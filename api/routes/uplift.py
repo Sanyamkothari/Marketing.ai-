@@ -60,6 +60,7 @@ from api.routes.runs import (
     ARTEFACT_NAME,
     _DatasetSource,
     _require_dataset,
+    _watch_cost,
     load_run,
     read_frame,
     requested_by,
@@ -86,8 +87,15 @@ from api.schemas import (
     UploadRecord,
 )
 from engine.access.roles import Role
+from engine.aws.run_cost import (  # Plan J M108 request, done at M106's integration (DEC-1316 (p))
+    RUN_COST_NEEDS_CONFIRMATION,
+    cached_price_table,
+    confirmation_message,
+    estimate_run_cost,
+)
 from engine.config import ProblemType, ResolvedConfig, RunMode, get_catalog, resolve_config
 from engine.contracts import RunRecord, RunState, Severity
+from engine.generative.budget import load_prices  # Plan J M108 (DEC-1318)
 from engine.keys import normalise_key, row_key_column, split_config_for_key, with_row_key
 from engine.pipeline import Pipeline
 from engine.registry import RegistryError
@@ -319,6 +327,22 @@ def create_uplift_run(
         storage.write_model(upload_key(upload.upload_id, UPLIFT_VALIDATION_FILENAME), checked.report)
     if not (report.passed and checked.report.passed):
         return _validation_conflict(report, checked.report)
+    if config.governance.max_run_cost_usd is not None:
+        # Plan J M108 (DEC-1318 (n)), done at M106's integration (DEC-1316 (p)): the run cost gate of
+        # `POST /runs`, at the same point - after the checks, before anything of the run is written. With
+        # no cap configured the request is handled exactly as before.
+        cost = estimate_run_cost(
+            config,
+            RunMode.TRAIN,
+            settings=settings,
+            table=cached_price_table(root),
+            llm_prices=load_prices(root),
+            fx=None,
+        )
+        if cost.needs_confirmation and not body.confirm_cost:
+            raise http_error(
+                409, RUN_COST_NEEDS_CONFIRMATION, confirmation_message(cost), path="confirm_cost"
+            )
 
     record = create_run(
         storage,
@@ -350,6 +374,9 @@ def create_uplift_run(
     spec = job_spec_for(record, upload=source, client_id=settings.client_id)
     write_job_spec(storage, spec)
     jobs.submit(spec.job_id, build_job_fn(spec, storage=storage, registry=registry))
+    if config.governance.max_run_cost_usd is not None and settings.job_backend == "sagemaker":
+        # Plan J M108 (DEC-1318 (n)): the same cost watcher `POST /runs` starts for a capped billed run.
+        _watch_cost(request, storage, jobs, record.run_id, settings=settings, root=root)
     response.headers["Location"] = f"/runs/{record.run_id}"
     return RunCreatedResponse(run_id=record.run_id)
 

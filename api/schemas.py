@@ -1250,6 +1250,11 @@ class UpliftRunRequest(StrictBase):
         description="0/1 column recording who was treated; the configured or hinted one when null.",
     )
     overrides: dict[str, Any] = Field(default_factory=dict, description="Run overrides, nested or dotted.")
+    # Plan J M108's request, done at M106's integration (DEC-1316 (p)): in place and defaulted, as
+    # `RunRequest.confirm_cost` - says "yes, start it" to `RUN_COST_NEEDS_CONFIRMATION`.
+    confirm_cost: bool = Field(
+        default=False, description="Start the run although its cost needs confirmation (Plan J M108)."
+    )
 
     @model_validator(mode="after")
     def _one_source(self) -> UpliftRunRequest:

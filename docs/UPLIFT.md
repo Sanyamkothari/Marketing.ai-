@@ -82,7 +82,10 @@ exactly one of `upload_id` and `dataset_id` (both or neither is 422): a built da
 manifest and rows like `POST /runs` reads one, its id seeds the randomness check, and `run.json` names
 the dataset, its client and its fingerprint. The dataset is never written to; its checks travel on the
 run. Step 4's "Learn who to contact next time" builds the experiment from a scoring run's own control
-group and outcomes (section 9).
+group and outcomes (section 9). With a cost cap on the use case (`governance.max_run_cost_usd`, Plan J
+M108), `POST /uplift/runs` passes the same gate as `POST /runs`: after the checks it answers 409
+`RUN_COST_NEEDS_CONFIRMATION` unless the request carries `confirm_cost: true`, and a started run on a
+billed deployment is watched and stopped at the cap (DEC-1316 (p)).
 
 ---
 
