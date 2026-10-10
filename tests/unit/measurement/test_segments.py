@@ -9,6 +9,7 @@ Bonferroni level of the family of groups judged. Campaigns come from the engine'
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
 from typing import Any
 
 import numpy as np
@@ -189,12 +190,13 @@ def test_the_file_holds_no_customer_id() -> None:
     assert not [key for key in campaign.scores["customer_id"] if key in text]
 
 
-def _timed(n: int) -> float:
+def _measurer(n: int) -> Callable[[], float]:
+    """Builds the campaign and its report once; each call times one measurement of its groups."""
     campaign = segmented_campaign(n, 0.15, {"A": 0.02, "B": 0.0, "C": -0.02}, seed=1)
     kw = campaign.measure_kwargs
     report = measure_campaign(campaign.scores, campaign.outcomes, intended_column="intended_treatment", **kw)
-    best = float("inf")
-    for _ in range(3):
+
+    def once() -> float:
         start = time.perf_counter()
         measure_campaign_segments(
             campaign.scores,
@@ -206,17 +208,33 @@ def _timed(n: int) -> float:
             treatment_date_column=kw["treatment_date_column"],
             intended_column="intended_treatment",
         )
-        best = min(best, time.perf_counter() - start)
-    return best
+        return time.perf_counter() - start
+
+    return once
+
+
+def _best_times(rounds: int = 5) -> tuple[float, float]:
+    """The best of `rounds` runs at 20k and at 200k rows, the two sizes taking turns.
+
+    A busy machine slows a run, rarely every run, and taking turns means a burst of load that lasts a while
+    slows both sizes, not only the one measured during it, so it cannot fake a growth that is not there.
+    Quadratic work is slow on every run, so the best of five still catches it."""
+    small_run, large_run = _measurer(20_000), _measurer(200_000)
+    small = large = float("inf")
+    for _ in range(rounds):
+        small = min(small, small_run())
+        large = min(large, large_run())
+    return small, large
 
 
 GROWTH_LIMIT = 30.0
 """Ten times the rows may take at most this many times as long: linear work gives about 10x, quadratic about
-100x; the margin leaves room for a busy machine (best of three runs, as the arbitration timing test does)."""
+100x; the margin leaves room for a busy machine (the sizes take turns, best of five each, as the arbitration
+timing test does)."""
 
 
 def test_measuring_the_groups_grows_linearly_with_the_campaign() -> None:
-    small, large = _timed(20_000), _timed(200_000)
+    small, large = _best_times()
     assert large / small < GROWTH_LIMIT, f"{small:.3f}s for 20k rows, {large:.3f}s for 200k"
 
 
