@@ -466,6 +466,13 @@ MILESTONE_TESTS: Final[Mapping[str, tuple[str, ...]]] = {
     # (the full-file reproduction skips, saying why, when the git-ignored data is absent).
     # tests/unit/test_prototype_parity.py (trunk) gained one PER_USE_CASE entry and is not evidence for it.
     "M110": ("library/tests/test_hillstrom_email.py",),
+    # M111 (DEC-1321). The rehearsal by a person outside the team is pending and no test can prove it; these prove the
+    # script, the generated summary and the seed. tests/unit/test_docs_honesty.py (trunk) is not evidence for it.
+    "M111": (
+        "tests/unit/test_demo_script.py",
+        "tests/unit/test_demo_summary.py",
+        "tests/unit/test_seed_validated.py",
+    ),
 }
 """Milestone id -> the test files (or directories, with a trailing `/`) that prove it is built.
 

@@ -1616,6 +1616,40 @@ the use case's `target.definition`.
 **What I did meanwhile.** No engine code was changed. M110 measures the overlap itself and repeats the comparison on
 evaluation rows neither model saw, with M96's own function and rule (DEC-1320 (h)); the result is the same.
 
+### 2026-10-10 — plan-j M111 (on main) → library-datasets (owner of `library/` and `docs/LIBRARY.md`): the manager demo on the Hillstrom results (record of edits)
+
+**What changed** (DEC-1321, pre-approved by the Plan J plan's M111 "Where in the code"): `library/DEMO_SCRIPT.md` is
+rewritten around the M110 results; the previous per-dataset walkthroughs moved unchanged to
+`library/DEMO_OTHER_DATASETS.md` ((h)). `library/DEMO_REHEARSAL.md` (the rehearsal checklist, pending, and the
+agent's dry run as Part 2), `library/hillstrom-email/DEMO_SUMMARY.md` and `DEMO_SUMMARY.provenance.json` (generated
+by `scripts/demo_summary.py`) are new. `library/hillstrom-email/journey.results.json`, the full-file run's
+aggregates (285 KB, no customer rows), is now committed beside `run_report.md` ((g)). `library/README.md` gains
+rows for the three demo files, and `docs/LIBRARY.md` section 4 points at the demo. Two new commands,
+`scripts/demo_summary.py` and `scripts/seed_validated.py`, follow `scripts/seed_demo.py`'s pattern.
+
+**What is needed.** Ratification of the edits, and two rules for whoever re-runs the Hillstrom journey (the audit
+follow-up included): a change that re-commits `library/hillstrom-email/run_report.md` must also re-commit
+`journey.results.json` and regenerate the summary with `python -m scripts.demo_summary`
+(`tests/unit/test_demo_summary.py` fails when the three are out of step); a change to the prepared file
+(`library/hillstrom-email/fetch.py`) must re-run the journey and update `scripts.demo_summary.VALIDATED_FILE_SHA256`.
+Optional, in the M110 area: point
+`library/tests/test_hillstrom_email.py::test_the_committed_report_is_what_run_engine_renders_from_its_run` at the
+committed results when `library/.runs/` is absent, so it stops skipping on a clean checkout.
+
+**What I did meanwhile.** Nothing else in `library/` was edited; `library/journey.py` and its results schema are read
+only, and a change to their field names (`steps.*`, `csv_sha256`, `rows`) stops the summary loudly (`SummaryError`).
+The new unit test covers the report check on a clean checkout.
+
+### 2026-10-10 — plan-j M111 (on main) → Plan H (owner of `docs/START_HERE.md`): a pointer to the manager demo (record of an additive edit)
+
+**What changed** (DEC-1321, pre-approved by the Plan J plan's M111 "Where in the code": "`docs/START_HERE.md`
+(pointer)"): a short "Showing it to someone else" section points at `library/DEMO_SCRIPT.md`, says it runs on a real
+public randomised test and tells the results as they fell, names `python -m scripts.seed_validated` (on the full file
+once fetched, otherwise on the labelled sample, whose numbers are not the validated ones) and the generated summary,
+and says the rehearsal by someone outside the team is still to be done. Nothing else in the file changed.
+
+**What is needed.** Ratification of the edit. Nothing else.
+
 ### 2026-09-23 — plan-e-pilot (on main) → all branches: every change Plan E made outside its own files and blocks
 
 **What is needed.** Nothing from anybody; this is the announcement §3 asks for. Measured with
