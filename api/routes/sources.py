@@ -46,6 +46,7 @@ from api.deps import ConfigRootDep, SettingsDep, StorageDep
 from api.routes.clients import ClientStoreDep, load_client
 from api.routes.uploads import CHUNK_BYTES, http_error, ingest_http
 from api.schemas import ErrorResponse
+from engine.access.roles import Role
 from engine.clients import ClientStore, ClientStoreError
 from engine.config import (
     OnboardingLimits,
@@ -57,7 +58,6 @@ from engine.config import (
     load_engine_config,
     load_use_case,
 )
-from engine.access.roles import Role
 from engine.connections.base import ConnectorError
 from engine.connections.store import ConnectionStore
 from engine.measurement.pull import PullSelection

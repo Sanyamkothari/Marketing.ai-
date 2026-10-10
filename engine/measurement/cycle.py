@@ -512,12 +512,14 @@ def measure_recorded(
     covariate_column: str | None,
     outcome_kind: Literal["binary", "continuous"] | None,
     ledger_engine: Callable[[], Engine | None] | None,
+    now: datetime,
 ) -> Measured:
     """Measure a campaign that has its outcomes through the one path, against its plan (`POST /campaigns/{id}/measure`).
 
     Raises `CycleError` with the route's codes: `CAMPAIGN_OUTCOMES_MISSING`, `CAMPAIGN_EPOCH_MISMATCH`,
     `TEST_PLAN_CHANGED`, `COVARIATE_NOT_BEFORE_CAMPAIGN`, `CAMPAIGN_INVALID`. A campaign some of whose
-    outcome windows are still open stores nothing and answers `matured=False`.
+    outcome windows are still open stores nothing and answers `matured=False`. `now` stamps a recomputed
+    contact readout; `as_of` is the moment the outcomes are read as of.
     """
     from engine.measurement.audit import AUDIT_FILENAME, AuditReadout, label_report
     from engine.measurement.campaign import CAMPAIGN_EPOCH_MISMATCH
@@ -604,7 +606,7 @@ def measure_recorded(
         }
     )
     save_campaign(store, storage, updated)
-    refresh_contacts(storage, updated, report, audit=audit, now=as_of)
+    refresh_contacts(storage, updated, report, audit=audit, now=now)
     return Measured(report=report, campaign=updated, matured=True)
 
 
@@ -898,6 +900,7 @@ def measure_step(
         covariate_column=None,
         outcome_kind=None,
         ledger_engine=ledger_engine,
+        now=now,
     )
     if not measured.matured:
         return StepOutcome("CAMPAIGN_NOT_MATURED", campaign_id=campaign.campaign_id)
