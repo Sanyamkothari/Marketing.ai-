@@ -172,8 +172,8 @@ def render_audit(results: dict[str, Any], *, results_path: str, command: str) ->
         "campaign that **actually ran**: Hillstrom's own e-mail test, with who got which e-mail as the assignment "
         "and visit, conversion and spend as the outcomes, posted to `POST /campaigns/audit` the way a client's "
         "past campaign would be. No model is trained and nothing is tuned; it is the whole file, as it ran. Every number "
-        f"below is read from [`{results_path}`]({results_path}), which is git-ignored and rebuilt by the command at the "
-        "end of this section."
+        f"below is read from [`{results_path}`]({results_path}), committed beside this report (aggregates only: no customer "
+        "row) and rewritten by the command at the end of this section."
     )
     add("")
     add("| | |")
@@ -318,7 +318,7 @@ def render_audit(results: dict[str, Any], *, results_path: str, command: str) ->
             continue
         add(
             f"| `{case['key']}` | provenance verified: {proof.get('provenance_verified')}; HTML {proof['html_status']}, "
-            f"PDF {proof['pdf_status']} ({_int(proof['pdf_bytes'])} bytes) | {proof['view']['claim_label']} "
+            f"PDF {proof['pdf_status']} | {proof['view']['claim_label']} "
             f"| {proof['view']['headline']} |"
         )
     add("")

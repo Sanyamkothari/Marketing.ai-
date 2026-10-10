@@ -26,7 +26,11 @@ dataset's *original* randomised campaign (who got which e-mail, and what happene
 client uses, `POST /campaigns/audit` (`library/audit.py`), records the label, the per-offer effects, the
 Value Proof Packs and the programme route's answer, and renders them as section 8 of the same
 `run_report.md` (`library/audit_report.py`). The report is the journey's sections followed by the audit's,
-rendered here and nowhere else; the journey command keeps the audit section when a run of it exists.
+rendered here and nowhere else. Both results files are committed beside the report (aggregates only; M111
+committed the journey's), and `journey_report_text` reads the committed audit results unless it is given others,
+so the committed report is checkable from a clean checkout. The audit command writes its results to
+`library/.runs/<dataset>/audit/` and to `library/<dataset>/audit.results.json`, and renders the report from the
+committed journey results (`--journey-results` names others).
 
 Writes the run directory to `library/.runs/<dataset>/data/runs/<run_id>/` (git-ignored) and, beside
 the dataset directory, `library/.runs/<dataset>/<run_id>.results.json` holding the validation
@@ -75,6 +79,8 @@ from engine.storage import LocalStorage, run_key, upload_key  # noqa: E402
 from engine.utils.ids import new_run_id  # noqa: E402
 
 RUNS_DIR = Path(__file__).resolve().parent / ".runs"
+AUDIT_RESULTS_NAME = "audit.results.json"
+"""The audit results, kept in `.runs/<dataset>/audit/` and committed as `library/<dataset>/` + this (DEC-1322)."""
 
 
 class _NoJobs:
@@ -336,17 +342,20 @@ def run(
     return RunOutcome(run_id=run_id, state=state, error=failure, results=results, directory=directory)
 
 
-def audit_results_path(dataset: str, runs_dir: Path | None = None) -> Path:
-    """Where `audit_main` keeps a dataset's audit results (ignored with the rest of `library/.runs/`)."""
-    return (runs_dir if runs_dir is not None else RUNS_DIR) / dataset / "audit" / "audit.results.json"
+def committed_results_path(dataset: str, name: str) -> Path:
+    """`library/<dataset>/<name>`: a results file committed beside the dataset's `run_report.md`."""
+    return Path(__file__).resolve().parent / dataset / name
 
 
-def journey_report_text(results: dict[str, Any], audit: dict[str, Any] | None = None) -> str:
+def journey_report_text(
+    results: dict[str, Any], audit: dict[str, Any] | None = None, *, committed_audit: bool = True
+) -> str:
     """The `run_report.md` of a journey's results, exactly as `journey_main` writes it.
 
     A function of the results alone (and of where the CLI keeps them), so the committed report can be
-    checked against the run it names: `library/tests/test_hillstrom_email.py` does. With the dataset's
-    audit results the audit readout follows the journey as section 8.
+    checked against the run it names: `library/tests/test_hillstrom_email.py` does. The audit readout
+    follows the journey as section 8 (DEC-1322): the `audit` results given, else the dataset's committed
+    `audit.results.json` when there is one (`committed_audit=False` renders the journey alone).
     """
     from library.journey_report import render_report
 
@@ -354,11 +363,13 @@ def journey_report_text(results: dict[str, Any], audit: dict[str, Any] | None = 
     link = f"../.runs/{dataset}/journey/journey.results.json"
     command = f"python library/{dataset}/fetch.py\npython -m library.run_engine journey --dataset {dataset}"
     text = render_report(results, results_path=link, command=command)
+    if audit is None and committed_audit:
+        audit = _read_json(committed_results_path(dataset, AUDIT_RESULTS_NAME))
     if audit is None:
         return text
     from library.audit_report import render_audit
 
-    audit_link = f"../.runs/{dataset}/audit/audit.results.json"
+    audit_link = f"{AUDIT_RESULTS_NAME}"
     audit_command = (
         f"python library/{dataset}/fetch.py\npython -m library.run_engine audit --dataset {dataset}"
     )
@@ -407,10 +418,7 @@ def journey_main(argv: list[str]) -> int:
     if args.runs_dir.resolve() == RUNS_DIR.resolve():
         report_path = library / spec.dataset / "run_report.md"
         report_path.write_text(
-            journey_report_text(
-                json.loads(results_file.read_text(encoding="utf-8")),
-                _read_json(audit_results_path(spec.dataset)),
-            ),
+            journey_report_text(json.loads(results_file.read_text(encoding="utf-8"))),
             encoding="utf-8",
         )
         print(f"report   {report_path}")
@@ -435,6 +443,13 @@ def audit_main(argv: list[str]) -> int:
     parser.add_argument(
         "--runs-dir", type=Path, default=RUNS_DIR, help="default: library/.runs; any other writes no report"
     )
+    parser.add_argument(
+        "--journey-results",
+        type=Path,
+        default=None,
+        help="the journey results the report's first sections are rendered from; default: the committed "
+        "library/<dataset>/journey.results.json, else library/.runs/<dataset>/journey/journey.results.json",
+    )
     args = parser.parse_args(argv)
     spec = AUDITS[args.dataset]
     library = Path(__file__).resolve().parent
@@ -446,12 +461,17 @@ def audit_main(argv: list[str]) -> int:
     results = outcome.results
     if csv_path.is_relative_to(REPO_ROOT):  # the report names the file as a checkout spells it
         results["csv"] = csv_path.relative_to(REPO_ROOT).as_posix()
-    results_file = outcome.directory / "audit.results.json"
+    results_file = outcome.directory / AUDIT_RESULTS_NAME
     results_file.write_text(json.dumps(results, indent=2, default=str), encoding="utf-8")
     print(f"results  {results_file}")
     if args.runs_dir.resolve() == RUNS_DIR.resolve():
-        journey = _read_json(RUNS_DIR / spec.dataset / "journey" / "journey.results.json")
-        if journey is None:
+        committed = committed_results_path(spec.dataset, AUDIT_RESULTS_NAME)
+        committed.write_text(results_file.read_text(encoding="utf-8"), encoding="utf-8")
+        print(f"results  {committed}")
+        journey = args.journey_results or committed_results_path(spec.dataset, "journey.results.json")
+        if not journey.is_file():
+            journey = RUNS_DIR / spec.dataset / "journey" / "journey.results.json"
+        if not journey.is_file():
             print(
                 f"no journey results yet: run python -m library.run_engine journey --dataset {spec.dataset} "
                 "to write run_report.md with this audit",
@@ -460,10 +480,9 @@ def audit_main(argv: list[str]) -> int:
             return 0
         report_path = library / spec.dataset / "run_report.md"
         report_path.write_text(
-            journey_report_text(journey, json.loads(results_file.read_text(encoding="utf-8"))),
-            encoding="utf-8",
+            journey_report_text(json.loads(journey.read_text(encoding="utf-8"))), encoding="utf-8"
         )
-        print(f"report   {report_path}")
+        print(f"report   {report_path}  (journey results: {journey})")
     return 0
 
 

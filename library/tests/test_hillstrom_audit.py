@@ -24,8 +24,8 @@ FOLDER = LIBRARY / "hillstrom-email"
 SAMPLE = FOLDER / "sample.csv"
 PREPARED = FOLDER / "data" / "prepared.csv"
 REPORT = FOLDER / "run_report.md"
-AUDIT_RESULTS = LIBRARY / ".runs" / "hillstrom-email" / "audit" / "audit.results.json"
-JOURNEY_RESULTS = LIBRARY / ".runs" / "hillstrom-email" / "journey" / "journey.results.json"
+AUDIT_RESULTS = FOLDER / "audit.results.json"
+JOURNEY_RESULTS = FOLDER / "journey.results.json"
 
 OUTCOMES = ("visit", "conversion", "spend")
 
@@ -314,6 +314,19 @@ def test_the_audit_section_says_what_a_failed_check_means_and_does_not_hide_a_re
 # ---------------------------------------------------------------------------
 # The committed report against the full file's run
 # ---------------------------------------------------------------------------
+def test_the_committed_report_is_the_committed_journey_then_the_committed_audit() -> None:
+    """A clean checkout can check the report: both results files are committed beside it (aggregates only)."""
+    from library.run_engine import journey_report_text
+
+    journey = json.loads(JOURNEY_RESULTS.read_text(encoding="utf-8"))
+    audit = json.loads(AUDIT_RESULTS.read_text(encoding="utf-8"))
+    expected = journey_report_text(journey, audit)
+    assert REPORT.read_text(encoding="utf-8") == expected
+    assert journey_report_text(journey) == expected, "the committed audit results are the default"
+    assert expected.startswith(journey_report_text(journey, committed_audit=False).rstrip("\n"))
+    assert AUDIT_RESULTS.stat().st_size < 600_000, "aggregates only: no customer row"
+
+
 def test_the_committed_report_carries_the_audit_section_and_its_label() -> None:
     text = REPORT.read_text(encoding="utf-8")
     assert "## 8. The audit readout on the original campaign" in text

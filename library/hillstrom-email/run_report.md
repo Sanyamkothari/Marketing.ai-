@@ -9,11 +9,11 @@ rebuilt by the command at the end. Nothing here is synthetic and nothing was tun
 | Data | `library/hillstrom-email/data/prepared.csv`, 64,000 rows (SHA-256 `434bc95c6e096dbe…`; the raw file it was prepared from is verified by `fetch.py`) |
 | Use case | `hillstrom-email` |
 | Split | 32,000 training rows, 32,000 evaluation rows (seed 20261010, stratified by segment and conversion) |
-| Risk model run | `r_20261010_11100001`, 73.0 s |
-| Campaign-effect run | `r_20261010_11100002`, 17.3 s |
+| Risk model run | `r_20261010_11100001`, 62.1 s |
+| Campaign-effect run | `r_20261010_11100002`, 17.6 s |
 | Scoring run | `r_20261010_11100003` |
 | Risk model's scoring run (section 3) | `r_20261010_11100004` |
-| Whole journey | 138.9 s |
+| Whole journey | 128.8 s |
 
 ## The answer in one table
 
@@ -81,7 +81,7 @@ The data, by group (the outcomes as the file records them):
 
 ## 2. The models
 
-**Risk model** (`POST /runs`, Phase 1): Ensemble (LightGBM), 6 models trained, 73.0 s. Test metrics: f1 0.0145, pr_auc 0.0097, precision 0.0086, recall 0.0465, roc_auc 0.5341. Against its baseline (baseline (logistic regression)): does not beat it.
+**Risk model** (`POST /runs`, Phase 1): Ensemble (LightGBM), 6 models trained, 62.1 s. Test metrics: f1 0.0145, pr_auc 0.0097, precision 0.0086, recall 0.0465, roc_auc 0.5341. Against its baseline (baseline (logistic regression)): does not beat it.
 
 **Campaign-effect model** (`POST /uplift/runs`, x_learner on lightgbm), measured on its own hold-out of 6,392 training rows. Registered as `candidate`: a model of several offers is never champion (DEC-1310 (h)).
 
@@ -287,7 +287,7 @@ python -m library.run_engine journey --dataset hillstrom-email
 
 ## 8. The audit readout on the original campaign (M103, public dataset, retrospective audit)
 
-**Public dataset, retrospective audit.** The journey above measured a list the engine made. This section reads the campaign that **actually ran**: Hillstrom's own e-mail test, with who got which e-mail as the assignment and visit, conversion and spend as the outcomes, posted to `POST /campaigns/audit` the way a client's past campaign would be. No model is trained and nothing is tuned; it is the whole file, as it ran. Every number below is read from [`../.runs/hillstrom-email/audit/audit.results.json`](../.runs/hillstrom-email/audit/audit.results.json), which is git-ignored and rebuilt by the command at the end of this section.
+**Public dataset, retrospective audit.** The journey above measured a list the engine made. This section reads the campaign that **actually ran**: Hillstrom's own e-mail test, with who got which e-mail as the assignment and visit, conversion and spend as the outcomes, posted to `POST /campaigns/audit` the way a client's past campaign would be. No model is trained and nothing is tuned; it is the whole file, as it ran. Every number below is read from [`audit.results.json`](audit.results.json), committed beside this report (aggregates only: no customer row) and rewritten by the command at the end of this section.
 
 | | |
 |---|---|
@@ -296,7 +296,7 @@ python -m library.run_engine journey --dataset hillstrom-email
 | Outcomes file | 64,000 rows: `customer_id`, `visit`, `conversion`, `spend` |
 | Campaign dated | 2008-03-20, outcome window 14 days |
 | Campaign ids | `c_20261010_11200001`, `c_20261010_11200002`, `c_20261010_11200003`, `c_20261010_11200004` |
-| Whole audit | 18.6 s |
+| Whole audit | 20.4 s |
 
 ### 8.1 The answer in one table
 
@@ -349,10 +349,10 @@ A Pack was built for each campaign, named "... - public dataset, retrospective a
 
 | Pack | Built | Claim | Headline |
 |---|---|---|---|
-| `conversion` | provenance verified: True; HTML 200, PDF 200 (35,119 bytes) | Causal: the customers held back were chosen at random | Extra outcomes because of the campaign: +145 (likely +107 to +184). Net value ₹10,29,750 (10.30 lakh) to ₹17,76,011 (17.76 lakh). |
-| `spend_any` | provenance verified: True; HTML 200, PDF 200 (33,060 bytes) | Causal: the customers held back were chosen at random | Extra amount because of the campaign: +25,479.61 (likely +16,060.85 to +34,898.37). Net value ₹13,30,916 (13.31 lakh) to ₹28,94,430 (28.94 lakh). |
-| `spend_mens` | provenance verified: True; HTML 200, PDF 200 (33,039 bytes) | Causal: the customers held back were chosen at random | Extra amount because of the campaign: +16,402.71 (likely +10,336.87 to +22,468.54). Net value ₹8,56,895 (8.57 lakh) to ₹18,63,824 (18.64 lakh). |
-| `spend_womens` | provenance verified: True; HTML 200, PDF 200 (33,050 bytes) | Causal: the customers held back were chosen at random | Extra amount because of the campaign: +9,076.90 (likely +3,613.48 to +14,540.33). Net value ₹2,98,849 (2.99 lakh) to ₹12,05,778 (12.06 lakh). |
+| `conversion` | provenance verified: True; HTML 200, PDF 200 | Causal: the customers held back were chosen at random | Extra outcomes because of the campaign: +145 (likely +107 to +184). Net value ₹10,29,750 (10.30 lakh) to ₹17,76,011 (17.76 lakh). |
+| `spend_any` | provenance verified: True; HTML 200, PDF 200 | Causal: the customers held back were chosen at random | Extra amount because of the campaign: +25,479.61 (likely +16,060.85 to +34,898.37). Net value ₹13,30,916 (13.31 lakh) to ₹28,94,430 (28.94 lakh). |
+| `spend_mens` | provenance verified: True; HTML 200, PDF 200 | Causal: the customers held back were chosen at random | Extra amount because of the campaign: +16,402.71 (likely +10,336.87 to +22,468.54). Net value ₹8,56,895 (8.57 lakh) to ₹18,63,824 (18.64 lakh). |
+| `spend_womens` | provenance verified: True; HTML 200, PDF 200 | Causal: the customers held back were chosen at random | Extra amount because of the campaign: +9,076.90 (likely +3,613.48 to +14,540.33). Net value ₹2,98,849 (2.99 lakh) to ₹12,05,778 (12.06 lakh). |
 
 **Finding (`conversion`).** With 2 offers the Pack's headline ('Extra outcomes because of the campaign: +145 (likely +107 to +184). Net value ₹10,29,750 (10.30 lakh) to ₹17,76,011 (17.76 lakh).'), its "Extra outcomes" (+145) and the value of what the campaign changed are the first offer's, Mens E-Mail, alone; the other offer's (Womens E-Mail +67) is in the offer table and the backfire table but not in the headline or the net value, while the cost of contacts (₹2,135) is for all 42,694 e-mails sent. The net value therefore credits one offer and charges both. Every figure is traced to a measured record, so provenance passes; it is the scope of the headline that is partial (M100 keeps the first offer in the single-offer fields, DEC-668 (3), and the Pack reads those fields). Raised for M104 (DEC-1314); no engine code was changed.
 
