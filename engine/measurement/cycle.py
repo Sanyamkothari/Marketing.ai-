@@ -89,6 +89,8 @@ __all__ = [
     "CYCLE_SERVICES_MISSING",
     "LEARNED_FILENAME",
     "LEARN_NOT_READY",
+    "LEARN_REFUSED_FILENAME",
+    "CampaignLearnRefused",
     "CampaignLearned",
     "CycleError",
     "CycleServices",
@@ -129,6 +131,8 @@ CAMPAIGN_INVALID: Final[str] = "CAMPAIGN_INVALID"
 
 LEARNED_FILENAME: Final[str] = "learned.json"
 """`campaigns/<id>/learned.json`: which uplift run a scheduled learn started from the campaign. Ids only."""
+LEARN_REFUSED_FILENAME: Final[str] = "learn_refused.json"
+"""`campaigns/<id>/learn_refused.json`: a scheduled learn was refused for the campaign (its code only)."""
 
 UPLOAD_RECORD_FILENAME: Final[str] = "upload.json"
 UPLOAD_PROFILE_FILENAME: Final[str] = "profile.json"
@@ -182,6 +186,18 @@ class CampaignLearned(StrictBase):
     run_id: str = Field(description="The scoring run whose campaign was learned from.")
     uplift_run_id: str = Field(description="The training run started on the campaign's randomised rows.")
     learned_at: AwareDatetime
+
+
+class CampaignLearnRefused(StrictBase):
+    """`campaigns/<id>/learn_refused.json`: a scheduled learn was refused for this campaign, and why (a code).
+
+    The refusal depends only on the campaign's own files, so the next firing does not try again and raise the
+    same failure alert every day: it answers `LEARN_REFUSED` quietly. Learning by hand on step 4 is unaffected.
+    """
+
+    campaign_id: str
+    code: str = Field(description="The refusal's code, e.g. LEARN_NO_OVERLAP.")
+    refused_at: AwareDatetime
 
 
 # ---------------------------------------------------------------------------
@@ -945,16 +961,26 @@ def learn_step(
     campaign = max(measured, key=lambda item: (item.treatment_start, item.campaign_id))
     if storage.exists(campaign_key(campaign.campaign_id, LEARNED_FILENAME)):
         return StepOutcome("NOTHING_TO_LEARN", campaign_id=campaign.campaign_id)
-    started = learn_from_campaign(
-        storage,
-        registry,
-        jobs,
-        campaign=campaign,
-        config_root=config_root,
-        principal=principal,
-        client_tag=client_tag,
-        now=now,
-    )
+    if storage.exists(campaign_key(campaign.campaign_id, LEARN_REFUSED_FILENAME)):
+        # Refused once already, with its alert: the same campaign would be refused for the same reason.
+        return StepOutcome("LEARN_REFUSED", campaign_id=campaign.campaign_id)
+    try:
+        started = learn_from_campaign(
+            storage,
+            registry,
+            jobs,
+            campaign=campaign,
+            config_root=config_root,
+            principal=principal,
+            client_tag=client_tag,
+            now=now,
+        )
+    except CycleError as exc:
+        storage.write_model(
+            campaign_key(campaign.campaign_id, LEARN_REFUSED_FILENAME),
+            CampaignLearnRefused(campaign_id=campaign.campaign_id, code=exc.code, refused_at=now),
+        )
+        raise
     return StepOutcome(
         "LEARNING_STARTED", run_id=started.run_id, running=True, campaign_id=campaign.campaign_id
     )

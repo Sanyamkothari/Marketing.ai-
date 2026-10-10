@@ -206,6 +206,29 @@ def test_free_sql_or_an_injected_name_is_refused_before_any_row_is_read(
     assert not any(sql.startswith("SELECT * FROM") and " WHERE " in sql for sql in server.executed)
 
 
+def test_a_learn_schedule_refused_for_a_campaign_says_so_once(
+    client: TestClient, data_dir: Path, server: FakeServer
+) -> None:
+    """A measured campaign that cannot teach a model fails one learn firing, with its alert, then waits quietly."""
+    campaign_id = _campaign(client, data_dir, server)
+    ok(client.post(f"/campaigns/{campaign_id}/outcomes", json=_pull_body(_connection(client))))
+    ok(client.post(f"/campaigns/{campaign_id}/measure", json={"as_of": MATURE.isoformat()}))
+    created = ok(
+        client.post(
+            "/schedules",
+            json={"use_case_id": "win-back-campaign", "kind": "learn", "cadence": "daily", "timezone": "UTC"},
+        ),
+        201,
+    )
+    first = ok(client.post(f"/schedules/{created['schedule_id']}/fire"), 201)
+    # 4,000 customers hold back 400, below the 1,000 a group needs to learn from (uplift.min_arm_rows).
+    assert (first["status"], first["error_code"]) == ("failed", "LEARN_NOT_READY"), first
+    second = ok(client.post(f"/schedules/{created['schedule_id']}/fire"), 201)
+    assert (second["status"], second["result_code"]) == ("succeeded", "LEARN_REFUSED"), second
+    failed = ok(client.get("/monitoring/alerts", params={"kind": "scheduled_job_failed"}))
+    assert len([a for a in failed["alerts"] if a["schedule_id"] == created["schedule_id"]]) == 1
+
+
 # --- consent ---------------------------------------------------------------------------------------------
 CONSENT_COLUMNS = ["principal_id", "purpose", "status", "recorded_at", "source"]
 

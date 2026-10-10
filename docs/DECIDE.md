@@ -971,10 +971,11 @@ cycle.py`):
 | `score` | fetches the bound tables, rebuilds the recipe, scores with the model in use | `SCORED` | - |
 | `treat_list` | the newest finished scoring run without a campaign: its treat list (M98) and its campaign record (`POST /campaigns`'s engine half), sent when the run finished | `TREAT_LIST_READY` / `NOTHING_NEW` | `treat_list_ready` |
 | `measure` | once the newest live campaign's window has closed: its outcomes read from the connection the schedule names (`parameters.outcomes`) for exactly that window, kept as an upload, given to the campaign and measured through the one path against its plan | `CAMPAIGN_MEASURED` / `CAMPAIGN_NOT_MATURED` / `EARLY_LOOK` / `NOTHING_TO_MEASURE` | `campaign_measured` |
-| `learn` | the newest measured campaign not yet learned from: M106's frame, a training upload, the uplift checks and a training run with `governance.approval_required` forced on | `LEARNING_STARTED`, then `MODEL_PENDING_APPROVAL` or `MODEL_CANDIDATE` | `challenger_waiting` |
+| `learn` | the newest measured campaign not yet learned from: M106's frame, a training upload, the uplift checks and a training run with `governance.approval_required` forced on | `LEARNING_STARTED`, then `MODEL_PENDING_APPROVAL` or `MODEL_CANDIDATE`; `NOTHING_TO_LEARN`; `LEARN_REFUSED` | `challenger_waiting` |
 
 A step that fails is a failed firing with its code and the usual `scheduled_job_failed` alert; a step with
-nothing to do succeeds quietly. The three new alerts are `info`. The learning run passes M108's cost gate like
+nothing to do succeeds quietly. A learn refused for a campaign (its code kept in `campaigns/<id>/learn_refused.json`)
+is not tried again for that campaign: later firings answer `LEARN_REFUSED` instead of raising the same alert daily. The three new alerts are `info`. The learning run passes M108's cost gate like
 every scheduled run. Nothing is promoted or approved: a person approves the challenger, which is the only
 thing left to a person in the cycle (`tests/integration/measurement/test_monthly_loop.py`).
 
