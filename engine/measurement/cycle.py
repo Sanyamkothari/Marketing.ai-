@@ -71,6 +71,8 @@ from engine.storage import Storage, StorageError, run_key, upload_key
 from engine.utils.logging import get_logger
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     import pandas as pd
     from sqlalchemy.engine import Engine
 
@@ -560,6 +562,7 @@ def measure_recorded(
     outcome_kind: Literal["binary", "continuous"] | None,
     ledger_engine: Callable[[], Engine | None] | None,
     now: datetime,
+    config_root: Path | None = None,
 ) -> Measured:
     """Measure a campaign that has its outcomes through the one path, against its plan (`POST /campaigns/{id}/measure`).
 
@@ -567,16 +570,22 @@ def measure_recorded(
     `TEST_PLAN_CHANGED`, `COVARIATE_NOT_BEFORE_CAMPAIGN`, `CAMPAIGN_INVALID`. A campaign some of whose
     outcome windows are still open stores nothing and answers `matured=False`. `now` stamps a recomputed
     contact readout; `as_of` is the moment the outcomes are read as of.
+
+    Plan K M136 (DEC-1402): once the report is stored, the Estimated figure of every comparable campaign of the use
+    case is rewritten (`engine.measurement.pooling`) when `configs/measurement.yaml` under `config_root` turns
+    pooling on; with it off (the default) nothing more is read or written.
     """
     from engine.measurement.audit import AUDIT_FILENAME, AuditReadout, label_report
     from engine.measurement.campaign import CAMPAIGN_EPOCH_MISMATCH
     from engine.measurement.continuous import COVARIATE_NOT_BEFORE_CAMPAIGN, CovariateNotBeforeCampaignError
     from engine.measurement.measure import measure_campaign
     from engine.measurement.plan import TEST_PLAN_CHANGED, TestPlan, TestPlanChangedError
+    from engine.measurement.pooling import load_pooling_settings, refresh_pooled_estimates  # PLAN-K (M136)
     from engine.measurement.programme import PROGRAMME_FILENAME, ProgrammeReadout
     from engine.measurement.segments import SEGMENT_EFFECTS_FILENAME
     from engine.uplift.contracts import IncrementalityStatus
 
+    pooling = load_pooling_settings(config_root)  # PLAN-K (M136): read before anything is stored
     campaign_id = campaign.campaign_id
     if campaign.outcomes is None:
         raise CycleError(CAMPAIGN_OUTCOMES_MISSING, "Add the campaign's outcomes file first.")
@@ -654,6 +663,8 @@ def measure_recorded(
     )
     save_campaign(store, storage, updated)
     refresh_contacts(storage, updated, report, audit=audit, now=now)
+    if pooling.enabled:  # PLAN-K (M136): the Estimated figures, beside every comparable campaign's report
+        refresh_pooled_estimates(storage, store, updated, settings=pooling, now=now)
     return Measured(report=report, campaign=updated, matured=True)
 
 
@@ -1152,9 +1163,16 @@ def learn_from_campaign(
         now=now,
     )
     if learned is not None:
+        from engine.measurement.pooling import pooled_prior  # PLAN-K (M136): information only, None when off
+
         storage.write_model(
             run_key(started.run_id, LEARN_RECORD_FILENAME),
-            learned.model_copy(update={"uplift_run_id": started.run_id}),
+            learned.model_copy(
+                update={
+                    "uplift_run_id": started.run_id,
+                    "pooled_prior": pooled_prior(storage, campaign.campaign_id, root=config_root),
+                }
+            ),
         )
     storage.write_model(
         campaign_key(campaign.campaign_id, LEARNED_FILENAME),

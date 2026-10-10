@@ -84,6 +84,7 @@ from pydantic import AwareDatetime, Field
 
 from engine.config import PrimaryKey, key_columns
 from engine.contracts import Artefact
+from engine.measurement.pooling import PooledPrior  # PLAN-K (M136)
 from engine.uplift.contracts import ConfidenceValue
 
 if TYPE_CHECKING:
@@ -251,6 +252,14 @@ class LearnRecord(Artefact):
     summary: str = Field(description="Which customers the model learned from and why, in one sentence.")
     notes: tuple[str, ...] = Field(default=(), description="Plain sentences on who was left out and why.")
     created_at: AwareDatetime = Field(description="When the frame was built.")
+    # PLAN-K (M136, DEC-1402): read-only information for the Approver. Absent unless pooling is on and the campaign
+    # learned from was pooled, so every record written without it is byte for byte what it was; nothing reads it
+    # to choose or approve a model.
+    pooled_prior: PooledPrior | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+        description="The comparable campaigns' average effect and spread (Estimated), as an optional prior.",
+    )
 
 
 @dataclass(frozen=True)

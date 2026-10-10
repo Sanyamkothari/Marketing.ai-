@@ -275,6 +275,28 @@ class ProvenToDate(StrictBase):
     )
 
 
+class EstimatedLine(StrictBase):
+    """PLAN-K (M136, DEC-1402): a counted campaign's Estimated difference beside its measured one; never added."""
+
+    campaign_id: str
+    campaign_name: Figure
+    label: str = Field(description="`Estimated`: never a measured result (decision K7).")
+    measured: Figure = Field(description="The measured difference per customer, read from the report.")
+    measured_low: Figure | None = None
+    measured_high: Figure | None = None
+    estimated: Figure | None = Field(
+        default=None,
+        description="The difference drawn towards comparable campaigns; null when none is drawn.",
+    )
+    estimated_low: Figure | None = None
+    estimated_high: Figure | None = None
+    campaigns_compared: Figure | None = Field(
+        default=None, description="Comparable campaigns it is drawn towards, this one included."
+    )
+    code: str | None = Field(default=None, description="`POOL_TOO_FEW` when nothing is drawn.")
+    note: str
+
+
 class CampaignSummary(StrictBase):
     """`GET /campaigns/summary`: what wants attention and the value proven to date; every number a traced figure."""
 
@@ -283,6 +305,11 @@ class CampaignSummary(StrictBase):
     proven: ProvenToDate
     artefacts: tuple[str, ...] = Field(description="Every aggregate artefact read.")
     built_at: AwareDatetime
+    estimated: tuple[EstimatedLine, ...] | None = Field(  # PLAN-K (M136): absent unless pooling is on
+        default=None,
+        exclude_if=lambda value: value is None,
+        description="Each counted campaign's Estimated difference beside its measured one; absent with pooling off.",
+    )
 
 
 class SummaryTraceError(Exception):
@@ -1058,6 +1085,65 @@ def _net_line(view: ProofView) -> ProofLine | None:
     return next((line for line in section.lines if line.label == "Net value" and line.low is not None), None)
 
 
+# --- PLAN-K (M136, DEC-1402): Estimated figures beside the measured ones, never in a total ---------------------
+_ESTIMATED_NOTE: Final[str] = (
+    "Estimated, not measured: the measured difference drawn towards comparable campaigns by as much of it as is "
+    "noise. It is shown for comparison and never added to the value proven to date."
+)
+_NOT_ESTIMATED_NOTE: Final[str] = (
+    "Fewer comparable campaigns have a final result than an estimate needs, so this campaign is shown only as "
+    "measured."
+)
+
+
+def _estimated_lines(
+    builder: _Builder, names: dict[str, Figure], root: Path | None
+) -> tuple[EstimatedLine, ...] | None:
+    """Every counted campaign's current `pooled_estimate.json` beside its report; None (nothing read) with pooling off."""
+    from engine.measurement.pooling import (
+        ESTIMATED_LABEL,
+        POOL_TOO_FEW,
+        POOLED_FILENAME,
+        is_current,
+        load_pooling_settings,
+    )
+
+    if not load_pooling_settings(root).enabled:
+        return None
+    reader, out = builder.reader, []
+    for cid, name in names.items():
+        report, pooled = f"campaigns/{cid}/incrementality_report.json", f"campaigns/{cid}/{POOLED_FILENAME}"
+        if not is_current(reader.doc(pooled), reader.doc(report)):
+            continue
+        field = reader.get(pooled, "estimate_field")
+        measured = reader.fig(report, f"{field}.value", _effect_format(reader.get(report, "outcome_kind")))
+        if not isinstance(field, str) or measured is None:
+            continue
+        fmt = measured.format
+        drawn = reader.get(pooled, "status") == "pooled"
+        out.append(
+            EstimatedLine(
+                campaign_id=cid,
+                campaign_name=name,
+                label=ESTIMATED_LABEL,
+                measured=measured,
+                measured_low=reader.fig(report, f"{field}.ci_low", fmt),
+                measured_high=reader.fig(report, f"{field}.ci_high", fmt),
+                estimated=reader.fig(pooled, "pooled_effect", fmt) if drawn else None,
+                estimated_low=reader.fig(pooled, "pooled_interval.ci_low", fmt) if drawn else None,
+                estimated_high=reader.fig(pooled, "pooled_interval.ci_high", fmt) if drawn else None,
+                campaigns_compared=reader.fig(pooled, "campaigns_compared", "count") if drawn else None,
+                code=None if drawn else POOL_TOO_FEW,
+                note=_ESTIMATED_NOTE if drawn else _NOT_ESTIMATED_NOTE,
+            )
+        )
+    return tuple(out)
+
+
+def _effect_format(outcome_kind: object) -> FigureFormat:
+    return "signed_amount" if outcome_kind == "continuous" else "points"
+
+
 _UNPRINTED: Final[frozenset[str]] = frozenset(
     {
         "campaign_id",
@@ -1097,6 +1183,7 @@ def build_summary(
     names = {line.campaign_id: line.campaign_name for lines in builder.lines.values() for line in lines}
     builder.fading(names)
     builder.challengers(list(dict.fromkeys(c.use_case_id for c in campaigns if c.use_case_id is not None)))
+    estimated = _estimated_lines(builder, names, root)  # PLAN-K (M136): None with pooling off
     summary = CampaignSummary(
         cards=tuple(builder.cards),
         proven=ProvenToDate(
@@ -1108,6 +1195,7 @@ def build_summary(
         ),
         artefacts=tuple(sorted(set(builder.reader.read) | builder.view_artefacts)),
         built_at=now or utc_now(),
+        estimated=estimated,
     )
     failures = check_figures(list(figures_of(summary)), list(free_text(summary, _UNPRINTED)), storage)
     if failures:

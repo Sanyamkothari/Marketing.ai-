@@ -975,6 +975,7 @@ def measure_campaign_results(
             outcome_kind=body.outcome_kind,
             ledger_engine=lambda: get_platform_engine(request),
             now=utc_now(),
+            config_root=root,  # PLAN-K (M136): where `configs/measurement.yaml` (pooling) is read
         )
     except CycleError as exc:
         if exc.code in _AUDITED_REFUSALS:
