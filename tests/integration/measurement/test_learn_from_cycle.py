@@ -66,7 +66,7 @@ from tests.integration.uplift.test_uplift_api import (
     upload,
 )
 
-pytestmark = pytest.mark.integration
+pytestmark = [pytest.mark.integration, pytest.mark.slow]  # trains uplift models end to end: 6-10 min serially
 
 USE_CASE: Final[str] = "win-back-campaign"
 KEY: Final[str] = "customer_id"
