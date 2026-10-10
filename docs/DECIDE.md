@@ -41,6 +41,7 @@ the user downloads (the treat list).
 | 22 | Cost before each run | M108 | not yet written |
 | 23 | Validation on real public randomised data | M110 | not yet written |
 | 24 | The manager demo | M111 | not yet written |
+| 25 | Small fixes that make existing things work better | M109 | written (below) |
 
 ## 4. Running the statistical suite
 
@@ -786,3 +787,37 @@ as a text figure read from that file, never replaced by a sentence of the pack's
 **On screen.** Results lists the ready packs with their sentence (`ui/modules/simple/pages.js`); Reports lists every
 recent campaign's pack or the server's reason; `#/pilot/proof/<campaign>` shows the server's page, its suggestions with
 an Approve button for an Analyst, and a value form when the pack has no value inputs (`ui/modules/pilot/screen.js`).
+
+## 25. Small fixes that make existing things work better (M109, DEC-1319)
+
+**Events behind a drift alarm.** A person with the Analyst role can note an event against a scoring run (a price
+change, a promotion, a competitor's launch, a change of rules, a season, something else) with its date, a short
+note and, optionally, the measures it touched: `POST /runs/{run_id}/drift-events`, removed with `DELETE
+/runs/{run_id}/drift-events/{annotation_id}`; `GET /runs/{run_id}/drift-events` (Viewer) answers the notes beside
+the drift the run measured (`engine/decide/drift_annotations.py`). The notes are a new artefact,
+`drift_annotations.json`, in the scoring run's directory; the predict stage, `drift.json` and the verdict are
+never written or read for writing. An event is counted as a possible reason only when it is dated on or after the
+day the model's training run was created (when that run can be read) and on or before the day the run measured
+its drift; an event outside that period is kept and shown with the reason it is not counted. A note can name only
+measures the report compared (`DRIFT_ANNOTATION_INVALID`), a run without a drift report refuses a note
+(`DRIFT_NOT_MEASURED`), and a run holds at most 50 (`DRIFT_ANNOTATION_LIMIT`). The scoring Output page shows an
+"Events behind the change" card (`ui/modules/decide/drift_events.js`, a page panel) with the server's headline,
+period and each event's reading; it draws nothing for a stable run with no notes. The note is free text and may not
+hold personal data; the audit event carries the run, the count and the kind of event, never the text. The file is
+not row-level (no customer id), so it is not in `ROW_LEVEL_ARTEFACTS`. The root-cause summary (Phase 3a) does not
+read the notes.
+
+**Wording.** `campaign_verdict` and `amount_verdict` say "detectable effect" (the smallest change a test of that
+size can see) in "No clear effect yet" and "early look" in "Outcome window not over yet"; the plan card's labels
+and the Output page's power card use the same two terms. Only sentences changed: headlines, kinds and numbers are
+as before.
+
+**Guided setup.** For a use case that contacts customers, `engine/agent/recommend.holdout_advice` sizes the share
+held back with the test planner for a 2-point change either way (80% power, 95% confidence) and proposes
+`actions.control_group_fraction`, the smallest whole percent, as a check suggestion when the current share is too
+small and half the customers would be enough. A persistent holdout, a file too small even for half, and an explore
+share (sized so that it reaches `uplift.min_arm_rows`, at most 10%) are plain assumptions, because no run can
+override them. The benchmark gains a `mid_size_file` case; the other twenty-one digests are unchanged.
+
+**Retail win-back.** No setting or extra column makes it beat its baseline: see `library/online-retail/run_report.md`.
+

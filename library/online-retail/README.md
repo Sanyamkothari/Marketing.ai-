@@ -118,7 +118,7 @@ split is about 220 shoppers. Treat the numbers in `run_report.md` accordingly.
 
 ## Why a different setting cannot make it beat the baseline
 
-Plan J M109 asked. Cross-validation over seven model families and five extra columns, and one look at 293
+Plan J M109 asked. Cross-validation over six models and five extra columns, and one look at 293
 shoppers put aside beforehand, all say the same thing: nothing beats the logistic-regression baseline, and a
 single 219-shopper test set cannot tell the two apart. The method and numbers are in
 [`run_report.md`](run_report.md) and the scripts in [`investigation/`](investigation/).

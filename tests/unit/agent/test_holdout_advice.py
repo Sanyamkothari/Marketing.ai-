@@ -12,10 +12,11 @@ from __future__ import annotations
 
 import dataclasses
 
+import pandas as pd
 import pytest
 
-from engine.agent.advisor import advise
-from engine.agent.contracts import AgentConfidence, ProposalKind
+from engine.agent.advisor import Advice, advise
+from engine.agent.contracts import AgentConfidence, Proposal, ProposalKind
 from engine.config import load_use_case, overridable_paths
 from engine.holdout.spec import HoldoutConfig
 from engine.measurement.planner import arm_sizes, mde_two_proportions
@@ -27,11 +28,11 @@ PATH = "actions.control_group_fraction"
 UC = "targeted-advertisement"
 
 
-def _frame(rows: int, positive_rate: float = 0.12):  # type: ignore[no-untyped-def]
+def _frame(rows: int, positive_rate: float = 0.12) -> pd.DataFrame:
     return generate(GenerationSpec(use_case_id=UC, rows=rows, variant="clean", positive_rate=positive_rate))
 
 
-def _proposal(advice, path=PATH):  # type: ignore[no-untyped-def]
+def _proposal(advice: Advice, path: str = PATH) -> Proposal | None:
     return next((p for p in advice.proposals if p.kind is ProposalKind.SETTING and p.path == path), None)
 
 
@@ -52,7 +53,8 @@ def test_the_proposed_share_is_the_smallest_whole_percent_that_sees_two_points()
     rate = float(frame["converted_30d"].mean())
     proposal = _proposal(advise(context_for(frame)))
     assert proposal is not None
-    share = float(proposal.value)
+    assert isinstance(proposal.value, float)
+    share = proposal.value
     seen = mde_two_proportions(*arm_sizes(len(frame), share), rate)
     assert seen.absolute is not None and seen.absolute <= 0.02 + 1e-9
     one_less = mde_two_proportions(*arm_sizes(len(frame), round(share - 0.01, 2)), rate)
