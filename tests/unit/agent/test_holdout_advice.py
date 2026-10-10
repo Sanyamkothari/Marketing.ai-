@@ -120,3 +120,27 @@ def test_every_proposal_the_rule_makes_is_legal_and_resolves(rows: int) -> None:
     for proposal in advice.proposals:
         if proposal.kind is ProposalKind.SETTING:
             assert proposal.path in legal
+
+
+def test_the_advice_is_computed_from_counts_alone_so_a_million_rows_cost_nothing() -> None:
+    import time
+
+    from engine.agent.recommend import DataFacts, holdout_advice
+
+    facts = DataFacts(
+        rows=1_000_000, positive_rate=0.05, time_columns=(), consent_candidates=(), evidence_ids=("e1",)
+    )
+    started = time.perf_counter()
+    advice = holdout_advice(load_use_case(UC), facts)
+    assert time.perf_counter() - started < 1.0
+    assert advice is not None and advice.enough and advice.recommended_fraction is None
+
+
+def test_without_a_known_rate_nothing_is_guessed() -> None:
+    from engine.agent.recommend import DataFacts, holdout_advice
+
+    for rate in (None, 0.0, 1.0):
+        facts = DataFacts(
+            rows=20_000, positive_rate=rate, time_columns=(), consent_candidates=(), evidence_ids=()
+        )
+        assert holdout_advice(load_use_case(UC), facts) is None

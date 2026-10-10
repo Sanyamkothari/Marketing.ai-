@@ -124,3 +124,12 @@ def test_a_clear_result_reads_exactly_as_before() -> None:
     verdict = campaign_verdict(clear, outcome_is_good=True, outcome_label="Bought within 30 days")
     assert verdict.headline == "The campaign added about 180 conversions"
     assert verdict.detail == "Likely between 9 and 351. Counted: Bought within 30 days."
+
+
+def test_the_campaign_page_path_carries_the_new_wording_and_no_verdict_for_an_early_look() -> None:
+    """`campaign_verdict_for` is what `GET /campaigns/{id}` calls: the same sentences, and none for an early look."""
+    from engine.measurement.measure import campaign_verdict_for
+
+    verdict = campaign_verdict_for(_report(), outcome_is_good=True)
+    assert verdict is not None and "detectable effect" in verdict.detail
+    assert campaign_verdict_for(_report(early_look=True), outcome_is_good=True) is None
