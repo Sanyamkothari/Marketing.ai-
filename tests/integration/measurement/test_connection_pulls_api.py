@@ -155,7 +155,13 @@ def test_the_same_outcomes_uploaded_as_a_file_give_the_same_report(
         )
         by_file = ok(second.post(f"/campaigns/{created}/measure", json={"as_of": MATURE.isoformat()}))
     assert pulled["campaign"]["outcomes"]["rows"] == len(frame.index)
-    for field in ("treated_rows", "control_rows", "treated_conversions", "control_conversions", "absolute_lift"):
+    for field in (
+        "treated_rows",
+        "control_rows",
+        "treated_conversions",
+        "control_conversions",
+        "absolute_lift",
+    ):
         assert by_pull["report"][field] == by_file["report"][field], field
 
 

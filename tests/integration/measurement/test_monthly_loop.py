@@ -17,18 +17,21 @@ bucket or the database: every statement the database saw is a catalogue read, `S
 
 **The world.** `telco-churn`'s recipe (a customer table and an activity log) feeds a use case set up as a
 campaign-effect use case, whose outcome is `Retained`. The truth: a contact raises the chance of staying
-by 30 points in the North and East, and lowers it by 10 points elsewhere. The model in use was trained on
-an experiment whose effect was the reverse, so the model learned from the month's randomised rows (the
-list and the 10% explore share) beats it, and is put forward to the Approver.
+by 30 points in the North, lowers it by 45 in the West and changes nothing in the East and South. The model
+in use was trained on an experiment whose effect was the reverse: it lists the West, never contacts the
+North (a predicted sleeping dog), and leaves the East and South outside its list, where the 10% explore
+share contacts some at random. The model learned from those randomised rows ranks the West last, so it
+beats the model in use on the cycle's own experiment and is put forward to the Approver.
 """
 
 from __future__ import annotations
 
 import io
+import itertools
 import shutil
 from collections.abc import Iterator
 from dataclasses import dataclass
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
 from typing import Any, Final
 
@@ -41,7 +44,9 @@ from fastapi.testclient import TestClient
 from moto import mock_aws
 
 from api.main import create_app
+from api.routes import uploads as upload_routes
 from api.routes.schedules import CLOCK_SLOT, app_request, get_firer, get_schedule_store, get_scheduling_engine
+from engine import runs as engine_runs
 from engine.access.roles import SYSTEM_SCHEDULER
 from engine.clients import LocalClientStore
 from engine.config import RunMode, get_roles, load_use_case
@@ -61,13 +66,14 @@ from engine.scheduling.scheduler import LocalScheduler
 from engine.scheduling.schedules import FiringStatus, FiringTrigger, ScheduleFiring
 from engine.settings import Settings
 from engine.storage import LocalStorage, run_key
+from engine.utils import ids as engine_ids
 from tests.unit.connections.fakes import FakeServer, driver_module
 from tests.unit.production.scheduling_support import FakeClock, tables
 
 pytestmark = [pytest.mark.slow, pytest.mark.integration]
 
 USE_CASE: Final[str] = "telco-churn"
-ENTITIES: Final[int] = 3_000
+ENTITIES: Final[int] = 8_000
 BUCKET: Final[str] = "client-exports"
 TARGET: Final[str] = "Retained"
 TREATMENT: Final[str] = "contacted"
@@ -89,14 +95,14 @@ UPLIFT: Final[dict[str, Any]] = {
 # The truth
 # ---------------------------------------------------------------------------
 def effect(frame: pd.DataFrame) -> np.ndarray:
-    """What a contact does to the chance of staying: +30 points in the North and East, -10 elsewhere."""
-    north_east = frame["region"].astype(str).str.lower().isin({"north", "east"}).to_numpy()
-    return np.where(north_east, 0.30, -0.10)
+    """What a contact does to the chance of staying: +30 points in the North, -45 in the West, none elsewhere."""
+    region = frame["region"].astype(str).str.lower().to_numpy()
+    return np.select([region == "north", region == "west"], [0.30, -0.45], default=0.0)
 
 
 def base_rate(frame: pd.DataFrame) -> np.ndarray:
     active = pd.to_numeric(frame["events_90d"], errors="coerce").fillna(0).to_numpy()
-    return np.clip(0.35 + 0.25 * (active > np.median(active)), 0.05, 0.95)
+    return np.clip(0.60 + 0.20 * (active > np.median(active)), 0.05, 0.95)
 
 
 def outcomes(frame: pd.DataFrame, treated: np.ndarray, *, seed: int, scale: float = 1.0) -> np.ndarray:
@@ -115,10 +121,11 @@ def make_root(config_root: Path, target: Path) -> Path:
     document["problem_type"] = "uplift"
     document["model_search"] = {"metric": "auuc", "metric_choices": ["auuc"]}
     document["target"] = {"column": TARGET, "positive_label": 1, "definition": "The subscriber stayed"}
+    document.pop("template", None)  # the Kaggle file's template names its own target, Churn
     document["actions"] = {
         **document.get("actions", {}),
         "explore_fraction": EXPLORE,
-        "control_group_fraction": 0.10,
+        "control_group_fraction": 0.30,
     }
     document["uplift"] = UPLIFT
     document["validation"] = {"min_rows": 200, "min_positive": 20}
@@ -187,16 +194,16 @@ def _csv(frame: pd.DataFrame) -> bytes:
 
 
 def _finish(client: TestClient, run_id: str) -> RunRecord:
-    import time
+    import time as wall
 
-    deadline = time.monotonic() + RUN_TIMEOUT_S
+    deadline = wall.monotonic() + RUN_TIMEOUT_S
     while True:
         record = RunRecord.model_validate(client.get(f"/runs/{run_id}").json()["run"])
         if record.state in {RunState.DONE, RunState.FAILED, RunState.CANCELLED}:
             assert record.state is RunState.DONE, record.error
             return record
-        assert time.monotonic() < deadline
-        time.sleep(0.2)
+        assert wall.monotonic() < deadline
+        wall.sleep(0.2)
 
 
 @pytest.fixture(scope="module")
@@ -211,9 +218,15 @@ def loop(tmp_path_factory: pytest.TempPathFactory, config_root: Path) -> Iterato
         patch.setenv("AWS_ACCESS_KEY_ID", "testing")
         patch.setenv("AWS_SECRET_ACCESS_KEY", "testing")
         server = FakeServer({"crm": {"placeholder": (["id"], [(1,)])}})
-        server.db.execute('CREATE TABLE "crm"."retention" ("customer_id", "retained", "recorded_on")')
+        server.db.execute('CREATE TABLE "crm"."retention" ("entity_key", "retained", "recorded_on")')
         patch.setattr(postgres_module, "load_sdk", lambda _name: driver_module("psycopg", server, "Error"))
         patch.setattr(sql_module, "reach", lambda host, port: None)
+        # Every seed of the cycle comes from a run or upload id (the control group and explore draws, the
+        # balancing cut, the uplift checks): numbered ids make the month the same month on every run.
+        runs, uploads = itertools.count(1), itertools.count(1)
+        patch.setattr(engine_runs, "new_run_id", lambda _moment=None: f"r_20261001_7a{next(runs):06x}")
+        patch.setattr(engine_ids, "new_upload_id", lambda: f"u_7a{next(uploads):010x}")
+        patch.setattr(upload_routes, "new_upload_id", lambda: f"u_7b{next(uploads):010x}")
         s3 = boto3.client("s3", region_name="us-east-1")
         s3.create_bucket(Bucket=BUCKET)
         made = tables(seed=20261001, entities=ENTITIES, end=date(2026, 6, 1))
@@ -516,7 +529,8 @@ def test_a_month_runs_score_treat_list_measure_learn_with_only_the_approval_left
     loop.at(month + timedelta(days=2), 7)
     waiting = loop.firings("measure")[0]
     assert (waiting["status"], waiting["result_code"]) == ("succeeded", "CAMPAIGN_NOT_MATURED"), waiting
-    closes = (start + timedelta(days=OUTCOME_WINDOW_DAYS)).date() + timedelta(days=1)
+    window_end = start + timedelta(days=OUTCOME_WINDOW_DAYS)
+    closes = window_end.date() if window_end.time() <= time(7, 1) else window_end.date() + timedelta(days=1)
     loop.at(closes, 7)
     measured = loop.firings("measure")[0]
     assert (measured["status"], measured["result_code"]) == ("succeeded", "CAMPAIGN_MEASURED"), measured
@@ -527,15 +541,17 @@ def test_a_month_runs_score_treat_list_measure_learn_with_only_the_approval_left
     assert loop.alerts(AlertKind.CAMPAIGN_MEASURED)
 
     # 5. Learning, at 08:00 the same day: a challenger, never the model in use.
-    loop.at(closes, 8)
-    learning = loop.firings("learn")[0]
-    assert (learning["status"], learning["result_code"]) == ("running", "LEARNING_STARTED"), learning
+    (learning,) = [f for f in loop.at(closes, 8) if f.schedule_id == loop.schedules["learn"]]
+    assert (learning.status, learning.result_code) == (FiringStatus.RUNNING, "LEARNING_STARTED"), learning
     loop.at(closes + timedelta(days=1), 2)  # the next tick settles it
     learned = loop.firings("learn")[0]
-    assert (learned["status"], learned["result_code"]) == ("succeeded", "MODEL_PENDING_APPROVAL"), learned
     learned_run = loop.storage.read_model(run_key(learned["run_id"], "run.json"), RunRecord)
     assert learned_run.requested_by == SYSTEM_SCHEDULER.user_id
     challenger = loop.registry.get(learned_run.model_version_id or "")
+    assert (learned["status"], learned["result_code"]) == ("succeeded", "MODEL_PENDING_APPROVAL"), (
+        learned,
+        challenger.model_dump(mode="json"),
+    )
     assert challenger.status is ModelStatus.PENDING_APPROVAL
     champion = loop.registry.get_champion(USE_CASE)
     assert champion is not None and champion.model_id == loop.champion_id, "nothing changed without a person"

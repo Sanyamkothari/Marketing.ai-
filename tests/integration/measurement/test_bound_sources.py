@@ -26,8 +26,8 @@ from moto import mock_aws
 from api.main import create_app
 from engine.config import RunMode, get_roles, load_use_case
 from engine.connections.store import ConnectionStore
-from engine.measurement.cycle import CycleServices
 from engine.measurement.campaign import InMemoryCampaignStore
+from engine.measurement.cycle import CycleServices
 from engine.measurement.pull import PullSelection
 from engine.onboarding.datasets import dataset_key
 from engine.onboarding.mapping import suggested_mapping_spec

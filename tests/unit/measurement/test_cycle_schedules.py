@@ -22,7 +22,7 @@ from engine.measurement.campaign import InMemoryCampaignStore
 from engine.measurement.cycle import CYCLE_CODES, CYCLE_SERVICES_MISSING, LEARN_NOT_READY, CycleServices
 from engine.measurement.pull import PULL_CODES, OutcomePullSpec, PullSelection
 from engine.onboarding.specs import SourceSpec
-from engine.scheduling.alerts import SEVERITY_FOR, AlertKind, AlertQuery, sns_subject, new_alert
+from engine.scheduling.alerts import SEVERITY_FOR, AlertKind, AlertQuery, new_alert, sns_subject
 from engine.scheduling.firing import ScheduleFirer
 from engine.scheduling.schedules import FiringStatus, Schedule, ScheduleKind, ScheduleParameters
 from engine.settings import Settings

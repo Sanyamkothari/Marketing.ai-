@@ -71,7 +71,6 @@ from engine.aws.run_cost import (  # Plan J M108 (DEC-1318): the same cost gate 
     start_cost_watch,
 )
 from engine.clients import ClientStore, ClientStoreError
-from engine.connections.base import ConnectorError as ConnectorErrorType  # Plan J M107
 from engine.config import (
     Catalog,
     ConfigError,
@@ -82,6 +81,7 @@ from engine.config import (
     get_catalog,
     resolve_config,
 )
+from engine.connections.base import ConnectorError as ConnectorErrorType  # Plan J M107
 from engine.contracts import (
     DriftBaseline,
     DriftReport,
