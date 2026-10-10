@@ -486,6 +486,16 @@ MILESTONE_TESTS: Final[Mapping[str, tuple[str, ...]]] = {
         "tests/unit/test_demo_summary.py",
         "tests/unit/test_seed_validated.py",
     ),
+    # M131 (DEC-1323), a Plan K milestone built early under Plan J's range: TRAI Third Amendment consent rules and
+    # the measurement purpose. test_connection_pulls_api.py (M107's) and test_privacy_routes.py (trunk) gained its
+    # Parquet import and purpose tests; test_consent_basis.py keeps a `slow` 200k-row test beside its fast ones.
+    "M131": (
+        "tests/unit/decide/test_a2p_declaration.py",
+        "tests/unit/production/test_consent_basis.py",
+        "tests/integration/decide/test_consent_basis_real_run.py",
+        "tests/integration/measurement/test_connection_pulls_api.py",
+        "tests/integration/production/test_privacy_routes.py",
+    ),
     # M137 (DEC-1325), a Plan K milestone built early under Plan J's range: "safe to roll out". The nightly test
     # (tests/statistical/test_rollout_verdict.py, DEC-1300 (e)) is left out, as for M96. test_compare.py and
     # test_model_gates.py are M96's files and gained the verdict's tests; test_compare.py keeps a fast test beside its

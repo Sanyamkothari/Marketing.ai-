@@ -399,6 +399,11 @@ codes:
     title: "An SMS action has no registered DLT template"
     meaning: "The catalogue's region (configs/regions/<region>.yaml) requires a DLT template id for SMS. This action is sent by SMS and has no id, or still has the example's placeholder, such as <your DLT template id>."
     fix: "Enter the template id registered with your DLT operator for this action in configs/decide/catalogue.yaml."
+  # Plan K M131 (DEC-1323 (a)): an automated call or IVR action the region requires to be declared
+  ACTION_A2P_UNDECLARED:
+    title: "An automated call or IVR action is not declared to the operator"
+    meaning: "The catalogue's region (configs/regions/<region>.yaml) requires a2p_declared: true on every action sent by call or ivr. India's file does, following the TRAI Third Amendment, in force about 30 days after its Gazette publication (expected late October 2026). This action is sent on one of those channels and the field is missing or false. The message names the action's position, channel and region and the field. This describes what the product checks and is not legal advice."
+    fix: "Set a2p_declared: true on the action in configs/decide/catalogue.yaml once its calls are declared to the operator as automated (A2P) calls. The value must be a real true: a quoted \"true\", 1 or \"yes\" is refused. If people dial these calls by hand, move the action to another channel name, such as telecaller."
   CATALOGUE_INVALID:
     title: "The action catalogue is not valid"
     meaning: "The file configs/decide/catalogue.yaml failed its checks. Possible causes: a missing or unknown field, the same action_id twice, channels that are not a list of channel names (lower case letters, digits and _), or a field the region requires that is missing or still a placeholder. The message names the field."
@@ -407,6 +412,15 @@ codes:
     title: "A consent row names a channel that is not a channel name"
     meaning: "A row of the imported consent file has a channel that could never match a configured channel, such as e-mail or text msg, so the customer's opt-out would never apply. A channel name is lower case letters, digits and _, such as sms or email; case and spaces around it are ignored. The row is refused rather than stored, and each such row is reported, like a row with an unreadable status."
     fix: "Correct the channel in the rows reported, or leave it empty for a record that applies to every channel, then import the file again."
+  # Plan K M131 (DEC-1323 (b)): a consent row whose basis or operator_registered cell cannot be read
+  CONSENT_BASIS_INVALID:
+    title: "A consent file row has an unknown basis"
+    meaning: "The basis column records how the consent was obtained and must be explicit, inquiry or legacy, in any letter case. A row of the imported consent file has another value. The row and the column are reported; the value itself is not repeated. The row is refused rather than stored, like a row with an unreadable status."
+    fix: "Correct the basis in the rows reported, or leave it empty where it was not recorded, then import the file again. The import is all or nothing unless you choose to import the readable rows only."
+  CONSENT_REGISTERED_INVALID:
+    title: "A consent file row has an unreadable operator_registered flag"
+    meaning: "The operator_registered column says whether the consent is held on the telecom operators' digital platform and must be true, false, yes, no, 1 or 0 (1.0 and 0.0 are also read, as a Parquet column with gaps is written). A row of the imported consent file has another value. The row and the column are reported; the value itself is not repeated."
+    fix: "Correct operator_registered in the rows reported, or leave it empty where it was not recorded, then import the file again. The import is all or nothing unless you choose to import the readable rows only."
   # --- Plan J M100: a model that chooses between several offers is never champion (DEC-1310 (h)) -----------
   MULTI_ARM_PROMOTION_REFUSED:
     title: "A model that chooses between several offers is not made champion"

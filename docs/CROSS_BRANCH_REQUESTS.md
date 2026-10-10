@@ -1745,6 +1745,68 @@ must re-include it by name in the same way, or it will be missing on a clean che
 
 **What I did meanwhile.** Checked at integration that exactly those 30 files are newly tracked.
 
+### 2026-10-10 — plan-j M131 (Plan K, built early; on main) → Phase 4b (owner of `engine/privacy/`, `configs/privacy.yaml`, `alembic/`, `api/routes/privacy.py` and the PHASE-4B block of `api/schemas.py`): consent basis, migration `0008` and a measurement purpose (record of in-place edits)
+
+**What changed** (pre-approved in the M131 scope; DEC-1323 (b), (c), (f), (h)), each additive and null or unused by
+default:
+
+* `engine/privacy/tables.py`: `ConsentRecordRow.basis` (`explicit`, `inquiry` or `legacy`) and
+  `ConsentRecordRow.operator_registered`, both nullable (null = not recorded), and both in `_ADDED_COLUMNS`, so an
+  old SQLite `platform.db` is upgraded in place by `add_missing_columns`, as M99 did for `channel`.
+* `alembic/versions/0008_consent_basis.py`: the two nullable `consent_record` columns, chained to `0007` (checked at
+  integration: the only `0008` on `main`, chain linear; upgrade and downgrade tested). Any branch adding a migration
+  after `0007` must rebase onto `0008`.
+* `engine/privacy/contracts.py`: `ConsentBasis` and `ConsentRecord.basis` / `ConsentRecord.operator_registered`.
+  They are not excluded when None, as M99's `channel` is not, so `/privacy/consent` responses and an access
+  export's `consent_history.json` now carry `"basis": null` and `"operator_registered": null` for an unchanged
+  deployment (DEC-1323 (f)).
+* `engine/privacy/consent.py`: the two optional CSV columns (row codes `CONSENT_BASIS_INVALID` and
+  `CONSENT_REGISTERED_INVALID`, by row and column, the value never quoted; `1.0` and `0.0` are read, as the
+  connection import writes a nullable-integer Parquet column), `record(basis=, operator_registered=)`,
+  `ConsentBasisRules`, and `classify(channel=, basis_rules=)` with two new buckets, `inquiry_lapsed` and
+  `legacy_unregistered`. With no rules the four older buckets and the all-channel scoring gate are unchanged.
+* `api/routes/privacy.py` and `api/schemas.py` (in place, in `ConsentRecordRequest` inside the PHASE-4B block):
+  `POST /privacy/consent` accepts optional `basis` and `operator_registered`.
+* `configs/privacy.yaml`: a new purpose, `measurement_comparison_groups`, which no use case maps and nothing reads;
+  `tests/integration/production/test_privacy_routes.py` now expects it among the lookup's purposes.
+* Tests: `tests/unit/production/test_consent_basis.py` (new); `test_consent_ledger.py`,
+  `test_consent_channel_migration.py`, `test_platform_migration.py` and the Alembic tests pass unchanged (the
+  Postgres case needs `make postgres-up`).
+
+Nothing was renamed or removed.
+
+**What is needed.** Ratification of the edits, and a decision on DEC-1323 (f): keep the two null keys in API
+responses and access exports (the M99 precedent), or exclude them when None if byte-identical exports matter more.
+
+**What I did meanwhile.** The keys are kept and documented in `docs/DECIDE.md` section 26 and DEC-1323 (f).
+
+### 2026-10-10 — plan-j M131 (Plan K, built early; on main) → Plan E (owner of `configs/pilot/help.yaml`): three codes (announcement)
+
+**What changed** (DEC-1323 (a), (b)): `ACTION_A2P_UNDECLARED` joined `engine.decide.codes.PLAN_J_CODES` beside
+`ACTION_DLT_TEMPLATE_MISSING`, and `CONSENT_BASIS_INVALID` and `CONSENT_REGISTERED_INVALID` beside
+`CONSENT_CHANNEL_INVALID`, each with a `configs/pilot/help.yaml` entry in the same place, under a Plan K M131
+comment. `tests/unit/pilot/test_help.py` is unchanged and green (the jargon check included).
+
+**What is needed.** Nothing; this is an announcement.
+
+### 2026-10-10 — plan-j M131 (Plan K, built early; on main) → all branches that write a region file or a catalogue; Plan K owners (M134, M135): the A2P rule, the consent-basis rules and their config root (announcement and open item)
+
+**What changed** (DEC-1323 (a), (c), (e)): region files accept a second rule family, `<channel>_requires_true:
+[field]`, beside `<channel>_requires`, and an optional `consent_basis` block. `configs/regions/in.yaml` now requires
+`a2p_declared: true` on `call` and `ivr` and carries the India `consent_basis` block (sms, call, ivr; inquiry
+consents valid 7 days; legacy consents only when registered). So an India catalogue with a `call` or `ivr` action
+fails to load with `ACTION_A2P_UNDECLARED` unless it sets `a2p_declared: true` (`ActionItem.a2p_declared` is a
+`StrictBool`). `channel_contactability.json` gains optional counts and `consent_basis_rules_sha256`, excluded when
+None. DEC-1323 is written in Plan J's block before DEC-1325; DEC-1324 stays reserved for M135.
+
+**What is needed.** An open item, not urgent: the rules are read from the run process's own config root, not from
+the root a run's catalogue was stamped against (DEC-1323 (e)). Recording the catalogue's region in
+`CatalogueStamp`, and resolving the region file from the stamped root, would close it; that widens a contract, so
+it was not done at integration. M134 (the compliance gate) is the natural owner.
+
+**What I did meanwhile.** Nothing in code. The limit is stated in `docs/DECIDE.md` section 26 and DEC-1323 (e), and
+`consent_basis_rules_sha256` records the rules a run really applied. One config root per deployment avoids it.
+
 ### 2026-10-10 — plan-j M137 (Plan K, built early; on main) → Phase 3b (owners of `engine/uplift/` and `docs/UPLIFT.md`): "safe to roll out" on the equal-budget comparison (record of additive edits)
 
 **What changed** (pre-approved in the M137 scope; DEC-1325), each additive and off or null by default:
