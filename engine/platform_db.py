@@ -62,6 +62,8 @@ PLATFORM_TABLES: Final[tuple[str, ...]] = (
     "platform_setting",
     # 0006_campaigns (Plan J M94) - `engine.measurement.campaign.CAMPAIGN_TABLE`
     "campaign",
+    # 0009_agentic_ledger (Plan K M132) - `engine.agentic.ledger.DECISION_LOG_TABLE`
+    "agentic_decision_log",
 )
 """Every Phase 4b table a migration creates, beside `engine.aws.postgres.METADATA_TABLES`.
 
