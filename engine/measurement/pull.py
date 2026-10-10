@@ -238,11 +238,12 @@ def resolve(connections: ConnectionStore, connection_id: str, selection: PullSel
     config = dict(record.config)
     if group == "database":
         if not selection.is_table:
-            raise invalid(
-                "A database holds tables, not files or folders.", "Pick a schema and a table from the list."
-            )
+            raise invalid("A database holds tables, not files or folders.", "Pick a table from the list.")
         if not (selection.schema_name and selection.table):
-            raise invalid("A table is named by its schema and its own name.", "Pick both from the list.")
+            raise invalid(
+                "A table is named by where it sits in the database and its own name.",
+                "Pick it from the list.",
+            )
         chosen = Selection(schema_name=selection.schema_name, table=selection.table)
         secrets = connections.secrets(record)
         return Resolved(

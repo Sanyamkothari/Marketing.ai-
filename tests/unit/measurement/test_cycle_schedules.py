@@ -22,6 +22,7 @@ from engine.measurement.campaign import InMemoryCampaignStore
 from engine.measurement.cycle import CYCLE_CODES, CYCLE_SERVICES_MISSING, LEARN_NOT_READY, CycleServices
 from engine.measurement.pull import PULL_CODES, OutcomePullSpec, PullSelection
 from engine.onboarding.specs import SourceSpec
+from engine.pilot.plain import jargon_in
 from engine.scheduling.alerts import SEVERITY_FOR, AlertKind, AlertQuery, new_alert, sns_subject
 from engine.scheduling.firing import ScheduleFirer
 from engine.scheduling.schedules import FiringStatus, Schedule, ScheduleKind, ScheduleParameters
@@ -139,6 +140,7 @@ def test_a_loop_kind_without_its_services_fails_with_a_plain_reason(world: World
         assert (firing.status, firing.error_code) == (FiringStatus.FAILED, CYCLE_SERVICES_MISSING)
     failed = world.alerts.store.query(AlertQuery(kind=AlertKind.SCHEDULED_JOB_FAILED))  # type: ignore[attr-defined]
     assert len(failed) == 2
+    assert all(jargon_in(alert.message) == () for alert in failed)
 
 
 def test_nothing_new_is_a_quiet_success(world: World) -> None:

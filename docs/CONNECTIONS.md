@@ -80,6 +80,36 @@ Only one query ever reads a table: `SELECT * FROM <schema>.<table> LIMIT n`, wit
 the database's own identifier rules (psycopg `sql.Identifier`, MySQL back-ticks, Snowflake double
 quotes) and accepted only when the database lists them. BigQuery uses its table API, with no SQL.
 
+## The monthly loop reads from connections (Plan J M107, DEC-1317)
+
+So the value arrives every month without anyone downloading and uploading files, three things can be
+read from a saved connection, always read-only and never written back (`engine/measurement/pull.py`):
+
+* **A client's table, kept bound** - `POST /clients/{id}/sources/from-connection {connection_id,
+  selection, role?}` adds a source exactly as the file upload `POST /clients/{id}/sources` does (same
+  limits, same profile, same role), with a `binding` saying where it came from. `selection` is one file
+  (`path`), **the newest CSV or Parquet file under a folder** (`prefix`: newest by the store's own
+  last-modified time) or a table (`schema_name` and `table`). Before every scheduled build of a recipe
+  that reads a bound source, the table is read again by that binding - for a folder, whatever file is
+  newest now - and the build uses it (`docs/ONBOARDING.md` section 8). Nothing is uploaded.
+* **A campaign's outcomes** - `POST /campaigns/{id}/outcomes {connection_id, selection, date_column,
+  date_from, date_to, outcome_column?}` reads only the rows dated inside the window and keeps them as an
+  ordinary upload with `pull_source.json` beside it (the connection, the table or file, the window, how
+  many rows, and whether the database or Marketing AI applied the window). A `measure` schedule does the
+  same on its own once the campaign's outcome window has closed.
+* **Consent** - `POST /privacy/consent/imports/from-connection {connection_id, selection, client_id?,
+  partial?}` (Admin) imports a consent table or file all or nothing, exactly as the file import.
+
+**The query rule, amended (DEC-1317 amends DEC-1105).** A pull from a SQL database (PostgreSQL, Redshift,
+MySQL, Snowflake) adds at most **one** condition to the one query: a date window on a column the request
+declared - `SELECT * FROM <schema>.<table> WHERE <column> >= '<from>' AND <column> < '<day after to>'
+LIMIT n`. The column must be one of the columns the table itself reports (read through the same query
+with `LIMIT 0`) and is quoted by the same identifier rule as the names; the two dates are written from
+date values, never from typed text. There is no free SQL: a request with any other field is refused,
+and a name the database did not list never reaches SQL. A file in a store, or a BigQuery table, is read
+whole within the size limit and the same window is applied after reading; a row whose date cannot be read
+is left out and counted.
+
 ## The AI service: two settings, Product AI and Deliverable AI
 
 Marketing AI talks to a language model for two different jobs, so there are **two settings**, each

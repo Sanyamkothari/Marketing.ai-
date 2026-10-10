@@ -513,6 +513,9 @@ def test_openapi_builds_and_documents_every_route(client: TestClient) -> None:
         "/cost/spend",
         # Plan J M105: what needs attention across the campaigns, and the value proven to date (DEC-1315)
         "/campaigns/summary",
+        # Plan J M107: a source and a consent table read from a saved connection (DEC-1317)
+        "/clients/{client_id}/sources/from-connection",
+        "/privacy/consent/imports/from-connection",
     }
 
 

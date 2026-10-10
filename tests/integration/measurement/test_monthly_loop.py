@@ -59,6 +59,7 @@ from engine.measurement.pull import PullSelection
 from engine.onboarding.datasets import dataset_key
 from engine.onboarding.mapping import suggested_mapping_spec
 from engine.onboarding.sources import FileSourceReader, add_connection_source
+from engine.pilot.plain import jargon_in
 from engine.registry import LocalModelRegistry
 from engine.scheduling.alerts import AlertKind, AlertQuery, AlertStore
 from engine.scheduling.firing import build_dataset_from_spec
@@ -560,6 +561,11 @@ def test_a_month_runs_score_treat_list_measure_learn_with_only_the_approval_left
     # A second learn firing finds nothing new to learn from.
     loop.at(closes + timedelta(days=1), 8)
     assert loop.firings("learn")[0]["result_code"] == "NOTHING_TO_LEARN"
+
+    # Each step's alert is in plain words.
+    for kind in (AlertKind.TREAT_LIST_READY, AlertKind.CAMPAIGN_MEASURED, AlertKind.CHALLENGER_WAITING):
+        for alert in loop.alerts(kind):
+            assert jargon_in(alert.message) == (), (kind, alert.message)
 
     # Every firing was the scheduler's; nothing was written to the client's systems.
     for kind in loop.schedules:

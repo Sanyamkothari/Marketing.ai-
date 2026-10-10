@@ -379,3 +379,57 @@ def test_a_pull_is_bounded_by_the_size_limit(s3: Any, store: ConnectionStore) ->
             now=NOW,
         )
     assert caught.value.code == "CONNECTION_TOO_LARGE"
+
+
+def test_a_window_over_200k_rows_of_a_store_file_is_read_in_linear_time(
+    s3: Any, store: ConnectionStore
+) -> None:
+    """Read once, filtered by one vectorised comparison: no loop over rows (PLAN_J_DELEGATION §4.7, item 3).
+
+    About 0.6 s here for 200,000 rows read from the bucket and filtered; 1,000,000 rows take about 3 s
+    (the filter alone is about 0.25 s at 1,000,000).
+    """
+    rows = 200_000
+    days = pd.date_range("2026-01-01", periods=90).strftime("%Y-%m-%d").to_numpy()
+    frame = pd.DataFrame(
+        {
+            "customer_id": [f"C{i:07d}" for i in range(rows)],
+            "converted": [i % 2 for i in range(rows)],
+            "recorded_on": days[[i % 90 for i in range(rows)]],
+        }
+    )
+    s3.put_object(Bucket=BUCKET, Key="outcomes/big.csv", Body=frame.to_csv(index=False).encode())
+    started = time.perf_counter()
+    kept, record = pull_frame(
+        store,
+        _bucket(store),
+        PullSelection(path="outcomes/big.csv"),
+        window=FEBRUARY,
+        limit_bytes=LIMIT,
+        now=NOW,
+    )
+    elapsed = time.perf_counter() - started
+    assert record.rows == len(kept.index) == int((frame["recorded_on"].str[5:7] == "02").sum())
+    assert elapsed < 10.0, f"{elapsed:.1f} s for {rows:,} rows"
+
+
+def test_every_refusal_is_in_plain_words(s3: Any, store: ConnectionStore, server: FakeServer) -> None:
+    """Each message a person reads passes `jargon_in` (Plan J's rule for every message shown)."""
+    from engine.pilot.plain import jargon_in
+
+    database, bucket = _database(store), _bucket(store)
+    s3.put_object(Bucket=BUCKET, Key="outcomes/q1.csv", Body=_csv(ROWS))
+    unknown = DateWindow(column="nope", date_from=date(2026, 2, 1), date_to=date(2026, 2, 2))
+    attempts = [
+        (database, PullSelection(prefix="exports/"), FEBRUARY),
+        (database, PullSelection(table="outcomes"), FEBRUARY),
+        (database, PullSelection(schema_name="crm", table="outcomes"), unknown),
+        (bucket, PullSelection(schema_name="crm", table="outcomes"), None),
+        (bucket, PullSelection(prefix="empty/"), None),
+        (bucket, PullSelection(path="outcomes/q1.csv"), unknown),
+    ]
+    for connection, selection, window in attempts:
+        with pytest.raises(ConnectorError) as caught:
+            pull_frame(store, connection, selection, window=window, limit_bytes=LIMIT, now=NOW)
+        words = f"{caught.value.message} {caught.value.fix or ''}"
+        assert jargon_in(words) == (), (caught.value.code, words)
