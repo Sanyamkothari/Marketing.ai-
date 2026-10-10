@@ -508,6 +508,7 @@ MILESTONE_TESTS: Final[Mapping[str, tuple[str, ...]]] = {
     ),
     "M151": ("tests/unit/doctor/test_diagnose.py", "tests/integration/test_api_doctor.py"),
     "M152": ("tests/unit/agent/test_propose_step.py",),
+    "M154": ("tests/unit/agent/test_edits.py", "tests/integration/agent/test_edit_ui.py"),
     "M153": (
         "tests/unit/agent/test_value_steps.py",
         "tests/unit/agent/test_recipe_plan_l.py",

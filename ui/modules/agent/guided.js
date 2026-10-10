@@ -39,7 +39,17 @@ import {
 import { createConnectionPicker } from "../connections/picker.js";
 import { TABLE_FILE_TYPES, bindIntakeNotes, intakeNotesHtml } from "../intake/notes.js";
 import { takeHandoff } from "../doctor/handoff.js";
-import { postAnswer, postApply, postDecisions, postMessage, postPreview, startSession } from "./api.js";
+import {
+  postAnswer,
+  postApply,
+  postDecisions,
+  postEdit,
+  postMessage,
+  postPreview,
+  postRows,
+  startSession,
+} from "./api.js";
+import { PAGE_ROWS, cellTarget, editRequest, editorHtml, freshEditor } from "./edit.js";
 import { sentHtml, statusHtml } from "./sent.js";
 import { injectAgentStyles } from "./styles.js";
 
@@ -69,6 +79,7 @@ function fresh() {
     picker: null, // "Pick from a connection" (Plan H M80) while phase is "picking"
     fileName: "",
     file: null, // the File chosen, kept so intake's "read it as it is" can send it again (Plan L M150)
+    editor: freshEditor(), // editing by hand (Plan L M154)
     upload: null,
     uploadError: null,
     session: null,
@@ -168,8 +179,13 @@ function uploadStep(entry, n) {
   );
 }
 
+/** Who made a suggestion (Plan L M152, DEC-1520); the rules' own carry no label. */
+const SOURCE_LABELS = { ai: "Suggested by the AI", person: "Your edit" };
+
 function itemHtml(g, proposal, disabled) {
-  const check = proposal.confidence === "check" ? `<span class="pill warn">Please check</span>` : "";
+  const label = SOURCE_LABELS[proposal.source];
+  const source = label ? `<span class="pill" data-ag-source="${esc(proposal.source)}">${esc(label)}</span>` : "";
+  const check = (proposal.confidence === "check" ? `<span class="pill warn">Please check</span>` : "") + source;
   return `<label class="ag-item"><input type="checkbox" data-ag-proposal="${esc(proposal.proposal_id)}"${
     ticked(g, proposal) ? " checked" : ""
   }${disabled ? " disabled" : ""}><span><span class="ag-t">${esc(proposal.title)}</span>${check}<span class="ag-r">${esc(
@@ -444,7 +460,7 @@ function mainHtml(entry) {
     `<p class="ag-lead">Ticked suggestions are applied when you approve. Untick any you do not want; the ones marked “Please check” need your eye.</p>${checklistHtml(
       g,
       closed,
-    )}`,
+    )}${score || closed ? "" : editorHtml(g.editor, { disabled: Boolean(g.busy) })}`,
   )}${summaryHtml(entry, three, closed)}${actionsHtml(entry)}`;
 }
 
@@ -696,6 +712,86 @@ async function ask(entry) {
   if (input && typeof input.focus === "function") input.focus();
 }
 
+// --- editing by hand (Plan L M154) -----------------------------------------------------------------
+
+async function loadRows(entry, offset) {
+  const ed = entry.state.editor;
+  ed.busy = true;
+  ed.error = null;
+  draw(entry);
+  try {
+    ed.page = await postRows(entry.state.upload.upload_id, { offset, limit: PAGE_ROWS });
+    ed.offset = offset;
+  } catch (error) {
+    ed.error = error;
+  }
+  ed.busy = false;
+  draw(entry);
+}
+
+async function submitEdit(entry, choice, value) {
+  const g = entry.state;
+  const ed = g.editor;
+  const request = editRequest(ed, choice, value);
+  if (!request) {
+    ed.editing = null;
+    draw(entry);
+    return;
+  }
+  ed.busy = true;
+  ed.error = null;
+  draw(entry);
+  try {
+    adopt(g, await postEdit(g.upload.upload_id, request));
+    ed.editing = null;
+    g.report = null;
+    announceStatus("Your edit was added to the list");
+  } catch (error) {
+    ed.error = error;
+  }
+  ed.busy = false;
+  draw(entry);
+}
+
+function bindEditor(entry) {
+  const main = entry.main;
+  const ed = entry.state.editor;
+  main.querySelectorAll("[data-ag-editor]").forEach((button) =>
+    button.addEventListener("click", () => {
+      const act = button.dataset.agEditor;
+      if (act === "open") {
+        ed.open = true;
+        loadRows(entry, 0);
+      } else if (act === "close") {
+        Object.assign(ed, freshEditor());
+        draw(entry);
+      } else if (act === "next") loadRows(entry, ed.offset + PAGE_ROWS);
+      else if (act === "prev") loadRows(entry, Math.max(0, ed.offset - PAGE_ROWS));
+    }),
+  );
+  main.querySelectorAll("[data-ag-cell]").forEach((button) =>
+    button.addEventListener("click", () => {
+      const [r, c] = button.dataset.agCell.split(":").map(Number);
+      ed.editing = cellTarget(ed, r, c);
+      draw(entry);
+      const input = main.querySelector("[data-ag-editform] input");
+      if (input) input.focus();
+    }),
+  );
+  const form = main.querySelector("[data-ag-editform]");
+  if (form) {
+    const value = () => (form.querySelector("input") ? form.querySelector("input").value : "");
+    form.addEventListener("submit", (event) => {
+      event.preventDefault();
+      submitEdit(entry, "cell", value());
+    });
+    form.querySelectorAll("[data-ag-edit]").forEach((button) => {
+      if (button.dataset.agEdit === "cell") return; // the form's own submit
+      button.addEventListener("click", () => submitEdit(entry, button.dataset.agEdit, value()));
+    });
+  }
+}
+
 function restart(entry) {
   entry.state = fresh();
   draw(entry);
@@ -714,6 +810,7 @@ function bind(entry) {
       if (chosen) uploadFile(entry, chosen);
     });
   }
+  bindEditor(entry);
   // Plan L M150: the same file again, read as it is or from another sheet; the helper starts over.
   bindIntakeNotes(main, {
     onAsIs: () => g.file && uploadFile(entry, g.file, { intake: false }),

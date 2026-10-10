@@ -113,6 +113,13 @@ def add_edit(
     if column in personal and kind is not RecipeStepKind.DROP_COLUMN:
         raise SessionError("AGENT_EDIT_NOT_ALLOWED", "A column holding personal data can only be hidden.")
     params = dict(params)
+    if kind is RecipeStepKind.CORRECT_CELLS and "key_column" not in params:
+        key_column = roles_of(session)[0]
+        if key_column is None:
+            raise SessionError(
+                "AGENT_EDIT_INVALID", "Choose the ID column first: a correction is found by it."
+            )
+        params["key_column"] = key_column
     earlier: Proposal | None = None
     if kind in _MERGED:
         earlier = next(

@@ -37,6 +37,20 @@ const CSS = `
 .ag-typed{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px;padding-top:10px;border-top:1px dashed var(--line)}
 .ag-typed-input{flex:1;min-width:220px;height:32px;padding:4px 10px;border:1px solid var(--line);border-radius:6px;font-size:13px;color:var(--ink);background:var(--card)}
 .ag-typed-input:focus{border-color:var(--brand-blue);outline:none}
+.ag-editbar{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-top:12px}
+.ag-tablewrap{overflow-x:auto;max-width:100%;padding:0 14px}
+.ag-table{border-collapse:collapse;font-size:12px;min-width:100%}
+.ag-table th,.ag-table td{border-bottom:1px solid var(--line);padding:2px 6px;text-align:left;white-space:nowrap}
+.ag-table th{color:var(--muted);font-weight:600}
+.ag-table .ag-ln,.ag-table .ag-pd{color:var(--muted)}
+.ag-cell{background:none;border:0;padding:2px 0;font:inherit;color:var(--ink);cursor:pointer;text-align:left}
+.ag-cell:hover,.ag-cell:focus{text-decoration:underline;outline:none}
+.ag-empty{color:var(--muted);font-style:italic}
+.ag-pager{padding:8px 14px}
+.ag-editform{margin:8px 14px 12px;padding:10px 12px;border:1px solid var(--line);border-radius:8px;font-size:13px}
+.ag-editform p{margin:0 0 6px}
+.ag-editform input{margin-left:6px;height:28px;padding:2px 8px;border:1px solid var(--line);border-radius:6px;color:var(--ink);background:var(--card)}
+.ag-editform .btn-row{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}
 .ag-stop p{margin:0;padding:14px 20px 0;line-height:1.55}
 .ag-stop .ag-stop-ask{margin:12px 20px 16px;padding-top:0;border-top:0}
 .ag-sum{margin-top:12px;display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:12px 24px}

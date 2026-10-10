@@ -1821,7 +1821,7 @@ ten numbers per milestone.
 | M151 | Data Doctor, the place | `#/doctor`, linked from Home: many files, what each one is, what they can power per use case (Guided setup's own advisor), a hand-off that opens the use case's Guided setup on the file | **done** | `tests/unit/doctor/test_diagnose.py`, `tests/integration/test_api_doctor.py` |
 | M152 | The AI proposes steps | `propose_step`: the chat suggests a data fix, grounded in a look at the column, checked by the recipe engine, measured on 1,000 rows, never ticked, labelled as the AI's (prompt v2) | **done** | `tests/unit/agent/test_propose_step.py` |
 | M153 | New value steps | nine stateless steps (`map_values`, `set_missing_text`, `convert_units`, `correct_cells`, `split_column`, `valid_range`, `fill_missing`, `remove_rows`, `rename_column`), and the rules' range suggestion for ages and percentages | **done** | `tests/unit/agent/test_value_steps.py`, `tests/unit/agent/test_recipe_plan_l.py`, `tests/unit/agent/test_range_advice.py` |
-| M154 | Editing by hand | table view; edits become steps; undo by unticking | pending | — |
+| M154 | Editing by hand | "Edit by hand" in Guided setup: a table view (personal data hidden); a cell corrected for one customer, a value changed everywhere, rows left out; each edit an accepted step labelled "Your edit", undone by unticking, replayed next month | **done** | `tests/unit/agent/test_edits.py`, `tests/integration/agent/test_edit_ui.py` |
 | M155 | Several files (level 4) | Data Doctor drives the onboarding builder; built datasets carry a recipe | pending | — |
 | M156 | Wide sheets | `unpivot` | pending | — |
 | M157 | Outcome from events (level 5) | `propose_label`, agreed as a sentence | pending | — |

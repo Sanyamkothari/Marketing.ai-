@@ -84,7 +84,20 @@ and never ticked for you). **Suggested by the AI**: the chat, when you ask ("Bom
 city"); the AI must look at the column first, the fix is tried on your first 1,000 rows and shows what it
 changes, and it is never ticked for you. **Your edit**: what you did by hand (M154).
 
-## 4. What Data Doctor will not do
+## 4. Editing by hand (M154)
+
+Under Guided setup's suggestions, **Edit by hand** opens your rows (personal-data columns show
+`[personal data]`). Click a value and choose:
+
+- **Change this cell only** - for that customer (found by the ID column). Next month the same customer
+  with the same wrong value is corrected again; if the value has changed since, it is left alone.
+- **Change "…" everywhere** - every cell holding that value, in this file and next month's.
+- **Leave out rows with "…"** - for test rows and the like. Never by the outcome column.
+
+Each edit appears in the list above, ticked and labelled **Your edit**; untick it to undo it. Many
+corrections in one column are kept as one step.
+
+## 5. What Data Doctor will not do
 
 - **Match people across files with no shared key.** It can tidy keys (leading zeros, prefixes) and say how many
   match; it does not guess that "R. Sharma, Pune" is "Rahul Sharma".

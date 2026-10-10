@@ -326,6 +326,7 @@ class RowsResponse(StrictBase):
     personal: tuple[str, ...] = Field(description="Columns whose values are hidden.")
     rows: tuple[tuple[str | None, ...], ...]
     row_numbers: tuple[int, ...] = Field(description="Each row's line in the file, the header being line 1.")
+    key_column: str | None = Field(default=None, description="The ID column a correction finds its row by.")
     offset: int
     total: int = Field(description="Rows that match (all rows when nothing is searched).")
 
@@ -698,6 +699,7 @@ def rows_agent_session(
         personal=tuple(page["personal"]),
         rows=tuple(tuple(row) for row in page["rows"]),
         row_numbers=tuple(page["row_numbers"]),
+        key_column=roles_of(session)[0],
         offset=page["offset"],
         total=page["total"],
     )
