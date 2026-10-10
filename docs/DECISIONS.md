@@ -1415,4 +1415,86 @@ DEC-1500…1509, M151 → DEC-1510…1519, …), so parallel work on two milesto
   *Consequences of M150:* `tests/unit/intake/` (rules, the 30-file messy bench, stored-file edges, connectors),
   `tests/integration/test_api_intake.py` and `tests/integration/test_intake_ui.py` (jsdom) prove it. A clean CSV is
   stored byte for byte as before (pinned by a test).
+- **DEC-1510 — M151: Data Doctor is a place, `#/doctor`, and Home points to it.** *Context:* a person with several
+  files had to pick a use case before learning what the files could do. *Decision:* (a) "Bring your data" takes
+  any number of CSV, Excel or Parquet files before anything is chosen; each is an ordinary upload (`POST /uploads`,
+  under Home's first trainable use case), so intake, limits, retention and erasure are an upload's. (b) Home's
+  "For you" line links to it through the existing `registerForYou` seam; no shared screen is edited. (c) The page
+  is `ui/modules/doctor/index.js`, registered in `ui/index.html`'s PLAN-L block, its route claimed through
+  `registerModule`. *Consequences:* the place adds no storage of its own.
+- **DEC-1511 — The diagnosis reuses the code that already decides each question.** *Decision:* (a) What a file
+  is comes from onboarding's role detector (`profile_source` / `detect_roles`), with its reasons, and the
+  profile's key and time candidates; the label is the role's own `description`. (b) What the files can power is
+  Guided setup's own advisor, rules only, run for each trainable use case Home lists on each file whose columns
+  name that use case's outcome (exactly, ignoring case, or by one `target_synonyms`), on its first 200,000 rows:
+  `ready` when it has no blocking question and no "Please check" suggestion, `check` otherwise, `missing` or
+  `too_small` when it stops (its own reason, "too few"/"at least" wording read as too small). A use case no file
+  names the outcome of is `missing`, with what to collect from `target.definition` and `target.label_source`.
+  Ready first, then check, too small, missing. *Consequences:* the place never promises more than Guided setup
+  then does; a file whose outcome column has an unusual name is `missing` here until M157 (outcome from events)
+  or a rename (M154) names it.
+- **DEC-1512 — `POST /doctor/diagnosis` and `POST /doctor/handoff`.** *Decision:* both need an Analyst, as
+  uploading does. The hand-off copies the file as received (`original_key`, else `source_key`) into a new upload
+  of the chosen use case and reads it the same way (the same sheet, intake on or off), so its Guided setup opens
+  on it; the original upload is untouched, and handing a file to its own use case returns that upload (200).
+- **DEC-1513 — The hand-off reaches Guided setup in memory.** *Decision:* `ui/modules/doctor/handoff.js` holds the
+  handed upload until that use case's Guided setup mounts and takes it once; the helper then starts as after a
+  file upload. A reload forgets it, and the person picks the file again.
+- **DEC-1520 — M152: the chat suggests data fixes (`propose_step`).** *Context:* the chat could look and talk but
+  only suggest settings, so what it understood (two spellings that mean one city, units, impossible values) could
+  not become a fix. *Decision:* (a) A new action `propose_step` `{kind, column, params, new_column, reason,
+  evidence_ids}` for the kinds in `CHAT_STEP_KINDS` (parsing and tidying, `set_missing`, Plan L's value steps,
+  rename and hide). Combining rows and formulas stay the rules'; correcting a cell and leaving rows out stay the
+  person's own. (b) It is refused, with a code the model can correct once, when the kind is not the chat's, the
+  column holds personal data (only hiding is allowed), no cited look-tool result is about the column
+  (`AGENT_STEP_UNGROUNDED`), `check_recipe` refuses it with the accepted steps, or it changes nothing on the
+  first 1,000 rows (`AGENT_STEP_NO_EFFECT`). (c) A suggestion that passes is pending, `check`, never ticked, cites
+  the look it rests on, and carries its measured effect in its reason ("On the first 1000 rows it changes 334
+  values."). (d) `Proposal.source` (added, defaulted: null for the rules and every session saved before) says
+  `ai` for the chat's suggestions, settings included, and `person` for edits; the screen labels both. (e) The
+  prompt is `data_agent.v2.md` (v1 kept): it teaches the action and its kinds, and rule 2 now says a suggested
+  fix is only a suggestion. (f) `changed` joins the egress gate's known result keys.
+- **DEC-1530 — M153: nine new step kinds, all stateless.** *Decision:* `map_values`, `set_missing_text`,
+  `convert_units`, `correct_cells`, `split_column`, `valid_range`, `fill_missing`, `remove_rows`,
+  `rename_column` (`engine/agent/value_steps.py`), each bounded (500 spellings, 20 words, 20 units, 1,000
+  corrections, 50 values) and refused on the ID and the outcome. A fill is one constant: a value spelled like a
+  statistic ("mean") is refused. `split_column` and `remove_rows` need the `derive` level. Order: the person's
+  and the AI's text fixes first (phase 0), then parsing, units and splits, then emptying codes and ranges, then
+  fills and leaving rows out, then combining, deriving, and hiding and renaming last. Only the order matters, so
+  the numbers moved (as DEC-1220's did) and every recipe saved before orders and hashes as it did.
+- **DEC-1531 — The rules suggest a range where a column's name says it.** *Decision:* a number column with a word
+  `age` (0-120) or `pct`/`percent`/`percentage` (0-100, and only on the 0-100 scale) holding at least 20 numbers,
+  of which at least one and at most a fifth fall outside, gets a `valid_range` suggestion: `check`, never ticked
+  (`NEVER_TICKED_STEPS`), citing `describe_numbers`, naming how many rows and which values. *Consequences:* the
+  22 pinned benchmark files are unchanged (none has such a column).
+- **DEC-1540 — M154: an edit by hand is the person's accepted step.** *Decision:* `engine/agent/edits.add_edit`
+  turns an edit into a `RecipeStep` of the kinds in `PERSON_STEP_KINDS`, checked by `check_recipe` with the
+  accepted steps and tried on the first 1,000 rows, and adds it accepted, `decided_by: user`, `source: person`:
+  ticked, undone by unticking, kept across re-advice like every decision of the person's. Corrections of one
+  column are one `correct_cells` step and spellings one `map_values` step, so fifty edits add one step. A
+  correction applies only where the row's ID and the old value both still match, so next month a changed value
+  is left alone and counted, never overwritten.
+- **DEC-1541 — The table view.** *Decision:* `POST /uploads/{id}/agent-session/rows` (Analyst, a POST like the preview, audited as a read)
+  pages through the file in order, 100 rows at most, optionally only rows where one column equals a value;
+  personal-data columns show `[personal data]` and cannot be searched; every other cell is masked and cut to 60
+  characters, as the preview does. `POST /uploads/{id}/agent-session/edits` adds an edit and answers the session.
+
+  *Consequences of M151-M154:* `tests/unit/doctor/`, `tests/integration/test_api_doctor.py` (three mixed files reach Guided
+  setup with no Manual setup), `tests/unit/agent/test_value_steps.py`, `test_recipe_plan_l.py`, `test_range_advice.py`,
+  `test_propose_step.py` and `test_edits.py` prove it; the 22 pinned benchmark files are unchanged.
+- **DEC-1506 — M160: the messy-file benchmark, and where M160 and M161 take their numbers.** *Context:* plan §11
+  sets targets (under 2% of files fail at upload, at least 80% reach an approved run without Manual setup, at
+  most three questions per file) that nothing measured. *Decision:* (a) `scripts/plan_l_benchmark.py` makes
+  thirty files, Home's five trainable use cases times six mixes of what exports do (workbooks, titles, totals and
+  notes, empty rows, a repeated column, money as text, words meaning "no value", the outcome spelled
+  differently), from each use case's generated data, and drives each through `POST /uploads`, the diagnosis,
+  the hand-off and Guided setup to Approve with no person: blocking questions get their recommended option,
+  recommended suggestions are accepted and the rest rejected. (b) It writes `reports/plan_l_benchmark.{md,json}`
+  and says plainly what it cannot prove: the data under the mess is generated, and time for a non-technical
+  person needs a pilot. (c) Measured on 10 Oct 2026: 0 of 30 fail at upload, 30 of 30 reach an approved run,
+  0.33 questions per file, a median of two clicks in the second month (Guided setup starts again; M159's
+  memory is what can make it one). (d) M150 used DEC-1500…1505 and M151…M159 own ten numbers each, so M160 and
+  M161 take M150's free tail, DEC-1506…1509. *Consequences:* `tests/integration/test_plan_l_benchmark.py` drives
+  two files in the fast suite and all thirty, against the targets, in the slow one. AI suggestions still never
+  start ticked (plan §11): the benchmark accepts only the rules' recommended set.
 <!-- ---- END PLAN-L ---- -->

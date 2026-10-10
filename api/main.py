@@ -307,6 +307,10 @@ from api.routes.drift_events import router as drift_events_router  # noqa: E402
 PHASE_ROUTERS.append(drift_events_router)
 # ---- END PLAN-J ----
 # ---- PLAN-L (data doctor) — append only below this line ----
+# Plan L M151 (DEC-1512): Data Doctor, the place - POST /doctor/diagnosis and POST /doctor/handoff (Analyst).
+from api.routes.doctor import router as doctor_router  # noqa: E402
+
+PHASE_ROUTERS.append(doctor_router)
 # ---- END PLAN-L ----
 
 app: FastAPI = create_app()

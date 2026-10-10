@@ -37,6 +37,20 @@ from engine.agent.contracts import RecipeReceipt, RecipeStep, RecipeStepKind, St
 from engine.agent.formats import ParseOutcome, map_booleans, normalise_texts, parse_dates, parse_numbers
 from engine.agent.placeholders import MAX_PLACEHOLDER_VALUES, set_missing
 from engine.agent.reshape import CombineError, CombineSpec, LeakCheck, combine_rows
+from engine.agent.value_steps import (
+    MAX_CORRECTIONS,
+    MAX_MAPPINGS,
+    MAX_MISSING_WORDS,
+    REMOVE_OPERATORS,
+    convert_units,
+    correct_cells,
+    fill_missing,
+    map_values,
+    remove_rows,
+    set_missing_text,
+    split_column,
+    valid_range,
+)
 from engine.onboarding.transforms import TransformError, derive
 from engine.utils.time import utc_now
 
@@ -50,14 +64,27 @@ __all__ = [
 ]
 
 STEP_PHASE: Final[dict[RecipeStepKind, int]] = {
+    # Plan L (DEC-1530): the person's and the AI's text fixes come first, on the values as written, so a
+    # corrected or emptied cell is what the parsers then read; a fill comes after every step that empties
+    # cells, and rows are left out before they are combined. Only the order matters (the numbers moved,
+    # as DEC-1220's did), so every recipe saved before orders and hashes exactly as it did.
+    RecipeStepKind.CORRECT_CELLS: 0,
+    RecipeStepKind.MAP_VALUES: 0,
+    RecipeStepKind.SET_MISSING_TEXT: 0,
     RecipeStepKind.PARSE_NUMBER: 1,
     RecipeStepKind.PARSE_DATE: 1,
     RecipeStepKind.MAP_BOOLEAN: 1,
     RecipeStepKind.NORMALISE_TEXT: 1,
+    RecipeStepKind.CONVERT_UNITS: 1,
+    RecipeStepKind.SPLIT_COLUMN: 1,
     RecipeStepKind.SET_MISSING: 2,
-    RecipeStepKind.COMBINE_ROWS: 3,
-    RecipeStepKind.DERIVE: 4,
-    RecipeStepKind.DROP_COLUMN: 5,
+    RecipeStepKind.VALID_RANGE: 2,
+    RecipeStepKind.FILL_MISSING: 3,
+    RecipeStepKind.REMOVE_ROWS: 3,
+    RecipeStepKind.COMBINE_ROWS: 4,
+    RecipeStepKind.DERIVE: 5,
+    RecipeStepKind.DROP_COLUMN: 6,
+    RecipeStepKind.RENAME_COLUMN: 6,
 }
 """Parse and tidy, then empty placeholder codes, then combine rows, then derive, then drop (Plan G §6.3,
 M76, DEC-1220). Placeholders come after parsing, so a code written as text (`"99"`) is already a number,
@@ -66,6 +93,8 @@ and before combining, so a code is never added up or averaged into a combined co
 _LEVEL_OF: Final[dict[RecipeStepKind, AgentLevel]] = {
     RecipeStepKind.DERIVE: AgentLevel.DERIVE,
     RecipeStepKind.COMBINE_ROWS: AgentLevel.RESHAPE,
+    RecipeStepKind.SPLIT_COLUMN: AgentLevel.DERIVE,
+    RecipeStepKind.REMOVE_ROWS: AgentLevel.DERIVE,
 }
 """The level a step kind needs; every kind not listed is `clean`."""
 
@@ -231,6 +260,23 @@ def check_recipe(
             )
         elif step.kind is RecipeStepKind.DROP_COLUMN:
             available.remove(step.column)
+        elif step.kind is RecipeStepKind.CORRECT_CELLS and str(_params(step)["key_column"]) not in available:
+            raise RecipeError(
+                "RECIPE_COLUMN_MISSING",
+                f"The file has no column '{_params(step)['key_column']}' to find the corrected rows by.",
+                column=str(_params(step)["key_column"]),
+                order=step.order,
+            )
+        elif step.kind is RecipeStepKind.RENAME_COLUMN:
+            new = str(step.new_column)
+            if new in available or new in protected:
+                raise RecipeError(
+                    "RECIPE_STEP_INVALID",
+                    f"There is already a column called '{new}'.",
+                    column=new,
+                    order=step.order,
+                )
+            available[available.index(step.column)] = new
         elif step.new_column is not None:
             if step.new_column in available:
                 raise RecipeError(
@@ -296,6 +342,15 @@ def _check_params(step: RecipeStep) -> None:
         RecipeStepKind.COMBINE_ROWS: frozenset(
             {"time_column", "snapshot_column", "dayfirst", "outcome", "features"}
         ),
+        RecipeStepKind.MAP_VALUES: frozenset({"mapping"}),
+        RecipeStepKind.SET_MISSING_TEXT: frozenset({"values"}),
+        RecipeStepKind.CONVERT_UNITS: frozenset({"units", "bare"}),
+        RecipeStepKind.CORRECT_CELLS: frozenset({"key_column", "cells"}),
+        RecipeStepKind.SPLIT_COLUMN: frozenset({"separator", "part"}),
+        RecipeStepKind.VALID_RANGE: frozenset({"minimum", "maximum"}),
+        RecipeStepKind.FILL_MISSING: frozenset({"value"}),
+        RecipeStepKind.REMOVE_ROWS: frozenset({"operator", "values"}),
+        RecipeStepKind.RENAME_COLUMN: frozenset(),
     }
     unknown = set(params) - allowed[kind]
     if unknown:
@@ -332,6 +387,89 @@ def _check_params(step: RecipeStep) -> None:
             raise refuse(f"list 1 to {MAX_PLACEHOLDER_VALUES} numbers to treat as missing")
     if kind is RecipeStepKind.DERIVE and not isinstance(params.get("expression"), str):
         raise refuse("a new column needs an expression")
+    _check_plan_l_params(kind, params, refuse)
+
+
+_STATISTIC_WORDS: Final[frozenset[str]] = frozenset(
+    {"mean", "median", "average", "avg", "mode", "most common"}
+)
+"""A fill value spelled like a statistic is refused: it would read as one and be a word (DEC-1530)."""
+
+
+def _number(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+
+
+def _check_plan_l_params(
+    kind: RecipeStepKind, params: dict[str, Any], refuse: Callable[[str], RecipeError]
+) -> None:
+    """The parameters of Plan L's step kinds (DEC-1530): bounded, frozen, nothing learnt from the file."""
+    if kind is RecipeStepKind.MAP_VALUES:
+        mapping = params.get("mapping")
+        if not (
+            isinstance(mapping, dict)
+            and 0 < len(mapping) <= MAX_MAPPINGS
+            and all(isinstance(k, str) and isinstance(v, str) for k, v in mapping.items())
+        ):
+            raise refuse(f"mapping must map 1 to {MAX_MAPPINGS} spellings to spellings")
+    if kind is RecipeStepKind.SET_MISSING_TEXT:
+        values = params.get("values")
+        if not (
+            isinstance(values, list)
+            and 0 < len(values) <= MAX_MISSING_WORDS
+            and all(isinstance(v, str) and v.strip() for v in values)
+        ):
+            raise refuse(f"list 1 to {MAX_MISSING_WORDS} words to treat as empty")
+    if kind is RecipeStepKind.CONVERT_UNITS:
+        units = params.get("units")
+        if not (
+            isinstance(units, dict)
+            and 0 < len(units) <= 20
+            and all(isinstance(k, str) and k.strip() and _number(v) and v > 0 for k, v in units.items())
+        ):
+            raise refuse("units must map 1 to 20 unit names to positive factors")
+        if params.get("bare", "fail") not in {"fail", "as_target"}:
+            raise refuse("bare must be 'fail' or 'as_target'")
+    if kind is RecipeStepKind.CORRECT_CELLS:
+        cells = params.get("cells")
+        if not isinstance(params.get("key_column"), str):
+            raise refuse("name the ID column the corrected rows are found by")
+        if not (
+            isinstance(cells, list)
+            and 0 < len(cells) <= MAX_CORRECTIONS
+            and all(isinstance(c, dict) and set(c) == {"key", "old", "new"} for c in cells)
+        ):
+            raise refuse(f"list 1 to {MAX_CORRECTIONS} corrections, each with key, old and new")
+    if kind is RecipeStepKind.SPLIT_COLUMN:
+        separator, part = params.get("separator"), params.get("part")
+        if not (isinstance(separator, str) and 0 < len(separator) <= 5):
+            raise refuse("the separator is 1 to 5 characters")
+        if not (isinstance(part, int) and not isinstance(part, bool) and -10 <= part < 10):
+            raise refuse("part is a whole number from -10 to 9")
+    if kind is RecipeStepKind.VALID_RANGE:
+        low, high = params.get("minimum"), params.get("maximum")
+        if (low is None and high is None) or not all(v is None or _number(v) for v in (low, high)):
+            raise refuse("give a minimum, a maximum or both, as numbers")
+        if low is not None and high is not None and low > high:
+            raise refuse("the minimum is above the maximum")
+    if kind is RecipeStepKind.FILL_MISSING:
+        value = params.get("value")
+        statistic = isinstance(value, str) and value.strip().casefold() in _STATISTIC_WORDS
+        if statistic or not (_number(value) or (isinstance(value, str) and 0 < len(value) <= 100)):
+            raise refuse("fill with one number or one short text; never a statistic of the file")
+    if kind is RecipeStepKind.REMOVE_ROWS:
+        operator, values = params.get("operator"), params.get("values", [])
+        if operator not in REMOVE_OPERATORS:
+            raise refuse(f"operator must be one of {sorted(REMOVE_OPERATORS)}")
+        if not isinstance(values, list) or len(values) > 50:
+            raise refuse("values is a list of at most 50")
+        if operator != "is_empty" and not values:
+            raise refuse("say which values the rows to leave out hold")
+        if operator in {"before", "after"}:
+            try:
+                pd.Timestamp(str(values[0]))
+            except (ValueError, TypeError) as exc:
+                raise refuse("before and after need a date") from exc
 
 
 def _apply(frame: pd.DataFrame, step: RecipeStep, snapshot_column: str | None) -> ParseOutcome:
@@ -358,6 +496,27 @@ def _apply(frame: pd.DataFrame, step: RecipeStep, snapshot_column: str | None) -
             _series(series), values=[float(v) for v in params["values"]]
         ),
         RecipeStepKind.DERIVE: lambda: _derive(frame, str(params["expression"]), snapshot_column, step),
+        RecipeStepKind.MAP_VALUES: lambda: map_values(
+            _series(series), mapping={str(k): str(v) for k, v in dict(params["mapping"]).items()}
+        ),
+        RecipeStepKind.SET_MISSING_TEXT: lambda: set_missing_text(
+            _series(series), values=[str(v) for v in params["values"]]
+        ),
+        RecipeStepKind.CONVERT_UNITS: lambda: convert_units(
+            _series(series),
+            units={str(k): float(v) for k, v in dict(params["units"]).items()},
+            bare=str(params.get("bare", "fail")),
+        ),
+        RecipeStepKind.CORRECT_CELLS: lambda: correct_cells(
+            _series(series), frame[str(params["key_column"])], cells=list(params["cells"])
+        ),
+        RecipeStepKind.SPLIT_COLUMN: lambda: split_column(
+            _series(series), separator=str(params["separator"]), part=int(params["part"])
+        ),
+        RecipeStepKind.VALID_RANGE: lambda: valid_range(
+            _series(series), minimum=params.get("minimum"), maximum=params.get("maximum")
+        ),
+        RecipeStepKind.FILL_MISSING: lambda: fill_missing(_series(series), value=params["value"]),
     }
     return runners[step.kind]()
 
@@ -443,6 +602,37 @@ def run_recipe(
             if not absent:
                 work = work.drop(columns=[step.column])
             continue
+        if step.kind is RecipeStepKind.REMOVE_ROWS:
+            params = _params(step)
+            keep = remove_rows(
+                work[step.column], operator=str(params["operator"]), values=list(params.get("values", []))
+            )
+            removed = int((~keep).sum())
+            receipts.append(
+                StepReceipt(
+                    order=step.order,
+                    kind=step.kind,
+                    column=step.column,
+                    rows=len(work),
+                    changed=removed,
+                    failed=0,
+                )
+            )
+            work = work[keep.to_numpy()]
+            continue
+        if step.kind is RecipeStepKind.RENAME_COLUMN:
+            receipts.append(
+                StepReceipt(
+                    order=step.order,
+                    kind=step.kind,
+                    column=step.column,
+                    rows=len(work),
+                    changed=len(work),
+                    failed=0,
+                )
+            )
+            work = work.rename(columns={step.column: str(step.new_column)})
+            continue
         if step.kind is RecipeStepKind.COMBINE_ROWS:
             try:
                 combined = combine_rows(
@@ -478,7 +668,9 @@ def run_recipe(
                 column=step.column,
                 order=step.order,
             ) from exc
-        if step.kind is not RecipeStepKind.DERIVE:
+        if step.kind not in (RecipeStepKind.DERIVE, RecipeStepKind.CORRECT_CELLS):
+            # A correction that no longer applies (the customer left, the value was fixed at source) is
+            # counted on the receipt but never stops a run: the person's other corrections still hold.
             non_empty = int(work[step.column].notna().sum())
             if non_empty and outcome.failed / non_empty * 100.0 > max_failure_pct:
                 raise RecipeError(

@@ -68,6 +68,16 @@ export const postMessage = (uploadId, text) => call(session(uploadId, "/messages
 /** The first rows before and after the accepted steps: `{ columns_before, rows_before, columns_after, rows_after, receipt }`. */
 export const postPreview = (uploadId) => call(session(uploadId, "/preview"), { method: "POST" });
 
+/** Plan L M154: a page of the file for editing by hand: `{ columns, personal, rows, row_numbers, key_column, offset, total }`. */
+export const postRows = (uploadId, { offset = 0, limit = 10, whereColumn = null, equals = null } = {}) =>
+  call(session(uploadId, "/rows"), {
+    method: "POST",
+    body: { offset, limit, where_column: whereColumn, equals },
+  });
+
+/** Plan L M154: one edit made by hand, added as a ticked step; the session comes back. */
+export const postEdit = (uploadId, edit) => call(session(uploadId, "/edits"), { method: "POST", body: edit });
+
 /** Approve: `{ upload_id, mode, primary_key, target, overrides, summary, receipt }`, or a 409. */
 export const postApply = (uploadId) => call(session(uploadId, "/apply"), { method: "POST" });
 

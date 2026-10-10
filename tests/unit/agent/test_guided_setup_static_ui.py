@@ -91,7 +91,17 @@ def test_every_session_path_is_a_route_the_agent_router_declares() -> None:
     }
     text = code_of("api.js")
     tails = [match.group(1) or "" for match in SESSION_PATH.finditer(text)]
-    assert sorted(set(tails)) == ["", "/answers", "/apply", "/decisions", "/messages", "/preview"]
+    # Plan L M154 (DEC-1541) added "/edits" and "/rows": editing by hand and its table view.
+    assert sorted(set(tails)) == [
+        "",
+        "/answers",
+        "/apply",
+        "/decisions",
+        "/edits",
+        "/messages",
+        "/preview",
+        "/rows",
+    ]
     for tail in tails:
         path = f"/uploads/{{upload_id}}/agent-session{tail}"
         assert (path, "POST") in declared, path

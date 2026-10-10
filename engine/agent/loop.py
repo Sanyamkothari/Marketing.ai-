@@ -62,7 +62,10 @@ from engine.agent.contracts import (
     ChatRole,
     Proposal,
     ProposalKind,
+    ProposalSource,
     ProposalState,
+    RecipeStep,
+    RecipeStepKind,
     SentItem,
     ToolResult,
     TurnLog,
@@ -97,6 +100,7 @@ __all__ = [
     "MAX_PROMPT_CHARS",
     "MAX_REPLY_CHARS",
     "PROPOSE_TOOL",
+    "STEP_TOOL",
     "TurnResult",
     "chat_turn",
 ]
@@ -105,6 +109,44 @@ _LOGGER = get_logger(__name__)
 
 HELPER_PROMPT: Final[str] = "data_agent"
 PROPOSE_TOOL: Final[str] = "propose_setting"
+STEP_TOOL: Final[str] = "propose_step"
+"""Plan L M152 (DEC-1520): the chat suggests a data fix from the fixed list, checked like every step."""
+CHAT_STEP_KINDS: Final[frozenset[RecipeStepKind]] = frozenset(
+    {
+        RecipeStepKind.PARSE_NUMBER,
+        RecipeStepKind.PARSE_DATE,
+        RecipeStepKind.MAP_BOOLEAN,
+        RecipeStepKind.NORMALISE_TEXT,
+        RecipeStepKind.SET_MISSING,
+        RecipeStepKind.MAP_VALUES,
+        RecipeStepKind.SET_MISSING_TEXT,
+        RecipeStepKind.CONVERT_UNITS,
+        RecipeStepKind.SPLIT_COLUMN,
+        RecipeStepKind.VALID_RANGE,
+        RecipeStepKind.FILL_MISSING,
+        RecipeStepKind.RENAME_COLUMN,
+        RecipeStepKind.DROP_COLUMN,
+    }
+)
+"""What the chat may suggest. Combining rows and formulas stay the rules'; correcting a cell and leaving
+rows out stay the person's own (DEC-1520)."""
+STEP_SAMPLE_ROWS: Final[int] = 1_000
+"""Rows a chat suggestion is tried on before it is shown, so its effect is measured, not claimed."""
+CHAT_STEP_TITLES: Final[dict[RecipeStepKind, str]] = {
+    RecipeStepKind.PARSE_NUMBER: "Turn '{c}' into numbers",
+    RecipeStepKind.PARSE_DATE: "Read '{c}' as dates",
+    RecipeStepKind.MAP_BOOLEAN: "Read '{c}' as yes/no",
+    RecipeStepKind.NORMALISE_TEXT: "Tidy the spellings in '{c}'",
+    RecipeStepKind.SET_MISSING: "Treat codes in '{c}' as missing",
+    RecipeStepKind.MAP_VALUES: "Merge spellings in '{c}' that mean the same",
+    RecipeStepKind.SET_MISSING_TEXT: "Treat words meaning 'no value' in '{c}' as empty",
+    RecipeStepKind.CONVERT_UNITS: "Put '{c}' in one unit",
+    RecipeStepKind.SPLIT_COLUMN: "Take part of '{c}' into a new column",
+    RecipeStepKind.VALID_RANGE: "Treat impossible values in '{c}' as unknown",
+    RecipeStepKind.FILL_MISSING: "Fill the empty cells of '{c}'",
+    RecipeStepKind.RENAME_COLUMN: "Rename '{c}'",
+    RecipeStepKind.DROP_COLUMN: "Hide '{c}'",
+}
 MAX_REPLY_CHARS: Final[int] = 800
 MAX_MESSAGE_CHARS: Final[int] = 1_000
 MAX_REASON_CHARS: Final[int] = 200
@@ -154,12 +196,12 @@ class TurnResult:
 
 def _logged(name: str) -> str:
     """The action name as the turn log keeps it: a known action, never text the model made up."""
-    return name if name in TOOLS or name in {PROPOSE_TOOL, "reply"} else LOGGED_UNKNOWN
+    return name if name in TOOLS or name in {PROPOSE_TOOL, STEP_TOOL, "reply"} else LOGGED_UNKNOWN
 
 
 def _chat_made(session: AgentSession) -> frozenset[str]:
-    """Ids of evidence the model's own `propose_setting` actions produced."""
-    return frozenset(r.evidence_id for r in session.tool_results if r.tool == PROPOSE_TOOL)
+    """Ids of evidence the model's own `propose_setting` and `propose_step` actions produced."""
+    return frozenset(r.evidence_id for r in session.tool_results if r.tool in {PROPOSE_TOOL, STEP_TOOL})
 
 
 def _advisor_proposals(session: AgentSession) -> list[Proposal]:
@@ -442,7 +484,7 @@ def chat_turn(
             args: dict[str, Any] = dict(gate.unalias_args(raw_args)) if isinstance(raw_args, dict) else {}
             if name == "reply":
                 return _reply(session, action, results, checker, finish)
-            if name == PROPOSE_TOOL and session.explore:
+            if name in {PROPOSE_TOOL, STEP_TOOL} and session.explore:
                 raise AgentToolError(
                     EXPLORE_READ_ONLY,
                     "This chat only answers questions about the data; it cannot suggest a setting. Reply instead.",
@@ -460,6 +502,21 @@ def chat_turn(
                 results.append(result)
                 proposals.append(proposal)
                 _record(gate, names, feedback, items, result, PROPOSE_TEXT_KEYS)
+                continue
+            if name == STEP_TOOL:
+                result, proposal = _propose_step(
+                    ctx,
+                    session,
+                    args,
+                    results,
+                    checker,
+                    f"{prefix}e{len(results) + 1}",
+                    f"{prefix}p{len(proposals) + 1}",
+                    clock,
+                )
+                results.append(result)
+                proposals.append(proposal)
+                _record(gate, names, feedback, items, result, STEP_TEXT_KEYS)
                 continue
             tool = TOOLS.get(name)
             if tool is None or tool.kind is not ToolKind.READ:
@@ -572,6 +629,154 @@ def _propose(
         evidence_ids=(evidence_id,),
         confidence=AgentConfidence.CHECK,
         state=ProposalState.PENDING,
+        source=ProposalSource.AI,
+    )
+    return result, proposal
+
+
+STEP_TEXT_KEYS: Final[frozenset[str]] = frozenset({"kind", "column"})
+
+
+def _looked_at(result: ToolResult, column: str) -> bool:
+    """True when a look-tool result is about `column` (named in its arguments)."""
+    args = result.args
+    named = [args.get(key) for key in ("column", "left", "right", "where_column")]
+    listed = args.get("columns")
+    return (
+        column in [str(v) for v in named if v is not None]
+        or (isinstance(listed, list) and column in [str(v) for v in listed])
+        or (result.tool == "find_format_issues" and not listed)
+    )
+
+
+def _propose_step(
+    ctx: AgentContext,
+    session: AgentSession,
+    args: dict[str, Any],
+    turn_results: list[ToolResult],
+    checker: _Checker,
+    evidence_id: str,
+    proposal_id: str,
+    clock: Callable[[], datetime],
+) -> tuple[ToolResult, Proposal]:
+    """A chat suggestion of one data fix: allowed, grounded in a look at the column, checked and measured.
+
+    Refused with a code the model can correct (once) when the kind is not the chat's to suggest, the column
+    holds personal data, no cited look-tool result is about the column, the recipe engine refuses the step,
+    or the step changes nothing on the file's first `STEP_SAMPLE_ROWS` rows. A suggestion that passes is
+    pending, `check`, labelled as the AI's, and never ticked for the person.
+    """
+    from engine.agent.advisor import ordered_steps, recipe_steps
+    from engine.agent.recipe import RecipeError, check_recipe, run_recipe
+
+    try:
+        kind = RecipeStepKind(str(args.get("kind", "")))
+    except ValueError:
+        kind = None
+    if kind is None or kind not in CHAT_STEP_KINDS:
+        raise AgentToolError(
+            "AGENT_STEP_NOT_ALLOWED",
+            f"{str(args.get('kind'))[:40]!r} is not a fix the chat may suggest. Allowed: "
+            + ", ".join(sorted(k.value for k in CHAT_STEP_KINDS)),
+        )
+    column = ctx.resolve(str(args.get("column", "")))
+    personal = {c.name for c in ctx.profile.columns if c.pii_kinds} | set(
+        ctx.config.agent.always_hide_columns
+    )
+    if column in personal and kind is not RecipeStepKind.DROP_COLUMN:
+        raise AgentToolError("AGENT_STEP_NOT_ALLOWED", "A column holding personal data can only be hidden.")
+    cited = (
+        [str(e) for e in args.get("evidence_ids", []) if isinstance(e, str)]
+        if isinstance(args.get("evidence_ids"), list)
+        else []
+    )
+    known = {r.evidence_id: r for r in (*session.tool_results, *turn_results)}
+    looks = [
+        known[e] for e in cited if e in known and known[e].tool in TOOLS and _looked_at(known[e], column)
+    ]
+    if not looks:
+        raise AgentToolError(
+            "AGENT_STEP_UNGROUNDED",
+            f"Look at '{display_name(column)}' with a tool first, and cite that result in evidence_ids.",
+        )
+    raw_params = args.get("params")
+    params: dict[str, Any] = dict(raw_params) if isinstance(raw_params, dict) else {}
+    new_column = args.get("new_column")
+    try:
+        step = RecipeStep(
+            order=1,
+            kind=kind,
+            column=column,
+            new_column=str(new_column) if isinstance(new_column, str) and new_column.strip() else None,
+            params=params,
+        )
+    except ValueError as exc:
+        raise AgentToolError("AGENT_TOOL_ARGS_INVALID", str(exc).splitlines()[-1][:200]) from exc
+    key, target = roles_of(session)
+    agent = ctx.config.agent
+    accepted = recipe_steps(
+        p
+        for p in session.proposals
+        if p.state is ProposalState.ACCEPTED and p.kind is ProposalKind.RECIPE_STEP
+    )
+    try:
+        check_recipe(
+            ordered_steps([*accepted, step]),
+            columns=[str(c) for c in ctx.frame.columns],
+            primary_key=key,
+            target=target,
+            levels=agent.levels,
+        )
+        trial = run_recipe(
+            ctx.frame.head(STEP_SAMPLE_ROWS),
+            [step],
+            upload_id=ctx.upload_id,
+            primary_key=key,
+            target=target,
+            levels=agent.levels,
+            max_failure_pct=agent.max_conversion_failure_pct,
+        )
+    except RecipeError as exc:
+        raise AgentToolError(exc.code, exc.message) from exc
+    receipt = trial.receipt.steps[0]
+    if receipt.changed == 0 and kind not in (RecipeStepKind.DROP_COLUMN, RecipeStepKind.RENAME_COLUMN):
+        raise AgentToolError(
+            "AGENT_STEP_NO_EFFECT",
+            f"That fix changes nothing in the first {min(STEP_SAMPLE_ROWS, len(ctx.frame))} rows of "
+            f"'{display_name(column)}'. Look again, or reply instead.",
+        )
+    reason = str(args.get("reason") or CHAT_REASON).strip()[:MAX_REASON_CHARS] or CHAT_REASON
+    if checker.failure(reason, target="helper suggestion", max_chars=MAX_REASON_CHARS) is not None:
+        reason = CHAT_REASON
+    measured = (
+        f" On the first {receipt.rows} rows it changes {receipt.changed} value"
+        f"{'' if receipt.changed == 1 else 's'}"
+        + (f" and cannot read {receipt.failed}" if receipt.failed else "")
+        + "."
+    )
+    result = ToolResult(
+        evidence_id=evidence_id,
+        tool=STEP_TOOL,
+        args={"kind": kind.value, "column": column, "params": dict(params)},
+        result={
+            "kind": kind.value,
+            "column": column,
+            "rows": receipt.rows,
+            "changed": receipt.changed,
+            "failed": receipt.failed,
+        },
+        created_at=clock(),
+    )
+    proposal = Proposal(
+        proposal_id=proposal_id,
+        kind=ProposalKind.RECIPE_STEP,
+        title=CHAT_STEP_TITLES[kind].format(c=display_name(column)),
+        reason=(reason + measured)[: MAX_REASON_CHARS + len(measured)],
+        step=step.model_copy(update={"reason": reason}),
+        evidence_ids=(evidence_id, *(r.evidence_id for r in looks)),
+        confidence=AgentConfidence.CHECK,
+        state=ProposalState.PENDING,
+        source=ProposalSource.AI,
     )
     return result, proposal
 

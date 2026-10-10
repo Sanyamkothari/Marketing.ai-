@@ -518,6 +518,12 @@ def test_openapi_builds_and_documents_every_route(client: TestClient) -> None:
         "/runs/{run_id}/drift-events/{annotation_id}",
         # Plan J M107: a source and a consent table read from a saved connection (DEC-1317)
         "/clients/{client_id}/sources/from-connection",
+        # Plan L M151: Data Doctor, the place - what the files are and can power, and the hand-off (DEC-1512)
+        "/doctor/diagnosis",
+        "/doctor/handoff",
+        # Plan L M154: editing by hand in Guided setup, and the table view (DEC-1541)
+        "/uploads/{upload_id}/agent-session/edits",
+        "/uploads/{upload_id}/agent-session/rows",
         "/privacy/consent/imports/from-connection",
     }
 

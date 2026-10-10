@@ -116,6 +116,7 @@ RESULT_KEYS: Final[frozenset[str]] = frozenset(
         "bucket",
         "buckets",
         "cells",
+        "changed",  # Plan L M152: a `propose_step` result's measured effect (DEC-1520)
         "checked",
         "checks",
         "code",
