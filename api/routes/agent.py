@@ -295,7 +295,6 @@ register(
             purpose="see the rows of the file being set up",
             object_type="upload",
             object_param="upload_id",
-            audit_reads=True,
         ),
     }
 )

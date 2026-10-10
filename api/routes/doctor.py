@@ -144,8 +144,10 @@ def handoff(
             upload_id=record.upload_id, profile=profile, intake=_intake(storage, record.intake_key)
         )
     previous = _intake(storage, record.intake_key)
-    received = received_format_for(record.file_name) if record.original_key else record.file_format
-    source = record.original_key or record.source_key
+    # The file as it arrived; an erasure deletes a kept original, and then the table read from it is used.
+    kept = record.original_key is not None and storage.exists(record.original_key)
+    received = received_format_for(record.file_name) if kept else record.file_format
+    source = record.original_key if kept and record.original_key else record.source_key
     upload_id = new_upload_id()
     target = upload_key(upload_id, "original.xlsx" if received == "xlsx" else f"source.{received}")
     size = storage.size_bytes(source)

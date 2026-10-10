@@ -1474,7 +1474,7 @@ DEC-1500…1509, M151 → DEC-1510…1519, …), so parallel work on two milesto
   column are one `correct_cells` step and spellings one `map_values` step, so fifty edits add one step. A
   correction applies only where the row's ID and the old value both still match, so next month a changed value
   is left alone and counted, never overwritten.
-- **DEC-1541 — The table view.** *Decision:* `POST /uploads/{id}/agent-session/rows` (Analyst, a POST like the preview, audited as a read)
+- **DEC-1541 — The table view.** *Decision:* `POST /uploads/{id}/agent-session/rows` (Analyst, a POST like the preview, audited as every POST is)
   pages through the file in order, 100 rows at most, optionally only rows where one column equals a value;
   personal-data columns show `[personal data]` and cannot be searched; every other cell is masked and cut to 60
   characters, as the preview does. `POST /uploads/{id}/agent-session/edits` adds an edit and answers the session.
