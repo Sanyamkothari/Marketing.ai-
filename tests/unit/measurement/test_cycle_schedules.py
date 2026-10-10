@@ -17,6 +17,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
+from engine.connections.store import ConnectionStore
 from engine.measurement.campaign import InMemoryCampaignStore
 from engine.measurement.cycle import CYCLE_CODES, CYCLE_SERVICES_MISSING, LEARN_NOT_READY, CycleServices
 from engine.measurement.pull import PULL_CODES, OutcomePullSpec, PullSelection
@@ -24,6 +25,7 @@ from engine.onboarding.specs import SourceSpec
 from engine.scheduling.alerts import SEVERITY_FOR, AlertKind, AlertQuery, sns_subject, new_alert
 from engine.scheduling.firing import ScheduleFirer
 from engine.scheduling.schedules import FiringStatus, Schedule, ScheduleKind, ScheduleParameters
+from engine.settings import Settings
 from tests.unit.production.scheduling_support import World, make_world
 
 NOW = datetime(2026, 9, 1, tzinfo=UTC)
@@ -140,7 +142,10 @@ def test_a_loop_kind_without_its_services_fails_with_a_plain_reason(world: World
 
 
 def test_nothing_new_is_a_quiet_success(world: World) -> None:
-    firer = ScheduleFirer(world.services(cycle=CycleServices(campaigns=InMemoryCampaignStore())))
+    connections = ConnectionStore(world.storage, Settings())
+    firer = ScheduleFirer(
+        world.services(cycle=CycleServices(campaigns=InMemoryCampaignStore(), connections=connections))
+    )
     treat = firer.fire(world.schedule(ScheduleKind.TREAT_LIST)) or pytest.fail("not fired")
     assert (treat.status, treat.result_code) == (FiringStatus.SUCCEEDED, "NOTHING_NEW")
     learn = firer.fire(world.schedule(ScheduleKind.LEARN)) or pytest.fail("not fired")

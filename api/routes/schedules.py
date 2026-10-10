@@ -88,6 +88,7 @@ from engine.access.roles import Role
 from engine.audit.events import content_hash
 from engine.clients import ClientStore, ClientStoreError
 from engine.config import ConfigError, StrictBase, resolve_config
+from engine.measurement.cycle import CycleServices  # Plan J M107 (DEC-1317)
 from engine.onboarding.specs import OnboardingSpec
 from engine.platform_db import platform_engine
 from engine.scheduling.alerts import AlertSink, AlertStore, build_alert_sink
@@ -313,6 +314,20 @@ def _services(request: Request, *, audited: bool) -> FiringServices:
         clock=scheduling_clock(request),
         job_client_tag=settings.client_id,
         settings=settings,  # Plan J M108 (DEC-1318): the run cost gate
+        cycle=_cycle_services(request),  # Plan J M107 (DEC-1317): the monthly loop
+    )
+
+
+def _cycle_services(request: Request) -> CycleServices:
+    """The monthly loop's services (Plan J M107): the campaigns, the saved connections, the holdout ledger's database."""
+    from api.access import get_platform_engine
+    from api.routes.campaigns import get_campaign_store
+    from engine.connections.store import ConnectionStore
+
+    return CycleServices(
+        campaigns=get_campaign_store(request),
+        connections=ConnectionStore(get_storage(request), get_settings(request)),
+        ledger_engine=get_platform_engine(request),
     )
 
 

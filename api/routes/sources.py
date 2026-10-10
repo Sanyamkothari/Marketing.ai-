@@ -39,8 +39,10 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any, Final, Literal
 
 from fastapi import APIRouter, File, Form, HTTPException, Response, UploadFile
+from pydantic import Field
 
-from api.deps import ConfigRootDep, StorageDep
+from api.access_policy import RoutePolicy, register
+from api.deps import ConfigRootDep, SettingsDep, StorageDep
 from api.routes.clients import ClientStoreDep, load_client
 from api.routes.uploads import CHUNK_BYTES, http_error, ingest_http
 from api.schemas import ErrorResponse
@@ -55,7 +57,11 @@ from engine.config import (
     load_engine_config,
     load_use_case,
 )
-from engine.onboarding.sources import FileSourceReader, join_coverage, profile_source
+from engine.access.roles import Role
+from engine.connections.base import ConnectorError
+from engine.connections.store import ConnectionStore
+from engine.measurement.pull import PullSelection
+from engine.onboarding.sources import FileSourceReader, add_connection_source, join_coverage, profile_source
 from engine.onboarding.specs import DecidedBy, KeyCandidate, SourceProfile, SourceSpec
 from engine.stages import ingest
 from engine.storage import Storage, StorageError
@@ -233,6 +239,109 @@ async def create_source(
 
     response.headers["Location"] = f"/clients/{client_id}/sources/{source_id}"
     return SourceCreateResponse(source_id=source_id, profile=load_profile(storage, client_id, source_id))
+
+
+# ---------------------------------------------------------------------------
+# POST /clients/{id}/sources/from-connection  (Plan J M107, DEC-1317)
+# ---------------------------------------------------------------------------
+register(
+    {
+        ("POST", "/clients/{client_id}/sources/from-connection"): RoutePolicy(
+            role=Role.ANALYST,
+            action="sources.create_from_connection",
+            purpose="add a data source from a saved connection",
+            object_type="client",
+            object_param="client_id",
+        )
+    }
+)
+
+
+class SourceFromConnectionRequest(StrictBase):
+    """Body of `POST /clients/{id}/sources/from-connection`: which saved connection, and what to read from it."""
+
+    connection_id: str = Field(min_length=1, max_length=64, description="The saved connection to read.")
+    selection: PullSelection = Field(
+        description="One file (`path`), the newest file under a folder (`prefix`), or a table (`schema_name`, `table`)."
+    )
+    role: str | None = Field(default=None, description="Confirmed role, when the caller already knows it.")
+
+
+@router.post(
+    "/clients/{client_id}/sources/from-connection",
+    response_model=SourceCreateResponse,
+    status_code=201,
+    responses={**_SOURCE_ERRORS, 413: {"model": ErrorResponse}, 502: {"model": ErrorResponse}},
+    summary="Read a client's table from a saved connection, profile it and keep it bound for monthly builds",
+)
+def create_source_from_connection(
+    client_id: str,
+    body: SourceFromConnectionRequest,
+    storage: StorageDep,
+    root: ConfigRootDep,
+    store: ClientStoreDep,
+    settings: SettingsDep,
+    response: Response,
+) -> SourceCreateResponse:
+    """The multipart route's checks and profile, with the bytes read from a saved connection (read-only).
+
+    The source carries a `binding` (the connection and what was read), so each scheduled build reads the
+    table again - for a folder, its newest file - before the recipe is rebuilt
+    (`engine.onboarding.sources.refresh_bound_sources`). Nothing is uploaded and nothing is written to the
+    client's system. The multipart `POST /clients/{id}/sources` is unchanged; this route sits beside it so
+    a file upload keeps exactly its form, its checks and its answers.
+    """
+    load_client(store, client_id)
+    roles = get_roles(root)
+    if body.role is not None:
+        require_role(roles, body.role)
+    limits = onboarding_limits(root)
+    held = len(working_sources(store, client_id))
+    if held >= limits.max_sources:
+        raise http_error(
+            409,
+            "TOO_MANY_SOURCES",
+            f"This client already has {held} source{'' if held == 1 else 's'} not yet in a saved "
+            f"recipe, and this engine allows {limits.max_sources}. Remove one before adding another.",
+        )
+    config = any_use_case_config(root)
+    try:
+        spec, _profile = add_connection_source(
+            storage,
+            store,
+            ConnectionStore(storage, settings),
+            client_id=client_id,
+            connection_id=body.connection_id,
+            selection=body.selection,
+            role=body.role,
+            config=config,
+            roles=roles,
+            limit_bytes=config.validation.max_file_size_mb * 1024 * 1024,
+            row_limit=limits.max_source_rows,
+            now=utc_now(),
+        )
+    except ConnectorError as exc:
+        raise http_error(
+            exc.status, exc.code, f"{exc.message} {exc.fix}" if exc.fix else exc.message
+        ) from None
+    try:
+        resync_join_coverage(
+            storage,
+            store,
+            root=root,
+            roles=roles,
+            client_id=client_id,
+            only=None if body.role == roles.entity_role else frozenset({spec.source_id}),
+        )
+    except Exception:
+        discard_source(
+            storage, store, client_id=client_id, source_id=spec.source_id, raw_key=spec.storage_key
+        )
+        raise
+    response.headers["Location"] = f"/clients/{client_id}/sources/{spec.source_id}"
+    return SourceCreateResponse(
+        source_id=spec.source_id, profile=load_profile(storage, client_id, spec.source_id)
+    )
 
 
 # ---------------------------------------------------------------------------

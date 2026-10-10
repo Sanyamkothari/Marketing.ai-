@@ -23,13 +23,22 @@ whose date cannot be read is left out and counted (`unreadable_dates`), never gu
 from __future__ import annotations
 
 import io
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta
-from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, BinaryIO, Final, Literal, Protocol, runtime_checkable
 
 from pydantic import AwareDatetime, Field, model_validator
 
 from engine.config import StrictBase
-from engine.connections.base import ConfigValue, ConnectorError, Selection, addon_missing
+from engine.connections.base import (
+    ConfigValue,
+    Connector,
+    ConnectorError,
+    FetchResult,
+    FileFormat,
+    Selection,
+    addon_missing,
+)
 
 if TYPE_CHECKING:
     import pandas as pd
@@ -46,7 +55,10 @@ __all__ = [
     "OutcomePullSpec",
     "PullRecord",
     "PullSelection",
+    "Resolved",
+    "fetch_resolved",
     "pull_frame",
+    "resolve",
 ]
 
 PULL_INVALID: Final[str] = "PULL_INVALID"
@@ -192,6 +204,122 @@ def invalid(message: str, fix: str) -> ConnectorError:
     return ConnectorError(PULL_INVALID, message, fix, status=422)
 
 
+@dataclass(frozen=True)
+class Resolved:
+    """A selection checked against its connection, with the one file or table it names settled."""
+
+    connection_id: str
+    kind: str
+    connector: Connector
+    config: dict[str, ConfigValue]
+    secrets: dict[str, str]
+    chosen: Selection
+    file_format: FileFormat
+    path: str | None
+    """The file read (for a folder, its newest file); null for a table."""
+    windowed: bool
+    """True when the connector reads a date window itself (a SQL database)."""
+
+
+def resolve(connections: ConnectionStore, connection_id: str, selection: PullSelection) -> Resolved:
+    """The connection, its connector and the one file or table `selection` names, before any row is read.
+
+    Raises `ConnectorError`: the store's for an unknown connection or unreadable secrets, `PULL_INVALID`
+    for a selection that does not fit the connection, `PULL_NOTHING_FOUND` for an empty folder.
+    """
+    from engine.connections.registry import connector as connector_for
+
+    record = connections.get(connection_id)
+    connector = connector_for(record.kind)
+    if not connector.available():
+        info = connector.info()
+        raise addon_missing(info.label, info.addon or record.kind)
+    group = connector.info().group
+    config = dict(record.config)
+    if group == "database":
+        if not selection.is_table:
+            raise invalid(
+                "A database holds tables, not files or folders.", "Pick a schema and a table from the list."
+            )
+        if not (selection.schema_name and selection.table):
+            raise invalid("A table is named by its schema and its own name.", "Pick both from the list.")
+        chosen = Selection(schema_name=selection.schema_name, table=selection.table)
+        secrets = connections.secrets(record)
+        return Resolved(
+            record.connection_id,
+            record.kind,
+            connector,
+            config,
+            secrets,
+            chosen,
+            connector.file_format(chosen),
+            None,
+            isinstance(connector, WindowedTables),
+        )
+    if group != "store":
+        raise invalid("This connection does not hold data to read.", "Pick a store or a database connection.")
+    if selection.is_table:
+        raise invalid(
+            "A file store holds files, not tables.", "Pick a file, or a folder to read the newest file of."
+        )
+    secrets = connections.secrets(record)
+    path = selection.path
+    if selection.prefix:
+        if not isinstance(connector, NewestFile):
+            raise invalid(
+                "This kind of connection cannot pick the newest file in a folder.", "Pick one file instead."
+            )
+        path = connector.newest(config, secrets, selection.prefix)
+        if path is None:
+            raise ConnectorError(
+                PULL_NOTHING_FOUND,
+                "There is no CSV or Parquet file in that folder.",
+                "Check the folder, or wait until the next file has landed there.",
+                status=404,
+            )
+    chosen = Selection(path=path)
+    return Resolved(
+        record.connection_id,
+        record.kind,
+        connector,
+        config,
+        secrets,
+        chosen,
+        connector.file_format(chosen),
+        path,
+        False,
+    )
+
+
+def fetch_resolved(
+    resolved: Resolved,
+    sink: BinaryIO,
+    *,
+    window: DateWindow | None,
+    limit_bytes: int,
+    max_rows: int = PULL_MAX_ROWS,
+) -> FetchResult:
+    """Read `resolved` into `sink`: the date window only when the connector can (`resolved.windowed`)."""
+    if window is not None and resolved.windowed:
+        windowed = resolved.connector
+        assert isinstance(windowed, WindowedTables)
+        result: FetchResult = windowed.fetch_window(
+            resolved.config,
+            resolved.secrets,
+            resolved.chosen,
+            sink,
+            column=window.column,
+            start=window.date_from,
+            end=window.end_exclusive,
+            limit_bytes=limit_bytes,
+            max_rows=max_rows,
+        )
+        return result
+    return resolved.connector.fetch(
+        resolved.config, resolved.secrets, resolved.chosen, sink, limit_bytes=limit_bytes, max_rows=max_rows
+    )
+
+
 def pull_frame(
     connections: ConnectionStore,
     connection_id: str,
@@ -208,84 +336,21 @@ def pull_frame(
     `PULL_INVALID` for a selection or window that does not fit the connection, `PULL_NOTHING_FOUND` for an
     empty folder.
     """
-    from engine.connections.registry import connector as connector_for
-
-    record = connections.get(connection_id)
-    connector = connector_for(record.kind)
-    if not connector.available():
-        info = connector.info()
-        raise addon_missing(info.label, info.addon or record.kind)
-    group = connector.info().group
-    config = dict(record.config)
-    secrets = connections.secrets(record)
-    path: str | None = None
-    filtered_by: Literal["database", "marketing_ai"] | None = None
+    resolved = resolve(connections, connection_id, selection)
     sink = io.BytesIO()
-    if group == "database":
-        if not selection.is_table:
-            raise invalid(
-                "A database holds tables, not files or folders.", "Pick a schema and a table from the list."
-            )
-        if not (selection.schema_name and selection.table):
-            raise invalid("A table is named by its schema and its own name.", "Pick both from the list.")
-        chosen = Selection(schema_name=selection.schema_name, table=selection.table)
-        if window is not None and isinstance(connector, WindowedTables):
-            fetched = connector.fetch_window(
-                config,
-                secrets,
-                chosen,
-                sink,
-                column=window.column,
-                start=window.date_from,
-                end=window.end_exclusive,
-                limit_bytes=limit_bytes,
-                max_rows=max_rows,
-            )
-            filtered_by = "database"
-        else:
-            fetched = connector.fetch(
-                config, secrets, chosen, sink, limit_bytes=limit_bytes, max_rows=max_rows
-            )
-    elif group == "store":
-        if selection.is_table:
-            raise invalid(
-                "A file store holds files, not tables.",
-                "Pick a file, or a folder to read the newest file of.",
-            )
-        if selection.prefix:
-            if not isinstance(connector, NewestFile):
-                raise invalid(
-                    "This kind of connection cannot pick the newest file in a folder.",
-                    "Pick one file instead.",
-                )
-            path = connector.newest(config, secrets, selection.prefix)
-            if path is None:
-                raise ConnectorError(
-                    PULL_NOTHING_FOUND,
-                    "There is no CSV or Parquet file in that folder.",
-                    "Check the folder, or wait until the next file has landed there.",
-                    status=404,
-                )
-        else:
-            path = selection.path
-        chosen = Selection(path=path)
-        fetched = connector.fetch(config, secrets, chosen, sink, limit_bytes=limit_bytes, max_rows=max_rows)
-    else:
-        raise invalid("This connection does not hold data to read.", "Pick a store or a database connection.")
+    fetched = fetch_resolved(resolved, sink, window=window, limit_bytes=limit_bytes, max_rows=max_rows)
     frame = _read(sink.getvalue(), fetched.file_format)
     unreadable = 0
-    if window is not None and filtered_by is None:
+    filtered_by: Literal["database", "marketing_ai"] | None = None
+    if window is not None and resolved.windowed:
+        filtered_by = "database"
+    elif window is not None:
         frame, unreadable = _within(frame, window)
         filtered_by = "marketing_ai"
-    elif window is not None and window.column not in frame.columns:
-        raise invalid(
-            "The rows read have no column with the name given for the date.",
-            "Pick the column that holds the date of each row.",
-        )
     pulled = PullRecord(
-        connection_id=record.connection_id,
-        kind=record.kind,
-        path=path,
+        connection_id=resolved.connection_id,
+        kind=resolved.kind,
+        path=resolved.path,
         prefix=selection.prefix,
         schema_name=selection.schema_name,
         table=selection.table,

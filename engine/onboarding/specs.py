@@ -104,6 +104,7 @@ __all__ = [
     "SnapshotMode",
     "SnapshotSpec",
     "SnapshotStat",
+    "SourceBinding",
     "SourceProfile",
     "SourceSpec",
     "SourceStat",
@@ -314,6 +315,30 @@ class SourceProfile(Artefact):
         return self.profile.row_count
 
 
+class SourceBinding(Artefact):
+    """Where a source read from a saved connection came from, and how to read it again (Plan J M107).
+
+    `pick` is `newest` for "the newest CSV or Parquet file under `prefix`", `fixed` for one file (`path`)
+    or one table (`schema_name` and `table`). Before each scheduled build the client's newest bound source of
+    each role the recipe reads is read again this way (`engine.onboarding.sources.refresh_bound_sources`).
+    Ids and names only: never a secret, never a data value.
+    """
+
+    connection_id: str = Field(description="The saved connection read.")
+    kind: str = Field(description="The connection's kind, e.g. `s3` or `postgres`.")
+    pick: Literal["newest", "fixed"] = Field(
+        description="`newest` file under a folder, or one `fixed` file or table."
+    )
+    prefix: str | None = Field(default=None, description="The folder whose newest file is read.")
+    path: str | None = Field(default=None, description="The one file read.")
+    schema_name: str | None = Field(default=None, description="The schema of the one table read.")
+    table: str | None = Field(default=None, description="The one table read.")
+    object_path: str | None = Field(
+        default=None, description="The file this copy was read from; null for a table."
+    )
+    fetched_at: AwareDatetime = Field(description="UTC time this copy was read.")
+
+
 class SourceSpec(Artefact):
     """The registry row of one uploaded source: what it is, where it is and what it holds."""
 
@@ -327,6 +352,13 @@ class SourceSpec(Artefact):
     columns: tuple[str, ...] = Field(description="Column names, in file order.")
     fingerprint: DatasetFingerprint = Field(description="Identity of the exact table.")
     created_at: AwareDatetime = Field(description="UTC time the source was uploaded.")
+    # Plan J M107 (DEC-1317): an in-place, defaulted declaration, left out of the document while unset, so a
+    # source uploaded as a file is stored and served exactly as before.
+    binding: SourceBinding | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+        description="Set when the source was read from a saved connection: which one, and what to read again.",
+    )
 
 
 # ---------------------------------------------------------------------------

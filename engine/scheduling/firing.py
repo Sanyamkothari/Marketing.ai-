@@ -71,6 +71,7 @@ from engine.aws.run_cost import (  # Plan J M108 (DEC-1318): the same cost gate 
     start_cost_watch,
 )
 from engine.clients import ClientStore, ClientStoreError
+from engine.connections.base import ConnectorError as ConnectorErrorType  # Plan J M107
 from engine.config import (
     Catalog,
     ConfigError,
@@ -118,6 +119,7 @@ from engine.scheduling.alerts import AlertKind, AlertSink, new_alert
 from engine.scheduling.retraining import NO_RETRAIN_FLAGS, RetrainFlags, flagged_for_use_case
 from engine.scheduling.scheduler import Clock
 from engine.scheduling.schedules import (
+    LOOP_KINDS,
     MAX_MISSED_RECORDED,
     DueSlots,
     FiringStatus,
@@ -136,6 +138,9 @@ from engine.utils.logging import get_logger, log_failure
 from engine.utils.time import utc_now
 
 if TYPE_CHECKING:
+    from engine.config import RoleCatalogue
+    from engine.connections.store import ConnectionStore
+    from engine.measurement.cycle import CycleServices, StepOutcome
     from engine.settings import Settings
 
 __all__ = [
@@ -174,6 +179,9 @@ _KIND_LABEL: Final[dict[ScheduleKind, str]] = {
     ScheduleKind.SCORE: "scoring",
     ScheduleKind.DRIFT_CHECK: "drift check",
     ScheduleKind.RETRAIN: "retraining",
+    ScheduleKind.TREAT_LIST: "treat list",
+    ScheduleKind.MEASURE: "campaign measurement",
+    ScheduleKind.LEARN: "learning from the last campaign",
 }
 
 _TERMINAL_RUN_STATES: Final[frozenset[RunState]] = frozenset(
@@ -215,6 +223,10 @@ class FiringServices:
     settings: Settings | None = None
     """The deployment's settings (Plan J M108, DEC-1318), for the run cost gate. `None` (a test, an embedder)
     skips the gate; the API and the CLI pass theirs, and the gate acts only when a cost cap is set."""
+    cycle: CycleServices | None = None
+    """The monthly loop's services (Plan J M107, DEC-1317): the campaign store, the saved connections and the
+    platform database. `None` (a test, an embedder): the loop's kinds fail with `CYCLE_SERVICES_MISSING`, and a
+    recipe's sources bound to a connection are not read again before a build - exactly the behaviour before."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -403,27 +415,9 @@ def start_dataset_run(
             dataset_id=dataset_id,
         )
     source = _DatasetUpload(upload_id=dataset_id, file_name=f"{dataset_id} (built)", source_key=frame_key)
-    capped_cloud_run = (
-        settings is not None
-        and settings.job_backend == "sagemaker"
-        and config.governance.max_run_cost_usd is not None
+    capped_cloud_run = cost_gate(
+        config, mode, settings=settings, config_root=config_root, dataset_id=dataset_id
     )
-    if capped_cloud_run and settings is not None:
-        cost = estimate_run_cost(
-            config,
-            mode,
-            settings=settings,
-            table=cached_price_table(config_root) if config_root is not None else None,
-            llm_prices=load_prices(config_root) if config_root is not None else LlmPriceTable(),
-            fx=None,
-        )
-        if cost.needs_confirmation:
-            raise FiringError(
-                RUN_COST_NEEDS_CONFIRMATION,
-                confirmation_message(cost)
-                + " A scheduled run cannot be confirmed by a person, so it was not started.",
-                dataset_id=dataset_id,
-            )
     record = create_run(
         storage,
         Pipeline(storage, registry, jobs),
@@ -454,17 +448,62 @@ def start_dataset_run(
     jobs.submit(spec.job_id, build_job_fn(spec, storage=storage, registry=registry))
     if capped_cloud_run and settings is not None:
         # Plan J M108 (DEC-1318): nobody polls a scheduled run, so its cost is watched from here.
-        start_cost_watch(
-            storage,
-            jobs,
-            record.run_id,
-            settings=settings,
-            table_for=lambda: cached_price_table(config_root) if config_root is not None else None,
-        )
+        watch_cost(storage, jobs, record.run_id, settings=settings, config_root=config_root)
     _LOGGER.info(
         "schedule.run_started run_id=%s mode=%s dataset_id=%s", record.run_id, mode.value, dataset_id
     )
     return record
+
+
+def cost_gate(
+    config: UseCaseConfig,
+    mode: RunMode,
+    *,
+    settings: Settings | None,
+    config_root: Path | None,
+    dataset_id: str | None,
+) -> bool:
+    """Plan J M108 (DEC-1318): refuse a scheduled run whose cost needs a person's confirmation.
+
+    True when the run is capped and billed, so its cost is to be watched once it starts. With no cap, or no
+    `settings`, nothing is checked and False is answered. Shared by `start_dataset_run` and the loop's
+    learning run (Plan J M107), so every run a firing starts passes the same gate.
+    """
+    capped_cloud_run = (
+        settings is not None
+        and settings.job_backend == "sagemaker"
+        and config.governance.max_run_cost_usd is not None
+    )
+    if capped_cloud_run and settings is not None:
+        cost = estimate_run_cost(
+            config,
+            mode,
+            settings=settings,
+            table=cached_price_table(config_root) if config_root is not None else None,
+            llm_prices=load_prices(config_root) if config_root is not None else LlmPriceTable(),
+            fx=None,
+        )
+        if cost.needs_confirmation:
+            raise FiringError(
+                RUN_COST_NEEDS_CONFIRMATION,
+                confirmation_message(cost)
+                + " A scheduled run cannot be confirmed by a person, so it was not started.",
+                dataset_id=dataset_id,
+            )
+    return capped_cloud_run
+
+
+def watch_cost(
+    storage: Storage, jobs: JobRunner, run_id: str, *, settings: Settings, config_root: Path | None
+) -> None:
+    """Plan J M108 (DEC-1318): watch a capped scheduled run's cost, stopping it past the cap."""
+    start_cost_watch(
+        storage,
+        jobs,
+        run_id,
+        settings=settings,
+        table_for=lambda: cached_price_table(config_root) if config_root is not None else None,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -550,16 +589,48 @@ def build_dataset_from_spec(
     client_store: ClientStore,
     storage: Storage,
     cancel: CancelToken | None = None,
+    connections: ConnectionStore | None = None,
+    roles: RoleCatalogue | None = None,
+    now: datetime | None = None,
 ) -> DatasetManifest:
     """Build a fresh dataset from `spec` on the latest tables, register it, and return its manifest.
 
     `build_dataset` writes `datasets/<id>/` itself, as it does for `POST /datasets`; a build whose
     checks found a blocking problem writes its report and no rows, and is `DATASET_CHECKS_FAILED`
     here with the dataset id, so the firing's history links to the report that says why.
+
+    Plan J M107 (DEC-1317): given `connections`, the recipe's tables that came from a saved connection are
+    read again first (`engine.onboarding.sources.refresh_bound_sources`: for "the newest file in a folder",
+    whatever is newest now), so `latest_recipe_inputs` re-points the recipe at them with no upload. A
+    connection that cannot be read fails the build with its own code. Without `connections`, or with no
+    bound table, nothing is read and the build is exactly as before.
     """
     from engine.onboarding import build
     from engine.onboarding.sources import FileSourceReader
 
+    if connections is not None:
+        from engine.onboarding.sources import refresh_bound_sources
+
+        try:
+            fetched = refresh_bound_sources(
+                storage,
+                client_store,
+                connections,
+                spec,
+                config=config,
+                roles=roles,
+                limit_bytes=config.validation.max_file_size_mb * 1024 * 1024,
+                now=now or utc_now(),
+            )
+        except ConnectorErrorType as exc:
+            raise FiringError(exc.code, exc.message) from exc
+        except ClientStoreError as exc:
+            raise FiringError(
+                "ONBOARDING_INPUT_MISSING",
+                "A table or mapping this recipe names no longer exists. Open the recipe and save it again.",
+            ) from exc
+        if fetched:
+            _LOGGER.info("schedule.sources_fetched spec_id=%s count=%d", spec.spec_id, len(fetched))
     inputs = latest_recipe_inputs(client_store, spec)
     registry = LocalDatasetRegistry(storage)
     dataset_id = registry.new_dataset_id(spec.client_id, spec.use_case)
@@ -962,7 +1033,11 @@ class ScheduleFirer:
         finished = firing.model_copy(
             update={"status": FiringStatus.SUCCEEDED, "result_code": result_code, "finished_at": now}
         )
-        return finished if services.store.settle_firing(finished) else None
+        if not services.store.settle_firing(finished):
+            return None
+        if firing.kind is ScheduleKind.LEARN and record.model_version_id is not None:
+            self._alert_learned(finished, record, result_code)  # Plan J M107: raised by the settler that won
+        return finished
 
     def _trained(self, firing: ScheduleFiring, record: RunRecord) -> str:
         """`MODEL_<STATUS>` for the version a finished training run registered; clears its flags."""
@@ -1005,6 +1080,8 @@ class ScheduleFirer:
             return self._score(schedule, resolved)
         if schedule.kind is ScheduleKind.RETRAIN:
             return self._retrain(schedule, resolved)
+        if schedule.kind in LOOP_KINDS:
+            return self._loop_step(schedule, resolved)
         return self._drift_check(schedule, firing, resolved)
 
     def _score(self, schedule: Schedule, resolved: ResolvedConfig) -> _Outcome:
@@ -1110,6 +1187,140 @@ class ScheduleFirer:
         retrain_run = self._start(resolved, manifest, mode=RunMode.TRAIN, version=None)
         return _Outcome(
             FiringStatus.RUNNING, "RETRAIN_FOR_ERASURE", retrain_run.run_id, manifest.dataset_id, flagged
+        )
+
+    # --- the monthly loop (Plan J M107, DEC-1317) ----------------------------------------------------
+    def _loop_step(self, schedule: Schedule, resolved: ResolvedConfig) -> _Outcome:
+        """`treat_list`, `measure` or `learn`: one step of the loop (`engine.measurement.cycle`)."""
+        from engine.measurement.cycle import (
+            CYCLE_SERVICES_MISSING,
+            CycleError,
+            learn_step,
+            measure_step,
+            treat_list_step,
+        )
+
+        services = self.services
+        cycle = services.cycle
+        config = resolved.config
+        if cycle is None or (schedule.kind is ScheduleKind.MEASURE and cycle.connections is None):
+            raise FiringError(
+                CYCLE_SERVICES_MISSING,
+                f"This deployment does not give its scheduler the campaigns and connections the "
+                f"{_KIND_LABEL[schedule.kind]} step needs, so nothing was done.",
+            )
+        ledger = cycle.ledger_engine
+        try:
+            if schedule.kind is ScheduleKind.TREAT_LIST:
+                step = treat_list_step(
+                    services.storage,
+                    cycle.campaigns,
+                    config=config,
+                    client_id=schedule.client_id,
+                    config_root=services.config_root,
+                    created_by=services.principal.user_id,
+                    now=services.clock(),
+                )
+            elif schedule.kind is ScheduleKind.MEASURE:
+                pull = schedule.parameters.outcomes
+                if (
+                    pull is None or cycle.connections is None
+                ):  # pragma: no cover - refused above and by Schedule
+                    raise FiringError(
+                        CYCLE_SERVICES_MISSING, "This measure schedule names no outcomes to read."
+                    )
+                step = measure_step(
+                    services.storage,
+                    cycle.campaigns,
+                    cycle.connections,
+                    config=config,
+                    client_id=schedule.client_id,
+                    pull=pull,
+                    ledger_engine=lambda: ledger,
+                    now=services.clock(),
+                )
+            else:
+                # The learning run passes the cost gate every scheduled run passes (Plan J M108).
+                capped = cost_gate(
+                    config,
+                    RunMode.TRAIN,
+                    settings=services.settings,
+                    config_root=services.config_root,
+                    dataset_id=None,
+                )
+                step = learn_step(
+                    services.storage,
+                    cycle.campaigns,
+                    services.registry,
+                    services.jobs,
+                    config=config,
+                    client_id=schedule.client_id,
+                    config_root=services.config_root,
+                    principal=services.principal,
+                    client_tag=services.job_client_tag,
+                    now=services.clock(),
+                )
+                if capped and step.running and step.run_id is not None and services.settings is not None:
+                    watch_cost(
+                        services.storage,
+                        services.jobs,
+                        step.run_id,
+                        settings=services.settings,
+                        config_root=services.config_root,
+                    )
+        except CycleError as exc:
+            raise FiringError(exc.code, exc.message) from exc
+        except ConnectorErrorType as exc:
+            raise FiringError(exc.code, exc.message) from exc
+        self._alert_step(schedule, step)
+        status = FiringStatus.RUNNING if step.running else FiringStatus.SUCCEEDED
+        return _Outcome(status, step.result_code, step.run_id)
+
+    def _alert_step(self, schedule: Schedule, step: StepOutcome) -> None:
+        """The loop's alert for a step that produced something a person acts on (none for a quiet step)."""
+        kinds = {
+            ScheduleKind.TREAT_LIST: AlertKind.TREAT_LIST_READY,
+            ScheduleKind.MEASURE: AlertKind.CAMPAIGN_MEASURED,
+        }
+        kind = kinds.get(schedule.kind)
+        if step.alert is None or kind is None:
+            return
+        self.services.alerts.raise_alert(
+            new_alert(
+                kind,
+                use_case_id=schedule.use_case_id,
+                client_id=schedule.client_id,
+                schedule_id=schedule.schedule_id,
+                run_id=step.run_id,
+                message=step.alert,
+                now=self.services.clock(),
+            )
+        )
+
+    def _alert_learned(self, firing: ScheduleFiring, record: RunRecord, result_code: str) -> None:
+        """A settled learning run: its challenger waits for an Approver, or was not put forward."""
+        if result_code == "MODEL_PENDING_APPROVAL":
+            message = (
+                f"A model learned from the last campaign of {firing.use_case_id} is waiting for an Approver "
+                f"(model {record.model_version_id}). It is used only once a person approves it."
+            )
+        else:
+            message = (
+                f"A model was learned from the last campaign of {firing.use_case_id} (model "
+                f"{record.model_version_id}), but it was not put forward for approval: it did not beat the "
+                "model in use by enough, or could not be compared with it. Review it on the Models page."
+            )
+        self.services.alerts.raise_alert(
+            new_alert(
+                AlertKind.CHALLENGER_WAITING,
+                use_case_id=firing.use_case_id,
+                client_id=firing.client_id,
+                schedule_id=firing.schedule_id,
+                run_id=firing.run_id,
+                model_id=record.model_version_id,
+                message=message,
+                now=self.services.clock(),
+            )
         )
 
     # --- data for the kinds -------------------------------------------------------------------------
@@ -1252,8 +1463,17 @@ class ScheduleFirer:
         return spec
 
     def _build(self, spec: OnboardingSpec, config: UseCaseConfig, *, mode: RunMode) -> DatasetManifest:
+        cycle = self.services.cycle
+        connections = cycle.connections if cycle is not None else None
         manifest = build_dataset_from_spec(
-            spec, config=config, mode=mode, client_store=self._client_store(), storage=self.services.storage
+            spec,
+            config=config,
+            mode=mode,
+            client_store=self._client_store(),
+            storage=self.services.storage,
+            connections=connections,  # Plan J M107: bound tables are read again first
+            roles=_roles(self.services.config_root) if connections is not None else None,
+            now=self.services.clock(),
         )
         # Every refusal POST /runs makes on a dataset applies to a freshly built one too.
         return load_built_dataset(
@@ -1358,3 +1578,13 @@ def _claimed_newest(recorded: Sequence[ScheduleFiring], slots: Sequence[datetime
         return False
     newest = to_utc(max(slots))
     return any(item.scheduled_for is not None and to_utc(item.scheduled_for) == newest for item in recorded)
+
+
+def _roles(config_root: Path) -> RoleCatalogue | None:
+    """The role catalogue a fetched source is profiled against (Plan J M107); None when it cannot be read."""
+    from engine.config import get_roles
+
+    try:
+        return get_roles(config_root)
+    except ConfigError:
+        return None

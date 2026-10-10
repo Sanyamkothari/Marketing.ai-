@@ -284,7 +284,7 @@ def test_post_from_connection_adds_a_bound_source_with_its_profile(client: TestC
     assert response.status_code == 201, response.text
     body = response.json()
     assert response.headers["Location"] == f"/clients/{client_id}/sources/{body['source_id']}"
-    assert body["profile"]["rows"] == len(made["customers"].index)
+    assert body["profile"]["profile"]["row_count"] == len(made["customers"].index)
     listed = client.get(f"/clients/{client_id}/sources").json()
     (source,) = listed["sources"]
     assert source["binding"]["object_path"] == "exports/customers/2026-06.csv"
