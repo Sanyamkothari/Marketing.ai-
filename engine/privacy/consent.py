@@ -119,8 +119,9 @@ CONSENT_CSV_OPTIONAL: Final[tuple[str, ...]] = (
 DEFAULT_IMPORT_SOURCE: Final[str] = "csv_import"
 MAX_PRINCIPAL_ID_CHARS: Final[int] = 256
 _BASES: Final[frozenset[str]] = frozenset(item.value for item in ConsentBasis)
-_TRUE_WORDS: Final[frozenset[str]] = frozenset({"true", "yes", "1"})
-_FALSE_WORDS: Final[frozenset[str]] = frozenset({"false", "no", "0"})
+# "1.0" and "0.0": a 0/1 flag with gaps is read as a float column when a Parquet file is written as text.
+_TRUE_WORDS: Final[frozenset[str]] = frozenset({"true", "yes", "1", "1.0"})
+_FALSE_WORDS: Final[frozenset[str]] = frozenset({"false", "no", "0", "0.0"})
 FUTURE_TOLERANCE: Final[timedelta] = timedelta(minutes=5)
 """A record may be stamped this far in the future (clock skew) and no further."""
 

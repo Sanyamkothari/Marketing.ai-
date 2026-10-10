@@ -24,7 +24,15 @@ from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any, Final
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictBool,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
 from engine.config import ConfigError, config_root, load_yaml
 from engine.contracts import Artefact
@@ -103,7 +111,7 @@ class ActionItem(_Model):
     template_ref: str | None = Field(default=None, description="Template reference.")
     offer_id: str | None = Field(default=None, description="Offer identifier.")
     priority: int | None = Field(default=None, description="Priority score for arbitration.")
-    a2p_declared: bool | None = Field(
+    a2p_declared: StrictBool | None = Field(
         default=None,
         description=(
             "Whether this automated call action is declared to the telecom operator as A2P "

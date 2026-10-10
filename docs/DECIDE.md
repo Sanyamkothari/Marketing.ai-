@@ -1134,8 +1134,8 @@ override them. The benchmark gains a `mid_size_file` case; the other twenty-one 
 
 ## 26. India: TRAI Third Amendment and consent basis (M131, DEC-1323)
 
-Plan K M131, built early under Plan J's range because the rule takes effect about 30 days after its Gazette
-publication of 18 September 2026 (late October 2026). It is opt-in and data-driven: everything below is read
+Plan K M131, built early under Plan J's range because the rule was notified on 18 September 2026
+and is in force 30 days after its Gazette publication (expected late October 2026). It is opt-in and data-driven: everything below is read
 from `configs/regions/in.yaml` and the client's catalogue, so with no catalogue, no region file or no
 `consent_basis` block a run is what it was. *This section describes what the product checks. It is not legal
 advice; the client's own counsel decides what the rules mean for them.*
@@ -1204,6 +1204,16 @@ run-level `consent_basis_rules_sha256` of the rules applied. A channel the rules
   reading; a client who sends only service messages should say so to their counsel before relying on this.
 * **A consent manager.** Nothing here talks to a registered consent manager or to an operator's platform; the
   `operator_registered` flag is what the client reports.
+* **A different config root for the run and its catalogue.** The consent-basis rules are read from the run
+  process's own config root (`MARKETING_AI_CONFIG_DIR` or `configs/`), the root `catalogue_or_none()` also
+  reads. A run created with an explicit config root that differs from the process's (`create_app(config_root=...)`
+  or a scheduled firing's `FiringServices.config_root`) carries the catalogue stamp of that other root, but its
+  `regions/<region>.yaml` is not read from there; with no region file in the process root the rules are not
+  applied. Keep one config root per deployment. `consent_basis_rules_sha256` in `channel_contactability.json`
+  records the rules a run really applied, so a mismatch with the catalogue's region file is visible there.
+* **Access export keys.** `consent_history.json` in a data-subject access export, and the `/privacy/consent`
+  responses, now carry `basis` and `operator_registered` on every record (null when not recorded), as M99's
+  `channel` was added before them. This is an intended, additive change to those files.
 
 ### The measurement purpose
 

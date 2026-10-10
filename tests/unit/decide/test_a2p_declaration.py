@@ -117,11 +117,15 @@ def test_the_rule_is_not_specific_to_the_fields_it_ships_with(tmp_path: Path) ->
     assert caught.value.path == "actions[0].eligibility"
 
 
-def test_a_truthy_string_is_not_a_declaration() -> None:
-    """The field is a boolean: a quoted "true" is refused by the model, never read as declared."""
+@pytest.mark.parametrize("written", ['"true"', '"yes"', '"1"', "1", "0", "maybe"])
+def test_only_a_real_boolean_is_a_declaration(tmp_path: Path, written: str) -> None:
+    """The field is a strict boolean: a quoted "true", a number or a word is refused, never read as declared."""
+    root = _root(tmp_path, _call_action(f"a2p_declared: {written}"))
+    with pytest.raises(ConfigError):
+        load_catalogue(root=root)
     with pytest.raises(ValueError):
         ActionItem.model_validate(
-            {"action_id": "a", "label": "A", "channels": ["call"], "a2p_declared": "maybe"}
+            {"action_id": "a", "label": "A", "channels": ["call"], "a2p_declared": written.strip('"')}
         )
 
 

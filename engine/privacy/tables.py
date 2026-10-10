@@ -183,7 +183,8 @@ def add_missing_columns(engine: Engine) -> None:
 
     The scoring seam reads the ledger without creating anything (`ConsentLedger(create=False)`), but a
     `platform.db` written before Plan J M99 has a `consent_record` without `channel` (and before Plan K
-    M131, without `basis` and `operator_registered`), which every read of the table now selects; this brings that file up to date in place (Postgres: `0007`).
+    M131, without `basis` and `operator_registered`), which every read of the table now selects; this
+    brings that file up to date in place (Postgres: `0007`, `0008`).
     """
     if engine.dialect.name != "sqlite":
         return

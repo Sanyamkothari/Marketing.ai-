@@ -311,6 +311,22 @@ def test_the_two_columns_parse_and_are_stored(ledger: ConsentLedger, privacy: Pr
     assert report.ignored_columns == ()
 
 
+def test_a_float_written_flag_from_a_parquet_column_with_gaps_is_read_as_one_and_zero(
+    ledger: ConsentLedger, privacy: PrivacyConfig
+) -> None:
+    """A nullable int column becomes float64 and is written as `1.0`/`0.0`/empty; the import must not refuse it."""
+    rows = [
+        "principal_id,purpose,status,recorded_at,basis,operator_registered",
+        f"c1,{PURPOSE},granted,2026-10-01,legacy,1.0",
+        f"c2,{PURPOSE},granted,2026-10-01,legacy,0.0",
+        f"c3,{PURPOSE},granted,2026-10-01,legacy,",
+    ]
+    report = ledger.import_csv("\n".join(rows) + "\n", client_id=CLIENT, privacy=privacy, now=T0)
+    assert report.imported and report.rows_imported == 3 and not report.errors
+    got = [ledger.history(key, client_id=CLIENT)[0].operator_registered for key in ("c1", "c2", "c3")]
+    assert got == [True, False, None]
+
+
 def test_bad_values_are_reported_by_row_and_column_without_quoting_them(
     ledger: ConsentLedger, privacy: PrivacyConfig
 ) -> None:
