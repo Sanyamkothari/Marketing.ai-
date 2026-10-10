@@ -29,6 +29,7 @@ from typing import TYPE_CHECKING, Final
 
 from engine.config import RunMode
 from engine.doctor.contracts import FileDiagnosis, ReadinessStatus, UseCaseReadiness
+from engine.doctor.sufficiency import enough_data, with_alternatives
 from engine.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -150,7 +151,8 @@ def readiness(
     """Each offered use case's verdict over all files, best first."""
     verdicts = [_one_use_case(files, offer, root) for offer in offers]
     order = {offer.config.id: index for index, offer in enumerate(offers)}
-    return tuple(sorted(verdicts, key=lambda v: (_STATUS_ORDER[v.status], order[v.use_case_id])))
+    ranked = tuple(sorted(verdicts, key=lambda v: (_STATUS_ORDER[v.status], order[v.use_case_id])))
+    return with_alternatives(ranked)  # Plan L M158 (DEC-1582): the use cases the same files do power
 
 
 def _one_use_case(files: Sequence[LoadedFile], offer: Offer, root: Path) -> UseCaseReadiness:
@@ -252,6 +254,15 @@ def _advised(loaded: LoadedFile, column: str, config: UseCaseConfig, root: Path)
             upload_id=loaded.upload_id,
             summary=f"{loaded.file_name}: {reason}",
             outcome_column=column,
+            # Plan L M158 (DEC-1581): never just a stop - what is short, what to do now, what to collect.
+            next_steps=enough_data(
+                frame,
+                outcome=column,
+                config=config,
+                root=root,
+                file_name=loaded.file_name,
+                file_rows=loaded.profile.row_count,
+            ),
         )
     status: ReadinessStatus = "ready" if questions == 0 and suggestions == 0 else "check"
     if status == "ready":

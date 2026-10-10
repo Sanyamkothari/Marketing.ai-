@@ -13,6 +13,7 @@ from typing import Literal
 from pydantic import Field
 
 from engine.config import StrictBase
+from engine.doctor.sufficiency import NextSteps
 
 __all__ = [
     "Diagnosis",
@@ -68,6 +69,14 @@ class UseCaseReadiness(StrictBase):
     outcome_column: str | None = Field(default=None, description="The column Guided setup would learn from.")
     questions: int = Field(default=0, description="Questions Guided setup will ask before training.")
     suggestions: int = Field(default=0, description="Suggestions Guided setup will show before training.")
+    # Plan L M158 (DEC-1580): an added, defaulted field - what to do when the data is not enough.
+    next_steps: NextSteps | None = Field(
+        default=None,
+        description=(
+            "When the use case is not ready: what is short and by how much, what can be done now and what "
+            "to collect from whom (`engine.doctor.sufficiency`). Null when it is ready."
+        ),
+    )
 
 
 class Diagnosis(StrictBase):
