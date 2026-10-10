@@ -78,13 +78,24 @@ from engine.agent.tools import AgentContext, AgentToolError
 from engine.ai_service import effective_service
 from engine.config import PrimaryKey, RunMode, StrictBase, UseCaseConfig, resolve_config, sole_key
 from engine.contracts import FeatureSchema, ModelVersion, ValidationReport
+from engine.doctor.memory import (
+    TreatmentOffer,
+    offer_for,
+    recall,
+    remember,
+    remembered_recipe,
+    use_same_treatment,
+    used_in,
+)
 from engine.generative.budget import Meter
 from engine.generative.contracts import LlmUsageReport
 from engine.generative.guardrails import Guardrails, load_policy
+from engine.intake.contracts import IntakeReport
 from engine.pii import redact_text
 from engine.stages import ingest
 from engine.storage import Storage, StorageError, upload_key
 from engine.utils.ids import new_upload_id
+from engine.utils.logging import get_logger
 from engine.utils.time import utc_now
 
 __all__ = [
@@ -97,6 +108,7 @@ __all__ = [
 ]
 
 router = APIRouter(tags=["agent"])
+_LOGGER = get_logger(__name__)
 
 register(
     {
@@ -297,6 +309,14 @@ register(
             object_param="upload_id",
             audit_reads=True,
         ),
+        # Plan L M159 (DEC-1594): tick the steps that treated a file of the same shape last time.
+        ("POST", "/uploads/{upload_id}/agent-session/same-treatment"): RoutePolicy(
+            role=Role.ANALYST,
+            action="agent.same_treatment",
+            purpose="use the same treatment as last time",
+            object_type="upload",
+            object_param="upload_id",
+        ),
     }
 )
 
@@ -360,6 +380,19 @@ class ChatAvailability(StrictBase):
 class AgentSessionResponse(StrictBase):
     session: AgentSession
     chat: ChatAvailability
+    # Plan L M159 (DEC-1594): a file of a shape treated before is offered that treatment (never applied).
+    treatment: TreatmentOffer | None = Field(
+        default=None,
+        description="The treatment of a file of the same shape, offered until it is used; null when there is none.",
+    )
+
+
+class SameTreatmentRequest(StrictBase):
+    """Body of `POST /uploads/{id}/agent-session/same-treatment`: the offer the person accepted."""
+
+    recipe_id: str = Field(
+        min_length=1, max_length=64, description="`treatment.recipe_id` of the offer shown."
+    )
 
 
 class SessionStartRequest(StrictBase):
@@ -555,7 +588,34 @@ def _response(
             data_access=config.agent.ai_data_access,
             third_party=is_third_party(effective.llm, effective.provider),
         )
-    return AgentSessionResponse(session=session, chat=chat)
+    return AgentSessionResponse(session=session, chat=chat, treatment=_treatment(storage, session))
+
+
+def _treatment(storage: Storage, session: AgentSession, *, unused: bool = True) -> TreatmentOffer | None:
+    """The remembered treatment of a file of this session's shape, or None (Plan L M159)."""
+    if session.status is SessionStatus.APPLIED or session.explore:
+        return None
+    try:
+        upload = load_upload(storage, session.upload_id)
+        profile = load_upload_profile(storage, session.upload_id)
+        intake = (
+            storage.read_model(upload.intake_key, IntakeReport)
+            if upload.intake_key is not None and storage.exists(upload.intake_key)
+            else None
+        )
+    except (HTTPException, StorageError):
+        return None
+    offer = offer_for(
+        storage,
+        use_case_id=session.use_case_id,
+        upload_id=session.upload_id,
+        columns=profile.fingerprint.columns,
+        intake=intake,
+        mode=session.mode,
+    )
+    if offer is not None and unused and used_in(session, offer.recipe_id):
+        return None
+    return offer
 
 
 def _session_error(exc: SessionError) -> HTTPException:
@@ -1056,6 +1116,8 @@ def _apply_agent_session(
     applied = session.model_copy(
         update={"status": SessionStatus.APPLIED, "applied_upload_id": prepared.upload_id}
     )
+    if ctx.mode is RunMode.TRAIN and recipe is not None and prepared.upload_id != upload_id:
+        _remember(storage, ctx, upload, recipe, prepared.upload_id)
     _save(storage, applied.model_copy(update={"updated_at": utc_now()}))
     set_audit_context(
         request,
@@ -1076,6 +1138,76 @@ def _apply_agent_session(
         summary=applied.summary,
         receipt=receipt,
     )
+
+
+def _remember(
+    storage: Storage, ctx: AgentContext, upload: UploadRecord, recipe: DataRecipe, prepared_id: str
+) -> None:
+    """Plan L M159 (DEC-1592): remember this shape's treatment. Never fails an approval."""
+    try:
+        intake = (
+            storage.read_model(upload.intake_key, IntakeReport)
+            if upload.intake_key is not None and storage.exists(upload.intake_key)
+            else None
+        )
+        remember(
+            storage,
+            use_case_id=ctx.use_case_id,
+            columns=ctx.profile.fingerprint.columns,
+            sheet=intake.sheet if intake is not None else None,
+            intake_enabled=not (intake is not None and intake.turned_off),
+            recipe=recipe,
+            recipe_upload_id=prepared_id,
+            source_upload_id=upload.upload_id,
+        )
+    except Exception as exc:  # the memory is a convenience; the approval it follows has succeeded
+        _LOGGER.warning(
+            "doctor.memory.remember_failed upload=%s error=%s", upload.upload_id, type(exc).__name__
+        )
+
+
+@router.post(
+    "/uploads/{upload_id}/agent-session/same-treatment",
+    response_model=AgentSessionResponse,
+    responses={404: {"model": ErrorResponse}, 409: {"model": ErrorResponse}, 422: {"model": ErrorResponse}},
+    summary="Use the same treatment as last time: tick the remembered steps, still to be checked and approved",
+)
+def same_treatment_agent_session(
+    upload_id: str, body: SameTreatmentRequest, root: ConfigRootDep, storage: StorageDep, request: Request
+) -> AgentSessionResponse:
+    """Plan L M159 (DEC-1594): the offer `treatment` names, taken. Nothing is prepared until Approve."""
+    with _session_lock(upload_id):
+        session = _load_session(storage, upload_id)
+        ctx = _load_context(
+            storage, root, request, upload_id, session.use_case_id, session.model_version_id
+        ).ctx
+        offer = _treatment(storage, session, unused=False)
+        if offer is None or not offer.can_apply:
+            raise _refuse(
+                409, "DOCTOR_MEMORY_NONE", "There is no earlier treatment for a file like this one."
+            )
+        if offer.recipe_id != body.recipe_id:
+            raise _refuse(
+                409,
+                "DOCTOR_MEMORY_CHANGED",
+                "The treatment for files like this one has changed since it was shown. Look at it again.",
+            )
+        memory = recall(storage, session.use_case_id, offer.shape_hash)
+        recipe = remembered_recipe(storage, memory) if memory is not None else None
+        if memory is None or recipe is None:
+            raise _refuse(409, "DOCTOR_MEMORY_NONE", "The earlier treatment is no longer kept.")
+        try:
+            session = use_same_treatment(session, ctx, recipe, memory)
+        except SessionError as exc:
+            raise _session_error(exc) from exc
+        set_audit_context(
+            request,
+            object_id=upload_id,
+            object_type="upload",
+            after_hash=recipe.recipe_hash,
+            details={"use_case_id": ctx.use_case_id, "count": len(recipe.steps)},
+        )
+        return _response(_save(storage, session), ctx.config, storage, request)
 
 
 # ---------------------------------------------------------------------------

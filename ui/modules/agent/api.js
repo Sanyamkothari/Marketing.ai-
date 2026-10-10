@@ -68,6 +68,10 @@ export const postMessage = (uploadId, text) => call(session(uploadId, "/messages
 /** The first rows before and after the accepted steps: `{ columns_before, rows_before, columns_after, rows_after, receipt }`. */
 export const postPreview = (uploadId) => call(session(uploadId, "/preview"), { method: "POST" });
 
+/** Plan L M159: tick the steps that treated a file of the same shape last time (the offer's `recipe_id`). */
+export const postSameTreatment = (uploadId, recipeId) =>
+  call(session(uploadId, "/same-treatment"), { method: "POST", body: { recipe_id: recipeId } });
+
 /** Approve: `{ upload_id, mode, primary_key, target, overrides, summary, receipt }`, or a 409. */
 export const postApply = (uploadId) => call(session(uploadId, "/apply"), { method: "POST" });
 

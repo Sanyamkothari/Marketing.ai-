@@ -524,6 +524,8 @@ def test_openapi_builds_and_documents_every_route(client: TestClient) -> None:
         # Plan L M154: editing by hand in Guided setup, and the table view (DEC-1541)
         "/uploads/{upload_id}/agent-session/edits",
         "/uploads/{upload_id}/agent-session/rows",
+        # Plan L M159: use the same treatment as a file of the same shape last time (DEC-1594)
+        "/uploads/{upload_id}/agent-session/same-treatment",
         "/privacy/consent/imports/from-connection",
     }
 

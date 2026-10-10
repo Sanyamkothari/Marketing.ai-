@@ -35,6 +35,7 @@ from engine.config import (
     load_use_case,
 )
 from engine.contracts import DatasetProfile
+from engine.doctor.memory import offer_for
 from engine.intake.config import IntakeConfig, load_intake_config
 from engine.intake.run import INTAKE_REPORT_FILENAME, ReceivedFormat, intake_file, received_format_for
 from engine.stages import ingest
@@ -235,7 +236,16 @@ def finish_upload(
     if record.intake_key is not None:
         storage.write_model(record.intake_key, prepared.report)
     storage.write_model(upload_key(upload_id, UPLOAD_RECORD_FILENAME), record)
-    return UploadResponse(upload_id=upload_id, profile=profile, intake=prepared.report)
+    # Plan L M159 (DEC-1593): this shape treated before? Say so; the treatment is offered, never applied.
+    treatment = offer_for(
+        storage,
+        use_case_id=config.id,
+        upload_id=upload_id,
+        columns=profile.fingerprint.columns,
+        intake=prepared.report,
+        mode=mode.value,
+    )
+    return UploadResponse(upload_id=upload_id, profile=profile, intake=prepared.report, treatment=treatment)
 
 
 @router.get(

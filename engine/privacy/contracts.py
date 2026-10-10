@@ -149,6 +149,8 @@ class RetentionCategory(StrEnum):
     RUN_SAMPLES = "run_samples"
     CAMPAIGN_ROW_LEVEL = "campaign_row_level"
     """Plan J M94: a campaign's assignment and outcomes."""
+    DOCTOR_MEMORY = "doctor_memory"
+    """Plan L M159: Data Doctor's memory of a shape's treatment; goes with the upload holding its recipe."""
 
 
 class RetentionAction(StrEnum):
