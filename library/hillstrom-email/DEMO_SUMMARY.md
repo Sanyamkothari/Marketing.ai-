@@ -26,7 +26,9 @@ Counted as a policy over all 32,000 evaluation customers, it means the men's e-m
 
 2,351 customers are left alone because contacting them looks harmful (the model's "sleeping dogs"), and 787 more because the expected gain is below the cost of the e-mail.
 
-**Verdict.** Not established as a group: the predicted effects do not match what was measured, by decile, so the model is not calibrated and these names are its best guess, not a measured fact.
+In the replay campaign, 553 customers the scoring run labelled sleeping dogs were e-mailed anyway (the offer choice and the segment labels come from different steps) and 538 like them were held back. E-mailing them changed the conversion rate by +0.72 pts (range -0.28 pts to +1.92 pts).
+
+**Verdict.** The predicted effects do not match what was measured, by decile: the model is not calibrated, so these names are its best guess. The measurement does not confirm the label: for the customers called sleeping dogs the range includes zero, so no harm is shown from e-mailing them.
 
 ### 3. What is it worth?
 

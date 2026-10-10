@@ -123,6 +123,41 @@
       "field": "steps.treat_list.offer_choice.reasons.below_cost"
     },
     {
+      "id": "leave_alone.2.contacted",
+      "text": "553",
+      "value": 553.0,
+      "format": "count",
+      "field": "steps.campaigns.conversion.proof.view.sections.7.table.rows.2.2.value"
+    },
+    {
+      "id": "leave_alone.2.held",
+      "text": "538",
+      "value": 538.0,
+      "format": "count",
+      "field": "steps.campaigns.conversion.proof.view.sections.7.table.rows.2.3.value"
+    },
+    {
+      "id": "leave_alone.2.diff",
+      "text": "+0.72 pts",
+      "value": 0.007182855260592779,
+      "format": "signed_points",
+      "field": "steps.campaigns.conversion.proof.view.sections.7.table.rows.2.4.value"
+    },
+    {
+      "id": "leave_alone.2.low",
+      "text": "-0.28 pts",
+      "value": -0.0028480757430015017,
+      "format": "signed_points",
+      "field": "steps.campaigns.conversion.proof.view.sections.7.table.rows.2.5.low.value"
+    },
+    {
+      "id": "leave_alone.2.high",
+      "text": "+1.92 pts",
+      "value": 0.019227957445833017,
+      "format": "signed_points",
+      "field": "steps.campaigns.conversion.proof.view.sections.7.table.rows.2.5.high.value"
+    },
+    {
       "id": "worth.1.lift",
       "text": "+0.45 pts",
       "value": 0.004495025878336831,

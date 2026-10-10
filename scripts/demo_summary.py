@@ -346,18 +346,36 @@ def _build(results: Mapping[str, Any]) -> DemoSummary:
             "below_cost": r.fig(f"{steps}treat_list.offer_choice.reasons.below_cost", "count"),
         },
     )
+    dogs = _table_row(
+        r,
+        f"{steps}campaigns.conversion.proof.view.sections",
+        "backfire",
+        ("Predicted group", "Sleeping dogs"),
+    )
+    col = _column_reader(r, f"{steps}campaigns.conversion.proof.view.sections", "backfire")
+    dogs_side = _side(
+        r.number(f"{dogs}.{col('Range')}.low.value"), r.number(f"{dogs}.{col('Range')}.high.value")
+    )
+    measured_dogs = Claim(
+        template=(
+            "In the replay campaign, {contacted} customers the scoring run labelled sleeping dogs were e-mailed "
+            "anyway (the offer choice and the segment labels come from different steps) and {held} like them "
+            "were held back. E-mailing them changed the conversion rate by {diff} (range {low} to {high})."
+        ),
+        figures={
+            "contacted": r.fig(f"{dogs}.{col('Contacted')}.value", "count"),
+            "held": r.fig(f"{dogs}.{col('Held back')}.value", "count"),
+            "diff": r.fig(f"{dogs}.{col('Difference')}.value", "signed_points"),
+            "low": r.fig(f"{dogs}.{col('Range')}.low.value", "signed_points"),
+            "high": r.fig(f"{dogs}.{col('Range')}.high.value", "signed_points"),
+        },
+    )
     row_alone = Row(
         key="leave_alone",
         question="Who to leave alone?",
-        short="Named, and calibrated" if calibrated else "Named, but not established",
-        claims=(alone,),
-        verdict=(
-            "The predicted effects match the measured ones by decile, so these names can be trusted to that "
-            "extent."
-            if calibrated
-            else "Not established as a group: the predicted effects do not match what was measured, by decile, "
-            "so the model is not calibrated and these names are its best guess, not a measured fact."
-        ),
+        short=_alone_short(calibrated, dogs_side),
+        claims=(alone, measured_dogs),
+        verdict=_alone_verdict(calibrated, dogs_side),
     )
 
     # -- 3. what it is worth -------------------------------------------------------------------------------
@@ -502,9 +520,12 @@ def _build(results: Mapping[str, Any]) -> DemoSummary:
             "w_high": r.fig(f"{womens_cmp}.ci_high", "auuc"),
         },
     )
-    quality = (
-        "stable across the folds of the data" if stable else "not stable across the folds of the data"
-    ) + (" and calibrated by decile" if calibrated else " but not calibrated by decile")
+    quality = {
+        (True, True): "stable across the folds of the data and calibrated by decile",
+        (True, False): "stable across the folds of the data but not calibrated by decile",
+        (False, True): "calibrated by decile but not stable across the folds of the data",
+        (False, False): "neither stable across the folds of the data nor calibrated by decile",
+    }[(stable, calibrated)]
     row_how = Row(
         key="how_we_know",
         question="How do we know?",
@@ -556,6 +577,55 @@ def _how_verdict(beats: bool, holdout: bool, mens: bool, womens: bool) -> str:
         detail
         + " Whatever the list earns, it does not earn it because uplift modelling added to plain risk ranking."
     )
+
+
+def _alone_short(calibrated: bool, dogs: str) -> str:
+    if dogs == "below":
+        return "Named, and harm shown"
+    return "Named, but not confirmed" if calibrated else "Named, but not established"
+
+
+def _alone_verdict(calibrated: bool, dogs: str) -> str:
+    first = (
+        "The predicted effects match the measured ones by decile."
+        if calibrated
+        else "The predicted effects do not match what was measured, by decile: the model is not calibrated, "
+        "so these names are its best guess."
+    )
+    second = {
+        "below": "The measurement agrees: e-mailing the customers called sleeping dogs made things worse.",
+        "includes": "The measurement does not confirm the label: for the customers called sleeping dogs the "
+        "range includes zero, so no harm is shown from e-mailing them.",
+        "above": "The measurement contradicts the label: the customers called sleeping dogs did better when "
+        "e-mailed.",
+    }[dogs]
+    return f"{first} {second}"
+
+
+def _column_reader(r: _Reader, sections: str, key: str) -> Callable[[str], int]:
+    """A function from a column title of a Pack table to its position in the table's rows."""
+    section = f"{sections}.{r.index_of(sections, 'key', key)}"
+    columns = r.raw(f"{section}.table.columns")
+    if not isinstance(columns, list):
+        raise SummaryError(f"the {key} section of the Pack has no table")
+
+    def column(title: str) -> int:
+        if title not in columns:
+            raise SummaryError(f"the {key} table of the Pack has no column {title!r}")
+        return int(columns.index(title))
+
+    return column
+
+
+def _table_row(r: _Reader, sections: str, key: str, lead: tuple[str, str]) -> str:
+    """The path of the row of a Pack table whose first two cells are `lead` (a kind and a group)."""
+    section = f"{sections}.{r.index_of(sections, 'key', key)}"
+    rows = r.raw(f"{section}.table.rows")
+    if isinstance(rows, list):
+        for position, row in enumerate(rows):
+            if isinstance(row, list) and tuple(row[:2]) == lead:
+                return f"{section}.table.rows.{position}"
+    raise SummaryError(f"the {key} table of the Pack has no row for {lead[1]!r}")
 
 
 def _worth_short(off: str, replay: str) -> str:

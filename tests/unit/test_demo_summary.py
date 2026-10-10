@@ -229,7 +229,35 @@ def test_if_uplift_beat_risk_the_page_would_say_so(mutable: dict[str, Any]) -> N
         "calibrated by decile" in rows["how_we_know"].verdict
         and "not calibrated" not in rows["how_we_know"].verdict
     )
-    assert rows["leave_alone"].short == "Named, and calibrated"
+    assert (
+        rows["leave_alone"].short == "Named, but not confirmed"
+    )  # calibrated, but the measurement shows no harm
+
+
+def _sleeping_dogs_range(data: dict[str, Any]) -> dict[str, Any]:
+    """The Pack's backfire-table cell holding the sleeping dogs' difference range (low and high figures)."""
+    sections = data["steps"]["campaigns"]["conversion"]["proof"]["view"]["sections"]
+    table = next(s for s in sections if s["key"] == "backfire")["table"]
+    column = table["columns"].index("Range")
+    row = next(r for r in table["rows"] if r[:2] == ["Predicted group", "Sleeping dogs"])
+    cell: dict[str, Any] = row[column]
+    return cell
+
+
+def test_if_the_measured_sleeping_dogs_were_harmed_the_page_would_say_so(mutable: dict[str, Any]) -> None:
+    cell = _sleeping_dogs_range(mutable)
+    cell["low"]["value"], cell["high"]["value"] = -0.02, -0.004
+    row = _rows(build_summary(mutable))["leave_alone"]
+    assert row.short == "Named, and harm shown" and "made things worse" in row.verdict
+
+
+def test_if_the_measured_sleeping_dogs_did_better_the_page_would_say_the_label_is_contradicted(
+    mutable: dict[str, Any],
+) -> None:
+    cell = _sleeping_dogs_range(mutable)
+    cell["low"]["value"], cell["high"]["value"] = 0.004, 0.02
+    row = _rows(build_summary(mutable))["leave_alone"]
+    assert "contradicts the label" in row.verdict
 
 
 def test_a_mixed_uplift_result_reads_as_mixed(mutable: dict[str, Any]) -> None:
