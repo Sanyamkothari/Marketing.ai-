@@ -3,8 +3,9 @@ id: ecommerce
 name: E-commerce
 journey_label: Shopper Lifecycle
 
-# One public dataset carries this industry today: the UCI Online Retail invoice log, aggregated to
-# one row per lapsed shopper, at Win-back. The two planned entries are the stages a transaction log
+# Two public datasets carry this industry today: the UCI Online Retail invoice log, aggregated to
+# one row per lapsed shopper, at Win-back, and the MineThatData e-mail test (Hillstrom), randomised
+# into three groups, at Retention (Plan J M110). The two planned entries are the stages a transaction log
 # cannot answer until Phase 2's aggregation lets the engine build the rows itself.
 
 stages:
@@ -24,6 +25,11 @@ stages:
         status: planned
         name: Abandoned Basket Recovery
         description: Predicts which abandoned baskets a reminder will recover, and writes the reminder.
+  - id: retention
+    name: Retention
+    ai_type: predictive
+    use_cases:
+      - {id: hillstrom-email, status: available}   # Plan J M110: the public randomised e-mail test (library/hillstrom-email)
   - id: win_back
     name: Win-back
     ai_type: predictive

@@ -32,6 +32,7 @@ use_case_purposes:                      # use-case id -> purpose; a use case lis
   bank-term-deposit: marketing_communication
   insurance-cross-sell: marketing_communication
   card-default-propensity: account_servicing
+  hillstrom-email: marketing_communication       # Plan J M110: the public e-mail test (library/hillstrom-email)
   # Every use case with actions.contacts_customers true MUST be listed (CONSENT_PURPOSE_MISSING at load).
 
 retention:

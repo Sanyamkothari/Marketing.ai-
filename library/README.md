@@ -1,7 +1,8 @@
 # `library/` — the public dataset library
 
-Six public datasets, five industries, six use cases, run through the engine with **no engine
-code** — five trained end to end, one deliberately not.
+Seven public datasets, five industries, seven use cases, run through the engine with **no engine
+code** — six trained end to end, one deliberately not. The seventh, the randomised MineThatData e-mail
+test, carries the whole Plan J journey (M110).
 
 The summary table, the "what needed code changes" section and the licence overview are in
 [`docs/LIBRARY.md`](../docs/LIBRARY.md); the demo script is [`DEMO_SCRIPT.md`](DEMO_SCRIPT.md).
@@ -17,11 +18,13 @@ This file is the map of the directory.
 | [`health-insurance-cross-sell/`](health-insurance-cross-sell/) | Insurance | `insurance-cross-sell` | yes |
 | [`uci-credit-default/`](uci-credit-default/) | Banking | `card-default-propensity` | yes |
 | [`criteo-uplift/`](criteo-uplift/) | Ad-tech | `criteo-uplift` — **planned** (configured for Phase 3b uplift; data unreachable here) | **no**, and the report says why |
+| [`hillstrom-email/`](hillstrom-email/) | E-commerce | `hillstrom-email` — the whole Plan J journey (M110) | yes — through `run_engine.py journey`; uplift does not beat risk there, and the report says so |
 
 Each directory holds the same six files: `README.md` (source, licence, rows, columns, what the
 target means, known quirks), `LICENSE.txt`, `fetch.py`, `mapping.yaml`, `run_report.md` and
 `sample.csv`. `criteo-uplift/` has a seventh, `use_case.yaml`, and no `sample.csv` — see its
-README.
+README. `hillstrom-email/` has the six, and its `run_report.md` is the whole journey's (`python -m
+library.run_engine journey --dataset hillstrom-email`), not a single training run's.
 
 ## The rest of the directory
 
@@ -29,6 +32,7 @@ README.
 |---|---|
 | [`../configs/`](../configs/) | not in this directory any more. The library's four industry files and four use-case files ship in the repository's own [`configs/industries/`](../configs/industries/) and [`configs/use_cases/`](../configs/use_cases/), and their templates are generated into [`templates/`](../templates/) with everyone else's. They sat in a second root, `library/configs/`, until a second industry was allowed in `configs/` (DEC-400, then DEC-085). |
 | [`run_engine.py`](run_engine.py) | the harness behind every `run_report.md`. It uploads a CSV, calls `Pipeline.run_train` exactly the way `POST /runs` does, and writes a `results.json` holding the validation findings, leaderboard, test metrics, baseline comparison, decile lift, top features and wall clock. Every number in every report comes out of it. |
+| [`journey.py`](journey.py), [`journey_report.py`](journey_report.py) | Plan J M110: `run_engine.py journey` drives the whole product journey on a randomised dataset through the API (readiness, risk and campaign-effect models, approval checks, treat list, off-policy and campaign measurement, Value Proof Pack) and renders its `run_report.md` from the run's results |
 | [`tests/`](tests/) | one pytest module per dataset, opt-in (DEC-409) |
 | [`DEMO_SCRIPT.md`](DEMO_SCRIPT.md) | one page: which dataset to show to which audience, and what to click |
 | `.runs/`, `*/data/` | git-ignored. `fetch.py` rebuilds the data; the runs are scratch. |
