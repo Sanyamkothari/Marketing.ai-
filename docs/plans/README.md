@@ -19,6 +19,7 @@ actually written to justify.
 | Plan J: product value first (the plan being worked; proposal) | [`MARKETING_AI_PLAN_J_PRODUCT.md`](MARKETING_AI_PLAN_J_PRODUCT.md); evidence in [`docs/research/`](../research/) | M90 … M111, DEC-1300 … 1399 (claimed by M90) |
 | Plan J Phase 2 delegation: who builds what, the rules for a partner agent, and its prompts | [`PLAN_J_DELEGATION.md`](PLAN_J_DELEGATION.md) | partner branches `plan-j/<milestone>-<name>`, merged by the main session |
 | Hand-off reference design for the later integration phase (not allocated) | [`MARKETING_AI_PLAN_J_LAYER.md`](MARKETING_AI_PLAN_J_LAYER.md) | renumbered when the integration plan is written |
+| Plan K: agents that check, not agents that send (proposal for the manager review) | [`MARKETING_AI_PLAN_K_PROPOSAL.md`](MARKETING_AI_PLAN_K_PROPOSAL.md); evidence in [`docs/research/AGENTIC_AI_OPPORTUNITIES_2026_10.md`](../research/AGENTIC_AI_OPPORTUNITIES_2026_10.md) | M130 … M144, DEC-1400 … 1499 (proposed; not claimed) |
 | The parallel-work protocol (the contract between the phase branches, not a phase plan) | [`PARALLEL_WORK_PROTOCOL.md`](../../PARALLEL_WORK_PROTOCOL.md) | all |
 
 ## Missing
