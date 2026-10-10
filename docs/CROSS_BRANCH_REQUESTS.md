@@ -1208,6 +1208,50 @@ Nothing was removed or loosened. `docs/API.md` regenerated (`gen_api_docs --chec
 
 **What is needed.** Ratification of the test edit. Nothing else.
 
+### 2026-10-09 — plan-j M105 (on main) → Plan E (owner of `engine/pilot/proof.py` and `configs/pilot/help.yaml`): two shared helpers and seven codes (record of in-place edits and announcement)
+
+**What changed** (DEC-1315 (j), (k), (o)):
+
+* `engine/pilot/proof.py` (M104's file) gains two public names in `__all__`: `safe_identifier` (the former `_safe`,
+  kept as an alias; it also rejects `..`) and `free_text(item, unprinted, scope)` (the former `_free_text`, now
+  parameterised). `check_figures` is shared with the campaigns' summary. `verify_provenance` calls
+  `free_text(view, _UNPRINTED, ProofView)`, so its behaviour is unchanged and the M104 tests pass.
+* `CAMPAIGN_NO_CONTROL`, `CAMPAIGN_EARLY_LOOK`, `CONTROL_GROUP_CONTACTED`, `CHALLENGER_READY`, `GROUP_BACKFIRED`,
+  `EFFECT_FADING` and `SUMMARY_NOT_TRACEABLE` (`engine.measurement.summary.SUMMARY_CODES`) join
+  `engine.decide.codes.PLAN_J_CODES` by import (one definition) and get `configs/pilot/help.yaml` entries under a
+  Plan J M105 comment, in plain words. `PLAN_UNDERPOWERED`, `DRIFT_DRIFTED` and `UPLIFT_NOT_BETTER_THAN_RISK` are
+  reused with their existing entries. `tests/unit/pilot/test_help.py` is unchanged and green.
+
+**What is needed.** Ratification of the edits. Nothing else.
+
+### 2026-10-09 — plan-j M105 (on main) → owner of `engine/measurement/campaign.py` (M94): every campaign can be listed (record of an in-place edit)
+
+**What changed** (DEC-1315 (f)): `CampaignStore.list` takes `limit: int | None` in the Protocol, `SqlCampaignStore`
+and `InMemoryCampaignStore`. The default stays 100; `None` lists every campaign. Additive: no caller changes. The
+summary of value proven to date uses `None`, so a total "to date" cannot fall because newer campaigns were made.
+
+**What is needed.** Nothing; a new store implementation must accept `None` the same way.
+
+### 2026-10-09 — plan-j M105 (on main) → Plan H (owner of `ui/modules/simple/` and its tests): warnings and the value proven to date on Results (record of in-place edits)
+
+**What changed** (DEC-1315 (l), (n)): `ui/modules/simple/pages.js` gains `summaryCardHtml`, called from
+`resultsHtml`, which draws only the server's cards and totals; `ui/modules/simple/api.js` and `index.js` fetch
+`GET /campaigns/summary` once for Results (a role that may not read it, or an API without the route, sees Results as
+before). `tests/integration/production/ui/simple/fake.mjs` answers the route from captured fixtures,
+`tests/integration/simple/test_simple_ui.py` writes three more captured fixtures (`campaign_summary`,
+`campaign_summary_full`, `campaign_summary_empty`) and `tests/integration/production/ui/simple/summary.test.mjs` is
+new. The other fixtures are unchanged.
+
+**What is needed.** Ratification of the edits. Nothing else.
+
+### 2026-10-09 — plan-j M105 (on main) → trunk (owner of `tests/integration/test_api_config.py`): one route joins the OpenAPI path set (record of an in-place edit)
+
+**What changed** (DEC-1315 (n)): the exact-set OpenAPI path pin gains `/campaigns/summary` under a Plan J M105
+comment. Nothing was removed or loosened (the test failed without it). `docs/API.md` regenerated (`gen_api_docs
+--check` clean).
+
+**What is needed.** Ratification of the test edit. Nothing else.
+
 ### 2026-09-23 — plan-e-pilot (on main) → all branches: every change Plan E made outside its own files and blocks
 
 **What is needed.** Nothing from anybody; this is the announcement §3 asks for. Measured with

@@ -18,6 +18,7 @@ from engine.measurement.codes import MEASUREMENT_CHECK_CODES
 from engine.measurement.continuous import CONTINUOUS_CODES
 from engine.measurement.programme import PROGRAMME_CODES
 from engine.measurement.reconcile import CONTACT_RECONCILE_CODES
+from engine.measurement.summary import SUMMARY_CODES
 from engine.model_gates import UPLIFT_GATE_CODES
 from engine.pilot.proof import PROOF_CODES
 
@@ -104,6 +105,10 @@ PLAN_J_CODES: Final[frozenset[str]] = (
     | PROOF_CODES  # M104 (DEC-1314 (b), (f), (i)): PROOF_SYNTHETIC_DATA and PROOF_NOT_MATURE (409, no pack for
     # generated data or an unfinished result), PROOF_NOT_TRACEABLE (500, a number that does not trace back) and
     # PROOF_SUPPRESSION_INVALID (409, approving a group the pack does not flag) (`engine.pilot.proof`)
+    | SUMMARY_CODES  # M105 (DEC-1315 (b), (h), (j)): the Results cards CAMPAIGN_NO_CONTROL, CAMPAIGN_EARLY_LOOK,
+    # CONTROL_GROUP_CONTACTED, CHALLENGER_READY, GROUP_BACKFIRED and EFFECT_FADING, and SUMMARY_NOT_TRACEABLE (500, a
+    # number of the summary that does not trace back) (`engine.measurement.summary`); its cards also reuse
+    # PLAN_UNDERPOWERED, DRIFT_DRIFTED and UPLIFT_NOT_BETTER_THAN_RISK
 )
 """Empty at M90; each Plan J milestone from M91 on adds the codes it raises.
 
@@ -118,4 +123,5 @@ joined from `engine.measurement.continuous.CONTINUOUS_CODES` (DEC-1312 (m)). M10
 `engine.measurement.audit.AUDIT_CODES`, `engine.measurement.reconcile.CONTACT_RECONCILE_CODES` and
 `engine.measurement.programme.PROGRAMME_CODES` (DEC-1313); its programme route also raises the existing
 CAMPAIGN_EPOCH_MISMATCH and TEST_PLAN_INVALID. M104's four are joined from `engine.pilot.proof.PROOF_CODES`
-(DEC-1314)."""
+(DEC-1314). M105's seven are joined from `engine.measurement.summary.SUMMARY_CODES` (DEC-1315); its cards also
+carry PLAN_UNDERPOWERED, DRIFT_DRIFTED and UPLIFT_NOT_BETTER_THAN_RISK, which the catalogue already explains."""

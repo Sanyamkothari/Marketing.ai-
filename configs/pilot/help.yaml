@@ -481,6 +481,36 @@ codes:
     title: "That group is not flagged as backfiring"
     meaning: "The group named for leaving out of the next cycle is not one this campaign's Value Proof Pack flags as backfiring in its latest measurement, so there is no suggestion to approve for it."
     fix: "Open the campaign's Value Proof Pack and approve one of the suggestions it lists. If the campaign was measured again, the suggestions are the new measurement's."
+  # --- Plan J M105: warnings and the value proven to date on Results (DEC-1315 (b), (h), (j)) -----------------------
+  # PLAN_UNDERPOWERED, DRIFT_DRIFTED and UPLIFT_NOT_BETTER_THAN_RISK are reused as cards with their entries above.
+  CAMPAIGN_NO_CONTROL:
+    title: "Nobody was held back, so this campaign cannot be measured"
+    meaning: "Nobody was kept out of this campaign as a control group, so there is nothing to compare the contacted customers with and what the campaign changed cannot be measured. It is never counted in the value proven to date."
+    fix: "Keep a random group of customers out of the next campaign so that its effect can be measured."
+  CAMPAIGN_EARLY_LOOK:
+    title: "This result was read early"
+    meaning: "The campaign was measured before the day its test plan fixed for the final reading, so the result can still move and is not a final verdict. It is not counted in the value proven to date."
+    fix: "Measure the campaign again on or after the planned day, and decide only then."
+  CONTROL_GROUP_CONTACTED:
+    title: "Customers kept back were contacted anyway"
+    meaning: "At least one in twenty of the customers in the control group was contacted, so the difference between the groups understates what the campaign does."
+    fix: "Find out how they were reached and keep the control group out of every channel next time."
+  CHALLENGER_READY:
+    title: "A new model is waiting for approval"
+    meaning: "A newly trained model for this use case waits for someone to approve it before it is used for any list."
+    fix: "Open the approvals to compare it with the model in use, then approve or decline it."
+  GROUP_BACKFIRED:
+    title: "A group of customers did worse because of the campaign"
+    meaning: "The measured difference for this group lies wholly on the harmful side, even allowing for the number of groups checked. When the groups were random only by your statement, the card says so and reads as 'if the groups were random as you said'."
+    fix: "Open the campaign's Value Proof Pack and, if you agree, approve leaving this group out of the next cycle. Nothing is applied automatically."
+  EFFECT_FADING:
+    title: "The effect of the campaign is falling from one cycle to the next"
+    meaning: "Across at least three final cycles of this use case (randomised by the engine or verified), the measured effect has fallen by more than chance would explain: the whole 95% range of the trend lies below zero and the latest effect is below the first. Campaigns that measure the same customers count as one cycle."
+    fix: "Refresh the offer or the message, check that the customers contacted have not changed, and keep the control group in place to see whether the effect recovers."
+  SUMMARY_NOT_TRACEABLE:
+    title: "The summary of campaigns cannot be shown"
+    meaning: "A number in the warnings or in the value proven to date, or a digit in their words, could not be traced back to the measured record it was read from, so nothing is shown rather than a number nobody can check."
+    fix: "Measure the campaign again so its records are written together. If it happens again, tell your administrator: a stored record may have been changed by hand."
 
 settings:
   actions.bands[*].min_score:

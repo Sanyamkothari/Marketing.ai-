@@ -409,6 +409,17 @@ MILESTONE_TESTS: Final[Mapping[str, tuple[str, ...]]] = {
         "tests/integration/pilot/test_proof_pack_offers.py",
         "tests/integration/pilot/test_proof_pack_amounts.py",
     ),
+    # M105 (DEC-1315). The nightly false-alarm test (tests/statistical/test_fading_false_alarm.py, DEC-1300 (e)) is
+    # left out, as for M102 to M104. The node test (summary.test.mjs) runs through
+    # tests/integration/simple/test_simple_ui.py, which predates M105 (Plan H) and is not evidence for it;
+    # test_campaign_access.py (M94) and test_api_config.py (trunk) gained one route each and are not evidence either.
+    "M105": (
+        "tests/unit/measurement/test_summary.py",
+        "tests/integration/measurement/test_campaign_summary.py",
+        "tests/integration/measurement/test_campaign_summary_cycles.py",
+        "tests/integration/measurement/test_campaign_summary_units.py",
+        "tests/integration/measurement/test_campaign_summary_scale.py",
+    ),
 }
 """Milestone id -> the test files (or directories, with a trailing `/`) that prove it is built.
 
