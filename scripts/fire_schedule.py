@@ -226,6 +226,7 @@ def build_services(settings: Settings) -> tuple[FiringServices, JobRunner]:
         client_store=_client_store(settings.data_dir),
         retrain_flags=privacy_retrain_flags(engine),
         job_client_tag=settings.client_id,
+        settings=settings,  # Plan J M108 (DEC-1318): the run cost gate
     )
     return services, jobs
 

@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Annotated, Any, Final, Literal
 
 from fastapi import APIRouter, HTTPException, Query, Request, Response
@@ -75,6 +76,15 @@ from api.schemas import (
     RunRequest,
     UploadRecord,
     ValidationErrorResponse,
+)
+from engine.aws.run_cost import (  # Plan J M108 (DEC-1318)
+    RUN_COST_NEEDS_CONFIRMATION,
+    CostWatch,
+    cached_price_table,
+    confirmation_message,
+    enforce_cost_cap,
+    estimate_run_cost,
+    start_cost_watch,
 )
 from engine.config import (
     PrimaryKey,
@@ -120,6 +130,7 @@ from engine.decide.treat_list import (  # Plan J M98 (DEC-1308)
     build_treat_list,
     ensure_treat_list,
 )
+from engine.generative.budget import load_prices  # Plan J M108 (DEC-1318)
 from engine.generative.contracts import GENERATIVE_ARTEFACTS, GENERATIVE_TABULAR_SCHEMAS
 from engine.holdout.assign import HOLDOUT_ASSIGNMENT_FILENAME  # Plan J M92 (DEC-1302 (e))
 from engine.holdout.spec import HOLDOUT_REPORT_FILENAME  # Plan J M92 (DEC-1302 (e))
@@ -149,6 +160,7 @@ from engine.runs import (
     update_stage,
     write_job_spec,
 )
+from engine.settings import Settings
 from engine.stages import ingest, validate
 from engine.stages.score import (
     CHAMPION_NOT_FOUND,
@@ -474,6 +486,23 @@ def create_run_endpoint(
     if not report.passed:
         return validation_conflict(report)
 
+    if config.governance.max_run_cost_usd is not None:
+        # Plan J M108 (DEC-1318): a run above the cost cap, or one that cannot be checked against it, is
+        # refused until the person confirms. Before `create_run`, so a refused run leaves nothing behind.
+        # Only a configured cap reaches this: with none, the request is handled exactly as before.
+        cost = estimate_run_cost(
+            config,
+            body.mode,
+            settings=settings,
+            table=cached_price_table(root),
+            llm_prices=load_prices(root),
+            fx=None,
+        )
+        if cost.needs_confirmation and not body.confirm_cost:
+            raise http_error(
+                409, RUN_COST_NEEDS_CONFIRMATION, confirmation_message(cost), path="confirm_cost"
+            )
+
     # One source for the job path whichever the run read: an upload is an `UploadInfo` already, and
     # a dataset is one through `_DatasetSource`. Everything below is then the same for both.
     source: UploadInfo = upload if upload is not None else _require_dataset(dataset)
@@ -505,6 +534,9 @@ def create_run_endpoint(
     spec = job_spec_for(record, upload=source, client_id=settings.client_id)
     write_job_spec(storage, spec)
     jobs.submit(spec.job_id, build_job_fn(spec, storage=storage, registry=registry))
+    if config.governance.max_run_cost_usd is not None and settings.job_backend == "sagemaker":
+        # Plan J M108 (DEC-1318): watch the running cost of a capped run that the cloud bills for.
+        _watch_cost(request, storage, jobs, record.run_id, settings=settings, root=root)
     response.headers["Location"] = f"/runs/{record.run_id}"
     return RunCreatedResponse(run_id=record.run_id)
 
@@ -556,7 +588,9 @@ def list_runs(
     responses=_NOT_FOUND,
     summary="One run: its record and the status the Running screen polls",
 )
-def read_run(run_id: str, storage: StorageDep, jobs: JobsDep) -> RunDetailResponse:
+def read_run(
+    run_id: str, storage: StorageDep, jobs: JobsDep, settings: SettingsDep, root: ConfigRootDep
+) -> RunDetailResponse:
     """`run.json` + `status.json` (plan §8). Both exist from the moment the `202` is returned.
 
     A runner whose jobs can end without this process hearing about it is asked to reconcile first
@@ -565,6 +599,11 @@ def read_run(run_id: str, storage: StorageDep, jobs: JobsDep) -> RunDetailRespon
     """
     record = load_run(storage, run_id)
     reconcile_run(jobs, run_id)
+    if settings.job_backend == "sagemaker" and record.state in (RunState.PENDING, RunState.RUNNING):
+        # Plan J M108 (DEC-1318): the cost cap is enforced on this poll too, whichever sees it first.
+        stopped = enforce_cost_cap(storage, jobs, run_id, settings=settings, table=cached_price_table(root))
+        if stopped is not None:
+            record = stopped
     try:
         status = storage.read_model(run_key(run_id, STATUS_FILENAME), RunStatus)
     except StorageError as exc:
@@ -845,6 +884,18 @@ def run_not_found(run_id: str) -> HTTPException:
 
 def media_type_for(name: str) -> str:
     return MEDIA_TYPES.get(name.rsplit(".", 1)[-1], DEFAULT_MEDIA_TYPE)
+
+
+def _watch_cost(
+    request: Request, storage: Storage, jobs: JobRunner, run_id: str, *, settings: Settings, root: Path
+) -> None:
+    """Start the cost watcher of one run and remember it on the app, dropping the ones that ended."""
+    state = request.app.state
+    watches: list[CostWatch] = [w for w in getattr(state, "cost_watches", []) if w.thread.is_alive()]
+    watches.append(
+        start_cost_watch(storage, jobs, run_id, settings=settings, table_for=lambda: cached_price_table(root))
+    )
+    state.cost_watches = watches
 
 
 def reconcile_run(jobs: JobRunner, run_id: str) -> None:

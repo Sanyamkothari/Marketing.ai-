@@ -265,6 +265,9 @@ class RunRequest(StrictBase):
     model_choice: str | None = None
     model_version_id: str | None = None
     overrides: dict[str, Any] = Field(default_factory=dict)
+    # Plan J M108 (DEC-1318): says "yes, start it" to the cost warning a capped run answers with
+    # (`RUN_COST_NEEDS_CONFIRMATION`). Defaulted, so every existing request is unchanged.
+    confirm_cost: bool = False
 
     @model_validator(mode="after")
     def _one_source_of_data(self) -> RunRequest:

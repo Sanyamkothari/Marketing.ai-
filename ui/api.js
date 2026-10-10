@@ -117,3 +117,26 @@ export const postRetrainNow = (payload) =>
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
+
+// --- Plan J M108 (DEC-1318): the cost of a run before it starts, and what runs have cost ------------
+
+/** What one run of this use case could cost at list price, the cap on it, and whether it needs confirming. */
+export const getCostEstimate = (useCaseId, mode) =>
+  request(`/use-cases/${encodeURIComponent(useCaseId)}/cost-estimate?mode=${encodeURIComponent(mode)}`);
+
+/** What finished runs cost each month (`GET /cost/spend`). */
+export const getSpend = (months = 6) => request(`/cost/spend?months=${encodeURIComponent(months)}`);
+
+/** The saved exchange rate, or `{ fx_rate: null }` (`GET /cost/fx-rate`). */
+export const getFxRate = () => request("/cost/fx-rate");
+
+/** Save the exchange rate rupee amounts use (`PUT /cost/fx-rate`, Admin). */
+export const putFxRate = (payload) =>
+  request("/cost/fx-rate", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+
+/** Forget the exchange rate (`DELETE /cost/fx-rate`, Admin). */
+export const deleteFxRate = () => request("/cost/fx-rate", { method: "DELETE" });

@@ -119,6 +119,14 @@ LEGACY_POLICIES: Final[dict[PolicyKey, RoutePolicy]] = {
         object_param="use_case_id",
     ),
     # --- Phase 1: uploads, runs, models ----------------------------------------------------------
+    # Plan J M108 (DEC-1318): what a run could cost, beside the Run button.
+    ("GET", "/use-cases/{use_case_id}/cost-estimate"): _policy(
+        _V,
+        "use_cases.cost_estimate",
+        "see what a run could cost",
+        object_type="use_case",
+        object_param="use_case_id",
+    ),
     ("POST", "/uploads"): _policy(_AN, "uploads.create", "upload data", object_type="upload"),
     ("GET", "/uploads/{upload_id}/profile"): _policy(
         _V, "uploads.profile", "see an upload's profile", object_type="upload", object_param="upload_id"
