@@ -97,7 +97,70 @@ Under Guided setup's suggestions, **Edit by hand** opens your rows (personal-dat
 Each edit appears in the list above, ticked and labelled **Your edit**; untick it to undo it. Many
 corrections in one column are kept as one step.
 
-## 5. What Data Doctor will not do
+## 5. The outcome from your events (M157)
+
+Most people have no "churned" column. They have a log of what customers did: recharges, orders, logins. When
+no file has a use case's outcome but one file is a customer list and another is such a log, **Missing
+something** also shows the outcome as a sentence you can agree to:
+
+> When has a customer churned? *A customer has churned when there is no recharge for **30 / 60 / 90** days
+> after the snapshot.*
+
+Under each choice it says, counted on your files, how many customers it would make "yes": *At 30 Apr 2025, the
+latest month-end whose 60 days are over, 412 of 2,000 customers (20.6%) are 'yes'. 2 later month-ends not
+counted: their 60 days are not over yet.*
+
+- **The counts are the builder's own.** Each choice is an onboarding outcome definition (a `LabelSpec`, see
+  [`ONBOARDING.md`](ONBOARDING.md) §5), and the count is what onboarding's label builder gives for it on your
+  two files: every customer in the list, at the month-ends near the end of your log. Nothing is estimated.
+- **Customers whose window is not over are not counted.** If your log ends on 30 June, nobody can know yet
+  whether a customer quiet since 25 May will recharge in the 60 days after 31 May. Such a customer is
+  neither "yes" nor "no"; that month-end is left out, here and in the dataset (`LABEL_HORIZON_CENSORED`). This
+  is *censoring*, and the sentence says so in plain words.
+- **Which column is which.** The customer list's ID column, the log's column holding the same IDs (the one
+  whose values match the list best, not the log's own row number), and the log's best date column are shown
+  with the sentence. "Recharge" comes from the file's name when it has a word from the list in
+  `configs/outcomes.yaml`; otherwise from what the file was read as ("payment", "order", "activity").
+- **Nothing is built until you say yes to one sentence.** Agreeing sends the sentence you read, word for
+  word, with your choice. If the files have changed since, or the sentence on screen is not the one the
+  choice now reads, nothing is recorded and the new sentence is shown. A choice with no month-end whose
+  window is over (a 90-day window on two months of data) cannot be agreed: there is nothing to learn from yet.
+
+What is offered, per use case, is configuration, not code: [`configs/outcomes.yaml`](../configs/outcomes.yaml)
+holds each sentence, the kind of outcome it builds (*nothing happened in the window* or *something did*), which
+kinds of log it reads and the choices. Only those two kinds are offered, because they need nothing but an ID and
+a date; an outcome that tests a value ("a bill paid more than 7 days late") is written in *Build from raw
+tables*. RCA, Win-back, Targeted Advertisement and Fault Prediction ship with sentences (and Telco Churn, for
+its own industry).
+
+### For developers
+
+- `engine/doctor/outcomes.py` — the catalogue (`load_outcome_catalogue`), `offer_outcome` (the measured offer)
+  and `attach_outcome_offers` (the diagnosis hook). Counts come from `engine.onboarding.labels.build_labels` on
+  month-ends planned by `engine.onboarding.snapshots.plan_snapshots`; dates are read with
+  `engine.onboarding.transforms.cast_series`, keys matched with `engine.onboarding.sources.join_coverage`.
+- `POST /doctor/diagnosis`: a `missing` use case's `outcome_offer` (null when no sentence fits the files).
+- `POST /doctor/outcome` (Analyst): `{use_case, entity_upload_id, event_upload_id, date_column, days,
+  sentence, agreed}`. The offer is measured again; `422 OUTCOME_NOT_AGREED` without `agreed: true`,
+  `422 OUTCOME_CHOICE_UNKNOWN` for a window not offered, `409 OUTCOME_SENTENCE_CHANGED` when `sentence` is not
+  the choice's sentence word for word, `409 OUTCOME_NOT_OFFERED` when the two files cannot define it,
+  `409 OUTCOME_NOT_MEASURABLE` when no window is over yet, `404 OUTCOME_NO_SENTENCE` for a use case with no
+  sentence. The `201` is the agreement, kept at `uploads/<customer list>/outcome_<use case>.json` (so erasing
+  the upload erases it), with the `LabelSpec` and `next_steps`.
+- **What the screen does next** (until M155 lets Data Doctor drive the builder itself): add the customer list
+  as the client's `entity` source and the log as a source of the agreement's `event_role`
+  (`POST /clients/{id}/sources`); map the list's `entity_id_column` to `entity_key`, and the log's
+  `event_id_column` to `entity_key` and its `date_column` to `event_time` (`POST /clients/{id}/mappings/suggest`,
+  `PUT /clients/{id}/mappings/{mapping_id}`); save the recipe with the agreement's `label_spec` unchanged
+  (`POST /clients/{id}/onboarding-specs`); build (`POST /datasets`). The label is named after the use case's
+  `target.column`, so the dataset trains as the use case expects.
+- The chat does not propose an outcome yet (`propose_label`): Guided setup's chat works on one file, and an
+  outcome from events needs two.
+- Tests: `tests/unit/doctor/test_outcomes.py` (every count recomputed directly; censoring; no dates, no offer),
+  `tests/integration/test_api_doctor_outcome.py` (the offer, the agreement, the refusals, and the agreed
+  `LabelSpec` building a dataset through the onboarding API).
+
+## 6. What Data Doctor will not do
 
 - **Match people across files with no shared key.** It can tidy keys (leading zeros, prefixes) and say how many
   match; it does not guess that "R. Sharma, Pune" is "Rahul Sharma".

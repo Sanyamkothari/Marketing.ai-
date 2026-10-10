@@ -1825,7 +1825,7 @@ ten numbers per milestone.
 | M154 | Editing by hand | "Edit by hand" in Guided setup: a table view (personal data hidden); a cell corrected for one customer, a value changed everywhere, rows left out; each edit an accepted step labelled "Your edit", undone by unticking, replayed next month | **done** | `tests/unit/agent/test_edits.py`, `tests/integration/agent/test_edit_ui.py` |
 | M155 | Several files (level 4) | Data Doctor drives the onboarding builder; built datasets carry a recipe | pending | — |
 | M156 | Wide sheets | `unpivot` | pending | — |
-| M157 | Outcome from events (level 5) | `propose_label`, agreed as a sentence | pending | — |
+| M157 | Outcome from events (level 5) | a use case no file has the outcome of is offered it from an event log as a sentence with choices ("no recharge for 30 / 60 / 90 days after the snapshot"), each counted by onboarding's own label builder, censored month-ends left out; `POST /doctor/outcome` records an explicit yes to one exact sentence and returns its `LabelSpec`; sentences in `configs/outcomes.yaml`; the chat's `propose_label` not yet | **done** | `tests/unit/doctor/test_outcomes.py`, `tests/integration/test_api_doctor_outcome.py` |
 | M158 | Enough data | readiness per use case, what to do now, what to collect | pending | — |
 | M159 | Memory per client | same-shape files offered the saved treatment | pending | — |
 | M160 | The messy-file benchmark | thirty files shaped like real exports, five use cases, driven to Approve with no person; `reports/plan_l_benchmark.md`: 0 fail at upload, 30 of 30 reach an approved run, 0.33 questions per file | **done** | `tests/integration/test_plan_l_benchmark.py` |

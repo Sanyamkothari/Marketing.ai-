@@ -1497,4 +1497,56 @@ DEC-1500…1509, M151 → DEC-1510…1519, …), so parallel work on two milesto
   M161 take M150's free tail, DEC-1506…1509. *Consequences:* `tests/integration/test_plan_l_benchmark.py` drives
   two files in the fast suite and all thirty, against the targets, in the slow one. AI suggestions still never
   start ticked (plan §11): the benchmark accepts only the rules' recommended set.
+- **DEC-1570 — M157: the outcome sentences are configuration, in their own file.** *Context:* most clients have no
+  "churned" column but do have an event log; plan §5.3 asks for the outcome "shown back as a sentence".
+  *Decision:* (a) `configs/outcomes.yaml`, read by `engine/doctor/outcomes.load_outcome_catalogue` (cached per file
+  and modification time, like `intake.yaml`), holds per use case a `question`, a `sentence` with blanks
+  (`{An_entity}`, `{entity}`, `{an_event}`, `{event}`, `{days}`), its `label_type`, the `event_kinds` (onboarding
+  roles, best first), the `days` offered and `default_days`. (b) A missing file offers no sentence; a malformed
+  one is a `ValueError` naming the file. (c) Shipped: rca, win-back-campaign, targeted-advertisement,
+  fault-prediction (Home) and telco-churn. *Consequences:* adding a sentence is a YAML edit.
+- **DEC-1571 — Only what a `LabelSpec` can build from an ID and a date is offered.** *Decision:* (a) `label_type` is
+  `event_absence` or `event_presence` only: a `column` outcome is a column a file already has (M151), and a
+  `value_threshold` outcome needs a condition the person writes, which stays in Build from raw tables. (b) Each
+  choice is a real `LabelSpec`: `type` from the template, `role` what the event file was read as,
+  `horizon_days` the choice, `description` the sentence; no `where`, `grace_days` or `exclude_roles`. (c) A
+  template with an unknown blank, or a default not among its choices, is refused at load.
+- **DEC-1572 — The offer and its counts are onboarding's own label builder's.** *Decision:* (a) `offer_outcome` needs
+  a customer list (read as the entity role, with an ID column; with several, the one closest to one row per ID,
+  then the most rows) and an event file of one of the template's kinds with a date column (a file of no detected
+  kind is `other_event`). (b) The event file's ID column is the one with the best `join_coverage` against the
+  list's IDs, above zero, so a log's own `recharge_id` is never taken for the customer. (c) Dates are read with
+  `cast_series`, as the builder reads them. (d) For each choice, month-end snapshots near the data end are
+  planned by `plan_snapshots` and labelled by `build_labels`; the count shown is the latest month-end that is
+  not censored: customers, yes, no, rate. (e) `UseCaseReadiness.outcome_offer` (defaulted null) carries it, only
+  for a `missing` verdict; a failure to build an offer is logged and leaves the verdict as it was.
+- **DEC-1573 — `POST /doctor/outcome`: nothing is built from a sentence the person did not pick.** *Decision:*
+  (a) The body names the two uploads, the date column, the window, the sentence as read and `agreed`. (b) The
+  offer is measured again. Refusals: `422 OUTCOME_NOT_AGREED`, `OUTCOME_SAME_FILE`, `OUTCOME_CHOICE_UNKNOWN`;
+  `409 OUTCOME_SENTENCE_CHANGED` (word for word; the answer gives the current one), `OUTCOME_NOT_OFFERED`,
+  `OUTCOME_NOT_MEASURABLE`; `404 OUTCOME_NO_SENTENCE`. (c) The `201` is an `OutcomeAgreement` (sentence,
+  `label_spec`, the measured choice, the columns, `event_role`, `data_end`, `agreed_at`, `next_steps`).
+  (d) Analyst, audited like every POST.
+- **DEC-1574 — Censoring is the builder's, and it is said in words.** *Decision:* a month-end whose window runs past
+  the event file's last date is censored by `build_labels`: its customers are neither yes nor no; each choice
+  says how many later month-ends were left out, and a choice with no month-end whose window is over shows no
+  count and cannot be agreed (`OUTCOME_NOT_MEASURABLE`).
+- **DEC-1575 — The label is named after the use case's `target.column`.** *Decision:* whatever window is picked, so
+  Guided setup, the readiness check and a run from the dataset learn from the column they expect; the window
+  lives in `horizon_days` and the sentence in `description`.
+- **DEC-1576 — The event's word comes from the file's name, from a list.** *Decision:* `{event}` is the first word of
+  the file's name found in `outcomes.yaml:event_words` ("recharges_2025.csv" → "recharge"), else the word for
+  the file's kind, else "event". No text from inside the file ever enters the sentence.
+- **DEC-1577 — The agreement is kept beside the customer list.** *Decision:*
+  `uploads/<entity upload>/outcome_<use case>.json`, rewritten by a later agreement. It holds no customer ID
+  (counts, column names, the spec); erasing or retiring the upload removes it with the folder. Who agreed is in
+  the audit trail.
+- **DEC-1578 — Data Doctor does not drive the builder for an agreed outcome in M157.** *Decision:* the agreement's
+  `next_steps` and `docs/DATA_DOCTOR.md` §5 list the onboarding calls (sources, mappings with
+  `entity_key`/`event_time`, the recipe with `label_spec` unchanged, `POST /datasets`);
+  `tests/integration/test_api_doctor_outcome.py` follows them to a passing dataset. M155 can take an
+  agreement's `label_spec` as is.
+- **DEC-1579 — `propose_label` in the chat is not built.** *Decision:* Guided setup's chat works on one upload and an
+  outcome from events needs two files; when the chat sees several files its `propose_label` should return the
+  same `OutcomeOffer` and build nothing, agreement staying `POST /doctor/outcome`.
 <!-- ---- END PLAN-L ---- -->

@@ -521,6 +521,8 @@ def test_openapi_builds_and_documents_every_route(client: TestClient) -> None:
         # Plan L M151: Data Doctor, the place - what the files are and can power, and the hand-off (DEC-1512)
         "/doctor/diagnosis",
         "/doctor/handoff",
+        # Plan L M157: the outcome from events, agreed as a sentence (DEC-1573)
+        "/doctor/outcome",
         # Plan L M154: editing by hand in Guided setup, and the table view (DEC-1541)
         "/uploads/{upload_id}/agent-session/edits",
         "/uploads/{upload_id}/agent-session/rows",
