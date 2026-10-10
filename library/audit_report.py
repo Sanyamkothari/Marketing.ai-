@@ -135,6 +135,24 @@ def _line_range(view: dict[str, Any], section: str, label: str) -> str | None:
     return None
 
 
+def _charged(case: dict[str, Any], whole: dict[str, Any]) -> str:
+    """The e-mails the Pack's cost of contacts charges, as the campaign record counts them (`intended_treated`).
+
+    The value lines rest on the e-mailed customers measured (`offers_combined.treated_rows`); when some e-mailed
+    customers were left out of the measurement (no outcome) the two counts differ, and the sentence says by how many
+    rather than claiming every money line covers the same e-mails.
+    """
+    measured = int(whole["treated_rows"])
+    counts = (case.get("campaign") or {}).get("counts") or {}
+    charged = int(counts.get("intended_treated", measured))
+    if charged == measured:
+        return f"all {_int(charged)} e-mails sent: every money line covers the same e-mails"
+    return (
+        f"all {_int(charged)} e-mails meant to be sent, while the value lines rest on the {_int(measured)} of them "
+        f"measured, so {_int(charged - measured)} e-mails are charged and not credited (no outcome was measured for them)"
+    )
+
+
 def _pack_finding(results: dict[str, Any]) -> str:
     """How a Pack of several offers scopes its money lines, quoted from the Pack and the report.
 
@@ -164,8 +182,8 @@ def _pack_finding(results: dict[str, Any]) -> str:
                 f"**Several offers (`{case['key']}`).** The Pack adds the {len(arms)} offers together against the "
                 f'one group sent nothing: its headline and "Extra outcomes" ({credited}) are {parts} together, '
                 f"and the value of what the campaign changed ({value}) and the net value rest on that sum, while the "
-                f"cost of contacts ({cost}) is for all {_int(whole['treated_rows'])} e-mails sent: every money line "
-                "covers the same e-mails. The range is the engine's own, from every e-mailed customer compared with "
+                f"cost of contacts ({cost}) is for {_charged(case, whole)}. The range is the engine's own, from every "
+                "e-mailed customer compared with "
                 "the shared group at once (`offers_combined` of the report), which counts that group once; the "
                 "offers' own ranges are not added. This closes the finding raised for M104 (DEC-1314) in "
                 "docs/CROSS_BRANCH_REQUESTS.md on 2026-10-10 (DEC-1322 (g))."

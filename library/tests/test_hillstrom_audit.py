@@ -386,6 +386,26 @@ def test_a_verdict_over_several_offers_is_said_to_be_the_first_offers_only() -> 
     assert "reads the first offer only" not in single
 
 
+def test_the_several_offers_sentence_quotes_the_e_mails_the_cost_was_charged_on() -> None:
+    """The Pack's cost of contacts charges the campaign record's `intended_treated`, which counts e-mailed customers
+    left out of the measurement for having no outcome; the sentence quotes that count and, when it differs from the
+    customers measured, says by how many instead of claiming every money line covers the same e-mails."""
+    from library.audit_report import render_audit
+
+    audit = json.loads(AUDIT_RESULTS.read_text(encoding="utf-8"))
+    case = audit["cases"]["conversion"]
+    measured = case["report"]["offers_combined"]["treated_rows"]
+    assert case["campaign"]["counts"]["intended_treated"] == measured
+    text = render_audit(audit, results_path="a.json", command="cmd")
+    assert f"is for all {measured:,} e-mails sent: every money line covers the same e-mails" in text
+
+    case["campaign"]["counts"]["intended_treated"] = measured + 120  # 120 e-mailed customers with no outcome
+    text = render_audit(audit, results_path="a.json", command="cmd")
+    assert f"is for all {measured + 120:,} e-mails meant to be sent" in text
+    assert f"rest on the {measured:,} of them measured, so 120 e-mails are charged and not credited" in text
+    assert "every money line covers the same e-mails" not in text
+
+
 # ---------------------------------------------------------------------------
 # The committed report against the full file's run
 # ---------------------------------------------------------------------------

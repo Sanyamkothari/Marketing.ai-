@@ -177,6 +177,22 @@ def test_the_net_value_values_every_offer_and_charges_every_offers_contacts_and_
     assert any("every offer together" in note for note in net["notes"])
 
 
+def test_the_held_back_customers_forgone_gain_says_it_assumes_the_contacted_mix(
+    world: World, combined: str
+) -> None:
+    """The pooled lift weighs each offer by its share of the contacted customers, so the held-back customers'
+    forgone gain is what they would have added given the offers in that same mix, and the label says so."""
+    view = _view(world, combined)
+    report = _stored(world, combined, "incrementality_report.json")
+    whole = report["offers_combined"]
+    forgone = _line(view, "test_cost", "What they would have added")
+    assert forgone["label"] == (
+        "What they would have added had they been given the offers in the same mix as the contacted customers"
+    )
+    assert forgone["value"]["value"] == pytest.approx(whole["control_rows"] * whole["absolute_lift"]["value"])
+    assert forgone["value"]["sources"][0]["field"].startswith("offers_combined.")
+
+
 def test_every_number_of_a_pack_of_several_offers_is_traced(world: World, combined: str) -> None:
     view = _view(world, combined)
     assert view["claim"] == "proven"

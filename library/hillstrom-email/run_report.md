@@ -296,7 +296,7 @@ python -m library.run_engine journey --dataset hillstrom-email
 | Outcomes file | 64,000 rows: `customer_id`, `visit`, `conversion`, `spend` |
 | Campaign dated | 2008-03-20, outcome window 14 days |
 | Campaign ids | `c_20261010_11200001`, `c_20261010_11200002`, `c_20261010_11200003`, `c_20261010_11200004` |
-| Whole audit | 19.3 s |
+| Whole audit | 19.5 s |
 
 ### 8.1 The answer in one table
 

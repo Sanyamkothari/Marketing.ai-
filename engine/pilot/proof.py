@@ -1725,7 +1725,14 @@ def _test_cost(context: _Context) -> ProofSection:
                         else (
                             "What they would have added had they been given the first offer"
                             if context.scope == "first_offer"
-                            else "What they would have added had they been contacted"
+                            else (
+                                # The pooled lift weighs each offer by its share of the contacted customers, so
+                                # this is the gain only had the held-back customers been given the same mix.
+                                "What they would have added had they been given the offers in the same mix as "
+                                "the contacted customers"
+                                if context.scope == "combined"
+                                else "What they would have added had they been contacted"
+                            )
                         )
                     ),
                 ),

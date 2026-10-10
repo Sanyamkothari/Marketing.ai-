@@ -794,7 +794,10 @@ slightly wide when the offers' rates differ a lot. `tests/statistical/test_offer
 coverage of the true total on 2,000 campaigns of three offers per case, and that the independent combination falls well
 below it. The pack's whole-campaign lines (the headline, the extra outcomes, gross and naive credit, the control group's
 cost, the value of what the campaign changed, the net value and the offers taken) read `offers_combined` and say "every
-offer together"; the contacts paid are every offer's, as before; each offer alone stays in the offer table. A report of
+offer together"; the contacts paid are every offer's, as before; each offer alone stays in the offer table. The
+pooled lift weighs each offer by its share of the contacted customers, so the control group's forgone gain is labelled
+as what the held-back customers would have added "had they been given the offers in the same mix as the contacted
+customers". A report of
 several offers measured before `offers_combined` existed is never summed across offers: those lines say they are "the
 first offer alone", the costs are the first offer's measured customers, and the headline says the other offers are not
 added in; measuring the campaign again adds them. A pack of one offer is byte for byte what it was
