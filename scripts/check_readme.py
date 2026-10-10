@@ -420,6 +420,15 @@ MILESTONE_TESTS: Final[Mapping[str, tuple[str, ...]]] = {
         "tests/integration/measurement/test_campaign_summary_units.py",
         "tests/integration/measurement/test_campaign_summary_scale.py",
     ),
+    # M108 (DEC-1318). The node test (cost_card.test.mjs) runs through test_cost_card_js.py.
+    # test_api_config.py and test_ui.py (trunk) gained one line each and are not evidence for it.
+    "M108": (
+        "tests/unit/decide/test_run_cost.py",
+        "tests/unit/decide/test_scheduled_run_cost.py",
+        "tests/unit/decide/test_cost_card_js.py",
+        "tests/integration/decide/test_run_cost_api.py",
+        "tests/integration/decide/test_run_cost_defaults.py",
+    ),
 }
 """Milestone id -> the test files (or directories, with a trailing `/`) that prove it is built.
 

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from typing import Final
 
+from engine.aws.run_cost import RUN_COST_CODES
 from engine.decide.channel_columns import CHANNEL_COLUMN_CODES
 from engine.decide.offer_run import OFFER_CHOICE_CODES
 from engine.measurement.arms import MULTI_ARM_CODES
@@ -109,6 +110,9 @@ PLAN_J_CODES: Final[frozenset[str]] = (
     # CONTROL_GROUP_CONTACTED, CHALLENGER_READY, GROUP_BACKFIRED and EFFECT_FADING, and SUMMARY_NOT_TRACEABLE (500, a
     # number of the summary that does not trace back) (`engine.measurement.summary`); its cards also reuse
     # PLAN_UNDERPOWERED, DRIFT_DRIFTED and UPLIFT_NOT_BETTER_THAN_RISK
+    | RUN_COST_CODES  # M108 (DEC-1318 (e), (f), (l)): RUN_COST_NEEDS_CONFIRMATION (409 from POST /runs, and a
+    # scheduled firing's failure, when a run's estimate is above the cap or cannot be worked out) and
+    # RUN_COST_CAP_REACHED (a run stopped at its cost limit, RunRecord.error) (`engine.aws.run_cost`)
 )
 """Empty at M90; each Plan J milestone from M91 on adds the codes it raises.
 
@@ -124,4 +128,5 @@ joined from `engine.measurement.continuous.CONTINUOUS_CODES` (DEC-1312 (m)). M10
 `engine.measurement.programme.PROGRAMME_CODES` (DEC-1313); its programme route also raises the existing
 CAMPAIGN_EPOCH_MISMATCH and TEST_PLAN_INVALID. M104's four are joined from `engine.pilot.proof.PROOF_CODES`
 (DEC-1314). M105's seven are joined from `engine.measurement.summary.SUMMARY_CODES` (DEC-1315); its cards also
-carry PLAN_UNDERPOWERED, DRIFT_DRIFTED and UPLIFT_NOT_BETTER_THAN_RISK, which the catalogue already explains."""
+carry PLAN_UNDERPOWERED, DRIFT_DRIFTED and UPLIFT_NOT_BETTER_THAN_RISK, which the catalogue already explains.
+M108's two are joined from `engine.aws.run_cost.RUN_COST_CODES` (DEC-1318)."""

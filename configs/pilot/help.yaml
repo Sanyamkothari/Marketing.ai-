@@ -511,6 +511,15 @@ codes:
     title: "The summary of campaigns cannot be shown"
     meaning: "A number in the warnings or in the value proven to date, or a digit in their words, could not be traced back to the measured record it was read from, so nothing is shown rather than a number nobody can check."
     fix: "Measure the campaign again so its records are written together. If it happens again, tell your administrator: a stored record may have been changed by hand."
+  # --- Plan J M108: cost before each run, with a cap (DEC-1318 (e), (f), (l)) ------------------------------------------
+  RUN_COST_NEEDS_CONFIRMATION:
+    title: "This run needs your confirmation before it starts"
+    meaning: "Your administrator set a limit on what one run may cost, and this run could cost more than that, or its cost could not be worked out. Nothing was started. The message shows the most it could cost at the cloud's published price list; that is an estimate, not a bill. A scheduled run cannot be confirmed by a person, so it is not started."
+    fix: "If you accept the cost, start it again and choose Start it anyway; a run is stopped when its running cost reaches the limit. For a scheduled run, ask an administrator to raise the limit or to refresh the price list."
+  RUN_COST_CAP_REACHED:
+    title: "This run was stopped at its cost limit"
+    meaning: "The run was stopped because the cost it had run up so far reached the limit your administrator set for a single run. The message shows the limit and about how much it had cost at the cloud's published price list (an estimate, not a bill). The steps it had finished stay on its record, but a stopped run gives no results."
+    fix: "To run it again, ask an administrator to raise the limit."
 
 settings:
   actions.bands[*].min_score:

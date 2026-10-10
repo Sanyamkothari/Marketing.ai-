@@ -1252,6 +1252,60 @@ comment. Nothing was removed or loosened (the test failed without it). `docs/API
 
 **What is needed.** Ratification of the test edit. Nothing else.
 
+### 2026-10-10 — plan-j M108 (on main) → Phase 4b (owner of `engine/scheduling/firing.py`, `api/routes/schedules.py` and `scripts/fire_schedule.py`): a scheduled run passes the run cost gate (record of in-place edits)
+
+**What changed** (DEC-1318 (l), (o)): in-place and backward-compatible. `FiringServices` gains an optional
+`settings` (default `None`); `start_dataset_run` gains the optional keyword `settings` (default `None`); both
+callers (`api/routes/schedules.py` `_services`, `scripts/fire_schedule.py` `build_services`) pass the deployment's
+settings. With a cost cap set on the use case (`governance.max_run_cost_usd`) and `job_backend` sagemaker, a
+firing whose run needs cost confirmation fails with `RUN_COST_NEEDS_CONFIRMATION` and starts nothing (the failed
+firing raises the usual alert), and a firing that starts is watched by `engine.aws.run_cost.start_cost_watch`.
+With no cap, no settings, or a local deployment, a firing is exactly as before
+(`tests/unit/decide/test_scheduled_run_cost.py`; the Phase 4b scheduling tests pass unchanged).
+
+**What is needed.** Ratification of the edits. A one-shot CLI firing's watcher ends with the process; the next
+`GET /runs/{id}` poll and SageMaker's own time limit bound such a run. A scheduler-tick sweep that calls
+`enforce_cost_cap` for each running capped run would close that gap if Phase 4b wants it.
+
+### 2026-10-10 — plan-j M108 (on main) → Phase 3b / M106 (owner of `api/routes/uplift.py`): an uplift run should pass the run cost gate (request)
+
+**What is needed** (DEC-1318 (n)): after M106 merges, `POST /uplift/runs` should do what `POST /runs` does
+(`api/routes/runs.py`): call `engine.aws.run_cost.estimate_run_cost` and, when the answer needs confirmation and
+the request does not carry `confirm_cost: true`, answer 409 `RUN_COST_NEEDS_CONFIRMATION` with
+`confirmation_message`; after submitting, start the cost watcher as `_watch_cost` does. Until then an uplift run is
+checked against the cap only by the `GET /runs/{id}` poll. M108 did not edit the file.
+
+### 2026-10-10 — plan-j M108 (on main) → Plan E (owner of `configs/pilot/help.yaml`): two new codes (announcement)
+
+**What changed** (DEC-1318 (p)): `RUN_COST_NEEDS_CONFIRMATION` (409 from `POST /runs`, and a scheduled firing's
+failure) and `RUN_COST_CAP_REACHED` (a run stopped at its cost limit) (`engine.aws.run_cost.RUN_COST_CODES`) join
+`engine.decide.codes.PLAN_J_CODES` by import (one definition) and get `configs/pilot/help.yaml` entries under a
+Plan J M108 comment, in plain words. `tests/unit/pilot/test_help.py` is unchanged and green.
+
+**What is needed.** Nothing; this is an announcement.
+
+### 2026-10-10 — plan-j M108 (on main) → trunk (owner of `api/routes/runs.py`, `api/routes/use_cases.py`, `api/schemas.py` `RunRequest`, `engine/runs.py`, `engine/aws/prices.py`, `engine/config.py` `GovernanceConfig`, `configs/engine.yaml`, `ui/api.js`, `ui/usecase.js`, `tests/integration/test_ui.py` and `tests/integration/test_api_config.py`): cost before each run (record of in-place edits)
+
+**What changed** (DEC-1318 (o)), each additive and inert with no cap set:
+
+* `engine/config.py` `GovernanceConfig.max_run_cost_usd` (float above zero, or null; the in-place declaration
+  registered in the Plan J plan, §3.5), left out of every dump while null so a default `run_config.json` is
+  byte-identical; its `configs/engine.yaml` default is `null` and config-only (a run's `overrides` cannot set it).
+* `api/schemas.py` `RunRequest.confirm_cost: bool = False`, in place (a field cannot move into the PLAN-J block).
+* `api/routes/runs.py`: `POST /runs` answers 409 `RUN_COST_NEEDS_CONFIRMATION` above the cap unless confirmed, and
+  starts a cost watcher for a SageMaker run; `GET /runs/{id}` also checks the cap. `api/routes/use_cases.py` gains
+  `GET /use-cases/{use_case_id}/cost-estimate` (Viewer, with its `api/access_policy.py` `RoutePolicy`).
+* `engine/runs.py` `cancel_run` takes an optional `error` (left out, the record is written as before);
+  `engine/aws/prices.py` gains `price_compute_time` and `PricedTime`, the multiplication `cost_estimate` already
+  did, shared with the estimate and the stop.
+* `ui/api.js` and `ui/usecase.js`: the cost line beside Run and the "Start it anyway" box; `ui/cost.js` is new.
+  `tests/integration/test_ui.py` lists `ui/cost.js` among the modules the page loads.
+* `tests/integration/test_api_config.py`'s exact-set OpenAPI path pin gains `/use-cases/{use_case_id}/cost-estimate`,
+  `/cost/fx-rate` and `/cost/spend` under one Plan J M108 comment. Nothing was removed or loosened. The cost router is
+  mounted in `api/main.py`'s PLAN-J block and the `#/cost` module in `ui/index.html`'s. `docs/API.md` regenerated.
+
+**What is needed.** Ratification of the edits. Nothing else.
+
 ### 2026-09-23 — plan-e-pilot (on main) → all branches: every change Plan E made outside its own files and blocks
 
 **What is needed.** Nothing from anybody; this is the announcement §3 asks for. Measured with
