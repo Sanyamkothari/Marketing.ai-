@@ -84,6 +84,29 @@ and never ticked for you). **Suggested by the AI**: the chat, when you ask ("Bom
 city"); the AI must look at the column first, the fix is tried on your first 1,000 rows and shows what it
 changes, and it is never ticked for you. **Your edit**: what you did by hand (M154).
 
+### A column per month (M156)
+
+A sheet kept by hand often has one column per month: `customer_id, 2024_01_spend, 2024_02_spend, 2024_01_calls,
+2024_02_calls`. For a use case that may reshape data, Guided setup asks *"Your sheet has one column per month for
+spend and calls. Turn them into rows (one row per customer per month)?"*
+
+- **Turn into rows** makes one row per customer per month, with a `month` column (the first day of the month)
+  and one column each for spend and calls. Guided setup then offers to combine those rows back into one row per
+  customer, with each customer's total, average, largest and latest spend, instead of a separate column per
+  month. The outcome is copied onto every row of its customer and is never turned into rows.
+- **Keep as columns** leaves the sheet as it is; each month stays a separate column.
+
+It reads the column names only, by a fixed list: months with a year (`2024_01`, `2024-01`, `Jan_2024`),
+quarters (`2024_Q1`), years (`2024`), with the month either side of the measure (`spend_2024_01` works too). A
+single month's column is not a wide sheet, and columns that merely share a word (`total_spend`, `avg_spend`) are
+not either. **Months without a year** (`Jan_spend`) cannot be put in date order, so Guided setup only notes them
+and keeps them as columns; name them with the year to have them turned into rows.
+
+Next month's sheet is turned into rows by exactly the same list of columns. A column it no longer has stops
+scoring with the column named; a new month's column is left out and counted on the receipt, and when it holds
+more than the use case's failure limit of the cells, scoring stops rather than use part of the months: start
+Guided setup again on the new sheet.
+
 ## 4. What Data Doctor will not do
 
 - **Match people across files with no shared key.** It can tidy keys (leading zeros, prefixes) and say how many
