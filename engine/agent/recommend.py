@@ -17,6 +17,7 @@ off a check (`validation.leakage_check`) or removes human approval (`governance.
 from __future__ import annotations
 
 import json
+import math
 import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -36,15 +37,25 @@ from engine.config import (
     UseCaseConfig,
     resolve_config,
 )
+from engine.holdout.spec import MAX_EXPLORE_FRACTION, effective_holdout_fraction, is_persistent
+from engine.measurement.planner import (
+    MAX_HOLDOUT_SHARE,
+    arm_sizes,
+    holdout_for_mde,
+    mde_two_proportions,
+)
 
 if TYPE_CHECKING:
     from engine.decide.reasons import BusinessReasonDictionary
 
 __all__ = [
     "NEVER_RECOMMENDED",
+    "PLANNED_EFFECT",
     "DataFacts",
+    "HoldoutAdvice",
     "ReasonPhraseSuggestion",
     "SettingRecommendation",
+    "holdout_advice",
     "recommend_settings",
     "setting_allowed",
     "settings_fields",
@@ -369,6 +380,157 @@ def _value_rules(config: UseCaseConfig, facts: DataFacts) -> list[SettingRecomme
     return []
 
 
+# ---------------------------------------------------------------------------
+# How many customers to hold back, and an explore share (Plan J M109, DEC-1319 (i)-(m))
+# ---------------------------------------------------------------------------
+PLANNED_EFFECT: Final[float] = 0.02
+"""The change a campaign is planned to show: 2 points, the middle of the 1 to 3 points realistic campaigns move a rate."""
+
+HOLDOUT_PATH: Final[str] = "actions.control_group_fraction"
+"""The one run setting that holds the share held back; a persistent holdout and the explore share are deployment settings."""
+
+
+@dataclass(frozen=True)
+class HoldoutAdvice:
+    """What the planner says about the share held back for this file, in the numbers the sentences are built from."""
+
+    rows: int
+    base_rate: float
+    current_fraction: float
+    current_effect: float | None
+    """The smallest change a test with the current share is sure to see, as a fraction (0.02 is 2 points); None if none."""
+    enough: bool
+    """True when the current share already sees `PLANNED_EFFECT` either way."""
+    possible: bool
+    """False when even holding back half of the customers would not see `PLANNED_EFFECT`."""
+    recommended_fraction: float | None
+    """The smallest whole-percent share above the current one that sees `PLANNED_EFFECT`; None when none is needed or possible."""
+    recommended_control: int | None
+    persistent: bool
+    """True when the holdout is a deployment setting (a persistent scope), so a run cannot change it."""
+    explore_percent: int | None
+    """A whole-percent explore share that reaches the uplift floor of customers, or None when 10% would not."""
+    explore_rows: int | None
+    floor: int
+
+
+def _plain_points(effect: float | None) -> str:
+    return "no change you could rely on" if effect is None else f"about {effect * 100:.1f} points or more"
+
+
+def holdout_advice(config: UseCaseConfig, facts: DataFacts) -> HoldoutAdvice | None:
+    """The planner's reading of this file, or None when the use case contacts nobody or the base rate is unknown.
+
+    The share is the smallest whole percent (the planner's own search, rounded up) that lets a test of this
+    many customers see `PLANNED_EFFECT` in either direction at 80% power and 95% confidence. It takes the
+    file's size and positive rate as the list scored later and the rate without a campaign: the Guided setup
+    text says both, because neither is known until then.
+    """
+    rate = facts.positive_rate
+    if not config.actions.contacts_customers or facts.rows < 1 or rate is None or not 0.0 < rate < 1.0:
+        return None
+    current = effective_holdout_fraction(config.actions)
+    n_treat, n_control = arm_sizes(facts.rows, current)
+    now = mde_two_proportions(n_treat, n_control, rate)
+    needs: list[float] = []
+    possible = True
+    for sign in (1.0, -1.0):
+        if not 0.0 <= rate + sign * PLANNED_EFFECT <= 1.0:
+            continue  # no room to move that way, so only the other way is planned for
+        plan = holdout_for_mde(facts.rows, rate, sign * PLANNED_EFFECT)
+        if plan.share is None:
+            possible = False
+        else:
+            needs.append(plan.share)
+    if not needs and possible:
+        return None  # the rate leaves no room either way: nothing to plan
+    enough = possible and now.absolute is not None and now.absolute <= PLANNED_EFFECT + 1e-9
+    recommended: float | None = None
+    control: int | None = None
+    if possible and not enough:
+        recommended = min(MAX_HOLDOUT_SHARE, math.ceil(max(needs) * 100.0 - 1e-9) / 100.0)
+        recommended = max(recommended, round(current + 0.01, 2))
+        control = arm_sizes(facts.rows, recommended)[1]
+    floor = config.uplift.min_arm_rows
+    explore_percent = next(
+        (
+            percent
+            for percent in range(1, int(MAX_EXPLORE_FRACTION * 100) + 1)
+            if facts.rows * percent / 100.0 >= floor
+        ),
+        None,
+    )
+    return HoldoutAdvice(
+        rows=facts.rows,
+        base_rate=rate,
+        current_fraction=current,
+        current_effect=now.absolute,
+        enough=enough,
+        possible=possible,
+        recommended_fraction=recommended,
+        recommended_control=control,
+        persistent=is_persistent(config.actions),
+        explore_percent=explore_percent,
+        explore_rows=None if explore_percent is None else math.ceil(facts.rows * explore_percent / 100.0),
+        floor=floor,
+    )
+
+
+def _holdout_rules(config: UseCaseConfig, facts: DataFacts) -> list[SettingRecommendation]:
+    advice = holdout_advice(config, facts)
+    if advice is None or advice.persistent or advice.recommended_fraction is None:
+        return []
+    share = advice.recommended_fraction
+    control = advice.recommended_control or 0
+    seen = _plain_points(advice.current_effect)
+    return [
+        SettingRecommendation(
+            HOLDOUT_PATH,
+            share,
+            f"Hold back {share:.0%} of customers so the campaign can be measured",
+            f"Realistic campaign effects are 1 to 3 points. With {advice.current_fraction:.0%} held back of "
+            f"{advice.rows:,} customers, a test sees {seen}; to see {PLANNED_EFFECT * 100:.0f} points it needs "
+            f"about {share:.0%} held back ({control:,} customers). This assumes about {advice.base_rate:.0%} "
+            "respond without a campaign, and that the list you score later is about this size.",
+            AgentConfidence.CHECK,
+            facts.evidence_ids,
+        )
+    ]
+
+
+def holdout_notes(advice: HoldoutAdvice | None) -> tuple[str, ...]:
+    """Plain sentences for what no run setting can hold: a deployment's holdout and the explore share.
+
+    Each is an assumption for the person to read, not a setting the run would apply (the explore share and a
+    persistent holdout are not run overrides, so a box that changed nothing would be a lie).
+    """
+    if advice is None:
+        return ()
+    notes: list[str] = []
+    if advice.persistent:
+        notes.append(
+            f"Customers held back are fixed by your administrator at {advice.current_fraction:.0%}, the same "
+            "customers every run, so this run cannot change it. At that share a test of "
+            f"{advice.rows:,} customers sees {_plain_points(advice.current_effect)}."
+        )
+    elif not advice.possible:
+        notes.append(
+            f"Even holding back half of {advice.rows:,} customers would not show a change of "
+            f"{PLANNED_EFFECT * 100:.0f} points: the detectable effect, the smallest change a test of this "
+            f"size can see, stays larger. With {advice.current_fraction:.0%} held back it is "
+            f"{_plain_points(advice.current_effect)}. A campaign on a list this size needs a bigger list or "
+            "a longer period before its effect can be told from chance."
+        )
+    if advice.explore_percent is not None:
+        notes.append(
+            f"To let the next model learn about customers who are not on the list, your administrator can "
+            f"set an explore share. The next model needs at least {advice.floor:,} customers in each group; "
+            f"{advice.explore_percent}% of {advice.rows:,} customers is {advice.explore_rows:,}. Explore "
+            "customers are contacted at random, so each one costs a contact; the most allowed is 10%."
+        )
+    return tuple(notes)
+
+
 def recommend_settings(
     config: UseCaseConfig,
     facts: DataFacts,
@@ -392,6 +554,7 @@ def recommend_settings(
         *([rec] for rec in _time_rules(config, facts)),
         *([rec] for rec in _consent_rules(config, facts)),
         *([rec] for rec in _value_rules(config, facts)),
+        *([rec] for rec in _holdout_rules(config, facts)),
     ]
     allowed = [
         list(group)

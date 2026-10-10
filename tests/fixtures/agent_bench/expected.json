@@ -46,6 +46,21 @@
     "questions": [],
     "hidden": []
   },
+  "mid_size_file": {
+    "status": "needs_review",
+    "stopped": false,
+    "primary_key": "customer_id",
+    "target": "converted_30d",
+    "proposals": [
+      "role primary_key=customer_id (sure)",
+      "role target=converted_30d (sure)",
+      "setting split.type=time_based (check)",
+      "setting split.time_column=snapshot_date (check)",
+      "setting actions.control_group_fraction=0.13 (check)"
+    ],
+    "questions": [],
+    "hidden": []
+  },
   "renamed_target": {
     "status": "needs_review",
     "stopped": false,
