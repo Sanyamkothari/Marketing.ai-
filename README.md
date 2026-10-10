@@ -1626,7 +1626,7 @@ in [`docs/DECIDE.md`](docs/DECIDE.md).
 | M107 | The monthly loop, read-only | The monthly cycle runs on schedule from saved connections (read-only) with only the approval left to a person. Three new schedule kinds after `score` (`treat_list`, `measure`, `learn`), each reading only what the step before wrote, carry a cycle from this month's tables to a challenger that waits for an Approver, with an `info` alert at each step (`treat_list_ready`, `campaign_measured`, `challenger_waiting`). Sources can be bound to a saved connection (`POST /clients/{id}/sources/from-connection`, Analyst): the newest CSV or Parquet file under a folder, or a table, is read again before each scheduled build, but only when the build would read that bound table, so a recipe of uploaded files reads no connection; a table read again meets the per-source row limit. Outcomes are read for the campaign's own date window (`POST /campaigns/{id}/outcomes` takes `upload_id` or `connection_id`; one quoted date-window `WHERE` on a checked column, amending DEC-1105, no free SQL, a read-only session), and consent can be read from a connection (`POST /privacy/consent/imports/from-connection`, Admin, the file route's size limit). The sibling `/from-connection` routes, in place of extending the multipart routes, are an approved deviation from the plan. A refused learn is not retried until the campaign is measured again; the learning run passes M108's cost gate only once a run is about to start. Nothing is written to a client's systems and the treat list stays a download. Built by Claude Code after one review round with two lenses. DEC-1317 | **done** | `tests/unit/measurement/test_cycle_schedules.py`, `tests/unit/measurement/test_cycle_upload.py`, `tests/unit/measurement/test_outcome_pull.py`, `tests/integration/measurement/test_bound_sources.py`, `tests/integration/measurement/test_connection_pulls_api.py`, `tests/integration/measurement/test_monthly_loop.py` |
 | M108 | Cost before each run, with a cap | The cost of a run shown before it starts; a cap that refuses or stops a run. `GET /use-cases/{use_case_id}/cost-estimate` (Viewer) gives the most one run could cost at the AWS list price, in US dollars, beside the Run button; it is null with a reason when the price list, the machine's price or the time limit is missing, and rupees appear only beside an Admin-saved exchange rate with its source and date (`PUT /cost/fx-rate`, audited). An optional `governance.max_run_cost_usd` (config-only) makes `POST /runs` and scheduled firings answer `RUN_COST_NEEDS_CONFIRMATION` above it (a person may confirm; a schedule cannot), and a running job is stopped through `cancel_run` with `RUN_COST_CAP_REACHED` when its running cost passes it. `GET /cost/spend` (Viewer, `#/cost`) gives the monthly recorded spend. AI text is shown but not counted: a run never calls it (an approved departure from the plan). Opt-in: with no cap, a default `run_config.json` is byte-identical. Built by Claude Code after one review round with two lenses. DEC-1318 | **done** | `tests/unit/decide/test_run_cost.py`, `tests/unit/decide/test_scheduled_run_cost.py`, `tests/unit/decide/test_cost_card_js.py`, `tests/unit/decide/cost_card.test.mjs`, `tests/integration/decide/test_run_cost_api.py`, `tests/integration/decide/test_run_cost_defaults.py` |
 | M109 | Small fixes that make existing things work better | The retail baseline, annotated drift events and reviewed suggestion benchmarks. An Analyst can note an event (a price change, a promotion, a competitor's launch, a change of rules, a season) against a scoring run's drift report: `GET /runs/{run_id}/drift-events` (Viewer), `POST` and `DELETE` (Analyst, audited without the text), kept in a new row-free artefact, `drift_annotations.json`; `drift.json`, the predict stage and the verdict are never written. An event counts as a possible reason only when dated between the model's training run and the drift measurement and only through measures that moved; it never lowers a measured change or silences an alert. The scoring Output page shows the "Events behind the change" card with add and remove, and the root-cause screen shows it read-only. Verdicts, the plan card and the power card say "detectable effect" and "early look" (sentences only, no number or verdict kind). Guided setup sizes the held-back share with the test planner for a 2-point change and proposes `actions.control_group_fraction` as a check suggestion; the agent benchmark gains one case (`mid_size_file`), the other 21 digests unchanged. Retail win-back (UCI Online Retail): no setting was changed; with 20% of the shoppers sealed first, no model family, extra column or label and window setting beats the baseline (`library/online-retail/run_report.md`). Built by Claude Code after one review round with two lenses. DEC-1319 | **done** | `tests/integration/decide/test_drift_events.py`, `tests/unit/agent/test_holdout_advice.py`, `tests/unit/decide/test_verdict_wording.py`, `tests/unit/decide/test_drift_events_card_js.py`, `tests/unit/decide/test_rca_drift_events_js.py`, `tests/unit/decide/test_planner_words_js.py`, `tests/unit/decide/drift_events_card.test.mjs`, `tests/unit/decide/rca_drift_events.test.mjs`, `tests/unit/decide/planner_words.test.mjs` |
-| M110 | Validate on real public randomised data | The whole journey run on real randomised public data (Hillstrom; Criteo and others where obtained), each with a reproducible run report | pending | — |
+| M110 | Validate on real public randomised data | The whole journey run on real randomised public data (Hillstrom; Criteo and others where obtained), each with a reproducible run report. The whole journey runs on Hillstrom (MineThatData, 2008: 64,000 customers randomised to a men's e-mail, a women's e-mail or no e-mail) through `python -m library.run_engine journey --dataset hillstrom-email`, every step through the product's own API, split once (seed 20261010) into 32,000 training rows and 32,000 evaluation rows used only for measurement, with both test plans registered before any evaluation outcome is read; `library/hillstrom-email/run_report.md` is rendered only from the run's results and a re-run reproduces every number (a test checks both). Results, recorded as they fell: the risk model's ROC-AUC is 0.534 and does not beat its baseline; uplift does **not** beat risk ranking, in the engine's check (whose risk model had seen 84.5% of the hold-out, recorded) or repeated out of sample on the evaluation rows for either e-mail, and it is not calibrated; the targeted list beats sending no e-mail (+0.45 pts conversion off-policy, +0.60 pts measured by the replay campaign) but **loses** to sending everyone the men's e-mail (-0.24 pts, -0.43 to -0.04). Both Value Proof Packs are built, provenance-verified and labelled "public dataset, retrospective replay, a third of each group kept". New use case `hillstrom-email` (configs only, no engine code); only a tenth-of-the-file `sample.csv` (6,401 rows) is committed and the full file is git-ignored; whether that sample may stay in git is the product owner's decision (no explicit licence). Criteo and X5 were unreachable and Lenta's licence is not approved, so they were skipped with reasons. Built by Claude Code after one review round with two lenses. DEC-1320 | **done** | `library/tests/test_hillstrom_email.py` (opt-in library test), `tests/unit/test_prototype_parity.py` (its `hillstrom-email` entry) |
 | M111 | The manager demo | A demo script that uses only real results, rehearsed once end to end by someone outside the team | pending | — |
 
 M90 changes no product behaviour. It claims the decision range, adds this block to the shared files, and sets up
@@ -1741,7 +1741,7 @@ was closed on 2026-10-09 by DEC-1311 (af)–(ak) (below).
 **Phase 3 (M102–M105), against its exit gate** ([`docs/plans/MARKETING_AI_PLAN_J_PRODUCT.md`](docs/plans/MARKETING_AI_PLAN_J_PRODUCT.md)):
 the gate asks for M102–M104 merged (with M105 following), the nightly coverage tests (yes/no, amounts, per offer)
 within their bands, the Proof Pack provenance test green, and an audit readout on at least one real past campaign.
-**The gate is not yet met,** and only because the real-past-campaign audit readout is pending client data; every
+**The gate is not yet met,** and only because no audit readout has been produced on a real past campaign; every
 other item is met.
 
 - M102, M103, M104 and M105 are merged on `main` and read **done** above (M105 on 2026-10-09, DEC-1315).
@@ -1756,24 +1756,40 @@ other item is met.
   the merged tree too (2 passed). Earlier, M103's `tests/statistical/test_complier_coverage.py` (4 passed) and M104's
   `tests/statistical/test_backfire_false_alarm.py` (1 passed) passed after their merges on 2026-10-09. The whole
   nightly suite (`make test-statistical`) was not re-run in one go at the M103, M104 or M105 integration.
-- **The real-past-campaign audit readout is pending client data.** The audit route exists (M103, DEC-1313), but no
-  prospect or Minfy team has supplied a real past campaign, so no audit readout has been produced on one. If none
-  arrives, M110 runs it on Hillstrom: a public randomised dataset, read retrospectively, so it shows the audit path
-  works on real data but is not a client's own campaign.
+- **The real-past-campaign audit readout is still open.** The audit route exists (M103, DEC-1313), but no prospect
+  or Minfy team has supplied a real past campaign. M110 (2026-10-10, DEC-1320) ran the readout on Hillstrom instead: a
+  public randomised e-mail test from 2008, read retrospectively, not a client's own campaign. Exactly what it showed:
+  the file's logged random e-mail was replayed as two campaigns (conversion; spend with CUPED) on the 32,000
+  evaluation rows, recorded with `POST /campaigns`, their plans registered before any evaluation outcome was read,
+  measured through the one measurement path (`POST /campaigns/{id}/outcomes`, then `/measure`), with a third of each
+  group kept (the customers whose random e-mail matched the list's choice) and an outcome window of 0 days (a stated
+  limit). The list beat no e-mail on conversion, +0.60 pts (+0.21 to +1.00; p = 0.002), and on spend (CUPED), +$0.84
+  per customer (+0.23 to +1.45); both Value Proof Packs were built and provenance-verified, though their fixed
+  *Method and limits* text overstates what a replay is (raised for M104, DEC-1320 (o)). It did **not** go through the
+  M103 audit route (`POST /campaigns/audit`, a past campaign uploaded as an assignment file and an outcome file) or
+  the programme readout, so that route has still not been run on real data; the gate's item stays open until a
+  client's past campaign, or Hillstrom through `POST /campaigns/audit`, is read out.
 
 **Phase 4 (M106–M111), against its exit gate** ([`docs/plans/MARKETING_AI_PLAN_J_PRODUCT.md`](docs/plans/MARKETING_AI_PLAN_J_PRODUCT.md)):
 the gate asks for M106–M111 merged, the scheduled cycle green on fakes, validation results recorded and the demo
-rehearsed; the manager review follows. **The gate is not yet met:** M110 and M111 are pending.
+rehearsed; the manager review follows. **The gate is not yet met:** M111 is pending.
 
-- M106, M107, M108 and M109 are merged on `main` and read **done** above, all on 2026-10-10 (DEC-1316, DEC-1317,
-  DEC-1318 and DEC-1319).
+- M106, M107, M108, M109 and M110 are merged on `main` and read **done** above, all on 2026-10-10 (DEC-1316,
+  DEC-1317, DEC-1318, DEC-1319 and DEC-1320).
 - **The scheduled cycle is green on fakes:** `tests/integration/measurement/test_monthly_loop.py` (marked `slow`)
   runs SCORE → TREAT LIST → MEASURE → LEARN on schedules under a controlled clock, reading the month's tables and the
   campaign's outcomes from fake connections, read-only, and ends with a challenger waiting for an Approver and the
   champion unchanged; it passed on `main` after the M107 merge (1 passed, run serially, 2026-10-10). The same test
   checks that a capped deployment's learning run is refused with nothing written (DEC-1317 (h)).
-- **Validation results are pending (M110):** the whole journey on real public randomised data (Hillstrom first),
-  each with a reproducible run report. It also carries the Phase 3 gate's audit readout if no client data arrives.
+- **Validation results are recorded (M110, DEC-1320)** on one dataset, Hillstrom (64,000 customers, randomised to a
+  men's e-mail, a women's e-mail or no e-mail), in `library/hillstrom-email/run_report.md`, which is rendered only
+  from the run's results and which a fresh run on the full file reproduces (`library/tests/test_hillstrom_email.py`,
+  19 passed on `main` after the merge, 2026-10-10). They go against the product as often as for it: uplift does not
+  beat risk ranking, in the engine's check or out of sample, and is not calibrated; the risk model's ROC-AUC is 0.534
+  and does not beat its baseline; the targeted list beats sending no e-mail (+0.45 pts off-policy, +0.60 pts by
+  replay) but loses to sending everyone the men's e-mail (-0.24 pts). Criteo and X5 were unreachable and Lenta's
+  licence is not approved, so no second dataset was run. M110 did not run the M103 audit route (see the Phase 3
+  gate above).
 - **The demo is pending (M111):** a demo script that uses only real results, rehearsed once end to end by someone
   outside the team.
 <!-- ---- END PLAN-J ---- -->

@@ -461,6 +461,11 @@ MILESTONE_TESTS: Final[Mapping[str, tuple[str, ...]]] = {
         "tests/unit/decide/test_rca_drift_events_js.py",
         "tests/unit/decide/test_planner_words_js.py",
     ),
+    # M110 (DEC-1320). The library tests are opt-in (DEC-409) and outside `testpaths`, so the fast suite never
+    # selects them and this mapping can only fail on a missing path; they run with `pytest library/tests/...`
+    # (the full-file reproduction skips, saying why, when the git-ignored data is absent).
+    # tests/unit/test_prototype_parity.py (trunk) gained one PER_USE_CASE entry and is not evidence for it.
+    "M110": ("library/tests/test_hillstrom_email.py",),
 }
 """Milestone id -> the test files (or directories, with a trailing `/`) that prove it is built.
 
