@@ -34,7 +34,9 @@ library.run_engine journey --dataset hillstrom-email`), not a single training ru
 | [`run_engine.py`](run_engine.py) | the harness behind every `run_report.md`. It uploads a CSV, calls `Pipeline.run_train` exactly the way `POST /runs` does, and writes a `results.json` holding the validation findings, leaderboard, test metrics, baseline comparison, decile lift, top features and wall clock. Every number in every report comes out of it. |
 | [`journey.py`](journey.py), [`journey_report.py`](journey_report.py) | Plan J M110: `run_engine.py journey` drives the whole product journey on a randomised dataset through the API (readiness, risk and campaign-effect models, approval checks, treat list, off-policy and campaign measurement, Value Proof Pack) and renders its `run_report.md` from the run's results |
 | [`tests/`](tests/) | one pytest module per dataset, opt-in (DEC-409) |
-| [`DEMO_SCRIPT.md`](DEMO_SCRIPT.md) | one page: which dataset to show to which audience, and what to click |
+| [`DEMO_SCRIPT.md`](DEMO_SCRIPT.md) | Plan J M111: the manager demo, on the Hillstrom e-mail test: the five questions, the screens to click, the honest limits, and what looks contradictory on the screens |
+| [`DEMO_REHEARSAL.md`](DEMO_REHEARSAL.md) | the checklist for the rehearsal by someone outside the team (pending), and the author's dry run |
+| [`DEMO_OTHER_DATASETS.md`](DEMO_OTHER_DATASETS.md) | the previous demo script for the other datasets, unchanged; Criteo is not to be demonstrated |
 | `.runs/`, `*/data/` | git-ignored. `fetch.py` rebuilds the data; the runs are scratch. |
 
 ## Running it
