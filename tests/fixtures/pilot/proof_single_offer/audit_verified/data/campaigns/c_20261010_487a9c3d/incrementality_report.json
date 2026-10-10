@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "run_id": "c_20261010_487a9c3d",
+  "campaign_id": "c_20261010_487a9c3d",
+  "outcome_column": "converted",
+  "outcome_window_days": 30,
+  "as_of": "2026-06-30T00:00:00Z",
+  "status": "mature",
+  "results_available_on": null,
+  "treated_rows": 6400,
+  "treated_conversions": 887,
+  "treated_rate": 0.13859375,
+  "control_rows": 1600,
+  "control_conversions": 141,
+  "control_rate": 0.088125,
+  "absolute_lift": {
+    "schema_version": 1,
+    "value": 0.05046874999999999,
+    "ci_low": 0.03344230674346542,
+    "ci_high": 0.06603658669557923,
+    "confidence_level": 0.95
+  },
+  "relative_lift": 0.5726950354609929,
+  "incremental_conversions": {
+    "schema_version": 1,
+    "value": 322.99999999999994,
+    "ci_low": 214.03076315817867,
+    "ci_high": 422.6341548517071,
+    "confidence_level": 0.95
+  },
+  "p_value": 6.82829977155364e-8,
+  "rows_immature": 0,
+  "rows_without_outcome": 0,
+  "rows_suppressed_or_untreated": 0,
+  "causal": true,
+  "summary": "Treated customers converted at 13.9% against 8.8% for the control group: a lift of +5.0 points (95% CI +3.3 points to +6.6 points; p < 0.001), about 323 extra conversions caused by the campaign.",
+  "computed_at": "2026-10-10T06:47:03.058716Z",
+  "test_plan_hash": null,
+  "early_look": false
+}

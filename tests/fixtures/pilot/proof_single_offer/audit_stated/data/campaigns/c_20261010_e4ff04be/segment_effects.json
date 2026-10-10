@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "campaign_id": "c_20261010_e4ff04be",
+  "report_computed_at": "2026-10-10T06:47:04.572065Z",
+  "outcome_kind": "binary",
+  "early_look": false,
+  "min_rows_per_arm": 50,
+  "family_alpha": 0.05,
+  "family_size": 0,
+  "family_confidence": null,
+  "cells": [],
+  "not_measured": [
+    {
+      "schema_version": 1,
+      "dimension": "band",
+      "reason": "No customer of the campaign has a band."
+    }
+  ],
+  "computed_at": "2026-10-10T06:47:04.589307Z"
+}

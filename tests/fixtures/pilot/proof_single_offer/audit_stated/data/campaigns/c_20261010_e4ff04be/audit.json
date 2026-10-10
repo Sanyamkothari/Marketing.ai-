@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "campaign_id": "c_20261010_e4ff04be",
+  "stated_basis": "random",
+  "causal_basis": "declared_random",
+  "causal": false,
+  "label": "Random by your statement, not verified",
+  "explanation": "You said the customers were chosen at random, and we could not check it. The assignment file has no customer details besides the id and the group (age, region, past purchases and so on), so nothing could be used to test whether the groups were chosen at random. The numbers are shown as you described the campaign; they are not a proven effect.",
+  "randomness": {
+    "status": "not_run",
+    "auc": null,
+    "threshold": 0.6,
+    "rows_used": null,
+    "signals": [],
+    "columns_used": 0,
+    "reason": "The assignment file has no customer details besides the id and the group (age, region, past purchases and so on), so nothing could be used to test whether the groups were chosen at random."
+  },
+  "assignment_upload_id": "u_085d20b461d9",
+  "assignment_file_name": "assignment.csv",
+  "assignment_rows": 8000,
+  "rows_without_group": 0,
+  "offers": null,
+  "control_level": null,
+  "outcome_kind": "binary",
+  "outcome_is_good": true,
+  "sent_dates": "outcomes",
+  "synthetic": false,
+  "notes": [
+    "Every customer in the assignment file was compared, whether or not they were meant to be reached (the usual way to read a campaign: the groups as they were chosen)."
+  ],
+  "audited_at": "2026-10-10T06:47:04.118621Z"
+}

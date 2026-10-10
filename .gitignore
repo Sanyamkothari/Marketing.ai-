@@ -1,5 +1,8 @@
 # local artefact store (plan §3)
 data/
+# ...except the stored single-offer Value Proof Pack inputs (aggregate JSON only), which the byte-identity
+# test rebuilds the stored Packs from (tests/unit/pilot/test_proof_single_offer_golden.py)
+!tests/fixtures/pilot/proof_single_offer/*/data/
 
 # virtualenv
 .venv/

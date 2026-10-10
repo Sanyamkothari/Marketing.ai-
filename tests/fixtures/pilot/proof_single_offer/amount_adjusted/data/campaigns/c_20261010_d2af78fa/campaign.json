@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "campaign_id": "c_20261010_d2af78fa",
+  "kind": "scored",
+  "name": "Win-back Campaign, sent 22 Mar 2026",
+  "use_case_id": "win-back-campaign",
+  "run_ids": [
+    "r_20261009_10200001"
+  ],
+  "primary_key": "customer_id",
+  "treatment_start": "2026-03-22T00:00:00Z",
+  "treatment_start_source": "run_finished",
+  "outcome_window_days": 30,
+  "population": "intended",
+  "bands": null,
+  "causal": true,
+  "causal_basis": "engine_random",
+  "holdout_scope": "run",
+  "holdout_scope_key": null,
+  "holdout_epoch": null,
+  "counts": {
+    "rows": 20000,
+    "suppressed": 0,
+    "treated": 10000,
+    "holdout": 10000,
+    "intended": 20000,
+    "intended_treated": 10000,
+    "intended_holdout": 10000,
+    "explore": 0
+  },
+  "status": "measured",
+  "outcomes": {
+    "upload_id": "u_8834673cd465",
+    "file_name": "revenue.csv",
+    "outcome_column": "revenue",
+    "outcome_named": true,
+    "positive_label": null,
+    "treatment_date_column": "treatment_date",
+    "rows": 20000,
+    "added_at": "2026-10-10T06:47:07.109590Z",
+    "covariate_column": "pre_revenue",
+    "covariate_date_column": "pre_revenue_until"
+  },
+  "arbitration_id": null,
+  "test_plan_hash": "1139e6584e1a9d2d9b2fbd962f93a4c0344a0ca98e17bea1569b2cb10b5ae133",
+  "test_plan_version": 1,
+  "created_at": "2026-10-10T06:47:06.437785Z",
+  "created_by": "local-operator",
+  "measured_at": "2026-10-10T06:47:07.389276Z"
+}

@@ -27,7 +27,19 @@ CASES = ("scored_banded", "scored_uplift", "audit_verified", "audit_stated", "am
 
 
 def test_every_golden_case_is_present() -> None:
+    """Every case holds its stored Pack and the artefacts it was built from.
+
+    The root `.gitignore` ignores every `data/` directory (the local artefact store) and re-includes these by name;
+    a case whose `data/` was not committed fails here, by name, rather than as a missing directory below.
+    """
     assert sorted(path.name for path in GOLDEN.iterdir() if path.is_dir()) == sorted(CASES)
+    for case in CASES:
+        assert (GOLDEN / case / "pack.json").is_file(), f"{case}: the stored Pack is missing"
+        campaigns = GOLDEN / case / "data" / "campaigns"
+        assert campaigns.is_dir(), f"{case}: the artefacts the stored Pack was built from are missing"
+        (campaign,) = [path for path in campaigns.iterdir() if path.is_dir()]
+        for name in ("campaign.json", "incrementality_report.json"):
+            assert (campaign / name).is_file(), f"{case}: {name} is missing"
 
 
 @pytest.mark.parametrize("case", CASES)
