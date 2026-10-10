@@ -17,6 +17,7 @@ from engine.measurement.arms import MULTI_ARM_CODES
 from engine.measurement.audit import AUDIT_CODES
 from engine.measurement.codes import MEASUREMENT_CHECK_CODES
 from engine.measurement.continuous import CONTINUOUS_CODES
+from engine.measurement.learn import LEARN_CODES
 from engine.measurement.programme import PROGRAMME_CODES
 from engine.measurement.reconcile import CONTACT_RECONCILE_CODES
 from engine.measurement.summary import SUMMARY_CODES
@@ -113,6 +114,9 @@ PLAN_J_CODES: Final[frozenset[str]] = (
     | RUN_COST_CODES  # M108 (DEC-1318 (e), (f), (l)): RUN_COST_NEEDS_CONFIRMATION (409 from POST /runs, and a
     # scheduled firing's failure, when a run's estimate is above the cap or cannot be worked out) and
     # RUN_COST_CAP_REACHED (a run stopped at its cost limit, RunRecord.error) (`engine.aws.run_cost`)
+    | LEARN_CODES  # M106 (DEC-1316 (e), (f), (o)): LEARN_NO_OVERLAP, 409 from POST /runs/{id}/measure/learn (and
+    # step 4's learn.reason) when the last cycle cannot show what a contact changes outside its list: no explore
+    # share, or an outcomes file that covers the two sides unevenly or leaves too few (`engine.measurement.learn`)
 )
 """Empty at M90; each Plan J milestone from M91 on adds the codes it raises.
 
@@ -129,4 +133,5 @@ joined from `engine.measurement.continuous.CONTINUOUS_CODES` (DEC-1312 (m)). M10
 CAMPAIGN_EPOCH_MISMATCH and TEST_PLAN_INVALID. M104's four are joined from `engine.pilot.proof.PROOF_CODES`
 (DEC-1314). M105's seven are joined from `engine.measurement.summary.SUMMARY_CODES` (DEC-1315); its cards also
 carry PLAN_UNDERPOWERED, DRIFT_DRIFTED and UPLIFT_NOT_BETTER_THAN_RISK, which the catalogue already explains.
-M108's two are joined from `engine.aws.run_cost.RUN_COST_CODES` (DEC-1318)."""
+M108's two are joined from `engine.aws.run_cost.RUN_COST_CODES` (DEC-1318). M106's one is joined from
+`engine.measurement.learn.LEARN_CODES` (DEC-1316)."""

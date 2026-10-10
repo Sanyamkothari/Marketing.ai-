@@ -520,6 +520,11 @@ codes:
     title: "This run was stopped at its cost limit"
     meaning: "The run was stopped because the cost it had run up so far reached the limit your administrator set for a single run. The message shows the limit and about how much it had cost at the cloud's published price list (an estimate, not a bill). The steps it had finished stay on its record, but a stopped run gives no results."
     fix: "To run it again, ask an administrator to raise the limit."
+  # --- Plan J M106: learn the next model from the last cycle (DEC-1316 (e), (f)) ---------------------------------------
+  LEARN_NO_OVERLAP:
+    title: "Nothing to learn from for customers outside the list"
+    meaning: "The last cycle cannot show what a contact changes for customers who were not on its list. Either it contacted none of them at random, or the outcomes file covers the contacted and the not-contacted customers unevenly, or it leaves too few of them. A model learned from it would only be guessing for those customers, so nothing was learned and nothing was written."
+    fix: "Upload outcomes for every customer the cycle scored, contacted or not. Or set an explore share of 5% or more (actions.explore_fraction) for the next cycle and learn from that one. Or train on a file from a randomised campaign."
 
 settings:
   actions.bands[*].min_score:

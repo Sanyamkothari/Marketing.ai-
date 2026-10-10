@@ -420,6 +420,16 @@ MILESTONE_TESTS: Final[Mapping[str, tuple[str, ...]]] = {
         "tests/integration/measurement/test_campaign_summary_units.py",
         "tests/integration/measurement/test_campaign_summary_scale.py",
     ),
+    # M106 (DEC-1316). The node test (live_calibration.test.mjs) runs through
+    # tests/integration/production/test_approvals_ui_js.py, which predates M106 (Phase 4b) and is not evidence for it.
+    # test_uplift_run_cost.py is M108's request to M106, done at M106's integration (DEC-1316 (p)).
+    "M106": (
+        "tests/unit/measurement/test_learn.py",
+        "tests/integration/measurement/test_learn_from_cycle.py",
+        "tests/integration/measurement/test_learn_default_unchanged.py",
+        "tests/integration/uplift/test_uplift_dataset_run.py",
+        "tests/integration/decide/test_uplift_run_cost.py",
+    ),
     # M108 (DEC-1318). The node test (cost_card.test.mjs) runs through test_cost_card_js.py.
     # test_api_config.py and test_ui.py (trunk) gained one line each and are not evidence for it.
     "M108": (

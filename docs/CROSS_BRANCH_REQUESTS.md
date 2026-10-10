@@ -1267,14 +1267,6 @@ With no cap, no settings, or a local deployment, a firing is exactly as before
 `GET /runs/{id}` poll and SageMaker's own time limit bound such a run. A scheduler-tick sweep that calls
 `enforce_cost_cap` for each running capped run would close that gap if Phase 4b wants it.
 
-### 2026-10-10 — plan-j M108 (on main) → Phase 3b / M106 (owner of `api/routes/uplift.py`): an uplift run should pass the run cost gate (request)
-
-**What is needed** (DEC-1318 (n)): after M106 merges, `POST /uplift/runs` should do what `POST /runs` does
-(`api/routes/runs.py`): call `engine.aws.run_cost.estimate_run_cost` and, when the answer needs confirmation and
-the request does not carry `confirm_cost: true`, answer 409 `RUN_COST_NEEDS_CONFIRMATION` with
-`confirmation_message`; after submitting, start the cost watcher as `_watch_cost` does. Until then an uplift run is
-checked against the cap only by the `GET /runs/{id}` poll. M108 did not edit the file.
-
 ### 2026-10-10 — plan-j M108 (on main) → Plan E (owner of `configs/pilot/help.yaml`): two new codes (announcement)
 
 **What changed** (DEC-1318 (p)): `RUN_COST_NEEDS_CONFIRMATION` (409 from `POST /runs`, and a scheduled firing's
@@ -1305,6 +1297,70 @@ Plan J M108 comment, in plain words. `tests/unit/pilot/test_help.py` is unchange
   mounted in `api/main.py`'s PLAN-J block and the `#/cost` module in `ui/index.html`'s. `docs/API.md` regenerated.
 
 **What is needed.** Ratification of the edits. Nothing else.
+
+### 2026-10-10 — plan-j M106 (on main) → Phase 3b (owner of `api/routes/uplift.py`, `api/schemas.py` `UpliftRunRequest` and `docs/UPLIFT.md`): dataset-backed uplift runs, the run cost gate and the randomised-cycle docs (record of in-place edits)
+
+**What changed** (DEC-1316 (l), (n), (p)), each additive and defaulted:
+
+* `api/schemas.py` `UpliftRunRequest` (inside the PHASE-3B block, in place: a field cannot move out of its class):
+  `upload_id` becomes `str | None`, with a new `dataset_id: str | None`; exactly one of them is required (a
+  validator answers 422 for both or neither). `confirm_cost: bool = False` is added, as `RunRequest.confirm_cost`.
+  A caller that sends `upload_id` as before is unaffected.
+* `api/routes/uplift.py` `POST /uplift/runs`: a dataset is read through `api/routes/runs.py`'s `_dataset_source`
+  (typed `_DatasetSource`, the job path's source typed `UploadInfo`, as `POST /runs`), `check_seed` uses the dataset
+  id, `run.json` carries the dataset lineage, and the dataset is never written to. With
+  `governance.max_run_cost_usd` set, the route answers 409 `RUN_COST_NEEDS_CONFIRMATION` after both layers of checks
+  unless `confirm_cost` is true, and starts the cost watcher for a SageMaker run (M108's request, below in Resolved).
+  With no cap, an upload-backed run is exactly as before (`tests/integration/uplift/test_uplift_api.py` unchanged).
+* `docs/UPLIFT.md`: section 2 (`dataset_id` and the cost gate), section 9 (learning from a randomised cycle: it reads
+  `holdout_assignment.json`, the frame checks, the forced approval and the overlap gap), the section 16 limitation and
+  the `LEARN_NO_OVERLAP` row of the error table. `engine/uplift/` is unchanged.
+
+**What is needed.** Ratification of the edits. Nothing else.
+
+### 2026-10-10 — plan-j M106 (on main) → Phase 4b (owner of `engine/approvals.py` and `ui/modules/production/approvals.js`): the Approver's predicted-against-measured block (record of in-place edits)
+
+**What changed** (DEC-1316 (i), (j), (m)): `engine/approvals.py` `ApprovalItem` gains `live_calibration`, set only for a
+model learned from a randomised cycle and left out of the dump otherwise (`exclude_if`), so every other approval item
+is byte-identical. `ui/modules/production/approvals.js` draws it under the heading "How the model that chose the last
+list did on that campaign" (the server's sentence and per-tenth rows; nothing computed in the browser), pinned by
+`tests/integration/production/ui/approvals/live_calibration.test.mjs`, which runs through
+`tests/integration/production/test_approvals_ui_js.py`. The rest of the screen is unchanged.
+
+**What is needed.** Ratification of the edits. Nothing else.
+
+### 2026-10-10 — plan-j M106 (on main) → trunk / Plan H (owner of `api/routes/measure.py`): learning from a randomised cycle (record of in-place edits)
+
+**What changed** (DEC-1316 (a), (e)–(h), (m)): `POST /runs/{id}/measure/learn` on a scoring run that engaged the
+holdout service builds its experiment from `engine.measurement.learn.build_randomised_frame`, may answer 409
+`LEARN_NO_OVERLAP` (before reading anything, or after the outcomes file, before anything is written), forces
+`governance.approval_required` true (a request setting it false is 422 `MEASURE_INVALID`) and writes
+`learned_from.json`. `MeasureView` gains `learned` (absent unless a model was learned from the run). Every other
+scoring run learns exactly as before (`tests/integration/measurement/test_learn_default_unchanged.py`,
+`tests/integration/uplift/test_measure_campaign.py` unchanged). The file only imports the existing
+`get_campaign_store` from `api/routes/campaigns.py`.
+
+**What is needed.** Ratification of the edits. Step 4's screen (`ui/modules/measure`, Plan H) does not draw
+`learned` yet; whoever owns it may add it from `GET /runs/{id}/measure` with no server change.
+
+### 2026-10-10 — plan-j M106 (on main) → M107 (monthly loop, the LEARN kind): what a scheduled learn now meets (announcement)
+
+**What changed** (DEC-1316 (e), (f), (h)): on a randomised cycle `POST /runs/{id}/measure/learn` always yields a
+challenger (approval is forced), and it may answer 409 `LEARN_NO_OVERLAP` after reading the outcomes file, for uneven
+outcome coverage between contacted and not-contacted customers or for fewer than `uplift.min_arm_rows` per side
+outside the list. A scheduled outcome pull that covers only the hand-off is refused this way.
+
+**What is needed.** Pull outcomes for every customer the cycle scored, contacted or not, and treat the 409 as a
+failed firing with its sentence, not as a retryable error.
+
+### 2026-10-10 — plan-j M106 (on main) → Plan E (owner of `configs/pilot/help.yaml`): one new code (announcement)
+
+**What changed** (DEC-1316 (o)): `LEARN_NO_OVERLAP` (409 from `POST /runs/{id}/measure/learn`, and step 4's
+`learn.reason`) (`engine.measurement.learn.LEARN_CODES`) joins `engine.decide.codes.PLAN_J_CODES` by import and gets
+a `configs/pilot/help.yaml` entry under a Plan J M106 comment, in plain words. `tests/unit/pilot/test_help.py` is
+unchanged and green.
+
+**What is needed.** Nothing; this is an announcement.
 
 ### 2026-09-23 — plan-e-pilot (on main) → all branches: every change Plan E made outside its own files and blocks
 
@@ -1425,6 +1481,21 @@ run link and an alert's run link.
 **Re-filed 2026-09-23 (Plan D M58)** to the trunk. Half of it is covered: approving, rejecting and promoting a challenger now have their own screen, `#/approvals`, linked from the user bar (DEC-862, DEC-864). The link is still missing: `ui/pages.js` has no link from a scoring run's Output page to `#/monitoring/runs/<run_id>`. Plan D touched `ui/pages.js` only for uplift runs (DEC-858). Needed from: the trunk's owner of `ui/pages.js`, that one link on a finished scoring run's Output page.
 
 ## Resolved
+
+### 2026-10-10 — plan-j M108 (on main) → Phase 3b / M106 (owner of `api/routes/uplift.py`): an uplift run should pass the run cost gate (request; closed 2026-10-10)
+
+**What is needed** (DEC-1318 (n)): after M106 merges, `POST /uplift/runs` should do what `POST /runs` does
+(`api/routes/runs.py`): call `engine.aws.run_cost.estimate_run_cost` and, when the answer needs confirmation and
+the request does not carry `confirm_cost: true`, answer 409 `RUN_COST_NEEDS_CONFIRMATION` with
+`confirmation_message`; after submitting, start the cost watcher as `_watch_cost` does. Until then an uplift run is
+checked against the cap only by the `GET /runs/{id}` poll. M108 did not edit the file.
+
+**Answer (2026-10-10, M106 integration on `main`).** Done (DEC-1316 (p)): with a cap set, `POST /uplift/runs` calls
+`estimate_run_cost` after both layers of checks and before anything is written, answers 409
+`RUN_COST_NEEDS_CONFIRMATION` with `confirmation_message` unless the request carries `confirm_cost: true`
+(`UpliftRunRequest.confirm_cost`, in place and defaulted), and starts the cost watcher through
+`api/routes/runs.py::_watch_cost` for a SageMaker run. With no cap nothing changes.
+`tests/integration/decide/test_uplift_run_cost.py` (4 tests) fails on the route before.
 
 ### 2026-10-09 — plan-j Phase 2 gate (on main) → owner of `engine/measurement/` and `engine/decide/` (M102 to M105): a multi-offer campaign leaves about 21% of its contacted customers out of both arms (request; closed 2026-10-09)
 
