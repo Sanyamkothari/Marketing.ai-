@@ -54,12 +54,12 @@ import re
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from statistics import NormalDist
-from typing import TYPE_CHECKING, Final, Literal
+from typing import TYPE_CHECKING, Any, Final, Literal
 
 from pydantic import AwareDatetime, Field
 
 from engine.config import StrictBase
-from engine.measurement.campaign import Campaign, CampaignKind
+from engine.measurement.campaign import Campaign, CampaignKind, CampaignStore
 from engine.pilot.proof import (
     PROOF_NOT_MATURE,
     PROOF_NOT_TRACEABLE,
@@ -294,6 +294,10 @@ class EstimatedLine(StrictBase):
         default=None, description="Comparable campaigns it is drawn towards, this one included."
     )
     code: str | None = Field(default=None, description="`POOL_TOO_FEW` when nothing is drawn.")
+    warning: str | None = Field(
+        default=None,
+        description="`POOL_NO_SPREAD` when the comparable campaigns differ by no more than chance explains.",
+    )
     note: str
 
 
@@ -1090,6 +1094,11 @@ _ESTIMATED_NOTE: Final[str] = (
     "Estimated, not measured: the measured difference drawn towards comparable campaigns by as much of it as is "
     "noise. It is shown for comparison and never added to the value proven to date."
 )
+_NO_SPREAD_NOTE: Final[str] = (
+    "The comparable campaigns differ by no more than chance explains, so this estimate is drawn as far towards "
+    "their average as the method allows. That usually means too little data to tell them apart, not that their "
+    "effects are equal."
+)
 _NOT_ESTIMATED_NOTE: Final[str] = (
     "Fewer comparable campaigns have a final result than an estimate needs, so this campaign is shown only as "
     "measured."
@@ -1097,23 +1106,43 @@ _NOT_ESTIMATED_NOTE: Final[str] = (
 
 
 def _estimated_lines(
-    builder: _Builder, names: dict[str, Figure], root: Path | None
+    builder: _Builder,
+    names: dict[str, Figure],
+    campaigns: Sequence[Campaign],
+    root: Path | None,
+    store: CampaignStore | None,
+    now: datetime,
 ) -> tuple[EstimatedLine, ...] | None:
-    """Every counted campaign's current `pooled_estimate.json` beside its report; None (nothing read) with pooling off."""
+    """Every counted campaign's current `pooled_estimate.json` beside its report; None (nothing read) with pooling off.
+
+    With the campaign `store`, the files of every use case are first brought up to date
+    (`pooling.refresh_stale_pooled_estimates`): campaigns measured while pooling was off, or under other settings,
+    are pooled now. A file still stale (no store given) is shown as absent, never as a current estimate.
+    """
     from engine.measurement.pooling import (
         ESTIMATED_LABEL,
+        POOL_NO_SPREAD,
         POOL_TOO_FEW,
         POOLED_FILENAME,
         is_current,
         load_pooling_settings,
+        refresh_stale_pooled_estimates,
     )
 
-    if not load_pooling_settings(root).enabled:
+    settings = load_pooling_settings(root)
+    if not settings.enabled:
         return None
+    if store is not None:
+        use_cases = {c.use_case_id for c in campaigns if c.use_case_id is not None and c.campaign_id in names}
+        refresh_stale_pooled_estimates(builder.storage, store, use_cases, settings=settings, now=now)
     reader, out = builder.reader, []
+
+    def report_of(member_id: str) -> Any:
+        return reader.doc(f"campaigns/{member_id}/incrementality_report.json")
+
     for cid, name in names.items():
         report, pooled = f"campaigns/{cid}/incrementality_report.json", f"campaigns/{cid}/{POOLED_FILENAME}"
-        if not is_current(reader.doc(pooled), reader.doc(report)):
+        if not is_current(reader.doc(pooled), reader.doc(report), settings=settings, report_of=report_of):
             continue
         field = reader.get(pooled, "estimate_field")
         measured = reader.fig(report, f"{field}.value", _effect_format(reader.get(report, "outcome_kind")))
@@ -1121,6 +1150,8 @@ def _estimated_lines(
             continue
         fmt = measured.format
         drawn = reader.get(pooled, "status") == "pooled"
+        warnings = reader.get(pooled, "warnings")
+        no_spread = drawn and isinstance(warnings, list) and POOL_NO_SPREAD in warnings
         out.append(
             EstimatedLine(
                 campaign_id=cid,
@@ -1134,7 +1165,12 @@ def _estimated_lines(
                 estimated_high=reader.fig(pooled, "pooled_interval.ci_high", fmt) if drawn else None,
                 campaigns_compared=reader.fig(pooled, "campaigns_compared", "count") if drawn else None,
                 code=None if drawn else POOL_TOO_FEW,
-                note=_ESTIMATED_NOTE if drawn else _NOT_ESTIMATED_NOTE,
+                warning=POOL_NO_SPREAD if no_spread else None,
+                note=(
+                    (f"{_ESTIMATED_NOTE} {_NO_SPREAD_NOTE}" if no_spread else _ESTIMATED_NOTE)
+                    if drawn
+                    else _NOT_ESTIMATED_NOTE
+                ),
             )
         )
     return tuple(out)
@@ -1168,14 +1204,20 @@ def build_summary(
     root: Path | None = None,
     now: datetime | None = None,
     rules: SummaryRules | None = None,
+    store: CampaignStore | None = None,
 ) -> CampaignSummary:
     """What wants attention and the value proven to date, over `campaigns` (newest first), every figure verified.
 
     Reads only aggregate artefacts (the module docstring) and the model `registry` when one is given; without
     it no challenger card can be drawn. Raises `SummaryTraceError` when a figure does not resolve.
+
+    PLAN-K (M136): with pooling on (`configs/measurement.yaml`) and the campaign `store` given, the Estimated files
+    of the counted campaigns' use cases are brought up to date first (the one write a summary makes, of aggregate
+    files only); with pooling off `store` is never read.
     """
     from engine.utils.time import utc_now
 
+    moment = now or utc_now()
     builder = _Builder(storage, registry, root, now, rules or SummaryRules())
     for campaign in campaigns:
         builder.campaign(campaign)
@@ -1183,7 +1225,9 @@ def build_summary(
     names = {line.campaign_id: line.campaign_name for lines in builder.lines.values() for line in lines}
     builder.fading(names)
     builder.challengers(list(dict.fromkeys(c.use_case_id for c in campaigns if c.use_case_id is not None)))
-    estimated = _estimated_lines(builder, names, root)  # PLAN-K (M136): None with pooling off
+    estimated = _estimated_lines(
+        builder, names, campaigns, root, store, moment
+    )  # PLAN-K (M136): None when off
     summary = CampaignSummary(
         cards=tuple(builder.cards),
         proven=ProvenToDate(
@@ -1194,7 +1238,7 @@ def build_summary(
             unpriced=tuple(builder.unpriced),
         ),
         artefacts=tuple(sorted(set(builder.reader.read) | builder.view_artefacts)),
-        built_at=now or utc_now(),
+        built_at=moment,
         estimated=estimated,
     )
     failures = check_figures(list(figures_of(summary)), list(free_text(summary, _UNPRINTED)), storage)

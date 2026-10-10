@@ -3,11 +3,15 @@
 * REML and DerSimonian-Laird are checked against hand computations: the closed form with equal standard errors
   (both give `S²_y - s²`), and the published BCG vaccine meta-analysis (Colditz et al. 1994; metafor's `dat.bcg`,
   REML `τ² = 0.3132`, `μ = -0.7145 (0.1798)`; DL `τ² = 0.3088`, `μ = -0.7141 (0.1787)`), from the trials' own counts;
-* Morris's corrected share and variance are computed by hand on a fixed set;
-* the guards: three campaigns draw nothing, no spread is full pooling with a warning, a bad standard error is
-  refused, and DerSimonian-Laird is used (and recorded) when REML does not converge;
-* the registered primary estimate is read from reports measured by the real code, never written by hand;
-* the settings file: off by default, a typo refused.
+* Morris's corrected share and his own variance, `s²(1 - ((k - 1)/k) B) + (2/(k - 3)) B² (y - μ̂)²`, are computed
+  by hand on a fixed set;
+* the guards: three campaigns draw nothing and are not pooled (`POOL_TOO_FEW`), no spread draws as far as the
+  method allows with a warning, a bad standard error is refused, and DerSimonian-Laird is used (and recorded) when
+  REML does not converge;
+* the registered primary estimate is read from reports measured by the real code, never written by hand, and the
+  adjusted estimate is the registered one for either kind of outcome;
+* a file is current only while its own report, every member's report and the settings are unchanged;
+* the settings file: off by default, a typo refused with a coded configuration error.
 
 The pooling of stored campaigns, end to end through the campaign routes, is in
 `tests/integration/measurement/test_campaign_pooling.py`; the coverage of the intervals is checked nightly by
@@ -16,12 +20,15 @@ The pooling of stored campaigns, end to end through the campaign routes, is in
 
 from __future__ import annotations
 
+import json
 import math
+from dataclasses import replace
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
-from pydantic import ValidationError
 
+from engine.config import ConfigError
 from engine.measurement import pooling
 from engine.measurement.measure import measure_campaign
 from engine.measurement.pooling import (
@@ -29,11 +36,15 @@ from engine.measurement.pooling import (
     POOL_NO_SPREAD,
     POOL_TOO_FEW,
     POOLING_CODES,
+    CellEntry,
     CellMember,
+    PoolingCell,
     PoolingSettings,
     dl_between_variance,
     fit_cell,
+    is_current,
     load_pooling_settings,
+    pool_entries,
     primary_estimate,
     reml_between_variance,
     se_from_interval,
@@ -128,17 +139,22 @@ def test_morris_estimate_and_range_by_hand() -> None:
     for member, y in zip(fit.members, effects, strict=True):
         assert member.shrinkage == pytest.approx(share)
         assert member.pooled_effect == pytest.approx(share * mean + (1 - share) * y)
-        # s²(1 - B) + B² / Σw + 2/(k-3) B² (y - μ)², with Σw = k / (s² + σ²) = 20,000.
-        variance = noise * (1 - share) + share**2 / 20_000 + (2 / (k - 3)) * share**2 * (y - mean) ** 2
+        # Morris (1983), r = 1: V = s²(1 - ((k - 1)/k) B) + 2/(k - 3) B² (y - μ)².
+        variance = noise * (1 - (k - 1) / k * share) + (2 / (k - 3)) * share**2 * (y - mean) ** 2
         assert member.pooled_se == pytest.approx(math.sqrt(variance))
         low, high = member.interval()
         assert (low, high) == pytest.approx(
             (member.pooled_effect - Z * member.pooled_se, member.pooled_effect + Z * member.pooled_se)
         )
-    furthest = fit.members[3]  # y = 0.05: 0.00008 + 0.000002 + 0.000016 = 0.000098
+    furthest = fit.members[
+        3
+    ]  # y = 0.05: 0.0001 (1 - 0.16) + 1 (0.04) (0.0004) = 0.000084 + 0.000016 = 0.0001
     assert furthest.pooled_effect == pytest.approx(0.046)
-    assert furthest.pooled_se == pytest.approx(math.sqrt(0.000098))
-    assert all(member.pooled_se < member.se for member in fit.members), "narrower than each campaign's own"
+    assert furthest.pooled_se == pytest.approx(0.01), "the furthest is as uncertain as its own figure"
+    middle = fit.members[1]  # y = 0.03, the average: 0.000084
+    assert middle.pooled_se == pytest.approx(math.sqrt(0.000084))
+    assert all(member.pooled_se <= member.se * (1 + 1e-12) for member in fit.members)
+    assert sum(member.pooled_se < member.se * (1 - 1e-9) for member in fit.members) == 3
 
 
 def test_no_spread_draws_as_far_as_the_method_allows() -> None:
@@ -186,6 +202,16 @@ def test_a_yes_no_campaign_is_pooled_on_its_difference_in_rates() -> None:
     assert found is not None and found == ("absolute_lift", report.absolute_lift)
 
 
+def test_a_yes_no_campaign_with_a_registered_adjustment_is_pooled_on_the_adjusted_estimate() -> None:
+    """Plan K M135 adjusts a yes/no outcome through the same field: the registered estimate is the primary one."""
+    sim = population(4_000, 0.05, 0.02, seed=1364)
+    report = measure_incrementality(sim.scores, sim.outcomes, **sim.measure_kwargs)
+    adjusted = ConfidenceValue(value=0.018, ci_low=0.004, ci_high=0.032)
+    registered = report.model_copy(update={"adjusted_interval": adjusted})
+    assert registered.outcome_kind in (None, "binary")
+    assert primary_estimate(registered) == ("adjusted_interval", adjusted)
+
+
 def test_an_amount_uses_the_registered_adjusted_estimate_when_there_is_one() -> None:
     sim = revenue_campaign(2_000, 5.0, seed=1362, rho=0.6)
     adjusted = measure_incrementality(sim.scores, sim.outcomes, **sim.adjusted_kwargs)
@@ -209,6 +235,84 @@ def test_several_offers_pool_every_offer_together_and_never_the_first_alone() ->
     ), "a report of several offers not added together is the first offer's"
 
 
+# --- which cells are pooled, and when a file is current -----------------------------------------------------------
+_AT = datetime(2026, 9, 1, tzinfo=UTC)
+_CELL = PoolingCell(
+    use_case_id="win-back-campaign",
+    outcome_column="converted",
+    outcome_kind="binary",
+    holdout="run",
+    synthetic=False,
+)
+
+
+def _entries(effects: list[float], cell: PoolingCell = _CELL) -> list[CellEntry]:
+    return [
+        CellEntry(
+            campaign_id=f"cmp_{index}",
+            cell=cell,
+            customers=("runs", f"r_{index}"),
+            rank=(_AT.isoformat(), _AT.isoformat(), f"cmp_{index}"),
+            estimate_field="absolute_lift",
+            effect=effect,
+            se=0.01,
+            report_computed_at=_AT,
+        )
+        for index, effect in enumerate(effects)
+    ]
+
+
+def test_three_comparable_campaigns_are_not_pooled_and_say_why() -> None:
+    settings = PoolingSettings(enabled=True)
+    three = pool_entries(_entries([0.01, 0.04, 0.02]), settings, _AT)
+    assert {(item.status, item.code) for item in three} == {("not_pooled", POOL_TOO_FEW)}
+    assert all(item.pooled_effect is None and item.reason and "fourth" in item.reason for item in three)
+    four = pool_entries(_entries([0.01, 0.04, 0.02, 0.03]), settings, _AT)
+    assert {item.status for item in four} == {"pooled"} and all(item.code is None for item in four)
+    fewer = pool_entries(
+        _entries([0.01, 0.04, 0.02, 0.03]), PoolingSettings(enabled=True, min_campaigns=5), _AT
+    )
+    assert all(item.code == POOL_TOO_FEW and "fourth" not in (item.reason or "") for item in fewer)
+
+
+def test_campaigns_of_different_clients_are_never_pooled_together() -> None:
+    entries = [
+        *_entries([0.01, 0.04], _CELL.model_copy(update={"client_id": "cl_a"})),
+        *(
+            replace(entry, campaign_id=f"b_{entry.campaign_id}", customers=("b", *entry.customers))
+            for entry in _entries([0.02, 0.03], _CELL.model_copy(update={"client_id": "cl_b"}))
+        ),
+    ]
+    estimates = pool_entries(entries, PoolingSettings(enabled=True), _AT)
+    assert len({item.cell_id for item in estimates}) == 2
+    assert all(len(item.pooled_from) == 2 and item.status == "not_pooled" for item in estimates)
+    same = pool_entries(
+        [*_entries([0.01, 0.04, 0.02, 0.03], _CELL.model_copy(update={"client_id": "cl_a"}))],
+        PoolingSettings(enabled=True),
+        _AT,
+    )
+    assert {item.status for item in same} == {"pooled"}
+
+
+def test_a_file_is_current_only_while_its_reports_and_settings_are_unchanged() -> None:
+    settings = PoolingSettings(enabled=True)
+    estimate = pool_entries(_entries([0.01, 0.04, 0.02, 0.03]), settings, _AT)[0]
+    document = json.loads(estimate.model_dump_json())
+    assert document["member_reports"] == {f"cmp_{index}": "2026-09-01T00:00:00Z" for index in range(4)}
+    reports = {f"cmp_{index}": {"computed_at": "2026-09-01T00:00:00Z"} for index in range(4)}
+    own = reports["cmp_0"]
+    assert is_current(document, own, settings=settings, report_of=reports.get)
+    assert not is_current(
+        document, own, settings=PoolingSettings(enabled=True, min_campaigns=4)
+    ), "settings changed"
+    remeasured = {**reports, "cmp_2": {"computed_at": "2026-09-02T00:00:00Z"}}
+    assert not is_current(document, own, settings=settings, report_of=remeasured.get), "a member re-measured"
+    assert not is_current(
+        document, own, settings=settings, report_of=lambda _: None
+    ), "a member's report is gone"
+    assert not is_current(document, {"computed_at": "2026-09-03T00:00:00Z"}), "its own report re-measured"
+
+
 # --- settings and codes ------------------------------------------------------------------------------------------
 def test_pooling_is_off_by_default_and_in_the_shipped_file(config_root: Path, tmp_path: Path) -> None:
     assert PoolingSettings().enabled is False
@@ -217,15 +321,25 @@ def test_pooling_is_off_by_default_and_in_the_shipped_file(config_root: Path, tm
     assert shipped.enabled is False and shipped.min_campaigns == MIN_CAMPAIGNS == 3
 
 
-def test_a_settings_file_is_read_and_a_typo_is_refused(tmp_path: Path) -> None:
+def test_a_settings_file_is_read_and_a_typo_is_refused_with_a_code(tmp_path: Path) -> None:
     (tmp_path / "measurement.yaml").write_text("pooling:\n  enabled: true\n  min_campaigns: 4\n")
     assert load_pooling_settings(tmp_path) == PoolingSettings(enabled=True, min_campaigns=4)
-    (tmp_path / "measurement.yaml").write_text("pooling:\n  enable: true\n")
-    with pytest.raises(ValidationError):
-        load_pooling_settings(tmp_path)
-    (tmp_path / "measurement.yaml").write_text("pooling:\n  enabled: true\n  min_campaigns: 2\n")
-    with pytest.raises(ValidationError):
-        load_pooling_settings(tmp_path)
+    (tmp_path / "measurement.yaml").write_text("# nothing set yet\n")
+    assert load_pooling_settings(tmp_path) == PoolingSettings(), "an empty file: every default"
+    refused = {
+        "pooling:\n  enable: true\n": ("CONFIG_INVALID", "pooling.enable"),
+        "pooling:\n  enabled: true\n  min_campaigns: 2\n": ("CONFIG_INVALID", "pooling.min_campaigns"),
+        "pooling: [enabled]\n": ("CONFIG_INVALID", "pooling"),
+        "- pooling\n": ("CONFIG_NOT_A_MAPPING", None),
+        "pooling: {enabled: true\n": ("CONFIG_YAML_ERROR", None),
+    }
+    for text, (code, path) in refused.items():
+        (tmp_path / "measurement.yaml").write_text(text)
+        with pytest.raises(ConfigError) as caught:
+            load_pooling_settings(tmp_path)
+        assert caught.value.code == code, text
+        assert path is None or caught.value.path == path
+        assert "measurement.yaml" in caught.value.message
 
 
 def test_the_codes() -> None:

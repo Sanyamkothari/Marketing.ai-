@@ -159,6 +159,30 @@ def test_nothing_new_is_a_quiet_success(world: World) -> None:
     assert store.query(AlertQuery()) == ()
 
 
+def test_a_measure_firing_hands_the_installations_config_root_to_the_measure_step(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Plan K M136: the measurement reads `configs/measurement.yaml` (pooling) under the installation's root, as
+    the route does, so the step is given `services.config_root` like the treat-list and learn steps are."""
+    from engine.measurement import cycle
+
+    seen: list[object] = []
+
+    def measure_step(
+        *_args: object, config_root: object = "not given", **_kwargs: object
+    ) -> cycle.StepOutcome:
+        seen.append(config_root)
+        return cycle.StepOutcome("NOTHING_TO_MEASURE")
+
+    monkeypatch.setattr(cycle, "measure_step", measure_step)
+    connections = ConnectionStore(world.storage, Settings())
+    firer = ScheduleFirer(
+        world.services(cycle=CycleServices(campaigns=InMemoryCampaignStore(), connections=connections))
+    )
+    firer.fire(world.schedule(ScheduleKind.MEASURE, parameters=ScheduleParameters(outcomes=PULL)))
+    assert seen == [world.config_root]
+
+
 def test_a_loop_schedule_needs_a_use_case_that_contacts_and_holds_back(world: World) -> None:
     from engine.scheduling.scheduler import NullScheduler
     from engine.scheduling.schedules import ScheduleError

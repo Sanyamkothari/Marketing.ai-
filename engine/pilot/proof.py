@@ -1355,16 +1355,22 @@ _NO_SPREAD_NOTE: Final[str] = (
 
 
 def _pooled_key(reader: _Reader, campaign_id: str, report: Any, root: Path | None) -> str | None:
-    """`pooled_estimate.json` when pooling is on (`configs/measurement.yaml`) and it was read from this report.
+    """`pooled_estimate.json` when pooling is on (`configs/measurement.yaml`) and it is current: read from this report
+    and from every member's report as they stand, under the settings in force (`pooling.is_current`).
 
     With pooling off nothing is read, so the pack, and the artefacts it lists, are exactly what they were.
     """
     from engine.measurement.pooling import POOLED_FILENAME, is_current, load_pooling_settings
 
-    if not load_pooling_settings(root).enabled:
+    settings = load_pooling_settings(root)
+    if not settings.enabled:
         return None
     key = f"campaigns/{campaign_id}/{POOLED_FILENAME}"
-    return key if is_current(reader.doc(key), report) else None
+
+    def report_of(member_id: str) -> Any:
+        return reader.doc(f"campaigns/{member_id}/{_REPORT}") if safe_identifier(member_id) else None
+
+    return key if is_current(reader.doc(key), report, settings=settings, report_of=report_of) else None
 
 
 def _estimated_lines(context: _Context) -> list[ProofLine]:

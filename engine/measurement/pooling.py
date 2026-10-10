@@ -24,40 +24,57 @@ the holdout         the record's `holdout_scope`, `holdout_scope_key` and `holdo
                     pooled across epochs of a changed holdout; per-run draws pool with each other
 generated data      `run.json` `synthetic` or the outcomes upload's `synthetic`: a planted effect never moves
                     a real campaign's estimate
+client              the first scoring run's `run.json` `client_id` (Plan D M51), the rule the monthly loop's
+                    steps use: one client's estimate is never drawn towards another client's results
 ==================  ============================================================================================
 
 **Who enters.** A campaign enters its cell only with a final result the engine can stand behind: measured (not an
 early look, every outcome window closed), its control group drawn at random by the engine or verified random
 (`causal_basis` `engine_random` or `verified_random`), not a programme readout. Its estimate is the **registered
-primary estimate**, read from the stored report, never re-measured: on a yes/no outcome the difference in rates
-(`absolute_lift`; every offer together, `offers_combined.absolute_lift`, for a campaign of several offers, and none
-for one measured before offers were added together); on an amount the adjusted difference when the plan registered
-an adjustment (`adjusted_interval`, Plan J M102; M135's estimate arrives through the same field), else the plain
-difference (`mean_difference_ci`). Its standard error is read from the width of the stored 95% range,
+primary estimate**, read from the stored report, never re-measured: the adjusted difference whenever the plan
+registered an adjustment (`adjusted_interval`, Plan J M102, for an amount or a yes/no outcome alike; Plan K M135's
+estimate arrives through the same field), read for an amount by `engine.measurement.measure.headline_estimate`, the
+rule its verdict uses; otherwise, on a yes/no outcome, the difference in rates (`absolute_lift`; every offer
+together, `offers_combined.absolute_lift`, for a campaign of several offers, and none for one measured before offers
+were added together), and on an amount the plain difference (`mean_difference_ci`). Its standard error is read from the width of the stored 95% range,
 `(high - low) / (2 z)`, the rule the effect-fading card already uses. Campaigns that measure the same customers (the
 same scoring runs) are one campaign: only the latest measured enters, exactly as value to date counts them once.
 
 **The model (per cell, design §9.2).** `τ̂_j | τ_j ~ N(τ_j, s_j²)`, `τ_j ~ N(μ, σ²)`. `σ²` is estimated by restricted
 maximum likelihood (REML: the root of the restricted score, found by bisection, truncated at zero); when that does
 not converge the closed-form DerSimonian-Laird estimate is used and the method recorded. `μ̂` is the weighted mean
-with weights `1 / (s_j² + σ̂²)`. Each campaign's estimate is `τ̃_j = B_j μ̂ + (1 - B_j) τ̂_j`, where `B_j` is the
-share of its own figure that is noise, `s_j² / (s_j² + σ̂²)`, with Morris's correction below.
+with weights `w_j = 1 / (s_j² + σ̂²)`. Each campaign's estimate is `τ̃_j = B_j μ̂ + (1 - B_j) τ̂_j`, where `B_j` is
+the share of its own figure that is noise, with Morris's correction below.
 
-**The correction (Morris 1983).** Plugging `μ̂` and `σ̂²` in as if they were known draws too hard and gives a range
-that is too narrow. Morris's parametric empirical-Bayes interval corrects both, for `k` campaigns and one estimated
-mean: the share is `B_j = ((k - 3) / (k - 1)) s_j² / (s_j² + σ̂²)` (the factor makes the estimate of `B` unbiased),
-and the variance adds both estimation errors, `V_j = s_j² (1 - B_j) + B_j² / Σw + (2 / (k - 3)) B_j² (τ̂_j - μ̂)²`
-(`1 / Σw` is the variance of `μ̂`; for equal standard errors this is Morris's `s² (1 - ((k - 1)/k) B)` term). With
-three campaigns the factor is zero: the estimate is the campaign's own, honestly, and the first campaign drawn towards
-the others is the fourth. The range is `τ̃_j ± 1.96 √V_j`. Without the correction the nightly two-group world
-covers 92.5% at eight campaigns, below the band; with it, 95% (DEC-1402).
+**The correction (Morris 1983), on the estimate and on its range.** Plugging `μ̂` and `σ̂²` in as if they were
+known draws too hard and gives a range that is too narrow. Morris's parametric empirical-Bayes estimator corrects
+both, for `k` campaigns and one estimated mean (Morris 1983, JASA 78, §4, with `r = 1`):
+
+* the share is `B_j = ((k - 3) / (k - 1)) s_j² / (s_j² + σ̂²)`: the factor makes the estimate of the share unbiased;
+* the variance is Morris's own, `V_j = s_j² (1 - ((k - 1) / k) B_j) + (2 / (k - 3)) B_j² (τ̂_j - μ̂)²`: the first term
+  is the posterior variance with the uncertainty of `μ̂` added (`(k - 1)/k` rather than one), the second the
+  uncertainty of `B_j` itself;
+* the range is `τ̃_j ± 1.96 √V_j`.
+
+**A deviation from design §9.2 (DEC-1402).** The design puts Morris's correction on the range only and gives the
+point estimate the plug-in share `s_j² / (s_j² + σ̂²)`, so `σ̂² = 0` would draw every campaign fully to the average.
+That was tried: with the plug-in share and Morris's range the nightly two-group world covers 93.0% at eight and at
+twelve campaigns, on the lower edge of the band (93.05%), so the corrected share is used for the estimate too, as
+Morris's estimator does. Two consequences follow and are shown, not hidden:
+
+* with three comparable campaigns the factor is zero, so nothing would move: three campaigns are treated as too few
+  (`POOL_TOO_FEW`, with its own reason), and the first campaign drawn towards the others is the fourth;
+* `σ̂² = 0` draws each campaign `(k - 3) / (k - 1)` of the way to the average (a third at four campaigns, a half at
+  five), as far as the method allows, never fully.
 
 **Guards.**
 
-* Fewer than three comparable campaigns: nothing is pooled, and the file says why (`POOL_TOO_FEW`).
-* `σ̂² = 0`: every campaign is drawn fully to the cell's average. That is shown, with a warning
-  (`POOL_NO_SPREAD`), because it usually means too little data to see the campaigns differ, not that they are equal.
-* The holdout and the duplicate rules above.
+* Fewer than four comparable campaigns (or fewer than `min_campaigns`): nothing is pooled, and the file says why
+  (`POOL_TOO_FEW`).
+* `σ̂² = 0`: every campaign is drawn as far towards the cell's average as the method allows. That is shown, with a
+  warning (`POOL_NO_SPREAD`), because it usually means too little data to see the campaigns differ, not that they
+  are equal.
+* The holdout, client and duplicate rules above.
 
 **Never a measured result.** The file is labelled **Estimated**. "Proven value to date" stays the sum of the raw
 measured lower bounds (decision K7); the summary and the Value Proof Pack show the estimate *beside* the measured
@@ -66,9 +83,16 @@ and read only then, so with the default every summary and Proof Pack is byte for
 
 **Where it lives.** `campaigns/<id>/pooled_estimate.json`, one per campaign in a cell, rewritten for every campaign of
 the use case each time one of its campaigns is measured (`refresh_pooled_estimates`, called by the one measurement
-path, `engine.measurement.cycle.measure_recorded`). It holds aggregates only (estimates, ranges, campaign ids), never a
-customer id, and records the `computed_at` of the report it read, so a reader can tell a stale file from a current
-one (`read_pooled_estimate`). Pure Python; nothing heavy is imported.
+path, `engine.measurement.cycle.measure_recorded`, whether a person or the monthly schedule measures). It holds
+aggregates only (estimates, ranges, campaign ids), never a customer id.
+
+**Current or stale.** Each file records the `computed_at` of every member's report (`member_reports`) and the
+settings it was fitted under. A reader shows it only while its own report, every member's report and the settings
+are unchanged (`is_current`); otherwise the file counts as absent. Campaigns measured while pooling was off, or a
+change to `min_campaigns`, would leave the files behind: building the campaign summary with pooling on compares
+every use case's files with what would be written now and rewrites the use cases that differ
+(`refresh_stale_pooled_estimates`), so turning pooling on fills in every campaign measured before. Pure Python;
+nothing heavy is imported.
 """
 
 from __future__ import annotations
@@ -76,7 +100,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
-from collections.abc import Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from statistics import NormalDist
@@ -98,6 +122,7 @@ if TYPE_CHECKING:
 
 __all__ = [
     "ESTIMATED_LABEL",
+    "FIRST_DRAWN",
     "MEASUREMENT_SETTINGS_FILENAME",
     "MIN_CAMPAIGNS",
     "POOLED_FILENAME",
@@ -124,6 +149,7 @@ __all__ = [
     "primary_estimate",
     "read_pooled_estimate",
     "refresh_pooled_estimates",
+    "refresh_stale_pooled_estimates",
     "reml_between_variance",
     "se_from_interval",
 ]
@@ -136,8 +162,8 @@ _LOGGER = get_logger(__name__)
 POOL_TOO_FEW: Final[str] = "POOL_TOO_FEW"
 """Fewer than three comparable campaigns have a final result: nothing is pooled, and the reason is shown."""
 POOL_NO_SPREAD: Final[str] = "POOL_NO_SPREAD"
-"""A warning, never blocking: the comparable campaigns differ by no more than noise, so each is drawn fully to their
-average; that usually means too little data, not equal effects."""
+"""A warning, never blocking: the comparable campaigns differ by no more than noise, so each is drawn as far towards
+their average as the method allows; that usually means too little data, not equal effects."""
 POOLING_CODES: Final[frozenset[str]] = frozenset({POOL_TOO_FEW, POOL_NO_SPREAD})
 
 POOLED_FILENAME: Final[str] = "pooled_estimate.json"
@@ -145,7 +171,9 @@ POOLED_FILENAME: Final[str] = "pooled_estimate.json"
 MEASUREMENT_SETTINGS_FILENAME: Final[str] = "measurement.yaml"
 """`configs/measurement.yaml`: installation-wide measurement options; absent means every default."""
 MIN_CAMPAIGNS: Final[int] = 3
-"""The fewest comparable campaigns a cell needs before anything is pooled (design §9.2)."""
+"""The smallest `min_campaigns` a setting may name (design §9.2: fewer than three are never pooled)."""
+FIRST_DRAWN: Final[int] = 4
+"""The fewest comparable campaigns that draw anything: Morris's factor `(k - 3) / (k - 1)` is zero at three."""
 ESTIMATED_LABEL: Final[str] = "Estimated"
 """How every pooled figure is labelled wherever it is shown: never as a measured result (decision K7)."""
 CONFIDENCE: Final[float] = 0.95
@@ -175,19 +203,48 @@ class PoolingSettings(StrictBase):
 def load_pooling_settings(root: Path | None = None) -> PoolingSettings:
     """`pooling` of `configs/measurement.yaml` under the configuration root; every default when absent.
 
-    Raises `ValueError` (a pydantic `ValidationError`) for a section that names an unknown key or a value out of
-    range, so a typo cannot silently leave pooling off.
+    Raises `engine.config.ConfigError`, the coded error every route already answers with its code and a plain
+    message (HTTP 422), never a bare 500: `CONFIG_YAML_ERROR` or `CONFIG_NOT_A_MAPPING` for a file that is not a
+    mapping of settings, `CONFIG_INVALID` for a section that names an unknown key or a value out of range, so a typo
+    cannot silently leave pooling off.
     """
     import yaml
+    from pydantic import ValidationError
 
-    from engine.config import config_root
+    from engine.config import ConfigError, config_root
 
     path = config_root(root) / MEASUREMENT_SETTINGS_FILENAME
     if not path.is_file():
         return PoolingSettings()
-    document = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-    section = document.get("pooling") if isinstance(document, dict) else None
-    return PoolingSettings.model_validate(section or {})
+    try:
+        document = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except yaml.YAMLError as exc:
+        raise ConfigError(
+            "CONFIG_YAML_ERROR", f"{MEASUREMENT_SETTINGS_FILENAME} is not valid YAML: {exc}.", path=str(path)
+        ) from exc
+    if document is None:  # an empty file, or comments only: every default
+        return PoolingSettings()
+    if not isinstance(document, dict):
+        raise ConfigError(
+            "CONFIG_NOT_A_MAPPING",
+            f"{MEASUREMENT_SETTINGS_FILENAME} must contain a mapping of settings, not {type(document).__name__}.",
+            path=str(path),
+        )
+    section = document.get("pooling")
+    if section is not None and not isinstance(section, dict):
+        raise ConfigError(
+            "CONFIG_INVALID",
+            f"{MEASUREMENT_SETTINGS_FILENAME}: `pooling` must be a mapping of settings.",
+            path="pooling",
+        )
+    try:
+        return PoolingSettings.model_validate(section or {})
+    except ValidationError as exc:
+        first = exc.errors()[0]
+        dotted = ".".join(["pooling", *(str(part) for part in first["loc"])])
+        raise ConfigError(
+            "CONFIG_INVALID", f"{MEASUREMENT_SETTINGS_FILENAME} {dotted}: {first['msg']}.", path=dotted
+        ) from exc
 
 
 # ---------------------------------------------------------------------------
@@ -325,8 +382,8 @@ def fit_cell(members: Sequence[CellMember], *, method: Method = "reml") -> CellF
     mean = _weighted_mean(effects, weights)
     mean_variance = 1.0 / total
     k = len(members)
-    # Morris (1983): with r = 1 estimated mean, B is estimated without bias by (k - 3) / (k - 1) times the
-    # plug-in share, and its own variance is about 2 B² / (k - 3). Three campaigns therefore draw nothing.
+    # Morris (1983), r = 1 estimated mean: the share is estimated without bias by (k - 3) / (k - 1) times the
+    # plug-in share; the variance is s²(1 - ((k - 1)/k) B) + (2/(k - 3)) B² (y - μ̂)². Three campaigns draw nothing.
     correction = (k - 3) / (k - 1) if k > 3 else 0.0
     spread_term = 2.0 / (k - 3) if k > 3 else 0.0
     fitted: list[MemberFit] = []
@@ -335,8 +392,7 @@ def fit_cell(members: Sequence[CellMember], *, method: Method = "reml") -> CellF
         shrinkage = correction * noise / (noise + tau2)
         pooled = shrinkage * mean + (1.0 - shrinkage) * member.effect
         variance = (
-            noise * (1.0 - shrinkage)
-            + shrinkage * shrinkage * mean_variance
+            noise * (1.0 - ((k - 1) / k) * shrinkage)
             + spread_term * shrinkage * shrinkage * (member.effect - mean) ** 2
         )
         fitted.append(
@@ -379,17 +435,21 @@ def se_from_interval(interval: ConfidenceValue) -> float | None:
 def primary_estimate(report: IncrementalityReport) -> tuple[EstimateField, ConfidenceValue] | None:
     """The registered primary estimate of a stored report, and the field it is read from; None when it has none.
 
-    An amount: the adjusted difference when the plan registered an adjustment (it is the planned analysis), else
-    the plain difference. A yes/no outcome: the difference in rates; for several offers, every offer together
+    The adjusted difference whenever the plan registered an adjustment (it is the planned analysis), for either
+    kind of outcome. Otherwise an amount's plain difference (both read by `measure.headline_estimate`, the rule an
+    amount's verdict uses); a yes/no outcome's difference in rates; for several offers, every offer together
     (`offers_combined`), and none for a report of several offers measured before they were added together, whose
     own fields are the first offer's alone.
     """
+    if report.adjusted_interval is not None:
+        return "adjusted_interval", report.adjusted_interval
     if report.outcome_kind == "continuous":
-        if report.adjusted_interval is not None:
-            return "adjusted_interval", report.adjusted_interval
-        if report.mean_difference_ci is not None:
-            return "mean_difference_ci", report.mean_difference_ci
-        return None
+        from engine.measurement.measure import headline_estimate
+
+        estimate, adjusted = headline_estimate(report)
+        if estimate is None:
+            return None
+        return ("adjusted_interval" if adjusted else "mean_difference_ci"), estimate
     if report.arms is not None and len(report.arms) >= 2:
         combined = report.offers_combined
         if combined is not None and combined.absolute_lift is not None:
@@ -419,6 +479,10 @@ class PoolingCell(StrictBase):
     )
     holdout: str = Field(description="`run`, or `<scope>:<key>:epoch-<n>` for a persistent holdout's epoch.")
     synthetic: bool = Field(description="Measured on generated data; pooled only with other generated data.")
+    client_id: str | None = Field(
+        default=None,
+        description="The client of the campaign's first scoring run (`run.json`); campaigns pool within one client.",
+    )
 
     @property
     def cell_id(self) -> str:
@@ -470,6 +534,12 @@ class PooledEstimate(Artefact):
     report_computed_at: AwareDatetime = Field(
         description="`computed_at` of the report the estimate was read from."
     )
+    member_reports: dict[str, AwareDatetime] = Field(
+        description="`computed_at` of every member's report, this one's included: a re-measured member makes it stale."
+    )
+    settings: PoolingSettings = Field(
+        description="The settings it was fitted under: changed settings make it stale."
+    )
     computed_at: AwareDatetime
 
 
@@ -489,6 +559,10 @@ class PooledPrior(Artefact):
 
 _TOO_FEW_REASON: Final[str] = (
     "Fewer comparable campaigns have a final result than pooling needs, so this campaign is shown only as measured."
+)
+_THREE_REASON: Final[str] = (
+    "Three comparable campaigns have a final result: the estimate can be drawn towards them only from the fourth "
+    "on, so this campaign is shown only as measured."
 )
 _PRIOR_NOTE: Final[str] = (
     "The average and spread of comparable campaigns' measured effects, estimated, shown for information. It does "
@@ -571,6 +645,16 @@ def _catalogue(storage: Storage, campaign: Campaign) -> tuple[tuple[str, ...] | 
     return tuple(sorted(channels)), tuple(sorted(actions))
 
 
+def _client(storage: Storage, campaign: Campaign) -> str | None:
+    """The client of the campaign's first scoring run, read as the monthly loop reads it (`cycle._client_matches`)."""
+    from engine.pilot.proof import safe_identifier
+
+    if not campaign.run_ids or not safe_identifier(campaign.run_ids[0]):
+        return None
+    client = _field(_json(storage, f"runs/{campaign.run_ids[0]}/run.json"), "client_id")
+    return client if isinstance(client, str) else None
+
+
 def _holdout(campaign: Campaign) -> str:
     from engine.holdout.spec import PERSISTENT_SCOPES
 
@@ -620,6 +704,7 @@ def cell_entry(storage: Storage, campaign: Campaign) -> CellEntry | None:
         offer_family=family,
         holdout=_holdout(campaign),
         synthetic=_synthetic(storage, campaign),
+        client_id=_client(storage, campaign),
     )
     runs = campaign.run_ids
     customers = ("runs", *sorted(runs)) if runs else ("campaign", campaign.campaign_id)
@@ -635,7 +720,10 @@ def cell_entry(storage: Storage, campaign: Campaign) -> CellEntry | None:
     )
 
 
-def _estimate(entry: CellEntry, ids: tuple[str, ...], now: datetime, **fields: Any) -> PooledEstimate:
+def _estimate(
+    entry: CellEntry, members: Sequence[CellEntry], settings: PoolingSettings, now: datetime, **fields: Any
+) -> PooledEstimate:
+    ids = tuple(member.campaign_id for member in members)
     return PooledEstimate(
         campaign_id=entry.campaign_id,
         cell_id=entry.cell.cell_id,
@@ -646,6 +734,8 @@ def _estimate(entry: CellEntry, ids: tuple[str, ...], now: datetime, **fields: A
         pooled_from=ids,
         campaigns_compared=len(ids),
         report_computed_at=entry.report_computed_at,
+        member_reports={member.campaign_id: member.report_computed_at for member in members},
+        settings=settings,
         computed_at=now,
         **fields,
     )
@@ -666,10 +756,12 @@ def pool_entries(
     out: list[PooledEstimate] = []
     for members in cells.values():
         members.sort(key=lambda entry: entry.campaign_id)
-        ids = tuple(entry.campaign_id for entry in members)
-        if len(members) < settings.min_campaigns:
+        if len(members) < max(settings.min_campaigns, FIRST_DRAWN):
+            reason = _TOO_FEW_REASON if len(members) < settings.min_campaigns else _THREE_REASON
             out += [
-                _estimate(entry, ids, now, status="not_pooled", code=POOL_TOO_FEW, reason=_TOO_FEW_REASON)
+                _estimate(
+                    entry, members, settings, now, status="not_pooled", code=POOL_TOO_FEW, reason=reason
+                )
                 for entry in members
             ]
             continue
@@ -680,7 +772,8 @@ def pool_entries(
             out.append(
                 _estimate(
                     entry,
-                    ids,
+                    members,
+                    settings,
                     now,
                     status="pooled",
                     pooled_effect=member.pooled_effect,
@@ -696,6 +789,22 @@ def pool_entries(
                 )
             )
     return out
+
+
+def _write_use_case(
+    storage: Storage, campaigns: Sequence[Campaign], settings: PoolingSettings, now: datetime
+) -> tuple[PooledEstimate, ...]:
+    """Rewrite every file of one use case's `campaigns`; a campaign that no longer enters a cell loses its file."""
+    entries = [entry for item in campaigns if (entry := cell_entry(storage, item)) is not None]
+    written = pool_entries(entries, settings, now)
+    for estimate in written:
+        storage.write_model(pooled_key(estimate.campaign_id), estimate)
+    kept = {estimate.campaign_id for estimate in written}
+    for item in campaigns:
+        key = pooled_key(item.campaign_id)
+        if item.campaign_id not in kept and storage.exists(key):
+            storage.delete(key)
+    return tuple(written)
 
 
 def refresh_pooled_estimates(
@@ -716,28 +825,70 @@ def refresh_pooled_estimates(
     settings = settings if settings is not None else load_pooling_settings(root)
     if not settings.enabled or campaign.use_case_id is None:
         return ()
-    campaigns = store.list(use_case_id=campaign.use_case_id, limit=None)
-    entries = [entry for item in campaigns if (entry := cell_entry(storage, item)) is not None]
-    written = pool_entries(entries, settings, now)
-    for estimate in written:
-        storage.write_model(pooled_key(estimate.campaign_id), estimate)
-    kept = {estimate.campaign_id for estimate in written}
-    for item in campaigns:
-        key = pooled_key(item.campaign_id)
-        if item.campaign_id not in kept and storage.exists(key):
-            storage.delete(key)
+    written = _write_use_case(
+        storage, store.list(use_case_id=campaign.use_case_id, limit=None), settings, now
+    )
     pooled = sum(estimate.status == "pooled" for estimate in written)
     _LOGGER.info(
         "pooling.refresh use_case=%s campaigns=%d pooled=%d", campaign.use_case_id, len(written), pooled
     )
-    return tuple(written)
+    return written
 
 
-def is_current(pooled: Any, report: Any) -> bool:
-    """Whether a `pooled_estimate.json` document was read from this `incrementality_report.json` document."""
+def _same(document: Any, expected: PooledEstimate) -> bool:
+    """Whether a stored file says what `expected` says, apart from when it was written."""
+    from pydantic import ValidationError
+
+    if not isinstance(document, dict):
+        return False
+    try:
+        stored = PooledEstimate.model_validate(document)
+    except ValidationError:
+        return False
+    return stored.model_copy(update={"computed_at": expected.computed_at}) == expected
+
+
+def refresh_stale_pooled_estimates(
+    storage: Storage,
+    store: CampaignStore,
+    use_case_ids: Iterable[str],
+    *,
+    settings: PoolingSettings,
+    now: datetime,
+) -> tuple[str, ...]:
+    """Rewrite the files of every use case named whose files differ from what would be written now.
+
+    The way pooling catches up when it is turned on, or its settings change: campaigns measured while it was off
+    have no file, and a member re-measured since, a campaign that joined a cell or a changed `min_campaigns` leaves
+    the others' files behind. Every campaign of each use case is read from `store`. Returns the use cases
+    rewritten; nothing when pooling is off.
+    """
+    if not settings.enabled:
+        return ()
+    rewritten: list[str] = []
+    for use_case_id in sorted(set(use_case_ids)):
+        members = store.list(use_case_id=use_case_id, limit=None)
+        entries = [entry for item in members if (entry := cell_entry(storage, item)) is not None]
+        expected = {estimate.campaign_id: estimate for estimate in pool_entries(entries, settings, now)}
+        current = all(
+            (
+                _same(_json(storage, pooled_key(item.campaign_id)), expected[item.campaign_id])
+                if item.campaign_id in expected
+                else not storage.exists(pooled_key(item.campaign_id))
+            )
+            for item in members
+        )
+        if not current:
+            _write_use_case(storage, members, settings, now)
+            rewritten.append(use_case_id)
+    if rewritten:
+        _LOGGER.info("pooling.catch_up use_cases=%d", len(rewritten))
+    return tuple(rewritten)
+
+
+def _same_time(stamp: Any, computed: Any) -> bool:
     from datetime import datetime
 
-    stamp, computed = _field(pooled, "report_computed_at"), _field(report, "computed_at")
     if not isinstance(stamp, str) or not isinstance(computed, str):
         return False
     try:
@@ -748,14 +899,48 @@ def is_current(pooled: Any, report: Any) -> bool:
         return False
 
 
-def read_pooled_estimate(storage: Storage, campaign_id: str) -> PooledEstimate | None:
-    """The campaign's current Estimated figure, or None: no file, a file of an earlier measurement, or unreadable."""
+def is_current(
+    pooled: Any,
+    report: Any,
+    *,
+    settings: PoolingSettings | None = None,
+    report_of: Callable[[str], Any] | None = None,
+) -> bool:
+    """Whether a `pooled_estimate.json` document is still what pooling says now.
+
+    It must have been read from this `incrementality_report.json` document; with `settings`, fitted under them;
+    with `report_of` (a campaign id to its stored report document), every member's report must be the one it read.
+    """
+    if not _same_time(_field(pooled, "report_computed_at"), _field(report, "computed_at")):
+        return False
+    if settings is not None and _field(pooled, "settings") != settings.model_dump(mode="json"):
+        return False
+    if report_of is not None:
+        members = _field(pooled, "member_reports")
+        if not isinstance(members, dict) or not members:
+            return False
+        for member_id, stamp in members.items():
+            if not _same_time(stamp, _field(report_of(str(member_id)), "computed_at")):
+                return False
+    return True
+
+
+def read_pooled_estimate(
+    storage: Storage, campaign_id: str, *, settings: PoolingSettings | None = None
+) -> PooledEstimate | None:
+    """The campaign's current Estimated figure, or None: no file, a stale file (`is_current`), or unreadable."""
     from pydantic import ValidationError
 
     from engine.measurement.campaign import REPORT_FILENAME, campaign_key
+    from engine.pilot.proof import safe_identifier
+
+    def report_of(member_id: str) -> Any:
+        return (
+            _json(storage, campaign_key(member_id, REPORT_FILENAME)) if safe_identifier(member_id) else None
+        )
 
     document = _json(storage, pooled_key(campaign_id))
-    if not is_current(document, _json(storage, campaign_key(campaign_id, REPORT_FILENAME))):
+    if not is_current(document, report_of(campaign_id), settings=settings, report_of=report_of):
         return None
     try:
         return PooledEstimate.model_validate(document)
@@ -765,9 +950,10 @@ def read_pooled_estimate(storage: Storage, campaign_id: str) -> PooledEstimate |
 
 def pooled_prior(storage: Storage, campaign_id: str, *, root: Path | None = None) -> PooledPrior | None:
     """The campaign's cell average and spread as a prior for the next model, when pooling is on and it pooled."""
-    if not load_pooling_settings(root).enabled:
+    settings = load_pooling_settings(root)
+    if not settings.enabled:
         return None
-    estimate = read_pooled_estimate(storage, campaign_id)
+    estimate = read_pooled_estimate(storage, campaign_id, settings=settings)
     if (
         estimate is None
         or estimate.status != "pooled"

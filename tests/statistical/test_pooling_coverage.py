@@ -10,6 +10,9 @@ on binomial counts drawn for the arms; the standard error is read from the range
 `engine.measurement.pooling` reads a stored report, and the cell is fitted by `fit_cell`, the function
 `refresh_pooled_estimates` uses.
 
+Four and five campaigns are where Morris's correction matters most (the default settings pool from four), so they
+are checked beside six, eight and twelve.
+
 What is required (design §9.2, DEC-1402):
 
 * coverage: the share of campaigns whose pooled 95% range holds their true effect, averaged within each simulation
@@ -87,11 +90,19 @@ def _world(base_seed: int, campaigns: int, effects: Sequence[float]) -> list[Cel
 @pytest.mark.parametrize(
     ("campaigns", "effects", "seed"),
     [
+        (4, (0.005, 0.025), 136_006),
+        (5, (0.0, 0.01, 0.03), 136_007),
         (8, (0.005, 0.025), 136_001),
         (6, (0.0, 0.01, 0.03), 136_002),
         (12, (0.005, 0.025), 136_003),
     ],
-    ids=["eight-campaigns-two-groups", "six-campaigns-three-groups", "twelve-campaigns-two-groups"],
+    ids=[
+        "four-campaigns-two-groups",
+        "five-campaigns-three-groups",
+        "eight-campaigns-two-groups",
+        "six-campaigns-three-groups",
+        "twelve-campaigns-two-groups",
+    ],
 )
 def test_pooled_ranges_cover_a_mixture_of_true_effects_and_are_narrower(
     campaigns: int, effects: tuple[float, ...], seed: int

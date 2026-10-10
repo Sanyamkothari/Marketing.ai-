@@ -898,8 +898,13 @@ def measure_step(
     pull: OutcomePullSpec,
     ledger_engine: Callable[[], Engine | None] | None,
     now: datetime,
+    config_root: Path | None = None,
 ) -> StepOutcome:
-    """Once the newest live campaign's window has closed: read its outcomes for that window and measure it."""
+    """Once the newest live campaign's window has closed: read its outcomes for that window and measure it.
+
+    `config_root` is the installation's configuration root, where `configs/measurement.yaml` (Plan K M136 pooling)
+    is read, exactly as `POST /campaigns/{id}/measure` reads it.
+    """
     from engine.measurement.pull import PULL_SOURCE_FILENAME, DateWindow, pull_frame
 
     live = [
@@ -978,6 +983,7 @@ def measure_step(
             outcome_kind=None,
             ledger_engine=ledger_engine,
             now=now,
+            config_root=config_root,  # PLAN-K (M136): pooling reads this installation's measurement.yaml
         )
     except CycleError:
         # Refused before any of the measurement was written: the campaign is put back as it was and this

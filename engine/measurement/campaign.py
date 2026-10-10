@@ -41,6 +41,8 @@ same database as the audit trail, through `CampaignStore`; a test or a laptop wi
 `pilot_roi_inputs.json`         M104: the campaign's own value inputs, written by `api/routes/pilot.py`
                                 (`engine.pilot.proof.save_campaign_value_inputs`; aggregate, no customer id;
                                 names who entered them)
+`pooled_estimate.json`          Plan K M136: the Estimated figure beside the report
+                                (`engine.measurement.pooling`; aggregate, campaign ids only, no customer id)
 ==============================  ==========================================================================
 
 `assignment.parquet`, `outcomes.parquet` and `contact.parquet` hold one row per customer: they are
