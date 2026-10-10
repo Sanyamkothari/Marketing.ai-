@@ -59,6 +59,7 @@ __all__ = [
     "BaselineComparison",
     "BaselineKind",
     "CalibrationDecile",
+    "CombinedOffers",
     "ConfidenceValue",
     "FoldAuuc",
     "FoldAuucValue",
@@ -243,6 +244,41 @@ class ArmSummary(Artefact):
     )
     p_value: float | None = Field(default=None, description="Two-sided two-proportion z-test p-value.")
     note: str | None = Field(default=None, description="Why a number is missing, in plain words.")
+
+
+class CombinedOffers(Artefact):
+    """Every offer of a campaign added together against the shared control (Plan J M104 fix, DEC-1314 (s)).
+
+    Written beside `arms` on a measured campaign of two or more offers. The offers' extra outcomes add up to
+    `sum_k n_k (p_k - p_c)`, which is exactly `N_T (pbar_T - p_c)`: every contacted customer of every configured
+    offer pooled against the one held-back group. So this is `measure_incrementality` on those customers and
+    the control's (`method` `pooled`), and its interval is that comparison's Newcombe interval, which counts
+    the shared control once instead of once per offer. The field names are the report's own, with the same
+    meaning over every offer.
+    """
+
+    offers: tuple[str, ...] = Field(description="The offers added together, in configured order.")
+    control: str = Field(description="The control level every offer is compared with.")
+    method: Literal["pooled"] = Field(
+        default="pooled",
+        description="`pooled`: every offer's contacted customers against the shared control, in one comparison.",
+    )
+    treated_rows: int = Field(description="Mature contacted customers of every offer measured.")
+    treated_conversions: int = Field(description="Outcomes among them.")
+    treated_rate: float | None = Field(description="treated_conversions / treated_rows.")
+    control_rows: int = Field(description="Mature held-back customers measured, counted once.")
+    control_conversions: int = Field(description="Outcomes among them.")
+    control_rate: float | None = Field(description="control_conversions / control_rows.")
+    absolute_lift: ConfidenceValue | None = Field(
+        description="treated_rate - control_rate over every offer, with its Newcombe interval."
+    )
+    incremental_conversions: ConfidenceValue | None = Field(
+        description="absolute_lift x treated_rows: the sum of every offer's extra outcomes, with its interval."
+    )
+    p_value: float | None = Field(description="Two-sided two-proportion z-test p-value.")
+    rows_without_outcome: int = Field(
+        description="Customers of the pooled comparison with no outcome in the file, left out."
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1002,6 +1038,15 @@ class IncrementalityReport(Artefact):
         default=None,
         exclude_if=_absent,
         description="Codes worth knowing about the amounts, never blocking: OUTCOME_SKEWED.",
+    )
+    # Plan J M104 fix (DEC-1314 (s)): every offer added together against the shared control, written by
+    # `measure_campaign(..., combine_offers=True)` beside `arms` when two or more offers are measured (every
+    # route that stores a campaign report asks for it); absent otherwise, so a report of
+    # one offer is byte for byte what it was. The Value Proof Pack reads it for every whole-campaign line.
+    offers_combined: CombinedOffers | None = Field(
+        default=None,
+        exclude_if=_absent,
+        description="Every offer together against the shared control; absent with fewer than two offers.",
     )
 
 

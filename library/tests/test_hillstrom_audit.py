@@ -182,6 +182,41 @@ def test_the_campaign_ids_are_pinned_and_nothing_but_the_files_enters_the_store(
 
 @pytest.mark.slow
 @pytest.mark.integration
+def test_the_conversion_pack_credits_both_e_mails_and_charges_both(audit: Any) -> None:
+    """DEC-1314 (r)-(w), closing DEC-1322 (g): the headline, the extra outcomes and the net value add the men's
+    and the women's e-mail against the one group sent nothing, and the costs are every e-mail's."""
+    case = audit.results["cases"]["conversion"]
+    report, view = case["report"], case["proof"]["view"]
+    arms = report["arms"]
+    assert [a["arm"] for a in arms] == ["Mens E-Mail", "Womens E-Mail"]
+    whole = report["offers_combined"]
+    assert whole["treated_rows"] == sum(a["treated_rows"] for a in arms)
+    added = sum(a["incremental_conversions"]["value"] for a in arms)
+    incremental = next(s for s in view["sections"] if s["key"] == "incremental")
+    gain = incremental["lines"][-1]
+    assert gain["label"] == "Extra outcomes because of the campaign, every offer together"
+    assert gain["value"]["value"] == pytest.approx(added)
+    assert gain["value"]["value"] > arms[0]["incremental_conversions"]["value"]
+    assert view["headline"].startswith(
+        f"Extra outcomes because of the campaign, every offer together: {gain['value']['text']}"
+    )
+    net = {
+        line["label"]: line for line in next(s for s in view["sections"] if s["key"] == "net_value")["lines"]
+    }
+    value = net["Value of what the campaign changed, every offer together"]
+    assert value["value"]["value"] == pytest.approx(
+        added * case["proof"]["value_inputs"]["value_per_outcome"]
+    )
+    contacts = net["Cost of contacts, for every customer meant to be contacted"]
+    emailed = case["campaign"]["counts"]["intended_treated"]
+    assert emailed == whole["treated_rows"], "every e-mail of both offers is paid for"
+    assert contacts["value"]["value"] == pytest.approx(
+        emailed * case["proof"]["value_inputs"]["contact_cost"]
+    )
+
+
+@pytest.mark.slow
+@pytest.mark.integration
 def test_the_programme_readout_does_not_apply_and_the_route_says_so(audit: Any) -> None:
     programme = audit.results["programme"]
     assert programme["applies"] is False
@@ -242,7 +277,11 @@ def test_the_audit_section_is_rendered_from_the_results_alone(audit: Any) -> Non
     assert "public dataset, retrospective audit" in first and "**Causal**" in first
     assert "### 8.5 The programme readout does not apply" in first and "`PROGRAMME_NO_HOLDOUT`" in first
     assert "was refused by the route: `CAMPAIGN_INVALID`" in first
-    assert "**Finding (`conversion`).**" in first, "the Pack's first-offer scope is said where it is met"
+    # DEC-1314 (r)-(w) fixed the first-offer scope this section used to report (DEC-1322 (g)): the Pack's scope
+    # of several offers is still said where it is met, now as every offer added together.
+    assert "**Several offers (`conversion`).**" in first, "the Pack's scope of several offers is said"
+    assert "every money line covers the same e-mails" in first
+    assert "**Finding (`conversion`).**" not in first
     assert "Caution: the amount is skewed" in first or "no skew warning" in first
 
 
@@ -345,6 +384,26 @@ def test_a_verdict_over_several_offers_is_said_to_be_the_first_offers_only() -> 
     single = render_audit(audit, results_path="a.json", command="cmd")
     assert "The engine's verdict for the campaign as a whole: " in single
     assert "reads the first offer only" not in single
+
+
+def test_the_several_offers_sentence_quotes_the_e_mails_the_cost_was_charged_on() -> None:
+    """The Pack's cost of contacts charges the campaign record's `intended_treated`, which counts e-mailed customers
+    left out of the measurement for having no outcome; the sentence quotes that count and, when it differs from the
+    customers measured, says by how many instead of claiming every money line covers the same e-mails."""
+    from library.audit_report import render_audit
+
+    audit = json.loads(AUDIT_RESULTS.read_text(encoding="utf-8"))
+    case = audit["cases"]["conversion"]
+    measured = case["report"]["offers_combined"]["treated_rows"]
+    assert case["campaign"]["counts"]["intended_treated"] == measured
+    text = render_audit(audit, results_path="a.json", command="cmd")
+    assert f"is for all {measured:,} e-mails sent: every money line covers the same e-mails" in text
+
+    case["campaign"]["counts"]["intended_treated"] = measured + 120  # 120 e-mailed customers with no outcome
+    text = render_audit(audit, results_path="a.json", command="cmd")
+    assert f"is for all {measured + 120:,} e-mails meant to be sent" in text
+    assert f"rest on the {measured:,} of them measured, so 120 e-mails are charged and not credited" in text
+    assert "every money line covers the same e-mails" not in text
 
 
 # ---------------------------------------------------------------------------
@@ -454,6 +513,11 @@ def test_the_figures_in_docs_library_are_the_committed_results() -> None:
         expected.append(f"({usd(ci['ci_low'])} to {usd(ci['ci_high'])})")
         expected.append(f"bootstrap {usd(boot['ci_low'])} to {usd(boot['ci_high'])}")
     expected.append(f"{sum(a['treated_rows'] for a in cases['conversion']['report']['arms']):,} e-mails")
+    combined = cases["conversion"]["report"]["offers_combined"]["incremental_conversions"]
+    expected.append(
+        f"+{combined['value']:.0f} extra conversions, every offer together "
+        f"({combined['ci_low']:.0f} to {combined['ci_high']:.0f})"
+    )
     expected.append(results["programme"]["code"])
     expected.append(str(cases["spend_offers"]["refusal"]["detail"]["code"]))
     missing = [e for e in expected if e not in section]

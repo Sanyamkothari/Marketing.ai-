@@ -1,0 +1,1309 @@
+{
+ "schema_version": 1,
+ "campaign_id": "c_20261010_d2af78fa",
+ "kind": "scored",
+ "campaign_name": {
+  "value": "Win-back Campaign, sent 22 Mar 2026",
+  "text": "Win-back Campaign, sent 22 Mar 2026",
+  "format": "text",
+  "sources": [
+   {
+    "artefact": "campaigns/c_20261010_d2af78fa/campaign.json",
+    "field": "name"
+   }
+  ],
+  "formula": null
+ },
+ "use_case_id": "win-back-campaign",
+ "outcome": {
+  "value": "revenue",
+  "text": "revenue",
+  "format": "text",
+  "sources": [
+   {
+    "artefact": "campaigns/c_20261010_d2af78fa/incrementality_report.json",
+    "field": "outcome_column"
+   }
+  ],
+  "formula": null
+ },
+ "outcome_kind": "continuous",
+ "outcome_is_good": true,
+ "claim": "proven",
+ "claim_label": "Causal: the customers held back were chosen at random",
+ "headline": "Extra amount because of the campaign: +21,217.09 (likely +12,324.98 to +30,109.21). Net value -₹13,716 to -₹8,380.",
+ "measured_on": {
+  "value": "2026-06-30T00:00:00Z",
+  "text": "30 Jun 2026",
+  "format": "date",
+  "sources": [
+   {
+    "artefact": "campaigns/c_20261010_d2af78fa/incrementality_report.json",
+    "field": "as_of"
+   }
+  ],
+  "formula": null
+ },
+ "sections": [
+  {
+   "key": "plan",
+   "title": "The plan as registered, against what ran",
+   "status": "measured",
+   "reason": null,
+   "lines": [],
+   "table": {
+    "columns": [
+     "",
+     "Planned",
+     "As measured"
+    ],
+    "rows": [
+     [
+      "Customers contacted",
+      {
+       "value": 10000,
+       "text": "10,000",
+       "format": "count",
+       "sources": [
+        {
+         "artefact": "campaigns/c_20261010_d2af78fa/test_plan.json",
+         "field": "n_treat"
+        }
+       ],
+       "formula": null
+      },
+      {
+       "value": 10000,
+       "text": "10,000",
+       "format": "count",
+       "sources": [
+        {
+         "artefact": "campaigns/c_20261010_d2af78fa/incrementality_report.json",
+         "field": "treated_rows"
+        }
+       ],
+       "formula": null
+      }
+     ],
+     [
+      "Customers held back",
+      {
+       "value": 10000,
+       "text": "10,000",
+       "format": "count",
+       "sources": [
+        {
+         "artefact": "campaigns/c_20261010_d2af78fa/test_plan.json",
+         "field": "n_holdout"
+        }
+       ],
+       "formula": null
+      },
+      {
+       "value": 10000,
+       "text": "10,000",
+       "format": "count",
+       "sources": [
+        {
+         "artefact": "campaigns/c_20261010_d2af78fa/incrementality_report.json",
+         "field": "control_rows"
+        }
+       ],
+       "formula": null
+      }
+     ],
+     [
+      "Share held back",
+      {
+       "value": 0.5,
+       "text": "50%",
+       "format": "share",
+       "sources": [
+        {
+         "artefact": "campaigns/c_20261010_d2af78fa/test_plan.json",
+         "field": "holdout_fraction"
+        }
+       ],
+       "formula": null
+      },
+      {
+       "value": 0.5,
+       "text": "50%",
+       "format": "share",
+       "sources": [
+        {
+         "artefact": "campaigns/c_20261010_d2af78fa/incrementality_report.json",
+         "field": "control_rows"
+        },
+        {
+         "artefact": "campaigns/c_20261010_d2af78fa/incrementality_report.json",
+         "field": "treated_rows"
+        }
+       ],
+       "formula": "s0/(s0+s1)"
+      }
+     ],
+     [
+      "Outcome counted over",
+      {
+       "value": 30,
+       "text": "30 days",
+       "format": "days",
+       "sources": [
+        {
+         "artefact": "campaigns/c_20261010_d2af78fa/test_plan.json",
+         "field": "outcome_window_days"
+        }
+       ],
+       "formula": null
+      },
+      {
+       "value": 30,
+       "text": "30 days",
+       "format": "days",
+       "sources": [
+        {
+         "artefact": "campaigns/c_20261010_d2af78fa/incrementality_report.json",
+         "field": "outcome_window_days"
+        }
+       ],
+       "formula": null
+      }
+     ],
+     [
+      "Result read on",
+      {
+       "value": "2026-06-30",
+       "text": "30 Jun 2026",
+       "format": "date",
+       "sources": [
+        {
+         "artefact": "campaigns/c_20261010_d2af78fa/test_plan.json",
+         "field": "analysis_date"
+        }
+       ],
+       "formula": null
+      },
+      {
+       "value": "2026-06-30T00:00:00Z",
+       "text": "30 Jun 2026",
+       "format": "date",
+       "sources": [
+        {
+         "artefact": "campaigns/c_20261010_d2af78fa/incrementality_report.json",
+         "field": "as_of"
+        }
+       ],
+       "formula": null
+      }
+     ],
+     [
+      "Smallest change the test was sized for",
+      {
+       "value": 2.0,
+       "text": "2.00",
+       "format": "amount",
+       "sources": [
+        {
+         "artefact": "campaigns/c_20261010_d2af78fa/test_plan.json",
+         "field": "mde_value"
+        }
+       ],
+       "formula": null
+      },
+      "measured above"
+     ],
+     [
+      "Chance of seeing that change",
+      {
+       "value": 0.993043,
+       "text": "99.3%",
+       "format": "share",
+       "sources": [
+        {
+         "artefact": "campaigns/c_20261010_d2af78fa/test_plan.json",
+         "field": "achieved_power"
+        }
+       ],
+       "formula": null
+      },
+      "not applicable"
+     ],
+     [
+      "Plan version",
+      {
+       "value": 1,
+       "text": "1",
+       "format": "count",
+       "sources": [
+        {
+         "artefact": "campaigns/c_20261010_d2af78fa/test_plan.json",
+         "field": "version"
+        }
+       ],
+       "formula": null
+      },
+      "read against this plan"
+     ]
+    ]
+   },
+   "notes": []
+  },
+  {
+   "key": "delivery",
+   "title": "Did the list go out as planned?",
+   "status": "not_measured",
+   "reason": "No contact file was added, so whether the customers on the list were really contacted, and whether any held-back customer was contacted anyway, is not measured. Add one on the campaign's page.",
+   "lines": [],
+   "table": null,
+   "notes": []
+  },
+  {
+   "key": "incremental",
+   "title": "What the campaign changed, with ranges",
+   "status": "measured",
+   "reason": null,
+   "lines": [
+    {
+     "label": "Confidence of each range below",
+     "value": {
+      "value": 0.95,
+      "text": "95%",
+      "format": "share",
+      "sources": [
+       {
+        "artefact": "campaigns/c_20261010_d2af78fa/incrementality_report.json",
+        "field": "adjusted_interval.confidence_level"
+       }
+      ],
+      "formula": null
+     },
+     "low": null,
+     "high": null,
+     "missing": null
+    },
+    {
+     "label": "Average among contacted customers",
+     "value": {
+      "value": 102.18016899999999,
+      "text": "102.18",
+      "format": "amount",
+      "sources": [
+       {
+        "artefact": "campaigns/c_20261010_d2af78fa/incrementality_report.json",
+        "field": "treated_mean"
+       }
+      ],
+      "formula": null
+     },
+     "low": null,
+     "high": null,
+     "missing": null
+    },
+    {
+     "label": "Average among held-back customers",
+     "value": {
+      "value": 100.32045600000001,
+      "text": "100.32",
+      "format": "amount",
+      "sources": [
+       {
+        "artefact": "campaigns/c_20261010_d2af78fa/incrementality_report.json",
+        "field": "control_mean"
+       }
+      ],
+      "formula": null
+     },
+     "low": null,
+     "high": null,
+     "missing": null
+    },
+    {
+     "label": "Difference per contacted customer (adjusted for the earlier amount registered in the plan)",
+     "value": {
+      "value": 2.121709377262775,
+      "text": "+2.12",
+      "format": "signed_amount",
+      "sources": [
+       {
+        "artefact": "campaigns/c_20261010_d2af78fa/incrementality_report.json",
+        "field": "adjusted_interval.value"
+       }
+      ],
+      "formula": null
+     },
+     "low": {
+      "value": 1.2324975871555166,
+      "text": "+1.23",
+      "format": "signed_amount",
+      "sources": [
+       {
+        "artefact": "campaigns/c_20261010_d2af78fa/incrementality_report.json",
+        "field": "adjusted_interval.ci_low"
+       }
+      ],
+      "formula": null
+     },
+     "high": {
+      "value": 3.010921167370033,
+      "text": "+3.01",
+      "format": "signed_amount",
+      "sources": [
+       {
+        "artefact": "campaigns/c_20261010_d2af78fa/incrementality_report.json",
+        "field": "adjusted_interval.ci_high"
+       }
+      ],
+      "formula": null
+     },
+     "missing": null
+    },
+    {
+     "label": "Extra amount because of the campaign",
+     "value": {
+      "value": 21217.093772627748,
+      "text": "+21,217.09",
+      "format": "signed_amount",
+      "sources": [
+       {
+        "artefact": "campaigns/c_20261010_d2af78fa/incrementality_report.json",
+        "field": "adjusted_interval.value"
+       },
+       {
+        "artefact": "campaigns/c_20261010_d2af78fa/incrementality_report.json",
+        "field": "treated_rows"
+       }
+      ],
+      "formula": "s0*s1"
+     },
+     "low": {
+      "value": 12324.975871555165,
+      "text": "+12,324.98",
+      "format": "signed_amount",
+      "sources": [
+       {
+        "artefact": "campaigns/c_20261010_d2af78fa/incrementality_report.json",
+        "field": "adjusted_interval.ci_low"
+       },
+       {
+        "artefact": "campaigns/c_20261010_d2af78fa/incrementality_report.json",
+        "field": "treated_rows"
+       }
+      ],
+      "formula": "s0*s1"
+     },
+     "high": {
+      "value": 30109.21167370033,
+      "text": "+30,109.21",
+      "format": "signed_amount",
+      "sources": [
+       {
+        "artefact": "campaigns/c_20261010_d2af78fa/incrementality_report.json",
+        "field": "adjusted_interval.ci_high"
+       },
+       {
+        "artefact": "campaigns/c_20261010_d2af78fa/incrementality_report.json",
+        "field": "treated_rows"
+       }
+      ],
+      "formula": "s0*s1"
+     },
+     "missing": null
+    }
+   ],
+   "table": null,
+   "notes": [
+    "Each range is a confidence interval at that level: the true number very probably lies inside it."
+   ]
+  },
+  {
+   "key": "gross",
+   "title": "Gross against incremental",
+   "status": "measured",
+   "reason": null,
+   "lines": [
+    {
+     "label": "Total amount of the contacted customers (gross)",
+     "value": {
+      "value": 1021801.69,
+      "text": "1,021,801.69",
+      "format": "amount",
+      "sources": [
+       {
+        "artefact": "campaigns/c_20261010_d2af78fa/incrementality_report.json",
+        "field": "treated_mean"
+       },
+       {
+        "artefact": "campaigns/c_20261010_d2af78fa/incrementality_report.json",
+        "field": "treated_rows"
+       }
+      ],
+      "formula": "s0*s1"
+     },
+     "low": null,
+     "high": null,
+     "missing": null
+    },
+    {
+     "label": "What the average of the held-back customers says they would have had anyway",
+     "value": {
+      "value": 1003204.56,
+      "text": "1,003,204.56",
+      "format": "amount",
+      "sources": [
+       {
+        "artefact": "campaigns/c_20261010_d2af78fa/incrementality_report.json",
+        "field": "control_mean"
+       },
+       {
+        "artefact": "campaigns/c_20261010_d2af78fa/incrementality_report.json",
+        "field": "treated_rows"
+       }
+      ],
+      "formula": "s0*s1"
+     },
+     "low": null,
+     "high": null,
+     "missing": null
+    },
+    {
+     "label": "The difference: incremental",
+     "value": {
+      "value": 21217.093772627748,
+      "text": "+21,217.09",
+      "format": "signed_amount",
+      "sources": [
+       {
+        "artefact": "campaigns/c_20261010_d2af78fa/incrementality_report.json",
+        "field": "adjusted_interval.value"
+       },
+       {
+        "artefact": "campaigns/c_20261010_d2af78fa/incrementality_report.json",
+        "field": "treated_rows"
+       }
+      ],
+      "formula": "s0*s1"
+     },
+     "low": {
+      "value": 12324.975871555165,
+      "text": "+12,324.98",
+      "format": "signed_amount",
+      "sources": [
+       {
+        "artefact": "campaigns/c_20261010_d2af78fa/incrementality_report.json",
+        "field": "adjusted_interval.ci_low"
+       },
+       {
+        "artefact": "campaigns/c_20261010_d2af78fa/incrementality_report.json",
+        "field": "treated_rows"
+       }
+      ],
+      "formula": "s0*s1"
+     },
+     "high": {
+      "value": 30109.21167370033,
+      "text": "+30,109.21",
+      "format": "signed_amount",
+      "sources": [
+       {
+        "artefact": "campaigns/c_20261010_d2af78fa/incrementality_report.json",
+        "field": "adjusted_interval.ci_high"
+       },
+       {
+        "artefact": "campaigns/c_20261010_d2af78fa/incrementality_report.json",
+        "field": "treated_rows"
+       }
+      ],
+      "formula": "s0*s1"
+     },
+     "missing": null
+    }
+   ],
+   "table": null,
+   "notes": [
+    "Gross counts everything the contacted customers did. Incremental is only what they did beyond the held-back customers, chosen the same way and not contacted: the part the campaign caused."
+   ]
+  },
+  {
+   "key": "credit",
+   "title": "Naive credit against measured credit",
+   "status": "measured",
+   "reason": null,
+   "lines": [
+    {
+     "label": "Naive credit: the whole amount of every contacted customer",
+     "value": {
+      "value": 1021801.69,
+      "text": "1,021,801.69",
+      "format": "amount",
+      "sources": [
+       {
+        "artefact": "campaigns/c_20261010_d2af78fa/incrementality_report.json",
+        "field": "treated_mean"
+       },
+       {
+        "artefact": "campaigns/c_20261010_d2af78fa/incrementality_report.json",
+        "field": "treated_rows"
+       }
+      ],
+      "formula": "s0*s1"
+     },
+     "low": null,
+     "high": null,
+     "missing": null
+    },
+    {
+     "label": "Measured credit: only what the campaign changed",
+     "value": {
+      "value": 21217.093772627748,
+      "text": "+21,217.09",
+      "format": "signed_amount",
+      "sources": [
+       {
+        "artefact": "campaigns/c_20261010_d2af78fa/incrementality_report.json",
+        "field": "adjusted_interval.value"
+       },
+       {
+        "artefact": "campaigns/c_20261010_d2af78fa/incrementality_report.json",
+        "field": "treated_rows"
+       }
+      ],
+      "formula": "s0*s1"
+     },
+     "low": {
+      "value": 12324.975871555165,
+      "text": "+12,324.98",
+      "format": "signed_amount",
+      "sources": [
+       {
+        "artefact": "campaigns/c_20261010_d2af78fa/incrementality_report.json",
+        "field": "adjusted_interval.ci_low"
+       },
+       {
+        "artefact": "campaigns/c_20261010_d2af78fa/incrementality_report.json",
+        "field": "treated_rows"
+       }
+      ],
+      "formula": "s0*s1"
+     },
+     "high": {
+      "value": 30109.21167370033,
+      "text": "+30,109.21",
+      "format": "signed_amount",
+      "sources": [
+       {
+        "artefact": "campaigns/c_20261010_d2af78fa/incrementality_report.json",
+        "field": "adjusted_interval.ci_high"
+       },
+       {
+        "artefact": "campaigns/c_20261010_d2af78fa/incrementality_report.json",
+        "field": "treated_rows"
+       }
+      ],
+      "formula": "s0*s1"
+     },
+     "missing": null
+    },
+    {
+     "label": "Naive credit in rupees",
+     "value": {
+      "value": 306540.507,
+      "text": "₹3,06,541 (3.07 lakh)",
+      "format": "inr",
+      "sources": [
+       {
+        "artefact": "campaigns/c_20261010_d2af78fa/incrementality_report.json",
+        "field": "treated_mean"
+       },
+       {
+        "artefact": "campaigns/c_20261010_d2af78fa/incrementality_report.json",
+        "field": "treated_rows"
+       },
+       {
+        "artefact": "campaigns/c_20261010_d2af78fa/pilot_roi_inputs.json",
+        "field": "value_per_outcome"
+       }
+      ],
+      "formula": "s0*s1*s2"
+     },
+     "low": null,
+     "high": null,
+     "missing": null
+    },
+    {
+     "label": "Measured credit in rupees",
+     "value": {
+      "value": 6365.128131788324,
+      "text": "₹6,365",
+      "format": "inr",
+      "sources": [
+       {
+        "artefact": "campaigns/c_20261010_d2af78fa/incrementality_report.json",
+        "field": "adjusted_interval.value"
+       },
+       {
+        "artefact": "campaigns/c_20261010_d2af78fa/incrementality_report.json",
+        "field": "treated_rows"
+       },
+       {
+        "artefact": "campaigns/c_20261010_d2af78fa/pilot_roi_inputs.json",
+        "field": "value_per_outcome"
+       }
+      ],
+      "formula": "s0*s1*s2"
+     },
+     "low": {
+      "value": 3697.4927614665494,
+      "text": "₹3,697",
+      "format": "inr",
+      "sources": [
+       {
+        "artefact": "campaigns/c_20261010_d2af78fa/incrementality_report.json",
+        "field": "adjusted_interval.ci_low"
+       },
+       {
+        "artefact": "campaigns/c_20261010_d2af78fa/incrementality_report.json",
+        "field": "treated_rows"
+       },
+       {
+        "artefact": "campaigns/c_20261010_d2af78fa/pilot_roi_inputs.json",
+        "field": "value_per_outcome"
+       }
+      ],
+      "formula": "s0*s1*s2"
+     },
+     "high": {
+      "value": 9032.7635021101,
+      "text": "₹9,033",
+      "format": "inr",
+      "sources": [
+       {
+        "artefact": "campaigns/c_20261010_d2af78fa/incrementality_report.json",
+        "field": "adjusted_interval.ci_high"
+       },
+       {
+        "artefact": "campaigns/c_20261010_d2af78fa/incrementality_report.json",
+        "field": "treated_rows"
+       },
+       {
+        "artefact": "campaigns/c_20261010_d2af78fa/pilot_roi_inputs.json",
+        "field": "value_per_outcome"
+       }
+      ],
+      "formula": "s0*s1*s2"
+     },
+     "missing": null
+    }
+   ],
+   "table": null,
+   "notes": [
+    "Naive credit is what a tool that credits every response to the campaign would report: every outcome among the contacted customers, including the ones who would have had it anyway."
+   ]
+  },
+  {
+   "key": "offer_money",
+   "title": "Offer money spent on sure things and sleeping dogs",
+   "status": "not_measured",
+   "reason": "This list was not chosen by the campaign-effect model, so its customers were not sorted into persuadables, sure things, lost causes and sleeping dogs.",
+   "lines": [],
+   "table": null,
+   "notes": []
+  },
+  {
+   "key": "test_cost",
+   "title": "What the control group and the explore slice cost",
+   "status": "measured",
+   "reason": null,
+   "lines": [
+    {
+     "label": "Held-back customers measured",
+     "value": {
+      "value": 10000,
+      "text": "10,000",
+      "format": "count",
+      "sources": [
+       {
+        "artefact": "campaigns/c_20261010_d2af78fa/incrementality_report.json",
+        "field": "control_rows"
+       }
+      ],
+      "formula": null
+     },
+     "low": null,
+     "high": null,
+     "missing": null
+    },
+    {
+     "label": "What they would have added had they been contacted",
+     "value": {
+      "value": 21217.093772627748,
+      "text": "+21,217.09",
+      "format": "signed_amount",
+      "sources": [
+       {
+        "artefact": "campaigns/c_20261010_d2af78fa/incrementality_report.json",
+        "field": "adjusted_interval.value"
+       },
+       {
+        "artefact": "campaigns/c_20261010_d2af78fa/incrementality_report.json",
+        "field": "control_rows"
+       }
+      ],
+      "formula": "s0*s1"
+     },
+     "low": {
+      "value": 12324.975871555165,
+      "text": "+12,324.98",
+      "format": "signed_amount",
+      "sources": [
+       {
+        "artefact": "campaigns/c_20261010_d2af78fa/incrementality_report.json",
+        "field": "adjusted_interval.ci_low"
+       },
+       {
+        "artefact": "campaigns/c_20261010_d2af78fa/incrementality_report.json",
+        "field": "control_rows"
+       }
+      ],
+      "formula": "s0*s1"
+     },
+     "high": {
+      "value": 30109.21167370033,
+      "text": "+30,109.21",
+      "format": "signed_amount",
+      "sources": [
+       {
+        "artefact": "campaigns/c_20261010_d2af78fa/incrementality_report.json",
+        "field": "adjusted_interval.ci_high"
+       },
+       {
+        "artefact": "campaigns/c_20261010_d2af78fa/incrementality_report.json",
+        "field": "control_rows"
+       }
+      ],
+      "formula": "s0*s1"
+     },
+     "missing": null
+    },
+    {
+     "label": "What that is worth in rupees, before costs",
+     "value": {
+      "value": 6365.128131788324,
+      "text": "₹6,365",
+      "format": "inr",
+      "sources": [
+       {
+        "artefact": "campaigns/c_20261010_d2af78fa/incrementality_report.json",
+        "field": "adjusted_interval.value"
+       },
+       {
+        "artefact": "campaigns/c_20261010_d2af78fa/incrementality_report.json",
+        "field": "control_rows"
+       },
+       {
+        "artefact": "campaigns/c_20261010_d2af78fa/pilot_roi_inputs.json",
+        "field": "value_per_outcome"
+       }
+      ],
+      "formula": "s0*s1*s2"
+     },
+     "low": {
+      "value": 3697.4927614665494,
+      "text": "₹3,697",
+      "format": "inr",
+      "sources": [
+       {
+        "artefact": "campaigns/c_20261010_d2af78fa/incrementality_report.json",
+        "field": "adjusted_interval.ci_low"
+       },
+       {
+        "artefact": "campaigns/c_20261010_d2af78fa/incrementality_report.json",
+        "field": "control_rows"
+       },
+       {
+        "artefact": "campaigns/c_20261010_d2af78fa/pilot_roi_inputs.json",
+        "field": "value_per_outcome"
+       }
+      ],
+      "formula": "s0*s1*s2"
+     },
+     "high": {
+      "value": 9032.7635021101,
+      "text": "₹9,033",
+      "format": "inr",
+      "sources": [
+       {
+        "artefact": "campaigns/c_20261010_d2af78fa/incrementality_report.json",
+        "field": "adjusted_interval.ci_high"
+       },
+       {
+        "artefact": "campaigns/c_20261010_d2af78fa/incrementality_report.json",
+        "field": "control_rows"
+       },
+       {
+        "artefact": "campaigns/c_20261010_d2af78fa/pilot_roi_inputs.json",
+        "field": "value_per_outcome"
+       }
+      ],
+      "formula": "s0*s1*s2"
+     },
+     "missing": null
+    },
+    {
+     "label": "Customers contacted at random outside the list (the explore slice)",
+     "value": {
+      "value": 0,
+      "text": "0",
+      "format": "count",
+      "sources": [
+       {
+        "artefact": "campaigns/c_20261010_d2af78fa/campaign.json",
+        "field": "counts.explore"
+       }
+      ],
+      "formula": null
+     },
+     "low": null,
+     "high": null,
+     "missing": null
+    }
+   ],
+   "table": null,
+   "notes": [
+    "The held-back customers are the price of knowing: without them nothing above could be measured. The explore slice pays for what the next model learns about customers outside the list."
+   ]
+  },
+  {
+   "key": "backfire",
+   "title": "Groups where the campaign backfired",
+   "status": "not_measured",
+   "reason": "No group of the campaign's customers could be read one by one; the lines below say why.",
+   "lines": [
+    {
+     "label": "Not read band by band",
+     "value": {
+      "value": "No customer of the campaign has a band.",
+      "text": "No customer of the campaign has a band.",
+      "format": "text",
+      "sources": [
+       {
+        "artefact": "campaigns/c_20261010_d2af78fa/segment_effects.json",
+        "field": "not_measured.0.reason"
+       }
+      ],
+      "formula": null
+     },
+     "low": null,
+     "high": null,
+     "missing": null
+    }
+   ],
+   "table": null,
+   "notes": []
+  },
+  {
+   "key": "net_value",
+   "title": "Net value in rupees, as a range",
+   "status": "measured",
+   "reason": null,
+   "lines": [
+    {
+     "label": "Value of what the campaign changed",
+     "value": {
+      "value": 6365.128131788324,
+      "text": "₹6,365",
+      "format": "inr",
+      "sources": [
+       {
+        "artefact": "campaigns/c_20261010_d2af78fa/incrementality_report.json",
+        "field": "adjusted_interval.value"
+       },
+       {
+        "artefact": "campaigns/c_20261010_d2af78fa/incrementality_report.json",
+        "field": "treated_rows"
+       },
+       {
+        "artefact": "campaigns/c_20261010_d2af78fa/pilot_roi_inputs.json",
+        "field": "value_per_outcome"
+       }
+      ],
+      "formula": "s0*s1*s2"
+     },
+     "low": {
+      "value": 3697.4927614665494,
+      "text": "₹3,697",
+      "format": "inr",
+      "sources": [
+       {
+        "artefact": "campaigns/c_20261010_d2af78fa/incrementality_report.json",
+        "field": "adjusted_interval.ci_low"
+       },
+       {
+        "artefact": "campaigns/c_20261010_d2af78fa/incrementality_report.json",
+        "field": "treated_rows"
+       },
+       {
+        "artefact": "campaigns/c_20261010_d2af78fa/pilot_roi_inputs.json",
+        "field": "value_per_outcome"
+       }
+      ],
+      "formula": "s0*s1*s2"
+     },
+     "high": {
+      "value": 9032.7635021101,
+      "text": "₹9,033",
+      "format": "inr",
+      "sources": [
+       {
+        "artefact": "campaigns/c_20261010_d2af78fa/incrementality_report.json",
+        "field": "adjusted_interval.ci_high"
+       },
+       {
+        "artefact": "campaigns/c_20261010_d2af78fa/incrementality_report.json",
+        "field": "treated_rows"
+       },
+       {
+        "artefact": "campaigns/c_20261010_d2af78fa/pilot_roi_inputs.json",
+        "field": "value_per_outcome"
+       }
+      ],
+      "formula": "s0*s1*s2"
+     },
+     "missing": null
+    },
+    {
+     "label": "Cost of contacts, for every customer meant to be contacted",
+     "value": {
+      "value": 2500.0,
+      "text": "₹2,500",
+      "format": "inr",
+      "sources": [
+       {
+        "artefact": "campaigns/c_20261010_d2af78fa/campaign.json",
+        "field": "counts.intended_treated"
+       },
+       {
+        "artefact": "campaigns/c_20261010_d2af78fa/pilot_roi_inputs.json",
+        "field": "contact_cost"
+       }
+      ],
+      "formula": "s0*s1"
+     },
+     "low": null,
+     "high": null,
+     "missing": null
+    },
+    {
+     "label": "Cost of offers taken, by the contacted customers measured with an amount above zero",
+     "value": {
+      "value": 14913.0,
+      "text": "₹14,913",
+      "format": "inr",
+      "sources": [
+       {
+        "artefact": "campaigns/c_20261010_d2af78fa/incrementality_report.json",
+        "field": "treated_conversions"
+       },
+       {
+        "artefact": "campaigns/c_20261010_d2af78fa/pilot_roi_inputs.json",
+        "field": "offer_cost"
+       }
+      ],
+      "formula": "s0*s1"
+     },
+     "low": null,
+     "high": null,
+     "missing": null
+    },
+    {
+     "label": "Net value",
+     "value": {
+      "value": -11047.871868211676,
+      "text": "-₹11,048",
+      "format": "inr",
+      "sources": [
+       {
+        "artefact": "campaigns/c_20261010_d2af78fa/incrementality_report.json",
+        "field": "adjusted_interval.value"
+       },
+       {
+        "artefact": "campaigns/c_20261010_d2af78fa/incrementality_report.json",
+        "field": "treated_rows"
+       },
+       {
+        "artefact": "campaigns/c_20261010_d2af78fa/pilot_roi_inputs.json",
+        "field": "value_per_outcome"
+       },
+       {
+        "artefact": "campaigns/c_20261010_d2af78fa/campaign.json",
+        "field": "counts.intended_treated"
+       },
+       {
+        "artefact": "campaigns/c_20261010_d2af78fa/pilot_roi_inputs.json",
+        "field": "contact_cost"
+       },
+       {
+        "artefact": "campaigns/c_20261010_d2af78fa/incrementality_report.json",
+        "field": "treated_conversions"
+       },
+       {
+        "artefact": "campaigns/c_20261010_d2af78fa/pilot_roi_inputs.json",
+        "field": "offer_cost"
+       }
+      ],
+      "formula": "s0*s1*s2 - s3*s4 - s5*s6"
+     },
+     "low": {
+      "value": -13715.50723853345,
+      "text": "-₹13,716",
+      "format": "inr",
+      "sources": [
+       {
+        "artefact": "campaigns/c_20261010_d2af78fa/incrementality_report.json",
+        "field": "adjusted_interval.ci_low"
+       },
+       {
+        "artefact": "campaigns/c_20261010_d2af78fa/incrementality_report.json",
+        "field": "treated_rows"
+       },
+       {
+        "artefact": "campaigns/c_20261010_d2af78fa/pilot_roi_inputs.json",
+        "field": "value_per_outcome"
+       },
+       {
+        "artefact": "campaigns/c_20261010_d2af78fa/campaign.json",
+        "field": "counts.intended_treated"
+       },
+       {
+        "artefact": "campaigns/c_20261010_d2af78fa/pilot_roi_inputs.json",
+        "field": "contact_cost"
+       },
+       {
+        "artefact": "campaigns/c_20261010_d2af78fa/incrementality_report.json",
+        "field": "treated_conversions"
+       },
+       {
+        "artefact": "campaigns/c_20261010_d2af78fa/pilot_roi_inputs.json",
+        "field": "offer_cost"
+       }
+      ],
+      "formula": "s0*s1*s2 - s3*s4 - s5*s6"
+     },
+     "high": {
+      "value": -8380.2364978899,
+      "text": "-₹8,380",
+      "format": "inr",
+      "sources": [
+       {
+        "artefact": "campaigns/c_20261010_d2af78fa/incrementality_report.json",
+        "field": "adjusted_interval.ci_high"
+       },
+       {
+        "artefact": "campaigns/c_20261010_d2af78fa/incrementality_report.json",
+        "field": "treated_rows"
+       },
+       {
+        "artefact": "campaigns/c_20261010_d2af78fa/pilot_roi_inputs.json",
+        "field": "value_per_outcome"
+       },
+       {
+        "artefact": "campaigns/c_20261010_d2af78fa/campaign.json",
+        "field": "counts.intended_treated"
+       },
+       {
+        "artefact": "campaigns/c_20261010_d2af78fa/pilot_roi_inputs.json",
+        "field": "contact_cost"
+       },
+       {
+        "artefact": "campaigns/c_20261010_d2af78fa/incrementality_report.json",
+        "field": "treated_conversions"
+       },
+       {
+        "artefact": "campaigns/c_20261010_d2af78fa/pilot_roi_inputs.json",
+        "field": "offer_cost"
+       }
+      ],
+      "formula": "s0*s1*s2 - s3*s4 - s5*s6"
+     },
+     "missing": null
+    },
+    {
+     "label": "Value of one unit of the amount, as entered",
+     "value": {
+      "value": 0.3,
+      "text": "₹0.30",
+      "format": "inr_unit",
+      "sources": [
+       {
+        "artefact": "campaigns/c_20261010_d2af78fa/pilot_roi_inputs.json",
+        "field": "value_per_outcome"
+       }
+      ],
+      "formula": null
+     },
+     "low": null,
+     "high": null,
+     "missing": null
+    },
+    {
+     "label": "Cost of one contact, as entered",
+     "value": {
+      "value": 0.25,
+      "text": "₹0.25",
+      "format": "inr_unit",
+      "sources": [
+       {
+        "artefact": "campaigns/c_20261010_d2af78fa/pilot_roi_inputs.json",
+        "field": "contact_cost"
+       }
+      ],
+      "formula": null
+     },
+     "low": null,
+     "high": null,
+     "missing": null
+    },
+    {
+     "label": "Cost of one offer taken, as entered",
+     "value": {
+      "value": 1.5,
+      "text": "₹1.50",
+      "format": "inr_unit",
+      "sources": [
+       {
+        "artefact": "campaigns/c_20261010_d2af78fa/pilot_roi_inputs.json",
+        "field": "offer_cost"
+       }
+      ],
+      "formula": null
+     },
+     "low": null,
+     "high": null,
+     "missing": null
+    }
+   ],
+   "table": null,
+   "notes": [
+    "The range comes from the measured range of what the campaign changed; the rupee values per outcome and the costs are the value inputs entered for this campaign, estimates that move the rupees but not the measured count.",
+    "Offers are costed for the contacted customers measured; an offer taken by a customer with no outcome in the file is not known, so it is not counted."
+   ]
+  },
+  {
+   "key": "method",
+   "title": "Method and limits",
+   "status": "measured",
+   "reason": null,
+   "lines": [
+    {
+     "label": "Result read on",
+     "value": {
+      "value": "2026-06-30T00:00:00Z",
+      "text": "30 Jun 2026",
+      "format": "date",
+      "sources": [
+       {
+        "artefact": "campaigns/c_20261010_d2af78fa/incrementality_report.json",
+        "field": "as_of"
+       }
+      ],
+      "formula": null
+     },
+     "low": null,
+     "high": null,
+     "missing": null
+    },
+    {
+     "label": "Outcome counted over",
+     "value": {
+      "value": 30,
+      "text": "30 days",
+      "format": "days",
+      "sources": [
+       {
+        "artefact": "campaigns/c_20261010_d2af78fa/incrementality_report.json",
+        "field": "outcome_window_days"
+       }
+      ],
+      "formula": null
+     },
+     "low": null,
+     "high": null,
+     "missing": null
+    },
+    {
+     "label": "Customers left out for having no outcome in the file",
+     "value": {
+      "value": 0,
+      "text": "0",
+      "format": "count",
+      "sources": [
+       {
+        "artefact": "campaigns/c_20261010_d2af78fa/incrementality_report.json",
+        "field": "rows_without_outcome"
+       }
+      ],
+      "formula": null
+     },
+     "low": null,
+     "high": null,
+     "missing": null
+    },
+    {
+     "label": "Adjusted for each customer's earlier amount in",
+     "value": {
+      "value": "pre_revenue",
+      "text": "pre_revenue",
+      "format": "text",
+      "sources": [
+       {
+        "artefact": "campaigns/c_20261010_d2af78fa/incrementality_report.json",
+        "field": "covariate_column"
+       }
+      ],
+      "formula": null
+     },
+     "low": null,
+     "high": null,
+     "missing": null
+    },
+    {
+     "label": "Share of the noise the adjustment removed",
+     "value": {
+      "value": 0.35643829967289753,
+      "text": "35.6%",
+      "format": "share",
+      "sources": [
+       {
+        "artefact": "campaigns/c_20261010_d2af78fa/incrementality_report.json",
+        "field": "variance_reduction"
+       }
+      ],
+      "formula": null
+     },
+     "low": null,
+     "high": null,
+     "missing": null
+    }
+   ],
+   "table": null,
+   "notes": [
+    "The engine chose who was held back, at random, before the campaign went out.",
+    "So the results are proven: the difference between the groups is what the campaign caused.",
+    "Outcomes are counted for everyone the campaign was meant to reach, whether or not the message arrived, so the result is the effect of running the campaign.",
+    "Rupee values use the value inputs entered for this campaign; they are estimates, and the pack says where each comes from.",
+    "Results for each group are read without any adjustment by an earlier amount, and judged by the rule in the backfire section."
+   ]
+  }
+ ],
+ "proposals": [],
+ "artefacts": [
+  "campaigns/c_20261010_d2af78fa/campaign.json",
+  "campaigns/c_20261010_d2af78fa/incrementality_report.json",
+  "campaigns/c_20261010_d2af78fa/pilot_roi_inputs.json",
+  "campaigns/c_20261010_d2af78fa/segment_effects.json",
+  "campaigns/c_20261010_d2af78fa/test_plan.json",
+  "runs/r_20261009_10200001/run.json",
+  "uploads/u_8834673cd465/upload.json"
+ ],
+ "built_at": "2026-10-10T12:00:00Z"
+}

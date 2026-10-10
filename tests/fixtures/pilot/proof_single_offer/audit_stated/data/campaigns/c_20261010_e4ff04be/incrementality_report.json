@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "run_id": "c_20261010_e4ff04be",
+  "campaign_id": "c_20261010_e4ff04be",
+  "outcome_column": "converted",
+  "outcome_window_days": 30,
+  "as_of": "2026-06-30T00:00:00Z",
+  "status": "mature",
+  "results_available_on": null,
+  "treated_rows": 6400,
+  "treated_conversions": 856,
+  "treated_rate": 0.13375,
+  "control_rows": 1600,
+  "control_conversions": 167,
+  "control_rate": 0.104375,
+  "absolute_lift": {
+    "schema_version": 1,
+    "value": 0.029375000000000012,
+    "ci_low": 0.01148517597917862,
+    "ci_high": 0.045823249444221364,
+    "confidence_level": 0.95
+  },
+  "relative_lift": 0.2814371257485031,
+  "incremental_conversions": {
+    "schema_version": 1,
+    "value": 188.00000000000009,
+    "ci_low": 73.50512626674318,
+    "ci_high": 293.26879644301675,
+    "confidence_level": 0.95
+  },
+  "p_value": 0.0016493891363328812,
+  "rows_immature": 0,
+  "rows_without_outcome": 0,
+  "rows_suppressed_or_untreated": 0,
+  "causal": false,
+  "summary": "Random by your statement, not verified. If the groups were chosen at random as you said, 13.4% of contacted customers had the outcome against 10.4% of the others, a difference of +2.9 points (95% interval +1.1 points to +4.6 points), about 188 more conversions among the contacted customers. We could not check how the groups were chosen, so this is not shown as a proven effect.",
+  "computed_at": "2026-10-10T06:47:04.572065Z",
+  "test_plan_hash": null,
+  "early_look": false
+}

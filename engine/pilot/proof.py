@@ -35,6 +35,15 @@ that condition ("If the groups were chosen at random as you said"), never as pro
 shows its counts and rates and credits nothing to the campaign: no measured credit, no net value, no
 backfire.
 
+**Several offers: one scope for every money line (DEC-1314 (r)-(w)).** A report of several offers keeps the
+first offer in its own fields (DEC-668 (3)). The pack's whole-campaign lines (the headline, the extra outcomes,
+gross and naive credit, the value of what the campaign changed, the net value and its costs) read the report's
+`offers_combined` instead: every offer together against the shared control, one pooled comparison whose extra
+outcomes are the sum of the offers' own and whose interval counts the shared control once. The contacts paid
+are every offer's, as before. A report of several offers measured before `offers_combined` existed is never
+summed across offers: every such line says it is the first offer's alone and costs only the first offer's
+customers. Each offer alone is in the offer table either way.
+
 **Refusals.** A campaign whose data was generated (`RunRecord.synthetic`, a synthetic outcomes upload, an
 audit, programme or contact file marked synthetic) is refused with `PROOF_SYNTHETIC_DATA`: a planted effect
 is never presented to finance as value. A campaign not yet measured, measured before its outcomes were all in, or read
@@ -162,6 +171,10 @@ SectionKey = Literal[
     "method",
 ]
 Claim = Literal["proven", "stated_random", "descriptive"]
+Scope = Literal["single", "combined", "first_offer"]
+"""What the Pack's whole-campaign lines cover (DEC-1314 (r)): the report's own result (one offer, or none
+named); every offer together against the shared control (`offers_combined`); or, for a report of several
+offers measured before the offers were added together, the first offer alone, said in every such line."""
 FigureFormat = Literal[
     "count",
     "signed_count",
@@ -634,6 +647,7 @@ class _Context:
     costs_source: str
     approvals: dict[tuple[str, str], int] = field(default_factory=dict)
     ledger_key: str | None = None
+    scope: Scope = "single"
 
     def key(self, name: str) -> str:
         return f"campaigns/{self.campaign_id}/{name}"
@@ -643,7 +657,44 @@ class _Context:
         return self.key(_REPORT)
 
     def r(self, path: str, fmt: FigureFormat) -> Figure | None:
+        """A figure of the report's whole-campaign result: every offer together when the Pack adds them."""
+        if self.scope == "combined" and path.split(".", 1)[0] in _COMBINED_FIELDS:
+            path = f"{_COMBINED}.{path}"
         return self.reader.fig(self.report_key, path, fmt)
+
+
+_COMBINED: Final[str] = "offers_combined"
+_COMBINED_FIELDS: Final[frozenset[str]] = frozenset(
+    {
+        "treated_rows",
+        "treated_conversions",
+        "treated_rate",
+        "control_rows",
+        "control_conversions",
+        "control_rate",
+        "absolute_lift",
+        "incremental_conversions",
+        "rows_without_outcome",
+    }
+)
+"""The report fields that `offers_combined` repeats over every offer, with the same meaning."""
+
+
+def _scope(report: dict[str, Any]) -> Scope:
+    """Every offer together when the report adds them; the first offer alone, said so, when it does not."""
+    arms = report.get("arms")
+    if not isinstance(arms, list) or len(arms) < 2:
+        return "single"
+    return "combined" if isinstance(report.get(_COMBINED), dict) else "first_offer"
+
+
+def _scoped(context: _Context, label: str) -> str:
+    """A label about what the campaign changed, in the Pack's scope (the words hold no number)."""
+    if context.scope == "combined":
+        return f"{label}, every offer together"
+    if context.scope == "first_offer":
+        return label.replace("the campaign", "the first offer alone")
+    return label
 
 
 _KINDS: Final[dict[str, Literal["scored", "external", "programme"]]] = {
@@ -704,6 +755,7 @@ def build_proof(
         inputs_key=inputs_key,
         costs_key=costs_key,
         costs_source=costs_source,
+        scope=_scope(report),
     )
     _load_approvals(context)
     incremental = _incremental(context)
@@ -986,13 +1038,19 @@ def _benefit(
 
 def _benefit_label(context: _Context) -> str:
     if context.continuous:
-        return "Extra amount because of the campaign" if context.good else "Amount reduced by the campaign"
-    return "Extra outcomes because of the campaign" if context.good else "Outcomes prevented by the campaign"
+        label = "Extra amount because of the campaign" if context.good else "Amount reduced by the campaign"
+    else:
+        label = (
+            "Extra outcomes because of the campaign" if context.good else "Outcomes prevented by the campaign"
+        )
+    return _scoped(context, label)
 
 
 def _treated_words(context: _Context) -> str:
     """Who the treated arm is: for a programme everyone outside the control group, contacted or not."""
-    return "customers outside the control group" if context.kind == "programme" else "contacted customers"
+    if context.kind == "programme":
+        return "customers outside the control group"
+    return "customers given the first offer" if context.scope == "first_offer" else "contacted customers"
 
 
 def _held_words(context: _Context) -> str:
@@ -1004,7 +1062,9 @@ def _cap(text: str) -> str:
 
 
 def _one_treated(context: _Context) -> str:
-    return "customer outside the control group" if context.kind == "programme" else "contacted customer"
+    if context.kind == "programme":
+        return "customer outside the control group"
+    return "customer given the first offer" if context.scope == "first_offer" else "contacted customer"
 
 
 def _conditional(context: _Context, label: str) -> str:
@@ -1242,9 +1302,28 @@ def _incremental(context: _Context) -> ProofSection:
         )
     if context.claim == "descriptive":
         notes.append(_DESCRIPTIVE)
+    notes += _scope_notes(context)
     return ProofSection(
         key="incremental", title=title, status="measured", lines=tuple(lines), table=table, notes=tuple(notes)
     )
+
+
+def _scope_notes(context: _Context) -> list[str]:
+    """What the whole-campaign lines cover when the campaign has several offers (DEC-1314 (r))."""
+    if context.scope == "combined":
+        return [
+            "This campaign has several offers, each compared with the same held-back customers. The lines "
+            "above add every offer together: every contacted customer of every offer is compared with that one "
+            "held-back group at once, so the group is counted once and the range allows for every offer resting "
+            "on it. Each offer alone is in the table."
+        ]
+    if context.scope == "first_offer":
+        return [
+            "This campaign has several offers and was measured before they were added together, so the lines "
+            "above are the first offer's alone; the other offers are in the table and are not added in. "
+            "Measure the campaign again to add every offer together."
+        ]
+    return []
 
 
 def _offer_table(context: _Context) -> ProofTable | None:
@@ -1413,7 +1492,7 @@ def _credit(context: _Context) -> ProofSection:
         measured = _benefit(context, fmt="signed_amount" if context.continuous else "signed_count")
         lines.append(
             _line(
-                _conditional(context, "Measured credit: only what the campaign changed"),
+                _conditional(context, _scoped(context, "Measured credit: only what the campaign changed")),
                 *measured,
                 missing="Not measured: one of the two groups is too small to compare.",
             )
@@ -1643,7 +1722,18 @@ def _test_cost(context: _Context) -> ProofSection:
                     (
                         "What they would have added had they been in the programme"
                         if context.kind == "programme"
-                        else "What they would have added had they been contacted"
+                        else (
+                            "What they would have added had they been given the first offer"
+                            if context.scope == "first_offer"
+                            else (
+                                # The pooled lift weighs each offer by its share of the contacted customers, so
+                                # this is the gain only had the held-back customers been given the same mix.
+                                "What they would have added had they been given the offers in the same mix as "
+                                "the contacted customers"
+                                if context.scope == "combined"
+                                else "What they would have added had they been contacted"
+                            )
+                        )
                     ),
                 ),
                 *forgone,
@@ -1880,6 +1970,14 @@ def _contacts_paid(context: _Context) -> tuple[Figure | None, str, str | None]:
     out of the measurement for having no outcome in the file: the campaign record's `counts.intended_treated`.
     A record without that count falls back to the measured contacted customers, and the pack says so.
     """
+    if context.scope == "first_offer":
+        return (
+            context.r("treated_rows", "count"),
+            "Cost of contacts, for the customers given the first offer measured",
+            "This campaign has several offers and was measured before they were added together, so only the "
+            "customers given the first offer, as measured, are costed, the same customers as the value above; "
+            "any left out for having no outcome are not. Measure the campaign again to cost every offer.",
+        )
     paid = context.reader.fig(context.key(_CAMPAIGN), "counts.intended_treated", "count")
     if paid is not None:
         return paid, "Cost of contacts, for every customer meant to be contacted", None
@@ -1947,7 +2045,7 @@ def _net_value(context: _Context) -> ProofSection:
     unreadable = "Not measured: a count or a cost it is computed from could not be read."
     lines = (
         _line(
-            _conditional(context, "Value of what the campaign changed"),
+            _conditional(context, _scoped(context, "Value of what the campaign changed")),
             gains[0],
             gains[1],
             gains[2],
@@ -1956,9 +2054,9 @@ def _net_value(context: _Context) -> ProofSection:
         _line(contacts_label, contacts_total, missing=unreadable),
         _line(
             (
-                "Cost of offers taken, by the contacted customers measured with an amount above zero"
+                f"Cost of offers taken, by the {_treated_words(context)} measured with an amount above zero"
                 if context.continuous
-                else "Cost of offers taken, by the contacted customers measured"
+                else f"Cost of offers taken, by the {_treated_words(context)} measured"
             ),
             offers_total,
             missing=unreadable,
@@ -1986,6 +2084,11 @@ def _net_value(context: _Context) -> ProofSection:
     ]
     if contacts_note is not None:
         notes.append(contacts_note)
+    if context.scope == "combined":
+        notes.append(
+            "The value, the contacts and the offers above cover every offer together: the same customers in "
+            "each line, every offer's contacts paid for and every offer's measured extra outcomes valued."
+        )
     return ProofSection(
         key="net_value",
         title=title,
@@ -2020,7 +2123,12 @@ def _method(context: _Context) -> ProofSection:
             missing="Every outcome in the file was counted.",
         ),
         _line(
-            "Customers left out for having no outcome in the file",
+            (
+                "Customers left out for having no outcome in the file, among the first offer's and the "
+                "held-back customers"
+                if context.scope == "first_offer"
+                else "Customers left out for having no outcome in the file"
+            ),
             context.r("rows_without_outcome", "count"),
             missing="Not recorded: the result does not say how many customers had no outcome.",
         ),
@@ -2094,6 +2202,8 @@ def _headline(context: _Context, incremental: ProofSection, net: ProofSection) -
         and net_line.high is not None
     ):
         sentence += f" Net value {net_line.low.text} to {net_line.high.text}."
+    if context.scope == "first_offer":
+        sentence += " The other offers are in the offer table, not added in."
     return sentence
 
 

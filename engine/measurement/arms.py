@@ -12,6 +12,10 @@ module is the Plan J side of that path (DEC-1310):
   treatment's customers and the control's, so `arms[0]` repeats the report's own fields by construction.
 * **Measurement.** `measure_arms` is `measure_campaign`'s several-offer branch: each offer against the
   shared control through `measure_incrementality`, unchanged (the Newcombe interval, the maturity rule).
+  Asked to (`combine_offers`, which every route that stores a campaign report turns on), with two or
+  more offers it also adds them together (`offers_combined`, `combined_offers`): every offer's
+  customers pooled against the shared control in one comparison, whose extra outcomes are exactly the sum
+  of the offers' own and whose interval counts the shared control once (Plan J M104 fix, DEC-1314 (s)).
 * **Policy value.** `arm_policy_value` measures, out of sample, what choosing an offer per customer is
   worth: the "best offer" policy (the arm with the highest predicted uplift x value, or no offer) and
   the first treatment's own policy, each by inverse probability weighting on the randomised hold-out,
@@ -42,6 +46,7 @@ if TYPE_CHECKING:
     from engine.uplift.contracts import (
         ArmPolicyValue,
         ArmSummary,
+        CombinedOffers,
         IncrementalityReport,
         PolicyRecommendation,
         SegmentReport,
@@ -61,6 +66,7 @@ __all__ = [
     "arm_from_policy",
     "arm_from_segments",
     "arm_policy_value",
+    "combined_offers",
     "measure_arms",
     "promotion_refusal",
 ]
@@ -262,6 +268,7 @@ def measure_arms(
     outcome_window_days: int | None,
     as_of: datetime,
     campaign_id: str | None,
+    combine_offers: bool = False,
 ) -> IncrementalityReport:
     """Every offer against the shared control; the first offer's report with `arms` (see `measure_campaign`).
 
@@ -270,7 +277,8 @@ def measure_arms(
     configured offer's (DEC-668 (3)), never whichever offer happens to come first in the file, and every
     `ArmSummary.control` names the configured control level. Raises `ValueError` when either is missing,
     when `arm_column` is missing, when no treated customer names one of `arms`, or for anything
-    `measure_incrementality` refuses on an offer's customers.
+    `measure_incrementality` refuses on an offer's customers. With `combine_offers` and two or more
+    offers the report also carries `offers_combined` (:func:`combined_offers`).
     """
     from engine.uplift.incrementality import _flag, measure_incrementality
 
@@ -316,7 +324,53 @@ def measure_arms(
         arm_from_incrementality(level, position, held, report)
         for position, (level, report) in enumerate(zip(levels, reports, strict=True), start=1)
     )
-    return reports[0].model_copy(update={"arms": summaries})
+    update: dict[str, object] = {"arms": summaries}
+    if combine_offers and len(levels) > 1:
+        named = offer.isin(levels).fillna(value=False).to_numpy(dtype=bool) & ~control
+        pooled = measure_incrementality(
+            frame.loc[control | named],
+            outcomes,
+            run_id=run_id,
+            primary_key=primary_key,
+            outcome_column=outcome_column,
+            positive_label=positive_label,
+            intended_column=intended_column,
+            bands=bands,
+            treatment_time=treatment_time,
+            treatment_date_column=treatment_date_column,
+            outcome_window_days=outcome_window_days,
+            as_of=as_of,
+            campaign_id=campaign_id,
+        )
+        update["offers_combined"] = combined_offers(levels, held, pooled)
+    return reports[0].model_copy(update=update)
+
+
+def combined_offers(levels: Sequence[str], control: str, pooled: IncrementalityReport) -> CombinedOffers:
+    """Every offer together against the shared control, from the pooled comparison (DEC-1314 (s)).
+
+    `pooled` is `measure_incrementality` on every configured offer's customers and the control's. Its extra
+    outcomes, `absolute_lift x treated_rows`, are exactly the sum of the offers' own (each offer's difference
+    times its customers, all against the same control), and its Newcombe interval counts the shared control
+    once: adding the offers' own intervals as if they were unrelated would be too narrow, because every
+    offer's difference subtracts the same control rate (`tests/statistical/test_offers_combined_coverage.py`).
+    """
+    from engine.uplift.contracts import CombinedOffers
+
+    return CombinedOffers(
+        offers=tuple(levels),
+        control=control,
+        treated_rows=pooled.treated_rows,
+        treated_conversions=pooled.treated_conversions,
+        treated_rate=pooled.treated_rate,
+        control_rows=pooled.control_rows,
+        control_conversions=pooled.control_conversions,
+        control_rate=pooled.control_rate,
+        absolute_lift=pooled.absolute_lift,
+        incremental_conversions=pooled.incremental_conversions,
+        p_value=pooled.p_value,
+        rows_without_outcome=pooled.rows_without_outcome,
+    )
 
 
 # ---------------------------------------------------------------------------

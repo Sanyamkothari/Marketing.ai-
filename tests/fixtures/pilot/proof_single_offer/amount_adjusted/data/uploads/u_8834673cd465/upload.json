@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "upload_id": "u_8834673cd465",
+  "use_case_id": "win-back-campaign",
+  "mode": "score",
+  "file_name": "revenue.csv",
+  "file_format": "csv",
+  "file_size_bytes": 876072,
+  "delimiter": ",",
+  "encoding": "utf-8-sig",
+  "row_count": 20000,
+  "column_count": 5,
+  "source_key": "uploads/u_8834673cd465/source.csv",
+  "profile_key": "uploads/u_8834673cd465/profile.json",
+  "fingerprint_key": "uploads/u_8834673cd465/fingerprint.json",
+  "fingerprint_hash": "sha256:v1:cf7cf8cd25305fd0884976bda97666f9a528431f21d989354192468de3250016",
+  "created_at": "2026-10-10T06:47:05.925253Z",
+  "synthetic": false
+}

@@ -133,6 +133,56 @@ def test_the_arms_round_trip_through_the_report_contract() -> None:
     assert IncrementalityReport.model_validate_json(report.model_dump_json()) == report
 
 
+def test_every_configured_offer_is_added_together_against_the_shared_control_once() -> None:
+    """DEC-1314 (s): `offers_combined` is the pooled comparison of every configured offer's customers with the
+    shared control: the unchanged `measure_incrementality` on them, whose extra outcomes are exactly the sum of
+    the offers' own. An offer the configuration does not name is in no comparison, combined or not."""
+    campaign = multi_arm_campaign(2_400, 0.1, (0.02, 0.04, 0.06), seed=9)
+    kwargs = dict(campaign.measure_kwargs)
+    report = measure_campaign(
+        campaign.scores,
+        campaign.outcomes,
+        **{**kwargs, "arms": ("offer_3", "offer_1"), "control_level": "none"},
+        combine_offers=True,
+    )
+    assert report.arms is not None and report.offers_combined is not None
+    whole = report.offers_combined
+    assert whole.offers == ("offer_3", "offer_1") and whole.control == "none" and whole.method == "pooled"
+    control = campaign.scores["control_group"].to_numpy()
+    named = campaign.scores[ARM_COLUMN].isin(["offer_3", "offer_1"]).to_numpy()
+    pooled = measure_incrementality(
+        campaign.scores[control | named],
+        campaign.outcomes,
+        **{k: v for k, v in kwargs.items() if k not in {"arm_column", "arms", "control_level"}},
+    )
+    assert whole.absolute_lift == pooled.absolute_lift
+    assert whole.incremental_conversions == pooled.incremental_conversions
+    assert (whole.treated_rows, whole.control_rows) == (pooled.treated_rows, pooled.control_rows)
+    assert whole.treated_conversions == sum(a.treated_conversions or 0 for a in report.arms)
+    assert whole.incremental_conversions is not None
+    assert whole.incremental_conversions.value == pytest.approx(
+        sum(a.incremental_conversions.value for a in report.arms if a.incremental_conversions is not None)
+    )
+    assert whole.rows_without_outcome == pooled.rows_without_outcome
+    assert IncrementalityReport.model_validate_json(report.model_dump_json()) == report
+
+
+def test_one_offer_or_none_has_nothing_to_add_together_and_nothing_is_added_unasked() -> None:
+    campaign = multi_arm_campaign(1_200, 0.2, (0.05, 0.05), seed=10)
+    kwargs = dict(campaign.measure_kwargs)
+    one = measure_campaign(
+        campaign.scores, campaign.outcomes, **{**kwargs, "arms": ("offer_1",)}, combine_offers=True
+    )
+    assert one.arms is not None and one.offers_combined is None
+    assert "offers_combined" not in one.model_dump(mode="json")
+    binary = population(2_000, 0.1, 0.02, seed=4)
+    plain = measure_campaign(binary.scores, binary.outcomes, **binary.measure_kwargs, combine_offers=True)
+    assert "offers_combined" not in plain.model_dump(mode="json")
+    # Off by default: `measure_campaign`'s own report of several offers is byte for byte what it was (M102's pin).
+    unasked = measure_campaign(campaign.scores, campaign.outcomes, **kwargs)
+    assert unasked.arms is not None and "offers_combined" not in unasked.model_dump(mode="json")
+
+
 # ---------------------------------------------------------------------------
 # arm_policy_value
 # ---------------------------------------------------------------------------

@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "campaign_id": "c_20261010_487a9c3d",
+  "stated_basis": "random",
+  "causal_basis": "verified_random",
+  "causal": true,
+  "label": "Causal",
+  "explanation": "We tried to tell contacted customers from held-back ones using the details in your file and could not do better than a guessing score of 0.49 (0.50 is chance; our limit is 0.60), so the two groups look randomly chosen. The difference between them can be read as what the campaign changed.",
+  "randomness": {
+    "status": "passed",
+    "auc": 0.4919,
+    "threshold": 0.6,
+    "rows_used": 8000,
+    "signals": [],
+    "columns_used": 1,
+    "reason": null
+  },
+  "assignment_upload_id": "u_f6c23c24d999",
+  "assignment_file_name": "assignment.csv",
+  "assignment_rows": 8000,
+  "rows_without_group": 0,
+  "offers": null,
+  "control_level": null,
+  "outcome_kind": "binary",
+  "outcome_is_good": true,
+  "sent_dates": "outcomes",
+  "synthetic": false,
+  "notes": [
+    "Every customer in the assignment file was compared, whether or not they were meant to be reached (the usual way to read a campaign: the groups as they were chosen)."
+  ],
+  "audited_at": "2026-10-10T06:47:02.597478Z"
+}

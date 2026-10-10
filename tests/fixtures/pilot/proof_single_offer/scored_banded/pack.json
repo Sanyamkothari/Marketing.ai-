@@ -1,0 +1,927 @@
+{
+ "schema_version": 1,
+ "campaign_id": "c_20261010_00cd496c",
+ "kind": "scored",
+ "campaign_name": {
+  "value": "Win-back Campaign, sent 1 May 2026",
+  "text": "Win-back Campaign, sent 1 May 2026",
+  "format": "text",
+  "sources": [
+   {
+    "artefact": "campaigns/c_20261010_00cd496c/campaign.json",
+    "field": "name"
+   }
+  ],
+  "formula": null
+ },
+ "use_case_id": "win-back-campaign",
+ "outcome": {
+  "value": "converted",
+  "text": "converted",
+  "format": "text",
+  "sources": [
+   {
+    "artefact": "campaigns/c_20261010_00cd496c/incrementality_report.json",
+    "field": "outcome_column"
+   }
+  ],
+  "formula": null
+ },
+ "outcome_kind": "binary",
+ "outcome_is_good": true,
+ "claim": "proven",
+ "claim_label": "Causal: the customers held back were chosen at random",
+ "headline": "Extra outcomes because of the campaign: -256 (likely -486 to -48).",
+ "measured_on": {
+  "value": "2026-09-01T00:00:00Z",
+  "text": "1 Sep 2026",
+  "format": "date",
+  "sources": [
+   {
+    "artefact": "campaigns/c_20261010_00cd496c/incrementality_report.json",
+    "field": "as_of"
+   }
+  ],
+  "formula": null
+ },
+ "sections": [
+  {
+   "key": "plan",
+   "title": "The plan as registered, against what ran",
+   "status": "not_measured",
+   "reason": "No test plan was registered before the outcomes were read, so there is nothing to compare what ran against. Register one with the next campaign.",
+   "lines": [],
+   "table": null,
+   "notes": []
+  },
+  {
+   "key": "delivery",
+   "title": "Did the list go out as planned?",
+   "status": "not_measured",
+   "reason": "No contact file was added, so whether the customers on the list were really contacted, and whether any held-back customer was contacted anyway, is not measured. Add one on the campaign's page.",
+   "lines": [],
+   "table": null,
+   "notes": []
+  },
+  {
+   "key": "incremental",
+   "title": "What the campaign changed, with ranges",
+   "status": "measured",
+   "reason": null,
+   "lines": [
+    {
+     "label": "Confidence of each range below",
+     "value": {
+      "value": 0.95,
+      "text": "95%",
+      "format": "share",
+      "sources": [
+       {
+        "artefact": "campaigns/c_20261010_00cd496c/incrementality_report.json",
+        "field": "incremental_conversions.confidence_level"
+       }
+      ],
+      "formula": null
+     },
+     "low": null,
+     "high": null,
+     "missing": null
+    },
+    {
+     "label": "Contacted customers with the outcome",
+     "value": {
+      "value": 0.12829218106995885,
+      "text": "12.8%",
+      "format": "share",
+      "sources": [
+       {
+        "artefact": "campaigns/c_20261010_00cd496c/incrementality_report.json",
+        "field": "treated_rate"
+       }
+      ],
+      "formula": null
+     },
+     "low": null,
+     "high": null,
+     "missing": null
+    },
+    {
+     "label": "Held-back customers with the outcome",
+     "value": {
+      "value": 0.15462962962962962,
+      "text": "15.5%",
+      "format": "share",
+      "sources": [
+       {
+        "artefact": "campaigns/c_20261010_00cd496c/incrementality_report.json",
+        "field": "control_rate"
+       }
+      ],
+      "formula": null
+     },
+     "low": null,
+     "high": null,
+     "missing": null
+    },
+    {
+     "label": "Difference",
+     "value": {
+      "value": -0.026337448559670767,
+      "text": "-2.6 points",
+      "format": "points",
+      "sources": [
+       {
+        "artefact": "campaigns/c_20261010_00cd496c/incrementality_report.json",
+        "field": "absolute_lift.value"
+       }
+      ],
+      "formula": null
+     },
+     "low": {
+      "value": -0.050030435408603705,
+      "text": "-5.0 points",
+      "format": "points",
+      "sources": [
+       {
+        "artefact": "campaigns/c_20261010_00cd496c/incrementality_report.json",
+        "field": "absolute_lift.ci_low"
+       }
+      ],
+      "formula": null
+     },
+     "high": {
+      "value": -0.004896837509269322,
+      "text": "-0.5 points",
+      "format": "points",
+      "sources": [
+       {
+        "artefact": "campaigns/c_20261010_00cd496c/incrementality_report.json",
+        "field": "absolute_lift.ci_high"
+       }
+      ],
+      "formula": null
+     },
+     "missing": null
+    },
+    {
+     "label": "Extra outcomes because of the campaign",
+     "value": {
+      "value": -255.99999999999986,
+      "text": "-256",
+      "format": "signed_count",
+      "sources": [
+       {
+        "artefact": "campaigns/c_20261010_00cd496c/incrementality_report.json",
+        "field": "incremental_conversions.value"
+       }
+      ],
+      "formula": null
+     },
+     "low": {
+      "value": -486.29583217162804,
+      "text": "-486",
+      "format": "signed_count",
+      "sources": [
+       {
+        "artefact": "campaigns/c_20261010_00cd496c/incrementality_report.json",
+        "field": "incremental_conversions.ci_low"
+       }
+      ],
+      "formula": null
+     },
+     "high": {
+      "value": -47.59726059009781,
+      "text": "-48",
+      "format": "signed_count",
+      "sources": [
+       {
+        "artefact": "campaigns/c_20261010_00cd496c/incrementality_report.json",
+        "field": "incremental_conversions.ci_high"
+       }
+      ],
+      "formula": null
+     },
+     "missing": null
+    }
+   ],
+   "table": null,
+   "notes": [
+    "Each range is a confidence interval at that level: the true number very probably lies inside it."
+   ]
+  },
+  {
+   "key": "gross",
+   "title": "Gross against incremental",
+   "status": "measured",
+   "reason": null,
+   "lines": [
+    {
+     "label": "Contacted customers with the outcome (gross)",
+     "value": {
+      "value": 1247,
+      "text": "1,247",
+      "format": "count",
+      "sources": [
+       {
+        "artefact": "campaigns/c_20261010_00cd496c/incrementality_report.json",
+        "field": "treated_conversions"
+       }
+      ],
+      "formula": null
+     },
+     "low": null,
+     "high": null,
+     "missing": null
+    },
+    {
+     "label": "How many would have had it anyway, at the rate of the held-back customers",
+     "value": {
+      "value": 1502.9999999999998,
+      "text": "1,503",
+      "format": "count",
+      "sources": [
+       {
+        "artefact": "campaigns/c_20261010_00cd496c/incrementality_report.json",
+        "field": "control_rate"
+       },
+       {
+        "artefact": "campaigns/c_20261010_00cd496c/incrementality_report.json",
+        "field": "treated_rows"
+       }
+      ],
+      "formula": "s0*s1"
+     },
+     "low": null,
+     "high": null,
+     "missing": null
+    },
+    {
+     "label": "The difference: incremental",
+     "value": {
+      "value": -255.99999999999986,
+      "text": "-256",
+      "format": "signed_count",
+      "sources": [
+       {
+        "artefact": "campaigns/c_20261010_00cd496c/incrementality_report.json",
+        "field": "incremental_conversions.value"
+       }
+      ],
+      "formula": null
+     },
+     "low": {
+      "value": -486.29583217162804,
+      "text": "-486",
+      "format": "signed_count",
+      "sources": [
+       {
+        "artefact": "campaigns/c_20261010_00cd496c/incrementality_report.json",
+        "field": "incremental_conversions.ci_low"
+       }
+      ],
+      "formula": null
+     },
+     "high": {
+      "value": -47.59726059009781,
+      "text": "-48",
+      "format": "signed_count",
+      "sources": [
+       {
+        "artefact": "campaigns/c_20261010_00cd496c/incrementality_report.json",
+        "field": "incremental_conversions.ci_high"
+       }
+      ],
+      "formula": null
+     },
+     "missing": null
+    },
+    {
+     "label": "Share of the gross that is incremental",
+     "value": {
+      "value": -0.2052927024859662,
+      "text": "-20.5%",
+      "format": "share",
+      "sources": [
+       {
+        "artefact": "campaigns/c_20261010_00cd496c/incrementality_report.json",
+        "field": "incremental_conversions.value"
+       },
+       {
+        "artefact": "campaigns/c_20261010_00cd496c/incrementality_report.json",
+        "field": "treated_conversions"
+       }
+      ],
+      "formula": "s0/s1"
+     },
+     "low": null,
+     "high": null,
+     "missing": null
+    }
+   ],
+   "table": null,
+   "notes": [
+    "Gross counts everything the contacted customers did. Incremental is only what they did beyond the held-back customers, chosen the same way and not contacted: the part the campaign caused."
+   ]
+  },
+  {
+   "key": "credit",
+   "title": "Naive credit against measured credit",
+   "status": "measured",
+   "reason": null,
+   "lines": [
+    {
+     "label": "Naive credit: every contacted customer who had the outcome",
+     "value": {
+      "value": 1247,
+      "text": "1,247",
+      "format": "count",
+      "sources": [
+       {
+        "artefact": "campaigns/c_20261010_00cd496c/incrementality_report.json",
+        "field": "treated_conversions"
+       }
+      ],
+      "formula": null
+     },
+     "low": null,
+     "high": null,
+     "missing": null
+    },
+    {
+     "label": "Measured credit: only what the campaign changed",
+     "value": {
+      "value": -255.99999999999986,
+      "text": "-256",
+      "format": "signed_count",
+      "sources": [
+       {
+        "artefact": "campaigns/c_20261010_00cd496c/incrementality_report.json",
+        "field": "incremental_conversions.value"
+       }
+      ],
+      "formula": null
+     },
+     "low": {
+      "value": -486.29583217162804,
+      "text": "-486",
+      "format": "signed_count",
+      "sources": [
+       {
+        "artefact": "campaigns/c_20261010_00cd496c/incrementality_report.json",
+        "field": "incremental_conversions.ci_low"
+       }
+      ],
+      "formula": null
+     },
+     "high": {
+      "value": -47.59726059009781,
+      "text": "-48",
+      "format": "signed_count",
+      "sources": [
+       {
+        "artefact": "campaigns/c_20261010_00cd496c/incrementality_report.json",
+        "field": "incremental_conversions.ci_high"
+       }
+      ],
+      "formula": null
+     },
+     "missing": null
+    },
+    {
+     "label": "In rupees",
+     "value": null,
+     "low": null,
+     "high": null,
+     "missing": "No value inputs were entered for this campaign. Enter what one extra outcome is worth, and what contacts and offers cost, to see it in rupees."
+    }
+   ],
+   "table": null,
+   "notes": [
+    "Naive credit is what a tool that credits every response to the campaign would report: every outcome among the contacted customers, including the ones who would have had it anyway."
+   ]
+  },
+  {
+   "key": "offer_money",
+   "title": "Offer money spent on sure things and sleeping dogs",
+   "status": "not_measured",
+   "reason": "This list was not chosen by the campaign-effect model, so its customers were not sorted into persuadables, sure things, lost causes and sleeping dogs.",
+   "lines": [],
+   "table": null,
+   "notes": []
+  },
+  {
+   "key": "test_cost",
+   "title": "What the control group and the explore slice cost",
+   "status": "measured",
+   "reason": null,
+   "lines": [
+    {
+     "label": "Held-back customers measured",
+     "value": {
+      "value": 1080,
+      "text": "1,080",
+      "format": "count",
+      "sources": [
+       {
+        "artefact": "campaigns/c_20261010_00cd496c/incrementality_report.json",
+        "field": "control_rows"
+       }
+      ],
+      "formula": null
+     },
+     "low": null,
+     "high": null,
+     "missing": null
+    },
+    {
+     "label": "What they would have added had they been contacted",
+     "value": {
+      "value": -28.44444444444443,
+      "text": "-28",
+      "format": "signed_count",
+      "sources": [
+       {
+        "artefact": "campaigns/c_20261010_00cd496c/incrementality_report.json",
+        "field": "absolute_lift.value"
+       },
+       {
+        "artefact": "campaigns/c_20261010_00cd496c/incrementality_report.json",
+        "field": "control_rows"
+       }
+      ],
+      "formula": "s0*s1"
+     },
+     "low": {
+      "value": -54.032870241292,
+      "text": "-54",
+      "format": "signed_count",
+      "sources": [
+       {
+        "artefact": "campaigns/c_20261010_00cd496c/incrementality_report.json",
+        "field": "absolute_lift.ci_low"
+       },
+       {
+        "artefact": "campaigns/c_20261010_00cd496c/incrementality_report.json",
+        "field": "control_rows"
+       }
+      ],
+      "formula": "s0*s1"
+     },
+     "high": {
+      "value": -5.288584510010868,
+      "text": "-5",
+      "format": "signed_count",
+      "sources": [
+       {
+        "artefact": "campaigns/c_20261010_00cd496c/incrementality_report.json",
+        "field": "absolute_lift.ci_high"
+       },
+       {
+        "artefact": "campaigns/c_20261010_00cd496c/incrementality_report.json",
+        "field": "control_rows"
+       }
+      ],
+      "formula": "s0*s1"
+     },
+     "missing": null
+    },
+    {
+     "label": "In rupees",
+     "value": null,
+     "low": null,
+     "high": null,
+     "missing": "No value inputs were entered for this campaign. Enter what one extra outcome is worth, and what contacts and offers cost, to see it in rupees."
+    },
+    {
+     "label": "Customers contacted at random outside the list (the explore slice)",
+     "value": {
+      "value": 0,
+      "text": "0",
+      "format": "count",
+      "sources": [
+       {
+        "artefact": "campaigns/c_20261010_00cd496c/campaign.json",
+        "field": "counts.explore"
+       }
+      ],
+      "formula": null
+     },
+     "low": null,
+     "high": null,
+     "missing": null
+    }
+   ],
+   "table": null,
+   "notes": [
+    "The held-back customers are the price of knowing: without them nothing above could be measured. The explore slice pays for what the next model learns about customers outside the list."
+   ]
+  },
+  {
+   "key": "backfire",
+   "title": "Groups where the campaign backfired",
+   "status": "measured",
+   "reason": null,
+   "lines": [
+    {
+     "label": "Groups judged",
+     "value": {
+      "value": 2,
+      "text": "2",
+      "format": "count",
+      "sources": [
+       {
+        "artefact": "campaigns/c_20261010_00cd496c/segment_effects.json",
+        "field": "family_size"
+       }
+      ],
+      "formula": null
+     },
+     "low": null,
+     "high": null,
+     "missing": null
+    },
+    {
+     "label": "Confidence of each judged range, allowing for that many checks",
+     "value": {
+      "value": 0.975,
+      "text": "97.5%",
+      "format": "share",
+      "sources": [
+       {
+        "artefact": "campaigns/c_20261010_00cd496c/segment_effects.json",
+        "field": "family_confidence"
+       }
+      ],
+      "formula": null
+     },
+     "low": null,
+     "high": null,
+     "missing": null
+    },
+    {
+     "label": "Smallest number of customers a judged group has, contacted and held back alike",
+     "value": {
+      "value": 50,
+      "text": "50",
+      "format": "count",
+      "sources": [
+       {
+        "artefact": "campaigns/c_20261010_00cd496c/segment_effects.json",
+        "field": "min_rows_per_arm"
+       }
+      ],
+      "formula": null
+     },
+     "low": null,
+     "high": null,
+     "missing": null
+    }
+   ],
+   "table": {
+    "columns": [
+     "Kind",
+     "Group",
+     "Contacted",
+     "Held back",
+     "Difference",
+     "Range",
+     "Range allowing for every group checked",
+     "Result"
+    ],
+    "rows": [
+     [
+      "Band",
+      {
+       "value": "Low",
+       "text": "Low",
+       "format": "text",
+       "sources": [
+        {
+         "artefact": "campaigns/c_20261010_00cd496c/segment_effects.json",
+         "field": "cells.0.segment"
+        }
+       ],
+       "formula": null
+      },
+      {
+       "value": 7993,
+       "text": "7,993",
+       "format": "count",
+       "sources": [
+        {
+         "artefact": "campaigns/c_20261010_00cd496c/segment_effects.json",
+         "field": "cells.0.treated_rows"
+        }
+       ],
+       "formula": null
+      },
+      {
+       "value": 893,
+       "text": "893",
+       "format": "count",
+       "sources": [
+        {
+         "artefact": "campaigns/c_20261010_00cd496c/segment_effects.json",
+         "field": "cells.0.control_rows"
+        }
+       ],
+       "formula": null
+      },
+      {
+       "value": -0.000580995493116937,
+       "text": "-0.1 points",
+       "format": "points",
+       "sources": [
+        {
+         "artefact": "campaigns/c_20261010_00cd496c/segment_effects.json",
+         "field": "cells.0.effect.value"
+        }
+       ],
+       "formula": null
+      },
+      {
+       "low": {
+        "value": -0.02628776163404962,
+        "text": "-2.6 points",
+        "format": "points",
+        "sources": [
+         {
+          "artefact": "campaigns/c_20261010_00cd496c/segment_effects.json",
+          "field": "cells.0.effect.ci_low"
+         }
+        ],
+        "formula": null
+       },
+       "high": {
+        "value": 0.022345837673469617,
+        "text": "+2.2 points",
+        "format": "points",
+        "sources": [
+         {
+          "artefact": "campaigns/c_20261010_00cd496c/segment_effects.json",
+          "field": "cells.0.effect.ci_high"
+         }
+        ],
+        "formula": null
+       }
+      },
+      {
+       "low": {
+        "value": -0.030207890166218627,
+        "text": "-3.0 points",
+        "format": "points",
+        "sources": [
+         {
+          "artefact": "campaigns/c_20261010_00cd496c/segment_effects.json",
+          "field": "cells.0.family_interval.ci_low"
+         }
+        ],
+        "formula": null
+       },
+       "high": {
+        "value": 0.025415624848281918,
+        "text": "+2.5 points",
+        "format": "points",
+        "sources": [
+         {
+          "artefact": "campaigns/c_20261010_00cd496c/segment_effects.json",
+          "field": "cells.0.family_interval.ci_high"
+         }
+        ],
+        "formula": null
+       }
+      },
+      "no backfire shown"
+     ],
+     [
+      "Band",
+      {
+       "value": "Medium",
+       "text": "Medium",
+       "format": "text",
+       "sources": [
+        {
+         "artefact": "campaigns/c_20261010_00cd496c/segment_effects.json",
+         "field": "cells.1.segment"
+        }
+       ],
+       "formula": null
+      },
+      {
+       "value": 1727,
+       "text": "1,727",
+       "format": "count",
+       "sources": [
+        {
+         "artefact": "campaigns/c_20261010_00cd496c/segment_effects.json",
+         "field": "cells.1.treated_rows"
+        }
+       ],
+       "formula": null
+      },
+      {
+       "value": 187,
+       "text": "187",
+       "format": "count",
+       "sources": [
+        {
+         "artefact": "campaigns/c_20261010_00cd496c/segment_effects.json",
+         "field": "cells.1.control_rows"
+        }
+       ],
+       "formula": null
+      },
+      {
+       "value": -0.14704179297660003,
+       "text": "-14.7 points",
+       "format": "points",
+       "sources": [
+        {
+         "artefact": "campaigns/c_20261010_00cd496c/segment_effects.json",
+         "field": "cells.1.effect.value"
+        }
+       ],
+       "formula": null
+      },
+      {
+       "low": {
+        "value": -0.21118659761928493,
+        "text": "-21.1 points",
+        "format": "points",
+        "sources": [
+         {
+          "artefact": "campaigns/c_20261010_00cd496c/segment_effects.json",
+          "field": "cells.1.effect.ci_low"
+         }
+        ],
+        "formula": null
+       },
+       "high": {
+        "value": -0.09426126161808246,
+        "text": "-9.4 points",
+        "format": "points",
+        "sources": [
+         {
+          "artefact": "campaigns/c_20261010_00cd496c/segment_effects.json",
+          "field": "cells.1.effect.ci_high"
+         }
+        ],
+        "formula": null
+       }
+      },
+      {
+       "low": {
+        "value": -0.22120144117974241,
+        "text": "-22.1 points",
+        "format": "points",
+        "sources": [
+         {
+          "artefact": "campaigns/c_20261010_00cd496c/segment_effects.json",
+          "field": "cells.1.family_interval.ci_low"
+         }
+        ],
+        "formula": null
+       },
+       "high": {
+        "value": -0.08764499068514073,
+        "text": "-8.8 points",
+        "format": "points",
+        "sources": [
+         {
+          "artefact": "campaigns/c_20261010_00cd496c/segment_effects.json",
+          "field": "cells.1.family_interval.ci_high"
+         }
+        ],
+        "formula": null
+       }
+      },
+      "backfired"
+     ]
+    ]
+   },
+   "notes": [
+    "A group is flagged only when its whole range, widened to allow for the number of groups checked, lies on the harmful side of zero. Reading many groups at the usual confidence would flag some by chance; this rule keeps the chance of any false flag in a campaign with no harm anywhere to one in twenty.",
+    "A flagged group comes with a suggestion: leave it out of the next cycle. An Analyst approves it; nothing changes in any list until then, and the engine never applies it by itself."
+   ]
+  },
+  {
+   "key": "net_value",
+   "title": "Net value in rupees, as a range",
+   "status": "not_measured",
+   "reason": "No value inputs were entered for this campaign. Enter what one extra outcome is worth, and what contacts and offers cost, to see it in rupees.",
+   "lines": [],
+   "table": null,
+   "notes": []
+  },
+  {
+   "key": "method",
+   "title": "Method and limits",
+   "status": "measured",
+   "reason": null,
+   "lines": [
+    {
+     "label": "Result read on",
+     "value": {
+      "value": "2026-09-01T00:00:00Z",
+      "text": "1 Sep 2026",
+      "format": "date",
+      "sources": [
+       {
+        "artefact": "campaigns/c_20261010_00cd496c/incrementality_report.json",
+        "field": "as_of"
+       }
+      ],
+      "formula": null
+     },
+     "low": null,
+     "high": null,
+     "missing": null
+    },
+    {
+     "label": "Outcome counted over",
+     "value": {
+      "value": 90,
+      "text": "90 days",
+      "format": "days",
+      "sources": [
+       {
+        "artefact": "campaigns/c_20261010_00cd496c/incrementality_report.json",
+        "field": "outcome_window_days"
+       }
+      ],
+      "formula": null
+     },
+     "low": null,
+     "high": null,
+     "missing": null
+    },
+    {
+     "label": "Customers left out for having no outcome in the file",
+     "value": {
+      "value": 0,
+      "text": "0",
+      "format": "count",
+      "sources": [
+       {
+        "artefact": "campaigns/c_20261010_00cd496c/incrementality_report.json",
+        "field": "rows_without_outcome"
+       }
+      ],
+      "formula": null
+     },
+     "low": null,
+     "high": null,
+     "missing": null
+    }
+   ],
+   "table": null,
+   "notes": [
+    "The engine chose who was held back, at random, before the campaign went out.",
+    "So the results are proven: the difference between the groups is what the campaign caused.",
+    "Outcomes are counted for everyone the campaign was meant to reach, whether or not the message arrived, so the result is the effect of running the campaign.",
+    "No value inputs were entered, so no value is shown in rupees.",
+    "Results for each group are read without any adjustment by an earlier amount, and judged by the rule in the backfire section."
+   ]
+  }
+ ],
+ "proposals": [
+  {
+   "dimension": "band",
+   "segment": {
+    "value": "Medium",
+    "text": "Medium",
+    "format": "text",
+    "sources": [
+     {
+      "artefact": "campaigns/c_20261010_00cd496c/segment_effects.json",
+      "field": "cells.1.segment"
+     }
+    ],
+    "formula": null
+   },
+   "worst_case": {
+    "value": -0.08764499068514073,
+    "text": "-8.8 points",
+    "format": "points",
+    "sources": [
+     {
+      "artefact": "campaigns/c_20261010_00cd496c/segment_effects.json",
+      "field": "cells.1.family_interval.ci_high"
+     }
+    ],
+    "formula": null
+   },
+   "status": "proposed",
+   "approved_by": null,
+   "approved_at": null
+  }
+ ],
+ "artefacts": [
+  "campaigns/c_20261010_00cd496c/campaign.json",
+  "campaigns/c_20261010_00cd496c/incrementality_report.json",
+  "campaigns/c_20261010_00cd496c/segment_effects.json",
+  "runs/r_20261009_31000001/run.json",
+  "uploads/u_4659f0c19478/upload.json"
+ ],
+ "built_at": "2026-10-10T12:00:00Z"
+}

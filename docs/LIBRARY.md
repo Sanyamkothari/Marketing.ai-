@@ -377,9 +377,12 @@ is labelled so. The Packs' rupee figures use the journey's stated rate (₹83 pe
 mean spend of a buyer and ₹0.05 per e-mail, and move with those inputs; the measured counts and dollars do not. The
 visit outcome was not audited.
 
-**One finding for another milestone, no engine code changed.** With several offers the Value Proof Pack's headline,
-its "Extra outcomes" and the value of what the campaign changed are the first offer's alone (M100 keeps the first
-offer in the single-offer fields, and the Pack reads those fields), while its cost of contacts is for every e-mail
-sent. On the conversion audit the Pack credits the men's e-mail's +145 and charges all 42,694 e-mails; the women's
-+67 is in its offer table but not in the headline or the net value. The Pack's provenance passes (each figure is
-traced) but its scope is partial. Raised for M104 (DEC-1314) in `docs/CROSS_BRANCH_REQUESTS.md` on 2026-10-10.
+**One finding for another milestone, since fixed.** With several offers the Value Proof Pack's headline, its "Extra
+outcomes" and the value of what the campaign changed used to be the first offer's alone (M100 keeps the first offer in
+the single-offer fields, and the Pack read those fields), while its cost of contacts was for every e-mail sent: on the
+conversion audit it credited the men's e-mail's +145 and charged all 42,694 e-mails. Raised for M104 (DEC-1314) in
+`docs/CROSS_BRANCH_REQUESTS.md` on 2026-10-10 and fixed there (DEC-1314 (r)-(w)): the Pack now adds every offer
+together against the one group sent nothing, from the measurement's own pooled comparison (`offers_combined`), so its
+headline reads **+212 extra conversions, every offer together (150 to 270)**, the men's +145 and the women's +67, and
+its value and net value rest on that sum while it still charges all 42,694 e-mails. The range counts the shared group
+once; the offers' own ranges are not added.

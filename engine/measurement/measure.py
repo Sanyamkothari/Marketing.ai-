@@ -93,6 +93,7 @@ def measure_campaign(
     control_level: str | None = None,
     outcome_kind: OutcomeKind = "binary",
     covariate_date_column: str | None = None,
+    combine_offers: bool = False,
 ) -> IncrementalityReport:
     """Measure a campaign: `measure_incrementality` on `assignment`, checked against `plan`.
 
@@ -125,6 +126,12 @@ def measure_campaign(
     report's own fields are the first configured offer's against the control (DEC-668 (3)) whatever
     the file's row order; a treated customer with no offer named is in no offer's comparison. Without
     `arm_column` nothing changes.
+
+    **Every offer together (Plan J M104 fix, DEC-1314 (s)).** With `combine_offers` and two or more
+    offers the report also carries `offers_combined`: every configured offer's customers pooled against
+    the shared control (`engine.measurement.arms.combined_offers`), what the Value Proof Pack adds up.
+    Off by default, so this function's report is byte for byte what it was; every route that stores a
+    campaign report of several offers turns it on.
     """
     from engine.uplift.incrementality import measure_incrementality
 
@@ -172,6 +179,7 @@ def measure_campaign(
             outcome_window_days=outcome_window_days,
             as_of=as_of,
             campaign_id=campaign_id,
+            combine_offers=combine_offers,
         )
     else:
         report = measure_incrementality(

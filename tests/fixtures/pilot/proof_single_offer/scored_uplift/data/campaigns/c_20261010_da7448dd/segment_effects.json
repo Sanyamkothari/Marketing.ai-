@@ -1,0 +1,51 @@
+{
+  "schema_version": 1,
+  "campaign_id": "c_20261010_da7448dd",
+  "report_computed_at": "2026-10-10T06:47:01.588664Z",
+  "outcome_kind": "binary",
+  "early_look": false,
+  "min_rows_per_arm": 50,
+  "family_alpha": 0.05,
+  "family_size": 1,
+  "family_confidence": 0.95,
+  "cells": [
+    {
+      "schema_version": 1,
+      "dimension": "segment",
+      "segment": "persuadable",
+      "comparison": "within_group",
+      "treated_rows": 3172,
+      "control_rows": 353,
+      "treated_conversions": 1505,
+      "control_conversions": 115,
+      "treated_rate": 0.4744640605296343,
+      "control_rate": 0.32577903682719545,
+      "treated_mean": null,
+      "control_mean": null,
+      "effect": {
+        "schema_version": 1,
+        "value": 0.14868502370243886,
+        "ci_low": 0.0952561399590474,
+        "ci_high": 0.1986021594387775,
+        "confidence_level": 0.95
+      },
+      "judged": true,
+      "family_interval": {
+        "schema_version": 1,
+        "value": 0.14868502370243886,
+        "ci_low": 0.0952561399590474,
+        "ci_high": 0.1986021594387775,
+        "confidence_level": 0.95
+      },
+      "rows_without_outcome": 0
+    }
+  ],
+  "not_measured": [
+    {
+      "schema_version": 1,
+      "dimension": "band",
+      "reason": "The bands are the predicted segments, read once."
+    }
+  ],
+  "computed_at": "2026-10-10T06:47:01.651038Z"
+}

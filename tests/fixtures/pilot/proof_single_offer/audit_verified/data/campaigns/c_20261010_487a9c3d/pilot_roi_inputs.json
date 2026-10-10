@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "currency": "INR",
+  "value_per_outcome": 2000.0,
+  "outcome_is_good": null,
+  "value_basis": "",
+  "offer_cost": 150.0,
+  "contact_cost": 1.5,
+  "entered_by": "local operator",
+  "entered_at": "2026-10-10T06:47:03.240721Z",
+  "note": ""
+}
