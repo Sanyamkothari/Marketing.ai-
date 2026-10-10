@@ -64,6 +64,21 @@ dependencies = [
   "pymysql==1.2.3",                     # the MySQL / MariaDB connector; pure Python
   # ---- END PLAN-G ----
   # ---- PLAN-J (product) — append only below this line ----
+  # PLAN-K (M133): move into the PLAN-K block at integration
+  # Plan K M133 (DEC-1404): the official MCP Python SDK for the verifier at /mcp (imported only when
+  # mcp.enabled is on), and the packages it brought that nothing pinned before, at the versions uv resolved.
+  "mcp==2.3.0",                         # the MCP server: streamable HTTP, stateless (2026-07-28)
+  "mcp-types==2.3.0",                   # its protocol models, released with it
+  "httpx2==2.13.1",                     # the SDK's HTTP client (the in-process ASGI transport of the tests)
+  "httpcore2==2.13.1",
+  "truststore==0.10.4",
+  "jsonschema==4.26.0",                 # the SDK validates tool schemas and structured results
+  "jsonschema-specifications==2025.9.1",
+  "referencing==0.37.0",
+  "rpds-py==2026.9.1",
+  "opentelemetry-api==1.45.1",          # the SDK's tracing hooks; a no-op without an exporter
+  "pyjwt==2.15.1",                      # the SDK's auth helpers (crypto from the cryptography pin above)
+  "sse-starlette==3.5.0",
   # ---- END PLAN-J ----
   # ---- PLAN-L (data doctor) — append only below this line ----
   "openpyxl==3.1.5",                    # reads Excel workbooks (.xlsx, .xlsm) at intake; read-only streaming mode (DEC-1500)

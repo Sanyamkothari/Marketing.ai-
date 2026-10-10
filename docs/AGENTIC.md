@@ -16,9 +16,10 @@ list by email". A proposal is checked against the deployment's rules by the serv
 when a person with the Approver role approves it. Everything - each look, each suggestion, each refusal, each
 approval - is written to a ledger that cannot be edited without it showing.
 
-Everything here is switched off by default (`configs/agentic/agentic.yaml`, `agentic.enabled: false`). Off,
-the product is exactly what it was before Plan K: no route, and the app creates no table and writes no file
-(`api.main` imports only the switch reader, `engine.agentic.config`). A migrated database is the one
+Everything here is switched off by default (`configs/agentic/agentic.yaml`, `agentic.enabled: false`; the MCP
+server has its own switch, `configs/agentic/mcp.yaml`, `mcp.enabled: false`). Off, the product is exactly what
+it was before Plan K: no route, and the app creates no table and writes no file (`api.main` imports only the
+switch readers, `engine.agentic.config` and `api.mcp.config`). A migrated database is the one
 exception: `alembic upgrade head` adds the empty `agentic_decision_log` table (revision 0009) whatever the
 switch says, because a migration runs on every deployment.
 
@@ -190,14 +191,115 @@ with an offer budget, a cost cap, arbitration caps and a persistent holdout on a
   to guard it - must then fail. With every rule removed a kind is still refused (default deny).
 * The report is `EvalReport`, written by `write_report` as canonical JSON (`reports/agentic_eval.json` by default).
 
-## 8. Milestones
+## 8. The verifier over MCP (`api/mcp/`, `configs/agentic/mcp.yaml`; M133, DEC-1404)
+
+### 8.1 In plain words
+
+Another company's agent - Claude, ChatGPT, an in-house agent - can connect to Marketing AI over the Model
+Context Protocol and ask it what the product already knows: how big a test needs to be, who may be contacted,
+what a list is worth, what a campaign measured, how an outside campaign audits, its Value Proof Pack. It can
+also **draft** a test plan, which then waits for a person to approve it in the product. In M133 it answers
+about the **demo library only** (Hillstrom and generated data); client data waits for M141.
+
+### 8.2 Connect a client
+
+1. Switch it on: `agentic.enabled: true` (`configs/agentic/agentic.yaml`) and `mcp.enabled: true`
+   (`configs/agentic/mcp.yaml`). Off - the default - nothing is mounted and the MCP SDK is not even imported.
+2. Sign-in must be on (`MARKETING_AI_AUTH_MODE=local`); with sign-in off the endpoint answers
+   `503 AUTH_NOT_CONFIGURED`, even on a laptop.
+3. Sign in as the person the agent acts for and keep the token: `POST /auth/login`
+   `{"username": ..., "password": ...}` answers `{"token": ...}`. A Viewer's token reads; an Analyst's also drafts.
+4. Point the client at `https://<deployment>/mcp` (streamable HTTP) with the header
+   `Authorization: Bearer <token>`. For example, a client that takes a JSON server list:
+
+   ```json
+   {"mcpServers": {"marketing-ai": {"type": "http", "url": "https://<deployment>/mcp",
+                                    "headers": {"Authorization": "Bearer <token>"}}}}
+   ```
+
+The server speaks the stateless 2026-07-28 revision (one self-contained POST per request, no session id), so it
+sits behind the existing load balancer with no sticky sessions; clients of the 2025 revisions are served
+statelessly too. The token is the product's own session, checked by the deployment's identity provider: the
+endpoint is a resource server and issues nothing (OAuth client registration and audience-bound tokens come with
+M141).
+
+### 8.3 What it exposes
+
+Exactly the agent-safe core's tools (§3) - no tool is written for MCP - each with its input model's JSON schema,
+its output model's JSON schema and annotations (`readOnlyHint` on a read; a propose tool is not destructive and
+touches no outside system). A caller is shown only the tools its scopes allow.
+
+| Scope | Role | Tools |
+|---|---|---|
+| `marketing-ai:read` | Viewer (every signed-in person) | `plan_test`, `check_contactable`, `value_segment`, `measure`, `audit_campaign`, `get_proof_pack`, `evaluate_policy` |
+| `marketing-ai:propose` | Analyst | `draft_test_plan` |
+
+Per tool, the tool's own `RoutePolicy` decides: its role maps to the scope (`api.mcp.scopes.scope_for`). A tool
+whose route needs an Approver or an Admin maps to no scope and is never exposed. **There is no scope that
+approves.**
+
+A result is `structuredContent` that validates against the tool's output model, a short text written by our code
+from numbers only (never an arm's name, a column or a file name), and `_meta`: `marketing-ai/evidence_id` (the
+ledger's evidence id, recorded with the actor `agent:mcp:<client>`), `marketing-ai/label` (Causal, Estimated,
+Not proven, Descriptive) and, when something was withheld, `marketing-ai/withheld`. A refusal is a tool error
+with `marketing-ai/code`; a fault inside a tool is `MCP_TOOL_FAILED`, never its message.
+
+### 8.4 What it will never do
+
+* Approve, reject, send, export, write to a client system or change a setting: no such tool exists, and the
+  registry has no kind that could hold one (I1). A drafted proposal goes through the default-deny policy and an
+  Approver in the product, as every proposal does (I3); a malicious one (no holdout) is refused with
+  `POLICY_HOLDOUT_IMMUTABLE` on the ledger.
+* Answer about anything but the demo library (`MCP_DEMO_ONLY`): a run or upload made for one of
+  `mcp.demo_use_cases` (the `library/` datasets), or marked synthetic; never an onboarded client's run. The
+  answer is the same for "not demo" and "not there", and it never repeats the id it was given.
+* Show a group of fewer than 10 customers. Plan I's `rate_by` rule on every grouped output (bands, channels,
+  reason codes, arms, segments, whole reports; `api.mcp.suppress`): a group of 1 to 9 shows no figure, and the
+  next smallest joins it until what is withheld adds up to 10. A narrowed question (`value_segment` for one
+  band) is answered from the suppressed full answer, so two overlapping questions cannot isolate a small band.
+  A campaign with an arm of 1 to 9 customers is not served at all (`MCP_GROUP_TOO_SMALL`).
+* Pass on text from outside the product (`api.mcp.gate`): arguments are never echoed, instruction-shaped text
+  (also written as `snake_case` or with look-alike letters) is withheld, personal data is masked with Plan G's
+  scanners. The product's own sentences pass byte for byte.
+* Let one session flood it: `mcp.rate_limit` - 60 calls a minute and 2 at once per sign-in by default
+  (`MCP_RATE_LIMITED`, with `retry_after_seconds`).
+
+Every call writes one audit event (`mcp.tool_call`: the principal, `client_id` = `mcp:<the name the client
+declared>`, the tool, the outcome and its code, and the sha256 of what was served); the HTTP request is
+audited as `mcp.request`; a read the product's route would audit is audited again by the registry (§3).
+
+### 8.5 Long jobs
+
+The 2026-07-28 revision moved Tasks into an extension, and the pinned SDK (`mcp==2.3.0`) ships the extension
+mechanism but no Tasks implementation. A long tool (`audit_campaign` and `get_proof_pack` read stored artefacts;
+the Proof Pack is drawn on request) therefore runs **synchronously** on a worker thread and is refused with
+`MCP_TIMEOUT` after `mcp.call_timeout_seconds` (120 s). The thread cannot be stopped, so its call keeps its place
+in the session's concurrency budget until it ends.
+
+### 8.6 Limits
+
+* The rate limits are counted in the API process; several API processes divide the budget among them.
+* The client id is what the client declares about itself (cleaned to letters, digits, `.`, `_`, `-`): it names,
+  it does not authenticate. The principal is the authenticated part.
+* The text gate's instruction screen is a pattern list: wide on purpose, but a pattern list. What protects a
+  client's model is that results are typed aggregates first; the screen is the second line.
+* `POST /campaigns/audit` with an assignment column whose name holds a JSON special character (`:`, `"`, `[`,
+  ...) fails inside the randomness check (LightGBM refuses the feature name) - found while planting header
+  canaries; reported to Plan J.
+
+Tests: `tests/unit/mcp/` (switch, scopes, guard, suppression and its coverage walk, gate, limits, the in-process
+surface) and `tests/integration/mcp/` (a scripted client gets Hillstrom's numbers from the product's own API,
+the tool-list walk, sign-in and scopes, the malicious proposal, demo-only, rate limits, audit, injection canaries,
+the differencing attack).
+
+## 9. Milestones
 
 | Milestone | State |
 |---|---|
 | M130 Plan K set-up | pending (the integrator) |
 | M131 TRAI rules and the measurement purpose | built early under Plan J (DEC-1323) |
 | M132 The agent-safe core | this document's §3–§7 (DEC-1401) |
-| M133 The verifier over MCP, demo data | pending |
+| M133 The verifier over MCP, demo data | this document's §8 (DEC-1404) |
 | M134 Pre-send compliance gate | pending |
 | M135 Prediction covariates | built early under Plan J (DEC-1324) |
 | M136 Pooling across campaigns | pending |

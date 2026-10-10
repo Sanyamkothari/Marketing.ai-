@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from typing import Final
 
-__all__ = ["AGENTIC_CODES", "PLAN_K_CODES"]
+__all__ = ["AGENTIC_CODES", "MCP_CODES", "PLAN_K_CODES"]
 
 AGENTIC_CODES: Final[frozenset[str]] = frozenset(
     {
@@ -53,5 +53,24 @@ AGENTIC_CODES: Final[frozenset[str]] = frozenset(
 )
 """M132's codes (DEC-1401), joined into `PLAN_K_CODES` below."""
 
-PLAN_K_CODES: Final[frozenset[str]] = frozenset() | AGENTIC_CODES
+MCP_CODES: Final[frozenset[str]] = frozenset(
+    {
+        # M133 (DEC-1404): the verifier over MCP (`api.mcp`).
+        "MCP_DEMO_ONLY",  # not the demo workspace, or a run or campaign that is not demo data (or not there)
+        "MCP_SCOPE_DENIED",  # the sign-in's roles do not map to the scope the tool needs (propose: Analyst)
+        "MCP_RATE_LIMITED",  # over the per-session calls per minute, or too many calls running at once
+        "MCP_TIMEOUT",  # a tool ran longer than mcp.call_timeout_seconds (no Tasks in the pinned SDK)
+        "MCP_GROUP_TOO_SMALL",  # a campaign with an arm of 1 to 9 customers: its figures are not served
+        "MCP_RESULT_WITHHELD",  # outside text sat in a result field that cannot be left out
+        "MCP_NOT_STARTED",  # a request reached /mcp before the server had started, or after it stopped
+        "MCP_TOOL_FAILED",  # an unexpected fault inside a tool: answered with a code, never its message
+        # Existing access codes the MCP endpoint also answers, listed so the catalogue explains them (the
+        # API's access layer raises them too, so their entries are written for every caller).
+        "AUTH_REQUIRED",  # no valid bearer session
+        "AUTH_NOT_CONFIGURED",  # sign-in is switched off; the MCP server never runs without it
+    }
+)
+"""M133's codes (DEC-1404), joined into `PLAN_K_CODES` below."""
+
+PLAN_K_CODES: Final[frozenset[str]] = frozenset() | AGENTIC_CODES | MCP_CODES
 """Empty at M130; each Plan K milestone adds the codes it raises."""

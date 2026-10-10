@@ -46,8 +46,10 @@ graphviz==0.21
 greenlet==3.5.6
 h11==0.16.0
 httpcore==1.0.9
+httpcore2==2.13.1
 httptools==0.8.0
 httpx==0.28.1
+httpx2==2.13.1
 hypothesis==6.168.0
 idna==3.20
 imbalanced-learn==0.14.2
@@ -56,6 +58,8 @@ jinja2==3.1.6
 jmespath==1.1.0
 joblib==1.6.0
 jsii==1.140.0
+jsonschema==4.26.0
+jsonschema-specifications==2025.9.1
 kiwisolver==1.5.1
 librt==0.15.0
 lightgbm==4.7.0
@@ -65,6 +69,8 @@ mako==1.4.1
 markdown-it-py==4.2.0
 markupsafe==3.0.3
 matplotlib==3.11.2
+mcp==2.3.0
+mcp-types==2.3.0
 mdurl==0.1.2
 moto==5.2.3
 mypy==2.3.1
@@ -76,6 +82,7 @@ networkx==3.6.1
 numba==0.67.0
 numpy==2.4.6
 openpyxl==3.1.5
+opentelemetry-api==1.45.1
 packaging==26.3
 pandas-stubs==3.0.5.260914
 pandas==2.3.3
@@ -98,6 +105,7 @@ pydantic-extra-types==2.11.1
 pydantic-settings==2.15.0
 pyee==13.0.1
 pygments==2.21.0
+pyjwt==2.15.1
 pymysql==1.2.3
 pyparsing==3.3.3
 pypdf==6.19.0
@@ -110,12 +118,14 @@ pytokens==0.4.1
 pytz==2026.3.post1
 pyyaml==6.0.3
 rapidfuzz==3.14.6
+referencing==0.37.0
 requests==2.34.2
 responses==0.26.3
 rich==15.0.0
 rich-toolkit==0.20.5
 rich==15.0.0
 rignore==0.8.1
+rpds-py==2026.9.1
 ruff==0.16.8
 s3transfer==0.19.2
 scikit-learn==1.9.1
@@ -129,9 +139,11 @@ slicer==0.0.8
 sortedcontainers==2.4.0
 sqlalchemy==2.0.54
 sqlmodel==0.0.42
+sse-starlette==3.5.0
 starlette==1.6.0
 threadpoolctl==3.7.0
 tqdm==4.70.1
+truststore==0.10.4
 typeguard==2.13.3
 typer==0.27.2
 types-boto3==1.43.99
