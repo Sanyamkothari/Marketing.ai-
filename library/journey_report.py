@@ -107,6 +107,9 @@ def render_report(results: dict[str, Any], *, results_path: str, command: str) -
     add(f"| Risk model run | `{risk['run_id']}`, {risk['wall_clock_seconds']} s |")
     add(f"| Campaign-effect run | `{uplift['run_id']}`, {uplift['wall_clock_seconds']} s |")
     add(f"| Scoring run | `{treat['run_id']}` |")
+    risk_scoring = (steps.get("beats_risk_out_of_sample") or {}).get("risk_score_run_id")
+    if risk_scoring:
+        add(f"| Risk model's scoring run (section 3) | `{risk_scoring}` |")
     add(f"| Whole journey | {results['wall_clock_seconds']} s |")
     add("")
 
@@ -128,7 +131,18 @@ def render_report(results: dict[str, Any], *, results_path: str, command: str) -
         f"| Campaign-effect model (M100, {len(levels) - 1} offers) | AUUC of the first offer {_ci(uplift['evaluation'].get('auuc'))}; "
         f"status `{uplift['model_status']}` |"
     )
-    add(f"| Beats risk ranking (M96) | {_passed(beats)} |")
+    overlap = steps["approval"].get("risk_overlap") or {}
+    add(
+        f"| Beats risk ranking (M96, the engine's check) | {_passed(beats)} (its risk comparator was fitted on "
+        f"{_pct(overlap.get('share_fitted_by_risk'), 0)} of the rows it is judged on; see section 3) |"
+    )
+    oos = steps.get("beats_risk_out_of_sample") or {}
+    for level, comparison in (oos.get("offers") or {}).items():
+        add(
+            f"| Beats risk ranking, both models out of sample ({level}, evaluation rows) | "
+            f"{'**passed**' if comparison.get('beats_risk') else '**failed**'}: "
+            f"{_baseline_gap(comparison, 'propensity_model')} |"
+        )
     add(f"| Stable across folds (M96) | {_passed(stable)} |")
     add(f"| Calibrated by decile (M96) | {_passed(calibrated)} |")
     oc = treat["offer_choice"] or {}
@@ -258,6 +272,42 @@ def render_report(results: dict[str, Any], *, results_path: str, command: str) -
     for check in approval:
         add(f"- `{check['code']}` — {_passed(check)}. {check['message']}")
     add("")
+    comparison = (uplift.get("evaluation") or {}).get("baseline_comparison") or {}
+    if comparison:
+        add(
+            f"The engine's comparison on the campaign-effect run's hold-out ({_int(evaluation.get('rows_evaluated'))} training rows, "
+            f"first offer against no e-mail, {_int(comparison.get('bootstrap_samples'))} paired resamples); the check is decided "
+            f"by `{comparison.get('risk_baseline')}`:"
+        )
+        add("")
+        _baseline_table(add, comparison)
+    if overlap:
+        add(
+            f"**The comparator saw most of those rows.** The risk model was trained on the same {_int(split['training']['rows'])}-row "
+            f"training upload, so {_int(overlap.get('holdout_rows_fitted_by_risk'))} of the {_int(overlap.get('uplift_holdout_rows'))} "
+            f"hold-out rows ({_pct(overlap.get('share_fitted_by_risk'), 1)}) were in its training or validation part; only "
+            f"{_int(overlap.get('holdout_rows_in_risk_test'))} were in its test part"
+            + ("" if overlap.get("exact") else " (at least: its explained test rows are a sample)")
+            + ". The `propensity_model` row is therefore scored partly in-sample, which may flatter the risk ranking. "
+            + _p_control_agrees(comparison)
+            + " The comparison below repeats the check where neither model saw a row."
+        )
+        add("")
+    if oos:
+        add(
+            f"**Beats risk, both models out of sample.** The {_int(oos.get('rows'))} evaluation rows were scored by the risk model too "
+            f"(run `{oos.get('risk_score_run_id')}`, column `{oos.get('risk_score_column')}`). For each offer, the rows the file sent that "
+            "offer or no e-mail, ranked by the offer's predicted uplift against the risk score and `p_control`, by the same "
+            f"function and rule as M96 (`compare_with_baselines`, {_int(oos.get('bootstrap_samples'))} paired resamples, seed {oos.get('seed')}):"
+        )
+        add("")
+        for level, found in (oos.get("offers") or {}).items():
+            add(
+                f"*{level}* ({_int(found.get('rows'))} rows, {_int(found.get('treated_rows'))} sent it; uplift AUUC "
+                f"{_ci(found.get('uplift_auuc'))}): {found.get('summary')}"
+            )
+            add("")
+            _baseline_table(add, found)
 
     # -- treat list ----------------------------------------------------------------------------------------
     add("## 4. The treat list (M97, M100)")
@@ -322,44 +372,73 @@ def render_report(results: dict[str, Any], *, results_path: str, command: str) -
     ):
         add(f"**{outcome}** ({unit}, per customer, against sending no e-mail):")
         add("")
-        add("| Policy | E-mails | Value | Difference from no e-mail (95 %) | Interval |")
-        add("|---|---|---|---|---|")
+        booted = any(
+            "bootstrap" in row["difference_from_no_email"] for row in ope["estimates"][outcome].values()
+        )
+        if booted:
+            add(
+                "| Policy | E-mails | Value | Difference from no e-mail (95 %, normal) | Interval | Bootstrap 95 % (percentile) | Interval |"
+            )
+            add("|---|---|---|---|---|---|---|")
+        else:
+            add("| Policy | E-mails | Value | Difference from no e-mail (95 %) | Interval |")
+            add("|---|---|---|---|---|")
         for name, row in ope["estimates"][outcome].items():
             diff = row["difference_from_no_email"]
             shown = _pct(row["value"]["value"]) if fmt is _pp else _num(row["value"]["value"], 3)
-            add(
-                f"| {name} | {_int(ope['contacts'][name])} | {shown} | {_ci(diff, fmt)} | {_sign(diff) if name != 'no_email' else ''} |"
-            )
+            line = f"| {name} | {_int(ope['contacts'][name])} | {shown} | {_ci(diff, fmt)} | {_sign(diff) if name != 'no_email' else ''} |"
+            if booted:
+                b = diff.get("bootstrap") or {}
+                line += f" {_range(b, fmt)} | {_sign(b) if name != 'no_email' else ''} |"
+            add(line)
         add("")
         add(
             "Chosen list against each e-mail sent to everyone (paired on the same rows): "
             + "; ".join(
                 f"{k.replace('chosen_minus_', '')} {_ci(v, fmt)} ({_sign(v)})"
+                + (
+                    f", bootstrap {_range(v['bootstrap'], fmt)} ({_sign(v['bootstrap'])})"
+                    if "bootstrap" in v
+                    else ""
+                )
                 for k, v in ope["chosen_against_everyone"][outcome].items()
             )
             + "."
         )
         add("")
+        if booted:
+            boot = ope.get("bootstrap") or {}
+            add(
+                f"The bootstrap: {boot.get('method')}; {_int(boot.get('resamples'))} resamples, seed {boot.get('seed')}."
+            )
+            add("")
+            add(_skew_caveat(campaigns))
+            add("")
     add(
         f"**In rupees** (spend difference × {_int(ope['rows'])} customers × ₹{value['fx_inr_per_usd']:g} per dollar, less ₹"
         f"{results['contact_cost_inr']} per e-mail; revenue before margin):"
     )
     add("")
-    add("| Policy | Incremental revenue | E-mail cost | Net (95 %) |")
-    add("|---|---|---|---|")
+    add("| Policy | Incremental revenue | E-mail cost | Net (95 %, normal) | Net, bootstrap 95 % |")
+    add("|---|---|---|---|---|")
     for name, money in ope["money_on_evaluation_rows"].items():
         add(
             f"| {name} | {_inr(money['incremental_revenue_inr'])} | {_inr(money['contact_cost_inr'])} | "
-            f"{_inr(money['net_inr'])} ({_inr(money['net_ci_low_inr'])} to {_inr(money['net_ci_high_inr'])}) |"
+            f"{_inr(money['net_inr'])} ({_inr(money['net_ci_low_inr'])} to {_inr(money['net_ci_high_inr'])}) | "
+            f"{_inr(money.get('net_bootstrap_low_inr'))} to {_inr(money.get('net_bootstrap_high_inr'))} |"
         )
     add("")
+    if "OUTCOME_SKEWED" in _skew_caveat(campaigns):
+        add("The skew caution above applies to these rupee ranges too.")
+        add("")
 
     # -- campaigns -----------------------------------------------------------------------------------------
     add("## 6. Measured as a campaign, and the Value Proof Pack")
     add("")
     add(
-        "The treat list was recorded as a campaign (`POST /campaigns`), its test plan registered before any outcome was read, "
-        "and its outcomes uploaded by **replay**: a customer keeps their outcome only when the e-mail the file randomly sent them "
+        "The treat list was recorded as a campaign (`POST /campaigns`) and its test plan registered before the journey read any "
+        "evaluation row's outcome (the evaluation readiness checks, section 3's out-of-sample comparison and section 5 all come "
+        "after it); every plan input comes from training rows. Its outcomes were then uploaded by **replay**: a customer keeps their outcome only when the e-mail the file randomly sent them "
         "is the one the list gave them (no e-mail for the engine's control group). The file's e-mail was drawn independently of "
         "the list, so the kept customers are a random third of each arm and the comparison stays randomised; the others are "
         "counted by the engine as customers without an outcome, never as non-converters."
@@ -422,6 +501,8 @@ def render_report(results: dict[str, Any], *, results_path: str, command: str) -
             f"({inputs['value_basis']}), ₹{inputs['contact_cost']} per e-mail."
         )
         add("")
+    add(_pack_finding(campaigns))
+    add("")
     add(
         "**What the pack's money covers.** The replay keeps outcomes for about a third of the contacted customers, and the pack "
         "credits what it measured on those, while it costs the e-mails of every customer meant to be contacted. Its net value "
@@ -442,7 +523,16 @@ def render_report(results: dict[str, Any], *, results_path: str, command: str) -
         f"- **E-mail cost.** ₹{results['contact_cost_inr']} per e-mail (`configs/pilot/value.yaml`'s e-mail benchmark), no offer cost."
     )
     add(
-        "- **The covariate's date.** `history` is dated the day before the campaign record's start (the file defines it as the year before the e-mail)."
+        "- **The covariate's date.** The file has no dates. `history` is dated the day before the campaign record's start, by "
+        "assumption (the file defines it as the spend of the year before the e-mail), so the engine's point-in-time rule "
+        "(`COVARIATE_NOT_BEFORE_CAMPAIGN`) passes by construction: it is not a check here."
+    )
+    windows = {c.get("outcome_window_days") for c in campaigns.values()}
+    add(
+        f"- **The outcome window.** The campaigns were recorded with an outcome window of {', '.join(str(w) for w in sorted(windows, key=str))} "
+        "days, and each Pack prints that figure, while the file's outcomes cover two weeks. `POST /campaigns` refuses a "
+        "treatment start before the scoring run finished and `measure` refuses while a window is open, so a replayed "
+        "campaign cannot carry the real window. A limit of the replay; the outcomes themselves are the file's two weeks."
     )
     add(
         "- **Risk model overrides:** "
@@ -493,6 +583,28 @@ def _plain(results: dict[str, Any]) -> str:
         )
     elif beats is not None and beats.get("passed"):
         parts.append("The campaign-effect model beats plain risk ranking on its hold-out.")
+    oos = (steps.get("beats_risk_out_of_sample") or {}).get("offers") or {}
+    if oos:
+        won = [level for level, found in oos.items() if found.get("beats_risk")]
+        lost = [level for level, found in oos.items() if not found.get("beats_risk")]
+        if lost and not won:
+            parts.append(
+                "Repeated on the evaluation rows, where neither model saw a row, it does not beat the risk model's ranking "
+                "for any of the e-mails."
+            )
+        elif won and not lost:
+            parts.append(
+                "Repeated on the evaluation rows, where neither model saw a row, it beats the risk model's ranking for "
+                "every e-mail."
+            )
+        else:
+            parts.append(
+                "Repeated on the evaluation rows, where neither model saw a row, it beats the risk model's ranking for "
+                + " and ".join(won)
+                + " but not for "
+                + " and ".join(lost)
+                + "."
+            )
     sign = _sign(chosen)
     if "above" in sign:
         parts.append(
@@ -530,3 +642,100 @@ def _plain(results: dict[str, Any]) -> str:
         else "Not every Value Proof Pack could be built; section 6 says why."
     )
     return " ".join(parts)
+
+
+def _baseline_gap(comparison: dict[str, Any], kind: str) -> str:
+    row = next((b for b in comparison.get("baselines") or [] if b.get("baseline") == kind), None)
+    if row is None or not row.get("available"):
+        return "not measured"
+    return f"AUUC difference against {row.get('label')} {_ci(row.get('difference'))}"
+
+
+def _baseline_table(add: Any, comparison: dict[str, Any]) -> None:
+    add("| Ranking by | AUUC (95 %) | Uplift minus it (95 %) | Uplift better |")
+    add("|---|---|---|---|")
+    add(f"| predicted uplift | {_ci(comparison.get('uplift_auuc'))} | | |")
+    for row in comparison.get("baselines") or []:
+        if not row.get("available"):
+            add(f"| `{row.get('baseline')}` | not available: {row.get('reason')} | | |")
+            continue
+        add(
+            f"| `{row.get('baseline')}` ({row.get('label')}) | {_ci(row.get('auuc'))} | {_ci(row.get('difference'))} | "
+            f"{'yes' if row.get('uplift_better') else 'no'} |"
+        )
+    add("")
+
+
+def _range(interval: dict[str, Any] | None, fmt: Any = _num) -> str:
+    if not interval or interval.get("ci_low") is None or interval.get("ci_high") is None:
+        return "—"
+    return f"{fmt(interval['ci_low'])} to {fmt(interval['ci_high'])}"
+
+
+def _skew_caveat(campaigns: dict[str, Any]) -> str:
+    """The engine's own skew warning, when a campaign on the amount carried it, said under the amount's tables."""
+    flagged = [
+        name
+        for name, campaign in campaigns.items()
+        if "OUTCOME_SKEWED" in ((campaign.get("report") or {}).get("outcome_warnings") or [])
+    ]
+    if not flagged:
+        return "The engine raised no skew warning on the amount."
+    return (
+        f"**Caution: the amount is skewed.** The engine flagged `OUTCOME_SKEWED` on the `{'`, `'.join(flagged)}` campaign: "
+        "a few very large amounts dominate the averages, so the normal intervals above may be too narrow. The bootstrap "
+        "column is the check on them; neither is exact on so few non-zero amounts."
+    )
+
+
+def _pack_finding(campaigns: dict[str, Any]) -> str:
+    """Where the Pack's Method text claims more than a replay can support, quoted from the Pack itself."""
+    quoted: list[str] = []
+    left_out: list[str] = []
+    for name, campaign in campaigns.items():
+        proof = campaign.get("proof") or {}
+        if proof.get("status") != 200:
+            continue
+        method = next((x for x in proof["view"]["sections"] if x.get("key") == "method"), None)
+        for note in (method or {}).get("notes") or []:
+            if ("before the campaign went out" in note or "whether or not the message arrived" in note) and (
+                note not in quoted
+            ):
+                quoted.append(note)
+        report = campaign.get("report") or {}
+        replay = campaign.get("replay") or {}
+        if report.get("rows_without_outcome"):
+            left_out.append(
+                f"`{name}`: {_int(report['rows_without_outcome'])} of {_int(replay.get('intended'))} intended customers"
+            )
+    if not quoted:
+        return "The Packs' Method text makes no claim about when the control group was drawn or whom outcomes cover."
+    names = "; ".join(left_out) or "none"
+    return (
+        "**Finding.** Each Pack's *Method and limits* says: "
+        + " ".join(f"\u201c{q}\u201d" for q in quoted)
+        + " On this replay neither holds as written: nothing went out (the file is a 2008 log, and the engine's control group "
+        "was drawn when the evaluation rows were scored), and outcomes are counted only for the customers the replay kept, "
+        f"while the rest are left out as having no outcome ({names}). The Pack does print that count, and its campaign name "
+        "says it is a retrospective replay of a public dataset with a third of each group kept, but its method sentences "
+        "are fixed by `causal_basis` alone. The plan's `expectation` text, which says the same, is stored with the plan "
+        "and does not reach the Pack. Open question for M104 (DEC-1314): the Method text should depend on whether "
+        "outcomes are missing by design (a replay) or by loss. No engine code was changed."
+    )
+
+
+def _p_control_agrees(comparison: dict[str, Any]) -> str:
+    """Whether the out-of-sample `p_control` row reaches the same verdict as the comparator that decided the check."""
+    rows = {row.get("baseline"): row for row in comparison.get("baselines") or [] if row.get("available")}
+    own, decider = rows.get("p_control"), rows.get(comparison.get("risk_baseline"))
+    if own is None or decider is None or own is decider:
+        return "The `p_control` row, the campaign-effect model's own and out of sample here, is the only clean comparator."
+    same = bool(own.get("uplift_better")) == bool(decider.get("uplift_better"))
+    return (
+        "The `p_control` row is the campaign-effect model's own, out of sample on this hold-out, and it reaches the "
+        + (
+            "same verdict."
+            if same
+            else "**opposite** verdict, so the in-sample comparator decided the check."
+        )
+    )

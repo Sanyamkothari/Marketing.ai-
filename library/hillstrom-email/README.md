@@ -66,9 +66,10 @@ Every published column keeps its name and values, including the `Surburban` spel
 | `visit`, `spend` | outcomes, excluded | they happen after the e-mail, so a model that used them would be reading the answer |
 
 Two columns are derived by the journey, not by `fetch.py`, and both carry an assumption that the run
-report repeats: `value_inr` (each customer's value per conversion, from their spend history, in rupees at
-an assumed exchange rate) and `history_date` (the day before the campaign, the date the pre-campaign
-spend `history` is measured up to). See [`mapping.yaml`](mapping.yaml).
+report repeats: `value_inr` (each customer's value per conversion: their spend history scaled to the size
+of one order, the scale measured on training rows only, in rupees at an assumed exchange rate) and
+`history_date` (the day before the campaign, assigned by assumption as the date the pre-campaign spend
+`history` is measured up to). See [`mapping.yaml`](mapping.yaml).
 
 ## Known quirks
 
@@ -86,4 +87,5 @@ that is an input assumption, stated in the report, and every rupee figure scales
 
 **No dates.** The file says the outcomes cover the two weeks after the e-mail and the history covers the
 year before; it carries no date column. The journey dates the history the day before the campaign it
-records, so the engine's point-in-time rule checks it like any other covariate.
+records. That date is assigned by assumption, so the engine's point-in-time rule
+(`COVARIATE_NOT_BEFORE_CAMPAIGN`) passes by construction: it is not a check on this file.

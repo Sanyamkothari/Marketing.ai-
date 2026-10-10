@@ -32,7 +32,7 @@ prepare:
 # `uplift.treatment_levels: ["No E-Mail", "Mens E-Mail", "Womens E-Mail"]` (the control first, M100) and
 # `uplift.policy.value_column: value_inr`. configs/engine.yaml has no default for either leaf, and a
 # use-case file may only set leaves the engine defaults (tests/unit/test_use_case_files_minimal.py);
-# both may be overridden per run (DEC-1310 (a), DEC-1307). library/run_engine.py JOURNEYS lists them.
+# both may be overridden per run (DEC-1310 (a), DEC-1307). library/journey.py's HILLSTROM spec (in JOURNEYS) lists them.
 uplift:
   treatment_column: segment
   base_model: lightgbm                     # seconds on 32,000 rows, and the only base model fold_auuc supports

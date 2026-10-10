@@ -91,6 +91,9 @@ PER_USE_CASE: dict[str, dict[str, Any]] = {
     "rca": {"split": "time_based", "timeCol": "snapshot_date"},
     # From the library (DEC-085): ranked on the positives, as its own YAML explains.
     "retail-win-back": {"metric": "pr_auc"},
+    # Plan J M110 (DEC-1320): the randomised e-mail test. The lever and the two-week outcomes are never
+    # features, and a conversion is rare (under 1 in 100), so the bands sit at 2 % and 1 %.
+    "hillstrom-email": {"excl": ["segment", "visit", "spend", "value_inr"], "hi": 0.02, "md": 0.01},
 }
 
 
@@ -166,9 +169,10 @@ def test_threshold_became_an_object() -> None:
 @pytest.mark.parametrize("use_case_id", list_use_case_ids())
 def test_hi_and_md_became_band_list_entries(use_case_id: str) -> None:
     bands = load_all_use_cases()[use_case_id].actions.bands
-    assert [band.min_score for band in bands] == [0.80, 0.50, 0.00]
-    assert bands[0].min_score == PROTOTYPE_DEFAULTS["hi"][1]
-    assert bands[1].min_score == PROTOTYPE_DEFAULTS["md"][1]
+    hi, md = _expected(use_case_id, "hi"), _expected(use_case_id, "md")
+    assert [band.min_score for band in bands] == [hi, md, 0.00]
+    if use_case_id not in PER_USE_CASE or "hi" not in PER_USE_CASE[use_case_id]:
+        assert [hi, md] == [0.80, 0.50] == [PROTOTYPE_DEFAULTS[k][1] for k in ("hi", "md")]
     # The list carries what two loose numbers cannot: names and actions.
     assert [band.name for band in bands] == ["High", "Medium", "Low"]
     assert all(band.action for band in bands)

@@ -171,21 +171,138 @@ def test_the_split_is_seeded_stratified_and_disjoint() -> None:
         assert abs(int(kept.sum()) - int(both.sum()) / 2) <= 1
 
 
+def test_the_bootstrap_is_seeded_paired_and_percentile() -> None:
+    from library.journey import bootstrap_intervals
+
+    rng = np.random.default_rng(7)
+    skewed = np.where(rng.random(4000) < 0.01, rng.lognormal(4.0, 1.0, 4000), 0.0)
+    found = bootstrap_intervals({"a": skewed, "a_minus_a": skewed - skewed}, samples=300, seed=11)
+    again = bootstrap_intervals({"a": skewed, "a_minus_a": skewed - skewed}, samples=300, seed=11)
+    assert found == again, "seeded"
+    assert found["a"]["ci_low"] < skewed.mean() < found["a"]["ci_high"]
+    assert (
+        found["a_minus_a"]["ci_low"] == found["a_minus_a"]["ci_high"] == 0.0
+    ), "the same rows for every array"
+    draws = [skewed[np.random.default_rng(11).integers(0, 4000, size=(300, 4000))].mean(axis=1)]
+    assert found["a"]["ci_low"] == pytest.approx(float(np.percentile(draws[0], 2.5)))
+
+
+def test_the_report_warns_of_a_skewed_amount_and_quotes_the_packs_method_claims() -> None:
+    from library.journey_report import _pack_finding, _skew_caveat
+
+    itt = (
+        "Outcomes are counted for everyone the campaign was meant to reach, whether or not the message arrived, "
+        "so the result is the effect of running the campaign."
+    )
+    campaigns = {
+        "spend": {
+            "report": {"outcome_warnings": ["OUTCOME_SKEWED"], "rows_without_outcome": 17165},
+            "replay": {"intended": 25599},
+            "proof": {"status": 200, "view": {"sections": [{"key": "method", "notes": [itt]}]}},
+        }
+    }
+    assert "OUTCOME_SKEWED" in _skew_caveat(campaigns) and "too narrow" in _skew_caveat(campaigns)
+    finding = _pack_finding(campaigns)
+    assert finding.startswith("**Finding.**") and itt in finding
+    assert "17,165 of 25,599" in finding and "DEC-1314" in finding
+    campaigns["spend"]["report"]["outcome_warnings"] = []
+    assert "no skew warning" in _skew_caveat(campaigns)
+
+
 # ---------------------------------------------------------------------------
 # The whole journey, on the sample
 # ---------------------------------------------------------------------------
+_CALLS: list[tuple[str, str]] = []
+"""The order the journey's steps ran in on the sample: (step, what it read)."""
+
+
 @pytest.fixture(scope="module")
 def journey(tmp_path_factory: pytest.TempPathFactory) -> Any:
-    from library.journey import HILLSTROM, run_journey
+    import library.journey as module
 
-    return run_journey(
-        HILLSTROM,
-        csv_path=SAMPLE,
-        config_root=CONFIGS,
-        runs_dir=tmp_path_factory.mktemp("runs"),
-        extra_risk_overrides={"validation.min_positive": 20},
-        extra_uplift_overrides=SAMPLE_FLOORS,
+    def spy(name: str, original: Any) -> Any:
+        def wrapped(*args: Any, **kwargs: Any) -> Any:
+            # `_uplift_checks_on(frame, spec, config_root, upload_id, ...)`: the upload id says which rows.
+            _CALLS.append((name, str(args[3]) if name == "_uplift_checks_on" else str(kwargs.get("outcome"))))
+            return original(*args, **kwargs)
+
+        return wrapped
+
+    _CALLS.clear()
+    with pytest.MonkeyPatch.context() as patch:
+        for name in (
+            "_open_campaign",
+            "_uplift_checks_on",
+            "_beats_risk_out_of_sample",
+            "_off_policy_step",
+            "_measure_campaign",
+        ):
+            if hasattr(
+                module, name
+            ):  # a step the journey lacks is simply never recorded, and the test says so
+                patch.setattr(module, name, spy(name, getattr(module, name)))
+        return module.run_journey(
+            module.HILLSTROM,
+            csv_path=SAMPLE,
+            config_root=CONFIGS,
+            runs_dir=tmp_path_factory.mktemp("runs"),
+            extra_risk_overrides={"validation.min_positive": 20},
+            extra_uplift_overrides=SAMPLE_FLOORS,
+        )
+
+
+@pytest.mark.slow
+@pytest.mark.integration
+def test_both_plans_are_registered_before_any_evaluation_outcome_is_read(journey: Any) -> None:
+    names = [name for name, _ in _CALLS]
+    last_plan = max(i for i, name in enumerate(names) if name == "_open_campaign")
+    reads = [
+        i
+        for i, (name, what) in enumerate(_CALLS)
+        if name in {"_beats_risk_out_of_sample", "_off_policy_step", "_measure_campaign"}
+        or (name == "_uplift_checks_on" and what == "u_evaluation_rows")
+    ]
+    assert names.count("_open_campaign") == 2 and len(reads) == 5, _CALLS
+    assert last_plan < min(reads), _CALLS
+    registered = journey.results["steps"]["plans_registered_before_outcomes"]
+    for outcome, campaign in journey.results["steps"]["campaigns"].items():
+        assert registered[outcome]["plan_hash"] == campaign["report"]["test_plan_hash"]
+
+
+@pytest.mark.slow
+@pytest.mark.integration
+def test_beats_risk_is_repeated_with_both_models_out_of_sample(journey: Any) -> None:
+    steps = journey.results["steps"]
+    overlap = steps["approval"]["risk_overlap"]
+    assert (
+        overlap["holdout_rows_in_risk_test"] + overlap["holdout_rows_fitted_by_risk"]
+        == overlap["uplift_holdout_rows"]
     )
+    assert 0.5 < overlap["share_fitted_by_risk"] < 1.0, "the M96 comparator saw most of its hold-out"
+    oos = steps["beats_risk_out_of_sample"]
+    assert oos["rows"] == journey.results["split"]["evaluation"]["rows"]
+    assert list(oos["offers"]) == ["Mens E-Mail", "Womens E-Mail"]
+    for found in oos["offers"].values():
+        kinds = {row["baseline"]: row for row in found["baselines"]}
+        assert set(kinds) == {"p_control", "propensity_model"}
+        assert all(row["available"] and row["difference"]["ci_low"] is not None for row in kinds.values())
+        assert found["risk_baseline"] == "propensity_model"
+        assert found["beats_risk"] == kinds["propensity_model"]["uplift_better"]
+
+
+@pytest.mark.slow
+@pytest.mark.integration
+def test_the_skewed_amount_has_a_bootstrap_interval_beside_the_normal_one(journey: Any) -> None:
+    ope = journey.results["steps"]["off_policy"]
+    assert ope["bootstrap"]["resamples"] == 2000 and ope["bootstrap"]["seed"] == 20261010
+    for row in ope["estimates"]["spend"].values():
+        boot = row["difference_from_no_email"]["bootstrap"]
+        assert boot["ci_low"] <= boot["ci_high"]
+    for value in ope["chosen_against_everyone"]["spend"].values():
+        assert "bootstrap" in value
+    assert "bootstrap" not in ope["estimates"]["conversion"]["chosen"]["difference_from_no_email"]
+    for money in ope["money_on_evaluation_rows"].values():
+        assert money["net_bootstrap_low_inr"] <= money["net_bootstrap_high_inr"]
 
 
 @pytest.mark.slow
@@ -235,7 +352,10 @@ def test_the_campaigns_are_measured_on_replayed_rows_and_their_packs_are_traced(
         assert campaign["proof"]["status"] == 200 and campaign["proof"]["provenance_verified"] is True
         view = ProofView.model_validate(campaign["proof"]["view"])
         verify_provenance(view, storage)
-        assert view.campaign_name is not None and "retrospective" in view.campaign_name.text
+        assert view.campaign_name is not None and "retrospective replay" in view.campaign_name.text
+        html = (journey.directory / f"proof_{outcome}.html").read_text(encoding="utf-8")
+        assert "public dataset, retrospective replay, a third of each group kept" in html, "the Pack says so"
+        assert campaign["outcome_window_days"] == 0
         if outcome == "spend":
             assert report["outcome_kind"] == "continuous" and report["covariate_column"] == "history"
             assert report["adjusted_interval"] is not None, "the registered covariate was used"
@@ -269,6 +389,10 @@ def test_the_report_is_rendered_from_the_results_alone(journey: Any) -> None:
     )
     assert first == second
     assert "Public dataset, retrospective" in first and "## 7. Assumptions and settings" in first
+    assert "Beats risk ranking, both models out of sample" in first and "scored partly in-sample" in first
+    assert "**Finding.** Each Pack's *Method and limits* says" in first
+    assert "passes by construction" in first and "outcome window of 0 days" in first
+    assert "before the journey read any evaluation row's outcome" in first
 
 
 # ---------------------------------------------------------------------------
@@ -311,6 +435,8 @@ def _numbers(results: dict[str, Any]) -> dict[str, Any]:
         "auuc": steps["uplift_model"]["evaluation"]["auuc"],
         "arms": [(arm["effect"], arm["auuc"]) for arm in steps["uplift_model"]["evaluation"]["arms"]],
         "approval": steps["approval"]["checks"],
+        "risk_overlap": steps["approval"]["risk_overlap"],
+        "beats_risk_out_of_sample": steps["beats_risk_out_of_sample"]["offers"],
         "offers": steps["treat_list"]["offer_counts"],
         "off_policy": steps["off_policy"]["estimates"],
         "campaigns": campaigns,
@@ -328,6 +454,7 @@ def test_a_fresh_run_on_the_full_file_reproduces_the_committed_numbers(tmp_path:
 
     fresh = run_journey(HILLSTROM, csv_path=PREPARED, config_root=CONFIGS, runs_dir=tmp_path)
     committed = json.loads(RESULTS.read_text(encoding="utf-8"))
+
     def same_shape(numbers: dict[str, Any]) -> Any:
         return json.loads(json.dumps(numbers, default=str))
 

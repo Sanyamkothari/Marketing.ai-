@@ -18,21 +18,32 @@ known, randomised assignment, written out below so it can be checked by hand.
 3. **Train.** The risk model (`POST /runs`, Phase 1) on the training rows, then the campaign-effect
    model of every offer (`POST /uplift/runs`, M100) on the same rows.
 4. **Approval checks.** `engine.model_gates.approval_checks` - the Approver's screen's function: beats
-   risk, stability across folds and calibration (M96).
+   risk, stability across folds and calibration (M96). The engine's beats-risk check scores the uplift
+   run's hold-out with the risk model, which was fitted on the same training upload, so most of those
+   rows are in-sample for it; the journey records how many (`steps.approval.risk_overlap`) and step 6b
+   repeats the comparison where both models are out of sample.
 5. **Treat list.** The evaluation rows' features are scored (`POST /runs`, mode score): the offer per
-   customer by net value (M97/M100), the engine's own random control group.
-6. **Measure, off-policy.** The chosen policy's value on the evaluation rows, by inverse probability
+   customer by net value (M97/M100), the engine's own random control group. The same features are also
+   scored by the risk model (a second scoring run), for step 6b.
+6. **Plans first.** Both campaigns are recorded (`POST /campaigns`) and their test plans registered
+   *before the journey reads any evaluation row's outcome*; every plan input comes from training rows.
+   Only then: the uplift checks on the evaluation rows (step 2's second half), and
+   6b. **Beats risk, out of sample.** On the evaluation rows, for each offer against no e-mail, the
+   paired AUUC of the uplift score against the risk model's score and against `p_control`
+   (`engine.uplift.metrics.compare_with_baselines`, the M96 function, with its decision rule).
+7. **Measure, off-policy.** The chosen policy's value on the evaluation rows, by inverse probability
    weighting of their logged, random e-mail group, against sending nothing and against each e-mail to
-   everyone, with 95% intervals.
-7. **Measure, as a campaign.** The list is recorded as a campaign (`POST /campaigns`), a test plan is
-   registered before any outcome is read, and its outcomes are the evaluation rows' own, by
-   **replay**: a customer keeps their outcome only when the e-mail they were randomly sent is the one
-   the list gave them (or none, for the engine's control group). Because the dataset's e-mail was drawn
-   at random independently of the list, the kept customers are a random third of each arm, and the
-   comparison stays a randomised one (Li et al., 2011). Two campaigns: conversion (yes/no) and spend
-   (an amount, adjusted by the pre-registered `history` covariate, M102).
-8. **Value Proof Pack** (M104) of each campaign, read back as JSON, HTML and PDF, and its provenance
-   re-verified (`engine.pilot.proof.verify_provenance`).
+   everyone, with 95% normal intervals and, for the amount and its rupee value, a seeded percentile
+   bootstrap beside them (the amount is long-tailed; the normal interval may be too narrow).
+8. **Measure, as a campaign.** The campaigns' outcomes are the evaluation rows' own, by **replay**: a
+   customer keeps their outcome only when the e-mail they were randomly sent is the one the list gave
+   them (or none, for the engine's control group). Because the dataset's e-mail was drawn at random
+   independently of the list, the kept customers are a random third of each arm, and the comparison
+   stays a randomised one (Li et al., 2011). Two campaigns: conversion (yes/no) and spend (an amount,
+   adjusted by the pre-registered `history` covariate, M102).
+9. **Value Proof Pack** (M104) of each campaign, read back as JSON, HTML and PDF, and its provenance
+   re-verified (`engine.pilot.proof.verify_provenance`). The campaign name, which the Pack prints,
+   says that this is a retrospective replay of a public dataset.
 
 Nothing here is engine code. Run ids are pinned (`<prefix>01` ...), so every seed the engine derives from
 a run id is the same on every run; the split seed is fixed; and the risk model is LightGBM alone, so a
@@ -61,6 +72,8 @@ if TYPE_CHECKING:
 Z_95: Final = 1.959963984540054
 """The two-sided 95% normal quantile, as `engine.uplift.incrementality.Z_95` gives it."""
 RUN_TIMEOUT_S: Final = 3600.0
+BOOTSTRAP_RESAMPLES: Final = 2000
+"""Percentile-bootstrap resamples of the off-policy amount and rupee intervals (seeded by the split seed)."""
 
 
 # ---------------------------------------------------------------------------
@@ -129,7 +142,7 @@ HILLSTROM: Final = JourneySpec(
     split_seed=20261010,
     run_prefix="111000",
     run_date="20261010",
-    campaign_label="public dataset, retrospective",
+    campaign_label="public dataset, retrospective replay, a third of each group kept",
     risk_overrides={
         "model_search.strategy": "fast",
         "model_search.time_limit_minutes": 10,
@@ -307,6 +320,41 @@ def _interval(terms: npt.NDArray[np.float64]) -> dict[str, float | None]:
     return {"value": mean, "ci_low": mean - half, "ci_high": mean + half}
 
 
+def bootstrap_intervals(
+    terms: dict[str, npt.NDArray[np.float64]], *, samples: int, seed: int, chunk: int = 100
+) -> dict[str, dict[str, float]]:
+    """Percentile 95% intervals of each array's mean, from the same row resamples for every array.
+
+    Rows are drawn with replacement, `samples` times, by `numpy.random.default_rng(seed)`; resample `r`
+    holds the same rows for every array, so an interval of a difference (passed as its own array) is a
+    paired one. The arm shares stay the design's (they are known), so only the rows vary.
+    """
+    import numpy as np
+
+    names = list(terms)
+    if not names:
+        return {}
+    n = len(terms[names[0]])
+    rng = np.random.default_rng(seed)
+    means = {name: np.empty(samples, dtype=np.float64) for name in names}
+    done = 0
+    while done < samples:
+        size = min(chunk, samples - done)
+        rows = rng.integers(0, n, size=(size, n))
+        for name in names:
+            means[name][done : done + size] = terms[name][rows].mean(axis=1)
+        done += size
+    return {
+        name: {
+            "ci_low": float(np.percentile(draws, 2.5)),
+            "ci_high": float(np.percentile(draws, 97.5)),
+            "resamples": samples,
+            "seed": seed,
+        }
+        for name, draws in means.items()
+    }
+
+
 def ips_value(
     logged: npt.NDArray[np.integer[Any]],
     outcome: npt.NDArray[np.float64],
@@ -461,12 +509,10 @@ def run_journey(
         api = _Api(client=client, data_dir=data_dir, spec=spec)
         train_upload = api.upload(train_v, mode="train", name="training")
 
-        # -- 2. readiness: the uplift checks on both parts, the planner on the evaluation rows ----------
+        # -- 2. readiness: the uplift checks on the training rows (the evaluation rows' come after the
+        #       plans are registered), the planner on the evaluation rows' count ------------------------
         steps["readiness"] = {
             "training_checks": _uplift_checks_on(train_v, spec, config_root, train_upload, uplift_overrides),
-            "evaluation_checks": _uplift_checks_on(
-                eval_v, spec, config_root, "u_evaluation_rows", uplift_overrides
-            ),
         }
         control = results["split"]["training"]["groups"][spec.levels[0]]
         intended_guess = len(evaluation)
@@ -534,6 +580,7 @@ def run_journey(
 
         # -- 4. approval checks (M96), as the Approver's screen reads them ------------------------------
         steps["approval"] = _approval(api, uplift_record)
+        steps["approval"]["risk_overlap"] = _risk_overlap(api, risk_id, uplift_id)
 
         # -- 5. the treat list on the evaluation rows ---------------------------------------------------
         features = eval_v.drop(columns=[spec.treatment, *spec.outcomes])
@@ -557,19 +604,69 @@ def run_journey(
         choice[spec.primary_key] = choice[spec.primary_key].astype(np.int64)
         steps["treat_list"] = _treat_summary(api, score_id, score_record, choice)
 
-        # -- 6. off-policy value on the evaluation rows ------------------------------------------------
-        steps["off_policy"] = _off_policy_step(spec, evaluation, choice)
+        # -- 5b. the risk model's score of the same evaluation features (for step 6b) -------------------
+        risk_score_id, response = api.start(
+            "/runs",
+            {
+                "use_case": spec.use_case,
+                "mode": "score",
+                "upload_id": score_upload,
+                "primary_key": spec.primary_key,
+                "model_version_id": risk_record["model_version_id"],
+            },
+        )
+        api.ok(response, 202)
+        risk_score_record = api.finish(risk_score_id)
+        if risk_score_record["state"] != "done":
+            raise JourneyError(f"the risk model's scoring run failed: {risk_score_record.get('error')}")
 
-        # -- 7 and 8. the campaigns (replay) and their Value Proof Packs ---------------------------------
-        steps["campaigns"] = {}
-        for outcome_kind, outcome in (("binary", spec.target), ("continuous", spec.amount)):
-            steps["campaigns"][outcome] = _campaign(
+        # -- 6. both campaigns recorded and their plans registered, before any evaluation outcome is read
+        opened = {
+            outcome: _open_campaign(
                 api,
                 spec,
                 score_id=score_id,
+                train=train,
+                outcome=outcome,
+                outcome_kind=outcome_kind,
+                scale=scale,
+            )
+            for outcome_kind, outcome in (("binary", spec.target), ("continuous", spec.amount))
+        }
+        steps["plans_registered_before_outcomes"] = {
+            outcome: {"campaign_id": o["campaign_id"], "plan_hash": o["plan"].get("plan_hash")}
+            for outcome, o in opened.items()
+        }
+
+        # -- from here on the evaluation rows' outcomes are read -----------------------------------------
+        steps["readiness"]["evaluation_checks"] = _uplift_checks_on(
+            eval_v, spec, config_root, "u_evaluation_rows", uplift_overrides
+        )
+
+        # -- 6b. beats risk, with both models out of sample ----------------------------------------------
+        steps["beats_risk_out_of_sample"] = _beats_risk_out_of_sample(
+            api,
+            spec,
+            evaluation=evaluation,
+            score_id=score_id,
+            risk_score_id=risk_score_id,
+            risk_version_id=str(risk_record["model_version_id"]),
+            samples=int((steps["uplift_model"]["evaluation"] or {}).get("bootstrap_samples") or 200),
+            config_root=config_root,
+        )
+
+        # -- 7. off-policy value on the evaluation rows ------------------------------------------------
+        steps["off_policy"] = _off_policy_step(spec, evaluation, choice)
+
+        # -- 8 and 9. the campaigns (replay) and their Value Proof Packs ---------------------------------
+        steps["campaigns"] = {}
+        for outcome_kind, outcome in (("binary", spec.target), ("continuous", spec.amount)):
+            steps["campaigns"][outcome] = _measure_campaign(
+                api,
+                spec,
+                opened=opened[outcome],
                 evaluation=eval_v,
                 choice=choice,
-                train=train,
                 outcome=outcome,
                 outcome_kind=outcome_kind,
                 scale=scale,
@@ -641,6 +738,122 @@ def _approval(api: _Api, record: dict[str, Any]) -> dict[str, Any]:
     return {"checks": [c.model_dump() for c in checks]}
 
 
+def _risk_overlap(api: _Api, risk_id: str, uplift_id: str) -> dict[str, Any]:
+    """How many rows of the uplift run's hold-out the risk model was fitted on (its train and validation parts).
+
+    The risk model's test rows are the keys of its `row_explanations.parquet` (every test row is explained
+    unless the test part is larger than the explain stage's sample, which `test_rows` against `explained`
+    shows); every other row of the training upload was used to fit or tune it.
+    """
+    import pandas as pd
+
+    from engine.stages.explain import ROW_EXPLANATIONS_FILENAME
+
+    split = api.artefact_json(risk_id, "split.json") or {}
+    parts = {part["name"]: part["rows"] for part in split.get("parts", [])}
+    explained = pd.read_parquet(
+        io.BytesIO(api.artefact(risk_id, ROW_EXPLANATIONS_FILENAME)), columns=["primary_key"]
+    )
+    holdout = pd.read_parquet(
+        io.BytesIO(api.artefact(uplift_id, "uplift_holdout.parquet")), columns=["primary_key"]
+    )
+    test_keys = set(explained["primary_key"].astype(str))
+    held = holdout["primary_key"].astype(str)
+    out_of_sample = int(held.isin(test_keys).sum())
+    complete = parts.get("test") == len(test_keys)
+    return {
+        "uplift_holdout_rows": len(held),
+        "risk_test_rows": parts.get("test"),
+        "risk_test_rows_explained": len(test_keys),
+        "holdout_rows_in_risk_test": out_of_sample,
+        "holdout_rows_fitted_by_risk": len(held) - out_of_sample,
+        "share_fitted_by_risk": (len(held) - out_of_sample) / len(held) if len(held) else None,
+        "exact": complete,
+    }
+
+
+def _beats_risk_out_of_sample(
+    api: _Api,
+    spec: JourneySpec,
+    *,
+    evaluation: pd.DataFrame,
+    score_id: str,
+    risk_score_id: str,
+    risk_version_id: str,
+    samples: int,
+    config_root: Path,
+) -> dict[str, Any]:
+    """M96's beats-risk comparison on the evaluation rows, where neither model saw a row.
+
+    For each offer, the evaluation rows the file sent that offer or no e-mail: the uplift model's predicted
+    uplift for the offer ranked against the risk model's score (its own scoring run of the same features)
+    and against `p_control`, by `engine.uplift.metrics.compare_with_baselines` with the engine's paired
+    bootstrap and rule (beats risk only when the paired difference's lower bound is above zero).
+    """
+    import numpy as np
+    import pandas as pd
+
+    from engine.uplift.flow import arm_columns
+    from engine.uplift.metrics import BaselineInput, compare_with_baselines
+
+    key = spec.primary_key
+    uplift_scores = pd.read_parquet(io.BytesIO(api.artefact(score_id, "scores.parquet")))
+    risk_scores = pd.read_parquet(io.BytesIO(api.artefact(risk_score_id, "scores.parquet")))
+    risk_column = _score_field(spec, config_root)
+    for frame in (uplift_scores, risk_scores):
+        frame[key] = frame[key].astype(np.int64)
+    columns = [key, "p_control", *(arm_columns(k)[0] for k in range(1, len(spec.levels)))]
+    joined = (
+        evaluation[[key, spec.treatment, spec.target]]
+        .merge(uplift_scores[columns], on=key, how="inner", validate="one_to_one")
+        .merge(
+            risk_scores[[key, risk_column]].rename(columns={risk_column: "risk_score"}),
+            on=key,
+            how="inner",
+            validate="one_to_one",
+        )
+    )
+    offers: dict[str, Any] = {}
+    for k, level in enumerate(spec.levels[1:], start=1):
+        part = joined[joined[spec.treatment].isin([spec.levels[0], level])]
+        t = (part[spec.treatment] == level).to_numpy(dtype=np.int_)
+        y = part[spec.target].to_numpy(dtype=np.int_)
+        comparison = compare_with_baselines(
+            part[arm_columns(k)[0]].to_numpy(dtype=np.float64),
+            t,
+            y,
+            (
+                BaselineInput("p_control", part["p_control"].to_numpy(dtype=np.float64)),
+                BaselineInput(
+                    "propensity_model",
+                    part["risk_score"].to_numpy(dtype=np.float64),
+                    model_id=risk_version_id,
+                ),
+            ),
+            samples=samples,
+            seed=spec.split_seed,
+        )
+        offers[level] = {
+            "rows": len(part),
+            "treated_rows": int(t.sum()),
+            **comparison.model_dump(mode="json"),
+        }
+    return {
+        "rows": len(joined),
+        "risk_score_run_id": risk_score_id,
+        "risk_score_column": risk_column,
+        "bootstrap_samples": samples,
+        "seed": spec.split_seed,
+        "offers": offers,
+    }
+
+
+def _score_field(spec: JourneySpec, config_root: Path) -> str:
+    from engine.config import load_use_case
+
+    return str(load_use_case(spec.use_case, config_root).actions.score_field)
+
+
 def _treat_summary(api: _Api, run_id: str, record: dict[str, Any], choice: pd.DataFrame) -> dict[str, Any]:
     summary = api.artefact_json(run_id, "offer_choice.json")
     ranking = api.artefact_json(run_id, "ranking_choice.json")
@@ -707,6 +920,29 @@ def _off_policy_step(spec: JourneySpec, evaluation: pd.DataFrame, choice: pd.Dat
             paired.setdefault(outcome_name, {})["chosen_minus_everyone_" + level] = _interval(
                 chosen_terms - blanket
             )
+    # The amount is long-tailed (about one row in a hundred is not zero): a percentile bootstrap of the
+    # same per-row terms, beside the normal interval, for its values, differences and rupee rows.
+    amount = outcomes[spec.amount]
+    base_terms = ips_value(logged, amount, policies["no_email"], shares)
+    boot_terms: dict[str, Any] = {}
+    for name, policy in policies.items():
+        terms = ips_value(logged, amount, policy, shares)
+        boot_terms[f"{name}|value"] = terms
+        boot_terms[f"{name}|difference_from_no_email"] = terms - base_terms
+    chosen_amount = ips_value(logged, amount, chosen, shares)
+    for k, level in enumerate(spec.levels[1:], start=1):
+        boot_terms[f"chosen_minus_everyone_{level}"] = chosen_amount - ips_value(
+            logged, amount, np.full_like(logged, k), shares
+        )
+    boot = bootstrap_intervals(boot_terms, samples=BOOTSTRAP_RESAMPLES, seed=spec.split_seed)
+    for name in policies:
+        for part in ("value", "difference_from_no_email"):
+            estimates[spec.amount][name][part]["bootstrap"] = boot[f"{name}|{part}"]
+    for level in spec.levels[1:]:
+        paired[spec.amount]["chosen_minus_everyone_" + level]["bootstrap"] = boot[
+            f"chosen_minus_everyone_{level}"
+        ]
+
     # Money: the amount in rupees, less the e-mails sent, against sending nothing (revenue, before margin).
     rows = len(logged)
     money: dict[str, Any] = {}
@@ -715,12 +951,15 @@ def _off_policy_step(spec: JourneySpec, evaluation: pd.DataFrame, choice: pd.Dat
         diff = estimates[spec.amount][name]["difference_from_no_email"]
         cost = spec.contact_cost_inr * contacts[name]
         low, high = diff["ci_low"], diff["ci_high"]
+        b_low, b_high = diff["bootstrap"]["ci_low"], diff["bootstrap"]["ci_high"]
         money[name] = {
             "incremental_revenue_inr": diff["value"] * scale,
             "contact_cost_inr": cost,
             "net_inr": diff["value"] * scale - cost,
             "net_ci_low_inr": None if low is None else low * scale - cost,
             "net_ci_high_inr": None if high is None else high * scale - cost,
+            "net_bootstrap_low_inr": b_low * scale - cost,
+            "net_bootstrap_high_inr": b_high * scale - cost,
         }
     return {
         "rows": rows,
@@ -732,41 +971,49 @@ def _off_policy_step(spec: JourneySpec, evaluation: pd.DataFrame, choice: pd.Dat
         "chosen_against_everyone": paired,
         "money_on_evaluation_rows": money,
         "estimator": "inverse probability weighting with the evaluation rows' own arm shares; 95% normal intervals",
+        "bootstrap": {
+            "outcome": spec.amount,
+            "resamples": BOOTSTRAP_RESAMPLES,
+            "seed": spec.split_seed,
+            "method": "percentile, rows drawn with replacement, the same draws for every policy (paired)",
+        },
     }
 
 
-def _campaign(
+REPLAY_WINDOW_DAYS: Final = 0
+"""The campaign's outcome window. The file's outcomes are two weeks long, but `POST /campaigns` refuses a
+treatment start before the scoring run finished, and `measure` refuses while a window is open, so a
+replayed campaign can only be measured with a window of 0 days. A stated limit of the replay: the Pack
+prints "Outcome counted over 0 days", and run_report.md says why."""
+
+
+def _open_campaign(
     api: _Api,
     spec: JourneySpec,
     *,
     score_id: str,
-    evaluation: pd.DataFrame,
-    choice: pd.DataFrame,
     train: pd.DataFrame,
     outcome: str,
     outcome_kind: str,
     scale: dict[str, Any],
-    directory: Path,
 ) -> dict[str, Any]:
-    """Record the list as a campaign, register its plan, add the replayed outcomes, measure, build the pack."""
+    """Record the list as a campaign and register its plan, before any evaluation outcome is read."""
     import numpy as np
     import pandas as pd
 
-    from engine.measurement.campaign import ASSIGNMENT_FILENAME, campaign_key, read_frame
-    from engine.pilot.proof import ProofView, verify_provenance
-    from engine.storage import LocalStorage
-
     client = api.client
-    storage = LocalStorage(api.data_dir)
     name = f"Hillstrom e-mail ({outcome}) - {spec.campaign_label}"
     view = api.ok(
-        client.post("/campaigns", json={"run_id": score_id, "outcome_window_days": 0, "name": name}), 201
+        client.post(
+            "/campaigns", json={"run_id": score_id, "outcome_window_days": REPLAY_WINDOW_DAYS, "name": name}
+        ),
+        201,
     )
     campaign = view["campaign"]
     campaign_id = campaign["campaign_id"]
     start = pd.Timestamp(campaign["treatment_start"])
 
-    # The plan, registered before any outcome is read; its inputs come from the training rows only.
+    # The plan: its inputs come from the training rows only.
     control = train[train[spec.treatment] == spec.levels[0]]
     plan: dict[str, Any] = {
         "metric": spec.plan_metric[outcome],
@@ -792,6 +1039,37 @@ def _campaign(
             params={"value_per_conversion": round(worth, 2), "contact_cost": spec.contact_cost_inr},
         )
     )
+    return {
+        "campaign_id": campaign_id,
+        "name": name,
+        "start": start,
+        "plan": registered,
+        "plan_preview": preview,
+    }
+
+
+def _measure_campaign(
+    api: _Api,
+    spec: JourneySpec,
+    *,
+    opened: dict[str, Any],
+    evaluation: pd.DataFrame,
+    choice: pd.DataFrame,
+    outcome: str,
+    outcome_kind: str,
+    scale: dict[str, Any],
+    directory: Path,
+) -> dict[str, Any]:
+    """Add the replayed outcomes to a registered campaign, measure it and build its Value Proof Pack."""
+    import numpy as np
+
+    from engine.measurement.campaign import ASSIGNMENT_FILENAME, campaign_key, read_frame
+    from engine.pilot.proof import ProofView, verify_provenance
+    from engine.storage import LocalStorage
+
+    client = api.client
+    storage = LocalStorage(api.data_dir)
+    campaign_id, name, start = opened["campaign_id"], opened["name"], opened["start"]
 
     # Replay: keep a customer's outcome only when their random e-mail is the one the list gave them.
     assignment = read_frame(storage, campaign_key(campaign_id, ASSIGNMENT_FILENAME))
@@ -865,8 +1143,9 @@ def _campaign(
         "campaign_id": campaign_id,
         "name": name,
         "campaign": measured.get("campaign"),
-        "plan": registered,
-        "plan_preview": preview,
+        "plan": opened["plan"],
+        "plan_preview": opened["plan_preview"],
+        "outcome_window_days": REPLAY_WINDOW_DAYS,
         "replay": {
             "intended": int(intended.sum()),
             "intended_treated": int((intended & treated).sum()),

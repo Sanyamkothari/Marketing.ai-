@@ -1,8 +1,8 @@
 # MineThatData E-Mail Analytics (Hillstrom) -> use case `hillstrom-email`
 #
 # The shape Phase 2's column-mapping UI will import. One column is derived (the file ships no key);
-# nothing is renamed, recoded or dropped by fetch.py. The journey harness (library/run_engine.py
-# --journey hillstrom-email) splits the prepared file into training and evaluation rows and adds two
+# nothing is renamed, recoded or dropped by fetch.py. The journey harness (`python -m library.run_engine
+# journey --dataset hillstrom-email`, library/journey.py) splits the prepared file into training and evaluation rows and adds two
 # derived columns of its own to the files it uploads; both are listed under `journey_derived` with
 # the assumption behind each.
 schema_version: 1
@@ -55,20 +55,23 @@ columns:
 
 journey_derived:
     - name: value_inr
-      formula: "history x fx_inr_per_usd"
+      formula: "history x scale x fx_inr_per_usd, scale = mean spend / mean history of the training rows' converters (journey.value_scale)"
       used_as: "uplift.policy.value_column: what one conversion of this customer is worth, before margin"
       assumption: >-
-        A customer's worth per conversion is taken to be their past year's spend (`history`). The engine's
-        money is rupees and the file's is 2008 US dollars, so each dollar is converted at the journey's
-        fx_inr_per_usd (an input assumption, recorded in results.json and run_report.md, not a market quote).
-        Excluded from the features: it is `history` rescaled.
+        A customer's worth per conversion is taken to be proportional to their past year's spend (`history`),
+        scaled to the size of one order: the scale is the mean two-week spend of the training rows' converters
+        over their mean `history` (0.3877 on the full file), measured on training rows only. The engine's money
+        is rupees and the file's is 2008 US dollars, so each dollar is converted at the journey's
+        fx_inr_per_usd (an input assumption, recorded in journey.results.json and run_report.md, not a market
+        quote). Excluded from the features: it is `history` rescaled.
     - name: history_date
       formula: "the day before the campaign record's treatment start"
       used_as: "covariate_date_column for the CUPED covariate `history`"
       assumption: >-
         The file has no dates. `history` is by the dataset's own definition the spend of the twelve months
-        before the e-mail, so it is dated the day before the campaign; the engine's point-in-time rule
-        (COVARIATE_NOT_BEFORE_CAMPAIGN) then checks that date like any other.
+        before the e-mail, so it is dated, by assumption, the day before the campaign. The engine's
+        point-in-time rule (COVARIATE_NOT_BEFORE_CAMPAIGN) therefore passes by construction: it is not a check
+        on this file.
 
 dropped: []                                # nothing is dropped
 pii: []                                    # no names, e-mails, phone numbers, addresses or government ids

@@ -1,6 +1,6 @@
 # hillstrom-email — the Plan J journey on real randomised data
 
-**Public dataset, retrospective.** Produced only by `library/run_engine.py`; every number below is read
+**Public dataset, retrospective replay, a third of each group kept.** Produced only by `library/run_engine.py`; every number below is read
 from [`../.runs/hillstrom-email/journey/journey.results.json`](../.runs/hillstrom-email/journey/journey.results.json) of the run this report names, which is git-ignored and
 rebuilt by the command at the end. Nothing here is synthetic and nothing was tuned on the evaluation rows.
 
@@ -9,10 +9,11 @@ rebuilt by the command at the end. Nothing here is synthetic and nothing was tun
 | Data | `library/hillstrom-email/data/prepared.csv`, 64,000 rows (SHA-256 `434bc95c6e096dbe…`; the raw file it was prepared from is verified by `fetch.py`) |
 | Use case | `hillstrom-email` |
 | Split | 32,000 training rows, 32,000 evaluation rows (seed 20261010, stratified by segment and conversion) |
-| Risk model run | `r_20261010_11100001`, 57.9 s |
-| Campaign-effect run | `r_20261010_11100002`, 20.1 s |
+| Risk model run | `r_20261010_11100001`, 62.1 s |
+| Campaign-effect run | `r_20261010_11100002`, 17.6 s |
 | Scoring run | `r_20261010_11100003` |
-| Whole journey | 124.4 s |
+| Risk model's scoring run (section 3) | `r_20261010_11100004` |
+| Whole journey | 128.8 s |
 
 ## The answer in one table
 
@@ -21,7 +22,9 @@ rebuilt by the command at the end. Nothing here is synthetic and nothing was tun
 | Readiness | the uplift checks on the training rows passed, on the evaluation rows passed |
 | Risk model (Phase 1, LightGBM) | test ROC-AUC 0.5341; beats its baseline: no |
 | Campaign-effect model (M100, 2 offers) | AUUC of the first offer 0.0004 (-0.0013 to 0.0017); status `candidate` |
-| Beats risk ranking (M96) | **failed** |
+| Beats risk ranking (M96, the engine's check) | **failed** (its risk comparator was fitted on 85 % of the rows it is judged on; see section 3) |
+| Beats risk ranking, both models out of sample (Mens E-Mail, evaluation rows) | **failed**: AUUC difference against the approved propensity model's score -0.0000 (-0.0010 to 0.0007) |
+| Beats risk ranking, both models out of sample (Womens E-Mail, evaluation rows) | **failed**: AUUC difference against the approved propensity model's score 0.0001 (-0.0007 to 0.0010) |
 | Stable across folds (M96) | **passed** |
 | Calibrated by decile (M96) | **failed** |
 | Treat list (M97/M100) | 12,862 of 32,000 customers get an e-mail (Mens E-Mail: 7,597, Womens E-Mail: 5,265) |
@@ -33,7 +36,7 @@ rebuilt by the command at the end. Nothing here is synthetic and nothing was tun
 
 ## What this says, plainly
 
-The campaign-effect model does **not** beat plain risk ranking on its hold-out: knowing who an e-mail moves is not, on this file, better established than knowing who buys anyway. The chosen list measurably raises the conversion rate against sending nothing, on rows no model saw. It does measurably **worse** than sending everyone the Mens E-Mail: the simple rule wins on this file. Every step ran end to end through the product's own API, and each Value Proof Pack rests only on the measured numbers of its campaign, with every figure traced.
+The campaign-effect model does **not** beat plain risk ranking on its hold-out: knowing who an e-mail moves is not, on this file, better established than knowing who buys anyway. Repeated on the evaluation rows, where neither model saw a row, it does not beat the risk model's ranking for any of the e-mails. The chosen list measurably raises the conversion rate against sending nothing, on rows no model saw. It does measurably **worse** than sending everyone the Mens E-Mail: the simple rule wins on this file. Every step ran end to end through the product's own API, and each Value Proof Pack rests only on the measured numbers of its campaign, with every figure traced.
 
 ## 1. Readiness and the power sheet
 
@@ -78,7 +81,7 @@ The data, by group (the outcomes as the file records them):
 
 ## 2. The models
 
-**Risk model** (`POST /runs`, Phase 1): Ensemble (LightGBM), 6 models trained, 57.9 s. Test metrics: f1 0.0145, pr_auc 0.0097, precision 0.0086, recall 0.0465, roc_auc 0.5341. Against its baseline (baseline (logistic regression)): does not beat it.
+**Risk model** (`POST /runs`, Phase 1): Ensemble (LightGBM), 6 models trained, 62.1 s. Test metrics: f1 0.0145, pr_auc 0.0097, precision 0.0086, recall 0.0465, roc_auc 0.5341. Against its baseline (baseline (logistic regression)): does not beat it.
 
 **Campaign-effect model** (`POST /uplift/runs`, x_learner on lightgbm), measured on its own hold-out of 6,392 training rows. Registered as `candidate`: a model of several offers is never champion (DEC-1310 (h)).
 
@@ -96,6 +99,35 @@ As the Approver's screen shows them (`engine.model_gates.approval_checks`); advi
 - `UPLIFT_NOT_BETTER_THAN_RISK` — **failed**. This model does not beat risk ranking (by the approved propensity model's score): the AUUC difference is 0.0002 (95% CI -0.0016 to 0.0019), a range that includes zero.
 - `UPLIFT_UNSTABLE_ACROSS_FOLDS` — **passed**. Stable across folds: none of the 5 refitted models is clearly worse than random, and they differ no more than their sampling noise explains. AUUC by fold with 95% CI: fold 1 -0.0007 (-0.0024 to 0.0008); fold 2 -0.0008 (-0.0027 to 0.0011); fold 3 -0.0005 (-0.0020 to 0.0011); fold 4 0.0002 (-0.0014 to 0.0019); fold 5 -0.0004 (-0.0021 to 0.0012); -0.0004 on average.
 - `UPLIFT_MISCALIBRATED` — **failed**. Predicted uplift does not match what was measured: 6 of 10 groups contain the prediction in their 95% range; the average gap is 1.3 points.
+
+The engine's comparison on the campaign-effect run's hold-out (6,392 training rows, first offer against no e-mail, 200 paired resamples); the check is decided by `propensity_model`:
+
+| Ranking by | AUUC (95 %) | Uplift minus it (95 %) | Uplift better |
+|---|---|---|---|
+| predicted uplift | 0.0004 (-0.0013 to 0.0017) | | |
+| `p_control` (the model's own chance of the outcome without contact) | 0.0005 (-0.0011 to 0.0019) | -0.0000 (-0.0022 to 0.0023) | no |
+| `p_treated` (the model's own chance of the outcome with contact) | 0.0005 (-0.0009 to 0.0022) | -0.0001 (-0.0014 to 0.0010) | no |
+| `propensity_model` (the approved propensity model's score) | 0.0002 (-0.0011 to 0.0019) | 0.0002 (-0.0016 to 0.0019) | no |
+
+**The comparator saw most of those rows.** The risk model was trained on the same 32,000-row training upload, so 5,403 of the 6,392 hold-out rows (84.5 %) were in its training or validation part; only 989 were in its test part. The `propensity_model` row is therefore scored partly in-sample, which may flatter the risk ranking. The `p_control` row is the campaign-effect model's own, out of sample on this hold-out, and it reaches the same verdict. The comparison below repeats the check where neither model saw a row.
+
+**Beats risk, both models out of sample.** The 32,000 evaluation rows were scored by the risk model too (run `r_20261010_11100004`, column `conversion_prob`). For each offer, the rows the file sent that offer or no e-mail, ranked by the offer's predicted uplift against the risk score and `p_control`, by the same function and rule as M96 (`compare_with_baselines`, 200 paired resamples, seed 20261010):
+
+*Mens E-Mail* (21,307 rows, 10,654 sent it; uplift AUUC -0.0001 (-0.0008 to 0.0007)): This model does not beat risk ranking (by the approved propensity model's score): the AUUC difference is 0.0000 (95% CI -0.0010 to 0.0007), a range that includes zero.
+
+| Ranking by | AUUC (95 %) | Uplift minus it (95 %) | Uplift better |
+|---|---|---|---|
+| predicted uplift | -0.0001 (-0.0008 to 0.0007) | | |
+| `p_control` (the model's own chance of the outcome without contact) | -0.0006 (-0.0014 to 0.0002) | 0.0004 (-0.0008 to 0.0017) | no |
+| `propensity_model` (the approved propensity model's score) | -0.0001 (-0.0010 to 0.0006) | -0.0000 (-0.0010 to 0.0007) | no |
+
+*Womens E-Mail* (21,346 rows, 10,693 sent it; uplift AUUC 0.0008 (0.0002 to 0.0014)): This model does not beat risk ranking (by the approved propensity model's score): the AUUC difference is 0.0001 (95% CI -0.0007 to 0.0010), a range that includes zero.
+
+| Ranking by | AUUC (95 %) | Uplift minus it (95 %) | Uplift better |
+|---|---|---|---|
+| predicted uplift | 0.0008 (0.0002 to 0.0014) | | |
+| `p_control` (the model's own chance of the outcome without contact) | -0.0004 (-0.0009 to 0.0004) | 0.0011 (-0.0001 to 0.0021) | no |
+| `propensity_model` (the approved propensity model's score) | 0.0007 (0.0001 to 0.0012) | 0.0001 (-0.0007 to 0.0010) | no |
 
 ## 4. The treat list (M97, M100)
 
@@ -149,29 +181,35 @@ Chosen list against each e-mail sent to everyone (paired on the same rows): ever
 
 **spend** (dollars, per customer, against sending no e-mail):
 
-| Policy | E-mails | Value | Difference from no e-mail (95 %) | Interval |
-|---|---|---|---|---|
-| no_email | 0 | 0.600 | 0.000 (0.000 to 0.000) |  |
-| chosen | 25,599 | 1.214 | 0.615 (0.282 to 0.947) | **above zero** |
-| everyone_Mens E-Mail | 32,000 | 1.493 | 0.893 (0.479 to 1.307) | **above zero** |
-| everyone_Womens E-Mail | 32,000 | 1.015 | 0.416 (0.088 to 0.744) | **above zero** |
+| Policy | E-mails | Value | Difference from no e-mail (95 %, normal) | Interval | Bootstrap 95 % (percentile) | Interval |
+|---|---|---|---|---|---|---|
+| no_email | 0 | 0.600 | 0.000 (0.000 to 0.000) |  | 0.000 to 0.000 |  |
+| chosen | 25,599 | 1.214 | 0.615 (0.282 to 0.947) | **above zero** | 0.294 to 0.943 | **above zero** |
+| everyone_Mens E-Mail | 32,000 | 1.493 | 0.893 (0.479 to 1.307) | **above zero** | 0.483 to 1.286 | **above zero** |
+| everyone_Womens E-Mail | 32,000 | 1.015 | 0.416 (0.088 to 0.744) | **above zero** | 0.097 to 0.739 | **above zero** |
 
-Chosen list against each e-mail sent to everyone (paired on the same rows): everyone_Mens E-Mail -0.278 (-0.611 to 0.055) (includes zero); everyone_Womens E-Mail 0.199 (-0.146 to 0.544) (includes zero).
+Chosen list against each e-mail sent to everyone (paired on the same rows): everyone_Mens E-Mail -0.278 (-0.611 to 0.055) (includes zero), bootstrap -0.598 to 0.056 (includes zero); everyone_Womens E-Mail 0.199 (-0.146 to 0.544) (includes zero), bootstrap -0.128 to 0.541 (includes zero).
+
+The bootstrap: percentile, rows drawn with replacement, the same draws for every policy (paired); 2,000 resamples, seed 20261010.
+
+**Caution: the amount is skewed.** The engine flagged `OUTCOME_SKEWED` on the `spend` campaign: a few very large amounts dominate the averages, so the normal intervals above may be too narrow. The bootstrap column is the check on them; neither is exact on so few non-zero amounts.
 
 **In rupees** (spend difference × 32,000 customers × ₹83 per dollar, less ₹0.05 per e-mail; revenue before margin):
 
-| Policy | Incremental revenue | E-mail cost | Net (95 %) |
-|---|---|---|---|
-| no_email | ₹0 | ₹0 | ₹0 (₹0 to ₹0) |
-| chosen | ₹1,632,289 | ₹1,280 | ₹1,631,009 (₹746,838 to ₹2,515,180) |
-| everyone_Mens E-Mail | ₹2,371,616 | ₹1,600 | ₹2,370,016 (₹1,269,896 to ₹3,470,135) |
-| everyone_Womens E-Mail | ₹1,103,899 | ₹1,600 | ₹1,102,299 (₹231,106 to ₹1,973,493) |
+| Policy | Incremental revenue | E-mail cost | Net (95 %, normal) | Net, bootstrap 95 % |
+|---|---|---|---|---|
+| no_email | ₹0 | ₹0 | ₹0 (₹0 to ₹0) | ₹0 to ₹0 |
+| chosen | ₹1,632,289 | ₹1,280 | ₹1,631,009 (₹746,838 to ₹2,515,180) | ₹780,766 to ₹2,503,431 |
+| everyone_Mens E-Mail | ₹2,371,616 | ₹1,600 | ₹2,370,016 (₹1,269,896 to ₹3,470,135) | ₹1,280,733 to ₹3,413,452 |
+| everyone_Womens E-Mail | ₹1,103,899 | ₹1,600 | ₹1,102,299 (₹231,106 to ₹1,973,493) | ₹256,102 to ₹1,961,436 |
+
+The skew caution above applies to these rupee ranges too.
 
 ## 6. Measured as a campaign, and the Value Proof Pack
 
-The treat list was recorded as a campaign (`POST /campaigns`), its test plan registered before any outcome was read, and its outcomes uploaded by **replay**: a customer keeps their outcome only when the e-mail the file randomly sent them is the one the list gave them (no e-mail for the engine's control group). The file's e-mail was drawn independently of the list, so the kept customers are a random third of each arm and the comparison stays randomised; the others are counted by the engine as customers without an outcome, never as non-converters.
+The treat list was recorded as a campaign (`POST /campaigns`) and its test plan registered before the journey read any evaluation row's outcome (the evaluation readiness checks, section 3's out-of-sample comparison and section 5 all come after it); every plan input comes from training rows. Its outcomes were then uploaded by **replay**: a customer keeps their outcome only when the e-mail the file randomly sent them is the one the list gave them (no e-mail for the engine's control group). The file's e-mail was drawn independently of the list, so the kept customers are a random third of each arm and the comparison stays randomised; the others are counted by the engine as customers without an outcome, never as non-converters.
 
-### `conversion` — Hillstrom e-mail (conversion) - public dataset, retrospective
+### `conversion` — Hillstrom e-mail (conversion) - public dataset, retrospective replay, a third of each group kept
 
 Intended 25,599 (contacted 12,862, held back 12,737); kept by the replay: contacted 4,263 (Mens E-Mail 2,533, Womens E-Mail 1,730), held back 4,171.
 
@@ -196,7 +234,7 @@ Value Proof Pack: built (HTML 200, PDF 200), every figure re-verified by `verify
 
 Value inputs entered for the pack: ₹9,794.83 per conversion (Mean spend of a converting customer in the training rows, in rupees at the assumed rate; revenue before margin), ₹0.05 per e-mail.
 
-### `spend` — Hillstrom e-mail (spend) - public dataset, retrospective
+### `spend` — Hillstrom e-mail (spend) - public dataset, retrospective replay, a third of each group kept
 
 Intended 25,599 (contacted 12,862, held back 12,737); kept by the replay: contacted 4,263 (Mens E-Mail 2,533, Womens E-Mail 1,730), held back 4,171.
 
@@ -225,6 +263,8 @@ Value Proof Pack: built (HTML 200, PDF 200), every figure re-verified by `verify
 
 Value inputs entered for the pack: ₹83.00 per dollar of spend (One dollar of spend, in rupees at the assumed rate; revenue before margin), ₹0.05 per e-mail.
 
+**Finding.** Each Pack's *Method and limits* says: “The engine chose who was held back, at random, before the campaign went out.” “Outcomes are counted for everyone the campaign was meant to reach, whether or not the message arrived, so the result is the effect of running the campaign.” On this replay neither holds as written: nothing went out (the file is a 2008 log, and the engine's control group was drawn when the evaluation rows were scored), and outcomes are counted only for the customers the replay kept, while the rest are left out as having no outcome (`conversion`: 17,165 of 25,599 intended customers; `spend`: 17,165 of 25,599 intended customers). The Pack does print that count, and its campaign name says it is a retrospective replay of a public dataset with a third of each group kept, but its method sentences are fixed by `causal_basis` alone. The plan's `expectation` text, which says the same, is stored with the plan and does not reach the Pack. Open question for M104 (DEC-1314): the Method text should depend on whether outcomes are missing by design (a replay) or by loss. No engine code was changed.
+
 **What the pack's money covers.** The replay keeps outcomes for about a third of the contacted customers, and the pack credits what it measured on those, while it costs the e-mails of every customer meant to be contacted. Its net value is therefore an understatement of the list's; section 5's off-policy figure uses every evaluation row.
 
 ## 7. Assumptions and settings, all of them
@@ -232,7 +272,8 @@ Value inputs entered for the pack: ₹83.00 per dollar of spend (One dollar of s
 - **Exchange rate.** 83 rupees per US dollar: an input assumption close to the 2024 average reference rate, used only to express the file's 2008 dollars in the engine's rupees. Every rupee figure scales with it.
 - **Value per conversion.** `value_inr = history x scale x fx_inr_per_usd`; scale = mean spend of the 289 training converters ($118.01) over their mean `history` ($304.38) = 0.3877. Revenue, before margin. The pack's value per conversion is the same mean order in rupees, ₹9,794.83.
 - **E-mail cost.** ₹0.05 per e-mail (`configs/pilot/value.yaml`'s e-mail benchmark), no offer cost.
-- **The covariate's date.** `history` is dated the day before the campaign record's start (the file defines it as the year before the e-mail).
+- **The covariate's date.** The file has no dates. `history` is dated the day before the campaign record's start, by assumption (the file defines it as the spend of the year before the e-mail), so the engine's point-in-time rule (`COVARIATE_NOT_BEFORE_CAMPAIGN`) passes by construction: it is not a check here.
+- **The outcome window.** The campaigns were recorded with an outcome window of 0 days, and each Pack prints that figure, while the file's outcomes cover two weeks. `POST /campaigns` refuses a treatment start before the scoring run finished and `measure` refuses while a window is open, so a replayed campaign cannot carry the real window. A limit of the replay; the outcomes themselves are the file's two weeks.
 - **Risk model overrides:** `model_search.strategy=fast`, `model_search.time_limit_minutes=10`, `model_search.tuning_trials=5`, `model_search.candidates=['LightGBM']`, `governance.approval_required=False`.
 - **Campaign-effect overrides:** `uplift.treatment_levels=['No E-Mail', 'Mens E-Mail', 'Womens E-Mail']`, `uplift.policy.value_column=value_inr`, `governance.approval_required=False`.
 - **Configuration in the use case:** X-learner on LightGBM, persuadable at +0.5 points and sleeping dog at −0.2 points of conversion (the defaults are set for rates near 20 %), fold stability on, engine control group 50 %.
