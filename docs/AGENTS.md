@@ -328,9 +328,19 @@ the values it changed and could not convert (examples masked); more failures tha
 - **Dry run** (`POST /uploads/{id}/checks`, scoring file): the same source and the same recipe on
   every row, in memory - nothing is written - so it agrees with `POST /runs` (DEC-1011); other roles
   than the recipe's are the same 409 `RECIPE_ROLES_MISMATCH`.
-- **Built datasets**: a dataset cannot be prepared by a recipe yet, so scoring one with a model that
-  has a recipe is refused - `POST /runs` with `dataset_id` answers 409 `RECIPE_DATASET_UNSUPPORTED`,
-  and a scheduled score firing fails with the same code - rather than scored unprepared.
+- **Built datasets** (Plan L M155, DEC-1553 … DEC-1555): a dataset scored by a model that has a recipe is
+  prepared by that recipe first, as a scoring file is - `POST /runs` with `dataset_id` and a scheduled score
+  firing alike (`engine/agent/dataset_recipe.prepare_dataset`). The recipe runs on every row of the
+  dataset's frame under the levels and limit it was approved with, with the narrow future-data check, into
+  `datasets/<id>/prepared_<identity>.parquet` beside the dataset (whose own files are never touched; the
+  name hashes what a replay depends on, so two runs write the same rows). The run still names the dataset,
+  its client and fingerprint; its job reads the prepared rows, and the recipe and its receipt are written
+  into the run directory. The roles rule holds (`dataset_key_conflict`, the scoring half of
+  `refuse_other_roles`): the recipe's ID column must be the one that names the dataset's customers, and no
+  step may touch the rest of a periodic dataset's key (its snapshot date) - otherwise 409
+  `RECIPE_ROLES_MISMATCH` before anything is prepared. A recipe that cannot run on the dataset (a column
+  missing, values it cannot read) is the usual 409 with one `RECIPE_*` error, and a firing fails with that
+  code - never a 500 and never an unprepared score. `RECIPE_DATASET_UNSUPPORTED` (DEC-1044) is retired.
 
 ## 7. Chat safety
 

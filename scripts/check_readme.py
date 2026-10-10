@@ -524,6 +524,11 @@ MILESTONE_TESTS: Final[Mapping[str, tuple[str, ...]]] = {
         "tests/unit/agent/test_recipe_plan_l.py",
         "tests/unit/agent/test_range_advice.py",
     ),
+    "M155": (
+        "tests/unit/doctor/test_joins.py",
+        "tests/integration/test_api_doctor_joins.py",
+        "tests/integration/agent/test_dataset_recipe_refusal.py",
+    ),
     "M157": ("tests/unit/doctor/test_outcomes.py", "tests/integration/test_api_doctor_outcome.py"),
     "M160": ("tests/integration/test_plan_l_benchmark.py",),
 }

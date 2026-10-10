@@ -102,7 +102,38 @@ Under Guided setup's suggestions, **Edit by hand** opens your rows (personal-dat
 Each edit appears in the list above, ticked and labelled **Your edit**; untick it to undo it. Many
 corrections in one column are kept as one step.
 
-## 5. The outcome from your events (M157)
+## 5. How several files fit together (M155)
+
+With a customer list and some logs (bills, tickets, ...), **Bring your data** also says how they fit:
+
+- **Do the logs meet the customer list?** For every log, the share of its rows whose customer is on the list,
+  counted. When the IDs are written differently (`CUST-00123` on the list, `123` in the bills), it names the tidy-up
+  that makes them meet - take `CUST-` off, drop the zeros at the start, ignore spaces or upper and lower case - and
+  counts the share again with it. It names a tidy-up only when it brings the share above 80%, the bar the
+  raw-tables builder itself uses, and says so plainly when none does.
+- **Are these the same report for different months?** Files of the same kind with the same columns can be stacked
+  into one table. When a later file added a column, lost one or renamed one (same place or a close name, same
+  type), it lists the difference.
+
+Every share is measured on the files; a file longer than the rows read says so.
+
+A model trained on a file Guided setup prepared can now also score a **built dataset**: the dataset is prepared by
+the model's saved steps first, exactly as a scoring file is, and a dataset the steps cannot run on is refused with
+the column it misses. The dataset itself is never changed.
+
+### For developers
+
+- `engine/doctor/joins.py`: `file_links` measures each event file against the customer list with onboarding's
+  `join_coverage` and `key_format_mismatch` (a one-sided prefix is taken off first, then the same two functions are
+  asked again); `file_stacks` groups files of one kind whose columns agree; `how_files_fit` fills
+  `Diagnosis.links` and `Diagnosis.stacks` in `POST /doctor/diagnosis`.
+- `engine/agent/dataset_recipe.py`: `prepare_dataset` runs a model's recipe on a built dataset into
+  `datasets/<id>/prepared_<identity>.parquet`; `POST /runs` (`agent_recipes.replay_on_dataset`) and the scheduled
+  firing (`engine/scheduling/firing.start_dataset_run`) both call it (docs/AGENTS.md §6.3, "Built datasets").
+- The tests: `tests/unit/doctor/test_joins.py`, `tests/integration/test_api_doctor_joins.py`,
+  `tests/integration/agent/test_dataset_recipe_refusal.py`.
+
+## 6. The outcome from your events (M157)
 
 Most people have no "churned" column. They have a log of what customers did: recharges, orders, logins. When
 no file has a use case's outcome but one file is a customer list and another is such a log, **Missing
@@ -165,7 +196,7 @@ its own industry).
   `tests/integration/test_api_doctor_outcome.py` (the offer, the agreement, the refusals, and the agreed
   `LabelSpec` building a dataset through the onboarding API).
 
-## 6. What Data Doctor will not do
+## 7. What Data Doctor will not do
 
 - **Match people across files with no shared key.** It can tidy keys (leading zeros, prefixes) and say how many
   match; it does not guess that "R. Sharma, Pune" is "Rahul Sharma".

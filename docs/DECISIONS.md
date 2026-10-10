@@ -1527,6 +1527,50 @@ DEC-1500…1509, M151 → DEC-1510…1519, …), so parallel work on two milesto
   CSV that needs intake's rules in 8-13 s and 155 MB; a 20-sheet workbook in 9 s with the biggest sheet read; a
   workbook's rows at openpyxl's own pace, about 4,000-8,000 rows a second, so a million-row workbook takes two
   to four minutes, which `docs/DATA_DOCTOR.md` says, with CSV as the faster way.
+- **DEC-1550 — M155: how several files fit, and built datasets scored by a model with a recipe.** *Context:* the
+  diagnosis said what each file is but not whether the logs meet the customer list or are monthly copies of one
+  report, and a built dataset could not be scored by a model trained on Guided-prepared data (DEC-1044).
+  *Decision:* M155 adds both to what Data Doctor measures and closes `RECIPE_DATASET_UNSUPPORTED`; Data Doctor
+  driving the builder's roles and mappings, and stacking files in a build, are left for a follow-up.
+  *Consequences:* no new route; `Diagnosis` gains two defaulted fields, `links` and `stacks`.
+- **DEC-1551 — Links are measured with onboarding's own join checks.** *Decision:* (a) The customer list is the
+  entity-kind file with the most rows; every event-kind file is measured against its ID column, trying the list's
+  own column name, the diagnosis's ID column, then columns onboarding's `_ID_LIKE_NAME` matches (at most 4).
+  (b) The shares come from `join_coverage` and `key_format_mismatch`; a prefix on one side only (at least 90% of
+  IDs start with the same letters) is removed and the same two functions run again, which is how `CUST-00123`
+  meets `123`. (c) A fix is named only when it clears `JOIN_COVERAGE_OK` (0.8), with the share as written and
+  once fixed. (d) A share is never rounded to 100% or 0% when it is not; `sampled` says when a file was longer
+  than the rows read. *Consequences:* Data Doctor and `KEY_FORMAT_MISMATCH` cannot disagree.
+- **DEC-1552 — The same report for different months.** *Decision:* files of one kind stack when they share at least
+  two column names exactly and agree on at least 75% of their columns. A renamed column is a missing one paired
+  with an added one of the same type, in the same position or with a name at least 0.5 similar. Drift is listed
+  against the first file in name order, and rows are summed.
+- **DEC-1553 — `POST /runs` prepares a built dataset with the model's recipe.** *Decision:* with `dataset_id` and a
+  model that has a recipe, the recipe runs on every row under its approved levels and limit, with the narrow leak
+  check, into `datasets/<id>/prepared_<identity>.parquet` (`engine/agent/dataset_recipe.prepare_dataset`). The run
+  keeps its dataset lineage, the job reads the prepared rows, and the recipe and receipt are written into the run
+  directory. A recipe that cannot run answers the usual 409 with its `RECIPE_*` error. `RECIPE_DATASET_UNSUPPORTED`
+  is retired (supersedes DEC-1044).
+- **DEC-1554 — A scheduled score firing does the same.** *Decision:* `start_dataset_run` prepares the dataset with
+  `prepare_dataset`; a recipe error fails the firing with the recipe's own code, never with an unprepared score.
+- **DEC-1555 — The roles rule for a dataset.** *Decision:* `dataset_key_conflict`: the recipe's ID column, when it
+  named one, must be the column that names the dataset's customers, and no step may name the rest of a periodic
+  dataset's key (the snapshot date); otherwise 409 `RECIPE_ROLES_MISMATCH` before anything is written.
+- **DEC-1556 — Where the prepared rows live.** *Decision:* beside the dataset, one flat file named by a hash of what
+  a replay depends on (steps, ID, outcome and snapshot columns, levels, limit), so two runs write identical rows
+  to one file. The dataset's own files are unchanged. *Consequences:* retention, erasure and deleting the dataset
+  all cover it.
+- **DEC-1557 — Recipe helpers move to the engine.** *Decision:* `recipe_levels`, `consistent_types` and
+  `run_saved_recipe` move unchanged to `engine/agent/dataset_recipe.py`, re-exported by `agent_recipes`, so the
+  scheduled path runs a recipe exactly as the API does.
+- **DEC-1558 — Known limits.** *Decision:* modules that read a run's rows through `run_source_key` (root cause,
+  win-back, treat list) still read the unprepared dataset frame of a dataset run; the predict stage and the
+  firing's drift re-measure read the prepared rows. A periodic dataset is scored with a recipe only when no step
+  touches its snapshot date.
+- **DEC-1559 — How M155 is proven.** *Consequences:* `tests/unit/doctor/test_joins.py`,
+  `tests/integration/test_api_doctor_joins.py` and `tests/integration/agent/test_dataset_recipe_refusal.py` (a
+  dataset built through the onboarding API scored by a model whose training ran on a Guided-prepared upload,
+  training stubbed) prove it; the 22 pinned benchmark files are unchanged.
 - **DEC-1570 — M157: the outcome sentences are configuration, in their own file.** *Context:* most clients have no
   "churned" column but do have an event log; plan §5.3 asks for the outcome "shown back as a sentence".
   *Decision:* (a) `configs/outcomes.yaml`, read by `engine/doctor/outcomes.load_outcome_catalogue` (cached per file
@@ -1572,7 +1616,7 @@ DEC-1500…1509, M151 → DEC-1510…1519, …), so parallel work on two milesto
   (counts, column names, the spec); erasing or retiring the upload removes it with the folder. Who agreed is in
   the audit trail.
 - **DEC-1578 — Data Doctor does not drive the builder for an agreed outcome in M157.** *Decision:* the agreement's
-  `next_steps` and `docs/DATA_DOCTOR.md` §5 list the onboarding calls (sources, mappings with
+  `next_steps` and `docs/DATA_DOCTOR.md` §6 list the onboarding calls (sources, mappings with
   `entity_key`/`event_time`, the recipe with `label_spec` unchanged, `POST /datasets`);
   `tests/integration/test_api_doctor_outcome.py` follows them to a passing dataset. M155 can take an
   agreement's `label_spec` as is.

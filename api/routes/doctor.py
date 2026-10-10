@@ -45,6 +45,7 @@ from engine.config import (
 )
 from engine.doctor.contracts import Diagnosis, DiagnosisRequest, HandoffRequest
 from engine.doctor.diagnose import LoadedFile, Offer, diagnose_file, readiness
+from engine.doctor.joins import how_files_fit
 from engine.doctor.outcomes import (
     OutcomeAgreement,
     OutcomeFile,
@@ -152,7 +153,9 @@ def diagnose(body: DiagnosisRequest, storage: StorageDep, root: ConfigRootDep) -
         {offer.config.id: offer.config for offer in available},
         root,
     )
-    return Diagnosis(files=diagnosed, use_cases=verdicts)
+    return how_files_fit(
+        Diagnosis(files=diagnosed, use_cases=verdicts), files, roles
+    )  # M155 (DEC-1551, DEC-1552)
 
 
 @router.post(
