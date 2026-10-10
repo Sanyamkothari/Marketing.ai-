@@ -14,6 +14,23 @@ what was attempted, what stopped it, and what has to be true before a run is pos
 | Data fetched | **no** — re-tested 2026-09-23, still refused |
 | Reported metrics | **none** |
 
+## Status after Plan J M110 (2026-10-10)
+
+Plan J M110 asks for the whole journey on Criteo **if an owner downloads it through an approved
+channel** (internal validation only, ruling R2). No owner has downloaded it, and from this environment
+it is still unreachable, so the run was **skipped** again and nothing below changes:
+
+| Host | Attempted | 2026-10-10 |
+|---|---|---|
+| `go.criteo.net` | `http://go.criteo.net/criteo-research-uplift-v2.1.csv.gz` | the name **did not resolve** |
+| `huggingface.co` | `/datasets/criteo/criteo-uplift` | tunnel refused with **403** |
+| `sklift.s3.eu-west-2.amazonaws.com` | `/criteo.csv.gz` (scikit-uplift's mirror) | **403** |
+| `criteo-bucket.s3.eu-central-1.amazonaws.com` | `/criteo.csv.gz`, `/criteo10.csv.gz` | **404** |
+
+The journey Plan J validates instead runs on the MineThatData e-mail test
+([`../hillstrom-email/run_report.md`](../hillstrom-email/run_report.md)), the one randomised public file
+the product owner approved (2026-10-09).
+
 ## Status after Plan D M57 (2026-09-23)
 
 Plan D M57 asked for the Criteo uplift run "on a machine with open internet", its report to be

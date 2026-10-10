@@ -1,6 +1,8 @@
 # The public dataset library
 
-Six public datasets, five industries, six use cases, **one engine and no engine code**.
+Seven public datasets, five industries, seven use cases, **one engine and no engine code**. The
+seventh, the MineThatData e-mail test (Plan J M110), is the first randomised one the library could
+obtain, and the whole Plan J journey is validated on it: [section 7](#7-plan-j-m110-the-whole-journey-on-real-randomised-data).
 
 One industry and one use case already shipped (Telecom / `telco-churn`). The library adds four
 industries and four use cases, drafts a fifth, and changes no engine code to do it.
@@ -25,6 +27,7 @@ happened, the table says so.
 | 4 | [Health Insurance Cross-Sell](../library/health-insurance-cross-sell/) | Insurance | `insurance-cross-sell` | 381,109 | ROC-AUC **0.8581** (baseline 0.8380) | **3.23×** | Half the book is not worth a call; "already insured" is 55 % of the model on its own. |
 | 5 | [UCI Credit Default](../library/uci-credit-default/) | Banking | `card-default-propensity` | 30,000 | ROC-AUC **0.7957** (baseline 0.7279) | **3.25×** | The widest win over a linear baseline in the library, +0.068: last month's payment status is half the answer. |
 | 6 | [Criteo Uplift](../library/criteo-uplift/) | Ad-tech | `criteo-uplift` — **planned** | 13,979,592 | **not run** | — | Configured for Phase 3b's `uplift` problem type since 2026-09-23, but the data is still unreachable from this environment (re-tested that day), so nothing was trained and nothing is reported. |
+| 7 | [MineThatData E-Mail (Hillstrom)](../library/hillstrom-email/) | E-commerce | `hillstrom-email` (Plan J M110) | 64,000 | campaign-effect AUUC **0.0004** (−0.0013 to 0.0017); does **not** beat risk ranking | — | Randomised into men's, women's and no e-mail: the chosen list adds **+0.45 pts** of conversion over no e-mail on rows no model saw, but loses to sending everyone the men's e-mail. See section 7. |
 
 Every run used **engine defaults** — `strategy: balanced`, `time_limit_minutes: 30`,
 `tuning_trials: 50`, the default candidate pool — with no overrides, except the second bank run,
@@ -56,6 +59,9 @@ So every report was re-run and rewritten from artefacts produced against the mer
 figures above are those. It is also, incidentally, the cleanest demonstration in this repository of
 what the library is for: the same six configurations, unchanged, measured a real difference in the
 engine underneath them.
+
+Row 7 is not one of the six default-settings runs above: it is the whole Plan J journey, with its own
+settings, recorded in [section 7](#7-plan-j-m110-the-whole-journey-on-real-randomised-data).
 
 ## 2. What needed code changes
 
@@ -218,6 +224,84 @@ measurement.
 | UCI Credit Default | CC BY 4.0 | yes, with attribution |
 | Health Insurance Cross-Sell | reported **GNU GPL v2**, **unverified** — kaggle.com was unreachable | **check first** |
 | Criteo Uplift | **CC BY-NC-SA 4.0 — non-commercial** | **no** |
+| MineThatData E-Mail (Hillstrom) | **no explicit licence** — released publicly by its author for a 2008 challenge; listed in TensorFlow Datasets | **check before commercial redistribution** |
 
 Each dataset's `LICENSE.txt` carries the citation, the attribution requirement and, where a page
 could not be reached to confirm the licence, says exactly that.
+
+## 7. Plan J M110: the whole journey on real randomised data
+
+Before anyone outside the team sees a number, the full Plan J journey has to work on real randomised
+data with real effects, not on planted ones (DEC-1320). The library had one randomised dataset, Criteo,
+and it still cannot be fetched here. The product owner approved obtaining the MineThatData e-mail test
+(Kevin Hillstrom, 2008) on 2026-10-09; it is now [`library/hillstrom-email/`](../library/hillstrom-email/),
+with its use case [`hillstrom-email`](../configs/use_cases/hillstrom_email.yaml), and the journey runs
+end to end on it.
+
+**How it was run.** `python -m library.run_engine journey --dataset hillstrom-email` drives every step
+through the product's own API in-process (`library/journey.py`) and renders
+[`run_report.md`](../library/hillstrom-email/run_report.md) from what the run wrote
+(`library/journey_report.py`); nothing in that report was typed by hand. The 64,000 customers are split
+once, by a fixed seed, into 32,000 training rows (every model, check and setting) and 32,000 evaluation
+rows (measurement only). Run ids are pinned, so three runs on the same file gave identical numbers;
+the whole journey takes about two minutes (risk model capped at 10 minutes and 5 tuning trials;
+the campaign-effect model is LightGBM).
+
+**What it found, whichever way it fell** (all from the run report):
+
+| Step | Result |
+|---|---|
+| Readiness | the uplift checks pass on both halves (random assignment not predictable from the customer details; every group large enough) |
+| Risk model | test ROC-AUC 0.5341, and it does **not** beat its logistic-regression baseline: who buys in two weeks is barely predictable from this file |
+| Campaign-effect model (two e-mails against no e-mail, M100) | AUUC 0.0004 (−0.0013 to 0.0017) for the men's e-mail; registered as a candidate, never champion |
+| Beats risk ranking (M96) | **failed**: the difference 0.0002 (−0.0016 to 0.0019) includes zero |
+| Stable across folds (M96) | passed |
+| Calibrated by decile (M96) | **failed**: 6 of 10 deciles contain the prediction |
+| Treat list (M97, M100) | 12,862 of 32,000 evaluation customers get an e-mail outside the engine's control group (men's 7,597, women's 5,265) |
+| Off-policy value on the evaluation rows | the chosen list adds **+0.45 pts** of conversion over no e-mail (+0.23 to +0.67), +5.66 pts of visits and +$0.62 of spend per customer; but sending everyone the men's e-mail adds +0.69 pts, and the chosen list is measurably **worse** than that (−0.24 pts, −0.43 to −0.04) |
+| Campaign measurement (replay, M94) | conversion **+0.60 pts** (+0.21 to +1.00, p = 0.002), about 26 extra conversions among the 4,263 contacted customers the replay kept |
+| Spend with CUPED (M102) | +$0.84 per customer (+0.23 to +1.45); the pre-registered `history` covariate removed **0.07 %** of the variance, so the adjustment was honest and useless here |
+| Value Proof Pack (M104) | built for both campaigns, labelled "public dataset, retrospective" in the campaign name, provenance verified; claim "Causal: the customers held back were chosen at random" |
+
+**Read plainly.** The engine measured real effects correctly and proved them with traced numbers; the
+e-mails work. What it did **not** show is that targeting adds anything on this file: the campaign-effect
+model does not beat risk ranking, is not calibrated, and its list loses to the blanket men's e-mail. That
+is the honest outcome on 32,000 training customers with about a hundred conversions per group, and the
+approval checks said so before the list was measured.
+
+**How the campaign is measured on a retrospective file.** The engine draws its own random control group
+(here half the list) when it scores. The file's e-mail was drawn independently, so a customer keeps their
+outcome only when the e-mail the file sent them is the one the list gave them (or none, for the control
+group): the replay estimator for uniformly randomised logs. The kept customers are a random third of each
+arm, the rest are counted by the engine as customers without an outcome (never as non-converters), and the
+comparison stays randomised. The pack credits what it measured on that third but costs every e-mail the
+list meant to send, so its net value understates the list's.
+
+**Assumptions** (each stated in the report): the file's money is 2008 dollars and the engine's is rupees,
+so the journey converts at ₹83 per dollar (an input assumption, not a market quote); a customer's value per
+conversion is their past-year spend scaled to one order (the scale measured on training rows only), revenue
+before margin; an e-mail costs ₹0.05 (`configs/pilot/value.yaml`); `history` is dated the day before the
+campaign, as the file defines it.
+
+**Two findings for other milestones, no engine code changed.** (1) When uplift does not beat risk, the J5
+fallback (DEC-1306 (h)) re-ranks the scores' single-offer contact list by the risk model, but the offer
+choice of a model of several offers (DEC-1310 part B), and so the treat list, ignores it: on this run
+1,703 customers the fallback marked "Never treat" for the first offer were given an e-mail. (2) A
+campaign measured on an amount other than the use case's target (`spend`) gets a verdict headline worded
+with the target's definition ("added about 3,581 to The customer bought…"): the campaign page and step 4
+both label verdicts with `target.definition` whatever column was named.
+
+**The other randomised datasets: skipped, with the reason.**
+
+| Dataset | Reachable from here (2026-10-10) | Licence | Outcome |
+|---|---|---|---|
+| Criteo Uplift | no: `go.criteo.net` does not resolve, `huggingface.co` 403, scikit-uplift's S3 mirror 403 | CC BY-NC-SA 4.0, internal validation only (R2) | skipped; no owner download either ([run report](../library/criteo-uplift/run_report.md)) |
+| X5 RetailHero | no: `ods.ai` and its storage 403, scikit-uplift's S3 mirror 403 | competition terms, not readable from here | skipped |
+| Lenta | the scikit-uplift S3 mirror answers (200, not downloaded) | none published that could be found; no owner approval | skipped: a file whose licence is unknown and not approved is not fetched |
+
+```bash
+python library/hillstrom-email/fetch.py                           # verified by SHA-256
+python -m library.run_engine journey --dataset hillstrom-email     # about two minutes; rewrites run_report.md
+python -m pytest library/tests/test_hillstrom_email.py             # the sample journey; no download
+```
+

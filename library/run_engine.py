@@ -15,6 +15,12 @@ this file.
         --csv library/uci-bank-marketing/data/prepared.csv \
         --primary-key client_id --target y
 
+**The whole journey (Plan J M110).** `python -m library.run_engine journey --dataset hillstrom-email` runs
+every step a person takes on a randomised dataset - readiness, the risk and campaign-effect models, the
+approval checks, the treat list, the off-policy and campaign measurements and the Value Proof Pack -
+through the product's own API (`library/journey.py`), and renders `library/<dataset>/run_report.md` from
+what the run wrote (`library/journey_report.py`).
+
 Writes the run directory to `library/.runs/<dataset>/data/runs/<run_id>/` (git-ignored) and, beside
 the dataset directory, `library/.runs/<dataset>/<run_id>.results.json` holding the validation
 findings, the leaderboard, the test metrics, the baseline comparison, the decile-1 lift, the top
@@ -323,7 +329,65 @@ def run(
     return RunOutcome(run_id=run_id, state=state, error=failure, results=results, directory=directory)
 
 
+def journey_report_text(results: dict[str, Any]) -> str:
+    """The `run_report.md` of a journey's results, exactly as `journey_main` writes it.
+
+    A function of the results alone (and of where the CLI keeps them), so the committed report can be
+    checked against the run it names: `library/tests/test_hillstrom_email.py` does.
+    """
+    from library.journey_report import render_report
+
+    dataset = str(results["dataset"])
+    link = f"../.runs/{dataset}/journey/journey.results.json"
+    command = f"python library/{dataset}/fetch.py\npython -m library.run_engine journey --dataset {dataset}"
+    return render_report(results, results_path=link, command=command)
+
+
+def journey_main(argv: list[str]) -> int:
+    """`python -m library.run_engine journey --dataset <slug>`: the whole Plan J journey (M110).
+
+    Runs `library.journey.run_journey` on the dataset's prepared file, writes its results to
+    `library/.runs/<dataset>/journey/journey.results.json` and renders `library/<dataset>/run_report.md`
+    from them. The report is produced here and nowhere else, so every number in it comes out of this run.
+    """
+    from library.journey import JOURNEYS, run_journey
+
+    parser = argparse.ArgumentParser(
+        prog="python -m library.run_engine journey", description=journey_main.__doc__
+    )
+    parser.add_argument("--dataset", required=True, choices=sorted(JOURNEYS), help="library/<dataset> slug")
+    parser.add_argument("--csv", type=Path, default=None, help="default: library/<dataset>/data/prepared.csv")
+    parser.add_argument("--config-root", type=Path, default=REPO_ROOT / "configs")
+    parser.add_argument(
+        "--runs-dir", type=Path, default=RUNS_DIR, help="default: library/.runs; any other writes no report"
+    )
+    args = parser.parse_args(argv)
+    spec = JOURNEYS[args.dataset]
+    library = Path(__file__).resolve().parent
+    csv_path = (args.csv or library / spec.dataset / "data" / "prepared.csv").resolve()
+    if not csv_path.is_file():
+        print(f"{csv_path} is missing: run python library/{spec.dataset}/fetch.py first", file=sys.stderr)
+        return 2
+    outcome = run_journey(spec, csv_path=csv_path, config_root=args.config_root, runs_dir=args.runs_dir)
+    results = outcome.results
+    if csv_path.is_relative_to(REPO_ROOT):  # the report names the file as a checkout spells it
+        results["csv"] = csv_path.relative_to(REPO_ROOT).as_posix()
+    results_file = outcome.directory / "journey.results.json"
+    results_file.write_text(json.dumps(results, indent=2, default=str), encoding="utf-8")
+    print(f"results  {results_file}")
+    if args.runs_dir.resolve() == RUNS_DIR.resolve():
+        report_path = library / spec.dataset / "run_report.md"
+        report_path.write_text(
+            journey_report_text(json.loads(results_file.read_text(encoding="utf-8"))), encoding="utf-8"
+        )
+        print(f"report   {report_path}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
+    arguments = sys.argv[1:] if argv is None else argv
+    if arguments[:1] == ["journey"]:
+        return journey_main(arguments[1:])
     parser = argparse.ArgumentParser(prog="python -m library.run_engine", description=__doc__)
     parser.add_argument("--dataset", required=True, help="library/<dataset> slug")
     parser.add_argument("--use-case", required=True, help="use-case id in configs/use_cases/")
@@ -346,7 +410,7 @@ def main(argv: list[str] | None = None) -> int:
         metavar="PATH=VALUE",
         help="run override, repeatable; the value is read as JSON when it parses as JSON",
     )
-    args = parser.parse_args(argv)
+    args = parser.parse_args(arguments)
 
     outcome = run(
         dataset=args.dataset,

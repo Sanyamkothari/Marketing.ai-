@@ -105,7 +105,7 @@ def verify(path: Path) -> None:
 
 
 def _download(url: str, target: Path) -> None:
-    with urllib.request.urlopen(url, timeout=TIMEOUT_S) as response, target.open("wb") as handle:  # noqa: S310
+    with urllib.request.urlopen(url, timeout=TIMEOUT_S) as response, target.open("wb") as handle:
         shutil.copyfileobj(response, handle)
 
 
@@ -156,7 +156,8 @@ def write_sample(frame: pd.DataFrame, path: Path = SAMPLE) -> pd.DataFrame:
     """A tenth of the rows, the same share of each group, in the published order."""
     share = SAMPLE_ROWS / len(frame)
     parts = [
-        group.sample(frac=share, random_state=SAMPLE_SEED) for _level, group in frame.groupby(TREATMENT, sort=True)
+        group.sample(frac=share, random_state=SAMPLE_SEED)
+        for _level, group in frame.groupby(TREATMENT, sort=True)
     ]
     sample = pd.concat(parts).sort_index()
     sample.to_csv(path, index=False, lineterminator="\n")
@@ -164,9 +165,13 @@ def write_sample(frame: pd.DataFrame, path: Path = SAMPLE) -> pd.DataFrame:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     parser.add_argument("--no-download", action="store_true", help="use the file already in data/")
-    parser.add_argument("--from", dest="source", type=Path, default=None, help="a local copy to verify and use")
+    parser.add_argument(
+        "--from", dest="source", type=Path, default=None, help="a local copy to verify and use"
+    )
     parser.add_argument("--write-sample", action="store_true", help="also rewrite the committed sample.csv")
     args = parser.parse_args(argv)
 
