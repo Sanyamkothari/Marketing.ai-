@@ -190,3 +190,43 @@ def test_the_approvals_list_carries_the_checks_and_leaves_the_decision_alone(tmp
     assert item.checks[0].passed is False
     dumped = item.model_dump(mode="json")["checks"][0]
     assert set(dumped) == {"code", "passed", "message"}
+
+
+def test_the_safe_to_roll_out_sentence_follows_the_comparisons_and_the_rule_does_not_move() -> None:
+    """Plan K M137: the verdict's sentence is added beside the comparison's; `passed` is still M96's."""
+    from engine.measurement.compare import cross_fit, equal_budget_comparison
+    from engine.measurement.simulate import uplift_population
+    from engine.pilot.plain import jargon_in
+    from tests.statistical.risk_comparison import linear_risk_fitter, linear_uplift_fitter
+
+    population = uplift_population(800, seed=1, effect="null")
+    cross = cross_fit(
+        population.features,
+        population.t,
+        population.y,
+        folds=5,
+        seed=1,
+        fit_uplift=linear_uplift_fitter,
+        fit_risk=linear_risk_fitter,
+        scheme="ring",
+    )
+    arguments: dict[str, object] = {
+        "t": population.t,
+        "y": population.y,
+        "propensity": population.propensity,
+        "cross": cross,
+        "top_share": 0.2,
+        "cost_per_contact": None,
+        "run_id": RUN_ID,
+        "causal": True,
+        "propensity_source": "recorded",
+    }
+    plain = equal_budget_comparison(**arguments)  # type: ignore[arg-type]
+    with_verdict = equal_budget_comparison(**arguments, rollout_confidence=0.95)  # type: ignore[arg-type]
+    assert with_verdict.rollout is not None
+    before = uplift_checks(evaluation("equal"), plain)
+    after = uplift_checks(evaluation("equal"), with_verdict)
+    assert after[0].message == f"{before[0].message} {with_verdict.rollout.summary}"
+    assert after[0].message.endswith(f"{with_verdict.summary} {with_verdict.rollout.summary}")
+    assert [check.passed for check in after] == [check.passed for check in before]
+    assert jargon_in(with_verdict.rollout.summary) == ()

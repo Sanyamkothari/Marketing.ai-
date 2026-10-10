@@ -10,6 +10,8 @@ had no `engine.measurement.compare`.
 
 from __future__ import annotations
 
+import math
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
@@ -18,6 +20,7 @@ import pandas as pd
 import pytest
 
 from engine.measurement.compare import (
+    CrossFit,
     FoldScores,
     cross_fit,
     equal_budget_comparison,
@@ -25,10 +28,14 @@ from engine.measurement.compare import (
     fold_assignment,
     fold_auuc_not_computed,
     fold_auuc_report,
+    rollout_verdict,
     top_share_policy,
     training_folds,
 )
 from engine.measurement.simulate import uplift_population
+from engine.pilot.roi import ValueCosts
+from engine.uplift.config import UpliftPolicyConfig
+from engine.uplift.contracts import RiskComparison, RolloutVerdict
 from tests.statistical.risk_comparison import linear_risk_fitter, linear_uplift_fitter
 
 
@@ -370,3 +377,325 @@ def test_the_refit_estimate_scales_one_fit_to_the_fold_sizes() -> None:
     assert estimate_refit_seconds(7.0, folds=5, rows_all=1_000, rows_fitted=700) == 40.0
     assert estimate_refit_seconds(7.0, folds=5, rows_all=1_000, rows_fitted=700, schemes=("ring",)) == 20.0
     assert estimate_refit_seconds(None, folds=5, rows_all=1_000, rows_fitted=700) is None
+
+
+# ---------------------------------------------------------------------------
+# "Safe to roll out" (Plan K M137, DEC-1325). Fails on the code before M137: no `rollout_verdict`.
+# ---------------------------------------------------------------------------
+Z95_ONE_SIDED = 1.6448536269514722
+"""`NormalDist().inv_cdf(0.95)`, written out so the hand computations do not call the code under test."""
+
+
+def _hand_bounds(terms: list[float], z: float = Z95_ONE_SIDED) -> tuple[float, float]:
+    n = len(terms)
+    mean = sum(terms) / n
+    sd = math.sqrt(sum((x - mean) ** 2 for x in terms) / (n - 1))
+    return n * mean - z * math.sqrt(n) * sd, n * mean + z * math.sqrt(n) * sd
+
+
+def _verdict(terms: list[float], confidence: float = 0.95) -> RolloutVerdict:
+    paired = np.asarray(terms, dtype=np.float64)
+    return rollout_verdict(
+        paired,
+        np.sign(paired),
+        confidence=confidence,
+        gamma=np.abs(paired),
+        treated_terms=np.zeros(paired.shape[0]),
+    )
+
+
+def test_a_clear_gain_is_safe_with_hand_computed_one_sided_bounds() -> None:
+    terms = [1.0, 2.0, 3.0, 2.0, 2.0]
+    verdict = _verdict(terms)
+    low, high = _hand_bounds(terms)  # 10 -/+ 1.6449 x sqrt(5) x sqrt(0.5) = 7.399, 12.601
+    assert low == pytest.approx(7.399, abs=1e-3) and high == pytest.approx(12.601, abs=1e-3)
+    assert verdict.outcome == "safe" and verdict.confidence == 0.95
+    assert verdict.lower_bound_conversions == pytest.approx(low)
+    assert verdict.upper_bound_conversions == pytest.approx(high)
+    assert verdict.rows_needed is None
+    assert verdict.value_basis == "conversions"
+    assert verdict.lower_bound_inr is None and verdict.upper_bound_inr is None
+    assert verdict.rows_without_value is None and verdict.inr_unavailable_reason is None
+    assert verdict.summary == (
+        "Safe to switch from risk ranking to this model at this budget: at least 7.4 extra conversions "
+        "(95% one-sided)."
+    )
+
+
+def test_a_clear_loss_is_not_safe() -> None:
+    terms = [-1.0, -2.0, -3.0, -2.0, -2.0]
+    verdict = _verdict(terms)
+    low, high = _hand_bounds(terms)
+    assert verdict.outcome == "not_safe" and high < 0.0
+    assert verdict.lower_bound_conversions == pytest.approx(low)
+    assert verdict.upper_bound_conversions == pytest.approx(high)
+    assert verdict.rows_needed is None
+    assert verdict.summary == (
+        "Not safe: risk ranking does better at this budget, by at least 7.4 conversions (95% one-sided)."
+    )
+
+
+def test_an_unclear_gain_cannot_tell_and_says_how_many_rows_would_settle_it() -> None:
+    terms = [1.0, -1.0, 2.0, -1.0, 0.5]
+    verdict = _verdict(terms)
+    low, high = _hand_bounds(terms)
+    assert low < 0.0 < high and verdict.outcome == "cannot_tell"
+    mean = sum(terms) / 5
+    sd = math.sqrt(sum((x - mean) ** 2 for x in terms) / 4)
+    needed = math.ceil((Z95_ONE_SIDED * sd / mean) ** 2)
+    assert verdict.rows_needed == needed
+    # At that many rows, with this mean and sd, the lower bound would just clear zero.
+    assert needed * mean - Z95_ONE_SIDED * math.sqrt(needed) * sd > 0.0
+    assert (needed - 1) * mean - Z95_ONE_SIDED * math.sqrt(needed - 1) * sd <= 0.0
+    assert verdict.summary == (
+        f"Cannot tell yet: about {needed:,} rows would settle it if the gain seen here is real "
+        "(this comparison used 5)."
+    )
+
+
+def test_no_rows_needed_when_no_gain_was_seen() -> None:
+    for terms in ([-1.0, 1.0, -0.5, 0.5, -0.2], [1.0, -1.0, 1.0, -1.0]):
+        verdict = _verdict(terms)
+        assert verdict.outcome == "cannot_tell" and sum(terms) <= 0.0
+        assert verdict.rows_needed is None
+        assert verdict.summary.startswith("Cannot tell yet: at this budget this model shows no gain")
+
+
+def test_the_confidence_is_the_one_sided_level_asked_for() -> None:
+    terms = [1.0, 2.0, 3.0, 2.0, 2.0]
+    verdict = _verdict(terms, confidence=0.995)
+    z = 2.5758293035489004  # NormalDist().inv_cdf(0.995)
+    assert verdict.lower_bound_conversions == pytest.approx(_hand_bounds(terms, z)[0])
+    assert "99.5% one-sided" in verdict.summary
+    with pytest.raises(ValueError, match=r"between 0\.5 and 1"):
+        _verdict(terms, confidence=1.0)
+    with pytest.raises(ValueError, match="at least two"):
+        _verdict([1.0])
+
+
+def test_rows_needed_rounds_up_in_the_sentence_only() -> None:
+    from engine.measurement.compare import _about
+
+    assert [_about(n) for n in (7, 95, 100, 40_123, 41_000, 1_234_567)] == [
+        "7",
+        "95",
+        "100",
+        "41,000",
+        "41,000",
+        "1,300,000",
+    ]
+
+
+@dataclass(frozen=True)
+class Rollout:
+    report: RiskComparison
+    switch: np.ndarray
+    gamma: np.ndarray
+    treated: np.ndarray
+
+
+def _rollout_compare(
+    *,
+    policy: UpliftPolicyConfig | None = None,
+    values: np.ndarray | None = None,
+    costs: ValueCosts | None = None,
+    effect: str = "heterogeneous",
+) -> Rollout:
+    population = uplift_population(3_000, seed=8, effect=effect)  # type: ignore[arg-type]
+    cross = cross_fit(
+        population.features,
+        population.t,
+        population.y,
+        folds=5,
+        seed=8,
+        fit_uplift=linear_uplift_fitter,
+        fit_risk=linear_risk_fitter,
+        scheme="ring",
+    )
+    report = equal_budget_comparison(
+        t=population.t,
+        y=population.y,
+        propensity=population.propensity,
+        cross=cross,
+        top_share=0.25,
+        cost_per_contact=25.0,
+        run_id="r",
+        causal=True,
+        propensity_source="recorded",
+        rollout_confidence=0.95,
+        value_policy=policy,
+        row_values=values,
+        value_costs=costs,
+    )
+    switch = top_share_policy(cross.uplift, cross.fold_of, top_share=0.25) - top_share_policy(
+        cross.risk, cross.fold_of, top_share=0.25
+    )
+    t, y, e = population.t, population.y, population.propensity
+    mu1, mu0 = cross.p_treated, cross.p_control
+    gamma = mu1 - mu0 + t * (y - mu1) / e - (1 - t) * (y - mu0) / (1 - e)
+    return Rollout(report=report, switch=switch, gamma=gamma, treated=mu1 + t * (y - mu1) / e)
+
+
+def test_the_verdict_reads_the_comparisons_own_paired_terms() -> None:
+    run = _rollout_compare()
+    verdict = run.report.rollout
+    assert verdict is not None
+    low, high = _hand_bounds((run.switch * run.gamma).tolist())
+    assert verdict.lower_bound_conversions == pytest.approx(low)
+    assert verdict.upper_bound_conversions == pytest.approx(high)
+    # One sum, two quantiles: the same centre as M96's two-sided interval, a narrower band.
+    difference = run.report.difference
+    assert (low + high) / 2 == pytest.approx(difference.value)
+    assert difference.ci_low is not None and difference.ci_low < verdict.lower_bound_conversions
+    # Without value inputs: no rupees, never a made-up one.
+    assert verdict.value_basis == "conversions"
+    assert verdict.lower_bound_inr is None and verdict.upper_bound_inr is None
+
+
+def test_without_the_setting_the_report_is_m96s_and_its_json_has_no_rollout_key() -> None:
+    _, _, report = _compare()
+    assert report.rollout is None
+    assert '"rollout"' not in report.model_dump_json()
+
+
+def test_the_rupee_bounds_are_m97s_net_value_of_the_same_rows() -> None:
+    from engine.pilot.roi import format_inr
+    from engine.uplift.policy import customer_net_values
+
+    policy = UpliftPolicyConfig(
+        value_column="spend", margin_pct=30.0, horizon_months=6, cost_per_contact=25.0
+    )
+    values = np.random.default_rng(4).gamma(2.0, 400.0, size=3_000)
+    values[[3, 50, 900]] = np.nan
+    costs = ValueCosts(offer_cost=0.0, contact_cost=0.86)
+    run = _rollout_compare(policy=policy, values=values, costs=costs)
+    verdict = run.report.rollout
+    assert verdict is not None and verdict.value_basis == "net_inr"
+    assert verdict.rows_without_value == 3 and verdict.inr_unavailable_reason is None
+    # By hand with M97's own function: Γ as the effect, the contact cost added back (it cancels).
+    money = customer_net_values(run.gamma, policy, values=values, p_treated=run.treated, value_costs=costs)
+    assert money.net_value is not None
+    low, high = _hand_bounds((run.switch * (money.net_value + 25.0)).tolist())
+    assert verdict.lower_bound_inr == pytest.approx(low)
+    assert verdict.upper_bound_inr == pytest.approx(high)
+    # With no offer cost that is exactly (π_u − π_r)·Γ·v_i, v_i = value × 30% × 6 months, a missing value 0.
+    v = np.where(np.isfinite(values), values, 0.0) * 0.3 * 6
+    assert (low, high) == pytest.approx(_hand_bounds((run.switch * run.gamma * v).tolist()))
+    # The contact cost cancels: both rankings make the same number of contacts at the same cost.
+    assert run.switch.sum() == 0.0
+    assert float((run.switch * money.net_value).sum()) == pytest.approx(
+        float((run.switch * run.gamma * v).sum())
+    )
+    if verdict.outcome == "safe" and low > 0:
+        assert verdict.summary.endswith(f"worth at least {format_inr(low)}.")
+
+
+def test_an_offer_cost_is_charged_to_every_contacted_converter_as_m97_charges_it() -> None:
+    policy = UpliftPolicyConfig(value_column="spend", margin_pct=40.0)
+    values = np.random.default_rng(5).gamma(2.0, 400.0, size=3_000)
+    run = _rollout_compare(policy=policy, values=values, costs=ValueCosts(offer_cost=50.0, contact_cost=1.0))
+    verdict = run.report.rollout
+    assert verdict is not None and verdict.value_basis == "net_inr"
+    # M97: net = uplift × value × margin − offer cost × p_treated − contact; doubly robust terms here.
+    low, high = _hand_bounds((run.switch * (run.gamma * values * 0.4 - 50.0 * run.treated)).tolist())
+    assert verdict.lower_bound_inr == pytest.approx(low)
+    assert verdict.upper_bound_inr == pytest.approx(high)
+
+
+def test_too_many_missing_values_give_no_rupees_as_m97_gives_no_money() -> None:
+    values = np.full(3_000, 100.0)
+    values[:400] = np.nan  # 13% missing, above M97's 10%
+    run = _rollout_compare(policy=UpliftPolicyConfig(value_column="spend"), values=values, costs=ValueCosts())
+    verdict = run.report.rollout
+    assert verdict is not None and verdict.value_basis == "conversions"
+    assert verdict.lower_bound_inr is None and verdict.upper_bound_inr is None
+    assert verdict.rows_without_value == 400
+    assert verdict.inr_unavailable_reason is not None and "400 of 3,000" in verdict.inr_unavailable_reason
+
+
+def test_a_value_column_the_rows_lack_gives_no_rupees_and_says_why() -> None:
+    run = _rollout_compare(policy=UpliftPolicyConfig(value_column="spend"), values=None)
+    verdict = run.report.rollout
+    assert verdict is not None and verdict.value_basis == "conversions"
+    assert verdict.lower_bound_inr is None and verdict.rows_without_value is None
+    assert verdict.inr_unavailable_reason == (
+        "The rows have no 'spend' column, so the difference cannot be put in rupees."
+    )
+
+
+def test_one_value_per_conversion_prices_every_conversion_alike() -> None:
+    run = _rollout_compare(policy=UpliftPolicyConfig(value_per_conversion=500.0, margin_pct=50.0))
+    verdict = run.report.rollout
+    assert verdict is not None and verdict.value_basis == "net_inr"
+    low, high = _hand_bounds((run.switch * run.gamma * 250.0).tolist())
+    assert verdict.lower_bound_inr == pytest.approx(low) and verdict.upper_bound_inr == pytest.approx(high)
+    assert verdict.lower_bound_inr == pytest.approx(verdict.lower_bound_conversions * 250.0)
+
+
+@pytest.mark.parametrize("effect", ["heterogeneous", "null", "risk"])
+def test_every_sentence_is_plain(effect: str) -> None:
+    from engine.pilot.plain import jargon_in
+
+    run = _rollout_compare(effect=effect, policy=UpliftPolicyConfig(value_per_conversion=900.0))
+    assert run.report.rollout is not None
+    assert jargon_in(run.report.rollout.summary) == ()
+    for terms in (
+        [1.0, 2.0, 3.0, 2.0, 2.0],
+        [-1.0, -2.0, -3.0, -2.0, -2.0],
+        [1.0, -1.0, 2.0, -1.0, 0.5],
+        [-1.0, 1.0, -0.5, 0.5, -0.2],
+    ):
+        assert jargon_in(_verdict(terms).summary) == ()
+
+
+def _timed_rollout(rows: int, seed: int) -> float:
+    rng = np.random.default_rng(seed)
+    t = rng.integers(0, 2, rows)
+    y = (rng.random(rows) < 0.2 + 0.05 * t).astype(int)
+    cross = CrossFit(
+        fold_of=np.arange(rows) % 5,
+        uplift=rng.normal(size=rows),
+        p_treated=np.full(rows, 0.25),
+        p_control=np.full(rows, 0.2),
+        risk=rng.random(rows),
+        folds=5,
+        scheme="ring",
+        seconds=0.0,
+    )
+    values = rng.gamma(2.0, 400.0, size=rows)
+    started = time.perf_counter()
+    report = equal_budget_comparison(
+        t=t,
+        y=y,
+        propensity=0.5,
+        cross=cross,
+        top_share=0.2,
+        cost_per_contact=1.0,
+        run_id="r",
+        causal=True,
+        propensity_source="treated_share",
+        rollout_confidence=0.95,
+        value_policy=UpliftPolicyConfig(value_column="spend", margin_pct=30.0),
+        row_values=values,
+        value_costs=ValueCosts(offer_cost=20.0, contact_cost=0.86),
+    )
+    elapsed = time.perf_counter() - started
+    assert report.rollout is not None and report.rollout.lower_bound_inr is not None
+    return elapsed
+
+
+def test_the_comparison_with_its_verdict_is_linear_in_rows() -> None:
+    small = min(_timed_rollout(20_000, seed) for seed in (1, 2, 3))
+    large = _timed_rollout(200_000, 4)
+    print(f"\n[Perf] comparison with verdict: 20,000 rows {small:.3f}s; 200,000 rows {large:.2f}s")
+    # Linear work gives about 10x (sorting about 12x); quadratic about 100x. 30x leaves room for contention.
+    assert large < 30 * max(small, 0.02), "ten times the rows took far more than ten times as long"
+
+
+@pytest.mark.slow
+def test_a_million_rows_are_compared_with_their_verdict_in_linear_time() -> None:
+    small = min(_timed_rollout(100_000, seed) for seed in (5, 6))
+    large = _timed_rollout(1_000_000, 7)
+    print(f"\n[Perf] comparison with verdict: 100,000 rows {small:.2f}s; 1,000,000 rows {large:.2f}s")
+    assert large < 30 * max(small, 0.05), "ten times the rows took far more than ten times as long"
+    assert large < 60.0, f"1,000,000 rows took {large:.1f}s"

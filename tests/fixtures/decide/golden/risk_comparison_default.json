@@ -1,0 +1,186 @@
+{
+  "schema_version": 1,
+  "run_id": "r_20261010_0d137001",
+  "rows": 5000,
+  "rows_excluded": 0,
+  "folds": 3,
+  "top_share": 0.2,
+  "propensity_source": "treated_share",
+  "cost_per_contact": 20.0,
+  "uplift": {
+    "schema_version": 1,
+    "ranking": "uplift",
+    "contacts": 1001,
+    "incremental_conversions": {
+      "schema_version": 1,
+      "value": 124.80223922865095,
+      "ci_low": 77.15984466375944,
+      "ci_high": 172.44463379354244,
+      "confidence_level": 0.95
+    },
+    "per_rupee": {
+      "schema_version": 1,
+      "value": 0.006233878083349198,
+      "ci_low": 0.0038541380950928793,
+      "ci_high": 0.008613618071605517,
+      "confidence_level": 0.95
+    },
+    "ope": {
+      "schema_version": 1,
+      "run_id": "r_20261010_0d137001",
+      "policy_description": "Treat the top 20% of each fold by cross-fitted predicted uplift",
+      "rows": 5000,
+      "policy_treat_share": 0.2002,
+      "propensity": 0.5056000000000003,
+      "estimates": [
+        {
+          "schema_version": 1,
+          "method": "ips",
+          "value": {
+            "schema_version": 1,
+            "value": 0.1907720904510262,
+            "ci_low": 0.17444871318811067,
+            "ci_high": 0.20709546771394172,
+            "confidence_level": 0.95
+          }
+        },
+        {
+          "schema_version": 1,
+          "method": "snips",
+          "value": {
+            "schema_version": 1,
+            "value": 0.18689987658904153,
+            "ci_low": 0.17173721664606117,
+            "ci_high": 0.20206253653202189,
+            "confidence_level": 0.95
+          }
+        },
+        {
+          "schema_version": 1,
+          "method": "dr",
+          "value": {
+            "schema_version": 1,
+            "value": 0.18542532496605316,
+            "ci_low": 0.17078393105348552,
+            "ci_high": 0.2000667188786208,
+            "confidence_level": 0.95
+          }
+        }
+      ],
+      "logged_value": 0.1736,
+      "treat_all_value": {
+        "schema_version": 1,
+        "value": 0.18182648616936495,
+        "ci_low": 0.1675970516985196,
+        "ci_high": 0.1960559206402103,
+        "confidence_level": 0.95
+      },
+      "treat_none_value": {
+        "schema_version": 1,
+        "value": 0.16046487712032298,
+        "ci_low": 0.14698920219569234,
+        "ci_high": 0.17394055204495362,
+        "confidence_level": 0.95
+      },
+      "causal": true,
+      "computed_at": "2026-10-10T20:06:08.241062Z"
+    }
+  },
+  "risk": {
+    "schema_version": 1,
+    "ranking": "risk",
+    "contacts": 1001,
+    "incremental_conversions": {
+      "schema_version": 1,
+      "value": 26.702526101345015,
+      "ci_low": -32.39264911072787,
+      "ci_high": 85.79770131341789,
+      "confidence_level": 0.95
+    },
+    "per_rupee": {
+      "schema_version": 1,
+      "value": 0.001333792512554696,
+      "ci_low": -0.001618014441095298,
+      "ci_high": 0.0042855994662046905,
+      "confidence_level": 0.95
+    },
+    "ope": {
+      "schema_version": 1,
+      "run_id": "r_20261010_0d137001",
+      "policy_description": "Treat the top 20% of each fold by cross-fitted risk (chance of the outcome)",
+      "rows": 5000,
+      "policy_treat_share": 0.2002,
+      "propensity": 0.5056000000000003,
+      "estimates": [
+        {
+          "schema_version": 1,
+          "method": "ips",
+          "value": {
+            "schema_version": 1,
+            "value": 0.1746126234074802,
+            "ci_low": 0.15899014590399388,
+            "ci_high": 0.19023510091096654,
+            "confidence_level": 0.95
+          }
+        },
+        {
+          "schema_version": 1,
+          "method": "snips",
+          "value": {
+            "schema_version": 1,
+            "value": 0.17106840779796717,
+            "ci_low": 0.15646496842172702,
+            "ci_high": 0.18567184717420732,
+            "confidence_level": 0.95
+          }
+        },
+        {
+          "schema_version": 1,
+          "method": "dr",
+          "value": {
+            "schema_version": 1,
+            "value": 0.16580538234059197,
+            "ci_low": 0.1520619258799244,
+            "ci_high": 0.17954883880125955,
+            "confidence_level": 0.95
+          }
+        }
+      ],
+      "logged_value": 0.1736,
+      "treat_all_value": {
+        "schema_version": 1,
+        "value": 0.18182648616936495,
+        "ci_low": 0.1675970516985196,
+        "ci_high": 0.1960559206402103,
+        "confidence_level": 0.95
+      },
+      "treat_none_value": {
+        "schema_version": 1,
+        "value": 0.16046487712032298,
+        "ci_low": 0.14698920219569234,
+        "ci_high": 0.17394055204495362,
+        "confidence_level": 0.95
+      },
+      "causal": true,
+      "computed_at": "2026-10-10T20:06:08.241815Z"
+    }
+  },
+  "difference": {
+    "schema_version": 1,
+    "value": 98.09971312730593,
+    "ci_low": 34.084879879150094,
+    "ci_high": 162.11454637546177,
+    "confidence_level": 0.95
+  },
+  "difference_per_rupee": {
+    "schema_version": 1,
+    "value": 0.004900085570794502,
+    "ci_low": 0.0017025414525049997,
+    "ci_high": 0.008097629689084004,
+    "confidence_level": 0.95
+  },
+  "uplift_better": true,
+  "causal": true,
+  "summary": "At the same budget (1,001 contacts, the top 20% of each fold), ranking by uplift beats risk ranking: +98.1 extra conversions (95% CI +34.1 to +162.1).",
+  "computed_at": "2026-10-10T20:06:08.241956Z"
+}

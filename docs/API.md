@@ -587,7 +587,7 @@ How the target is derived (plan section 5.2).  `agent_editable` is `False` and c
 | `drift_treated_share_tolerance` | number | no |  |
 | `segments` | UpliftSegmentsConfig | no | Where the four segments are cut. A Phase 5 agent may propose new cuts. |
 | `policy` | UpliftPolicyConfig | no | The budget the targeting recommendation works within. A Phase 5 agent may propose budgets. |
-| `evidence` | UpliftEvidenceConfig | no | `uplift.evidence` (Plan J M96): the costly evidence an Approver may ask for. All off by default.  Each switch refits the meta-learner `folds` times on the training rows, LightGBM base model only (`engine.measurement.compare`). `fold_auuc` reports each fold's AUUC of a model fitted on all the other folds; `risk_comparison` writes `risk_comparison.json`, uplift top-`top_share` against risk top-`top_share` at equal budget, from models fitted on the next `(folds - 1) // 2` folds round a ring (so its interval is honest) together with a plain LightGBM risk model. `propensity_column` names a column of recorded per-row treatment probabilities (M92's `treatment_probability`); it is never a feature, rows outside (0, 1) are left out of the comparison, and without it the treated share is the propensity, as for a randomised file. Not agent-editable: they decide what evidence an approval rests on. |
+| `evidence` | UpliftEvidenceConfig | no | `uplift.evidence` (Plan J M96): the costly evidence an Approver may ask for. All off by default.  Each switch refits the meta-learner `folds` times on the training rows, LightGBM base model only (`engine.measurement.compare`). `fold_auuc` reports each fold's AUUC of a model fitted on all the other folds; `risk_comparison` writes `risk_comparison.json`, uplift top-`top_share` against risk top-`top_share` at equal budget, from models fitted on the next `(folds - 1) // 2` folds round a ring (so its interval is honest) together with a plain LightGBM risk model. `propensity_column` names a column of recorded per-row treatment probabilities (M92's `treatment_probability`); it is never a feature, rows outside (0, 1) are left out of the comparison, and without it the treated share is the propensity, as for a randomised file. Not agent-editable: they decide what evidence an approval rests on.  `rollout_verdict` (Plan K M137, DEC-1325) adds `rollout` to `risk_comparison.json`: the same paired difference read as a one-sided "safe to roll out" verdict at `rollout_confidence` (0.80 to 0.995), in rupees when M97's value inputs exist. It needs `risk_comparison`; off by default, so the file is byte-identical to M96's. |
 | `treatment_levels` | list[string] | no | Several offers against one shared control (Plan J M100): the control value first, then each offer's value in the treatment column. Empty: one treatment, recorded as 0/1. |
 
 #### AgentConfig
@@ -883,7 +883,7 @@ The budget the targeting recommendation works within. A Phase 5 agent may propos
 
 #### UpliftEvidenceConfig
 
-`uplift.evidence` (Plan J M96): the costly evidence an Approver may ask for. All off by default.  Each switch refits the meta-learner `folds` times on the training rows, LightGBM base model only (`engine.measurement.compare`). `fold_auuc` reports each fold's AUUC of a model fitted on all the other folds; `risk_comparison` writes `risk_comparison.json`, uplift top-`top_share` against risk top-`top_share` at equal budget, from models fitted on the next `(folds - 1) // 2` folds round a ring (so its interval is honest) together with a plain LightGBM risk model. `propensity_column` names a column of recorded per-row treatment probabilities (M92's `treatment_probability`); it is never a feature, rows outside (0, 1) are left out of the comparison, and without it the treated share is the propensity, as for a randomised file. Not agent-editable: they decide what evidence an approval rests on.
+`uplift.evidence` (Plan J M96): the costly evidence an Approver may ask for. All off by default.  Each switch refits the meta-learner `folds` times on the training rows, LightGBM base model only (`engine.measurement.compare`). `fold_auuc` reports each fold's AUUC of a model fitted on all the other folds; `risk_comparison` writes `risk_comparison.json`, uplift top-`top_share` against risk top-`top_share` at equal budget, from models fitted on the next `(folds - 1) // 2` folds round a ring (so its interval is honest) together with a plain LightGBM risk model. `propensity_column` names a column of recorded per-row treatment probabilities (M92's `treatment_probability`); it is never a feature, rows outside (0, 1) are left out of the comparison, and without it the treated share is the propensity, as for a randomised file. Not agent-editable: they decide what evidence an approval rests on.  `rollout_verdict` (Plan K M137, DEC-1325) adds `rollout` to `risk_comparison.json`: the same paired difference read as a one-sided "safe to roll out" verdict at `rollout_confidence` (0.80 to 0.995), in rupees when M97's value inputs exist. It needs `risk_comparison`; off by default, so the file is byte-identical to M96's.
 
 | Field | Type | Required | Meaning |
 |---|---|---|---|
@@ -892,6 +892,8 @@ The budget the targeting recommendation works within. A Phase 5 agent may propos
 | `folds` | integer | no |  |
 | `top_share` | number | no |  |
 | `propensity_column` | string \| null | no |  |
+| `rollout_verdict` | boolean | no |  |
+| `rollout_confidence` | number | no |  |
 
 #### AgentColumnHints
 
@@ -2105,6 +2107,8 @@ Keys of the default document that no advanced-settings field renders, with their
 | `uplift.evidence.folds` | int 3..10; cross-fitting folds |
 | `uplift.evidence.top_share` | float 0..1; share of each fold both rankings contact in risk_comparison.json |
 | `uplift.evidence.propensity_column` | str \| null; recorded per-row P(treated) (M92's treatment_probability); never a feature; null = the treated share |
+| `uplift.evidence.rollout_verdict` | bool; Plan K M137: add a one-sided "safe to roll out" verdict to risk_comparison.json (needs risk_comparison) |
+| `uplift.evidence.rollout_confidence` | float 0.80..0.995; one-sided confidence of the verdict's bounds |
 | `agent` | Plan G §8.1. The Guided-setup helper of each use case (DEC-1003); not overridable per run |
 | `agent.enabled` | bool; the Guided setup tab appears only when this is true and the use case trains a model |
 | `agent.display_name` | str \| null; null = "<use case name> helper" |

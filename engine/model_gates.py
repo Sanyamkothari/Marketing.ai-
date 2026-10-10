@@ -8,7 +8,9 @@ other rows. This module reads what the training run measured and turns it into c
 
 * `UPLIFT_NOT_BETTER_THAN_RISK` - from `UpliftEvaluation.baseline_comparison`: passes when the paired
   AUUC difference against risk ranking has its lower bound above zero. When the run also wrote the
-  equal-budget comparison (`risk_comparison.json`), its sentence is added.
+  equal-budget comparison (`risk_comparison.json`), its sentence is added, and so is its "safe to roll
+  out" sentence when the run computed one (Plan K M137, `uplift.evidence.rollout_verdict`). The pass
+  rule does not change: the verdict is evidence for the Approver.
 * `UPLIFT_UNSTABLE_ACROSS_FOLDS` - from `fold_auuc`: passes when every fold was measured, no fold's
   bootstrap interval lies wholly at or below zero, and the folds' AUUCs differ no more than their
   sampling noise explains (`engine.measurement.compare.fold_auuc_report`).
@@ -83,6 +85,8 @@ def uplift_checks(
         message = baseline.summary
         if comparison is not None:
             message = f"{message} {comparison.summary}"
+            if comparison.rollout is not None:  # Plan K M137: evidence beside the rule, never the rule
+                message = f"{message} {comparison.rollout.summary}"
         risk = ApprovalCheck(code=UPLIFT_NOT_BETTER_THAN_RISK, passed=baseline.beats_risk, message=message)
     folds = evaluation.fold_auuc
     stability = ApprovalCheck(

@@ -68,7 +68,8 @@ class Draw:
         return self.true_uplift - self.true_risk
 
 
-def compare_once(seed: int, *, n: int, effect: str) -> Draw:
+def compare_once(seed: int, *, n: int, effect: str, rollout_confidence: float | None = None) -> Draw:
+    """One simulated comparison; with `rollout_confidence` (Plan K M137) it carries its one-sided verdict."""
     population: SimulatedUpliftPopulation = uplift_population(n, seed=seed, effect=effect)  # type: ignore[arg-type]
     cross = cross_fit(
         population.features,
@@ -91,6 +92,7 @@ def compare_once(seed: int, *, n: int, effect: str) -> Draw:
         causal=True,
         propensity_source="recorded",
         seed=seed,
+        rollout_confidence=rollout_confidence,
     )
     # The same tie key the comparison used, so the truths are of the very policies it evaluated.
     uplift_policy = top_share_policy(cross.uplift, cross.fold_of, top_share=TOP_SHARE, seed=seed)
