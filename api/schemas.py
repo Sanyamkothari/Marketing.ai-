@@ -33,6 +33,9 @@ from engine.contracts import (
     ValidationReport,
 )
 
+# Plan L M150 (DEC-1501): the upload response says how the file was read.
+from engine.intake.contracts import IntakeReport
+
 
 class ApiChoice(StrictBase):
     """One option of a Setup-screen select; `label` never comes from a config value."""
@@ -220,7 +223,9 @@ class UploadRecord(Artefact):
     encoding: str = Field(description="Character encoding the file was decoded with.")
     row_count: int = Field(description="Number of data rows in the file.")
     column_count: int = Field(description="Number of columns in the file.")
-    source_key: str = Field(description="Storage key of the bytes as received.")
+    source_key: str = Field(
+        description="Storage key of the file as read (the bytes as received unless intake rewrote them)."
+    )
     profile_key: str = Field(description="Storage key of the stored `profile.json`.")
     fingerprint_key: str = Field(description="Storage key of the stored `fingerprint.json`.")
     fingerprint_hash: str = Field(description="Dataset digest, copied out so a run needs no second read.")
@@ -233,6 +238,17 @@ class UploadRecord(Artefact):
             "with `RunRecord.synthetic` true and its reports carry the synthetic-data block."
         ),
     )
+    # Plan L M150 (DEC-1501): added, defaulted fields, so every upload.json written before them still reads.
+    original_key: str | None = Field(
+        default=None,
+        description=(
+            "Storage key of the file as received when intake rewrote it (`original.csv`, `original.xlsx`); "
+            "`source_key` is then the file as read. Null when the file was read as it arrived."
+        ),
+    )
+    intake_key: str | None = Field(
+        default=None, description="Storage key of the upload's `intake.json`: how the file was read."
+    )
 
 
 class UploadResponse(StrictBase):
@@ -240,6 +256,8 @@ class UploadResponse(StrictBase):
 
     upload_id: str
     profile: DatasetProfile
+    # Plan L M150 (DEC-1501): what intake did on the way in, with the sentences the upload screen shows.
+    intake: IntakeReport | None = None
 
 
 class RunRequest(StrictBase):
@@ -1371,3 +1389,5 @@ class PilotFeedbackResponse(StrictBase):
 # ---- END PLAN-G ----
 # ---- PLAN-J (product) — append only below this line ----
 # ---- END PLAN-J ----
+# ---- PLAN-L (data doctor) — append only below this line ----
+# ---- END PLAN-L ----

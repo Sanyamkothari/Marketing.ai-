@@ -130,7 +130,8 @@ def test_create_test_browse_preview_import_then_guided_setup(client: TestClient,
     )
     assert imported.status_code == 201, imported.text
     upload = imported.json()
-    assert set(upload) == {"upload_id", "profile"} and upload["profile"]["row_count"] == 2500
+    # Plan L M150: an import answers exactly what `POST /uploads` does, intake report included.
+    assert set(upload) == {"upload_id", "profile", "intake"} and upload["profile"]["row_count"] == 2500
     assert imported.headers["location"] == f"/uploads/{upload['upload_id']}/profile"
     source = json.loads(
         (tmp_path / "data" / "uploads" / upload["upload_id"] / "connection_source.json").read_text()

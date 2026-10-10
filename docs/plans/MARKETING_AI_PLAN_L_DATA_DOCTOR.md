@@ -5,7 +5,7 @@
 **Branch:** a new branch from `main` when the build starts
 **Decision range:** DEC-1500 … 1599 (Plan K proposes DEC-1400 … 1499; the first milestone claims the next free hundred in the protocol table)
 **Milestones:** M150 – M161 (after Plan K's M130 – M148)
-**Status:** proposed, waiting for approval
+**Status:** approved 2026-10-10; M150 done (DEC-1500 … DEC-1505)
 
 > **How to use this document.** Read it with Plan G and `docs/AGENTS.md`. Plan G built a careful helper
 > inside each use case. This plan turns that helper, the onboarding builder and the AI service into one
@@ -103,7 +103,7 @@ Grouped by where the person gets stuck. "Today" says what actually happens.
 | Two header rows (merged "Q1 / Revenue") | Common in hand-kept sheets | Read as data |
 | Repeated column names | Common in Excel | Refused: `UPLOAD_DUPLICATE_COLUMNS` |
 | "Grand Total" / "Subtotal" / notes rows at the bottom | Common in report exports | Read as customers; can break the ID check or skew numbers |
-| Missing values written as text (`N/A`, `-`, `NULL`, `none`, `not known`) | Very common | Only an empty cell is missing (`na_values=[""]`); a number column with `N/A` stays text, and `N/A` becomes a category |
+| Missing values written as text (`-`, `unknown`, `not known`, `#DIV/0!`, `none`) | Very common | pandas' own list (`N/A`, `NA`, `NULL`, `None`, `#N/A`) is read as empty in every column; anything else stays text, so a number column with `-` in it is read as text |
 
 ### 4.2 Shape
 

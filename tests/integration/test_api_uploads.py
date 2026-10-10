@@ -253,14 +253,18 @@ def storage(data_dir: Path) -> LocalStorage:
 
 
 def upload_csv(
-    client: TestClient, payload: bytes = CLEAN_CSV.encode(), *, name: str = "history.csv", mode: str = "train"
+    client: TestClient,
+    payload: bytes = CLEAN_CSV.encode(),
+    *,
+    name: str = "history.csv",
+    mode: str = "train",
+    intake: bool = True,
 ) -> Any:
     """`POST /uploads` with one in-memory file; returns the raw response."""
-    return client.post(
-        "/uploads",
-        files={"file": (name, payload, "text/csv")},
-        data={"use_case": DEMO_ID, "mode": mode},
-    )
+    data = {"use_case": DEMO_ID, "mode": mode}
+    if not intake:
+        data["intake"] = "false"
+    return client.post("/uploads", files={"file": (name, payload, "text/csv")}, data=data)
 
 
 def small_config_root(config_root: Path, destination: Path, *, max_file_size_mb: int) -> Path:
@@ -364,7 +368,10 @@ def test_malformed_csv_is_422_unreadable_and_leaves_no_orphan(
 def test_every_ingest_error_becomes_its_documented_status_and_leaves_no_orphan(
     client: TestClient, storage: LocalStorage, payload: bytes, code: str
 ) -> None:
-    response = upload_csv(client, payload)
+    # Plan L M150 (DEC-1501): intake gives a repeated name a number (`a_2`), so ingest's own refusal of
+    # one is reached with intake turned off; `tests/integration/test_api_intake.py` covers the renaming.
+    turned_off = code == "UPLOAD_DUPLICATE_COLUMNS"
+    response = upload_csv(client, payload, intake=not turned_off)
     assert response.status_code == INGEST_ERROR_STATUS[code]
     assert response.json()["detail"]["code"] == code
     assert storage.list_keys("uploads/") == ()

@@ -3167,3 +3167,12 @@ The product owner asked for the README's opening to be rewritten, so Plan H did 
 `docs/START_HERE.md` first, the opening paragraphs describe the four pages, the four-step flow and
 the single-company tool, and "What works today" names Guided setup, Connections and the one generic
 journey (the industry templates stay as config, reachable by URL). **What is needed.** Nothing.
+
+### 2026-10-10 — plan-l (M150) → Plan J owners: `make test` fails at collection without pytest-xdist (request)
+
+**Why.** `tests/integration/decide/test_phase2_journey.py` marks itself `pytest.mark.xdist_group(...)`. With
+`--strict-markers` in `addopts`, a fresh `make setup` (no `pytest-xdist` in the `dev` extra) stops `make test` at
+collection: "'xdist_group' not found in `markers` configuration option". It passes wherever xdist happens to be
+installed. **What is needed.** Either add `pytest-xdist` to the `dev` extra (pinned, with the freeze) or register
+`xdist_group` in `markers`. **What Plan L did meanwhile.** Installed xdist in its local venv only, to run the suite;
+nothing committed.

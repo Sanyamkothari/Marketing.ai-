@@ -121,7 +121,7 @@ const field = (name, label, attrs = "") => `<label>${esc(label)}<input name="${e
 
 function filePicker(kind, label, hint, file) {
   const got = file ? `<span class="dc-text" data-file-name="${esc(kind)}">${esc(file.fileName)} · ${esc(fmtInt(file.rows))} rows</span>` : "";
-  return `<label>${esc(label)}<input type="file" accept=".csv,.parquet" data-audit-file="${esc(kind)}"></label>${got}<p class="dc-text">${esc(hint)}</p>`;
+  return `<label>${esc(label)}<input type="file" accept=".csv,.xlsx,.xlsm,.parquet" data-audit-file="${esc(kind)}"></label>${got}<p class="dc-text">${esc(hint)}</p>`;
 }
 
 const problem = (error) =>

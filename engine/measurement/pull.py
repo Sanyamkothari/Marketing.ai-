@@ -5,7 +5,7 @@ a recipe's tables before each scheduled build, a campaign's outcomes once its wi
 table. Every read goes through a saved connection (Plan H M80) and its connector, which only ever reads,
 on a read-only session where the service allows one (DEC-1105). Nothing here writes to a client's system.
 
-**What may be read** (`PullSelection`): exactly one of a file (`path`), the newest CSV or Parquet file
+**What may be read** (`PullSelection`): exactly one of a file (`path`), the newest CSV, Excel or Parquet file
 anywhere under a folder (`prefix`, a store only), or a table (`schema_name` and `table`, a database only).
 
 **The query rule** (DEC-1317, amending DEC-1105). From a SQL database the only statement that reads rows is
@@ -86,7 +86,7 @@ class PullSelection(StrictBase):
     prefix: str | None = Field(
         default=None,
         max_length=_MAX_NAME,
-        description="A store's folder: the newest CSV or Parquet file anywhere under it is read.",
+        description="A store's folder: the newest CSV, Excel or Parquet file anywhere under it is read.",
     )
     schema_name: str | None = Field(
         default=None, max_length=256, description="A database's schema or dataset."
@@ -275,7 +275,7 @@ def resolve(connections: ConnectionStore, connection_id: str, selection: PullSel
         if path is None:
             raise ConnectorError(
                 PULL_NOTHING_FOUND,
-                "There is no CSV or Parquet file in that folder.",
+                "There is no CSV, Excel or Parquet file in that folder.",
                 "Check the folder, or wait until the next file has landed there.",
                 status=404,
             )
@@ -371,6 +371,18 @@ def _read(data: bytes, file_format: str) -> pd.DataFrame:
 
     if file_format == "parquet":
         return pd.read_parquet(io.BytesIO(data))
+    if file_format == "xlsx":
+        # Plan L M150 (DEC-1504): a workbook is read through intake, as an uploaded one is.
+        from engine.intake.config import IntakeConfig
+        from engine.intake.run import workbook_csv
+        from engine.stages.ingest import IngestError
+
+        try:
+            data, _report = workbook_csv(data, IntakeConfig())
+        except IngestError as exc:
+            raise ConnectorError(
+                exc.code, exc.message, "Save the sheet you need as CSV.", status=422
+            ) from exc
     if not data.strip():
         return pd.DataFrame()
     return pd.read_csv(io.BytesIO(data), low_memory=False)

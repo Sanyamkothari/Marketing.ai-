@@ -266,3 +266,5 @@ demo-signin: demo-seed ## the demo with sign-in on and one demo user per role (l
 test-statistical: ## the nightly statistical suite (Plan J): Monte Carlo coverage, false-positive rate, power
 	MARKETING_AI_STATISTICAL=1 $(BIN)/python -m pytest tests/statistical -m statistical
 # ---- END PLAN-J ----
+# ---- PLAN-L (data doctor) — append only below this line ----
+# ---- END PLAN-L ----

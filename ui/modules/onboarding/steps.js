@@ -52,6 +52,7 @@ import {
   table,
   toggletip,
 } from "../../dom.js";
+import { TABLE_FILE_TYPES, intakeNotesHtml } from "../intake/notes.js"; // Plan L M150 (DEC-1505)
 
 /** The two standard types `StandardColumn` allows `value_aliases` on; any other type has no value
  * map to edit (`engine.config.StandardColumn._shape` refuses one outright). */
@@ -301,7 +302,7 @@ function checksFolded(checks, key, counts) {
 
 /** The file input as a button: the empty state's one action, or "Add more files" beside a table. */
 const uploadLabel = (text, kind) =>
-  `<label class="btn ${kind} ob-upload"><input type="file" class="sr" multiple accept=".csv,.parquet" data-act="pick-files"><span>${esc(
+  `<label class="btn ${kind} ob-upload"><input type="file" class="sr" multiple accept="${TABLE_FILE_TYPES}" data-act="pick-files"><span>${esc(
     text,
   )}</span></label>`;
 
@@ -321,7 +322,11 @@ function uploadingLines(state) {
       }),
     )
     .join("");
-  return reading + refused;
+  // Plan L M150 (DEC-1505): what Data Doctor's intake did to each file, under its name.
+  const read = (state.intakeNotes || [])
+    .map(({ name, intake }) => intakeNotesHtml(intake, { title: `How Data Doctor read ${name}` }))
+    .join("");
+  return reading + refused + read;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -504,7 +509,7 @@ export function sourcesStep(state) {
     const body = state.sourcesLoading
       ? `<div class="loading">Loading this client's tables…</div>`
       : `${uploadingLines(state)}${state.sourcesError ? errorBox(state.sourcesError) : ""}<div class="empty-state"><p class="es-t">Add your raw tables</p><p>${esc(
-          `One CSV or Parquet file per table (${entity}s, activity, bills…). We will suggest what each one is.`,
+          `One CSV, Excel or Parquet file per table (${entity}s, activity, bills…). We will suggest what each one is.`,
         )}</p>${uploadLabel("Add files", "primary")}</div>`;
     return stepShell("sources", "Your tables", "One file per table.", false, state.open === "sources", body);
   }
@@ -518,7 +523,7 @@ export function sourcesStep(state) {
       }</button>`
     : "";
   const body = `
-    <div class="btn-row ob-toolbar">${primary}${uploadLabel("Add more files", "secondary")}<span class="fhint">CSV or Parquet, one file per table</span>${
+    <div class="btn-row ob-toolbar">${primary}${uploadLabel("Add more files", "secondary")}<span class="fhint">CSV, Excel or Parquet, one file per table</span>${
       // Once every table has its role, moving on is this step's one primary action.
       done ? `<span class="spacer"></span>${stepLink("mapping", "Continue to Mapping", "primary")}` : ""
     }</div>
@@ -594,7 +599,7 @@ function replaySourcesStep(state) {
   const body = `
     ${
       hasTables
-        ? `<div class="btn-row ob-toolbar">${uploadLabel("Add more files", "secondary")}<span class="fhint">The same tables as last month, as CSV or Parquet</span></div>`
+        ? `<div class="btn-row ob-toolbar">${uploadLabel("Add more files", "secondary")}<span class="fhint">The same tables as last month, as CSV, Excel or Parquet</span></div>`
         : `<div class="empty-state"><p class="es-t">Upload this month's extract</p><p>The same tables you trained with, one CSV or Parquet file per table. They are read exactly the way last month's were.</p>${uploadLabel(
             "Add files",
             "secondary",

@@ -94,6 +94,7 @@ function initialState(clientId, useCaseId, replay, entity) {
     sourcesError: null,
     uploading: [],
     uploadErrors: [], // [{name, error}] - files the last upload could not add
+    intakeNotes: [], // [{name, intake}] - how Data Doctor read each file of the last upload (Plan L M150)
 
     mappingSuggested: {}, // sourceId -> the untouched MappingSpec `suggestMapping` returned
     mappings: {}, // sourceId -> the working copy the mapping table edits
@@ -373,11 +374,13 @@ export function onboardingPanel(
   async function uploadFiles(fileList) {
     state.sourcesError = null;
     state.uploadErrors = [];
+    state.intakeNotes = [];
     for (const file of Array.from(fileList)) {
       state.uploading = [...state.uploading, file.name];
       rerender();
       try {
         const created = await createSource(clientId, file);
+        if (created.intake) state.intakeNotes = [...state.intakeNotes, { name: file.name, intake: created.intake }];
         if (state.replay) state.replay.uploadedIds = [...state.replay.uploadedIds, created.source_id];
       } catch (error) {
         // Kept apart from `sourcesError`: the re-read that follows clears that one, and a file the

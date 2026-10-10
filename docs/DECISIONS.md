@@ -1303,3 +1303,94 @@ Plan H (`docs/plans/MARKETING_AI_PLAN_H_SIMPLE.md`) shares Plan G's workstream a
 
   *Consequences:* CONSEQ
 <!-- ---- END PLAN-J ---- -->
+<!-- ---- PLAN-L (data doctor) — append only below this line ---- -->
+## Plan L — Data Doctor, one agent for messy data (DEC-1500 … DEC-1599)
+
+Plan L (`docs/plans/MARKETING_AI_PLAN_L_DATA_DOCTOR.md`, M150–M161) makes the product usable by a client with
+no data team: files of any shape go in, Data Doctor reads them, fixes what it can with the person's approval,
+and says plainly what is missing. Each milestone takes the ten numbers `DEC-15m0 … DEC-15m9` (M150 →
+DEC-1500…1509, M151 → DEC-1510…1519, …), so parallel work on two milestones never claims the same number.
+
+- **DEC-1500 — M150 sets Plan L up and adds `configs/intake.yaml`.** *Context:* the plan was approved on
+  2026-10-10 with three instructions: start M150, add `openpyxl`, claim the range. *Decision:* (a) `PARALLEL_WORK_PROTOCOL.md`
+  §4 gains the rows `DEC-1400…1499` (kept free for Plan K, a proposal with no claim) and `DEC-1500…1599 | Plan L`,
+  with `DEC-1600 up` unallocated. (b) Every file in `SHARED_FILES` gets a `PLAN-L (data doctor)` block after
+  `END PLAN-J`, and `tests/unit/test_shared_file_markers.py` pins it in `PHASES`. (c) `openpyxl==3.1.5` is pinned in
+  Plan L's `pyproject.toml` block and, with its one dependency `et-xmlfile==2.0.0`, in `requirements-freeze.txt`. No
+  stub package is added: the two call sites type the workbook as `Any`. (d) The intake rules' settings live in their
+  own file, `configs/intake.yaml`, read by `engine/intake/config.py`; the model's defaults are the file's values
+  (pinned equal by a test), so a configuration root without the file reads files exactly as the shipped one does.
+  *Consequences:* no change to `engine.yaml`'s schema; the only `engine.yaml` edit is the dataset hint's wording
+  (DEC-1505 (d)).
+- **DEC-1501 — Intake runs between the write and ingest, rewrites only when a rule applies, and says what it did.**
+  *Context:* report exports and hand-kept sheets failed at the first step (a title read as the header, a "Grand
+  Total" read as a customer, a repeated name refused). *Decision:* (a) `engine/intake/run.intake_file` runs on every
+  file that becomes an upload (`POST /uploads`, `POST /connections/{id}/import`) or a client source
+  (`POST /clients/{id}/sources`, a connection-backed source's pull and its scheduled refresh), training and scoring
+  alike. (b) A CSV that needs no rule is not touched: its bytes, its key and everything ingest computes from them are
+  what they were, and no `intake.json` is written. Deciding reads its first 64 KB, its first `sample_rows` records and
+  its last 256 KB (by seeking; a store that cannot seek is read through once). (c) A CSV that needs a rule is copied to
+  `original.csv` and rewritten in one streaming pass into the key ingest reads, as UTF-8 with commas; cells the rules
+  leave alone are written as read. A codec that fails part-way is replaced by the next one and the pass restarts. (d)
+  The report, `IntakeReport` (`engine/intake/contracts.py`), is stored as `intake.json` when the file was rewritten or
+  intake was turned off, and returned in every response as `intake`, with `notes`: plain sentences built from its own
+  counts. The only cell text it keeps is a left-out row's first cell, masked by `engine.pii.redact_text` and cut to 40
+  characters. (e) `UploadRecord` gains two defaulted fields, `original_key` and `intake_key` (null on every record
+  written before); `source_key` now names the file as read. (f) `intake=false` (a form field, and a field of the
+  import body) reads the file exactly as before Plan L; a workbook is still converted, row 1 as its header. (g) The
+  same rules run on next month's file, so the same export is read the same way every month: that is M150's
+  "replay". *Consequences:* two tests changed on purpose. `test_api_uploads.py`'s repeated-name case now sends
+  `intake=false` to reach ingest's own refusal (intake numbers the name instead), and its other cases are unchanged;
+  `test_connections_api.py` expects `intake` among the import's keys, because an import answers exactly what
+  `POST /uploads` does.
+- **DEC-1502 — The rules leave an ordinary table alone.** *Decision:* (a) The header moves down only when every row
+  above it holds at most two filled cells and fewer than the table is wide, and the row found holds at least two
+  (and half the width) filled cells, none a number, with data under it, within `max_header_search_rows`. A first
+  row with three filled cells is the header, whatever it says. (b) Two header rows are joined only when the lower one
+  repeats a name, the upper one is empty above a lower name (a merged cell's shadow) and together they name half the
+  table; only repeated names are joined (`Q1 Revenue`), and a column named only above takes that name. (c) A
+  trailing row is left out only when its first filled cell, in one of the first three columns, is a whole total word
+  (`total_words`, ignoring a trailing colon and parenthesis) or it is a single cell of three or more words or with a
+  colon in a table at least three columns wide; at most `max_footer_rows`, never the last data row. (d) A word meaning
+  "no value" (`missing_words`) is emptied only in a column whose other values all read as numbers (pandas' own test)
+  or that the engine's type rule reads as dates or yes/no; in a text column it stays (`Unknown` can be an answer).
+  pandas already empties `N/A`, `NA`, `NULL`, `None` and `#N/A` everywhere. (e) A repeated name gets `_2`, `_3`;
+  a blank one with values under it gets `Unnamed: <position>`, pandas' own name, so a file reads alike rewritten or
+  not; a column with no name and no value in the rows looked at is left out, and a filled cell later found in a
+  left-out place is counted (`cells_left_out`), never silent. Rows with every cell empty are left out and counted.
+- **DEC-1503 — Workbooks.** *Decision:* (a) `.xlsx` and `.xlsm` are read with `openpyxl` in read-only mode with cached
+  formula values; `.xls` and `.xlsb` are refused (415) with "save it as .xlsx or CSV". (b) Before opening, the file
+  must be a zip archive whose members unpack to at most `max_workbook_uncompressed_mb` (a zip bomb is refused
+  unopened, `UPLOAD_WORKBOOK_TOO_LARGE`); a password-protected or damaged file is `UPLOAD_WORKBOOK_UNREADABLE`. The XML
+  is parsed by the standard library's expat, whose amplification limits stop entity expansion. (c) The sheet read is
+  the one named (`sheet`, exact then case-insensitive; a hidden one only when named), else the visible sheet holding a
+  table with the most rows, else the first visible sheet with anything in it; an unknown name is
+  `UPLOAD_SHEET_NOT_FOUND` naming the sheets there are. Every sheet is listed in the report. (d) Cells become text as
+  "Save as CSV" writes them: whole numbers without `.0`, dates as ISO, `TRUE`/`FALSE`. The workbook is kept as
+  `original.xlsx`; the table goes to `source.csv` (`raw.csv` for a source), so everything downstream reads CSV.
+  *Consequences:* a scoring workbook's sheet is chosen by the same rule, not remembered from training; M159 (memory
+  per client) is where a remembered choice belongs.
+- **DEC-1504 — Connections.** *Decision:* (a) `FileFormat` gains `xlsx`; S3 and Azure Blob list, preview and import
+  `.xlsx`/`.xlsm` files, and the preview is the table intake would read (`workbook_preview`, whole file up to the
+  Parquet preview limit). (b) Database connectors already deliver CSV, so their tables go through the same rules;
+  title and total rules never fire on a table a database wrote. (c) A measurement pull (`engine/measurement/pull._read`)
+  reads a workbook through `workbook_csv`; a pulled CSV is read as before (Plan J's measured files are unchanged). (d)
+  A connection-backed source's pull, and its scheduled refresh, run intake with the deployment's `intake.yaml`
+  (`engine.config.config_root`) when the caller passes none. (e) Deleting a source, or unwinding a failed one, removes
+  `original.*` and `intake.json` with it (`companion_keys`); retention already removes a source's whole folder.
+- **DEC-1505 — The upload screens say what intake did.** *Decision:* (a) `ui/modules/intake/notes.js` draws the
+  report's `notes` under the file picker of Guided setup, Manual setup and the raw-tables panel, as text, never markup.
+  (b) Where the screen still holds the file, the box offers "Read it as it is instead" (the same file with
+  `intake=false`) and one "Read the sheet … instead" per other sheet with a table; an import from a connection shows
+  the notes alone. (c) Every picker that posts to `/uploads` or `/clients/{id}/sources` accepts `.xlsx`/`.xlsm`, and the pickers
+  say "CSV, Excel or Parquet". `engine.yaml`'s dataset hint keeps its wording: it is part of every run's
+  `run_config.json`, which Plan J's byte-identity tests pin. (d) The Phase 1 Setup form reaches the notes through
+  a router seam in Plan L's block (`registerUploadNotes`, `uploadNotesHtml`, `bindUploadNotes`, `tableFileTypes`),
+  registered by `ui/modules/intake/index.js`, so no Phase 1 file imports a phase module (`test_ui.py`). (e)
+  `engine/measurement/cycle.py`'s `_UploadDocument`, which mirrors `UploadRecord` field for field, gains the same
+  two fields.
+
+  *Consequences of M150:* `tests/unit/intake/` (rules, the 30-file messy bench, stored-file edges, connectors),
+  `tests/integration/test_api_intake.py` and `tests/integration/test_intake_ui.py` (jsdom) prove it. A clean CSV is
+  stored byte for byte as before (pinned by a test).
+<!-- ---- END PLAN-L ---- -->

@@ -3901,3 +3901,5 @@ def _plan_j_validate_action_ids(config: UseCaseConfig, root: Path | None) -> Non
 
 
 # ---- END PLAN-J ----
+# ---- PLAN-L (data doctor) — append only below this line ----
+# ---- END PLAN-L ----

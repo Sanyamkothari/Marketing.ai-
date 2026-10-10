@@ -232,6 +232,8 @@ class _UploadDocument(Artefact):
     fingerprint_hash: str
     created_at: AwareDatetime
     synthetic: bool = False
+    original_key: str | None = None  # Plan L M150 (DEC-1501): `UploadRecord` gained these two
+    intake_key: str | None = None
 
 
 @dataclass(frozen=True)

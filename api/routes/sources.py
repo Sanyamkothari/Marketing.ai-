@@ -44,7 +44,7 @@ from pydantic import Field
 from api.access_policy import RoutePolicy, register
 from api.deps import ConfigRootDep, SettingsDep, StorageDep
 from api.routes.clients import ClientStoreDep, load_client
-from api.routes.uploads import CHUNK_BYTES, http_error, ingest_http
+from api.routes.uploads import CHUNK_BYTES, http_error, ingest_http, received_filename
 from api.schemas import ErrorResponse
 from engine.access.roles import Role
 from engine.clients import ClientStore, ClientStoreError
@@ -60,6 +60,9 @@ from engine.config import (
 )
 from engine.connections.base import ConnectorError
 from engine.connections.store import ConnectionStore
+from engine.intake.config import load_intake_config
+from engine.intake.contracts import IntakeReport
+from engine.intake.run import INTAKE_REPORT_FILENAME, companion_keys, intake_file, received_format_for
 from engine.measurement.pull import PullSelection
 from engine.onboarding.sources import FileSourceReader, add_connection_source, join_coverage, profile_source
 from engine.onboarding.specs import DecidedBy, KeyCandidate, SourceProfile, SourceSpec
@@ -72,9 +75,17 @@ if TYPE_CHECKING:
 
 router: APIRouter = APIRouter(tags=["sources"])
 
-FileField = Annotated[UploadFile, File(description="The client's raw CSV or Parquet table.")]
+FileField = Annotated[UploadFile, File(description="The client's raw CSV, Excel (.xlsx) or Parquet table.")]
 RoleField = Annotated[
     str | None, Form(description="Confirmed role, when the caller already knows it; left unset otherwise.")
+]
+SheetField = Annotated[
+    str | None,
+    Form(description="For an Excel workbook, the sheet to read, as for `POST /uploads` (Plan L M150)."),
+]
+IntakeField = Annotated[
+    bool,
+    Form(description="False reads the file exactly as it arrived, as for `POST /uploads` (Plan L M150)."),
 ]
 
 _SOURCE_ERRORS: dict[int | str, dict[str, object]] = {
@@ -102,6 +113,8 @@ class SourceCreateResponse(StrictBase):
 
     source_id: str
     profile: SourceProfile
+    # Plan L M150 (DEC-1504): how the file was read, as `POST /uploads` says it.
+    intake: IntakeReport | None = None
 
 
 class SourceListResponse(StrictBase):
@@ -135,6 +148,8 @@ async def create_source(
     response: Response,
     file: FileField,
     role: RoleField = None,
+    sheet: SheetField = None,
+    intake: IntakeField = True,
 ) -> SourceCreateResponse:
     """Stream the file in, profile it, detect its role and persist `clients/<id>/sources/<sid>/`.
 
@@ -164,18 +179,36 @@ async def create_source(
             f"recipe, and this engine allows {limits.max_sources}. Remove one before adding another.",
         )
     try:
-        file_format = ingest.file_format_for(file.filename or "")
+        received = received_format_for(file.filename or "")
     except ingest.IngestError as exc:
         raise ingest_http(exc.code, exc.message) from exc
 
     source_id = new_source_id()
-    raw_key = source_raw_key(client_id, source_id, file_format)
-    with storage.open_write(raw_key) as sink:
+    raw_key = source_raw_key(client_id, source_id, "csv" if received == "xlsx" else received)
+    received_key = (
+        source_file_key(client_id, source_id, received_filename(received)) if received == "xlsx" else raw_key
+    )
+    with storage.open_write(received_key) as sink:
         while chunk := await file.read(CHUNK_BYTES):
             sink.write(chunk)
 
     try:
         try:
+            prepared = intake_file(
+                storage,
+                received_key=received_key,
+                received_format=received,
+                csv_key=raw_key,
+                original_key=source_file_key(client_id, source_id, f"original.{received}"),
+                config=load_intake_config(root),
+                sheet=sheet,
+                enabled=intake,
+            )
+            raw_key = prepared.source_key
+            file_format = prepared.file_format
+            if prepared.worth_keeping:
+                intake_key = source_file_key(client_id, source_id, INTAKE_REPORT_FILENAME)
+                storage.write_model(intake_key, prepared.report)
             result = ingest.read_upload(
                 storage,
                 raw_key,
@@ -238,7 +271,9 @@ async def create_source(
         raise
 
     response.headers["Location"] = f"/clients/{client_id}/sources/{source_id}"
-    return SourceCreateResponse(source_id=source_id, profile=load_profile(storage, client_id, source_id))
+    return SourceCreateResponse(
+        source_id=source_id, profile=load_profile(storage, client_id, source_id), intake=prepared.report
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -319,6 +354,7 @@ def create_source_from_connection(
             limit_bytes=config.validation.max_file_size_mb * 1024 * 1024,
             row_limit=limits.max_source_rows,
             now=utc_now(),
+            intake=load_intake_config(root),
         )
     except ConnectorError as exc:
         raise http_error(
@@ -421,6 +457,8 @@ def delete_source(
     """
     source = load_source(store, client_id, source_id)
     store.delete_source(source_id)
+    for key in companion_keys(storage, source.storage_key):
+        storage.delete(key)
     storage.delete(source.storage_key)
     storage.delete(source_profile_key(client_id, source_id))
     resync_join_coverage(storage, store, root=root, roles=get_roles(root), client_id=client_id)
@@ -665,6 +703,12 @@ def cleared_coverage(candidates: tuple[KeyCandidate, ...]) -> tuple[KeyCandidate
     )
 
 
+def source_file_key(client_id: str, source_id: str, name: str) -> str:
+    """A file beside a source's profile: `original.xlsx`, `original.csv`, `intake.json` (Plan L M150)."""
+    folder = source_profile_key(client_id, source_id).rsplit("/", 1)[0]
+    return f"{folder}/{name}"
+
+
 def discard_source(
     storage: Storage, store: ClientStore, *, client_id: str, source_id: str, raw_key: str
 ) -> None:
@@ -675,8 +719,9 @@ def discard_source(
     show a source with no file, or a row whose profile was never written. The registry row may
     legitimately not exist yet, which is why its absence is suppressed rather than reported.
     """
-    storage.delete(raw_key)
-    storage.delete(source_profile_key(client_id, source_id))
+    for key in (*companion_keys(storage, raw_key), raw_key, source_profile_key(client_id, source_id)):
+        with suppress(StorageError, OSError):
+            storage.delete(key)
     with suppress(ClientStoreError):
         store.delete_source(source_id)
 

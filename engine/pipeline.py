@@ -1971,3 +1971,5 @@ from engine.decide.channel_columns import install_channel_column_guard  # noqa: 
 
 install_channel_column_guard(_ScoreFlow)
 # ---- END PLAN-J ----
+# ---- PLAN-L (data doctor) — append only below this line ----
+# ---- END PLAN-L ----

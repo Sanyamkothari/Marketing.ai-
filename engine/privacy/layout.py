@@ -7,7 +7,8 @@ here rather than three times. It was read off the code that writes each director
 ======================================  =====================================  =========================
 Key                                     Written by                             Dated / keyed by
 ======================================  =====================================  =========================
-`uploads/<id>/source.{csv,parquet}`     `api/routes/uploads.py`                `upload.json` created_at;
+`uploads/<id>/source.{csv,parquet}`,    `api/routes/uploads.py`                `upload.json` created_at;
+`uploads/<id>/original.*`, `intake.json`  (Plan L intake, DEC-1501)
 `uploads/<id>/{upload,profile,...}`                                            key = the consuming run's
                                                                                `run.json` primary_key
 `clients/<c>/sources/<s>/raw.*`,        `api/routes/sources.py`                the `SourceSpec` row's

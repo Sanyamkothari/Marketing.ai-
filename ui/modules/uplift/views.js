@@ -451,8 +451,8 @@ function setupBody(uc, s) {
     )}</div>
     <div class="orline"><label class="control file ${
       s.upload ? "has" : ""
-    }"><input type="file" id="u-file" class="sr" accept=".csv,.parquet"><span class="fname">${esc(
-      profile ? profile.file_name : "Upload CSV or Parquet",
+    }"><input type="file" id="u-file" class="sr" accept=".csv,.xlsx,.xlsm,.parquet"><span class="fname">${esc(
+      profile ? profile.file_name : "Upload CSV, Excel or Parquet",
     )}</span><span class="ico" aria-hidden="true">⤒</span></label>${
       profile
         ? `<span>${esc(fmtInt(profile.row_count))} rows · ${esc(String(profile.column_count))} columns · ${esc(
@@ -1747,8 +1747,8 @@ function outcomesForm(c, { again }) {
   const ready = profile && f.outcome_column;
   const form = `<form id="u-camp" class="uform" novalidate>
     <p class="seg-help">One row per customer of this run: its customer ID and whether they had the outcome. Contacted customers are compared with the control group; customers who were not part of the test are left out.</p>
-    <div class="orline"><label class="control file ${profile ? "has" : ""}"><input type="file" id="u-camp-file" class="sr" accept=".csv,.parquet"><span class="fname">${esc(
-      profile ? profile.file_name : "Upload outcomes CSV or Parquet",
+    <div class="orline"><label class="control file ${profile ? "has" : ""}"><input type="file" id="u-camp-file" class="sr" accept=".csv,.xlsx,.xlsm,.parquet"><span class="fname">${esc(
+      profile ? profile.file_name : "Upload outcomes CSV, Excel or Parquet",
     )}</span><span class="ico" aria-hidden="true">⤒</span></label>${
       profile ? `<span>${esc(fmtInt(profile.row_count))} rows</span>` : ""
     }</div>

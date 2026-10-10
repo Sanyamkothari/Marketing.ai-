@@ -47,7 +47,7 @@ At the top, choose **Train a model** (your first time: a file where you already 
 
 Under **Your data**, do one of these:
 
-- **Upload CSV or Parquet**: one row per customer. For training, include the column with the outcome (for example, whether they bought).
+- **Upload CSV, Excel or Parquet**: one row per customer. For training, include the column with the outcome (for example, whether they bought). Data Doctor reads the file the way you would: it finds the table in an Excel workbook, skips a title above the column names, leaves out a "Grand Total" row, and reads `-` or `unknown` in a number column as empty. A box under the file says what it did, with **Read it as it is instead** if you disagree (see [DATA_DOCTOR.md](DATA_DOCTOR.md)).
 - **Pick from a connection**: choose a saved connection, open a folder or schema, pick a file or a table. You see its first rows (personal details are hidden in this preview), then click **Import**. From here on it works exactly like an uploaded file. **Manual setup** offers the same **Pick from a connection** beside its file upload (with no connection yet, it links to **Connections** instead).
 - Not sure which columns you need? **Download template** shows them.
 

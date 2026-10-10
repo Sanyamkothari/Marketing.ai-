@@ -74,6 +74,10 @@ import {
   setupModes,
   setupSource,
   uploadSources,
+  // Plan L M150 (DEC-1505): what intake did to the file, drawn by the intake module when it is loaded.
+  bindUploadNotes,
+  tableFileTypes,
+  uploadNotesHtml,
 } from "./modules/router.js";
 import * as seams from "./modules/router.js";
 import { COST_NEEDS_CONFIRMATION, costConfirmHtml, costLineHtml } from "./cost.js"; // Plan J M108 (DEC-1318)
@@ -115,6 +119,7 @@ export function useCaseState(uc) {
       source: FILE,
       dataset: null,
       upload: null,
+      file: null, // Plan L M150: the File behind `upload`, for intake's "read it as it is"
       uploadError: null,
       uploading: false,
       // An upload source (UI audit §8.4 item 10): the one whose panel has the file control's place
@@ -667,11 +672,12 @@ function uploadStep(uc, s, n, card) {
     ? `<div id="f-upload-source" data-upload-panel="${esc(open.name)}"></div>`
     : `<div class="orline"><label class="control file ${
         s.upload ? "has" : ""
-      }"><input type="file" id="f-file" class="sr" accept=".csv,.parquet"><span class="fname">${esc(
-        profile ? uploadName(s, profile) : "Upload CSV or Parquet",
+      }"><input type="file" id="f-file" class="sr" accept="${tableFileTypes()}"><span class="fname">${esc(
+        profile ? uploadName(s, profile) : "Upload CSV, Excel or Parquet",
       )}</span><span class="ico" aria-hidden="true">⤒</span></label>${entries}<span>or <a class="btn quiet sm" href="${esc(
         templateUrl(uc.setup.template_url),
       )}" download>Download template</a></span></div>
+    ${s.upload ? uploadNotesHtml(s.upload.intake, { undo: Boolean(s.file), busy: s.uploading }) : ""}
     ${s.uploading ? `<div class="loading" role="status">Reading the file…</div>` : ""}
     ${s.uploadError ? errorBox(s.uploadError) : ""}
     ${previewHtml(s)}`;
@@ -1577,10 +1583,11 @@ export function createController(uc, rerender) {
     }
   }
 
-  async function upload(file) {
+  async function upload(file, options = {}) {
     s.uploading = true;
     s.uploadError = null;
     s.upload = null;
+    s.file = file; // Plan L M150: kept so intake's "read it as it is" can send it again
     s.pk = "";
     s.target = "";
     s.problemType = "";
@@ -1588,7 +1595,7 @@ export function createController(uc, rerender) {
     s.validation = null;
     rerender();
     try {
-      const result = await postUpload(file, uc.id, s.mode);
+      const result = await postUpload(file, uc.id, s.mode, options);
       s.upload = result;
       adoptUpload();
     } catch (error) {
@@ -1791,6 +1798,7 @@ export function createController(uc, rerender) {
     s.uploadSource = null;
     s.dataset = null;
     s.upload = prepared;
+    s.file = null;
     s.uploadError = null;
     s.pk = primaryKey || "";
     s.target = s.mode === "train" ? target || "" : "";
@@ -1830,6 +1838,7 @@ export function createController(uc, rerender) {
     s.uploading = false;
     s.uploadError = null;
     s.upload = result;
+    s.file = null;
     s.uploadFrom = { uploadId: result.upload_id, label: label || result.profile.file_name };
     resetColumns();
     adoptUpload();
@@ -1914,6 +1923,10 @@ export function createController(uc, rerender) {
     on("f-file", "change", (event) => {
       const file = event.target.files[0];
       if (file) upload(file);
+    });
+    bindUploadNotes(root, {
+      onAsIs: () => s.file && upload(s.file, { intake: false }),
+      onSheet: (sheet) => s.file && upload(s.file, { sheet }),
     });
     on("f-cols-change", "click", () => {
       s.editColumns = !s.editColumns;

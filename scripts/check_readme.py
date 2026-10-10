@@ -486,6 +486,16 @@ MILESTONE_TESTS: Final[Mapping[str, tuple[str, ...]]] = {
         "tests/unit/test_demo_summary.py",
         "tests/unit/test_seed_validated.py",
     ),
+    # --- Plan L (docs/plans/MARKETING_AI_PLAN_L_DATA_DOCTOR.md); each milestone adds its own entry ---
+    "M150": (
+        "tests/unit/intake/test_grid.py",
+        "tests/unit/intake/test_intake_bench.py",
+        "tests/unit/intake/test_intake_run.py",
+        "tests/unit/intake/test_intake_config.py",
+        "tests/unit/intake/test_intake_connectors.py",
+        "tests/integration/test_api_intake.py",
+        "tests/integration/test_intake_ui.py",
+    ),
 }
 """Milestone id -> the test files (or directories, with a trailing `/`) that prove it is built.
 

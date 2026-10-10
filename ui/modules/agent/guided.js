@@ -37,6 +37,7 @@ import {
   present,
 } from "../../dom.js";
 import { createConnectionPicker } from "../connections/picker.js";
+import { TABLE_FILE_TYPES, bindIntakeNotes, intakeNotesHtml } from "../intake/notes.js";
 import { postAnswer, postApply, postDecisions, postMessage, postPreview, startSession } from "./api.js";
 import { sentHtml, statusHtml } from "./sent.js";
 import { injectAgentStyles } from "./styles.js";
@@ -66,6 +67,7 @@ function fresh() {
     phase: "upload", // upload | picking | uploading | starting | session
     picker: null, // "Pick from a connection" (Plan H M80) while phase is "picking"
     fileName: "",
+    file: null, // the File chosen, kept so intake's "read it as it is" can send it again (Plan L M150)
     upload: null,
     uploadError: null,
     session: null,
@@ -146,9 +148,9 @@ function uploadStep(entry, n) {
   const source =
     g.phase === "picking" && g.picker
       ? g.picker.html()
-      : `<div class="orline"><label class="control file${g.upload ? " has" : ""}"><input type="file" id="ag-file" class="sr" accept=".csv,.parquet"${
+      : `<div class="orline"><label class="control file${g.upload ? " has" : ""}"><input type="file" id="ag-file" class="sr" accept="${TABLE_FILE_TYPES}"${
           locked ? " disabled" : ""
-        }><span class="fname">${esc(g.fileName || "Upload CSV or Parquet")}</span><span class="ico" aria-hidden="true">⤒</span></label><span>or <button type="button" class="btn quiet sm" id="ag-from-conn"${
+        }><span class="fname">${esc(g.fileName || "Upload CSV, Excel or Parquet")}</span><span class="ico" aria-hidden="true">⤒</span></label><span>or <button type="button" class="btn quiet sm" id="ag-from-conn"${
           locked ? " disabled" : ""
         }>Pick from a connection</button></span><span>or <a class="btn quiet sm" href="${esc(
           templateUrl(uc.setup.template_url),
@@ -159,6 +161,7 @@ function uploadStep(entry, n) {
     Boolean(g.upload),
     `<div class="fhint">${esc(hint.trim())}</div>
     ${source}
+    ${g.upload ? intakeNotesHtml(g.upload.intake, { undo: Boolean(g.file) && !g.applied, busy: Boolean(busy) }) : ""}
     ${busy ? `<div class="loading" role="status">${esc(busy)}</div>` : ""}
     ${g.uploadError ? errorBox(g.uploadError) : ""}`,
   );
@@ -524,12 +527,12 @@ function draw(entry) {
 
 // --- behaviour -------------------------------------------------------------------------------------
 
-async function uploadFile(entry, file) {
+async function uploadFile(entry, file, options = {}) {
   const g = entry.state;
-  Object.assign(g, fresh(), { phase: "uploading", fileName: file.name });
+  Object.assign(g, fresh(), { phase: "uploading", fileName: file.name, file });
   draw(entry);
   try {
-    g.upload = await postUpload(file, entry.host.uc.id, entry.mode);
+    g.upload = await postUpload(file, entry.host.uc.id, entry.mode, options);
   } catch (error) {
     g.uploadError = error;
     g.phase = "upload";
@@ -710,6 +713,11 @@ function bind(entry) {
       if (chosen) uploadFile(entry, chosen);
     });
   }
+  // Plan L M150: the same file again, read as it is or from another sheet; the helper starts over.
+  bindIntakeNotes(main, {
+    onAsIs: () => g.file && uploadFile(entry, g.file, { intake: false }),
+    onSheet: (sheet) => g.file && uploadFile(entry, g.file, { sheet }),
+  });
   main.querySelectorAll("[data-ag-proposal]").forEach((box) =>
     box.addEventListener("change", () => {
       g.ticks[box.dataset.agProposal] = box.checked;

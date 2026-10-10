@@ -15,7 +15,8 @@ agents) started after Plan E, so its `PLAN-G` block follows Plan E's (DEC-1000).
 value first) was set up after Plan I, so its `PLAN-J` block follows Plan G's in the code files and Plan
 I's in `docs/DECISIONS.md`, the last block either file has (DEC-1300). Plan I and Plan D carry blocks
 of their own in `docs/DECISIONS.md` and `README.md` only; they are not in `PHASES`, so this test does
-not pin them.
+not pin them. Plan L (Data Doctor) was set up after Plan J, so its `PLAN-L` block follows Plan J's in every
+shared file (DEC-1500). Plan K is a proposal with no blocks yet.
 
 `docs/API.md` is in §4's list and deliberately absent from this one: it is generated and `make
 lint` fails on a hand-edit (DEC-014), so a block there would be deleted by the next `make
@@ -59,6 +60,7 @@ PHASES: Final[tuple[str, ...]] = (
     "PLAN-E",
     "PLAN-G",
     "PLAN-J",
+    "PLAN-L",
 )
 
 OPEN: Final[str] = "---- {phase} ("
