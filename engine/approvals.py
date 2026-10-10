@@ -23,11 +23,12 @@ cannot be enforced, and the screen says that rather than implying otherwise. A r
 and whether its predicted uplift is calibrated, each read from what its training run measured. They
 inform the Approver; the champion rule and the decision routes ignore them.
 
-**How the model in use did on the last campaign (Plan J M106).** A challenger learned from a cycle
-(step 4's "Learn who to contact next time" on a run that engaged the holdout service) also carries
-`live_calibration`: the change the model that chose that cycle's list predicted, against the change
-the campaign measured, per tenth of its ranking, read from the training run's `learned_from.json`
-(`engine.measurement.learn`). It is advice too, and absent for every other model.
+**How the model that chose the last list did on that campaign (Plan J M106).** A challenger learned
+from a cycle (step 4's "Learn who to contact next time" on a run that engaged the holdout service)
+also carries `live_calibration`: the change the model that chose that cycle's list predicted, against
+the change the campaign measured, per tenth of its ranking, read from the training run's
+`learned_from.json` (`engine.measurement.learn`). That model may since have been replaced, so the block
+never calls it the model in use. It is advice too, and absent for every other model.
 
 **Every decision is recorded with its reason** in `model_decision` (the platform database, migration
 `0005_plan_d`): approved, rejected or promoted, by whom (a user id), against which champion, when.

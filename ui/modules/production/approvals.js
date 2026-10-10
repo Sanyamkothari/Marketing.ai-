@@ -308,7 +308,7 @@ function liveCalibration(block) {
   const verdict =
     block.matches === true || block.matches === false ? String(block.matches) : "null";
   return `<div class="pb-live" data-live="${esc(block.source_run_id)}" data-matches="${esc(verdict)}" role="note">
-    <p class="pb-meta">How the model in use did on the last campaign (predicted against measured, by tenth of its ranking)</p>
+    <p class="pb-meta">How the model that chose the last list did on that campaign (predicted against measured, by tenth of its ranking)</p>
     <p class="pb-small">${esc(block.summary)}</p>
     <details class="pb-measures"><summary>Show the ten tenths</summary>${rowsTable(cols, rows, { cls: "pb-live-table" })}</details>
   </div>`;

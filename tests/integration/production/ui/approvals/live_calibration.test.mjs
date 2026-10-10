@@ -1,9 +1,9 @@
-/* Plan J M106: the Approver's "how the model in use did on the last campaign" block
+/* Plan J M106: the Approver's "how the model that chose the last list did on that campaign" block
    (`ApprovalItem.live_calibration`, `engine/measurement/learn.py`) on the Approvals screen, against a
    REAL `GET /approvals` body (PB_FIXTURES, written by test_approvals_ui_js.py) whose item is given the
    block a challenger learned from a campaign carries - here the planted miscalibration of
-   tests/integration/measurement/test_learn_from_cycle.py: the model in use predicted a large gain for
-   its top tenth, and the campaign measured a loss. The screen draws the server's sentence, numbers and
+   tests/integration/measurement/test_learn_from_cycle.py: the model that chose the list predicted a
+   large gain for its top tenth, and the campaign measured a loss. The screen draws the server's sentence, numbers and
    verdicts (only the unit changes, a share as points), and the block is advice: the Approve and Reject
    buttons stay. An item without the block draws none. */
 import { test } from "node:test";
@@ -15,7 +15,7 @@ const body = fixture("approvals_approver");
 const item = body.items[0];
 const modelId = item.version.model_id;
 const SUMMARY =
-  "For the tenth it ranked highest the model in use predicted +21.9 points; the last campaign measured -29.8 points (95% range -35.1 points to -24.0 points). In 1 of 10 tenths the measured range holds the prediction, so its predictions do not match what the campaign measured.";
+  "For the tenth it ranked highest the model that chose the last list predicted +21.9 points; the last campaign measured -29.8 points (95% range -35.1 points to -24.0 points). In 1 of 10 tenths the measured range holds the prediction, so its predictions do not match what the campaign measured.";
 const decile = (n, predicted, value, low, high, inside) => ({
   schema_version: 1,
   decile: n,
@@ -61,7 +61,7 @@ test("the block is the server's sentence and verdict, for the run the model lear
   assert.equal(block.dataset.live, "r_20261009_6a000002");
   assert.equal(block.dataset.matches, "false");
   assert.ok(block.textContent.includes(SUMMARY));
-  assert.match(block.textContent, /How the model in use did on the last campaign/);
+  assert.match(block.textContent, /How the model that chose the last list did on that campaign/);
 });
 
 test("each tenth shows the server's predicted and measured change as points, with its range", () => {

@@ -4,8 +4,10 @@ Everything goes through the product's own API, as a user's files would: a real u
 train flow, the uplift score flow (which writes `holdout_assignment.parquet`), step 4's measurement
 and step 4's "Learn who to contact next time". Nothing writes a run artefact by hand. The config root is
 a copy of `configs/` in which `win-back-campaign` is a campaign-effect use case with an explore slice
-of 5% (the explore world) or with a control group kept per use case and no explore slice (the
-no-overlap world).
+of 5%, the smallest the plan names, and `governance.approval_required: false` (the explore world), or
+with a control group kept per use case and no explore slice (the no-overlap world). The explore world's
+use case lets a model go into use without an Approver, and the learn requests ask nothing about
+approval and keep the default champion threshold: the learned model must still wait for an Approver.
 
 **The planted miscalibration.** The model in use (A) is trained on a campaign whose effect was the
 reverse of the truth (`effect_scale=-1`) and put in use by hand: it predicts that the customers the
@@ -22,8 +24,9 @@ contact. Pooling the groups without that cut would make "who was contacted" pred
 customers' own data, which the randomness check refuses: the test shows both.
 
 Every test here fails on the commit before M106 (b5ea557): the frame there is the list's own
-customers only, there is no learn record and no calibration block, and a cycle without an explore
-slice learns anyway.
+customers only, there is no learn record and no calibration block, a cycle without an explore slice
+learns anyway, the learned model goes straight into use, and an outcomes file covering only the
+hand-off is learned from as if it covered everyone.
 """
 
 from __future__ import annotations
@@ -71,22 +74,21 @@ TARGET: Final[str] = "reactivated_90d"
 TREATMENT: Final[str] = "contacted"
 TRAIN_ROWS: Final[int] = 10_000
 CAMPAIGN_ROWS: Final[int] = 60_000
-EXPLORE: Final[float] = 0.10
+EXPLORE: Final[float] = 0.05
 EFFECT: Final[float] = 1.5
 """The campaign's true effects, scaled up so the learned model's ranking is measurably better than chance."""
 SALT: Final[str] = "learn-from-cycle-salt-0001"
 TRAIN_RUN: Final[str] = "r_20261009_6a000001"
 EXPLORE_RUN: Final[str] = "r_20261009_6a000002"
 CLOSED_RUN: Final[str] = "r_20261009_6a000003"
-LEARN_OVERRIDES: Final[dict[str, Any]] = {
-    "uplift": dict(FAST_OVERRIDES["uplift"]),
-    "governance": {"approval_required": True},
-    "evaluation": {"champion_min_improvement_pct": 0.0},
-}
-"""Seconds, not minutes; and the learned model waits for an Approver, so the screen has something."""
+HANDOFF_RUN: Final[str] = "r_20261009_6a000004"
+LEARN_OVERRIDES: Final[dict[str, Any]] = {"uplift": dict(FAST_OVERRIDES["uplift"])}
+"""Seconds, not minutes. Nothing about approval and no champion threshold: the defaults hold."""
 
 
-def make_root(config_root: Path, target: Path, *, actions: dict[str, Any]) -> Path:
+def make_root(
+    config_root: Path, target: Path, *, actions: dict[str, Any], governance: dict[str, Any] | None = None
+) -> Path:
     """A copy of `configs/` whose `win-back-campaign` is a campaign-effect use case with `actions` added."""
     shutil.copytree(config_root, target)
     path = target / "use_cases" / "win_back_campaign.yaml"
@@ -94,6 +96,8 @@ def make_root(config_root: Path, target: Path, *, actions: dict[str, Any]) -> Pa
     document["problem_type"] = "uplift"
     document["model_search"] = {"metric": "auuc", "metric_choices": ["auuc"]}
     document.setdefault("actions", {}).update(actions)
+    if governance is not None:
+        document.setdefault("governance", {}).update(governance)
     path.write_text(yaml.safe_dump(document, sort_keys=False), encoding="utf-8")
     return target
 
@@ -125,8 +129,12 @@ def _read_parquet(app: App, run_id: str, name: str) -> pd.DataFrame:
     return frame.set_index(KEY, drop=False)
 
 
-def _cycle(app: App, run_id: str, *, seed: int) -> Cycle:
-    """Score a new campaign with the model in use, send it, and measure it through step 4."""
+def _cycle(app: App, run_id: str, *, seed: int, handoff_only: bool = False) -> Cycle:
+    """Score a new campaign with the model in use, send it, and measure it through step 4.
+
+    `handoff_only` keeps outcomes for the hand-off alone (the list, its control group and the explored
+    customers), as a campaign tool's export would: nobody else outside the list has one.
+    """
     campaign = make_winback_campaign(CAMPAIGN_ROWS, seed=seed)
     record = finish(
         app,
@@ -140,6 +148,11 @@ def _cycle(app: App, run_id: str, *, seed: int) -> Cycle:
     table = _read_parquet(app, run_id, "holdout_assignment.parquet")
     treated = set(table.index[table["treated"].to_numpy(dtype=bool)])
     outcomes = outcomes_for(campaign, treated_keys=treated, seed=seed + 1, effect_scale=EFFECT)
+    if handoff_only:
+        config = app.storage.read_model(run_key(run_id, "run_config.json"), ResolvedConfig).config
+        selected, _sleeping = selection_masks(scores.reset_index(drop=True), config)
+        handed = set(scores.index[selected]) | treated
+        outcomes = outcomes[outcomes[KEY].astype(str).isin(handed)].reset_index(drop=True)
     outcomes_upload = upload(app, outcomes, mode="score")
     # The runs finish today, so the outcomes are read as final at once (a window of 0 days): this test is
     # about which customers the next model learns from, not about waiting for outcomes.
@@ -165,6 +178,7 @@ def explore_root(config_root: Path, tmp_path_factory: pytest.TempPathFactory) ->
         config_root,
         tmp_path_factory.mktemp("learn-explore-root") / "configs",
         actions={"explore_fraction": EXPLORE},
+        governance={"approval_required": False},
     )
 
 
@@ -256,7 +270,7 @@ def test_the_frame_passes_the_randomness_check_and_the_unbalanced_pool_would_not
     assert report["randomness_auc"] is not None and report["randomness_auc"] <= 0.60
 
     # The same randomised rows, every one of them, with no cut: contact is then predictable from the
-    # customers' own data (the list's customers were contacted nine times in ten, the others about one in eleven).
+    # customers' own data (the list's customers were contacted nine times in ten, the others about one in 22).
     table, scores = learned.cycle.table, learned.cycle.scores
     probability = table["treatment_probability"]
     pooled_keys = table.index[((probability > 0.0) & (probability < 1.0)).to_numpy()]
@@ -294,6 +308,9 @@ def test_step_4_records_which_rows_entered_and_why(learned: Learned) -> None:
         on_list
     )
     assert groups["outside_the_list"]["chance_of_contact"] == pytest.approx((1 - 0.10) * EXPLORE)
+    for group in groups.values():
+        # The outcomes file covers everyone, so nobody is left out for want of an outcome.
+        assert group["outcome_coverage_contacted"] == group["outcome_coverage_not_contacted"] == 1.0
     left = record["left_out"]
     assert left["not_eligible"] == int((~eligible).sum())
     assert left["never_contacted_by_the_rule"] == int((eligible & sleeping).sum())
@@ -310,9 +327,38 @@ def test_step_4_records_which_rows_entered_and_why(learned: Learned) -> None:
 # ---------------------------------------------------------------------------
 # The Approver's block
 # ---------------------------------------------------------------------------
+def test_the_learned_model_waits_for_an_approver_although_the_use_case_needs_none(learned: Learned) -> None:
+    app = learned.cycle.app
+    scored = app.storage.read_model(run_key(learned.cycle.run_id, "run_config.json"), ResolvedConfig)
+    assert scored.config.governance.approval_required is False, "the use case itself needs no Approver"
+    assert scored.sources["governance.approval_required"] == "use_case"
+    config = app.storage.read_model(run_key(learned.uplift_run.run_id, "run_config.json"), ResolvedConfig)
+    assert config.config.governance.approval_required is True
+    assert config.sources["governance.approval_required"] == "override"
+    challenger = app.registry.get(learned.uplift_run.model_version_id or "")
+    assert challenger.status is ModelStatus.PENDING_APPROVAL, "a learned model went into use unapproved"
+    in_use = app.registry.get(learned.model_in_use.model_version_id or "")
+    assert in_use.status is ModelStatus.CHAMPION
+
+
+def test_a_learn_request_cannot_switch_the_approval_off(learned: Learned) -> None:
+    app, cycle = learned.cycle.app, learned.cycle
+    before = {path.name for path in (app.data_dir / "runs").iterdir()}
+    for overrides in (
+        {**LEARN_OVERRIDES, "governance": {"approval_required": False}},
+        {**LEARN_OVERRIDES, "governance.approval_required": False},
+    ):
+        refused = app.client.post(f"/runs/{cycle.run_id}/measure/learn", json={"overrides": overrides})
+        assert refused.status_code == 422, refused.text
+        assert "Approver" in refused.json()["detail"]["message"]
+    assert {path.name for path in (app.data_dir / "runs").iterdir()} == before
+
+
 def test_the_approver_sees_the_planted_miscalibration_of_the_model_in_use(learned: Learned) -> None:
     app, cycle = learned.cycle.app, learned.cycle
     challenger = app.registry.get(learned.uplift_run.model_version_id or "")
+    # At the default champion threshold the learned model is put forward, so the block reaches the
+    # Approver; one that did not clear it would stay a candidate, its block on step 4's record only.
     assert challenger.status is ModelStatus.PENDING_APPROVAL
     body = app.client.get("/approvals").json()
     item = next(item for item in body["items"] if item["version"]["model_id"] == challenger.model_id)
@@ -378,3 +424,25 @@ def test_a_cycle_without_an_explore_slice_is_refused_with_the_reason(
                 path.name for path in (data_dir / "runs").iterdir()
             } == before, "a refused learn started a run"
             assert cycle.table["explore"].sum() == 0
+
+
+# ---------------------------------------------------------------------------
+# An outcomes file that undoes the randomisation
+# ---------------------------------------------------------------------------
+def test_an_outcomes_file_covering_only_the_hand_off_is_refused(learned: Learned) -> None:
+    """Outcomes for the list, its control group and the explored customers only: outside the list every
+    customer with an outcome was contacted, so dropping the rest would leave nothing to compare with."""
+    app = learned.cycle.app
+    cycle = _cycle(app, HANDOFF_RUN, seed=31, handoff_only=True)
+    explored = cycle.table["explore"].to_numpy(dtype=bool)
+    assert explored.any() and cycle.table.index[explored].isin(cycle.outcomes.index).all()
+    before = {path.name for path in (app.data_dir / "runs").iterdir()}
+    refused = app.client.post(f"/runs/{HANDOFF_RUN}/measure/learn", json={"overrides": LEARN_OVERRIDES})
+    assert refused.status_code == 409, refused.text
+    detail = refused.json()["detail"]
+    assert detail["code"] == "LEARN_NO_OVERLAP"
+    assert "outside the list" in detail["message"] and "0%" in detail["message"]
+    assert jargon_in(detail["message"]) == (), detail["message"]
+    assert {
+        path.name for path in (app.data_dir / "runs").iterdir()
+    } == before, "a refused learn started a run"

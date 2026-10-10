@@ -56,7 +56,14 @@ from fastapi.responses import JSONResponse
 
 from api.access_policy import RoutePolicy, register
 from api.deps import ConfigRootDep, JobsDep, RegistryDep, SettingsDep, StorageDep
-from api.routes.runs import ARTEFACT_NAME, load_run, read_frame, requested_by
+from api.routes.runs import (
+    ARTEFACT_NAME,
+    _DatasetSource,
+    _require_dataset,
+    load_run,
+    read_frame,
+    requested_by,
+)
 from api.routes.uploads import (
     UPLOAD_VALIDATION_FILENAME,
     http_error,
@@ -84,7 +91,14 @@ from engine.contracts import RunRecord, RunState, Severity
 from engine.keys import normalise_key, row_key_column, split_config_for_key, with_row_key
 from engine.pipeline import Pipeline
 from engine.registry import RegistryError
-from engine.runs import RUN_CONFIG_FILENAME, build_job_fn, create_run, job_spec_for, write_job_spec
+from engine.runs import (
+    RUN_CONFIG_FILENAME,
+    UploadInfo,
+    build_job_fn,
+    create_run,
+    job_spec_for,
+    write_job_spec,
+)
 from engine.stages import export, ingest, validate
 from engine.stages.train import predictor_key_for
 from engine.storage import Storage, StorageError, run_key, upload_key
@@ -258,13 +272,12 @@ def create_uplift_run(
     # dataset is seen through the same four-property source, and its id seeds the check and names the
     # lineage on `run.json`.
     upload: UploadRecord | None = None
-    dataset: Any = None
+    dataset: _DatasetSource | None = None
     if body.dataset_id is not None:
         from api.routes.runs import _dataset_source
         from engine.pilot.demo import is_demo_client
 
         dataset = _dataset_source(storage, body.dataset_id, config=config, client_id=None)
-        source: Any = dataset
         profile = dataset.profile
         source_id: str = dataset.manifest.dataset_id
         synthetic = is_demo_client(storage, dataset.manifest.client_id)
@@ -276,10 +289,11 @@ def create_uplift_run(
                 UPLOAD_MODE_MISMATCH,
                 f"This file was uploaded for {upload.mode.value}. Upload it again for train.",
             )
-        source = upload
         profile = load_upload_profile(storage, upload.upload_id)
         source_id = upload.upload_id
         synthetic = upload.synthetic
+    # One source for the job path, typed as `POST /runs` types it: an upload is an `UploadInfo` already.
+    source: UploadInfo = upload if upload is not None else _require_dataset(dataset)
     frame = read_frame(storage, source.source_key, source.file_format, profile_row_cap(config))
     report = validate.validate_for_training(
         frame,

@@ -5,8 +5,11 @@ The scored rows are Phase 1's own (`apply_actions` on win-back) and their assign
 run writes, row for row. What is pinned: only rows whose contact was randomised enter; in each group
 the smaller side enters whole and the larger is cut to its size; every scored row is accounted for by
 exactly one reason; the frame does not depend on row order; a cycle without an explore share is
-refused unless everyone the list could contact was on it; a risk-ranked list has no calibration block,
-with the reason; a planted miscalibration is reported as one; and the frame is built in linear time.
+refused unless everyone the list could contact was on it; an outcomes file whose coverage differs
+between contacted and not-contacted customers (one covering only the hand-off, say) is refused after the
+frame is built; a group whose recorded chances of contact disagree with its rule is refused; a
+risk-ranked list has no calibration block, with the reason; a planted miscalibration is reported as
+one; and the frame is built in linear time.
 """
 
 from __future__ import annotations
@@ -23,12 +26,14 @@ from engine.config import load_use_case
 from engine.holdout.assign import assignment_frame, selection_masks
 from engine.holdout.spec import HoldoutAssignmentReport, HoldoutSpec
 from engine.measurement.learn import (
+    COVERAGE_TOLERANCE,
     GROUP_ON_LIST,
     GROUP_OUTSIDE_LIST,
     LEARN_CODES,
     LearnFrame,
     build_randomised_frame,
     delivery_from,
+    frame_refusal,
     live_calibration,
     overlap_refusal,
 )
@@ -74,7 +79,13 @@ def _world(
 
 
 def _build(
-    inputs: pd.DataFrame, scores: pd.DataFrame, assignment: pd.DataFrame, outcomes: pd.DataFrame, config: Any
+    inputs: pd.DataFrame,
+    scores: pd.DataFrame,
+    assignment: pd.DataFrame,
+    outcomes: pd.DataFrame,
+    config: Any,
+    *,
+    holdout_fraction: float = 0.10,
 ) -> LearnFrame:
     return build_randomised_frame(
         inputs,
@@ -89,7 +100,7 @@ def _build(
         treatment_column="contacted",
         run_id=RUN_ID,
         model_id="m_win-back-campaign_1",
-        holdout_fraction=0.10,
+        holdout_fraction=holdout_fraction,
         explore_fraction=EXPLORE,
         samples=50,
         now=NOW,
@@ -267,3 +278,90 @@ def test_the_frame_is_built_in_linear_time() -> None:
     seconds = time.perf_counter() - started
     assert built.record.rows > 0
     assert seconds < 10.0, f"{seconds:.1f}s for 200k rows"
+
+
+# ---------------------------------------------------------------------------
+# What the outcomes file leaves of the randomisation (review fix, DEC-1316)
+# ---------------------------------------------------------------------------
+CANDIDATES: Final[int] = 5_000
+"""Any positive count: the cycle had customers outside its list it could explore."""
+
+
+def _outside(built: LearnFrame) -> Any:
+    return next(group for group in built.record.groups if group.group == GROUP_OUTSIDE_LIST)
+
+
+def test_a_full_outcomes_file_is_not_refused(world: Any) -> None:
+    built = _build(*world)
+    for group in built.record.groups:
+        assert group.outcome_coverage_contacted == group.outcome_coverage_not_contacted == 1.0
+    assert frame_refusal(built.record, explore_candidates=CANDIDATES, min_rows=200) is None
+    # A cycle with nobody outside its list to explore needs no one from there.
+    assert frame_refusal(built.record, explore_candidates=0, min_rows=10**9) is None
+
+
+def test_outcomes_for_the_hand_off_only_are_refused(world: Any) -> None:
+    """The reviewer's probe: outcomes for the list, its control group and the explored customers only."""
+    inputs, scores, assignment, outcomes, config = world
+    selected, _sleeping = selection_masks(scores, config)
+    treated = assignment.set_index(KEY).loc[scores[KEY], "treated"].to_numpy(dtype=bool)
+    handed = set(scores[KEY][selected | treated])
+    built = _build(inputs, scores, assignment, outcomes[outcomes[KEY].isin(handed)], config)
+    outside = _outside(built)
+    assert outside.contacted > 0 and outside.not_contacted == 0
+    assert outside.entered_contacted == outside.entered_not_contacted == 0
+    assert outside.outcome_coverage_contacted == 1.0 and outside.outcome_coverage_not_contacted == 0.0
+    refusal = frame_refusal(built.record, explore_candidates=CANDIDATES, min_rows=200)
+    assert refusal is not None and "outside the list" in refusal and "100%" in refusal and "0%" in refusal
+    assert jargon_in(refusal) == (), refusal
+
+
+def test_outcomes_missing_more_often_for_one_side_are_refused_and_even_gaps_are_not(world: Any) -> None:
+    inputs, scores, assignment, outcomes, config = world
+    selected, _sleeping = selection_masks(scores, config)
+    table = assignment.set_index(KEY).loc[scores[KEY]]
+    treated = table["treated"].to_numpy(dtype=bool)
+    chance = table["treatment_probability"].to_numpy()
+    outside_alone = scores[KEY][~selected & ~treated & (chance > 0) & (chance < 1)]
+    rng = np.random.default_rng(12)
+    dropped = set(outside_alone[rng.random(len(outside_alone.index)) < 0.30])
+    uneven = _build(inputs, scores, assignment, outcomes[~outcomes[KEY].isin(dropped)], config)
+    gap = _outside(uneven)
+    assert gap.outcome_coverage_contacted == 1.0
+    assert gap.outcome_coverage_not_contacted is not None and gap.outcome_coverage_not_contacted < 0.75
+    refusal = frame_refusal(uneven.record, explore_candidates=CANDIDATES, min_rows=200)
+    assert refusal is not None and "outside the list" in refusal and jargon_in(refusal) == ()
+
+    # The same share missing at random, whoever was contacted: nothing depends on the contact.
+    even = outcomes[rng.random(len(outcomes.index)) >= 0.05]
+    built = _build(inputs, scores, assignment, even, config)
+    for group in built.record.groups:
+        assert (
+            group.outcome_coverage_contacted is not None and group.outcome_coverage_not_contacted is not None
+        )
+        assert (
+            abs(group.outcome_coverage_contacted - group.outcome_coverage_not_contacted) <= COVERAGE_TOLERANCE
+        )
+    assert frame_refusal(built.record, explore_candidates=CANDIDATES, min_rows=200) is None
+
+
+def test_too_few_customers_outside_the_list_are_refused(world: Any) -> None:
+    built = _build(*world)
+    entered = _outside(built).entered_contacted
+    assert frame_refusal(built.record, explore_candidates=CANDIDATES, min_rows=entered) is None
+    refusal = frame_refusal(built.record, explore_candidates=CANDIDATES, min_rows=entered + 1)
+    assert refusal is not None and refusal.startswith(f"Only {entered:,} contacted")
+    assert jargon_in(refusal) == (), refusal
+
+
+def test_a_group_whose_recorded_chances_disagree_with_its_rule_is_refused(world: Any) -> None:
+    inputs, scores, assignment, outcomes, config = world
+    selected, _sleeping = selection_masks(scores, config)
+    on_list = assignment[KEY].isin(set(scores[KEY][selected]))
+    drifted = assignment.copy()
+    drifted.loc[drifted.index[on_list.to_numpy()][:10], "treatment_probability"] = 0.5
+    with pytest.raises(ValueError, match="on the list"):
+        _build(inputs, scores, drifted, outcomes, config)
+    # Every chance alike, but not the one the run's settings give.
+    with pytest.raises(ValueError, match="cannot be compared as one randomised group"):
+        _build(inputs, scores, assignment, outcomes, config, holdout_fraction=0.20)

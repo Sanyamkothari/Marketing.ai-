@@ -72,6 +72,7 @@ from engine.measurement.learn import (
     LEARN_RECORD_FILENAME,
     LearnFrame,
     LearnRecord,
+    frame_refusal,
     overlap_refusal,
     read_learn_record,
 )
@@ -332,6 +333,8 @@ def create_learn(
     readiness = _learn_readiness(report, resolved.uplift)
     if not readiness.ready:
         raise http_error(409, MEASURE_NOT_READY, readiness.reason)
+    # Plan J M106: a model learned from a randomised cycle is always a challenger for an Approver.
+    challenger = _challenger_overrides(body.overrides) if holdout is not None else None
 
     inputs = _run_input(storage, record)
     scores = _read_scores(storage, run_id)
@@ -369,6 +372,13 @@ def create_learn(
             frame, learned = built.frame, built.record
     except ValueError as exc:
         raise http_error(422, MEASURE_INVALID, str(exc)) from exc
+    if holdout is not None and learned is not None:
+        # Plan J M106: what the outcomes file left of the randomisation, checked before anything is written.
+        late = frame_refusal(
+            learned, explore_candidates=holdout.explore_candidates, min_rows=resolved.uplift.min_arm_rows
+        )
+        if late is not None:
+            raise http_error(409, LEARN_NO_OVERLAP, late)
     experiment = _write_upload(
         storage,
         config,
@@ -378,7 +388,9 @@ def create_learn(
         # makes the experiment, and the uplift run learned from it, synthetic.
         synthetic=record.synthetic or outcomes_upload.synthetic,
     )
-    overrides: dict[str, Any] = {**body.overrides, "target.positive_label": 1}
+    overrides: dict[str, Any] = (
+        {**body.overrides, "target.positive_label": 1} if challenger is None else challenger
+    )
     started = create_uplift_run(
         UpliftRunRequest(
             use_case=config.id,
@@ -451,6 +463,27 @@ def _run_input(storage: Storage, record: RunRecord) -> Any:
         upload = load_upload(storage, record.upload_id)
         key, file_format = upload.source_key, upload.file_format
     return _read_all(storage, key, file_format)
+
+
+def _challenger_overrides(requested: dict[str, Any]) -> dict[str, Any]:
+    """The learn run's overrides on a randomised cycle: the request's, with approval always required.
+
+    Like a scheduled training run (DEC-743), a model learned from a cycle waits for an Approver
+    whatever `governance.approval_required` says; a request that asks otherwise is refused (422).
+    """
+    from engine.config import expand_paths
+
+    expanded = expand_paths(requested)
+    governance = expanded.get("governance")
+    if isinstance(governance, dict) and governance.get("approval_required") is False:
+        raise http_error(
+            422,
+            MEASURE_INVALID,
+            "A model learned from the last campaign always waits for an Approver, so "
+            "governance.approval_required cannot be set to false here.",
+        )
+    forced = {**(governance if isinstance(governance, dict) else {}), "approval_required": True}
+    return {**expanded, "target.positive_label": 1, "governance": forced}
 
 
 def _holdout_report(storage: Storage, run_id: str) -> HoldoutAssignmentReport | None:

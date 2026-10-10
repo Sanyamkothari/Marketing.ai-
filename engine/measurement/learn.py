@@ -43,6 +43,22 @@ customer who is not a predicted sleeping dog was on the list (then the control g
 randomised everyone, and the data is already randomised). The rule reads `holdout_assignment.json`
 only (:func:`overlap_refusal`), so step 4's screen and the learn route give the same answer.
 
+The outcomes file can undo that randomisation after the fact, so the built frame is checked too
+(:func:`frame_refusal`, same code). Customers with no outcome are left out, which is only harmless
+when an outcome is as likely to be missing for a contacted customer as for one left alone: a file that
+covers only the hand-off (the list, its control group and the explored customers) has outcomes for every
+contacted customer outside the list and for none of the others, and dropping the rest would leave a
+"randomised" group of contacted customers only. So, per group, the share of contacted customers with an
+outcome and the share of not-contacted ones are recorded, and learning is refused when they differ by
+more than :data:`COVERAGE_TOLERANCE`; and, when the cycle had customers it could explore, it is refused
+when fewer than the uplift floor (`uplift.min_arm_rows`) entered on either side from outside the list.
+
+**Each group has one chance of contact.** The groups come from recomputing "on the list" from the
+scores and the run's configuration; the recorded chance of contact of every member is then checked to
+be the one the group's rule gives (`1 - h`, or `(1 - h) * explore_fraction`). A disagreement (a drifted
+configuration, a different record) raises `ValueError` rather than balancing customers with different
+chances as if they were alike.
+
 **Predicted against measured, for the Approver.** The model that chose the last list predicted, per
 customer, what a contact would change (the scores' `uplift` column). On the frame's rows - customers
 the model scored before the campaign, so its predictions are out of sample - the predicted change is
@@ -80,6 +96,7 @@ if TYPE_CHECKING:
     from engine.storage import Storage
 
 __all__ = [
+    "COVERAGE_TOLERANCE",
     "GROUP_ON_LIST",
     "GROUP_OUTSIDE_LIST",
     "LEARN_CODES",
@@ -95,6 +112,7 @@ __all__ = [
     "LiveDecile",
     "build_randomised_frame",
     "delivery_from",
+    "frame_refusal",
     "live_calibration",
     "live_calibration_for",
     "overlap_refusal",
@@ -110,6 +128,12 @@ LEARN_CODES: Final[frozenset[str]] = frozenset({LEARN_NO_OVERLAP})
 
 PREDICTED_EFFECT_COLUMN: Final[str] = "uplift"
 """The scores' predicted change from a contact (an uplift scoring run's own column)."""
+
+COVERAGE_TOLERANCE: Final[float] = 0.05
+"""Largest gap allowed, in a group, between the contacted and the not-contacted shares with an outcome."""
+
+_CHANCE_TOLERANCE: Final[float] = 1e-9
+"""How far a recorded chance of contact may sit from the group's rule (float rounding only)."""
 
 GROUP_ON_LIST: Final[str] = "on_the_list"
 GROUP_OUTSIDE_LIST: Final[str] = "outside_the_list"
@@ -136,6 +160,14 @@ class LearnGroup(Artefact):
     not_contacted: int = Field(description="Customers in the group, with an outcome, whom it did not.")
     entered_contacted: int = Field(description="Of the contacted, how many entered the frame.")
     entered_not_contacted: int = Field(description="Of the not contacted, how many entered the frame.")
+    outcome_coverage_contacted: float | None = Field(
+        default=None,
+        description="Share of the group's contacted customers with an outcome in the file; null with none.",
+    )
+    outcome_coverage_not_contacted: float | None = Field(
+        default=None,
+        description="Share of the group's not-contacted customers with an outcome in the file; null with none.",
+    )
 
 
 class LeftOut(Artefact):
@@ -162,7 +194,7 @@ class Delivery(Artefact):
 
 
 class LiveDecile(Artefact):
-    """One tenth of the frame, ranked by the change the model in use predicted, highest first."""
+    """One tenth of the frame, ranked by the change the model that chose the last list predicted, highest first."""
 
     decile: int = Field(description="1 is the tenth with the highest predicted change.")
     rows: int = Field(description="Customers in the tenth.")
@@ -338,24 +370,39 @@ def build_randomised_frame(
     seed = _seed(run_id)
     keep = np.zeros(len(scores.index), dtype=bool)
     groups: list[LearnGroup] = []
-    for name, members in ((GROUP_ON_LIST, pool & selected), (GROUP_OUTSIDE_LIST, pool & ~selected)):
-        rows = np.flatnonzero(members)
-        if rows.size == 0:
+    expected = {
+        GROUP_ON_LIST: 1.0 - float(holdout_fraction),
+        GROUP_OUTSIDE_LIST: (1.0 - float(holdout_fraction)) * float(explore_fraction),
+    }
+    for name, members in (
+        (GROUP_ON_LIST, randomised & selected),
+        (GROUP_OUTSIDE_LIST, randomised & ~selected),
+    ):
+        everyone = np.flatnonzero(members)
+        if everyone.size == 0:
             continue
+        _require_one_chance(probability[everyone], expected[name], group=name)
+        rows = everyone[known[everyone]]
         contacted = rows[treated[rows]]
         alone = rows[~treated[rows]]
         smaller, larger = (contacted, alone) if contacted.size <= alone.size else (alone, contacted)
         drawn = _smallest_draws(score_keys.to_numpy()[larger], smaller.size, seed=seed)
         keep[smaller] = True
         keep[larger[drawn]] = True
+        everyone_contacted = int(treated[everyone].sum())
+        everyone_alone = int(everyone.size) - everyone_contacted
         groups.append(
             LearnGroup(
                 group=name,  # type: ignore[arg-type]
-                chance_of_contact=float(probability[rows[0]]),
+                chance_of_contact=expected[name],
                 contacted=int(contacted.size),
                 not_contacted=int(alone.size),
                 entered_contacted=int(keep[contacted].sum()),
                 entered_not_contacted=int(keep[alone].sum()),
+                outcome_coverage_contacted=(
+                    contacted.size / everyone_contacted if everyone_contacted else None
+                ),
+                outcome_coverage_not_contacted=(alone.size / everyone_alone if everyone_alone else None),
             )
         )
 
@@ -414,6 +461,51 @@ def build_randomised_frame(
         created_at=now,
     )
     return LearnFrame(frame=result, record=record)
+
+
+def _require_one_chance(chances: Any, expected: float, *, group: str) -> None:
+    """Every member of a group must carry the chance of contact its rule gives, or nothing is balanced."""
+    import numpy as np
+
+    if chances.size and bool((np.abs(chances - expected) > _CHANCE_TOLERANCE).any()):
+        where = "on the list" if group == GROUP_ON_LIST else "outside the list"
+        raise ValueError(
+            f"The run's control-group record gives the customers {where} chances of contact from "
+            f"{float(chances.min()):.4f} to {float(chances.max()):.4f}, but its settings give every one of "
+            f"them {expected:.4f}, so they cannot be compared as one randomised group."
+        )
+
+
+def frame_refusal(record: LearnRecord, *, explore_candidates: int, min_rows: int) -> str | None:
+    """Why the built frame cannot teach a model what a contact does, or None when it can (DEC-1316).
+
+    Two checks on what the outcomes file left of the randomisation: in each group the shares of
+    contacted and not-contacted customers with an outcome must not differ by more than
+    :data:`COVERAGE_TOLERANCE`; and, when the cycle had customers outside its list it could explore
+    (`explore_candidates`, M92), at least `min_rows` must have entered on each side from outside it.
+    """
+    for group in record.groups:
+        covered, alone = group.outcome_coverage_contacted, group.outcome_coverage_not_contacted
+        if covered is None or alone is None or abs(covered - alone) <= COVERAGE_TOLERANCE:
+            continue
+        where = "on the list" if group.group == GROUP_ON_LIST else "outside the list"
+        return (
+            f"The outcomes file has an outcome for {covered:.0%} of the contacted customers {where} but for "
+            f"{alone:.0%} of those not contacted, so leaving out the customers without one would compare "
+            "unlike customers. Upload outcomes for every customer the last cycle scored, contacted or not."
+        )
+    if explore_candidates <= 0:
+        return None
+    outside = next((group for group in record.groups if group.group == GROUP_OUTSIDE_LIST), None)
+    entered = 0 if outside is None else min(outside.entered_contacted, outside.entered_not_contacted)
+    if entered >= min_rows:
+        return None
+    return (
+        f"Only {entered:,} contacted and {entered:,} not-contacted customers outside the list have an "
+        f"outcome to compare, fewer than the {min_rows:,} each side needs, so nothing shows what a contact "
+        "would change for them. Upload outcomes for every customer the last cycle scored, contacted or "
+        "not, or raise the explore share (actions.explore_fraction) for the next cycle."
+    )
 
 
 def _seed(run_id: str) -> int:
@@ -608,12 +700,16 @@ def _calibration_sentence(
     measured = top.measured
     if measured is not None and measured.ci_low is not None and measured.ci_high is not None:
         first = (
-            f"For the tenth it ranked highest the model in use predicted {_points(top.predicted)}; the last "
+            f"For the tenth it ranked highest the model that chose the last list predicted "
+            f"{_points(top.predicted)}; the last "
             f"campaign measured {_points(measured.value)} (95% range {_points(measured.ci_low)} to "
             f"{_points(measured.ci_high)})."
         )
     else:
-        first = f"For the tenth it ranked highest the model in use predicted {_points(top.predicted)}."
+        first = (
+            f"For the tenth it ranked highest the model that chose the last list predicted "
+            f"{_points(top.predicted)}."
+        )
     verdict = "match" if matches else "do not match"
     return (
         f"{first} In {inside} of {judged} tenths the measured range holds the prediction, so its predictions "
