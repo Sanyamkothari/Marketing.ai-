@@ -10,9 +10,10 @@ is what it was before M99 (DEC-1309 (h)).
 
 **Region rule, data-driven.** `configs/regions/<region>.yaml` declares channel requirements (such as
 `sms_requires: [dlt_template_id, message_category]`); catalogue validation applies the configured
-region's list without naming any region in Python. A required field left as a placeholder in angle
-brackets (`"<your DLT template id>"`, as the example writes it) counts as missing, so a copied example
-is refused rather than sent.
+region's list without naming any region in Python. A second family, `<channel>_requires_true: [field]`
+(Plan K M131), asks for a field that is exactly `true` (such as `a2p_declared` on `call`: not null, not
+false). A required field left as a placeholder in angle brackets (`"<your DLT template id>"`, as the
+example writes it) counts as missing, so a copied example is refused rather than sent.
 """
 
 from __future__ import annotations
@@ -32,6 +33,7 @@ from engine.utils.logging import get_logger
 
 if TYPE_CHECKING:
     from engine.config import UseCaseConfig
+    from engine.privacy.consent import ConsentBasisRules
     from engine.storage import Storage
 
 __all__ = [
@@ -47,6 +49,7 @@ __all__ = [
     "clear_catalogue_cache",
     "load_catalogue",
     "referenced_action_ids",
+    "region_consent_basis",
     "stamp_checked_catalogue",
     "stamped_at_creation",
     "validate_action_ids",
@@ -100,6 +103,13 @@ class ActionItem(_Model):
     template_ref: str | None = Field(default=None, description="Template reference.")
     offer_id: str | None = Field(default=None, description="Offer identifier.")
     priority: int | None = Field(default=None, description="Priority score for arbitration.")
+    a2p_declared: bool | None = Field(
+        default=None,
+        description=(
+            "Whether this automated call action is declared to the telecom operator as A2P "
+            "(TRAI TCCCPR Third Amendment); null = not stated."
+        ),
+    )
 
     @model_validator(mode="before")
     @classmethod
@@ -187,6 +197,8 @@ def load_catalogue(root: Path | None = None) -> ActionCatalogue:
     - `CONFIG_NOT_FOUND` when missing.
     - `CATALOGUE_INVALID` when the schema is invalid or a region's required field is missing.
     - `ACTION_DLT_TEMPLATE_MISSING` when the region requires a DLT template id an action lacks.
+    - `ACTION_A2P_UNDECLARED` when the region requires `a2p_declared: true` on a channel an action is
+      sent by and the action says false or nothing (any other `_requires_true` field: `CATALOGUE_INVALID`).
     """
     base = config_root(root)
     cat_path = base / CATALOGUE_FILENAME
@@ -208,7 +220,9 @@ def load_catalogue(root: Path | None = None) -> ActionCatalogue:
     if loaded.region:
         reg_file = base / REGIONS_DIRECTORY / f"{loaded.region.strip().lower()}.yaml"
         if reg_file.is_file():
-            _apply_region_rules(loaded, load_yaml(reg_file))
+            region_data = load_yaml(reg_file)
+            _apply_region_rules(loaded, region_data)
+            _consent_basis_block(region_data, source=reg_file.name)
         else:
             _LOGGER.warning(
                 "catalogue region %r has no rules file; no channel requirement applied", loaded.region
@@ -218,6 +232,41 @@ def load_catalogue(root: Path | None = None) -> ActionCatalogue:
     return loaded
 
 
+def _consent_basis_block(region_data: dict[str, Any], *, source: str) -> ConsentBasisRules | None:
+    """The region file's optional `consent_basis` block as rules, or None when it has none."""
+    block = region_data.get("consent_basis")
+    if block is None:
+        return None
+    # Imported here: the ledger module is heavy, and a catalogue without the block never needs it.
+    from engine.privacy.consent import ConsentBasisRules
+
+    try:
+        return ConsentBasisRules.model_validate(block)
+    except ValidationError as exc:
+        first = exc.errors()[0]
+        dotted = ".".join(["consent_basis", *(str(part) for part in first["loc"])])
+        raise ConfigError("CATALOGUE_INVALID", f"{source}: {dotted}: {first['msg']}.", path=dotted) from exc
+
+
+def region_consent_basis(root: Path | None = None) -> ConsentBasisRules | None:
+    """The consent-basis rules of the region the run's catalogue names, or None (Plan K M131).
+
+    None - and so the consent ledger's answer is what it was - when there is no `catalogue.yaml`, it names
+    no region, the region has no file, or the file has no `consent_basis` block. The engine never names a
+    region: the rules are read from `configs/regions/<region>.yaml`.
+
+    Raises `ConfigError` `CATALOGUE_INVALID` for a block that is not valid (also checked when the
+    catalogue loads, so a bad block fails config load, not a run).
+    """
+    catalogue = catalogue_or_none(root)
+    if catalogue is None or not catalogue.region:
+        return None
+    reg_file = config_root(root) / REGIONS_DIRECTORY / f"{catalogue.region.strip().lower()}.yaml"
+    if not reg_file.is_file():
+        return None
+    return _consent_basis_block(load_yaml(reg_file), source=reg_file.name)
+
+
 def _missing(value: object) -> bool:
     if value is None:
         return True
@@ -225,16 +274,39 @@ def _missing(value: object) -> bool:
 
 
 def _apply_region_rules(catalogue: ActionCatalogue, region_data: dict[str, Any]) -> None:
-    """Validate catalogue actions against channel requirements from region config without naming any region in code."""
+    """Validate catalogue actions against channel requirements from region config without naming any region in code.
+
+    Two families, both read from the region file: `<channel>_requires: [field, ...]` (each field present
+    and not a placeholder) and `<channel>_requires_true: [field, ...]` (each field exactly `True`).
+    """
     for key, req_list in region_data.items():
-        if not (key.endswith("_requires") and isinstance(req_list, list)):
+        if not isinstance(req_list, list):
             continue
-        channel_name = key[: -len("_requires")].lower()
+        if key.endswith("_requires_true"):
+            channel_name = key[: -len("_requires_true")].lower()
+            must_be_true = True
+        elif key.endswith("_requires"):
+            channel_name = key[: -len("_requires")].lower()
+            must_be_true = False
+        else:
+            continue
         for position, action in enumerate(catalogue.actions):
             if channel_name not in action.channels:
                 continue
             for req in req_list:
-                if not _missing(getattr(action, req, None)):
+                value = getattr(action, req, None)
+                if must_be_true:
+                    if value is True:
+                        continue
+                    code = "ACTION_A2P_UNDECLARED" if req == "a2p_declared" else "CATALOGUE_INVALID"
+                    raise ConfigError(
+                        code,
+                        f"Action {action.action_id!r} is sent by {channel_name}, which region "
+                        f"{catalogue.region!r} requires to have {req!r} set to true; it is "
+                        f"{'missing' if value is None else 'false'}.",
+                        path=f"actions[{position}].{req}",
+                    )
+                if not _missing(value):
                     continue
                 code = "ACTION_DLT_TEMPLATE_MISSING" if req == "dlt_template_id" else "CATALOGUE_INVALID"
                 raise ConfigError(

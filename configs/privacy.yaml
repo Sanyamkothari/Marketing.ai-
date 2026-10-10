@@ -21,6 +21,9 @@ purposes:                               # the purposes a consent record may be g
   account_servicing:
     label: Account servicing
     description: Reminders and notices about a customer's own account, such as a payment falling due.
+  measurement_comparison_groups:        # Plan K M131 (DEC-1323). No use case is mapped to it: it is recorded and exported only.
+    label: Measurement with comparison groups
+    description: Using customers' data, including customers deliberately not contacted, to measure the effect of messages with randomised comparison groups.
 
 use_case_purposes:                      # use-case id -> purpose; a use case listed here is gated by the
   targeted-advertisement: marketing_communication   # consent ledger whenever one exists for the run's

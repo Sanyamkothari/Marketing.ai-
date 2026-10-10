@@ -22,6 +22,15 @@ returned untouched: nothing is read, nothing is written, and the run is byte for
   that channel** (`ConsentLedger.classify(..., channel=ch)`): the latest of the customer's all-channel
   records (`channel` null, which every record from before M99 is) and their records for that channel.
 
+Plan K M131 (DEC-1323): when the catalogue names a region whose file has a `consent_basis` block, the
+ledger is asked with those rules (:class:`engine.privacy.consent.ConsentBasisRules`) on the channels the
+block lists: an inquiry-based consent past its validity, and a legacy consent not recorded as registered
+with the operators, are not valid consent **on that channel** - not suppressed, only not contactable
+there, like any per-channel opt-out. `channel_contactability.json` then says how many rows each rule took
+(`inquiry_lapsed_rows`, `legacy_unregistered_rows`, on the channels the rules covered) and the rules'
+`consent_basis_rules_sha256`. With no catalogue, region or block there are no rules and nothing new is
+written or read. The all-channel question, and so the consent gate, is not changed.
+
 A configured column the scoring file lacks is skipped with a warning and named in the summary, as a
 Phase 1 suppression column is (DEC-030). With an entity key (a periodic file), a customer not
 contactable on a channel at any snapshot is not contactable on it at all, as suppression is decided
@@ -60,6 +69,7 @@ channels the seam returns the stage table untouched.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final
 
@@ -75,6 +85,7 @@ if TYPE_CHECKING:
     import pandas as pd
 
     from engine.config import UseCaseConfig
+    from engine.privacy.consent import ConsentBasisRules
 
 __all__ = [
     "ALL_CHANNEL_CONSENT_COLUMN",
@@ -128,6 +139,24 @@ class ChannelSource(Artefact):
     not_contactable_eligible_rows: int = Field(
         description="Rows neither suppressed nor held out as control that are not contactable on the channel."
     )
+    inquiry_lapsed_rows: int | None = Field(
+        default=None,
+        description=(
+            "Plan K M131: rows neither suppressed nor held out as control whose consent on this channel is "
+            "an inquiry-based grant older than the region's validity, so not counted. Absent when the "
+            "region's consent-basis rules did not apply to this channel."
+        ),
+        exclude_if=lambda value: value is None,
+    )
+    legacy_unregistered_rows: int | None = Field(
+        default=None,
+        description=(
+            "Plan K M131: rows neither suppressed nor held out as control whose consent on this channel is "
+            "a legacy grant not recorded as registered with the operators, so not counted (registration not "
+            "recorded counts as not registered). Absent when the rules did not apply to this channel."
+        ),
+        exclude_if=lambda value: value is None,
+    )
 
 
 class ChannelContactability(Artefact):
@@ -151,6 +180,14 @@ class ChannelContactability(Artefact):
             "Plan J M100 part B: rows the consent ledger let through on a channel grant alone (no valid "
             "all-channel record). They are sent only on a configured channel they are contactable on, never "
             "on a channel the use case does not configure. Absent when there are none."
+        ),
+        exclude_if=lambda value: value is None,
+    )
+    consent_basis_rules_sha256: str | None = Field(
+        default=None,
+        description=(
+            "Plan K M131: SHA-256 of the canonical JSON of the region's consent-basis rules this run applied "
+            "(inquiry validity, legacy registration, channels). Absent when no such rule applied."
         ),
         exclude_if=lambda value: value is None,
     )
@@ -332,14 +369,32 @@ def _write_catalogue_stamp(flow: Any) -> None:
     )
 
 
+@dataclass(frozen=True)
+class BasisOutcome:
+    """What the region's consent-basis rules (Plan K M131) did to one run, per channel they cover."""
+
+    rules: ConsentBasisRules
+    inquiry_lapsed: dict[str, np.ndarray]
+    """Per covered channel, per row: the deciding grant is an inquiry consent past its validity."""
+    legacy_unregistered: dict[str, np.ndarray]
+    """Per covered channel, per row: the deciding grant is a legacy consent not recorded as registered."""
+
+
 def _ledger_verdicts(
     flow: Any, banded: pd.DataFrame, channels: tuple[str, ...]
-) -> tuple[dict[str, Any], str, np.ndarray] | None:
+) -> tuple[dict[str, Any], str, np.ndarray, BasisOutcome | None] | None:
     """Per channel, the ledger's valid-consent flag per row, when a ledger gates this run; then the
-    purpose, and per row whether the customer holds a valid all-channel record (Plan J M100 part B)."""
+    purpose, per row whether the customer holds a valid all-channel record (Plan J M100 part B), and
+    what the region's consent-basis rules took away (Plan K M131; None when no rule applied).
+
+    The rules come from the region the run's catalogue names (`region_consent_basis`); with no catalogue,
+    no region or no `consent_basis` block there are none, and the ledger is asked exactly as before. The
+    all-channel question is never asked with rules.
+    """
     import pandas as pd
 
     from engine import keys
+    from engine.decide.catalogue import region_consent_basis
     from engine.privacy.consent import consent_gate_for_run, principal_key
     from engine.utils.time import utc_now
 
@@ -349,16 +404,25 @@ def _ledger_verdicts(
     )
     if gate is None:
         return None
+    rules = region_consent_basis()
     principals = pd.Series(
         [principal_key(value) for value in banded[keys.entity_column(ctx.primary_key)].tolist()]
     )
     at = utc_now()
     verdicts: dict[str, Any] = {}
+    lapsed: dict[str, np.ndarray] = {}
+    unregistered: dict[str, np.ndarray] = {}
     for channel in channels:
-        verdict = gate.ledger.classify(gate.client_id, gate.purpose, principals.tolist(), at, channel=channel)
+        verdict = gate.ledger.classify(
+            gate.client_id, gate.purpose, principals.tolist(), at, channel=channel, basis_rules=rules
+        )
         verdicts[channel] = principals.isin(verdict.valid).to_numpy(dtype=bool)
+        if rules is not None and rules.applies_to(channel):
+            lapsed[channel] = principals.isin(verdict.inquiry_lapsed).to_numpy(dtype=bool)
+            unregistered[channel] = principals.isin(verdict.legacy_unregistered).to_numpy(dtype=bool)
     every = gate.ledger.classify(gate.client_id, gate.purpose, principals.tolist(), at)
-    return verdicts, gate.purpose, principals.isin(every.valid).to_numpy(dtype=bool)
+    outcome = None if rules is None or not lapsed else BasisOutcome(rules, lapsed, unregistered)
+    return verdicts, gate.purpose, principals.isin(every.valid).to_numpy(dtype=bool), outcome
 
 
 def consent_scope(
@@ -408,6 +472,7 @@ def _write_contactability(flow: Any) -> None:
         raise RuntimeError("the actions stage produced no scored rows")
     channels = tuple(ctx.config.actions.suppression.channels)
     ledger = _ledger_verdicts(flow, banded, channels)
+    basis = None if ledger is None else ledger[3]
     masks, missing = contactability_masks(
         banded,
         flow._frame,
@@ -464,9 +529,20 @@ def _write_contactability(flow: Any) -> None:
                     ledger=ledger is not None,
                     contactable_rows=int(np.count_nonzero(masks[channel])),
                     not_contactable_eligible_rows=counts[channel],
+                    inquiry_lapsed_rows=(
+                        None
+                        if basis is None or channel not in basis.inquiry_lapsed
+                        else int((eligible & basis.inquiry_lapsed[channel]).sum())
+                    ),
+                    legacy_unregistered_rows=(
+                        None
+                        if basis is None or channel not in basis.legacy_unregistered
+                        else int((eligible & basis.legacy_unregistered[channel]).sum())
+                    ),
                 )
                 for channel in channels
             ),
+            consent_basis_rules_sha256=None if basis is None else basis.rules.sha256(),
             channel_only_consent_rows=(
                 int(channel_only.sum()) if channel_only is not None and channel_only.any() else None
             ),

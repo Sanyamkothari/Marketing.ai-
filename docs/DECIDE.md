@@ -42,6 +42,7 @@ the user downloads (the treat list).
 | 23 | Validation on real public randomised data | M110 | not yet written |
 | 24 | The manager demo | M111 | not yet written |
 | 25 | Small fixes that make existing things work better | M109 | written (below) |
+| 26 | India: TRAI Third Amendment and consent basis | M131 | written (below) |
 
 ## 4. Running the statistical suite
 
@@ -378,7 +379,8 @@ for the hand-off, and the Output page labels them differently: **Download contac
 * **Region rules, data-driven.** `configs/regions/<region>.yaml` (such as `in.yaml`:
   `sms_requires: [dlt_template_id, message_category]`) is applied to the catalogue's `region` without naming
   any region in Python. A missing DLT template id is `ACTION_DLT_TEMPLATE_MISSING`; another missing required
-  field is `CATALOGUE_INVALID`. A value left as a placeholder in angle brackets counts as missing.
+  field is `CATALOGUE_INVALID`. A value left as a placeholder in angle brackets counts as missing. A second
+  family, `<channel>_requires_true`, and the region's `consent_basis` block are section 26.
 
 ## 14. Choosing the offer (M100, DEC-1310)
 
@@ -1129,3 +1131,90 @@ share (sized so that it reaches `uplift.min_arm_rows`, at most 10%) are plain as
 override them. The benchmark gains a `mid_size_file` case; the other twenty-one digests are unchanged.
 
 **Retail win-back.** No setting or extra column makes it beat its baseline: see `library/online-retail/run_report.md`.
+
+## 26. India: TRAI Third Amendment and consent basis (M131, DEC-1323)
+
+Plan K M131, built early under Plan J's range because the rule takes effect about 30 days after its Gazette
+publication of 18 September 2026 (late October 2026). It is opt-in and data-driven: everything below is read
+from `configs/regions/in.yaml` and the client's catalogue, so with no catalogue, no region file or no
+`consent_basis` block a run is what it was. *This section describes what the product checks. It is not legal
+advice; the client's own counsel decides what the rules mean for them.*
+
+**What the amendment says, for commercial messages over telecom channels.** (1) Automated, robo and AI-voice
+calls (A2P) must be declared to the operator in advance, or they count as unsolicited commercial
+communication. (2) A consent given by inquiry lasts only 7 days. (3) A legacy consent counts only if it was
+obtained verifiably **and** is registered on the operators' digital platform.
+
+### A. Declaring automated calls (the catalogue)
+
+An action in `configs/decide/catalogue.yaml` has an optional `a2p_declared: true | false` (null = not stated).
+`configs/regions/in.yaml` carries `call_requires_true: [a2p_declared]` and `ivr_requires_true: [a2p_declared]`,
+a second kind of region rule beside `<channel>_requires`: an action sent on that channel must have each listed
+field **exactly true**. A missing or false value refuses the catalogue at config load with
+`ACTION_A2P_UNDECLARED`, naming the action, channel, region and field. A call placed by a human telecaller is
+not A2P: give that channel another name, such as `telecaller`. `catalogue.example.yaml` has a commented example.
+
+### B. Recording the basis and the registration (the consent ledger)
+
+A consent record gains two optional fields. `basis` is `explicit`, `inquiry` or `legacy`; empty means not
+recorded and is read as explicit. `operator_registered` is true or false; empty means not recorded and is
+**never** read as registered.
+
+* **Consent CSV import:** two optional columns, `basis` (case-insensitive) and `operator_registered`
+  (`true`, `false`, `yes`, `no`, `1`, `0`). A bad value is reported by row and column, without quoting the
+  value: `CONSENT_BASIS_INVALID`, `CONSENT_REGISTERED_INVALID`. A file without the columns imports as before.
+* **One record:** `POST /privacy/consent` accepts the same two fields.
+* **Storage:** two nullable columns on `consent_record`; Postgres gets them from `alembic/versions/0008_consent_basis.py`,
+  a laptop's SQLite `platform.db` in place, so every record stored before keeps its meaning.
+
+### C. What changes in a run
+
+The region file's optional block says which rules apply on which channels:
+
+```yaml
+consent_basis:
+  channels: [sms, call, ivr]
+  inquiry_valid_days: 7
+  legacy_requires_operator_registration: true
+```
+
+When the run's catalogue names that region and a consent ledger gates the run, then **on those channels only**,
+for a customer whose deciding record is a grant that has not expired:
+
+* an `inquiry` grant stops counting `inquiry_valid_days` after it was recorded (`ConsentLedger.classify`
+  puts the customer in the `inquiry_lapsed` bucket);
+* a `legacy` grant counts only if `operator_registered` is true; false and not recorded both put the customer
+  in `legacy_unregistered`.
+
+A later withdrawal still decides first, and an expired grant is still expired. These customers are **not
+contactable on that channel**. They are not suppressed: like any per-channel opt-out, they keep their score,
+band and action, and the treat list sends them on another channel they are contactable on (email, if planned)
+or not at all. The all-channel consent gate and `consent_report.json` are unchanged.
+`channel_contactability.json` records the effect: per channel the rules covered, `inquiry_lapsed_rows` and
+`legacy_unregistered_rows` (counted among customers neither suppressed nor held out as control), and the
+run-level `consent_basis_rules_sha256` of the rules applied. A channel the rules do not cover has neither count.
+
+### What is **not** modelled
+
+* **Template suspension.** An operator can suspend a registered DLT template. That is left to the operator's DLT
+  scrubbing and to the integration plan's send-log reconciliation; the product does not know a template's
+  status.
+* **Service and transactional exemptions.** Messages that are not promotional may be treated differently. The
+  rules here are applied per channel, to every purpose that has a consent ledger, which is the conservative
+  reading; a client who sends only service messages should say so to their counsel before relying on this.
+* **A consent manager.** Nothing here talks to a registered consent manager or to an operator's platform; the
+  `operator_registered` flag is what the client reports.
+
+### The measurement purpose
+
+`configs/privacy.yaml` has a purpose `measurement_comparison_groups` ("Measurement with comparison groups"): using
+customers' data, including customers deliberately not contacted, to measure the effect of messages with
+randomised comparison groups. No use case is mapped to it and no behaviour depends on it yet; it can be recorded
+in the ledger and is exported with the rest of a customer's history. An Indian legal opinion on randomised
+hold-outs under the DPDP Act is pending, so nothing here says a hold-out is lawful or "DPDP-safe".
+
+**Suggested wording for a client's notice (a draft for the client's lawyers, not legal advice):**
+
+> "We also use information about our customers, including customers who did not receive a particular message,
+> to measure whether our messages help. To do this we sometimes choose at random who receives a message and
+> who does not, and compare the two groups. This is used only to measure our own communications."
