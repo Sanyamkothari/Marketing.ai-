@@ -44,7 +44,7 @@ from engine.config import (
     load_industry,
 )
 from engine.doctor.contracts import Diagnosis, DiagnosisRequest, HandoffRequest
-from engine.doctor.diagnose import LoadedFile, Offer, diagnose_file, readiness
+from engine.doctor.diagnose import ADVISE_ROWS, LoadedFile, Offer, diagnose_file, readiness
 from engine.doctor.joins import how_files_fit
 from engine.doctor.outcomes import (
     OutcomeAgreement,
@@ -114,11 +114,17 @@ def offers(root_path: Path) -> tuple[Offer, ...]:
     return tuple(found)
 
 
+DIAGNOSIS_ROWS: Final[int] = 4_000_000
+"""Rows one diagnosis reads across all its files (M161, DEC-1507): every file is held at once, so twenty large
+uploads must not cost twenty full reads. A file gets an even share, never fewer than `ADVISE_ROWS`; what is
+measured on fewer rows than a file has says so (`sampled`, the outcome's note)."""
+
+
 def _load(storage: Storage, upload_id: str, cap: int) -> LoadedFile:
     record = load_upload(storage, upload_id)
     profile = load_upload_profile(storage, upload_id)
     frame = ingest.read_upload(
-        storage, record.source_key, file_format=record.file_format, max_rows=None, row_cap=cap
+        storage, record.source_key, file_format=record.file_format, max_rows=cap, row_cap=cap
     ).frame
     notes: tuple[str, ...] = ()
     if record.intake_key is not None and storage.exists(record.intake_key):
@@ -139,8 +145,12 @@ def diagnose(body: DiagnosisRequest, storage: StorageDep, root: ConfigRootDep) -
     if not available:
         raise http_error(404, "DOCTOR_NO_USE_CASES", "There is no use case to check the files against.")
     any_config = available[0].config
-    cap = min(profile_row_cap(offer.config) for offer in available)
-    files = [_load(storage, upload_id, cap) for upload_id in dict.fromkeys(body.upload_ids)]
+    wanted = tuple(dict.fromkeys(body.upload_ids))
+    cap = min(
+        min(profile_row_cap(offer.config) for offer in available),
+        max(ADVISE_ROWS, DIAGNOSIS_ROWS // len(wanted)),
+    )
+    files = [_load(storage, upload_id, cap) for upload_id in wanted]
     roles = get_roles(root)
     diagnosed = tuple(diagnose_file(loaded, any_config, roles) for loaded in files)
     # Plan L M157 (DEC-1573): a `missing` use case gets the outcome an event file can define, if any.

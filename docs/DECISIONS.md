@@ -1513,7 +1513,9 @@ DEC-1500…1509, M151 → DEC-1510…1519, …), so parallel work on two milesto
   retention could never find without an `upload.json`. (f) **`POST /uploads` reads the file off the event loop**
   (`run_in_threadpool`), so a big file does not stall every other request. (g) A connection's workbook preview
   reads only the rows it shows; `sheet` form fields are at most 255 characters; `defusedxml` becomes a direct
-  dependency (openpyxl parses through it when installed). *Consequences:* `tests/integration/test_intake_erasure.py`,
+  dependency (openpyxl parses through it when installed). (h) **A diagnosis reads a bounded share of each file**:
+  four million rows across its files, each at least `ADVISE_ROWS`, read as a bounded preview, so twenty large
+  uploads cannot hold twenty full files at once; a share measured on part of a file says so. *Consequences:* `tests/integration/test_intake_erasure.py`,
   the hostile-workbook tests in `tests/unit/intake/test_intake_run.py`, `tests/integration/test_api_intake.py`
   and `tests/unit/agent/test_edits.py` prove it. Not changed, by design: no route scopes uploads by client
   (single-tenant today, as every upload route), and Viewers still see the corrections a session holds.
