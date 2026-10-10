@@ -91,9 +91,12 @@ def upload(client: TestClient, client_id: str, path: Path, payload: bytes | None
     return source_id
 
 
-def onboard(client: TestClient, client_id: str, tables: RawTables) -> tuple[str, list[str]]:
+def onboard(
+    client: TestClient, client_id: str, tables: RawTables, snapshot_spec: dict[str, Any] | None = None
+) -> tuple[str, list[str]]:
     """Every table uploaded, its proposed role confirmed and its suggested mapping saved; the
-    use case's suggested features and label kept. Returns the saved recipe and its file ids."""
+    use case's suggested features and label kept. Returns the saved recipe and its file ids.
+    `snapshot_spec` is the engine's default (periodic) unless a caller names another (Plan L M155)."""
     source_ids = [upload(client, client_id, getattr(tables, name)) for name in TABLES]
     for source_id in source_ids:
         profile = ok(client.get(f"/clients/{client_id}/sources"))["profiles"][source_id]
@@ -124,7 +127,7 @@ def onboard(client: TestClient, client_id: str, tables: RawTables) -> tuple[str,
                     "features": [f for f in schema["suggested_features"] if f["role"] in set(roles.values())]
                 },
                 "label_spec": schema["label"],
-                "snapshot_spec": {},
+                "snapshot_spec": snapshot_spec or {},
             },
         ),
         201,

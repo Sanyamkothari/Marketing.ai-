@@ -13,11 +13,16 @@ from typing import Literal
 from pydantic import Field
 
 from engine.config import StrictBase
+from engine.doctor.outcomes import OutcomeOffer
 
 __all__ = [
+    "ColumnDrift",
+    "ColumnRename",
     "Diagnosis",
     "DiagnosisRequest",
     "FileDiagnosis",
+    "FileLink",
+    "FileStack",
     "HandoffRequest",
     "ReadinessStatus",
     "UseCaseReadiness",
@@ -68,6 +73,83 @@ class UseCaseReadiness(StrictBase):
     outcome_column: str | None = Field(default=None, description="The column Guided setup would learn from.")
     questions: int = Field(default=0, description="Questions Guided setup will ask before training.")
     suggestions: int = Field(default=0, description="Suggestions Guided setup will show before training.")
+    # Plan L M157 (DEC-1572): for a `missing` use case whose outcome an event file can define, the
+    # sentence to agree, with its choices measured on the files. Null otherwise; never built from.
+    outcome_offer: OutcomeOffer | None = Field(
+        default=None,
+        description="The outcome an event file can define, as a sentence to agree; null when none.",
+    )
+
+
+class FileLink(StrictBase):
+    """How one event file meets the customer list (Plan L M155, DEC-1551): every share is measured."""
+
+    upload_id: str = Field(description="The event file (a log of bills, tickets, ...).")
+    file_name: str
+    column: str = Field(description="The event file's column that names the customer.")
+    list_upload_id: str = Field(description="The customer list it was measured against.")
+    list_file_name: str
+    list_column: str = Field(description="The customer list's ID column.")
+    coverage: float = Field(
+        description="Share of the event rows naming a customer whose customer is in the list, as written."
+    )
+    fix: str | None = Field(
+        default=None,
+        description="In plain words, what to do to the IDs so they meet; null when none is needed.",
+    )
+    transform: str | None = Field(
+        default=None,
+        description=(
+            "The onboarding mapping transform that is the fix (`strip`, `lower`, `lstrip_zeros`), when one is; "
+            "null for no fix or for a fix that also removes a prefix."
+        ),
+    )
+    fixed_coverage: float | None = Field(
+        default=None, description="The same share once `fix` is applied, measured; null when there is no fix."
+    )
+    sampled: bool = Field(
+        default=False,
+        description="True when a file was longer than the rows read, so the shares are of those rows.",
+    )
+    summary: str = Field(description="One plain sentence.")
+
+
+class ColumnRename(StrictBase):
+    """A column the first file of a stack has under another name in a later one."""
+
+    before: str
+    after: str
+
+
+class ColumnDrift(StrictBase):
+    """How one file of a stack differs from the stack's first file."""
+
+    upload_id: str
+    file_name: str
+    added: tuple[str, ...] = Field(default=(), description="Columns this file has and the first does not.")
+    missing: tuple[str, ...] = Field(
+        default=(), description="Columns the first file has and this one does not."
+    )
+    renamed: tuple[ColumnRename, ...] = Field(
+        default=(), description="Columns read as renamed: same place or a close name, and the same type."
+    )
+
+
+class FileStack(StrictBase):
+    """Files that look like the same report for different periods, and can be stacked (DEC-1552)."""
+
+    upload_ids: tuple[str, ...] = Field(
+        description="In file-name order; the first is the one compared against."
+    )
+    file_names: tuple[str, ...]
+    kind: str | None = Field(description="What the files are (the same for all of them).")
+    columns: tuple[str, ...] = Field(description="Columns every file has under the same name.")
+    rows: int = Field(description="Rows of all the files together, counted.")
+    drift: tuple[ColumnDrift, ...] = Field(
+        default=(),
+        description="One entry per file whose columns differ from the first's; empty when all agree.",
+    )
+    summary: str = Field(description="One plain sentence.")
 
 
 class Diagnosis(StrictBase):
@@ -75,6 +157,12 @@ class Diagnosis(StrictBase):
 
     files: tuple[FileDiagnosis, ...]
     use_cases: tuple[UseCaseReadiness, ...] = Field(description="Ready first, then check, then the rest.")
+    links: tuple[FileLink, ...] = Field(
+        default=(), description="How each event file's customer IDs meet the customer list's (M155)."
+    )
+    stacks: tuple[FileStack, ...] = Field(
+        default=(), description="Files that are the same report for different periods (M155)."
+    )
 
 
 class DiagnosisRequest(StrictBase):

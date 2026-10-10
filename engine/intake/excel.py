@@ -4,8 +4,10 @@
 table and one row. Two guards run before a workbook is opened: it must be a zip archive (an old `.xls`
 or a password-protected file is not, and is refused with what to do instead), and its members must
 not unpack to more than `max_workbook_uncompressed_mb`, so a small upload cannot expand into gigabytes.
-The XML itself is parsed by the standard library's expat, whose built-in amplification limits stop
-entity-expansion attacks; external entities are never resolved.
+The XML itself is parsed through `defusedxml` (a direct dependency, which openpyxl uses whenever it is
+installed): entity declarations and DTDs are refused, so no entity-expansion attack and no external entity.
+The table of texts is read into memory whole, so it has its own limit (`max_shared_strings_mb`), and the
+size a sheet declares is never trusted (`sheet_rows`).
 
 Cells become text the way a "Save as CSV" would write them, so the same rules read both alike: a
 whole number without `.0`, a date as `YYYY-MM-DD` (with the time when it has one), `TRUE` / `FALSE`, an
@@ -33,6 +35,7 @@ __all__ = [
     "cell_text",
     "check_workbook",
     "open_workbook",
+    "sheet_bytes",
     "sheet_rows",
 ]
 
@@ -43,6 +46,8 @@ SHEET_SCAN_ROWS: Final[int] = 200
 """Rows of each sheet read to decide whether it holds a table."""
 
 _MIDNIGHT: Final[time] = time(0, 0)
+_CELL_ALLOWANCE: Final[int] = 1_000_000
+"""Cells any sheet may produce beyond its budget of one per two stored bytes."""
 
 
 class WorkbookError(Exception):
@@ -66,22 +71,75 @@ def check_workbook(path: Path | BinaryIO, config: IntakeConfig) -> None:
     try:
         with zipfile.ZipFile(path) as archive:
             unpacked = sum(member.file_size for member in archive.infolist())
+            texts = sum(
+                member.file_size
+                for member in archive.infolist()
+                if member.filename.casefold() == "xl/sharedstrings.xml"
+            )
     except zipfile.BadZipFile as exc:
         raise WorkbookError(
             "UPLOAD_WORKBOOK_UNREADABLE", "This .xlsx file is damaged and cannot be opened."
         ) from exc
-    if unpacked > limit:
+    if unpacked > limit or texts > config.max_shared_strings_mb * 1024 * 1024:
         raise WorkbookError(
             "UPLOAD_WORKBOOK_TOO_LARGE",
-            f"This workbook unpacks to more than {config.max_workbook_uncompressed_mb:,} MB. "
-            "Save the sheet you need as CSV and upload that instead.",
+            f"This workbook unpacks to more than {config.max_workbook_uncompressed_mb:,} MB"
+            + (
+                ""
+                if unpacked > limit
+                else f", or holds more than {config.max_shared_strings_mb:,} MB of texts"
+            )
+            + ". Save the sheet you need as CSV and upload that instead.",
         )
+
+
+def _sheet_size(self: Any) -> None:
+    """`ReadOnlyWorksheet._get_size` that stops where the sheet's data starts.
+
+    openpyxl's own looks for the `<dimension>` element on *end* events, so when a writer leaves it out
+    (pandas, many exporters) it parses the whole sheet before it gives up: every sheet of a workbook read
+    in full just to open it (a 200,000-row sheet took 30 seconds). Start events see the element, with
+    its attributes, before any row; the result is the same, the dimension or nothing.
+    """
+    from openpyxl.worksheet._reader import DATA_TAG, DIMENSION_TAG  # type: ignore[import-untyped]
+    from openpyxl.worksheet.dimensions import SheetDimension  # type: ignore[import-untyped]
+    from openpyxl.xml.functions import iterparse  # type: ignore[import-untyped]
+
+    # openpyxl's own parser (defusedxml's when that is installed), as the rest of the sheet is read with
+
+    source = self._get_source()
+    try:
+        for _event, element in iterparse(source, events=("start",)):
+            if element.tag == DIMENSION_TAG:
+                boundaries = SheetDimension.from_tree(element).boundaries
+                self._min_column, self._min_row, self._max_column, self._max_row = boundaries
+                return
+            if element.tag == DATA_TAG:
+                return
+    finally:
+        source.close()
+
+
+def _read_dimensions_quickly() -> None:
+    from openpyxl.worksheet._read_only import ReadOnlyWorksheet  # type: ignore[import-untyped]
+
+    if getattr(ReadOnlyWorksheet, "_get_size", None) is not _sheet_size:
+        ReadOnlyWorksheet._get_size = _sheet_size
+
+
+def sheet_bytes(book: Any, sheet: Any) -> int | None:
+    """How many bytes the sheet's XML unpacks to: its size when the workbook does not say how many rows."""
+    try:
+        return int(book._archive.getinfo(sheet._worksheet_path).file_size)
+    except (AttributeError, KeyError, TypeError, ValueError):
+        return None
 
 
 def open_workbook(path: Path | BinaryIO) -> Any:
     """The workbook in read-only mode with cached formula values (`openpyxl` ships no type stubs)."""
     from openpyxl import load_workbook  # type: ignore[import-untyped]
 
+    _read_dimensions_quickly()
     try:
         return load_workbook(path, read_only=True, data_only=True)
     except Exception as exc:  # openpyxl raises a dozen unrelated types for a damaged file
@@ -117,8 +175,26 @@ def cell_text(value: Any) -> str:
 
 
 def sheet_rows(sheet: Any, *, max_rows: int | None = None) -> Iterator[list[str]]:
-    """The sheet's rows as text, from its first row, every row padded only as far as Excel stored it."""
+    """The sheet's rows as text, from its first row, each as wide as its last stored cell.
+
+    The size a sheet declares is not trusted: openpyxl pads every row to it, so a 5 KB file declaring
+    `A1:XFD1048576` would come out as rows of 16,384 cells. And a row is as wide as its last cell, so
+    the cells produced are capped by what the sheet stores: a cell takes at least a dozen bytes of XML,
+    and a table with gaps a few more cells than that; a sheet that would produce far more (one value
+    in a far column of every row) is refused rather than read for hours.
+    """
+    sheet.reset_dimensions()
+    stored = sheet_bytes(sheet.parent, sheet)
+    budget = None if stored is None else stored // 2 + _CELL_ALLOWANCE
     for row in sheet.iter_rows(max_row=max_rows, values_only=True):
+        if budget is not None:
+            budget -= len(row)
+            if budget < 0:
+                raise WorkbookError(
+                    "UPLOAD_WORKBOOK_TOO_SPARSE",
+                    f'Sheet "{sheet.title}" has values far apart, with mostly empty cells between them. '
+                    "Save the table you need as CSV and upload that instead.",
+                )
         yield [cell_text(value) for value in row]
 
 

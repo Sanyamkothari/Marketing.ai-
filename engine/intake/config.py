@@ -85,7 +85,14 @@ class IntakeConfig(BaseModel):
         default=20_000, description="Data rows the rules look at to decide."
     )
     max_workbook_uncompressed_mb: Annotated[int, Field(ge=1, le=65_536)] = Field(
-        default=2048, description="The most an .xlsx archive may unpack to before it is refused unopened."
+        default=1024, description="The most an .xlsx archive may unpack to before it is refused unopened."
+    )
+    max_shared_strings_mb: Annotated[int, Field(ge=1, le=65_536)] = Field(
+        default=64,
+        description=(
+            "The most a workbook's table of texts (`xl/sharedStrings.xml`) may unpack to: it is held in "
+            "memory whole, about ten times its size."
+        ),
     )
 
     @field_validator("total_words", "missing_words")

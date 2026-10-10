@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Annotated, Final
 
 from fastapi import APIRouter, File, Form, HTTPException, Response, UploadFile
+from fastapi.concurrency import run_in_threadpool
 
 from api.deps import ConfigRootDep, StorageDep
 from api.schemas import ErrorResponse, UploadRecord, UploadResponse
@@ -73,7 +74,8 @@ SyntheticField = Annotated[
 SheetField = Annotated[
     str | None,
     Form(
-        description="For an Excel workbook, the sheet to read; by default the visible sheet with the largest table."
+        max_length=255,
+        description="For an Excel workbook, the sheet to read; by default the visible sheet with the largest table.",
     ),
 ]
 IntakeField = Annotated[
@@ -141,7 +143,9 @@ async def create_upload(
         delete_upload(storage, upload_id)
         raise
 
-    upload = finish_upload(
+    # Reading a big file takes seconds to minutes: off the event loop, so other requests are served.
+    upload = await run_in_threadpool(
+        finish_upload,
         storage,
         config,
         upload_id=upload_id,
@@ -209,6 +213,10 @@ def finish_upload(
     except ingest.IngestError as exc:
         delete_upload(storage, upload_id)
         raise ingest_http(exc.code, exc.message) from exc
+    except Exception:
+        # No upload.json is written, so retention would never find what was stored: remove it now.
+        delete_upload(storage, upload_id)
+        raise
 
     record = UploadRecord(
         upload_id=upload_id,

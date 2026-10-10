@@ -86,6 +86,7 @@ __all__ = [
     "fail_if_unfinished",
     "fail_interrupted",
     "find_principal",
+    "is_intake_original",
     "models_flagged_for_retraining",
     "queue_request",
     "requeue_failed",
@@ -104,6 +105,10 @@ _UNAVAILABLE: Final[str] = "training_input_unavailable"
 _KEYED: Final[frozenset[FileKind]] = frozenset({FileKind.CSV, FileKind.PARQUET, FileKind.JSON})
 """Kinds whose rows are decided by the file's recorded key columns (JSON: its rows of records)."""
 
+INTAKE_ORIGINALS: Final[frozenset[str]] = frozenset({"original.csv", "original.xlsx"})
+"""Files intake keeps as they arrived beside the table it reads (Plan L M150, DEC-1501)."""
+_WORKBOOK_PARTS: Final[tuple[str, ...]] = ("xl/worksheets/", "xl/sharedStrings.xml")
+
 
 # ---------------------------------------------------------------------------
 # Find
@@ -119,13 +124,18 @@ def find_principal(
     layout = index or StoreIndex(storage)
     locations: list[PrincipalLocation] = []
     searched = 0
+    originals: list[str] = []
     for key in layout.keys:
         if not is_artefact_key(key):
             continue
         searched += 1
+        if is_intake_original(key):
+            originals.append(key)
+            continue
         location = _locate(storage, key, matcher, layout)
         if location is not None:
             locations.append(location)
+    locations.extend(_locate_originals(storage, originals, matcher, locations))
     runs, models, unknown = _training_exposure(layout, locations)
     _LOGGER.info("privacy.find searched=%d locations=%d models=%d", searched, len(locations), len(models))
     return PrincipalFindings(
@@ -187,6 +197,68 @@ def _locate(storage: Storage, key: str, matcher: Matcher, layout: StoreIndex) ->
         cells=hits.cells,
         occurrences=hits.occurrences,
     )
+
+
+def is_intake_original(key: str) -> bool:
+    """True for a file intake kept as it arrived (`original.csv`, `original.xlsx`) beside the one it reads."""
+    return key.rsplit("/", 1)[-1] in INTAKE_ORIGINALS
+
+
+def _locate_originals(
+    storage: Storage, keys: list[str], matcher: Matcher, found: list[PrincipalLocation]
+) -> list[PrincipalLocation]:
+    """The kept originals that may hold the principal: erasure deletes them rather than rewriting them.
+
+    A workbook is a zip, so its bytes never show an id: its sheets and shared strings are searched
+    unpacked. An original is also reported whenever the table read from it (in the same folder) holds
+    the principal: a rewritten original's header can sit under titles, so its rows cannot be matched
+    by key the way the read table's are. Matching is by bytes, so a numeric id may match more than the
+    person; the result is that a kept original is deleted, never that data is left behind.
+    """
+    folders = {location.key.rsplit("/", 1)[0] for location in found}
+    needle = matcher.principal_id.encode("utf-8")
+    located: list[PrincipalLocation] = []
+    for key in keys:
+        try:
+            count = (
+                _workbook_count(storage, key, needle)
+                if key.endswith(".xlsx")
+                else _binary_count(storage, key, needle)
+            )
+        except StorageError:
+            raise
+        except Exception:  # a damaged workbook cannot be searched; deleting it is the safe answer
+            _LOGGER.warning("privacy.find: %s could not be unpacked; reported as holding the principal", key)
+            count = 1
+        if count or key.rsplit("/", 1)[0] in folders:
+            located.append(
+                PrincipalLocation(
+                    key=key,
+                    store=store_of(key).value,
+                    file_kind=FileKind.BINARY.value,
+                    occurrences=count,
+                    rewritable=True,
+                )
+            )
+    return located
+
+
+def _workbook_count(storage: Storage, key: str, needle: bytes) -> int:
+    """Occurrences of `needle` in a workbook's sheets and shared strings, unpacked as they are read."""
+    import zipfile
+
+    count = 0
+    with storage.open_read(key) as handle, zipfile.ZipFile(handle) as archive:
+        for member in archive.infolist():
+            if not member.filename.startswith(_WORKBOOK_PARTS):
+                continue
+            tail = b""
+            with archive.open(member) as part:
+                while chunk := part.read(_CHUNK):
+                    window = tail + chunk
+                    count += window.count(needle) - tail.count(needle)
+                    tail = window[-(len(needle) - 1) :] if len(needle) > 1 else b""
+    return count
 
 
 def _binary_count(storage: Storage, key: str, needle: bytes) -> int:
@@ -732,7 +804,7 @@ def _erase_file(
     tombstone: str,
 ) -> tuple[int, int, FileKind | None]:
     """Erase the principal from one file: `(rows, cells, kind)`, `kind` None for a deleted cache entry."""
-    if location.store == Store.LLM_CACHE:
+    if location.store == Store.LLM_CACHE or is_intake_original(location.key):  # deleted, not rewritten
         storage.delete(location.key)
         purge_old_versions(storage, location.key)
         return 0, location.rows + location.cells + location.occurrences, None

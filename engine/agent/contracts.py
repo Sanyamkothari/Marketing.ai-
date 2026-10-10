@@ -127,6 +127,9 @@ class RecipeStepKind(StrEnum):
     FILL_MISSING = "fill_missing"
     REMOVE_ROWS = "remove_rows"
     RENAME_COLUMN = "rename_column"
+    # Plan L M156 (DEC-1560): a wide sheet's month columns into rows (level 3, first in the fixed order). Row-wise:
+    # each row becomes one row per listed period, from that row's own cells and the frozen parameters only.
+    UNPIVOT = "unpivot"
 
 
 class ProposalSource(StrEnum):
@@ -202,6 +205,8 @@ class RecipeStep(StrictBase):
             raise ValueError(f"a {self.kind.value} step must name new_column")
         if self.kind is RecipeStepKind.REMOVE_ROWS and self.new_column is not None:
             raise ValueError("a remove_rows step creates no column")
+        if self.kind is RecipeStepKind.UNPIVOT and self.new_column is not None:
+            raise ValueError("an unpivot step names its new columns in params")
         return self
 
 

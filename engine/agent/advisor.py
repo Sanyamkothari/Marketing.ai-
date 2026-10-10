@@ -19,6 +19,10 @@ a recorded `ToolResult` a proposal cites, and turns what they found into:
   a stop: "Each customer appears on N rows on average. Combine them into one row per customer?".
   Choosing Combine adds a `combine_rows` step (`engine.agent.reshape`), and the advisor looks at the
   file again as it will be once combined; choosing Stop stops with the Run button's own message.
+* **a question to turn a wide sheet into rows** (Plan L M156) - when the use case allows `reshape`, a
+  training file with one column per month (`2024_01_spend`, `2024_02_spend`, …) gets a blocking question;
+  choosing Turn into rows adds an `unpivot` step and the advisor looks at the rows it makes (where the
+  combine question then comes up). Months without a year are only noted: they cannot be put in date order.
 
 Hiding a column is a recipe `drop_column` step, so scoring drops it the same way (DEC-1006).
 `summarise` turns whatever the user has decided into the four lists read before Approve.
@@ -62,6 +66,7 @@ from engine.agent.recommend import (
 )
 from engine.agent.reshape import choose_dates, plan_combine
 from engine.agent.tools import AgentContext, AgentToolError, call_tool
+from engine.agent.unpivot import find_wide_columns
 from engine.agent.untrusted import MAX_NAME_CHARS, clean_text, display_name, quoted
 from engine.config import (
     ColumnType,
@@ -161,6 +166,7 @@ class _Builder:
     ctx: AgentContext
     prefix: str = ""
     decided_steps: tuple[RecipeStep, ...] = ()
+    carry: tuple[str, ...] = ()  # Plan L M156: a wide sheet's kept columns, carried as they are by a combine
     results: list[ToolResult] = field(default_factory=list)
     proposals: list[Proposal] = field(default_factory=list)
     questions: list[Question] = field(default_factory=list)
@@ -791,6 +797,9 @@ def _ask_to_combine(
     ctx = builder.ctx
     prepared = _prepared_context(builder, builder.preview_steps(), key, target)
     others = {name for name in protected if name in prepared.frame.columns} - {key, target}
+    # A wide sheet's kept columns hold one value per customer, copied onto each of its rows: carried as they
+    # are, never added up over the periods, and never the date that orders the rows (Plan L M156).
+    others |= {name for name in builder.carry if name in prepared.frame.columns} - {key, target}
     dates = choose_dates(
         prepared.profile, exclude=[key, target, *sorted(others)], snapshot_hint=ctx.config.split.time_column
     )
@@ -856,6 +865,99 @@ def _ask_to_combine(
         evidence,
     )
     return None
+
+
+def _and(names: Sequence[str]) -> str:
+    """`spend`, `spend and calls`, `spend, calls and visits`."""
+    return names[0] if len(names) == 1 else f"{', '.join(names[:-1])} and {names[-1]}"
+
+
+def _ask_to_unpivot(
+    builder: _Builder, profile: ToolResult, key: str, target: str, protected: set[str]
+) -> set[str]:
+    """Ask whether to turn a wide sheet's period columns into rows (Plan L M156); the columns asked about.
+
+    Read from the column names only (`engine.agent.unpivot.find_wide_columns`). Periods that name no year
+    (`Jan_spend`) cannot be put in date order, so their rows could not be combined back into one per
+    entity: the advisor says so as an assumption and asks nothing.
+    """
+    ctx = builder.ctx
+    columns = [str(c) for c in ctx.frame.columns]
+    group = find_wide_columns(columns, skip=protected)
+    if group is None:
+        return set()
+    entity, word = ctx.config.entity, group.kind
+    plain = _and([display_name(m) for m in group.measures])
+    if not group.dated:
+        named = group.name_pattern.replace("{measure}", group.measures[0]).replace("{period}", "2024_01")
+        builder.assumptions.append(
+            f"Your sheet has one column per {word} for {plain} ('{display_name(group.columns[0])}', …), but the "
+            "column names give no year, so they stay separate columns: as rows they could not be put in date "
+            f"order and combined back into one row per {entity}. Name them with the year (for example "
+            f"'{display_name(named)}') to have them turned into rows."
+        )
+        return set()
+    kept = [c for c in columns if c not in set(group.columns) and c != target]
+    params = group.params(key=key, id_columns=kept, outcome=target, taken=columns)
+    period_column = display_name(str(params["period_column"]))
+    shown = ", ".join(f"'{display_name(c)}'" for c in group.columns[:3])
+    reason = (
+        f"The columns {shown}{', …' if len(group.columns) > 3 else ''} hold {plain} for different {word}s. As "
+        f"rows, one per {entity} per {word} with '{period_column}' saying which {word}, they can be combined back "
+        f"into one row per {entity} with totals, averages and the latest value, instead of each {word} being an "
+        f"unrelated column. '{display_name(target)}' is copied onto every row, never turned into rows."
+    )
+    step = RecipeStep(order=1, kind=RecipeStepKind.UNPIVOT, column=key, params=params, reason=reason)
+    builder.ask(
+        f"Your sheet has one column per {word} for {plain}. Turn them into rows (one row per {entity} per {word})?",
+        [
+            QuestionOption(
+                option_id="unpivot",
+                label="Turn into rows (recommended)",
+                effect=f"One row per {entity} per {word}; the rows can then be combined into one row per {entity}.",
+                proposal=builder.option_proposal(
+                    kind=ProposalKind.RECIPE_STEP,
+                    title=f"Turn the {word} columns of {plain} into rows",
+                    reason=reason,
+                    step=step,
+                    evidence_ids=(profile.evidence_id,),
+                    confidence=AgentConfidence.SURE,
+                ),
+            ),
+            QuestionOption(
+                option_id="keep", label="Keep as columns", effect=f"Each {word} stays a separate column."
+            ),
+        ],
+        [profile.evidence_id],
+    )
+    return set(group.columns)
+
+
+def _unpivoted_context(
+    ctx: AgentContext, step: RecipeStep, primary_key: str | None, target: str | None
+) -> AgentContext:
+    """A context over the rows a wide sheet becomes, so everything is advised on them (Plan L M156)."""
+    run = run_recipe(
+        ctx.frame,
+        [step.model_copy(update={"order": 1})],
+        upload_id=ctx.upload_id,
+        primary_key=primary_key if primary_key is not None else step.column,
+        target=target,
+        levels=ctx.config.agent.levels,
+        max_failure_pct=ctx.config.agent.max_conversion_failure_pct,
+    )
+    profile = ingest.profile_dataset(
+        run.frame,
+        ctx.config,
+        upload_id=ctx.upload_id,
+        file_name=ctx.profile.file_name,
+        file_format=ctx.profile.file_format,
+        file_size_bytes=ctx.profile.file_size_bytes,
+        delimiter=ctx.profile.delimiter,
+        encoding=ctx.profile.encoding,
+        row_count=len(run.frame),
+    )
+    return replace(ctx, frame=run.frame, profile=profile)
 
 
 def _leaks(checks: ToolResult) -> list[dict[str, Any]]:
@@ -1078,6 +1180,7 @@ def advise(
     combine: RecipeStep | None = None,
     combine_declined: bool = False,
     decided_steps: Sequence[RecipeStep] = (),
+    unpivot_declined: bool = False,
 ) -> Advice:
     """Look at the file and propose everything; `primary_key` / `target` are the user's answers so far.
 
@@ -1089,8 +1192,33 @@ def advise(
     file. `combine_declined` means the user answered Stop, so a repeating ID stops the session.
     `decided_steps` are the recipe steps the person already accepted (an answered day/month
     question's `parse_date`): the preview runs them, so the combine reads the dates they convert.
+
+    Plan L M156: an accepted `unpivot` among `decided_steps` turns the wide sheet into rows first, and
+    everything - the roles, the fixes, the combine question - is then about those rows. `unpivot_declined`
+    means the person answered Keep as columns, so the sheet is not asked about again.
     """
-    builder = _Builder(ctx, prefix=id_prefix, decided_steps=tuple(decided_steps))
+    unpivot = next((step for step in decided_steps if step.kind is RecipeStepKind.UNPIVOT), None)
+    carry: tuple[str, ...] = ()
+    if unpivot is not None:
+        decided_steps = [step for step in decided_steps if step is not unpivot]
+        try:
+            ctx = _unpivoted_context(ctx, unpivot, primary_key, target)
+        except RecipeError as exc:
+            return Advice(
+                status=SessionStatus.STOPPED,
+                tool_results=(),
+                proposals=(),
+                questions=(),
+                assumptions=(),
+                engine_hidden=(),
+                stop_reason=f"The columns could not be turned into rows: {exc.message}",
+                primary_key=primary_key,
+                target=target,
+            )
+        personal = {column.name for column in ctx.profile.columns if column.pii_kinds}
+        kept: Any = unpivot.params.get("id_columns") or []
+        carry = tuple(str(name) for name in kept if str(name) not in personal)
+    builder = _Builder(ctx, prefix=id_prefix, decided_steps=tuple(decided_steps), carry=carry)
     config = ctx.config
     profile = builder.call("get_profile")
     roles = builder.call("find_roles")
@@ -1114,15 +1242,29 @@ def advise(
         )
         if name
     }
+    wide: set[str] = set()
+    if (
+        ctx.mode is RunMode.TRAIN
+        and AgentLevel.RESHAPE in config.agent.levels
+        and unpivot is None
+        and combine is None
+        and not unpivot_declined
+        and not to_combine
+        and stop is None
+        and key is not None
+        and outcome_column is not None
+    ):
+        # Plan L M156: columns about to be turned into rows get no fixes of their own; the answer re-advises.
+        wide = _ask_to_unpivot(builder, profile, key, outcome_column, protected)
     if ctx.mode is RunMode.TRAIN:
         issues = builder.call("find_format_issues")
-        _format_proposals(builder, issues, protected, outcome_column)
-        _range_proposals(builder, protected | ({outcome_column} if outcome_column else set()))
+        _format_proposals(builder, issues, protected | wide, outcome_column)
+        _range_proposals(builder, protected | wide | ({outcome_column} if outcome_column else set()))
     can_check = outcome_column is not None if ctx.mode is RunMode.TRAIN else ctx.schema is not None
     if to_combine and key is not None and outcome_column is not None and stop is None:
         # Nothing else is checked on rows that are about to be combined: the answer re-advises.
         stop = _ask_to_combine(builder, profile, key, outcome_column, protected)
-    elif stop is None and can_check:
+    elif stop is None and can_check and not wide:
         steps = ordered_steps([*builder.preview_steps(), *([combine] if combine is not None else [])])
         waiting = False
         try:
@@ -1308,9 +1450,18 @@ def summarise(
         (p.step for p in accepted if p.step is not None and p.step.kind is RecipeStepKind.COMBINE_ROWS),
         None,
     )
-    if ctx.mode is RunMode.TRAIN and combine is not None:
+    unpivot = next(
+        (p.step for p in accepted if p.step is not None and p.step.kind is RecipeStepKind.UNPIVOT), None
+    )
+    if ctx.mode is RunMode.TRAIN and unpivot is not None:
+        period: Any = unpivot.params.get("period_column")
         actions.append(
-            f"Combine the {ctx.profile.row_count:,} rows into one row per {entity} by '{combine.column}', "
+            f"Turn the columns that hold one period each into rows, one per {entity} per '{period}'."
+        )
+    if ctx.mode is RunMode.TRAIN and combine is not None:
+        rows = "those rows" if unpivot is not None else f"the {ctx.profile.row_count:,} rows"
+        actions.append(
+            f"Combine {rows} into one row per {entity} by '{combine.column}', "
             f"using only rows dated on or before each {entity}'s snapshot, and train on those."
         )
     elif ctx.mode is RunMode.TRAIN:

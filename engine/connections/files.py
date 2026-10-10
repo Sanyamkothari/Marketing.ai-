@@ -99,7 +99,8 @@ def workbook_preview(data: bytes) -> Preview:
     from engine.stages.ingest import IngestError
 
     try:
-        text, _report = workbook_csv(data, IntakeConfig())
+        config = IntakeConfig()
+        text, _report = workbook_csv(data, config, max_rows=config.max_header_search_rows + 25)
         frame = pd.read_csv(io.BytesIO(text), nrows=20, dtype=str, keep_default_na=False)
     except (IngestError, ValueError, pd.errors.ParserError):
         raise ConnectorError(

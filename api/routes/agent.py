@@ -295,7 +295,6 @@ register(
             purpose="see the rows of the file being set up",
             object_type="upload",
             object_param="upload_id",
-            audit_reads=True,
         ),
     }
 )
@@ -485,7 +484,9 @@ def _load_context(
         except RecipeError as exc:
             recipe_error = exc
         else:
-            if any(step.kind is RecipeStepKind.COMBINE_ROWS for step in recipe.steps):
+            if any(
+                step.kind in {RecipeStepKind.COMBINE_ROWS, RecipeStepKind.UNPIVOT} for step in recipe.steps
+            ):
                 # Combined rows are other rows: the profile the helper reads must describe them.
                 profile = ingest.profile_dataset(
                     frame,

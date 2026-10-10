@@ -81,6 +81,7 @@ Contract schema version: 1.
 | GET | `/decide/conflicts` | Get arbitration conflicts summary for Results UI | dict |
 | POST | `/doctor/diagnosis` | What each uploaded file is, and which use cases the files can power | Diagnosis |
 | POST | `/doctor/handoff` | The file as an upload of the chosen use case, read the same way, for its Guided setup | UploadResponse |
+| POST | `/doctor/outcome` | Agree the outcome built from an event file, as the sentence the person picked | OutcomeAgreement |
 | GET | `/healthz` | Liveness probe | HealthResponse |
 | GET | `/holdout` | The holdout: salt, epochs, use cases | HoldoutView |
 | PUT | `/holdout` | Start a new holdout epoch (Admin): a lower share, or a new salt | HoldoutView |

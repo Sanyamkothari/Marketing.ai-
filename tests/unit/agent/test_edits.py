@@ -120,3 +120,22 @@ def test_the_table_view_shows_rows_with_personal_data_hidden(started: tuple[Any,
     assert page["row_numbers"] == [2, 3, 4, 5, 6]
     found = table_rows(ctx, where_column="note", equals="TEST", limit=100)
     assert found["total"] == 15
+
+
+def test_a_correction_is_found_by_the_id_column_only(started: tuple[Any, Any]) -> None:
+    """Any other column would be a lookup on it: an email typed as the key would also be kept (M161)."""
+    frame = synthetic(rows=1500)
+    frame["email"] = [f"user{i}@example.com" for i in range(len(frame))]
+    ctx = context_for(frame)
+    session = start_session(ctx, session_id="s2")
+    assert "email" in {c.name for c in ctx.profile.columns if c.pii_kinds}
+    for key_column, key in (("email", "user9@example.com"), ("region", "north")):
+        with pytest.raises(SessionError) as caught:
+            add_edit(
+                session,
+                ctx,
+                kind=RecipeStepKind.CORRECT_CELLS,
+                column="tenure_months",
+                params={"key_column": key_column, "cells": [{"key": key, "old": "1", "new": "2"}]},
+            )
+        assert caught.value.code == "AGENT_EDIT_NOT_ALLOWED"

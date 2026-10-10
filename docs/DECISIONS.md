@@ -1474,7 +1474,7 @@ DEC-1500…1509, M151 → DEC-1510…1519, …), so parallel work on two milesto
   column are one `correct_cells` step and spellings one `map_values` step, so fifty edits add one step. A
   correction applies only where the row's ID and the old value both still match, so next month a changed value
   is left alone and counted, never overwritten.
-- **DEC-1541 — The table view.** *Decision:* `POST /uploads/{id}/agent-session/rows` (Analyst, a POST like the preview, audited as a read)
+- **DEC-1541 — The table view.** *Decision:* `POST /uploads/{id}/agent-session/rows` (Analyst, a POST like the preview, audited as every POST is)
   pages through the file in order, 100 rows at most, optionally only rows where one column equals a value;
   personal-data columns show `[personal data]` and cannot be searched; every other cell is masked and cut to 60
   characters, as the preview does. `POST /uploads/{id}/agent-session/edits` adds an edit and answers the session.
@@ -1497,4 +1497,191 @@ DEC-1500…1509, M151 → DEC-1510…1519, …), so parallel work on two milesto
   M161 take M150's free tail, DEC-1506…1509. *Consequences:* `tests/integration/test_plan_l_benchmark.py` drives
   two files in the fast suite and all thirty, against the targets, in the slow one. AI suggestions still never
   start ticked (plan §11): the benchmark accepts only the rules' recommended set.
+- **DEC-1507 — M161: what the security review of Plan L changed.** *Context:* a review of intake, Data Doctor, the
+  table view and edits, and `propose_step` found paths a hostile file or a curious Analyst could take.
+  *Decision:* (a) **Erasure and access reach kept originals.** A workbook is zipped, so its bytes never show an
+  id: `original.xlsx` is searched unpacked (sheets and texts), an original is reported whenever the table read
+  from it holds the person, and erasure deletes kept originals rather than rewriting them; Data Doctor's
+  hand-off falls back to the read table once the original is gone. (b) **A correction is found by the ID column
+  only**, never one holding personal data (always-hidden columns count as personal): any other key column was a
+  lookup on it that also kept what was typed. (c) **A workbook's declared size is not trusted**
+  (`reset_dimensions`), and the cells a sheet may produce are capped by what it stores (one per two bytes plus a
+  million), so a 5 KB file of values far apart is refused (`UPLOAD_WORKBOOK_TOO_SPARSE`) rather than read for
+  hours. (d) **The table of texts has its own limit**, `max_shared_strings_mb` (64), as openpyxl holds it whole;
+  the whole-archive default drops from 2,048 to 1,024 MB. (e) **A sheet damaged half way** is a 422
+  `UPLOAD_WORKBOOK_UNREADABLE`, and any unexpected failure in `finish_upload` removes the upload's folder, which
+  retention could never find without an `upload.json`. (f) **`POST /uploads` reads the file off the event loop**
+  (`run_in_threadpool`), so a big file does not stall every other request. (g) A connection's workbook preview
+  reads only the rows it shows; `sheet` form fields are at most 255 characters; `defusedxml` becomes a direct
+  dependency (openpyxl parses through it when installed). (h) **A diagnosis reads a bounded share of each file**:
+  four million rows across its files, each at least `ADVISE_ROWS`, read as a bounded preview, so twenty large
+  uploads cannot hold twenty full files at once; a share measured on part of a file says so. *Consequences:* `tests/integration/test_intake_erasure.py`,
+  the hostile-workbook tests in `tests/unit/intake/test_intake_run.py`, `tests/integration/test_api_intake.py`
+  and `tests/unit/agent/test_edits.py` prove it. Not changed, by design: no route scopes uploads by client
+  (single-tenant today, as every upload route), and Viewers still see the corrections a session holds.
+- **DEC-1508 — M161: opening a workbook reads no rows; the biggest sheet is the one that holds the most.**
+  *Context:* openpyxl looks for a sheet's `<dimension>` on end events, so a workbook written without one
+  (pandas, many exporters) had every sheet parsed whole just to open it (22 s for a 200,000-row sheet), and
+  then declared no row count, so the first table sheet was read instead of the biggest. *Decision:* (a) the
+  dimension is looked for on start events and the search stops where the data starts (0.02 s, the same
+  result). (b) The biggest sheet is chosen by the bytes its XML unpacks to, which a missing or false
+  declaration cannot change. *Consequences:* measured on 10 Oct 2026 (a shared, loaded machine): a 1,000,000-row
+  CSV that needs intake's rules in 8-13 s and 155 MB; a 20-sheet workbook in 9 s with the biggest sheet read; a
+  workbook's rows at openpyxl's own pace, about 4,000-8,000 rows a second, so a million-row workbook takes two
+  to four minutes, which `docs/DATA_DOCTOR.md` says, with CSV as the faster way.
+- **DEC-1509 — M161: the Data Doctor page shows how files fit and asks the outcome question.** *Context:* M155 and
+  M157 added `links`, `stacks` and `outcome_offer` to the diagnosis, but the page drew none of them, so a person
+  could not see a log that needs an ID fix or agree to an outcome. *Decision:* (a) "How your files fit together"
+  lists each log against the customer list (the share, the share after the fix, the fix in plain words) and the
+  files that are one report for different months, with renamed, new and missing columns. (b) A `missing` use case
+  with an offer shows its question with one radio button per choice (the sentence and what it counts), the
+  default picked; a choice with nothing to count cannot be picked; nothing is sent until **Use this outcome**,
+  which sends the chosen sentence word for word, and the agreement's next steps are shown. (c)
+  `showDiagnosis(diagnosis, uploads)` draws a diagnosis already made. *Consequences:*
+  `tests/integration/test_doctor_ui.py` (with `production/ui/doctor/doctor.test.mjs`) proves it on real bodies,
+  hostile names included.
+- **DEC-1550 — M155: how several files fit, and built datasets scored by a model with a recipe.** *Context:* the
+  diagnosis said what each file is but not whether the logs meet the customer list or are monthly copies of one
+  report, and a built dataset could not be scored by a model trained on Guided-prepared data (DEC-1044).
+  *Decision:* M155 adds both to what Data Doctor measures and closes `RECIPE_DATASET_UNSUPPORTED`; Data Doctor
+  driving the builder's roles and mappings, and stacking files in a build, are left for a follow-up.
+  *Consequences:* no new route; `Diagnosis` gains two defaulted fields, `links` and `stacks`.
+- **DEC-1551 — Links are measured with onboarding's own join checks.** *Decision:* (a) The customer list is the
+  entity-kind file with the most rows; every event-kind file is measured against its ID column, trying the list's
+  own column name, the diagnosis's ID column, then columns onboarding's `_ID_LIKE_NAME` matches (at most 4).
+  (b) The shares come from `join_coverage` and `key_format_mismatch`; a prefix on one side only (at least 90% of
+  IDs start with the same letters) is removed and the same two functions run again, which is how `CUST-00123`
+  meets `123`. (c) A fix is named only when it clears `JOIN_COVERAGE_OK` (0.8), with the share as written and
+  once fixed. (d) A share is never rounded to 100% or 0% when it is not; `sampled` says when a file was longer
+  than the rows read. *Consequences:* Data Doctor and `KEY_FORMAT_MISMATCH` cannot disagree.
+- **DEC-1552 — The same report for different months.** *Decision:* files of one kind stack when they share at least
+  two column names exactly and agree on at least 75% of their columns. A renamed column is a missing one paired
+  with an added one of the same type, in the same position or with a name at least 0.5 similar. Drift is listed
+  against the first file in name order, and rows are summed.
+- **DEC-1553 — `POST /runs` prepares a built dataset with the model's recipe.** *Decision:* with `dataset_id` and a
+  model that has a recipe, the recipe runs on every row under its approved levels and limit, with the narrow leak
+  check, into `datasets/<id>/prepared_<identity>.parquet` (`engine/agent/dataset_recipe.prepare_dataset`). The run
+  keeps its dataset lineage, the job reads the prepared rows, and the recipe and receipt are written into the run
+  directory. A recipe that cannot run answers the usual 409 with its `RECIPE_*` error. `RECIPE_DATASET_UNSUPPORTED`
+  is retired (supersedes DEC-1044).
+- **DEC-1554 — A scheduled score firing does the same.** *Decision:* `start_dataset_run` prepares the dataset with
+  `prepare_dataset`; a recipe error fails the firing with the recipe's own code, never with an unprepared score.
+- **DEC-1555 — The roles rule for a dataset.** *Decision:* `dataset_key_conflict`: the recipe's ID column, when it
+  named one, must be the column that names the dataset's customers, and no step may name the rest of a periodic
+  dataset's key (the snapshot date); otherwise 409 `RECIPE_ROLES_MISMATCH` before anything is written.
+- **DEC-1556 — Where the prepared rows live.** *Decision:* beside the dataset, one flat file named by a hash of what
+  a replay depends on (steps, ID, outcome and snapshot columns, levels, limit), so two runs write identical rows
+  to one file. The dataset's own files are unchanged. *Consequences:* retention, erasure and deleting the dataset
+  all cover it.
+- **DEC-1557 — Recipe helpers move to the engine.** *Decision:* `recipe_levels`, `consistent_types` and
+  `run_saved_recipe` move unchanged to `engine/agent/dataset_recipe.py`, re-exported by `agent_recipes`, so the
+  scheduled path runs a recipe exactly as the API does.
+- **DEC-1558 — Known limits.** *Decision:* modules that read a run's rows through `run_source_key` (root cause,
+  win-back, treat list) still read the unprepared dataset frame of a dataset run; the predict stage and the
+  firing's drift re-measure read the prepared rows. A periodic dataset is scored with a recipe only when no step
+  touches its snapshot date.
+- **DEC-1559 — How M155 is proven.** *Consequences:* `tests/unit/doctor/test_joins.py`,
+  `tests/integration/test_api_doctor_joins.py` and `tests/integration/agent/test_dataset_recipe_refusal.py` (a
+  dataset built through the onboarding API scored by a model whose training ran on a Guided-prepared upload,
+  training stubbed) prove it; the 22 pinned benchmark files are unchanged.
+- **DEC-1560 — M156: `unpivot`, a wide sheet's period columns into rows.** *Context:* a hand-kept sheet often has one
+  column per month (`2024_01_spend`, `2024_02_spend`, …), so each month is an unrelated column. *Decision:* a
+  recipe step kind `unpivot` (`engine/agent/unpivot.py`, level `reshape`) with `id_columns` (kept on every row, the
+  ID first), `value_columns` (a frozen `{column, measure, period}` list), `name_pattern`, `period_column` and
+  `outcome`. Each input row becomes one row per listed period, with the kept columns, the outcome, the period and
+  one column per measure. It is row-wise (DEC-1004): a row's output depends only on that row and the frozen
+  parameters.
+- **DEC-1561 — What an unpivot may not do.** *Decision:* `check_recipe` refuses an unpivot keyed on another column
+  than the ID; the ID, the outcome or a kept column as a value column; an `outcome` other than the recipe's (it is
+  always carried, never turned into rows); a name `name_pattern` does not rebuild from its listed measure and
+  period; fewer than two periods; periods of mixed kinds; one measure twice in a period; a result with two columns
+  of one name; more than 1,000 value columns or 200 kept columns; and a second unpivot. Every other column is
+  left out, so the output has the same columns on every file.
+- **DEC-1562 — An unpivot runs first.** *Decision:* `STEP_PHASE[UNPIVOT] = -1` and `check_recipe` starts from the
+  lowest phase, so every later step, `combine_rows` included, reads the rows the person sees. No existing kind's
+  phase moved, so every saved recipe orders and hashes as before. *Consequences:* a fix by hand on a wide column
+  is refused after an accepted unpivot (`RECIPE_COLUMN_MISSING`).
+- **DEC-1563 — A fixed period grammar.** *Decision:* a period is a year and month (`2024_01`, `2024-01`, `202401`,
+  `Jan_2024`, `2024 Jan`), a year and quarter (`2024_Q1`, `Q1 2024`), a year (1900-2099), a month name, `M1`-`M12`
+  or `Q1`-`Q4`, case-insensitive; a column name is a measure and a period joined by `_ - .` or a space, in either
+  order. A period with a year is written as the date it starts; one without a year is written as named and never
+  given one.
+- **DEC-1564 — Replaying the frozen list.** *Decision:* next month's file is turned into rows by exactly the listed
+  columns: a listed column it lacks stops the run (`RECIPE_COLUMN_MISSING`); a new month's column is left out and
+  its non-empty cells counted on the receipt, and over `max_conversion_failure_pct` the run stops with
+  `RECIPE_VALUES_UNCONVERTED` rather than use part of the months. *Consequences:* a sheet whose window moves needs a
+  new Guided setup.
+- **DEC-1565 — The advisor asks about a wide sheet.** *Decision:* only on a training file whose use case allows
+  `reshape`, with the ID and outcome known, the ID not repeating and nobody having declined. `find_wide_columns`
+  reads column names only (skipping the ID, outcome, consent and suppression columns); a measure counts with at
+  least two periods; the biggest group wins. A group with years gets a blocking question in the use case's own
+  words ("Turn them into rows (one row per shopper per month)?") with "Turn into rows (recommended)" and "Keep as
+  columns"; the answer re-advises.
+- **DEC-1566 — Periods without a year are noted, not asked.** *Context:* `Jan_spend` cannot be put in date order,
+  so its rows could not be combined back into one row per customer, and a question whose recommended answer led
+  to a stop would be worse than none. *Decision:* the advisor notes that such columns stay columns and how to
+  name them (`2024_01_spend`); the step itself supports them.
+- **DEC-1567 — The answer re-advises on the rows.** *Decision:* `advise` takes an accepted `unpivot` from
+  `decided_steps` and advises the rows it makes (roles, fixes, checks, the combine question); "Keep as columns"
+  (`unpivot_declined`) is never asked again; answering again withdraws the step, like the combine question.
+- **DEC-1568 — Combining the rows back.** *Decision:* after an unpivot, `combine_rows` orders by the period column
+  and each customer's latest period is its snapshot; kept columns (not personal data) are carried as they are,
+  never added up and never chosen as the date. A training Approve runs onboarding's full future-data check, a
+  scoring replay the narrow one; a scoring session re-profiles after an `unpivot`, as after `combine_rows`.
+- **DEC-1569 — Scope and proof.** *Decision:* only the rules suggest an unpivot; the chat and edits by hand do not.
+  No API model changed. *Consequences:* `tests/unit/agent/test_unpivot.py`, `test_advisor_unpivot.py` and
+  `tests/integration/agent/test_unpivot_api.py` prove it (a month-per-column sheet trains through Guided setup and
+  next month's sheet replays); the 22 pinned benchmark files are unchanged.
+- **DEC-1570 — M157: the outcome sentences are configuration, in their own file.** *Context:* most clients have no
+  "churned" column but do have an event log; plan §5.3 asks for the outcome "shown back as a sentence".
+  *Decision:* (a) `configs/outcomes.yaml`, read by `engine/doctor/outcomes.load_outcome_catalogue` (cached per file
+  and modification time, like `intake.yaml`), holds per use case a `question`, a `sentence` with blanks
+  (`{An_entity}`, `{entity}`, `{an_event}`, `{event}`, `{days}`), its `label_type`, the `event_kinds` (onboarding
+  roles, best first), the `days` offered and `default_days`. (b) A missing file offers no sentence; a malformed
+  one is a `ValueError` naming the file. (c) Shipped: rca, win-back-campaign, targeted-advertisement,
+  fault-prediction (Home) and telco-churn. *Consequences:* adding a sentence is a YAML edit.
+- **DEC-1571 — Only what a `LabelSpec` can build from an ID and a date is offered.** *Decision:* (a) `label_type` is
+  `event_absence` or `event_presence` only: a `column` outcome is a column a file already has (M151), and a
+  `value_threshold` outcome needs a condition the person writes, which stays in Build from raw tables. (b) Each
+  choice is a real `LabelSpec`: `type` from the template, `role` what the event file was read as,
+  `horizon_days` the choice, `description` the sentence; no `where`, `grace_days` or `exclude_roles`. (c) A
+  template with an unknown blank, or a default not among its choices, is refused at load.
+- **DEC-1572 — The offer and its counts are onboarding's own label builder's.** *Decision:* (a) `offer_outcome` needs
+  a customer list (read as the entity role, with an ID column; with several, the one closest to one row per ID,
+  then the most rows) and an event file of one of the template's kinds with a date column (a file of no detected
+  kind is `other_event`). (b) The event file's ID column is the one with the best `join_coverage` against the
+  list's IDs, above zero, so a log's own `recharge_id` is never taken for the customer. (c) Dates are read with
+  `cast_series`, as the builder reads them. (d) For each choice, month-end snapshots near the data end are
+  planned by `plan_snapshots` and labelled by `build_labels`; the count shown is the latest month-end that is
+  not censored: customers, yes, no, rate. (e) `UseCaseReadiness.outcome_offer` (defaulted null) carries it, only
+  for a `missing` verdict; a failure to build an offer is logged and leaves the verdict as it was.
+- **DEC-1573 — `POST /doctor/outcome`: nothing is built from a sentence the person did not pick.** *Decision:*
+  (a) The body names the two uploads, the date column, the window, the sentence as read and `agreed`. (b) The
+  offer is measured again. Refusals: `422 OUTCOME_NOT_AGREED`, `OUTCOME_SAME_FILE`, `OUTCOME_CHOICE_UNKNOWN`;
+  `409 OUTCOME_SENTENCE_CHANGED` (word for word; the answer gives the current one), `OUTCOME_NOT_OFFERED`,
+  `OUTCOME_NOT_MEASURABLE`; `404 OUTCOME_NO_SENTENCE`. (c) The `201` is an `OutcomeAgreement` (sentence,
+  `label_spec`, the measured choice, the columns, `event_role`, `data_end`, `agreed_at`, `next_steps`).
+  (d) Analyst, audited like every POST.
+- **DEC-1574 — Censoring is the builder's, and it is said in words.** *Decision:* a month-end whose window runs past
+  the event file's last date is censored by `build_labels`: its customers are neither yes nor no; each choice
+  says how many later month-ends were left out, and a choice with no month-end whose window is over shows no
+  count and cannot be agreed (`OUTCOME_NOT_MEASURABLE`).
+- **DEC-1575 — The label is named after the use case's `target.column`.** *Decision:* whatever window is picked, so
+  Guided setup, the readiness check and a run from the dataset learn from the column they expect; the window
+  lives in `horizon_days` and the sentence in `description`.
+- **DEC-1576 — The event's word comes from the file's name, from a list.** *Decision:* `{event}` is the first word of
+  the file's name found in `outcomes.yaml:event_words` ("recharges_2025.csv" → "recharge"), else the word for
+  the file's kind, else "event". No text from inside the file ever enters the sentence.
+- **DEC-1577 — The agreement is kept beside the customer list.** *Decision:*
+  `uploads/<entity upload>/outcome_<use case>.json`, rewritten by a later agreement. It holds no customer ID
+  (counts, column names, the spec); erasing or retiring the upload removes it with the folder. Who agreed is in
+  the audit trail.
+- **DEC-1578 — Data Doctor does not drive the builder for an agreed outcome in M157.** *Decision:* the agreement's
+  `next_steps` and `docs/DATA_DOCTOR.md` §6 list the onboarding calls (sources, mappings with
+  `entity_key`/`event_time`, the recipe with `label_spec` unchanged, `POST /datasets`);
+  `tests/integration/test_api_doctor_outcome.py` follows them to a passing dataset. M155 can take an
+  agreement's `label_spec` as is.
+- **DEC-1579 — `propose_label` in the chat is not built.** *Decision:* Guided setup's chat works on one upload and an
+  outcome from events needs two files; when the chat sees several files its `propose_label` should return the
+  same `OutcomeOffer` and build nothing, agreement staying `POST /doctor/outcome`.
 <!-- ---- END PLAN-L ---- -->

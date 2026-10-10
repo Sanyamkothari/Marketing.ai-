@@ -144,3 +144,25 @@ def test_unknown_uploads_and_use_cases_are_404(client: TestClient) -> None:
 
 def test_an_empty_request_is_422(client: TestClient) -> None:
     assert client.post("/doctor/diagnosis", json={"upload_ids": []}).status_code == 422
+
+
+def test_a_diagnosis_reads_a_bounded_share_of_each_file_and_says_so(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every file is held at once, so the rows read are shared out (M161, DEC-1507), and a share says when."""
+    from api.routes import doctor
+
+    monkeypatch.setattr(doctor, "DIAGNOSIS_ROWS", 400)
+    monkeypatch.setattr(doctor, "ADVISE_ROWS", 100)
+    customers = upload(
+        client, "customers.csv", ("customer_id,plan\n" + "".join(f"C{i},a\n" for i in range(150))).encode()
+    )
+    bills = upload(client, "bills.csv", bills_csv())
+    diagnosis = client.post(
+        "/doctor/diagnosis", json={"upload_ids": [customers["upload_id"], bills["upload_id"]]}
+    )
+    assert diagnosis.status_code == 200, diagnosis.text
+    files = {item["upload_id"]: item for item in diagnosis.json()["files"]}
+    assert files[bills["upload_id"]]["rows"] == 600, "the file's own row count, not the rows read"
+    links = diagnosis.json()["links"]
+    assert links and all(link["sampled"] for link in links)

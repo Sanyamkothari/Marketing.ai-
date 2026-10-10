@@ -67,6 +67,7 @@ dependencies = [
   # ---- END PLAN-J ----
   # ---- PLAN-L (data doctor) — append only below this line ----
   "openpyxl==3.1.5",                    # reads Excel workbooks (.xlsx, .xlsm) at intake; read-only streaming mode (DEC-1500)
+  "defusedxml==0.7.1",                  # openpyxl parses every workbook's XML through it when installed: no entities, no DTDs (DEC-1507)
   # ---- END PLAN-L ----
 ]
 

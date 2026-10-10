@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import io
+import re
 import zipfile
+from collections.abc import Callable
 from pathlib import Path
 
 import pandas as pd
@@ -204,6 +206,47 @@ def test_the_largest_visible_table_is_read_and_the_others_listed(storage: LocalS
     assert len(read_upload(storage, "u/source.csv").frame) == 10
 
 
+def undimensioned_book(sizes: tuple[int, ...]) -> Workbook:
+    """A workbook written as pandas and many exporters write one: no `<dimension>`, so no row count."""
+    book = Workbook(write_only=True)
+    for index, size in enumerate(sizes):
+        sheet = book.create_sheet(f"Region {index}")
+        sheet.append(["Region report"])
+        sheet.append(["id", "spend"])
+        for row in range(size):
+            sheet.append([f"C{row}", row])
+    return book
+
+
+def test_without_a_row_count_the_biggest_sheet_is_still_read(storage: LocalStorage) -> None:
+    report = book_intake(storage, undimensioned_book((30, 300, 120))).report
+    assert [sheet.rows for sheet in report.sheets] == [None, None, None]
+    assert report.sheet == "Region 1"
+    assert report.rows_written == 300
+
+
+def test_opening_a_workbook_without_a_row_count_does_not_read_its_rows() -> None:
+    from engine.intake.excel import open_workbook
+
+    buffer = io.BytesIO()
+    undimensioned_book((500, 500)).save(buffer)
+    damaged = io.BytesIO()
+    with zipfile.ZipFile(buffer) as source, zipfile.ZipFile(damaged, "w") as target:
+        for member in source.infolist():
+            data = source.read(member)
+            if member.filename.startswith("xl/worksheets/sheet"):
+                # The end of every sheet is broken: only a reader that parses every row can notice.
+                data = data.replace(b"</sheetData>", b"<row><broken></sheetData>")
+            target.writestr(member, data)
+    book = open_workbook(io.BytesIO(damaged.getvalue()))
+    assert [sheet.max_row for sheet in book.worksheets] == [None, None]
+
+
+def test_a_declared_row_count_is_still_read(storage: LocalStorage) -> None:
+    report = book_intake(storage, three_sheet_book()).report
+    assert [sheet.rows for sheet in report.sheets] == [1, 11, 2, 51]
+
+
 def test_a_named_sheet_is_read_hidden_or_not_and_case_is_forgiven(storage: LocalStorage) -> None:
     assert book_intake(storage, three_sheet_book(), sheet="summary").report.sheet == "Summary"
     assert book_intake(storage, three_sheet_book(), sheet="Everything").report.sheet == "Everything"
@@ -278,3 +321,88 @@ def test_an_empty_workbook_says_so(storage: LocalStorage) -> None:
     with pytest.raises(IngestError) as caught:
         book_intake(storage, Workbook())
     assert caught.value.code == "UPLOAD_NO_ROWS"
+
+
+# ---------------------------------------------------------------------------
+# Hostile workbooks (Plan L M161)
+# ---------------------------------------------------------------------------
+def rewritten(book: Workbook, change: Callable[[bytes], bytes]) -> bytes:
+    """The workbook saved, with every sheet's XML passed through `change`."""
+    buffer = io.BytesIO()
+    book.save(buffer)
+    out = io.BytesIO()
+    with zipfile.ZipFile(buffer) as source, zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as target:
+        for member in source.infolist():
+            data = source.read(member)
+            if member.filename.startswith("xl/worksheets/sheet"):
+                data = change(data)
+            target.writestr(member, data)
+    return out.getvalue()
+
+
+def raw_intake(storage: LocalStorage, data: bytes, config: IntakeConfig = CONFIG) -> IntakeResult:
+    storage.write_bytes("u/original.xlsx", data)
+    return intake_file(
+        storage,
+        received_key="u/original.xlsx",
+        received_format="xlsx",
+        csv_key="u/source.csv",
+        original_key="u/original.xlsx",
+        config=config,
+    )
+
+
+def small_table() -> Workbook:
+    book = Workbook()
+    sheet = book.active
+    sheet.append(["id", "plan", "spend"])
+    for index in range(20):
+        sheet.append([f"C{index}", "Gold", index])
+    return book
+
+
+def test_a_declared_size_is_not_trusted(storage: LocalStorage) -> None:
+    """openpyxl pads every row to the declared size: A1:XFD1048576 would be rows of 16,384 cells."""
+    data = rewritten(
+        small_table(),
+        lambda xml: re.sub(rb'<dimension ref="[^"]*"/>', b'<dimension ref="A1:XFD1048576"/>', xml),
+    )
+    assert b"XFD1048576" in zipfile.ZipFile(io.BytesIO(data)).read("xl/worksheets/sheet1.xml")
+    result = raw_intake(storage, data)
+    assert result.report.rows_written == 20
+    assert list(read_upload(storage, "u/source.csv").frame.columns) == ["id", "plan", "spend"]
+    assert result.report.sheets[0].rows == 1048576, "the declared count is still reported"
+
+
+def test_values_far_apart_in_every_row_are_refused_not_read_for_hours(storage: LocalStorage) -> None:
+    book = Workbook()
+    sheet = book.active
+    sheet.append(["id", "spend"])
+    for row in range(2, 202):
+        sheet.cell(row=row, column=1, value=f"C{row}")
+        sheet.cell(row=row, column=16384, value=row)
+    with pytest.raises(IngestError) as caught:
+        book_intake(storage, book)
+    assert caught.value.code == "UPLOAD_WORKBOOK_TOO_SPARSE"
+
+
+def test_too_many_texts_are_refused_unopened(storage: LocalStorage) -> None:
+    """The table of texts is held in memory whole, so it has its own, smaller limit."""
+    buffer = io.BytesIO()
+    small_table().save(buffer)
+    out = io.BytesIO()
+    with zipfile.ZipFile(buffer) as source, zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as target:
+        for member in source.infolist():
+            target.writestr(member, source.read(member))
+        target.writestr("xl/sharedStrings.xml", b"<sst>" + b"<si><t>x</t></si>" * 150_000 + b"</sst>")
+    with pytest.raises(IngestError) as caught:
+        raw_intake(storage, out.getvalue(), IntakeConfig(max_shared_strings_mb=1))
+    assert caught.value.code == "UPLOAD_WORKBOOK_TOO_LARGE"
+    assert "texts" in caught.value.message
+
+
+def test_a_sheet_damaged_half_way_is_a_clear_refusal(storage: LocalStorage) -> None:
+    data = rewritten(small_table(), lambda xml: xml.replace(b'r="A15"', b'r="A!15"'))
+    with pytest.raises(IngestError) as caught:
+        raw_intake(storage, data)
+    assert caught.value.code == "UPLOAD_WORKBOOK_UNREADABLE"
