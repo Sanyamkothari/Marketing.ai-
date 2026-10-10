@@ -1745,6 +1745,56 @@ must re-include it by name in the same way, or it will be missing on a clean che
 
 **What I did meanwhile.** Checked at integration that exactly those 30 files are newly tracked.
 
+### 2026-10-10 — plan-j M137 (Plan K, built early; on main) → Phase 3b (owners of `engine/uplift/` and `docs/UPLIFT.md`): "safe to roll out" on the equal-budget comparison (record of additive edits)
+
+**What changed** (pre-approved in the M137 scope; DEC-1325), each additive and off or null by default:
+
+* `engine/uplift/config.py`: `UpliftEvidenceConfig` gains `rollout_verdict: bool = False` and
+  `rollout_confidence: float = 0.95` (0.80 to 0.995), not agent-editable through the class-level `_editable(False)`
+  the other evidence settings use, left out of a serialised config at their defaults (`exclude_if`), and a validator
+  that refuses `rollout_verdict` without `risk_comparison`.
+* `engine/uplift/contracts.py`: the new `RolloutVerdict` (in `__all__`: `outcome`, `confidence`,
+  `lower_bound_conversions`, `upper_bound_conversions`, `value_basis`, `lower_bound_inr`, `upper_bound_inr`,
+  `rows_without_value`, `inr_unavailable_reason`, `rows_needed`, `summary`) and `RiskComparison.rollout`, optional
+  and excluded while absent, so `risk_comparison.json` is byte for byte M96's when the setting is off.
+* `engine/uplift/flow.py`: `UpliftTrainFlow._write_risk_comparison` passes `rollout_confidence` and, when M97's
+  value inputs exist, the per-row values and the costs `_evaluate` reads once (`lookup_value_costs`) to
+  `engine.measurement.compare.equal_budget_comparison`, taken from the same rows as M96's terms.
+* `engine/model_gates.py` (M96's): the `UPLIFT_NOT_BETTER_THAN_RISK` message appends the verdict's sentence after
+  the comparison's own; the pass rule is unchanged.
+* `docs/UPLIFT.md` section 12 documents the verdict; tests `tests/unit/uplift/test_uplift_config.py` (gained tests)
+  and `tests/integration/uplift/test_rollout_verdict_flow.py` (new).
+
+Nothing was renamed or removed.
+
+**What is needed.** Ratification of the edits. Any branch that reads or writes `risk_comparison.json`, or edits the
+`UPLIFT_NOT_BETTER_THAN_RISK` message, should expect the optional `rollout` key and the appended sentence.
+
+**What I did meanwhile.** A run that does not opt in is unchanged: `tests/fixtures/decide/golden/risk_comparison_default.json`
+was written on the unchanged code and the integration test compares the default file to it.
+
+### 2026-10-10 — plan-j M137 (Plan K, built early; on main) → trunk (owner of `configs/engine.yaml` and `docs/API.md`): two `uplift.evidence` defaults (record of additive edits)
+
+**What changed** (DEC-1325 (f)): `configs/engine.yaml` gains `uplift.evidence.rollout_verdict: false` and
+`rollout_confidence: 0.95`, each with a comment; `docs/API.md` regenerated (`python -m scripts.gen_api_docs`) for the
+new config fields and `RolloutVerdict`. Nothing else changed.
+
+**What is needed.** Ratification of the edits.
+
+**What I did meanwhile.** Both settings are off or at their defaults, and left out of `run_config.json` there, so
+every shipped use case serialises exactly as before.
+
+### 2026-10-10 — plan-j M137 (Plan K, built early; on main) → all branches that call `equal_budget_comparison` or touch `UpliftEvidenceConfig`; Plan K owners (M131, M135): DEC-1325 is taken early (announcement)
+
+**What changed** (DEC-1325 (b), (f)): `engine.measurement.compare.equal_budget_comparison` gains the keyword-only
+`rollout_confidence` and `values`, both defaulting to None, so every existing caller gets the same result. M137 is a
+Plan K milestone numbered DEC-1325 in Plan J's block; DEC-1323 and DEC-1324 are reserved for M131 and M135.
+
+**What is needed.** Branches editing `UpliftEvidenceConfig` or `uplift.evidence` in `configs/engine.yaml` should merge
+around the two new fields. The M131 and M135 integrations should write DEC-1323 and DEC-1324 before DEC-1325.
+
+**What I did meanwhile.** DEC-1325 is written after DEC-1322 with a line that reserves the two numbers.
+
 ### 2026-09-23 — plan-e-pilot (on main) → all branches: every change Plan E made outside its own files and blocks
 
 **What is needed.** Nothing from anybody; this is the announcement §3 asks for. Measured with

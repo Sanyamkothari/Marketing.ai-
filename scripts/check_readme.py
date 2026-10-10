@@ -486,6 +486,16 @@ MILESTONE_TESTS: Final[Mapping[str, tuple[str, ...]]] = {
         "tests/unit/test_demo_summary.py",
         "tests/unit/test_seed_validated.py",
     ),
+    # M137 (DEC-1325), a Plan K milestone built early under Plan J's range: "safe to roll out". The nightly test
+    # (tests/statistical/test_rollout_verdict.py, DEC-1300 (e)) is left out, as for M96. test_compare.py and
+    # test_model_gates.py are M96's files and gained the verdict's tests; test_compare.py keeps a fast test beside its
+    # `slow` one-million-row test.
+    "M137": (
+        "tests/unit/measurement/test_compare.py",
+        "tests/unit/decide/test_model_gates.py",
+        "tests/unit/uplift/test_uplift_config.py",
+        "tests/integration/uplift/test_rollout_verdict_flow.py",
+    ),
 }
 """Milestone id -> the test files (or directories, with a trailing `/`) that prove it is built.
 
