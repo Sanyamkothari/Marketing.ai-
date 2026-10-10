@@ -323,5 +323,63 @@ should depend on whether outcomes are missing by design (a replay) or by loss.
 python library/hillstrom-email/fetch.py                           # verified by SHA-256
 python -m library.run_engine journey --dataset hillstrom-email     # about two minutes; rewrites run_report.md
 python -m pytest library/tests/test_hillstrom_email.py             # the sample journey; no download
+python -m library.run_engine audit --dataset hillstrom-email       # section 8; about twenty seconds
+python -m pytest library/tests/test_hillstrom_audit.py             # the sample audit; no download
 ```
 
+## 8. Plan J: the audit readout on a real past randomised campaign (Hillstrom, public, retrospective)
+
+The Phase 3 gate asks for an audit readout (M103, `POST /campaigns/audit`) on a real past campaign, "if a prospect
+or Minfy team can supply one (otherwise on Hillstrom in M110)". None has been supplied, so it was run on Hillstrom's
+own e-mail test (DEC-1322). Unlike section 7, which measured a list the engine made, this reads the campaign that
+**actually ran**: who got which e-mail is the assignment, and visit, conversion and spend are the outcomes. It is a
+public dataset read retrospectively, not a client's campaign, and everything it shows is labelled so.
+
+**How it was run.** `python -m library.run_engine audit --dataset hillstrom-email` (`library/audit.py`) cuts the
+file into the two files a client would export and posts them as the route documents: an **assignment file**
+(`customer_id`, `segment`, and the eight customer details the file carries) and an **outcomes file** (`customer_id`,
+`visit`, `conversion`, `spend`), each through `POST /uploads`, then `POST /campaigns/audit` with the mappings
+(`No E-Mail` the control, the men's and women's e-mail the offers) and the statement that the groups were chosen at
+random. The details stay in the assignment file on purpose: the engine tries to predict who got an e-mail from them,
+and the claim is **Causal** only when it cannot. No model is trained, nothing is split or tuned; it is all 64,000
+customers. The numbers are written to `library/hillstrom-email/audit.results.json` (committed, aggregates only,
+like the journey's) and rendered into section 8 of [`run_report.md`](../library/hillstrom-email/run_report.md)
+(`library/audit_report.py`); nothing in it was typed by hand, and a test checks a fresh run reproduces every number.
+
+**What it found** (all from the run report):
+
+| Audit | Label | What the engine tried | Result (95 % interval) |
+|---|---|---|---|
+| Conversion, each e-mail against no e-mail | **Causal** | predict who was e-mailed from the 8 details: guessing score 0.506 at worst (chance 0.500, limit 0.60) | men's **+0.68 pts** (+0.50 to +0.86), 145 extra conversions (107 to 184); women's **+0.31 pts** (+0.15 to +0.47), 67 extra (32 to 101); both p < 0.001 |
+| Spend, any e-mail against none | **Causal** | guessing score 0.502 | **+$0.60** per customer (+$0.38 to +$0.82); bootstrap +$0.38 to +$0.81 |
+| Spend, the men's e-mail against none | **Causal** | guessing score 0.503 | **+$0.77** (+$0.49 to +$1.05); bootstrap +$0.49 to +$1.06 |
+| Spend, the women's e-mail against none | **Causal** | guessing score 0.506 | **+$0.42** (+$0.17 to +$0.68); bootstrap +$0.17 to +$0.69 |
+| Spend, both e-mails in one audit | refused | `CAMPAIGN_INVALID`: several offers are measured on a yes/no outcome only | the route says so; spend per offer is read from a file of the two groups concerned |
+| Value Proof Pack (M104), each of the four | built, provenance verified | claim "Causal: the customers held back were chosen at random" | the campaign name the Pack prints reads "... - public dataset, retrospective audit" |
+| Programme readout | does not apply | `POST /campaigns/programme` answers `409 PROGRAMME_NO_HOLDOUT` | needs the universal hold-out (M92) that only the engine's own scoring draws; no programme number is claimed |
+
+**Read plainly.** The engine labelled the original Hillstrom campaign **Causal**, because it could not tell who got
+an e-mail from the customer details, and found that both e-mails work: more customers bought and more was spent,
+the men's e-mail more than the women's. That agrees with what the test was designed to show, and with section 7's
+replay of the model's list, but it is a different estimate (the e-mails themselves on all 64,000 customers, not the
+model's list on the evaluation half) and is not meant to equal it. The check also bites: on the sample a test gives
+the e-mail to the customers with the larger history, and the same route labels it **Descriptive only**
+(`test_an_assignment_chosen_from_the_customers_history_is_not_called_causal`). A passing check cannot prove
+randomness; the claim rests on the statement made in the request and on the engine's failure to contradict it.
+
+**Assumptions.** The file has no dates: the campaign is dated 2008-03-20, the date in the published file's name, only
+so the engine has a start date and a 14-day outcome window; nothing but the Pack's printed dates depends on it. No
+contact file was added (nobody knows who opened or received an e-mail), so each Pack's delivery section says it is
+not measured and the comparison is intent to treat. No adjustment by an earlier amount is made: an audit has no
+test plan registered in advance. `spend` is skewed and the engine flags `OUTCOME_SKEWED` on the three amounts; the
+report prints a seeded 2,000-resample bootstrap beside the engine's interval, which is the harness's own check and
+is labelled so. The Packs' rupee figures use the journey's stated rate (₹83 per dollar), one conversion at the file's
+mean spend of a buyer and ₹0.05 per e-mail, and move with those inputs; the measured counts and dollars do not. The
+visit outcome was not audited.
+
+**One finding for another milestone, no engine code changed.** With several offers the Value Proof Pack's headline,
+its "Extra outcomes" and the value of what the campaign changed are the first offer's alone (M100 keeps the first
+offer in the single-offer fields, and the Pack reads those fields), while its cost of contacts is for every e-mail
+sent. On the conversion audit the Pack credits the men's e-mail's +145 and charges all 42,694 e-mails; the women's
++67 is in its offer table but not in the headline or the net value. The Pack's provenance passes (each figure is
+traced) but its scope is partial. To be raised for M104 (DEC-1314) in `docs/CROSS_BRANCH_REQUESTS.md` at integration (the entry is in this branch's hand-over, not yet in that file).

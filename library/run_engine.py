@@ -21,6 +21,17 @@ approval checks, the treat list, the off-policy and campaign measurements and th
 through the product's own API (`library/journey.py`), and renders `library/<dataset>/run_report.md` from
 what the run wrote (`library/journey_report.py`).
 
+**The audit readout (Plan J, DEC-1322).** `python -m library.run_engine audit --dataset hillstrom-email` reads the
+dataset's *original* randomised campaign (who got which e-mail, and what happened) through the route a
+client uses, `POST /campaigns/audit` (`library/audit.py`), records the label, the per-offer effects, the
+Value Proof Packs and the programme route's answer, and renders them as section 8 of the same
+`run_report.md` (`library/audit_report.py`). The report is the journey's sections followed by the audit's,
+rendered here and nowhere else. Both results files are committed beside the report (aggregates only; M111
+committed the journey's), and `journey_report_text` reads the committed audit results unless it is given others,
+so the committed report is checkable from a clean checkout. The audit command writes its results to
+`library/.runs/<dataset>/audit/` and to `library/<dataset>/audit.results.json`, and renders the report from the
+committed journey results (`--journey-results` names others).
+
 Writes the run directory to `library/.runs/<dataset>/data/runs/<run_id>/` (git-ignored) and, beside
 the dataset directory, `library/.runs/<dataset>/<run_id>.results.json` holding the validation
 findings, the leaderboard, the test metrics, the baseline comparison, the decile-1 lift, the top
@@ -68,6 +79,8 @@ from engine.storage import LocalStorage, run_key, upload_key  # noqa: E402
 from engine.utils.ids import new_run_id  # noqa: E402
 
 RUNS_DIR = Path(__file__).resolve().parent / ".runs"
+AUDIT_RESULTS_NAME = "audit.results.json"
+"""The audit results, kept in `.runs/<dataset>/audit/` and committed as `library/<dataset>/` + this (DEC-1322)."""
 
 
 class _NoJobs:
@@ -329,18 +342,45 @@ def run(
     return RunOutcome(run_id=run_id, state=state, error=failure, results=results, directory=directory)
 
 
-def journey_report_text(results: dict[str, Any]) -> str:
+def committed_results_path(dataset: str, name: str) -> Path:
+    """`library/<dataset>/<name>`: a results file committed beside the dataset's `run_report.md`."""
+    return Path(__file__).resolve().parent / dataset / name
+
+
+def journey_report_text(
+    results: dict[str, Any], audit: dict[str, Any] | None = None, *, committed_audit: bool = True
+) -> str:
     """The `run_report.md` of a journey's results, exactly as `journey_main` writes it.
 
     A function of the results alone (and of where the CLI keeps them), so the committed report can be
-    checked against the run it names: `library/tests/test_hillstrom_email.py` does.
+    checked against the run it names: `library/tests/test_hillstrom_email.py` does. The audit readout
+    follows the journey as section 8 (DEC-1322): the `audit` results given, else the dataset's committed
+    `audit.results.json` when there is one (`committed_audit=False` renders the journey alone).
     """
     from library.journey_report import render_report
 
     dataset = str(results["dataset"])
     link = f"../.runs/{dataset}/journey/journey.results.json"
     command = f"python library/{dataset}/fetch.py\npython -m library.run_engine journey --dataset {dataset}"
-    return render_report(results, results_path=link, command=command)
+    text = render_report(results, results_path=link, command=command)
+    if audit is None and committed_audit:
+        audit = _read_json(committed_results_path(dataset, AUDIT_RESULTS_NAME))
+    if audit is None:
+        return text
+    from library.audit_report import render_audit
+
+    audit_link = f"{AUDIT_RESULTS_NAME}"
+    audit_command = (
+        f"python library/{dataset}/fetch.py\npython -m library.run_engine audit --dataset {dataset}"
+    )
+    return text.rstrip("\n") + "\n\n" + render_audit(audit, results_path=audit_link, command=audit_command)
+
+
+def _read_json(path: Path) -> dict[str, Any] | None:
+    if not path.is_file():
+        return None
+    loaded: dict[str, Any] = json.loads(path.read_text(encoding="utf-8"))
+    return loaded
 
 
 def journey_main(argv: list[str]) -> int:
@@ -378,9 +418,80 @@ def journey_main(argv: list[str]) -> int:
     if args.runs_dir.resolve() == RUNS_DIR.resolve():
         report_path = library / spec.dataset / "run_report.md"
         report_path.write_text(
-            journey_report_text(json.loads(results_file.read_text(encoding="utf-8"))), encoding="utf-8"
+            journey_report_text(json.loads(results_file.read_text(encoding="utf-8"))),
+            encoding="utf-8",
         )
         print(f"report   {report_path}")
+    return 0
+
+
+def audit_main(argv: list[str]) -> int:
+    """`python -m library.run_engine audit --dataset <slug>`: the audit readout on the original campaign.
+
+    Runs `library.audit.run_audit` on the dataset's prepared file, writes its results to
+    `library/.runs/<dataset>/audit/audit.results.json` and, when the dataset's journey results are there too,
+    renders `library/<dataset>/run_report.md` from both. The audit section is produced here and nowhere else.
+    """
+    from library.audit import AUDITS, run_audit
+
+    parser = argparse.ArgumentParser(
+        prog="python -m library.run_engine audit", description=audit_main.__doc__
+    )
+    parser.add_argument("--dataset", required=True, choices=sorted(AUDITS), help="library/<dataset> slug")
+    parser.add_argument("--csv", type=Path, default=None, help="default: library/<dataset>/data/prepared.csv")
+    parser.add_argument("--config-root", type=Path, default=REPO_ROOT / "configs")
+    parser.add_argument(
+        "--runs-dir", type=Path, default=RUNS_DIR, help="default: library/.runs; any other writes no report"
+    )
+    parser.add_argument(
+        "--journey-results",
+        type=Path,
+        default=None,
+        help="the journey results the report's first sections are rendered from; default: the committed "
+        "library/<dataset>/journey.results.json, else library/.runs/<dataset>/journey/journey.results.json",
+    )
+    args = parser.parse_args(argv)
+    spec = AUDITS[args.dataset]
+    library = Path(__file__).resolve().parent
+    default_csv = (library / spec.dataset / "data" / "prepared.csv").resolve()
+    csv_path = (args.csv or default_csv).resolve()
+    if not csv_path.is_file():
+        print(f"{csv_path} is missing: run python library/{spec.dataset}/fetch.py first", file=sys.stderr)
+        return 2
+    outcome = run_audit(spec, csv_path=csv_path, config_root=args.config_root, runs_dir=args.runs_dir)
+    results = outcome.results
+    if csv_path.is_relative_to(REPO_ROOT):  # the report names the file as a checkout spells it
+        results["csv"] = csv_path.relative_to(REPO_ROOT).as_posix()
+    results_file = outcome.directory / AUDIT_RESULTS_NAME
+    results_file.write_text(json.dumps(results, indent=2, default=str), encoding="utf-8")
+    print(f"results  {results_file}")
+    if args.runs_dir.resolve() != RUNS_DIR.resolve():
+        return 0
+    if csv_path != default_csv:  # the committed results and report describe the dataset's whole prepared file
+        print(
+            f"not committed: {csv_path} is not the dataset's prepared file, so the committed audit results and "
+            "run_report.md are left as they are",
+            file=sys.stderr,
+        )
+        return 0
+    committed = committed_results_path(spec.dataset, AUDIT_RESULTS_NAME)
+    committed.write_text(results_file.read_text(encoding="utf-8"), encoding="utf-8")
+    print(f"results  {committed}")
+    journey = args.journey_results or committed_results_path(spec.dataset, "journey.results.json")
+    if not journey.is_file():
+        journey = RUNS_DIR / spec.dataset / "journey" / "journey.results.json"
+    if not journey.is_file():
+        print(
+            f"no journey results yet: run python -m library.run_engine journey --dataset {spec.dataset} "
+            "to write run_report.md with this audit",
+            file=sys.stderr,
+        )
+        return 0
+    report_path = library / spec.dataset / "run_report.md"
+    report_path.write_text(
+        journey_report_text(json.loads(journey.read_text(encoding="utf-8"))), encoding="utf-8"
+    )
+    print(f"report   {report_path}  (journey results: {journey})")
     return 0
 
 
@@ -388,6 +499,8 @@ def main(argv: list[str] | None = None) -> int:
     arguments = sys.argv[1:] if argv is None else argv
     if arguments[:1] == ["journey"]:
         return journey_main(arguments[1:])
+    if arguments[:1] == ["audit"]:
+        return audit_main(arguments[1:])
     parser = argparse.ArgumentParser(prog="python -m library.run_engine", description=__doc__)
     parser.add_argument("--dataset", required=True, help="library/<dataset> slug")
     parser.add_argument("--use-case", required=True, help="use-case id in configs/use_cases/")
