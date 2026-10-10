@@ -82,3 +82,37 @@ def test_the_default_learner_is_the_x_learner_and_an_unknown_one_is_refused() ->
     for wrong in ("y", "xl", "x-learner"):
         with pytest.raises(ValidationError):
             UpliftConfig(learner=wrong)  # type: ignore[arg-type]
+
+
+# ---------------------------------------------------------------------------
+# Plan K M137: the "safe to roll out" verdict's settings
+# ---------------------------------------------------------------------------
+def test_the_rollout_verdict_is_off_by_default_and_absent_from_a_default_config() -> None:
+    evidence = UpliftConfig().evidence
+    assert evidence.rollout_verdict is False and evidence.rollout_confidence == 0.95
+    dumped = UpliftConfig().model_dump(mode="json")["evidence"]
+    assert "rollout_verdict" not in dumped and "rollout_confidence" not in dumped
+    switched = UpliftConfig.model_validate(
+        {"evidence": {"risk_comparison": True, "rollout_verdict": True, "rollout_confidence": 0.9}}
+    ).model_dump(mode="json")["evidence"]
+    assert switched["rollout_verdict"] is True and switched["rollout_confidence"] == 0.9
+
+
+def test_the_rollout_settings_are_not_agent_editable_like_the_other_evidence() -> None:
+    editable = uplift_agent_editable_paths()
+    assert editable["uplift.evidence.rollout_verdict"] is False
+    assert editable["uplift.evidence.rollout_confidence"] is False
+    assert editable["uplift.evidence.risk_comparison"] is False
+
+
+@pytest.mark.parametrize("confidence", [0.79, 0.996, 1.0])
+def test_the_rollout_confidence_stays_between_80_and_99_5_percent(confidence: float) -> None:
+    with pytest.raises(ValidationError):
+        UpliftConfig.model_validate(
+            {"evidence": {"risk_comparison": True, "rollout_verdict": True, "rollout_confidence": confidence}}
+        )
+
+
+def test_the_rollout_verdict_needs_the_equal_budget_comparison() -> None:
+    with pytest.raises(ValidationError, match="turn on risk_comparison"):
+        UpliftConfig.model_validate({"evidence": {"rollout_verdict": True}})

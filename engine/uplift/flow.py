@@ -85,7 +85,7 @@ from __future__ import annotations
 import io
 import time
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Any, Final
 
 from engine import __version__, keys
 from engine.config import Metric, ProblemType, SplitType, recipe_from_config
@@ -864,7 +864,15 @@ class UpliftTrainFlow(_TrainFlow):
             causal=self._causal,
             holdout_keys=self._holdout_keys(rows),
         )
-        evaluation, evidence_note = self._with_evidence(evaluation, rows, t, y, prediction)
+        values = self._holdout_values(rows)
+        value_costs: ValueCosts | None = None
+        if values is not None:
+            # Plan J M97: the offer and contact costs are read once, and the recommendation records them
+            # (and, Plan K M137, the rollout verdict prices its rupees with the same costs).
+            from engine.pilot.roi import lookup_value_costs
+
+            value_costs = lookup_value_costs()
+        evaluation, evidence_note = self._with_evidence(evaluation, rows, t, y, prediction, value_costs)
         segments = assign_segments(prediction.uplift, prediction.p_control, card.segment_thresholds)
         segments_report = segment_report(
             prediction.uplift,
@@ -876,13 +884,6 @@ class UpliftTrainFlow(_TrainFlow):
             computed_on="test",
             causal=self._causal,
         )
-        values = self._holdout_values(rows)
-        value_costs: ValueCosts | None = None
-        if values is not None:
-            # Plan J M97: the offer and contact costs are read once, and the recommendation records them.
-            from engine.pilot.roi import lookup_value_costs
-
-            value_costs = lookup_value_costs()
         recommendation = self._holdout_recommendation(
             prediction.uplift, prediction.p_treated, segments, t, y, values, value_costs
         )
@@ -1143,6 +1144,7 @@ class UpliftTrainFlow(_TrainFlow):
         t: IntArray,
         y: IntArray,
         prediction: UpliftPrediction,
+        value_costs: ValueCosts | None = None,
     ) -> tuple[UpliftEvaluation, str]:
         """The evaluation with `baseline_comparison`, `calibration_by_decile` and `fold_auuc` filled in,
         `risk_comparison.json` written when asked for, and a note for the stage line.
@@ -1163,7 +1165,7 @@ class UpliftTrainFlow(_TrainFlow):
             prediction.uplift, t, y, baselines, samples=samples, seed=self._seed
         )
         calibration = calibration_by_decile(prediction.uplift, t, y, samples=samples, seed=self._seed)
-        folds, note = self._cross_fitted_evidence()
+        folds, note = self._cross_fitted_evidence(value_costs)
         updated = evaluation.model_copy(
             update={
                 "baseline_comparison": comparison,
@@ -1211,7 +1213,7 @@ class UpliftTrainFlow(_TrainFlow):
             )
         return BaselineInput("propensity_model", scores, model_id=version.model_id)
 
-    def _cross_fitted_evidence(self) -> tuple[FoldAuuc, str]:
+    def _cross_fitted_evidence(self, value_costs: ValueCosts | None = None) -> tuple[FoldAuuc, str]:
         """`fold_auuc` (computed, or why not and what it would cost) and the equal-budget comparison."""
         from engine.measurement.compare import (
             LIGHTGBM_ONLY_REASON,
@@ -1280,7 +1282,7 @@ class UpliftTrainFlow(_TrainFlow):
                 notes.append("fold check could not run")
             ctx.cancel.raise_if_cancelled()
         if evidence.risk_comparison:
-            notes.append(self._write_risk_comparison(features, t, y, groups))
+            notes.append(self._write_risk_comparison(features, t, y, groups, value_costs))
         return folds, "".join(f" · {note}" for note in notes)
 
     def _groups(self) -> npt.NDArray[np.object_] | None:
@@ -1291,9 +1293,19 @@ class UpliftTrainFlow(_TrainFlow):
         return kept[_entity(self._ctx)].to_numpy(dtype=object)
 
     def _write_risk_comparison(
-        self, features: pd.DataFrame, t: IntArray, y: IntArray, groups: npt.NDArray[np.object_] | None
+        self,
+        features: pd.DataFrame,
+        t: IntArray,
+        y: IntArray,
+        groups: npt.NDArray[np.object_] | None,
+        value_costs: ValueCosts | None = None,
     ) -> str:
-        """`risk_comparison.json` from a ring cross-fit of the randomised rows; the stage note."""
+        """`risk_comparison.json` from a ring cross-fit of the randomised rows; the stage note.
+
+        With `uplift.evidence.rollout_verdict` (Plan K M137) the comparison also carries its one-sided
+        verdict, priced with the run's `uplift.policy` and, when the file carries the value column, the
+        rows' values and the costs `_evaluate` read once (`value_costs`).
+        """
         import numpy as np
         import pandas as pd
 
@@ -1349,6 +1361,7 @@ class UpliftTrainFlow(_TrainFlow):
                 propensity_source=source,
                 rows_excluded=int(len(t) - rows.shape[0]),
                 seed=self._seed,
+                **self._rollout_inputs(kept, rows, value_costs),
             )
         except ValueError as exc:
             _LOGGER.warning("evaluate: the equal-budget comparison could not run: %s", exc)
@@ -1360,6 +1373,31 @@ class UpliftTrainFlow(_TrainFlow):
             if report.uplift_better
             else "uplift not better than risk at equal budget"
         )
+
+    def _rollout_inputs(
+        self, kept: pd.DataFrame, rows: IntArray, value_costs: ValueCosts | None
+    ) -> dict[str, Any]:
+        """`equal_budget_comparison`'s Plan K M137 arguments: none with `rollout_verdict` off (the report
+        is then exactly M96's); else the confidence, the policy, and the comparison rows' values when
+        the use case names a value column the file carries (NaN where missing, never filled in)."""
+        import numpy as np
+        import pandas as pd
+
+        uplift = self._ctx.config.uplift
+        if not uplift.evidence.rollout_verdict:
+            return {}
+        column = uplift.policy.value_column
+        values = (
+            pd.to_numeric(kept[column].iloc[rows], errors="coerce").to_numpy(dtype=np.float64)
+            if column is not None and column in kept.columns
+            else None
+        )
+        return {
+            "rollout_confidence": uplift.evidence.rollout_confidence,
+            "value_policy": uplift.policy,
+            "row_values": values,
+            "value_costs": value_costs,
+        }
 
     def _holdout_keys(self, rows: IntArray) -> list[str]:
         """The hold-out rows' keys as text (the row key of a composite key): what

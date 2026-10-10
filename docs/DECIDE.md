@@ -232,6 +232,11 @@ account, with the formulas, is `docs/UPLIFT.md` section 12 ("Does the model earn
   recorded treatment probabilities, by extra conversions and per rupee with 95% intervals
   (`engine/measurement/compare.py`, `GET /runs/{run_id}/risk-comparison`, a Viewer's). Its nightly coverage
   test is `tests/statistical/test_risk_comparison_coverage.py`.
+* **Safe to roll out (Plan K M137, DEC-1325).** Opt-in (`uplift.evidence.rollout_verdict`): the same paired
+  difference read as a one-sided verdict - `safe`, `not_safe` or `cannot_tell` at `rollout_confidence` -
+  in conversions and, with M97's value inputs, in rupees, with how many rows would settle a "cannot tell"
+  if the gain seen is real. `rollout` in `risk_comparison.json`; its sentence follows the comparison's on
+  the Approver's screen. See docs/UPLIFT.md section 12. Nightly: `tests/statistical/test_rollout_verdict.py`.
 
 ## 12. The treat list and its reasons (M98, DEC-1308)
 
