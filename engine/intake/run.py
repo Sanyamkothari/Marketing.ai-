@@ -52,6 +52,7 @@ from engine.intake.grid import (
     name_columns,
     nonempty,
 )
+from engine.storage import StorageError
 from engine.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -490,11 +491,16 @@ def _intake_workbook(
 
 
 def workbook_csv(
-    data: bytes, config: IntakeConfig, *, sheet: str | None = None
+    data: bytes, config: IntakeConfig, *, sheet: str | None = None, max_rows: int | None = None
 ) -> tuple[bytes, IntakeReport]:
-    """A workbook held in memory as the CSV intake reads from it, and the report: for a pulled file (DEC-1504)."""
+    """A workbook held in memory as the CSV intake reads from it, and the report: for a pulled file (DEC-1504).
+
+    `max_rows` stops after that many of the sheet's rows (titles included): a preview needs no more.
+    """
     sink = io.BytesIO()
-    report = _convert_workbook(io.BytesIO(data), sink, config, sheet=sheet, enabled=True, original_key=None)
+    report = _convert_workbook(
+        io.BytesIO(data), sink, config, sheet=sheet, enabled=True, original_key=None, max_rows=max_rows
+    )
     return sink.getvalue(), report
 
 
@@ -506,6 +512,7 @@ def _convert_workbook(
     sheet: str | None,
     enabled: bool,
     original_key: str | None,
+    max_rows: int | None = None,
 ) -> IntakeReport:
     """Read one sheet of the workbook at `source` through the rules and write it to `sink` as UTF-8 CSV."""
     from engine.stages.ingest import IngestError
@@ -521,6 +528,8 @@ def _convert_workbook(
         infos, chosen = _choose_sheet(book, sheet, config)
         worksheet = book[chosen]
         limit = config.max_header_search_rows + config.sample_rows + 2
+        if max_rows is not None:
+            limit = min(limit, max_rows)
         head = list(sheet_rows(worksheet, max_rows=limit))
         if enabled:
             plan = _plan(head, [], len(head) < limit, config)
@@ -540,12 +549,21 @@ def _convert_workbook(
         plain = config.model_copy(update={"max_footer_rows": 0}) if not enabled else config
         out = io.TextIOWrapper(sink, encoding="utf-8", newline="")
         try:
-            counts = _write(sheet_rows(worksheet), plan, out, plain)
+            counts = _write(sheet_rows(worksheet, max_rows=max_rows), plan, out, plain)
         finally:
             out.flush()
             out.detach()
     except WorkbookError as exc:
         raise IngestError(exc.code, exc.message) from exc
+    except (OSError, StorageError):
+        raise
+    except Exception as exc:  # openpyxl raises a dozen unrelated types for a sheet damaged half way
+        _LOG.warning("intake.workbook_damaged error=%s", type(exc).__name__)
+        raise IngestError(
+            "UPLOAD_WORKBOOK_UNREADABLE",
+            "Part of this workbook is damaged and cannot be read. Open it in Excel, save it as .xlsx or CSV, "
+            "and upload it again.",
+        ) from exc
     finally:
         book.close()
     report = _report(
@@ -574,8 +592,8 @@ def _choose_sheet(book: Any, wanted: str | None, config: IntakeConfig) -> tuple[
     worksheets = list(book.worksheets)
     infos: list[SheetInfo] = []
     for worksheet in worksheets:
+        declared = getattr(worksheet, "max_row", None)  # before `sheet_rows` sets it aside
         rows = list(sheet_rows(worksheet, max_rows=SHEET_SCAN_ROWS))
-        declared = getattr(worksheet, "max_row", None)
         infos.append(
             SheetInfo(
                 name=str(worksheet.title),

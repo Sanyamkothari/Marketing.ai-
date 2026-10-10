@@ -40,6 +40,11 @@ has three or more words or a colon. A clean CSV is stored and read byte for byte
 **Old Excel files** (`.xls`, `.xlsb`) cannot be read: open them in Excel and save as `.xlsx` or CSV.
 **Password-protected** workbooks cannot be read either.
 
+**How big.** A CSV of a million rows is read in seconds. A workbook is slower: about 5,000 rows a second, so a
+million-row sheet takes a few minutes. For very large tables, save the sheet as CSV. A workbook that would
+unpack to more than 1 GB, or whose texts alone would unpack to more than 64 MB, is refused before it is opened.
+So is a sheet whose values sit far apart with mostly empty cells between them.
+
 The words and limits are in [`configs/intake.yaml`](../configs/intake.yaml): which words mean "no value",
 which mean "total", how far down to look for the column names, how many rows may be left out at the end.
 

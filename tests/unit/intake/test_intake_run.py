@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import io
+import re
 import zipfile
+from collections.abc import Callable
 from pathlib import Path
 
 import pandas as pd
@@ -319,3 +321,88 @@ def test_an_empty_workbook_says_so(storage: LocalStorage) -> None:
     with pytest.raises(IngestError) as caught:
         book_intake(storage, Workbook())
     assert caught.value.code == "UPLOAD_NO_ROWS"
+
+
+# ---------------------------------------------------------------------------
+# Hostile workbooks (Plan L M161)
+# ---------------------------------------------------------------------------
+def rewritten(book: Workbook, change: Callable[[bytes], bytes]) -> bytes:
+    """The workbook saved, with every sheet's XML passed through `change`."""
+    buffer = io.BytesIO()
+    book.save(buffer)
+    out = io.BytesIO()
+    with zipfile.ZipFile(buffer) as source, zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as target:
+        for member in source.infolist():
+            data = source.read(member)
+            if member.filename.startswith("xl/worksheets/sheet"):
+                data = change(data)
+            target.writestr(member, data)
+    return out.getvalue()
+
+
+def raw_intake(storage: LocalStorage, data: bytes, config: IntakeConfig = CONFIG) -> IntakeResult:
+    storage.write_bytes("u/original.xlsx", data)
+    return intake_file(
+        storage,
+        received_key="u/original.xlsx",
+        received_format="xlsx",
+        csv_key="u/source.csv",
+        original_key="u/original.xlsx",
+        config=config,
+    )
+
+
+def small_table() -> Workbook:
+    book = Workbook()
+    sheet = book.active
+    sheet.append(["id", "plan", "spend"])
+    for index in range(20):
+        sheet.append([f"C{index}", "Gold", index])
+    return book
+
+
+def test_a_declared_size_is_not_trusted(storage: LocalStorage) -> None:
+    """openpyxl pads every row to the declared size: A1:XFD1048576 would be rows of 16,384 cells."""
+    data = rewritten(
+        small_table(),
+        lambda xml: re.sub(rb'<dimension ref="[^"]*"/>', b'<dimension ref="A1:XFD1048576"/>', xml),
+    )
+    assert b"XFD1048576" in zipfile.ZipFile(io.BytesIO(data)).read("xl/worksheets/sheet1.xml")
+    result = raw_intake(storage, data)
+    assert result.report.rows_written == 20
+    assert list(read_upload(storage, "u/source.csv").frame.columns) == ["id", "plan", "spend"]
+    assert result.report.sheets[0].rows == 1048576, "the declared count is still reported"
+
+
+def test_values_far_apart_in_every_row_are_refused_not_read_for_hours(storage: LocalStorage) -> None:
+    book = Workbook()
+    sheet = book.active
+    sheet.append(["id", "spend"])
+    for row in range(2, 202):
+        sheet.cell(row=row, column=1, value=f"C{row}")
+        sheet.cell(row=row, column=16384, value=row)
+    with pytest.raises(IngestError) as caught:
+        book_intake(storage, book)
+    assert caught.value.code == "UPLOAD_WORKBOOK_TOO_SPARSE"
+
+
+def test_too_many_texts_are_refused_unopened(storage: LocalStorage) -> None:
+    """The table of texts is held in memory whole, so it has its own, smaller limit."""
+    buffer = io.BytesIO()
+    small_table().save(buffer)
+    out = io.BytesIO()
+    with zipfile.ZipFile(buffer) as source, zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as target:
+        for member in source.infolist():
+            target.writestr(member, source.read(member))
+        target.writestr("xl/sharedStrings.xml", b"<sst>" + b"<si><t>x</t></si>" * 150_000 + b"</sst>")
+    with pytest.raises(IngestError) as caught:
+        raw_intake(storage, out.getvalue(), IntakeConfig(max_shared_strings_mb=1))
+    assert caught.value.code == "UPLOAD_WORKBOOK_TOO_LARGE"
+    assert "texts" in caught.value.message
+
+
+def test_a_sheet_damaged_half_way_is_a_clear_refusal(storage: LocalStorage) -> None:
+    data = rewritten(small_table(), lambda xml: xml.replace(b'r="A15"', b'r="A!15"'))
+    with pytest.raises(IngestError) as caught:
+        raw_intake(storage, data)
+    assert caught.value.code == "UPLOAD_WORKBOOK_UNREADABLE"

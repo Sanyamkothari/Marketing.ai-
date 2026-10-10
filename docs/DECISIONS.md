@@ -1497,6 +1497,36 @@ DEC-1500…1509, M151 → DEC-1510…1519, …), so parallel work on two milesto
   M161 take M150's free tail, DEC-1506…1509. *Consequences:* `tests/integration/test_plan_l_benchmark.py` drives
   two files in the fast suite and all thirty, against the targets, in the slow one. AI suggestions still never
   start ticked (plan §11): the benchmark accepts only the rules' recommended set.
+- **DEC-1507 — M161: what the security review of Plan L changed.** *Context:* a review of intake, Data Doctor, the
+  table view and edits, and `propose_step` found paths a hostile file or a curious Analyst could take.
+  *Decision:* (a) **Erasure and access reach kept originals.** A workbook is zipped, so its bytes never show an
+  id: `original.xlsx` is searched unpacked (sheets and texts), an original is reported whenever the table read
+  from it holds the person, and erasure deletes kept originals rather than rewriting them; Data Doctor's
+  hand-off falls back to the read table once the original is gone. (b) **A correction is found by the ID column
+  only**, never one holding personal data (always-hidden columns count as personal): any other key column was a
+  lookup on it that also kept what was typed. (c) **A workbook's declared size is not trusted**
+  (`reset_dimensions`), and the cells a sheet may produce are capped by what it stores (one per two bytes plus a
+  million), so a 5 KB file of values far apart is refused (`UPLOAD_WORKBOOK_TOO_SPARSE`) rather than read for
+  hours. (d) **The table of texts has its own limit**, `max_shared_strings_mb` (64), as openpyxl holds it whole;
+  the whole-archive default drops from 2,048 to 1,024 MB. (e) **A sheet damaged half way** is a 422
+  `UPLOAD_WORKBOOK_UNREADABLE`, and any unexpected failure in `finish_upload` removes the upload's folder, which
+  retention could never find without an `upload.json`. (f) **`POST /uploads` reads the file off the event loop**
+  (`run_in_threadpool`), so a big file does not stall every other request. (g) A connection's workbook preview
+  reads only the rows it shows; `sheet` form fields are at most 255 characters; `defusedxml` becomes a direct
+  dependency (openpyxl parses through it when installed). *Consequences:* `tests/integration/test_intake_erasure.py`,
+  the hostile-workbook tests in `tests/unit/intake/test_intake_run.py`, `tests/integration/test_api_intake.py`
+  and `tests/unit/agent/test_edits.py` prove it. Not changed, by design: no route scopes uploads by client
+  (single-tenant today, as every upload route), and Viewers still see the corrections a session holds.
+- **DEC-1508 — M161: opening a workbook reads no rows; the biggest sheet is the one that holds the most.**
+  *Context:* openpyxl looks for a sheet's `<dimension>` on end events, so a workbook written without one
+  (pandas, many exporters) had every sheet parsed whole just to open it (22 s for a 200,000-row sheet), and
+  then declared no row count, so the first table sheet was read instead of the biggest. *Decision:* (a) the
+  dimension is looked for on start events and the search stops where the data starts (0.02 s, the same
+  result). (b) The biggest sheet is chosen by the bytes its XML unpacks to, which a missing or false
+  declaration cannot change. *Consequences:* measured on 10 Oct 2026 (a shared, loaded machine): a 1,000,000-row
+  CSV that needs intake's rules in 8-13 s and 155 MB; a 20-sheet workbook in 9 s with the biggest sheet read; a
+  workbook's rows at openpyxl's own pace, about 4,000-8,000 rows a second, so a million-row workbook takes two
+  to four minutes, which `docs/DATA_DOCTOR.md` says, with CSV as the faster way.
 - **DEC-1570 — M157: the outcome sentences are configuration, in their own file.** *Context:* most clients have no
   "churned" column but do have an event log; plan §5.3 asks for the outcome "shown back as a sentence".
   *Decision:* (a) `configs/outcomes.yaml`, read by `engine/doctor/outcomes.load_outcome_catalogue` (cached per file
