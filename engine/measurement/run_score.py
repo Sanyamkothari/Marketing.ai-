@@ -61,6 +61,10 @@ if TYPE_CHECKING:
 __all__ = [
     "COVARIATE_SOURCE_COLUMN",
     "COVARIATE_SOURCE_RUN_SCORE",
+    "NOTE_FEW_CUSTOMERS",
+    "NOTE_NO_PREDICTION",
+    "NOTE_NO_SPREAD_WITHIN",
+    "NOTE_SAME_PREDICTION",
     "PREDICTION_COLUMN",
     "CovariateSource",
     "PredictionAdjustment",
@@ -68,6 +72,7 @@ __all__ = [
     "adjust_by_prediction",
     "load_run_prediction",
     "prediction_column_for",
+    "varies_within",
 ]
 
 CovariateSource = Literal["column", "run_score"]
@@ -80,6 +85,21 @@ PREDICTION_COLUMN: Final[str] = "prediction"
 
 UPLIFT_PREDICTION_COLUMN: Final[str] = "p_control"
 """An uplift run's chance of the outcome without contact (`engine.uplift.flow.P_CONTROL_COLUMN`)."""
+
+NOTE_NO_PREDICTION: Final[str] = (
+    "No measured customer has a prediction from the scoring run, so nothing could be adjusted."
+)
+NOTE_FEW_CUSTOMERS: Final[str] = (
+    "One of the two groups has fewer than two customers with an outcome, so the estimate cannot be adjusted."
+)
+NOTE_SAME_PREDICTION: Final[str] = (
+    "The scoring run predicted the same for every measured customer, so its prediction cannot narrow the "
+    "range and the estimate is not adjusted."
+)
+NOTE_NO_SPREAD_WITHIN: Final[str] = (
+    "The scoring run's prediction does not vary within either group, so it cannot narrow the range and the "
+    "estimate is not adjusted."
+)
 
 
 @dataclass(frozen=True)
@@ -195,8 +215,8 @@ def adjust_by_prediction(
 
     All arrays are aligned on the measured customers (already joined on the key). A usable customer whose
     prediction is unknown (NaN) is given the mean of the known ones and counted in `rows_missing`. None
-    with a plain `note` when no usable customer has a prediction or it is the same for all of them;
-    None without a note when an arm has fewer than two customers (nothing to compare, said elsewhere).
+    always comes with a plain `note`: no usable customer has a prediction, an arm has fewer than two
+    usable customers, the prediction is the same for all of them, or it does not vary within either arm.
     """
     counted = np.asarray(usable, dtype=bool)
     arm = np.asarray(treated, dtype=bool)
@@ -205,22 +225,25 @@ def adjust_by_prediction(
     known = counted & np.isfinite(values)
     missing = int((counted & ~known).sum())
     if not known.any():
-        return PredictionAdjustment(
-            None,
-            missing,
-            "No measured customer has a prediction from the scoring run, so nothing could be adjusted.",
-        )
+        return PredictionAdjustment(None, missing, NOTE_NO_PREDICTION)
     if int((counted & arm).sum()) < 2 or int((counted & ~arm).sum()) < 2:
-        return PredictionAdjustment(None, missing, None)
-    same = (
-        "The scoring run predicted the same for every measured customer, so its prediction cannot narrow "
-        "the range and the estimate is not adjusted."
-    )
+        return PredictionAdjustment(None, missing, NOTE_FEW_CUSTOMERS)
     if float(np.ptp(values[known])) == 0.0:  # exactly constant: no slope, whatever rounding the mean leaves
-        return PredictionAdjustment(None, missing, same)
+        return PredictionAdjustment(None, missing, NOTE_SAME_PREDICTION)
     filled = np.where(known, values, float(values[known].mean()))
-    adjusted = adjusted_difference(
-        y[counted & arm], filled[counted & arm], y[counted & ~arm], filled[counted & ~arm]
-    )
-    note = same if adjusted is None else None
+    treated_x, control_x = filled[counted & arm], filled[counted & ~arm]
+    if not varies_within(treated_x, control_x):
+        return PredictionAdjustment(None, missing, NOTE_NO_SPREAD_WITHIN)
+    adjusted = adjusted_difference(y[counted & arm], treated_x, y[counted & ~arm], control_x)
+    note = NOTE_NO_SPREAD_WITHIN if adjusted is None else None
     return PredictionAdjustment(adjusted, missing, note)
+
+
+def varies_within(*arms: NDArray[np.float64]) -> bool:
+    """True when the prediction varies inside at least one arm.
+
+    Checked exactly (`np.ptp`), before the slope: a prediction constant inside each arm but different
+    between them leaves only the rounding of the arm means as "spread", and a slope fitted to that would
+    move the estimate by noise.
+    """
+    return any(len(values) and float(np.ptp(values)) > 0.0 for values in arms)

@@ -1165,10 +1165,17 @@ MLRATE: Meta 2021). Nothing new is trained: compute once.
   the arrays are 0/1 and the adjusted difference is a difference in rates. The report reuses `adjusted_lift`,
   `adjusted_interval`, `variance_reduction`, `rows_covariate_missing` and `adjustment_note`, adds
   `covariate_source: run_score` (absent otherwise, so every other report's JSON is byte for byte what it was), keeps
-  `covariate_column` null and always keeps the unadjusted estimate beside it.
+  `covariate_column` null and always keeps the unadjusted estimate beside it. When the estimate cannot be adjusted
+  the adjusted fields are null and `adjustment_note` says why, in one of four sentences: no measured customer has a
+  prediction; a group has fewer than two customers with an outcome; the prediction is the same for everyone; or it
+  does not vary within either group (constant inside each group but different between them, checked exactly
+  before any slope is fitted, so a slope is never fitted to the rounding of the group means).
 * **What reads it.** It is the analysis the plan registered, so the verdict (`campaign_verdict_for`), the Value
-  Proof Pack ("Difference (adjusted for the predicted chance registered in the plan)", the extra outcomes and their
-  value from it times the contacted customers, every figure traced to `adjusted_interval`), the value view
+  Proof Pack ("Difference (adjusted for the predicted chance registered in the plan)", on an amount too, since the
+  run's prediction is a chance; the extra outcomes and their value from it times the contacted customers, every
+  figure traced to `adjusted_interval`; in "Method and limits" the customers with no prediction and the share of the
+  noise removed, with a note that the adjustment used the chance the scoring run predicted before the campaign, and
+  never §16's "earlier amount" line), the value view
   (`adjusted: true`) and the fading rule of the summary read the adjusted estimate, each with a plain sentence.
 * **Planning.** A yes/no plan that registers it may give `expected_rho2`, the share of the outcome's spread the
   person expects the prediction to explain (never assumed by the product); `achieved_power`,
@@ -1186,6 +1193,8 @@ outcome) and removes variance on average, (b) that with no effect it excludes ze
 that a useless prediction (pure noise) leaves the interval no wider than 2% per campaign and 0.5% on average. The
 fast tests (`tests/unit/measurement/test_run_score.py`, `test_run_score_scale.py`,
 `tests/integration/measurement/test_campaign_run_score.py`) check the plan rules and the hash, the hand computation
-on a key join, row order, composite keys, the point-in-time refusals, the plan gate, a real train-and-score journey
-through the API with the Proof Pack and the value view, and that the join and adjustment on 1,000,000 customers take
+on a key join, row order, composite keys, the point-in-time refusals, the plan gate, the loader on a propensity and
+an uplift run (`p_control`) and each of its refusals, a reason for every null, the report pinned byte for byte to the
+one made before M135, a real train-and-score journey through the API with the Proof Pack's every line and the value
+view, and that the join and adjustment on 1,000,000 customers take
 about ten times as long as on 100,000.

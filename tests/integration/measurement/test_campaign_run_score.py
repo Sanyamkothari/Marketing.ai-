@@ -211,6 +211,18 @@ def test_the_journey_measures_a_yes_no_campaign_adjusted_by_the_runs_prediction(
     verify_provenance(view, world.storage)
     labels = [line.label for section in view.sections for line in section.lines]
     assert "Difference (adjusted for the predicted chance registered in the plan)" in labels
+    assert not [
+        label for label in labels if "earlier amount" in label
+    ], "M102's covariate line on a run_score pack"
+    lines = {line.label: line for section in view.sections for line in section.lines}
+    unmeasured = {label: line.missing for label, line in lines.items() if line.missing is not None}
+    assert set(unmeasured) == {"In rupees"}, f"only the rupees wait for value inputs: {unmeasured}"
+    method = next(section for section in view.sections if section.key == "method")
+    filled = next(line for line in method.lines if line.label.startswith("Customers with no prediction"))
+    assert filled.missing is None and filled.value is not None and filled.value.text == "0"
+    assert any(
+        "the scoring run predicted for each customer before the campaign" in note for note in method.notes
+    )
     document = proof_document(view)
     assert jargon_in(document.model_dump_json(exclude={"schema_version", "generated_at", "footer"})) == ()
     assert any(

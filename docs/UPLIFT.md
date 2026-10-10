@@ -1127,8 +1127,9 @@ whether choosing per customer does better than the first offer alone; every numb
   day or earlier (`COVARIATE_NOT_BEFORE_CAMPAIGN` otherwise) and registered in advance (`TEST_PLAN_CHANGED` otherwise).
   Long-tailed revenue is never capped; below Kohavi et al.'s size (355 g² customers per arm) the report
   carries `OUTCOME_SKEWED`: the range may be too narrow. Both intervals' coverage is tested nightly, on
-  normal and on zero-inflated lognormal revenue. On a yes/no outcome nothing changes: every M102 field is
-  absent. Several offers are still measured on a yes/no outcome only. Details: [`docs/DECIDE.md`](DECIDE.md)
+  normal and on zero-inflated lognormal revenue. On a yes/no outcome every M102 field is absent unless the test
+  plan registered `covariate_source: run_score` (Plan K M135): then the scoring run's prediction adjusts the
+  difference in rates, see [`docs/DECIDE.md`](DECIDE.md) section 26. Several offers are still measured on a yes/no outcome only. Details: [`docs/DECIDE.md`](DECIDE.md)
   section 16.
 * **Two-column keys: uploads train, datasets score.** Since M53 `POST /uplift/runs` takes a
   two-column key (customer + snapshot date) on an uploaded file, and uplift scoring and campaign

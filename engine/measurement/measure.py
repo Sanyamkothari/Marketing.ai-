@@ -124,11 +124,11 @@ def measure_campaign(
     registered test plan named that covariate in advance**: with no plan, a covariate on an amount is
     refused with `TestPlanChangedError` (`TEST_PLAN_CHANGED`) just as a covariate different from the
     plan's is, because choosing the adjustment after seeing the outcomes is one more way to move the
-    goalposts. A yes/no outcome never uses a covariate, so with no plan it is ignored and the report
-    is exactly as before M102. Several offers (`arm_column`) are measured on a yes/no outcome only:
-    an amount there is refused with a plain `ValueError` (DEC-1312), since no nightly check covers
-    per-offer amounts or their adjustment yet; a covariate on a yes/no several-offer campaign is
-    ignored, as before.
+    goalposts. A yes/no outcome never uses a covariate column (the scoring run's prediction is M135's,
+    below), so with no plan it is ignored and the report is exactly as before M102. Several offers
+    (`arm_column`) are measured on a yes/no outcome only: an amount there is refused with a plain
+    `ValueError` (DEC-1312), since no nightly check covers per-offer amounts or their adjustment yet; a
+    covariate on a yes/no several-offer campaign is ignored, as before.
 
     **Several offers (Plan J M100, DEC-668 (2)).** With `arm_column`, the column naming each treated
     customer's offer, every offer is measured against the shared control (`control_group`) by

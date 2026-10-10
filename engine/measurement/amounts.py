@@ -32,6 +32,12 @@ from engine.measurement.continuous import (
     mean_difference,
     skewed_arms,
 )
+from engine.measurement.run_score import (
+    NOTE_NO_PREDICTION,
+    NOTE_NO_SPREAD_WITHIN,
+    NOTE_SAME_PREDICTION,
+    varies_within,
+)
 
 if TYPE_CHECKING:
     from numpy.typing import NDArray
@@ -96,19 +102,17 @@ def amount_report(
     named = covariate_column is not None or run_score
     if run_score and compared is not None:
         if treated_covariate is None or control_covariate is None:
-            note = "No measured customer has a prediction from the scoring run, so nothing could be adjusted."
+            note = NOTE_NO_PREDICTION
         else:
             constant = float(np.ptp(np.concatenate([treated_covariate, control_covariate]))) == 0.0
             adjusted = (
                 None
                 if constant  # exactly the same for everyone: no slope, whatever rounding the mean leaves
+                or not varies_within(treated_covariate, control_covariate)  # only the arm means differ
                 else adjusted_difference(treated, treated_covariate, control, control_covariate)
             )
             if adjusted is None:
-                note = (
-                    "The scoring run predicted the same for every measured customer, so its prediction cannot "
-                    "narrow the range and the estimate is not adjusted."
-                )
+                note = NOTE_SAME_PREDICTION if constant else NOTE_NO_SPREAD_WITHIN
     elif covariate_column is not None and compared is not None:
         if treated_covariate is None or control_covariate is None:
             note = (

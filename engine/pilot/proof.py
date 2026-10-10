@@ -1047,11 +1047,7 @@ def _rate_base(context: _Context) -> str:
 def _adjusted_words(context: _Context) -> str:
     """What the registered adjustment took account of, in the words of a line's label."""
     if context.reader.get(context.report_key, "covariate_source") == "run_score":
-        return (
-            " (adjusted for the predicted amount registered in the plan)"
-            if context.continuous
-            else " (adjusted for the predicted chance registered in the plan)"
-        )
+        return " (adjusted for the predicted chance registered in the plan)"
     return " (adjusted for the earlier amount registered in the plan)"
 
 
@@ -2185,19 +2181,28 @@ def _method(context: _Context) -> ProofSection:
             missing="Not recorded: the result does not say how many customers had no outcome.",
         ),
     ]
+    run_score = context.reader.get(context.report_key, "covariate_source") == "run_score"
     if _estimate_base(context) == "adjusted_interval":
-        lines += [
+        lines.append(
             _line(
+                "Customers with no prediction from the scoring run (given the average one)",
+                context.r("rows_covariate_missing", "count"),
+                missing="Not recorded: the result does not say how many customers had no prediction.",
+            )
+            if run_score
+            else _line(
                 "Adjusted for each customer's earlier amount in",
                 context.r("covariate_column", "text"),
                 missing="Not recorded: the result does not name the earlier amount.",
-            ),
+            )
+        )
+        lines.append(
             _line(
                 "Share of the noise the adjustment removed",
                 context.r("variance_reduction", "share"),
                 missing="Not recorded: the result does not say how much noise the adjustment removed.",
-            ),
-        ]
+            )
+        )
     notes = [
         _BASIS_TEXT.get(basis, _BASIS_TEXT["not_random"]),
         {
@@ -2216,6 +2221,11 @@ def _method(context: _Context) -> ProofSection:
         "Results for each group are read without any adjustment by an earlier amount, and judged by the rule in "
         "the backfire section.",
     ]
+    if run_score and _estimate_base(context) == "adjusted_interval":
+        notes.append(
+            "Adjusted for the chance of the outcome the scoring run predicted for each customer before the "
+            "campaign, as the test plan registered."
+        )
     if context.kind == "programme":
         notes.append(
             "A programme readout compares everyone outside the universal control group with its members, over a "

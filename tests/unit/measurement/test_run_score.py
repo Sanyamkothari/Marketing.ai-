@@ -9,9 +9,12 @@ adjusted interval is the nightly `tests/statistical/test_run_score_coverage.py`.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 from collections.abc import Iterator
 from datetime import UTC, date, datetime, timedelta
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -19,7 +22,7 @@ import pandas as pd
 import pytest
 from pydantic import ValidationError
 
-from engine.measurement.campaign import INTENDED_COLUMN, build_assignment
+from engine.measurement.campaign import INTENDED_COLUMN, Campaign, build_assignment
 from engine.measurement.continuous import CovariateNotBeforeCampaignError, adjusted_difference
 from engine.measurement.measure import campaign_verdict_for, headline_estimate, measure_campaign
 from engine.measurement.plan import (
@@ -32,7 +35,14 @@ from engine.measurement.plan import (
     realised_population,
 )
 from engine.measurement.planner import achieved_power, mde_two_proportions
-from engine.measurement.run_score import PREDICTION_COLUMN, RunPrediction, adjust_by_prediction
+from engine.measurement.run_score import (
+    NOTE_FEW_CUSTOMERS,
+    NOTE_NO_SPREAD_WITHIN,
+    PREDICTION_COLUMN,
+    RunPrediction,
+    adjust_by_prediction,
+    load_run_prediction,
+)
 from engine.measurement.simulate import (
     KEY_COLUMN,
     OUTCOME_COLUMN,
@@ -42,10 +52,19 @@ from engine.measurement.simulate import (
     revenue_campaign,
 )
 from engine.pilot.plain import jargon_in
+from engine.runs import RUN_CONFIG_FILENAME, RUN_FILENAME
+from engine.stages.export import SCORES_PARQUET
+from engine.storage import LocalStorage, run_key
 from engine.uplift.incrementality import measure_incrementality
 from engine.uplift.measure import VerdictKind
+from tests.fixtures.decide.treat_runs import write_run
 
 REGISTERED = datetime(2026, 3, 1, tzinfo=UTC)
+
+PRE_M135_REPORT_SHA256 = "6c7f8f0134ea9ecf56db81027140e5632b601fa1600fa3f61c2ff2e9bde7580a"
+"""SHA-256 of the JSON report (`computed_at` left out) of `predicted_campaign(2_000, 0.2, 0.02, seed=7)`
+measured with no plan, recorded on b55132f (the commit before M135) by `measure_campaign` and
+`measure_incrementality` alike: a change that altered every report the same way would move it."""
 
 
 @pytest.fixture(autouse=True)
@@ -296,6 +315,8 @@ def test_without_run_score_the_report_is_what_it_was() -> None:
     assert planned.model_dump(exclude={"computed_at", "test_plan_hash", "early_look"}) == no_plan.model_dump(
         exclude={"computed_at", "test_plan_hash", "early_look"}
     )
+    digest = hashlib.sha256(no_plan.model_dump_json(exclude={"computed_at"}).encode("utf-8")).hexdigest()
+    assert digest == PRE_M135_REPORT_SHA256, "the report is no longer byte for byte the one made before M135"
 
 
 def test_run_score_needs_a_plan_that_registered_it() -> None:
@@ -432,6 +453,160 @@ def test_adjust_by_prediction_counts_only_the_usable_customers() -> None:
     treated = np.array([True, True, True, True, False, False, False, False])
     result = adjust_by_prediction(outcome, prediction, usable=usable, treated=treated)
     assert result.rows_missing == 2 and result.adjusted is not None
+
+
+def test_an_estimate_that_cannot_be_adjusted_always_says_why() -> None:
+    outcome = np.array([1, 0, 1, 0, 1], dtype=float)
+    usable = np.ones(5, dtype=bool)
+    one_held_back = adjust_by_prediction(
+        outcome,
+        np.array([0.9, 0.1, 0.8, 0.2, 0.5]),
+        usable=usable,
+        treated=np.array([True, True, True, True, False]),
+    )
+    assert one_held_back.adjusted is None and one_held_back.note == NOTE_FEW_CUSTOMERS
+    flat_within = adjust_by_prediction(
+        outcome,
+        np.array([0.4, 0.4, 0.4, 0.2, 0.2]),
+        usable=usable,
+        treated=np.array([True, True, True, False, False]),
+    )
+    assert flat_within.adjusted is None and flat_within.note == NOTE_NO_SPREAD_WITHIN
+    assert jargon_in(NOTE_FEW_CUSTOMERS) == () and jargon_in(NOTE_NO_SPREAD_WITHIN) == ()
+
+
+def test_a_report_with_one_held_back_customer_says_why_it_is_not_adjusted() -> None:
+    sim = predicted_campaign(400, 0.2, 0.02, seed=13)
+    held = sim.scores.loc[sim.scores["control_group"].astype(bool), KEY_COLUMN]
+    outcomes = sim.outcomes[~sim.outcomes[KEY_COLUMN].isin(held.iloc[1:])]  # one held-back outcome left
+    assignment = build_assignment(sim.scores, primary_key=KEY_COLUMN)
+    plan = _plan(assignment, covariate_source="run_score")
+    report = measure_campaign(
+        assignment,
+        outcomes,
+        intended_column=INTENDED_COLUMN,
+        plan=plan,
+        covariate_source="run_score",
+        run_prediction=sim.run_prediction,
+        **sim.measure_kwargs,
+    )
+    assert report.control_rows == 1 and report.absolute_lift is not None, "measured, one held back"
+    assert report.covariate_source == "run_score" and report.adjusted_interval is None
+    assert report.adjustment_note == NOTE_FEW_CUSTOMERS and NOTE_FEW_CUSTOMERS in report.summary
+
+
+def test_a_prediction_that_does_not_vary_within_either_group_is_not_called_the_same_for_all() -> None:
+    sim = predicted_campaign(1_000, 0.2, 0.02, seed=14)
+    held = set(sim.scores.loc[sim.scores["control_group"].astype(bool), KEY_COLUMN])
+    by_arm = sim.run_prediction.frame.assign(
+        **{PREDICTION_COLUMN: [0.2 if key in held else 0.4 for key in sim.run_prediction.frame[KEY_COLUMN]]}
+    )
+    prediction = RunPrediction(frame=by_arm, run_id="r", column="c", predicted_at=sim.predicted_at)
+    assignment = build_assignment(sim.scores, primary_key=KEY_COLUMN)
+    plan = _plan(assignment, covariate_source="run_score")
+    report = _measured(sim, assignment, plan, covariate_source="run_score", run_prediction=prediction)
+    assert report.adjusted_interval is None and report.adjustment_note == NOTE_NO_SPREAD_WITHIN
+
+    revenue = revenue_campaign(1_000, 3.0, seed=15, rho=0.6)
+    held = set(revenue.scores.loc[revenue.scores["control_group"].astype(bool), KEY_COLUMN])
+    keys = revenue.outcomes[KEY_COLUMN]
+    frame = pd.DataFrame({KEY_COLUMN: keys, PREDICTION_COLUMN: [0.2 if k in held else 0.4 for k in keys]})
+    early = revenue.measure_kwargs["treatment_time"] - timedelta(days=200)
+    amounts = build_assignment(revenue.scores, primary_key=KEY_COLUMN)
+    amount_plan = freeze_plan(
+        TestPlanInput(
+            metric="revenue",
+            outcome_column="revenue",
+            outcome_kind="continuous",
+            outcome_window_days=30,
+            analysis_date=date(2026, 6, 1),
+            covariate_source="run_score",
+        ),
+        realised_population(amounts, intended_column=INTENDED_COLUMN),
+        campaign_id="c_m135",
+        registered_by="u_1",
+        registered_at=REGISTERED,
+    )
+    amount = measure_campaign(
+        amounts,
+        revenue.outcomes,
+        intended_column=INTENDED_COLUMN,
+        plan=amount_plan,
+        covariate_source="run_score",
+        run_prediction=RunPrediction(frame=frame, run_id="r", column="c", predicted_at=early),
+        **revenue.measure_kwargs,
+    )
+    assert amount.mean_difference_ci is not None and amount.adjusted_interval is None
+    assert amount.adjustment_note == NOTE_NO_SPREAD_WITHIN
+
+
+# ---------------------------------------------------------------------------
+# The loader: which column a run's prediction is in, and its refusals
+# ---------------------------------------------------------------------------
+def _campaign_of(*run_ids: str) -> Campaign:
+    """Only what the loader reads: the campaign's runs and its key."""
+    return Campaign.model_construct(run_ids=run_ids, primary_key="customer_id")
+
+
+def test_an_uplift_runs_prediction_is_its_chance_without_contact_joined_by_key(tmp_path: Path) -> None:
+    storage = LocalStorage(tmp_path)
+    written = write_run(storage, "r_m135_uplift", kind="uplift", rows=40)
+    assert written.config.actions.score_field not in written.scores.columns, "only p_control can be right"
+    loaded = load_run_prediction(storage, _campaign_of("r_m135_uplift"))
+    assert loaded.column == "p_control" and loaded.run_id == "r_m135_uplift"
+    assert list(loaded.frame.columns) == ["customer_id", PREDICTION_COLUMN]
+    expected = written.scores.set_index("customer_id")["p_control"]
+    got = loaded.frame.set_index("customer_id")[PREDICTION_COLUMN]
+    assert got.reindex(expected.index).tolist() == expected.tolist()
+
+
+def test_a_propensity_runs_prediction_is_its_score_field(tmp_path: Path) -> None:
+    storage = LocalStorage(tmp_path)
+    written = write_run(storage, "r_m135_prop", kind="propensity", rows=40)
+    loaded = load_run_prediction(storage, _campaign_of("r_m135_prop"))
+    assert loaded.column == written.config.actions.score_field
+    expected = written.scores.set_index("customer_id")[loaded.column]
+    got = loaded.frame.set_index("customer_id")[PREDICTION_COLUMN]
+    assert got.reindex(expected.index).tolist() == expected.tolist()
+
+
+def test_the_loader_refuses_with_a_plain_sentence(tmp_path: Path) -> None:
+    storage = LocalStorage(tmp_path)
+    write_run(storage, "r_m135_a", kind="propensity", rows=20)
+    with pytest.raises(ValueError, match="not made from one of our scoring runs"):
+        load_run_prediction(storage, _campaign_of())
+    with pytest.raises(ValueError, match="several scoring runs"):
+        load_run_prediction(storage, _campaign_of("r_m135_a", "r_m135_b"))
+
+    unfinished = tmp_path / "unfinished"
+    write_run(LocalStorage(unfinished), "r_m135_u", kind="propensity", rows=20)
+    record_path = unfinished / run_key("r_m135_u", RUN_FILENAME)
+    record = json.loads(record_path.read_text(encoding="utf-8"))
+    record_path.write_text(json.dumps({**record, "finished_at": None}), encoding="utf-8")
+    with pytest.raises(CovariateNotBeforeCampaignError, match="has not finished"):
+        load_run_prediction(LocalStorage(unfinished), _campaign_of("r_m135_u"))
+
+    no_scores = tmp_path / "no_scores"
+    write_run(LocalStorage(no_scores), "r_m135_s", kind="propensity", rows=20)
+    (no_scores / run_key("r_m135_s", SCORES_PARQUET)).unlink()
+    with pytest.raises(ValueError, match="has no scores file"):
+        load_run_prediction(LocalStorage(no_scores), _campaign_of("r_m135_s"))
+
+    no_column = tmp_path / "no_column"
+    written = write_run(LocalStorage(no_column), "r_m135_c", kind="propensity", rows=20)
+    scores_path = no_column / run_key("r_m135_c", SCORES_PARQUET)
+    written.scores.drop(columns=[written.config.actions.score_field]).to_parquet(scores_path, index=False)
+    with pytest.raises(ValueError, match=f"has no '{written.config.actions.score_field}' column"):
+        load_run_prediction(LocalStorage(no_column), _campaign_of("r_m135_c"))
+
+    no_config = tmp_path / "no_config"
+    write_run(LocalStorage(no_config), "r_m135_k", kind="propensity", rows=20)
+    (no_config / run_key("r_m135_k", RUN_CONFIG_FILENAME)).unlink()
+    with pytest.raises(ValueError, match="kept no record of its settings"):
+        load_run_prediction(LocalStorage(no_config), _campaign_of("r_m135_k"))
+
+    with pytest.raises(ValueError, match="no longer stored"):
+        load_run_prediction(storage, _campaign_of("r_m135_gone"))
 
 
 # ---------------------------------------------------------------------------
