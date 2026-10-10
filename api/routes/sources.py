@@ -439,13 +439,18 @@ def working_sources(store: ClientStore, client_id: str) -> tuple[SourceSpec, ...
     would let a four-table client train and score one month and then refuse the third month's
     tables, because each month's replay adds a copy of every table (Plan A M35). So only the tables
     still being worked on count towards the upload limit; with no saved recipe that is every source,
-    exactly as before.
+    exactly as before. Plan J M107: a copy a scheduled build read again from a connection
+    (`SourceBinding.refreshes`) belongs to the recipe it refreshed, so it does not count either.
     """
     referenced: set[str] = set()
     for spec in store.list_specs(client_id):
         referenced.add(spec.entity_source_id)
         referenced.update(spec.event_source_ids)
-    return tuple(source for source in store.list_sources(client_id) if source.source_id not in referenced)
+    return tuple(
+        source
+        for source in store.list_sources(client_id)
+        if source.source_id not in referenced and (source.binding is None or source.binding.refreshes is None)
+    )
 
 
 def source_raw_key(client_id: str, source_id: str, file_format: Literal["csv", "parquet"]) -> str:

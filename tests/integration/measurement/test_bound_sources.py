@@ -24,6 +24,7 @@ from fastapi.testclient import TestClient
 from moto import mock_aws
 
 from api.main import create_app
+from api.routes.sources import working_sources
 from engine.config import RunMode, get_roles, load_use_case
 from engine.connections.store import ConnectionStore
 from engine.measurement.campaign import InMemoryCampaignStore
@@ -194,6 +195,11 @@ def test_the_newest_object_under_the_prefix_is_read_by_the_next_scheduled_build(
     assert len(newest) == 1 and newest[0].role == "activity"
     assert newest[0].source_id in manifest.source_fingerprints
     assert newest[0].rows == len(later.index)
+    binding = newest[0].binding
+    assert binding is not None and binding.refreshes is not None
+    assert newest[0].source_id not in {
+        s.source_id for s in working_sources(world.client_store, world.client_id)
+    }
     assert not world.storage.list_keys("uploads/"), "no upload: the table came from the connection"
     assert _objects(s3) == before, "nothing is written to the client's bucket"
 

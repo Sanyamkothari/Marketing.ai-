@@ -337,6 +337,13 @@ class SourceBinding(Artefact):
         default=None, description="The file this copy was read from; null for a table."
     )
     fetched_at: AwareDatetime = Field(description="UTC time this copy was read.")
+    refreshes: str | None = Field(
+        default=None,
+        description=(
+            "The bound source a scheduled build read again to make this copy; null for one a person added. A "
+            "copy is part of the recipe it refreshes, so it never counts towards the sources being worked on."
+        ),
+    )
 
 
 class SourceSpec(Artefact):

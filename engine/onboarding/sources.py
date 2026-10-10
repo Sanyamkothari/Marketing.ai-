@@ -727,6 +727,7 @@ def add_connection_source(
             table=selection.table,
             object_path=resolved.path,
             fetched_at=now,
+            refreshes=keep_if_unchanged.source_id if keep_if_unchanged is not None else None,
         )
         spec = SourceSpec(
             source_id=chosen_id,
