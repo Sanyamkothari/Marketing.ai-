@@ -13,6 +13,7 @@ from typing import Literal
 from pydantic import Field
 
 from engine.config import StrictBase
+from engine.doctor.outcomes import OutcomeOffer
 
 __all__ = [
     "Diagnosis",
@@ -68,6 +69,12 @@ class UseCaseReadiness(StrictBase):
     outcome_column: str | None = Field(default=None, description="The column Guided setup would learn from.")
     questions: int = Field(default=0, description="Questions Guided setup will ask before training.")
     suggestions: int = Field(default=0, description="Suggestions Guided setup will show before training.")
+    # Plan L M157 (DEC-1572): for a `missing` use case whose outcome an event file can define, the
+    # sentence to agree, with its choices measured on the files. Null otherwise; never built from.
+    outcome_offer: OutcomeOffer | None = Field(
+        default=None,
+        description="The outcome an event file can define, as a sentence to agree; null when none.",
+    )
 
 
 class Diagnosis(StrictBase):
