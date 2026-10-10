@@ -39,9 +39,9 @@ sign-in is on. Rejecting archives a `pending_approval` version; nothing else can
 from __future__ import annotations
 
 import uuid
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from datetime import datetime
-from typing import Final, Literal, TypeVar
+from typing import Any, Final, Literal, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import Column, DateTime
@@ -66,6 +66,7 @@ from engine.storage import Storage, StorageError, run_key
 from engine.utils.time import utc_now
 
 __all__ = [
+    "DECISION_SUBJECTS",  # Plan K M132 (DEC-1401): a proposal is the second kind of decision
     "MODEL_DECISION_TABLE",
     "ApprovalItem",
     "DecisionKind",
@@ -73,6 +74,9 @@ __all__ = [
     "HeadToHeadMetric",
     "ModelDecision",
     "ModelDecisionRow",
+    "ProposalDecisionKind",
+    "ProposalReceipt",
+    "decide_proposal",
     "decisions_for",
     "head_to_head",
     "pending_approvals",
@@ -443,3 +447,196 @@ def _row(
         difference=difference,
         better=better,
     )
+
+
+# ---------------------------------------------------------------------------
+# Plan K M132 (DEC-1401): agent proposals, a second kind of decision beside model decisions
+# ---------------------------------------------------------------------------
+# A proposal (`engine.agentic.proposals`) is decided here as a model is: by a person holding the Approver
+# role, never by the person it was proposed for (`separation_refusal`, the same rule), and with the policy
+# checked again against the facts as they are now. Approving it calls the function the HTTP route calls (the
+# caller passes it in as `execute`: `api.routes.agentic` passes `api.routes.campaigns.register_plan` for a
+# test plan), so an agent never gets a second path to anything. The record is the decision ledger
+# (`engine.agentic.ledger`): `proposal.approved` (signed), `proposal.rejected`, `proposal.refused`,
+# `approval.refused`, `proposal.execution_failed` and, for a test plan, `test_plan.frozen` (signed, with the
+# holdout's commitment). Nothing above this block changes, and nothing here runs unless `agentic.enabled` is
+# on; `engine.agentic` is imported inside the functions, so importing this module does not load it.
+DECISION_SUBJECTS: Final[tuple[str, ...]] = ("model", "proposal")
+"""What a person decides on: a challenger model (Plan D) or an agent's proposal (Plan K)."""
+
+ProposalDecisionKind = Literal["approved", "rejected"]
+
+
+class ProposalReceipt(_Model):
+    """What an Approver gets back, and keeps: the decision and the ledger head after it (the checkpoint)."""
+
+    proposal_id: str
+    decision: ProposalDecisionKind
+    status: str = Field(description="The proposal's status after the decision.")
+    decided_by: str = Field(description="`Principal.user_id` of whoever decided.")
+    payload_digest: str
+    result_ref: str | None = Field(
+        default=None, description="What approving made, e.g. the frozen plan_hash."
+    )
+    ledger_checkpoint: str = Field(
+        description="entry_hash of the ledger head after the decision. Keep it: a rewritten ledger no longer matches."
+    )
+
+
+def decide_proposal(
+    proposal_id: str,
+    decision: ProposalDecisionKind,
+    *,
+    principal: Principal,
+    reason: str | None,
+    tool_ctx: Any,
+    execute: Callable[[Any], str | None],
+) -> ProposalReceipt:
+    """Approve or reject a pending proposal (see the block comment above). Raises `AgenticError`."""
+    from engine.agentic.canonical import digest
+    from engine.agentic.config import load_policy, require_enabled
+    from engine.agentic.errors import AgenticError
+    from engine.agentic.ledger import (
+        APPROVAL_REFUSED,
+        EXECUTION_FAILED,
+        PROPOSAL_APPROVED,
+        PROPOSAL_EXPIRED,
+        PROPOSAL_REFUSED,
+        PROPOSAL_REJECTED,
+    )
+    from engine.agentic.policy import RULES, ProposalSubject, build_context, evaluate
+    from engine.agentic.proposals import ProposalStore
+
+    require_enabled(tool_ctx.config_root)
+    ledger = tool_ctx.ledger
+    if ledger is None:
+        raise AgenticError(
+            "LEDGER_CHAIN_BROKEN", "A proposal is decided only onto the decision ledger.", status=500
+        )
+    store = ProposalStore(tool_ctx.storage)
+    proposal = store.get(proposal_id)
+    now = tool_ctx.clock()
+    refs: dict[str, Any] = {
+        "proposal_id": proposal.proposal_id,
+        "proposal_kind": proposal.kind,
+        "payload_digest": proposal.payload_digest,
+    }
+    reason_text = (reason or "").strip()
+    reason_part: dict[str, Any] = {"reason_digest": digest(reason_text)} if reason_text else {}
+    if proposal.status == "pending" and proposal.status_at(now) == "expired":
+        ledger.append(PROPOSAL_EXPIRED, principal.user_id, {**refs, "status": "expired"}, at=now)
+        store.save(proposal.model_copy(update={"status": "expired"}))
+        raise AgenticError(
+            "PROPOSAL_EXPIRED", "This proposal expired before anyone decided on it.", status=409
+        )
+    if proposal.status != "pending":
+        raise AgenticError(
+            "PROPOSAL_NOT_PENDING",
+            f"This proposal is {proposal.status}; only a pending one can be decided.",
+            status=409,
+        )
+
+    def finish(
+        status: str, kind: str, extra: dict[str, Any], result_ref: str | None = None
+    ) -> ProposalReceipt:
+        body = {
+            **refs,
+            "status": status,
+            "decided_by": principal.user_id,
+            "proposed_by": proposal.proposed_by,
+        }
+        head = ledger.append(kind, principal.user_id, {**body, **extra}, at=now)
+        store.save(
+            proposal.model_copy(
+                update={
+                    "status": status,
+                    "decided_by": principal.user_id,
+                    "decided_at": now,
+                    "result_ref": result_ref,
+                    "ledger_checkpoint": head.entry_hash,
+                }
+            )
+        )
+        return ProposalReceipt(
+            proposal_id=proposal.proposal_id,
+            decision=decision,
+            status=status,
+            decided_by=principal.user_id,
+            payload_digest=proposal.payload_digest,
+            result_ref=result_ref,
+            ledger_checkpoint=head.entry_hash,
+        )
+
+    if decision == "rejected":
+        return finish("rejected", PROPOSAL_REJECTED, reason_part)
+
+    subject = ProposalSubject(kind=proposal.kind, payload=proposal.payload, proposed_by=proposal.proposed_by)
+    context = build_context(subject, tool_ctx, load_policy(tool_ctx.config_root), approver=principal)
+    rules = tool_ctx.policy_rules if tool_ctx.policy_rules is not None else RULES
+    refused = [d for d in evaluate(subject, context, rules=rules) if not d.allowed]
+    if any(d.rule == "role.separation" for d in refused):
+        body = {
+            **refs,
+            "status": "pending",
+            "codes": ["POLICY_ROLE_SEPARATION"],
+            "decided_by": principal.user_id,
+        }
+        ledger.append(APPROVAL_REFUSED, principal.user_id, body, at=now)
+        raise AgenticError(
+            "POLICY_ROLE_SEPARATION",
+            "You proposed this, so another Approver has to decide on it.",
+            status=403,
+        )
+    codes = sorted({d.code for d in refused if d.code is not None})
+    if (
+        not codes
+        and proposal.kind == "test_plan"
+        and context.dry_plan_hash != proposal.payload.get("plan_hash")
+    ):
+        codes = ["PROPOSAL_STALE"]
+    if codes:
+        ledger.append(
+            PROPOSAL_REFUSED, principal.user_id, {**refs, "status": "refused", "codes": codes}, at=now
+        )
+        store.save(proposal.model_copy(update={"status": "refused", "decision_codes": tuple(codes)}))
+        message = (
+            "The campaign has changed since this was proposed, so the plan would not be the one proposed."
+            if codes == ["PROPOSAL_STALE"]
+            else "The policy refuses this proposal now: " + ", ".join(codes) + "."
+        )
+        raise AgenticError(codes[0], message, status=409, detail={"codes": codes})
+    try:
+        result_ref = execute(proposal)
+    except AgenticError as exc:
+        ledger.append(
+            EXECUTION_FAILED, principal.user_id, {**refs, "status": "pending", "codes": [exc.code]}, at=now
+        )
+        raise
+    if proposal.kind == "test_plan" and result_ref is not None:
+        _record_frozen_plan(ledger, tool_ctx, principal, proposal, result_ref, now)
+    return finish("approved", PROPOSAL_APPROVED, {**reason_part, "result_ref": result_ref}, result_ref)
+
+
+def _record_frozen_plan(
+    ledger: Any, tool_ctx: Any, principal: Principal, proposal: Any, plan_hash: str, now: datetime
+) -> None:
+    """`test_plan.frozen` (signed): the plan's hash and the holdout's commitment (scope, epoch, salt id)."""
+    from engine.agentic.ledger import TEST_PLAN_FROZEN
+
+    campaign_id = str(proposal.payload.get("campaign_id"))
+    body: dict[str, Any] = {
+        "proposal_id": proposal.proposal_id,
+        "campaign_id": campaign_id,
+        "plan_hash": plan_hash,
+    }
+    campaign = None if tool_ctx.campaigns is None else tool_ctx.campaigns.get(campaign_id)
+    if campaign is not None:
+        body["plan_version"] = campaign.test_plan_version
+        body["holdout_scope"] = campaign.holdout_scope
+        body["holdout_epoch"] = campaign.holdout_epoch
+        if campaign.holdout_scope != "run" and tool_ctx.platform_engine is not None:
+            from engine.holdout.salt import HoldoutLedger, salt_id
+
+            fingerprint = HoldoutLedger(tool_ctx.platform_engine).fingerprint()
+            body["holdout_salt_id"] = None if fingerprint is None else salt_id(fingerprint)
+    ledger.append(TEST_PLAN_FROZEN, principal.user_id, body, at=now)

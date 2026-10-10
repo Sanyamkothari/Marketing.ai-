@@ -1,0 +1,7 @@
+# Plan K switches (docs/AGENTIC.md, design §11).
+#
+# agentic.enabled: the agent-safe core (M132) - the tool registry's in-process entry point, proposals,
+# the decision ledger and the /agentic routes. Off (the default), none of it is reachable: the routes are
+# not mounted, no table is created and every response is byte-identical to Plan J's.
+agentic:
+  enabled: false

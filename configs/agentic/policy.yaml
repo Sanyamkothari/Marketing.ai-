@@ -1,0 +1,35 @@
+# The policy every agent proposal is checked against (Plan K M132, design §2; docs/AGENTIC.md).
+#
+# The policy is default-deny: a proposal kind with no rule set below is refused (POLICY_NO_RULES), and a
+# rule set allows a proposal only when every rule that applies allows it. The sha256 of this file is the
+# policy version written into every ledger entry, so a past decision can be re-checked against the rules
+# in force when it was made. Prompts never reach this file: it is read by the server only.
+schema_version: 1
+
+# Which rules apply to which proposal kind, in the order they are evaluated (every one is evaluated, so a
+# refusal lists every rule it breaks). Rule names: holdout.immutable, budget.cap, consent.channel,
+# frequency.cap, test.registered, role.separation.
+rule_sets:
+  test_plan: [holdout.immutable, role.separation]
+  campaign_plan:
+    [holdout.immutable, budget.cap, consent.channel, frequency.cap, test.registered, role.separation]
+
+holdout:
+  # How far a proposed holdout share may sit below the share in force (0.5 percentage points, the test
+  # plan's own HOLDOUT_TOLERANCE) before it counts as shrinking the holdout.
+  tolerance: 0.005
+
+budget:
+  # A run whose cost cannot be worked out while a cost cap is set needs a person's confirmation
+  # (RUN_COST_NEEDS_CONFIRMATION); an agent cannot give it, so its proposal is refused.
+  refuse_unpriced_when_capped: true
+
+consent:
+  # Customers on the proposed list who may not be contacted on the proposed channel. Any is too many.
+  max_not_contactable: 0
+  # A channel whose contactability the scoring run did not record is not assumed contactable.
+  require_recorded: true
+
+proposals:
+  # A pending proposal no Approver decided within this many days expires and cannot be approved.
+  expire_after_days: 14

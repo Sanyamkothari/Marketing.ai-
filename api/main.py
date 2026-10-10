@@ -305,6 +305,22 @@ PHASE_ROUTERS.append(cost_router)
 from api.routes.drift_events import router as drift_events_router  # noqa: E402
 
 PHASE_ROUTERS.append(drift_events_router)
+
+
+# PLAN-K (M132): move into the PLAN-K block at integration
+# Plan K M132 (DEC-1401): the /agentic proposal routes, mounted only when `agentic.enabled` is on
+# (configs/agentic/agentic.yaml). Off - the default - nothing of `engine.agentic` is imported, no route
+# exists and no table is created, so every app is byte-identical to Plan J's.
+def _install_agentic(app: FastAPI) -> None:
+    from engine.agentic.config import agentic_enabled
+
+    if agentic_enabled(app.state.config_root):
+        from api.routes.agentic import router as agentic_router
+
+        app.include_router(agentic_router)
+
+
+PHASE_APP_HOOKS.append(_install_agentic)
 # ---- END PLAN-J ----
 
 app: FastAPI = create_app()
