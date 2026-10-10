@@ -513,6 +513,9 @@ def test_openapi_builds_and_documents_every_route(client: TestClient) -> None:
         "/cost/spend",
         # Plan J M105: what needs attention across the campaigns, and the value proven to date (DEC-1315)
         "/campaigns/summary",
+        # Plan J M109: events noted against a scoring run's drift report (DEC-1319)
+        "/runs/{run_id}/drift-events",
+        "/runs/{run_id}/drift-events/{annotation_id}",
     }
 
 
