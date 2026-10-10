@@ -1240,6 +1240,7 @@ class ScheduleFirer:
                     pull=pull,
                     ledger_engine=lambda: ledger,
                     now=services.clock(),
+                    config_root=services.config_root,  # PLAN-K (M138): where configs/measurement.yaml is read
                 )
             else:
                 # The learning run passes the cost gate every scheduled run passes (Plan J M108), checked only
@@ -1284,6 +1285,7 @@ class ScheduleFirer:
         except ConnectorErrorType as exc:
             raise FiringError(exc.code, exc.message) from exc
         self._alert_step(schedule, step)
+        self._alert_harm(schedule, step, config.name)  # PLAN-K (M138)
         status = FiringStatus.RUNNING if step.running else FiringStatus.SUCCEEDED
         # `run_id` names a run the firing started (learning); a run a step only read is in its alert.
         return _Outcome(status, step.result_code, step.run_id if step.running else None)
@@ -1308,6 +1310,24 @@ class ScheduleFirer:
                 now=self.services.clock(),
             )
         )
+
+    def _alert_harm(self, schedule: Schedule, step: StepOutcome, use_case_name: str) -> None:
+        """PLAN-K (M138, DEC-1403): one `harm_alarm` warning when a harm alarm fired for the first time at this step."""
+        from engine.measurement.harm import harm_alert
+
+        if step.harm is None:
+            return
+        alert = harm_alert(
+            step.harm,
+            use_case_id=schedule.use_case_id,
+            use_case_name=use_case_name,
+            client_id=schedule.client_id,
+            schedule_id=schedule.schedule_id,
+            run_id=step.run_id,
+            now=self.services.clock(),
+        )
+        if alert is not None:
+            self.services.alerts.raise_alert(alert)
 
     def _alert_learned(self, firing: ScheduleFiring, record: RunRecord, result_code: str) -> None:
         """A settled learning run: its challenger waits for an Approver, was not put forward, or was not made.

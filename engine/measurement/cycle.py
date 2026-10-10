@@ -78,6 +78,7 @@ if TYPE_CHECKING:
     from engine.connections.store import ConnectionStore
     from engine.jobs import JobRunner
     from engine.measurement.audit import AuditReadout
+    from engine.measurement.harm import HarmOutcome
     from engine.measurement.pull import OutcomePullSpec
     from engine.measurement.reconcile import ContactReadout, UnlistedRule
     from engine.measurement.segments import SegmentEffects
@@ -177,6 +178,8 @@ class StepOutcome:
     campaign_id: str | None = None
     alert: str | None = None
     """A sentence for a person when the step produced something to act on; None for a quiet step."""
+    harm: HarmOutcome | None = None
+    """PLAN-K (M138, DEC-1403): the harm check of an interim reading, when one ran; its new alarms are alerted."""
 
 
 class CampaignLearned(StrictBase):
@@ -889,8 +892,14 @@ def measure_step(
     pull: OutcomePullSpec,
     ledger_engine: Callable[[], Engine | None] | None,
     now: datetime,
+    config_root: Any = None,
 ) -> StepOutcome:
-    """Once the newest live campaign's window has closed: read its outcomes for that window and measure it."""
+    """Once the newest live campaign's window has closed: read its outcomes for that window and measure it.
+
+    PLAN-K (M138, DEC-1403): an interim reading (an early look, or outcomes still to come in) is checked for harm
+    (`engine.measurement.harm`) when `configs/measurement.yaml` under `config_root` turns the alarm on.
+    """
+    from engine.measurement.harm import check_campaign_harm
     from engine.measurement.pull import PULL_SOURCE_FILENAME, DateWindow, pull_frame
 
     live = [
@@ -985,10 +994,13 @@ def measure_step(
         if given is None:  # nothing refers to the copy yet
             _discard_upload(storage, upload.upload_id)
         raise
+    harm = check_campaign_harm(  # PLAN-K (M138): None when the alarm is off or the reading is final
+        storage, measured.campaign or given or campaign, measured.report, root=config_root, now=now
+    )
     if not measured.matured:
-        return StepOutcome("CAMPAIGN_NOT_MATURED", campaign_id=campaign.campaign_id)
+        return StepOutcome("CAMPAIGN_NOT_MATURED", campaign_id=campaign.campaign_id, harm=harm)
     if measured.report.early_look:
-        return StepOutcome("EARLY_LOOK", campaign_id=campaign.campaign_id)
+        return StepOutcome("EARLY_LOOK", campaign_id=campaign.campaign_id, harm=harm)
     _LOGGER.info("cycle.measure campaign=%s rows=%d", campaign.campaign_id, record.rows)
     return StepOutcome(
         "CAMPAIGN_MEASURED",

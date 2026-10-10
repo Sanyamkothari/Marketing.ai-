@@ -980,6 +980,7 @@ def measure_campaign_results(
         if exc.code in _AUDITED_REFUSALS:
             set_audit_context(request, details={"reason_code": exc.code})
         raise _cycle_http(exc) from exc
+    _check_harm(request, storage, measured.campaign or campaign, measured.report, root)  # PLAN-K (M138)
     if not measured.matured or measured.campaign is None:
         refusal_response = _not_matured(request, measured.report)
         assert refusal_response is not None  # an unmatured report is always refused
@@ -2004,3 +2005,33 @@ def add_campaign_contacts(
         readout.holdout_listed,
     )
     return _view(storage, campaign, root)
+
+
+# ---------------------------------------------------------------------------
+# PLAN-K (M138, DEC-1403): the harm check of an interim reading, on demand
+# ---------------------------------------------------------------------------
+def _check_harm(request: Request, storage: Storage, campaign: Campaign, report: Any, root: Any) -> None:
+    """Check an early look, or a reading with outcomes still to come in, for harm (`engine.measurement.harm`).
+
+    Nothing is read or written unless `configs/measurement.yaml` turns the alarm on; a final result is never
+    checked. An alarm that fires for the first time raises one `harm_alarm` alert, as the monthly loop does.
+    """
+    from api.routes.schedules import get_alert_sink
+    from engine.measurement.harm import campaign_client_id, check_campaign_harm, harm_alert
+
+    now = utc_now()
+    outcome = check_campaign_harm(storage, campaign, report, root=root, now=now)
+    if outcome is None or campaign.use_case_id is None:
+        return
+    config = _config(campaign, root)
+    alert = harm_alert(
+        outcome,
+        use_case_id=campaign.use_case_id,
+        use_case_name=config.name if config is not None else None,
+        client_id=campaign_client_id(storage, campaign),
+        schedule_id=None,
+        run_id=campaign.run_ids[0] if campaign.run_ids else None,
+        now=now,
+    )
+    if alert is not None:
+        get_alert_sink(request).raise_alert(alert)

@@ -840,6 +840,7 @@ figures read from them (the same `Figure` as the Value Proof Pack):
 | A group did worse (`GROUP_BACKFIRED`) | the Value Proof Pack proposes leaving a group out and nobody has approved it yet: exactly M104's rule | `segment_effects.json`, `incrementality_report.json` |
 | Does not beat risk ranking (`UPLIFT_NOT_BETTER_THAN_RISK`) | the run's `ranking_choice.json` says so (M96) | `ranking_choice.json` |
 | Effect falling (`EFFECT_FADING`) | the rule below | the cycles' `incrementality_report.json` |
+| May be doing harm (`HARM_ALARM`, Plan K M138) | the harm alarm (opt-in) fired under the plan in force and no final result is read yet: §26 | `harm_alarm.json`, `test_plan.json` |
 
 A campaign on generated data raises no card; its only line is the reason it is not counted.
 
@@ -1134,3 +1135,39 @@ share (sized so that it reaches `uplift.min_arm_rows`, at most 10%) are plain as
 override them. The benchmark gains a `mid_size_file` case; the other twenty-one digests are unchanged.
 
 **Retail win-back.** No setting or extra column makes it beat its baseline: see `library/online-retail/run_report.md`.
+
+## 26. An early harm alarm, never an early win (Plan K M138, DEC-1403)
+
+**Why.** M94 refuses a verdict on an early look, which is right for "did it work?". But an offer that is hurting
+customers should not run on until the planned day. `engine/measurement/harm.py` watches every interim reading of a
+campaign for **harm only**, with a test that may be read at every data refresh without raising the false-alarm rate.
+
+**The rule** (design §9.4). For the difference `d` (contacted minus held back) read from the report the measurement
+just computed, its variance `V = s_T^2/n_T + s_C^2/n_C` (for a yes/no outcome `p(1 - p)/n` per group; for an amount
+the planned estimate's range, `((high - low) / 2z)^2`, never smaller than Welch's own) and `tau` = the registered test
+plan's smallest effect worth detecting in the outcome's unit (`mde_pp / 100`, or `mde_value`):
+`L = sqrt(V / (V + tau^2)) * exp(tau^2 d^2 / (2 V (V + tau^2)))`. The alarm fires when `L >= 1/alpha` (`alpha` = 0.05)
+**and** `d` is on the harmful side: below zero, or above zero for an outcome the campaign exists to prevent (decided as
+the Value Proof Pack decides it). A benefit never fires, however strong. Several offers are each judged against the
+shared control at `alpha / m`. Fewer than `min_rows_per_arm` (100) customers counted in a group, no registered plan, a
+plan with no smallest effect, or groups not drawn at random: nothing is judged, and `harm_alarm.json` says why.
+
+**Where it runs.** On an early look, or a reading with outcomes still to come in: the monthly loop's `measure` step and,
+on demand, `POST /campaigns/{id}/measure`. It writes `campaigns/<id>/harm_alarm.json` (`HarmCheck`, aggregate, kept
+with the report). An alarm stands once fired under a plan (an amended plan sets it aside) until the final result is
+read; a final result is never checked. When it first fires: the `HARM_ALARM` warning card on the campaigns' summary
+(§19) and one `harm_alarm` alert (severity `warning`) through the scheduling alert path. **Nothing stops**: a person
+decides. The result is still read only on the planned day, and no output of an early look reads as a win
+(`tests/integration/measurement/test_harm_alarm_loop.py` greps them).
+
+**Opt-in.** `harm_alarm.enabled` in `configs/measurement.yaml` (installation-wide; also `alpha`, `min_rows_per_arm`)
+is false by default: then nothing is read or written and every output is as before.
+
+**Measured** (`tests/statistical/test_harm_alarm.py`, nightly, 4,000 campaigns per case, staggered sends over eight
+weeks, 14-day windows). On no effect the share of campaigns with any alarm before the analysis date stays far below
+5% whether read daily, every third day, weekly, at irregular moments or twice (about 0.1% to 1%), where a plain
+one-sided 95% test read daily cries wolf in about a quarter of them. A harm of the smallest effect (3 points on 10%)
+is caught before the analysis date in about 87% of campaigns read daily with 2,712 customers per group, twice what a
+single reading needs for 80% power; at the planner's own 1,356 it is about 53%: reading every day without false alarms
+costs sample size.
+

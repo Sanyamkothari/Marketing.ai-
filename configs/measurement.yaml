@@ -1,0 +1,14 @@
+# configs/measurement.yaml - measurement options read across campaigns (Plan K).
+#
+# Installation-wide, like privacy.yaml and guardrails.yaml: one file under the configuration root. A missing
+# file, or a missing section, means every default below. Every option is off by default; with them off every
+# summary, alert and campaign file is byte for byte what it was before Plan K.
+
+harm_alarm:                   # Plan K M138 (DEC-1403): an early alarm when a campaign is doing harm, never a win
+  enabled: false              # bool; check every interim reading (an early look, or outcomes still to come in)
+                              # with a one-sided sequential test, write campaigns/<id>/harm_alarm.json, and on an
+                              # alarm show a warning card and raise one alert. Nothing is ever stopped on its own
+  alpha: 0.05                 # float 0 < a <= 0.1; the most often it may fire on a campaign that does no harm,
+                              # however often it is read (split across the offers of a campaign of several)
+  min_rows_per_arm: 100       # int >= 30; customers each group needs with an outcome counted before a reading
+                              # is judged at all
