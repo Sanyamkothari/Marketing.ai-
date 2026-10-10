@@ -23,7 +23,7 @@ whose date cannot be read is left out and counted (`unreadable_dates`), never gu
 from __future__ import annotations
 
 import io
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from typing import TYPE_CHECKING, Any, BinaryIO, Final, Literal, Protocol, runtime_checkable
 
@@ -211,8 +211,9 @@ class Resolved:
     connection_id: str
     kind: str
     connector: Connector
-    config: dict[str, ConfigValue]
-    secrets: dict[str, str]
+    config: dict[str, ConfigValue] = field(repr=False)
+    secrets: dict[str, str] = field(repr=False)
+    """The connection's decrypted secrets, for its connector only: never printed, logged or stored."""
     chosen: Selection
     file_format: FileFormat
     path: str | None

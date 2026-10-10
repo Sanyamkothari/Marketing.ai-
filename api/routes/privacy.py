@@ -73,7 +73,7 @@ import threading
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Annotated, Final, Literal
+from typing import Annotated, Any, Final, Literal
 
 from fastapi import APIRouter, FastAPI, File, Form, Query, Request, Response, UploadFile
 from fastapi.responses import JSONResponse
@@ -640,11 +640,25 @@ def import_consent_from_connection(
         raise http_error(
             exc.status, exc.code, f"{exc.message} {exc.fix}" if exc.fix else exc.message
         ) from None
+    too_large = http_error(
+        413,
+        "CONSENT_FILE_TOO_LARGE",
+        f"A consent file may be at most {MAX_CONSENT_FILE_BYTES // (1024 * 1024)} MB; split it.",
+    )
     data = sink.getvalue()
     if fetched.file_format == "parquet":  # the ledger reads CSV: a Parquet file's columns are written as text
         import pandas as pd
+        import pyarrow.parquet as pq
 
+        # Compressed bytes say little about the rows: every cell of the text written is at least one byte
+        # (its separator), so a file whose cells alone pass the limit is refused before it is expanded.
+        factory: Any = pq.ParquetFile  # pyarrow ships no types
+        metadata = factory(io.BytesIO(data)).metadata
+        if int(metadata.num_rows) * max(int(metadata.num_columns), 1) > MAX_CONSENT_FILE_BYTES:
+            raise too_large
         data = pd.read_parquet(io.BytesIO(data)).to_csv(index=False).encode("utf-8")
+    if len(data) > MAX_CONSENT_FILE_BYTES:  # the file route's limit, on the same text it would be given
+        raise too_large
     ledger = ConsentLedger(get_privacy_engine(request), salt=_salt(request, settings))
     try:
         report = ledger.import_csv(data, client_id=client, privacy=config, partial=body.partial)

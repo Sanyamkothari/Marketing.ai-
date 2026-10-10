@@ -191,13 +191,19 @@ class CampaignLearned(StrictBase):
 class CampaignLearnRefused(StrictBase):
     """`campaigns/<id>/learn_refused.json`: a scheduled learn was refused for this campaign, and why (a code).
 
-    The refusal depends only on the campaign's own files, so the next firing does not try again and raise the
-    same failure alert every day: it answers `LEARN_REFUSED` quietly. Learning by hand on step 4 is unaffected.
+    The refusal depends on the campaign's own files and on its measurement, so while the campaign keeps the
+    measurement that was judged the next firing does not try again and raise the same failure alert every
+    day: it answers `LEARN_REFUSED` quietly. Once a person measures the campaign again
+    (`POST /campaigns/{id}/measure`), its `measured_at` changes and the next firing tries again, overwriting
+    this marker if it is refused again.
     """
 
     campaign_id: str
     code: str = Field(description="The refusal's code, e.g. LEARN_NO_OVERLAP.")
     refused_at: AwareDatetime
+    measured_at: AwareDatetime | None = Field(
+        default=None, description="The campaign's `measured_at` when it was refused: the measurement judged."
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -447,11 +453,60 @@ def record_outcomes(
     now: datetime,
 ) -> Campaign:
     """Give `campaign` its outcomes (`POST /campaigns/{id}/outcomes`): the needed columns, copied and recorded."""
+    outcome, wanted = outcome_columns(
+        [str(name) for name in frame.columns],
+        campaign,
+        config=config,
+        outcome_column=outcome_column,
+        treatment_date_column=treatment_date_column,
+        covariate_column=covariate_column,
+        covariate_date_column=covariate_date_column,
+    )
+    kept = frame[wanted]
+    try:
+        write_frame(storage, campaign_key(campaign.campaign_id, OUTCOMES_FILENAME), kept)
+    except (ValueError, TypeError) as exc:  # a column pyarrow cannot store as one type
+        raise CycleError(
+            CAMPAIGN_INVALID, "The outcomes file mixes kinds of value in one column.", status=422
+        ) from exc
+    updated = campaign.model_copy(
+        update={
+            "outcomes": CampaignOutcomes(
+                upload_id=upload_id,
+                file_name=file_name,
+                outcome_column=outcome,
+                outcome_named=outcome_column is not None,
+                positive_label=positive_label,
+                treatment_date_column=treatment_date_column,
+                rows=len(kept.index),
+                added_at=now,
+                covariate_column=covariate_column,
+                covariate_date_column=covariate_date_column if covariate_column is not None else None,
+            )
+        }
+    )
+    save_campaign(store, storage, updated)
+    return updated
+
+
+def outcome_columns(
+    columns: list[str],
+    campaign: Campaign,
+    *,
+    config: UseCaseConfig | None,
+    outcome_column: str | None,
+    treatment_date_column: str | None,
+    covariate_column: str | None,
+    covariate_date_column: str | None,
+) -> tuple[str, list[str]]:
+    """`(outcome column, the columns kept)` of an outcomes table with `columns`; `CycleError` when one is missing.
+
+    `record_outcomes`' own check, run on its own by the scheduled measure step before anything is stored.
+    """
     from engine.config import key_columns
     from engine.measurement.continuous import COVARIATE_NOT_BEFORE_CAMPAIGN
     from engine.uplift.measure import detect_outcome_column
 
-    columns = [str(name) for name in frame.columns]
     try:
         outcome = outcome_column or detect_outcome_column(
             columns,
@@ -481,31 +536,7 @@ def record_outcomes(
             f"The outcomes file has no column {', '.join(repr(m) for m in missing)}.",
             status=422,
         )
-    kept = frame[list(dict.fromkeys(wanted))]
-    try:
-        write_frame(storage, campaign_key(campaign.campaign_id, OUTCOMES_FILENAME), kept)
-    except (ValueError, TypeError) as exc:  # a column pyarrow cannot store as one type
-        raise CycleError(
-            CAMPAIGN_INVALID, "The outcomes file mixes kinds of value in one column.", status=422
-        ) from exc
-    updated = campaign.model_copy(
-        update={
-            "outcomes": CampaignOutcomes(
-                upload_id=upload_id,
-                file_name=file_name,
-                outcome_column=outcome,
-                outcome_named=outcome_column is not None,
-                positive_label=positive_label,
-                treatment_date_column=treatment_date_column,
-                rows=len(kept.index),
-                added_at=now,
-                covariate_column=covariate_column,
-                covariate_date_column=covariate_date_column if covariate_column is not None else None,
-            )
-        }
-    )
-    save_campaign(store, storage, updated)
-    return updated
+    return outcome, list(dict.fromkeys(wanted))
 
 
 @dataclass(frozen=True)
@@ -882,7 +913,19 @@ def measure_step(
         limit_bytes=config.validation.max_file_size_mb * 1024 * 1024,
         now=now,
     )
+    # The table's columns are checked before anything is stored: a table without its outcome leaves no copy.
+    outcome_columns(
+        [str(name) for name in frame.columns],
+        campaign,
+        config=config,
+        outcome_column=pull.outcome_column,
+        treatment_date_column=None,
+        covariate_column=None,
+        covariate_date_column=None,
+    )
     named = record.table or record.path or "outcomes"
+    outcomes_key = campaign_key(campaign.campaign_id, OUTCOMES_FILENAME)
+    earlier = storage.read_bytes(outcomes_key) if storage.exists(outcomes_key) else None
     upload = store_frame_upload(
         storage,
         config,
@@ -891,33 +934,50 @@ def measure_step(
         mode=RunMode.SCORE,
         now=now,
     )
-    storage.write_model(upload_key(upload.upload_id, PULL_SOURCE_FILENAME), record)
-    given = record_outcomes(
-        storage,
-        store,
-        campaign,
-        frame,
-        upload_id=upload.upload_id,
-        file_name=upload.file_name,
-        config=config,
-        outcome_column=pull.outcome_column,
-        positive_label=pull.positive_label,
-        treatment_date_column=None,
-        covariate_column=None,
-        covariate_date_column=None,
-        now=now,
-    )
-    measured = measure_recorded(
-        storage,
-        store,
-        given,
-        as_of=now,
-        outcome_window_days=None,
-        covariate_column=None,
-        outcome_kind=None,
-        ledger_engine=ledger_engine,
-        now=now,
-    )
+    given: Campaign | None = None
+    try:
+        storage.write_model(upload_key(upload.upload_id, PULL_SOURCE_FILENAME), record)
+        given = record_outcomes(
+            storage,
+            store,
+            campaign,
+            frame,
+            upload_id=upload.upload_id,
+            file_name=upload.file_name,
+            config=config,
+            outcome_column=pull.outcome_column,
+            positive_label=pull.positive_label,
+            treatment_date_column=None,
+            covariate_column=None,
+            covariate_date_column=None,
+            now=now,
+        )
+        measured = measure_recorded(
+            storage,
+            store,
+            given,
+            as_of=now,
+            outcome_window_days=None,
+            covariate_column=None,
+            outcome_kind=None,
+            ledger_engine=ledger_engine,
+            now=now,
+        )
+    except CycleError:
+        # Refused before any of the measurement was written: the campaign is put back as it was and this
+        # pull's copy removed, so a firing that fails every day does not keep a new copy of the rows each time.
+        if given is not None:
+            if earlier is not None:
+                storage.write_bytes(outcomes_key, earlier)
+            else:
+                _discard(storage, outcomes_key)
+            save_campaign(store, storage, campaign)
+        _discard_upload(storage, upload.upload_id)
+        raise
+    except BaseException:
+        if given is None:  # nothing refers to the copy yet
+            _discard_upload(storage, upload.upload_id)
+        raise
     if not measured.matured:
         return StepOutcome("CAMPAIGN_NOT_MATURED", campaign_id=campaign.campaign_id)
     if measured.report.early_look:
@@ -947,8 +1007,14 @@ def learn_step(
     principal: Principal,
     client_tag: str | None,
     now: datetime,
+    before_start: Callable[[], None] | None = None,
 ) -> StepOutcome:
-    """The newest measured campaign, unless it was learned from already: the next model, as a challenger."""
+    """The newest measured campaign, unless it was learned from already: the next model, as a challenger.
+
+    `before_start` is called once the campaign is known to teach a model, just before anything of the run
+    is written (the firing's run cost gate, Plan J M108): a step with nothing to learn, or a campaign
+    refused, never reaches it. Whatever it raises propagates, and no refusal marker is written for it.
+    """
     measured = [
         campaign
         for campaign in store.list(use_case_id=config.id, limit=None)
@@ -961,8 +1027,11 @@ def learn_step(
     campaign = max(measured, key=lambda item: (item.treatment_start, item.campaign_id))
     if storage.exists(campaign_key(campaign.campaign_id, LEARNED_FILENAME)):
         return StepOutcome("NOTHING_TO_LEARN", campaign_id=campaign.campaign_id)
-    if storage.exists(campaign_key(campaign.campaign_id, LEARN_REFUSED_FILENAME)):
-        # Refused once already, with its alert: the same campaign would be refused for the same reason.
+    refused: CampaignLearnRefused | None = _stored(
+        storage, campaign_key(campaign.campaign_id, LEARN_REFUSED_FILENAME), CampaignLearnRefused
+    )
+    if refused is not None and refused.measured_at == campaign.measured_at:
+        # Refused once already, with its alert: the same measurement would be refused for the same reason.
         return StepOutcome("LEARN_REFUSED", campaign_id=campaign.campaign_id)
     try:
         started = learn_from_campaign(
@@ -974,11 +1043,17 @@ def learn_step(
             principal=principal,
             client_tag=client_tag,
             now=now,
+            before_start=before_start,
         )
     except CycleError as exc:
         storage.write_model(
             campaign_key(campaign.campaign_id, LEARN_REFUSED_FILENAME),
-            CampaignLearnRefused(campaign_id=campaign.campaign_id, code=exc.code, refused_at=now),
+            CampaignLearnRefused(
+                campaign_id=campaign.campaign_id,
+                code=exc.code,
+                refused_at=now,
+                measured_at=campaign.measured_at,
+            ),
         )
         raise
     return StepOutcome(
@@ -996,6 +1071,7 @@ def learn_from_campaign(
     principal: Principal,
     client_tag: str | None,
     now: datetime,
+    before_start: Callable[[], None] | None = None,
 ) -> RunRecord:
     """Start the uplift training run that learns from a measured campaign (M106's frame), as a challenger.
 
@@ -1037,6 +1113,8 @@ def learn_from_campaign(
         )
         if late is not None:
             raise CycleError(LEARN_NO_OVERLAP, late)
+    if before_start is not None:  # e.g. the scheduled run's cost gate: only once a run would really start
+        before_start()
     upload = store_frame_upload(
         storage,
         configured,
@@ -1336,6 +1414,20 @@ def _stored(storage: Storage, key: str, model: type[Any]) -> Any:
         return storage.read_model(key, model)
     except StorageError:
         return None
+
+
+def _discard_upload(storage: Storage, upload_id: str) -> None:
+    """Remove an upload `measure_step` wrote: its rows, profile, fingerprint, record and pull record."""
+    from engine.measurement.pull import PULL_SOURCE_FILENAME
+
+    names = (
+        "source.parquet",
+        UPLOAD_PROFILE_FILENAME,
+        UPLOAD_FINGERPRINT_FILENAME,
+        UPLOAD_RECORD_FILENAME,
+        PULL_SOURCE_FILENAME,
+    )
+    _discard(storage, *(upload_key(upload_id, name) for name in names))
 
 
 def _discard(storage: Storage, *keys: str) -> None:

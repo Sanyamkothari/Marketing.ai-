@@ -479,6 +479,73 @@ def _the_crm_records_outcomes(loop: Loop, run_id: str, treatment_start: datetime
     return len(scored_input.index)
 
 
+def _a_capped_deployment_refuses_the_learning_run(loop: Loop, campaign_id: str) -> None:
+    """A learn firing on the same data, through a firer whose deployment is capped and cannot price a run.
+
+    The firer has its own schedule store and alert table, so the loop's own history is untouched.
+    """
+    import tempfile
+    from dataclasses import replace
+
+    from engine.aws.prices import PRICES_FILENAME
+    from engine.measurement.campaign import campaign_key
+    from engine.measurement.cycle import LEARN_REFUSED_FILENAME, LEARNED_FILENAME
+    from engine.platform_db import sqlite_engine
+    from engine.scheduling.alerts import LogAlertSink
+    from engine.scheduling.firing import ScheduleFirer
+    from engine.scheduling.schedules import Schedule, ScheduleKind, SqlScheduleStore
+    from tests.fixtures.settings import sagemaker_settings
+
+    services = get_firer(app_request(loop.app)).services
+    scratch = Path(tempfile.mkdtemp(prefix="capped-"))
+    root = scratch / "configs"
+    shutil.copytree(services.config_root, root)
+    engine_yaml = root / "engine.yaml"
+    text = engine_yaml.read_text(encoding="utf-8")
+    assert "max_run_cost_usd: null" in text
+    engine_yaml.write_text(
+        text.replace("max_run_cost_usd: null", "max_run_cost_usd: 5.0", 1), encoding="utf-8"
+    )
+    (root / PRICES_FILENAME).unlink()
+    platform = sqlite_engine(scratch / "platform.db")
+    store = SqlScheduleStore(platform)
+    capped = ScheduleFirer(
+        replace(
+            services,
+            store=store,
+            alerts=LogAlertSink(AlertStore(platform)),
+            settings=sagemaker_settings(),
+            config_root=root,
+        )
+    )
+    now = loop.clock()
+    schedule = Schedule(
+        schedule_id="sch_capped_learn",
+        client_id=loop.client_id,
+        use_case_id=USE_CASE,
+        kind=ScheduleKind.LEARN,
+        cron="0 8 * * *",
+        created_by="u_test",
+        created_at=now,
+        updated_at=now,
+    )
+    runs = [key for key in loop.storage.list_keys("runs/") if key.endswith("/run.json")]
+    uploads = loop.storage.list_keys("uploads/")
+    firing = capped.fire(store.create(schedule.model_copy(update={"next_due_at": now}))) or pytest.fail(
+        "not fired"
+    )
+    assert (firing.status, firing.error_code) == (FiringStatus.FAILED, "RUN_COST_NEEDS_CONFIRMATION"), firing
+    assert firing.run_id is None
+    assert [key for key in loop.storage.list_keys("runs/") if key.endswith("/run.json")] == runs, "no run"
+    assert loop.storage.list_keys("uploads/") == uploads, "no training upload"
+    assert not loop.storage.exists(campaign_key(campaign_id, LEARNED_FILENAME))
+    assert not loop.storage.exists(
+        campaign_key(campaign_id, LEARN_REFUSED_FILENAME)
+    ), "a cost is not a refusal"
+    platform.dispose()
+    shutil.rmtree(scratch)
+
+
 def test_a_month_runs_score_treat_list_measure_learn_with_only_the_approval_left_to_a_person(
     loop: Loop,
 ) -> None:
@@ -540,6 +607,10 @@ def test_a_month_runs_score_treat_list_measure_learn_with_only_the_approval_left
     assert view["campaign"]["outcomes"]["rows"] == customers, "the window only: no decoy row"
     assert view["report"]["treated_rows"] > 0 and view["report"]["control_rows"] > 0
     assert loop.alerts(AlertKind.CAMPAIGN_MEASURED)
+
+    # Review fix: on a capped cloud deployment whose run cannot be priced, the learning run this campaign
+    # would start is refused by the cost gate, and nothing of it is written - no run, no upload, no marker.
+    _a_capped_deployment_refuses_the_learning_run(loop, campaign["campaign_id"])
 
     # 5. Learning, at 08:00 the same day: a challenger, never the model in use.
     (learning,) = [f for f in loop.at(closes, 8) if f.schedule_id == loop.schedules["learn"]]

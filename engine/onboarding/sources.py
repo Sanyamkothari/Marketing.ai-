@@ -760,16 +760,22 @@ def refresh_bound_sources(
     roles: RoleCatalogue | None,
     limit_bytes: int,
     now: datetime,
+    row_limit: int | None = None,
 ) -> tuple[str, ...]:
-    """Read each of the recipe's bound tables again before a scheduled build; the new sources' ids.
+    """Read again the bound tables the recipe's next build would read; the new sources' ids.
 
-    For every role the recipe maps once, the client's newest source of that role that came from a
-    connection is read again by its binding: for "the newest file in a folder", whatever is newest now.
+    For every role the recipe maps once, the table the build would read is found by
+    `engine.scheduling.firing.latest_recipe_inputs`' own rule: among the mapped source and every source of
+    the same role carrying every column its mapping reads, the newest. Only when that table came from a
+    connection is it read again by its binding (for "the newest file in a folder", whatever is newest now).
     A table that has changed becomes a new source of the same role, newer than every other, which
-    `engine.scheduling.firing.latest_recipe_inputs` then re-points the recipe at; an unchanged one adds
-    nothing. A role mapped twice is left as saved, as `latest_recipe_inputs` leaves it. A source uploaded
-    as a file has no binding and is never read again. Raises `ConnectorError` when a connection cannot be
-    read, so the build stops rather than score last month's tables as if they were this month's.
+    `latest_recipe_inputs` then re-points the recipe at; an unchanged one adds nothing. A recipe whose
+    tables were uploaded as files reads no connection at all, whatever other bound sources the client has,
+    so it behaves exactly as before. A role mapped twice is left as saved, as `latest_recipe_inputs` leaves it.
+
+    `row_limit` is the engine's limit on one source's rows: a table read again past it fails the build with
+    `SOURCE_TOO_LARGE`, as adding it would have. Raises `ConnectorError` when a connection cannot be read,
+    so the build stops rather than score last month's tables as if they were this month's.
     """
     from collections import Counter
 
@@ -783,12 +789,18 @@ def refresh_bound_sources(
     for mapping in mappings:
         if counts[mapping.role] != 1:
             continue
-        bound = [source for source in sources if source.role == mapping.role and source.binding is not None]
-        if not bound:
-            continue
-        latest = max(bound, key=lambda source: (to_utc(source.created_at), source.source_id))
+        original = client_store.get_source(mapping.source_id)
+        needed = {column.source for column in mapping.columns}
+        candidates = [original] + [
+            source
+            for source in sources
+            if source.role == mapping.role
+            and source.source_id != original.source_id
+            and needed <= set(source.columns)
+        ]
+        latest = max(candidates, key=lambda source: (to_utc(source.created_at), source.source_id))
         binding = latest.binding
-        if binding is None:  # pragma: no cover - filtered above
+        if binding is None:  # the build reads an uploaded file: nothing to read again
             continue
         selection = PullSelection(
             prefix=binding.prefix if binding.pick == "newest" else None,
@@ -808,6 +820,7 @@ def refresh_bound_sources(
             roles=roles,
             limit_bytes=limit_bytes,
             now=now,
+            row_limit=row_limit,
             keep_if_unchanged=latest,
         )
         if fresh.source_id != latest.source_id:

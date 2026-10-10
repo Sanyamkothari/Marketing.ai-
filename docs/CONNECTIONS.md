@@ -90,8 +90,9 @@ read from a saved connection, always read-only and never written back (`engine/m
   limits, same profile, same role), with a `binding` saying where it came from. `selection` is one file
   (`path`), **the newest CSV or Parquet file under a folder** (`prefix`: newest by the store's own
   last-modified time) or a table (`schema_name` and `table`). Before every scheduled build of a recipe
-  that reads a bound source, the table is read again by that binding - for a folder, whatever file is
-  newest now - and the build uses it (`docs/ONBOARDING.md` section 8). Nothing is uploaded.
+  that would read a bound source, the table is read again by that binding - for a folder, whatever file is
+  newest now - within the per-source row limit, and the build uses it (`docs/ONBOARDING.md` section 8).
+  A build that reads only uploaded files reads no connection. Nothing is uploaded.
 * **A campaign's outcomes** - `POST /campaigns/{id}/outcomes {connection_id, selection, date_column,
   date_from, date_to, outcome_column?}` reads only the rows dated inside the window and keeps them as an
   ordinary upload with `pull_source.json` beside it (the connection, the table or file, the window, how

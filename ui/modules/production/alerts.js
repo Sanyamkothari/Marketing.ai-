@@ -40,6 +40,10 @@ export const ALERT_KIND_LABEL = {
   performance_drop: "The model did worse on real outcomes",
   scheduled_job_failed: "A scheduled job failed",
   schedule_missed: "Scheduled runs were missed",
+  // Plan J M107 (DEC-1317): the monthly loop's own alerts, information only.
+  treat_list_ready: "A treat list is ready",
+  campaign_measured: "A campaign was measured",
+  challenger_waiting: "A new model was learned",
 };
 
 const kindWords = (kind) => {

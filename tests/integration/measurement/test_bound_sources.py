@@ -34,7 +34,8 @@ from engine.onboarding.datasets import dataset_key
 from engine.onboarding.mapping import suggested_mapping_spec
 from engine.onboarding.sources import FileSourceReader, add_connection_source
 from engine.onboarding.specs import DatasetManifest, OnboardingSpec, SourceSpec
-from engine.scheduling.firing import ScheduleFirer, build_dataset_from_spec
+from engine.scheduling.alerts import AlertKind, AlertQuery
+from engine.scheduling.firing import FiringError, ScheduleFirer, build_dataset_from_spec
 from engine.scheduling.schedules import FiringStatus, ScheduleKind, ScheduleParameters
 from engine.settings import Settings
 from engine.storage import run_key
@@ -43,7 +44,9 @@ from tests.unit.production.scheduling_support import USE_CASE, World, make_world
 pytestmark = pytest.mark.integration
 
 BUCKET = "client-exports"
+MAY = datetime(2026, 5, 1, tzinfo=UTC)
 JUNE = datetime(2026, 6, 2, tzinfo=UTC)
+JULY = datetime(2026, 7, 2, tzinfo=UTC)
 
 
 @pytest.fixture
@@ -139,16 +142,27 @@ def bound(tmp_path: Path, config_root: Path, s3: Any) -> Bound:
 
 
 def _training_frame(bound: Bound) -> pd.DataFrame:
+    return _built_frame(bound.world, bound.spec)
+
+
+def _built_frame(world: World, spec: OnboardingSpec) -> pd.DataFrame:
     manifest = build_dataset_from_spec(
-        bound.spec,
+        spec,
         config=load_use_case(USE_CASE),
         mode=RunMode.TRAIN,
-        client_store=bound.world.client_store,
-        storage=bound.world.storage,
+        client_store=world.client_store,
+        storage=world.storage,
     )
-    return pd.read_parquet(
-        bound.world.storage.local_path(dataset_key(manifest.dataset_id, "dataset.parquet"))
-    )
+    return pd.read_parquet(world.storage.local_path(dataset_key(manifest.dataset_id, "dataset.parquet")))
+
+
+def _s3_connection(connections: ConnectionStore) -> str:
+    return connections.create(
+        kind="s3",
+        name="Client exports",
+        config={"bucket": BUCKET, "region": "us-east-1", "prefix": "exports/"},
+        secrets={"access_key_id": "testing", "secret_access_key": "testing"},
+    ).connection_id
 
 
 def _manifest(world: World, dataset_id: str | None) -> DatasetManifest:
@@ -245,6 +259,76 @@ def test_a_connection_that_fails_fails_the_firing_with_its_reason(bound: Bound, 
     )
     firing = firer.fire(schedule) or pytest.fail("not fired")
     assert firing.status is FiringStatus.FAILED and firing.error_code == "PULL_NOTHING_FOUND"
+
+
+def test_a_recipe_of_uploaded_files_reads_no_connection_whatever_bound_sources_the_client_has(
+    tmp_path: Path, config_root: Path, s3: Any
+) -> None:
+    """Review regression: the build reads the newest table of each role; only that one is read again.
+
+    The recipe was saved on two uploaded files (June 2). The client also has an older activity table bound to
+    the bucket (May 1) whose file has since been deleted. The scheduled scoring build reads the uploads, as it
+    did before M107: no connection is read, so the deleted file cannot fail it, and no source is added.
+    """
+    world = make_world(tmp_path, config_root)
+    connections = ConnectionStore(world.storage, Settings())
+    connection_id = _s3_connection(connections)
+    s3.put_object(Bucket=BUCKET, Key="exports/activity/2026-05.csv", Body=_csv(tables()["activity"]))
+    older, _profile = add_connection_source(
+        world.storage,
+        world.client_store,
+        connections,
+        client_id=world.client_id,
+        connection_id=connection_id,
+        selection=PullSelection(prefix="exports/activity/"),
+        role="activity",
+        config=load_use_case(USE_CASE),
+        roles=get_roles(config_root),
+        limit_bytes=200 * 1024 * 1024,
+        now=MAY,
+    )
+    s3.delete_object(Bucket=BUCKET, Key="exports/activity/2026-05.csv")
+    register_champion(world, _built_frame(world, world.spec))
+    count = len(world.client_store.list_sources(world.client_id))
+
+    firer = ScheduleFirer(
+        world.services(cycle=CycleServices(campaigns=InMemoryCampaignStore(), connections=connections))
+    )
+    firing = firer.fire(world.schedule(ScheduleKind.SCORE)) or pytest.fail("not fired")
+    assert firing.status is FiringStatus.RUNNING, firing.error_code
+    manifest = _manifest(world, firing.dataset_id)
+    assert set(manifest.source_fingerprints) == {"s_customers", "s_activity"}
+    assert older.source_id not in manifest.source_fingerprints
+    assert len(world.client_store.list_sources(world.client_id)) == count, "no table was read again"
+    failed = world.alerts.store.query(AlertQuery(kind=AlertKind.SCHEDULED_JOB_FAILED))  # type: ignore[attr-defined]
+    assert failed == ()
+
+
+def test_a_bound_table_grown_past_the_row_limit_fails_the_build(bound: Bound, s3: Any) -> None:
+    """Review fix: a table read again meets the per-source row limit adding it met (`SOURCE_TOO_LARGE`)."""
+    world = bound.world
+    later = tables(seed=7, end=JULY.date())["activity"]
+    s3.put_object(Bucket=BUCKET, Key="exports/activity/2026-07.csv", Body=_csv(later))
+    config = load_use_case(USE_CASE)
+    limit = len(later.index) - 1
+    customers = world.client_store.get_source(bound.spec.entity_source_id)
+    assert customers.rows <= limit, "only the grown activity table is past the limit"
+    limits = config.onboarding.limits.model_copy(update={"max_source_rows": limit})
+    capped = config.model_copy(update={"onboarding": config.onboarding.model_copy(update={"limits": limits})})
+    count = len(world.client_store.list_sources(world.client_id))
+    with pytest.raises(FiringError) as caught:
+        build_dataset_from_spec(
+            bound.spec,
+            config=capped,
+            mode=RunMode.SCORE,
+            client_store=world.client_store,
+            storage=world.storage,
+            connections=bound.connections,
+            roles=get_roles(world.config_root),
+            now=JULY,
+        )
+    assert caught.value.code == "SOURCE_TOO_LARGE", caught.value.code
+    assert len(world.client_store.list_sources(world.client_id)) == count, "the too-large copy is not kept"
 
 
 # --- the route ------------------------------------------------------------------------------------------

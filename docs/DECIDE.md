@@ -957,10 +957,22 @@ size limit and the window applied here; `pull_source.json` records which of the 
 **Sources bound to a connection.** `POST /clients/{id}/sources/from-connection` adds a source as the file
 upload does, with a `binding` (`SourceSpec.binding`, absent while unset, so a file source is stored exactly as
 before). Before every scheduled build (`engine.scheduling.firing.build_dataset_from_spec`, given the loop's
-services) the newest bound source of each role the recipe reads is read again by its binding
-(`engine.onboarding.sources.refresh_bound_sources`); a changed table becomes a new source of that role, which
-`latest_recipe_inputs` re-points the recipe at; an unchanged one (same file, same fingerprint) adds nothing. A
-connection that cannot be read fails the firing with its own code. The multipart route is unchanged.
+services) the table the build would read for each role - chosen by `latest_recipe_inputs`' own rule: the newest
+of the mapped source and the sources of that role carrying every column its mapping reads - is read again by its
+binding when, and only when, it came from a connection (`engine.onboarding.sources.refresh_bound_sources`); a
+changed table becomes a new source of that role, which `latest_recipe_inputs` re-points the recipe at; an
+unchanged one (same file, same fingerprint) adds nothing. A recipe reading uploaded files reads no connection,
+whatever bound sources the client also has. A connection that cannot be read, or a table read again past the
+per-source row limit (`SOURCE_TOO_LARGE`), fails the firing with its own code. The multipart route is unchanged.
+
+**Routes: a deviation from the plan.** The plan has `POST /clients/{id}/sources` and `POST /privacy/consent/imports`
+accept `{connection_id, selection}`. Those two routes take a multipart form, whose contract (and OpenAPI request
+body) would change if a JSON body were accepted beside it, so connection reads use sibling routes instead:
+`POST /clients/{id}/sources/from-connection` and `POST /privacy/consent/imports/from-connection`, with the same
+role, rules and answers as their file routes. `POST /campaigns/{id}/outcomes` already takes JSON, so it is
+extended in place: exactly one of `upload_id` or `connection_id`. A consent table read from a connection obeys the
+file route's size limit on the text the ledger is given, not only on the bytes read: a Parquet file whose cells
+would pass the limit is refused before it is expanded.
 
 **The four schedules.** `ScheduleKind` gains three kinds after `score`, each reading only what the step before
 wrote, so each runs on its own cadence and a missed day simply waits for the next (`engine/measurement/
@@ -974,10 +986,16 @@ cycle.py`):
 | `learn` | the newest measured campaign not yet learned from: M106's frame, a training upload, the uplift checks and a training run with `governance.approval_required` forced on | `LEARNING_STARTED`, then `MODEL_PENDING_APPROVAL` or `MODEL_CANDIDATE`; `NOTHING_TO_LEARN`; `LEARN_REFUSED` | `challenger_waiting` |
 
 A step that fails is a failed firing with its code and the usual `scheduled_job_failed` alert; a step with
-nothing to do succeeds quietly. A learn refused for a campaign (its code kept in `campaigns/<id>/learn_refused.json`)
-is not tried again for that campaign: later firings answer `LEARN_REFUSED` instead of raising the same alert daily. The three new alerts are `info`. The learning run passes M108's cost gate like
-every scheduled run. Nothing is promoted or approved: a person approves the challenger, which is the only
-thing left to a person in the cycle (`tests/integration/measurement/test_monthly_loop.py`).
+nothing to do succeeds quietly. A learn refused for a campaign (its code and the campaign's `measured_at` kept in
+`campaigns/<id>/learn_refused.json`) is not tried again while the campaign keeps that measurement: later firings
+answer `LEARN_REFUSED` instead of raising the same alert daily, and once a person measures the campaign again the
+next firing tries again. A learning run that finishes without registering a model raises `scheduled_job_failed`
+(the firing itself succeeded, `MODEL_NOT_REGISTERED`). The three new alerts are `info`. The learning run passes
+M108's cost gate like every scheduled run, checked only once a run is about to start: a day with nothing to learn,
+or a refused campaign, never meets it. A measure firing checks the table's columns before keeping a copy, and a
+measurement refused afterwards puts the campaign back as it was and removes the copy, so a firing that fails every
+day keeps no copies of the rows. Nothing is promoted or approved: a person approves the challenger, which is the
+only thing left to a person in the cycle (`tests/integration/measurement/test_monthly_loop.py`).
 
 **One code path with the routes.** `open_campaign`, `record_outcomes` and `measure_recorded` are the engine
 halves of `POST /campaigns`, `POST /campaigns/{id}/outcomes` and `POST /campaigns/{id}/measure`, which call

@@ -599,11 +599,12 @@ def build_dataset_from_spec(
     checks found a blocking problem writes its report and no rows, and is `DATASET_CHECKS_FAILED`
     here with the dataset id, so the firing's history links to the report that says why.
 
-    Plan J M107 (DEC-1317): given `connections`, the recipe's tables that came from a saved connection are
-    read again first (`engine.onboarding.sources.refresh_bound_sources`: for "the newest file in a folder",
-    whatever is newest now), so `latest_recipe_inputs` re-points the recipe at them with no upload. A
-    connection that cannot be read fails the build with its own code. Without `connections`, or with no
-    bound table, nothing is read and the build is exactly as before.
+    Plan J M107 (DEC-1317): given `connections`, each table the build would read that came from a saved
+    connection is read again first (`engine.onboarding.sources.refresh_bound_sources`: for "the newest file
+    in a folder", whatever is newest now), so `latest_recipe_inputs` re-points the recipe at it with no
+    upload. A connection that cannot be read, or a table past the per-source row limit
+    (`SOURCE_TOO_LARGE`), fails the build with its own code. Without `connections`, or when the build reads
+    only uploaded files, nothing is read and the build is exactly as before.
     """
     from engine.onboarding import build
     from engine.onboarding.sources import FileSourceReader
@@ -621,6 +622,7 @@ def build_dataset_from_spec(
                 roles=roles,
                 limit_bytes=config.validation.max_file_size_mb * 1024 * 1024,
                 now=now or utc_now(),
+                row_limit=config.onboarding.limits.max_source_rows,  # the limit adding a source meets
             )
         except ConnectorErrorType as exc:
             raise FiringError(exc.code, exc.message) from exc
@@ -1035,7 +1037,7 @@ class ScheduleFirer:
         )
         if not services.store.settle_firing(finished):
             return None
-        if firing.kind is ScheduleKind.LEARN and record.model_version_id is not None:
+        if firing.kind is ScheduleKind.LEARN:
             self._alert_learned(finished, record, result_code)  # Plan J M107: raised by the settler that won
         return finished
 
@@ -1240,14 +1242,22 @@ class ScheduleFirer:
                     now=services.clock(),
                 )
             else:
-                # The learning run passes the cost gate every scheduled run passes (Plan J M108).
-                capped = cost_gate(
-                    config,
-                    RunMode.TRAIN,
-                    settings=services.settings,
-                    config_root=services.config_root,
-                    dataset_id=None,
-                )
+                # The learning run passes the cost gate every scheduled run passes (Plan J M108), checked only
+                # once a run is about to start: a day with nothing to learn, or a refused campaign, never
+                # meets it.
+                capped: list[bool] = []
+
+                def gate() -> None:
+                    capped.append(
+                        cost_gate(
+                            config,
+                            RunMode.TRAIN,
+                            settings=services.settings,
+                            config_root=services.config_root,
+                            dataset_id=None,
+                        )
+                    )
+
                 step = learn_step(
                     services.storage,
                     cycle.campaigns,
@@ -1259,8 +1269,9 @@ class ScheduleFirer:
                     principal=services.principal,
                     client_tag=services.job_client_tag,
                     now=services.clock(),
+                    before_start=gate,
                 )
-                if capped and step.running and step.run_id is not None and services.settings is not None:
+                if any(capped) and step.running and step.run_id is not None and services.settings is not None:
                     watch_cost(
                         services.storage,
                         services.jobs,
@@ -1299,8 +1310,20 @@ class ScheduleFirer:
         )
 
     def _alert_learned(self, firing: ScheduleFiring, record: RunRecord, result_code: str) -> None:
-        """A settled learning run: its challenger waits for an Approver, or was not put forward."""
-        if result_code == "MODEL_PENDING_APPROVAL":
+        """A settled learning run: its challenger waits for an Approver, was not put forward, or was not made.
+
+        A run that finished without registering a model is `scheduled_job_failed`: the month's learning,
+        which the client expected, produced no challenger.
+        """
+        kind = AlertKind.CHALLENGER_WAITING
+        if result_code == "MODEL_NOT_REGISTERED":
+            kind = AlertKind.SCHEDULED_JOB_FAILED
+            message = (
+                f"The learning run from the last campaign of {firing.use_case_id} finished, but no new model "
+                f"was registered (run {record.run_id}), so nothing waits for approval this time. Open the run "
+                "to see why."
+            )
+        elif result_code == "MODEL_PENDING_APPROVAL":
             message = (
                 f"A model learned from the last campaign of {firing.use_case_id} is waiting for an Approver "
                 f"(model {record.model_version_id}). It is used only once a person approves it."
@@ -1313,7 +1336,7 @@ class ScheduleFirer:
             )
         self.services.alerts.raise_alert(
             new_alert(
-                AlertKind.CHALLENGER_WAITING,
+                kind,
                 use_case_id=firing.use_case_id,
                 client_id=firing.client_id,
                 schedule_id=firing.schedule_id,

@@ -188,3 +188,84 @@ def test_a_loop_schedule_needs_a_use_case_that_contacts_and_holds_back(world: Wo
         created_by="u_test",
     )
     assert made.kind is ScheduleKind.TREAT_LIST and made.parameters == ScheduleParameters()
+
+
+# --- review fixes --------------------------------------------------------------------------------------
+def _capped_unpriced_root(config_root: Path, target: Path) -> Path:
+    """A copy of `configs/` with a run cost cap and no price list: every billed run needs a person's yes."""
+    import shutil
+
+    from engine.aws.prices import PRICES_FILENAME
+
+    shutil.copytree(config_root, target)
+    path = target / "engine.yaml"
+    text = path.read_text(encoding="utf-8")
+    assert "max_run_cost_usd: null" in text
+    path.write_text(text.replace("max_run_cost_usd: null", "max_run_cost_usd: 5.0", 1), encoding="utf-8")
+    (target / PRICES_FILENAME).unlink()
+    return target
+
+
+def test_a_capped_deployment_with_nothing_to_learn_is_a_quiet_success(
+    tmp_path: Path, config_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Review fix: the cost gate is met only by a run about to start, not by every learn firing.
+
+    On a capped SageMaker deployment whose runs cannot be priced, a learn firing with nothing measured used to
+    fail with RUN_COST_NEEDS_CONFIRMATION and a critical alert every day although no run would have started.
+    (The gate refusing a campaign that would really be learned from is in
+    `tests/integration/measurement/test_connection_pulls_api.py`.)
+    """
+    from tests.fixtures.settings import sagemaker_settings
+
+    monkeypatch.delenv("MARKETING_AI_CONFIG_DIR", raising=False)
+    world = make_world(tmp_path / "w", _capped_unpriced_root(config_root, tmp_path / "configs"))
+    firer = ScheduleFirer(
+        world.services(settings=sagemaker_settings(), cycle=CycleServices(campaigns=InMemoryCampaignStore()))
+    )
+    learn = firer.fire(world.schedule(ScheduleKind.LEARN)) or pytest.fail("not fired")
+    assert (learn.status, learn.result_code, learn.error_code) == (
+        FiringStatus.SUCCEEDED,
+        "NOTHING_TO_LEARN",
+        None,
+    )
+    assert world.alerts.store.query(AlertQuery()) == ()  # type: ignore[attr-defined]
+
+
+@pytest.mark.parametrize("kind", [ScheduleKind.LEARN, ScheduleKind.RETRAIN])
+def test_a_learning_run_that_registers_no_model_says_so(world: World, kind: ScheduleKind) -> None:
+    """Review fix: a learning run that ends without a model raises an alert; a retrain is as before (none)."""
+    from engine.contracts import RunState
+    from engine.runs import update_run
+
+    firer = ScheduleFirer(world.services())
+    started = firer.fire(world.schedule(ScheduleKind.RETRAIN)) or pytest.fail("not fired")
+    assert started.run_id is not None
+    world.store.save_firing(started.model_copy(update={"kind": kind}))  # as the step that started it
+    update_run(world.storage, started.run_id, state=RunState.DONE)  # finished, and nothing registered
+    (settled,) = firer.settle()
+    assert (settled.status, settled.result_code) == (FiringStatus.SUCCEEDED, "MODEL_NOT_REGISTERED")
+    alerts = world.alerts.store.query(AlertQuery())  # type: ignore[attr-defined]
+    if kind is ScheduleKind.RETRAIN:
+        assert alerts == ()
+        return
+    (alert,) = alerts
+    assert alert.kind is AlertKind.SCHEDULED_JOB_FAILED and alert.run_id == started.run_id
+    assert "no new model was registered" in alert.message and jargon_in(alert.message) == ()
+
+
+def test_the_resolved_connection_never_prints_its_secrets(world: World) -> None:
+    """Review fix: `Resolved` carries the decrypted keys to the connector only; its repr leaves them out."""
+    from engine.measurement.pull import resolve
+
+    connections = ConnectionStore(world.storage, Settings())
+    record = connections.create(
+        kind="s3",
+        name="Client exports",
+        config={"bucket": "client-exports", "region": "us-east-1", "prefix": "exports/"},
+        secrets={"access_key_id": "AKIA-REPR-CHECK", "secret_access_key": "very-secret-value-0123"},
+    )
+    resolved = resolve(connections, record.connection_id, PullSelection(path="exports/a.csv"))
+    assert resolved.secrets["secret_access_key"] == "very-secret-value-0123"
+    shown = repr(resolved)
+    assert "very-secret-value-0123" not in shown and "AKIA-REPR-CHECK" not in shown

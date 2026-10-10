@@ -95,8 +95,9 @@ SEVERITY_FOR: Final[dict[AlertKind, Severity]] = {
     AlertKind.CAMPAIGN_MEASURED: "info",
     AlertKind.CHALLENGER_WAITING: "info",
 }
-"""A failed job is critical - something the client expected did not happen; the rest are warnings -
-something to look at, and the product kept working."""
+"""A failed job is critical - something the client expected did not happen; drift, a performance drop and
+missed runs are warnings - something to look at, and the product kept working; the monthly loop's steps
+(Plan J M107) are information - something was produced for a person to act on."""
 
 _TITLES: Final[dict[AlertKind, str]] = {
     AlertKind.DRIFT_ABOVE_THRESHOLD: "Data drift above threshold",

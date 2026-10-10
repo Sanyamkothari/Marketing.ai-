@@ -598,8 +598,11 @@ from. A **scheduled** scoring or retraining build then reads it again first: for
 is newest by then, so this month's export is picked up with nothing uploaded. When the table has not
 changed (the same file, the same contents) nothing new is added; when it has, the new copy becomes the
 newest table of its role and the recipe reads it, exactly as if you had uploaded it. A connection that
-cannot be read stops the build with its reason, rather than score last month's table again as if it were
-this month's. Tables you upload as files are never read again on their own.
+cannot be read, or a table that has grown past the row limit for one table, stops the build with its
+reason, rather than score last month's table again as if it were this month's. Only the table the build
+would read anyway is read again: when the newest table of a role (with every column the recipe needs) is
+one you uploaded as a file, no connection is read for it. Tables you upload as files are never read again
+on their own.
 
 The recipe is also what makes a result auditable months later. Each built dataset records which
 recipe produced it, which mappings it applied and a fingerprint of every source file it read, so

@@ -229,6 +229,92 @@ def test_a_learn_schedule_refused_for_a_campaign_says_so_once(
     assert len([a for a in failed["alerts"] if a["schedule_id"] == created["schedule_id"]]) == 1
 
 
+def test_a_learn_refused_for_a_campaign_is_tried_again_once_the_campaign_is_measured_again(
+    client: TestClient, data_dir: Path, server: FakeServer
+) -> None:
+    """Review fix: the refusal judged one measurement; a person measuring the campaign again lifts it."""
+    campaign_id = _campaign(client, data_dir, server)
+    ok(client.post(f"/campaigns/{campaign_id}/outcomes", json=_pull_body(_connection(client))))
+    ok(client.post(f"/campaigns/{campaign_id}/measure", json={"as_of": MATURE.isoformat()}))
+    created = ok(
+        client.post(
+            "/schedules",
+            json={"use_case_id": "win-back-campaign", "kind": "learn", "cadence": "daily", "timezone": "UTC"},
+        ),
+        201,
+    )
+    fire = f"/schedules/{created['schedule_id']}/fire"
+    assert ok(client.post(fire), 201)["error_code"] == "LEARN_NOT_READY"
+    assert ok(client.post(fire), 201)["result_code"] == "LEARN_REFUSED"
+    ok(client.post(f"/campaigns/{campaign_id}/measure", json={"as_of": MATURE.isoformat()}))
+    again = ok(client.post(fire), 201)
+    assert (again["status"], again["error_code"]) == ("failed", "LEARN_NOT_READY"), again
+    assert ok(client.post(fire), 201)["result_code"] == "LEARN_REFUSED", "refused again: quiet again"
+    failed = ok(client.get("/monitoring/alerts", params={"kind": "scheduled_job_failed"}))
+    assert len([a for a in failed["alerts"] if a["schedule_id"] == created["schedule_id"]]) == 2
+
+
+def _measure_schedule(client: TestClient, connection_id: str, outcome_column: str) -> str:
+    body = {
+        "use_case_id": "win-back-campaign",
+        "kind": "measure",
+        "cadence": "daily",
+        "timezone": "UTC",
+        "parameters": {
+            "outcomes": {
+                "connection_id": connection_id,
+                "selection": {"schema_name": "crm", "table": "outcomes"},
+                "date_column": "recorded_on",
+                "outcome_column": outcome_column,
+            }
+        },
+    }
+    return str(ok(client.post("/schedules", json=body), 201)["schedule_id"])
+
+
+def test_a_measure_firing_whose_table_lacks_the_outcome_keeps_no_copy_of_its_rows(
+    client: TestClient, data_dir: Path, server: FakeServer
+) -> None:
+    """Review fix: the columns are checked before the pulled rows are stored, so a daily failure stores nothing."""
+    campaign_id = _campaign(client, data_dir, server)
+    schedule_id = _measure_schedule(client, _connection(client), "no_such_outcome")
+    storage = LocalStorage(data_dir)
+    before = storage.list_keys("uploads/")
+    for _ in range(2):
+        failed = ok(client.post(f"/schedules/{schedule_id}/fire"), 201)
+        assert (failed["status"], failed["error_code"]) == ("failed", "CAMPAIGN_INVALID"), failed
+    assert storage.list_keys("uploads/") == before, "no copy of the outcome rows was kept"
+    assert ok(client.get(f"/campaigns/{campaign_id}"))["campaign"]["outcomes"] is None
+
+
+def test_a_measurement_refused_after_the_pull_puts_the_campaign_back_and_keeps_no_copy(
+    client: TestClient, data_dir: Path, server: FakeServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Review fix: a refusal after the outcomes were given leaves the campaign as it was, with no new upload."""
+    from engine.measurement import cycle as cycle_module
+    from engine.measurement.campaign import OUTCOMES_FILENAME, campaign_key
+
+    campaign_id = _campaign(client, data_dir, server)
+    connection_id = _connection(client)
+    by_hand = ok(client.post(f"/campaigns/{campaign_id}/outcomes", json=_pull_body(connection_id)))
+    storage = LocalStorage(data_dir)
+    earlier = storage.read_bytes(campaign_key(campaign_id, OUTCOMES_FILENAME))
+    before = storage.list_keys("uploads/")
+
+    def refuse(*_args: Any, **_kwargs: Any) -> Any:
+        raise cycle_module.CycleError("CAMPAIGN_EPOCH_MISMATCH", "The holdout changed since the campaign.")
+
+    monkeypatch.setattr(cycle_module, "measure_recorded", refuse)
+    schedule_id = _measure_schedule(client, connection_id, TARGET)
+    for _ in range(2):
+        failed = ok(client.post(f"/schedules/{schedule_id}/fire"), 201)
+        assert (failed["status"], failed["error_code"]) == ("failed", "CAMPAIGN_EPOCH_MISMATCH"), failed
+    assert storage.list_keys("uploads/") == before, "the firing's copies were removed"
+    view = ok(client.get(f"/campaigns/{campaign_id}"))["campaign"]
+    assert view["outcomes"] == by_hand["campaign"]["outcomes"], "the outcomes given by hand are kept"
+    assert storage.read_bytes(campaign_key(campaign_id, OUTCOMES_FILENAME)) == earlier
+
+
 # --- consent ---------------------------------------------------------------------------------------------
 CONSENT_COLUMNS = ["principal_id", "purpose", "status", "recorded_at", "source"]
 
@@ -285,3 +371,58 @@ def test_a_consent_table_with_a_bad_row_imports_nothing(client: TestClient, serv
 def test_the_consent_file_route_is_unchanged(client: TestClient) -> None:
     operation = client.app.openapi()["paths"]["/privacy/consent/imports"]["post"]  # type: ignore[attr-defined]
     assert set(operation["requestBody"]["content"]) == {"multipart/form-data"}
+
+
+def test_a_parquet_consent_file_that_expands_past_the_limit_is_refused(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Review fix: the limit is on the text the ledger is given, as for the file route, not the compressed bytes."""
+    import io
+
+    import boto3
+    import pandas as pd
+    from moto import mock_aws
+
+    from api.routes import privacy as privacy_routes
+
+    rows = pd.DataFrame(_consent_rows(1) * 2_000, columns=CONSENT_COLUMNS)
+    buffer = io.BytesIO()
+    rows.to_parquet(buffer, index=False)
+    parquet = buffer.getvalue()
+    text = rows.to_csv(index=False).encode()
+    limit = 20_000
+    assert len(parquet) < limit < len(text) and len(rows.index) * len(rows.columns) < limit
+    for name in ("AWS_PROFILE", "AWS_SESSION_TOKEN"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "testing")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "testing")
+    with mock_aws():
+        boto3.client("s3", region_name="us-east-1").create_bucket(Bucket="consent-exports")
+        boto3.client("s3", region_name="us-east-1").put_object(
+            Bucket="consent-exports", Key="consent/2026-05.parquet", Body=parquet
+        )
+        connection_id = ok(
+            client.post(
+                "/connections",
+                json={
+                    "kind": "s3",
+                    "name": "Consent exports",
+                    "config": {"bucket": "consent-exports", "region": "us-east-1"},
+                    "secrets": {"access_key_id": "testing", "secret_access_key": "testing"},
+                },
+            ),
+            201,
+        )["connection_id"]
+        body = {
+            "connection_id": connection_id,
+            "selection": {"path": "consent/2026-05.parquet"},
+            "client_id": "acme",
+        }
+        for cap in (limit, 5_000):  # past the limit once written out; past it by its cells alone
+            monkeypatch.setattr(privacy_routes, "MAX_CONSENT_FILE_BYTES", cap)
+            refused = client.post("/privacy/consent/imports/from-connection", json=body)
+            assert refused.status_code == 413, refused.text
+            assert refused.json()["detail"]["code"] == "CONSENT_FILE_TOO_LARGE"
+        monkeypatch.setattr(privacy_routes, "MAX_CONSENT_FILE_BYTES", len(text) + 1)
+        accepted = client.post("/privacy/consent/imports/from-connection", json=body)
+        assert accepted.status_code in (201, 422), accepted.text  # read and judged row by row: not too large
