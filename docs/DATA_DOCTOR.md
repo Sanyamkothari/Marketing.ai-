@@ -127,6 +127,9 @@ corrections in one column are kept as one step.
 
 ## 5. How several files fit together (M155)
 
+The page's **How your files fit together** card shows what follows for every log and every set of monthly
+files.
+
 With a customer list and some logs (bills, tickets, ...), **Bring your data** also says how they fit:
 
 - **Do the logs meet the customer list?** For every log, the share of its rows whose customer is on the list,
@@ -180,6 +183,8 @@ counted: their 60 days are not over yet.*
   whose values match the list best, not the log's own row number), and the log's best date column are shown
   with the sentence. "Recharge" comes from the file's name when it has a word from the list in
   `configs/outcomes.yaml`; otherwise from what the file was read as ("payment", "order", "activity").
+- **On the page**, pick a choice and press **Use this outcome**; the steps that build the data from it are listed
+  under the sentence.
 - **Nothing is built until you say yes to one sentence.** Agreeing sends the sentence you read, word for
   word, with your choice. If the files have changed since, or the sentence on screen is not the one the
   choice now reads, nothing is recorded and the new sentence is shown. A choice with no month-end whose

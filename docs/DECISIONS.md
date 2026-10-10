@@ -1527,6 +1527,17 @@ DEC-1500…1509, M151 → DEC-1510…1519, …), so parallel work on two milesto
   CSV that needs intake's rules in 8-13 s and 155 MB; a 20-sheet workbook in 9 s with the biggest sheet read; a
   workbook's rows at openpyxl's own pace, about 4,000-8,000 rows a second, so a million-row workbook takes two
   to four minutes, which `docs/DATA_DOCTOR.md` says, with CSV as the faster way.
+- **DEC-1509 — M161: the Data Doctor page shows how files fit and asks the outcome question.** *Context:* M155 and
+  M157 added `links`, `stacks` and `outcome_offer` to the diagnosis, but the page drew none of them, so a person
+  could not see a log that needs an ID fix or agree to an outcome. *Decision:* (a) "How your files fit together"
+  lists each log against the customer list (the share, the share after the fix, the fix in plain words) and the
+  files that are one report for different months, with renamed, new and missing columns. (b) A `missing` use case
+  with an offer shows its question with one radio button per choice (the sentence and what it counts), the
+  default picked; a choice with nothing to count cannot be picked; nothing is sent until **Use this outcome**,
+  which sends the chosen sentence word for word, and the agreement's next steps are shown. (c)
+  `showDiagnosis(diagnosis, uploads)` draws a diagnosis already made. *Consequences:*
+  `tests/integration/test_doctor_ui.py` (with `production/ui/doctor/doctor.test.mjs`) proves it on real bodies,
+  hostile names included.
 - **DEC-1550 — M155: how several files fit, and built datasets scored by a model with a recipe.** *Context:* the
   diagnosis said what each file is but not whether the logs meet the customer list or are monthly copies of one
   report, and a built dataset could not be scored by a model trained on Guided-prepared data (DEC-1044).
