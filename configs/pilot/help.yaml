@@ -573,6 +573,107 @@ codes:
     title: "This campaign cannot teach a model yet"
     meaning: "To learn who to contact next time, the measured campaign needs a final result rather than an early look. It needs a yes/no outcome and enough customers who responded in both the contacted and the held-back groups. It also needs the file the scoring run read to still be stored. The message says which of these is missing."
     fix: "Supply what the message names and measure the campaign again; the next scheduled learn then tries again."
+  # --- Plan K M132: the agent-safe core - tools, the policy, proposals and the decision ledger (DEC-1401) ---------
+  POLICY_NO_RULES:
+    title: "No rules allow this kind of proposal"
+    meaning: "An agent proposed something the deployment has no rules for (for example, sending a message now). Anything without rules is refused."
+    fix: "Nothing to do. If this kind of proposal should be possible, an Admin adds a rule set for it in configs/agentic/policy.yaml."
+  POLICY_PAYLOAD_INVALID:
+    title: "The proposal is not in the expected form"
+    meaning: "The proposal has a field its kind does not have, or lacks one it needs, so it cannot be checked and is refused."
+    fix: "Have the agent draft it again with the fields the message names."
+  POLICY_HOLDOUT_IMMUTABLE:
+    title: "The proposal would change the control group"
+    meaning: "The proposal would hold back fewer customers than the share in force, hold back no one, contact customers who are held back, or choose who is held back another way than the use case does (a fresh draw for each run instead of the lasting group, or one lasting group for another). No agent can change who is held back."
+    fix: "Keep the share held back, and the way it is chosen, as the use case sets them. Only an Admin changes them, in the use case settings."
+  POLICY_BUDGET_CAP:
+    title: "The proposal is over budget"
+    meaning: "The run's cost estimate is above the cost cap (or cannot be worked out while a cap is set), the offers would cost more than the offer budget, or the plan contacts more customers than the contact budget allows."
+    fix: "Propose fewer contacts or cheaper offers. Raising a budget or confirming an unpriced run is a person's decision, not an agent's."
+  POLICY_CONSENT_CHANNEL:
+    title: "Not everyone the plan would contact may be contacted on this channel"
+    meaning: "The plan would contact more customers on the channel than the scoring run found contactable there. Or the run did not record who may be contacted on this channel, or could not read one of the channel's configured columns, so consent was never checked. Customers who opted out of a channel are already left off its list and do not count against a plan."
+    fix: "Propose no more contacts than the run's contactable customers on that channel, or use a channel the run recorded. Add the missing consent column to the scoring file and score again."
+  POLICY_FREQUENCY_CAP:
+    title: "Too many contacts"
+    meaning: "The plan contacts each customer more often than the contact cap allows, or sends more on a channel than that channel's cap (configs/decide/arbitration.yaml)."
+    fix: "Propose one contact per customer, or fewer contacts on the channel."
+  POLICY_TEST_NOT_REGISTERED:
+    title: "The campaign has no frozen test plan, or another one"
+    meaning: "A campaign plan must rest on the campaign's test plan, fixed in advance. This campaign has none, or the plan the proposal cites is not the one frozen."
+    fix: "Register the campaign's test plan first, then propose again citing it."
+  POLICY_TEST_PLAN_FIXED:
+    title: "This campaign's test plan can no longer be set this way"
+    meaning: "The campaign already has a different frozen test plan, or it was measured before any plan was registered. A new plan proposed now could not be registered, so it is refused instead of being sent to an Approver."
+    fix: "To change a frozen plan, file an amendment with a reason. A campaign already measured cannot get a plan fixed in advance. Plan the next campaign before its results are read."
+  POLICY_ROLE_SEPARATION:
+    title: "Someone else has to approve this"
+    meaning: "The proposal was made for you, so you cannot approve it yourself. Another person with the Approver role must decide."
+    fix: "Ask another Approver to approve or reject it."
+  TOOL_UNKNOWN:
+    title: "There is no such tool"
+    meaning: "An agent asked for a tool the product does not have. Only the listed read and propose tools exist, and none of them sends anything."
+    fix: "Use one of the listed tools."
+  TOOL_INPUT_INVALID:
+    title: "The tool was asked the wrong way"
+    meaning: "The request to the tool has a field it does not accept, a value in the wrong form, an id that is not a plain id, or cites evidence no tool produced."
+    fix: "Ask again with the fields the message names. Cite only evidence ids that a tool returned."
+  TOOL_ROLE_REQUIRED:
+    title: "Your role does not allow this"
+    meaning: "The agent acts for you, and you do not hold the role this needs (for example, only an Analyst can have a proposal drafted). An agent never sees or does more than you could."
+    fix: "Ask an Admin for the role, or ask someone who holds it."
+  TOOL_OUTPUT_TOO_LARGE:
+    title: "The answer would be too large"
+    meaning: "A tool returns totals and counts, never customer rows, and this answer would exceed its size limit (16 KB)."
+    fix: "Ask a narrower question, for example one band or one channel."
+  TOOL_ARTEFACT_UNREADABLE:
+    title: "A stored result could not be read"
+    meaning: "The result the tool needs is stored but cannot be read. It may be a partial write or a file from an older version. The tool does not report it as \"not computed\", because that would be untrue."
+    fix: "Compute it again through the screen or route that writes it (for example, measure the campaign again). If it happens again, tell your administrator and name the file shown."
+  PROPOSAL_NOT_FOUND:
+    title: "There is no such proposal"
+    meaning: "The proposal named does not exist. It may have been made in another workspace."
+    fix: "Open it again from the list of agent proposals."
+  PROPOSAL_NOT_PENDING:
+    title: "This proposal was already decided"
+    meaning: "Only a pending proposal can be approved or rejected. This one was already approved, rejected, refused or has expired."
+    fix: "Nothing to do. If it is still wanted, have the agent draft it again."
+  PROPOSAL_EXPIRED:
+    title: "This proposal expired"
+    meaning: "Nobody decided on it within the allowed days (14 by default), so it can no longer be approved. The facts it rested on may have changed."
+    fix: "Have the agent draft it again, so it is checked against today's facts."
+  PROPOSAL_STALE:
+    title: "The campaign changed since this was proposed"
+    meaning: "The plan proposed is no longer the plan the campaign would get. The campaign's assignment changed, or the plan registered was not the one proposed. So it was not approved."
+    fix: "Have the agent draft the plan again from the campaign as it is now."
+  PROPOSAL_TAMPERED:
+    title: "This proposal was changed after it was drafted"
+    meaning: "The stored proposal does not match what the decision record wrote when it was drafted (what it proposes, who it was for, the evidence it cites, or its dates). It cannot be approved, and nothing was done."
+    fix: "Have the agent draft it again. If nobody changed it on purpose, tell your administrator: proposal files should only be changed by the product."
+  PROPOSAL_NOT_EXECUTABLE:
+    title: "Nothing can carry this proposal out yet"
+    meaning: "The proposal passed the rules, but the product cannot yet carry out proposals of this kind (campaign plans arrive in a later release). It stays pending and on the record."
+    fix: "Nothing to do now. Carry the plan out yourself through the usual screens if it is wanted."
+  LEDGER_CHAIN_BROKEN:
+    title: "The decision record was changed"
+    meaning: "An entry in the decision record was edited, removed or added out of order, or a checkpoint you kept is no longer in it. Each entry is chained to the one before, so any change shows up. The check names the first bad entry."
+    fix: "Tell your administrator at once and keep the checkpoint from your last approval receipt. Restore the record from a backup taken before the bad entry."
+  LEDGER_SIGNATURE_INVALID:
+    title: "A signed decision does not verify"
+    meaning: "An approval, a frozen test plan or an evidence label in the decision record is unsigned, or its signature does not match the signing key."
+    fix: "Check that the verification uses the deployment's own signing key. If it does, tell your administrator: the entry was changed or forged."
+  AGENTIC_DISABLED:
+    title: "Agent proposals are switched off"
+    meaning: "This deployment has agent tools and proposals turned off (agentic.enabled is false), which is the default. Nothing about agents is reachable."
+    fix: "An Admin turns them on in configs/agentic/agentic.yaml if the deployment should use them."
+  CONFIG_INVALID:
+    title: "A settings file cannot be used"
+    meaning: "A settings file is missing, cannot be read, or has a value that is not allowed. Examples are a use case setting or the agent policy files under configs/agentic. The message names the file and the setting."
+    fix: "Correct the setting named, or restore the file, then try again."
+  RUN_NOT_FOUND:
+    title: "There is no such run"
+    meaning: "The run named does not exist, or it was recorded in another workspace."
+    fix: "Open the run again from the Runs page, or check the run id."
 
 settings:
   actions.bands[*].min_score:

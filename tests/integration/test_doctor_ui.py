@@ -33,8 +33,7 @@ TESTS_DIR: Final[Path] = NODE_DIR / "doctor"
 def tickets_csv() -> bytes:
     lines = ["ticket_id,customer_id,opened_on,topic"]
     lines += [
-        f"T{index:05d},c{index % 600:05d},2025-0{1 + index % 6}-1{index % 9},network"
-        for index in range(900)
+        f"T{index:05d},c{index % 600:05d},2025-0{1 + index % 6}-1{index % 9},network" for index in range(900)
     ]
     return ("\n".join(lines) + "\n").encode()
 

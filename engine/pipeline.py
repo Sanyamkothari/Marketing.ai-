@@ -1973,3 +1973,5 @@ install_channel_column_guard(_ScoreFlow)
 # ---- END PLAN-J ----
 # ---- PLAN-L (data doctor) — append only below this line ----
 # ---- END PLAN-L ----
+# ---- PLAN-K (agents that check) — append only below this line ----
+# ---- END PLAN-K ----

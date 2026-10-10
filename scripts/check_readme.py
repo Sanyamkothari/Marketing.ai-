@@ -546,6 +546,28 @@ MILESTONE_TESTS: Final[Mapping[str, tuple[str, ...]]] = {
     "M158": ("tests/unit/doctor/test_sufficiency.py", "tests/integration/test_api_doctor.py"),
     "M159": ("tests/unit/doctor/test_memory.py", "tests/integration/agent/test_api_doctor_memory.py"),
     "M160": ("tests/integration/test_plan_l_benchmark.py",),
+    # --- Plan K (docs/plans/MARKETING_AI_PLAN_K_PROPOSAL.md, docs/AGENTIC.md); each milestone adds its own entry.
+    # M131, M135 and M137 were built early under Plan J's range; their entries are above, with Plan J's, and their
+    # README rows are in the Plan K table. ---
+    # M130 (DEC-1400), the set-up: the PLAN-K blocks, PLAN_K_CODES in the catalogue check, the three switches.
+    "M130": (
+        "tests/unit/test_shared_file_markers.py",
+        "tests/unit/pilot/test_help.py",
+        "tests/unit/agentic/test_flags.py",
+    ),
+    # M132 (DEC-1401), the agent-safe core. tests/unit/measurement/test_campaign_migration.py is Plan J's file; M132
+    # made it pin the platform tables' order (agentic_decision_log after campaign).
+    "M132": (
+        "tests/unit/agentic/test_canonical.py",
+        "tests/unit/agentic/test_ledger.py",
+        "tests/unit/agentic/test_policy.py",
+        "tests/unit/agentic/test_registry.py",
+        "tests/unit/agentic/test_switch.py",
+        "tests/agentic/scenarios/test_scenarios.py",
+        "tests/agentic/test_proposal_routes.py",
+        "tests/agentic/test_read_tools.py",
+        "tests/unit/measurement/test_campaign_migration.py",
+    ),
 }
 """Milestone id -> the test files (or directories, with a trailing `/`) that prove it is built.
 

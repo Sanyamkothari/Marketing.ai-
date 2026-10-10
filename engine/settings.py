@@ -792,3 +792,5 @@ def build_services(config: Settings) -> tuple[Any, Any]:
 # ---- END PLAN-J ----
 # ---- PLAN-L (data doctor) — append only below this line ----
 # ---- END PLAN-L ----
+# ---- PLAN-K (agents that check) — append only below this line ----
+# ---- END PLAN-K ----

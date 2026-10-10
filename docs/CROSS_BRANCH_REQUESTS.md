@@ -1924,6 +1924,85 @@ the exact within-group check (`varies_within`) the run_score path uses.
 
 **What I did meanwhile.** Nothing further.
 
+### 2026-10-10 — plan-k M130 (on main) → protocol owner and all branches: Plan K claims DEC-1400…1499 and adds a `PLAN-K` block after Plan L's (record of an in-place edit and announcement)
+
+**What changed** (DEC-1400 (a), (b)): `PARALLEL_WORK_PROTOCOL.md` §4's `DEC-1400…1499` row, which Plan L had left as
+"Plan K … not claimed (proposal)", now reads claimed 2026-10-10 by M130 (M130–M144), and notes that M131, M135 and
+M137 were built earlier under Plan J's range (DEC-1323, DEC-1324, DEC-1325). Plan L's row is unchanged. Every file
+in `tests/unit/test_shared_file_markers.py`'s `SHARED_FILES` gains an empty `PLAN-K (agents that check)` block
+directly after `END PLAN-L`, in each file's comment syntax; `PHASES` ends `"PLAN-L", "PLAN-K"` and the docstring
+says why (blocks follow the order plans reached `main`: Plan J, Plan L, then Plan K). In `api/main.py` the PLAN-K
+block holds M132's `_install_agentic` app hook (`PHASE_APP_HOOKS`), moved there from the end of the PLAN-J block,
+where the M132 branch had parked it; the PLAN-J block is back to what it was.
+
+**What is needed.** Nothing; this is an announcement. Branches that add to a shared file append inside their own
+block; Plan L keeps its block, which now sits between Plan J's and Plan K's.
+
+**What I did meanwhile.** `test_shared_file_markers.py` passes with the new order.
+
+### 2026-10-10 — plan-k M130 and M132 (on main) → Plan E (owner of `engine/pilot/help.py` and `configs/pilot/help.yaml`): `PLAN_K_CODES` and 25 catalogue entries (record of a pre-approved edit and announcement)
+
+**What changed** (DEC-1400 (c), DEC-1401 (p)): `engine.pilot.help.known_codes()` also includes
+`engine.agentic.codes.PLAN_K_CODES`, mirroring the `PLAN_J_CODES` line (one import, one term of the union).
+`configs/pilot/help.yaml` gains a Plan K M132 section after Plan J's M107 entries with the 25 codes M132 raises: the
+`POLICY_*`, `TOOL_*`, `PROPOSAL_*` and `LEDGER_*` codes and `AGENTIC_DISABLED`, plus `CONFIG_INVALID` and
+`RUN_NOT_FOUND`, existing engine codes that had no entry; those two are written generically, because
+`engine.config`, `engine.decide.treat_list`, `api.routes.pilot` and `engine.scheduling` raise them too.
+`POLICY_HOLDOUT_IMMUTABLE`'s text was reworded at integration so that it passes the jargon check (no "holdout").
+`tests/unit/pilot/test_help.py` is green.
+
+**What is needed.** Nothing; this is an announcement.
+
+**What I did meanwhile.** Nothing further.
+
+### 2026-10-10 — plan-k M132 (on main) → Phase 4b and Plan D (owners of `engine/approvals.py`, `engine/platform_db.py`, `alembic/`): proposals as a second decision subject, the `agentic_decision_log` table and migration `0009` (record of pre-approved additive edits)
+
+**What changed** (DEC-1401 (i), (k), (n)), each additive:
+
+* `engine/approvals.py`: `DECISION_SUBJECTS = ("model", "proposal")`, `ProposalDecisionKind`, `ProposalReceipt` and
+  `decide_proposal(...)`, which approves or rejects a pending agent proposal only when the stored proposal matches
+  its `proposal.drafted` ledger entry (`PROPOSAL_TAMPERED` otherwise), re-runs the policy with today's facts and the
+  approver, and calls the executor the route passes. Its `engine.agentic` imports are inside the function, so
+  importing `engine.approvals` imports nothing of Plan K. The model decision path is unchanged.
+* `engine/platform_db.py`: `PLATFORM_TABLES` appends `agentic_decision_log` after `campaign`.
+* `alembic/env.py`: imports `engine.agentic.ledger.DecisionLogEntry` for its metadata side effect, beside the
+  other table classes.
+* `alembic/versions/0009_agentic_ledger.py` (new): creates `agentic_decision_log` with its four lookup indexes,
+  including the nullable indexed `proposal_id` and `evidence_id`. At integration its `down_revision` was set to
+  `"0008"` (M131's `0008_consent_basis`), so the history is one line, 0007 → 0008 → 0009, with one head.
+
+Nothing was renamed or removed. With `agentic.enabled` off the app creates no table and writes no file, but
+`alembic upgrade head` adds the empty `agentic_decision_log` table on every migrated database.
+
+**What is needed.** Ratification of the edits. A later platform table takes the next revision after `0009`.
+
+**What I did meanwhile.** `tests/unit/test_alembic_migrations.py`, `test_alembic_offline_sql.py` and
+`test_postgres_metadata.py` pass on SQLite (the PostgreSQL cases skip without a server, as before).
+
+### 2026-10-10 — plan-k M132 (on main) → Plan J (owners of `tests/unit/measurement/test_campaign_migration.py` and `api/routes/runs.py`), M131, and the later Plan K milestones (M133, M139): what the agent-safe core expects of its neighbours (announcement and one optional request)
+
+**What changed** (DEC-1401):
+
+* `tests/unit/measurement/test_campaign_migration.py::test_the_campaign_table_is_declared_last` now pins only the
+  order (`campaign` directly after `platform_setting`, and before `agentic_decision_log`) instead of an exact tail, so
+  later milestones that append platform tables no longer need to edit it.
+* M131: the policy's `consent.channel` rule and the `check_contactable` tool read `inquiry_lapsed_rows` and
+  `legacy_unregistered_rows` from each `channel_contactability.json` `by_channel` entry as row counts, and
+  `columns_missing` as names; a channel recorded with a configured column missing is refused.
+* M133 (MCP) and M139 (planner): draft through `engine.agentic.proposals.submit_proposal`, which requires the
+  Analyst role for every kind (`TOOL_ROLE_REQUIRED`, 403); call tools through `ToolRegistry.call` with a
+  `ToolContext` that carries `platform_engine`, so audited tools write their audit events; never rewrite a stored
+  proposal (approval refuses it as `PROPOSAL_TAMPERED`), draft a new one. The ledger offers
+  `proposal_entries(proposal_id)` and `missing_evidence(ids)`.
+
+**What is needed.** Optional, for Plan J: `GET /runs/{run_id}/artefacts/{name}` does not serve
+`expected_gross_value.json` by name (`ARTEFACT_UNKNOWN`); only the treat list summary carries its total. The
+`value_segment` tool takes that route's policy (Viewer, `audit_reads`). If the file should be downloadable, add
+`EXPECTED_GROSS_VALUE_FILENAME` to the route's known names.
+
+**What I did meanwhile.** `value_segment` reads the stored artefact directly; this is documented in
+`docs/AGENTIC.md`.
+
 ### 2026-09-23 — plan-e-pilot (on main) → all branches: every change Plan E made outside its own files and blocks
 
 **What is needed.** Nothing from anybody; this is the announcement §3 asks for. Measured with

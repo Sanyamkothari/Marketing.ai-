@@ -1,0 +1,22 @@
+# Plan K switches (docs/AGENTIC.md, design §11). Every one is off by default; with all three off the product is
+# byte-identical to Plan J's.
+#
+# agentic.enabled: the agent-safe core (M132) - the tool registry's in-process entry point, proposals,
+# the decision ledger and the /agentic routes. Off (the default), none of it is reachable: the routes are
+# not mounted, the app creates no table and writes no file, and every response is byte-identical to Plan
+# J's. (`alembic upgrade head` still adds the empty agentic_decision_log table, revision 0009, whatever
+# this switch says: a migration runs on every deployment.)
+agentic:
+  enabled: false
+
+# compliance.gate.enabled: the pre-send compliance gate (M134), one decision record per customer, channel and
+# purpose before a list leaves the product. Off until the integration plan's hand-off exists.
+# Declared by the set-up (M130, DEC-1400 (d)); nothing reads it yet.
+compliance:
+  gate:
+    enabled: false
+
+# mcp.enabled: the verifier over MCP (M133) - other companies' agents calling the read and propose tools.
+# Declared by the set-up (M130, DEC-1400 (d)); nothing reads it yet.
+mcp:
+  enabled: false

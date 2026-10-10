@@ -312,5 +312,22 @@ from api.routes.doctor import router as doctor_router  # noqa: E402
 
 PHASE_ROUTERS.append(doctor_router)
 # ---- END PLAN-L ----
+# ---- PLAN-K (agents that check) — append only below this line ----
+
+
+# Plan K M132 (DEC-1401): the /agentic proposal routes, mounted only when `agentic.enabled` is on
+# (configs/agentic/agentic.yaml). Off - the default - only engine.agentic.config (the switch reader) is
+# imported; no route module, no table class, so every response is byte-identical to Plan J's.
+def _install_agentic(app: FastAPI) -> None:
+    from engine.agentic.config import agentic_enabled
+
+    if agentic_enabled(app.state.config_root):
+        from api.routes.agentic import router as agentic_router
+
+        app.include_router(agentic_router)
+
+
+PHASE_APP_HOOKS.append(_install_agentic)
+# ---- END PLAN-K ----
 
 app: FastAPI = create_app()
