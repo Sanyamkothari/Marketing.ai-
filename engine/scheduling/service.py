@@ -31,6 +31,7 @@ from engine.config import ConfigError, resolve_config
 from engine.scheduling.cron import DEFAULT_TIMEZONE, CronError, zone
 from engine.scheduling.scheduler import Scheduler
 from engine.scheduling.schedules import (
+    LOOP_KINDS,
     CadencePreset,
     Schedule,
     ScheduleError,
@@ -86,13 +87,24 @@ def _validated(**fields: object) -> Schedule:
         raise ScheduleError("SCHEDULE_INVALID", str(first.get("msg", "The schedule is not valid."))) from exc
 
 
-def _check_use_case(use_case_id: str, config_root: Path) -> None:
+def _check_use_case(use_case_id: str, config_root: Path, kind: ScheduleKind | None = None) -> None:
     try:
-        resolve_config(use_case_id, root=config_root)
+        config = resolve_config(use_case_id, root=config_root).config
     except ConfigError as exc:
         raise ScheduleError(
             "USE_CASE_NOT_FOUND", f"There is no use case {use_case_id!r} to schedule."
         ) from exc
+    if kind in LOOP_KINDS:
+        from engine.uplift.measure import measure_offered
+
+        if not measure_offered(
+            config
+        ):  # Plan J M107: a loop step needs a campaign to list, measure or learn from
+            raise ScheduleError(
+                "SCHEDULE_INVALID",
+                f"{config.name} contacts nobody or holds nobody back, so it has no campaign for a "
+                f"{kind.value.replace('_', ' ')} schedule to work on.",
+            )
 
 
 def _check_spec(
@@ -152,7 +164,7 @@ def create_schedule(
     """Validate, store and register a new schedule. `cadence` is a preset name or a cron line."""
     moment = now or utc_now()
     chosen = parameters or ScheduleParameters()
-    _check_use_case(use_case_id, config_root)
+    _check_use_case(use_case_id, config_root, kind)
     cron, preset = _cadence(cadence, timezone)
     _check_spec(client_store, chosen, client_id=client_id, use_case_id=use_case_id)
     schedule = _validated(

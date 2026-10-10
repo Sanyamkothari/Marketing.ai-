@@ -157,3 +157,34 @@ def test_nothing_new_is_a_quiet_success(world: World) -> None:
     assert (measure.status, measure.result_code) == (FiringStatus.SUCCEEDED, "NOTHING_TO_MEASURE")
     store = world.alerts.store  # type: ignore[attr-defined]
     assert store.query(AlertQuery()) == ()
+
+
+def test_a_loop_schedule_needs_a_use_case_that_contacts_and_holds_back(world: World) -> None:
+    from engine.scheduling.scheduler import NullScheduler
+    from engine.scheduling.schedules import ScheduleError
+    from engine.scheduling.service import create_schedule
+
+    for kind in (ScheduleKind.TREAT_LIST, ScheduleKind.LEARN):
+        with pytest.raises(ScheduleError) as caught:
+            create_schedule(
+                world.store,
+                NullScheduler(),
+                config_root=world.config_root,
+                client_id=world.client_id,
+                use_case_id="fault-prediction",
+                kind=kind,
+                cadence="daily",
+                created_by="u_test",
+            )
+        assert caught.value.code == "SCHEDULE_INVALID" and jargon_in(caught.value.message) == ()
+    made = create_schedule(
+        world.store,
+        NullScheduler(),
+        config_root=world.config_root,
+        client_id=world.client_id,
+        use_case_id="telco-churn",
+        kind=ScheduleKind.TREAT_LIST,
+        cadence="daily",
+        created_by="u_test",
+    )
+    assert made.kind is ScheduleKind.TREAT_LIST and made.parameters == ScheduleParameters()

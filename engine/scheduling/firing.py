@@ -1274,7 +1274,8 @@ class ScheduleFirer:
             raise FiringError(exc.code, exc.message) from exc
         self._alert_step(schedule, step)
         status = FiringStatus.RUNNING if step.running else FiringStatus.SUCCEEDED
-        return _Outcome(status, step.result_code, step.run_id)
+        # `run_id` names a run the firing started (learning); a run a step only read is in its alert.
+        return _Outcome(status, step.result_code, step.run_id if step.running else None)
 
     def _alert_step(self, schedule: Schedule, step: StepOutcome) -> None:
         """The loop's alert for a step that produced something a person acts on (none for a quiet step)."""
