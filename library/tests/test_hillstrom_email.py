@@ -403,10 +403,13 @@ def test_the_committed_report_is_what_run_engine_renders_from_its_run() -> None:
         pytest.skip(
             f"{RESULTS} is absent: run python -m library.run_engine journey --dataset hillstrom-email"
         )
-    from library.run_engine import journey_report_text
+    from library.run_engine import audit_results_path, journey_report_text
 
+    # The report is the journey's sections, then the audit readout's (DEC-1322) when the audit has been run.
+    audit = audit_results_path("hillstrom-email")
     assert REPORT.read_text(encoding="utf-8") == journey_report_text(
-        json.loads(RESULTS.read_text(encoding="utf-8"))
+        json.loads(RESULTS.read_text(encoding="utf-8")),
+        json.loads(audit.read_text(encoding="utf-8")) if audit.is_file() else None,
     )
 
 

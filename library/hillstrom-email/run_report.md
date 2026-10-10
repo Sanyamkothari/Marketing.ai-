@@ -9,11 +9,11 @@ rebuilt by the command at the end. Nothing here is synthetic and nothing was tun
 | Data | `library/hillstrom-email/data/prepared.csv`, 64,000 rows (SHA-256 `434bc95c6e096dbe…`; the raw file it was prepared from is verified by `fetch.py`) |
 | Use case | `hillstrom-email` |
 | Split | 32,000 training rows, 32,000 evaluation rows (seed 20261010, stratified by segment and conversion) |
-| Risk model run | `r_20261010_11100001`, 62.1 s |
-| Campaign-effect run | `r_20261010_11100002`, 17.6 s |
+| Risk model run | `r_20261010_11100001`, 73.0 s |
+| Campaign-effect run | `r_20261010_11100002`, 17.3 s |
 | Scoring run | `r_20261010_11100003` |
 | Risk model's scoring run (section 3) | `r_20261010_11100004` |
-| Whole journey | 128.8 s |
+| Whole journey | 138.9 s |
 
 ## The answer in one table
 
@@ -81,7 +81,7 @@ The data, by group (the outcomes as the file records them):
 
 ## 2. The models
 
-**Risk model** (`POST /runs`, Phase 1): Ensemble (LightGBM), 6 models trained, 62.1 s. Test metrics: f1 0.0145, pr_auc 0.0097, precision 0.0086, recall 0.0465, roc_auc 0.5341. Against its baseline (baseline (logistic regression)): does not beat it.
+**Risk model** (`POST /runs`, Phase 1): Ensemble (LightGBM), 6 models trained, 73.0 s. Test metrics: f1 0.0145, pr_auc 0.0097, precision 0.0086, recall 0.0465, roc_auc 0.5341. Against its baseline (baseline (logistic regression)): does not beat it.
 
 **Campaign-effect model** (`POST /uplift/runs`, x_learner on lightgbm), measured on its own hold-out of 6,392 training rows. Registered as `candidate`: a model of several offers is never champion (DEC-1310 (h)).
 
@@ -283,4 +283,97 @@ Value inputs entered for the pack: ₹83.00 per dollar of spend (One dollar of s
 ```bash
 python library/hillstrom-email/fetch.py
 python -m library.run_engine journey --dataset hillstrom-email
+```
+
+## 8. The audit readout on the original campaign (M103, public dataset, retrospective audit)
+
+**Public dataset, retrospective audit.** The journey above measured a list the engine made. This section reads the campaign that **actually ran**: Hillstrom's own e-mail test, with who got which e-mail as the assignment and visit, conversion and spend as the outcomes, posted to `POST /campaigns/audit` the way a client's past campaign would be. No model is trained and nothing is tuned; it is the whole file, as it ran. Every number below is read from [`../.runs/hillstrom-email/audit/audit.results.json`](../.runs/hillstrom-email/audit/audit.results.json), which is git-ignored and rebuilt by the command at the end of this section.
+
+| | |
+|---|---|
+| Data | `library/hillstrom-email/data/prepared.csv`, 64,000 rows (SHA-256 `434bc95c6e096dbe…`) |
+| Groups in the original campaign | No E-Mail 21,306, Mens E-Mail 21,307, Womens E-Mail 21,387 |
+| Outcomes file | 64,000 rows: `customer_id`, `visit`, `conversion`, `spend` |
+| Campaign dated | 2008-03-20, outcome window 14 days |
+| Campaign ids | `c_20261010_11200001`, `c_20261010_11200002`, `c_20261010_11200003`, `c_20261010_11200004` |
+| Whole audit | 18.6 s |
+
+### 8.1 The answer in one table
+
+| Campaign audited | Label | Randomness check | Effect (95 %) |
+|---|---|---|---|
+| Conversion: each e-mail against no e-mail | **Causal** | passed: guessing score 0.506 (chance 0.500, limit 0.60) | Mens E-Mail +0.68 pts (+0.50 pts to +0.86 pts): **above zero**; Womens E-Mail +0.31 pts (+0.15 pts to +0.47 pts): **above zero** |
+| Spend: any e-mail against no e-mail | **Causal** | passed: guessing score 0.502 (chance 0.500, limit 0.60) | $0.60 ($0.38 to $0.82) per customer: **above zero** |
+| Spend: the men's e-mail against no e-mail | **Causal** | passed: guessing score 0.503 (chance 0.500, limit 0.60) | $0.77 ($0.49 to $1.05) per customer: **above zero** |
+| Spend: the women's e-mail against no e-mail | **Causal** | passed: guessing score 0.506 (chance 0.500, limit 0.60) | $0.42 ($0.17 to $0.68) per customer: **above zero** |
+| Spend: each e-mail against no e-mail, in one audit | refused: `CAMPAIGN_INVALID` | | |
+
+### 8.2 What the numbers may claim
+
+The label is **Causal** for every campaign audited: it was stated that the e-mail was assigned at random (the route requires the statement and never assumes it), and the engine **verified** it. It tried to predict who was e-mailed from the customer details in the assignment file (8 columns: `recency`, `history_segment`, `history`, `mens`, `womens`, `zip_code`, `newbie`, `channel`) and could not do better than a guessing score of 0.506 at worst (0.500 is chance; the limit is 0.60). With several offers it tests each against the shared control and reports the worst. Because the outcomes are in a separate file, the test could not have used them.
+
+The engine's own notes on these audits:
+
+- Every customer in the assignment file was compared, whether or not they were meant to be reached (the usual way to read a campaign: the groups as they were chosen).
+- Every customer was taken to be contacted on the date the campaign went out.
+
+### 8.3 What each e-mail changed
+
+**Conversion: each e-mail against no e-mail** (campaign `c_20261010_11200001`; the men's e-mail and the women's e-mail, each against the group sent nothing).
+
+| Offer | E-mailed | Converted | Held back | Converted | Difference (95 %) | Extra conversions (95 %) | p |
+|---|---|---|---|---|---|---|---|
+| Mens E-Mail | 21,307 | 267 (1.25 %) | 21,306 | 122 (0.57 %) | +0.68 pts (+0.50 pts to +0.86 pts): **above zero** | 145 (107 to 184) | < 0.001 |
+| Womens E-Mail | 21,387 | 189 (0.88 %) | 21,306 | 122 (0.57 %) | +0.31 pts (+0.15 pts to +0.47 pts): **above zero** | 67 (32 to 101) | < 0.001 |
+
+The engine's verdict for the campaign as a whole: The campaign added about 145 conversions. Likely between 107 and 184. (the single-offer fields of the report, and so this sentence, are the first offer's; the table is the per-offer reading).
+
+**Spend, in dollars** (the file's money; the Packs convert it at the stated rate).
+
+| Contrast | E-mailed | Mean spend | Held back | Mean spend | Difference per customer (engine, 95 %) | Bootstrap (harness, 95 %) | p | In total, dollars (engine) |
+|---|---|---|---|---|---|---|---|---|
+| every customer sent an e-mail against the group sent nothing | 42,694 | $1.25 | 21,306 | $0.65 | $0.60 ($0.38 to $0.82): **above zero** | $0.38 to $0.81 | < 0.001 | +25,480 (likely +16,061 to +34,898) |
+| the men's e-mail against the group sent nothing | 21,307 | $1.42 | 21,306 | $0.65 | $0.77 ($0.49 to $1.05): **above zero** | $0.49 to $1.06 | < 0.001 | +16,403 (likely +10,337 to +22,469) |
+| the women's e-mail against the group sent nothing | 21,387 | $1.08 | 21,306 | $0.65 | $0.42 ($0.17 to $0.68): **above zero** | $0.17 to $0.69 | 0.001 | +9,077 (likely +3,613 to +14,540) |
+
+**Caution: the amount is skewed.** The engine flagged `OUTCOME_SKEWED` on `spend_any`, `spend_mens`, `spend_womens`: a few very large amounts dominate the averages, so its normal interval may be too narrow. The bootstrap column is the harness's check on it (a seeded percentile bootstrap of the difference in means, 2,000 resamples); neither is exact with so few customers who spent anything.
+
+The route measures a yes/no outcome for each of several offers but an amount only for one contrast: the three-group file on the amount was posted as well and refused (below), so spend is read for any e-mail against none and, from a file of the two groups concerned, for each e-mail against none.
+No adjustment by an earlier amount is made: an audit has no test plan registered in advance, and the adjusted estimate (M102) must be named in one.
+
+`spend_offers` (Spend: each e-mail against no e-mail, in one audit) was refused by the route: `CAMPAIGN_INVALID`: Several offers are measured on a yes/no outcome only: measuring each offer on an amount, or adjusting it by an amount from before the campaign, is not offered yet. Measure the campaign as a whole on the amount, or each offer on a yes/no outcome.
+
+### 8.4 Value Proof Packs (M104)
+
+A Pack was built for each campaign, named "... - public dataset, retrospective audit" in the campaign name the Pack prints, and its provenance re-verified (`engine.pilot.proof.verify_provenance`: every figure resolves to a measured record).
+
+| Pack | Built | Claim | Headline |
+|---|---|---|---|
+| `conversion` | provenance verified: True; HTML 200, PDF 200 (35,119 bytes) | Causal: the customers held back were chosen at random | Extra outcomes because of the campaign: +145 (likely +107 to +184). Net value ₹10,29,750 (10.30 lakh) to ₹17,76,011 (17.76 lakh). |
+| `spend_any` | provenance verified: True; HTML 200, PDF 200 (33,060 bytes) | Causal: the customers held back were chosen at random | Extra amount because of the campaign: +25,479.61 (likely +16,060.85 to +34,898.37). Net value ₹13,30,916 (13.31 lakh) to ₹28,94,430 (28.94 lakh). |
+| `spend_mens` | provenance verified: True; HTML 200, PDF 200 (33,039 bytes) | Causal: the customers held back were chosen at random | Extra amount because of the campaign: +16,402.71 (likely +10,336.87 to +22,468.54). Net value ₹8,56,895 (8.57 lakh) to ₹18,63,824 (18.64 lakh). |
+| `spend_womens` | provenance verified: True; HTML 200, PDF 200 (33,050 bytes) | Causal: the customers held back were chosen at random | Extra amount because of the campaign: +9,076.90 (likely +3,613.48 to +14,540.33). Net value ₹2,98,849 (2.99 lakh) to ₹12,05,778 (12.06 lakh). |
+
+**Finding (`conversion`).** With 2 offers the Pack's headline ('Extra outcomes because of the campaign: +145 (likely +107 to +184). Net value ₹10,29,750 (10.30 lakh) to ₹17,76,011 (17.76 lakh).'), its "Extra outcomes" (+145) and the value of what the campaign changed are the first offer's, Mens E-Mail, alone; the other offer's (Womens E-Mail +67) is in the offer table and the backfire table but not in the headline or the net value, while the cost of contacts (₹2,135) is for all 42,694 e-mails sent. The net value therefore credits one offer and charges both. Every figure is traced to a measured record, so provenance passes; it is the scope of the headline that is partial (M100 keeps the first offer in the single-offer fields, DEC-668 (3), and the Pack reads those fields). Raised for M104 (DEC-1314); no engine code was changed.
+
+Value inputs: one conversion is worth ₹9,658.17 (the mean spend of a customer who bought, over the whole file, at the assumed rate; revenue before margin; 578 buyers, mean spend $116.36), one dollar of spend ₹83, and one e-mail costs ₹0.05. 83 rupees per US dollar: an input assumption close to the 2024 average reference rate, used only to express the file's 2008 dollars in the engine's rupees. Every rupee figure scales with it.
+
+### 8.5 The programme readout does not apply
+
+`POST /campaigns/programme` reads the whole customer base against the **universal hold-out** (M92) over a finished period, intent to treat. That hold-out is drawn by the engine when it scores; Hillstrom's file was randomised by someone else, once, three ways, and has none. The route was asked once and refused: `PROGRAMME_NO_HOLDOUT` (409): "The programme is read against the universal holdout, and none has been used yet: set actions.holdout.scope to universal on the use cases, with the holdout secret set, and score once." No programme number is produced or claimed.
+
+### 8.6 Assumptions and limits
+
+- **Dates.** The file carries no date. The campaign is dated 2008-03-20, the date in the published file's name (`...DataMiningChallenge_2008.03.20.csv`), only so the engine has a start date and a 14-day window (the file's outcomes cover two weeks). Nothing but the Pack's printed dates depends on it.
+- **Randomisation is stated and verified, not proven by the file.** The request said the e-mail was assigned at random, as the route requires; the engine's check could not contradict it. A check that passes cannot prove randomness, it can only fail to find a pattern in the customer details the file carries.
+- **Intent to treat.** Every customer in the assignment file is compared, whether or not an e-mail reached them: the file does not say who opened or received one, so no contact file was added and the Packs' delivery section says so.
+- **A different question from the journey's.** The journey measured the model's treat list on the half of the file no model saw (a third of each arm kept). This measures the e-mails themselves on all 64,000 customers, the way the test was designed; the two are not the same estimate and are not meant to agree.
+- **Rupee figures** in the Packs are estimates that move with the stated value inputs; the measured counts and dollar amounts do not.
+- **Visits** were not audited; the outcomes file carries them and the route would read them the same way as conversion.
+
+### 8.7 Reproduce
+
+```bash
+python library/hillstrom-email/fetch.py
+python -m library.run_engine audit --dataset hillstrom-email
 ```
