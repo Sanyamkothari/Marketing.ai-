@@ -14,6 +14,11 @@ measured against the engine's own random control group, each with its Value Proo
 1. `--csv PATH`: a prepared file you give it (the full file's `prepared.csv`).
 2. `library/hillstrom-email/data/prepared.csv`, when `library/hillstrom-email/fetch.py` has been run: **the full
    file**, 64,000 customers. Its numbers are the validated ones in `library/hillstrom-email/DEMO_SUMMARY.md`.
+
+Neither 1 nor 2 is called validated by where it came from: the file's SHA-256 is compared with the validated
+digest (`scripts.demo_summary.VALIDATED_FILE_SHA256`). A file with any other digest is announced as UNVERIFIED, its
+kind is `unverified`, and the summary written beside the store carries a notice in its first lines (it is read from
+the digest the journey recorded, so a 64,000-row file that is not the validated one cannot pass for it).
 3. With `--fetch`: it runs `fetch.py`, which downloads the file and refuses any copy whose SHA-256 is not the
    validated one. If that fails (no network, a blocked host) it says why and falls back to 4.
 4. `library/hillstrom-email/sample.csv`: **a tenth of the file**, committed to git. The journey runs on it with the
@@ -32,6 +37,7 @@ cores; the sample, less.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import importlib.util
 import json
 import sys
@@ -49,6 +55,7 @@ __all__ = [
     "choose_source",
     "main",
     "seed",
+    "sha256_of",
 ]
 
 REPO_ROOT: Final = Path(__file__).resolve().parent.parent
@@ -85,9 +92,11 @@ class SeedResult:
     summary_path: Path | None
     source: Path
     source_kind: str
-    """`given`, `full file` or `sample`."""
+    """`given`, `full file`, `unverified` (a file whose SHA-256 is not the validated one) or `sample`."""
     rows: int
     is_sample: bool
+    is_validated: bool = False
+    """True only when the file's SHA-256 is the validated one; a sample is never validated."""
     campaign_ids: dict[str, str] = field(default_factory=dict)
     """Outcome measured (`conversion`, `spend`) -> campaign id."""
     notes: list[str] = field(default_factory=list)
@@ -136,6 +145,15 @@ def choose_source(
     return sample_file, "sample"
 
 
+def sha256_of(path: Path) -> str:
+    """The SHA-256 of the file at `path`, read in blocks."""
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
 def _store_is_empty(directory: Path) -> bool:
     return not directory.exists() or not any(directory.iterdir())
 
@@ -147,6 +165,7 @@ def seed(
     fetch: bool = False,
     force: bool = False,
     config_root: Path | None = None,
+    expected_sha256: str | None = None,
     echo: Callable[[str], None] = print,
 ) -> SeedResult:
     """Seed `data_dir` with the Hillstrom journey; see the module docstring."""
@@ -159,16 +178,29 @@ def seed(
         raise SeedError(
             f"{store} already holds a store; --force replaces it (the journey always starts from an empty one)"
         )
+    from scripts.demo_summary import VALIDATED_FILE_SHA256
+
     source, kind = choose_source(csv, fetch=fetch, echo=echo)
     sample = kind == "sample"
+    validated = False
+    if not sample:
+        validated = sha256_of(source) == (expected_sha256 or VALIDATED_FILE_SHA256)
+        if not validated:
+            kind = "unverified"
+            echo(
+                f"UNVERIFIED: {source} does not have the validated SHA-256, so its numbers are not shown to be "
+                "the validated results. The journey runs, and the summary says so; do not quote it. For the "
+                "validated file: python library/hillstrom-email/fetch.py, then run "
+                f"{COMMAND} --force again without --csv."
+            )
     if sample:
         echo(
             "SAMPLE: no full file found, so this is the committed sample, a tenth of the file. Every screen works, "
             "but the numbers are NOT the validated results. For those: python library/hillstrom-email/fetch.py, "
             f"then run {COMMAND} --force again."
         )
-    else:
-        echo(f"seeding from {source} ({kind})")
+    elif validated:
+        echo(f"seeding from {source} ({kind}, SHA-256 verified)")
     echo("running the whole journey through the product's API; this takes a few minutes ...")
     outcome = run_journey(
         HILLSTROM,
@@ -202,6 +234,7 @@ def seed(
         source_kind=kind,
         rows=int(results["rows"]),
         is_sample=sample,
+        is_validated=validated,
         campaign_ids={name: str(item["campaign_id"]) for name, item in campaigns.items()},
     )
     from scripts import demo_summary
@@ -241,7 +274,13 @@ def describe(result: SeedResult, *, port: int = 8000) -> str:
             "These are the numbers of the SAMPLE, not the validated results. Quote only library/hillstrom-email/"
             "DEMO_SUMMARY.md, which is from the full file.",
         ]
-    elif result.source_kind == "full file":
+    elif not result.is_validated:
+        lines += [
+            "",
+            "UNVERIFIED: the file is not the validated one (its SHA-256 differs), so these numbers are not shown to "
+            "be the validated results. Quote only library/hillstrom-email/DEMO_SUMMARY.md.",
+        ]
+    else:
         lines += [
             "",
             "These should equal library/hillstrom-email/DEMO_SUMMARY.md: compare the generated summary with "

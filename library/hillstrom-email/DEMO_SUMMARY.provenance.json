@@ -2,6 +2,7 @@
   "artefact": "journey.results.json",
   "generated_by": "python -m scripts.demo_summary",
   "is_sample": false,
+  "file_verified": true,
   "figures": [
     {
       "id": "about.rows",
@@ -291,6 +292,20 @@
       "field": "steps.off_policy.estimates.conversion.everyone_Mens E-Mail.difference_from_no_email.value"
     },
     {
+      "id": "simple_rule.1.mens_lift_low",
+      "text": "+0.43 pts",
+      "value": 0.004283398000429048,
+      "format": "signed_points",
+      "field": "steps.off_policy.estimates.conversion.everyone_Mens E-Mail.difference_from_no_email.ci_low"
+    },
+    {
+      "id": "simple_rule.1.mens_lift_high",
+      "text": "+0.94 pts",
+      "value": 0.009419300312589841,
+      "format": "signed_points",
+      "field": "steps.off_policy.estimates.conversion.everyone_Mens E-Mail.difference_from_no_email.ci_high"
+    },
+    {
       "id": "simple_rule.1.gap",
       "text": "-0.24 pts",
       "value": -0.002356323278172614,
@@ -312,6 +327,41 @@
       "field": "steps.off_policy.chosen_against_everyone.conversion.chosen_minus_everyone_Mens E-Mail.ci_high"
     },
     {
+      "id": "simple_rule.1.spend_gap",
+      "text": "-$0.278",
+      "value": -0.27836099261225133,
+      "format": "usd",
+      "field": "steps.off_policy.chosen_against_everyone.spend.chosen_minus_everyone_Mens E-Mail.value"
+    },
+    {
+      "id": "simple_rule.1.spend_low",
+      "text": "-$0.611",
+      "value": -0.6114146127778723,
+      "format": "usd",
+      "field": "steps.off_policy.chosen_against_everyone.spend.chosen_minus_everyone_Mens E-Mail.ci_low"
+    },
+    {
+      "id": "simple_rule.1.spend_high",
+      "text": "$0.055",
+      "value": 0.05469262755336973,
+      "format": "usd",
+      "field": "steps.off_policy.chosen_against_everyone.spend.chosen_minus_everyone_Mens E-Mail.ci_high"
+    },
+    {
+      "id": "simple_rule.1.spend_boot_low",
+      "text": "-$0.598",
+      "value": -0.5982991277795883,
+      "format": "usd",
+      "field": "steps.off_policy.chosen_against_everyone.spend.chosen_minus_everyone_Mens E-Mail.bootstrap.ci_low"
+    },
+    {
+      "id": "simple_rule.1.spend_boot_high",
+      "text": "$0.056",
+      "value": 0.05636126363905462,
+      "format": "usd",
+      "field": "steps.off_policy.chosen_against_everyone.spend.chosen_minus_everyone_Mens E-Mail.bootstrap.ci_high"
+    },
+    {
       "id": "simple_rule.1.mens_net",
       "text": "₹23,70,016 (23.70 lakh)",
       "value": 2370015.5769219827,
@@ -319,18 +369,39 @@
       "field": "steps.off_policy.money_on_evaluation_rows.everyone_Mens E-Mail.net_inr"
     },
     {
-      "id": "simple_rule.1.mens_low",
+      "id": "simple_rule.1.net_low",
       "text": "₹12,69,896 (12.70 lakh)",
       "value": 1269896.3137380942,
       "format": "inr",
       "field": "steps.off_policy.money_on_evaluation_rows.everyone_Mens E-Mail.net_ci_low_inr"
     },
     {
-      "id": "simple_rule.1.mens_high",
+      "id": "simple_rule.1.net_high",
       "text": "₹34,70,135 (34.70 lakh)",
       "value": 3470134.840105871,
       "format": "inr",
       "field": "steps.off_policy.money_on_evaluation_rows.everyone_Mens E-Mail.net_ci_high_inr"
+    },
+    {
+      "id": "simple_rule.1.list_net",
+      "text": "₹16,31,009 (16.31 lakh)",
+      "value": 1631008.830543843,
+      "format": "inr",
+      "field": "steps.off_policy.money_on_evaluation_rows.chosen.net_inr"
+    },
+    {
+      "id": "simple_rule.1.list_low",
+      "text": "₹7,46,838 (7.47 lakh)",
+      "value": 746837.6113966554,
+      "format": "inr",
+      "field": "steps.off_policy.money_on_evaluation_rows.chosen.net_ci_low_inr"
+    },
+    {
+      "id": "simple_rule.1.list_high",
+      "text": "₹25,15,180 (25.15 lakh)",
+      "value": 2515180.0496910303,
+      "format": "inr",
+      "field": "steps.off_policy.money_on_evaluation_rows.chosen.net_ci_high_inr"
     },
     {
       "id": "simple_rule.1.w_gap",

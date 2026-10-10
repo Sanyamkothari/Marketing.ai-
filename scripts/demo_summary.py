@@ -21,7 +21,9 @@ of every figure and its source (`DEMO_SUMMARY.provenance.json`). `--check` re-re
 artefact and fails when either differs, which is what `tests/unit/test_demo_summary.py` runs.
 
 Run on the committed sample (what `scripts.seed_validated` does on a machine without the full file) the page says,
-in its first lines, that it is a sample run whose numbers are not the validated ones.
+in its first lines, that it is a sample run whose numbers are not the validated ones. Run on a file with the full
+number of rows whose SHA-256 is not the validated one (`VALIDATED_FILE_SHA256`, recorded in the artefact by the
+journey), it says, in the same place, that the file is not shown to be the validated one.
 """
 
 from __future__ import annotations
@@ -65,6 +67,9 @@ ARTEFACT: Final = "journey.results.json"
 """How the provenance names the artefact: every field path is inside this one file."""
 FULL_FILE_ROWS: Final = 64_000
 """Rows of the validated file (`library/hillstrom-email/fetch.py`'s `ROWS`); a run on any other count is a sample."""
+VALIDATED_FILE_SHA256: Final = "434bc95c6e096dbe5b6384ca54f7198b1eed69244b2c770c6538c3023e9892f5"
+"""SHA-256 of the validated prepared file (`library/hillstrom-email/data/prepared.csv`), as the committed run
+recorded it. A 64,000-row file with any other digest is not the validated one, and the page says so."""
 COMMAND: Final = "python -m scripts.demo_summary"
 
 DIGITS: Final = re.compile(r"\d(?:[\d,]*\d)?(?:\.\d+)?")
@@ -165,6 +170,8 @@ class DemoSummary(StrictBase):
 
     title: str
     is_sample: bool
+    file_verified: bool = True
+    """False when the run's file is not the validated one (its SHA-256 differs), even if it has the full row count."""
     sample_notice: str | None = None
     about: Claim
     rows: tuple[Row, ...]
@@ -261,6 +268,7 @@ def build_summary(results: Mapping[str, Any]) -> DemoSummary:
 def _build(results: Mapping[str, Any]) -> DemoSummary:
     r = _Reader(results)
     is_sample = int(r.number("rows")) != FULL_FILE_ROWS
+    file_verified = r.raw("csv_sha256") == VALIDATED_FILE_SHA256
     steps = "steps."
     confidence_at = f"{steps}campaigns.conversion.report.absolute_lift.confidence_level"
     _confirm_confidence(r, confidence_at, f"{steps}off_policy.estimator")
@@ -384,7 +392,7 @@ def _build(results: Mapping[str, Any]) -> DemoSummary:
     off_policy = Claim(
         template=(
             "On the evaluation customers, by inverse-probability weighting of the e-mail the file sent at "
-            "random, the list raises the conversion rate by {lift} over sending no e-mail (range {low} to "
+            "random, the list changes the conversion rate by {lift} over sending no e-mail (range {low} to "
             "{high})."
         ),
         figures={
@@ -413,6 +421,7 @@ def _build(results: Mapping[str, Any]) -> DemoSummary:
             "extra_high": r.fig(f"{campaign}.incremental_conversions.ci_high", "count"),
         },
     )
+    off_lift = r.number(f"{chosen}.value")
     money = f"{steps}off_policy.money_on_evaluation_rows.chosen"
     pack = f"{steps}campaigns.conversion.proof.view.sections"
     net_section = f"{pack}.{r.index_of(pack, 'key', 'net_value')}.lines"
@@ -422,8 +431,12 @@ def _build(results: Mapping[str, Any]) -> DemoSummary:
             "In rupees (revenue before margin, at the stated exchange rate) the list nets {net} on the "
             "evaluation customers after the cost of the e-mails, range {low} to {high}. The campaign's Value "
             "Proof Pack, built only on the replay's measured outcomes, shows a net value of {pack_low} to "
-            "{pack_high}; it credits the outcomes of only a third of each group while costing every e-mail, "
-            "so it understates the list."
+            "{pack_high}; it credits the outcomes of only a third of each group while costing every e-mail"
+            + (
+                ", so it understates the list."
+                if off_lift > 0
+                else ", so it is not comparable with the figure above."
+            )
         ),
         figures={
             "net": r.fig(f"{money}.net_inr", "inr"),
@@ -446,21 +459,36 @@ def _build(results: Mapping[str, Any]) -> DemoSummary:
     versus_w = f"{steps}off_policy.chosen_against_everyone.conversion.chosen_minus_everyone_Womens E-Mail"
     everyone = f"{steps}off_policy.estimates.conversion.everyone_Mens E-Mail.difference_from_no_email"
     everyone_money = f"{steps}off_policy.money_on_evaluation_rows.everyone_Mens E-Mail"
+    spend_gap = f"{steps}off_policy.chosen_against_everyone.spend.chosen_minus_everyone_Mens E-Mail"
     simple = Claim(
         template=(
-            "Sending everyone the men's e-mail raises the conversion rate by {mens_lift} over no e-mail. "
-            "The list against that, on the same customers, is {gap} (range {low} to {high}). In rupees, "
-            "sending everyone the men's e-mail nets {mens_net} (range {mens_low} to {mens_high}). Against "
-            "sending everyone the women's e-mail the list is {w_gap} (range {w_low} to {w_high})."
+            "Sending everyone the men's e-mail changes the conversion rate by {mens_lift} over no e-mail "
+            "(range {mens_lift_low} to {mens_lift_high}). The list against that, on the same customers, is "
+            "{gap} (range {low} to {high}). In money, the difference in revenue per customer between the list "
+            "and the men's e-mail to everyone is {spend_gap} (range {spend_low} to {spend_high}; resampled "
+            "range {spend_boot_low} to {spend_boot_high}). In rupees, sending everyone the men's e-mail nets "
+            "{mens_net} (range {net_low} to {net_high}), against the list's {list_net} (range {list_low} to "
+            "{list_high}). Against sending everyone the women's e-mail the list is {w_gap} (range {w_low} to "
+            "{w_high})."
         ),
         figures={
             "mens_lift": r.fig(f"{everyone}.value", "signed_points"),
+            "mens_lift_low": r.fig(f"{everyone}.ci_low", "signed_points"),
+            "mens_lift_high": r.fig(f"{everyone}.ci_high", "signed_points"),
             "gap": r.fig(f"{versus}.value", "signed_points"),
             "low": r.fig(f"{versus}.ci_low", "signed_points"),
             "high": r.fig(f"{versus}.ci_high", "signed_points"),
+            "spend_gap": r.fig(f"{spend_gap}.value", "usd"),
+            "spend_low": r.fig(f"{spend_gap}.ci_low", "usd"),
+            "spend_high": r.fig(f"{spend_gap}.ci_high", "usd"),
+            "spend_boot_low": r.fig(f"{spend_gap}.bootstrap.ci_low", "usd"),
+            "spend_boot_high": r.fig(f"{spend_gap}.bootstrap.ci_high", "usd"),
             "mens_net": r.fig(f"{everyone_money}.net_inr", "inr"),
-            "mens_low": r.fig(f"{everyone_money}.net_ci_low_inr", "inr"),
-            "mens_high": r.fig(f"{everyone_money}.net_ci_high_inr", "inr"),
+            "net_low": r.fig(f"{everyone_money}.net_ci_low_inr", "inr"),
+            "net_high": r.fig(f"{everyone_money}.net_ci_high_inr", "inr"),
+            "list_net": r.fig(f"{money}.net_inr", "inr"),
+            "list_low": r.fig(f"{money}.net_ci_low_inr", "inr"),
+            "list_high": r.fig(f"{money}.net_ci_high_inr", "inr"),
             "w_gap": r.fig(f"{versus_w}.value", "signed_points"),
             "w_low": r.fig(f"{versus_w}.ci_low", "signed_points"),
             "w_high": r.fig(f"{versus_w}.ci_high", "signed_points"),
@@ -468,17 +496,30 @@ def _build(results: Mapping[str, Any]) -> DemoSummary:
     )
     gap_side = _side(r.number(f"{versus}.ci_low"), r.number(f"{versus}.ci_high"))
     w_side = _side(r.number(f"{versus_w}.ci_low"), r.number(f"{versus_w}.ci_high"))
+    # Money is skewed, so the side of zero is the more cautious of the t-style range and the resampled one.
+    money_side = _side(
+        min(r.number(f"{spend_gap}.ci_low"), r.number(f"{spend_gap}.bootstrap.ci_low")),
+        max(r.number(f"{spend_gap}.ci_high"), r.number(f"{spend_gap}.bootstrap.ci_high")),
+    )
     row_simple = Row(
         key="simple_rule",
         question="Does it beat the obvious alternative, the men's e-mail to everyone?",
-        short={"below": "No, it is worse", "includes": "Not shown", "above": "Yes, it is better"}[gap_side],
+        short=_simple_short(gap_side, money_side),
         claims=(simple,),
         verdict={
-            "below": "No. The list is measurably worse than sending everyone the men's e-mail: on this file "
-            "the simple rule wins.",
-            "includes": "Not shown. The list cannot be told apart from sending everyone the men's e-mail.",
-            "above": "Yes. The list is measurably better than sending everyone the men's e-mail.",
+            "below": "No. The list is measurably worse than sending everyone the men's e-mail on conversions: "
+            "on this file the simple rule wins.",
+            "includes": "Not shown. The list cannot be told apart from sending everyone the men's e-mail on "
+            "conversions.",
+            "above": "Yes. The list is measurably better than sending everyone the men's e-mail on conversions.",
         }[gap_side]
+        + " In money, "
+        + {
+            "below": "the list is measurably worse too.",
+            "includes": "the list is not shown to differ from it: the range of the difference includes zero, "
+            "so the two rupee nets above are not shown to differ.",
+            "above": "the list is measurably better.",
+        }[money_side]
         + " Against the women's e-mail to everyone: "
         + {
             "below": "the list is measurably worse.",
@@ -542,11 +583,18 @@ def _build(results: Mapping[str, Any]) -> DemoSummary:
         "not the validated results: they differ from the committed page, and the ranges are wide. The "
         "validated results are on the full file."
         if is_sample
-        else None
+        else (
+            None
+            if file_verified
+            else "This page was generated from a file with the full number of rows whose checksum is not the "
+            "validated one, so it is not shown to be the validated file. Its numbers may not be the validated "
+            "results: do not quote them until the file is checked against the validated checksum."
+        )
     )
     return DemoSummary(
         title="Hillstrom e-mail test: what the product found",
         is_sample=is_sample,
+        file_verified=file_verified,
         sample_notice=notice,
         about=about,
         rows=(row_contact, row_alone, row_worth, row_simple, row_how),
@@ -577,6 +625,15 @@ def _how_verdict(beats: bool, holdout: bool, mens: bool, womens: bool) -> str:
         detail
         + " Whatever the list earns, it does not earn it because uplift modelling added to plain risk ranking."
     )
+
+
+def _simple_short(conversion: str, money: str) -> str:
+    """The short answer to question four; when the money disagrees with the conversions it says so."""
+    base = {"below": "No, it is worse", "includes": "Not shown", "above": "Yes, it is better"}[conversion]
+    if money == conversion:
+        return base
+    phrase = {"below": "worse", "includes": "not shown", "above": "better"}[money]
+    return f"{base} on conversions; in money, {phrase}"
 
 
 def _alone_short(calibrated: bool, dogs: str) -> str:
@@ -823,7 +880,8 @@ def render_markdown(summary: DemoSummary, *, results_name: str = ARTEFACT) -> st
     """The page as Markdown: what it is, one block per question, the limits, where the numbers come from."""
     lines = [f"# {summary.title}", ""]
     if summary.sample_notice:
-        lines += [f"> **SAMPLE RUN. {summary.sample_notice}**", ""]
+        label = "SAMPLE RUN." if summary.is_sample else "UNVERIFIED FILE."
+        lines += [f"> **{label} {summary.sample_notice}**", ""]
     lines += [
         "**Public dataset, retrospective.** " + summary.about.words(),
         "",
@@ -865,6 +923,7 @@ def provenance(summary: DemoSummary, *, results_name: str = ARTEFACT) -> dict[st
         "artefact": results_name,
         "generated_by": COMMAND,
         "is_sample": summary.is_sample,
+        "file_verified": summary.file_verified,
         "figures": [
             {
                 "id": name,

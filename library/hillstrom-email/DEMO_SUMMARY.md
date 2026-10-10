@@ -9,7 +9,7 @@
 | 1. Who to contact, and with which e-mail? | **A list, with an e-mail chosen on every row** |
 | 2. Who to leave alone? | **Named, but not established** |
 | 3. What is it worth? | **Beats sending nothing** |
-| 4. Does it beat the obvious alternative, the men's e-mail to everyone? | **No, it is worse** |
+| 4. Does it beat the obvious alternative, the men's e-mail to everyone? | **No, it is worse on conversions; in money, not shown** |
 | 5. How do we know? | **Uplift does not beat risk ranking** |
 
 ## The five questions, in full
@@ -32,7 +32,7 @@ In the replay campaign, 553 customers the scoring run labelled sleeping dogs wer
 
 ### 3. What is it worth?
 
-On the evaluation customers, by inverse-probability weighting of the e-mail the file sent at random, the list raises the conversion rate by +0.45 pts over sending no e-mail (range +0.23 pts to +0.67 pts).
+On the evaluation customers, by inverse-probability weighting of the e-mail the file sent at random, the list changes the conversion rate by +0.45 pts over sending no e-mail (range +0.23 pts to +0.67 pts).
 
 Measured as a campaign against the engine's own random control group, with a third of each group kept (the replay), the lift is +0.60 pts (range +0.21 pts to +1.00 pts; p = 0.002), about 26 extra conversions (range 9 to 43).
 
@@ -42,9 +42,9 @@ In rupees (revenue before margin, at the stated exchange rate) the list nets ₹
 
 ### 4. Does it beat the obvious alternative, the men's e-mail to everyone?
 
-Sending everyone the men's e-mail raises the conversion rate by +0.69 pts over no e-mail. The list against that, on the same customers, is -0.24 pts (range -0.43 pts to -0.04 pts). In rupees, sending everyone the men's e-mail nets ₹23,70,016 (23.70 lakh) (range ₹12,69,896 (12.70 lakh) to ₹34,70,135 (34.70 lakh)). Against sending everyone the women's e-mail the list is +0.14 pts (range -0.08 pts to +0.36 pts).
+Sending everyone the men's e-mail changes the conversion rate by +0.69 pts over no e-mail (range +0.43 pts to +0.94 pts). The list against that, on the same customers, is -0.24 pts (range -0.43 pts to -0.04 pts). In money, the difference in revenue per customer between the list and the men's e-mail to everyone is -$0.278 (range -$0.611 to $0.055; resampled range -$0.598 to $0.056). In rupees, sending everyone the men's e-mail nets ₹23,70,016 (23.70 lakh) (range ₹12,69,896 (12.70 lakh) to ₹34,70,135 (34.70 lakh)), against the list's ₹16,31,009 (16.31 lakh) (range ₹7,46,838 (7.47 lakh) to ₹25,15,180 (25.15 lakh)). Against sending everyone the women's e-mail the list is +0.14 pts (range -0.08 pts to +0.36 pts).
 
-**Verdict.** No. The list is measurably worse than sending everyone the men's e-mail: on this file the simple rule wins. Against the women's e-mail to everyone: not shown either way.
+**Verdict.** No. The list is measurably worse than sending everyone the men's e-mail on conversions: on this file the simple rule wins. In money, the list is not shown to differ from it: the range of the difference includes zero, so the two rupee nets above are not shown to differ. Against the women's e-mail to everyone: not shown either way.
 
 ### 5. How do we know?
 

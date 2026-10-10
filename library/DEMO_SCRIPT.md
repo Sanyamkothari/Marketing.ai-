@@ -5,13 +5,14 @@ nothing planted and nothing fabricated: the MineThatData e-mail test (Hillstrom)
 sent, at random, the men's e-mail, the women's e-mail or nothing. The story is five questions: who to contact,
 which offer, who to leave alone, what it is worth, and how we know.
 
-**The results are mixed, and the demo says so.** The list beats sending nothing. It does not beat the obvious
-alternative, sending everyone the men's e-mail. Uplift modelling does not beat plain risk ranking. The model is
+**The results are mixed, and the demo says so.** The list beats sending nothing. On conversions it does not beat the
+obvious alternative, sending everyone the men's e-mail (in money, it is not shown to differ). Uplift modelling does not beat plain risk ranking. The model is
 stable but not calibrated. That is the product doing its job: it proves value where there is some and says plainly
 where there is not. Never spin it; the managers will trust the rest only if you do not.
 
-**Status of the rehearsal.** The dry run by the author is done; the rehearsal by someone outside the team, using
-only this page, is **pending**. Its checklist is [`DEMO_REHEARSAL.md`](DEMO_REHEARSAL.md). Until it is ticked, treat
+**Status of the rehearsal.** A dry run by an agent (not the rehearsal) is done and recorded in
+[`DEMO_REHEARSAL.md`](DEMO_REHEARSAL.md) Part 2; the rehearsal by a person outside the team, using only this page, is
+**pending**. Its checklist is in the same file. Until it is ticked, treat
 this script as untested by a stranger.
 
 One page of numbers to hand out or keep open:
@@ -52,6 +53,8 @@ The other datasets (telecom, banking, insurance, e-commerce win-back) are in
   **4,171** held-back customers actually measured.
 - **Rupees are an assumption.** **83** rupees to the dollar, revenue before margin. Change the rate and every rupee
   figure moves.
+- **Money is skewed.** A few large orders dominate the amount spent, so the rupee ranges may be too narrow (the
+  summary's limits say so; the report's resampled range is the check). Quote the ranges, never a single rupee figure.
 
 ## The story, in the order to tell it
 
@@ -74,11 +77,15 @@ rupees the list nets **₹16,31,009** on the evaluation customers, range **₹7,
 Pack shows **₹88,187** to **₹4,18,481**; it is a floor, because it counts the outcomes of only a third of each group
 while costing every e-mail.
 
-**4. Does it beat the obvious alternative?** No. Sending everyone the men's e-mail raises the conversion rate by
-**+0.69 pts**. The list against that, on the same customers, is **-0.24 pts**, range **-0.43 pts** to **-0.04 pts**:
-measurably worse. In rupees, the men's e-mail to everyone nets **₹23,70,016**. Against the women's e-mail to
-everyone the list is **+0.14 pts**, range **-0.08 pts** to **+0.36 pts**, which cannot be told apart. Say: *"On this
-file the simple rule wins, and the product told us so itself."*
+**4. Does it beat the obvious alternative?** On conversions, no. Sending everyone the men's e-mail raises the
+conversion rate by **+0.69 pts**, range **+0.43 pts** to **+0.94 pts**. The list against that, on the same customers,
+is **-0.24 pts**, range **-0.43 pts** to **-0.04 pts**: measurably worse. **In money it is not shown to be worse.** The
+difference in revenue per customer, the list minus the men's e-mail to everyone, is **-$0.278**, range **-$0.611** to
+**$0.055** (resampled **-$0.598** to **$0.056**): the range includes zero. In rupees, the men's e-mail to everyone
+nets **₹23,70,016**, range **₹12,69,896** to **₹34,70,135**, against the list's **₹16,31,009**, range **₹7,46,838** to
+**₹25,15,180**: the two overlap, so do not say the list "loses" a number of rupees. Against the women's e-mail to
+everyone the list is **+0.14 pts**, range **-0.08 pts** to **+0.36 pts**, which cannot be told apart. Say: *"On
+conversions the simple rule wins, and the product told us so itself. In money it is not shown to differ."*
 
 **5. How do we know, and how far can we trust it?** The risk model's ROC-AUC is **0.534**, against **0.560** for its
 plain logistic-regression baseline: a weak model. The uplift model does not beat plain risk ranking: its difference
@@ -119,7 +126,7 @@ not repeated here: read them off the screen and match them to the summary page.
    below it is the power sheet: what size of effect this holdout could see. *(Question 3.)*
 5. **Results → Value Proof Packs → the conversion pack.** Walk **What the campaign changed**, **Naive credit against
    measured credit** (a tool that credited every response would claim nearly twice the measured effect),
-   **Groups where the campaign backfired** (none) and **Method and limits**. Read the line **Customers left out for
+   **Groups where the campaign backfired** (none shown; one group had too few customers to judge) and **Method and limits**. Read the line **Customers left out for
    having no outcome in the file**. *(Question 3.)*
 6. **Close with `DEMO_SUMMARY.md`** open: the answers in short, then the limits. *(All five.)*
 
@@ -148,8 +155,8 @@ These are real, known and recorded (`docs/DECISIONS.md` DEC-1320 (o), DEC-1321).
 
 | Question | Answer |
 |---|---|
-| "So does it work?" | Against sending nothing, yes, on this file: both ranges are wholly above zero. Against the simplest alternative, no. And the part that is new, uplift modelling, did not add anything over plain risk ranking here. That is a result, not a failure of the demo. |
-| "Why is the list worse than just e-mailing the men's version?" | Because the model that picks who gets which e-mail is not good enough on this file to beat a one-line rule, and the product measured that rather than hiding it. A different dataset or more data could change it; this one does not. |
+| "So does it work?" | Against sending nothing, yes, on this file: both ranges are wholly above zero. Against the simplest alternative, on conversions no; in money, not shown to differ. And the part that is new, uplift modelling, did not add anything over plain risk ranking here. That is a result, not a failure of the demo. |
+| "Why is the list worse than just e-mailing the men's version?" | On conversions it is measurably worse; in money the difference is not shown (its range includes zero). Because the model that picks who gets which e-mail is not good enough on this file to beat a one-line rule, and the product measured that rather than hiding it. A different dataset or more data could change it; this one does not. |
 | "Is this ROI?" | No. It is revenue before margin, at an assumed exchange rate, on a retrospective replay, on public data. It shows the method and that the method can say no. ROI needs a client's own campaign and their own value per customer. |
 | "Did you tune on the test half?" | No. The data was split once, by a fixed seed; every model, check and setting uses the first half; the second half is only measured on, and both test plans were registered before any outcome of it was read. |
 | "Why does the replay keep only a third?" | The file's random e-mail matches our list for about a third of each group; the match is random, so the comparison stays randomised. The others are counted as no outcome, never as non-converters. The Pack understates the list for that reason. |

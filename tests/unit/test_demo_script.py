@@ -9,8 +9,10 @@ the guides resolve.
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
+from typing import Any
 
 REPO = Path(__file__).resolve().parents[2]
 LIBRARY = REPO / "library"
@@ -67,11 +69,63 @@ def test_the_script_tells_the_results_honestly() -> None:
         "a client's own",
         "next proof",
         "never spin",
+        "in money it is not shown",  # the men's e-mail comparison is told in money as well as in conversions
+        "money is skewed",  # the skew caution of the summary's limits is said aloud too
         "do not demo",  # Criteo: the licence warning stays
     ):
         assert needed in lowered, needed
     for spin in ("proves roi", "guaranteed", "game-changing", "revolutionary", "breakthrough"):
         assert spin not in lowered, spin
+
+
+def test_the_money_comparison_with_the_mens_email_is_not_told_as_a_loss() -> None:
+    story = " ".join(_checked_region().split())
+    assert "In money it is not shown to be worse." in story
+    assert "the range includes zero" in story and 'do not say the list "loses"' in story
+    for needed in ("-$0.278", "-$0.611", "$0.055", "₹12,69,896", "₹34,70,135", "+0.43 pts", "+0.94 pts"):
+        assert needed in story, needed
+
+
+def _artefact() -> dict[str, Any]:
+    loaded: dict[str, Any] = json.loads(
+        (LIBRARY / "hillstrom-email" / "journey.results.json").read_text(encoding="utf-8")
+    )
+    return loaded
+
+
+def test_the_numbers_the_script_quotes_from_the_screens_are_fields_of_the_artefact() -> None:
+    """The contradictions section quotes screen figures that are not on the summary page; each is a field."""
+    steps = _artefact()["steps"]
+    contradictory = SCRIPT.split("## What looks contradictory", 1)[1].split("## Questions you will get", 1)[0]
+    treat = steps["treat_list"]
+    conversion = steps["campaigns"]["conversion"]
+    wanted = {
+        "Contact": treat["ranking_choice"]["contacts"],
+        "To treat": treat["treat_rows"],
+        "Customers measured": conversion["campaign"]["counts"]["intended"],
+        "contacted": conversion["campaign"]["counts"]["intended_treated"],
+    }
+    assert wanted["Customers measured"] == treat["offer_choice"]["policy_intended_rows"]
+    assert wanted["contacted"] == treat["treat_rows"]
+    held = treat["offer_choice"]["policy_intended_held_back_rows"]
+    assert held == conversion["campaign"]["counts"]["intended_holdout"]
+    for label in ("Contact", "To treat", "Customers measured"):
+        assert f'"{label} {wanted[label]:,}"' in contradictory, label
+    assert f"{wanted['contacted']:,} contacted and {held:,} held back" in contradictory
+
+
+def test_nearly_twice_and_no_backfire_in_the_click_path_are_what_the_pack_holds() -> None:
+    sections = {
+        section["key"]: section
+        for section in _artefact()["steps"]["campaigns"]["conversion"]["proof"]["view"]["sections"]
+    }
+    ratio = next(line["value"]["value"] for line in sections["credit"]["lines"] if "times" in line["label"])
+    assert 1.7 <= ratio < 2.0, "a tool crediting every response claims nearly twice the measured effect"
+    assert "nearly twice" in SCRIPT
+    table = sections["backfire"]["table"]
+    verdicts = {row[table["columns"].index("Result")] for row in table["rows"]}
+    assert verdicts <= {"no backfire shown", "too few customers to judge"}, verdicts
+    assert "none shown" in SCRIPT and "backfired" in SCRIPT
 
 
 def test_the_script_names_the_things_that_look_contradictory_before_a_manager_asks() -> None:

@@ -112,9 +112,15 @@ def test_the_full_file_runs_with_no_floors_changed_and_the_summary_is_the_valida
 ) -> None:
     csv = tmp_path / "prepared.csv"
     csv.write_text("customer_id\n1\n", encoding="utf-8")
-    result = seed(data_dir=tmp_path / "store", csv=csv, echo=lambda _line: None)
+    # this stand-in is "the validated file" for the test: its own digest is the one expected
+    result = seed(
+        data_dir=tmp_path / "store",
+        csv=csv,
+        expected_sha256=seed_module.sha256_of(csv),
+        echo=lambda _line: None,
+    )
     assert fake_journey["extra"] == {"extra_risk_overrides": None, "extra_uplift_overrides": None}
-    assert result.source_kind == "given" and not result.is_sample
+    assert result.source_kind == "given" and not result.is_sample and result.is_validated
     assert result.results_path.is_file() and result.summary_path is not None
     committed = (FOLDER / "DEMO_SUMMARY.md").read_text(encoding="utf-8")
     assert result.summary_path.read_text(encoding="utf-8") == committed
@@ -173,6 +179,71 @@ def test_the_printed_next_steps_name_the_serve_command_the_screens_and_the_cavea
     sample = copy.deepcopy(result)
     sample.is_sample = True
     assert "SAMPLE, not the validated results" in seed_module.describe(sample)
+
+
+# ---------------------------------------------------------------------------
+# A file is validated by its digest, not by where it was found or what it was called
+# ---------------------------------------------------------------------------
+def test_the_pinned_digest_is_the_one_the_committed_full_file_run_recorded() -> None:
+    from scripts.demo_summary import VALIDATED_FILE_SHA256
+
+    assert COMMITTED["csv_sha256"] == VALIDATED_FILE_SHA256 and COMMITTED["rows"] == 64_000
+
+
+def test_sha256_of_reads_the_whole_file(tmp_path: Path) -> None:
+    import hashlib
+
+    big = tmp_path / "big.csv"
+    big.write_bytes(b"customer_id\n" + b"1\n" * 600_000)  # more than one read block
+    assert seed_module.sha256_of(big) == hashlib.sha256(big.read_bytes()).hexdigest()
+
+
+def test_a_full_size_file_that_is_not_the_validated_one_is_unverified_and_the_page_says_so(
+    tmp_path: Path, fake_journey: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A tampered 64,000-row file sits where fetch.py puts the full file; the journey records its own digest."""
+    tampered = tmp_path / "prepared.csv"
+    tampered.write_text("customer_id\n1\n", encoding="utf-8")
+    monkeypatch.setattr(seed_module, "FULL_FILE", tampered)
+    fake_journey["results"]["csv_sha256"] = seed_module.sha256_of(tampered)  # what the journey records
+    assert fake_journey["results"]["rows"] == 64_000
+    said: list[str] = []
+    result = seed(data_dir=tmp_path / "store", echo=said.append)
+    assert result.source == tampered and result.source_kind == "unverified"
+    assert not result.is_validated and not result.is_sample
+    assert any(line.startswith("UNVERIFIED:") and "validated SHA-256" in line for line in said)
+    assert result.summary_path is not None
+    page = result.summary_path.read_text(encoding="utf-8")
+    assert page.splitlines()[2].startswith("> **UNVERIFIED FILE.")
+    assert page != (FOLDER / "DEMO_SUMMARY.md").read_text(encoding="utf-8")
+    text = seed_module.describe(result)
+    assert "UNVERIFIED" in text and "These should equal" not in text
+
+
+def test_a_file_given_with_csv_is_unverified_unless_its_digest_is_the_validated_one(
+    tmp_path: Path, fake_journey: dict[str, Any]
+) -> None:
+    given = tmp_path / "mine.csv"
+    given.write_text("customer_id\n1\n", encoding="utf-8")
+    fake_journey["results"]["csv_sha256"] = seed_module.sha256_of(given)
+    said: list[str] = []
+    result = seed(data_dir=tmp_path / "a", csv=given, echo=said.append)
+    assert result.source_kind == "unverified" and any(line.startswith("UNVERIFIED:") for line in said)
+    # the same call with the file's digest taken as the validated one is the validated case
+    fake_journey["results"]["csv_sha256"] = COMMITTED["csv_sha256"]
+    ok = seed(
+        data_dir=tmp_path / "b", csv=given, expected_sha256=seed_module.sha256_of(given), echo=said.append
+    )
+    assert ok.source_kind == "given" and ok.is_validated
+    assert "These should equal" in seed_module.describe(ok)
+
+
+def test_the_sample_is_never_called_validated(
+    tmp_path: Path, fake_journey: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(seed_module, "FULL_FILE", tmp_path / "absent.csv")
+    result = seed(data_dir=tmp_path / "store", echo=lambda _line: None)
+    assert result.is_sample and not result.is_validated
 
 
 # ---------------------------------------------------------------------------

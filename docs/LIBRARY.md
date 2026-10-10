@@ -185,7 +185,7 @@ so the tests work with no network.
 The manager demo (Plan J M111, DEC-1321), on the Hillstrom e-mail test of section 7, telling its results as they
 fell: **[`library/DEMO_SCRIPT.md`](../library/DEMO_SCRIPT.md)**. `python -m scripts.seed_validated` loads the dataset
 through the product's API into a clean store (the full file when it has been fetched, otherwise the committed sample,
-and it says which); `python -m scripts.demo_summary` writes the one-page summary,
+and it says which, and that a file whose SHA-256 is not the validated one is unverified); `python -m scripts.demo_summary` writes the one-page summary,
 [`library/hillstrom-email/DEMO_SUMMARY.md`](../library/hillstrom-email/DEMO_SUMMARY.md), in which every number is a
 field of the run's artefact (`journey.results.json`, now committed beside the report). The rehearsal by someone
 outside the team is still pending: [`library/DEMO_REHEARSAL.md`](../library/DEMO_REHEARSAL.md). The walkthroughs for

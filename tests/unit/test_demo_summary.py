@@ -179,8 +179,9 @@ def test_the_committed_results_are_told_as_they_fell(results: dict[str, Any]) ->
     rows = _rows(build_summary(results))
     assert rows["worth"].short == "Beats sending nothing"
     assert "beats sending no e-mail" in rows["worth"].verdict
-    assert rows["simple_rule"].short == "No, it is worse"
+    assert rows["simple_rule"].short == "No, it is worse on conversions; in money, not shown"
     assert "measurably worse than sending everyone the men's e-mail" in rows["simple_rule"].verdict
+    assert "In money, the list is not shown to differ" in rows["simple_rule"].verdict
     assert rows["how_we_know"].short == "Uplift does not beat risk ranking"
     assert rows["leave_alone"].short == "Named, but not established"
     assert "not calibrated" in rows["leave_alone"].verdict
@@ -195,7 +196,7 @@ def test_if_the_list_beat_the_men_email_the_page_would_say_so(mutable: dict[str,
     ]
     gap.update(value=0.003, ci_low=0.001, ci_high=0.005)
     rows = _rows(build_summary(mutable))
-    assert rows["simple_rule"].short == "Yes, it is better"
+    assert rows["simple_rule"].short == "Yes, it is better on conversions; in money, not shown"
     assert "measurably better" in rows["simple_rule"].verdict
 
 
@@ -278,3 +279,124 @@ def test_a_run_on_the_sample_says_so_in_its_first_lines(mutable: dict[str, Any])
     assert summary.is_sample and page.splitlines()[2].startswith("> **SAMPLE RUN.")
     assert "not the validated results" in page
     assert "SAMPLE RUN" not in SUMMARY.read_text(encoding="utf-8")
+
+
+def test_a_run_on_a_full_size_file_that_is_not_the_validated_one_says_so_in_its_first_lines(
+    mutable: dict[str, Any],
+) -> None:
+    """64,000 rows is not enough: the digest the journey recorded must be the validated file's."""
+    assert mutable["rows"] == demo.FULL_FILE_ROWS and mutable["csv_sha256"] == demo.VALIDATED_FILE_SHA256
+    mutable["csv_sha256"] = "0" * 64
+    summary = build_summary(mutable)
+    page = render_markdown(summary)
+    assert not summary.is_sample and not summary.file_verified
+    assert page.splitlines()[2].startswith("> **UNVERIFIED FILE.")
+    assert "not the validated one" in page and "SAMPLE RUN" not in page
+    assert json.loads(demo._provenance_text(summary))["file_verified"] is False
+    committed = SUMMARY.read_text(encoding="utf-8")
+    assert "UNVERIFIED FILE" not in committed
+    assert json.loads(PROVENANCE.read_text(encoding="utf-8"))["file_verified"] is True
+
+
+def test_a_sample_run_is_called_a_sample_even_though_its_digest_differs(mutable: dict[str, Any]) -> None:
+    mutable["rows"] = 6400
+    mutable["csv_sha256"] = "0" * 64
+    page = render_markdown(build_summary(mutable))
+    assert page.splitlines()[2].startswith("> **SAMPLE RUN.") and "UNVERIFIED" not in page
+
+
+# ---------------------------------------------------------------------------
+# Money against the obvious alternative is told with its range, not as two nets side by side
+# ---------------------------------------------------------------------------
+def _claim_words(summary: Any, key: str) -> str:
+    return " ".join(claim.words() for claim in _rows(summary)[key].claims)
+
+
+def test_the_money_comparison_with_the_mens_email_carries_the_measured_difference_and_its_ranges(
+    results: dict[str, Any],
+) -> None:
+    gap = results["steps"]["off_policy"]["chosen_against_everyone"]["spend"][
+        "chosen_minus_everyone_Mens E-Mail"
+    ]
+    summary = build_summary(results)
+    words = _claim_words(summary, "simple_rule")
+    for printed in (
+        demo.format_value("usd", gap["value"]),
+        demo.format_value("usd", gap["ci_low"]),
+        demo.format_value("usd", gap["ci_high"]),
+        demo.format_value("usd", gap["bootstrap"]["ci_low"]),
+        demo.format_value("usd", gap["bootstrap"]["ci_high"]),
+    ):
+        assert printed in words, printed
+    assert gap["ci_low"] < 0 < gap["ci_high"], "the committed result: the difference's range includes zero"
+    page = SUMMARY.read_text(encoding="utf-8")
+    assert "difference in revenue per customer" in page and "(range -$0.611 to $0.055" in page
+    # both nets keep their ranges, the list's as well as the men's e-mail's
+    money = results["steps"]["off_policy"]["money_on_evaluation_rows"]
+    for name in ("chosen", "everyone_Mens E-Mail"):
+        for part in ("net_inr", "net_ci_low_inr", "net_ci_high_inr"):
+            assert demo.format_value("inr", money[name][part]) in words, (name, part)
+
+
+def test_the_headline_effect_of_the_mens_email_to_everyone_carries_its_range(results: dict[str, Any]) -> None:
+    effect = results["steps"]["off_policy"]["estimates"]["conversion"]["everyone_Mens E-Mail"][
+        "difference_from_no_email"
+    ]
+    words = _claim_words(build_summary(results), "simple_rule")
+    assert (
+        f"by {demo.format_value('signed_points', effect['value'])} over no e-mail "
+        f"(range {demo.format_value('signed_points', effect['ci_low'])} to "
+        f"{demo.format_value('signed_points', effect['ci_high'])})"
+    ) in words
+
+
+@pytest.mark.parametrize(
+    ("low", "high", "short", "phrase"),
+    [
+        (-0.9, -0.2, "No, it is worse", "the list is measurably worse too"),
+        (0.2, 0.9, "No, it is worse on conversions; in money, better", "the list is measurably better"),
+        (-0.4, 0.3, "No, it is worse on conversions; in money, not shown", "not shown to differ"),
+    ],
+)
+def test_the_money_verdict_is_computed_from_which_side_of_zero_the_difference_lies(
+    mutable: dict[str, Any], low: float, high: float, short: str, phrase: str
+) -> None:
+    gap = mutable["steps"]["off_policy"]["chosen_against_everyone"]["spend"][
+        "chosen_minus_everyone_Mens E-Mail"
+    ]
+    gap.update(ci_low=low, ci_high=high, value=(low + high) / 2)
+    gap["bootstrap"].update(ci_low=low, ci_high=high)
+    row = _rows(build_summary(mutable))["simple_rule"]
+    assert row.short == short and phrase in row.verdict
+
+
+def test_the_money_verdict_takes_the_more_cautious_of_the_two_ranges(mutable: dict[str, Any]) -> None:
+    """Spend is skewed: if the resampled range reaches zero, the difference is not shown, whatever the other says."""
+    gap = mutable["steps"]["off_policy"]["chosen_against_everyone"]["spend"][
+        "chosen_minus_everyone_Mens E-Mail"
+    ]
+    gap.update(ci_low=-0.9, ci_high=-0.2)
+    gap["bootstrap"].update(ci_low=-0.9, ci_high=0.1)
+    assert "not shown to differ" in _rows(build_summary(mutable))["simple_rule"].verdict
+
+
+# ---------------------------------------------------------------------------
+# The words follow the sign: a result that fell the other way is not written as a gain
+# ---------------------------------------------------------------------------
+def test_a_negative_lift_is_not_written_as_a_raise_and_the_pack_is_not_said_to_understate_it(
+    mutable: dict[str, Any],
+) -> None:
+    steps = mutable["steps"]
+    chosen = steps["off_policy"]["estimates"]["conversion"]["chosen"]["difference_from_no_email"]
+    chosen.update(value=-0.002, ci_low=-0.004, ci_high=-0.0004)
+    everyone = steps["off_policy"]["estimates"]["conversion"]["everyone_Mens E-Mail"][
+        "difference_from_no_email"
+    ]
+    everyone.update(value=-0.003, ci_low=-0.005, ci_high=-0.001)
+    page = render_markdown(build_summary(mutable))
+    assert not re.search(r"raises[^.]*? by -", page), "a negative value was written as a raise"
+    assert "changes the conversion rate by -0.20 pts" in page
+    assert "understates the list" not in page and "is not comparable with the figure above" in page
+    assert "raises" not in page, "the verbs are neutral: the figure's sign says the direction"
+    committed = SUMMARY.read_text(encoding="utf-8")
+    assert "so it understates the list" in committed and "raises" not in committed
