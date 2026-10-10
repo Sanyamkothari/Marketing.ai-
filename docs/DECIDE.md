@@ -797,19 +797,25 @@ note and, optionally, the measures it touched: `POST /runs/{run_id}/drift-events
 the drift the run measured (`engine/decide/drift_annotations.py`). The notes are a new artefact,
 `drift_annotations.json`, in the scoring run's directory; the predict stage, `drift.json` and the verdict are
 never written or read for writing. An event is counted as a possible reason only when it is dated on or after the
-day the model's training run was created (when that run can be read) and on or before the day the run measured
-its drift; an event outside that period is kept and shown with the reason it is not counted. A note can name only
+day the model's training run was created (when that run can be read; the training data's own last day is not
+recorded, so the server says the data the model learned from "may already include" an earlier event, not that it
+did) and on or before the day the run measured its drift; an event outside that period is kept and shown with
+the reason it is not counted. So is an event that names only measures that did not move in this run: it cannot
+explain a change it did not touch, and the headline never offers it. A note can name only
 measures the report compared (`DRIFT_ANNOTATION_INVALID`), a run without a drift report refuses a note
 (`DRIFT_NOT_MEASURED`), and a run holds at most 50 (`DRIFT_ANNOTATION_LIMIT`). The scoring Output page shows an
 "Events behind the change" card (`ui/modules/decide/drift_events.js`, a page panel) with the server's headline,
 period and each event's reading; it draws nothing for a stable run with no notes. The note is free text and may not
 hold personal data; the audit event carries the run, the count and the kind of event, never the text. The file is
-not row-level (no customer id), so it is not in `ROW_LEVEL_ARTEFACTS`. The root-cause summary (Phase 3a) does not
-read the notes.
+not row-level (no customer id), so it is not in `ROW_LEVEL_ARTEFACTS`. The root-cause screen
+(`ui/modules/generative/rca.js`) shows the same card read-only (no form, no remove button) for the run it covers,
+and draws nothing when that run has no measured change; the root-cause summary itself (Phase 3a, the job that
+writes the notes per risk group) does not read the notes.
 
 **Wording.** `campaign_verdict` and `amount_verdict` say "detectable effect" (the smallest change a test of that
 size can see) in "No clear effect yet" and "early look" in "Outcome window not over yet"; the plan card's labels
-and the Output page's power card use the same two terms. Only sentences changed: headlines, kinds and numbers are
+and the Output page's power card use the same two terms (the card's headline sentence is pinned by the uplift power
+tests, so the caption under it says "the lift above is the detectable effect" and defines "reliably"). Only sentences changed: headlines, kinds and numbers are
 as before.
 
 **Guided setup.** For a use case that contacts customers, `engine/agent/recommend.holdout_advice` sizes the share

@@ -1,7 +1,14 @@
-"""The one look at the sealed 20%: every model fitted on DEV, scored once on SEALED. Nothing is chosen from it.
+"""The look at the sealed 20%: every model fitted on DEV, scored on SEALED. Nothing is chosen from it.
 
-All four candidates are reported whatever they score; the baseline is the engine's own recipe (median impute,
+All five candidates are reported whatever they score; the baseline is the engine's own recipe (median impute,
 standardise, one-hot country, logistic regression). The paired bootstrap resamples the sealed rows.
+
+The first look had the baseline and three other families (random forest, extra trees, gradient boosting). Review
+pointed out that logistic regression with stronger shrinkage (`C=0.1`), the only candidate ahead of the baseline
+in most dev folds (16 of 25), had been left out; it was added to the same run, so the other rows are the ones
+already reported (same seed, same fits). The extra-column variants of `feat_cv.py` are not in it: they need the
+raw invoice log and were not ahead of the baseline on dev. It is a second look at the same sealed rows, said so
+in `run_report.md`.
 """
 
 import warnings
@@ -39,6 +46,9 @@ def pre(scale: bool) -> ColumnTransformer:
 
 models = {
     "baseline (logistic regression)": Pipeline([("p", pre(True)), ("m", LogisticRegression(max_iter=2000))]),
+    "logistic regression, stronger shrinkage": Pipeline(
+        [("p", pre(True)), ("m", LogisticRegression(max_iter=2000, C=0.1))]
+    ),
     "random forest": Pipeline(
         [("p", pre(False)), ("m", RandomForestClassifier(500, min_samples_leaf=5, n_jobs=2, random_state=0))]
     ),
@@ -66,11 +76,11 @@ idx = [rng.integers(0, n, n) for _ in range(2000)]
 idx219 = [rng.integers(0, n, 219) for _ in range(2000)]
 base = scores["baseline (logistic regression)"]
 print(f"sealed rows {n}, positive rate {y.mean():.4f}; prior PR-AUC = {y.mean():.4f}")
-print(f"{'model':32} {'PR-AUC':>7} {'ROC':>7} {'d PR-AUC':>9} {'95% interval':>18} {'SD on 219 rows':>15}")
+print(f"{'model':40} {'PR-AUC':>7} {'ROC':>7} {'d PR-AUC':>9} {'95% interval':>18} {'SD on 219 rows':>15}")
 for name, p in scores.items():
     pr, roc = average_precision_score(y, p), roc_auc_score(y, p)
     if name.startswith("baseline"):
-        print(f"{name:32} {pr:7.4f} {roc:7.4f}")
+        print(f"{name:40} {pr:7.4f} {roc:7.4f}")
         continue
     d = np.array(
         [
@@ -84,5 +94,5 @@ for name, p in scores.items():
     )
     lo, hi = np.percentile(d, [2.5, 97.5])
     print(
-        f"{name:32} {pr:7.4f} {roc:7.4f} {pr - average_precision_score(y, base):+9.4f} [{lo:+.4f}, {hi:+.4f}] {d219.std():15.4f}"
+        f"{name:40} {pr:7.4f} {roc:7.4f} {pr - average_precision_score(y, base):+9.4f} [{lo:+.4f}, {hi:+.4f}] {d219.std():15.4f}"
     )

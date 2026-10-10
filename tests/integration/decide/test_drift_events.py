@@ -94,6 +94,45 @@ def test_an_event_outside_the_period_is_kept_but_not_counted(tmp_path: Path) -> 
     assert view["explained_measures"] == []
 
 
+def _stable_measure(setup: Setup) -> str:
+    return next(f.feature for f in setup.run.report.features if f.status.value == "stable")
+
+
+def test_an_event_that_names_only_measures_that_did_not_move_is_not_offered_as_the_reason(
+    tmp_path: Path,
+) -> None:
+    """Review fix: a note on a stable measure cannot explain a change it did not touch."""
+    setup = Setup(tmp_path)
+    stable = _stable_measure(setup)
+    assert setup.note(event_date="2026-09-01", note="Price change", measures=[stable]).status_code == 201
+    view = setup.view()
+    (event,) = view["events"]
+    assert event["counted"] is False and event["explains"] == []
+    assert "names only measures that did not move" in event["reason"]
+    assert view["headline"] == "No event has been noted for the period since the model was trained."
+    assert "Possibly explained" not in view["headline"]
+    assert view["explained_measures"] == [] and set(MOVED) <= set(view["unexplained_measures"])
+
+
+def test_a_stable_measure_beside_a_moved_one_still_counts_through_the_moved_one(tmp_path: Path) -> None:
+    setup = Setup(tmp_path)
+    stable = _stable_measure(setup)
+    assert setup.note(measures=[stable, "visits_last_7d"]).status_code == 201
+    (event,) = setup.view()["events"]
+    assert event["counted"] is True and event["explains"] == ["visits_last_7d"]
+
+
+def test_an_event_before_the_training_run_is_not_said_to_have_been_learned_for_certain(
+    tmp_path: Path,
+) -> None:
+    """Review fix: the bound is the training run's start, not the end of its data, so the server only says "may"."""
+    setup = Setup(tmp_path)
+    assert setup.note(event_date="2026-07-01", note="Spring sale").status_code == 201
+    (event,) = setup.view()["events"]
+    assert event["counted"] is False
+    assert "may already include it" in event["reason"] and "already learned" not in event["reason"]
+
+
 def test_a_general_event_is_a_reason_for_the_change_as_a_whole(tmp_path: Path) -> None:
     setup = Setup(tmp_path)
     assert setup.note(kind="competitor_launch", note="New rival site").status_code == 201

@@ -1119,7 +1119,8 @@ def _settings(
     schema = advanced_settings_schema(
         config, columns=tuple(str(c) for c in prepared.frame.columns), primary_key=key, target=target
     )
-    for rec in recommend_settings(config, facts, schema, config_root=prepared.config_root):
+    holdout = holdout_advice(config, facts)  # worked out once; the rules and the notes read the same answer
+    for rec in recommend_settings(config, facts, schema, config_root=prepared.config_root, holdout=holdout):
         builder.propose(
             kind=ProposalKind.SETTING,
             title=rec.title,
@@ -1138,7 +1139,7 @@ def _settings(
         builder.assumptions.append(
             f"Only {facts.positive_rate:.1%} of rows are 'yes'; the model search gives them extra weight automatically."
         )
-    builder.assumptions.extend(holdout_notes(holdout_advice(config, facts)))
+    builder.assumptions.extend(holdout_notes(holdout))
     _reason_wording(builder, prepared, key, target, exclude)
 
 

@@ -13,15 +13,19 @@ measured change, silence an alert or lift the "retrain" action. The view says so
 
 * it is dated on or before the day the run's drift was measured (`drift.json`'s `computed_at`);
 * it is dated on or after the day the model's training run was started, when that run can be read (data
-  from before the model was trained is already in what the model learned). When the training run
-  cannot be read there is no lower bound, and the view says so.
+  from before the model was trained may already be in what the model learned; the bound is the training
+  run's start, not the end of the training data, which is not recorded). When the training run cannot be
+  read there is no lower bound, and the view says so.
 
-An event outside that window is kept and shown, labelled with the reason it is not counted.
+An event outside that window is kept and shown, labelled with the reason it is not counted. So is an event
+that names measures, none of which moved in this run: it cannot explain a change it did not touch.
 
 **Naming the measures.** An event may name the measures (columns) it touches. A name must be one of the
 measures the drift report compared; anything else is refused (`DRIFT_ANNOTATION_INVALID`) rather
 than stored and shown as a connection nobody measured. An event that names none is a general one: it is
-listed as a possible reason for the change as a whole, and it is never matched to a single measure.
+listed as a possible reason for the change as a whole, and it is never matched to a single measure. An
+event that names measures counts only through the ones that moved; the headline never offers it as a reason
+for a change it did not name.
 
 **Nothing invented.** A run with no drift report refuses a note (`DRIFT_NOT_MEASURED`): there is nothing
 to explain. A stable run lists its notes and says nothing needs explaining. Every sentence is plain
@@ -345,10 +349,13 @@ def _row(
         reason = f"It is dated after the day this run measured the change ({_day(end)})."
     elif start is not None and annotation.event_date < start:
         reason = (
-            f"It is dated before the model was trained ({_day(start)}), so the model already learned from it."
+            f"It is dated before the model was trained ({_day(start)}), so the data the model learned "
+            "from may already include it."
         )
+    explains = tuple(name for name in annotation.measures if name in moved) if reason is None else ()
+    if reason is None and annotation.measures and not explains:
+        reason = "It names only measures that did not move in this run, so it does not explain this change."
     counted = reason is None
-    explains = tuple(name for name in annotation.measures if name in moved) if counted else ()
     return DriftEventRow(
         annotation_id=annotation.annotation_id,
         event_date=annotation.event_date,

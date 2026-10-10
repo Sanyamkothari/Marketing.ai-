@@ -22,6 +22,7 @@ import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from types import EllipsisType
 from typing import TYPE_CHECKING, Any, Final
 
 from engine.agent.contracts import AgentConfidence
@@ -476,21 +477,24 @@ def holdout_advice(config: UseCaseConfig, facts: DataFacts) -> HoldoutAdvice | N
     )
 
 
-def _holdout_rules(config: UseCaseConfig, facts: DataFacts) -> list[SettingRecommendation]:
-    advice = holdout_advice(config, facts)
+def _holdout_rules(advice: HoldoutAdvice | None, facts: DataFacts) -> list[SettingRecommendation]:
     if advice is None or advice.persistent or advice.recommended_fraction is None:
         return []
     share = advice.recommended_fraction
     control = advice.recommended_control or 0
-    seen = _plain_points(advice.current_effect)
+    seen = (
+        "a test of that size cannot reliably see any change"
+        if advice.current_effect is None
+        else f"the detectable effect is {_plain_points(advice.current_effect)}"
+    )
     return [
         SettingRecommendation(
             HOLDOUT_PATH,
             share,
             f"Hold back {share:.0%} of customers so the campaign can be measured",
             f"Realistic campaign effects are 1 to 3 points. With {advice.current_fraction:.0%} held back of "
-            f"{advice.rows:,} customers, a test sees {seen}; to see {PLANNED_EFFECT * 100:.0f} points it needs "
-            f"about {share:.0%} held back ({control:,} customers). This assumes about {advice.base_rate:.0%} "
+            f"{advice.rows:,} customers, {seen}; to bring it down to {PLANNED_EFFECT * 100:.0f} points the "
+            f"test needs about {share:.0%} held back ({control:,} customers). This assumes about {advice.base_rate:.0%} "
             "respond without a campaign, and that the list you score later is about this size.",
             AgentConfidence.CHECK,
             facts.evidence_ids,
@@ -537,8 +541,14 @@ def recommend_settings(
     schema: AdvancedSettingsSchema,
     *,
     config_root: Path | None = None,
+    holdout: HoldoutAdvice | EllipsisType | None = ...,
 ) -> tuple[SettingRecommendation, ...]:
-    """The changes these facts justify, each allowed by the schema, and resolvable together."""
+    """The changes these facts justify, each allowed by the schema, and resolvable together.
+
+    `holdout` is the planner's reading (`holdout_advice`) when the caller has it already, so it is worked out
+    once per setup pass; left out (`...`), it is worked out here. `None` means there is nothing to plan.
+    """
+    advice = holdout_advice(config, facts) if isinstance(holdout, EllipsisType) else holdout
     fields = settings_fields(schema)
 
     def resolves(overrides: Mapping[str, Any]) -> bool:
@@ -554,7 +564,7 @@ def recommend_settings(
         *([rec] for rec in _time_rules(config, facts)),
         *([rec] for rec in _consent_rules(config, facts)),
         *([rec] for rec in _value_rules(config, facts)),
-        *([rec] for rec in _holdout_rules(config, facts)),
+        *([rec] for rec in _holdout_rules(advice, facts)),
     ]
     allowed = [
         list(group)

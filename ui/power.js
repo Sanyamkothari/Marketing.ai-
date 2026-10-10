@@ -250,7 +250,7 @@ export function powerCardBody(uc, summary) {
     : "";
   return `<div class="card-body" data-power-card${canTry ? ` data-eligible="${esc(String(inputs.eligible))}" data-baseline="${esc(String(inputs.baseline))}" data-held="${esc(String(inputs.heldRows))}"` : ""}>
       <p class="pg-p" data-power-headline>${esc(head.text)}</p>
-      ${head.ok ? `<p class="caption">${esc(`The detectable effect is the smallest lift the after-campaign comparison would call real (95% confidence) at least 8 times in 10.${basis}`)}</p>` : ""}
+      ${head.ok ? `<p class="caption">${esc(`The lift above is the detectable effect: the smallest lift the after-campaign comparison would call real (95% confidence) at least 8 times in 10. That is what \"reliably\" means here.${basis}`)}</p>` : ""}
       ${tryIt}
     </div>`;
 }

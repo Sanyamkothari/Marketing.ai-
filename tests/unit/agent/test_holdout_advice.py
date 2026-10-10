@@ -17,7 +17,8 @@ import pytest
 
 from engine.agent.advisor import Advice, advise
 from engine.agent.contracts import AgentConfidence, Proposal, ProposalKind
-from engine.config import load_use_case, overridable_paths
+from engine.agent.recommend import DataFacts
+from engine.config import UseCaseConfig, load_use_case, overridable_paths
 from engine.holdout.spec import HoldoutConfig
 from engine.measurement.planner import arm_sizes, mde_two_proportions
 from engine.pilot.plain import jargon_in
@@ -46,6 +47,29 @@ def test_a_file_too_small_for_ten_percent_gets_a_bigger_share_sized_by_the_plann
     assert PATH in overridable_paths(load_use_case(UC))
     assert "points" in proposal.reason and "1 to 3 points" in proposal.reason
     assert not jargon_in(proposal.title) and not jargon_in(proposal.reason), proposal.reason
+
+
+def test_the_suggestion_and_the_note_use_the_planners_term_for_the_same_quantity() -> None:
+    proposal = _proposal(advise(context_for(_frame(20_000))))
+    assert proposal is not None
+    assert "the detectable effect is about" in proposal.reason, proposal.reason
+    assert "to bring it down to 2 points" in proposal.reason, proposal.reason
+    assert "a test sees" not in proposal.reason
+
+
+def test_the_planner_is_read_once_per_setup_pass(monkeypatch: pytest.MonkeyPatch) -> None:
+    from engine.agent.recommend import HoldoutAdvice, holdout_advice
+
+    calls: list[int] = []
+
+    def counted(config: UseCaseConfig, facts: DataFacts) -> HoldoutAdvice | None:
+        calls.append(1)
+        return holdout_advice(config, facts)
+
+    monkeypatch.setattr("engine.agent.advisor.holdout_advice", counted)
+    monkeypatch.setattr("engine.agent.recommend.holdout_advice", counted)
+    advise(context_for(_frame(20_000)))
+    assert len(calls) == 1, calls
 
 
 def test_the_proposed_share_is_the_smallest_whole_percent_that_sees_two_points() -> None:

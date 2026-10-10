@@ -15,9 +15,11 @@ const summary = { rows_scored: 12000, score_mean: 0.1, control_group_rows: 1000,
 
 test("the scoring Output page's card calls the lift it can see the detectable effect", () => {
   const html = power.powerCardBody(uc, summary);
-  assert.match(html, /The detectable effect is the smallest lift/);
+  assert.match(html, /The lift above is the detectable effect: the smallest lift/);
+  assert.match(html, /That is what &quot;reliably&quot; means here\./);
   assert.doesNotMatch(html, /A "reliable" lift/);
-  // the sentence the card leads with is unchanged
+  // the sentence the card leads with is unchanged (the uplift power tests pin it); the caption under it
+  // names the lift the planner's way and defines "reliably"
   assert.match(html, /can reliably detect a lift of 3 points \(30% relative\) or more\./);
 });
 
