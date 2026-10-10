@@ -79,6 +79,8 @@ Contract schema version: 1.
 | GET | `/decide/arbitrated-treat-list.csv` | Download arbitrated treat list CSV | - |
 | GET | `/decide/arbitrated-treat-list.parquet` | Download arbitrated treat list Parquet | - |
 | GET | `/decide/conflicts` | Get arbitration conflicts summary for Results UI | dict |
+| POST | `/doctor/diagnosis` | What each uploaded file is, and which use cases the files can power | Diagnosis |
+| POST | `/doctor/handoff` | The file as an upload of the chosen use case, read the same way, for its Guided setup | UploadResponse |
 | GET | `/healthz` | Liveness probe | HealthResponse |
 | GET | `/holdout` | The holdout: salt, epochs, use cases | HoldoutView |
 | PUT | `/holdout` | Start a new holdout epoch (Admin): a lower share, or a new salt | HoldoutView |
@@ -176,8 +178,10 @@ Contract schema version: 1.
 | POST | `/uploads/{upload_id}/agent-session/answers` | Answer one of the helper's questions | AgentSessionResponse |
 | POST | `/uploads/{upload_id}/agent-session/apply` | Approve: prepare the data with the accepted steps and return what Run needs | ApplyResponse |
 | POST | `/uploads/{upload_id}/agent-session/decisions` | Accept or reject the helper's suggestions | AgentSessionResponse |
+| POST | `/uploads/{upload_id}/agent-session/edits` | Add an edit made by hand: a step like every other, ticked, undone by unticking | AgentSessionResponse |
 | POST | `/uploads/{upload_id}/agent-session/messages` | Ask the helper something; its reply is checked before it is kept | AgentSessionResponse |
 | POST | `/uploads/{upload_id}/agent-session/preview` | The first rows before and after the accepted steps, and what each step did | PreviewResponse |
+| POST | `/uploads/{upload_id}/agent-session/rows` | A page of the file being set up, for editing by hand (personal data hidden) | RowsResponse |
 | DELETE | `/uploads/{upload_id}/ask` | Start a new Ask-your-data chat on an upload; the old one is deleted | AskResponse |
 | GET | `/uploads/{upload_id}/ask` | Ask your data: an upload's read-only chat with the data helper, and its charts | AskResponse |
 | POST | `/uploads/{upload_id}/ask/messages` | Ask the data helper a question about an upload; it looks things up and cannot change anything | AskResponse |

@@ -58,6 +58,7 @@ from engine.agent.contracts import (
     SessionStatus,
     recipe_hash,
 )
+from engine.agent.edits import TABLE_MAX_ROWS, add_edit, table_rows
 from engine.agent.egress import cap_sent, is_third_party
 from engine.agent.explore import EXPLORE_SESSION_FILENAME, RateChart, charts_of, start_explore
 from engine.agent.formats import masked_cut
@@ -73,7 +74,7 @@ from engine.agent.session import (
     start_session,
     with_summary,
 )
-from engine.agent.tools import AgentContext
+from engine.agent.tools import AgentContext, AgentToolError
 from engine.ai_service import effective_service
 from engine.config import PrimaryKey, RunMode, StrictBase, UseCaseConfig, resolve_config, sole_key
 from engine.contracts import FeatureSchema, ModelVersion, ValidationReport
@@ -280,8 +281,53 @@ register(
             object_type="upload",
             object_param="upload_id",
         ),
+        # Plan L M154 (DEC-1541): editing by hand, and the table view it is made in.
+        ("POST", "/uploads/{upload_id}/agent-session/edits"): RoutePolicy(
+            role=Role.ANALYST,
+            action="agent.edit",
+            purpose="edit the data by hand",
+            object_type="upload",
+            object_param="upload_id",
+        ),
+        ("POST", "/uploads/{upload_id}/agent-session/rows"): RoutePolicy(
+            role=Role.ANALYST,
+            action="agent.rows",
+            purpose="see the rows of the file being set up",
+            object_type="upload",
+            object_param="upload_id",
+            audit_reads=True,
+        ),
     }
 )
+
+
+class EditRequest(StrictBase):
+    """Body of `POST /uploads/{id}/agent-session/edits`: one edit made by hand (Plan L M154)."""
+
+    kind: RecipeStepKind = Field(description="What the edit does: one of the step kinds a person may use.")
+    column: str = Field(min_length=1, max_length=512, description="The column it changes.")
+    params: dict[str, Any] = Field(default_factory=dict, description="The step's parameters.")
+    new_column: str | None = Field(default=None, max_length=128, description="For a split or a rename.")
+
+
+class RowsRequest(StrictBase):
+    """Body of `POST /uploads/{id}/agent-session/rows`."""
+
+    offset: int = Field(default=0, ge=0)
+    limit: int = Field(default=50, ge=1, le=100)
+    where_column: str | None = Field(default=None, max_length=512, description="Only rows where this column…")
+    equals: str | None = Field(default=None, max_length=200, description="…equals this value.")
+
+
+class RowsResponse(StrictBase):
+    """Body of `GET /uploads/{id}/agent-session/rows`: a page of the file for the table view."""
+
+    columns: tuple[str, ...]
+    personal: tuple[str, ...] = Field(description="Columns whose values are hidden.")
+    rows: tuple[tuple[str | None, ...], ...]
+    row_numbers: tuple[int, ...] = Field(description="Each row's line in the file, the header being line 1.")
+    offset: int
+    total: int = Field(description="Rows that match (all rows when nothing is searched).")
 
 
 class ChatAvailability(StrictBase):
@@ -598,6 +644,63 @@ def decide_agent_session(
         except SessionError as exc:
             raise _session_error(exc) from exc
         return _response(_save(storage, session), ctx.config, storage, request)
+
+
+@router.post(
+    "/uploads/{upload_id}/agent-session/edits",
+    response_model=AgentSessionResponse,
+    responses={404: {"model": ErrorResponse}, 409: {"model": ErrorResponse}, 422: {"model": ErrorResponse}},
+    summary="Add an edit made by hand: a step like every other, ticked, undone by unticking",
+)
+def edit_agent_session(
+    upload_id: str, body: EditRequest, root: ConfigRootDep, storage: StorageDep, request: Request
+) -> AgentSessionResponse:
+    with _session_lock(upload_id):
+        session = _load_session(storage, upload_id)
+        ctx = _load_context(
+            storage, root, request, upload_id, session.use_case_id, session.model_version_id
+        ).ctx
+        try:
+            session = add_edit(
+                session,
+                ctx,
+                kind=body.kind,
+                column=body.column,
+                params=body.params,
+                new_column=body.new_column,
+            )
+        except SessionError as exc:
+            raise _session_error(exc) from exc
+        return _response(_save(storage, session), ctx.config, storage, request)
+
+
+@router.post(
+    "/uploads/{upload_id}/agent-session/rows",
+    response_model=RowsResponse,
+    responses={404: {"model": ErrorResponse}, 422: {"model": ErrorResponse}},
+    summary="A page of the file being set up, for editing by hand (personal data hidden)",
+)
+def rows_agent_session(
+    upload_id: str, body: RowsRequest, root: ConfigRootDep, storage: StorageDep, request: Request
+) -> RowsResponse:
+    """A POST, like the preview: it reads rows of the file, which an Analyst may and a Viewer may not."""
+    offset, limit, where_column, equals = body.offset, body.limit, body.where_column, body.equals
+    session = _load_session(storage, upload_id)
+    ctx = _load_context(storage, root, request, upload_id, session.use_case_id, session.model_version_id).ctx
+    try:
+        page = table_rows(
+            ctx, offset=offset, limit=min(limit, TABLE_MAX_ROWS), where_column=where_column, equals=equals
+        )
+    except AgentToolError as exc:
+        raise _refuse(422, exc.code, exc.message) from exc
+    return RowsResponse(
+        columns=tuple(page["columns"]),
+        personal=tuple(page["personal"]),
+        rows=tuple(tuple(row) for row in page["rows"]),
+        row_numbers=tuple(page["row_numbers"]),
+        offset=page["offset"],
+        total=page["total"],
+    )
 
 
 @router.post(

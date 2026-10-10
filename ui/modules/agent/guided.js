@@ -38,6 +38,7 @@ import {
 } from "../../dom.js";
 import { createConnectionPicker } from "../connections/picker.js";
 import { TABLE_FILE_TYPES, bindIntakeNotes, intakeNotesHtml } from "../intake/notes.js";
+import { takeHandoff } from "../doctor/handoff.js";
 import { postAnswer, postApply, postDecisions, postMessage, postPreview, startSession } from "./api.js";
 import { sentHtml, statusHtml } from "./sent.js";
 import { injectAgentStyles } from "./styles.js";
@@ -795,7 +796,11 @@ export function mountGuided(slots, host) {
     entries.set(key, entry);
   }
   entry.host = host;
+  // Plan L M151: a file Data Doctor handed to this use case starts the helper at once.
+  const handed = takeHandoff(host.uc.id, host.mode);
+  if (handed) Object.assign(entry.state, fresh(), { upload: handed.upload, fileName: handed.fileName });
   draw(entry);
   slots.main.replaceChildren(entry.main);
   if (slots.aside) slots.aside.replaceChildren(entry.aside);
+  if (handed) startHelper(entry);
 }

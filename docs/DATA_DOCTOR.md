@@ -55,7 +55,36 @@ which mean "total", how far down to look for the column names, how many rows may
 - The tests: `tests/unit/intake/` (including thirty files shaped like real exports, `bench.py`),
   `tests/integration/test_api_intake.py`, `tests/integration/test_intake_ui.py`.
 
-## 2. What Data Doctor will not do
+## 2. Bring your data: what your files can power (M151)
+
+Home's **For you** line links to **Bring your data** (`#/doctor`). Drop the files you have, before choosing
+anything. For each file Data Doctor says what it looks like (a customer list, a log of bills, ...), how many rows
+and columns it has, which column names each customer and how many rows each one has, its dates, and how many
+columns hold personal data or could be tidied. Then, for every use case on Home, it says one of:
+
+- **Ready** - Guided setup has nothing to ask. **Start** opens it on your file.
+- **Ready after a quick check** - Guided setup will ask a question or show a suggestion first.
+- **Not enough data yet** - with Guided setup's own reason (for example, too few customers who did the thing).
+- **Missing something** - no file has the outcome; it says what to collect and where it usually comes from.
+
+The verdict is Guided setup's own advisor, run on each file that has the use case's outcome column, so the
+place never promises more than Guided setup then does. **Start** copies the file into the chosen use case, read
+the same way (the same sheet, intake on or off); nothing is trained until you approve and run.
+
+## 3. More fixes, and who suggested each (M152, M153)
+
+Guided setup's checklist can now hold these fixes, each a step our code runs on a copy and replays on next
+month's file: merge spellings that mean the same (`Bombay` → `Mumbai`), read words like `unknown` as empty,
+put a column in one unit (`2 GB` → 2048 MB), take part of a column into a new one (`Mumbai, MH` → `Mumbai`),
+treat impossible values as unknown (an age of 212), fill empty cells with one value you choose (never an
+average), correct one cell for one customer, leave out rows by a rule (never by the outcome), rename a column.
+
+Each suggestion says who made it. **Found by our checks**: the rules (an age of 212 is always "Please check"
+and never ticked for you). **Suggested by the AI**: the chat, when you ask ("Bombay and Mumbai are the same
+city"); the AI must look at the column first, the fix is tried on your first 1,000 rows and shows what it
+changes, and it is never ticked for you. **Your edit**: what you did by hand (M154).
+
+## 4. What Data Doctor will not do
 
 - **Match people across files with no shared key.** It can tidy keys (leading zeros, prefixes) and say how many
   match; it does not guess that "R. Sharma, Pune" is "Rahul Sharma".

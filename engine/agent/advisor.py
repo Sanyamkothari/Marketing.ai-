@@ -29,9 +29,12 @@ from __future__ import annotations
 import contextlib
 import hashlib
 import itertools
+import re
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Any, Final
+
+import pandas as pd
 
 from engine.agent.config import AgentLevel
 from engine.agent.contracts import (
@@ -112,7 +115,9 @@ _ENGINE_HIDES: Final[Mapping[str, str]] = {
 }
 """Warnings the engine already acts on by itself: shown as hidden columns, never proposed."""
 
-NEVER_TICKED_STEPS: Final[frozenset[RecipeStepKind]] = frozenset({RecipeStepKind.SET_MISSING})
+NEVER_TICKED_STEPS: Final[frozenset[RecipeStepKind]] = frozenset(
+    {RecipeStepKind.SET_MISSING, RecipeStepKind.VALID_RANGE}  # Plan L M153 (DEC-1531): a range is a question
+)
 """Steps only the person may tick, whatever `agent.tick_uncertain` says: emptying a value is right only
 when it really is a code for "unknown", which the file cannot prove (DEC-1224)."""
 
@@ -523,6 +528,63 @@ def _placeholder_proposal(
         confidence=AgentConfidence.CHECK,
         examples=tuple(dict.fromkeys((*texts, *edges))),
     )
+
+
+RANGE_RULES: Final[tuple[tuple[frozenset[str], float, float, str], ...]] = (
+    (frozenset({"age"}), 0.0, 120.0, "an age"),
+    (frozenset({"pct", "percent", "percentage"}), 0.0, 100.0, "a percentage"),
+)
+"""Plan L M153 (DEC-1531): the columns whose name says what values are possible, and that range."""
+
+RANGE_MIN_NUMBERS: Final[int] = 20
+RANGE_MAX_SHARE: Final[float] = 0.2
+"""A range is suggested only for a column of at least 20 numbers, of which at most a fifth fall outside it:
+more than that and the name is probably not what the values mean."""
+
+
+def _range_proposals(builder: _Builder, protected: set[str]) -> None:
+    """Suggest emptying impossible values in a column whose name says its range (an age of 212).
+
+    A name matches when one of its words (split on `_`, spaces, dots and dashes) is a rule's word, so
+    `customer_age` matches and `usage` does not. A percentage column must also be on the 0-100 scale
+    (its typical value above 1), not 0-1. Always `check` and never ticked: the person decides whether 212
+    is a typing slip or a code (`NEVER_TICKED_STEPS`).
+    """
+    frame = builder.ctx.frame
+    for column in [str(c) for c in frame.columns]:
+        if column in protected or not pd.api.types.is_numeric_dtype(frame[column]):
+            continue
+        words = set(re.split(r"[_\s.\-]+", column.casefold()))
+        for tokens, low, high, meaning in RANGE_RULES:
+            if not words & tokens:
+                continue
+            values = pd.to_numeric(frame[column], errors="coerce").dropna()
+            if len(values) < RANGE_MIN_NUMBERS:
+                break
+            outside = values[(values < low) | (values > high)]
+            if outside.empty or len(outside) > RANGE_MAX_SHARE * len(values):
+                break
+            if high == 100.0 and float(values.median()) <= 1.0:
+                break
+            evidence = builder.call("describe_numbers", {"column": column})
+            shown = ", ".join(number_text(float(v)) for v in sorted(set(outside.tolist()))[:4])
+            reason = (
+                f"'{display_name(column)}' looks like {meaning}, so values below {number_text(low)} or above "
+                f"{number_text(high)} cannot be right: {len(outside)} rows hold one ({shown}). Tick it to treat them "
+                "as unknown; the rows are kept."
+            )
+            builder.propose(
+                kind=ProposalKind.RECIPE_STEP,
+                title=f"Treat values outside {number_text(low)}-{number_text(high)} in '{display_name(column)}' as unknown",
+                reason=reason,
+                step=_step(
+                    RecipeStepKind.VALID_RANGE, column, minimum=int(low), maximum=int(high)
+                ).model_copy(update={"reason": reason}),
+                evidence_ids=(evidence.evidence_id,),
+                confidence=AgentConfidence.CHECK,
+                examples=tuple(number_text(float(v)) for v in sorted(set(outside.tolist()))[:4]),
+            )
+            break
 
 
 def _format_proposals(
@@ -1055,6 +1117,7 @@ def advise(
     if ctx.mode is RunMode.TRAIN:
         issues = builder.call("find_format_issues")
         _format_proposals(builder, issues, protected, outcome_column)
+        _range_proposals(builder, protected | ({outcome_column} if outcome_column else set()))
     can_check = outcome_column is not None if ctx.mode is RunMode.TRAIN else ctx.schema is not None
     if to_combine and key is not None and outcome_column is not None and stop is None:
         # Nothing else is checked on rows that are about to be combined: the answer re-advises.

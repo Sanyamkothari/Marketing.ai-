@@ -48,6 +48,7 @@ __all__ = [
     "DecidedBy",
     "Proposal",
     "ProposalKind",
+    "ProposalSource",
     "ProposalState",
     "Question",
     "QuestionOption",
@@ -115,6 +116,25 @@ class RecipeStepKind(StrEnum):
     SET_MISSING = "set_missing"  # placeholder codes (99, -1, …) to an empty cell (DEC-1220)
     DERIVE = "derive"
     COMBINE_ROWS = "combine_rows"
+    # Plan L M153/M154 (DEC-1530, DEC-1540): more ways to fix a value, each stateless; `remove_rows`
+    # leaves out the rows a rule names (row-wise: a row is kept or not on its own values).
+    MAP_VALUES = "map_values"
+    SET_MISSING_TEXT = "set_missing_text"
+    CONVERT_UNITS = "convert_units"
+    CORRECT_CELLS = "correct_cells"
+    SPLIT_COLUMN = "split_column"
+    VALID_RANGE = "valid_range"
+    FILL_MISSING = "fill_missing"
+    REMOVE_ROWS = "remove_rows"
+    RENAME_COLUMN = "rename_column"
+
+
+class ProposalSource(StrEnum):
+    """Who made a suggestion (Plan L M152, DEC-1520). The screen labels each; only the rules may start one ticked."""
+
+    RULES = "rules"
+    AI = "ai"
+    PERSON = "person"
 
 
 class SessionStatus(StrEnum):
@@ -178,6 +198,10 @@ class RecipeStep(StrictBase):
             raise ValueError("a combine_rows step names its new columns in params.features")
         if self.kind is RecipeStepKind.SET_MISSING and self.new_column is not None:
             raise ValueError("a set_missing step empties cells of its own column")
+        if self.kind in (RecipeStepKind.SPLIT_COLUMN, RecipeStepKind.RENAME_COLUMN) and not self.new_column:
+            raise ValueError(f"a {self.kind.value} step must name new_column")
+        if self.kind is RecipeStepKind.REMOVE_ROWS and self.new_column is not None:
+            raise ValueError("a remove_rows step creates no column")
         return self
 
 
@@ -340,6 +364,14 @@ class Proposal(StrictBase):
     confidence: AgentConfidence = Field(description="`sure` or `check`.")
     state: ProposalState = Field(default=ProposalState.PENDING, description="Only the user changes it.")
     decided_by: DecidedBy | None = Field(default=None, description="Who set the state; null while pending.")
+    # Plan L M152 (DEC-1520): an added, defaulted field, so every session saved before it still reads.
+    source: ProposalSource | None = Field(
+        default=None,
+        description=(
+            "Who suggested it: `ai` (the chat), `person` (an edit by hand); null for the rules' own suggestions "
+            "and for every suggestion saved before Plan L."
+        ),
+    )
 
     @model_validator(mode="after")
     def _shape(self) -> Self:
