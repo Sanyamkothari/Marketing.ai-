@@ -21,7 +21,8 @@ touches data. The API stores the result at `uploads/<upload_id>/agent/agent_sess
   dropped - except a recipe step on a column that is now the ID or the outcome, which the recipe
   may never change.
   Answering "combine the rows?" (M76) re-runs it too: with Combine the rest of the advice is about
-  the combined file; with Stop a repeating ID stops the session.
+  the combined file; with Stop a repeating ID stops the session. Answering "turn them into rows?" (Plan L
+  M156) re-runs it as well: with Turn into rows the advice is about the rows the wide sheet becomes.
 * `status_of` is the one rule for where a session is: stopped when the data cannot work, ready
   when nothing is left to decide, needs review otherwise.
 """
@@ -75,6 +76,7 @@ __all__ = [
     "roles_of",
     "start_session",
     "status_of",
+    "unpivot_declined",
     "with_summary",
 ]
 
@@ -131,6 +133,26 @@ def _combines(proposal: Proposal | None) -> bool:
 def _is_combine_question(question: Question) -> bool:
     """The M76 question "combine the rows?": one of its options adds a `combine_rows` step."""
     return any(_combines(option.proposal) for option in question.options)
+
+
+def _is_unpivot_question(question: Question) -> bool:
+    """The Plan L M156 question "turn them into rows?": one of its options adds an `unpivot` step."""
+    return any(
+        option.proposal is not None
+        and option.proposal.step is not None
+        and option.proposal.step.kind is RecipeStepKind.UNPIVOT
+        for option in question.options
+    )
+
+
+def unpivot_declined(session: AgentSession) -> bool:
+    """Whether the person answered Keep as columns to the M156 question, for `advise`."""
+    return any(
+        _is_unpivot_question(q)
+        and q.answer is not None
+        and not any(o.proposal is not None for o in q.options if o.option_id == q.answer)
+        for q in session.questions
+    )
 
 
 def reshape_of(session: AgentSession) -> tuple[RecipeStep | None, bool]:
@@ -385,7 +407,7 @@ def _touches_role(proposal: Proposal, roles: set[str]) -> bool:
     return (
         step is not None
         and step.column in roles
-        and step.kind not in {RecipeStepKind.COMBINE_ROWS, RecipeStepKind.DERIVE}
+        and step.kind not in {RecipeStepKind.COMBINE_ROWS, RecipeStepKind.DERIVE, RecipeStepKind.UNPIVOT}
     )
 
 
@@ -483,6 +505,7 @@ def answer(
     if (
         (chosen is not None and chosen.kind is ProposalKind.ROLE)
         or _is_combine_question(question)
+        or _is_unpivot_question(question)
         or (combining and chosen is not None and chosen.kind is ProposalKind.RECIPE_STEP)
     ):
         key, target = roles_of(updated)
@@ -500,6 +523,7 @@ def answer(
                     for p in updated.proposals
                     if p.state is ProposalState.ACCEPTED and p.step is not None and not _combines(p)
                 ],
+                unpivot_declined=unpivot_declined(updated),
             )
         except AgentToolError as exc:
             raise SessionError(exc.code, exc.message) from exc

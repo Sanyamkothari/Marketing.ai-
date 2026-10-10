@@ -37,6 +37,7 @@ from engine.agent.contracts import RecipeReceipt, RecipeStep, RecipeStepKind, St
 from engine.agent.formats import ParseOutcome, map_booleans, normalise_texts, parse_dates, parse_numbers
 from engine.agent.placeholders import MAX_PLACEHOLDER_VALUES, set_missing
 from engine.agent.reshape import CombineError, CombineSpec, LeakCheck, combine_rows
+from engine.agent.unpivot import UnpivotError, UnpivotSpec, unpivot
 from engine.agent.value_steps import (
     MAX_CORRECTIONS,
     MAX_MAPPINGS,
@@ -64,6 +65,10 @@ __all__ = [
 ]
 
 STEP_PHASE: Final[dict[RecipeStepKind, int]] = {
+    # Plan L M156 (DEC-1562): a wide sheet is turned into rows before anything else, so every later step reads
+    # the rows the person will see (one per customer per month) and `combine_rows` can combine them back. A
+    # phase below every other keeps each saved recipe's order, and so its hash, exactly as it was.
+    RecipeStepKind.UNPIVOT: -1,
     # Plan L (DEC-1530): the person's and the AI's text fixes come first, on the values as written, so a
     # corrected or emptied cell is what the parsers then read; a fill comes after every step that empties
     # cells, and rows are left out before they are combined. Only the order matters (the numbers moved,
@@ -93,6 +98,7 @@ and before combining, so a code is never added up or averaged into a combined co
 _LEVEL_OF: Final[dict[RecipeStepKind, AgentLevel]] = {
     RecipeStepKind.DERIVE: AgentLevel.DERIVE,
     RecipeStepKind.COMBINE_ROWS: AgentLevel.RESHAPE,
+    RecipeStepKind.UNPIVOT: AgentLevel.RESHAPE,
     RecipeStepKind.SPLIT_COLUMN: AgentLevel.DERIVE,
     RecipeStepKind.REMOVE_ROWS: AgentLevel.DERIVE,
 }
@@ -181,8 +187,9 @@ def check_recipe(
     available = list(columns)
     file_columns = frozenset(columns)
     protected = {name for name in (primary_key, target) if name}
-    phase = 0
+    phase = min(STEP_PHASE.values())
     combined = False
+    unpivoted = False
     created: set[str] = set()
     for expected, step in enumerate(steps, start=1):
         if step.order != expected:
@@ -211,6 +218,14 @@ def check_recipe(
                 )
             combined = True
             available = _check_combine(step, available, primary_key=primary_key, target=target)
+            continue
+        if step.kind is RecipeStepKind.UNPIVOT:
+            if unpivoted:
+                raise RecipeError(
+                    "RECIPE_STEP_INVALID", "Columns can be turned into rows only once.", order=step.order
+                )
+            unpivoted = True
+            available = _check_unpivot(step, available, primary_key=primary_key, target=target)
             continue
         if step.column in protected and step.kind is not RecipeStepKind.DERIVE:
             raise RecipeError(
@@ -308,6 +323,41 @@ def _check_combine(
         raise RecipeError(
             "RECIPE_STEP_INVALID",
             f"The outcome column '{target}' is read as the outcome only, never combined into a new column.",
+            column=target,
+            order=step.order,
+        )
+    for column in spec.reads:
+        if column not in available:
+            raise RecipeError(
+                "RECIPE_COLUMN_MISSING",
+                f"The file has no column '{column}'.",
+                column=column,
+                order=step.order,
+            )
+    return list(spec.output_columns(with_outcome=spec.outcome in available))
+
+
+def _check_unpivot(
+    step: RecipeStep, available: list[str], *, primary_key: str | None, target: str | None
+) -> list[str]:
+    """Refuse an unpivot keyed on another column, or one that turns the ID or the outcome into rows or
+    drops the outcome; return the columns after it (Plan L M156, DEC-1561)."""
+    if primary_key is not None and step.column != primary_key:
+        raise RecipeError(
+            "RECIPE_STEP_INVALID",
+            f"Columns are turned into rows per ID column '{primary_key}', not per '{step.column}'.",
+            column=step.column,
+            order=step.order,
+        )
+    try:
+        spec = UnpivotSpec.from_params(step.column, _params(step))
+    except UnpivotError as exc:
+        raise RecipeError(exc.code, exc.message, column=exc.column, order=step.order) from exc
+    if target is not None and spec.outcome != target:
+        raise RecipeError(
+            "RECIPE_STEP_INVALID",
+            f"The outcome column '{target}' is carried to every row as the outcome, never turned into rows "
+            "or left out.",
             column=target,
             order=step.order,
         )
@@ -632,6 +682,24 @@ def run_recipe(
                 )
             )
             work = work.rename(columns={step.column: str(step.new_column)})
+            continue
+        if step.kind is RecipeStepKind.UNPIVOT:
+            try:
+                rows = unpivot(work, key=step.column, params=_params(step), max_failure_pct=max_failure_pct)
+            except UnpivotError as exc:
+                raise RecipeError(exc.code, exc.message, column=exc.column, order=step.order) from exc
+            receipts.append(
+                StepReceipt(
+                    order=step.order,
+                    kind=step.kind,
+                    column=step.column,
+                    rows=rows.rows_in,
+                    changed=rows.rows_out,
+                    failed=rows.failed,
+                    examples_failed=rows.failed_examples,
+                )
+            )
+            work = rows.frame
             continue
         if step.kind is RecipeStepKind.COMBINE_ROWS:
             try:

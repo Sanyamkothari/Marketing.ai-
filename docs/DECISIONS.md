@@ -1571,6 +1571,54 @@ DEC-1500…1509, M151 → DEC-1510…1519, …), so parallel work on two milesto
   `tests/integration/test_api_doctor_joins.py` and `tests/integration/agent/test_dataset_recipe_refusal.py` (a
   dataset built through the onboarding API scored by a model whose training ran on a Guided-prepared upload,
   training stubbed) prove it; the 22 pinned benchmark files are unchanged.
+- **DEC-1560 — M156: `unpivot`, a wide sheet's period columns into rows.** *Context:* a hand-kept sheet often has one
+  column per month (`2024_01_spend`, `2024_02_spend`, …), so each month is an unrelated column. *Decision:* a
+  recipe step kind `unpivot` (`engine/agent/unpivot.py`, level `reshape`) with `id_columns` (kept on every row, the
+  ID first), `value_columns` (a frozen `{column, measure, period}` list), `name_pattern`, `period_column` and
+  `outcome`. Each input row becomes one row per listed period, with the kept columns, the outcome, the period and
+  one column per measure. It is row-wise (DEC-1004): a row's output depends only on that row and the frozen
+  parameters.
+- **DEC-1561 — What an unpivot may not do.** *Decision:* `check_recipe` refuses an unpivot keyed on another column
+  than the ID; the ID, the outcome or a kept column as a value column; an `outcome` other than the recipe's (it is
+  always carried, never turned into rows); a name `name_pattern` does not rebuild from its listed measure and
+  period; fewer than two periods; periods of mixed kinds; one measure twice in a period; a result with two columns
+  of one name; more than 1,000 value columns or 200 kept columns; and a second unpivot. Every other column is
+  left out, so the output has the same columns on every file.
+- **DEC-1562 — An unpivot runs first.** *Decision:* `STEP_PHASE[UNPIVOT] = -1` and `check_recipe` starts from the
+  lowest phase, so every later step, `combine_rows` included, reads the rows the person sees. No existing kind's
+  phase moved, so every saved recipe orders and hashes as before. *Consequences:* a fix by hand on a wide column
+  is refused after an accepted unpivot (`RECIPE_COLUMN_MISSING`).
+- **DEC-1563 — A fixed period grammar.** *Decision:* a period is a year and month (`2024_01`, `2024-01`, `202401`,
+  `Jan_2024`, `2024 Jan`), a year and quarter (`2024_Q1`, `Q1 2024`), a year (1900-2099), a month name, `M1`-`M12`
+  or `Q1`-`Q4`, case-insensitive; a column name is a measure and a period joined by `_ - .` or a space, in either
+  order. A period with a year is written as the date it starts; one without a year is written as named and never
+  given one.
+- **DEC-1564 — Replaying the frozen list.** *Decision:* next month's file is turned into rows by exactly the listed
+  columns: a listed column it lacks stops the run (`RECIPE_COLUMN_MISSING`); a new month's column is left out and
+  its non-empty cells counted on the receipt, and over `max_conversion_failure_pct` the run stops with
+  `RECIPE_VALUES_UNCONVERTED` rather than use part of the months. *Consequences:* a sheet whose window moves needs a
+  new Guided setup.
+- **DEC-1565 — The advisor asks about a wide sheet.** *Decision:* only on a training file whose use case allows
+  `reshape`, with the ID and outcome known, the ID not repeating and nobody having declined. `find_wide_columns`
+  reads column names only (skipping the ID, outcome, consent and suppression columns); a measure counts with at
+  least two periods; the biggest group wins. A group with years gets a blocking question in the use case's own
+  words ("Turn them into rows (one row per shopper per month)?") with "Turn into rows (recommended)" and "Keep as
+  columns"; the answer re-advises.
+- **DEC-1566 — Periods without a year are noted, not asked.** *Context:* `Jan_spend` cannot be put in date order,
+  so its rows could not be combined back into one row per customer, and a question whose recommended answer led
+  to a stop would be worse than none. *Decision:* the advisor notes that such columns stay columns and how to
+  name them (`2024_01_spend`); the step itself supports them.
+- **DEC-1567 — The answer re-advises on the rows.** *Decision:* `advise` takes an accepted `unpivot` from
+  `decided_steps` and advises the rows it makes (roles, fixes, checks, the combine question); "Keep as columns"
+  (`unpivot_declined`) is never asked again; answering again withdraws the step, like the combine question.
+- **DEC-1568 — Combining the rows back.** *Decision:* after an unpivot, `combine_rows` orders by the period column
+  and each customer's latest period is its snapshot; kept columns (not personal data) are carried as they are,
+  never added up and never chosen as the date. A training Approve runs onboarding's full future-data check, a
+  scoring replay the narrow one; a scoring session re-profiles after an `unpivot`, as after `combine_rows`.
+- **DEC-1569 — Scope and proof.** *Decision:* only the rules suggest an unpivot; the chat and edits by hand do not.
+  No API model changed. *Consequences:* `tests/unit/agent/test_unpivot.py`, `test_advisor_unpivot.py` and
+  `tests/integration/agent/test_unpivot_api.py` prove it (a month-per-column sheet trains through Guided setup and
+  next month's sheet replays); the 22 pinned benchmark files are unchanged.
 - **DEC-1570 — M157: the outcome sentences are configuration, in their own file.** *Context:* most clients have no
   "churned" column but do have an event log; plan §5.3 asks for the outcome "shown back as a sentence".
   *Decision:* (a) `configs/outcomes.yaml`, read by `engine/doctor/outcomes.load_outcome_catalogue` (cached per file
