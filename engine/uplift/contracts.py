@@ -1008,32 +1008,58 @@ class IncrementalityReport(Artefact):
     covariate_column: str | None = Field(
         default=None,
         exclude_if=_absent,
-        description="The amount from before the campaign the adjusted estimate used (pre-registered).",
+        description=(
+            "The column from before the campaign the adjusted estimate used (pre-registered); null when the "
+            "scoring run's prediction was used (`covariate_source: run_score`)."
+        ),
     )
     adjusted_lift: float | None = Field(
         default=None,
         exclude_if=_absent,
-        description="mean_difference adjusted by the covariate (CUPED); absent without a covariate.",
+        description=(
+            "The outcome's mean difference adjusted by the covariate (CUPED): a difference in rates for a "
+            "yes/no outcome, in the amount's unit for an amount; absent without a covariate."
+        ),
     )
     adjusted_interval: ConfidenceValue | None = Field(
         default=None,
         exclude_if=_absent,
-        description="adjusted_lift with its Welch 95% interval on the adjusted amounts.",
+        description=(
+            "adjusted_lift with its Welch 95% interval on the adjusted values (a rate for a yes/no outcome, an "
+            "amount for an amount)."
+        ),
     )
     variance_reduction: float | None = Field(
         default=None,
         exclude_if=_absent,
-        description="1 − (adjusted variance ÷ unadjusted variance) of the difference; about rho² for a covariate correlated rho.",
+        description=(
+            "1 − (adjusted variance ÷ unadjusted variance) of the difference; about rho² for a covariate "
+            "correlated rho. Reported as measured, negative too."
+        ),
     )
     rows_covariate_missing: int | None = Field(
         default=None,
         exclude_if=_absent,
-        description="Measured customers with no amount from before; set to the mean of the known ones.",
+        description=(
+            "Measured customers with no covariate value (no amount from before, or no prediction from the "
+            "scoring run); set to the mean of the known ones."
+        ),
     )
     adjustment_note: str | None = Field(
         default=None,
         exclude_if=_absent,
         description="Why the adjusted estimate is not given although a covariate was named, in one sentence.",
+    )
+    # Plan K M135 (DEC-1324, built early under Plan J's range): the registered plan may adjust by the scoring
+    # run's own prediction from before the campaign, on a yes/no outcome as well as an amount. Absent unless
+    # it was used, so every other report's JSON is byte for byte what it was.
+    covariate_source: Literal["column", "run_score"] | None = Field(
+        default=None,
+        exclude_if=_absent,
+        description=(
+            "Where the adjusted estimate's covariate came from: `run_score` (the scoring run's prediction of "
+            "each customer's outcome, made before the campaign); absent otherwise."
+        ),
     )
     outcome_warnings: tuple[str, ...] | None = Field(
         default=None,

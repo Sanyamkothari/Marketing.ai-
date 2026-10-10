@@ -496,6 +496,14 @@ MILESTONE_TESTS: Final[Mapping[str, tuple[str, ...]]] = {
         "tests/integration/measurement/test_connection_pulls_api.py",
         "tests/integration/production/test_privacy_routes.py",
     ),
+    # M135 (DEC-1324), a Plan K milestone built early under Plan J's range: the scoring run's prediction as the
+    # adjustment (CUPAC). The nightly test (tests/statistical/test_run_score_coverage.py, DEC-1300 (e)) is left out,
+    # as for M96 and M137.
+    "M135": (
+        "tests/unit/measurement/test_run_score.py",
+        "tests/unit/measurement/test_run_score_scale.py",
+        "tests/integration/measurement/test_campaign_run_score.py",
+    ),
     # M137 (DEC-1325), a Plan K milestone built early under Plan J's range: "safe to roll out". The nightly test
     # (tests/statistical/test_rollout_verdict.py, DEC-1300 (e)) is left out, as for M96. test_compare.py and
     # test_model_gates.py are M96's files and gained the verdict's tests; test_compare.py keeps a fast test beside its

@@ -900,12 +900,10 @@ class _Builder:
             return
         key = f"campaigns/{campaign.campaign_id}/incrementality_report.json"
         base = "absolute_lift"
-        if view.outcome_kind == "continuous":
-            base = (
-                "adjusted_interval"
-                if isinstance(self.reader.get(key, "adjusted_interval"), dict)
-                else ("mean_difference_ci")
-            )
+        if isinstance(self.reader.get(key, "adjusted_interval"), dict):
+            base = "adjusted_interval"  # the registered analysis; a yes/no one too (Plan K M135)
+        elif view.outcome_kind == "continuous":
+            base = "mean_difference_ci"
         interval = self.reader.get(key, base)
         if not isinstance(interval, dict):
             return

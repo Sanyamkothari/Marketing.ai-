@@ -458,9 +458,9 @@ codes:
     fix: "Correct the setting the message names, or remove the file to use the defaults (every use case equal, one action per customer, no channel caps). The file configs/decide/arbitration.example.yaml shows every setting."
   # --- Plan J M102: campaigns measured on an amount such as revenue (DEC-1312 (e), (f)) ----------------------
   COVARIATE_NOT_BEFORE_CAMPAIGN:
-    title: "The earlier amount may include the campaign's effect"
-    meaning: "The amount used to adjust the result (for example last quarter's revenue) is dated on or after the day a customer was contacted, or has no date column, so it could already include what the campaign changed. Nothing was measured or stored."
-    fix: "Use an amount measured before each customer was contacted, dated at least one day before the contact, and name its date column."
+    title: "The figure used to adjust may include the campaign's effect"
+    meaning: "The figure used to adjust the result may come from after the campaign started, so it could already include what the campaign changed. Either the earlier amount (for example last quarter's revenue) is dated on or after the day a customer was contacted or has no date column, or the scoring run whose prediction the test plan registered finished after the campaign started or never finished. Nothing was measured or stored."
+    fix: "Use an amount measured before each customer was contacted, dated at least one day before the contact, and name its date column. Register the scoring run's prediction only for a campaign whose scoring run finished before the campaign started."
   OUTCOME_SKEWED:
     title: "A few very large amounts make the range less reliable"
     meaning: "Most customers spent little or nothing and a few spent far more, so with this many customers the range around the result may be too narrow. The numbers are kept and nothing was capped."

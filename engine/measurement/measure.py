@@ -28,6 +28,14 @@ band, predicted segment and offer, with the false-alarm guard of the Value Proof
 (`engine.measurement.segments`); every route that stores a campaign report stores its
 `segment_effects.json` beside it.
 
+**The scoring run's prediction (Plan K M135, DEC-1324).** A plan registered with `covariate_source: run_score`
+adjusts the outcome - yes/no or an amount - by the chance of the outcome the campaign's scoring run
+predicted for each customer before the campaign (`engine.measurement.run_score`). The caller reads it
+(`load_run_prediction`) and passes it as `run_prediction`; this function uses it only when the plan in force
+registered it, refuses it with no plan or against a plan that did not (`TEST_PLAN_CHANGED`), and refuses it
+for several offers. On a yes/no report the adjusted difference in rates is the headline (`headline_estimate`,
+`campaign_verdict_for`), as the adjusted amount is on an amount's: it is the analysis the plan registered.
+
 **`as_of` always comes from the caller.** `utc_now()` lives in the route, never here, so the same
 inputs give the same report on any day.
 """
@@ -54,12 +62,14 @@ if TYPE_CHECKING:
     from engine.config import PrimaryKey
     from engine.measurement.continuous import OutcomeKind
     from engine.measurement.plan import TestPlan
+    from engine.measurement.run_score import CovariateSource, RunPrediction
     from engine.measurement.segments import SegmentEffects
     from engine.uplift.contracts import ConfidenceValue, IncrementalityReport
     from engine.uplift.measure import CampaignVerdict
 
 __all__ = [
     "EARLY_LOOK_PREFIX",
+    "adjusted_by",
     "amount_verdict",
     "campaign_verdict_for",
     "early_look_summary",
@@ -94,6 +104,8 @@ def measure_campaign(
     outcome_kind: OutcomeKind = "binary",
     covariate_date_column: str | None = None,
     combine_offers: bool = False,
+    covariate_source: CovariateSource | None = None,
+    run_prediction: RunPrediction | None = None,
 ) -> IncrementalityReport:
     """Measure a campaign: `measure_incrementality` on `assignment`, checked against `plan`.
 
@@ -112,11 +124,11 @@ def measure_campaign(
     registered test plan named that covariate in advance**: with no plan, a covariate on an amount is
     refused with `TestPlanChangedError` (`TEST_PLAN_CHANGED`) just as a covariate different from the
     plan's is, because choosing the adjustment after seeing the outcomes is one more way to move the
-    goalposts. A yes/no outcome never uses a covariate, so with no plan it is ignored and the report
-    is exactly as before M102. Several offers (`arm_column`) are measured on a yes/no outcome only:
-    an amount there is refused with a plain `ValueError` (DEC-1312), since no nightly check covers
-    per-offer amounts or their adjustment yet; a covariate on a yes/no several-offer campaign is
-    ignored, as before.
+    goalposts. A yes/no outcome never uses a covariate column (the scoring run's prediction is M135's,
+    below), so with no plan it is ignored and the report is exactly as before M102. Several offers
+    (`arm_column`) are measured on a yes/no outcome only: an amount there is refused with a plain
+    `ValueError` (DEC-1312), since no nightly check covers per-offer amounts or their adjustment yet; a
+    covariate on a yes/no several-offer campaign is ignored, as before.
 
     **Several offers (Plan J M100, DEC-668 (2)).** With `arm_column`, the column naming each treated
     customer's offer, every offer is measured against the shared control (`control_group`) by
@@ -132,10 +144,32 @@ def measure_campaign(
     the shared control (`engine.measurement.arms.combined_offers`), what the Value Proof Pack adds up.
     Off by default, so this function's report is byte for byte what it was; every route that stores a
     campaign report of several offers turns it on.
+
+    **The scoring run's prediction (Plan K M135, DEC-1324).** `covariate_source="run_score"` adjusts the
+    outcome, yes/no or an amount, by `run_prediction` (`engine.measurement.run_score.load_run_prediction`),
+    with M102's estimator. Only when the registered plan says `run_score`: with no plan it is refused
+    (`TestPlanChangedError`, as an unregistered covariate is), against a plan that did not register it it is
+    a change of plan like any other. `covariate_column` must then be None, `run_prediction` must be given,
+    and several offers are refused (`ValueError`), as M102 refuses an amount there.
     """
     from engine.uplift.incrementality import measure_incrementality
 
     frame = as_scores_frame(assignment)
+    run_score = covariate_source == "run_score"
+    if run_score and covariate_column is not None:
+        raise ValueError(
+            "Adjust by one thing at a time: the scoring run's prediction or a column from before the campaign."
+        )
+    if run_score and arm_column is not None:
+        raise ValueError(
+            "Several offers are measured without an adjustment: adjusting each offer by the scoring run's "
+            "prediction is not offered yet. Measure the campaign without it, or register a plan that does not "
+            "name it."
+        )
+    if plan is None and run_score:
+        raise TestPlanChangedError(
+            (PlanDifference(field="covariate_source", planned="none", realised="run_score"),), unplanned=True
+        )
     if plan is None and covariate_column is not None and outcome_kind == "continuous":
         raise TestPlanChangedError(
             (PlanDifference(field="covariate_column", planned="none", realised=covariate_column),),
@@ -156,9 +190,14 @@ def measure_campaign(
             outcome_window_days=outcome_window_days,
             covariate_column=covariate_column,
             outcome_kind=outcome_kind,
+            covariate_source=covariate_source,
         )
         if differences:
             raise TestPlanChangedError(differences)
+    if run_score and run_prediction is None:
+        raise ValueError(
+            "The scoring run's prediction was not read, so the planned adjustment cannot be made."
+        )
     if arm_column is not None:
         from engine.measurement.arms import measure_arms
 
@@ -199,6 +238,7 @@ def measure_campaign(
             outcome_kind=outcome_kind,
             covariate_column=covariate_column,
             covariate_date_column=covariate_date_column,
+            run_prediction=run_prediction if run_score else None,
         )
     if plan is None:
         return report
@@ -302,17 +342,70 @@ def campaign_verdict_for(
     amount = report.outcome_kind == "continuous" and report.causal and report.status.value == "mature"
     if amount and (report.treated_rows or report.control_rows):
         return amount_verdict(report, outcome_is_good=outcome_is_good, outcome_label=outcome_label)
+    if report.outcome_kind != "continuous" and report.adjusted_interval is not None:
+        return _adjusted_rate_verdict(report, outcome_is_good=outcome_is_good, outcome_label=outcome_label)
     return campaign_verdict(report, outcome_is_good=outcome_is_good, outcome_label=outcome_label)
 
 
+def _adjusted_rate_verdict(
+    report: IncrementalityReport, *, outcome_is_good: bool, outcome_label: str | None
+) -> CampaignVerdict:
+    """The verdict of a yes/no report adjusted by the scoring run's prediction (Plan K M135).
+
+    `campaign_verdict`'s rules and words, read off the adjusted difference in rates (the analysis the plan
+    registered) and the outcomes it implies among the contacted customers, with one sentence saying so.
+    """
+    from engine.uplift.contracts import ConfidenceValue
+    from engine.uplift.measure import VerdictKind, campaign_verdict
+
+    adjusted = report.adjusted_interval
+    assert adjusted is not None  # the caller checked
+    rows = report.treated_rows
+
+    def scaled(value: float | None) -> float | None:
+        return None if value is None else value * rows
+
+    incremental = ConfidenceValue(
+        value=adjusted.value * rows,
+        ci_low=scaled(adjusted.ci_low),
+        ci_high=scaled(adjusted.ci_high),
+        confidence_level=adjusted.confidence_level,
+    )
+    read = report.model_copy(update={"absolute_lift": adjusted, "incremental_conversions": incremental})
+    verdict = campaign_verdict(read, outcome_is_good=outcome_is_good, outcome_label=outcome_label)
+    if verdict.kind not in {
+        VerdictKind.ADDED,
+        VerdictKind.PREVENTED,
+        VerdictKind.HARMED,
+        VerdictKind.NO_CLEAR_EFFECT,
+    }:
+        return verdict
+    return verdict.model_copy(update={"detail": f"{verdict.detail} {adjusted_by(report)}"})
+
+
+def adjusted_by(report: IncrementalityReport) -> str:
+    """One sentence naming what an adjusted estimate took account of, as the plan registered it."""
+    if report.covariate_source == "run_score":
+        what = "what" if report.outcome_kind == "continuous" else "the chance of the outcome"
+        return (
+            f"Adjusted for {what} the scoring run predicted for each customer before the campaign, as the test "
+            f"plan registered."
+        )
+    return f"Adjusted for each customer's {report.covariate_column!r} before the campaign."
+
+
 def headline_estimate(report: IncrementalityReport) -> tuple[ConfidenceValue | None, bool]:
-    """The per-customer difference a verdict or a value reads off an amount's report, and whether it is adjusted.
+    """The per-customer difference a verdict or a value reads off a report, and whether it is adjusted.
 
     The adjusted estimate when the report has one: it was registered in the test plan before the outcomes
-    were read, so it is the planned analysis, and it has the narrower range. Otherwise Welch's difference.
+    were read, so it is the planned analysis, and it has the narrower range. Otherwise Welch's difference
+    for an amount, and the Newcombe difference in rates for a yes/no outcome (Plan K M135: a yes/no report
+    is adjusted only by the scoring run's prediction its plan registered).
     """
     if report.adjusted_interval is not None:
         return report.adjusted_interval, True
+    if report.outcome_kind != "continuous":
+        return report.absolute_lift, False
     return report.mean_difference_ci, False
 
 
@@ -349,7 +442,7 @@ def amount_verdict(
     what = outcome_label or report.outcome_column
     likely = f"Likely between {low:,} and {high:,} in total ({estimate.value:+,.2f} per contacted customer)."
     if adjusted:
-        likely += f" Adjusted for each customer's {report.covariate_column!r} before the campaign."
+        likely += f" {adjusted_by(report)}"
     went_up = estimate.value > 0
     if outcome_is_good and went_up:
         kind, headline = VerdictKind.ADDED, f"The campaign added about {amount:,} to {what}"

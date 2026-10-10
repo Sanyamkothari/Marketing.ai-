@@ -1857,6 +1857,73 @@ around the two new fields. The M131 and M135 integrations should write DEC-1323 
 
 **What I did meanwhile.** DEC-1325 is written after DEC-1322 with a line that reserves the two numbers.
 
+### 2026-10-10 — plan-j M135 (Plan K, built early; on main) → Phase 3b (owners of `engine/uplift/` and `docs/UPLIFT.md`): the scoring run's prediction as the adjustment (record of additive edits)
+
+**What changed** (pre-approved in the M135 scope; DEC-1324), each additive and absent or None by default:
+
+* `engine/uplift/contracts.py`: `IncrementalityReport.covariate_source` (`'run_score'`, excluded while absent), and
+  wider descriptions of M102's `covariate_column`, `adjusted_lift`, `adjusted_interval`, `variance_reduction` and
+  `rows_covariate_missing` (a rate on a yes/no outcome, an amount on an amount). `make generate` left `docs/API.md`
+  unchanged.
+* `engine/uplift/incrementality.py`: `measure_incrementality` takes the keyword-only `covariate_source` and
+  `run_prediction` (default None, so behaviour is unchanged). With a prediction it joins it on every key column,
+  checks it comes from before the campaign (`COVARIATE_NOT_BEFORE_CAMPAIGN`, compared by day) and fills M102's
+  adjusted fields on a yes/no outcome.
+* `docs/UPLIFT.md`: the M102 bullet's "On a yes/no outcome nothing changes: every M102 field is absent" now names
+  the run_score exception and points at `docs/DECIDE.md` section 27.
+
+Nothing was renamed or removed.
+
+**What is needed.** Ratification of the edits. On a yes/no `IncrementalityReport` with `covariate_source:
+run_score`, M102's adjusted fields can now be present: any branch that read "`adjusted_interval` implies an
+amount" should check `outcome_kind` or `covariate_source` instead.
+
+**What I did meanwhile.** A report without run_score is byte for byte what it was:
+`tests/unit/measurement/test_run_score.py` pins it to a SHA-256 recorded with the merge-base engine (b55132f).
+
+### 2026-10-10 — plan-j M135 (Plan K, built early; on main) → Plan E (owner of `engine/pilot/` and `configs/pilot/help.yaml`): the Proof Pack and the value view read the adjusted rate (record of additive edits)
+
+**What changed** (pre-approved in the M135 scope; DEC-1324 (h)):
+
+* `engine/pilot/proof.py`: on a report whose plan registered `covariate_source: run_score` the Pack's difference
+  is the adjusted one, labelled "Difference (adjusted for the predicted chance registered in the plan)" (on a yes/no
+  outcome and on an amount), and its Method and limits section shows "Customers with no prediction from the scoring
+  run (given the average one)", the share of the noise removed and the method note, never M102's "earlier amount"
+  line. Every other Pack is unchanged.
+* `engine/pilot/roi.py`: a mature yes/no report with an `adjusted_interval` is priced from the adjusted difference in
+  rates times the contacted customers (`_priced_adjusted_rate`), with `adjusted: true` and one sentence; an amount
+  adjusted by run_score says so in its `value_note`. Every other view is unchanged.
+* `configs/pilot/help.yaml` (at integration): M102's `COVARIATE_NOT_BEFORE_CAMPAIGN` entry, which M135 reuses for a
+  scoring run that finished after the campaign started or never finished, now names that case too; its title reads
+  "The figure used to adjust may include the campaign's effect". `tests/unit/pilot/test_help.py` stays green.
+
+Nothing was renamed or removed. No new codes.
+
+**What is needed.** Ratification of the edits.
+
+**What I did meanwhile.** The Proof Pack goldens (`tests/unit/pilot/test_proof_single_offer_golden.py`) and the
+value view tests pass unchanged; `tests/integration/measurement/test_campaign_run_score.py` checks every Pack line on
+a real train-and-score journey.
+
+### 2026-10-10 — plan-j M135 (Plan K, built early; on main) → all branches that call `measure_campaign`, the test planner or the simulators: new keyword arguments and a new module (announcement)
+
+**What changed** (DEC-1324 (a), (i)): additive contract fields, all left out of the JSON while unset:
+`TestPlanInput.covariate_source` and `TestPlan.covariate_source` (`'column'` | `'run_score'`; old plans keep their
+`plan_hash`) and `CampaignMeasureRequest.covariate_source` (default null, the plan's value).
+`engine.measurement.measure.measure_campaign` takes the keyword-only `covariate_source` and `run_prediction`
+(default None); `engine.measurement.planner.achieved_power`, `mde_two_proportions` and `power_preview` take the
+keyword `rho2` (default 0.0, numbers unchanged). New: `engine.measurement.run_score` (`load_run_prediction`,
+`adjust_by_prediction`, `varies_within` and the `NOTE_*` sentences) and the simulator
+`engine.measurement.simulate.predicted_campaign` (a yes/no outcome plus a prediction fixed before the treatment).
+DEC-1324 is written in Plan J's block between DEC-1323 and DEC-1325; `docs/DECIDE.md` section 27 documents it.
+
+**What is needed.** Nothing; this is an announcement. Two latent items are left as they were, so M102's output is
+unchanged: `planner.continuous_power_preview`'s basis sentence still speaks of "the test plan's earlier amount"
+(it is not given the source), and M102's own `covariate_column` path in `engine/measurement/amounts.py` does not use
+the exact within-group check (`varies_within`) the run_score path uses.
+
+**What I did meanwhile.** Nothing further.
+
 ### 2026-09-23 — plan-e-pilot (on main) → all branches: every change Plan E made outside its own files and blocks
 
 **What is needed.** Nothing from anybody; this is the announcement §3 asks for. Measured with
