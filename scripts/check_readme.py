@@ -439,6 +439,18 @@ MILESTONE_TESTS: Final[Mapping[str, tuple[str, ...]]] = {
         "tests/integration/decide/test_run_cost_api.py",
         "tests/integration/decide/test_run_cost_defaults.py",
     ),
+    # M109 (DEC-1319). The node tests (drift_events_card.test.mjs, rca_drift_events.test.mjs, planner_words.test.mjs)
+    # run through test_drift_events_card_js.py, test_rca_drift_events_js.py and test_planner_words_js.py.
+    # library/tests/test_online_retail.py and tests/unit/agent/test_advisor.py (the agent-bench golden) predate M109
+    # and are not evidence for it.
+    "M109": (
+        "tests/integration/decide/test_drift_events.py",
+        "tests/unit/agent/test_holdout_advice.py",
+        "tests/unit/decide/test_verdict_wording.py",
+        "tests/unit/decide/test_drift_events_card_js.py",
+        "tests/unit/decide/test_rca_drift_events_js.py",
+        "tests/unit/decide/test_planner_words_js.py",
+    ),
 }
 """Milestone id -> the test files (or directories, with a trailing `/`) that prove it is built.
 

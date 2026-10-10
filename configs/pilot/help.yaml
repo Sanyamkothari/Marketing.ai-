@@ -525,6 +525,23 @@ codes:
     title: "Nothing to learn from for customers outside the list"
     meaning: "The last cycle cannot show what a contact changes for customers who were not on its list. Either it contacted none of them at random, or the outcomes file covers the contacted and the not-contacted customers unevenly, or it leaves too few of them. A model learned from it would only be guessing for those customers, so nothing was learned and nothing was written."
     fix: "Upload outcomes for every customer the cycle scored, contacted or not. Or set an explore share of 5% or more (actions.explore_fraction) for the next cycle and learn from that one. Or train on a file from a randomised campaign."
+  # --- Plan J M109: events noted against a scoring run's drift report (DEC-1319 (e), (h)) -----------------------------
+  DRIFT_NOT_MEASURED:
+    title: "This run has no measure of how much the customers changed"
+    meaning: "Events can only be noted on a run that scored customers against a trained model and measured how much they changed since the model was trained. This run has no such measure, so there is no change for an event to explain."
+    fix: "Open a scoring run, or score a list first, then note the event there."
+  DRIFT_ANNOTATION_INVALID:
+    title: "The event note could not be saved"
+    meaning: "The note was empty, or it named a measure the change report did not compare."
+    fix: "Write a short note, and name only the measures the change report compared. Leave the list of measures empty if the event touched the customers as a whole."
+  DRIFT_ANNOTATION_NOT_FOUND:
+    title: "No noted event with that id"
+    meaning: "The event was already removed, or it belongs to a different run."
+    fix: "Reload the page to see the events that are noted now."
+  DRIFT_ANNOTATION_LIMIT:
+    title: "This run already holds the most noted events"
+    meaning: "A run holds at most 50 noted events, so this one was not added."
+    fix: "Remove one that no longer matters before adding another."
 
 settings:
   actions.bands[*].min_score:

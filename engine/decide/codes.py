@@ -12,6 +12,7 @@ from typing import Final
 
 from engine.aws.run_cost import RUN_COST_CODES
 from engine.decide.channel_columns import CHANNEL_COLUMN_CODES
+from engine.decide.drift_annotations import DRIFT_ANNOTATION_CODES
 from engine.decide.offer_run import OFFER_CHOICE_CODES
 from engine.measurement.arms import MULTI_ARM_CODES
 from engine.measurement.audit import AUDIT_CODES
@@ -117,6 +118,10 @@ PLAN_J_CODES: Final[frozenset[str]] = (
     | LEARN_CODES  # M106 (DEC-1316 (e), (f), (o)): LEARN_NO_OVERLAP, 409 from POST /runs/{id}/measure/learn (and
     # step 4's learn.reason) when the last cycle cannot show what a contact changes outside its list: no explore
     # share, or an outcomes file that covers the two sides unevenly or leaves too few (`engine.measurement.learn`)
+    | DRIFT_ANNOTATION_CODES  # M109 (DEC-1319 (e), (f), (h)): DRIFT_NOT_MEASURED (409, a run with no drift report
+    # refuses a note), DRIFT_ANNOTATION_INVALID (422, an empty note or one naming a measure the report did not
+    # compare), DRIFT_ANNOTATION_NOT_FOUND (404) and DRIFT_ANNOTATION_LIMIT (409, 50 notes per run), from
+    # /runs/{id}/drift-events (`engine.decide.drift_annotations`)
 )
 """Empty at M90; each Plan J milestone from M91 on adds the codes it raises.
 
@@ -134,4 +139,5 @@ CAMPAIGN_EPOCH_MISMATCH and TEST_PLAN_INVALID. M104's four are joined from `engi
 (DEC-1314). M105's seven are joined from `engine.measurement.summary.SUMMARY_CODES` (DEC-1315); its cards also
 carry PLAN_UNDERPOWERED, DRIFT_DRIFTED and UPLIFT_NOT_BETTER_THAN_RISK, which the catalogue already explains.
 M108's two are joined from `engine.aws.run_cost.RUN_COST_CODES` (DEC-1318). M106's one is joined from
-`engine.measurement.learn.LEARN_CODES` (DEC-1316)."""
+`engine.measurement.learn.LEARN_CODES` (DEC-1316). M109's four are joined from
+`engine.decide.drift_annotations.DRIFT_ANNOTATION_CODES` (DEC-1319)."""

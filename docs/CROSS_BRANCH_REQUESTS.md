@@ -1362,6 +1362,82 @@ unchanged and green.
 
 **What is needed.** Nothing; this is an announcement.
 
+### 2026-10-10 — plan-j M109 (on main) → Phase 3b (owner of `engine/uplift/measure.py`, `ui/power.js` and `tests/unit/uplift/power.test.mjs`): the planner's words in the verdict and the power card (record of in-place edits)
+
+**What changed** (DEC-1319 (a), (p)): wording only. `campaign_verdict` in `engine/uplift/measure.py` changes two
+`detail` sentences: "Outcome window not over yet" now says anything counted now "would be an early look, not a
+result", and "No clear effect yet" says the test can only show a change at or above its "detectable effect", the
+smallest change a group of this size can see. No headline, kind, number or branch moved (merged with M106's logic
+without conflict). In `ui/power.js` only the caption under the power card's headline changed: "The lift above is
+the detectable effect: ... That is what "reliably" means here." The headline sentence and its try-it sentences are
+pinned by `tests/unit/uplift/power.test.mjs` and were left alone; `tests/unit/decide/planner_words.test.mjs` pins the
+new caption.
+
+**What is needed.** Ratification of the edits. If Phase 3b wants the headline itself to use the term ("the
+detectable effect is a lift of X"), it rewords `powerHeadline` together with `power.test.mjs`; Plan J has no
+objection.
+
+### 2026-10-10 — plan-j M109 (on main) → Phase 3a (owner of `ui/modules/generative/rca.js`): a read-only card of noted events on the root-cause screen (record of in-place edits)
+
+**What changed** (DEC-1319 (g)): `load()` also fetches `GET /runs/{run_id}/drift-events` for the run the screen
+covers (errors swallowed: no card) and `rcaHtml` draws the "Events behind the change" card from
+`ui/modules/decide/drift_events.js` with `can_edit` forced false, so there is no form and no remove button; a run with
+no measured change draws nothing. The file imports `../decide/api.js` and `../decide/drift_events.js`. The root-cause
+summary job (`engine/generative/`) is untouched and does not read the notes. Pinned by
+`tests/unit/decide/rca_drift_events.test.mjs`, which runs through `tests/unit/decide/test_rca_drift_events_js.py`.
+
+**What is needed.** Ratification of the edit. Nothing else.
+
+### 2026-10-10 — plan-j M109 (on main) → Plan G (owner of `engine/agent/`, `docs/AGENTS.md` and `tests/fixtures/agent_bench/`): Guided setup proposes how many customers to hold back (record of in-place edits)
+
+**What changed** (DEC-1319 (i)–(m), (o)):
+
+* `engine/agent/recommend.py`: `holdout_advice(config, facts)` asks the test planner (`engine/measurement/planner.py`)
+  what share a test needs held back to see a 2-point change either way; `_holdout_rules` proposes
+  `actions.control_group_fraction` (the smallest whole percent) as a **check** suggestion when the current share is
+  too small and half would be enough; `holdout_notes` writes plain assumptions for a persistent holdout, a file too
+  small even for half, and the explore share. `recommend_settings` gains an optional keyword `holdout` (left out, it
+  is worked out there as before), so callers that already hold the planner's reading do not recompute it.
+* `engine/agent/advisor.py` `_settings` works the planner out once and passes it to both.
+* `tests/fixtures/agent_bench/cases.py` gains `mid_size_file` (20,000 rows) and `expected.json` its digest
+  (`actions.control_group_fraction=0.13`, check). The other twenty-one digests are byte-identical.
+* `docs/AGENTS.md`: the paragraph "How many customers to hold back" and the case counts.
+
+**What is needed.** Ratification of the edits. A branch that adds another caller of `recommend_settings` can keep
+the default.
+
+### 2026-10-10 — plan-j M109 (on main) → library-datasets (owner of `library/online-retail/` and `docs/LIBRARY.md`): why the retail win-back case cannot beat its baseline (record of edits)
+
+**What changed** (DEC-1319 (n)): `library/online-retail/investigation/` is new (`seal.py`, `dev_cv.py`,
+`feat_cv.py`, `label_cv.py`, `sealed_eval.py` and a README): 20% of the 1,463 shoppers sealed first, model
+families, five extra columns and eight label and window settings examined on the rest, then one two-look sealed
+evaluation. `run_report.md` gains the "Plan J M109 follow-up" section with the tables; `docs/LIBRARY.md`'s Online
+Retail row says what was checked. No setting was changed: `configs/use_cases/retail_win_back.yaml`, `fetch.py` and
+`library/tests/test_online_retail.py` are untouched.
+
+**What is needed.** Ratification of the edits. `label_cv.py` needs the raw invoice log (`python
+library/online-retail/fetch.py`, into the git-ignored `data/`) and leaves the sealed shoppers out by id (`sample.csv`
+minus `dev.csv`), never opening `sealed.csv`.
+
+### 2026-10-10 — plan-j M109 (on main) → trunk (owner of `tests/integration/test_api_config.py`): two routes join the OpenAPI path set (record of an in-place edit)
+
+**What changed** (DEC-1319 (f), (p)): the exact-set OpenAPI path pin gains `/runs/{run_id}/drift-events` and
+`/runs/{run_id}/drift-events/{annotation_id}` under a Plan J M109 comment, at integration. Nothing was removed or
+loosened (the test failed without it). The router is mounted in `api/main.py`'s PLAN-J block; `docs/API.md` was
+regenerated on the branch (`gen_api_docs --check` clean).
+
+**What is needed.** Ratification of the test edit. Nothing else.
+
+### 2026-10-10 — plan-j M109 (on main) → Plan E (owner of `configs/pilot/help.yaml`): four new codes (announcement)
+
+**What changed** (DEC-1319 (q)): `DRIFT_NOT_MEASURED` (409), `DRIFT_ANNOTATION_INVALID` (422),
+`DRIFT_ANNOTATION_NOT_FOUND` (404) and `DRIFT_ANNOTATION_LIMIT` (409), from `/runs/{run_id}/drift-events`
+(`engine.decide.drift_annotations.DRIFT_ANNOTATION_CODES`), join `engine.decide.codes.PLAN_J_CODES` by import and get
+`configs/pilot/help.yaml` entries under a Plan J M109 comment, in plain words. `tests/unit/pilot/test_help.py` is
+unchanged and green.
+
+**What is needed.** Nothing; this is an announcement.
+
 ### 2026-09-23 — plan-e-pilot (on main) → all branches: every change Plan E made outside its own files and blocks
 
 **What is needed.** Nothing from anybody; this is the announcement §3 asks for. Measured with
