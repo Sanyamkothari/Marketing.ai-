@@ -36,7 +36,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, runtime_checkable
 
-from engine.config import RoleCatalogue, RoleSpec, UseCaseConfig, get_roles
+from engine.config import RoleCatalogue, RoleSpec, UseCaseConfig, config_root, get_roles
 from engine.onboarding.specs import (
     KeyCandidate,
     RoleCandidate,
@@ -54,6 +54,7 @@ if TYPE_CHECKING:
     from engine.clients import ClientStore
     from engine.connections.store import ConnectionStore
     from engine.contracts import DatasetFingerprint, DatasetProfile
+    from engine.intake.config import IntakeConfig
     from engine.measurement.pull import PullSelection
     from engine.onboarding.specs import OnboardingSpec
     from engine.stages.ingest import ReadResult
@@ -646,6 +647,7 @@ def add_connection_source(
     row_limit: int | None = None,
     source_id: str | None = None,
     keep_if_unchanged: SourceSpec | None = None,
+    intake: IntakeConfig | None = None,
 ) -> tuple[SourceSpec, SourceProfile]:
     """Read `selection` from a saved connection into a new source of `client_id`, bound to it (Plan J M107).
 
@@ -658,24 +660,45 @@ def add_connection_source(
     finds nothing new adds no copy. `row_limit` is the engine's limit on one source's rows
     (`SOURCE_TOO_LARGE`, a 409, as for an upload). Anything that fails after the first byte landed leaves
     nothing behind. Raises `ConnectorError`.
+
+    Plan L M150 (DEC-1504): the pulled file goes through Data Doctor's intake as an uploaded source does,
+    so every month's pull of the same export is read the same way; a workbook is kept as `original.xlsx`
+    and read from the CSV intake writes. `intake` defaults to the deployment's `intake.yaml`
+    (`engine.config.config_root`), which is what a scheduled refresh reads.
     """
     from engine.clients import ClientStoreError
     from engine.connections.base import ConnectorError
+    from engine.intake.config import load_intake_config
+    from engine.intake.run import INTAKE_REPORT_FILENAME, intake_file
     from engine.measurement.pull import fetch_resolved, resolve
     from engine.onboarding.specs import DecidedBy, SourceBinding
     from engine.stages.ingest import IngestError, read_upload
 
     resolved = resolve(connections, connection_id, selection)
     chosen_id = source_id or new_source_id()
-    raw_key = source_raw_key(client_id, chosen_id, resolved.file_format)
+    received = resolved.file_format
+    raw_key = source_raw_key(client_id, chosen_id, "csv" if received == "xlsx" else received)
+    folder = raw_key.rsplit("/", 1)[0]
+    received_key = f"{folder}/original.xlsx" if received == "xlsx" else raw_key
     try:
-        with storage.open_write(raw_key) as sink:
+        with storage.open_write(received_key) as sink:
             fetched = fetch_resolved(resolved, sink, window=None, limit_bytes=limit_bytes)
         try:
+            prepared = intake_file(
+                storage,
+                received_key=received_key,
+                received_format=received,
+                csv_key=raw_key,
+                original_key=f"{folder}/original.{received}",
+                config=intake or load_intake_config(config_root()),
+            )
+            raw_key = prepared.source_key
+            if prepared.worth_keeping:
+                storage.write_model(f"{folder}/{INTAKE_REPORT_FILENAME}", prepared.report)
             result = read_upload(
                 storage,
                 raw_key,
-                file_format=resolved.file_format,
+                file_format=prepared.file_format,
                 row_cap=min(row_limit or PROFILE_ROW_CAP, PROFILE_ROW_CAP),
             )
         except IngestError as exc:
@@ -734,7 +757,7 @@ def add_connection_source(
             client_id=client_id,
             file_name=file_name,
             storage_key=raw_key,
-            file_format=resolved.file_format,
+            file_format=prepared.file_format,
             role=role,
             rows=profile.rows,
             columns=tuple(column.name for column in profile.profile.columns),
@@ -835,9 +858,10 @@ def _discard(
     from contextlib import suppress
 
     from engine.clients import ClientStoreError
+    from engine.intake.run import companion_keys
     from engine.storage import StorageError
 
-    for key in (raw_key, source_profile_key(client_id, source_id)):
+    for key in (*companion_keys(storage, raw_key), raw_key, source_profile_key(client_id, source_id)):
         with suppress(OSError, StorageError):
             storage.delete(key)
     with suppress(ClientStoreError):

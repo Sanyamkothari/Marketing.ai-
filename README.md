@@ -1804,3 +1804,29 @@ outside the team.
   the rehearsal. **The Phase 4 gate is not met until a person outside the team rehearses the demo** and signs that
   file; the manager review follows.
 <!-- ---- END PLAN-J ---- -->
+<!-- ---- PLAN-L (data doctor) — append only below this line ---- -->
+
+## Plan L — Data Doctor, one agent for messy data (M150–M161)
+
+[`docs/plans/MARKETING_AI_PLAN_L_DATA_DOCTOR.md`](docs/plans/MARKETING_AI_PLAN_L_DATA_DOCTOR.md) is for clients
+with no data team: files of any shape go in, Data Doctor reads them, fixes what it can with the person's approval,
+lets them correct anything by hand, builds the one file a use case needs, and says plainly what is missing. Every
+change stays a step our tested code runs and next month's file replays. How it works, in plain words:
+[`docs/DATA_DOCTOR.md`](docs/DATA_DOCTOR.md). Decisions: DEC-1500 … DEC-1599 in [`docs/DECISIONS.md`](docs/DECISIONS.md),
+ten numbers per milestone.
+
+| # | Milestone | Definition of done | Status | Tests that prove it |
+|---|---|---|---|---|
+| M150 | Intake widening | Excel workbooks (every sheet listed, the table chosen), the header found under titles, two header rows joined, total and note rows left out, repeated names numbered, missing words read as empty in number/date columns; a clean CSV stored byte for byte as before; `intake=false` reads as before; uploads, imports, sources and pulls alike; the upload screens say what was done | **done** | `tests/unit/intake/`, `tests/integration/test_api_intake.py`, `tests/integration/test_intake_ui.py` |
+| M151 | Data Doctor, the place | Home "Bring your data"; many files; diagnosis per file; what your data can power per use case; hand-off into Guided setup | pending | — |
+| M152 | The AI proposes steps | `propose_step` for the existing step kinds, checked like every step | pending | — |
+| M153 | New value steps | `map_values`, `set_missing_text`, `valid_range`, `convert_units`, `split_column`, `rename_column`, `fill_missing` | pending | — |
+| M154 | Editing by hand | table view; edits become steps; undo by unticking | pending | — |
+| M155 | Several files (level 4) | Data Doctor drives the onboarding builder; built datasets carry a recipe | pending | — |
+| M156 | Wide sheets | `unpivot` | pending | — |
+| M157 | Outcome from events (level 5) | `propose_label`, agreed as a sentence | pending | — |
+| M158 | Enough data | readiness per use case, what to do now, what to collect | pending | — |
+| M159 | Memory per client | same-shape files offered the saved treatment | pending | — |
+| M160 | The messy-file benchmark | targets of plan §11 measured | pending | — |
+| M161 | Hardening and docs | security review, performance | pending | — |
+<!-- ---- END PLAN-L ---- -->

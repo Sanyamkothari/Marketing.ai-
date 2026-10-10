@@ -187,7 +187,7 @@ class AzureBlobConnector:
                 )
             )
             return report([*steps, *skipped_after(remaining(StepName.LIST))], utc_now())
-        steps.append(step(StepName.LIST, StepStatus.OK, f"Found {len(keys)} CSV or Parquet files."))
+        steps.append(step(StepName.LIST, StepStatus.OK, f"Found {len(keys)} CSV, Excel or Parquet files."))
         if keys:
             try:
                 container.download_blob(keys[0], offset=0, length=1024).readall()
@@ -288,7 +288,7 @@ class AzureBlobConnector:
             raise
         except Exception as exc:
             raise _read_error(exc) from None
-        return preview_bytes(data, "parquet", truncated=False)
+        return preview_bytes(data, file_format, truncated=False)
 
     def fetch(
         self,
@@ -342,7 +342,9 @@ def _key(selection: Selection) -> str:
     key = (selection.path or "").strip()
     if not key or key.endswith("/"):
         raise ConnectorError(
-            "CONNECTION_PICK_A_FILE", "Pick a file first.", "Choose a CSV or Parquet file from the list."
+            "CONNECTION_PICK_A_FILE",
+            "Pick a file first.",
+            "Choose a CSV, Excel or Parquet file from the list.",
         )
     return key
 

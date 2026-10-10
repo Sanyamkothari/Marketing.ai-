@@ -108,7 +108,7 @@ export function createConnectionPicker({ useCaseId, mode, redraw, onImported, on
         return `<button type="button" class="cp-item" data-cp-pick="${esc(JSON.stringify([item.path, item.schema_name, item.table, item.name]))}"${
           item.importable ? "" : " disabled"
         }><span class="cp-name">${esc(item.name)}</span><span class="cp-meta">${esc(
-          item.importable ? size || "Pick" : "Not a CSV or Parquet file",
+          item.importable ? size || "Pick" : "Not a CSV, Excel or Parquet file",
         )}</span></button>`;
       })
       .join("");

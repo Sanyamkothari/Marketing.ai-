@@ -2,8 +2,13 @@
 
 The upload route never holds the file in memory: it streams the request body into `Storage` a
 megabyte at a time, counting as it goes, so the configured size limit is enforced before the bytes
-land and an aborted upload leaves nothing behind. Everything after the write is ingest's job; this
-module only maps an `IngestError` onto the M1 error envelope.
+land and an aborted upload leaves nothing behind. Everything after the write is intake's and ingest's
+job; this module only maps an `IngestError` onto the M1 error envelope.
+
+Plan L M150 (DEC-1501): between the write and ingest, Data Doctor's intake rules read the file the way
+a person would - an Excel workbook's table, the column names under a title, no "Grand Total" row, "-"
+read as empty in a column of numbers - and rewrite it only when one of them applies, keeping the file
+as received beside it. The form's `intake=false` reads the file exactly as before.
 
 `engine.stages.ingest` is imported as a module rather than by name because the two upload/run routers
 are the only callers of its M2 surface and referencing it through the module gives every test one
@@ -13,7 +18,7 @@ seam to stub, without any of them reaching into the route's own globals.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Annotated, Final, Literal
+from typing import Annotated, Final
 
 from fastapi import APIRouter, File, Form, HTTPException, Response, UploadFile
 
@@ -30,6 +35,8 @@ from engine.config import (
     load_use_case,
 )
 from engine.contracts import DatasetProfile
+from engine.intake.config import IntakeConfig, load_intake_config
+from engine.intake.run import INTAKE_REPORT_FILENAME, ReceivedFormat, intake_file, received_format_for
 from engine.stages import ingest
 from engine.storage import Storage, StorageError, upload_key
 from engine.utils.ids import new_upload_id
@@ -51,7 +58,7 @@ UPLOAD_VALIDATION_FILENAME: Final[str] = "validation.json"
 UNSUPPORTED_FORMAT_CODE: Final[str] = "UPLOAD_UNSUPPORTED_FORMAT"
 """The one `IngestError` code that is a 415 rather than a 422."""
 
-FileField = Annotated[UploadFile, File(description="The CSV or Parquet file to profile.")]
+FileField = Annotated[UploadFile, File(description="The CSV, Excel (.xlsx) or Parquet file to profile.")]
 UseCaseField = Annotated[str, Form(description="Use case whose limits and hints drive the profile.")]
 ModeField = Annotated[RunMode, Form(description="train or score; recorded on the upload record.")]
 SyntheticField = Annotated[
@@ -60,6 +67,21 @@ SyntheticField = Annotated[
         description=(
             "True when the file is generated data, not a client's. Every run that reads it is "
             "quarantined as synthetic: its reports say the effect is planted (Plan J M95)."
+        )
+    ),
+]
+SheetField = Annotated[
+    str | None,
+    Form(
+        description="For an Excel workbook, the sheet to read; by default the visible sheet with the largest table."
+    ),
+]
+IntakeField = Annotated[
+    bool,
+    Form(
+        description=(
+            "False reads the file exactly as it arrived, without Data Doctor's intake rules (no header "
+            "search, no total rows left out, no missing words read as empty). A workbook is still converted."
         )
     ),
 ]
@@ -78,7 +100,7 @@ _NOT_FOUND: dict[int | str, dict[str, object]] = {404: {"model": ErrorResponse}}
     response_model=UploadResponse,
     status_code=201,
     responses=_UPLOAD_ERRORS,
-    summary="Store a CSV or Parquet file, profile it and return everything the Setup screen renders",
+    summary="Store a CSV, Excel or Parquet file, read it, profile it and return everything the Setup screen renders",
 )
 async def create_upload(
     storage: StorageDep,
@@ -88,6 +110,8 @@ async def create_upload(
     use_case: UseCaseField,
     mode: ModeField = RunMode.TRAIN,
     synthetic: SyntheticField = False,
+    sheet: SheetField = None,
+    intake: IntakeField = True,
 ) -> UploadResponse:
     """Stream the file in, profile it and persist the `uploads/<upload_id>/` directory.
 
@@ -98,11 +122,11 @@ async def create_upload(
     limit_mb = config.validation.max_file_size_mb
     upload_id = new_upload_id()
     try:
-        file_format = ingest.file_format_for(file.filename or "")
+        received = received_format_for(file.filename or "")
     except ingest.IngestError as exc:
         raise ingest_http(exc.code, exc.message) from exc
 
-    source_key = upload_key(upload_id, source_filename(file_format))
+    source_key = upload_key(upload_id, received_filename(received))
     total = 0
     try:
         with storage.open_write(source_key) as sink:
@@ -122,11 +146,14 @@ async def create_upload(
         config,
         upload_id=upload_id,
         source_key=source_key,
-        file_format=file_format,
-        file_name=file.filename or source_filename(file_format),
+        file_format=received,
+        file_name=file.filename or received_filename(received),
         file_size_bytes=total,
         mode=mode,
         synthetic=synthetic,
+        intake=load_intake_config(root),
+        sheet=sheet,
+        intake_enabled=intake,
     )
     response.headers["Location"] = f"/uploads/{upload_id}/profile"
     return upload
@@ -138,21 +165,35 @@ def finish_upload(
     *,
     upload_id: str,
     source_key: str,
-    file_format: Literal["csv", "parquet"],
+    file_format: ReceivedFormat,
     file_name: str,
     file_size_bytes: int,
     mode: RunMode,
     synthetic: bool = False,
+    intake: IntakeConfig | None = None,
+    sheet: str | None = None,
+    intake_enabled: bool = True,
 ) -> UploadResponse:
-    """Profile a file already written at `source_key` and record it as upload `upload_id`.
+    """Read a file already written at `source_key` through intake, profile it and record it as upload `upload_id`.
 
     Everything `POST /uploads` does after the bytes land, shared with an import from a connection
     (Plan H M80), so an imported table is an upload in every respect. An unreadable file removes the
-    whole upload directory and raises the same 415/422 the upload route gives.
+    whole upload directory and raises the same 415/422 the upload route gives. A workbook arrives at
+    `original.xlsx` (`received_filename`); intake writes the table it reads to `source.csv`.
     """
     try:
+        prepared = intake_file(
+            storage,
+            received_key=source_key,
+            received_format=file_format,
+            csv_key=upload_key(upload_id, source_filename("csv")),
+            original_key=upload_key(upload_id, f"original.{file_format}"),
+            config=intake or IntakeConfig(),
+            sheet=sheet,
+            enabled=intake_enabled,
+        )
         result = ingest.read_upload(
-            storage, source_key, file_format=file_format, row_cap=profile_row_cap(config)
+            storage, prepared.source_key, file_format=prepared.file_format, row_cap=profile_row_cap(config)
         )
         profile = ingest.profile_dataset(
             result.frame,
@@ -180,7 +221,9 @@ def finish_upload(
         encoding=profile.encoding,
         row_count=profile.row_count,
         column_count=profile.column_count,
-        source_key=source_key,
+        source_key=prepared.source_key,
+        original_key=prepared.report.original_key,
+        intake_key=upload_key(upload_id, INTAKE_REPORT_FILENAME) if prepared.worth_keeping else None,
         profile_key=upload_key(upload_id, UPLOAD_PROFILE_FILENAME),
         fingerprint_key=upload_key(upload_id, UPLOAD_FINGERPRINT_FILENAME),
         fingerprint_hash=profile.fingerprint.hash,
@@ -189,8 +232,10 @@ def finish_upload(
     )
     storage.write_model(record.profile_key, profile)
     storage.write_model(record.fingerprint_key, profile.fingerprint)
+    if record.intake_key is not None:
+        storage.write_model(record.intake_key, prepared.report)
     storage.write_model(upload_key(upload_id, UPLOAD_RECORD_FILENAME), record)
-    return UploadResponse(upload_id=upload_id, profile=profile)
+    return UploadResponse(upload_id=upload_id, profile=profile, intake=prepared.report)
 
 
 @router.get(
@@ -238,6 +283,12 @@ def profile_row_cap(config: UseCaseConfig) -> int:
 def source_filename(file_format: str) -> str:
     """`source.csv` or `source.parquet` - the one place the stored name is spelled."""
     return f"source.{file_format}"
+
+
+def received_filename(received: ReceivedFormat) -> str:
+    """Where a received file lands: `source.csv` / `source.parquet`, or `original.xlsx` for a workbook,
+    which intake turns into `source.csv` (Plan L M150)."""
+    return "original.xlsx" if received == "xlsx" else source_filename(received)
 
 
 def load_upload(storage: Storage, upload_id: str) -> UploadRecord:

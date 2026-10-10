@@ -78,12 +78,13 @@ PREVIEW_MAX_BYTES: Final[int] = 256 * 1024
 """How much of a CSV object a preview downloads: plenty for twenty rows."""
 
 PREVIEW_MAX_PARQUET_BYTES: Final[int] = 64 * 1024 * 1024
-"""A Parquet file has its index at the end, so a preview reads the whole file - up to this size."""
+"""A Parquet file (and a workbook, a zip with its index at the end) is read whole for a preview - up to this size."""
 
 FETCH_BATCH_ROWS: Final[int] = 10_000
 """Rows a database fetch reads, converts and writes at a time."""
 
-FileFormat = Literal["csv", "parquet"]
+FileFormat = Literal["csv", "parquet", "xlsx"]
+"""How a fetched file is read; `xlsx` is an Excel workbook, which intake turns into CSV (Plan L M150, DEC-1504)."""
 ConfigValue = str | int | bool | None
 
 
@@ -192,7 +193,7 @@ class BrowseItem(_Frozen):
     schema_name: str | None = None
     table: str | None = None
     size_bytes: int | None = None
-    importable: bool = Field(description="True for a CSV or Parquet file, or a table.")
+    importable: bool = Field(description="True for a CSV, Excel (.xlsx) or Parquet file, or a table.")
 
 
 class BrowseResult(_Frozen):

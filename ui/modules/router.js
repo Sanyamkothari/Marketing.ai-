@@ -449,3 +449,31 @@ export async function resultsListsHtml() {
   );
 }
 // ---- END PLAN-J ----
+// ---- PLAN-L (data doctor) — append only below this line ----
+// Plan L M150 (DEC-1505): how the Setup form says what Data Doctor's intake did to a file, without importing
+// a phase module. `ui/modules/intake/index.js` registers `{ accept, html(intake, options), bind(root, handlers) }`;
+// with nothing registered the form draws no notes and its file control accepts CSV and Parquet, as before.
+let uploadNotesProvider = null;
+
+/** Register the upload notes: `{ accept, html(intake, { undo, busy }), bind(root, { onAsIs, onSheet }) }`. */
+export function registerUploadNotes(provider) {
+  const { accept, html, bind } = provider || {};
+  if (typeof accept !== "string" || typeof html !== "function" || typeof bind !== "function") {
+    throw new Error("registerUploadNotes needs { accept, html(intake, options), bind(root, handlers) }");
+  }
+  uploadNotesProvider = { accept, html, bind };
+  announceModulesChanged();
+}
+
+/** The file types an upload control accepts. */
+export const tableFileTypes = () => (uploadNotesProvider ? uploadNotesProvider.accept : ".csv,.parquet");
+
+/** The notes for one upload's `intake`, or "" with no provider. */
+export const uploadNotesHtml = (intake, options = {}) =>
+  uploadNotesProvider ? uploadNotesProvider.html(intake, options) : "";
+
+/** Wire the notes' buttons; nothing without a provider. */
+export function bindUploadNotes(root, handlers = {}) {
+  if (uploadNotesProvider) uploadNotesProvider.bind(root, handlers);
+}
+// ---- END PLAN-L ----

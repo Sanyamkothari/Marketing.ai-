@@ -54,11 +54,14 @@ export const templateUrl = (path) => url(path);
  * the Run click with advice the screen could not act on — it offered to upload the file again,
  * which is what had just gone wrong (DEC-081).
  */
-export function postUpload(file, useCaseId, mode) {
+export function postUpload(file, useCaseId, mode, { sheet = null, intake = true } = {}) {
   const form = new FormData();
   form.append("file", file);
   form.append("use_case", useCaseId);
   form.append("mode", mode);
+  // Plan L M150 (DEC-1505): a workbook's sheet, and "read it as it is" (intake off).
+  if (sheet) form.append("sheet", sheet);
+  if (!intake) form.append("intake", "false");
   return request("/uploads", { method: "POST", body: form });
 }
 

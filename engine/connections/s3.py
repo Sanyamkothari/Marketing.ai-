@@ -9,7 +9,7 @@ Only these calls are ever made: `HeadBucket`, `ListObjectsV2`, `HeadObject`, `Ge
 for a preview), and - to tell whether the keys could write - `sts:GetCallerIdentity`,
 `iam:SimulatePrincipalPolicy` and `GetBucketAcl`, all of which read. Nothing is ever written.
 
-`newest` (Plan J M107, DEC-1317) answers "the newest CSV or Parquet file under this folder" from
+`newest` (Plan J M107, DEC-1317) answers "the newest CSV, Excel or Parquet file under this folder" from
 `ListObjectsV2` alone: the latest `LastModified`, the greatest key among files modified in the same second.
 """
 
@@ -333,7 +333,9 @@ class S3Connector:
             more = " or more" if listing.get("IsTruncated") else ""
             steps.append(
                 step(
-                    StepName.LIST, StepStatus.OK, f"Found {len(keys)}{more} CSV or Parquet files in {where}."
+                    StepName.LIST,
+                    StepStatus.OK,
+                    f"Found {len(keys)}{more} CSV, Excel or Parquet files in {where}.",
                 )
             )
         else:
@@ -341,8 +343,8 @@ class S3Connector:
                 step(
                     StepName.LIST,
                     StepStatus.OK,
-                    f"The bucket opened, but there are no CSV or Parquet files in {where} yet.",
-                    "Put a CSV or Parquet export there, or change “Start in folder” under More options.",
+                    f"The bucket opened, but there are no CSV, Excel or Parquet files in {where} yet.",
+                    "Put a CSV, Excel or Parquet export there, or change “Start in folder” under More options.",
                 )
             )
 
@@ -593,7 +595,7 @@ class S3Connector:
             data = client.get_object(Bucket=bucket, Key=key)["Body"].read()
         except (ClientError, BotoCoreError) as exc:
             raise _read_error(exc, bucket, key) from None
-        return preview_bytes(data, "parquet", truncated=False)
+        return preview_bytes(data, file_format, truncated=False)
 
     def fetch(
         self,
@@ -630,7 +632,9 @@ class S3Connector:
         key = (selection.path or "").strip()
         if not key or key.endswith("/"):
             raise ConnectorError(
-                "CONNECTION_PICK_A_FILE", "Pick a file first.", "Choose a CSV or Parquet file from the list."
+                "CONNECTION_PICK_A_FILE",
+                "Pick a file first.",
+                "Choose a CSV, Excel or Parquet file from the list.",
             )
         return key
 

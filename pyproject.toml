@@ -65,6 +65,9 @@ dependencies = [
   # ---- END PLAN-G ----
   # ---- PLAN-J (product) — append only below this line ----
   # ---- END PLAN-J ----
+  # ---- PLAN-L (data doctor) — append only below this line ----
+  "openpyxl==3.1.5",                    # reads Excel workbooks (.xlsx, .xlsm) at intake; read-only streaming mode (DEC-1500)
+  # ---- END PLAN-L ----
 ]
 
 [project.optional-dependencies]

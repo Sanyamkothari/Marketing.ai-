@@ -37,7 +37,7 @@ from starlette.concurrency import run_in_threadpool
 from api.access import set_audit_context
 from api.access_policy import RoutePolicy, register
 from api.deps import ConfigRootDep, SettingsDep, StorageDep
-from api.routes.uploads import delete_upload, finish_upload, http_error, source_filename, use_case_config
+from api.routes.uploads import delete_upload, finish_upload, http_error, received_filename, use_case_config
 from api.schemas import ErrorResponse, UploadResponse
 from engine.access.roles import Role
 from engine.config import RunMode
@@ -53,6 +53,7 @@ from engine.connections import (
 )
 from engine.connections.base import BrowseResult, ConfigValue, Connector, FetchResult, KindInfo, Preview
 from engine.connections.registry import check_name
+from engine.intake.config import load_intake_config
 from engine.storage import upload_key
 from engine.utils.ids import new_upload_id
 from engine.utils.time import utc_now
@@ -197,6 +198,15 @@ class ImportRequest(_Strict):
         default=None, max_length=256, description="A database's schema or dataset."
     )
     table: str | None = Field(default=None, max_length=256, description="A database's table.")
+    # Plan L M150 (DEC-1504): the same two intake choices `POST /uploads` takes.
+    sheet: str | None = Field(
+        default=None,
+        max_length=256,
+        description="For an Excel workbook, the sheet to read, as for `POST /uploads`.",
+    )
+    intake: bool = Field(
+        default=True, description="False reads the table exactly as it arrived, as for `POST /uploads`."
+    )
 
     def selection(self) -> Selection:
         return Selection(path=self.path, schema_name=self.schema_name, table=self.table)
@@ -432,7 +442,7 @@ def import_from_connection(
     file_format = _catch(lambda: conn.file_format(selection))
     limit_bytes = config.validation.max_file_size_mb * 1024 * 1024
     upload_id = new_upload_id()
-    source_key = upload_key(upload_id, source_filename(file_format))
+    source_key = upload_key(upload_id, received_filename(file_format))
 
     def fetch() -> FetchResult:
         with storage.open_write(source_key) as sink:
@@ -454,6 +464,9 @@ def import_from_connection(
         file_name=fetched.file_name,
         file_size_bytes=fetched.size_bytes,
         mode=body.mode,
+        intake=load_intake_config(root),
+        sheet=body.sheet,
+        intake_enabled=body.intake,
     )
     storage.write_model(
         upload_key(upload_id, IMPORT_SOURCE_FILENAME),

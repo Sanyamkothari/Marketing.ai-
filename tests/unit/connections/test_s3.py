@@ -48,7 +48,7 @@ def test_a_reachable_bucket_passes_every_step_and_finds_its_region(s3: object) -
     assert [s.name for s in report.steps] == list(StepName)
     assert got["reach"] == got["sign_in"] == got["list"] == got["read_sample"] == "ok"
     listed = next(s for s in report.steps if s.name is StepName.LIST)
-    assert "Found 2 CSV or Parquet files" in listed.message
+    assert "Found 2 CSV, Excel or Parquet files" in listed.message  # Plan L M150: workbooks are listed too
     # moto has no IAM policy simulator and the bucket is private: the check says it cannot tell.
     assert got["read_only_check"] == "skipped"
 

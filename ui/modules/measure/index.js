@@ -136,7 +136,7 @@ function blockHtml(uc, run) {
 
 function uploadButton(st, label, kind) {
   const busy = !!st.busy;
-  return `<label class="btn ${kind} measure-upload${busy ? " is-busy" : ""}"><input type="file" class="measure-file" accept=".csv,.parquet,text/csv" data-measure-file="${esc(
+  return `<label class="btn ${kind} measure-upload${busy ? " is-busy" : ""}"><input type="file" class="measure-file" accept=".csv,.xlsx,.xlsm,.parquet,text/csv" data-measure-file="${esc(
     st.run.run_id,
   )}"${busy ? " disabled" : ""}><span>${esc(label)}</span></label>`;
 }
