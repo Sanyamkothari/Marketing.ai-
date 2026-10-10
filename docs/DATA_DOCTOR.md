@@ -224,7 +224,51 @@ its own industry).
   `tests/integration/test_api_doctor_outcome.py` (the offer, the agreement, the refusals, and the agreed
   `LabelSpec` building a dataset through the onboarding API).
 
-## 7. What Data Doctor will not do
+## 7. Not enough data yet: what to do instead (M158)
+
+When a use case is **Not enough data yet** (or Guided setup's advisor stops on the file), Data Doctor never
+just stops. Under the verdict it says:
+
+- **What is short, and by how much**, counted the way the Run button counts it and against the use case's
+  own minimums (`validation.min_rows`, `validation.min_positive`): "tiny.csv has 60 customers; the model
+  needs at least 1,000, so 940 more."
+- **What you can do now**, only what the product can do: start another use case your files already power
+  (with its **Start** button), and, for a use case that contacts customers, collect the outcome with your
+  next campaign - kept back at random in the use case's control group, with the smallest change such a
+  campaign can show worked out by the test planner on your file's customers and outcome rate. "Audit a
+  campaign" on the Results page reads it afterwards.
+- **What to collect, and from whom**: how many more customers (at your file's outcome rate, how many it
+  takes to reach the minimum), where the outcome usually comes from, and the pilot's data request for the
+  use case (the tables to ask for and how much history), with a download link.
+
+Every number is measured on your file or is a configured minimum. Nothing here offers "a longer history":
+no date window is applied before the verdict, so there is nothing shorter to undo.
+
+For developers: `engine/doctor/sufficiency.py` (`enough_data`, `with_alternatives`), the field
+`UseCaseReadiness.next_steps`, tests in `tests/unit/doctor/test_sufficiency.py` and
+`tests/integration/test_api_doctor.py`.
+
+## 8. Next month's file: the same treatment (M159)
+
+When you approve Guided setup on a file with fixes, Data Doctor remembers the file's **shape** - its
+column names in order, and the sheet for a workbook - and which fixes treated it (and how the file was
+read: the sheet, intake on or off). When a file of the same shape arrives, the upload and Guided setup say
+"This looks like billing_sept.csv, which you prepared with Guided setup on 3 Sep 2026 (4 steps). Use the
+same treatment?" **Use the same treatment** ticks last time's fixes in the checklist; they are still shown,
+previewed and approved like any other. Nothing is applied until you approve. A workbook whose remembered
+sheet is there but was not the one read says so, so you can read that sheet instead.
+
+The memory is kept per use case (uploads are not tied to a client; one deployment serves one client,
+`docs/CLIENT_ISOLATION.md`). It holds column names and ids only, never a value: the fixes themselves stay
+with the prepared file. It is deleted with that file by the retention job, or when it outlives the use
+case's retention setting, and an erasure request deletes an entry that holds the person's id.
+
+For developers: `engine/doctor/memory.py` (store `doctor_memory/<use case>/<shape>.json`), the response
+field `treatment` of `POST /uploads` and of every Guided-setup session answer,
+`POST /uploads/{id}/agent-session/same-treatment`, the store `doctor_memory` in `engine/privacy/layout.py`,
+tests in `tests/unit/doctor/test_memory.py` and `tests/integration/agent/test_api_doctor_memory.py`.
+
+## 9. What Data Doctor will not do
 
 - **Match people across files with no shared key.** It can tidy keys (leading zeros, prefixes) and say how many
   match; it does not guess that "R. Sharma, Pune" is "Rahul Sharma".

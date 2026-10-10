@@ -1697,4 +1697,50 @@ DEC-1500…1509, M151 → DEC-1510…1519, …), so parallel work on two milesto
 - **DEC-1579 — `propose_label` in the chat is not built.** *Decision:* Guided setup's chat works on one upload and an
   outcome from events needs two files; when the chat sees several files its `propose_label` should return the
   same `OutcomeOffer` and build nothing, agreement staying `POST /doctor/outcome`.
+- **DEC-1580 — M158: Data Doctor never just stops.** *Decision:* `UseCaseReadiness.next_steps` (added, defaulted:
+  null for a ready use case) carries `engine/doctor/sufficiency.py`'s answer for every use case that is not ready:
+  what is short and by how much, what can be done now, and what to collect from whom. Every number is measured on
+  the file or is a configured threshold.
+- **DEC-1581 — The shortfall is the Run button's own count.** *Decision:* `enough_data` runs `check_rows_too_few`
+  and `check_target_too_few_positives` through `params_from_config` on the rows the advisor read, so the minimums
+  are the use case's `validation.min_rows` and `validation.min_positive`; when the advisor read fewer rows than
+  the file has, the sentence says so.
+- **DEC-1582 — Only options the product can perform.** *Decision:* (a) another use case the same files power, first,
+  with its Start button; (b) for a use case whose actions contact customers, the next campaign with the use
+  case's control group (`effective_holdout_fraction`), sized by the test planner (`arm_sizes`,
+  `mde_two_proportions` at `configs/pilot/readiness.yaml`'s confidence and power) on the file's customers and
+  outcome rate, which "Audit a campaign" reads later; (c) no "longer history" option, as no window applies
+  before a readiness verdict.
+- **DEC-1583 — What to collect, from the pilot's data request.** *Decision:* how many more rows; at the file's own
+  outcome rate, how many customers reach `min_positive`; where the outcome comes from (`target.label_source`);
+  and `build_data_request`'s required tables and months of history; the page links
+  `GET /pilot/data-request?use_case=`. Every sentence passes `jargon_in`.
+- **DEC-1584 — How M158 is proven.** `tests/unit/doctor/test_sufficiency.py` (shipped thresholds; planner numbers
+  recomputed independently) and `tests/integration/test_api_doctor.py`; no existing expectation changed.
+- **DEC-1590 — M159: the next file of the same shape is offered the same treatment.** *Decision:* the shape is a
+  SHA-256 over the fingerprint columns in file order plus the workbook sheet name (`shape_of`). On Approve of a
+  training session with steps, `engine/doctor/memory.remember` writes shape → recipe id, the prepared upload
+  holding it, the source upload and the intake choices (sheet, intake on or off); the latest approval wins.
+- **DEC-1591 — Per use case, not per client.** *Decision:* uploads are not client-scoped (`CLIENT_ISOLATION.md`
+  §2.1), so the memory lives at `doctor_memory/<use case>/<shape>.json`. Onboarding build specs are not remembered
+  yet.
+- **DEC-1592 — Names and ids, never values.** *Decision:* an entry holds column names, the shape hash, ids, the sheet
+  name, intake on or off, the step count and two dates; the steps stay in the prepared upload's
+  `data_recipe.json` under that upload's retention and erasure, and an offer whose recipe is gone is not made.
+  Remembering never fails an approval.
+- **DEC-1593 — The offer.** *Decision:* `POST /uploads` (and imports and hand-offs through `finish_upload`) and every
+  Guided setup answer carry `treatment`: `same_shape` (`can_apply` for training files only) or `same_sheet` (a
+  workbook with last time's sheet unread). It is not offered on the file it was approved on, nor after it is used.
+- **DEC-1594 — Use the same treatment, never silently.** *Decision:* `POST /uploads/{id}/agent-session/same-treatment`
+  (Analyst, body `recipe_id`; 409 `DOCTOR_MEMORY_CHANGED` or `DOCTOR_MEMORY_NONE`) ticks the saved steps as the
+  person's decision: a step proposed again is ticked in place, others are added as "As last time: …"; all are
+  checked by `check_recipe`. It is refused on scoring, stopped or applied sessions and before an uncombined
+  combine. Approve and its checks still decide.
+- **DEC-1595 — Retention and erasure cover the memory.** *Decision:* `Store.DOCTOR_MEMORY` and
+  `RetentionCategory.DOCTOR_MEMORY`: an entry goes with its recipe's upload, or once it outlives its use case's
+  `retention_days` from `remembered_at` (an undated one is skipped and reported); erasure deletes an entry that
+  holds the id, as an LLM cache entry. *Consequences:* `tests/unit/doctor/test_memory.py` and
+  `tests/integration/agent/test_api_doctor_memory.py` prove it; the connections import key set gains `treatment`
+  and `test_hardening`'s agent-session policy count is 11. `infra/naming.OBJECT_PREFIXES` does not grant
+  `doctor_memory/` yet: on AWS the memory is skipped and logged, never failing anything.
 <!-- ---- END PLAN-L ---- -->

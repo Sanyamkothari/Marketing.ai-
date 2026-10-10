@@ -102,6 +102,11 @@ INTERRUPTED: Final[str] = "ERASURE_INTERRUPTED"
 _UNAVAILABLE: Final[str] = "training_input_unavailable"
 """`model_retrain_flag.reason` of a model whose training inputs are gone (exposure unknown, DEC-709)."""
 
+_DELETED_ON_HIT: Final[frozenset[Store]] = frozenset({Store.LLM_CACHE, Store.DOCTOR_MEMORY})
+"""Stores whose file is deleted outright when it holds the id, never rewritten: a cache entry, and Data
+Doctor's memory of a shape (Plan L M159; re-derived at the next Approve, and a rewritten entry would name a
+treatment nobody approved)."""
+
 _KEYED: Final[frozenset[FileKind]] = frozenset({FileKind.CSV, FileKind.PARQUET, FileKind.JSON})
 """Kinds whose rows are decided by the file's recorded key columns (JSON: its rows of records)."""
 
@@ -675,7 +680,7 @@ def _erase(
     for location in findings.locations:
         by_store.setdefault(location.store, []).append(location)
     totals = {
-        store: sum(1 for loc in items if loc.rewritable or loc.store == Store.LLM_CACHE)
+        store: sum(1 for loc in items if loc.rewritable or loc.store in _DELETED_ON_HIT)
         for store, items in by_store.items()
     }
     progress.plan({**totals, **({CONSENT_STORE: 1} if delete_consent else {})})
@@ -686,9 +691,9 @@ def _erase(
     failed_stores: list[str] = []
     for store, locations in by_store.items():
         unrewritable.extend(
-            loc.key for loc in locations if not loc.rewritable and loc.store != Store.LLM_CACHE
+            loc.key for loc in locations if not loc.rewritable and loc.store not in _DELETED_ON_HIT
         )
-        remaining = [loc for loc in locations if loc.rewritable or loc.store == Store.LLM_CACHE]
+        remaining = [loc for loc in locations if loc.rewritable or loc.store in _DELETED_ON_HIT]
         done, attempt = 0, 0
         progress.update(store, status="running")
         while remaining:
@@ -804,7 +809,7 @@ def _erase_file(
     tombstone: str,
 ) -> tuple[int, int, FileKind | None]:
     """Erase the principal from one file: `(rows, cells, kind)`, `kind` None for a deleted cache entry."""
-    if location.store == Store.LLM_CACHE or is_intake_original(location.key):  # deleted, not rewritten
+    if location.store in _DELETED_ON_HIT or is_intake_original(location.key):  # deleted, not rewritten
         storage.delete(location.key)
         purge_old_versions(storage, location.key)
         return 0, location.rows + location.cells + location.occurrences, None

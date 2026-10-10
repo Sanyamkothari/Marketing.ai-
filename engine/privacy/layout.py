@@ -30,6 +30,8 @@ Key                                     Written by                             D
 `.../suppression_proposals.json`,       `api/routes/pilot.py` (Plan J M104;    kept with the report; the
 `.../pilot_roi_inputs.json`             the value inputs: `engine.pilot.       value inputs name who
                                         proof.save_campaign_value_inputs`)     entered them
+`doctor_memory/<use case>/<shape>.json` `api/routes/agent.py` on Approve        `remembered_at`; column
+                                        (Plan L M159, `engine.doctor.memory`)  names and ids, no rows
 ======================================  =====================================  =========================
 
 Root-level files (`registry.db`, `clients.db`, `platform.db` and their journals) are databases, not
@@ -58,6 +60,7 @@ __all__ = [
     "VERSION_PURGE_PREFIXES",
     "CampaignInfo",
     "DatasetInfo",
+    "MemoryInfo",
     "RunInfo",
     "Store",
     "StoreIndex",
@@ -95,6 +98,8 @@ class Store(StrEnum):
     LLM_CACHE = "llm_cache"
     CAMPAIGNS = "campaigns"
     """Plan J M94: a campaign's assignment and outcomes (one row per customer), and its reports."""
+    DOCTOR_MEMORY = "doctor_memory"
+    """Plan L M159: which treatment a file of each shape had. Column names and ids, never a row."""
     OTHER = "other"
 
 
@@ -145,6 +150,8 @@ def store_of(key: str) -> Store:
         return Store.LLM_CACHE
     if head == "campaigns":
         return Store.CAMPAIGNS
+    if head == "doctor_memory":
+        return Store.DOCTOR_MEMORY
     return Store.OTHER
 
 
@@ -241,6 +248,17 @@ class CampaignInfo:
 
 
 @dataclass(frozen=True)
+class MemoryInfo:
+    """What a `doctor_memory/<use case>/<shape>.json` entry says (Plan L M159), read leniently."""
+
+    key: str
+    use_case_id: str | None
+    remembered_at: datetime | None
+    recipe_upload_id: str | None
+    source_upload_id: str | None
+
+
+@dataclass(frozen=True)
 class DatasetInfo:
     """What `dataset_manifest.json` says about one built dataset."""
 
@@ -261,6 +279,7 @@ class StoreIndex:
         self.uploads: dict[str, UploadInfo] = {}
         self.datasets: dict[str, DatasetInfo] = {}
         self.campaigns: dict[str, CampaignInfo] = {}
+        self.memories: dict[str, MemoryInfo] = {}
         for key in self._keys:
             parts = key.split("/")
             if len(parts) == 3 and parts[0] == "runs" and parts[2] == "run.json":
@@ -271,6 +290,8 @@ class StoreIndex:
                 self._add_dataset(storage, key, parts[1])
             elif len(parts) == 3 and parts[0] == "campaigns" and parts[2] == "campaign.json":
                 self._add_campaign(storage, key, parts[1])
+            elif len(parts) == 3 and parts[0] == "doctor_memory" and parts[2].endswith(".json"):
+                self._add_memory(storage, key)
 
     @property
     def keys(self) -> tuple[str, ...]:
@@ -332,6 +353,16 @@ class StoreIndex:
             run_ids=tuple(str(item) for item in run_ids) if isinstance(run_ids, list) else (),
             primary_key=_key_tuple(doc.get("primary_key")),
             matures_at=matures,
+        )
+
+    def _add_memory(self, storage: Storage, key: str) -> None:
+        doc = read_json(storage, key) or {}
+        self.memories[key] = MemoryInfo(
+            key=key,
+            use_case_id=_str_or_none(doc.get("use_case_id")),
+            remembered_at=parse_time(doc.get("remembered_at")),
+            recipe_upload_id=_str_or_none(doc.get("recipe_upload_id")),
+            source_upload_id=_str_or_none(doc.get("source_upload_id")),
         )
 
     def runs_reading_upload(self, upload_id: str) -> tuple[RunInfo, ...]:

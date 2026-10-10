@@ -44,6 +44,9 @@ const CSS = `
 .dd .dd-choice{display:grid;grid-template-columns:auto minmax(0,1fr);gap:2px 8px;margin:8px 0;font-size:13px}
 .dd .dd-choice small{grid-column:2;color:var(--muted)}
 .dd .dd-outcome .fhint{margin-top:6px}
+.dd .dd-next{margin-top:8px;font-size:13px;color:var(--ink2)}
+.dd .dd-next h5{margin:8px 0 2px;font-size:12px;font-weight:600;color:var(--ink2)}
+.dd .dd-next .dd-opt{margin:4px 0 0;line-height:1.5}
 `;
 
 let injected = false;
@@ -221,6 +224,32 @@ export function outcomeHtml(item) {
   }</div>`;
 }
 
+// Plan L M158 (DEC-1583): when a use case is not ready, what is short, what to do now and what to collect.
+function nextStepsHtml(next) {
+  if (!next) return "";
+  const list = (items) => (items.length ? `<ul>${items.map((t) => `<li>${esc(t)}</li>`).join("")}</ul>` : "");
+  const shortText = (next.shortfalls || []).map((s) => s.sentence);
+  const options = (next.options || []).map((o) => {
+    const button =
+      o.kind === "other_use_case" && o.use_case_id && o.upload_id
+        ? ` <button type="button" class="btn secondary sm" data-dd-start="${esc(o.use_case_id)}" data-dd-upload="${esc(
+            o.upload_id,
+          )}"${state.starting ? " disabled" : ""}>${esc(o.title)}</button>`
+        : "";
+    return `<p class="dd-opt" data-dd-option="${esc(o.kind)}"><strong>${esc(o.title)}.</strong> ${esc(o.detail)}${button}</p>`;
+  });
+  const request = next.data_request_use_case
+    ? `<p class="dd-opt"><a href="${API_BASE}/pilot/data-request?use_case=${encodeURIComponent(
+        next.data_request_use_case,
+      )}" download data-dd-request>Download the data request</a></p>`
+    : "";
+  const collect = next.collect || [];
+  if (!shortText.length && !options.length && !collect.length) return "";
+  return `<div class="dd-next" data-dd-next>${shortText.length ? `<h5>What is short</h5>${list(shortText)}` : ""}${
+    options.length ? `<h5>What you can do now</h5>${options.join("")}` : ""
+  }${collect.length ? `<h5>What to collect, and from whom</h5>${list(collect)}${request}` : ""}</div>`;
+}
+
 function useCaseHtml(item) {
   const status = STATUS[item.status] || STATUS.missing;
   const startable = (item.status === "ready" || item.status === "check") && item.upload_id;
@@ -234,7 +263,7 @@ function useCaseHtml(item) {
     item.name,
   )} <span class="pill ${status.pill}">${esc(status.title)}</span></h4><div class="dd-stage">${esc(item.stage)}</div><p>${esc(
     item.summary,
-  )}</p>${item.needs && item.needs.length ? `<ul>${item.needs.map((n) => `<li>${esc(n)}</li>`).join("")}</ul>` : ""}${outcomeHtml(
+  )}</p>${item.needs && item.needs.length ? `<ul>${item.needs.map((n) => `<li>${esc(n)}</li>`).join("")}</ul>` : ""}${nextStepsHtml(item.next_steps)}${outcomeHtml(
     item,
   )}</div>${button}</div>`;
 }

@@ -78,6 +78,10 @@ export const postRows = (uploadId, { offset = 0, limit = 10, whereColumn = null,
 /** Plan L M154: one edit made by hand, added as a ticked step; the session comes back. */
 export const postEdit = (uploadId, edit) => call(session(uploadId, "/edits"), { method: "POST", body: edit });
 
+/** Plan L M159: tick the steps that treated a file of the same shape last time (the offer's `recipe_id`). */
+export const postSameTreatment = (uploadId, recipeId) =>
+  call(session(uploadId, "/same-treatment"), { method: "POST", body: { recipe_id: recipeId } });
+
 /** Approve: `{ upload_id, mode, primary_key, target, overrides, summary, receipt }`, or a 409. */
 export const postApply = (uploadId) => call(session(uploadId, "/apply"), { method: "POST" });
 
