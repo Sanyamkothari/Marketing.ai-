@@ -18,10 +18,10 @@ actually written to justify.
 | Plan H: one simple product (generic journey, four pages, Connections) | [`MARKETING_AI_PLAN_H_SIMPLE.md`](MARKETING_AI_PLAN_H_SIMPLE.md) | same branch as Plan G, M80 … M84, DEC-1100 … 1199 |
 | Plan J: product value first (the plan being worked; proposal) | [`MARKETING_AI_PLAN_J_PRODUCT.md`](MARKETING_AI_PLAN_J_PRODUCT.md); evidence in [`docs/research/`](../research/) | M90 … M111, DEC-1300 … 1399 (claimed by M90) |
 | Plan J Phase 2 delegation: who builds what, the rules for a partner agent, and its prompts | [`PLAN_J_DELEGATION.md`](PLAN_J_DELEGATION.md) | partner branches `plan-j/<milestone>-<name>`, merged by the main session |
-| Plan K: Data Doctor, one agent for messy data (proposal) | [`MARKETING_AI_PLAN_K_DATA_DOCTOR.md`](MARKETING_AI_PLAN_K_DATA_DOCTOR.md) | new branch from `main`, M120 … M131, DEC-1400 … 1499 (claimed by M120) |
 | Hand-off reference design for the later integration phase (not allocated) | [`MARKETING_AI_PLAN_J_LAYER.md`](MARKETING_AI_PLAN_J_LAYER.md) | renumbered when the integration plan is written |
 | Plan K: agents that check, not agents that send (proposal for the manager review) | [`MARKETING_AI_PLAN_K_PROPOSAL.md`](MARKETING_AI_PLAN_K_PROPOSAL.md); evidence in [`docs/research/AGENTIC_AI_OPPORTUNITIES_2026_10.md`](../research/AGENTIC_AI_OPPORTUNITIES_2026_10.md) | M130 … M144, DEC-1400 … 1499 (proposed; not claimed) |
 | Plan K technical design: registry, policy, ledger, claim verifier, evals, MCP, statistics | [`PLAN_K_TECHNICAL_DESIGN.md`](PLAN_K_TECHNICAL_DESIGN.md) | design for review; optional M145 … M148 |
+| Plan L: Data Doctor, one agent for messy data (proposal) | [`MARKETING_AI_PLAN_L_DATA_DOCTOR.md`](MARKETING_AI_PLAN_L_DATA_DOCTOR.md) | new branch from `main`, M150 … M161, DEC-1500 … 1599 (proposed; not claimed) |
 | The parallel-work protocol (the contract between the phase branches, not a phase plan) | [`PARALLEL_WORK_PROTOCOL.md`](../../PARALLEL_WORK_PROTOCOL.md) | all |
 
 ## Missing

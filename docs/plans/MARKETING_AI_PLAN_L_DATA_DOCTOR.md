@@ -1,10 +1,10 @@
-# Marketing AI — Plan K: Data Doctor, one agent for messy data
+# Marketing AI — Plan L: Data Doctor, one agent for messy data
 
 **Companion to:** Plan G (`MARKETING_AI_PLAN_G_AGENTS.md`, Guided setup), `docs/AGENTS.md`, `docs/ONBOARDING.md`, `PARALLEL_WORK_PROTOCOL.md`
 **Owner:** Minfy — AI/ML team
 **Branch:** a new branch from `main` when the build starts
-**Decision range:** DEC-1400 … 1499 (the next free hundred; the first milestone claims it in the protocol table)
-**Milestones:** M120 – M131 (M112–M119 left free for Plan J)
+**Decision range:** DEC-1500 … 1599 (Plan K proposes DEC-1400 … 1499; the first milestone claims the next free hundred in the protocol table)
+**Milestones:** M150 – M161 (after Plan K's M130 – M148)
 **Status:** proposed, waiting for approval
 
 > **How to use this document.** Read it with Plan G and `docs/AGENTS.md`. Plan G built a careful helper
@@ -13,6 +13,13 @@
 > what format the product wants. It keeps every promise Plan G made (§5.2). Where this document is
 > silent, follow Plan G and the protocol. Where it is impossible or clearly wrong, stop, explain, and
 > propose the smallest change.
+
+> **Beside Plan K.** Plan K (`MARKETING_AI_PLAN_K_PROPOSAL.md`) is about agents that check campaigns
+> (compliance, the verifier, the planner). This plan is about the data that comes in before any of that.
+> They meet in two places. Plan K's M142 (mapping candidates and outcome-label drafts for integration
+> sources) is the same work as this plan's M155 and M157: whichever is built first, the other reuses it.
+> If Plan K's agent-safe core (M132: proposals, policy, signed log) is built first, Data Doctor's
+> proposals go through it; this plan does not depend on it.
 
 ---
 
@@ -232,7 +239,7 @@ the receipt, the audit log and next month's replay like every other fix.
 | "I don't have a churn column" | Proposes the outcome from events, as a sentence to agree | `LabelSpec` (level 5) |
 | "Score the customers who joined after March" | Cuts one file into a training file and a scoring file by a rule | New `split_file` action producing two prepared uploads with one recipe |
 
-The result of several files is a built dataset. Plan K closes `RECIPE_DATASET_UNSUPPORTED`: a built
+The result of several files is a built dataset. Plan L closes `RECIPE_DATASET_UNSUPPORTED`: a built
 dataset carries its build spec and the recipe applied after the build, and scoring replays both.
 
 ### 5.6 Memory per client
@@ -324,20 +331,20 @@ Ordered by how much resistance each removes, not by how interesting it is to bui
 
 | Milestone | What | Done when |
 |---|---|---|
-| **M120** Intake widening | Excel (every sheet), header and footer finders, repeated names, missing-value words; `IntakeSpec` saved and replayed. Rules only. | 30 real-shape messy files (§10) all reach a profile with correct headers; next month's file replays; no change to the 22 pinned Plan G benchmark digests except where an intake rule now applies (each listed in the DEC) |
-| **M121** Data Doctor, the place | Home "Bring your data"; drop many files; diagnosis per file (role, health, keys); *what your data can power* per use case; hand-off into a use case's Guided setup with everything pre-filled | A non-technical tester with 3 mixed files reaches a use case's checklist without opening Manual setup |
-| **M122** The AI proposes steps | `propose_step` for the existing step kinds; `explain`; sources labelled on the checklist | Fake-model tests: a grounded step lands pending; an ungrounded, leaking or invalid one is refused; the injection canary passes |
-| **M123** New value steps | `map_values`, `set_missing_text`, `valid_range`, `convert_units`, `split_column`, `rename_column`, `fill_missing` (constant) | Each step: stateless property test, receipt, replay test, refusal on ID/outcome |
-| **M124** Editing by hand | Table view; edits become `map_values`, `correct_cells`, `filter_rows`, `rename_column`, `drop_column`; undo by unticking | Jsdom + Playwright journey: edit, preview, approve, replay next month |
-| **M125** Several files (level 4) | Data Doctor drives the onboarding builder: `propose_role`, `propose_mapping`, join coverage, stacking monthly files with a column-drift check; built datasets carry a recipe, closing `RECIPE_DATASET_UNSUPPORTED` | Customer list + 3 monthly bills + tickets train through Data Doctor with no Manual setup; scoring next month replays |
-| **M126** Wide sheets | `unpivot` with name-pattern detection | A month-per-column sheet trains and replays |
-| **M127** Outcome from events (level 5) | `propose_label` from the person's sentence, shown back as a sentence, explicit agreement | "No recharge for 60 days" becomes a `LabelSpec` that builds, with censoring explained |
-| **M128** Enough data | Readiness per use case; *what you can do now*; the data request | Every `STOP_CODES` stop in Data Doctor shows what to do instead and what to collect |
-| **M129** Memory per client | Same-shape files offered the saved treatment | Second month's upload is one click to Approve |
-| **M130** The messy-file benchmark | 30 files shaped like real client exports (§10); time-to-first-run measured with non-technical testers | Targets in §11 met or the gap recorded |
-| **M131** Hardening and docs | `docs/DATA_DOCTOR.md`; security review of the new actions; 1M-row and 20-sheet performance | `make test-all` green twice |
+| **M150** Intake widening | Excel (every sheet), header and footer finders, repeated names, missing-value words; `IntakeSpec` saved and replayed. Rules only. | 30 real-shape messy files (§10) all reach a profile with correct headers; next month's file replays; no change to the 22 pinned Plan G benchmark digests except where an intake rule now applies (each listed in the DEC) |
+| **M151** Data Doctor, the place | Home "Bring your data"; drop many files; diagnosis per file (role, health, keys); *what your data can power* per use case; hand-off into a use case's Guided setup with everything pre-filled | A non-technical tester with 3 mixed files reaches a use case's checklist without opening Manual setup |
+| **M152** The AI proposes steps | `propose_step` for the existing step kinds; `explain`; sources labelled on the checklist | Fake-model tests: a grounded step lands pending; an ungrounded, leaking or invalid one is refused; the injection canary passes |
+| **M153** New value steps | `map_values`, `set_missing_text`, `valid_range`, `convert_units`, `split_column`, `rename_column`, `fill_missing` (constant) | Each step: stateless property test, receipt, replay test, refusal on ID/outcome |
+| **M154** Editing by hand | Table view; edits become `map_values`, `correct_cells`, `filter_rows`, `rename_column`, `drop_column`; undo by unticking | Jsdom + Playwright journey: edit, preview, approve, replay next month |
+| **M155** Several files (level 4) | Data Doctor drives the onboarding builder: `propose_role`, `propose_mapping`, join coverage, stacking monthly files with a column-drift check; built datasets carry a recipe, closing `RECIPE_DATASET_UNSUPPORTED` | Customer list + 3 monthly bills + tickets train through Data Doctor with no Manual setup; scoring next month replays |
+| **M156** Wide sheets | `unpivot` with name-pattern detection | A month-per-column sheet trains and replays |
+| **M157** Outcome from events (level 5) | `propose_label` from the person's sentence, shown back as a sentence, explicit agreement | "No recharge for 60 days" becomes a `LabelSpec` that builds, with censoring explained |
+| **M158** Enough data | Readiness per use case; *what you can do now*; the data request | Every `STOP_CODES` stop in Data Doctor shows what to do instead and what to collect |
+| **M159** Memory per client | Same-shape files offered the saved treatment | Second month's upload is one click to Approve |
+| **M160** The messy-file benchmark | 30 files shaped like real client exports (§10); time-to-first-run measured with non-technical testers | Targets in §11 met or the gap recorded |
+| **M161** Hardening and docs | `docs/DATA_DOCTOR.md`; security review of the new actions; 1M-row and 20-sheet performance | `make test-all` green twice |
 
-M120 and M121 alone remove most of the walls a first-hour user hits, and need no AI. They are the
+M150 and M151 alone remove most of the walls a first-hour user hits, and need no AI. They are the
 right first build.
 
 ## 10. The messy-file benchmark
@@ -358,7 +365,7 @@ Each file has an expected diagnosis, treatment and readiness, pinned like `expec
 
 ## 11. How we know it worked
 
-| Measure | Today (measure in M130 before building) | Target |
+| Measure | Today (measure in M160 before building) | Target |
 |---|---|---|
 | Files that fail at upload | — | < 2% of the benchmark |
 | First files to an approved run without Manual setup | — | ≥ 80% of the benchmark |
@@ -371,8 +378,8 @@ Each file has an expected diagnosis, treatment and readiness, pinned like `expec
 | Decision | Assumed default | Revisit when |
 |---|---|---|
 | Name in the product | *Data Doctor* (the place), *Guided setup* stays the tab inside a use case | Product review |
-| Excel library | `openpyxl` for `.xlsx` (pinned in Plan K's `pyproject.toml` block); `.xls` through `xlrd` or refused with "save as .xlsx" | M120 |
-| AI-suggested steps ever start ticked | Never (as `set_missing`) | After M130's benchmark |
+| Excel library | `openpyxl` for `.xlsx` (pinned in Plan L's `pyproject.toml` block); `.xls` through `xlrd` or refused with "save as .xlsx" | M150 |
+| AI-suggested steps ever start ticked | Never (as `set_missing`) | After M160's benchmark |
 | `correct_cells` limit | 1,000 cells per recipe | First pilot |
 | Rule-based "simple ranked list" when data is short | Offered, labelled "not a model" | Product review: it must not be mistaken for a prediction |
-| Data Doctor without a use case's config | Diagnosis uses every enabled use case's required roles | M121 |
+| Data Doctor without a use case's config | Diagnosis uses every enabled use case's required roles | M151 |
