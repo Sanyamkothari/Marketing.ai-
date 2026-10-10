@@ -39,6 +39,7 @@ from engine.config import (
 )
 from engine.doctor.contracts import Diagnosis, DiagnosisRequest, HandoffRequest
 from engine.doctor.diagnose import LoadedFile, Offer, diagnose_file, readiness
+from engine.doctor.joins import how_files_fit
 from engine.intake.config import load_intake_config
 from engine.intake.contracts import IntakeReport
 from engine.intake.run import received_format_for
@@ -119,10 +120,11 @@ def diagnose(body: DiagnosisRequest, storage: StorageDep, root: ConfigRootDep) -
     cap = min(profile_row_cap(offer.config) for offer in available)
     files = [_load(storage, upload_id, cap) for upload_id in dict.fromkeys(body.upload_ids)]
     roles = get_roles(root)
-    return Diagnosis(
+    diagnosis = Diagnosis(
         files=tuple(diagnose_file(loaded, any_config, roles) for loaded in files),
         use_cases=readiness(files, available, root),
     )
+    return how_files_fit(diagnosis, files, roles)  # Plan L M155 (DEC-1551, DEC-1552)
 
 
 @router.post(

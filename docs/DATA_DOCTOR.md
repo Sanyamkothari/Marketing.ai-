@@ -91,3 +91,34 @@ changes, and it is never ticked for you. **Your edit**: what you did by hand (M1
 - **Read scanned PDFs, photos or free-form documents** as tables.
 - **Invent history.** It can build an outcome from events you recorded; it cannot create one from nothing.
 - **Change your original file, or write code.** Every change is a step from a fixed list that our tested code runs.
+
+## 5. How several files fit together (M155)
+
+With a customer list and some logs (bills, tickets, ...), **Bring your data** also says how they fit:
+
+- **Do the logs meet the customer list?** For every log, the share of its rows whose customer is on the list,
+  counted. When the IDs are written differently (`CUST-00123` on the list, `123` in the bills), it names the tidy-up
+  that makes them meet - take `CUST-` off, drop the zeros at the start, ignore spaces or upper and lower case - and
+  counts the share again with it. It names a tidy-up only when it brings the share above 80%, the bar the
+  raw-tables builder itself uses, and says so plainly when none does.
+- **Are these the same report for different months?** Files of the same kind with the same columns can be stacked
+  into one table. When a later file added a column, lost one or renamed one (same place or a close name, same
+  type), it lists the difference.
+
+Every share is measured on the files; a file longer than the rows read says so.
+
+A model trained on a file Guided setup prepared can now also score a **built dataset**: the dataset is prepared by
+the model's saved steps first, exactly as a scoring file is, and a dataset the steps cannot run on is refused with
+the column it misses. The dataset itself is never changed.
+
+### For developers
+
+- `engine/doctor/joins.py`: `file_links` measures each event file against the customer list with onboarding's
+  `join_coverage` and `key_format_mismatch` (a one-sided prefix is taken off first, then the same two functions are
+  asked again); `file_stacks` groups files of one kind whose columns agree; `how_files_fit` fills
+  `Diagnosis.links` and `Diagnosis.stacks` in `POST /doctor/diagnosis`.
+- `engine/agent/dataset_recipe.py`: `prepare_dataset` runs a model's recipe on a built dataset into
+  `datasets/<id>/prepared_<identity>.parquet`; `POST /runs` (`agent_recipes.replay_on_dataset`) and the scheduled
+  firing (`engine/scheduling/firing.start_dataset_run`) both call it (docs/AGENTS.md §6.3, "Built datasets").
+- The tests: `tests/unit/doctor/test_joins.py`, `tests/integration/test_api_doctor_joins.py`,
+  `tests/integration/agent/test_dataset_recipe_refusal.py`.
