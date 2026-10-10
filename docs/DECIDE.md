@@ -779,6 +779,27 @@ unit prints with its paise (₹0.30, never ₹0). An amount is valued from the a
 the universal control group is its treated side), so its lines speak of "customers outside the control group" and its
 costs and net value are not measured; what it changed is still valued in the credit section.
 
+**Several offers: every money line has one scope (DEC-1314 (r)-(w)).** A report of several offers keeps the first
+offer in its own fields (DEC-668 (3)), so a pack that read those fields credited one offer and charged every offer's
+contacts (found on the Hillstrom audit, DEC-1322 (g)). With two or more offers, every route that stores a campaign
+report (the audit, and measuring an audited campaign again) asks `measure_campaign(..., combine_offers=True)`, which
+writes `incrementality_report.json` `offers_combined` (`engine.measurement.arms.combined_offers`; off by default, so
+the function's own report is byte for byte what it was, as M102's pin requires): every configured offer's
+contacted customers pooled against the shared control in one comparison, through the unchanged
+`measure_incrementality`. Its extra outcomes, `N_T (pbar_T - p_c)`, are exactly the sum of the offers' own
+`n_k (p_k - p_c)`; its Newcombe interval counts the shared control once. Adding the offers' own intervals as if they
+were unrelated would be too narrow, because every offer's difference subtracts the same control rate; with the offers'
+sizes fixed the pooled rate's variance is never more than the binomial one the interval assumes, so it is valid and only
+slightly wide when the offers' rates differ a lot. `tests/statistical/test_offers_combined_coverage.py` checks 95%
+coverage of the true total on 2,000 campaigns of three offers per case, and that the independent combination falls well
+below it. The pack's whole-campaign lines (the headline, the extra outcomes, gross and naive credit, the control group's
+cost, the value of what the campaign changed, the net value and the offers taken) read `offers_combined` and say "every
+offer together"; the contacts paid are every offer's, as before; each offer alone stays in the offer table. A report of
+several offers measured before `offers_combined` existed is never summed across offers: those lines say they are "the
+first offer alone", the costs are the first offer's measured customers, and the headline says the other offers are not
+added in; measuring the campaign again adds them. A pack of one offer is byte for byte what it was
+(`tests/unit/pilot/test_proof_single_offer_golden.py`, five stored packs).
+
 **Words carry no numbers of their own.** `verify_provenance` also reads every label, note, reason and the headline:
 a digit there that no figure prints fails the pack (`PROOF_NOT_TRACEABLE`). A reason the measurement recorded
 (`segment_effects.json` `not_measured`, such as a kind of group with too many values to read one by one) is printed

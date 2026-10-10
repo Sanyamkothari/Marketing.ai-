@@ -697,7 +697,12 @@ def segment_effects(
 
 def offer_arguments(audit: AuditReadout) -> dict[str, Any]:
     """`measure_campaign`'s several-offer arguments for an audited campaign with more than one offer."""
-    return {"arm_column": "offer", "arms": list(audit.offers or ()), "control_level": audit.control_level}
+    return {
+        "arm_column": "offer",
+        "arms": list(audit.offers or ()),
+        "control_level": audit.control_level,
+        "combine_offers": True,  # every offer together, for the Value Proof Pack (DEC-1314 (s))
+    }
 
 
 def covariate_date_column(outcomes: CampaignOutcomes, covariate: str | None) -> str | None:

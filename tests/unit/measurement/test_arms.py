@@ -143,6 +143,7 @@ def test_every_configured_offer_is_added_together_against_the_shared_control_onc
         campaign.scores,
         campaign.outcomes,
         **{**kwargs, "arms": ("offer_3", "offer_1"), "control_level": "none"},
+        combine_offers=True,
     )
     assert report.arms is not None and report.offers_combined is not None
     whole = report.offers_combined
@@ -166,15 +167,20 @@ def test_every_configured_offer_is_added_together_against_the_shared_control_onc
     assert IncrementalityReport.model_validate_json(report.model_dump_json()) == report
 
 
-def test_one_offer_or_none_has_nothing_to_add_together() -> None:
+def test_one_offer_or_none_has_nothing_to_add_together_and_nothing_is_added_unasked() -> None:
     campaign = multi_arm_campaign(1_200, 0.2, (0.05, 0.05), seed=10)
     kwargs = dict(campaign.measure_kwargs)
-    one = measure_campaign(campaign.scores, campaign.outcomes, **{**kwargs, "arms": ("offer_1",)})
+    one = measure_campaign(
+        campaign.scores, campaign.outcomes, **{**kwargs, "arms": ("offer_1",)}, combine_offers=True
+    )
     assert one.arms is not None and one.offers_combined is None
     assert "offers_combined" not in one.model_dump(mode="json")
     binary = population(2_000, 0.1, 0.02, seed=4)
-    plain = measure_campaign(binary.scores, binary.outcomes, **binary.measure_kwargs)
+    plain = measure_campaign(binary.scores, binary.outcomes, **binary.measure_kwargs, combine_offers=True)
     assert "offers_combined" not in plain.model_dump(mode="json")
+    # Off by default: `measure_campaign`'s own report of several offers is byte for byte what it was (M102's pin).
+    unasked = measure_campaign(campaign.scores, campaign.outcomes, **kwargs)
+    assert unasked.arms is not None and "offers_combined" not in unasked.model_dump(mode="json")
 
 
 # ---------------------------------------------------------------------------

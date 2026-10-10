@@ -106,7 +106,9 @@ def _line(view: dict[str, Any], key: str, starts: str) -> dict[str, Any]:
     return next(line for line in _section(view, key)["lines"] if line["label"].startswith(starts))
 
 
-def test_the_measurement_adds_every_offer_against_the_shared_control_once(world: World, combined: str) -> None:
+def test_the_measurement_adds_every_offer_against_the_shared_control_once(
+    world: World, combined: str
+) -> None:
     report = _stored(world, combined, "incrementality_report.json")
     arms = report["arms"]
     assert len(arms) == 3

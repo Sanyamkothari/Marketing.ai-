@@ -1427,7 +1427,12 @@ def _treatment_start(
 
 
 def _offer_arguments_for(built: Any) -> dict[str, Any]:
-    return {"arm_column": "offer", "arms": list(built.offers), "control_level": built.control_level}
+    return {
+        "arm_column": "offer",
+        "arms": list(built.offers),
+        "control_level": built.control_level,
+        "combine_offers": True,  # every offer together, for the Value Proof Pack (DEC-1314 (s))
+    }
 
 
 def _audit_notes(

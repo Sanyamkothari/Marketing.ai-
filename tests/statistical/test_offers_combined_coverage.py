@@ -43,7 +43,9 @@ def test_the_combined_interval_of_every_offer_covers_the_true_total(case: str) -
     covered = independent = 0
     for seed in seeds(base_seed, SIMS):
         campaign = multi_arm_campaign(4_000, base_rate, effects, seed=seed)
-        report = measure_campaign(campaign.scores, campaign.outcomes, **campaign.measure_kwargs)
+        report = measure_campaign(
+            campaign.scores, campaign.outcomes, **campaign.measure_kwargs, combine_offers=True
+        )
         assert report.arms is not None and report.offers_combined is not None
         whole = report.offers_combined.incremental_conversions
         assert whole is not None and whole.ci_low is not None and whole.ci_high is not None
@@ -59,7 +61,9 @@ def test_the_combined_interval_of_every_offer_covers_the_true_total(case: str) -
         centre = sum(arm.incremental_conversions.value for arm in report.arms if arm.incremental_conversions)
         half = math.sqrt(sum(h * h for h in halves))
         independent += centre - half <= truth <= centre + half
-    assert_share_in_band(covered / SIMS, NOMINAL, SIMS, what=f"coverage of every offer added together ({case})")
+    assert_share_in_band(
+        covered / SIMS, NOMINAL, SIMS, what=f"coverage of every offer added together ({case})"
+    )
     low, _ = band(NOMINAL, SIMS)
     assert independent / SIMS < low, (
         f"the independent combination should under-cover with a shared control ({case}): "
@@ -70,10 +74,14 @@ def test_the_combined_interval_of_every_offer_covers_the_true_total(case: str) -
 def test_the_combined_estimate_is_the_sum_of_the_offers_own() -> None:
     for seed in seeds(100_103, 50):
         campaign = multi_arm_campaign(4_000, 0.05, (0.02, 0.04, 0.06), seed=seed)
-        report = measure_campaign(campaign.scores, campaign.outcomes, **campaign.measure_kwargs)
+        report = measure_campaign(
+            campaign.scores, campaign.outcomes, **campaign.measure_kwargs, combine_offers=True
+        )
         assert report.arms is not None and report.offers_combined is not None
         whole = report.offers_combined.incremental_conversions
         parts = [arm.incremental_conversions for arm in report.arms]
         assert whole is not None and all(part is not None for part in parts)
         assert whole.value == pytest.approx(sum(part.value for part in parts if part is not None))
-        assert np.isclose(report.offers_combined.treated_rows, sum(arm.treated_rows or 0 for arm in report.arms))
+        assert np.isclose(
+            report.offers_combined.treated_rows, sum(arm.treated_rows or 0 for arm in report.arms)
+        )
