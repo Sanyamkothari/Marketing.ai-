@@ -1,0 +1,378 @@
+{
+  "artefact": "journey.results.json",
+  "generated_by": "python -m scripts.demo_summary",
+  "is_sample": false,
+  "figures": [
+    {
+      "id": "about.rows",
+      "text": "64,000",
+      "value": 64000.0,
+      "format": "count",
+      "field": "rows"
+    },
+    {
+      "id": "about.training",
+      "text": "32,000",
+      "value": 32000.0,
+      "format": "count",
+      "field": "split.training.rows"
+    },
+    {
+      "id": "about.evaluation",
+      "text": "32,000",
+      "value": 32000.0,
+      "format": "count",
+      "field": "split.evaluation.rows"
+    },
+    {
+      "id": "about.confidence",
+      "text": "95%",
+      "value": 0.95,
+      "format": "percent",
+      "field": "steps.campaigns.conversion.report.absolute_lift.confidence_level"
+    },
+    {
+      "id": "limit2.window",
+      "text": "0",
+      "value": 0.0,
+      "format": "count",
+      "field": "steps.campaigns.conversion.report.outcome_window_days"
+    },
+    {
+      "id": "limit3.fx",
+      "text": "83",
+      "value": 83.0,
+      "format": "count",
+      "field": "value.fx_inr_per_usd"
+    },
+    {
+      "id": "limit3.cost",
+      "text": "0.05",
+      "value": 0.05,
+      "format": "text",
+      "field": "contact_cost_inr"
+    },
+    {
+      "id": "contact.1.contacted",
+      "text": "12,862",
+      "value": 12862.0,
+      "format": "count",
+      "field": "steps.treat_list.treat_rows"
+    },
+    {
+      "id": "contact.1.rows",
+      "text": "32,000",
+      "value": 32000.0,
+      "format": "count",
+      "field": "steps.treat_list.treat_list_rows"
+    },
+    {
+      "id": "contact.1.mens",
+      "text": "7,597",
+      "value": 7597.0,
+      "format": "count",
+      "field": "steps.treat_list.offer_choice.arms.0.offered_rows"
+    },
+    {
+      "id": "contact.1.womens",
+      "text": "5,265",
+      "value": 5265.0,
+      "format": "count",
+      "field": "steps.treat_list.offer_choice.arms.1.offered_rows"
+    },
+    {
+      "id": "contact.2.rows",
+      "text": "32,000",
+      "value": 32000.0,
+      "format": "count",
+      "field": "steps.off_policy.rows"
+    },
+    {
+      "id": "contact.2.mens",
+      "text": "47.27%",
+      "value": 0.47271875,
+      "format": "rate",
+      "field": "steps.off_policy.policy_shares.Mens E-Mail"
+    },
+    {
+      "id": "contact.2.womens",
+      "text": "32.73%",
+      "value": 0.32725,
+      "format": "rate",
+      "field": "steps.off_policy.policy_shares.Womens E-Mail"
+    },
+    {
+      "id": "contact.2.none",
+      "text": "20.00%",
+      "value": 0.20003125,
+      "format": "rate",
+      "field": "steps.off_policy.policy_shares.No E-Mail"
+    },
+    {
+      "id": "leave_alone.1.sleeping",
+      "text": "2,351",
+      "value": 2351.0,
+      "format": "count",
+      "field": "steps.treat_list.offer_choice.reasons.sleeping_dog"
+    },
+    {
+      "id": "leave_alone.1.below_cost",
+      "text": "787",
+      "value": 787.0,
+      "format": "count",
+      "field": "steps.treat_list.offer_choice.reasons.below_cost"
+    },
+    {
+      "id": "worth.1.lift",
+      "text": "+0.45 pts",
+      "value": 0.004495025878336831,
+      "format": "signed_points",
+      "field": "steps.off_policy.estimates.conversion.chosen.difference_from_no_email.value"
+    },
+    {
+      "id": "worth.1.low",
+      "text": "+0.23 pts",
+      "value": 0.002336041208226785,
+      "format": "signed_points",
+      "field": "steps.off_policy.estimates.conversion.chosen.difference_from_no_email.ci_low"
+    },
+    {
+      "id": "worth.1.high",
+      "text": "+0.67 pts",
+      "value": 0.006654010548446877,
+      "format": "signed_points",
+      "field": "steps.off_policy.estimates.conversion.chosen.difference_from_no_email.ci_high"
+    },
+    {
+      "id": "worth.2.lift",
+      "text": "+0.60 pts",
+      "value": 0.005985161779391937,
+      "format": "signed_points",
+      "field": "steps.campaigns.conversion.report.absolute_lift.value"
+    },
+    {
+      "id": "worth.2.low",
+      "text": "+0.21 pts",
+      "value": 0.002127388010264668,
+      "format": "signed_points",
+      "field": "steps.campaigns.conversion.report.absolute_lift.ci_low"
+    },
+    {
+      "id": "worth.2.high",
+      "text": "+1.00 pts",
+      "value": 0.010037614695899812,
+      "format": "signed_points",
+      "field": "steps.campaigns.conversion.report.absolute_lift.ci_high"
+    },
+    {
+      "id": "worth.2.p",
+      "text": "0.002",
+      "value": 0.002452788884694676,
+      "format": "p_value",
+      "field": "steps.campaigns.conversion.report.p_value"
+    },
+    {
+      "id": "worth.2.extra",
+      "text": "26",
+      "value": 25.51474466554783,
+      "format": "count",
+      "field": "steps.campaigns.conversion.report.incremental_conversions.value"
+    },
+    {
+      "id": "worth.2.extra_low",
+      "text": "9",
+      "value": 9.06905508775828,
+      "format": "count",
+      "field": "steps.campaigns.conversion.report.incremental_conversions.ci_low"
+    },
+    {
+      "id": "worth.2.extra_high",
+      "text": "43",
+      "value": 42.790351448620896,
+      "format": "count",
+      "field": "steps.campaigns.conversion.report.incremental_conversions.ci_high"
+    },
+    {
+      "id": "worth.3.net",
+      "text": "₹16,31,009 (16.31 lakh)",
+      "value": 1631008.830543843,
+      "format": "inr",
+      "field": "steps.off_policy.money_on_evaluation_rows.chosen.net_inr"
+    },
+    {
+      "id": "worth.3.low",
+      "text": "₹7,46,838 (7.47 lakh)",
+      "value": 746837.6113966554,
+      "format": "inr",
+      "field": "steps.off_policy.money_on_evaluation_rows.chosen.net_ci_low_inr"
+    },
+    {
+      "id": "worth.3.high",
+      "text": "₹25,15,180 (25.15 lakh)",
+      "value": 2515180.0496910303,
+      "format": "inr",
+      "field": "steps.off_policy.money_on_evaluation_rows.chosen.net_ci_high_inr"
+    },
+    {
+      "id": "worth.3.pack_low",
+      "text": "₹88,187",
+      "value": 88186.75284522743,
+      "format": "inr",
+      "field": "steps.campaigns.conversion.proof.view.sections.8.lines.3.low.value"
+    },
+    {
+      "id": "worth.3.pack_high",
+      "text": "₹4,18,481 (4.18 lakh)",
+      "value": 418481.11807949544,
+      "format": "inr",
+      "field": "steps.campaigns.conversion.proof.view.sections.8.lines.3.high.value"
+    },
+    {
+      "id": "simple_rule.1.mens_lift",
+      "text": "+0.69 pts",
+      "value": 0.006851349156509445,
+      "format": "signed_points",
+      "field": "steps.off_policy.estimates.conversion.everyone_Mens E-Mail.difference_from_no_email.value"
+    },
+    {
+      "id": "simple_rule.1.gap",
+      "text": "-0.24 pts",
+      "value": -0.002356323278172614,
+      "format": "signed_points",
+      "field": "steps.off_policy.chosen_against_everyone.conversion.chosen_minus_everyone_Mens E-Mail.value"
+    },
+    {
+      "id": "simple_rule.1.low",
+      "text": "-0.43 pts",
+      "value": -0.004327204504317655,
+      "format": "signed_points",
+      "field": "steps.off_policy.chosen_against_everyone.conversion.chosen_minus_everyone_Mens E-Mail.ci_low"
+    },
+    {
+      "id": "simple_rule.1.high",
+      "text": "-0.04 pts",
+      "value": -0.0003854420520275734,
+      "format": "signed_points",
+      "field": "steps.off_policy.chosen_against_everyone.conversion.chosen_minus_everyone_Mens E-Mail.ci_high"
+    },
+    {
+      "id": "simple_rule.1.mens_net",
+      "text": "₹23,70,016 (23.70 lakh)",
+      "value": 2370015.5769219827,
+      "format": "inr",
+      "field": "steps.off_policy.money_on_evaluation_rows.everyone_Mens E-Mail.net_inr"
+    },
+    {
+      "id": "simple_rule.1.mens_low",
+      "text": "₹12,69,896 (12.70 lakh)",
+      "value": 1269896.3137380942,
+      "format": "inr",
+      "field": "steps.off_policy.money_on_evaluation_rows.everyone_Mens E-Mail.net_ci_low_inr"
+    },
+    {
+      "id": "simple_rule.1.mens_high",
+      "text": "₹34,70,135 (34.70 lakh)",
+      "value": 3470134.840105871,
+      "format": "inr",
+      "field": "steps.off_policy.money_on_evaluation_rows.everyone_Mens E-Mail.net_ci_high_inr"
+    },
+    {
+      "id": "simple_rule.1.w_gap",
+      "text": "+0.14 pts",
+      "value": 0.0014303147085935972,
+      "format": "signed_points",
+      "field": "steps.off_policy.chosen_against_everyone.conversion.chosen_minus_everyone_Womens E-Mail.value"
+    },
+    {
+      "id": "simple_rule.1.w_low",
+      "text": "-0.08 pts",
+      "value": -0.0007813020502653433,
+      "format": "signed_points",
+      "field": "steps.off_policy.chosen_against_everyone.conversion.chosen_minus_everyone_Womens E-Mail.ci_low"
+    },
+    {
+      "id": "simple_rule.1.w_high",
+      "text": "+0.36 pts",
+      "value": 0.0036419314674525378,
+      "format": "signed_points",
+      "field": "steps.off_policy.chosen_against_everyone.conversion.chosen_minus_everyone_Womens E-Mail.ci_high"
+    },
+    {
+      "id": "how_we_know.1.roc",
+      "text": "0.534",
+      "value": 0.5341,
+      "format": "score",
+      "field": "steps.risk_model.test_metrics.roc_auc"
+    },
+    {
+      "id": "how_we_know.1.baseline",
+      "text": "0.560",
+      "value": 0.5597,
+      "format": "score",
+      "field": "steps.risk_model.baseline_rows.0.baseline_value"
+    },
+    {
+      "id": "how_we_know.2.gap",
+      "text": "+0.0002",
+      "value": 0.00017811118586819866,
+      "format": "auuc",
+      "field": "steps.uplift_model.evaluation.baseline_comparison.baselines.2.difference.value"
+    },
+    {
+      "id": "how_we_know.2.low",
+      "text": "-0.0016",
+      "value": -0.001565793030664392,
+      "format": "auuc",
+      "field": "steps.uplift_model.evaluation.baseline_comparison.baselines.2.difference.ci_low"
+    },
+    {
+      "id": "how_we_know.2.high",
+      "text": "+0.0019",
+      "value": 0.0018511049489003558,
+      "format": "auuc",
+      "field": "steps.uplift_model.evaluation.baseline_comparison.baselines.2.difference.ci_high"
+    },
+    {
+      "id": "how_we_know.2.m_gap",
+      "text": "+0.0000",
+      "value": -1.2538381855590382e-05,
+      "format": "auuc",
+      "field": "steps.beats_risk_out_of_sample.offers.Mens E-Mail.baselines.1.difference.value"
+    },
+    {
+      "id": "how_we_know.2.m_low",
+      "text": "-0.0010",
+      "value": -0.0010135901796449202,
+      "format": "auuc",
+      "field": "steps.beats_risk_out_of_sample.offers.Mens E-Mail.baselines.1.difference.ci_low"
+    },
+    {
+      "id": "how_we_know.2.m_high",
+      "text": "+0.0007",
+      "value": 0.0007328435633061201,
+      "format": "auuc",
+      "field": "steps.beats_risk_out_of_sample.offers.Mens E-Mail.baselines.1.difference.ci_high"
+    },
+    {
+      "id": "how_we_know.2.w_gap",
+      "text": "+0.0001",
+      "value": 0.00010365071122441882,
+      "format": "auuc",
+      "field": "steps.beats_risk_out_of_sample.offers.Womens E-Mail.baselines.1.difference.value"
+    },
+    {
+      "id": "how_we_know.2.w_low",
+      "text": "-0.0007",
+      "value": -0.0007480981056285756,
+      "format": "auuc",
+      "field": "steps.beats_risk_out_of_sample.offers.Womens E-Mail.baselines.1.difference.ci_low"
+    },
+    {
+      "id": "how_we_know.2.w_high",
+      "text": "+0.0010",
+      "value": 0.0009872170532809514,
+      "format": "auuc",
+      "field": "steps.beats_risk_out_of_sample.offers.Womens E-Mail.baselines.1.difference.ci_high"
+    }
+  ]
+}
