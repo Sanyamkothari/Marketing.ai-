@@ -1,184 +1,180 @@
-# Demo script — one page
+# The manager demo (Plan J M111, DEC-1321)
 
-Which dataset to show to whom, and what to click. Every number quoted below is in that dataset's
-`run_report.md`; none of it is a forecast.
+**What you are showing.** The product deciding and proving, on real randomised data, in its own screens, with
+nothing planted and nothing fabricated: the MineThatData e-mail test (Hillstrom), 64,000 customers who were each
+sent, at random, the men's e-mail, the women's e-mail or nothing. The story is five questions: who to contact,
+which offer, who to leave alone, what it is worth, and how we know.
 
-**Before you start.** `python library/<dataset>/fetch.py` for the dataset you are showing, so the
-prepared file exists. Every dataset's use case ships in the repository's own `configs/` (DEC-085),
-so the overview's industry selector reaches all of them and no `--config-root` is needed.
-**Never demo Criteo Uplift — it is CC BY-NC-SA, non-commercial.**
+**The results are mixed, and the demo says so.** The list beats sending nothing. On conversions it does not beat the
+obvious alternative, sending everyone the men's e-mail (in money, it is not shown to differ). Uplift modelling does not beat plain risk ranking. The model is
+stable but not calibrated. That is the product doing its job: it proves value where there is some and says plainly
+where there is not. Never spin it; the managers will trust the rest only if you do not.
 
-> ### Do not train live at the default budget
->
-> The committed reports are engine defaults: `strategy: balanced`, `time_limit_minutes: 30`,
-> `tuning_trials: 50`. On this hardware that is **10 to 22 minutes per run**, and you do not want
-> to stand in front of a customer for twenty-two minutes watching a progress bar.
->
-> For anything performed live, set **Model search → Strategy: `fast`** and **Time limit: 1 minute**
-> in Advanced settings. That finishes in 20–60 seconds and produces every artefact — the same
-> validation report, leaderboard, decile chart and explanations, on a smaller search. Say so out
-> loud: *"this is the one-minute setting; the numbers in our library are the full thirty-minute
-> budget, and they are in the repository."*
->
-> Better still, for the numbers below: **run it beforehand and show the finished run.** The Output
-> and Model pages are what sells; the progress bar is not.
+**Status of the rehearsal.** A dry run by an agent (not the rehearsal) is done and recorded in
+[`DEMO_REHEARSAL.md`](DEMO_REHEARSAL.md) Part 2; the rehearsal by a person outside the team, using only this page, is
+**pending**. Its checklist is in the same file. Until it is ticked, treat
+this script as untested by a stranger.
+
+One page of numbers to hand out or keep open:
+[`hillstrom-email/DEMO_SUMMARY.md`](hillstrom-email/DEMO_SUMMARY.md), generated from the run's artefact by
+`python -m scripts.demo_summary`, every number traced to a field of it. **Quote nothing that is not on that page.**
+The other datasets (telecom, banking, insurance, e-commerce win-back) are in
+[`DEMO_OTHER_DATASETS.md`](DEMO_OTHER_DATASETS.md); they are not randomised and cannot show value.
 
 ---
 
-## Telecom → Telco Customer Churn
+## Before you start (the day before, about ten minutes of work and three of waiting)
 
-*The one to open with. It needs no configuration at all.*
+1. **Get the full file.** `python library/hillstrom-email/fetch.py` downloads it and refuses any copy whose SHA-256
+   is not the validated one (`--from PATH` checks a copy you already have). The file is never in git.
+   **Without it the next step uses the committed sample, a tenth of the file: fine for rehearsing the clicks,
+   never for showing numbers.** The command says which it used, and a page generated from the sample says so in its
+   first lines.
+2. **Seed a clean store.** `python -m scripts.seed_validated --force`. It runs the whole journey through the
+   product's own API (about three minutes on four cores) and prints the command that serves the store and the
+   address of every screen below. Nothing trains while anybody watches.
+3. **Serve it.** `MARKETING_AI_DATA_DIR=<the store it printed> .venv/bin/uvicorn api.main:app --port 8000`, then
+   open `http://localhost:8000/ui`.
+4. **Check the screens carry the validated numbers.** On the full file, `diff <the store>/../DEMO_SUMMARY.md
+   library/hillstrom-email/DEMO_SUMMARY.md` prints nothing. If it prints anything, you are not on the full file or
+   the run changed: do not demo until you know why.
+5. Open `hillstrom-email/DEMO_SUMMARY.md` in a second window.
 
-1. **Overview** → Telecom → Churn → **Telco Customer Churn**. Say: this use case ships in the
-   product; nothing was added for this demo.
-2. **Upload** `library/telco-customer-churn/data/prepared.csv`. Point out it is the Kaggle file
-   unchanged — 7,043 rows, 21 columns, blanks and all.
-3. **Validation** — empty. *"The file was accepted as published."*
-4. **Run training.** At the default budget this is ten minutes and 111 candidate models; at the
-   one-minute setting, under a minute.
-5. **Model page** — ROC-AUC **0.845**, baseline 0.841. Say the honest thing: *"111 models and ten
-   minutes bought four thousandths over a logistic regression. The point is not the cleverness —
-   it is that the whole path ran unattended, and told us the honest size of its own advantage."*
-6. **Output page** — the decile chart. Top decile churns at **79 %** against a book average of
-   27 %: **3.0× lift**, holding **30 %** of all churners. The top three hold **68 %**.
-7. **Explanations** — `tenure`, `Contract` and `InternetService` are **74 %** of the model. *"New
-   subscribers, month-to-month, on fibre. The lever is the contract, not the network."*
+## The honest limits (say them first, not last)
 
-**Close on:** one upload, no configuration, a call list you could work tomorrow.
+<!-- numbers-checked:start -->
+- **Public data, retrospective.** The file is an old public e-mail test. The product sent nothing. A client's own
+  campaign, with a holdout the engine draws before anything is sent, is the next proof and the one that counts.
+- **Half the file trained everything; half was never seen by a model.** Every result is measured on the half no
+  model saw: **32,000** customers.
+- **The campaign screens are a replay.** The file's own random e-mail rarely matches what our list says, so the
+  replay keeps the customers where it does and counts the other **17,165** as having no outcome. The screens that
+  count the customers the list meant to reach therefore show bigger groups than the **4,263** e-mailed and
+  **4,171** held-back customers actually measured.
+- **Rupees are an assumption.** **83** rupees to the dollar, revenue before margin. Change the rate and every rupee
+  figure moves.
+- **Money is skewed.** A few large orders dominate the amount spent, so the rupee ranges may be too narrow (the
+  summary's limits say so; the report's resampled range is the check). Quote the ranges, never a single rupee figure.
 
----
+## The story, in the order to tell it
 
-## Banking → UCI Bank Marketing
+**1. Who to contact, and with which e-mail?** The list e-mails **12,862** of **32,000** customers: the men's e-mail
+to **7,597** and the women's to **5,265**. As a policy over every evaluation customer that is the men's e-mail for
+**47.27%**, the women's for **32.73%** and nothing for **20.00%**. Say: *"An offer is chosen on every row. How well
+it is chosen comes in question five."*
 
-*The best story in the library, and the only one that needs two runs. Pre-run both.*
+**2. Who to leave alone?** **2,351** customers are left alone because every e-mail would make them less likely to buy,
+and **787** more because no e-mail earns back its cost. Say what the page says: *"These are the model's best guess,
+not a measured fact."* The model is not calibrated, and in the replay the customers the scoring run called sleeping
+dogs, e-mailed anyway (**553** of them, with **538** like them held back), changed by **+0.72 pts** with a range of
+**-0.28 pts** to **+1.92 pts**: no harm is shown, so the label is not confirmed.
 
-**Open it:** Overview → industry selector **Banking** → Awareness → **Term Deposit Conversion**.
+**3. What is it worth?** Against sending nothing the list raises the conversion rate by **+0.45 pts**, range
+**+0.23 pts** to **+0.67 pts**, measured on customers no model saw. Measured as a campaign against the engine's own
+random control group it is **+0.60 pts**, range **+0.21 pts** to **+1.00 pts**, **p = 0.002**, about **26** extra
+conversions (**9** to **43**). Both ranges are wholly above zero: on this file the list beats sending nothing. In
+rupees the list nets **₹16,31,009** on the evaluation customers, range **₹7,46,838** to **₹25,15,180**. The Value Proof
+Pack shows **₹88,187** to **₹4,18,481**; it is a floor, because it counts the outcomes of only a third of each group
+while costing every e-mail.
 
-1. **Upload** `library/uci-bank-marketing/data/prepared.csv` — 41,188 real campaign calls.
-2. **Show run A** (engine defaults). **Model page** — ROC-AUC **0.951**. Decile 1 subscribes at
-   **66 %** against 11 %: **5.9× lift**, capturing **59 %** of all subscriptions in one decile.
-   Let them enjoy it.
-3. **Explanations** — then stop on the top row. **`duration` is 67.7 % of the model**: the length
-   of the call, in seconds. *"We do not know that until after we have made the call. This model
-   cannot sort a call list."*
-4. **Advanced settings → Data preparation → Exclude columns → `duration`.** *"One setting. No
-   code."* Show run B.
-5. **Model page again** — ROC-AUC **0.791**, decile 1 at **51 %**, **4.5× lift**, still capturing
-   **45 %** of all subscriptions and **64 %** in the top two deciles. *"That is the model you
-   deploy."*
-6. **Explanations again** — the employment level and the month are now the top two, and four of
-   the top five features are macro-economic or seasonal. *"This campaign succeeded when rates made
-   deposits attractive. Your ranking will need retraining when rates move, which is what the drift
-   monitor is for."*
+**4. Does it beat the obvious alternative?** On conversions, no. Sending everyone the men's e-mail raises the
+conversion rate by **+0.69 pts**, range **+0.43 pts** to **+0.94 pts**. The list against that, on the same customers,
+is **-0.24 pts**, range **-0.43 pts** to **-0.04 pts**: measurably worse. **In money it is not shown to be worse.** The
+difference in revenue per customer, the list minus the men's e-mail to everyone, is **-$0.278**, range **-$0.611** to
+**$0.055** (resampled **-$0.598** to **$0.056**): the range includes zero. In rupees, the men's e-mail to everyone
+nets **₹23,70,016**, range **₹12,69,896** to **₹34,70,135**, against the list's **₹16,31,009**, range **₹7,46,838** to
+**₹25,15,180**: the two overlap, so do not say the list "loses" a number of rupees. Against the women's e-mail to
+everyone the list is **+0.14 pts**, range **-0.08 pts** to **+0.36 pts**, which cannot be told apart. Say: *"On
+conversions the simple rule wins, and the product told us so itself. In money it is not shown to differ."*
 
-**Close on:** the validator did not catch `duration` and could not have — it does not contain the
-answer, it just does not exist yet. The engine gave you the ranking, the explanation that exposed
-the problem, and the one-line fix.
+**5. How do we know, and how far can we trust it?** The risk model's ROC-AUC is **0.534**, against **0.560** for its
+plain logistic-regression baseline: a weak model. The uplift model does not beat plain risk ranking: its difference
+from the risk ranking is **+0.0002**, range **-0.0016** to **+0.0019**, in the engine's own check, and out of sample
+**+0.0000** (**-0.0010** to **+0.0007**) for the men's e-mail and **+0.0001** (**-0.0007** to **+0.0010**) for the
+women's. It is stable across folds and not calibrated by decile. Say: *"Whatever the list earns, it does not earn it
+because uplift modelling added to risk ranking. The value that is there is the e-mail itself, and the proof that it is
+there is the held-back group."*
+<!-- numbers-checked:end -->
 
----
+**Close on:** a product that could say *no* to itself in front of you, and that shows its working. The next proof is
+a client's own campaign: plan the test with them first (the power sheet says what size of effect their holdout can
+see), then measure.
 
-## Insurance → Health Insurance Cross-Sell
+## The screens to click (the same story, with the clicks)
 
-*The scale story. 381,109 rows, and the most actionable finding in the library.*
+Every instruction below was followed literally in the dry run (see `DEMO_REHEARSAL.md`). Numbers are deliberately
+not repeated here: read them off the screen and match them to the summary page.
 
-**Open it:** Overview → industry selector **Insurance** → Awareness → **Vehicle Policy Cross-sell**.
+1. **Results** (top bar). Read the first card aloud: **Needs your attention: "The model that picks who to contact does
+   not beat ranking by risk."** The product volunteered that. Below it, **Value proven to date** is a floor, the
+   lower end of each range, not an estimate; the conversion campaign is listed apart because it measures the same
+   customers as the spend one and is not counted twice. *(Question 5.)*
+2. **Results → Runs → the "Trained a model" row whose outcome starts "AUUC", Open ›; on the run page, the MODEL box's
+   View details ›.** (The other "Trained a model" row is the risk model, "Ranking quality".) The model page: **Model
+   beats random targeting: No.** Scroll to **Each offer against no offer**: *"Choosing the offer for each customer is not yet
+   shown to do better than the first offer alone."* Say that the row's outcome reads "AUUC 0" because the table
+   rounds it; the page shows the range. *(Question 5.)*
+3. **Results → Runs → the "Scored new data" row whose page says "Scored with X-learner", Open ›; on the run page, the
+   OUTPUT box's View details ›.** (There are two "Scored new data" rows and the table does not say which is which:
+   the lower, older one is the campaign-effect model's; the upper one is the risk model scoring the same customers.)
+   The Output page, **Who to contact**. Point at the banner **"This list is ranked by the propensity model, not by uplift"** (the product
+   reports its own fallback), then scroll to **Which offer each customer gets** (the offers and the net value of each),
+   open **Why some customers get no offer** (the two reasons in question 2), and the **Treat list** card with
+   **Download treat list (CSV)**. *(Questions 1 and 2.)*
+4. **Results → Campaigns → "Hillstrom e-mail (conversion) …".** The **Result** card: *"The campaign added about 26
+   conversions"*, with the range and the p-value, against the engine's own random control group. **Plan the test**
+   below it is the power sheet: what size of effect this holdout could see. *(Question 3.)*
+5. **Results → Value Proof Packs → the conversion pack.** Walk **What the campaign changed**, **Naive credit against
+   measured credit** (a tool that credited every response would claim nearly twice the measured effect),
+   **Groups where the campaign backfired** (none shown; one group had too few customers to judge) and **Method and limits**. Read the line **Customers left out for
+   having no outcome in the file**. *(Question 3.)*
+6. **Close with `DEMO_SUMMARY.md`** open: the answers in short, then the limits. *(All five.)*
 
-1. **Upload** `library/health-insurance-cross-sell/data/prepared.csv` — **381,109 policyholders**.
-   Let the row count land.
-2. **Run training.** 77 models at the default budget.
-3. **Model page** — ROC-AUC **0.858** against a baseline of 0.838. Point at PR-AUC (0.361) and say
-   why: at a 12 % base rate, ranking well and being precise are different achievements.
-4. **Output page** — the decile chart is the moment. Top decile **40 %** interested against 12 %:
-   **3.2× lift**. Then the bottom half: deciles 6–10 are at **0.08× and below — effectively
-   zero**. *"Half your book is not worth a call. The top three deciles reach 80 % of the
-   opportunity at 30 % of the contact cost."*
-5. **Explanations** — `Previously_Insured` is **55 %** of the model. *"People who already have the
-   policy. Your best model starts as list hygiene — and it found that itself."* If someone asks
-   why the chart has nine rows and not ten: `Driving_License` is 1 in 99.8 % of rows, and
-   permutation importance measured nothing to report. The engine did not pad the list.
+## What looks contradictory on the screens, and the true answer
 
-**Caveat to say out loud:** `Response` is stated interest, not a signed policy. This ranks a call
-list; it does not forecast revenue.
+These are real, known and recorded (`docs/DECISIONS.md` DEC-1320 (o), DEC-1321). Do not wait to be asked.
 
----
-
-## Banking (second) → UCI Credit Default
-
-*Show this when someone asks whether the AutoML is doing anything a logistic regression would not.*
-
-**Open it:** Overview → industry selector **Banking** → Service → **Card Default
-Propensity**.
-
-1. **Upload** `library/uci-credit-default/data/prepared.csv` — 30,000 card accounts.
-2. **Run training.** 152 models at the default budget.
-3. **Model page** — ROC-AUC **0.796** against a baseline of **0.728**: **+0.068**, the widest
-   margin in the library. *"Fifteen times the gap we saw on the churn file. The reason is
-   interaction — what a late payment means depends on the five months around it, and a linear model
-   cannot say that."*
-4. **Output page** — decile 1 defaults at **72 %** against 22 %: **3.25× lift**, capturing a third
-   of next month's defaults and two thirds in the top three. The curve falls monotonically with no
-   inversions.
-5. **Explanations** — `PAY_0`, last month's repayment status, is **50 %** on its own, and the
-   remaining repayment columns rank in order of recency. *"It rediscovered that the last month
-   matters most. That is a model reading the data, not the noise."*
-
-**Close on:** this is where the model search earns its licence fee.
-
----
-
-## E-commerce → UCI Online Retail (win-back)
-
-*Only show this to a technical audience, and only to make a point about honesty.*
-
-**Open it:** Overview → industry selector **E-commerce** → Win-back → **Retail Win-back**.
-
-1. Explain first: this is a **transaction log**, 541,909 invoice lines, not one row per customer.
-   `library/online-retail/fetch.py` aggregates it — that work becomes part of the product in
-   Phase 2.
-2. **Upload** `library/online-retail/data/prepared.csv` — 1,463 lapsed shoppers, 41 % of whom came
-   back.
-3. **Validation** — one warning: `CONSTANT_COLUMN` on `snapshot_date`. *"Single snapshot. It tells
-   you, and drops it."*
-4. **Run training.** 106 models.
-5. **Model page** — **the model ties with its own baseline and is marked as not beating it.**
-   PR-AUC 0.4975 against 0.4985; `model_beats_baseline: false`. Then show the leaderboard: the
-   winning ensemble beats a logistic regression by 0.047 on validation and *loses* to it by 0.014
-   on test. Say it straight: *"Fourteen months of invoices, no campaign history, no contact log, no
-   offer data. There is not enough here, and the system says so instead of showing you a number."*
-6. **Output page** — the decile curve is flat and out of order: D2, D3 and D5 all outrank D1.
-7. **What would fix it:** campaign history, contact log, offer type and discount depth. Not a
-   better algorithm — more columns.
-
-**Close on:** a platform that only ever reports success is one you cannot trust when it reports
-success.
-
----
-
-## Ad-tech → Criteo Uplift — **do not demo**
-
-CC BY-NC-SA 4.0: **non-commercial**. It may not appear in a sales deck, a customer pilot or a
-shipped product.
-
-If the conversation turns to incrementality, use it verbally: *"Ranking who will convert and
-ranking who converts because of the ad are different questions. The second is uplift modelling
-(Phase 3b); the dataset is mapped and its uplift use case is written, and we are not going to show
-you a propensity model and call it uplift."* Uplift itself can be shown on synthetic data, never on
-this dataset. See [`criteo-uplift/README.md`](criteo-uplift/README.md).
-
----
-
-## If you only have ten minutes
-
-**Telco** (3 min) → **Bank, both runs** (7 min), from pre-run results. One shows that the product
-works out of the box; the other shows that it tells you the truth about its own output. Nothing
-else in the library beats that pair.
+- **"Contact 7,596" on the Output page, "To treat 12,862" on the Treat list card.** Two lists. The contact list was
+  re-ranked by the risk model when uplift did not beat it; the offer choice, and so the treat list, still comes from
+  the campaign-effect model. The fallback does not reach a model of several offers. *The summary page and the
+  campaign are about the treat list.*
+- **"Customers measured 25,599" in the campaigns table, "12,862 contacted and 12,737 held back are compared" on the
+  campaign page.** Those are the customers the list meant to reach. The measurement is on the ones with an outcome;
+  the Pack's **Method and limits** says how many were left out, and the summary says how many were kept.
+- **The Pack's Method text says the held-back group was chosen "before the campaign went out" and that outcomes are
+  counted for everyone the campaign was meant to reach.** Nothing went out: it is a replay of a 2008 log, and the
+  Pack's campaign name says so. Say it aloud.
+- **The "Persuadables / Sleeping dogs" counts on the Output page differ from the two reasons for no offer.** The first
+  cut every customer by the first e-mail's predicted effect; the second is per offer, among customers not held back.
+- **The rupee figure on the Output page ("Net value of the offers given") is larger than the measured rupee range.**
+  The first is the model's prediction, from a model that is not calibrated; the second is measured. Quote only the
+  measured one.
+- **The screens round.** "AUUC 0" and "+1 pts" are rounded; the model page and the summary have the ranges.
 
 ## Questions you will get
 
 | Question | Answer |
 |---|---|
-| "Did you tune these?" | No. Engine defaults, no overrides, except the one `exclude_columns` line in the bank's second run. |
-| "How long does it take on our data?" | At the default thirty-minute budget, 10–22 minutes on four cores; the largest file here is 381,109 rows and took 21 minutes. At `fast` / 1 minute, under a minute. The budget is a setting. |
-| "What if our data is transactions, not customers?" | Today someone aggregates upstream — we show exactly how, in `library/online-retail/fetch.py`. In Phase 2 the product does it. |
-| "Can it tell when data is bad?" | It catches columns that contain the answer, and it told us `snapshot_date` was constant. It did **not** catch `duration`, and we will show you why no automated check could. |
-| "Will it always find a model?" | No — and the win-back dataset is in the library precisely because it did not. |
+| "So does it work?" | Against sending nothing, yes, on this file: both ranges are wholly above zero. Against the simplest alternative, on conversions no; in money, not shown to differ. And the part that is new, uplift modelling, did not add anything over plain risk ranking here. That is a result, not a failure of the demo. |
+| "Why is the list worse than just e-mailing the men's version?" | On conversions it is measurably worse; in money the difference is not shown (its range includes zero). Because the model that picks who gets which e-mail is not good enough on this file to beat a one-line rule, and the product measured that rather than hiding it. A different dataset or more data could change it; this one does not. |
+| "Is this ROI?" | No. It is revenue before margin, at an assumed exchange rate, on a retrospective replay, on public data. It shows the method and that the method can say no. ROI needs a client's own campaign and their own value per customer. |
+| "Did you tune on the test half?" | No. The data was split once, by a fixed seed; every model, check and setting uses the first half; the second half is only measured on, and both test plans were registered before any outcome of it was read. |
+| "Why does the replay keep only a third?" | The file's random e-mail matches our list for about a third of each group; the match is random, so the comparison stays randomised. The others are counted as no outcome, never as non-converters. The Pack understates the list for that reason. |
+| "Can we use this data commercially?" | No statement of terms comes with it. It is for internal validation; ask the author before redistributing it or anything derived from it. |
+| "What about the other datasets?" | Only this one is randomised, so only this one can show value. The others show the engine runs on other industries ([`DEMO_OTHER_DATASETS.md`](DEMO_OTHER_DATASETS.md)). **Criteo Uplift: do not demo** (CC BY-NC-SA, non-commercial). |
+| "Why does my screen show different numbers?" | You are on the sample, or a different run. Re-seed on the full file and diff against the summary page. |
+
+## If something goes wrong
+
+- **The seed stops with "already holds a store".** Add `--force`; it replaces only the store under the directory you gave it.
+- **The seed says SAMPLE.** The full file is missing. Run `python library/hillstrom-email/fetch.py`; if the
+  download is blocked, `--from PATH` with a copy you have; then seed again with `--force`.
+- **A page is empty or says "Loading…".** Reload once; the server is local and every page is read from the store.
+- **The numbers on a screen disagree with the summary.** Stop quoting the screen. Quote only the summary, and say
+  you will check the screen.
+
+## Other datasets, and the one you must not show
+
+The telecom, banking, insurance and win-back walkthroughs moved to [`DEMO_OTHER_DATASETS.md`](DEMO_OTHER_DATASETS.md)
+unchanged. **Criteo Uplift: do not demo.** It is CC BY-NC-SA 4.0, non-commercial, and may not appear in a sales
+deck, a customer pilot or a shipped product. See [`criteo-uplift/README.md`](criteo-uplift/README.md).
