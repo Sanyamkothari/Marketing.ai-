@@ -44,6 +44,21 @@ made-up rupee.
 these customers. Its nightly coverage is tested on simulated heterogeneous-effect and null-effect
 populations (`tests/statistical/test_risk_comparison_coverage.py`, DEC-1305's band).
 
+**Safe to roll out** (:func:`rollout_verdict`, Plan K M137, DEC-1325; `uplift.evidence.rollout_verdict`,
+off by default). The same paired terms, read once more as a decision with a stated error rate: the
+one-sided bounds `n·mean ∓ z_c·√n·sd` with `z_c = NormalDist().inv_cdf(confidence)` (0.95 by
+default), and `safe` when the lower bound is above zero (so on a population where uplift ranking is no
+better, `safe` comes out at most `1 − confidence` of the time), `not_safe` when the upper bound is below
+zero, `cannot_tell` otherwise. No second selection/certification split is drawn: the ring cross-fit
+already scores every row with models that never saw it and makes these per-row terms honest. With M97's
+value inputs the bounds are also in rupees: the per-row term becomes `(π_u − π_r)·m_i` with `m_i` the
+row's net money of a contact as `engine.uplift.policy.customer_net_values` computes it (`Γ·value·margin·
+horizon − offer cost × the row's doubly robust converted-if-contacted term`; with no offer cost exactly
+`Γ·v_i`), less the contact cost, which cancels because both rankings make the same number of contacts at
+the same cost. `rows_needed`, for `cannot_tell` with a positive estimate only, is `ceil((z_c·sd/mean)²)`:
+the comparison rows at which the lower bound would clear zero *if the per-row gain seen here is real*.
+It is never turned into rupees, and it is not a promise.
+
 **Fold AUUC** (:func:`fold_auuc_report`). A K-fold cross-fit gives each fold's AUUC of the uplift
 learner refitted without it: how much the model's ranking quality moves with the rows it learns from.
 Each fold's AUUC is judged against its own sampling noise, not as a bare number: a fold of a few
@@ -65,6 +80,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
+from statistics import NormalDist
 from typing import TYPE_CHECKING, Any, Final, Literal
 
 from engine.uplift.contracts import (
@@ -73,6 +89,7 @@ from engine.uplift.contracts import (
     FoldAuucValue,
     PolicyComparisonValue,
     RiskComparison,
+    RolloutVerdict,
 )
 from engine.utils.logging import get_logger, log_stage
 
@@ -81,7 +98,8 @@ if TYPE_CHECKING:
     import numpy.typing as npt
     import pandas as pd
 
-    from engine.uplift.config import UpliftLearner
+    from engine.pilot.roi import ValueCosts
+    from engine.uplift.config import UpliftLearner, UpliftPolicyConfig
 
     FloatArray = npt.NDArray[np.float64]
     IntArray = npt.NDArray[np.int_]
@@ -100,6 +118,7 @@ __all__ = [
     "fold_auuc_report",
     "lightgbm_risk_fitter",
     "lightgbm_uplift_fitter",
+    "rollout_verdict",
     "top_share_policy",
     "training_folds",
 ]
@@ -382,10 +401,18 @@ def equal_budget_comparison(
     rows_excluded: int = 0,
     now: datetime | None = None,
     seed: int = 0,
+    rollout_confidence: float | None = None,
+    value_policy: UpliftPolicyConfig | None = None,
+    row_values: npt.ArrayLike | None = None,
+    value_costs: ValueCosts | None = None,
 ) -> RiskComparison:
     """Uplift top-N against risk top-N at equal budget, by extra conversions (and per rupee).
 
-    `seed` orders equal scores (`top_share_policy`); both rankings use the same key.
+    `seed` orders equal scores (`top_share_policy`); both rankings use the same key. With
+    `rollout_confidence` (Plan K M137) the report also carries `rollout`, the one-sided verdict on the
+    same paired terms (:func:`rollout_verdict`); `value_policy`, `row_values` (the rows' value column, NaN
+    where missing) and `value_costs` price it in rupees as M97 does. Without `rollout_confidence` the
+    report is exactly M96's.
     """
     import numpy as np
 
@@ -436,9 +463,24 @@ def equal_budget_comparison(
             per_rupee=None if spend is None else _sum_interval(terms, spend),
             ope=report,
         )
-    paired = (policies["uplift"] - policies["risk"]) * gamma
+    switch = policies["uplift"] - policies["risk"]
+    paired = switch * gamma
     difference = _sum_interval(paired)
     better = difference.ci_low is not None and difference.ci_low > 0.0
+    rollout = (
+        None
+        if rollout_confidence is None
+        else rollout_verdict(
+            paired,
+            switch,
+            confidence=rollout_confidence,
+            gamma=gamma,
+            treated_terms=_dr_treated_terms(treatment, outcome, cross.p_treated, logged),
+            policy=value_policy,
+            values=row_values,
+            value_costs=value_costs,
+        )
+    )
     from engine.utils.time import utc_now
 
     return RiskComparison(
@@ -457,6 +499,7 @@ def equal_budget_comparison(
         causal=causal,
         summary=_comparison_summary(difference, better, contacts=contacts, share=share),
         computed_at=now if now is not None else utc_now(),
+        rollout=rollout,
     )
 
 
@@ -474,6 +517,207 @@ def _comparison_summary(difference: ConfidenceValue, better: bool, *, contacts: 
         f"At the same budget ({contacts:,} contacts, the top {share} of each fold), ranking by uplift "
         f"does not beat risk ranking: {gap}, a range that does not lie above zero."
     )
+
+
+# ---------------------------------------------------------------------------
+# "Safe to roll out" (Plan K M137, DEC-1325)
+# ---------------------------------------------------------------------------
+@dataclass(frozen=True)
+class _Rupees:
+    """The rupee side of a verdict: its bounds, or why there are none."""
+
+    basis: Literal["conversions", "net_inr"]
+    low: float | None = None
+    high: float | None = None
+    rows_without_value: int | None = None
+    reason: str | None = None
+
+
+def rollout_verdict(
+    paired: FloatArray,
+    switch: FloatArray,
+    *,
+    confidence: float,
+    gamma: FloatArray,
+    treated_terms: FloatArray,
+    policy: UpliftPolicyConfig | None = None,
+    values: npt.ArrayLike | None = None,
+    value_costs: ValueCosts | None = None,
+) -> RolloutVerdict:
+    """The one-sided verdict on the equal-budget difference (module docstring, "Safe to roll out").
+
+    `paired` are the comparison's own per-row terms `(π_u − π_r)·Γ`, `switch` is `π_u − π_r` and
+    `gamma` is `Γ`; `treated_terms` is each row's doubly robust estimate of its outcome if contacted,
+    which prices M97's offer cost. `policy` (with `values` and `value_costs`) gives the rupees; without
+    it, or without a value in it, the verdict is in conversions only. `ValueError` with fewer than two
+    rows or a confidence outside (0.5, 1).
+    """
+    import numpy as np
+
+    terms = np.asarray(paired, dtype=np.float64)
+    rows = terms.shape[0]
+    if rows < 2:
+        raise ValueError("A one-sided verdict needs at least two comparison rows.")
+    if not 0.5 < confidence < 1.0:
+        raise ValueError(f"The verdict's confidence must be between 0.5 and 1, not {confidence}.")
+    z = NormalDist().inv_cdf(confidence)
+    low, high = _one_sided(terms, z)
+    outcome: Literal["safe", "not_safe", "cannot_tell"] = (
+        "safe" if low > 0.0 else "not_safe" if high < 0.0 else "cannot_tell"
+    )
+    mean = float(terms.sum()) / rows
+    rows_needed = None
+    if outcome == "cannot_tell" and mean > 0.0:
+        rows_needed = math.ceil((z * float(terms.std(ddof=1)) / mean) ** 2)
+    rupees = _rupee_bounds(
+        np.asarray(switch, dtype=np.float64),
+        np.asarray(gamma, dtype=np.float64),
+        np.asarray(treated_terms, dtype=np.float64),
+        z=z,
+        policy=policy,
+        values=values,
+        value_costs=value_costs,
+    )
+    return RolloutVerdict(
+        outcome=outcome,
+        confidence=confidence,
+        lower_bound_conversions=low,
+        upper_bound_conversions=high,
+        value_basis=rupees.basis,
+        lower_bound_inr=rupees.low,
+        upper_bound_inr=rupees.high,
+        rows_without_value=rupees.rows_without_value,
+        inr_unavailable_reason=rupees.reason,
+        rows_needed=rows_needed,
+        summary=_rollout_summary(
+            outcome, low=low, high=high, confidence=confidence, rupees=rupees, rows=rows, needed=rows_needed
+        ),
+    )
+
+
+def _one_sided(terms: FloatArray, z: float) -> tuple[float, float]:
+    """`n·mean ∓ z·√n·sd` of the per-row terms (sd with ddof 1): the one-sided lower and upper bounds."""
+    total = float(terms.sum())
+    half = z * math.sqrt(terms.shape[0]) * float(terms.std(ddof=1))
+    return total - half, total + half
+
+
+def _dr_treated_terms(t: IntArray, y: IntArray, p_treated: FloatArray, propensity: FloatArray) -> FloatArray:
+    """Each row's doubly robust estimate of its outcome if contacted, `μ1 + t(y − μ1)/e`.
+
+    The treated half of `engine.uplift.ope.dr_effect_terms`' `Γ`: for a policy `π`, `Σ π·(this)` is the
+    contacted customers' conversions, the ones who take an offer and so are charged its cost (M97's
+    `offer_cost × p_treated`, with the doubly robust term in place of the model's `p_treated`).
+    """
+    terms: FloatArray = p_treated + t * (y - p_treated) / propensity
+    return terms
+
+
+def _rupee_bounds(
+    switch: FloatArray,
+    gamma: FloatArray,
+    treated_terms: FloatArray,
+    *,
+    z: float,
+    policy: UpliftPolicyConfig | None,
+    values: npt.ArrayLike | None,
+    value_costs: ValueCosts | None,
+) -> _Rupees:
+    """The verdict's bounds in rupees on M97's basis (`engine.uplift.policy.customer_net_values`).
+
+    M97's net money of contacting row `i` is `Γ·value·margin·horizon − offer_cost·(treated term) −
+    contact cost` on the value path, `Γ·value_per_conversion·margin·horizon − contact cost` on the
+    scalar one: `customer_net_values` is called with `Γ` as the effect and the doubly robust treated
+    term as `p_treated`, so the formula is M97's own. The contact cost is then added back: both rankings
+    contact the same number of customers (the comparison refuses otherwise) at the same cost per
+    contact, so `Σ (π_u − π_r)·contact cost = 0` exactly and keeping it in the per-row terms would only
+    move their standard deviation. A missing value counts as zero value and is counted, as M97 counts
+    it, so no row is dropped and the comparison stays at equal budget; above M97's
+    `MAX_MISSING_VALUE_SHARE` there are no rupees, as M97 shows no money then.
+    """
+    import numpy as np
+
+    from engine.uplift.policy import MAX_MISSING_VALUE_SHARE, customer_net_values
+
+    if policy is None:
+        return _Rupees("conversions")
+    column = policy.value_column
+    raw = None if values is None or column is None else np.asarray(values, dtype=np.float64)
+    money = customer_net_values(gamma, policy, values=raw, p_treated=treated_terms, value_costs=value_costs)
+    if money.value_weighted:
+        missing = money.values_missing
+        if money.unit is None or money.net_value is None or money.resolved_contact_cost is None:
+            return _Rupees(
+                "conversions",
+                rows_without_value=missing,
+                reason=(
+                    f"{missing} of {switch.shape[0]:,} customers have no '{column}', more than the "
+                    f"{MAX_MISSING_VALUE_SHARE:.0%} the money can leave out, so no rupee bounds are shown."
+                ),
+            )
+        per_row = switch * (money.net_value + money.resolved_contact_cost)
+        low, high = _one_sided(per_row, z)
+        return _Rupees("net_inr", low=low, high=high, rows_without_value=missing)
+    if money.unit is None:
+        reason = (
+            None
+            if column is None
+            else f"The rows have no '{column}' column, so the difference cannot be put in rupees."
+        )
+        return _Rupees("conversions", reason=reason)
+    low, high = _one_sided(switch * gamma * money.unit, z)
+    return _Rupees("net_inr", low=low, high=high)
+
+
+def _rollout_summary(
+    outcome: Literal["safe", "not_safe", "cannot_tell"],
+    *,
+    low: float,
+    high: float,
+    confidence: float,
+    rupees: _Rupees,
+    rows: int,
+    needed: int | None,
+) -> str:
+    from engine.pilot.roi import format_inr
+
+    level = f"{confidence * 100:g}% one-sided"
+    if outcome == "safe":
+        sentence = (
+            f"Safe to switch from risk ranking to this model at this budget: at least "
+            f"{_conversions(low)} extra conversions ({level})"
+        )
+        if rupees.low is not None and rupees.low > 0.0:
+            return f"{sentence}, worth at least {format_inr(rupees.low)}."
+        if rupees.low is not None:
+            return f"{sentence}, though their worth in rupees is not shown to be above zero."
+        return f"{sentence}."
+    if outcome == "not_safe":
+        return (
+            f"Not safe: risk ranking does better at this budget, by at least {_conversions(-high)} "
+            f"conversions ({level})."
+        )
+    if needed is not None:
+        return (
+            f"Cannot tell yet: about {_about(needed)} rows would settle it if the gain seen here is real "
+            f"(this comparison used {rows:,})."
+        )
+    return (
+        "Cannot tell yet: at this budget this model shows no gain over risk ranking, so there is no "
+        "gain for more rows to confirm."
+    )
+
+
+def _conversions(value: float) -> str:
+    return f"{value:,.1f}" if abs(value) < 10 else f"{value:,.0f}"
+
+
+def _about(count: int) -> str:
+    """`count` rounded up to two significant figures, with thousands separators: 40,123 -> 41,000."""
+    if count < 100:
+        return f"{count:,}"
+    step = 10 ** (len(str(count)) - 2)
+    return f"{math.ceil(count / step) * step:,}"
 
 
 # ---------------------------------------------------------------------------

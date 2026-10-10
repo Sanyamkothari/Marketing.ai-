@@ -76,6 +76,7 @@ __all__ = [
     "QiniPoint",
     "RankingChoice",
     "RiskComparison",
+    "RolloutVerdict",
     "Segment",
     "SegmentReport",
     "SegmentSummary",
@@ -1112,6 +1113,60 @@ class PolicyComparisonValue(Artefact):
     ope: OpeReport = Field(description="`evaluate_policy`'s IPS/SNIPS/DR report of this top-N.")
 
 
+class RolloutVerdict(Artefact):
+    """Safe to roll out (Plan K M137, DEC-1325): the equal-budget difference read as a one-sided verdict.
+
+    The bounds are of the very paired difference `RiskComparison.difference` reports (uplift minus risk
+    extra conversions, `Σ (π_u − π_r)·Γ`), one-sided: `n·mean − z_c·√n·sd` and `n·mean + z_c·√n·sd`
+    with `z_c` the normal quantile at `confidence` and `sd` of the per-row paired terms (ddof 1). `safe`
+    when the lower bound is above zero, `not_safe` when the upper bound is below zero, else
+    `cannot_tell`. Rupees only when the use case has value inputs (M97); never a made-up rupee.
+    """
+
+    outcome: Literal["safe", "not_safe", "cannot_tell"] = Field(
+        description=(
+            "safe: the lower bound is above zero; not_safe: the upper bound is below zero; "
+            "cannot_tell: neither."
+        )
+    )
+    confidence: float = Field(description="One-sided confidence of each bound, e.g. 0.95.")
+    lower_bound_conversions: float = Field(
+        description="One-sided lower bound of uplift minus risk extra conversions at equal budget."
+    )
+    upper_bound_conversions: float = Field(
+        description="One-sided upper bound of uplift minus risk extra conversions at equal budget."
+    )
+    value_basis: Literal["conversions", "net_inr"] = Field(
+        description=(
+            "net_inr: the rupee bounds are of the same paired difference with each conversion valued "
+            "as M97 values it; conversions: no value inputs, so no rupees."
+        )
+    )
+    lower_bound_inr: float | None = Field(
+        description="One-sided lower bound of the difference in net rupees; null without value inputs."
+    )
+    upper_bound_inr: float | None = Field(
+        description="One-sided upper bound of the difference in net rupees; null without value inputs."
+    )
+    rows_without_value: int | None = Field(
+        description=(
+            "Rows whose value is missing: counted at zero value, as M97 counts them, never given one. "
+            "Null without a value column."
+        )
+    )
+    inr_unavailable_reason: str | None = Field(
+        description="Why the rupee bounds are null when value inputs exist; null otherwise."
+    )
+    rows_needed: int | None = Field(
+        description=(
+            "For cannot_tell with a positive estimate only: the comparison rows at which the lower bound "
+            "would be above zero if the per-row gain seen here is real, ceil((z·sd/mean)²). Not a "
+            "promise: the gain seen here may not be real. Null otherwise."
+        )
+    )
+    summary: str = Field(description="One plain sentence for the Model page and the Approver's screen.")
+
+
 class RiskComparison(Artefact):
     """`risk_comparison.json` - uplift top-N against risk top-N at equal budget, cross-fitted (M96).
 
@@ -1147,6 +1202,14 @@ class RiskComparison(Artefact):
     causal: bool = Field(description="False when the treatment was acknowledged as not random.")
     summary: str = Field(description="One plain sentence for the Model page and the Approver's screen.")
     computed_at: AwareDatetime = Field(description="UTC time of the comparison.")
+    rollout: RolloutVerdict | None = Field(
+        default=None,
+        exclude_if=_absent,
+        description=(
+            "Plan K M137: the one-sided 'safe to roll out' verdict on the same difference, when "
+            "uplift.evidence.rollout_verdict is on; the key is absent otherwise."
+        ),
+    )
 
 
 class RankingChoice(Artefact):

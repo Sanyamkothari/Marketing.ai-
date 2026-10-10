@@ -745,6 +745,44 @@ The comparison's interval has a nightly coverage test on simulated heterogeneous
 and risk-driven populations (`tests/statistical/test_risk_comparison_coverage.py`, the four Monte
 Carlo standard error band of DEC-1305).
 
+**Safe to roll out** (Plan K M137, DEC-1325; `uplift.evidence.rollout_verdict`, off by default, needs
+`risk_comparison`). The comparison says whether uplift ranking beats risk ranking with a two-sided 95%
+interval; a finance reader needs the same answer as a rollout decision with a stated error rate. With
+the setting on, `risk_comparison.json` gains `rollout` (`RolloutVerdict`); with it off the file is
+byte-identical to M96's (the key is absent, not null).
+
+* *One-sided bounds of the same difference.* No new model and no new split: the verdict reads the
+  comparison's own per-row paired terms `(π_u − π_r)·Γ`, already honest because the ring cross-fit
+  scores every row with models that never saw it. Lower bound `n·mean − z_c·√n·sd`, upper bound
+  `n·mean + z_c·√n·sd`, `z_c = NormalDist().inv_cdf(rollout_confidence)` (0.95 by default, 0.80 to
+  0.995 allowed), `sd` with ddof 1. At 95% one-sided the lower bound sits above M96's two-sided lower
+  end, at the same centre.
+* *Three outcomes.* `safe` when the lower bound is above zero ("Safe to switch from risk ranking to
+  this model at this budget: at least 44 extra conversions (95% one-sided), worth at least ₹3,210");
+  `not_safe` when the upper bound is below zero ("Not safe: risk ranking does better at this
+  budget..."); `cannot_tell` otherwise. On a population where uplift ranking is no better, `safe` comes
+  out in at most 5% of runs at 95% (nightly, `tests/statistical/test_rollout_verdict.py`, the same band).
+* *Rupees only with value inputs.* With M97's value inputs the bounds are also in rupees
+  (`value_basis: net_inr`): each row's term is `(π_u − π_r)` times its net money of a contact as
+  `engine.uplift.policy.customer_net_values` computes it, with `Γ` as the effect - on the value path
+  `Γ × value × margin × horizon − offer cost × the row's doubly robust converted-if-contacted term`
+  (with no offer cost, exactly `Γ × v_i`); with only `value_per_conversion`, `Γ × value_per_conversion
+  × margin × horizon`. The contact cost is left out because it cancels: both rankings contact the same
+  number of customers at the same cost per contact. A customer without a value counts at zero value
+  and is counted in `rows_without_value`, as M97 counts them, so the comparison stays at equal budget;
+  above M97's 10% the rupee bounds are null with `inr_unavailable_reason`, as M97 shows no money then.
+  Without value inputs both rupee fields are null and `value_basis` is `conversions`: never a made-up
+  rupee. The verdict itself is always decided on conversions.
+* *`rows_needed` - what it means and what it does not.* Only for `cannot_tell` with a positive point
+  estimate: `ceil((z_c·sd/mean)²)`, the number of comparison rows at which the lower bound would be
+  above zero **if the per-row gain seen here is real**. It is not a promise: if the gain seen here is
+  luck, more rows will not show it. It is null when the estimate is at or below zero (there is no gain
+  to confirm), and it is never turned into rupees.
+
+The sentence is shown beside the comparison's sentence on the Approver's screen
+(`UPLIFT_NOT_BETTER_THAN_RISK`'s message, `engine.model_gates`). It is evidence for the Approver: the
+check's pass rule, the approval rule and which ranking a contact list uses do not change.
+
 ---
 
 ## 13. How to run it
@@ -850,6 +888,7 @@ only when `problem_type` is `uplift` (DEC-601).
 | `policy.*` (budget, cost, value, margin, ROI) | none | yes | **yes** |
 | `evidence.fold_auuc`, `evidence.risk_comparison` (Plan J M96, section 12) | off; off | yes | no |
 | `evidence.folds`, `evidence.top_share`, `evidence.propensity_column` | 5 (3 to 10); 0.2; none (never a feature) | yes | no |
+| `evidence.rollout_verdict`, `evidence.rollout_confidence` (Plan K M137, section 12) | off; 0.95 (one-sided, 0.80 to 0.995) | yes | no |
 
 ### Ranking by net money (Plan J M97, DEC-1307)
 

@@ -146,6 +146,11 @@ class UpliftEvidenceConfig(BaseModel):
     never a feature, rows outside (0, 1) are left out of the comparison, and without it the treated
     share is the propensity, as for a randomised file. Not agent-editable: they decide what evidence
     an approval rests on.
+
+    `rollout_verdict` (Plan K M137, DEC-1325) adds `rollout` to `risk_comparison.json`: the same paired
+    difference read as a one-sided "safe to roll out" verdict at `rollout_confidence` (0.80 to 0.995),
+    in rupees when M97's value inputs exist. It needs `risk_comparison`; off by default, so the file is
+    byte-identical to M96's.
     """
 
     model_config = ConfigDict(**_SETTINGS, json_schema_extra=_editable(False))
@@ -155,6 +160,20 @@ class UpliftEvidenceConfig(BaseModel):
     folds: Annotated[int, Field(ge=3, le=10)] = 5
     top_share: Annotated[float, Field(gt=0.0, le=1.0)] = 0.2
     propensity_column: str | None = None
+    # Plan K M137: off by default, and left out of a serialised config at their defaults, so the
+    # run_config.json of a run that did not opt in is byte-identical to one written before M137.
+    rollout_verdict: bool = Field(default=False, exclude_if=lambda value: not value)
+    rollout_confidence: Annotated[float, Field(ge=0.80, le=0.995)] = Field(
+        default=0.95, exclude_if=lambda value: value == 0.95
+    )
+
+    @model_validator(mode="after")
+    def _rollout_needs_the_comparison(self) -> Self:
+        if self.rollout_verdict and not self.risk_comparison:
+            raise ValueError(
+                "rollout_verdict reads the equal-budget comparison: turn on risk_comparison as well"
+            )
+        return self
 
 
 _WHOLE_NUMBER_TEXT: Final = re.compile(r"[+-]?\d+\.0*")

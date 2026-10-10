@@ -334,6 +334,8 @@ defaults:
       folds: 5                          # int 3..10; cross-fitting folds
       top_share: 0.2                    # float 0..1; share of each fold both rankings contact in risk_comparison.json
       propensity_column: null           # str | null; recorded per-row P(treated) (M92's treatment_probability); never a feature; null = the treated share
+      rollout_verdict: false            # bool; Plan K M137: add a one-sided "safe to roll out" verdict to risk_comparison.json (needs risk_comparison)
+      rollout_confidence: 0.95          # float 0.80..0.995; one-sided confidence of the verdict's bounds
 
   agent:                                # Plan G §8.1. The Guided-setup helper of each use case (DEC-1003); not overridable per run
     enabled: true                       # bool; the Guided setup tab appears only when this is true and the use case trains a model
