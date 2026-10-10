@@ -538,6 +538,7 @@ MILESTONE_TESTS: Final[Mapping[str, tuple[str, ...]]] = {
     "M158": ("tests/unit/doctor/test_sufficiency.py", "tests/integration/test_api_doctor.py"),
     "M159": ("tests/unit/doctor/test_memory.py", "tests/integration/agent/test_api_doctor_memory.py"),
     "M160": ("tests/integration/test_plan_l_benchmark.py",),
+    "M161": ("tests/integration/test_intake_erasure.py", "tests/integration/test_doctor_ui.py"),
 }
 """Milestone id -> the test files (or directories, with a trailing `/`) that prove it is built.
 
