@@ -15,6 +15,13 @@ name cannot even reach the quoting unless the database said it exists.
 CSV, counted against the use case's size limit as it goes. CSV and not Parquet because a batch at a
 time cannot know a column's final type (a column empty for ten thousand rows), and CSV is exactly
 what a person exporting the table by hand would upload: ingest reads it the same way.
+
+**The one WHERE (Plan J M107, DEC-1317, amending DEC-1105).** A pull of a campaign's outcomes reads
+only a date window: `SELECT * FROM <schema>.<table> WHERE <column> >= '<from>' AND <column> < '<to>'
+LIMIT n` (`fetch_window`). The column is quoted by the dialect's rule like the two names, and must
+first appear, exactly, among the columns the table itself reports (read through the same one query
+with `LIMIT 0`); the two dates are written from `datetime.date` values (`date_literal`), never from
+text. No other condition, and no other statement, is ever built.
 """
 
 from __future__ import annotations
@@ -22,6 +29,7 @@ from __future__ import annotations
 import io
 from abc import ABC, abstractmethod
 from collections.abc import Mapping, Sequence
+from datetime import date
 from typing import Any, BinaryIO, Final
 
 import pandas as pd
@@ -56,9 +64,19 @@ from engine.connections.base import (
 from engine.connections.net import reach
 from engine.utils.time import utc_now
 
-__all__ = ["SqlConnector", "database_fields"]
+__all__ = ["SqlConnector", "database_fields", "date_literal"]
 
 MAX_IDENTIFIER_CHARS: Final[int] = 256
+
+PULL_INVALID: Final[str] = "PULL_INVALID"
+"""`engine.measurement.pull.PULL_INVALID` (Plan J M107): the declared date column is not one of the table's."""
+
+
+def date_literal(day: date) -> str:
+    """`'YYYY-MM-DD'` for a `datetime.date` - never a `datetime`, never text - so nothing typed reaches SQL."""
+    if type(day) is not date:  # a datetime is a date too: refuse it rather than drop its time
+        raise TypeError("a date window is written from datetime.date values only")
+    return f"'{day.isoformat()}'"
 
 
 def database_fields(*, port: int, schema_label: str = "Only this schema") -> list[FieldSpec]:
@@ -114,6 +132,19 @@ class SqlConnector(ABC):
     @abstractmethod
     def write_privileges(self, connection: Any) -> int | None:
         """How many write privileges the user holds (0 means read-only), or None when it cannot tell."""
+
+    def window_sql(self, schema: str, table: str, column: str, start: date, end: date, limit: int) -> Any:
+        """`SELECT * FROM <schema>.<table> WHERE <column> >= <start> AND <column> < <end> LIMIT <limit>`.
+
+        Plan J M107 (DEC-1317): the one condition a pull may carry. A dialect that cannot quote a column
+        does not override this, and a window pull from it is refused.
+        """
+        del schema, table, column, start, end, limit
+        raise ConnectorError(
+            PULL_INVALID,
+            f"{self.label} cannot read a date window.",
+            "Read the whole table instead, or ask for an extract of the dates you need.",
+        )
 
     # --- defaults a dialect may override -----------------------------------------------------------
     def needs_reach(self, config: Mapping[str, ConfigValue]) -> tuple[str, int] | None:
@@ -329,25 +360,7 @@ class SqlConnector(ABC):
             schema, table = self._checked(connection, config, selection)
             name = f"{schema}.{table}.csv"
             writer = LimitedWriter(sink, limit_bytes, f"The table {schema}.{table}")
-            cursor = self.open_cursor(connection)
-            try:
-                cursor.execute(self.select_sql(schema, table, max_rows))
-                columns = [str(d[0]) for d in cursor.description]
-                rows = 0
-                header = True
-                while True:
-                    batch = cursor.fetchmany(FETCH_BATCH_ROWS)
-                    if not batch and not header:
-                        break
-                    buffer = io.StringIO()
-                    pd.DataFrame(list(batch), columns=columns).to_csv(buffer, index=False, header=header)
-                    writer.write(buffer.getvalue().encode("utf-8"))
-                    rows += len(batch)
-                    header = False
-                    if not batch:
-                        break
-            finally:
-                _close_cursor(cursor)
+            rows = self._stream(connection, self.select_sql(schema, table, max_rows), writer)
         except ConnectorError:
             raise
         except Exception as exc:
@@ -355,6 +368,71 @@ class SqlConnector(ABC):
         finally:
             self.close(connection)
         return FetchResult(file_format="csv", file_name=name, size_bytes=writer.written, rows=rows)
+
+    def fetch_window(
+        self,
+        config: Mapping[str, ConfigValue],
+        secrets: Mapping[str, str],
+        selection: Selection,
+        sink: BinaryIO,
+        *,
+        column: str,
+        start: date,
+        end: date,
+        limit_bytes: int,
+        max_rows: int,
+    ) -> FetchResult:
+        """The rows whose `column` falls on or after `start` and before `end`, as CSV (Plan J M107).
+
+        The table is checked against the database's own listing exactly as `fetch` checks it, and
+        `column` against the columns the table reports, before the one window query is built.
+        """
+        for day in (start, end):
+            date_literal(day)  # a TypeError before anything is opened
+        connection = self.connect(config, secrets)
+        name = ""
+        try:
+            schema, table = self._checked(connection, config, selection)
+            if column not in self._columns(connection, schema, table):
+                raise ConnectorError(
+                    PULL_INVALID,
+                    f"The table {schema}.{table} has no column with the name given for the date.",
+                    "Pick the column that holds the date of each row, exactly as the table spells it.",
+                )
+            name = f"{schema}.{table}.csv"
+            writer = LimitedWriter(sink, limit_bytes, f"The table {schema}.{table}")
+            statement = self.window_sql(schema, table, column, start, end, max_rows)
+            rows = self._stream(connection, statement, writer)
+        except ConnectorError:
+            raise
+        except Exception as exc:
+            raise _read_failed() from exc
+        finally:
+            self.close(connection)
+        return FetchResult(file_format="csv", file_name=name, size_bytes=writer.written, rows=rows)
+
+    def _stream(self, connection: Any, statement: Any, writer: LimitedWriter) -> int:
+        """Run `statement` on a fetch cursor and write its rows as CSV, a batch at a time; the row count."""
+        cursor = self.open_cursor(connection)
+        try:
+            cursor.execute(statement)
+            columns = [str(d[0]) for d in cursor.description]
+            rows = 0
+            header = True
+            while True:
+                batch = cursor.fetchmany(FETCH_BATCH_ROWS)
+                if not batch and not header:
+                    break
+                buffer = io.StringIO()
+                pd.DataFrame(list(batch), columns=columns).to_csv(buffer, index=False, header=header)
+                writer.write(buffer.getvalue().encode("utf-8"))
+                rows += len(batch)
+                header = False
+                if not batch:
+                    break
+        finally:
+            _close_cursor(cursor)
+        return rows
 
     # --- helpers ------------------------------------------------------------------------------------
     def _schemas(self, connection: Any, config: Mapping[str, ConfigValue]) -> list[str]:
@@ -384,6 +462,11 @@ class SqlConnector(ABC):
         if table not in self.list_tables(connection, schema):
             raise _not_found("table", f"{schema}.{table}")
         return schema, table
+
+    def _columns(self, connection: Any, schema: str, table: str) -> list[str]:
+        """The table's column names, as it reports them, read through the one query with `LIMIT 0`."""
+        columns, _rows = self._rows(connection, schema, table, 0)
+        return columns
 
     def _rows(self, connection: Any, schema: str, table: str, limit: int) -> tuple[list[str], Sequence[Any]]:
         cursor = connection.cursor()

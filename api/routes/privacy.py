@@ -67,15 +67,17 @@ from __future__ import annotations
 
 import csv
 import hashlib
+import io
 import re
 import threading
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Annotated, Final, Literal
+from typing import Annotated, Any, Final, Literal
 
 from fastapi import APIRouter, FastAPI, File, Form, Query, Request, Response, UploadFile
 from fastapi.responses import JSONResponse
+from pydantic import Field
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import SQLAlchemyError
 from starlette.concurrency import run_in_threadpool
@@ -111,6 +113,10 @@ from api.schemas import (
 from engine.access.roles import Role
 from engine.audit.events import content_hash, principal_hash
 from engine.clients import ClientStore
+from engine.config import StrictBase
+from engine.connections.base import ConnectorError
+from engine.connections.store import ConnectionStore
+from engine.measurement.pull import PullSelection, fetch_resolved, resolve
 from engine.platform_db import PLATFORM_DB_FILENAME, platform_engine
 from engine.privacy.access_export import export_principal
 from engine.privacy.config import PrivacyConfig, check_privacy_salt, privacy_config_or_none, privacy_salt
@@ -160,6 +166,13 @@ POLICIES: Final[dict[tuple[str, str], RoutePolicy]] = {
         action="privacy.consent.import",
         object_type="consent_import",
         purpose="import consent records",
+    ),
+    # Plan J M107 (DEC-1317): the same import, the table or file read from a saved connection (read-only).
+    ("POST", "/privacy/consent/imports/from-connection"): RoutePolicy(
+        role=_AD,
+        action="privacy.consent.import_connection",
+        object_type="consent_import",
+        purpose="import consent records from a saved connection",
     ),
     ("POST", "/privacy/consent/lookup"): RoutePolicy(
         role=_AD,
@@ -565,6 +578,98 @@ async def import_consent(
         ) from None
     except csv.Error:
         raise http_error(422, "CONSENT_FILE_UNREADABLE", "The consent file is not a readable CSV.") from None
+    set_audit_context(
+        request,
+        details={"request_kind": "consent_import", "client_id": client, "count": report.rows_imported},
+    )
+    if not report.imported:
+        return JSONResponse(status_code=422, content=report.model_dump(mode="json"))
+    return report
+
+
+class ConsentConnectionImport(StrictBase):
+    """Body of `POST /privacy/consent/imports/from-connection` (Plan J M107, DEC-1317)."""
+
+    connection_id: str = Field(min_length=1, max_length=64, description="The saved connection to read.")
+    selection: PullSelection = Field(
+        description="The consent table (`schema_name`, `table`), file (`path`) or folder's newest file (`prefix`)."
+    )
+    client_id: str | None = Field(default=None, description="The client the consent belongs to.")
+    partial: bool = Field(default=False, description="Import the valid rows even when some are refused.")
+
+
+@router.post(
+    "/privacy/consent/imports/from-connection",
+    response_model=ConsentImportResponse,
+    status_code=201,
+    responses={
+        **_ERRORS,
+        413: {"model": ErrorResponse},
+        422: {"model": ConsentImportResponse},
+        502: {"model": ErrorResponse},
+    },
+    summary="Import consent records from a saved connection's table or file (all or nothing unless partial)",
+)
+def import_consent_from_connection(
+    body: ConsentConnectionImport,
+    request: Request,
+    root: ConfigRootDep,
+    storage: StorageDep,
+    settings: SettingsDep,
+) -> ConsentImportResponse | JSONResponse:
+    """The file import's rules and answers, with the rows read from a saved connection (read-only, DEC-1317).
+
+    The table or file is read whole - a database through its one `SELECT`, on a read-only session - within the
+    size a consent file may have, then imported exactly as `POST /privacy/consent/imports` imports a file: every
+    row validated, then all appended or none. No message quotes a cell.
+    """
+    config = _privacy_config(root)
+    client = _client_id(body.client_id, settings, required=True)
+    assert client is not None
+    try:
+        resolved = resolve(ConnectionStore(storage, settings), body.connection_id, body.selection)
+        sink = io.BytesIO()
+        fetched = fetch_resolved(resolved, sink, window=None, limit_bytes=MAX_CONSENT_FILE_BYTES)
+    except ConnectorError as exc:
+        if exc.code == "CONNECTION_TOO_LARGE":
+            raise http_error(
+                413,
+                "CONSENT_FILE_TOO_LARGE",
+                f"A consent file may be at most {MAX_CONSENT_FILE_BYTES // (1024 * 1024)} MB; split it.",
+            ) from None
+        raise http_error(
+            exc.status, exc.code, f"{exc.message} {exc.fix}" if exc.fix else exc.message
+        ) from None
+    too_large = http_error(
+        413,
+        "CONSENT_FILE_TOO_LARGE",
+        f"A consent file may be at most {MAX_CONSENT_FILE_BYTES // (1024 * 1024)} MB; split it.",
+    )
+    data = sink.getvalue()
+    if fetched.file_format == "parquet":  # the ledger reads CSV: a Parquet file's columns are written as text
+        import pandas as pd
+        import pyarrow.parquet as pq
+
+        # Compressed bytes say little about the rows: every cell of the text written is at least one byte
+        # (its separator), so a file whose cells alone pass the limit is refused before it is expanded.
+        factory: Any = pq.ParquetFile  # pyarrow ships no types
+        metadata = factory(io.BytesIO(data)).metadata
+        if int(metadata.num_rows) * max(int(metadata.num_columns), 1) > MAX_CONSENT_FILE_BYTES:
+            raise too_large
+        data = pd.read_parquet(io.BytesIO(data)).to_csv(index=False).encode("utf-8")
+    if len(data) > MAX_CONSENT_FILE_BYTES:  # the file route's limit, on the same text it would be given
+        raise too_large
+    ledger = ConsentLedger(get_privacy_engine(request), salt=_salt(request, settings))
+    try:
+        report = ledger.import_csv(data, client_id=client, privacy=config, partial=body.partial)
+    except UnicodeDecodeError:
+        raise http_error(
+            422, "CONSENT_FILE_NOT_UTF8", "Save the consent file as UTF-8 and try again."
+        ) from None
+    except csv.Error:
+        raise http_error(
+            422, "CONSENT_FILE_UNREADABLE", "The consent table could not be read as rows."
+        ) from None
     set_audit_context(
         request,
         details={"request_kind": "consent_import", "client_id": client, "count": report.rows_imported},

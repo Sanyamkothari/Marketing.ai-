@@ -37,7 +37,7 @@ the user downloads (the treat list).
 | 18 | The Value Proof Pack | M104 | written (below) |
 | 19 | Warnings and proven value to date | M105 | written (below) |
 | 20 | Learning from the last cycle | M106 | written (below) |
-| 21 | The monthly loop (read-only) | M107 | not yet written |
+| 21 | The monthly loop (read-only) | M107 | written (below) |
 | 22 | Cost before each run | M108 | written (below) |
 | 23 | Validation on real public randomised data | M110 | not yet written |
 | 24 | The manager demo | M111 | not yet written |
@@ -938,6 +938,82 @@ writes no record and draws no block. **That path is not checked for overlap:** i
 only, so a model learned from it knows nothing of a contact's effect on anyone outside the list, which is the case
 `LEARN_NO_OVERLAP` describes; it is left as it was so defaults stay byte-identical. For a cycle that will be learned
 from, set `actions.explore_fraction` to 5% or more.
+
+## 21. The monthly loop, read-only (M107, DEC-1317)
+
+**Why.** The value has to arrive every month without someone downloading and uploading files. Connections
+(Plan H) already read a client's systems, read-only; M107 lets the product read them on its own, on a
+schedule, and carries a cycle from the new month's tables to a model learned from the last campaign. The
+treat list stays a download: nothing is ever written outside our storage.
+
+**Reading, read-only** (`engine/measurement/pull.py`, details in `docs/CONNECTIONS.md`). A selection is one
+file, the newest CSV or Parquet file under a folder, or a table. From a SQL database the only statement that
+reads rows is `SELECT * FROM <schema>.<table> LIMIT n`, which a pull may extend with **one** date window on a
+column the request declared: the column must be one of the table's own (read with `LIMIT 0`), it is quoted by
+the dialect's identifier rule, and the two dates are written from date values (`engine.connections.sql.
+date_literal`), never from text. This amends DEC-1105. There is no free SQL. The session is made read-only
+before the first row is read, as for every read. A store file, or a BigQuery table, is read whole within the
+size limit and the window applied here; `pull_source.json` records which of the two happened.
+
+**Sources bound to a connection.** `POST /clients/{id}/sources/from-connection` adds a source as the file
+upload does, with a `binding` (`SourceSpec.binding`, absent while unset, so a file source is stored exactly as
+before). Before every scheduled build (`engine.scheduling.firing.build_dataset_from_spec`, given the loop's
+services) the table the build would read for each role - chosen by `latest_recipe_inputs`' own rule: the newest
+of the mapped source and the sources of that role carrying every column its mapping reads - is read again by its
+binding when, and only when, it came from a connection (`engine.onboarding.sources.refresh_bound_sources`); a
+changed table becomes a new source of that role, which `latest_recipe_inputs` re-points the recipe at; an
+unchanged one (same file, same fingerprint) adds nothing. A recipe reading uploaded files reads no connection,
+whatever bound sources the client also has. A connection that cannot be read, or a table read again past the
+per-source row limit (`SOURCE_TOO_LARGE`), fails the firing with its own code. The multipart route is unchanged.
+
+**Routes: a deviation from the plan.** The plan has `POST /clients/{id}/sources` and `POST /privacy/consent/imports`
+accept `{connection_id, selection}`. Those two routes take a multipart form, whose contract (and OpenAPI request
+body) would change if a JSON body were accepted beside it, so connection reads use sibling routes instead:
+`POST /clients/{id}/sources/from-connection` and `POST /privacy/consent/imports/from-connection`, with the same
+role, rules and answers as their file routes. `POST /campaigns/{id}/outcomes` already takes JSON, so it is
+extended in place: exactly one of `upload_id` or `connection_id`. A consent table read from a connection obeys the
+file route's size limit on the text the ledger is given, not only on the bytes read: a Parquet file whose cells
+would pass the limit is refused before it is expanded.
+
+**The four schedules.** `ScheduleKind` gains three kinds after `score`, each reading only what the step before
+wrote, so each runs on its own cadence and a missed day simply waits for the next (`engine/measurement/
+cycle.py`):
+
+| Kind | What a firing does | Result | Alert |
+|---|---|---|---|
+| `score` | fetches the bound tables, rebuilds the recipe, scores with the model in use | `SCORED` | - |
+| `treat_list` | the newest finished scoring run without a campaign: its treat list (M98) and its campaign record (`POST /campaigns`'s engine half), sent when the run finished | `TREAT_LIST_READY` / `NOTHING_NEW` | `treat_list_ready` |
+| `measure` | once the newest live campaign's window has closed: its outcomes read from the connection the schedule names (`parameters.outcomes`) for exactly that window, kept as an upload, given to the campaign and measured through the one path against its plan | `CAMPAIGN_MEASURED` / `CAMPAIGN_NOT_MATURED` / `EARLY_LOOK` / `NOTHING_TO_MEASURE` | `campaign_measured` |
+| `learn` | the newest measured campaign not yet learned from: M106's frame, a training upload, the uplift checks and a training run with `governance.approval_required` forced on | `LEARNING_STARTED`, then `MODEL_PENDING_APPROVAL` or `MODEL_CANDIDATE`; `NOTHING_TO_LEARN`; `LEARN_REFUSED` | `challenger_waiting` |
+
+A step that fails is a failed firing with its code and the usual `scheduled_job_failed` alert; a step with
+nothing to do succeeds quietly. A learn refused for a campaign (its code and the campaign's `measured_at` kept in
+`campaigns/<id>/learn_refused.json`) is not tried again while the campaign keeps that measurement: later firings
+answer `LEARN_REFUSED` instead of raising the same alert daily, and once a person measures the campaign again the
+next firing tries again. A learning run that finishes without registering a model raises `scheduled_job_failed`
+(the firing itself succeeded, `MODEL_NOT_REGISTERED`). The three new alerts are `info`. The learning run passes
+M108's cost gate like every scheduled run, checked only once a run is about to start: a day with nothing to learn,
+or a refused campaign, never meets it. A measure firing checks the table's columns before keeping a copy, and a
+measurement refused afterwards puts the campaign back as it was and removes the copy, so a firing that fails every
+day keeps no copies of the rows. Nothing is promoted or approved: a person approves the challenger, which is the
+only thing left to a person in the cycle (`tests/integration/measurement/test_monthly_loop.py`).
+
+**One code path with the routes.** `open_campaign`, `record_outcomes` and `measure_recorded` are the engine
+halves of `POST /campaigns`, `POST /campaigns/{id}/outcomes` and `POST /campaigns/{id}/measure`, which call
+them; the routes keep their HTTP answers and audit reason codes. The learning run is the engine half of
+`POST /runs/{id}/measure/learn` for a measured campaign (`learn_from_campaign`, `start_learn_run`), learning
+from the campaign's outcomes; its upload is written by `store_frame_upload`, whose `upload.json` a test keeps
+field for field `api.schemas.UploadRecord`. `campaigns/<id>/learned.json` (ids only) stops a campaign from
+being learned from twice.
+
+**Codes.** `PULL_INVALID` (422: a selection or window that does not fit the connection), `PULL_NOTHING_FOUND`
+(404: an empty folder), `CYCLE_SERVICES_MISSING` (a deployment that gives its scheduler no campaign store or
+connections) and `LEARN_NOT_READY` (the measured campaign cannot teach a model yet).
+
+**Still open.** The schedules screen (`ui/modules/production/schedules.js`) names the new kinds by their ids
+and does not offer them in its form yet; a measured campaign's outcome table must name the customer column as
+the campaign's key does; a scheduled learn writes no step 4 record (`campaign_measure.json`), so step 4 does
+not show the run it started.
 
 ## 22. Cost before each run, with a cap (M108, DEC-1318)
 

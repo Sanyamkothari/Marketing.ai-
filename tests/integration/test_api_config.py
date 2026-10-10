@@ -516,6 +516,9 @@ def test_openapi_builds_and_documents_every_route(client: TestClient) -> None:
         # Plan J M109: events noted against a scoring run's drift report (DEC-1319)
         "/runs/{run_id}/drift-events",
         "/runs/{run_id}/drift-events/{annotation_id}",
+        # Plan J M107: a source and a consent table read from a saved connection (DEC-1317)
+        "/clients/{client_id}/sources/from-connection",
+        "/privacy/consent/imports/from-connection",
     }
 
 

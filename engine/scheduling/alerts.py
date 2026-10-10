@@ -4,7 +4,10 @@ Four things raise an alert, and only four: the latest scored data has drifted be
 `monitoring.drift_psi_threshold` (`drift_above_threshold`), real-world performance has dropped by
 more than `monitoring.performance_alert_drop_pct` against the model's test score (`performance_drop`),
 a scheduled job failed (`scheduled_job_failed`), and a due slot passed with nothing there to fire it
-(`schedule_missed`).
+(`schedule_missed`). Plan J M107 (DEC-1317) adds three of severity `info`, raised by the monthly loop's
+steps when they produce something a person acts on: a treat list ready to download (`treat_list_ready`),
+a campaign measured (`campaign_measured`), and a model learned from the last campaign waiting for an
+Approver (`challenger_waiting`).
 
 **An alert is written for a person reading an email (DEC-770).** `message` is business language -
 "The scheduled scoring for <use case> did not finish" - and it carries identifiers (the schedule, the
@@ -75,6 +78,10 @@ class AlertKind(StrEnum):
     PERFORMANCE_DROP = "performance_drop"
     SCHEDULED_JOB_FAILED = "scheduled_job_failed"
     SCHEDULE_MISSED = "schedule_missed"
+    # Plan J M107 (DEC-1317): the monthly loop says when a step produced something a person acts on.
+    TREAT_LIST_READY = "treat_list_ready"
+    CAMPAIGN_MEASURED = "campaign_measured"
+    CHALLENGER_WAITING = "challenger_waiting"
 
 
 Severity = Literal["info", "warning", "critical"]
@@ -84,15 +91,22 @@ SEVERITY_FOR: Final[dict[AlertKind, Severity]] = {
     AlertKind.PERFORMANCE_DROP: "warning",
     AlertKind.SCHEDULED_JOB_FAILED: "critical",
     AlertKind.SCHEDULE_MISSED: "warning",
+    AlertKind.TREAT_LIST_READY: "info",
+    AlertKind.CAMPAIGN_MEASURED: "info",
+    AlertKind.CHALLENGER_WAITING: "info",
 }
-"""A failed job is critical - something the client expected did not happen; the rest are warnings -
-something to look at, and the product kept working."""
+"""A failed job is critical - something the client expected did not happen; drift, a performance drop and
+missed runs are warnings - something to look at, and the product kept working; the monthly loop's steps
+(Plan J M107) are information - something was produced for a person to act on."""
 
 _TITLES: Final[dict[AlertKind, str]] = {
     AlertKind.DRIFT_ABOVE_THRESHOLD: "Data drift above threshold",
     AlertKind.PERFORMANCE_DROP: "Model performance dropped",
     AlertKind.SCHEDULED_JOB_FAILED: "Scheduled job failed",
     AlertKind.SCHEDULE_MISSED: "Scheduled run missed",
+    AlertKind.TREAT_LIST_READY: "Treat list ready",
+    AlertKind.CAMPAIGN_MEASURED: "Campaign measured",
+    AlertKind.CHALLENGER_WAITING: "New model waiting for approval",
 }
 
 

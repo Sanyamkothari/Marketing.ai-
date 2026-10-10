@@ -47,10 +47,15 @@ from engine.onboarding.specs import (
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
+    from datetime import datetime
 
     import pandas as pd
 
+    from engine.clients import ClientStore
+    from engine.connections.store import ConnectionStore
     from engine.contracts import DatasetFingerprint, DatasetProfile
+    from engine.measurement.pull import PullSelection
+    from engine.onboarding.specs import OnboardingSpec
     from engine.stages.ingest import ReadResult
     from engine.storage import Storage
 
@@ -60,11 +65,16 @@ __all__ = [
     "FileSourceReader",
     "ProfiledRead",
     "SourceReader",
+    "add_connection_source",
     "detect_roles",
     "join_coverage",
     "key_candidates",
     "key_format_mismatch",
+    "new_source_id",
     "profile_source",
+    "refresh_bound_sources",
+    "source_profile_key",
+    "source_raw_key",
     "time_candidates",
 ]
 
@@ -592,3 +602,243 @@ class FileSourceReader:
             row_count=result.row_count,
             fingerprint=result.fingerprint,
         )
+
+
+# ---------------------------------------------------------------------------
+# Plan J M107 (DEC-1317): sources read from a saved connection, and read again before each scheduled build
+# ---------------------------------------------------------------------------
+SOURCES_PREFIX: Final[str] = "clients/"
+SOURCE_PROFILE_FILENAME: Final[str] = "profile.json"
+PROFILE_ROW_CAP: Final[int] = 2_000_000
+"""`api.routes.sources.PROFILE_ROW_CAP`: rows held for a profile's statistics; the row count stays exact."""
+
+
+def source_raw_key(client_id: str, source_id: str, file_format: Literal["csv", "parquet"]) -> str:
+    """`clients/<client>/sources/<source>/raw.<format>`: where a source's bytes are kept."""
+    return f"{SOURCES_PREFIX}{client_id}/sources/{source_id}/raw.{file_format}"
+
+
+def source_profile_key(client_id: str, source_id: str) -> str:
+    """`clients/<client>/sources/<source>/profile.json`: the profile `GET /clients/{id}/sources` serves."""
+    return f"{SOURCES_PREFIX}{client_id}/sources/{source_id}/{SOURCE_PROFILE_FILENAME}"
+
+
+def new_source_id() -> str:
+    """`src_<12 hex>`, the shape `api.routes.sources.new_source_id` gives an uploaded source."""
+    import secrets
+
+    return f"src_{secrets.token_hex(6)}"
+
+
+def add_connection_source(
+    storage: Storage,
+    client_store: ClientStore,
+    connections: ConnectionStore,
+    *,
+    client_id: str,
+    connection_id: str,
+    selection: PullSelection,
+    role: str | None,
+    config: UseCaseConfig,
+    roles: RoleCatalogue | None,
+    limit_bytes: int,
+    now: datetime,
+    row_limit: int | None = None,
+    source_id: str | None = None,
+    keep_if_unchanged: SourceSpec | None = None,
+) -> tuple[SourceSpec, SourceProfile]:
+    """Read `selection` from a saved connection into a new source of `client_id`, bound to it (Plan J M107).
+
+    The bytes are streamed into `clients/<client>/sources/<source>/raw.<format>` exactly as an uploaded
+    source's are, read and profiled by the same functions, and registered with a `SourceBinding` saying
+    where they came from. Nothing is written to the client's system and no upload is made.
+
+    `keep_if_unchanged` is the bound source this read refreshes: when the table read is the same (the same
+    file and the same fingerprint) the new copy is discarded and that source is returned, so a build that
+    finds nothing new adds no copy. `row_limit` is the engine's limit on one source's rows
+    (`SOURCE_TOO_LARGE`, a 409, as for an upload). Anything that fails after the first byte landed leaves
+    nothing behind. Raises `ConnectorError`.
+    """
+    from engine.clients import ClientStoreError
+    from engine.connections.base import ConnectorError
+    from engine.measurement.pull import fetch_resolved, resolve
+    from engine.onboarding.specs import DecidedBy, SourceBinding
+    from engine.stages.ingest import IngestError, read_upload
+
+    resolved = resolve(connections, connection_id, selection)
+    chosen_id = source_id or new_source_id()
+    raw_key = source_raw_key(client_id, chosen_id, resolved.file_format)
+    try:
+        with storage.open_write(raw_key) as sink:
+            fetched = fetch_resolved(resolved, sink, window=None, limit_bytes=limit_bytes)
+        try:
+            result = read_upload(
+                storage,
+                raw_key,
+                file_format=resolved.file_format,
+                row_cap=min(row_limit or PROFILE_ROW_CAP, PROFILE_ROW_CAP),
+            )
+        except IngestError as exc:
+            raise ConnectorError(exc.code, exc.message, status=422) from exc
+        if row_limit is not None and result.row_count > row_limit:
+            raise ConnectorError(
+                "SOURCE_TOO_LARGE",
+                f"This table has {result.row_count:,} rows, above the {row_limit:,} row limit for one source.",
+                "Read a smaller table or file, or raise the limit.",
+                status=409,
+            )
+        if (
+            keep_if_unchanged is not None
+            and keep_if_unchanged.binding is not None
+            and keep_if_unchanged.binding.object_path == resolved.path
+            and result.fingerprint is not None
+            and keep_if_unchanged.fingerprint.hash == result.fingerprint.hash
+        ):
+            _discard(storage, client_store, client_id=client_id, source_id=chosen_id, raw_key=raw_key)
+            kept: SourceProfile = storage.read_model(
+                source_profile_key(client_id, keep_if_unchanged.source_id), SourceProfile
+            )
+            return keep_if_unchanged, kept
+        file_name = fetched.file_name
+        profile = profile_source(
+            result.frame,
+            config,
+            source_id=chosen_id,
+            client_id=client_id,
+            file_name=file_name,
+            file_format=result.file_format,
+            file_size_bytes=storage.size_bytes(raw_key),
+            delimiter=result.delimiter,
+            encoding=result.encoding,
+            row_count=result.row_count,
+            fingerprint=result.fingerprint,
+            roles=roles,
+        )
+        profile = profile.model_copy(
+            update={"role": role, "role_decided_by": DecidedBy.USER if role is not None else None}
+        )
+        binding = SourceBinding(
+            connection_id=resolved.connection_id,
+            kind=resolved.kind,
+            pick="newest" if selection.prefix else "fixed",
+            prefix=selection.prefix,
+            path=selection.path,
+            schema_name=selection.schema_name,
+            table=selection.table,
+            object_path=resolved.path,
+            fetched_at=now,
+            refreshes=keep_if_unchanged.source_id if keep_if_unchanged is not None else None,
+        )
+        spec = SourceSpec(
+            source_id=chosen_id,
+            client_id=client_id,
+            file_name=file_name,
+            storage_key=raw_key,
+            file_format=resolved.file_format,
+            role=role,
+            rows=profile.rows,
+            columns=tuple(column.name for column in profile.profile.columns),
+            fingerprint=profile.fingerprint,
+            created_at=now,
+            binding=binding,
+        )
+        client_store.add_source(client_id, spec)
+        storage.write_model(source_profile_key(client_id, chosen_id), profile)
+    except (ConnectorError, ClientStoreError, OSError, ValueError):
+        _discard(storage, client_store, client_id=client_id, source_id=chosen_id, raw_key=raw_key)
+        raise
+    return spec, profile
+
+
+def refresh_bound_sources(
+    storage: Storage,
+    client_store: ClientStore,
+    connections: ConnectionStore,
+    spec: OnboardingSpec,
+    *,
+    config: UseCaseConfig,
+    roles: RoleCatalogue | None,
+    limit_bytes: int,
+    now: datetime,
+    row_limit: int | None = None,
+) -> tuple[str, ...]:
+    """Read again the bound tables the recipe's next build would read; the new sources' ids.
+
+    For every role the recipe maps once, the table the build would read is found by
+    `engine.scheduling.firing.latest_recipe_inputs`' own rule: among the mapped source and every source of
+    the same role carrying every column its mapping reads, the newest. Only when that table came from a
+    connection is it read again by its binding (for "the newest file in a folder", whatever is newest now).
+    A table that has changed becomes a new source of the same role, newer than every other, which
+    `latest_recipe_inputs` then re-points the recipe at; an unchanged one adds nothing. A recipe whose
+    tables were uploaded as files reads no connection at all, whatever other bound sources the client has,
+    so it behaves exactly as before. A role mapped twice is left as saved, as `latest_recipe_inputs` leaves it.
+
+    `row_limit` is the engine's limit on one source's rows: a table read again past it fails the build with
+    `SOURCE_TOO_LARGE`, as adding it would have. Raises `ConnectorError` when a connection cannot be read,
+    so the build stops rather than score last month's tables as if they were this month's.
+    """
+    from collections import Counter
+
+    from engine.measurement.pull import PullSelection
+    from engine.registry import to_utc
+
+    mappings = [client_store.get_mapping(mapping_id) for mapping_id in spec.mapping_ids]
+    counts = Counter(mapping.role for mapping in mappings)
+    sources = client_store.list_sources(spec.client_id)
+    added: list[str] = []
+    for mapping in mappings:
+        if counts[mapping.role] != 1:
+            continue
+        original = client_store.get_source(mapping.source_id)
+        needed = {column.source for column in mapping.columns}
+        candidates = [original] + [
+            source
+            for source in sources
+            if source.role == mapping.role
+            and source.source_id != original.source_id
+            and needed <= set(source.columns)
+        ]
+        latest = max(candidates, key=lambda source: (to_utc(source.created_at), source.source_id))
+        binding = latest.binding
+        if binding is None:  # the build reads an uploaded file: nothing to read again
+            continue
+        selection = PullSelection(
+            prefix=binding.prefix if binding.pick == "newest" else None,
+            path=binding.path if binding.pick == "fixed" else None,
+            schema_name=binding.schema_name,
+            table=binding.table,
+        )
+        fresh, _profile = add_connection_source(
+            storage,
+            client_store,
+            connections,
+            client_id=spec.client_id,
+            connection_id=binding.connection_id,
+            selection=selection,
+            role=mapping.role,
+            config=config,
+            roles=roles,
+            limit_bytes=limit_bytes,
+            now=now,
+            row_limit=row_limit,
+            keep_if_unchanged=latest,
+        )
+        if fresh.source_id != latest.source_id:
+            added.append(fresh.source_id)
+    return tuple(added)
+
+
+def _discard(
+    storage: Storage, client_store: ClientStore, *, client_id: str, source_id: str, raw_key: str
+) -> None:
+    """Remove a half-made source: its bytes, its profile and its row, whichever got that far."""
+    from contextlib import suppress
+
+    from engine.clients import ClientStoreError
+    from engine.storage import StorageError
+
+    for key in (raw_key, source_profile_key(client_id, source_id)):
+        with suppress(OSError, StorageError):
+            storage.delete(key)
+    with suppress(ClientStoreError):
+        client_store.delete_source(source_id)

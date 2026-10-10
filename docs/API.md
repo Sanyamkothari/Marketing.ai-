@@ -46,6 +46,7 @@ Contract schema version: 1.
 | POST | `/clients/{client_id}/onboarding-specs/{spec_id}/replay` | Point a saved recipe at this month's files, reopening only what no longer fits | ReplayResponse |
 | GET | `/clients/{client_id}/sources` | A client's sources and their stored profiles | SourceListResponse |
 | POST | `/clients/{client_id}/sources` | Store a client's raw table, profile it and propose its role | SourceCreateResponse |
+| POST | `/clients/{client_id}/sources/from-connection` | Read a client's table from a saved connection, profile it and keep it bound for monthly builds | SourceCreateResponse |
 | DELETE | `/clients/{client_id}/sources/{source_id}` | Remove one source | - |
 | PATCH | `/clients/{client_id}/sources/{source_id}` | Confirm (or change) one source's role | SourceSpec |
 | DELETE | `/connection/aws` | Forget the chosen profile and go back to the default credential chain (local only) | AwsConnectionState |
@@ -118,6 +119,7 @@ Contract schema version: 1.
 | POST | `/privacy/access-requests` | Export everything held about one person, as a zip | - |
 | POST | `/privacy/consent` | Record one consent given or withdrawn | ConsentRecord |
 | POST | `/privacy/consent/imports` | Import a consent CSV (all or nothing unless partial) | ConsentImportReport |
+| POST | `/privacy/consent/imports/from-connection` | Import consent records from a saved connection's table or file (all or nothing unless partial) | ConsentImportReport |
 | POST | `/privacy/consent/lookup` | Look up one person's consent (the id goes in the body, never the URL) | ConsentLookupResponse |
 | GET | `/privacy/erasure` | The erasure register, newest first | ErasureRequestList |
 | POST | `/privacy/erasure` | Erase one person from every store, as a background job (the id goes in the body) | ErasureAccepted |

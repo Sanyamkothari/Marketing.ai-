@@ -89,30 +89,30 @@ Customer ids are never in a URL or an audit record: every route names a campaign
 from __future__ import annotations
 
 import math
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime
 from typing import Annotated, Any, Final, Literal
 
 from fastapi import APIRouter, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse
-from pydantic import AwareDatetime, Field, ValidationError
+from pydantic import AwareDatetime, Field, ValidationError, model_validator
 
 from api.access import get_platform_engine, set_audit_context
 from api.access_policy import RoutePolicy, register
 from api.deps import ConfigRootDep, RegistryDep, SettingsDep, StorageDep
-from api.routes.measure import MEASURE_NOT_OFFERED
 from api.routes.runs import load_run, requested_by
-from api.routes.uplift import RUN_NOT_SCORED, _finished_scoring_run, _read_all
+from api.routes.uplift import _finished_scoring_run, _read_all
 from api.routes.uploads import http_error, load_upload, use_case_config
 from api.schemas import ErrorBody, ErrorResponse
 from engine.access.roles import Role
 from engine.audit.events import content_hash
-from engine.config import ConfigError, PrimaryKey, RunMode, StrictBase, UseCaseConfig, key_columns
+from engine.config import ConfigError, PrimaryKey, RunMode, StrictBase, UseCaseConfig
+from engine.connections.base import ConnectorError
+from engine.connections.store import ConnectionStore
 from engine.contracts import RunRecord, RunState
-from engine.holdout.assign import HOLDOUT_ASSIGNMENT_FILENAME, run_holdout_spec
+from engine.holdout.assign import run_holdout_spec
 from engine.holdout.salt import HoldoutLedger, configured_salt, salt_fingerprint, salt_id
 from engine.holdout.spec import (
     HOLDOUT_SALT_CHANGED,
-    PERSISTENT_SCOPES,
     UNIVERSAL_SCOPE_KEY,
 )
 from engine.measurement.audit import (
@@ -137,7 +137,6 @@ from engine.measurement.campaign import (
     CAMPAIGN_FILENAME,
     CAMPAIGN_NOT_FOUND,
     CAMPAIGN_NOT_MATURED,
-    CAMPAIGN_OUTCOMES_MISSING,
     CONTACT_FILENAME,
     CONTACT_READOUT_FILENAME,
     INTENDED_COLUMN,
@@ -151,19 +150,26 @@ from engine.measurement.campaign import (
     CampaignStore,
     SqlCampaignStore,
     assignment_counts,
-    build_assignment,
     campaign_key,
-    chosen_intended_keys,
-    epoch_mismatch,
-    holdout_identity,
     new_campaign_id,
     read_frame,
     save_campaign,
     test_plan_version_filename,
     write_frame,
 )
-from engine.measurement.continuous import COVARIATE_NOT_BEFORE_CAMPAIGN, CovariateNotBeforeCampaignError
-from engine.measurement.measure import campaign_verdict_for, measure_campaign, measure_campaign_segments
+from engine.measurement.continuous import COVARIATE_NOT_BEFORE_CAMPAIGN
+from engine.measurement.cycle import (  # Plan J M107 (DEC-1317): the routes' engine halves, shared with the loop
+    CycleError,
+    contact_readout,
+    epoch_refusal,
+    measure_recorded,
+    open_campaign,
+    record_outcomes,
+    segment_effects,
+    store_frame_upload,
+    target_of,
+)
+from engine.measurement.measure import campaign_verdict_for, measure_campaign
 from engine.measurement.plan import (
     TEST_PLAN_CHANGED,
     TEST_PLAN_EXISTS,
@@ -171,7 +177,6 @@ from engine.measurement.plan import (
     TEST_PLAN_NOT_FOUND,
     TestPlan,
     TestPlanAmendment,
-    TestPlanChangedError,
     TestPlanInput,
     freeze_plan,
     plan_inputs,
@@ -194,15 +199,15 @@ from engine.measurement.programme import (
     period_window_days,
     programme_assignment,
 )
+from engine.measurement.pull import PULL_SOURCE_FILENAME, DateWindow, PullSelection, pull_frame
 from engine.measurement.reconcile import (
     CONTACT_UNREADABLE,
     ContactFileError,
     ContactReadout,
     UnlistedRule,
     normalise_contacts,
-    reconcile_contacts,
 )
-from engine.measurement.segments import SEGMENT_EFFECTS_FILENAME, SegmentEffects, policy_offers
+from engine.measurement.segments import SEGMENT_EFFECTS_FILENAME
 from engine.measurement.summary import (
     SUMMARY_NOT_TRACEABLE,
     CampaignSummary,
@@ -210,10 +215,9 @@ from engine.measurement.summary import (
     build_summary,
 )
 from engine.pilot.roi import outcome_is_good_by_default
-from engine.stages import export
-from engine.storage import Storage, StorageError, run_key
+from engine.storage import Storage, StorageError, upload_key
 from engine.uplift.contracts import IncrementalityReport, IncrementalityStatus
-from engine.uplift.measure import CampaignVerdict, detect_outcome_column, measure_offered
+from engine.uplift.measure import CampaignVerdict, detect_outcome_column
 from engine.utils.logging import get_logger
 from engine.utils.time import utc_now
 
@@ -332,9 +336,17 @@ class CampaignCreateRequest(StrictBase):
 
 
 class CampaignOutcomesRequest(StrictBase):
-    """Body of `POST /campaigns/{id}/outcomes`: the uploaded outcomes file and how to read it."""
+    """Body of `POST /campaigns/{id}/outcomes`: the outcomes file and how to read it.
 
-    upload_id: str = Field(description="Upload holding the customer id and the outcome after the campaign.")
+    The outcomes are an upload (`upload_id`), or, since Plan J M107 (DEC-1317), rows read from a saved
+    connection (`connection_id`, `selection` and the date window `date_column`, `date_from`, `date_to`):
+    exactly one of the two.
+    """
+
+    upload_id: str | None = Field(
+        default=None,
+        description="Upload holding the customer id and the outcome after the campaign; or give `connection_id`.",
+    )
     outcome_column: str | None = Field(
         default=None, description="The outcome column; found in the file when null."
     )
@@ -351,6 +363,34 @@ class CampaignOutcomesRequest(StrictBase):
         default=None,
         description="The date each covariate value was measured up to; required with covariate_column.",
     )
+    # Plan J M107 (DEC-1317): read the outcomes from a saved connection instead of an upload. Read-only; from a
+    # SQL database the only query is one quoted date window on `date_column` (no free SQL).
+    connection_id: str | None = Field(
+        default=None, max_length=64, description="A saved connection to read the outcomes from (Plan J M107)."
+    )
+    selection: PullSelection | None = Field(
+        default=None, description="The table, file or folder (its newest file) holding the outcomes."
+    )
+    date_column: str | None = Field(
+        default=None, min_length=1, max_length=256, description="The column that dates each row."
+    )
+    date_from: date | None = Field(default=None, description="The first day of outcomes read.")
+    date_to: date | None = Field(default=None, description="The last day of outcomes read (included).")
+
+    @model_validator(mode="after")
+    def _one_source(self) -> CampaignOutcomesRequest:
+        if (self.upload_id is None) == (self.connection_id is None):
+            raise ValueError("give exactly one of upload_id or connection_id")
+        pulled = (self.selection, self.date_column, self.date_from, self.date_to)
+        if self.connection_id is None and any(value is not None for value in pulled):
+            raise ValueError("selection, date_column, date_from and date_to go with connection_id")
+        if self.connection_id is not None and any(value is None for value in pulled):
+            raise ValueError(
+                "outcomes read from a connection name selection, date_column, date_from and date_to"
+            )
+        if self.date_from is not None and self.date_to is not None and self.date_to < self.date_from:
+            raise ValueError("date_to is before date_from")
+        return self
 
 
 class CampaignMeasureRequest(StrictBase):
@@ -627,85 +667,30 @@ def create_campaign(
     root: ConfigRootDep,
     storage: StorageDep,
 ) -> CampaignView:
-    import pandas as pd
-
     record = load_run(storage, body.run_id)
     finished_at = _finished_scoring_run(record)
     config = use_case_config(record.use_case_id, root)
-    if not measure_offered(config):
-        raise http_error(
-            409,
-            MEASURE_NOT_OFFERED,
-            f"{config.name} holds nobody back or contacts nobody, so it has no campaign.",
-        )
-    if body.treatment_start is not None and body.treatment_start < finished_at:
-        raise http_error(
-            422,
-            CAMPAIGN_INVALID,
-            "A campaign cannot go out before its list was made: give a treatment start on or after the run finished.",
-            path="treatment_start",
-        )
-    try:
-        scores = pd.read_parquet(_bytes(storage, run_key(record.run_id, export.SCORES_PARQUET)))
-    except StorageError as exc:
-        raise http_error(
-            409, RUN_NOT_SCORED, "This run has no scores file to build a campaign from."
-        ) from exc
-    holdout_table = _holdout_table(storage, record.run_id)
-    # A run that chose the offer per customer is measured within the customers its policy meant to contact
-    # (DEC-1311 (ai)), not within the first offer's `intended_treatment`.
-    intended_keys = (
-        chosen_intended_keys(storage, record.run_id) if "intended_treatment" in scores.columns else None
-    )
-    try:
-        assignment = build_assignment(
-            scores,
-            primary_key=record.primary_key,
-            bands=body.bands,
-            holdout=holdout_table,
-            intended_keys=intended_keys,
-        )
-    except ValueError as exc:
-        raise http_error(422, CAMPAIGN_INVALID, str(exc), path="bands" if body.bands else None) from exc
-    counts = assignment_counts(assignment)
-    holdout_scope, holdout_key, holdout_epoch = holdout_identity(run_holdout_spec(storage, record.run_id))
-    uplift_run = "intended_treatment" in scores.columns
-    start = body.treatment_start or finished_at
     window = (
         body.outcome_window_days if body.outcome_window_days is not None else default_outcome_window(config)
     )
-    now = utc_now()
-    campaign = Campaign(
-        campaign_id=new_campaign_id(now),
-        kind=CampaignKind.SCORED,
-        name=body.name or f"{config.name}, sent {start.day} {start:%b %Y}",
-        use_case_id=record.use_case_id,
-        run_ids=(record.run_id,),
-        primary_key=record.primary_key,
-        treatment_start=start,
-        treatment_start_source="entered" if body.treatment_start is not None else "run_finished",
-        outcome_window_days=window,
-        population="intended" if uplift_run else ("bands" if body.bands is not None else "eligible"),
-        bands=body.bands,
-        causal=counts.holdout > 0,
-        causal_basis="engine_random" if counts.holdout > 0 else "not_random",
-        holdout_scope=holdout_scope,
-        holdout_scope_key=holdout_key,
-        holdout_epoch=holdout_epoch,
-        counts=counts,
-        intended_source=None if intended_keys is None else "offer_choice",
-        status=CampaignStatus.LIVE,
-        created_at=now,
-        created_by=requested_by(request) or "local",
-    )
-    assignment_key = campaign_key(campaign.campaign_id, ASSIGNMENT_FILENAME)
-    write_frame(storage, assignment_key, assignment)
     try:
-        save_campaign(get_campaign_store(request), storage, campaign, create=True)
-    except Exception:
-        # Without its record the privacy jobs cannot read the assignment's key or date: never leave one.
-        _discard(storage, assignment_key, campaign_key(campaign.campaign_id, CAMPAIGN_FILENAME))
-        raise
+        # Plan J M107 (DEC-1317): the engine half, shared with the monthly loop's treat-list step.
+        campaign = open_campaign(
+            storage,
+            get_campaign_store(request),
+            record,
+            config,
+            finished_at=finished_at,
+            treatment_start=body.treatment_start,
+            bands=body.bands,
+            outcome_window_days=window,
+            name=body.name,
+            created_by=requested_by(request) or "local",
+            now=utc_now(),
+        )
+    except CycleError as exc:
+        raise _cycle_http(exc) from exc
+    counts = campaign.counts
     set_audit_context(request, object_id=campaign.campaign_id, details={"run_id": record.run_id})
     response.headers["Location"] = f"/campaigns/{campaign.campaign_id}"
     _LOGGER.info(
@@ -838,7 +823,7 @@ def _direction(campaign: Campaign, root: Any) -> tuple[bool, str | None]:
     except (ConfigError, HTTPException):  # the use case has gone: judge the column by its own name
         column = outcomes.outcome_column if outcomes is not None else ""
         return outcome_is_good_by_default(campaign.use_case_id, column, root), None
-    good = outcome_is_good_by_default(config.id, named or _target_of(config), root)
+    good = outcome_is_good_by_default(config.id, named or target_of(config), root)
     return good, config.target.definition or None
 
 
@@ -855,7 +840,7 @@ def _stored(storage: Storage, key: str, model: type[Any]) -> Any:
 @router.post(
     "/campaigns/{campaign_id}/outcomes",
     response_model=CampaignView,
-    responses=_ERRORS,
+    responses={**_ERRORS, 413: {"model": ErrorResponse}, 502: {"model": ErrorResponse}},
     summary="Give a campaign its outcomes file: customer id, outcome and optionally a treatment date",
 )
 def add_campaign_outcomes(
@@ -864,77 +849,96 @@ def add_campaign_outcomes(
     request: Request,
     root: ConfigRootDep,
     storage: StorageDep,
+    settings: SettingsDep,
 ) -> CampaignView:
     store = get_campaign_store(request)
     campaign = _load(store, campaign_id)
-    upload = load_upload(storage, body.upload_id)
-    frame = _read_all(storage, upload.source_key, upload.file_format)
-    columns = [str(name) for name in frame.columns]
     config = _config(campaign, root)
+    if (
+        body.connection_id is not None
+    ):  # Plan J M107 (DEC-1317): the window's rows, read from a saved connection
+        upload_id, file_name, frame = _pulled_outcomes(storage, settings, campaign, config, body)
+    else:
+        upload = load_upload(storage, body.upload_id or "")
+        frame = _read_all(storage, upload.source_key, upload.file_format)
+        upload_id, file_name = upload.upload_id, upload.file_name
     try:
-        outcome = body.outcome_column or detect_outcome_column(
-            columns,
-            primary_key=campaign.primary_key,
-            target_column=_target_of(config),
-            label_name=config.label.name if config is not None and config.label is not None else None,
+        updated = record_outcomes(
+            storage,
+            store,
+            campaign,
+            frame,
+            upload_id=upload_id,
+            file_name=file_name,
+            config=config,
+            outcome_column=body.outcome_column,
+            positive_label=body.positive_label,
+            treatment_date_column=body.treatment_date_column,
+            covariate_column=body.covariate_column,
+            covariate_date_column=body.covariate_date_column,
+            now=utc_now(),
         )
-    except ValueError as exc:
-        raise http_error(422, CAMPAIGN_INVALID, str(exc), path="upload_id") from exc
-    wanted = [*key_columns(campaign.primary_key), outcome]
-    if body.treatment_date_column is not None:
-        wanted.append(body.treatment_date_column)
-    if body.covariate_column is not None:  # Plan J M102: the adjustment needs to know when it was measured
-        if body.covariate_date_column is None:
-            raise http_error(
-                422,
-                COVARIATE_NOT_BEFORE_CAMPAIGN,
-                f"Name the column holding the date each {body.covariate_column!r} value was measured up to: "
-                f"without it the value cannot be shown to come from before the campaign.",
-                path="covariate_date_column",
-            )
-        wanted += [body.covariate_column, body.covariate_date_column]
-    missing = [name for name in wanted if name not in columns]
-    if missing:
-        raise http_error(
-            422, CAMPAIGN_INVALID, f"The outcomes file has no column {', '.join(repr(m) for m in missing)}."
-        )
-    kept = frame[list(dict.fromkeys(wanted))]
-    try:
-        write_frame(storage, campaign_key(campaign_id, OUTCOMES_FILENAME), kept)
-    except (ValueError, TypeError) as exc:  # a column pyarrow cannot store as one type
-        raise http_error(
-            422, CAMPAIGN_INVALID, "The outcomes file mixes kinds of value in one column."
-        ) from exc
-    updated = campaign.model_copy(
-        update={
-            "outcomes": CampaignOutcomes(
-                upload_id=upload.upload_id,
-                file_name=upload.file_name,
-                outcome_column=outcome,
-                outcome_named=body.outcome_column is not None,
-                positive_label=body.positive_label,
-                treatment_date_column=body.treatment_date_column,
-                rows=len(kept.index),
-                added_at=utc_now(),
-                covariate_column=body.covariate_column,
-                covariate_date_column=(
-                    body.covariate_date_column if body.covariate_column is not None else None
-                ),
-            )
-        }
-    )
-    save_campaign(store, storage, updated)
-    _LOGGER.info("campaigns.outcomes campaign=%s rows=%d", campaign_id, len(kept.index))
+    except CycleError as exc:
+        raise _cycle_http(exc) from exc
+    rows = updated.outcomes.rows if updated.outcomes is not None else 0
+    _LOGGER.info("campaigns.outcomes campaign=%s rows=%d", campaign_id, rows)
     return _view(storage, updated, root)
+
+
+def _pulled_outcomes(
+    storage: Storage,
+    settings: Any,
+    campaign: Campaign,
+    config: UseCaseConfig | None,
+    body: CampaignOutcomesRequest,
+) -> tuple[str, str, Any]:
+    """`(upload id, file name, rows)`: the date window's outcomes read from a saved connection (Plan J M107).
+
+    The rows are kept as an ordinary upload, with `pull_source.json` beside it saying which connection, which
+    table or file and which window; nothing is written to the client's system.
+    """
+    if config is None or body.connection_id is None or body.selection is None:
+        raise http_error(
+            422, CAMPAIGN_INVALID, "This campaign names no use case, so its outcomes cannot be read for it."
+        )
+    if body.date_column is None or body.date_from is None or body.date_to is None:  # the body's own check
+        raise http_error(422, CAMPAIGN_INVALID, "Name the date column and the first and last day to read.")
+    window = DateWindow(column=body.date_column, date_from=body.date_from, date_to=body.date_to)
+    now = utc_now()
+    try:
+        frame, record = pull_frame(
+            ConnectionStore(storage, settings),
+            body.connection_id,
+            body.selection,
+            window=window,
+            limit_bytes=config.validation.max_file_size_mb * 1024 * 1024,
+            now=now,
+        )
+    except ConnectorError as exc:
+        raise http_error(
+            exc.status, exc.code, f"{exc.message} {exc.fix}" if exc.fix else exc.message
+        ) from None
+    named = record.table or record.path or "outcomes"
+    upload = store_frame_upload(
+        storage,
+        config,
+        frame,
+        file_name=f"{named} {window.date_from.isoformat()} to {window.date_to.isoformat()}",
+        mode=RunMode.SCORE,
+        now=now,
+    )
+    storage.write_model(upload_key(upload.upload_id, PULL_SOURCE_FILENAME), record)
+    _LOGGER.info("campaigns.outcomes_pulled campaign=%s rows=%d", campaign.campaign_id, record.rows)
+    return upload.upload_id, upload.file_name, frame
+
+
+def _cycle_http(exc: CycleError) -> HTTPException:
+    """A `CycleError` from the engine half of a campaign route, as the route's own answer."""
+    return http_error(exc.status, exc.code, exc.message, path=exc.path)
 
 
 def _config(campaign: Campaign, root: Any) -> UseCaseConfig | None:
     return use_case_config(campaign.use_case_id, root) if campaign.use_case_id is not None else None
-
-
-def _target_of(config: UseCaseConfig | None) -> str:
-    """The use case's outcome column, as step 4 names it (`api.routes.measure._target`)."""
-    return (config.target.column if config is not None else None) or "outcome"
 
 
 # ---------------------------------------------------------------------------
@@ -959,90 +963,28 @@ def measure_campaign_results(
         )
     store = get_campaign_store(request)
     campaign = _load(store, campaign_id)
-    if campaign.outcomes is None:
-        raise http_error(409, CAMPAIGN_OUTCOMES_MISSING, "Add the campaign's outcomes file first.")
-    assignment = read_frame(storage, campaign_key(campaign_id, ASSIGNMENT_FILENAME))
-    outcomes = read_frame(storage, campaign_key(campaign_id, OUTCOMES_FILENAME))
-    plan = _stored(storage, campaign_key(campaign_id, TEST_PLAN_FILENAME), TestPlan)
-    window = (
-        body.outcome_window_days if body.outcome_window_days is not None else campaign.outcome_window_days
-    )
-    as_of = body.as_of or now
-    mismatch = _epoch_mismatch(request, storage, campaign, window=window, as_of=as_of)
-    if mismatch is not None:
-        set_audit_context(request, details={"reason_code": CAMPAIGN_EPOCH_MISMATCH})
-        raise http_error(409, CAMPAIGN_EPOCH_MISMATCH, mismatch)
-    # The pre-registered covariate is measured with unless another one is named: leaving it out of
-    # the body is not a change of plan.
-    covariate = body.covariate_column
-    if covariate is None and plan is not None:
-        covariate = plan.covariate_column
-    # Plan J M102: the outcome is read as the plan registered it (a different kind named in the body is a
-    # change of plan, refused by `measure_campaign`), else as the body says, else as yes/no.
-    # An audited or programme campaign that measured an amount without a plan keeps its kind: the page's
-    # "Measure now" sends this request without one (M103).
-    audit = _stored(storage, campaign_key(campaign_id, AUDIT_FILENAME), AuditReadout)
-    programme = _stored(storage, campaign_key(campaign_id, PROGRAMME_FILENAME), ProgrammeReadout)
-    kind = (
-        body.outcome_kind
-        or (plan.outcome_kind if plan is not None else None)
-        or (audit.outcome_kind if audit is not None else None)
-        or (programme.outcome_kind if programme is not None else None)
-        or "binary"
-    )
-    offers = {} if audit is None or not audit.offers else _offer_arguments(audit)  # several offers (M103)
     try:
-        report = measure_campaign(
-            assignment,
-            outcomes,
-            run_id=campaign.run_ids[0] if campaign.run_ids else campaign_id,
-            primary_key=campaign.primary_key,
-            outcome_column=campaign.outcomes.outcome_column,
-            positive_label=campaign.outcomes.positive_label,
-            intended_column=INTENDED_COLUMN,
-            treatment_time=campaign.treatment_start,
-            treatment_date_column=campaign.outcomes.treatment_date_column,
-            outcome_window_days=window,
-            as_of=as_of,
-            campaign_id=campaign_id,
-            plan=plan,
-            covariate_column=covariate,
-            outcome_kind=kind,
-            covariate_date_column=_covariate_date_column(campaign.outcomes, covariate),
-            **offers,
+        # Plan J M107 (DEC-1317): the engine half, shared with the monthly loop's measure step.
+        measured = measure_recorded(
+            storage,
+            store,
+            campaign,
+            as_of=body.as_of or now,
+            outcome_window_days=body.outcome_window_days,
+            covariate_column=body.covariate_column,
+            outcome_kind=body.outcome_kind,
+            ledger_engine=lambda: get_platform_engine(request),
+            now=utc_now(),
         )
-    except TestPlanChangedError as exc:
-        set_audit_context(request, details={"reason_code": TEST_PLAN_CHANGED})
-        raise http_error(409, TEST_PLAN_CHANGED, str(exc)) from exc
-    except CovariateNotBeforeCampaignError as exc:
-        set_audit_context(request, details={"reason_code": COVARIATE_NOT_BEFORE_CAMPAIGN})
-        raise http_error(422, COVARIATE_NOT_BEFORE_CAMPAIGN, str(exc)) from exc
-    except ValueError as exc:
-        raise http_error(422, CAMPAIGN_INVALID, str(exc)) from exc
-    refusal_response = _not_matured(request, report)
-    if refusal_response is not None:
+    except CycleError as exc:
+        if exc.code in _AUDITED_REFUSALS:
+            set_audit_context(request, details={"reason_code": exc.code})
+        raise _cycle_http(exc) from exc
+    if not measured.matured or measured.campaign is None:
+        refusal_response = _not_matured(request, measured.report)
+        assert refusal_response is not None  # an unmatured report is always refused
         return refusal_response
-    if audit is not None:  # an outside campaign keeps the claim its numbers support (M103)
-        report = label_report(report, audit.causal_basis)
-    segments = _segment_effects(
-        storage,
-        assignment,
-        outcomes,
-        report,
-        campaign=campaign,
-        outcome=campaign.outcomes,
-        control_level=audit.control_level if audit is not None else None,
-    )
-    storage.write_model(campaign_key(campaign_id, REPORT_FILENAME), report)
-    storage.write_model(campaign_key(campaign_id, SEGMENT_EFFECTS_FILENAME), segments)
-    updated = campaign.model_copy(
-        update={
-            "status": CampaignStatus.LIVE if report.early_look else CampaignStatus.MEASURED,
-            "measured_at": report.computed_at,
-        }
-    )
-    save_campaign(store, storage, updated)
-    _refresh_contacts(storage, updated, report, audit=audit)
+    report, updated = measured.report, measured.campaign
     _LOGGER.info(
         "campaigns.measure campaign=%s treated=%d control=%d early_look=%s",
         campaign_id,
@@ -1053,39 +995,13 @@ def measure_campaign_results(
     return _view(storage, updated, root)
 
 
-def _segment_effects(
-    storage: Storage,
-    assignment: Any,
-    outcomes: Any,
-    report: IncrementalityReport,
-    *,
-    campaign: Campaign,
-    outcome: CampaignOutcomes,
-    control_level: str | None = None,
-) -> SegmentEffects:
-    """`segment_effects.json` of a measured campaign (Plan J M104, DEC-1314): each band, segment and offer.
+_AUDITED_REFUSALS: Final[frozenset[str]] = frozenset(
+    {CAMPAIGN_EPOCH_MISMATCH, TEST_PLAN_CHANGED, COVARIATE_NOT_BEFORE_CAMPAIGN}
+)
+"""The measure refusals whose code the request's audit event records (as before Plan J M107)."""
 
-    The offers are the audited file's (each treated customer's offer, against the shared control), else, for
-    a run that chose the offer per customer, the offer its policy gave every customer (DEC-1311 (af)).
-    """
-    offers = None
-    if "offer" in assignment.columns:
-        offers = assignment["offer"]
-    elif campaign.intended_source == "offer_choice" and campaign.run_ids:
-        offers = policy_offers(storage, campaign.run_ids[0], assignment, campaign.primary_key)
-    return measure_campaign_segments(
-        assignment,
-        outcomes,
-        report,
-        primary_key=campaign.primary_key,
-        outcome_column=outcome.outcome_column,
-        positive_label=outcome.positive_label,
-        intended_column=INTENDED_COLUMN,
-        treatment_time=campaign.treatment_start,
-        treatment_date_column=outcome.treatment_date_column,
-        offers=offers,
-        control_level=control_level,
-    )
+_segment_effects = segment_effects
+"""`engine.measurement.cycle.segment_effects`, the audit and programme routes' name for it (Plan J M107)."""
 
 
 def _not_matured(request: Request, report: IncrementalityReport) -> JSONResponse | None:
@@ -1105,36 +1021,13 @@ def _not_matured(request: Request, report: IncrementalityReport) -> JSONResponse
     return JSONResponse(status_code=409, content=refusal.model_dump(mode="json"))
 
 
-def _offer_arguments(audit: AuditReadout) -> dict[str, Any]:
-    """`measure_campaign`'s several-offer arguments for an audited campaign with more than one offer."""
-    return {"arm_column": "offer", "arms": list(audit.offers or ()), "control_level": audit.control_level}
-
-
-def _covariate_date_column(outcomes: CampaignOutcomes, covariate: str | None) -> str | None:
-    """The date column copied with `covariate`, when the outcomes were given that covariate (Plan J M102)."""
-    if covariate is None or outcomes.covariate_column != covariate:
-        return None
-    return outcomes.covariate_date_column
-
-
 def _epoch_mismatch(
     request: Request, storage: Storage, campaign: Campaign, *, window: int | None, as_of: datetime
 ) -> str | None:
-    """`epoch_mismatch` over the campaign's runs and, for a persistent holdout, the ledger's current epoch.
-
-    The outcomes are all in at the end of the outcome window counted from the treatment start; with
-    no window, or per-row treatment dates the record does not hold, the measurement's own moment.
-    """
-    run_specs = {run_id: run_holdout_spec(storage, run_id) for run_id in campaign.run_ids}
-    ledger = None
-    if campaign.holdout_scope in PERSISTENT_SCOPES and campaign.holdout_scope_key is not None:
-        ledger = HoldoutLedger(get_platform_engine(request)).entry(
-            campaign.holdout_scope, campaign.holdout_scope_key
-        )
-    outcomes = campaign.outcomes
-    per_row = outcomes is not None and outcomes.treatment_date_column is not None
-    closes = as_of if window is None or per_row else campaign.treatment_start + timedelta(days=window)
-    return epoch_mismatch(campaign, run_specs, ledger, outcomes_in_by=min(closes, as_of))
+    """`engine.measurement.cycle.epoch_refusal`, reading the persistent holdout's ledger from the platform database."""
+    return epoch_refusal(
+        storage, campaign, ledger_engine=lambda: get_platform_engine(request), window=window, as_of=as_of
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1400,21 +1293,6 @@ def _resolved(campaign: Campaign, body: TestPlanInput) -> TestPlanInput:
     return decided
 
 
-def _holdout_table(storage: Storage, run_id: str) -> Any:
-    """The run's `holdout_assignment.parquet` (M92), or None when the run wrote none (a default run).
-
-    `scores.*` carries no explore flag (DEC-1302 (c)): the campaign's assignment takes `explore` and
-    `explore_probability` from this file, joined on the key.
-    """
-    import pandas as pd
-
-    key = run_key(run_id, HOLDOUT_ASSIGNMENT_FILENAME)
-    try:
-        return pd.read_parquet(_bytes(storage, key)) if storage.exists(key) else None
-    except StorageError:
-        return None
-
-
 def _realised(storage: Storage, campaign_id: str) -> Any:
     assignment = read_frame(storage, campaign_key(campaign_id, ASSIGNMENT_FILENAME))
     return realised_population(assignment, intended_column=INTENDED_COLUMN)
@@ -1487,83 +1365,13 @@ def _contact_frame(storage: Storage, spec: ContactFile, primary_key: PrimaryKey)
     return upload, contacts
 
 
-def _contact_readout(
-    assignment: Any,
-    outcomes: Any,
-    contacts: Any,
-    campaign: Campaign,
-    report: IncrementalityReport | None,
-    *,
-    unlisted: UnlistedRule,
-    offers: tuple[str, ...] | None,
-    now: datetime,
-    source: tuple[str | None, bool] = (None, False),
-) -> ContactReadout:
-    """The contact readout of `campaign` from its frames; the effect on the contacted only with a report.
-
-    `source` is the contact file's upload id and whether it was generated (DEC-1314): recorded on the readout
-    so a Value Proof Pack never presents a generated contact file to finance.
-    """
-    held = campaign.outcomes
-    measured = report is not None and held is not None and outcomes is not None
-    readout = reconcile_contacts(
-        assignment,
-        outcomes if measured else None,
-        contacts,
-        campaign_id=campaign.campaign_id,
-        primary_key=campaign.primary_key,
-        outcome_column=held.outcome_column if measured and held is not None else None,
-        positive_label=held.positive_label if held is not None else None,
-        outcome_kind=(report.outcome_kind or "binary") if report is not None else "binary",
-        treatment_time=campaign.treatment_start,
-        treatment_date_column=held.treatment_date_column if held is not None else None,
-        outcome_window_days=(
-            report.outcome_window_days if report is not None else campaign.outcome_window_days
-        ),
-        as_of=report.as_of if measured and report is not None else None,
-        report_treated_rows=report.treated_rows if report is not None else None,
-        report_control_rows=report.control_rows if report is not None else None,
-        unlisted=unlisted,
-        intended_column=INTENDED_COLUMN,
-        offer_column="offer" if offers else None,
-        first_offer=offers[0] if offers else None,
-        computed_at=now,
-    )
-    upload_id, synthetic = source
-    return readout.model_copy(update={"contact_upload_id": upload_id, "synthetic": synthetic})
+_contact_readout = contact_readout
+"""`engine.measurement.cycle.contact_readout` (Plan J M107), the name the audit, programme and contact routes use."""
 
 
 def _contact_source(upload: Any) -> tuple[str | None, bool]:
     """`(upload id, generated?)` of a contact file's upload record."""
     return str(upload.upload_id), bool(upload.synthetic)
-
-
-def _refresh_contacts(
-    storage: Storage, campaign: Campaign, report: IncrementalityReport | None, *, audit: AuditReadout | None
-) -> None:
-    """Recompute `contact_readout.json` after a (re)measurement, when the campaign has a contact file."""
-    contact_key = campaign_key(campaign.campaign_id, CONTACT_FILENAME)
-    if not storage.exists(contact_key):
-        return
-    readout_key = campaign_key(campaign.campaign_id, CONTACT_READOUT_FILENAME)
-    previous = _stored(storage, readout_key, ContactReadout)
-    outcomes = (
-        read_frame(storage, campaign_key(campaign.campaign_id, OUTCOMES_FILENAME))
-        if campaign.outcomes is not None
-        else None
-    )
-    readout = _contact_readout(
-        read_frame(storage, campaign_key(campaign.campaign_id, ASSIGNMENT_FILENAME)),
-        outcomes,
-        read_frame(storage, contact_key),
-        campaign,
-        report,
-        unlisted=previous.unlisted_customers if previous is not None else "unknown",
-        offers=audit.offers if audit is not None else None,
-        now=utc_now(),
-        source=(previous.contact_upload_id, previous.synthetic) if previous is not None else (None, False),
-    )
-    storage.write_model(readout_key, readout)
 
 
 def _persist_new(

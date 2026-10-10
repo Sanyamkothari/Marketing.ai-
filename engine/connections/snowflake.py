@@ -9,6 +9,7 @@ Snowflake has no read-only session switch, so the only statements run are the li
 from __future__ import annotations
 
 from collections.abc import Mapping
+from datetime import date
 from typing import Any
 
 from engine.connections.base import (
@@ -21,9 +22,9 @@ from engine.connections.base import (
     load_sdk,
     text_value,
 )
-from engine.connections.sql import SqlConnector
+from engine.connections.sql import SqlConnector, date_literal
 
-__all__ = ["SnowflakeConnector", "quote_identifier", "snowflake_select"]
+__all__ = ["SnowflakeConnector", "quote_identifier", "snowflake_select", "snowflake_window"]
 
 
 def quote_identifier(name: str) -> str:
@@ -40,6 +41,15 @@ def quote_identifier(name: str) -> str:
 
 def snowflake_select(schema: str, table: str, limit: int) -> str:
     return f"SELECT * FROM {quote_identifier(schema)}.{quote_identifier(table)} LIMIT {int(limit)}"
+
+
+def snowflake_window(schema: str, table: str, column: str, start: date, end: date, limit: int) -> str:
+    """Plan J M107 (DEC-1317): `snowflake_select` with one `WHERE` - a date window on a quoted column."""
+    name = quote_identifier(column)
+    return (
+        f"SELECT * FROM {quote_identifier(schema)}.{quote_identifier(table)} "
+        f"WHERE {name} >= {date_literal(start)} AND {name} < {date_literal(end)} LIMIT {int(limit)}"
+    )
 
 
 class SnowflakeConnector(SqlConnector):
@@ -120,6 +130,9 @@ class SnowflakeConnector(SqlConnector):
 
     def select_sql(self, schema: str, table: str, limit: int) -> Any:
         return snowflake_select(schema, table, limit)
+
+    def window_sql(self, schema: str, table: str, column: str, start: date, end: date, limit: int) -> Any:
+        return snowflake_window(schema, table, column, start, end, limit)
 
     def write_privileges(self, connection: Any) -> int | None:  # noqa: ARG002
         return None

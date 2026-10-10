@@ -55,6 +55,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlmodel import Field as SQLField
 from sqlmodel import Session, SQLModel, col, select
 
+from engine.measurement.pull import OutcomePullSpec
 from engine.platform_db import create_tables
 from engine.registry import to_utc
 from engine.scheduling.cron import DEFAULT_TIMEZONE, CronExpression, zone
@@ -62,6 +63,7 @@ from engine.utils.time import utc_now
 
 __all__ = [
     "FIRING_STATUSES",
+    "LOOP_KINDS",
     "MAX_MISSED_RECORDED",
     "PRESET_CRON",
     "SCHEDULE_FIRING_TABLE",
@@ -98,11 +100,26 @@ MAX_MISSED_RECORDED: Final[int] = 100
 
 
 class ScheduleKind(StrEnum):
-    """What a schedule does when it fires."""
+    """What a schedule does when it fires.
+
+    Plan J M107 (DEC-1317) adds the monthly loop's three steps after `score`: `treat_list` (the newest
+    scoring run's treat list and campaign record), `measure` (once its window has closed, the campaign's
+    outcomes read from a saved connection and measured) and `learn` (the next model learned from the measured
+    campaign, a challenger waiting for an Approver). They run `engine.measurement.cycle`.
+    """
 
     SCORE = "score"
     DRIFT_CHECK = "drift_check"
     RETRAIN = "retrain"
+    TREAT_LIST = "treat_list"
+    MEASURE = "measure"
+    LEARN = "learn"
+
+
+LOOP_KINDS: Final[frozenset[ScheduleKind]] = frozenset(
+    {ScheduleKind.TREAT_LIST, ScheduleKind.MEASURE, ScheduleKind.LEARN}
+)
+"""The monthly loop's kinds after scoring (Plan J M107): they read no recipe or dataset of their own."""
 
 
 class CadencePreset(StrEnum):
@@ -191,6 +208,16 @@ class ScheduleParameters(BaseModel):
     model_version_id: str | None = Field(
         default=None, description="Score with this model version instead of the champion (score only)."
     )
+    # Plan J M107 (DEC-1317): an in-place, defaulted declaration, typed in `engine.measurement.pull` and left out
+    # of the stored document while unset, so every schedule saved before it reads and writes exactly as before.
+    outcomes: OutcomePullSpec | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+        description=(
+            "Where a `measure` schedule reads a campaign's outcomes: a saved connection, the table or file, and "
+            "the column that dates each row (measure only)."
+        ),
+    )
 
 
 class Schedule(BaseModel):
@@ -201,7 +228,9 @@ class Schedule(BaseModel):
     schedule_id: str = Field(description="Unique id; also the EventBridge schedule name.")
     client_id: str | None = Field(description="Client the work is for; null on a deployment with no clients.")
     use_case_id: str = Field(description="Use case the work is for.")
-    kind: ScheduleKind = Field(description="`score`, `drift_check` or `retrain`.")
+    kind: ScheduleKind = Field(
+        description="`score`, `drift_check` or `retrain`; or the monthly loop's `treat_list`, `measure` or `learn`."
+    )
     cron: str = Field(description="Five-field cron line: minute hour day-of-month month day-of-week.")
     timezone: str = Field(default=DEFAULT_TIMEZONE, description="IANA zone the cron line is read in.")
     preset: CadencePreset | None = Field(
@@ -241,6 +270,15 @@ class Schedule(BaseModel):
             raise ValueError("only a score schedule may pin a model_version_id")
         if chosen.onboarding_spec_id and chosen.dataset_id:
             raise ValueError("name a recipe to rebuild or a fixed dataset, not both")
+        # Plan J M107: the loop's steps read what the step before them wrote, never a recipe of their own.
+        if self.kind in LOOP_KINDS and (chosen.onboarding_spec_id or chosen.dataset_id):
+            raise ValueError("a treat_list, measure or learn schedule reads no recipe or dataset of its own")
+        if self.kind is ScheduleKind.MEASURE and chosen.outcomes is None:
+            raise ValueError(
+                "a measure schedule needs outcomes: the connection and table its outcomes are read from"
+            )
+        if self.kind is not ScheduleKind.MEASURE and chosen.outcomes is not None:
+            raise ValueError("only a measure schedule reads outcomes")
         return self
 
     @property

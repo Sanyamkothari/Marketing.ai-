@@ -56,6 +56,7 @@ if TYPE_CHECKING:
     from engine.audit.events import AuditLog
     from engine.clients import ClientStore
     from engine.jobs import JobRunner
+    from engine.measurement.cycle import CycleServices
 
 __all__ = ["main"]
 
@@ -227,8 +228,27 @@ def build_services(settings: Settings) -> tuple[FiringServices, JobRunner]:
         retrain_flags=privacy_retrain_flags(engine),
         job_client_tag=settings.client_id,
         settings=settings,  # Plan J M108 (DEC-1318): the run cost gate
+        cycle=_cycle_services(settings, storage, engine),  # Plan J M107 (DEC-1317): the monthly loop
     )
     return services, jobs
+
+
+def _cycle_services(settings: Settings, storage: object, engine: object) -> CycleServices:
+    """The monthly loop's services, as the API builds its own (`api.routes.schedules._cycle_services`)."""
+    from sqlalchemy.engine import Engine
+
+    from engine.connections.store import ConnectionStore
+    from engine.measurement.campaign import SqlCampaignStore
+    from engine.measurement.cycle import CycleServices
+    from engine.storage import Storage
+
+    if not isinstance(engine, Engine) or not isinstance(storage, Storage):
+        raise TypeError("the monthly loop needs the deployment's storage and platform database")
+    return CycleServices(
+        campaigns=SqlCampaignStore(engine),
+        connections=ConnectionStore(storage, settings),
+        ledger_engine=engine,
+    )
 
 
 def _jobs(settings: Settings, storage: object) -> JobRunner:

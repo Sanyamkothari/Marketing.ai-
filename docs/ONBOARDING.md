@@ -589,6 +589,21 @@ or save the mapping without it, and the replay carries on. A table the recipe ne
 month's upload does not include is named too, and nothing is built until it is uploaded. A new
 column that was not there last month is left out, exactly as an unmapped column was the first time.
 
+### Tables that come from a connection (Plan J M107)
+
+A table can also be added from a saved connection instead of a file (`POST /clients/{id}/sources/
+from-connection`): a table in your database, one file, or **the newest file in a folder** of your
+storage. It is profiled and given its role exactly like an uploaded file, and it remembers where it came
+from. A **scheduled** scoring or retraining build then reads it again first: for a folder, whatever file
+is newest by then, so this month's export is picked up with nothing uploaded. When the table has not
+changed (the same file, the same contents) nothing new is added; when it has, the new copy becomes the
+newest table of its role and the recipe reads it, exactly as if you had uploaded it. A connection that
+cannot be read, or a table that has grown past the row limit for one table, stops the build with its
+reason, rather than score last month's table again as if it were this month's. Only the table the build
+would read anyway is read again: when the newest table of a role (with every column the recipe needs) is
+one you uploaded as a file, no connection is read for it. Tables you upload as files are never read again
+on their own.
+
 The recipe is also what makes a result auditable months later. Each built dataset records which
 recipe produced it, which mappings it applied and a fingerprint of every source file it read, so
 "why was this customer flagged in March" has an answer that does not depend on anybody's memory.
