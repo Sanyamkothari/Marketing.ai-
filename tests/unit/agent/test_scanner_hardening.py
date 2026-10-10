@@ -381,9 +381,13 @@ def test_no_scanner_is_slow_on_any_repeated_unit(name: str) -> None:
     slow = {}
     for unit in UNITS:
         text = (unit * (N // len(unit) + 1))[:N]
-        start = time.perf_counter()
-        SCANNERS[name](text)
-        took = time.perf_counter() - start
+        # The best of three runs: a busy machine (pytest -n 4 beside other jobs) slows one run, rarely all
+        # three, while a backtracking scanner is slow on every run, so the budget is unchanged.
+        took = float("inf")
+        for _ in range(3):
+            start = time.perf_counter()
+            SCANNERS[name](text)
+            took = min(took, time.perf_counter() - start)
         if took > BUDGET_SECONDS:
             slow[unit] = round(took, 3)
     assert not slow, slow

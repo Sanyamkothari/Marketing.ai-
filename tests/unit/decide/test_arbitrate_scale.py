@@ -20,7 +20,7 @@ from engine.decide.arbitrate import ArbitrationConfig, arbitrate_treat_lists
 N = 200_000
 SMALL = 50_000
 BUDGET_SECONDS = 3.0
-GROWTH_LIMIT = 10.0  # linear work gives about 4x for 4x the rows, quadratic about 16x; 10x leaves room for a busy machine (6.3x seen under pytest -n 4)
+GROWTH_LIMIT = 10.0  # linear work gives about 4x for 4x the rows, quadratic about 16x; 10x leaves room for a busy machine (6.3x seen under pytest -n 4, 13.9x once before the sizes took turns)
 """Four times the rows may take at most this many times as long (linear is 4; the sorts add a little)."""
 
 
@@ -62,21 +62,29 @@ def _lists(n: int, seed: int) -> list[pd.DataFrame]:
     ]
 
 
-def _timed(n: int, config: ArbitrationConfig) -> float:
-    """The best of three runs (the lists are built once): a busy machine slows a run, rarely every run."""
-    lists = _lists(n, seed=7)
-    best = float("inf")
-    for _ in range(3):
-        start = time.perf_counter()
-        arbitrate_treat_lists(lists, config=config)
-        best = min(best, time.perf_counter() - start)
-    return best
+def _once(lists: list[pd.DataFrame], config: ArbitrationConfig) -> float:
+    start = time.perf_counter()
+    arbitrate_treat_lists(lists, config=config)
+    return time.perf_counter() - start
+
+
+def _best_times(config: ArbitrationConfig, rounds: int = 5) -> tuple[float, float]:
+    """The best of `rounds` runs at each size, the two sizes taking turns (the lists are built once).
+
+    A busy machine slows a run, rarely every run, and taking turns means a burst of load that lasts a
+    while slows both sizes, not only the one measured during it, so it cannot fake a growth that is not
+    there. Quadratic work is slow on every run, so the best of five still catches it."""
+    small_lists, large_lists = _lists(SMALL, seed=7), _lists(N, seed=7)
+    small = large = float("inf")
+    for _ in range(rounds):
+        small = min(small, _once(small_lists, config))
+        large = min(large, _once(large_lists, config))
+    return small, large
 
 
 def test_arbitration_time_grows_linearly_with_the_rows() -> None:
     config = ArbitrationConfig(use_cases={"uc-2": {"priority": 2.0}}, channel_caps={"sms": 5_000})
-    small = _timed(SMALL, config)
-    large = _timed(N, config)
+    small, large = _best_times(config)
     assert large < GROWTH_LIMIT * small, (
         f"{N} rows took {large:.2f}s and {SMALL} rows took {small:.2f}s: "
         f"{large / small:.1f} times as long for 4 times the rows (limit {GROWTH_LIMIT})"
