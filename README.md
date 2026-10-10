@@ -1827,6 +1827,6 @@ ten numbers per milestone.
 | M157 | Outcome from events (level 5) | `propose_label`, agreed as a sentence | pending | — |
 | M158 | Enough data | readiness per use case, what to do now, what to collect | pending | — |
 | M159 | Memory per client | same-shape files offered the saved treatment | pending | — |
-| M160 | The messy-file benchmark | targets of plan §11 measured | pending | — |
+| M160 | The messy-file benchmark | thirty files shaped like real exports, five use cases, driven to Approve with no person; `reports/plan_l_benchmark.md`: 0 fail at upload, 30 of 30 reach an approved run, 0.33 questions per file | **done** | `tests/integration/test_plan_l_benchmark.py` |
 | M161 | Hardening and docs | security review, performance | pending | — |
 <!-- ---- END PLAN-L ---- -->

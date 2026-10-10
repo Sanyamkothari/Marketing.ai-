@@ -5,7 +5,7 @@
 **Branch:** a new branch from `main` when the build starts
 **Decision range:** DEC-1500 … 1599 (Plan K proposes DEC-1400 … 1499; the first milestone claims the next free hundred in the protocol table)
 **Milestones:** M150 – M161 (after Plan K's M130 – M148)
-**Status:** approved 2026-10-10; M150 done (DEC-1500 … DEC-1505)
+**Status:** approved 2026-10-10; M150–M154 and M160 done (DEC-1500 … DEC-1506, DEC-1510 … DEC-1541)
 
 > **How to use this document.** Read it with Plan G and `docs/AGENTS.md`. Plan G built a careful helper
 > inside each use case. This plan turns that helper, the onboarding builder and the AI service into one

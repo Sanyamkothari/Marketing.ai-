@@ -1470,4 +1470,19 @@ DEC-1500…1509, M151 → DEC-1510…1519, …), so parallel work on two milesto
   *Consequences of M151-M154:* `tests/unit/doctor/`, `tests/integration/test_api_doctor.py` (three mixed files reach Guided
   setup with no Manual setup), `tests/unit/agent/test_value_steps.py`, `test_recipe_plan_l.py`, `test_range_advice.py`,
   `test_propose_step.py` and `test_edits.py` prove it; the 22 pinned benchmark files are unchanged.
+- **DEC-1506 — M160: the messy-file benchmark, and where M160 and M161 take their numbers.** *Context:* plan §11
+  sets targets (under 2% of files fail at upload, at least 80% reach an approved run without Manual setup, at
+  most three questions per file) that nothing measured. *Decision:* (a) `scripts/plan_l_benchmark.py` makes
+  thirty files, Home's five trainable use cases times six mixes of what exports do (workbooks, titles, totals and
+  notes, empty rows, a repeated column, money as text, words meaning "no value", the outcome spelled
+  differently), from each use case's generated data, and drives each through `POST /uploads`, the diagnosis,
+  the hand-off and Guided setup to Approve with no person: blocking questions get their recommended option,
+  recommended suggestions are accepted and the rest rejected. (b) It writes `reports/plan_l_benchmark.{md,json}`
+  and says plainly what it cannot prove: the data under the mess is generated, and time for a non-technical
+  person needs a pilot. (c) Measured on 10 Oct 2026: 0 of 30 fail at upload, 30 of 30 reach an approved run,
+  0.33 questions per file, a median of two clicks in the second month (Guided setup starts again; M159's
+  memory is what can make it one). (d) M150 used DEC-1500…1505 and M151…M159 own ten numbers each, so M160 and
+  M161 take M150's free tail, DEC-1506…1509. *Consequences:* `tests/integration/test_plan_l_benchmark.py` drives
+  two files in the fast suite and all thirty, against the targets, in the slow one. AI suggestions still never
+  start ticked (plan §11): the benchmark accepts only the rules' recommended set.
 <!-- ---- END PLAN-L ---- -->
