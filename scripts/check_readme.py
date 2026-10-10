@@ -466,6 +466,13 @@ MILESTONE_TESTS: Final[Mapping[str, tuple[str, ...]]] = {
     # (the full-file reproduction skips, saying why, when the git-ignored data is absent).
     # tests/unit/test_prototype_parity.py (trunk) gained one PER_USE_CASE entry and is not evidence for it.
     "M110": ("library/tests/test_hillstrom_email.py",),
+    # M110a (DEC-1322), the audit readout on Hillstrom's own e-mail test that closes the Phase 3 gate's last item.
+    # Opt-in library tests, like M110's: the fast suite never selects them; the full-file reproduction skips, saying
+    # why, when the git-ignored data is absent. test_hillstrom_email.py checks the report the audit section joins.
+    "M110a": (
+        "library/tests/test_hillstrom_audit.py",
+        "library/tests/test_hillstrom_email.py",
+    ),
     # M111 (DEC-1321). The rehearsal by a person outside the team is pending and no test can prove it; these prove the
     # script, the generated summary and the seed. tests/unit/test_docs_honesty.py (trunk) is not evidence for it.
     "M111": (

@@ -1650,6 +1650,42 @@ and says the rehearsal by someone outside the team is still to be done. Nothing 
 
 **What is needed.** Ratification of the edit. Nothing else.
 
+### 2026-10-10 — plan-j M110a (on main) → library-datasets (owner of `library/` and `docs/LIBRARY.md`): the audit readout on Hillstrom's own e-mail test (record of edits)
+
+**What changed** (DEC-1322; the Phase 3 gate's Hillstrom fallback, which the Plan J plan places in M110's library
+area): `library/audit.py` (the audit through `POST /uploads` and `POST /campaigns/audit`, as a client would run it)
+and `library/audit_report.py` (section 8 of `run_report.md`, rendered from the audit's results) are new.
+`library/run_engine.py` gains an `audit` subcommand (`audit_main`), and `journey_report_text` now appends section 8
+from the committed `library/hillstrom-email/audit.results.json` (new, aggregates only, about 224 KB, no customer row
+or local path), so the report keeps one renderer; the journey's seven sections are unchanged and
+`journey.results.json` was not re-committed. `audit_main` writes the committed results and report only when the CSV
+is the dataset's own prepared file. `library/tests/test_hillstrom_audit.py` is new (opt-in; the full-file
+reproduction skips, saying why, when the data is absent). `library/README.md`, `library/hillstrom-email/README.md`
+and `docs/LIBRARY.md` (a new section 8, its figures read back from the results by a test) are updated.
+
+**What is needed.** Ratification of the edits. M111's rule still holds and was kept: `run_report.md` was regenerated
+from the committed results (never hand-edited), `python -m scripts.demo_summary --check` passes and
+`tests/unit/test_demo_summary.py` is green. A later re-run of the audit re-commits `audit.results.json` together
+with `run_report.md`, and updates `docs/LIBRARY.md` section 8 if a figure moves (the figures test fails until it is).
+
+**What I did meanwhile.** Nothing else in `library/` was edited; `library/journey.py` and its results are read only.
+
+### 2026-10-10 — plan-j M110a (on main) → M104 owners (DEC-1314; `engine/pilot/proof.py`): a Pack with several offers credits the first offer and charges every offer's contacts (request)
+
+**Why.** When a measured campaign has several offers, the Value Proof Pack's headline, "Extra outcomes because of the
+campaign" and the value of what the campaign changed cover only the first offer (M100 keeps the first offer in the
+single-offer fields, DEC-668 (3), and the Pack reads those fields), while "Cost of contacts" covers every offer. On
+the Hillstrom conversion audit (DEC-1322 (g)) the Pack credits +145 (men's e-mail) and charges all 42,694 e-mails;
+the women's +67 appears only in the offer table. Provenance passes (each figure is traced to a measured record); it
+is the scope of the headline and the net value that is partial.
+
+**What is needed.** One of: sum the offers in the headline and net value; or charge only the first offer's contacts;
+or state the scope in the headline.
+
+**What I did meanwhile.** No engine code was changed. `library/hillstrom-email/run_report.md` section 8.4 and
+`docs/LIBRARY.md` section 8 state the finding, and the report's verdict sentence for several offers says it reads
+the first offer only.
+
 ### 2026-09-23 — plan-e-pilot (on main) → all branches: every change Plan E made outside its own files and blocks
 
 **What is needed.** Nothing from anybody; this is the announcement §3 asks for. Measured with

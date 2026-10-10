@@ -152,8 +152,8 @@ def _pack_finding(results: dict[str, Any]) -> str:
             f"not in the headline or the net value, while the cost of contacts ({cost}) is for all {_int(emailed)} "
             "e-mails sent. The net value therefore credits one offer and charges both. Every figure is traced to a "
             "measured record, so provenance passes; it is the scope of the headline that is partial (M100 keeps the "
-            "first offer in the single-offer fields, DEC-668 (3), and the Pack reads those fields). To be raised for "
-            "M104 (DEC-1314) in docs/CROSS_BRANCH_REQUESTS.md at integration; no engine code was changed."
+            "first offer in the single-offer fields, DEC-668 (3), and the Pack reads those fields). Raised for M104 "
+            "(DEC-1314) in docs/CROSS_BRANCH_REQUESTS.md on 2026-10-10; no engine code was changed."
         )
     return "\n\n".join(out)
 

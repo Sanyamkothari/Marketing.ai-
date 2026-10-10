@@ -382,4 +382,4 @@ its "Extra outcomes" and the value of what the campaign changed are the first of
 offer in the single-offer fields, and the Pack reads those fields), while its cost of contacts is for every e-mail
 sent. On the conversion audit the Pack credits the men's e-mail's +145 and charges all 42,694 e-mails; the women's
 +67 is in its offer table but not in the headline or the net value. The Pack's provenance passes (each figure is
-traced) but its scope is partial. To be raised for M104 (DEC-1314) in `docs/CROSS_BRANCH_REQUESTS.md` at integration (the entry is in this branch's hand-over, not yet in that file).
+traced) but its scope is partial. Raised for M104 (DEC-1314) in `docs/CROSS_BRANCH_REQUESTS.md` on 2026-10-10.
