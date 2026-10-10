@@ -280,14 +280,20 @@ def target_of(config: UseCaseConfig) -> str | None:
 
 
 def _feature_template_columns(config: UseCaseConfig) -> tuple[TemplateColumn, ...]:
-    """The template's feature columns minus the free-text ones, in template order.
+    """The template's feature columns minus the free-text ones and `prepare.exclude_columns`, in template order.
 
     Plan §5 marks free text "ignored by the Phase 1 model", which is also why it is the column a
     root-cause summary reads *instead* of a reason. A reason about a paragraph of prose would be
-    neither.
+    neither. A column the use case excludes is never a feature either: the engine's own drift
+    baseline drops it (`engine.stages.register._feature_columns`), so a fabricated run that explained
+    a score by it, or expected drift on it, would disagree with every real run (Plan J M110, DEC-1320:
+    `hillstrom-email` excludes its treatment and its outcomes).
     """
+    excluded = set(config.prepare.exclude_columns)
     return tuple(
-        column for column in config.template.by_role(ColumnRole.FEATURE) if column.type is not ColumnType.TEXT
+        column
+        for column in config.template.by_role(ColumnRole.FEATURE)
+        if column.type is not ColumnType.TEXT and column.name not in excluded
     )
 
 
