@@ -55,6 +55,18 @@ export async function getProofs() {
   }
 }
 
+/**
+ * Plan J M105: what needs attention and the value proven to date (`GET /campaigns/summary`), or null when it cannot
+ * be read: Results then shows nothing of it, never an error and never a number of its own.
+ */
+export async function getSummary() {
+  try {
+    return await request("/campaigns/summary");
+  } catch {
+    return null;
+  }
+}
+
 /** The engine version this API serves (`GET /healthz`), or null. */
 export async function engineVersion() {
   try {

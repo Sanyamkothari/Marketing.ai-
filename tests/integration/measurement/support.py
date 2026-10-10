@@ -79,9 +79,24 @@ def _customers(rows: int, seed: int) -> tuple[Any, pd.DataFrame]:
     return campaign, frame
 
 
-def propensity_run(storage: LocalStorage, run_id: str, *, rows: int = 12_000, seed: int = 11) -> ScoredRun:
-    """A Phase 1 scoring run: bands, actions, suppression and the random control group."""
+def propensity_run(
+    storage: LocalStorage,
+    run_id: str,
+    *,
+    rows: int = 12_000,
+    seed: int = 11,
+    control_fraction: float | None = None,
+) -> ScoredRun:
+    """A Phase 1 scoring run: bands, actions, suppression and the random control group.
+
+    `control_fraction` (Plan J M105) overrides the use case's `actions.control_group_fraction`; `0.0` is a run
+    that held nobody back.
+    """
     config = load_use_case(USE_CASE)
+    if control_fraction is not None:
+        config = config.model_copy(
+            update={"actions": config.actions.model_copy(update={"control_group_fraction": control_fraction})}
+        )
     campaign, frame = _customers(rows, seed)
     frame[config.actions.score_field] = campaign.truth["p_treated"].to_numpy()
     scored = apply_actions(frame, config, run_id=run_id, primary_key=PRIMARY_KEY, now=SENT)

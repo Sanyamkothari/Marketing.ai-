@@ -9,7 +9,7 @@
 import { accessStatus } from "../../chrome.js";
 import { skeleton } from "../../dom.js";
 import { announceModulesChanged, canAccess, registerModule, registerResultLink, resultsListsHtml } from "../router.js";
-import { engineVersion, getAllRuns, getProofs, waitingForApproval } from "./api.js";
+import { engineVersion, getAllRuns, getProofs, getSummary, waitingForApproval } from "./api.js";
 import { injectStyles, resultsHtml, settingsHtml } from "./pages.js";
 
 export const ROUTES = ["results", "settings"];
@@ -30,7 +30,7 @@ function painter(app, parts) {
 async function renderResults(app, parts) {
   const paint = painter(app, parts);
   if (!app.querySelector('[data-module="simple"]')) paint(skeleton("list", { title: "Results" }));
-  const [answer, waiting, lists, proofs] = await Promise.all([
+  const [answer, waiting, lists, proofs, summary] = await Promise.all([
     getAllRuns().then(
       (body) => ({ runs: (body && body.runs) || [] }),
       (error) => ({ error }),
@@ -38,10 +38,11 @@ async function renderResults(app, parts) {
     waitingForApproval(),
     resultsListsHtml(), // Plan J M94: the campaigns beside the runs
     getProofs(), // Plan J M104: the Value Proof Packs that are ready
+    getSummary(), // Plan J M105: what needs attention and the value proven to date
   ]);
   // Plan J M103: a person who may audit a campaign another tool ran gets the way to it, beside the runs.
   const auditHref = canAccess("POST", "/campaigns/audit") ? "#/audit" : null;
-  paint(resultsHtml({ ...answer, waiting, lists, auditHref, proofs }));
+  paint(resultsHtml({ ...answer, waiting, lists, auditHref, proofs, summary }));
   document.title = "Results · Marketing AI";
 }
 

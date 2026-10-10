@@ -188,6 +188,7 @@ def write_fixtures(root: Path, config_root: Path) -> Path:
     _write(out, "roi_not_measured", _roi("not_measured"))
     _write(out, "roi_measured", _roi("measured"))
     _proof_fixtures(out, root, config_root)
+    _full_summary_fixture(out, root, config_root)
     return out
 
 
@@ -206,6 +207,9 @@ def _proof_fixtures(out: Path, root: Path, config_root: Path) -> None:
     with TestClient(create_app(config_root=config_root, data_dir=data_dir)) as client:
         campaign_id = _measured_campaign(client, run.run_id, _banded_outcomes(run.scores, seed=21))
         _write(out, "proofs", _ok(client.get("/pilot/proof")))
+        # Plan J M105: the summary before the suggestion is approved, with the harmed group's card and the lower
+        # bound of the one campaign that is final.
+        _write(out, "campaign_summary", _ok(client.get("/campaigns/summary")))
         _write(out, "proof", _ok(client.get(f"/pilot/proof/{campaign_id}", params={"format": "json"})))
         _write(out, "proof_page", {"html": client.get(f"/pilot/proof/{campaign_id}").text})
         approval = {"dimension": "band", "segment": HARMED_BAND}
@@ -221,6 +225,42 @@ def _proof_fixtures(out: Path, root: Path, config_root: Path) -> None:
         refused = client.get(f"/pilot/proof/{waiting}", params={"format": "json"})
         assert refused.status_code == 409, refused.text
         _write(out, "proof_refused", refused.json())
+    with TestClient(create_app(config_root=config_root, data_dir=root / "empty_summary_data")) as client:
+        _write(out, "campaign_summary_empty", _ok(client.get("/campaigns/summary")))
+
+
+def _full_summary_fixture(out: Path, root: Path, config_root: Path) -> None:
+    """Plan J M105: the summary of an installation with every kind of line the page draws - two campaigns on one
+    scoring run (the later one counted, the other listed apart), one read before its planned day, one random only
+    by the person's statement - each built by the real code, as `test_campaign_summary.py` builds them."""
+    import numpy as np
+    import pandas as pd
+
+    from engine.measurement.simulate import multi_arm_campaign
+    from engine.storage import LocalStorage
+    from tests.integration.measurement.support import propensity_run
+    from tests.integration.measurement.test_campaign_summary import POWERED, _audit, _scored
+    from tests.integration.pilot.test_proof_pack import _banded_outcomes
+
+    data_dir = root / "full_summary_data"
+    data_dir.mkdir()
+    run = propensity_run(LocalStorage(data_dir), "r_20261009_31000019", rows=6_000)
+    outcomes = _banded_outcomes(run.scores, seed=21)
+    later = (datetime.now(UTC) + timedelta(days=30)).date().isoformat()
+    with TestClient(create_app(config_root=config_root, data_dir=data_dir)) as client:
+        _scored(client, run.run_id, "First send", outcomes)
+        _scored(client, run.run_id, "First send, read again", outcomes)
+        _scored(client, run.run_id, "Read too soon", outcomes, plan=(later, POWERED))
+        sim = multi_arm_campaign(9_000, 0.12, (0.04, -0.07), seed=4105)
+        offers = pd.DataFrame(
+            {
+                "customer_id": sim.scores["customer_id"],
+                "group": np.where(sim.scores["control_group"], sim.levels[0], sim.scores["offer"]),
+            }
+        )
+        arm = {"control_value": sim.levels[0], "treated_values": list(sim.levels[1:])}
+        _audit(client, "Said to be random", offers, sim.outcomes, basis="random", arm=arm)
+        _write(out, "campaign_summary_full", _ok(client.get("/campaigns/summary")))
 
 
 def test_the_fixtures_are_the_world_the_screens_are_tested_in(tmp_path: Path, config_root: Path) -> None:
@@ -249,6 +289,16 @@ def test_the_fixtures_are_the_world_the_screens_are_tested_in(tmp_path: Path, co
     assert [p["status"] for p in read("proof")["proposals"]] == ["proposed"]
     assert [p["status"] for p in read("proof_approved")["proposals"]] == ["approved"]
     assert read("proof_refused")["detail"]["code"] == "PROOF_NOT_MATURE"
+    # Plan J M105: a real summary with the harmed group's card and one total, and an empty one with neither
+    summary = read("campaign_summary")
+    assert [card["code"] for card in summary["cards"]] == ["GROUP_BACKFIRED"]
+    assert [total["unit"] for total in summary["proven"]["totals"]] == ["outcomes:converted"]
+    full = read("campaign_summary_full")
+    assert {line["kind"] for line in full["proven"]["apart"]} == {"same_customers", "stated_random"}
+    assert [note["results_available_label"] is not None for note in full["proven"]["excluded"]] == [True]
+    assert len(full["proven"]["unpriced"]) == 1, "the counted campaign has no value inputs"
+    assert read("campaign_summary_empty")["cards"] == []
+    assert read("campaign_summary_empty")["proven"]["totals"] == []
 
 
 def test_the_four_page_product_in_jsdom(tmp_path: Path, config_root: Path) -> None:

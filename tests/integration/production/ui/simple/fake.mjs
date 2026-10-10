@@ -55,6 +55,13 @@ export async function installWholePage({ hash = "#/", world }) {
     if (method === "GET" && p === "/approvals") {
       return world.waiting ? ok(world.waiting) : { status: 403, body: { detail: { code: "ROLE_REQUIRED", message: "No." } } };
     }
+    // Plan J M105: `world.summary` is `GET /campaigns/summary`'s body (the real app's, captured by test_simple_ui.py);
+    // absent, the route answers as a role without it would.
+    if (method === "GET" && p === "/campaigns/summary") {
+      return world.summary
+        ? ok(world.summary)
+        : { status: 403, body: { detail: { code: "ROLE_REQUIRED", message: "No." } } };
+    }
     // Plan J M104: the Value Proof Packs. `world.proofs` is the list; `world.packs` maps a campaign id to
     // `{json, html, after, refused}` (the real app's answers, captured by test_simple_ui.py).
     if (method === "GET" && p === "/pilot/proof") return ok(world.proofs || { proofs: [] });

@@ -511,6 +511,8 @@ def test_openapi_builds_and_documents_every_route(client: TestClient) -> None:
         "/use-cases/{use_case_id}/cost-estimate",
         "/cost/fx-rate",
         "/cost/spend",
+        # Plan J M105: what needs attention across the campaigns, and the value proven to date (DEC-1315)
+        "/campaigns/summary",
     }
 
 
