@@ -69,6 +69,8 @@ if TYPE_CHECKING:
     import pandas as pd
     from numpy.typing import NDArray
 
+    from engine.measurement.run_score import RunPrediction
+
 __all__ = [
     "CONFIDENCE_LEVEL",
     "Z_95",
@@ -167,6 +169,7 @@ def measure_incrementality(
     outcome_kind: Literal["binary", "continuous"] = "binary",
     covariate_column: str | None = None,
     covariate_date_column: str | None = None,
+    run_prediction: RunPrediction | None = None,
 ) -> IncrementalityReport:
     """Measure a scoring run's campaign: treated rate − control rate on the mature rows.
 
@@ -184,6 +187,15 @@ def measure_incrementality(
     (CUPED) estimate: a covariate dated on or after the day of a customer's treatment (compared by day,
     since a value dated a day includes all of it), or not dated at all, is refused (`CovariateNotBeforeCampaignError`). Only `measure_campaign` decides whether a covariate
     may be used (the registered plan); a yes/no outcome ignores it, so its report is unchanged.
+
+    **The scoring run's prediction (Plan K M135, DEC-1324).** `run_prediction`
+    (`engine.measurement.run_score.RunPrediction`) adjusts a yes/no outcome or an amount by the chance of
+    the outcome the scoring run predicted for each customer before the campaign, with M102's
+    `adjusted_difference`. It is joined to the measured customers on every key column, as the outcomes are;
+    a customer with no prediction is given the mean of the known ones and counted. A run that finished
+    after the campaign went out, or after the day a customer's own treatment date names, is refused
+    (`CovariateNotBeforeCampaignError`). Not with `covariate_column` (one covariate at a time). Without it
+    nothing changes.
     """
     import pandas as pd
 
@@ -194,6 +206,10 @@ def measure_incrementality(
     if continuous and positive_label is not None:
         raise ValueError("positive_label names the converted value of a yes/no outcome; an amount has none.")
     adjust = continuous and covariate_column is not None
+    if run_prediction is not None and covariate_column is not None:
+        raise ValueError(
+            "Adjust by one thing at a time: the scoring run's prediction or a column from before the campaign."
+        )
     columns = key_columns(primary_key)
     _require_columns(scores, (*columns, _CONTROL_COLUMN), what="The run's scores")
     _require_columns(outcomes, (*columns, outcome_column), what="The outcomes file")
@@ -222,6 +238,8 @@ def measure_incrementality(
     outcome_keys = _joined_keys(outcomes, columns)
     _require_unique(score_keys, what="The run's scores")
     _require_unique(outcome_keys, what="The outcomes file")
+    if run_prediction is not None:  # Plan K M135: the run's own prediction, made before the campaign
+        _prediction_before(run_prediction, treatment_utc)
 
     # --- population ---------------------------------------------------------------------------
     suppressed = _suppressed(scores[_SUPPRESSED_COLUMN]) if _SUPPRESSED_COLUMN in scores.columns else None
@@ -278,6 +296,10 @@ def measure_incrementality(
         results_available_on = ready_at[immature].max().date()
 
     arm = members["treated"].to_numpy(dtype=bool)
+    predicted: NDArray[np.float64] | None = None
+    if run_prediction is not None:
+        predicted = _joined_prediction(run_prediction, columns, members["key"])
+        _prediction_before_each(run_prediction, dates, matched & date_ok)
     if continuous:
         return _amount_report(
             joined,
@@ -294,6 +316,7 @@ def measure_incrementality(
             results_available_on=results_available_on,
             members=len(members),
             covariate_column=covariate_column if adjust else None,
+            prediction=predicted,
             rows_immature=rows_immature,
             rows_without_outcome=rows_without_outcome,
             rows_outside=rows_outside,
@@ -349,6 +372,14 @@ def measure_incrementality(
         outcome_window_days=outcome_window_days,
         has_control_group=has_control_group,
     )
+    extra: dict[str, object] = {}
+    if predicted is not None:  # Plan K M135: adjusted by the scoring run's prediction
+        extra = _rate_adjustment(
+            joined["converted"], predicted, usable=usable, arm=arm, measured=absolute_lift
+        )
+        sentence = _rate_adjustment_sentence(extra)
+        if sentence:
+            summary += " " + sentence
     report = IncrementalityReport(
         run_id=run_id,
         campaign_id=campaign_id,
@@ -373,6 +404,7 @@ def measure_incrementality(
         causal=has_control_group,
         summary=summary,
         computed_at=datetime.now(UTC),
+        **extra,  # type: ignore[arg-type]
     )
     _LOGGER.info(
         "incrementality status=%s treated_rows=%d control_rows=%d rows_immature=%d "
@@ -569,9 +601,13 @@ def _amount_report(
     has_control_group: bool,
     rows: int,
     started: float,
+    prediction: NDArray[np.float64] | None = None,
 ) -> IncrementalityReport:
     """The amount branch of `measure_incrementality` (Plan J M102): the covariate's point-in-time rule,
-    then `engine.measurement.amounts.amount_report` on the usable amounts of each arm."""
+    then `engine.measurement.amounts.amount_report` on the usable amounts of each arm.
+
+    `prediction` (Plan K M135): the scoring run's prediction, aligned on the measured customers and already
+    checked to come from before the campaign, used as the covariate instead of a column."""
     import numpy as np
     import pandas as pd
 
@@ -606,6 +642,16 @@ def _amount_report(
             filled = np.where(known, value, float(value[known].mean()))
             treated_covariate = filled[counted & treated_arm]
             control_covariate = filled[counted & ~treated_arm]
+    source: Literal["run_score"] | None = None
+    if prediction is not None:
+        source = "run_score"
+        predicted = np.asarray(prediction, dtype=np.float64)
+        known = counted & np.isfinite(predicted)
+        missing = int((counted & ~known).sum())
+        if known.any():
+            filled = np.where(known, predicted, float(predicted[known].mean()))
+            treated_covariate = filled[counted & treated_arm]
+            control_covariate = filled[counted & ~treated_arm]
     status = (
         IncrementalityStatus.IMMATURE if rows_immature and not mature_any else IncrementalityStatus.MATURE
     )
@@ -628,6 +674,7 @@ def _amount_report(
         rows_without_outcome=rows_without_outcome,
         rows_outside=rows_outside,
         has_control_group=has_control_group,
+        covariate_source=source,
     )
     _LOGGER.info(
         "incrementality kind=continuous status=%s treated_rows=%d control_rows=%d rows_immature=%d "
@@ -642,6 +689,121 @@ def _amount_report(
     )
     log_stage(_LOGGER, "incrementality", rows=rows, seconds=time.perf_counter() - started)
     return report
+
+
+def _prediction_before(prediction: RunPrediction, treatment: datetime) -> None:
+    """Refuse a prediction made after the campaign went out (Plan K M135): it could hold the campaign's effect."""
+    from engine.measurement.continuous import CovariateNotBeforeCampaignError
+
+    made = _aware(prediction.predicted_at)
+    if made > treatment:
+        raise CovariateNotBeforeCampaignError(
+            f"The scoring run finished at {made:%Y-%m-%d %H:%M} UTC, after the campaign began at "
+            f"{treatment:%Y-%m-%d %H:%M} UTC: its prediction was made after the campaign began, so it could "
+            f"include the campaign's own effect. Register the plan without it, or measure a campaign sent "
+            f"after the run finished."
+        )
+
+
+def _prediction_before_each(prediction: RunPrediction, dates: pd.Series, mask: NDArray[np.bool_]) -> None:
+    """Refuse when a measured customer's own treatment date is a day before the run finished (Plan K M135).
+
+    Compared by day: a date without a time may be any moment of that day, and the campaign record already
+    holds the exact send time (checked by :func:`_prediction_before`).
+    """
+    import pandas as pd
+
+    from engine.measurement.continuous import CovariateNotBeforeCampaignError
+
+    made = pd.Timestamp(_aware(prediction.predicted_at)).normalize()
+    treated_on = pd.to_datetime(dates, utc=True).reset_index(drop=True).dt.normalize()
+    early = mask & (treated_on < made).fillna(value=False).to_numpy(dtype=bool)
+    count = int(early.sum())
+    if count:
+        raise CovariateNotBeforeCampaignError(
+            f"{count:,} customers were contacted before the day the scoring run finished "
+            f"({made:%Y-%m-%d}): its prediction was made after the campaign began for them, so it could include "
+            f"the campaign's own effect. Register the plan without it."
+        )
+
+
+def _joined_prediction(
+    prediction: RunPrediction, columns: tuple[str, ...], member_keys: pd.Series
+) -> NDArray[np.float64]:
+    """The run's prediction of each measured customer, joined on every key column; NaN where it has none."""
+    import numpy as np
+    import pandas as pd
+
+    from engine.measurement.run_score import PREDICTION_COLUMN
+
+    frame = prediction.frame
+    _require_columns(frame, (*columns, PREDICTION_COLUMN), what="The scoring run's prediction")
+    keys = _joined_keys(frame, columns)
+    _require_unique(keys, what="The scoring run's scores")
+    values = pd.to_numeric(frame[PREDICTION_COLUMN], errors="coerce").astype("float64").to_numpy()
+    values = np.where(np.isfinite(values), values, np.nan)
+    by_key = pd.Series(values, index=pd.Index(keys.to_numpy()))
+    joined: NDArray[np.float64] = np.asarray(by_key.reindex(member_keys.to_numpy()), dtype=np.float64)
+    return joined
+
+
+def _rate_adjustment(
+    converted: pd.Series,
+    prediction: NDArray[np.float64],
+    *,
+    usable: NDArray[np.bool_],
+    arm: NDArray[np.bool_],
+    measured: ConfidenceValue | None,
+) -> dict[str, object]:
+    """The M102 fields of a yes/no report adjusted by the run's prediction (Plan K M135): the adjusted
+    difference in rates when both arms were measured, and always the source and the customers filled in."""
+    import numpy as np
+
+    from engine.measurement.run_score import adjust_by_prediction
+
+    counted = np.asarray(usable, dtype=bool)
+    fields: dict[str, object] = {
+        "covariate_source": "run_score",
+        "rows_covariate_missing": int((counted & ~np.isfinite(prediction)).sum()),
+    }
+    if measured is None:
+        return fields
+    outcome: NDArray[np.float64] = np.asarray(
+        converted.astype("Float64").to_numpy(dtype=np.float64, na_value=np.nan), dtype=np.float64
+    )
+    result = adjust_by_prediction(outcome, prediction, usable=counted, treated=arm)
+    if result.adjusted is not None:
+        adjusted = result.adjusted
+        fields["adjusted_lift"] = adjusted.difference
+        fields["adjusted_interval"] = ConfidenceValue(
+            value=adjusted.difference,
+            ci_low=adjusted.low,
+            ci_high=adjusted.high,
+            confidence_level=CONFIDENCE_LEVEL,
+        )
+        fields["variance_reduction"] = adjusted.variance_reduction
+    elif result.note is not None:
+        fields["adjustment_note"] = result.note
+    return fields
+
+
+def _rate_adjustment_sentence(fields: dict[str, object]) -> str:
+    """The summary's sentence on the adjusted difference in rates (Plan K M135); empty when there is none."""
+    interval = fields.get("adjusted_interval")
+    if not isinstance(interval, ConfidenceValue) or interval.ci_low is None or interval.ci_high is None:
+        note = fields.get("adjustment_note")
+        return note if isinstance(note, str) else ""
+    reduction = fields.get("variance_reduction")
+    removed = (
+        f"this removed {reduction:.0%} of the chance variation."
+        if isinstance(reduction, float) and reduction >= 0.005
+        else "this time it did not narrow the range."
+    )
+    return (
+        f"Taking account of the chance of the outcome the scoring run predicted for each customer before the "
+        f"campaign, the difference is {_points(interval.value)} (95% CI {_points(interval.ci_low)} to "
+        f"{_points(interval.ci_high)}); {removed}"
+    )
 
 
 def _points(rate: float) -> str:

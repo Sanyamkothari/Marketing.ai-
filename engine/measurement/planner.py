@@ -65,6 +65,14 @@ These are the normal approximations of the test the report runs; with the hundre
 group a campaign has, Welch's t is the normal to two decimals. A spread that is unknown is a plain
 reason, never a guess.
 
+**A yes/no outcome adjusted by the scoring run's prediction (Plan K M135, DEC-1324).** A test plan that
+registers `covariate_source: run_score` may give `expected_rho2`, the share of the outcome's spread the
+prediction is expected to explain - the person's number, never assumed here. The adjusted comparison
+then has both spreads of `power(d)` times `sqrt(1 - rho2)` (:func:`achieved_power`,
+:func:`mde_two_proportions` and :func:`power_preview` take `rho2`, 0 by default, which leaves every
+number as it was), so a smaller control group sees the same change. For a sparse yes/no outcome the
+share is usually small; nothing is promised, the report measures it (`variance_reduction`).
+
 Every sentence this module writes is plain language (`engine.pilot.plain.jargon_in` finds nothing in
 it; a test runs every reason through it).
 """
@@ -173,12 +181,19 @@ def _z_alpha(alpha: float) -> float:
     return _NORMAL.inv_cdf(1.0 - alpha / 2.0)
 
 
-def _power(n_treat: int, n_control: int, p0: float, effect: float, alpha: float) -> float:
-    """`power(d)` of the module docstring; both groups non-empty, `p0 + effect` inside [0, 1]."""
+def _power(n_treat: int, n_control: int, p0: float, effect: float, alpha: float, rho2: float = 0.0) -> float:
+    """`power(d)` of the module docstring; both groups non-empty, `p0 + effect` inside [0, 1].
+
+    `rho2` (Plan K M135): the share of the outcome's spread the scoring run's prediction is expected to
+    remove; both spreads shrink by `sqrt(1 - rho2)`. 0 leaves every number exactly as before.
+    """
     p1 = p0 + effect
     pooled = (n_treat * p1 + n_control * p0) / (n_treat + n_control)
     se_null = math.sqrt(pooled * (1.0 - pooled) * (1.0 / n_treat + 1.0 / n_control))
     se_alt = math.sqrt(p1 * (1.0 - p1) / n_treat + p0 * (1.0 - p0) / n_control)
+    if rho2:
+        shrink = math.sqrt(1.0 - rho2)
+        se_null, se_alt = se_null * shrink, se_alt * shrink
     threshold = _z_alpha(alpha) * se_null
     if se_alt <= 0.0:
         return 1.0 if abs(effect) > threshold else 0.0
@@ -261,14 +276,18 @@ def achieved_power(
     base_rate: float | None,
     effect: float,
     alpha: float = DEFAULT_ALPHA,
+    *,
+    rho2: float = 0.0,
 ) -> PowerEstimate:
     """The chance that a test with these groups sees a true change of `effect` (signed, absolute).
 
     `effect` is in rate points as a fraction: -0.01 is a fall of one point. None with a reason when
     the base rate is unknown or at 0% or 100%, a group is empty, `effect` is 0, or the changed rate
-    would leave 0..1.
+    would leave 0..1. `rho2` (M135) is the share of the spread the registered prediction is expected to
+    remove (the person's own number, 0 without one).
     """
     _check_alpha_power(alpha)
+    _check_rho2(rho2)
     _check_count("n_treat", n_treat)
     _check_count("n_control", n_control)
     reason = _base_rate_reason(base_rate)
@@ -280,18 +299,20 @@ def achieved_power(
         return PowerEstimate(power=None, reason=REASON_NO_EFFECT)
     if not 0.0 <= base_rate + effect <= 1.0:
         return PowerEstimate(power=None, reason=REASON_NO_ROOM)
-    return PowerEstimate(power=_power(n_treat, n_control, base_rate, effect, alpha))
+    return PowerEstimate(power=_power(n_treat, n_control, base_rate, effect, alpha, rho2))
 
 
-def _smallest(n_treat: int, n_control: int, p0: float, alpha: float, power: float, sign: int) -> float | None:
+def _smallest(
+    n_treat: int, n_control: int, p0: float, alpha: float, power: float, sign: int, rho2: float = 0.0
+) -> float | None:
     """Bisect for the smallest effect, in direction `sign`, seen with `power`; None if none is."""
     room = (1.0 - p0) if sign > 0 else p0
-    if room <= 0.0 or _power(n_treat, n_control, p0, sign * room, alpha) < power:
+    if room <= 0.0 or _power(n_treat, n_control, p0, sign * room, alpha, rho2) < power:
         return None
     low, high = 0.0, room
     for _ in range(_BISECTION_STEPS):
         middle = (low + high) / 2.0
-        if _power(n_treat, n_control, p0, sign * middle, alpha) >= power:
+        if _power(n_treat, n_control, p0, sign * middle, alpha, rho2) >= power:
             high = middle
         else:
             low = middle
@@ -306,13 +327,16 @@ def mde_two_proportions(
     power: float = DEFAULT_POWER,
     *,
     direction: Direction = "either",
+    rho2: float = 0.0,
 ) -> Mde:
     """The smallest change in the outcome rate a test with these groups sees with `power`.
 
     `direction="either"` (the default) is the larger of the smallest rise and the smallest fall: the
     change the test is sure to see whichever way it goes. None with a reason when it cannot be said.
+    `rho2` (M135): the share of the spread a registered prediction is expected to remove, 0 without one.
     """
     _check_alpha_power(alpha, power)
+    _check_rho2(rho2)
     _check_count("n_treat", n_treat)
     _check_count("n_control", n_control)
     reason = _base_rate_reason(base_rate)
@@ -321,7 +345,7 @@ def mde_two_proportions(
     if n_treat == 0 or n_control == 0:
         return Mde(None, None, n_treat, n_control, REASON_EMPTY_GROUP)
     signs = {"up": (1,), "down": (-1,), "either": (1, -1)}[direction]
-    found = [_smallest(n_treat, n_control, base_rate, alpha, power, sign) for sign in signs]
+    found = [_smallest(n_treat, n_control, base_rate, alpha, power, sign, rho2) for sign in signs]
     if any(value is None for value in found):
         return Mde(None, None, n_treat, n_control, REASON_TOO_FEW)
     absolute = max(value for value in found if value is not None)
@@ -629,15 +653,26 @@ def continuous_power_preview(
     return PowerPreview(points=tuple(points), basis=basis)
 
 
-def power_preview(request: PowerPreviewRequest) -> PowerPreview:
-    """The planner at each control-group share of `request` (pure; the route only wraps it)."""
+def power_preview(request: PowerPreviewRequest, *, rho2: float = 0.0) -> PowerPreview:
+    """The planner at each control-group share of `request` (pure; the route only wraps it).
+
+    `rho2` (Plan K M135): a yes/no test plan that registered the scoring run's prediction may give the share
+    of the spread it expects that prediction to remove; the points then show the smaller change the
+    adjusted comparison can see. 0 (the default) gives exactly the points it always gave.
+    """
     contacted_at_random = math.floor(request.eligible * request.explore_share + 0.5)
     explore = cost_of_explore(contacted_at_random, request.contact_cost, request.offer_cost)
     points: list[PowerPreviewPoint] = []
     for share in request.holdout_shares:
         n_treat, n_control = arm_sizes(request.eligible, share)
         mde = mde_two_proportions(
-            n_treat, n_control, request.base_rate, request.alpha, request.power, direction=request.direction
+            n_treat,
+            n_control,
+            request.base_rate,
+            request.alpha,
+            request.power,
+            direction=request.direction,
+            rho2=rho2,
         )
         holdout = cost_of_holdout(n_control, mde.absolute, request.value_per_conversion)
         reasons = [mde.reason, holdout.reason if mde.reason is None else None, explore.reason]
@@ -652,7 +687,13 @@ def power_preview(request: PowerPreviewRequest) -> PowerPreview:
                 reason=" ".join(reason for reason in reasons if reason) or None,
             )
         )
-    return PowerPreview(points=tuple(points), basis=_basis(request))
+    basis = _basis(request)
+    if rho2 > 0.0:
+        basis += (
+            f" The test plan expects the scoring run's prediction to explain {round(rho2 * 100.0, 2):g}% of the "
+            "outcome's spread, and the adjusted comparison removes that much of it."
+        )
+    return PowerPreview(points=tuple(points), basis=basis)
 
 
 # ---------------------------------------------------------------------------
@@ -680,7 +721,8 @@ class ContinuousMde:
 def _check_rho2(rho2: float) -> None:
     if not (math.isfinite(rho2) and 0.0 <= rho2 < 1.0):
         raise ValueError(
-            "The expected share explained by the earlier amount (rho2) must be from 0 to below 1."
+            "The expected share of the spread explained by the earlier amount or the prediction (rho2) must be "
+            "from 0 to below 1."
         )
 
 

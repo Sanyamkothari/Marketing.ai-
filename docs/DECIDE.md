@@ -42,6 +42,7 @@ the user downloads (the treat list).
 | 23 | Validation on real public randomised data | M110 | not yet written |
 | 24 | The manager demo | M111 | not yet written |
 | 25 | Small fixes that make existing things work better | M109 | written (below) |
+| 26 | The scoring run's prediction as the adjustment (CUPAC) | Plan K M135 | written (below) |
 
 ## 4. Running the statistical suite
 
@@ -584,7 +585,7 @@ reports recorded on the commit before M102).
   `theta` the within-arm slope) and `variance_reduction` (`1 - adjusted variance / unadjusted variance` of the
   difference, about `rho²`: 0.36 at `rho = 0.6`). A customer with no earlier amount keeps their row with the mean of
   the known ones (`rows_covariate_missing`); a covariate that does not vary gives `adjustment_note`, never a number.
-  A yes/no outcome never uses a covariate.
+  A yes/no outcome never uses a covariate column (since Plan K M135 it may use the scoring run's own prediction: §26).
 * **Only a covariate registered in advance.** `measure_campaign` uses a covariate only when the test plan in force
   names it: a different one, or a covariate on an amount with no plan registered, is `409 TEST_PLAN_CHANGED`,
   because choosing the adjustment after seeing the outcomes is one more way to move the goalposts. On a yes/no
@@ -1129,3 +1130,62 @@ share (sized so that it reaches `uplift.min_arm_rows`, at most 10%) are plain as
 override them. The benchmark gains a `mid_size_file` case; the other twenty-one digests are unchanged.
 
 **Retail win-back.** No setting or extra column makes it beat its baseline: see `library/online-retail/run_report.md`.
+
+## 26. The scoring run's prediction as the adjustment (Plan K M135, DEC-1324)
+
+Plan K's M135, built early under Plan J's decision range. §16's adjustment narrows an **amount**'s range with an
+amount each customer had before the campaign. A **yes/no** outcome (churn, conversion) had nothing of the kind: a
+past column predicts it weakly. But the scoring run that chose who to contact already predicted, **before** the
+campaign, each customer's chance of the outcome. That prediction is reused as the covariate (CUPAC: DoorDash 2020;
+MLRATE: Meta 2021). Nothing new is trained: compute once.
+
+* **What it is.** The propensity run's predicted probability - its own `actions.score_field` column of
+  `scores.parquet`, read from the run's `run_config.json` (`churn_prob` for telco churn) - or, on an uplift run,
+  `p_control`, the chance of the outcome without contact (`engine/measurement/run_score.py`,
+  `load_run_prediction`). Only the key column(s) and that column are read.
+* **Why it is valid.** The prediction was fixed before the treatment, so the campaign cannot have changed it: its
+  difference between the two randomised groups is chance alone, and removing the part of the outcome it predicts
+  removes noise without bias. The point-in-time rule is enforced, not assumed: a run that finished after the
+  campaign's `treatment_start`, or after the day a customer's own treatment date names (compared by day: a date
+  with no time may be any moment of it; the record holds the exact send time), is refused with
+  `422 COVARIATE_NOT_BEFORE_CAMPAIGN` and a sentence saying the prediction was made after the campaign began.
+* **How to register it.** In the test plan, before the outcomes are read: `covariate_source: run_score`, with
+  `covariate_column` left null (both together are refused). Allowed for `outcome_kind` binary and continuous. The
+  field is part of the plan's content and its `plan_hash`, and is left out of the stored plan while unset, so every
+  plan registered before keeps its hash. An amendment that adds or drops it is a new version like any other, and
+  measuring with it against a plan that did not register it (or with no plan) is `409 TEST_PLAN_CHANGED`
+  (`POST /campaigns/{id}/measure {covariate_source}`; null means the plan's). Registering it on a campaign with no
+  scoring run (an audit, a programme readout) or several runs is `422 TEST_PLAN_INVALID`: the assignment does not
+  record which run scored which customer, so the product refuses rather than guesses. Several offers are refused
+  too, as §16 refuses an amount there.
+* **The computation.** The prediction is joined to the measured customers on **every key column** (the same text
+  keys the outcomes are joined on), never by position. A measured customer with no prediction keeps their row with
+  the mean of the known ones and is counted in `rows_covariate_missing`. The estimator is §16's
+  `adjusted_difference`, unchanged (the pooled within-arm slope, Welch on the adjusted values); on a yes/no outcome
+  the arrays are 0/1 and the adjusted difference is a difference in rates. The report reuses `adjusted_lift`,
+  `adjusted_interval`, `variance_reduction`, `rows_covariate_missing` and `adjustment_note`, adds
+  `covariate_source: run_score` (absent otherwise, so every other report's JSON is byte for byte what it was), keeps
+  `covariate_column` null and always keeps the unadjusted estimate beside it.
+* **What reads it.** It is the analysis the plan registered, so the verdict (`campaign_verdict_for`), the Value
+  Proof Pack ("Difference (adjusted for the predicted chance registered in the plan)", the extra outcomes and their
+  value from it times the contacted customers, every figure traced to `adjusted_interval`), the value view
+  (`adjusted: true`) and the fading rule of the summary read the adjusted estimate, each with a plain sentence.
+* **Planning.** A yes/no plan that registers it may give `expected_rho2`, the share of the outcome's spread the
+  person expects the prediction to explain (never assumed by the product); `achieved_power`,
+  `mde_two_proportions` and the plan preview then shrink both spreads by `sqrt(1 - rho2)`. With 0 (the default)
+  every number is as before.
+* **Measured, not promised.** Published reductions are 27% (Etsy, against 7% from CUPED) and about 19% beyond a
+  CUPED-style adjustment (Meta). For sparse yes/no retention outcomes we promise nothing: `variance_reduction` is
+  always reported, negative too, and the summary says when the prediction did not narrow the range.
+
+**How we know it is honest.** `tests/statistical/test_run_score_coverage.py` (nightly; the M95 band of four Monte
+Carlo standard errors) draws campaigns from `engine.measurement.simulate.predicted_campaign` - a yes/no outcome
+whose chance depends on two features, a prediction computed from the same features with noise and fixed before the
+treatment, a known effect - and checks (a) that the adjusted 95% interval covers the true effect (at a 15% and a 3%
+outcome) and removes variance on average, (b) that with no effect it excludes zero about 5% of the time, and (c)
+that a useless prediction (pure noise) leaves the interval no wider than 2% per campaign and 0.5% on average. The
+fast tests (`tests/unit/measurement/test_run_score.py`, `test_run_score_scale.py`,
+`tests/integration/measurement/test_campaign_run_score.py`) check the plan rules and the hash, the hand computation
+on a key join, row order, composite keys, the point-in-time refusals, the plan gate, a real train-and-score journey
+through the API with the Proof Pack and the value view, and that the join and adjustment on 1,000,000 customers take
+about ten times as long as on 100,000.

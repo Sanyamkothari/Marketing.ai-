@@ -560,6 +560,7 @@ def measure_recorded(
     outcome_kind: Literal["binary", "continuous"] | None,
     ledger_engine: Callable[[], Engine | None] | None,
     now: datetime,
+    covariate_source: Literal["column", "run_score"] | None = None,
 ) -> Measured:
     """Measure a campaign that has its outcomes through the one path, against its plan (`POST /campaigns/{id}/measure`).
 
@@ -567,6 +568,10 @@ def measure_recorded(
     `TEST_PLAN_CHANGED`, `COVARIATE_NOT_BEFORE_CAMPAIGN`, `CAMPAIGN_INVALID`. A campaign some of whose
     outcome windows are still open stores nothing and answers `matured=False`. `now` stamps a recomputed
     contact readout; `as_of` is the moment the outcomes are read as of.
+
+    `covariate_source` (Plan K M135): `run_score` adjusts by the scoring run's prediction. Null: the plan's
+    (a `covariate_column` named alone means a column). The prediction is read from the campaign's scoring run
+    only when the plan in force registered it; otherwise the measurement is refused as a change of plan.
     """
     from engine.measurement.audit import AUDIT_FILENAME, AuditReadout, label_report
     from engine.measurement.campaign import CAMPAIGN_EPOCH_MISMATCH
@@ -589,8 +594,11 @@ def measure_recorded(
         raise CycleError(CAMPAIGN_EPOCH_MISMATCH, mismatch)
     # The pre-registered covariate is measured with unless another one is named: leaving it out of the
     # request is not a change of plan.
+    source = covariate_source or ("column" if covariate_column is not None else None)
+    if source is None and plan is not None:
+        source = plan.covariate_source
     covariate = covariate_column
-    if covariate is None and plan is not None:
+    if covariate is None and plan is not None and source != "run_score":
         covariate = plan.covariate_column
     # Plan J M102: the outcome is read as the plan registered it (a different kind named is a change of plan,
     # refused by `measure_campaign`), else as asked, else as yes/no. An audited or programme campaign that
@@ -606,6 +614,11 @@ def measure_recorded(
     )
     offers = {} if audit is None or not audit.offers else offer_arguments(audit)  # several offers (M103)
     try:
+        prediction = None
+        if source == "run_score" and plan is not None and plan.covariate_source == "run_score" and not offers:
+            from engine.measurement.run_score import load_run_prediction
+
+            prediction = load_run_prediction(storage, campaign)  # Plan K M135: the run's own prediction
         report = measure_campaign(
             assignment,
             outcomes,
@@ -623,6 +636,8 @@ def measure_recorded(
             covariate_column=covariate,
             outcome_kind=kind,
             covariate_date_column=covariate_date_column(campaign.outcomes, covariate),
+            covariate_source="run_score" if source == "run_score" else None,
+            run_prediction=prediction,
             **offers,
         )
     except TestPlanChangedError as exc:

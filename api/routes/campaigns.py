@@ -45,6 +45,15 @@ register is **409 `TEST_PLAN_CHANGED`**, and so is a covariate on an amount with
 outcome never uses one, so it is ignored as before). The plan preview's points of a plan on an amount
 carry `mde_amount` (`mde_continuous` with the plan's `outcome_sd` and `expected_rho2`) and no `mde_pp`.
 
+**The scoring run's prediction (Plan K M135, DEC-1324).** A plan may register `covariate_source: run_score`
+(with `covariate_column` null) on a yes/no outcome or an amount: the measurement then adjusts by the chance
+of the outcome the campaign's scoring run predicted for each customer before the campaign
+(`engine.measurement.run_score`), read from the run's `scores.parquet` and joined on the key. Registering it
+on a campaign with no scoring run, or several, is **422 `TEST_PLAN_INVALID`**; a run that finished after the
+campaign went out (or after a customer's own treatment day) is **422 `COVARIATE_NOT_BEFORE_CAMPAIGN`**;
+measuring with it against a plan that did not register it is **409 `TEST_PLAN_CHANGED`**. Such a plan may
+give `expected_rho2` for a yes/no outcome too: the plan preview's points then shrink by it.
+
 **Holdout epochs (M92).** `POST /campaigns` records the scoring run's holdout (scope, key and epoch,
 from `holdout_assignment.json`; a run that wrote none drew per run). `POST /campaigns/{id}/measure`
 refuses **409 `CAMPAIGN_EPOCH_MISMATCH`** when the runs behind the assignment span two epochs, when
@@ -411,6 +420,13 @@ class CampaignMeasureRequest(StrictBase):
         description=(
             "`binary` (a rate) or `continuous` (an amount such as revenue, a mean); the test plan's when null, "
             "else binary (Plan J M102)."
+        ),
+    )
+    covariate_source: Literal["column", "run_score"] | None = Field(
+        default=None,
+        description=(
+            "Plan K M135: `run_score` adjusts by the scoring run's prediction from before the campaign; the "
+            "test plan's when null (a covariate_column named alone is a column). Checked against the plan now."
         ),
     )
 
@@ -975,6 +991,7 @@ def measure_campaign_results(
             outcome_kind=body.outcome_kind,
             ledger_engine=lambda: get_platform_engine(request),
             now=utc_now(),
+            covariate_source=body.covariate_source,
         )
     except CycleError as exc:
         if exc.code in _AUDITED_REFUSALS:
@@ -1162,7 +1179,10 @@ def preview_plan(
             )
         preview = continuous_power_preview(preview_request, plan.outcome_sd, rho2=plan.expected_rho2 or 0.0)
     else:
-        preview = power_preview(preview_request)
+        # Plan K M135: a yes/no plan carries an expected share only with the scoring run's prediction.
+        preview = power_preview(
+            preview_request, rho2=(plan.expected_rho2 or 0.0) if plan is not None else 0.0
+        )
     # The explore cost is the campaign's own explore slice, counted, not a share of it rounded back
     # (the request caps the share at 10% of the measured population, which an explore slice drawn
     # outside a narrow selection can exceed).
@@ -1279,6 +1299,20 @@ def _resolved(campaign: Campaign, body: TestPlanInput) -> TestPlanInput:
     # Plan J M102 (DEC-1312): an amount (`outcome_kind: continuous`) can be planned and measured now; the
     # refusal M94 put here ("amounts such as revenue come later") is lifted.
     decided = body.model_copy(update={"outcome_window_days": window})
+    if decided.covariate_source == "run_score" and len(campaign.run_ids) != 1:
+        # Plan K M135: the prediction is one scoring run's; with none, or several, there is no single one.
+        raise http_error(
+            422,
+            TEST_PLAN_INVALID,
+            (
+                "This campaign was not made from one of our scoring runs, so there is no prediction from before "
+                "the campaign to adjust with."
+                if not campaign.run_ids
+                else "This campaign was made from several scoring runs and does not record which run scored "
+                "which customer, so whose prediction to use cannot be said."
+            ),
+            path="covariate_source",
+        )
     if window is not None:
         from datetime import timedelta
 

@@ -1014,15 +1014,45 @@ def _oriented(
     return out[0], out[1], out[2]
 
 
+def _adjusted(context: _Context) -> bool:
+    """True when the report carries the adjusted estimate its test plan registered (M102, Plan K M135)."""
+    return isinstance(context.reader.get(context.report_key, "adjusted_interval"), dict)
+
+
 def _estimate_base(context: _Context) -> str | None:
-    """The report field of the per-customer difference an amount is valued from (adjusted when registered)."""
+    """The report field of the difference the campaign is valued from (adjusted when registered).
+
+    A yes/no outcome adjusted by the scoring run's prediction (Plan K M135) is valued from the adjusted
+    difference in rates, per contacted customer, as an amount is; otherwise from the outcomes it caused.
+    """
+    if _adjusted(context):
+        return "adjusted_interval"
     if not context.continuous:
         return "incremental_conversions"
-    if isinstance(context.reader.get(context.report_key, "adjusted_interval"), dict):
-        return "adjusted_interval"
     if isinstance(context.reader.get(context.report_key, "mean_difference_ci"), dict):
         return "mean_difference_ci"
     return None
+
+
+def _per_customer(context: _Context, base: str | None) -> bool:
+    """True when `base` is a difference per customer, to be multiplied by the contacted customers."""
+    return context.continuous or base == "adjusted_interval"
+
+
+def _rate_base(context: _Context) -> str:
+    """The difference in rates of a yes/no outcome: the adjusted one when registered (Plan K M135)."""
+    return "adjusted_interval" if _adjusted(context) else "absolute_lift"
+
+
+def _adjusted_words(context: _Context) -> str:
+    """What the registered adjustment took account of, in the words of a line's label."""
+    if context.reader.get(context.report_key, "covariate_source") == "run_score":
+        return (
+            " (adjusted for the predicted amount registered in the plan)"
+            if context.continuous
+            else " (adjusted for the predicted chance registered in the plan)"
+        )
+    return " (adjusted for the earlier amount registered in the plan)"
 
 
 def _benefit(
@@ -1032,7 +1062,7 @@ def _benefit(
     base = _estimate_base(context)
     if base is None:
         return None, None, None
-    rows = (context.r("treated_rows", "count"),) if context.continuous else ()
+    rows = (context.r("treated_rows", "count"),) if _per_customer(context, base) else ()
     return _oriented(context, base, multipliers=(*rows, *extra), fmt=fmt)
 
 
@@ -1248,11 +1278,7 @@ def _incremental(context: _Context) -> ProofSection:
                         if context.kind == "programme"
                         else "Difference per contacted customer"
                     )
-                    + (
-                        " (adjusted for the earlier amount registered in the plan)"
-                        if base == "adjusted_interval"
-                        else ""
-                    ),
+                    + (_adjusted_words(context) if base == "adjusted_interval" else ""),
                     context.r(f"{base}.value", "signed_amount"),
                     context.r(f"{base}.ci_low", "signed_amount"),
                     context.r(f"{base}.ci_high", "signed_amount"),
@@ -1272,10 +1298,10 @@ def _incremental(context: _Context) -> ProofSection:
                 missing=f"Not measured: the result has no rate for the {held}.",
             ),
             _line(
-                "Difference",
-                context.r("absolute_lift.value", "points"),
-                context.r("absolute_lift.ci_low", "points"),
-                context.r("absolute_lift.ci_high", "points"),
+                "Difference" + (_adjusted_words(context) if _adjusted(context) else ""),
+                context.r(f"{_rate_base(context)}.value", "points"),
+                context.r(f"{_rate_base(context)}.ci_low", "points"),
+                context.r(f"{_rate_base(context)}.ci_high", "points"),
                 missing="Not measured: one of the two groups had no customer with an outcome.",
             ),
         ]
@@ -1394,11 +1420,21 @@ def _gross(context: _Context) -> ProofSection:
         expected = derived(
             [context.r("control_rate", "share"), context.r("treated_rows", "count")], "s0*s1", "count"
         )
-        incremental = (
-            context.r("incremental_conversions.value", "signed_count"),
-            context.r("incremental_conversions.ci_low", "signed_count"),
-            context.r("incremental_conversions.ci_high", "signed_count"),
-        )
+        if _adjusted(context):
+            # Plan K M135: the registered adjusted difference in rates, times the contacted customers.
+            treated_rows = context.r("treated_rows", "count")
+            incremental = tuple(
+                derived(
+                    [context.r(f"adjusted_interval.{n}", "points"), treated_rows], "s0*s1", "signed_count"
+                )
+                for n in ("value", "ci_low", "ci_high")
+            )
+        else:
+            incremental = (
+                context.r("incremental_conversions.value", "signed_count"),
+                context.r("incremental_conversions.ci_low", "signed_count"),
+                context.r("incremental_conversions.ci_high", "signed_count"),
+            )
         gross_label = f"{_cap(_treated_words(context))} with the outcome (gross)"
         expected_label = f"How many would have had it anyway, at the rate of the {_held_words(context)}"
     lines = [
@@ -1426,7 +1462,19 @@ def _gross(context: _Context) -> ProofSection:
             )
         )
         share = (
-            derived([context.r("incremental_conversions.value", "count"), gross], "s0/s1", "share")
+            derived(
+                (
+                    [
+                        context.r("adjusted_interval.value", "points"),
+                        context.r("treated_rows", "count"),
+                        gross,
+                    ]
+                    if _adjusted(context)
+                    else [context.r("incremental_conversions.value", "count"), gross]
+                ),
+                "s0*s1/s2" if _adjusted(context) else "s0/s1",
+                "share",
+            )
             if not context.continuous
             else None
         )
@@ -1714,7 +1762,7 @@ def _test_cost(context: _Context) -> ProofSection:
                 else (None, None, None)
             )
         else:
-            forgone = _oriented(context, "absolute_lift", multipliers=(held,), fmt="signed_count")
+            forgone = _oriented(context, _rate_base(context), multipliers=(held,), fmt="signed_count")
         lines.append(
             _line(
                 _conditional(
@@ -1744,7 +1792,7 @@ def _test_cost(context: _Context) -> ProofSection:
         if value is None:
             lines.append(ProofLine(label="In rupees", missing=reason))
         else:
-            base = _estimate_base(context) if context.continuous else "absolute_lift"
+            base = _estimate_base(context) if context.continuous else _rate_base(context)
             money = (
                 _oriented(context, base, multipliers=(held, value), fmt="inr")
                 if base is not None
@@ -2027,7 +2075,11 @@ def _net_value(context: _Context) -> ProofSection:
     gains: list[Figure | None] = []
     for name in names:
         estimate = context.r(f"{base}.{name}", "count")
-        gain_parts: list[Figure | None] = [estimate, *((rows,) if context.continuous else ()), value]
+        gain_parts: list[Figure | None] = [
+            estimate,
+            *((rows,) if _per_customer(context, base) else ()),
+            value,
+        ]
         gain = sign + "*".join(f"s{i}" for i in range(len(gain_parts)))
         gains.append(derived(gain_parts, gain, "inr"))
         parts = [*gain_parts, paid, contact, *take_parts, offer]
