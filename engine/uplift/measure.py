@@ -203,9 +203,11 @@ def campaign_verdict(
             kind=VerdictKind.TOO_EARLY,
             headline="Outcome window not over yet",
             detail=(
-                f"Customers still have time to respond. Upload the outcomes again on or after {_day(when)}."
+                f"Customers still have time to respond, so anything counted now would be an early look, "
+                f"not a result. Upload the outcomes again on or after {_day(when)}."
                 if when is not None
-                else "Customers still have time to respond. Upload the outcomes again once it is over."
+                else "Customers still have time to respond, so anything counted now would be an early look, "
+                "not a result. Upload the outcomes again once it is over."
             ),
             results_on=when,
         )
@@ -235,7 +237,8 @@ def campaign_verdict(
             headline="No clear effect yet",
             detail=(
                 "Contacted and held-back customers did about the same, so the difference could be chance. "
-                "A bigger campaign or a longer wait may show one."
+                "The test can only show a change at or above its detectable effect, the smallest change a "
+                "group of this size can see. A bigger group or a longer wait lowers it."
             ),
         )
     amount = round(abs(incremental.value))
