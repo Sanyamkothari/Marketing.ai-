@@ -17,11 +17,11 @@ refusal lists every rule it breaks.
 
 | Rule | Refuses (code) |
 |---|---|
-| `holdout.immutable` | a holdout share below the one in force (configured, or the ledger's epoch), `scope: run` on a persistent holdout, held-out customers named as treated, or no holdout at all; for a test plan, a plan whose campaign holds nobody back or that asks for another share than the assignment's (`POLICY_HOLDOUT_IMMUTABLE`) |
+| `holdout.immutable` | a holdout share below the one in force (configured, or the ledger's epoch), a scope other than the use case's (`run` for a persistent holdout, or one persistent scope for another), held-out customers named as treated, or no holdout at all; for a test plan, a plan whose campaign holds nobody back or that asks for another share than the assignment's (`POLICY_HOLDOUT_IMMUTABLE`) |
 | `budget.cap` | the M108 estimate above `governance.max_run_cost_usd` (or unpriced while a cap is set), offer spending above `uplift.policy.total_budget`, contacts above `uplift.policy.budget_contacts` (`POLICY_BUDGET_CAP`) |
-| `consent.channel` | anyone on the run's list not contactable on the proposed channel, or a channel whose contactability the run did not record (`POLICY_CONSENT_CHANNEL`); counts and reasons only |
+| `consent.channel` | a plan reaching more customers on the channel than the run's contactable eligible rows there (the list on a channel holds only those, M99), a channel whose contactability the run did not record, or one recorded without a configured column (`POLICY_CONSENT_CHANNEL`); row counts and reasons only |
 | `frequency.cap` | more contacts per customer than `contact_cap_per_customer`, or more on the channel than its `channel_caps` entry (`POLICY_FREQUENCY_CAP`) |
-| `test.registered` | no frozen test plan for the campaign, or a different one from the plan cited (`POLICY_TEST_NOT_REGISTERED`) |
+| `test.registered` | a campaign plan with no frozen test plan for its campaign, or a different one from the plan cited (`POLICY_TEST_NOT_REGISTERED`); a test plan for a campaign that already has another frozen plan, or was measured before one was registered (`POLICY_TEST_PLAN_FIXED`) |
 | `role.separation` | at approval, the person who proposed it approving it (`POLICY_ROLE_SEPARATION`), the existing rule of `engine.approvals.separation_refusal` |
 
 The thresholds live in `configs/agentic/policy.yaml`; its sha256 is the policy version every ledger entry
@@ -60,6 +60,8 @@ __all__ = [
     "TestPlanPayload",
     "allowed",
     "build_context",
+    "contactability_columns_missing",
+    "contactability_reasons",
     "evaluate",
     "payload_model",
 ]
@@ -173,11 +175,21 @@ class CostFacts(StrictBase):
 
 class ContactabilityFacts(StrictBase):
     channels: tuple[str, ...]
-    eligible_rows: int
-    channel_counts: dict[str, int]
-    reasons: dict[str, dict[str, int]] = Field(
-        default_factory=dict, description="Per channel, counts by reason code (from the run's summary)."
+    eligible_rows: int = Field(description="Rows neither suppressed nor held out as control.")
+    channel_counts: dict[str, int] = Field(
+        description="Per channel: eligible rows not contactable on it (M99's `channel_counts`; rows)."
     )
+    reasons: dict[str, dict[str, int]] = Field(
+        default_factory=dict, description="Per channel, row counts by reason code (from the run's summary)."
+    )
+    columns_missing: dict[str, tuple[str, ...]] = Field(
+        default_factory=dict,
+        description="Per channel, the configured columns the scoring file lacked (names, not counts).",
+    )
+
+    def contactable(self, channel: str) -> int:
+        """Eligible rows that may be contacted on `channel`: the most a list on it can hold (rows)."""
+        return max(0, self.eligible_rows - int(self.channel_counts.get(channel, 0)))
 
 
 class PolicyContext(StrictBase):
@@ -195,6 +207,9 @@ class PolicyContext(StrictBase):
     contact_cap_per_customer: int | None = None
     channel_caps: dict[str, int] = Field(default_factory=dict)
     registered_plan_hash: str | None = None
+    campaign_measured: bool = Field(
+        default=False, description="A test plan's campaign already has a stored measurement."
+    )
 
 
 Rule = Callable[[ProposalSubject, PolicyContext], Decision | None]
@@ -245,12 +260,17 @@ def holdout_immutable(subject: ProposalSubject, ctx: PolicyContext) -> Decision 
         facts = ctx.holdout
         if facts is None:  # the use case could not be read: its holdout in force is unknown, so deny
             return _refuse(_HOLDOUT, code, "The use case's holdout could not be read, so it cannot be kept.")
-        if facts.scope != "run" and terms.scope == "run":
+        if terms.scope is not None and terms.scope != facts.scope:
             return _refuse(
                 _HOLDOUT,
                 code,
-                "The use case keeps a persistent holdout; a plan cannot replace it with a per-run draw.",
+                (
+                    "The use case keeps a persistent holdout; a plan cannot replace it with a per-run draw."
+                    if terms.scope == "run"
+                    else "The plan names another holdout than the use case's, which would hold back other customers."
+                ),
                 scope=facts.scope,
+                proposed_scope=terms.scope,
             )
         if terms.fraction < facts.in_force - tolerance:
             return _refuse(
@@ -322,14 +342,23 @@ _CONSENT: Final[str] = "consent.channel"
 
 
 def consent_channel(subject: ProposalSubject, ctx: PolicyContext) -> Decision | None:
-    """Everyone on the list is contactable on the channel for the purpose, by the run's own record (M99, M131)."""
+    """Nobody the plan would contact on the channel is someone the run recorded as not contactable on it.
+
+    The run's list on a channel holds only the eligible customers contactable on it: the treat list never
+    sends a customer anything on a channel they are not contactable on (M99), so opt-outs elsewhere in the run
+    are not on the list and do not refuse the plan. What the rule checks is the plan's own reach: its
+    `planned_contacts` may not exceed the run's contactable eligible rows on the channel by more than
+    `consent.max_not_contactable` (0). It refuses, too, a channel the run did not record, or recorded without
+    a configured column (whose consent was then never read), while `consent.require_recorded` is on.
+    """
     if subject.kind != "campaign_plan":
         return None
     payload = CampaignPlanPayload.model_validate(subject.payload)
     code = "POLICY_CONSENT_CHANNEL"
     facts = ctx.contactability
+    require = ctx.thresholds.consent.require_recorded
     if facts is None or payload.channel not in facts.channels:
-        if ctx.thresholds.consent.require_recorded:
+        if require:
             return _refuse(
                 _CONSENT,
                 code,
@@ -337,18 +366,34 @@ def consent_channel(subject: ProposalSubject, ctx: PolicyContext) -> Decision | 
                 channel=payload.channel,
             )
         return _allow(_CONSENT, channel=payload.channel)
-    blocked = int(facts.channel_counts.get(payload.channel, 0))
-    if blocked > ctx.thresholds.consent.max_not_contactable:
+    missing = facts.columns_missing.get(payload.channel, ())
+    if missing and require:
         return _refuse(
             _CONSENT,
             code,
-            "Some customers on the list may not be contacted on this channel.",
+            "The scoring file lacked a column the channel is configured with, so its consent was not read.",
             channel=payload.channel,
-            not_contactable=blocked,
-            eligible=facts.eligible_rows,
+            columns_missing=list(missing),
+        )
+    contactable = facts.contactable(payload.channel)
+    beyond = 0 if payload.planned_contacts is None else max(0, payload.planned_contacts - contactable)
+    if beyond > ctx.thresholds.consent.max_not_contactable:
+        return _refuse(
+            _CONSENT,
+            code,
+            "The plan would contact more customers on this channel than the run may contact on it.",
+            channel=payload.channel,
+            planned_contacts=payload.planned_contacts,
+            contactable_rows=contactable,
+            not_contactable_rows=int(facts.channel_counts.get(payload.channel, 0)),
             reasons=facts.reasons.get(payload.channel, {}),
         )
-    return _allow(_CONSENT, channel=payload.channel)
+    return _allow(
+        _CONSENT,
+        channel=payload.channel,
+        contactable_rows=contactable,
+        not_contactable_rows=int(facts.channel_counts.get(payload.channel, 0)),
+    )
 
 
 _FREQUENCY: Final[str] = "frequency.cap"
@@ -390,7 +435,10 @@ _TEST: Final[str] = "test.registered"
 
 
 def plan_registered(subject: ProposalSubject, ctx: PolicyContext) -> Decision | None:
-    """A campaign plan stands on a frozen test plan (M94), and on the one it cites."""
+    """A campaign plan stands on a frozen test plan (M94), and on the one it cites; a test plan is proposed
+    only while it can still be registered as the plan route would (`POST /campaigns/{id}/plan`)."""
+    if subject.kind == "test_plan":
+        return _test_plan_registrable(subject, ctx)
     if subject.kind != "campaign_plan":
         return None
     payload = CampaignPlanPayload.model_validate(subject.payload)
@@ -405,6 +453,28 @@ def plan_registered(subject: ProposalSubject, ctx: PolicyContext) -> Decision | 
             registered=ctx.registered_plan_hash,
         )
     return _allow(_TEST, plan_hash=ctx.registered_plan_hash)
+
+
+def _test_plan_registrable(subject: ProposalSubject, ctx: PolicyContext) -> Decision:
+    """Refuse a test plan nobody could approve into being: another plan is frozen, or the campaign was measured."""
+    payload = TestPlanPayload.model_validate(subject.payload)
+    code = "POLICY_TEST_PLAN_FIXED"
+    proposed = ctx.dry_plan_hash or payload.plan_hash
+    registered = ctx.registered_plan_hash
+    if registered is not None and registered != proposed:
+        return _refuse(
+            _TEST,
+            code,
+            "This campaign already has another frozen test plan; change it through an amendment, with a reason.",
+            registered=registered,
+        )
+    if registered is None and ctx.campaign_measured:
+        return _refuse(
+            _TEST,
+            code,
+            "This campaign has already been measured, so a plan registered now would not be fixed in advance.",
+        )
+    return _allow(_TEST, plan_hash=proposed)
 
 
 _ROLES: Final[str] = "role.separation"
@@ -513,6 +583,7 @@ def _campaign(tool_ctx: ToolContext, campaign_id: str) -> Any:
 
 def _test_plan_facts(payload: TestPlanPayload, tool_ctx: ToolContext) -> dict[str, Any]:
     from engine.agentic.proposals import dry_test_plan
+    from engine.measurement.campaign import REPORT_FILENAME, campaign_key
 
     campaign = _campaign(tool_ctx, payload.campaign_id)
     plan, realised = dry_test_plan(tool_ctx, campaign, payload.plan)
@@ -526,6 +597,7 @@ def _test_plan_facts(payload: TestPlanPayload, tool_ctx: ToolContext) -> dict[st
         ),
         "dry_plan_hash": plan.plan_hash,
         "registered_plan_hash": campaign.test_plan_hash,
+        "campaign_measured": tool_ctx.storage.exists(campaign_key(campaign.campaign_id, REPORT_FILENAME)),
     }
     return facts
 
@@ -599,11 +671,12 @@ def _cost_facts(config: Any, mode: Any, tool_ctx: ToolContext) -> CostFacts:
 
 
 def contactability_reasons(summary: Mapping[str, Any]) -> dict[str, dict[str, int]]:
-    """Per channel, counts by reason code, from a run's `channel_contactability.json` (as stored).
+    """Per channel, row counts by reason code, from a run's `channel_contactability.json` (as stored).
 
     `not_contactable` is M99's count of eligible customers not contactable on the channel; M131's optional
-    `inquiry_lapsed_rows` and `legacy_unregistered_rows` are read when the run wrote them, and a configured
-    column the file lacked is `column_missing`. Counts only: no customer is named.
+    `inquiry_lapsed_rows` and `legacy_unregistered_rows` are read when the run wrote them. Every value is a
+    number of rows; the configured columns the file lacked are names, kept apart by
+    :func:`contactability_columns_missing`. No customer is named.
     """
     out: dict[str, dict[str, int]] = {}
     for source in summary.get("by_channel", ()):
@@ -618,28 +691,31 @@ def contactability_reasons(summary: Mapping[str, Any]) -> dict[str, dict[str, in
             value = source.get(field)
             if isinstance(value, int):
                 reasons[code] = value
-        missing = source.get("columns_missing") or ()
-        if missing:
-            reasons["column_missing"] = len(missing)
         out[channel] = reasons
     return out
 
 
+def contactability_columns_missing(summary: Mapping[str, Any]) -> dict[str, tuple[str, ...]]:
+    """Per channel, the configured columns the scoring file lacked (M99's `columns_missing`), by name."""
+    return {
+        str(source.get("channel")): tuple(str(name) for name in source.get("columns_missing") or ())
+        for source in summary.get("by_channel", ())
+        if isinstance(source, Mapping)
+    }
+
+
 def _contactability_facts(run_id: str, tool_ctx: ToolContext) -> ContactabilityFacts | None:
-    import json
-
+    from engine.agentic.artefacts import read_stored_json
     from engine.decide.contactability import CHANNEL_CONTACTABILITY_SUMMARY_FILENAME
-    from engine.storage import StorageError, run_key
+    from engine.storage import run_key
 
-    try:
-        summary = json.loads(
-            tool_ctx.storage.read_bytes(run_key(run_id, CHANNEL_CONTACTABILITY_SUMMARY_FILENAME))
-        )
-    except (StorageError, ValueError, OSError):
+    summary = read_stored_json(tool_ctx.storage, run_key(run_id, CHANNEL_CONTACTABILITY_SUMMARY_FILENAME))
+    if summary is None:
         return None
     return ContactabilityFacts(
         channels=tuple(summary.get("channels", ())),
         eligible_rows=int(summary.get("eligible_rows", 0)),
         channel_counts={str(k): int(v) for k, v in dict(summary.get("channel_counts", {})).items()},
         reasons=contactability_reasons(summary),
+        columns_missing=contactability_columns_missing(summary),
     )

@@ -1,9 +1,11 @@
 """Plan K's two configuration files: the switch and the policy (design §2.1, §11).
 
 * `configs/agentic/agentic.yaml` - `agentic.enabled`, default **false**. With it off nothing of Plan K's
-  agent-safe core is reachable: `api.main` does not mount the `/agentic` routes, no table is created, and
-  :func:`require_enabled` refuses the in-process entry points with `AGENTIC_DISABLED`. A missing file is the
-  default (off), so a configuration root from before Plan K behaves as before.
+  agent-safe core is reachable: `api.main` imports only this module and does not mount the `/agentic`
+  routes, the app creates no table and writes no file, and :func:`require_enabled` refuses the in-process
+  entry points with `AGENTIC_DISABLED`. (`alembic upgrade head` still adds the empty `agentic_decision_log`
+  table, revision 0009: a migration runs on every deployment, whatever the switch says.) A missing file is
+  the default (off), so a configuration root from before Plan K behaves as before.
 * `configs/agentic/policy.yaml` - the policy's rule sets and thresholds. :func:`policy_version` is the
   sha256 of the file's bytes; it is written into every ledger entry (`engine.agentic.ledger`).
 

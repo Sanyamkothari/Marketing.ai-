@@ -111,6 +111,18 @@ CASES: list[tuple[str, dict[str, Any], dict[str, Any], str]] = [
         "POLICY_HOLDOUT_IMMUTABLE",
     ),
     (
+        "one persistent scope for another",
+        {"holdout": {"fraction": 0.10, "scope": "universal"}},
+        {"holdout": HoldoutFacts(scope="use_case", fraction=0.10)},
+        "POLICY_HOLDOUT_IMMUTABLE",
+    ),
+    (
+        "a persistent scope on a per-run holdout",
+        {"holdout": {"fraction": 0.10, "scope": "use_case"}},
+        {},
+        "POLICY_HOLDOUT_IMMUTABLE",
+    ),
+    (
         "below the epoch's share",
         {"holdout": {"fraction": 0.10, "scope": "universal"}},
         {"holdout": HoldoutFacts(scope="universal", fraction=0.10, epoch=2, epoch_fraction=0.15)},
@@ -146,7 +158,25 @@ CASES: list[tuple[str, dict[str, Any], dict[str, Any], str]] = [
     ("over the offer budget", {"offer_spend_inr": 9_000.0}, {}, "POLICY_BUDGET_CAP"),
     ("over the contact budget", {"planned_contacts": 300}, {"contact_budget": 200}, "POLICY_BUDGET_CAP"),
     # consent.channel
-    ("someone opted out", {"channel": "sms", "planned_contacts": 100}, {}, "POLICY_CONSENT_CHANNEL"),
+    (
+        "more contacts than may be contacted",
+        {"channel": "sms", "planned_contacts": 813},  # 1,080 eligible, 268 not contactable on SMS: 812 may be
+        {"channel_caps": {}},
+        "POLICY_CONSENT_CHANNEL",
+    ),
+    (
+        "a configured column the file lacked",
+        {},
+        {
+            "contactability": ContactabilityFacts(
+                channels=("sms", "email"),
+                eligible_rows=1_080,
+                channel_counts={"sms": 268, "email": 0},
+                columns_missing={"email": ("email_valid",)},
+            )
+        },
+        "POLICY_CONSENT_CHANNEL",
+    ),
     ("channel not recorded", {"channel": "push"}, {}, "POLICY_CONSENT_CHANNEL"),
     ("run recorded nothing", {}, {"contactability": None}, "POLICY_CONSENT_CHANNEL"),
     # frequency.cap
@@ -173,7 +203,7 @@ def test_each_rule_refuses_with_its_code(
 
 def test_a_refusal_lists_every_rule_it_breaks(policy: Any) -> None:
     decisions = evaluate(
-        subject(channel="sms", holdout=None, contacts_per_customer=3),
+        subject(channel="push", holdout=None, contacts_per_customer=3),
         context(policy, registered_plan_hash=None),
     )
     assert refusals(decisions) == {
@@ -185,9 +215,37 @@ def test_a_refusal_lists_every_rule_it_breaks(policy: Any) -> None:
 
 
 def test_consent_refusals_carry_counts_and_reason_codes_never_a_customer(policy: Any) -> None:
-    decisions = evaluate(subject(channel="sms", planned_contacts=100), context(policy))
+    decisions = evaluate(subject(channel="sms", planned_contacts=900), context(policy, channel_caps={}))
     refused = next(d for d in decisions if not d.allowed)
-    assert refused.detail["not_contactable"] == 268 and refused.detail["reasons"] == {"not_contactable": 268}
+    assert refused.detail["planned_contacts"] == 900 and refused.detail["contactable_rows"] == 812
+    assert refused.detail["not_contactable_rows"] == 268
+    assert refused.detail["reasons"] == {"not_contactable": 268}
+    assert all(isinstance(value, int) for value in refused.detail["reasons"].values()), "rows only"
+
+
+def test_opt_outs_off_the_list_do_not_refuse_a_plan_within_the_contactable_rows(policy: Any) -> None:
+    """A quarter of the run opted out of SMS; they are not on the SMS list (M99), so a plan for 300 is fine."""
+    decisions = evaluate(subject(channel="sms", planned_contacts=300), context(policy))
+    assert allowed(decisions)
+    consent = next(d for d in decisions if d.rule == "consent.channel")
+    assert consent.detail["contactable_rows"] == 812 and consent.detail["not_contactable_rows"] == 268
+    assert allowed(evaluate(subject(channel="sms", planned_contacts=None), context(policy)))
+    assert allowed(evaluate(subject(channel="sms", planned_contacts=400), context(policy)))  # the SMS cap
+
+
+def test_a_missing_column_is_named_not_counted(policy: Any) -> None:
+    facts = ContactabilityFacts(
+        channels=("email",),
+        eligible_rows=10,
+        channel_counts={"email": 0},
+        reasons={"email": {"not_contactable": 0}},
+        columns_missing={"email": ("email_valid",)},
+    )
+    refused = next(
+        d for d in evaluate(subject(), context(policy, contactability=facts)) if d.rule == "consent.channel"
+    )
+    assert refused.detail["columns_missing"] == ["email_valid"]
+    assert "column_missing" not in refused.detail and "reasons" not in refused.detail
 
 
 def test_role_separation_refuses_the_proposer_and_no_one_else(policy: Any) -> None:
@@ -236,6 +294,37 @@ def test_a_test_plan_cannot_change_or_skip_the_holdout(policy: Any) -> None:
     assert refusals(evaluate(test_plan(), context(policy, realised=nobody))) == {"POLICY_HOLDOUT_IMMUTABLE"}
 
 
+def test_a_test_plan_nobody_could_register_is_refused_at_draft(policy: Any) -> None:
+    """Another plan frozen, or a campaign already measured: refused when drafted, not left for an Approver."""
+    realised = RealisedFacts(
+        population_rows=1_000, n_treat=900, n_holdout=100, n_explore=0, holdout_fraction=0.1
+    )
+    body = {
+        "campaign_id": "c_1",
+        "plan": {"metric": "m", "outcome_column": "y", "analysis_date": "2030-01-01"},
+        "realised": realised.model_dump(),
+        "plan_hash": PLAN_HASH,
+    }
+    proposal = ProposalSubject(kind="test_plan", payload=body, proposed_by="u_asha")
+
+    def facts(**change: Any) -> PolicyContext:
+        given: dict[str, Any] = {
+            "realised": realised,
+            "dry_plan_hash": PLAN_HASH,
+            "registered_plan_hash": None,
+        }
+        return context(policy, **{**given, **change})
+
+    assert allowed(evaluate(proposal, facts()))
+    assert allowed(evaluate(proposal, facts(registered_plan_hash=PLAN_HASH))), "the same plan again"
+    other = evaluate(proposal, facts(registered_plan_hash="c" * 64))
+    assert refusals(other) == {"POLICY_TEST_PLAN_FIXED"}
+    assert next(d for d in other if not d.allowed).detail["registered"] == "c" * 64
+    measured = evaluate(proposal, facts(campaign_measured=True))
+    assert refusals(measured) == {"POLICY_TEST_PLAN_FIXED"}
+    assert "POLICY_TEST_PLAN_FIXED" in PLAN_K_CODES
+
+
 def test_the_policy_version_is_the_sha256_of_the_file(config_root: Path, tmp_path: Path) -> None:
     path = config_root / "agentic" / "policy.yaml"
     assert policy_version(config_root) == hashlib.sha256(path.read_bytes()).hexdigest()
@@ -262,5 +351,5 @@ def test_the_policy_file_is_checked(tmp_path: Path) -> None:
 def test_the_shipped_rule_sets_name_every_rule(policy: Any) -> None:
     assert set(RULES) == set(KNOWN_RULES)
     assert set(policy.rule_sets["campaign_plan"]) == set(KNOWN_RULES)
-    assert set(policy.rule_sets["test_plan"]) == {"holdout.immutable", "role.separation"}
+    assert set(policy.rule_sets["test_plan"]) == {"holdout.immutable", "test.registered", "role.separation"}
     assert "copy_arms" not in policy.rule_sets

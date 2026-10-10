@@ -2,6 +2,8 @@
 #
 # agentic.enabled: the agent-safe core (M132) - the tool registry's in-process entry point, proposals,
 # the decision ledger and the /agentic routes. Off (the default), none of it is reachable: the routes are
-# not mounted, no table is created and every response is byte-identical to Plan J's.
+# not mounted, the app creates no table and writes no file, and every response is byte-identical to Plan
+# J's. (`alembic upgrade head` still adds the empty agentic_decision_log table, revision 0009, whatever
+# this switch says: a migration runs on every deployment.)
 agentic:
   enabled: false

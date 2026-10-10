@@ -5,7 +5,8 @@ registered); a person approves it at `POST /agentic/proposals/{id}/approve`; the
 is the one proposed, frozen through the same function `POST /campaigns/{id}/plan` runs - so registering the
 same body again answers 200 with that very plan. The ledger records the draft, the frozen plan and the
 approval (both signed) and verifies, and the approval receipt carries the ledger head (the client's
-checkpoint). The other paths: reject, a plan registered meanwhile, a tampered proposal, expiry, an unknown id.
+checkpoint). The other paths: reject, a plan registered meanwhile, a proposal edited after it was drafted
+(whatever the edit), a plan the route would not freeze as proposed, expiry, an unknown id.
 """
 
 from __future__ import annotations
@@ -134,6 +135,7 @@ def test_rejecting_freezes_nothing(agentic_world: World) -> None:
 
 
 def test_an_approval_never_overwrites_a_plan_registered_meanwhile(agentic_world: World) -> None:
+    """The policy is checked again at approval: another plan frozen meanwhile refuses it, nothing is replaced."""
     world = agentic_world
     with world.client() as client:
         campaign_id = world.new_campaign(client)
@@ -141,17 +143,31 @@ def test_an_approval_never_overwrites_a_plan_registered_meanwhile(agentic_world:
         other = client.post(f"/campaigns/{campaign_id}/plan", json=world.plan_body(mde_pp=3.0))
         assert other.status_code == 201
         response = client.post(f"/agentic/proposals/{proposal_id}/approve", json={})
-        assert response.status_code == 409 and response.json()["detail"]["code"] == "TEST_PLAN_EXISTS"
+        assert response.status_code == 409 and response.json()["detail"]["code"] == "POLICY_TEST_PLAN_FIXED"
         assert (
             client.get(f"/campaigns/{campaign_id}/plan").json()["plan"]["plan_hash"]
             == other.json()["plan_hash"]
         )
-        assert client.get(f"/agentic/proposals/{proposal_id}").json()["status"] == "pending"
-    kinds = [entry.kind for entry in _ledger_entries(world, proposal_id)]
-    assert kinds == ["proposal.drafted", "proposal.execution_failed"]
+        assert client.get(f"/agentic/proposals/{proposal_id}").json()["status"] == "refused"
+    entries = _ledger_entries(world, proposal_id)
+    assert [entry.kind for entry in entries] == ["proposal.drafted", "proposal.refused"]
+    assert entries[-1].body["codes"] == ["POLICY_TEST_PLAN_FIXED"]
 
 
-def test_a_proposal_edited_after_it_was_drafted_is_refused_as_stale(agentic_world: World) -> None:
+def test_a_plan_for_a_campaign_with_another_plan_or_already_measured_is_refused_at_draft(
+    agentic_world: World, measured: str
+) -> None:
+    """Nobody is asked to approve what could not be registered (TEST_PLAN_EXISTS / TEST_PLAN_INVALID later)."""
+    world = agentic_world
+    other = _draft(world, world.planned_campaign, plan=world.plan_body(mde_pp=3.0))
+    assert other["status"] == "refused" and other["codes"] == ["POLICY_TEST_PLAN_FIXED"]
+    late = _draft(world, measured)
+    assert late["status"] == "refused" and late["codes"] == ["POLICY_TEST_PLAN_FIXED"]
+    same = _draft(world, world.planned_campaign)
+    assert same["status"] == "pending" and same["plan_hash"] == world.plan_hash, "the frozen plan, again"
+
+
+def test_a_proposal_edited_after_it_was_drafted_is_refused_as_tampered(agentic_world: World) -> None:
     world = agentic_world
     with world.client() as client:
         campaign_id = world.new_campaign(client)
@@ -160,9 +176,96 @@ def test_a_proposal_edited_after_it_was_drafted_is_refused_as_stale(agentic_worl
         tampered = store.get(proposal_id)
         store.save(tampered.model_copy(update={"payload": {**tampered.payload, "plan_hash": "0" * 64}}))
         response = client.post(f"/agentic/proposals/{proposal_id}/approve", json={})
-        assert response.status_code == 409 and response.json()["detail"]["code"] == "PROPOSAL_STALE"
+        assert response.status_code == 409 and response.json()["detail"]["code"] == "PROPOSAL_TAMPERED"
         assert client.get(f"/campaigns/{campaign_id}/plan").json()["plan"] is None
         assert client.get(f"/agentic/proposals/{proposal_id}").json()["status"] == "refused"
+
+
+def _consistently_edited(world: World, proposal: Proposal, *, digest_too: bool) -> Proposal:
+    """The proposal with a bigger smallest-effect-worth-detecting and its plan_hash recomputed by the product's
+    own dry freeze - an edit that keeps the file consistent with itself (and, with `digest_too`, with its own
+    payload_digest)."""
+    from engine.agentic.canonical import digest
+    from engine.agentic.proposals import dry_test_plan
+    from engine.measurement.plan import TestPlanInput
+
+    ctx = world.context()
+    assert ctx.campaigns is not None
+    campaign = ctx.campaigns.get(proposal.payload["campaign_id"])
+    assert campaign is not None
+    plan = TestPlanInput.model_validate({**proposal.payload["plan"], "mde_pp": 12.0})
+    frozen, _realised = dry_test_plan(ctx, campaign, plan)
+    payload = {**proposal.payload, "plan": plan.model_dump(mode="json"), "plan_hash": frozen.plan_hash}
+    update: dict[str, Any] = {"payload": payload}
+    if digest_too:
+        update["payload_digest"] = digest(payload)
+    return proposal.model_copy(update=update)
+
+
+@pytest.mark.parametrize("digest_too", [False, True], ids=["payload", "payload-and-digest"])
+def test_a_consistently_edited_proposal_is_not_what_gets_frozen(
+    agentic_world: World, digest_too: bool
+) -> None:
+    """Review finding (M132): the approval ran whatever the stored file said, so an edit that recomputed
+    plan_hash froze mde_pp=12 while the receipt kept the drafted payload_digest. The file must match the
+    proposal.drafted entry on the ledger."""
+    world = agentic_world
+    with world.client() as client:
+        campaign_id = world.new_campaign(client)
+        draft = _draft(world, campaign_id)
+        store = ProposalStore(world.storage)
+        edited = _consistently_edited(world, store.get(draft["proposal_id"]), digest_too=digest_too)
+        assert edited.payload["plan_hash"] != draft["plan_hash"]
+        store.save(edited)
+        response = client.post(f"/agentic/proposals/{draft['proposal_id']}/approve", json={})
+        assert response.status_code == 409 and response.json()["detail"]["code"] == "PROPOSAL_TAMPERED"
+        assert client.get(f"/campaigns/{campaign_id}/plan").json()["plan"] is None, "nothing frozen"
+    entries = _ledger_entries(world, draft["proposal_id"])
+    assert [entry.kind for entry in entries] == ["proposal.drafted", "proposal.refused"]
+    assert entries[-1].body["codes"] == ["PROPOSAL_TAMPERED"]
+    assert entries[-1].body["payload_digest"] == draft["payload_digest"], "the digest the ledger recorded"
+
+
+def test_a_proposal_reassigned_to_another_proposer_is_refused(agentic_world: World) -> None:
+    """Editing who it was proposed for would let its proposer approve it: the ledger says who it was."""
+    world = agentic_world
+    with world.client() as client:
+        campaign_id = world.new_campaign(client)
+    draft = _draft(world, campaign_id)
+    store = ProposalStore(world.storage)
+    store.save(store.get(draft["proposal_id"]).model_copy(update={"proposed_by": "u_somebody_else"}))
+    with pytest.raises(AgenticError) as caught:
+        decide_proposal(
+            draft["proposal_id"],
+            "approved",
+            principal=PRINCIPALS["analyst"],
+            reason=None,
+            tool_ctx=world.context(),
+            execute=lambda _proposal: pytest.fail("a tampered proposal is never executed"),
+        )
+    assert caught.value.code == "PROPOSAL_TAMPERED" and "proposed_by" in caught.value.message
+
+
+def test_an_execution_that_freezes_another_plan_is_not_an_approval(agentic_world: World) -> None:
+    """If the route freezes (or keeps) another plan than the one proposed, the proposal is refused as stale."""
+    world = agentic_world
+    with world.client() as client:
+        campaign_id = world.new_campaign(client)
+    draft = _draft(world, campaign_id)
+    with pytest.raises(AgenticError) as caught:
+        decide_proposal(
+            draft["proposal_id"],
+            "approved",
+            principal=PRINCIPALS["approver"],
+            reason=None,
+            tool_ctx=world.context(principal="approver"),
+            execute=lambda _proposal: "9" * 64,
+        )
+    assert caught.value.code == "PROPOSAL_STALE"
+    entries = _ledger_entries(world, draft["proposal_id"])
+    assert [entry.kind for entry in entries] == ["proposal.drafted", "test_plan.frozen", "proposal.refused"]
+    assert entries[-1].body["result_ref"] == "9" * 64 and entries[-1].body["codes"] == ["PROPOSAL_STALE"]
+    assert ProposalStore(world.storage).get(draft["proposal_id"]).status == "refused"
 
 
 def test_a_refused_draft_and_an_unknown_id_cannot_be_approved(agentic_world: World) -> None:

@@ -31,6 +31,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal
 
 from pydantic import AwareDatetime, Field
 
+from engine.access.roles import Role
 from engine.agentic.canonical import digest, jsonable
 from engine.agentic.errors import AgenticError
 from engine.agentic.policy import (
@@ -55,6 +56,7 @@ if TYPE_CHECKING:
 
 __all__ = [
     "PROPOSALS_PREFIX",
+    "PROPOSER_ROLE",
     "DraftTestPlanInput",
     "Proposal",
     "ProposalStatus",
@@ -62,11 +64,15 @@ __all__ = [
     "ProposalSummary",
     "draft_test_plan",
     "dry_test_plan",
+    "ledger_mismatch",
     "proposal_key",
     "submit_proposal",
 ]
 
 PROPOSALS_PREFIX: Final[str] = "agentic/proposals/"
+PROPOSER_ROLE: Final[Role] = Role.ANALYST
+"""Who a proposal may be drafted for, whatever its kind: the role of `POST /campaigns/{id}/plan`, the first
+proposing tool's route. A Viewer reads; drafting is the Analyst's, as registering a plan is."""
 _KIND: Final[re.Pattern[str]] = re.compile(r"[a-z][a-z0-9_]{0,63}")
 
 ProposalStatus = Literal["refused", "pending", "approved", "rejected", "expired"]
@@ -172,6 +178,60 @@ def _ledger_refs(payload: Mapping[str, Any]) -> dict[str, Any]:
     return refs
 
 
+_DECIDED_KINDS: Final[dict[str, ProposalStatus]] = {
+    "proposal.approved": "approved",
+    "proposal.rejected": "rejected",
+    "proposal.refused": "refused",
+    "proposal.expired": "expired",
+}
+
+
+def ledger_mismatch(proposal: Proposal, entries: Sequence[Any]) -> tuple[str | None, str | None]:
+    """Why the stored `proposal` is not the one the ledger recorded, and the status the ledger says it has.
+
+    `entries` are the ledger's entries naming the proposal, oldest first (`DecisionLedger.proposal_entries`).
+    The stored file is ordinary artefact storage, so before anyone acts on it the file must match its
+    `proposal.drafted` entry: the payload must hash to `payload_digest`, and the digest, kind, proposer,
+    agent, evidence, creation time and expiry must be the ones recorded when it was drafted; and no later
+    entry may have decided it already. Returns ``(None, None)`` when it matches, else ``(reason, status)``
+    where `status` is the decided status the ledger records, or None while the ledger says it is undecided.
+    """
+    from engine.agentic.ledger import PROPOSAL_DRAFTED
+
+    if digest(proposal.payload) != proposal.payload_digest:
+        return "its payload no longer hashes to the digest it was drafted with", None
+    drafted = next((entry for entry in entries if entry.kind == PROPOSAL_DRAFTED), None)
+    decided = [_DECIDED_KINDS[entry.kind] for entry in entries if entry.kind in _DECIDED_KINDS]
+    if drafted is None:
+        return "the ledger has no record of it being drafted as pending", (decided[-1] if decided else None)
+    body = drafted.body
+    recorded = {
+        "payload_digest": body.get("payload_digest"),
+        "proposal_kind": body.get("proposal_kind"),
+        "proposed_by": body.get("proposed_by"),
+        "actor": drafted.actor,
+        "evidence_ids": list(body.get("evidence_ids") or []),
+        "created_at": drafted.created_at,
+    }
+    stored = {
+        "payload_digest": proposal.payload_digest,
+        "proposal_kind": proposal.kind,
+        "proposed_by": proposal.proposed_by,
+        "actor": proposal.actor,
+        "evidence_ids": list(proposal.evidence_ids),
+        "created_at": proposal.created_at,
+    }
+    if "expires_at" in body:
+        recorded["expires_at"] = body["expires_at"]
+        stored["expires_at"] = proposal.expires_at.isoformat()
+    changed = sorted(name for name in recorded if recorded[name] != stored[name])
+    if changed:
+        return f"its {', '.join(changed)} differ from what the ledger recorded when it was drafted", None
+    if decided:
+        return f"the ledger records it as {decided[-1]} already", decided[-1]
+    return None, None
+
+
 def submit_proposal(
     kind: str,
     payload: Mapping[str, Any],
@@ -184,15 +244,21 @@ def submit_proposal(
     from engine.agentic.config import load_policy, policy_version
     from engine.agentic.ledger import PROPOSAL_DRAFTED, PROPOSAL_REFUSED
 
+    if not tool_ctx.principal.has(PROPOSER_ROLE):
+        raise AgenticError(
+            "TOOL_ROLE_REQUIRED",
+            "Only an Analyst can have a proposal drafted for them; a Viewer can read, not propose.",
+            status=403,
+        )
     if tool_ctx.ledger is None:
         raise AgenticError(
             "LEDGER_CHAIN_BROKEN", "A proposal is drafted only onto the decision ledger.", status=500
         )
-    unknown = [item for item in evidence_ids if not tool_ctx.ledger.has_evidence(item)]
+    unknown = sorted(tool_ctx.ledger.missing_evidence(evidence_ids)) if evidence_ids else []
     if unknown:
         raise AgenticError(
             "TOOL_INPUT_INVALID",
-            f"The proposal cites evidence that no tool produced: {', '.join(sorted(unknown))}.",
+            f"The proposal cites evidence that no tool produced: {', '.join(unknown)}.",
             status=422,
         )
     if not _KIND.fullmatch(kind):
@@ -237,6 +303,7 @@ def submit_proposal(
             "codes": list(proposal.codes),
             "rules": [d.rule for d in decisions],
             "proposed_by": who,
+            "expires_at": proposal.expires_at.isoformat(),
             **_ledger_refs(canonical_payload),
         },
         at=now,

@@ -65,10 +65,10 @@ def head(tmp_path: Path) -> Engine:
 
 def test_the_campaign_table_is_declared_last() -> None:
     # `PLATFORM_TABLES` lists tables in their migrations' order (DEC-721). `campaign` (0006) was the last when
-    # M94 wrote this; Plan K M132's `agentic_decision_log` (0009) now follows it, so the check pins 0006's place:
-    # directly after 0005's tables, and before every later migration's.
+    # M94 wrote this; later migrations append their tables after it (Plan K M132's `agentic_decision_log`,
+    # 0009), so the check pins only 0006's place: directly after 0005's tables, and before 0009's.
     assert PLATFORM_TABLES[PLATFORM_TABLES.index("platform_setting") + 1] == CAMPAIGN_TABLE
-    assert PLATFORM_TABLES[PLATFORM_TABLES.index(CAMPAIGN_TABLE) + 1 :] == ("agentic_decision_log",)
+    assert PLATFORM_TABLES.index(CAMPAIGN_TABLE) < PLATFORM_TABLES.index("agentic_decision_log")
 
 
 def test_0006_matches_the_model(head: Engine) -> None:

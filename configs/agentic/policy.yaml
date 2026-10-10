@@ -10,7 +10,7 @@ schema_version: 1
 # refusal lists every rule it breaks). Rule names: holdout.immutable, budget.cap, consent.channel,
 # frequency.cap, test.registered, role.separation.
 rule_sets:
-  test_plan: [holdout.immutable, role.separation]
+  test_plan: [holdout.immutable, test.registered, role.separation]
   campaign_plan:
     [holdout.immutable, budget.cap, consent.channel, frequency.cap, test.registered, role.separation]
 
@@ -25,9 +25,13 @@ budget:
   refuse_unpriced_when_capped: true
 
 consent:
-  # Customers on the proposed list who may not be contacted on the proposed channel. Any is too many.
+  # Customers the plan would contact on the proposed channel who may not be contacted on it: the plan's
+  # planned_contacts beyond the run's contactable eligible rows there. Any is too many. Customers who opted
+  # out of the channel are not on the run's list for it (the treat list never sends them anything there), so
+  # they do not count against a plan that stays within the contactable rows.
   max_not_contactable: 0
-  # A channel whose contactability the scoring run did not record is not assumed contactable.
+  # A channel whose contactability the scoring run did not record - or recorded without one of its
+  # configured columns, so its consent was never read - is not assumed contactable.
   require_recorded: true
 
 proposals:

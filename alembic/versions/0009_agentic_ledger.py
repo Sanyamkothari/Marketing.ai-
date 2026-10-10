@@ -8,7 +8,9 @@ WHY a table (DEC-1401): every agent proposal, every refusal, every approval and 
 entry of an append-only chain (`engine.agentic.ledger`): `seq` orders it, `prev_hash` and `entry_hash` chain
 it, `signature` and `key_id` sign the kinds that are signed. Nothing updates or deletes a row. The body is
 canonical JSON of ids, digests, codes and the policy version: never a customer id, a cell value or free
-text, so erasure never touches this table and never breaks the chain.
+text, so erasure never touches this table and never breaks the chain. `proposal_id` and `evidence_id` copy
+the body's own values into indexed columns, so a proposal's entries and a cited evidence id are index lookups
+(verification refuses an entry whose column disagrees with its body).
 
 Every timestamp is `DateTime(timezone=True)`, for DEC-339's reason. Reversible: `downgrade` drops the table,
 which loses the ledger (export it first; `python -m engine.agentic.ledger verify` checks a copy).
@@ -34,7 +36,7 @@ _TABLE = "agentic_decision_log"
 
 
 def upgrade() -> None:
-    """Create `agentic_decision_log` and its two lookup indexes."""
+    """Create `agentic_decision_log` and its four lookup indexes."""
     op.create_table(
         _TABLE,
         sa.Column("seq", sa.Integer(), autoincrement=False, nullable=False),
@@ -43,6 +45,8 @@ def upgrade() -> None:
         sa.Column("kind", _STR(), nullable=False),
         sa.Column("actor", _STR(), nullable=False),
         sa.Column("body", _STR(), nullable=False),
+        sa.Column("proposal_id", _STR(), nullable=True),
+        sa.Column("evidence_id", _STR(), nullable=True),
         sa.Column("signature", _STR(), nullable=True),
         sa.Column("key_id", _STR(), nullable=True),
         sa.Column("created_at", _TS, nullable=False),
@@ -50,10 +54,14 @@ def upgrade() -> None:
     )
     op.create_index(op.f("ix_agentic_decision_log_entry_hash"), _TABLE, ["entry_hash"], unique=True)
     op.create_index(op.f("ix_agentic_decision_log_kind"), _TABLE, ["kind"], unique=False)
+    op.create_index(op.f("ix_agentic_decision_log_proposal_id"), _TABLE, ["proposal_id"], unique=False)
+    op.create_index(op.f("ix_agentic_decision_log_evidence_id"), _TABLE, ["evidence_id"], unique=False)
 
 
 def downgrade() -> None:
     """Drop what `upgrade` added, and with it the ledger."""
+    op.drop_index(op.f("ix_agentic_decision_log_evidence_id"), table_name=_TABLE)
+    op.drop_index(op.f("ix_agentic_decision_log_proposal_id"), table_name=_TABLE)
     op.drop_index(op.f("ix_agentic_decision_log_kind"), table_name=_TABLE)
     op.drop_index(op.f("ix_agentic_decision_log_entry_hash"), table_name=_TABLE)
     op.drop_table(_TABLE)

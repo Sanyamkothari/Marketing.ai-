@@ -22,6 +22,7 @@ CONSENT = "POLICY_CONSENT_CHANNEL"
 FREQUENCY = "POLICY_FREQUENCY_CAP"
 TEST = "POLICY_TEST_NOT_REGISTERED"
 ROLES = "POLICY_ROLE_SEPARATION"
+PLAN_FIXED = "POLICY_TEST_PLAN_FIXED"
 
 
 def campaign_payload(world: World, **change: Any) -> dict[str, Any]:
@@ -108,6 +109,20 @@ def scenarios(world: World) -> tuple[Scenario, ...]:
             expect_status="approval_allowed",
         ),
         Scenario(
+            name="test_plan_another_plan_frozen",
+            description="A different plan for a campaign that already has a frozen one: refused at draft.",
+            request=_draft(world, world.planned_campaign, plan=world.plan_body(mde_pp=3.0)),
+            expect_status="refused",
+            expect_codes=(PLAN_FIXED,),
+            guards=("test.registered",),
+        ),
+        Scenario(
+            name="test_plan_same_plan_again",
+            description="The very plan the campaign already froze: allowed, approving it registers nothing new.",
+            request=_draft(world, world.planned_campaign),
+            expect_status="pending",
+        ),
+        Scenario(
             name="test_plan_viewer_cannot_propose",
             description="A Viewer cannot call a propose tool (the plan route is an Analyst's).",
             request=_draft(world, world.open_campaign),
@@ -162,6 +177,15 @@ def scenarios(world: World) -> tuple[Scenario, ...]:
         ),
         _campaign(
             world,
+            "campaign_plan_other_persistent_scope",
+            "A use case holding back per use case, proposed with the universal holdout instead.",
+            "refused",
+            (HOLDOUT,),
+            ("holdout.immutable",),
+            payload={"use_case_id": PERSISTENT_USE_CASE, "holdout": {"fraction": 0.10, "scope": "universal"}},
+        ),
+        _campaign(
+            world,
             "campaign_plan_over_offer_budget",
             "Offers worth ₹10,000 against a ₹5,000 offer budget.",
             "refused",
@@ -180,12 +204,21 @@ def scenarios(world: World) -> tuple[Scenario, ...]:
         ),
         _campaign(
             world,
-            "campaign_plan_sms_not_contactable",
-            "SMS, which a quarter of the list opted out of.",
+            "campaign_plan_sms_with_opt_outs_allowed",
+            "SMS for 300, in a run where a quarter opted out of SMS: they are not on the SMS list, so it is allowed.",
+            "pending",
+            (),
+            (),
+            payload={"channel": "sms"},
+        ),
+        _campaign(
+            world,
+            "campaign_plan_sms_beyond_contactable",
+            "SMS for 900, more than the run's customers who may be texted (about 810).",
             "refused",
             (CONSENT,),
             ("consent.channel",),
-            payload={"channel": "sms"},
+            payload={"channel": "sms", "planned_contacts": 900},
         ),
         _campaign(
             world,
@@ -240,6 +273,14 @@ def scenarios(world: World) -> tuple[Scenario, ...]:
             (ROLES,),
             ("role.separation",),
             approve_as="analyst",
+        ),
+        Scenario(
+            name="campaign_plan_viewer_cannot_propose",
+            description="A Viewer cannot have a campaign plan drafted for them, through any path.",
+            request=ProposalRequest(kind="campaign_plan", payload=campaign_payload(world)),
+            principal="viewer",
+            expect_status="error",
+            expect_codes=("TOOL_ROLE_REQUIRED",),
         ),
         # --- default deny ---------------------------------------------------------------------------------
         Scenario(

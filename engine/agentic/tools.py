@@ -3,8 +3,8 @@
 | Tool | Kind | Wraps | Mirrors (its `RoutePolicy`) |
 |---|---|---|---|
 | `plan_test` | read | `engine.measurement.planner.power_preview` | `POST /measurement/power-preview` (Viewer) |
-| `check_contactable` | read | the run's `channel_contactability.json` (`engine.decide.contactability`, M99, + M131's reasons) | `GET /runs/{run_id}/artefacts/{name}` (Viewer, audited) |
-| `value_segment` | read | the run's `expected_gross_value.json` (`engine.decide.value`, M97) | `GET /runs/{run_id}/artefacts/{name}` (Viewer, audited) |
+| `check_contactable` | read | the run's `channel_contactability.json` (`engine.decide.contactability`, M99, + M131's reasons) | `GET /runs/{run_id}/artefacts/{name}` (Viewer; audited as that route is) |
+| `value_segment` | read | the run's `expected_gross_value.json` (`engine.decide.value`, M97) | `GET /runs/{run_id}/artefacts/{name}` (Viewer; audited as that route is) |
 | `measure` | read | the campaign's stored report (`engine.measurement.measure.measure_campaign`, M94) | `GET /campaigns/{campaign_id}` (Viewer) |
 | `audit_campaign` | read | the campaign's stored `audit.json` and report (`engine.measurement.audit`, M103) | `GET /campaigns/{campaign_id}` (Viewer) |
 | `get_proof_pack` | read | `engine.pilot.proof.build_proof` (M104) | `GET /pilot/proof/{campaign_id}` (Viewer) |
@@ -13,7 +13,8 @@
 
 **Compute once.** A read tool reads what the product already computed and stored; it never measures,
 audits or evaluates again. Something not yet computed is answered with `null` and a plain reason (which route
-computes it), never with a fabricated value or 0. `get_proof_pack` builds the pack on request, as its route
+computes it), never with a fabricated value or 0; something stored that no longer reads is refused with
+`TOOL_ARTEFACT_UNREADABLE` (`engine.agentic.artefacts`), never reported as "not computed". `get_proof_pack` builds the pack on request, as its route
 does: the pack is itself a read of stored artefacts. Its build time is left out, so the same artefacts give the
 same evidence id.
 
@@ -24,7 +25,6 @@ does) and returns the counts only.
 
 from __future__ import annotations
 
-import json
 from typing import Any, Final
 
 from pydantic import Field
@@ -75,22 +75,17 @@ def _run_exists(ctx: ToolContext, run_id: str) -> None:
 
 
 def _stored_json(ctx: ToolContext, key: str) -> dict[str, Any] | None:
-    from engine.storage import StorageError
+    """None when nothing is stored at `key`; `TOOL_ARTEFACT_UNREADABLE` when something is but does not read."""
+    from engine.agentic.artefacts import read_stored_json
 
-    try:
-        loaded = json.loads(ctx.storage.read_bytes(key))
-    except (StorageError, OSError, ValueError):
-        return None
-    return loaded if isinstance(loaded, dict) else None
+    return read_stored_json(ctx.storage, key)
 
 
 def _stored_model(ctx: ToolContext, key: str, model: type[Any]) -> Any:
-    from engine.storage import StorageError
+    """None when nothing is stored at `key`; `TOOL_ARTEFACT_UNREADABLE` when it does not read or validate."""
+    from engine.agentic.artefacts import read_stored_model
 
-    try:
-        return ctx.storage.read_model(key, model)
-    except (StorageError, OSError, ValueError):
-        return None
+    return read_stored_model(ctx.storage, key, model)
 
 
 def _campaign(ctx: ToolContext, campaign_id: str) -> Any:
@@ -143,7 +138,12 @@ class ChannelReasons(StrictBase):
     ledger_applied: bool = Field(
         description="Whether the consent ledger's records for the channel were applied."
     )
-    reasons: dict[str, int] = Field(description="Counts by reason code; no customer is named.")
+    reasons: dict[str, int] = Field(
+        description="Rows by reason code (not_contactable, and M131's inquiry_lapsed, legacy_unregistered)."
+    )
+    columns_missing: tuple[str, ...] = Field(
+        default=(), description="Configured columns the scoring file lacked: names, not a count."
+    )
 
 
 class ContactabilityOut(StrictBase):
@@ -158,7 +158,7 @@ class ContactabilityOut(StrictBase):
 
 
 def _check_contactable(given: RunInput, ctx: ToolContext) -> ContactabilityOut:
-    from engine.agentic.policy import contactability_reasons
+    from engine.agentic.policy import contactability_columns_missing, contactability_reasons
     from engine.decide.contactability import CHANNEL_CONTACTABILITY_SUMMARY_FILENAME
     from engine.storage import run_key
 
@@ -174,6 +174,7 @@ def _check_contactable(given: RunInput, ctx: ToolContext) -> ContactabilityOut:
             ),
         )
     reasons = contactability_reasons(summary)
+    missing = contactability_columns_missing(summary)
     channels = tuple(
         ChannelReasons(
             channel=str(source["channel"]),
@@ -181,6 +182,7 @@ def _check_contactable(given: RunInput, ctx: ToolContext) -> ContactabilityOut:
             not_contactable_eligible_rows=int(source["not_contactable_eligible_rows"]),
             ledger_applied=bool(source.get("ledger")),
             reasons=reasons.get(str(source["channel"]), {}),
+            columns_missing=missing.get(str(source["channel"]), ()),
         )
         for source in summary.get("by_channel", ())
     )
@@ -560,9 +562,12 @@ def _evaluate_policy(given: RunInput, ctx: ToolContext) -> EvaluatePolicyOut:
 
 
 def _policy_label(out: EvaluatePolicyOut) -> EvidenceLabel:
-    if out.ope is not None and not out.ope.causal:
+    """`Not proven` when either stored artefact rests on treatment acknowledged as not random; `Estimated`
+    when there is an estimate; `Descriptive` when there is none."""
+    stored = [item for item in (out.ope, out.risk_comparison) if item is not None]
+    if any(not item.causal for item in stored):
         return "Not proven"
-    return "Estimated" if out.ope is not None or out.risk_comparison is not None else "Descriptive"
+    return "Estimated" if stored else "Descriptive"
 
 
 EVALUATE_POLICY: Final[AgentTool[RunInput, EvaluatePolicyOut]] = AgentTool(

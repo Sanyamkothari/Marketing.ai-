@@ -169,3 +169,70 @@ def test_every_evidence_label_goes_on_the_ledger_signed(tmp_path: Path, config_r
     assert "input" not in entry.body and "output" not in entry.body, "digests only"
     assert ledger.has_evidence(result.evidence_id)
     assert verify_ledger(engine, FakeSigner()).ok
+
+
+def _a_run(tmp_path: Path, run_id: str) -> None:
+    from engine.runs import RUN_FILENAME
+    from engine.storage import run_key
+
+    LocalStorage(tmp_path).write_bytes(run_key(run_id, RUN_FILENAME), b"{}")
+
+
+def test_a_call_its_route_would_audit_writes_one_audit_event(tmp_path: Path, config_root: Path) -> None:
+    """`check_contactable` mirrors an `audit_reads` route and `draft_test_plan` a POST: each call writes one
+    audit event, as the middleware writes one per request. `plan_test` mirrors an unaudited read: none."""
+    from engine.agentic.registry import audited
+    from engine.audit.events import AuditQuery
+    from engine.audit.store import SqlAuditLog
+
+    engine = sqlite_engine(tmp_path / PLATFORM_DB_FILENAME)
+    _a_run(tmp_path, "r_audited")
+    registry = default_registry()
+    out = registry.call(
+        "check_contactable", {"run_id": "r_audited"}, ctx(tmp_path, config_root, platform_engine=engine)
+    )
+    assert out.output["recorded"] is False
+    registry.call("plan_test", PREVIEW, ctx(tmp_path, config_root, platform_engine=engine))
+    with pytest.raises(AgenticError):
+        registry.call(
+            "draft_test_plan",
+            {"campaign_id": "c_1", "plan": {}},
+            ctx(tmp_path, config_root, platform_engine=engine, actor="agent:planner"),
+        )
+    log = SqlAuditLog(engine)
+    events = log.query(AuditQuery())
+    assert len(events) == 2, [event.action for event in events]
+    read = next(event for event in events if event.action == "runs.artefact_download")
+    assert (read.object_type, read.object_id, read.outcome, read.actor_id) == (
+        "run",
+        "r_audited",
+        "success",
+        "u_vera",
+    )
+    assert read.details["route"] == "tool:check_contactable" and read.details["trigger"] == "agent:core"
+    denied = next(event for event in events if event.action == "campaigns.plan")
+    assert denied.outcome == "denied" and denied.details["reason_code"] == "TOOL_ROLE_REQUIRED"
+    assert denied.object_id == "c_1" and denied.details["trigger"] == "agent:planner"
+    assert {tool.name for tool in ALL_TOOLS if audited(tool)} == {
+        "check_contactable",
+        "value_segment",
+        "draft_test_plan",
+    }
+
+
+def test_a_stored_artefact_that_does_not_read_is_not_called_missing(
+    tmp_path: Path, config_root: Path
+) -> None:
+    """A partial write is not "this run did not record it": the tool refuses with the real reason."""
+    from engine.storage import run_key
+
+    _a_run(tmp_path, "r_corrupt")
+    LocalStorage(tmp_path).write_bytes(run_key("r_corrupt", "channel_contactability.json"), b'{"channels": [')
+    with pytest.raises(AgenticError) as caught:
+        default_registry().call("check_contactable", {"run_id": "r_corrupt"}, ctx(tmp_path, config_root))
+    assert caught.value.code == "TOOL_ARTEFACT_UNREADABLE"
+    assert "channel_contactability.json" in caught.value.message and "r_corrupt" in caught.value.message
+    LocalStorage(tmp_path).write_bytes(run_key("r_corrupt", "expected_gross_value.json"), b'{"run_id": 1}')
+    with pytest.raises(AgenticError) as invalid:
+        default_registry().call("value_segment", {"run_id": "r_corrupt"}, ctx(tmp_path, config_root))
+    assert invalid.value.code == "TOOL_ARTEFACT_UNREADABLE", "stored but not valid: not 'not valued'"

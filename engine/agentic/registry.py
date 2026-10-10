@@ -1,7 +1,8 @@
 """The tool registry: what an agent may call, and nothing else (Plan K M132, design §1; invariant I1).
 
 A tool is a typed, deterministic function over the engine's own artefacts. It has a **kind**, and there are
-exactly two: `read` (computes and returns; no side effect but its audit and ledger entries) and `propose`
+exactly two: `read` (computes and returns; no side effect but its ledger entry and, where its route is
+audited, its audit event) and `propose`
 (returns a proposal; nothing changes until a person approves it). There is deliberately no `write` member,
 and :meth:`ToolRegistry.register` refuses anything that is not one of the two, so no tool can send, export
 or change anything outside our storage (I1).
@@ -16,7 +17,10 @@ or change anything outside our storage (I1).
    default (`TOOL_OUTPUT_TOO_LARGE`): aggregates only, row-level data never leaves a tool;
 5. the result gets an `evidence_id`, a **content hash** - ``"ev_" + sha256(canonical([tool, input,
    output]))[:16]`` - so the same question on the same artefacts gives the same id (what makes pass^k testable
-   and lets two agents cite one fact), and its evidence label goes on the ledger, signed (I5).
+   and lets two agents cite one fact), and its evidence label goes on the ledger, signed (I5);
+6. a call the mirrored route would audit (a `propose` tool, or a read whose policy has `audit_reads`) writes
+   one `AuditEvent` - success, denied or failed - with the route's `action` and object, `route: tool:<name>`
+   and `trigger: <agent>` (:func:`audited`), as the audit middleware writes one for the route's request.
 
 A tool never calls a language model, so its result is a function of its input and the stored artefacts.
 """
@@ -54,6 +58,7 @@ __all__ = [
     "ToolKind",
     "ToolRegistry",
     "ToolResult",
+    "audited",
     "evidence_id_for",
 ]
 
@@ -128,7 +133,8 @@ class AgentTool(Generic[In, Out]):
     input_model: type[In]
     output_model: type[Out]
     route_policy: RoutePolicy
-    """The same role and audit rules as the HTTP route that serves the same data (`mirrors`)."""
+    """The same role and audit rules as the HTTP route that serves the same data (`mirrors`): the role is
+    checked by :meth:`ToolRegistry.call`, and a call is audited exactly when that route's request is."""
     mirrors: tuple[str, str]
     """`(method, path)` of that route; `tests/unit/agentic/test_registry.py` checks the policy is identical."""
     evidence_label: Callable[[Out], EvidenceLabel]
@@ -172,6 +178,17 @@ class ToolRegistry:
     def call(self, name: str, given: Mapping[str, Any], ctx: ToolContext) -> ToolResult:
         """Check, run and record one call (see the module docstring)."""
         tool = self.get(name)
+        try:
+            result = self._call(tool, given, ctx)
+        except AgenticError as exc:
+            _audit(
+                tool, given, ctx, outcome="denied" if exc.status in (401, 403) else "failed", code=exc.code
+            )
+            raise
+        _audit(tool, given, ctx, outcome="success", code=None)
+        return result
+
+    def _call(self, tool: AgentTool[Any, Any], given: Mapping[str, Any], ctx: ToolContext) -> ToolResult:
         role = tool.route_policy.role
         if role is not None and not ctx.principal.has(Role(role)):
             raise AgenticError(
@@ -228,3 +245,49 @@ class ToolRegistry:
                 },
             )
         return result
+
+
+def audited(tool: AgentTool[Any, Any]) -> bool:
+    """Whether a call of `tool` writes an audit event: exactly when its mirrored route's request would.
+
+    The audit middleware writes one event for every mutating request and for every read whose policy says
+    `audit_reads` (`api.access`); a `propose` tool mirrors a POST, so it is audited, and a `read` tool is
+    audited when its route's policy audits reads (the artefact downloads: `check_contactable`,
+    `value_segment`).
+    """
+    return tool.kind is ToolKind.PROPOSE or tool.route_policy.audit_reads
+
+
+def _audit(
+    tool: AgentTool[Any, Any], given: Mapping[str, Any], ctx: ToolContext, *, outcome: str, code: str | None
+) -> None:
+    """One `AuditEvent` for one audited call, on the platform database (`engine.audit.store`).
+
+    The same fields the middleware writes for the route - the principal, the route's `action`, its object -
+    with `route` naming the tool and `trigger` the agent that called it. Nothing is written without a
+    platform database (an in-memory context), as nothing is audited without one.
+    """
+    if not audited(tool) or ctx.platform_engine is None:
+        return
+    from engine.audit.store import SqlAuditLog, record_event
+
+    policy = tool.route_policy
+    raw = given.get(policy.object_param) if policy.object_param else None
+    details: dict[str, str | int | float | bool | None] = {
+        "route": f"tool:{tool.name}",
+        "trigger": ctx.actor[:200],
+    }
+    if policy.purpose:
+        details["purpose"] = policy.purpose[:200]
+    if code is not None:
+        details["reason_code"] = code
+    record_event(
+        SqlAuditLog(ctx.platform_engine),
+        ctx.principal,
+        policy.action,
+        object_type=policy.object_type,
+        object_id=raw if isinstance(raw, str) and len(raw) <= 64 else None,
+        outcome=outcome,
+        details=details,
+        clock=ctx.clock,
+    )

@@ -454,7 +454,9 @@ def _row(
 # ---------------------------------------------------------------------------
 # A proposal (`engine.agentic.proposals`) is decided here as a model is: by a person holding the Approver
 # role, never by the person it was proposed for (`separation_refusal`, the same rule), and with the policy
-# checked again against the facts as they are now. Approving it calls the function the HTTP route calls (the
+# checked again against the facts as they are now. The stored proposal file must be the one the ledger
+# recorded at draft time (`engine.agentic.proposals.ledger_mismatch`), or it is refused as
+# `PROPOSAL_TAMPERED`; a test plan the route freezes must hash to the plan proposed, or it is `PROPOSAL_STALE`. Approving it calls the function the HTTP route calls (the
 # caller passes it in as `execute`: `api.routes.agentic` passes `api.routes.campaigns.register_plan` for a
 # test plan), so an agent never gets a second path to anything. The record is the decision ledger
 # (`engine.agentic.ledger`): `proposal.approved` (signed), `proposal.rejected`, `proposal.refused`,
@@ -505,7 +507,7 @@ def decide_proposal(
         PROPOSAL_REJECTED,
     )
     from engine.agentic.policy import RULES, ProposalSubject, build_context, evaluate
-    from engine.agentic.proposals import ProposalStore
+    from engine.agentic.proposals import ProposalStore, ledger_mismatch
 
     require_enabled(tool_ctx.config_root)
     ledger = tool_ctx.ledger
@@ -523,6 +525,29 @@ def decide_proposal(
     }
     reason_text = (reason or "").strip()
     reason_part: dict[str, Any] = {"reason_digest": digest(reason_text)} if reason_text else {}
+    if proposal.status == "pending":
+        # The stored file is ordinary artefact storage: act on it only when it is the proposal the ledger
+        # recorded at draft time (payload digest, kind, proposer, evidence, expiry) and still undecided there.
+        entries = ledger.proposal_entries(proposal.proposal_id)
+        mismatch, ledger_status = ledger_mismatch(proposal, entries)
+        if mismatch is not None:
+            drafted = [e.body for e in entries if e.kind == "proposal.drafted" and "payload_digest" in e.body]
+            recorded = {"payload_digest": drafted[0]["payload_digest"]} if drafted else {}
+            status = ledger_status or "refused"
+            body = {**refs, **recorded, "status": status, "codes": ["PROPOSAL_TAMPERED"]}
+            if ledger_status is None:
+                ledger.append(PROPOSAL_REFUSED, principal.user_id, body, at=now)
+            else:
+                ledger.append(APPROVAL_REFUSED, principal.user_id, body, at=now)
+            store.save(
+                proposal.model_copy(update={"status": status, "decision_codes": ("PROPOSAL_TAMPERED",)})
+            )
+            raise AgenticError(
+                "PROPOSAL_TAMPERED",
+                f"This proposal was changed after it was drafted ({mismatch}), so it cannot be decided; "
+                "have it drafted again.",
+                status=409,
+            )
     if proposal.status == "pending" and proposal.status_at(now) == "expired":
         ledger.append(PROPOSAL_EXPIRED, principal.user_id, {**refs, "status": "expired"}, at=now)
         store.save(proposal.model_copy(update={"status": "expired"}))
@@ -614,6 +639,25 @@ def decide_proposal(
         raise
     if proposal.kind == "test_plan" and result_ref is not None:
         _record_frozen_plan(ledger, tool_ctx, principal, proposal, result_ref, now)
+        if result_ref != proposal.payload.get("plan_hash"):
+            # The route froze (or kept) another plan than the one proposed: never record that as approving it.
+            body = {**refs, "status": "refused", "codes": ["PROPOSAL_STALE"], "result_ref": result_ref}
+            ledger.append(PROPOSAL_REFUSED, principal.user_id, body, at=now)
+            store.save(
+                proposal.model_copy(
+                    update={
+                        "status": "refused",
+                        "decision_codes": ("PROPOSAL_STALE",),
+                        "result_ref": result_ref,
+                    }
+                )
+            )
+            raise AgenticError(
+                "PROPOSAL_STALE",
+                "The campaign's plan is not the one proposed, so this proposal was not approved.",
+                status=409,
+                detail={"codes": ["PROPOSAL_STALE"], "result_ref": result_ref},
+            )
     return finish("approved", PROPOSAL_APPROVED, {**reason_part, "result_ref": result_ref}, result_ref)
 
 

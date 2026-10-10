@@ -13,6 +13,7 @@ exist and the API is byte-identical to Plan J's (the `PLAN-K` hook in `api/main.
 There is no route that drafts or approves on an agent's behalf: an agent drafts through the tool registry
 (`engine.agentic.registry`), and only a signed-in person approves here. Refusals answer with the policy's code:
 `403 POLICY_ROLE_SEPARATION` for the person it was proposed for, `409 POLICY_*` when a rule refuses it now,
+`409 PROPOSAL_TAMPERED` when the stored proposal is not the one the ledger recorded at draft time,
 `409 PROPOSAL_STALE`, `PROPOSAL_EXPIRED` or `PROPOSAL_NOT_PENDING`, `404 PROPOSAL_NOT_FOUND`.
 """
 

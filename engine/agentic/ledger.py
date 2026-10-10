@@ -33,6 +33,7 @@ from __future__ import annotations
 import argparse
 import base64
 import os
+import re
 import sys
 import threading
 from collections.abc import Iterable, Iterator, Mapping, Sequence
@@ -109,6 +110,7 @@ BODY_KEYS: Final[frozenset[str]] = frozenset(
         "codes",
         "rules",
         "proposed_by",
+        "expires_at",
         "decided_by",
         "reason_digest",
         "campaign_id",
@@ -125,10 +127,24 @@ BODY_KEYS: Final[frozenset[str]] = frozenset(
 """The only keys a body may hold: ids, digests, codes and labels, never a row (see the module docstring)."""
 
 _BATCH: Final[int] = 10_000
+_EVIDENCE_ID: Final[re.Pattern[str]] = re.compile(r"ev_[0-9a-f]{16}")
+INDEXED_KEYS: Final[tuple[str, ...]] = ("proposal_id", "evidence_id")
+"""Body keys copied into indexed columns of the same name (see `DecisionLogEntry`)."""
+
+
+def _indexed(body: Mapping[str, Any], key: str) -> str | None:
+    value = body.get(key)
+    return value if isinstance(value, str) else None
 
 
 class DecisionLogEntry(SQLModel, table=True):
-    """One ledger entry. Alembic's `0009_agentic_ledger` creates the table on Postgres."""
+    """One ledger entry. Alembic's `0009_agentic_ledger` creates the table on Postgres.
+
+    `proposal_id` and `evidence_id` copy the body's own values into indexed columns, so finding a proposal's
+    entries or checking a cited evidence id is an index lookup, not a scan of every body. They are not part
+    of `entry_hash` (the body already is), and :func:`verify_entries` refuses an entry whose column disagrees
+    with its body, so editing a column to make an evidence id appear shows as `LEDGER_CHAIN_BROKEN`.
+    """
 
     __tablename__ = DECISION_LOG_TABLE
 
@@ -138,6 +154,8 @@ class DecisionLogEntry(SQLModel, table=True):
     kind: str = SQLField(index=True)
     actor: str
     body: str
+    proposal_id: str | None = SQLField(default=None, index=True)
+    evidence_id: str | None = SQLField(default=None, index=True)
     signature: str | None = None
     key_id: str | None = None
     created_at: datetime = SQLField(sa_column=Column("created_at", DateTime(timezone=True), nullable=False))
@@ -373,6 +391,8 @@ class DecisionLedger:
                             kind=kind,
                             actor=actor,
                             body=text,
+                            proposal_id=_indexed(parsed, "proposal_id"),
+                            evidence_id=_indexed(parsed, "evidence_id"),
                             signature=signature,
                             key_id=key_id,
                             created_at=created,
@@ -412,19 +432,39 @@ class DecisionLedger:
 
     def has_evidence(self, evidence_id: str) -> bool:
         """Whether a tool handed out `evidence_id` (an `evidence.label` entry names it)."""
-        from sqlmodel import Session, col, select
+        return not self.missing_evidence((evidence_id,))
 
-        if not evidence_id.startswith("ev_") or not evidence_id[3:].isalnum() or len(evidence_id) != 19:
-            return False
-        needle = f'%"evidence_id":"{evidence_id}"%'
-        with Session(self._engine) as session:
-            row = session.exec(
-                select(DecisionLogEntry.seq)
-                .where(col(DecisionLogEntry.kind) == EVIDENCE_LABEL)
-                .where(col(DecisionLogEntry.body).like(needle))
-                .limit(1)
-            ).first()
-        return row is not None
+    def missing_evidence(self, evidence_ids: Iterable[str]) -> frozenset[str]:
+        """The ids of `evidence_ids` no `evidence.label` entry names: one indexed `IN` query for all of them."""
+        from sqlalchemy import select
+
+        wanted = set(evidence_ids)
+        shaped = {item for item in wanted if _EVIDENCE_ID.fullmatch(item)}
+        if not shaped:
+            return frozenset(wanted)
+        table = _TABLE()
+        # Only the evidence_id index is used (the kind is checked here, not in SQL, so no planner can prefer
+        # the kind index, under which every evidence label would be read).
+        with self._engine.connect() as connection:
+            found = {
+                str(row.evidence_id)
+                for row in connection.execute(
+                    select(table.c.evidence_id, table.c.kind).where(table.c.evidence_id.in_(sorted(shaped)))
+                )
+                if row.kind == EVIDENCE_LABEL
+            }
+        return frozenset(wanted - found)
+
+    def proposal_entries(self, proposal_id: str) -> tuple[LedgerEntry, ...]:
+        """Every entry naming `proposal_id`, oldest first (an indexed lookup)."""
+        from sqlalchemy import select
+
+        table = _TABLE()
+        with self._engine.connect() as connection:
+            rows = connection.execute(
+                select(table).where(table.c.proposal_id == proposal_id).order_by(table.c.seq)
+            ).all()
+        return tuple(_view(row) for row in rows)
 
     def entries(self, *, kind: str | None = None, after_seq: int = 0) -> Iterator[LedgerEntry]:
         """Every entry after `after_seq`, oldest first (of one kind when given), read in batches."""
@@ -469,6 +509,9 @@ class VerifyReport(StrictBase):
     reason: str | None = Field(default=None, description="What is wrong with it, in one sentence.")
 
 
+_ABSENT: Final = object()
+
+
 @dataclass
 class _Walk:
     expected_seq: int = 1
@@ -479,6 +522,26 @@ class _Walk:
 def _bad(walk: _Walk, code: str, seq: int, reason: str) -> VerifyReport:
     head = None if walk.prev_hash == GENESIS_HASH else walk.prev_hash
     return VerifyReport(ok=False, entries=walk.checked, head=head, code=code, bad_seq=seq, reason=reason)
+
+
+def _stored_hash(row: Any) -> str:
+    """:func:`compute_entry_hash` of a stored row whose `body` is already canonical JSON.
+
+    The canonical content is ``{"actor":…,"body":…,"created_at":…,"kind":…,"seq":…}`` (keys sorted), so the
+    stored body text is spliced in as it is instead of being parsed and written again: verification pays for
+    one canonical write per entry, not two. The caller has checked that `row.body` is canonical, which is what
+    makes the splice equal to `compute_entry_hash` (a unit test holds the two equal).
+    """
+    import json
+
+    def text(value: str) -> str:
+        return json.dumps(value, ensure_ascii=False)
+
+    content = (
+        f'{{"actor":{text(row.actor)},"body":{row.body},"created_at":{text(_stamp(row.created_at))},'
+        f'"kind":{text(row.kind)},"seq":{int(row.seq)}}}'
+    )
+    return sha256_hex(row.prev_hash.encode("ascii") + content.encode("utf-8"))
 
 
 def _check_row(walk: _Walk, row: Any, verifier: Signer | None) -> VerifyReport | None:
@@ -497,13 +560,19 @@ def _check_row(walk: _Walk, row: Any, verifier: Signer | None) -> VerifyReport |
         return _bad(walk, "LEDGER_CHAIN_BROKEN", seq, f"entry {seq} does not point at the entry before it.")
     try:
         body = json.loads(row.body)
+        canonical = json.dumps(
+            body, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False
+        )
     except ValueError:
-        return _bad(walk, "LEDGER_CHAIN_BROKEN", seq, f"entry {seq}'s body is not JSON.")
-    recomputed = compute_entry_hash(
-        seq=seq, prev_hash=row.prev_hash, kind=row.kind, actor=row.actor, created_at=row.created_at, body=body
-    )
-    if recomputed != row.entry_hash or canonical_json(body) != row.body:
+        return _bad(walk, "LEDGER_CHAIN_BROKEN", seq, f"entry {seq}'s body is not canonical JSON.")
+    if canonical != row.body or _stored_hash(row) != row.entry_hash:
         return _bad(walk, "LEDGER_CHAIN_BROKEN", seq, f"entry {seq} was changed after it was written.")
+    for column in INDEXED_KEYS:
+        stored = getattr(row, column, _ABSENT)
+        if stored is not _ABSENT and stored != _indexed(body, column):
+            return _bad(
+                walk, "LEDGER_CHAIN_BROKEN", seq, f"entry {seq}'s {column} column does not match its body."
+            )
     if row.kind in SIGNED_KINDS or row.signature is not None:
         if row.signature is None or row.key_id is None:
             return _bad(walk, "LEDGER_SIGNATURE_INVALID", seq, f"entry {seq} ({row.kind}) is not signed.")
@@ -519,9 +588,15 @@ def _check_row(walk: _Walk, row: Any, verifier: Signer | None) -> VerifyReport |
     return None
 
 
-def verify_entries(rows: Iterable[Any], verifier: Signer | None) -> VerifyReport:
-    """Walk `rows` in order (they must be every entry, oldest first) and stop at the first bad one."""
-    walk = _Walk()
+def verify_entries(
+    rows: Iterable[Any], verifier: Signer | None, *, start: tuple[int, str] | None = None
+) -> VerifyReport:
+    """Walk `rows` in order and stop at the first bad one.
+
+    `rows` must be every entry, oldest first - or, with `start=(seq, entry_hash)` (a checkpoint the caller
+    trusts), every entry after `seq`, the first of which must point at `entry_hash`.
+    """
+    walk = _Walk() if start is None else _Walk(expected_seq=start[0] + 1, prev_hash=start[1])
     for row in rows:
         failure = _check_row(walk, row, verifier)
         if failure is not None:
@@ -530,14 +605,43 @@ def verify_entries(rows: Iterable[Any], verifier: Signer | None) -> VerifyReport
     return VerifyReport(ok=True, entries=walk.checked, head=head)
 
 
-def verify_ledger(engine: Engine, verifier: Signer | None) -> VerifyReport:
-    """:func:`verify_entries` over the database's whole ledger, read in batches of 10,000."""
+def verify_ledger(
+    engine: Engine, verifier: Signer | None, *, from_checkpoint: str | None = None
+) -> VerifyReport:
+    """:func:`verify_entries` over the database's ledger, read in batches of 10,000.
+
+    `from_checkpoint` is an `entry_hash` the caller already verified (a receipt's `ledger_checkpoint`, or the
+    `head` of an earlier report): only the entries after it are walked, and the first of them must point at
+    it. A checkpoint that is not in the ledger is `LEDGER_CHAIN_BROKEN`: the ledger was rewritten under it.
+    """
+    start: tuple[int, str] | None = None
+    if from_checkpoint is not None:
+        from sqlalchemy import select
+
+        table = _TABLE()
+        with engine.connect() as connection:
+            found = connection.execute(
+                select(table.c.seq).where(table.c.entry_hash == from_checkpoint)
+            ).first()
+        if found is None:
+            return VerifyReport(
+                ok=False,
+                entries=0,
+                head=None,
+                code="LEDGER_CHAIN_BROKEN",
+                bad_seq=None,
+                reason="The checkpoint is not in the ledger: the ledger was rewritten after it was taken.",
+            )
+        start = (int(found.seq), from_checkpoint)
 
     def rows() -> Iterator[Any]:
-        for batch in _batches(engine):
+        for batch in _batches(engine, after_seq=0 if start is None else start[0]):
             yield from batch
 
-    return verify_entries(rows(), verifier)
+    report = verify_entries(rows(), verifier, start=start)
+    if report.ok and report.head is None and start is not None:
+        return report.model_copy(update={"head": start[1]})
+    return report
 
 
 # ---------------------------------------------------------------------------
@@ -551,6 +655,12 @@ def _parser() -> argparse.ArgumentParser:
     verify = sub.add_parser("verify", help="Walk the chain and check every signature.")
     verify.add_argument(
         "--data-dir", type=Path, default=None, help="The data folder (default: the settings')."
+    )
+    verify.add_argument(
+        "--from-checkpoint",
+        default=None,
+        metavar="ENTRY_HASH",
+        help="Walk only the entries after this already-verified entry_hash (a receipt's ledger_checkpoint).",
     )
     verify.add_argument(
         "--key",
@@ -575,11 +685,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     from engine.platform_db import create_tables
 
     create_tables(engine, (DECISION_LOG_TABLE,))
-    report = verify_ledger(engine, verifier)
+    report = verify_ledger(engine, verifier, from_checkpoint=args.from_checkpoint)
     if report.ok:
         print(f"ok: {report.entries} entries, head {report.head or '-'}")
         return 0
-    print(f"{report.code}: entry seq={report.bad_seq}: {report.reason}", file=sys.stderr)
+    where = "" if report.bad_seq is None else f"entry seq={report.bad_seq}: "
+    print(f"{report.code}: {where}{report.reason}", file=sys.stderr)
     return 1
 
 

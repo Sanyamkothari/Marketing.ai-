@@ -309,8 +309,8 @@ PHASE_ROUTERS.append(drift_events_router)
 
 # PLAN-K (M132): move into the PLAN-K block at integration
 # Plan K M132 (DEC-1401): the /agentic proposal routes, mounted only when `agentic.enabled` is on
-# (configs/agentic/agentic.yaml). Off - the default - nothing of `engine.agentic` is imported, no route
-# exists and no table is created, so every app is byte-identical to Plan J's.
+# (configs/agentic/agentic.yaml). Off - the default - only engine.agentic.config (the switch reader) is
+# imported; no route module, no table class, so every response is byte-identical to Plan J's.
 def _install_agentic(app: FastAPI) -> None:
     from engine.agentic.config import agentic_enabled
 

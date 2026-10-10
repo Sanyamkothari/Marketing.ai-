@@ -1,7 +1,8 @@
 """The scenario suite's fixture world, built by the product's own code (Plan K M132, design §5.1).
 
 Nothing here writes a run artefact by hand. An uplift model is trained through `Pipeline.run_train`
-(LightGBM, 50 bootstrap resamples, as `tests/integration/decide/test_channel_consent_real_run.py` trains it)
+(LightGBM, 50 bootstrap resamples, as `tests/integration/decide/test_channel_consent_real_run.py` trains it,
+with `uplift.evidence.risk_comparison` on, so the run stores its equal-budget comparison)
 and a campaign file is scored through `Pipeline.run_score` with per-channel consent columns, so the run's
 `channel_contactability.json` is the real one: some customers opted out of SMS, everybody may be emailed.
 Campaigns are created and a test plan registered through the product's own API (`POST /campaigns`, `POST
@@ -13,7 +14,8 @@ The configuration root is a copy of `configs/` with the deployment's choices a s
 * `use_cases/win_back_campaign.yaml`: SMS and email channels; an offer budget of ₹5,000
   (`uplift.policy.total_budget`) and a one-cent cost cap per run (`governance.max_run_cost_usd`);
 * `use_cases/telco_churn.yaml`: a persistent holdout (`actions.holdout: {scope: use_case, fraction: 0.10}`);
-* `decide/arbitration.yaml`: one contact per customer, at most 500 by email and 400 by SMS;
+* `decide/arbitration.yaml`: one contact per customer, at most 500 by email and 1,000 by SMS (above the SMS
+  list, so the SMS scenarios meet the consent rule before the channel cap);
 * `decide/catalogue.yaml`: an SMS action, as the M99 test catalogue.
 
 Two deployments answer: `local` (no cloud bill, so no cost estimate) and `sagemaker` (billed at list price
@@ -65,7 +67,7 @@ ANALYSIS_DATE: Final[date] = date(2030, 1, 1)
 OFFER_BUDGET_INR: Final[float] = 5_000.0
 COST_CAP_USD: Final[float] = 0.01
 EMAIL_CAP: Final[int] = 500
-SMS_CAP: Final[int] = 400
+SMS_CAP: Final[int] = 1_000
 
 UPLIFT: Final[dict[str, Any]] = {
     "problem_type": "uplift",
@@ -75,6 +77,8 @@ UPLIFT: Final[dict[str, Any]] = {
         "bootstrap_samples": 50,
         "min_arm_rows": 200,
         "min_arm_positives": 20,
+        # `risk_comparison.json` (M96), so `evaluate_policy` reads a real stored comparison.
+        "evidence": {"risk_comparison": True, "folds": 3},
     },
     "governance": {"approval_required": False},
 }

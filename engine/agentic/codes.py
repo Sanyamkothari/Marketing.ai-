@@ -24,23 +24,31 @@ AGENTIC_CODES: Final[frozenset[str]] = frozenset(
         "POLICY_CONSENT_CHANNEL",  # consent.channel: someone on the list is not contactable on the channel
         "POLICY_FREQUENCY_CAP",  # frequency.cap: above the contact caps of decide/arbitration.yaml
         "POLICY_TEST_NOT_REGISTERED",  # test.registered: no frozen test plan, or not the one cited
+        "POLICY_TEST_PLAN_FIXED",  # test.registered on a test plan: another plan is frozen, or it was measured
         "POLICY_ROLE_SEPARATION",  # role.separation: the proposer approving their own proposal
         # The tool registry (`engine.agentic.registry`).
         "TOOL_UNKNOWN",
         "TOOL_INPUT_INVALID",
         "TOOL_ROLE_REQUIRED",
         "TOOL_OUTPUT_TOO_LARGE",
+        "TOOL_ARTEFACT_UNREADABLE",  # a stored artefact a tool or the policy reads is there but does not read
         # Proposals and their approval (`engine.agentic.proposals`, `engine.approvals`, `api.routes.agentic`).
         "PROPOSAL_NOT_FOUND",
         "PROPOSAL_NOT_PENDING",
         "PROPOSAL_EXPIRED",
         "PROPOSAL_STALE",
+        "PROPOSAL_TAMPERED",  # the stored proposal is not the one the ledger recorded when it was drafted
         "PROPOSAL_NOT_EXECUTABLE",  # approved, but nothing carries out its kind yet (campaign plans: M139)
         # The decision ledger (`engine.agentic.ledger`).
         "LEDGER_CHAIN_BROKEN",
         "LEDGER_SIGNATURE_INVALID",
-        # The switch (`engine.agentic.config`).
+        # The switch and the policy file (`engine.agentic.config`).
         "AGENTIC_DISABLED",
+        # Existing engine codes the agent-safe core also raises, listed so the catalogue explains them:
+        # neither was in `known_codes()` before (`engine.decide.treat_list`, `api.routes.pilot` and
+        # `engine.config` raise them too, so their entries are written for every caller).
+        "CONFIG_INVALID",  # configs/agentic/agentic.yaml or policy.yaml missing or not valid
+        "RUN_NOT_FOUND",  # a read tool asked about a run that does not exist
     }
 )
 """M132's codes (DEC-1401), joined into `PLAN_K_CODES` below."""
