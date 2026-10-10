@@ -305,6 +305,22 @@ PHASE_ROUTERS.append(cost_router)
 from api.routes.drift_events import router as drift_events_router  # noqa: E402
 
 PHASE_ROUTERS.append(drift_events_router)
+
+
+# PLAN-K (M132): move into the PLAN-K block at integration
+# Plan K M132 (DEC-1401): the /agentic proposal routes, mounted only when `agentic.enabled` is on
+# (configs/agentic/agentic.yaml). Off - the default - only engine.agentic.config (the switch reader) is
+# imported; no route module, no table class, so every response is byte-identical to Plan J's.
+def _install_agentic(app: FastAPI) -> None:
+    from engine.agentic.config import agentic_enabled
+
+    if agentic_enabled(app.state.config_root):
+        from api.routes.agentic import router as agentic_router
+
+        app.include_router(agentic_router)
+
+
+PHASE_APP_HOOKS.append(_install_agentic)
 # ---- END PLAN-J ----
 # ---- PLAN-L (data doctor) — append only below this line ----
 # Plan L M151 (DEC-1512): Data Doctor, the place - POST /doctor/diagnosis and POST /doctor/handoff (Analyst).
