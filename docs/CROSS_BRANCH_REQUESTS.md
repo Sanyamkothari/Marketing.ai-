@@ -1670,21 +1670,80 @@ with `run_report.md`, and updates `docs/LIBRARY.md` section 8 if a figure moves 
 
 **What I did meanwhile.** Nothing else in `library/` was edited; `library/journey.py` and its results are read only.
 
-### 2026-10-10 — plan-j M110a (on main) → M104 owners (DEC-1314; `engine/pilot/proof.py`): a Pack with several offers credits the first offer and charges every offer's contacts (request)
+### 2026-10-10 — plan-j M104 fix (on main) → Phase 3b (owner of `engine/uplift/contracts.py` and `docs/UPLIFT.md`): every offer together in a campaign report (record of additive edits)
 
-**Why.** When a measured campaign has several offers, the Value Proof Pack's headline, "Extra outcomes because of the
-campaign" and the value of what the campaign changed cover only the first offer (M100 keeps the first offer in the
-single-offer fields, DEC-668 (3), and the Pack reads those fields), while "Cost of contacts" covers every offer. On
-the Hillstrom conversion audit (DEC-1322 (g)) the Pack credits +145 (men's e-mail) and charges all 42,694 e-mails;
-the women's +67 appears only in the offer table. Provenance passes (each figure is traced to a measured record); it
-is the scope of the headline and the net value that is partial.
+**What changed** (DEC-1314 (s), pre-approved in the M104 fix's scope): `engine/uplift/contracts.py` gains
+`CombinedOffers` (exported in `__all__`) and `IncrementalityReport.offers_combined: CombinedOffers | None`, defaulted
+to `None` and excluded while absent, so every existing report, and every report of one offer, serialises byte for
+byte as before. `docs/UPLIFT.md`'s Measurement row of the several-offers table says what the key holds. Nothing was
+renamed or removed; `engine/uplift/incrementality.py` is unchanged and is what the pooled comparison calls.
 
-**What is needed.** One of: sum the offers in the headline and net value; or charge only the first offer's contacts;
-or state the scope in the headline.
+**What is needed.** Ratification of the edits.
 
-**What I did meanwhile.** No engine code was changed. `library/hillstrom-email/run_report.md` section 8.4 and
-`docs/LIBRARY.md` section 8 state the finding, and the report's verdict sentence for several offers says it reads
-the first offer only.
+**What I did meanwhile.** The field is written only by Plan J's `engine.measurement.arms.combined_offers` through
+`measure_campaign(..., combine_offers=True)`; `combine_offers` is off by default.
+
+### 2026-10-10 — plan-j M104 fix (on main) → all branches that call `measure_campaign` with `arm_column`/`arms`: `combine_offers` (announcement)
+
+**What changed** (DEC-1314 (s)): `engine.measurement.measure.measure_campaign` gains the keyword `combine_offers`,
+off by default, so the default report is unchanged. With it and two or more offers the report carries
+`offers_combined`. `POST /campaigns/audit` (`api/routes/campaigns.py`) and measuring an audited campaign again
+(`engine/measurement/cycle.py`) pass it.
+
+**What is needed.** A route that stores a campaign report of several offers should pass `combine_offers=True` so the
+Value Proof Pack can add the offers up. Without it the Pack labels its lines "the first offer alone" and never sums
+across offers.
+
+**What I did meanwhile.** Every Plan J route that stores such a report passes it.
+
+### 2026-10-10 — plan-j M104 fix (on main) → M105 owners (`GET /campaigns/summary`): the proven lower bound of a campaign of several offers (announcement)
+
+**What changed** (DEC-1314 (u)): for a campaign of several offers measured with `offers_combined`, the proven lower
+bound `GET /campaigns/summary` reads through the Pack is now the combined lower bound,
+`offers_combined.incremental_conversions.ci_low`, not the first offer's. A single-offer campaign is unchanged.
+Tested in `tests/integration/pilot/test_proof_pack_several_offers.py`.
+
+**What is needed.** Nothing; this is an announcement. `engine/measurement/summary.py` was not edited.
+
+### 2026-10-10 — plan-j M104 fix (on main) → library-datasets (owner of `library/` and `docs/LIBRARY.md`): the Hillstrom audit readout, regenerated (record of edits)
+
+**What changed** (DEC-1314 (x)): `library/audit_report.py` renders the several-offers Pack's sentence from the
+combined scope and quotes the e-mails the cost line charged (`campaign.counts.intended_treated`); when that differs
+from the measured count it says how many e-mails are charged and not credited.
+`library/hillstrom-email/audit.results.json` and section 8 of `run_report.md` were regenerated with
+`python -m library.run_engine audit --dataset hillstrom-email`, never hand-edited (the conversion Pack now reads +212
+extra conversions, every offer together, 150 to 270; the rest of the diff is timestamps, upload ids and sizes).
+`library/tests/test_hillstrom_audit.py` gains no-download tests of both branches of the sentence. `docs/LIBRARY.md`
+section 8 says the finding is fixed. `journey.results.json` has no several-offer Pack and is unchanged.
+
+**What is needed.** Ratification of the edits. M111's rule held: `python -m scripts.demo_summary --check` passes.
+
+**What I did meanwhile.** Nothing else in `library/` was edited.
+
+### 2026-10-10 — plan-j M104 fix (on main) → Plan E (owner of `engine/pilot/` and `tests/**/pilot/**`): the Pack of several offers and the stored single-offer Packs (record of edits)
+
+**What changed** (DEC-1314 (r)-(w); `engine/pilot/proof.py` is M104's file, pre-approved in DEC-1314 (p)): the Pack's
+whole-campaign lines read `offers_combined.*` for a campaign of several offers, or are labelled "the first offer
+alone" for a report measured before it; a Pack of one offer is unchanged. New tests:
+`tests/integration/pilot/test_proof_pack_several_offers.py` and `tests/unit/pilot/test_proof_single_offer_golden.py`,
+with five stored single-offer Packs and their aggregate inputs under `tests/fixtures/pilot/proof_single_offer/`
+(30 aggregate JSON files in `*/data/`, no customer row, no local path).
+
+**What is needed.** Ratification of the edits.
+
+**What I did meanwhile.** `engine/pilot/help.py` and `configs/pilot/help.yaml` are unchanged: the fix adds no code.
+
+### 2026-10-10 — plan-j M104 fix (on main) → trunk (owner of the root `.gitignore`) and all branches: fixture directories named `data/` (record of an additive edit; announcement)
+
+**What changed** (DEC-1314 (w)): the root `.gitignore` ignores every `data/` directory (the local artefact store).
+It now re-includes `tests/fixtures/pilot/proof_single_offer/*/data/`, so the single-offer golden test's inputs are
+committed and the test passes from a clean checkout (it failed there before, with `FileNotFoundError`). Nothing else
+is re-included; `library/hillstrom-email/data/` and the artefact store stay ignored.
+
+**What is needed.** Ratification of the edit. A branch that adds a fixture directory named `data/` under `tests/`
+must re-include it by name in the same way, or it will be missing on a clean checkout.
+
+**What I did meanwhile.** Checked at integration that exactly those 30 files are newly tracked.
 
 ### 2026-09-23 — plan-e-pilot (on main) → all branches: every change Plan E made outside its own files and blocks
 
@@ -1805,6 +1864,36 @@ run link and an alert's run link.
 **Re-filed 2026-09-23 (Plan D M58)** to the trunk. Half of it is covered: approving, rejecting and promoting a challenger now have their own screen, `#/approvals`, linked from the user bar (DEC-862, DEC-864). The link is still missing: `ui/pages.js` has no link from a scoring run's Output page to `#/monitoring/runs/<run_id>`. Plan D touched `ui/pages.js` only for uplift runs (DEC-858). Needed from: the trunk's owner of `ui/pages.js`, that one link on a finished scoring run's Output page.
 
 ## Resolved
+
+### 2026-10-10 — plan-j M110a (on main) → M104 owners (DEC-1314; `engine/pilot/proof.py`): a Pack with several offers credits the first offer and charges every offer's contacts (request; closed 2026-10-10)
+
+**Why.** When a measured campaign has several offers, the Value Proof Pack's headline, "Extra outcomes because of the
+campaign" and the value of what the campaign changed cover only the first offer (M100 keeps the first offer in the
+single-offer fields, DEC-668 (3), and the Pack reads those fields), while "Cost of contacts" covers every offer. On
+the Hillstrom conversion audit (DEC-1322 (g)) the Pack credits +145 (men's e-mail) and charges all 42,694 e-mails;
+the women's +67 appears only in the offer table. Provenance passes (each figure is traced to a measured record); it
+is the scope of the headline and the net value that is partial.
+
+**What is needed.** One of: sum the offers in the headline and net value; or charge only the first offer's contacts;
+or state the scope in the headline.
+
+**What I did meanwhile.** No engine code was changed. `library/hillstrom-email/run_report.md` section 8.4 and
+`docs/LIBRARY.md` section 8 state the finding, and the report's verdict sentence for several offers says it reads
+the first offer only.
+
+**Answer (2026-10-10, M104 fix integration on `main`).** Done, the first of the three options (DEC-1314 (r)-(x)): with
+several offers the Pack's headline, "Extra outcomes", gross and naive credit, the control group's cost, the value of
+what the campaign changed, the net value and the offers taken add every offer together. They read the measurement's
+own pooled comparison, `incrementality_report.json` `offers_combined` (every configured offer's contacted customers
+against the shared control, written by `measure_campaign(..., combine_offers=True)` on every route that stores a
+report of several offers; its Newcombe interval counts the shared control once). The cost of contacts stays every
+offer's (`counts.intended_treated`), and each offer alone stays in the offer and backfire tables. A report measured
+before `offers_combined` existed is labelled "the first offer alone" and costed on the first offer only, never summed.
+A Pack of one offer is byte for byte what it was (`tests/unit/pilot/test_proof_single_offer_golden.py`, five stored
+Packs). `library/hillstrom-email/audit.results.json` and `run_report.md` section 8 were regenerated with
+`python -m library.run_engine audit --dataset hillstrom-email`: the conversion Pack now reads +212 extra
+conversions, every offer together (150 to 270), against the men's +145 and the women's +67, and still charges all
+42,694 e-mails. `tests/integration/pilot/test_proof_pack_several_offers.py` fails on the Pack before.
 
 ### 2026-10-10 — plan-j M108 (on main) → Phase 3b / M106 (owner of `api/routes/uplift.py`): an uplift run should pass the run cost gate (request; closed 2026-10-10)
 

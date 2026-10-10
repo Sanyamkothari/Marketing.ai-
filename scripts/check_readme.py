@@ -401,6 +401,9 @@ MILESTONE_TESTS: Final[Mapping[str, tuple[str, ...]]] = {
     # is left out, as for M102 and M103. The node test (proof.test.mjs) runs through
     # tests/integration/simple/test_simple_ui.py, which predates M104 (Plan H) and is not evidence for it, as
     # test_pilot_ui.py is not. test_proof.py keeps fast tests beside its `slow` one-million-customer test.
+    # The M104 fix (DEC-1314 (r)-(x)), a Pack of several offers: test_arms.py (M100's) gained the pooled
+    # `combined_offers` tests the fix rests on; its nightly coverage test
+    # (tests/statistical/test_offers_combined_coverage.py) is left out, as above.
     "M104": (
         "tests/unit/pilot/test_proof.py",
         "tests/unit/measurement/test_segments.py",
@@ -408,6 +411,9 @@ MILESTONE_TESTS: Final[Mapping[str, tuple[str, ...]]] = {
         "tests/integration/pilot/test_proof_pack_programme.py",
         "tests/integration/pilot/test_proof_pack_offers.py",
         "tests/integration/pilot/test_proof_pack_amounts.py",
+        "tests/integration/pilot/test_proof_pack_several_offers.py",
+        "tests/unit/pilot/test_proof_single_offer_golden.py",
+        "tests/unit/measurement/test_arms.py",
     ),
     # M105 (DEC-1315). The nightly false-alarm test (tests/statistical/test_fading_false_alarm.py, DEC-1300 (e)) is
     # left out, as for M102 to M104. The node test (summary.test.mjs) runs through
