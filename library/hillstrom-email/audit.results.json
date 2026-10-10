@@ -84,21 +84,21 @@
         },
         "status": "measured",
         "outcomes": {
-          "upload_id": "u_b3581f2c78ed",
+          "upload_id": "u_3cbbc35539d7",
           "file_name": "outcomes.csv",
           "outcome_column": "conversion",
           "outcome_named": true,
           "positive_label": "1",
           "treatment_date_column": null,
           "rows": 64000,
-          "added_at": "2026-10-10T05:08:57.955329Z"
+          "added_at": "2026-10-10T06:56:04.653216Z"
         },
         "arbitration_id": null,
         "test_plan_hash": null,
         "test_plan_version": null,
-        "created_at": "2026-10-10T05:08:57.955329Z",
+        "created_at": "2026-10-10T06:56:04.653216Z",
         "created_by": "local-operator",
-        "measured_at": "2026-10-10T05:08:58.949033Z"
+        "measured_at": "2026-10-10T06:56:05.582867Z"
       },
       "report": {
         "schema_version": 1,
@@ -106,7 +106,7 @@
         "campaign_id": "c_20261010_11200001",
         "outcome_column": "conversion",
         "outcome_window_days": 14,
-        "as_of": "2026-10-10T05:08:57.955329Z",
+        "as_of": "2026-10-10T06:56:04.653216Z",
         "status": "mature",
         "results_available_on": null,
         "treated_rows": 21307,
@@ -136,7 +136,7 @@
         "rows_suppressed_or_untreated": 0,
         "causal": true,
         "summary": "Treated customers converted at 1.3% against 0.6% for the control group: a lift of +0.7 points (95% CI +0.5 points to +0.9 points; p < 0.001), about 145 extra conversions caused by the campaign.",
-        "computed_at": "2026-10-10T05:08:58.949033Z",
+        "computed_at": "2026-10-10T06:56:05.582867Z",
         "test_plan_hash": null,
         "early_look": false,
         "arms": [
@@ -218,7 +218,38 @@
             "p_value": 0.00015710512910668492,
             "note": null
           }
-        ]
+        ],
+        "offers_combined": {
+          "schema_version": 1,
+          "offers": [
+            "Mens E-Mail",
+            "Womens E-Mail"
+          ],
+          "control": "No E-Mail",
+          "method": "pooled",
+          "treated_rows": 42694,
+          "treated_conversions": 456,
+          "treated_rate": 0.010680657703658593,
+          "control_rows": 21306,
+          "control_conversions": 122,
+          "control_rate": 0.005726086548390125,
+          "absolute_lift": {
+            "schema_version": 1,
+            "value": 0.004954571155268468,
+            "ci_low": 0.0035081892654927277,
+            "ci_high": 0.006333495420672825,
+            "confidence_level": 0.95
+          },
+          "incremental_conversions": {
+            "schema_version": 1,
+            "value": 211.53046090303198,
+            "ci_low": 149.77863250094651,
+            "ci_high": 270.4022534902056,
+            "confidence_level": 0.95
+          },
+          "p_value": 4.271613795144969e-10,
+          "rows_without_outcome": 0
+        }
       },
       "verdict": {
         "schema_version": 1,
@@ -247,7 +278,7 @@
           "columns_used": 8,
           "reason": null
         },
-        "assignment_upload_id": "u_727b3ebdee5b",
+        "assignment_upload_id": "u_8784c747a91a",
         "assignment_file_name": "assignment_conversion.csv",
         "assignment_rows": 64000,
         "rows_without_group": 0,
@@ -264,7 +295,7 @@
           "Every customer in the assignment file was compared, whether or not they were meant to be reached (the usual way to read a campaign: the groups as they were chosen).",
           "Every customer was taken to be contacted on the date the campaign went out."
         ],
-        "audited_at": "2026-10-10T05:08:57.955329Z"
+        "audited_at": "2026-10-10T06:56:04.653216Z"
       },
       "proof": {
         "status": 200,
@@ -277,7 +308,7 @@
         "provenance_verified": true,
         "html_status": 200,
         "pdf_status": 200,
-        "pdf_bytes": 35118,
+        "pdf_bytes": 35652,
         "view": {
           "schema_version": 1,
           "campaign_id": "c_20261010_11200001",
@@ -311,9 +342,9 @@
           "outcome_is_good": true,
           "claim": "proven",
           "claim_label": "Causal: the customers held back were chosen at random",
-          "headline": "Extra outcomes because of the campaign: +145 (likely +107 to +184). Net value \u20b910,29,750 (10.30 lakh) to \u20b917,76,011 (17.76 lakh).",
+          "headline": "Extra outcomes because of the campaign, every offer together: +212 (likely +150 to +270). Net value \u20b914,44,453 (14.44 lakh) to \u20b926,09,456 (26.09 lakh).",
           "measured_on": {
-            "value": "2026-10-10T05:08:57.955329Z",
+            "value": "2026-10-10T06:56:04.653216Z",
             "text": "10 Oct 2026",
             "format": "date",
             "sources": [
@@ -358,7 +389,7 @@
                     "sources": [
                       {
                         "artefact": "campaigns/c_20261010_11200001/incrementality_report.json",
-                        "field": "incremental_conversions.confidence_level"
+                        "field": "offers_combined.incremental_conversions.confidence_level"
                       }
                     ],
                     "formula": null
@@ -370,13 +401,13 @@
                 {
                   "label": "Contacted customers with the outcome",
                   "value": {
-                    "value": 0.01253109306800582,
-                    "text": "1.3%",
+                    "value": 0.010680657703658593,
+                    "text": "1.1%",
                     "format": "share",
                     "sources": [
                       {
                         "artefact": "campaigns/c_20261010_11200001/incrementality_report.json",
-                        "field": "treated_rate"
+                        "field": "offers_combined.treated_rate"
                       }
                     ],
                     "formula": null
@@ -394,7 +425,7 @@
                     "sources": [
                       {
                         "artefact": "campaigns/c_20261010_11200001/incrementality_report.json",
-                        "field": "control_rate"
+                        "field": "offers_combined.control_rate"
                       }
                     ],
                     "formula": null
@@ -406,37 +437,37 @@
                 {
                   "label": "Difference",
                   "value": {
-                    "value": 0.006805006519615695,
-                    "text": "+0.7 points",
-                    "format": "points",
-                    "sources": [
-                      {
-                        "artefact": "campaigns/c_20261010_11200001/incrementality_report.json",
-                        "field": "absolute_lift.value"
-                      }
-                    ],
-                    "formula": null
-                  },
-                  "low": {
-                    "value": 0.005014344671481532,
+                    "value": 0.004954571155268468,
                     "text": "+0.5 points",
                     "format": "points",
                     "sources": [
                       {
                         "artefact": "campaigns/c_20261010_11200001/incrementality_report.json",
-                        "field": "absolute_lift.ci_low"
+                        "field": "offers_combined.absolute_lift.value"
+                      }
+                    ],
+                    "formula": null
+                  },
+                  "low": {
+                    "value": 0.0035081892654927277,
+                    "text": "+0.4 points",
+                    "format": "points",
+                    "sources": [
+                      {
+                        "artefact": "campaigns/c_20261010_11200001/incrementality_report.json",
+                        "field": "offers_combined.absolute_lift.ci_low"
                       }
                     ],
                     "formula": null
                   },
                   "high": {
-                    "value": 0.008640723396917826,
-                    "text": "+0.9 points",
+                    "value": 0.006333495420672825,
+                    "text": "+0.6 points",
                     "format": "points",
                     "sources": [
                       {
                         "artefact": "campaigns/c_20261010_11200001/incrementality_report.json",
-                        "field": "absolute_lift.ci_high"
+                        "field": "offers_combined.absolute_lift.ci_high"
                       }
                     ],
                     "formula": null
@@ -444,39 +475,39 @@
                   "missing": null
                 },
                 {
-                  "label": "Extra outcomes because of the campaign",
+                  "label": "Extra outcomes because of the campaign, every offer together",
                   "value": {
-                    "value": 144.99427391345162,
-                    "text": "+145",
+                    "value": 211.53046090303198,
+                    "text": "+212",
                     "format": "signed_count",
                     "sources": [
                       {
                         "artefact": "campaigns/c_20261010_11200001/incrementality_report.json",
-                        "field": "incremental_conversions.value"
+                        "field": "offers_combined.incremental_conversions.value"
                       }
                     ],
                     "formula": null
                   },
                   "low": {
-                    "value": 106.84064191525701,
-                    "text": "+107",
+                    "value": 149.77863250094651,
+                    "text": "+150",
                     "format": "signed_count",
                     "sources": [
                       {
                         "artefact": "campaigns/c_20261010_11200001/incrementality_report.json",
-                        "field": "incremental_conversions.ci_low"
+                        "field": "offers_combined.incremental_conversions.ci_low"
                       }
                     ],
                     "formula": null
                   },
                   "high": {
-                    "value": 184.10789341812813,
-                    "text": "+184",
+                    "value": 270.4022534902056,
+                    "text": "+270",
                     "format": "signed_count",
                     "sources": [
                       {
                         "artefact": "campaigns/c_20261010_11200001/incrementality_report.json",
-                        "field": "incremental_conversions.ci_high"
+                        "field": "offers_combined.incremental_conversions.ci_high"
                       }
                     ],
                     "formula": null
@@ -623,7 +654,8 @@
                 ]
               },
               "notes": [
-                "Each range is a confidence interval at that level: the true number very probably lies inside it."
+                "Each range is a confidence interval at that level: the true number very probably lies inside it.",
+                "This campaign has several offers, each compared with the same held-back customers. The lines above add every offer together: every contacted customer of every offer is compared with that one held-back group at once, so the group is counted once and the range allows for every offer resting on it. Each offer alone is in the table."
               ]
             },
             {
@@ -635,13 +667,13 @@
                 {
                   "label": "Contacted customers with the outcome (gross)",
                   "value": {
-                    "value": 267,
-                    "text": "267",
+                    "value": 456,
+                    "text": "456",
                     "format": "count",
                     "sources": [
                       {
                         "artefact": "campaigns/c_20261010_11200001/incrementality_report.json",
-                        "field": "treated_conversions"
+                        "field": "offers_combined.treated_conversions"
                       }
                     ],
                     "formula": null
@@ -653,17 +685,17 @@
                 {
                   "label": "How many would have had it anyway, at the rate of the held-back customers",
                   "value": {
-                    "value": 122.00572608654839,
-                    "text": "122",
+                    "value": 244.469539096968,
+                    "text": "244",
                     "format": "count",
                     "sources": [
                       {
                         "artefact": "campaigns/c_20261010_11200001/incrementality_report.json",
-                        "field": "control_rate"
+                        "field": "offers_combined.control_rate"
                       },
                       {
                         "artefact": "campaigns/c_20261010_11200001/incrementality_report.json",
-                        "field": "treated_rows"
+                        "field": "offers_combined.treated_rows"
                       }
                     ],
                     "formula": "s0*s1"
@@ -675,37 +707,37 @@
                 {
                   "label": "The difference: incremental",
                   "value": {
-                    "value": 144.99427391345162,
-                    "text": "+145",
+                    "value": 211.53046090303198,
+                    "text": "+212",
                     "format": "signed_count",
                     "sources": [
                       {
                         "artefact": "campaigns/c_20261010_11200001/incrementality_report.json",
-                        "field": "incremental_conversions.value"
+                        "field": "offers_combined.incremental_conversions.value"
                       }
                     ],
                     "formula": null
                   },
                   "low": {
-                    "value": 106.84064191525701,
-                    "text": "+107",
+                    "value": 149.77863250094651,
+                    "text": "+150",
                     "format": "signed_count",
                     "sources": [
                       {
                         "artefact": "campaigns/c_20261010_11200001/incrementality_report.json",
-                        "field": "incremental_conversions.ci_low"
+                        "field": "offers_combined.incremental_conversions.ci_low"
                       }
                     ],
                     "formula": null
                   },
                   "high": {
-                    "value": 184.10789341812813,
-                    "text": "+184",
+                    "value": 270.4022534902056,
+                    "text": "+270",
                     "format": "signed_count",
                     "sources": [
                       {
                         "artefact": "campaigns/c_20261010_11200001/incrementality_report.json",
-                        "field": "incremental_conversions.ci_high"
+                        "field": "offers_combined.incremental_conversions.ci_high"
                       }
                     ],
                     "formula": null
@@ -715,17 +747,17 @@
                 {
                   "label": "Share of the gross that is incremental",
                   "value": {
-                    "value": 0.543049715031654,
-                    "text": "54.3%",
+                    "value": 0.46388258969963153,
+                    "text": "46.4%",
                     "format": "share",
                     "sources": [
                       {
                         "artefact": "campaigns/c_20261010_11200001/incrementality_report.json",
-                        "field": "incremental_conversions.value"
+                        "field": "offers_combined.incremental_conversions.value"
                       },
                       {
                         "artefact": "campaigns/c_20261010_11200001/incrementality_report.json",
-                        "field": "treated_conversions"
+                        "field": "offers_combined.treated_conversions"
                       }
                     ],
                     "formula": "s0/s1"
@@ -749,13 +781,13 @@
                 {
                   "label": "Naive credit: every contacted customer who had the outcome",
                   "value": {
-                    "value": 267,
-                    "text": "267",
+                    "value": 456,
+                    "text": "456",
                     "format": "count",
                     "sources": [
                       {
                         "artefact": "campaigns/c_20261010_11200001/incrementality_report.json",
-                        "field": "treated_conversions"
+                        "field": "offers_combined.treated_conversions"
                       }
                     ],
                     "formula": null
@@ -765,39 +797,39 @@
                   "missing": null
                 },
                 {
-                  "label": "Measured credit: only what the campaign changed",
+                  "label": "Measured credit: only what the campaign changed, every offer together",
                   "value": {
-                    "value": 144.99427391345162,
-                    "text": "+145",
+                    "value": 211.53046090303198,
+                    "text": "+212",
                     "format": "signed_count",
                     "sources": [
                       {
                         "artefact": "campaigns/c_20261010_11200001/incrementality_report.json",
-                        "field": "incremental_conversions.value"
+                        "field": "offers_combined.incremental_conversions.value"
                       }
                     ],
                     "formula": null
                   },
                   "low": {
-                    "value": 106.84064191525701,
-                    "text": "+107",
+                    "value": 149.77863250094651,
+                    "text": "+150",
                     "format": "signed_count",
                     "sources": [
                       {
                         "artefact": "campaigns/c_20261010_11200001/incrementality_report.json",
-                        "field": "incremental_conversions.ci_low"
+                        "field": "offers_combined.incremental_conversions.ci_low"
                       }
                     ],
                     "formula": null
                   },
                   "high": {
-                    "value": 184.10789341812813,
-                    "text": "+184",
+                    "value": 270.4022534902056,
+                    "text": "+270",
                     "format": "signed_count",
                     "sources": [
                       {
                         "artefact": "campaigns/c_20261010_11200001/incrementality_report.json",
-                        "field": "incremental_conversions.ci_high"
+                        "field": "offers_combined.incremental_conversions.ci_high"
                       }
                     ],
                     "formula": null
@@ -807,17 +839,17 @@
                 {
                   "label": "Naive credit is this many times the measured credit",
                   "value": {
-                    "value": 1.8414520297496346,
-                    "text": "1.8x",
+                    "value": 2.155717895443133,
+                    "text": "2.2x",
                     "format": "times",
                     "sources": [
                       {
                         "artefact": "campaigns/c_20261010_11200001/incrementality_report.json",
-                        "field": "treated_conversions"
+                        "field": "offers_combined.treated_conversions"
                       },
                       {
                         "artefact": "campaigns/c_20261010_11200001/incrementality_report.json",
-                        "field": "incremental_conversions.value"
+                        "field": "offers_combined.incremental_conversions.value"
                       }
                     ],
                     "formula": "s0/s1"
@@ -829,13 +861,13 @@
                 {
                   "label": "Naive credit in rupees",
                   "value": {
-                    "value": 2578731.39,
-                    "text": "\u20b925,78,731 (25.79 lakh)",
+                    "value": 4404125.5200000005,
+                    "text": "\u20b944,04,126 (44.04 lakh)",
                     "format": "inr",
                     "sources": [
                       {
                         "artefact": "campaigns/c_20261010_11200001/incrementality_report.json",
-                        "field": "treated_conversions"
+                        "field": "offers_combined.treated_conversions"
                       },
                       {
                         "artefact": "campaigns/c_20261010_11200001/pilot_roi_inputs.json",
@@ -851,13 +883,13 @@
                 {
                   "label": "Measured credit in rupees",
                   "value": {
-                    "value": 1400379.346482681,
-                    "text": "\u20b914,00,379 (14.00 lakh)",
+                    "value": 2042997.1515798364,
+                    "text": "\u20b920,42,997 (20.43 lakh)",
                     "format": "inr",
                     "sources": [
                       {
                         "artefact": "campaigns/c_20261010_11200001/incrementality_report.json",
-                        "field": "incremental_conversions.value"
+                        "field": "offers_combined.incremental_conversions.value"
                       },
                       {
                         "artefact": "campaigns/c_20261010_11200001/pilot_roi_inputs.json",
@@ -867,13 +899,13 @@
                     "formula": "s0*s1"
                   },
                   "low": {
-                    "value": 1031885.0825266778,
-                    "text": "\u20b910,31,885 (10.32 lakh)",
+                    "value": 1446587.4950616667,
+                    "text": "\u20b914,46,587 (14.47 lakh)",
                     "format": "inr",
                     "sources": [
                       {
                         "artefact": "campaigns/c_20261010_11200001/incrementality_report.json",
-                        "field": "incremental_conversions.ci_low"
+                        "field": "offers_combined.incremental_conversions.ci_low"
                       },
                       {
                         "artefact": "campaigns/c_20261010_11200001/pilot_roi_inputs.json",
@@ -883,13 +915,13 @@
                     "formula": "s0*s1"
                   },
                   "high": {
-                    "value": 1778145.3329741627,
-                    "text": "\u20b917,78,145 (17.78 lakh)",
+                    "value": 2611590.9325914993,
+                    "text": "\u20b926,11,591 (26.12 lakh)",
                     "format": "inr",
                     "sources": [
                       {
                         "artefact": "campaigns/c_20261010_11200001/incrementality_report.json",
-                        "field": "incremental_conversions.ci_high"
+                        "field": "offers_combined.incremental_conversions.ci_high"
                       },
                       {
                         "artefact": "campaigns/c_20261010_11200001/pilot_roi_inputs.json",
@@ -930,7 +962,7 @@
                     "sources": [
                       {
                         "artefact": "campaigns/c_20261010_11200001/incrementality_report.json",
-                        "field": "control_rows"
+                        "field": "offers_combined.control_rows"
                       }
                     ],
                     "formula": null
@@ -942,49 +974,49 @@
                 {
                   "label": "What they would have added had they been contacted",
                   "value": {
-                    "value": 144.98746890693198,
-                    "text": "+145",
+                    "value": 105.56209303414998,
+                    "text": "+106",
                     "format": "signed_count",
                     "sources": [
                       {
                         "artefact": "campaigns/c_20261010_11200001/incrementality_report.json",
-                        "field": "absolute_lift.value"
+                        "field": "offers_combined.absolute_lift.value"
                       },
                       {
                         "artefact": "campaigns/c_20261010_11200001/incrementality_report.json",
-                        "field": "control_rows"
+                        "field": "offers_combined.control_rows"
                       }
                     ],
                     "formula": "s0*s1"
                   },
                   "low": {
-                    "value": 106.83562757058553,
-                    "text": "+107",
+                    "value": 74.74548049058805,
+                    "text": "+75",
                     "format": "signed_count",
                     "sources": [
                       {
                         "artefact": "campaigns/c_20261010_11200001/incrementality_report.json",
-                        "field": "absolute_lift.ci_low"
+                        "field": "offers_combined.absolute_lift.ci_low"
                       },
                       {
                         "artefact": "campaigns/c_20261010_11200001/incrementality_report.json",
-                        "field": "control_rows"
+                        "field": "offers_combined.control_rows"
                       }
                     ],
                     "formula": "s0*s1"
                   },
                   "high": {
-                    "value": 184.0992526947312,
-                    "text": "+184",
+                    "value": 134.9414534328552,
+                    "text": "+135",
                     "format": "signed_count",
                     "sources": [
                       {
                         "artefact": "campaigns/c_20261010_11200001/incrementality_report.json",
-                        "field": "absolute_lift.ci_high"
+                        "field": "offers_combined.absolute_lift.ci_high"
                       },
                       {
                         "artefact": "campaigns/c_20261010_11200001/incrementality_report.json",
-                        "field": "control_rows"
+                        "field": "offers_combined.control_rows"
                       }
                     ],
                     "formula": "s0*s1"
@@ -994,17 +1026,17 @@
                 {
                   "label": "What that is worth in rupees, before costs",
                   "value": {
-                    "value": 1400313.6225728632,
-                    "text": "\u20b914,00,314 (14.00 lakh)",
+                    "value": 1019536.6400796364,
+                    "text": "\u20b910,19,537 (10.20 lakh)",
                     "format": "inr",
                     "sources": [
                       {
                         "artefact": "campaigns/c_20261010_11200001/incrementality_report.json",
-                        "field": "absolute_lift.value"
+                        "field": "offers_combined.absolute_lift.value"
                       },
                       {
                         "artefact": "campaigns/c_20261010_11200001/incrementality_report.json",
-                        "field": "control_rows"
+                        "field": "offers_combined.control_rows"
                       },
                       {
                         "artefact": "campaigns/c_20261010_11200001/pilot_roi_inputs.json",
@@ -1014,17 +1046,17 @@
                     "formula": "s0*s1*s2"
                   },
                   "low": {
-                    "value": 1031836.653133402,
-                    "text": "\u20b910,31,837 (10.32 lakh)",
+                    "value": 721904.5573097828,
+                    "text": "\u20b97,21,905 (7.22 lakh)",
                     "format": "inr",
                     "sources": [
                       {
                         "artefact": "campaigns/c_20261010_11200001/incrementality_report.json",
-                        "field": "absolute_lift.ci_low"
+                        "field": "offers_combined.absolute_lift.ci_low"
                       },
                       {
                         "artefact": "campaigns/c_20261010_11200001/incrementality_report.json",
-                        "field": "control_rows"
+                        "field": "offers_combined.control_rows"
                       },
                       {
                         "artefact": "campaigns/c_20261010_11200001/pilot_roi_inputs.json",
@@ -1034,17 +1066,17 @@
                     "formula": "s0*s1*s2"
                   },
                   "high": {
-                    "value": 1778061.8793986721,
-                    "text": "\u20b917,78,062 (17.78 lakh)",
+                    "value": 1303287.4973015992,
+                    "text": "\u20b913,03,287 (13.03 lakh)",
                     "format": "inr",
                     "sources": [
                       {
                         "artefact": "campaigns/c_20261010_11200001/incrementality_report.json",
-                        "field": "absolute_lift.ci_high"
+                        "field": "offers_combined.absolute_lift.ci_high"
                       },
                       {
                         "artefact": "campaigns/c_20261010_11200001/incrementality_report.json",
-                        "field": "control_rows"
+                        "field": "offers_combined.control_rows"
                       },
                       {
                         "artefact": "campaigns/c_20261010_11200001/pilot_roi_inputs.json",
@@ -1393,15 +1425,15 @@
               "reason": null,
               "lines": [
                 {
-                  "label": "Value of what the campaign changed",
+                  "label": "Value of what the campaign changed, every offer together",
                   "value": {
-                    "value": 1400379.346482681,
-                    "text": "\u20b914,00,379 (14.00 lakh)",
+                    "value": 2042997.1515798364,
+                    "text": "\u20b920,42,997 (20.43 lakh)",
                     "format": "inr",
                     "sources": [
                       {
                         "artefact": "campaigns/c_20261010_11200001/incrementality_report.json",
-                        "field": "incremental_conversions.value"
+                        "field": "offers_combined.incremental_conversions.value"
                       },
                       {
                         "artefact": "campaigns/c_20261010_11200001/pilot_roi_inputs.json",
@@ -1411,13 +1443,13 @@
                     "formula": "s0*s1"
                   },
                   "low": {
-                    "value": 1031885.0825266778,
-                    "text": "\u20b910,31,885 (10.32 lakh)",
+                    "value": 1446587.4950616667,
+                    "text": "\u20b914,46,587 (14.47 lakh)",
                     "format": "inr",
                     "sources": [
                       {
                         "artefact": "campaigns/c_20261010_11200001/incrementality_report.json",
-                        "field": "incremental_conversions.ci_low"
+                        "field": "offers_combined.incremental_conversions.ci_low"
                       },
                       {
                         "artefact": "campaigns/c_20261010_11200001/pilot_roi_inputs.json",
@@ -1427,13 +1459,13 @@
                     "formula": "s0*s1"
                   },
                   "high": {
-                    "value": 1778145.3329741627,
-                    "text": "\u20b917,78,145 (17.78 lakh)",
+                    "value": 2611590.9325914993,
+                    "text": "\u20b926,11,591 (26.12 lakh)",
                     "format": "inr",
                     "sources": [
                       {
                         "artefact": "campaigns/c_20261010_11200001/incrementality_report.json",
-                        "field": "incremental_conversions.ci_high"
+                        "field": "offers_combined.incremental_conversions.ci_high"
                       },
                       {
                         "artefact": "campaigns/c_20261010_11200001/pilot_roi_inputs.json",
@@ -1475,7 +1507,7 @@
                     "sources": [
                       {
                         "artefact": "campaigns/c_20261010_11200001/incrementality_report.json",
-                        "field": "treated_conversions"
+                        "field": "offers_combined.treated_conversions"
                       },
                       {
                         "artefact": "campaigns/c_20261010_11200001/pilot_roi_inputs.json",
@@ -1491,13 +1523,13 @@
                 {
                   "label": "Net value",
                   "value": {
-                    "value": 1398244.6464826812,
-                    "text": "\u20b913,98,245 (13.98 lakh)",
+                    "value": 2040862.4515798364,
+                    "text": "\u20b920,40,862 (20.41 lakh)",
                     "format": "inr",
                     "sources": [
                       {
                         "artefact": "campaigns/c_20261010_11200001/incrementality_report.json",
-                        "field": "incremental_conversions.value"
+                        "field": "offers_combined.incremental_conversions.value"
                       },
                       {
                         "artefact": "campaigns/c_20261010_11200001/pilot_roi_inputs.json",
@@ -1513,7 +1545,7 @@
                       },
                       {
                         "artefact": "campaigns/c_20261010_11200001/incrementality_report.json",
-                        "field": "treated_conversions"
+                        "field": "offers_combined.treated_conversions"
                       },
                       {
                         "artefact": "campaigns/c_20261010_11200001/pilot_roi_inputs.json",
@@ -1523,13 +1555,13 @@
                     "formula": "s0*s1 - s2*s3 - s4*s5"
                   },
                   "low": {
-                    "value": 1029750.3825266778,
-                    "text": "\u20b910,29,750 (10.30 lakh)",
+                    "value": 1444452.7950616668,
+                    "text": "\u20b914,44,453 (14.44 lakh)",
                     "format": "inr",
                     "sources": [
                       {
                         "artefact": "campaigns/c_20261010_11200001/incrementality_report.json",
-                        "field": "incremental_conversions.ci_low"
+                        "field": "offers_combined.incremental_conversions.ci_low"
                       },
                       {
                         "artefact": "campaigns/c_20261010_11200001/pilot_roi_inputs.json",
@@ -1545,7 +1577,7 @@
                       },
                       {
                         "artefact": "campaigns/c_20261010_11200001/incrementality_report.json",
-                        "field": "treated_conversions"
+                        "field": "offers_combined.treated_conversions"
                       },
                       {
                         "artefact": "campaigns/c_20261010_11200001/pilot_roi_inputs.json",
@@ -1555,13 +1587,13 @@
                     "formula": "s0*s1 - s2*s3 - s4*s5"
                   },
                   "high": {
-                    "value": 1776010.6329741627,
-                    "text": "\u20b917,76,011 (17.76 lakh)",
+                    "value": 2609456.232591499,
+                    "text": "\u20b926,09,456 (26.09 lakh)",
                     "format": "inr",
                     "sources": [
                       {
                         "artefact": "campaigns/c_20261010_11200001/incrementality_report.json",
-                        "field": "incremental_conversions.ci_high"
+                        "field": "offers_combined.incremental_conversions.ci_high"
                       },
                       {
                         "artefact": "campaigns/c_20261010_11200001/pilot_roi_inputs.json",
@@ -1577,7 +1609,7 @@
                       },
                       {
                         "artefact": "campaigns/c_20261010_11200001/incrementality_report.json",
-                        "field": "treated_conversions"
+                        "field": "offers_combined.treated_conversions"
                       },
                       {
                         "artefact": "campaigns/c_20261010_11200001/pilot_roi_inputs.json",
@@ -1646,7 +1678,8 @@
               "table": null,
               "notes": [
                 "The range comes from the measured range of what the campaign changed; the rupee values per outcome and the costs are the value inputs entered for this campaign, estimates that move the rupees but not the measured count.",
-                "Offers are costed for the contacted customers measured; an offer taken by a customer with no outcome in the file is not known, so it is not counted."
+                "Offers are costed for the contacted customers measured; an offer taken by a customer with no outcome in the file is not known, so it is not counted.",
+                "The value, the contacts and the offers above cover every offer together: the same customers in each line, every offer's contacts paid for and every offer's measured extra outcomes valued."
               ]
             },
             {
@@ -1658,7 +1691,7 @@
                 {
                   "label": "Result read on",
                   "value": {
-                    "value": "2026-10-10T05:08:57.955329Z",
+                    "value": "2026-10-10T06:56:04.653216Z",
                     "text": "10 Oct 2026",
                     "format": "date",
                     "sources": [
@@ -1700,7 +1733,7 @@
                     "sources": [
                       {
                         "artefact": "campaigns/c_20261010_11200001/incrementality_report.json",
-                        "field": "rows_without_outcome"
+                        "field": "offers_combined.rows_without_outcome"
                       }
                     ],
                     "formula": null
@@ -1727,9 +1760,9 @@
             "campaigns/c_20261010_11200001/incrementality_report.json",
             "campaigns/c_20261010_11200001/pilot_roi_inputs.json",
             "campaigns/c_20261010_11200001/segment_effects.json",
-            "uploads/u_b3581f2c78ed/upload.json"
+            "uploads/u_3cbbc35539d7/upload.json"
           ],
-          "built_at": "2026-10-10T05:09:01.010458Z"
+          "built_at": "2026-10-10T06:56:07.450557Z"
         }
       }
     },
@@ -1785,21 +1818,21 @@
         },
         "status": "measured",
         "outcomes": {
-          "upload_id": "u_b3581f2c78ed",
+          "upload_id": "u_3cbbc35539d7",
           "file_name": "outcomes.csv",
           "outcome_column": "spend",
           "outcome_named": true,
           "positive_label": null,
           "treatment_date_column": null,
           "rows": 64000,
-          "added_at": "2026-10-10T05:09:02.406695Z"
+          "added_at": "2026-10-10T06:56:08.846517Z"
         },
         "arbitration_id": null,
         "test_plan_hash": null,
         "test_plan_version": null,
-        "created_at": "2026-10-10T05:09:02.406695Z",
+        "created_at": "2026-10-10T06:56:08.846517Z",
         "created_by": "local-operator",
-        "measured_at": "2026-10-10T05:09:03.174689Z"
+        "measured_at": "2026-10-10T06:56:09.636345Z"
       },
       "report": {
         "schema_version": 1,
@@ -1807,7 +1840,7 @@
         "campaign_id": "c_20261010_11200002",
         "outcome_column": "spend",
         "outcome_window_days": 14,
-        "as_of": "2026-10-10T05:09:02.406695Z",
+        "as_of": "2026-10-10T06:56:08.846517Z",
         "status": "mature",
         "results_available_on": null,
         "treated_rows": 42694,
@@ -1825,7 +1858,7 @@
         "rows_suppressed_or_untreated": 0,
         "causal": true,
         "summary": "Contacted customers averaged 1.25 against 0.65 for the control group: a difference of +0.60 per customer (95% CI +0.38 to +0.82; p < 0.001), about 25,480 more in total across the contacted customers. A few very large amounts dominate these averages, so the range may be too narrow; more customers in each group would make it reliable.",
-        "computed_at": "2026-10-10T05:09:03.174689Z",
+        "computed_at": "2026-10-10T06:56:09.636345Z",
         "test_plan_hash": null,
         "early_look": false,
         "outcome_kind": "continuous",
@@ -1870,7 +1903,7 @@
           "columns_used": 8,
           "reason": null
         },
-        "assignment_upload_id": "u_3d5d19723fd1",
+        "assignment_upload_id": "u_730fe43b6d31",
         "assignment_file_name": "assignment_spend_any.csv",
         "assignment_rows": 64000,
         "rows_without_group": 0,
@@ -1884,7 +1917,7 @@
           "Every customer in the assignment file was compared, whether or not they were meant to be reached (the usual way to read a campaign: the groups as they were chosen).",
           "Every customer was taken to be contacted on the date the campaign went out."
         ],
-        "audited_at": "2026-10-10T05:09:02.406695Z"
+        "audited_at": "2026-10-10T06:56:08.846517Z"
       },
       "bootstrap": {
         "estimate": 0.5967960667278983,
@@ -1940,7 +1973,7 @@
           "claim_label": "Causal: the customers held back were chosen at random",
           "headline": "Extra amount because of the campaign: +25,479.61 (likely +16,060.85 to +34,898.37). Net value \u20b913,30,916 (13.31 lakh) to \u20b928,94,430 (28.94 lakh).",
           "measured_on": {
-            "value": "2026-10-10T05:09:02.406695Z",
+            "value": "2026-10-10T06:56:08.846517Z",
             "text": "10 Oct 2026",
             "format": "date",
             "sources": [
@@ -2909,7 +2942,7 @@
                 {
                   "label": "Result read on",
                   "value": {
-                    "value": "2026-10-10T05:09:02.406695Z",
+                    "value": "2026-10-10T06:56:08.846517Z",
                     "text": "10 Oct 2026",
                     "format": "date",
                     "sources": [
@@ -2978,9 +3011,9 @@
             "campaigns/c_20261010_11200002/incrementality_report.json",
             "campaigns/c_20261010_11200002/pilot_roi_inputs.json",
             "campaigns/c_20261010_11200002/segment_effects.json",
-            "uploads/u_b3581f2c78ed/upload.json"
+            "uploads/u_3cbbc35539d7/upload.json"
           ],
-          "built_at": "2026-10-10T05:09:04.780258Z"
+          "built_at": "2026-10-10T06:56:11.170498Z"
         }
       }
     },
@@ -3036,21 +3069,21 @@
         },
         "status": "measured",
         "outcomes": {
-          "upload_id": "u_b3581f2c78ed",
+          "upload_id": "u_3cbbc35539d7",
           "file_name": "outcomes.csv",
           "outcome_column": "spend",
           "outcome_named": true,
           "positive_label": null,
           "treatment_date_column": null,
           "rows": 64000,
-          "added_at": "2026-10-10T05:09:05.970065Z"
+          "added_at": "2026-10-10T06:56:12.280135Z"
         },
         "arbitration_id": null,
         "test_plan_hash": null,
         "test_plan_version": null,
-        "created_at": "2026-10-10T05:09:05.970065Z",
+        "created_at": "2026-10-10T06:56:12.280135Z",
         "created_by": "local-operator",
-        "measured_at": "2026-10-10T05:09:06.568308Z"
+        "measured_at": "2026-10-10T06:56:12.889230Z"
       },
       "report": {
         "schema_version": 1,
@@ -3058,7 +3091,7 @@
         "campaign_id": "c_20261010_11200003",
         "outcome_column": "spend",
         "outcome_window_days": 14,
-        "as_of": "2026-10-10T05:09:05.970065Z",
+        "as_of": "2026-10-10T06:56:12.280135Z",
         "status": "mature",
         "results_available_on": null,
         "treated_rows": 21307,
@@ -3076,7 +3109,7 @@
         "rows_suppressed_or_untreated": 0,
         "causal": true,
         "summary": "Contacted customers averaged 1.42 against 0.65 for the control group: a difference of +0.77 per customer (95% CI +0.49 to +1.05; p < 0.001), about 16,403 more in total across the contacted customers. A few very large amounts dominate these averages, so the range may be too narrow; more customers in each group would make it reliable.",
-        "computed_at": "2026-10-10T05:09:06.568308Z",
+        "computed_at": "2026-10-10T06:56:12.889230Z",
         "test_plan_hash": null,
         "early_look": false,
         "outcome_kind": "continuous",
@@ -3121,7 +3154,7 @@
           "columns_used": 8,
           "reason": null
         },
-        "assignment_upload_id": "u_a379cf9b48b3",
+        "assignment_upload_id": "u_15d719e4e45d",
         "assignment_file_name": "assignment_spend_mens.csv",
         "assignment_rows": 42613,
         "rows_without_group": 0,
@@ -3135,7 +3168,7 @@
           "Every customer in the assignment file was compared, whether or not they were meant to be reached (the usual way to read a campaign: the groups as they were chosen).",
           "Every customer was taken to be contacted on the date the campaign went out."
         ],
-        "audited_at": "2026-10-10T05:09:05.970065Z"
+        "audited_at": "2026-10-10T06:56:12.280135Z"
       },
       "bootstrap": {
         "estimate": 0.7698271558945368,
@@ -3191,7 +3224,7 @@
           "claim_label": "Causal: the customers held back were chosen at random",
           "headline": "Extra amount because of the campaign: +16,402.71 (likely +10,336.87 to +22,468.54). Net value \u20b98,56,895 (8.57 lakh) to \u20b918,63,824 (18.64 lakh).",
           "measured_on": {
-            "value": "2026-10-10T05:09:05.970065Z",
+            "value": "2026-10-10T06:56:12.280135Z",
             "text": "10 Oct 2026",
             "format": "date",
             "sources": [
@@ -4160,7 +4193,7 @@
                 {
                   "label": "Result read on",
                   "value": {
-                    "value": "2026-10-10T05:09:05.970065Z",
+                    "value": "2026-10-10T06:56:12.280135Z",
                     "text": "10 Oct 2026",
                     "format": "date",
                     "sources": [
@@ -4229,9 +4262,9 @@
             "campaigns/c_20261010_11200003/incrementality_report.json",
             "campaigns/c_20261010_11200003/pilot_roi_inputs.json",
             "campaigns/c_20261010_11200003/segment_effects.json",
-            "uploads/u_b3581f2c78ed/upload.json"
+            "uploads/u_3cbbc35539d7/upload.json"
           ],
-          "built_at": "2026-10-10T05:09:07.962161Z"
+          "built_at": "2026-10-10T06:56:14.088486Z"
         }
       }
     },
@@ -4287,21 +4320,21 @@
         },
         "status": "measured",
         "outcomes": {
-          "upload_id": "u_b3581f2c78ed",
+          "upload_id": "u_3cbbc35539d7",
           "file_name": "outcomes.csv",
           "outcome_column": "spend",
           "outcome_named": true,
           "positive_label": null,
           "treatment_date_column": null,
           "rows": 64000,
-          "added_at": "2026-10-10T05:09:08.981890Z"
+          "added_at": "2026-10-10T06:56:15.070206Z"
         },
         "arbitration_id": null,
         "test_plan_hash": null,
         "test_plan_version": null,
-        "created_at": "2026-10-10T05:09:08.981890Z",
+        "created_at": "2026-10-10T06:56:15.070206Z",
         "created_by": "local-operator",
-        "measured_at": "2026-10-10T05:09:09.666082Z"
+        "measured_at": "2026-10-10T06:56:15.689677Z"
       },
       "report": {
         "schema_version": 1,
@@ -4309,7 +4342,7 @@
         "campaign_id": "c_20261010_11200004",
         "outcome_column": "spend",
         "outcome_window_days": 14,
-        "as_of": "2026-10-10T05:09:08.981890Z",
+        "as_of": "2026-10-10T06:56:15.070206Z",
         "status": "mature",
         "results_available_on": null,
         "treated_rows": 21387,
@@ -4327,7 +4360,7 @@
         "rows_suppressed_or_untreated": 0,
         "causal": true,
         "summary": "Contacted customers averaged 1.08 against 0.65 for the control group: a difference of +0.42 per customer (95% CI +0.17 to +0.68; p = 0.001), about 9,077 more in total across the contacted customers. A few very large amounts dominate these averages, so the range may be too narrow; more customers in each group would make it reliable.",
-        "computed_at": "2026-10-10T05:09:09.666082Z",
+        "computed_at": "2026-10-10T06:56:15.689677Z",
         "test_plan_hash": null,
         "early_look": false,
         "outcome_kind": "continuous",
@@ -4372,7 +4405,7 @@
           "columns_used": 8,
           "reason": null
         },
-        "assignment_upload_id": "u_1deaae75f45f",
+        "assignment_upload_id": "u_aa9503bbd759",
         "assignment_file_name": "assignment_spend_womens.csv",
         "assignment_rows": 42693,
         "rows_without_group": 0,
@@ -4386,7 +4419,7 @@
           "Every customer in the assignment file was compared, whether or not they were meant to be reached (the usual way to read a campaign: the groups as they were chosen).",
           "Every customer was taken to be contacted on the date the campaign went out."
         ],
-        "audited_at": "2026-10-10T05:09:08.981890Z"
+        "audited_at": "2026-10-10T06:56:15.070206Z"
       },
       "bootstrap": {
         "estimate": 0.4244122159365967,
@@ -4406,7 +4439,7 @@
         "provenance_verified": true,
         "html_status": 200,
         "pdf_status": 200,
-        "pdf_bytes": 33050,
+        "pdf_bytes": 33048,
         "view": {
           "schema_version": 1,
           "campaign_id": "c_20261010_11200004",
@@ -4442,7 +4475,7 @@
           "claim_label": "Causal: the customers held back were chosen at random",
           "headline": "Extra amount because of the campaign: +9,076.90 (likely +3,613.48 to +14,540.33). Net value \u20b92,98,849 (2.99 lakh) to \u20b912,05,778 (12.06 lakh).",
           "measured_on": {
-            "value": "2026-10-10T05:09:08.981890Z",
+            "value": "2026-10-10T06:56:15.070206Z",
             "text": "10 Oct 2026",
             "format": "date",
             "sources": [
@@ -5411,7 +5444,7 @@
                 {
                   "label": "Result read on",
                   "value": {
-                    "value": "2026-10-10T05:09:08.981890Z",
+                    "value": "2026-10-10T06:56:15.070206Z",
                     "text": "10 Oct 2026",
                     "format": "date",
                     "sources": [
@@ -5480,9 +5513,9 @@
             "campaigns/c_20261010_11200004/incrementality_report.json",
             "campaigns/c_20261010_11200004/pilot_roi_inputs.json",
             "campaigns/c_20261010_11200004/segment_effects.json",
-            "uploads/u_b3581f2c78ed/upload.json"
+            "uploads/u_3cbbc35539d7/upload.json"
           ],
-          "built_at": "2026-10-10T05:09:10.990182Z"
+          "built_at": "2026-10-10T06:56:16.900884Z"
         }
       }
     },
@@ -5522,5 +5555,5 @@
     "code": "PROGRAMME_NO_HOLDOUT",
     "message": "The programme is read against the universal holdout, and none has been used yet: set actions.holdout.scope to universal on the use cases, with the holdout secret set, and score once."
   },
-  "wall_clock_seconds": 20.4
+  "wall_clock_seconds": 19.3
 }

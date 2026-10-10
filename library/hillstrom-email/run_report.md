@@ -296,7 +296,7 @@ python -m library.run_engine journey --dataset hillstrom-email
 | Outcomes file | 64,000 rows: `customer_id`, `visit`, `conversion`, `spend` |
 | Campaign dated | 2008-03-20, outcome window 14 days |
 | Campaign ids | `c_20261010_11200001`, `c_20261010_11200002`, `c_20261010_11200003`, `c_20261010_11200004` |
-| Whole audit | 20.4 s |
+| Whole audit | 19.3 s |
 
 ### 8.1 The answer in one table
 
@@ -349,12 +349,12 @@ A Pack was built for each campaign, named "... - public dataset, retrospective a
 
 | Pack | Built | Claim | Headline |
 |---|---|---|---|
-| `conversion` | provenance verified: True; HTML 200, PDF 200 | Causal: the customers held back were chosen at random | Extra outcomes because of the campaign: +145 (likely +107 to +184). Net value ₹10,29,750 (10.30 lakh) to ₹17,76,011 (17.76 lakh). |
+| `conversion` | provenance verified: True; HTML 200, PDF 200 | Causal: the customers held back were chosen at random | Extra outcomes because of the campaign, every offer together: +212 (likely +150 to +270). Net value ₹14,44,453 (14.44 lakh) to ₹26,09,456 (26.09 lakh). |
 | `spend_any` | provenance verified: True; HTML 200, PDF 200 | Causal: the customers held back were chosen at random | Extra amount because of the campaign: +25,479.61 (likely +16,060.85 to +34,898.37). Net value ₹13,30,916 (13.31 lakh) to ₹28,94,430 (28.94 lakh). |
 | `spend_mens` | provenance verified: True; HTML 200, PDF 200 | Causal: the customers held back were chosen at random | Extra amount because of the campaign: +16,402.71 (likely +10,336.87 to +22,468.54). Net value ₹8,56,895 (8.57 lakh) to ₹18,63,824 (18.64 lakh). |
 | `spend_womens` | provenance verified: True; HTML 200, PDF 200 | Causal: the customers held back were chosen at random | Extra amount because of the campaign: +9,076.90 (likely +3,613.48 to +14,540.33). Net value ₹2,98,849 (2.99 lakh) to ₹12,05,778 (12.06 lakh). |
 
-**Finding (`conversion`).** With 2 offers the Pack's headline ('Extra outcomes because of the campaign: +145 (likely +107 to +184). Net value ₹10,29,750 (10.30 lakh) to ₹17,76,011 (17.76 lakh).'), its "Extra outcomes" (+145) and the value of what the campaign changed are the first offer's, Mens E-Mail, alone; the other offer's (Womens E-Mail +67) is in the offer table and the backfire table but not in the headline or the net value, while the cost of contacts (₹2,135) is for all 42,694 e-mails sent. The net value therefore credits one offer and charges both. Every figure is traced to a measured record, so provenance passes; it is the scope of the headline that is partial (M100 keeps the first offer in the single-offer fields, DEC-668 (3), and the Pack reads those fields). Raised for M104 (DEC-1314) in docs/CROSS_BRANCH_REQUESTS.md on 2026-10-10; no engine code was changed.
+**Several offers (`conversion`).** The Pack adds the 2 offers together against the one group sent nothing: its headline and "Extra outcomes" (+212, likely +150 to +270) are Mens E-Mail +145 and Womens E-Mail +67 together, and the value of what the campaign changed (₹20,42,997 (20.43 lakh), likely ₹14,46,587 (14.47 lakh) to ₹26,11,591 (26.12 lakh)) and the net value rest on that sum, while the cost of contacts (₹2,135) is for all 42,694 e-mails sent: every money line covers the same e-mails. The range is the engine's own, from every e-mailed customer compared with the shared group at once (`offers_combined` of the report), which counts that group once; the offers' own ranges are not added. This closes the finding raised for M104 (DEC-1314) in docs/CROSS_BRANCH_REQUESTS.md on 2026-10-10 (DEC-1322 (g)).
 
 Value inputs: one conversion is worth ₹9,658.17 (the mean spend of a customer who bought, over the whole file, at the assumed rate; revenue before margin; 578 buyers, mean spend $116.36), one dollar of spend ₹83, and one e-mail costs ₹0.05. 83 rupees per US dollar: an input assumption close to the 2024 average reference rate, used only to express the file's 2008 dollars in the engine's rupees. Every rupee figure scales with it.
 

@@ -127,8 +127,20 @@ def _skew_note(cases: list[dict[str, Any]]) -> str:
     )
 
 
+def _line_range(view: dict[str, Any], section: str, label: str) -> str | None:
+    """A line's value and range as the Pack prints them: `+212, likely +150 to +270`."""
+    for line in (_section(view, section) or {}).get("lines") or []:
+        if line.get("label") == label and line.get("value") and line.get("low") and line.get("high"):
+            return f"{line['value']['text']}, likely {line['low']['text']} to {line['high']['text']}"
+    return None
+
+
 def _pack_finding(results: dict[str, Any]) -> str:
-    """Where a Pack of several offers reads one offer only, quoted from the Pack and the report."""
+    """How a Pack of several offers scopes its money lines, quoted from the Pack and the report.
+
+    A report with `offers_combined` (DEC-1314 (r)-(w)) is added up across offers by the Pack, which this
+    says with the Pack's own figures; results from before it existed keep the finding raised for M104.
+    """
     out: list[str] = []
     for case in _measured(results):
         proof = case.get("proof") or {}
@@ -137,6 +149,28 @@ def _pack_finding(results: dict[str, Any]) -> str:
             continue
         view = proof["view"]
         first, rest = arms[0], arms[1:]
+        whole = case["report"].get("offers_combined")
+        if isinstance(whole, dict):
+            label = "Extra outcomes because of the campaign, every offer together"
+            credited = _line_range(view, "incremental", label)
+            value = _line_range(view, "net_value", "Value of what the campaign changed, every offer together")
+            cost = _line_text(view, "net_value", "Cost of contacts, for every customer meant to be contacted")
+            parts = " and ".join(
+                f"{a['arm']} {a['incremental_conversions']['value']:+,.0f}"
+                for a in arms
+                if a.get("incremental_conversions")
+            )
+            out.append(
+                f"**Several offers (`{case['key']}`).** The Pack adds the {len(arms)} offers together against the "
+                f'one group sent nothing: its headline and "Extra outcomes" ({credited}) are {parts} together, '
+                f"and the value of what the campaign changed ({value}) and the net value rest on that sum, while the "
+                f"cost of contacts ({cost}) is for all {_int(whole['treated_rows'])} e-mails sent: every money line "
+                "covers the same e-mails. The range is the engine's own, from every e-mailed customer compared with "
+                "the shared group at once (`offers_combined` of the report), which counts that group once; the "
+                "offers' own ranges are not added. This closes the finding raised for M104 (DEC-1314) in "
+                "docs/CROSS_BRANCH_REQUESTS.md on 2026-10-10 (DEC-1322 (g))."
+            )
+            continue
         credited = _line_text(view, "incremental", "Extra outcomes because of the campaign")
         cost = _line_text(view, "net_value", "Cost of contacts, for every customer meant to be contacted")
         emailed = sum(int(a["treated_rows"]) for a in arms)

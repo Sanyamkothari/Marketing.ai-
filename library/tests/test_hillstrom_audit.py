@@ -197,14 +197,22 @@ def test_the_conversion_pack_credits_both_e_mails_and_charges_both(audit: Any) -
     assert gain["label"] == "Extra outcomes because of the campaign, every offer together"
     assert gain["value"]["value"] == pytest.approx(added)
     assert gain["value"]["value"] > arms[0]["incremental_conversions"]["value"]
-    assert view["headline"].startswith(f"Extra outcomes because of the campaign, every offer together: {gain['value']['text']}")
-    net = {line["label"]: line for line in next(s for s in view["sections"] if s["key"] == "net_value")["lines"]}
+    assert view["headline"].startswith(
+        f"Extra outcomes because of the campaign, every offer together: {gain['value']['text']}"
+    )
+    net = {
+        line["label"]: line for line in next(s for s in view["sections"] if s["key"] == "net_value")["lines"]
+    }
     value = net["Value of what the campaign changed, every offer together"]
-    assert value["value"]["value"] == pytest.approx(added * case["proof"]["value_inputs"]["value_per_outcome"])
+    assert value["value"]["value"] == pytest.approx(
+        added * case["proof"]["value_inputs"]["value_per_outcome"]
+    )
     contacts = net["Cost of contacts, for every customer meant to be contacted"]
     emailed = case["campaign"]["counts"]["intended_treated"]
     assert emailed == whole["treated_rows"], "every e-mail of both offers is paid for"
-    assert contacts["value"]["value"] == pytest.approx(emailed * case["proof"]["value_inputs"]["contact_cost"])
+    assert contacts["value"]["value"] == pytest.approx(
+        emailed * case["proof"]["value_inputs"]["contact_cost"]
+    )
 
 
 @pytest.mark.slow
@@ -269,7 +277,11 @@ def test_the_audit_section_is_rendered_from_the_results_alone(audit: Any) -> Non
     assert "public dataset, retrospective audit" in first and "**Causal**" in first
     assert "### 8.5 The programme readout does not apply" in first and "`PROGRAMME_NO_HOLDOUT`" in first
     assert "was refused by the route: `CAMPAIGN_INVALID`" in first
-    assert "**Finding (`conversion`).**" in first, "the Pack's first-offer scope is said where it is met"
+    # DEC-1314 (r)-(w) fixed the first-offer scope this section used to report (DEC-1322 (g)): the Pack's scope
+    # of several offers is still said where it is met, now as every offer added together.
+    assert "**Several offers (`conversion`).**" in first, "the Pack's scope of several offers is said"
+    assert "every money line covers the same e-mails" in first
+    assert "**Finding (`conversion`).**" not in first
     assert "Caution: the amount is skewed" in first or "no skew warning" in first
 
 
@@ -481,6 +493,11 @@ def test_the_figures_in_docs_library_are_the_committed_results() -> None:
         expected.append(f"({usd(ci['ci_low'])} to {usd(ci['ci_high'])})")
         expected.append(f"bootstrap {usd(boot['ci_low'])} to {usd(boot['ci_high'])}")
     expected.append(f"{sum(a['treated_rows'] for a in cases['conversion']['report']['arms']):,} e-mails")
+    combined = cases["conversion"]["report"]["offers_combined"]["incremental_conversions"]
+    expected.append(
+        f"+{combined['value']:.0f} extra conversions, every offer together "
+        f"({combined['ci_low']:.0f} to {combined['ci_high']:.0f})"
+    )
     expected.append(results["programme"]["code"])
     expected.append(str(cases["spend_offers"]["refusal"]["detail"]["code"]))
     missing = [e for e in expected if e not in section]
