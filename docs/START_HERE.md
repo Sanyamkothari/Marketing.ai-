@@ -168,4 +168,8 @@ An error always starts with a plain sentence. Click **Details** to see its code 
 
 More detail, for the people who run Marketing AI: [CONNECTIONS.md](CONNECTIONS.md) (connections and secrets), [AGENTS.md](AGENTS.md) (how the Guided setup helper works) and [UPLIFT.md](UPLIFT.md) (measuring campaigns).
 
+## 🎬 Showing it to someone else
+
+To show the product to managers, use the demo script, [library/DEMO_SCRIPT.md](../library/DEMO_SCRIPT.md). It runs on a real public randomised e-mail test, not on invented data, and it tells the results as they fell: the list beats sending nothing, on conversions it does not beat sending everyone the men's e-mail (in money it is not shown to differ), and uplift modelling does not beat plain risk ranking on that file. One command, `python -m scripts.seed_validated`, loads the data and all the screens it needs: on the full file once `library/hillstrom-email/fetch.py` has been run, otherwise on the committed sample, which it labels and whose numbers are not the validated ones. The one-page summary to quote from is [library/hillstrom-email/DEMO_SUMMARY.md](../library/hillstrom-email/DEMO_SUMMARY.md). Whether someone outside the team can follow the script unaided is still to be tested ([library/DEMO_REHEARSAL.md](../library/DEMO_REHEARSAL.md)).
+
 To refresh the screenshots on this page: `python -m scripts.capture_start_here` (it uses synthetic data only).
