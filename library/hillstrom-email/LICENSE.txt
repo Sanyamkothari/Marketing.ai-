@@ -1,0 +1,42 @@
+MineThatData E-Mail Analytics and Data Mining Challenge (Hillstrom) — licence record
+====================================================================================
+
+Dataset      "Kevin_Hillstrom_MineThatData_E-MailAnalytics_DataMiningChallenge_2008.03.20.csv"
+             64,000 customers, 12 columns
+Author       Kevin Hillstrom, MineThatData
+Upstream     http://www.minethatdata.com/Kevin_Hillstrom_MineThatData_E-MailAnalytics_DataMiningChallenge_2008.03.20.csv
+             (blog post announcing the challenge: https://blog.minethatdata.com/2008/03/minethatdata-e-mail-analytics-and-data.html)
+Catalogued   TensorFlow Datasets, "hillstrom": https://www.tensorflow.org/datasets/catalog/hillstrom
+Copy fetched https://hillstorm1.s3.us-east-2.amazonaws.com/hillstorm_no_indices.csv.gz
+             (the mirror scikit-uplift's `fetch_hillstrom` reads; www.minethatdata.com did not resolve
+             from the environment this library was built in, 2026-10-09 and 2026-10-10)
+SHA-256      00a6a868e05a9ffe7382da51629f6d6dce88c5acfc945e79d314ebc78fd3a2c0 (the decompressed CSV)
+
+LICENCE — CHECK BEFORE COMMERCIAL REDISTRIBUTION
+------------------------------------------------
+What is known, and nothing more:
+
+* The file was publicly released by its author in March 2008 for the "MineThatData E-Mail
+  Analytics And Data Mining Challenge", for anyone to download and analyse.
+* It is listed in TensorFlow Datasets and redistributed by scikit-uplift, and it is widely used in
+  the uplift-modelling literature.
+* No explicit licence file or licence statement accompanies the data, at the canonical URL or at
+  the mirror. Its terms of reuse are therefore NOT known.
+
+Use it for internal validation, as this library does (the product owner approved obtaining it on
+2026-10-09). **Check the terms with the author before any commercial redistribution** of the file or
+of a derived file. The full file is not committed to this repository: `fetch.py` downloads it into the
+git-ignored `data/` directory and verifies the checksum above. Only `sample.csv`, a tenth of the rows
+drawn at random within each group, is committed, for the library's own tests.
+
+ATTRIBUTION
+-----------
+Kevin Hillstrom, "MineThatData E-Mail Analytics And Data Mining Challenge", MineThatData, March 2008.
+
+WHAT IS IN THE FILE
+-------------------
+Customer purchase history over the past year (recency in months, a spend band, the dollars spent,
+whether men's and women's merchandise were bought, an area type, whether the customer is new, the
+purchase channel), the randomised e-mail group, and three outcomes over the two weeks after the
+e-mail (a website visit, a conversion and the dollars spent). No names, addresses, e-mail addresses,
+phone numbers or government identifiers; the file has no key at all, so `fetch.py` adds a row number.

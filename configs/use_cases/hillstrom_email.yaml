@@ -1,0 +1,97 @@
+id: hillstrom-email
+name: E-mail Offer Choice
+description: Chooses, for each customer, the e-mail worth sending - men's merchandise, women's merchandise or none - by how much each one changes their chance of buying, and what that is worth.
+lifecycle_stage: Retention
+
+# The MineThatData E-Mail Analytics file (Kevin Hillstrom, 2008): 64,000 customers who last bought
+# within twelve months, split AT RANDOM into three equal groups - a men's e-mail, a women's e-mail
+# and no e-mail - with the visits, conversions and spend of the next two weeks. Plan J M110 validates
+# the whole journey on it (library/hillstrom-email/, DEC-1320). The column names and values are the
+# published ones; library/hillstrom-email/fetch.py only adds the row-number key.
+#
+# Configured as a propensity use case (Phase 1 trains the "risk" model on `conversion`, the model the
+# uplift check compares against), with the `uplift` block a campaign-effect run of three levels reads
+# (POST /uplift/runs, which sets the problem type itself; DEC-608).
+
+target:
+  column: conversion
+  positive_label: 1
+  definition: The customer bought in the two weeks after the e-mail (or after the day it would have gone out)
+  label_source: MineThatData E-Mail Analytics (Hillstrom, 2008), column conversion
+
+primary_key_hints: [customer_id]
+
+prepare:
+  # `segment` is the randomised e-mail: the campaign-effect run reads it as the treatment, and the risk
+  # model must never learn from it (it is the decision, not a customer fact). `visit` and `spend` are
+  # outcomes of the same two weeks. `value_inr` is `history` rescaled, which the journey adds as each
+  # customer's value (library/hillstrom-email/mapping.yaml); excluding a column a file lacks is a no-op.
+  exclude_columns: [segment, visit, spend, value_inr]
+
+# Two settings of the three-level run are passed by the journey as run overrides, not written here:
+# `uplift.treatment_levels: ["No E-Mail", "Mens E-Mail", "Womens E-Mail"]` (the control first, M100) and
+# `uplift.policy.value_column: value_inr`. configs/engine.yaml has no default for either leaf, and a
+# use-case file may only set leaves the engine defaults (tests/unit/test_use_case_files_minimal.py);
+# both may be overridden per run (DEC-1310 (a), DEC-1307). library/run_engine.py JOURNEYS lists them.
+uplift:
+  treatment_column: segment
+  base_model: lightgbm                     # seconds on 32,000 rows, and the only base model fold_auuc supports
+  segments:
+    # A conversion is rare here (under 1 in 100 without an e-mail), so a customer the e-mail moves by
+    # half a point is persuadable; the engine defaults (2 points, -1 point) were set for rates near 20 %.
+    persuadable_min_uplift: 0.005
+    sleeping_dog_max_uplift: -0.002
+  policy:
+    cost_per_contact: 0.05                 # rupees per e-mail: configs/pilot/value.yaml's e-mail benchmark
+  evidence:
+    fold_auuc: true                        # M96: is the model's quality the same when refitted on other rows?
+
+actions:
+  score_field: conversion_prob
+  bands:
+    - {name: High,   min_score: 0.02, action: "Send the e-mail the campaign-effect model chooses"}
+    - {name: Medium, min_score: 0.01, action: "Send the e-mail the campaign-effect model chooses"}
+    - {name: Low,    min_score: 0.00, action: "Send only where the campaign-effect model finds an effect"}
+  suppression:
+    opt_out_column: null                   # the public file carries no consent or contact history
+    recently_contacted_column: null
+  # The engine's own control group at the largest share it allows. On this file a measured campaign is a
+  # retrospective replay: only the customers whose random e-mail matches what the list chose keep their
+  # outcome, about a third of each group, so the control group is made as large as it may be.
+  control_group_fraction: 0.5
+
+output:
+  kpi:
+    label: "Customers worth an e-mail"
+    formula: 'count_where_band_in(["High","Medium"])'
+
+ui:
+  pages:
+    data: "Customer purchase history + e-mail test"
+    model: "E-mail Effect and Purchase Propensity"
+    output: "E-mail Choice per Customer"
+
+template:
+  columns:
+    - {name: customer_id,     role: primary_key, type: integer, description: "Row number in the published order. Identifies the customer; never used as a feature.", examples: ["1","2","3","4","5"]}
+    - {name: recency,         role: feature,     type: integer, description: "Months since the customer's last purchase",                                         examples: ["10","6","7","9","2"]}
+    - {name: history_segment, role: feature,     type: string,  description: "Band of last year's spend, as published",                                           examples: ["2) $100 - $200","3) $200 - $350","2) $100 - $200","5) $500 - $750","1) $0 - $100"]}
+    - {name: history,         role: feature,     type: float,   description: "Dollars spent in the past year, before the e-mail",                                 examples: ["142.44","329.08","180.65","675.83","45.34"]}
+    - {name: mens,            role: feature,     type: integer, description: "1 when the customer bought men's merchandise in the past year",                     examples: ["1","1","0","1","1"]}
+    - {name: womens,          role: feature,     type: integer, description: "1 when the customer bought women's merchandise in the past year",                   examples: ["0","1","1","0","0"]}
+    - {name: zip_code,        role: feature,     type: string,  description: "Area type: Urban, Surburban (spelled so in the file) or Rural",                     examples: ["Surburban","Rural","Surburban","Rural","Urban"]}
+    - {name: newbie,          role: feature,     type: integer, description: "1 when the customer is new in the past twelve months",                              examples: ["0","1","1","1","0"]}
+    - {name: channel,         role: feature,     type: string,  description: "How the customer bought in the past year: Phone, Web or Multichannel",              examples: ["Phone","Web","Web","Web","Web"]}
+    - {name: segment,         role: feature,     type: string,  description: "The e-mail the customer was sent, assigned at random: Mens E-Mail, Womens E-Mail or No E-Mail. THE LEVER: the campaign-effect run reads it as the treatment and the risk model excludes it. The template has no treatment role, so it is listed as a feature. Leave out when scoring.", examples: ["Womens E-Mail","No E-Mail","Womens E-Mail","Mens E-Mail","Womens E-Mail"]}
+    - {name: visit,           role: feature,     type: integer, description: "Outcome: 1 when the customer visited the website in the two weeks after. Excluded from the features. Leave out when scoring.", examples: ["0","0","0","0","0"]}
+    - {name: spend,           role: feature,     type: float,   description: "Outcome: dollars spent in the two weeks after. Excluded from the features. Leave out when scoring.",                       examples: ["0.0","0.0","0.0","0.0","0.0"]}
+    - {name: conversion,      role: target,      type: integer, description: "Target: 1 when the customer bought in the two weeks after, else 0. Leave blank when scoring.",                     examples: ["0","0","0","0","0"]}
+
+agent:                                  # Plan G: this use case's Guided-setup helper (DEC-1003)
+  goal: "Find the customers an e-mail makes more likely to buy, and which e-mail to send each of them."
+  knowledge:
+    - "The outcome is a purchase in the two weeks after the e-mail."
+    - "Which e-mail each customer was sent was decided at random, so the difference between the groups is the e-mail's effect."
+    - "Visits and spend in the same two weeks happen after the e-mail, so they contain the answer and must not be used to decide whom to e-mail."
+  column_hints:
+    target_synonyms: [converted, purchased, bought]
