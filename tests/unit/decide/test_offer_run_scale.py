@@ -10,7 +10,6 @@ step is a vectorised column operation or (the budget walk) one sort and one pass
 from __future__ import annotations
 
 import time
-from collections.abc import Callable
 from datetime import UTC, datetime
 
 import numpy as np
@@ -102,13 +101,22 @@ def _choose(rows: int, seed: int) -> float:
     return elapsed
 
 
-def _best_of_three(run: Callable[[], float]) -> float:
-    return min(run() for _ in range(3))
+def _best_times(rounds: int = 3) -> tuple[float, float]:
+    """The best of `rounds` runs at each size, the two sizes taking turns.
+
+    A busy machine slows a run, rarely every run, and taking turns means a burst of load that lasts a while
+    slows both sizes, not only the one measured during it, so it cannot fake a growth that is not there.
+    Quadratic work, or a 200k run over the budget, is slow on every run, so the best of three still catches it
+    (as `test_arbitrate_scale.py` does)."""
+    small = large = float("inf")
+    for _ in range(rounds):
+        small = min(small, _choose(FAST_ROWS, 5))
+        large = min(large, _choose(ROWS, 6))
+    return small, large
 
 
 def test_choosing_offers_in_the_run_for_200k_customers_is_fast_and_linear() -> None:
-    small = _best_of_three(lambda: _choose(FAST_ROWS, 5))
-    large = _choose(ROWS, 6)
+    small, large = _best_times()
     print(
         f"\n[Perf] decide_offers + the treat list's reading, {ROWS:,} rows x 2 offers with a budget: "
         f"{large:.2f}s; 1M estimate {large * 5:.1f}s; {FAST_ROWS:,} rows {small:.3f}s"

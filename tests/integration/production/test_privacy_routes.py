@@ -186,7 +186,11 @@ def test_the_latest_record_decides_and_a_lookup_is_audited_under_its_own_id(worl
     assert response.status_code == 200, response.text
     body = response.json()
     states = {item["purpose"]: item["state"] for item in body["purposes"]}
-    assert states == {PURPOSE: "withdrawn", "account_servicing": "none"}
+    assert states == {
+        PURPOSE: "withdrawn",
+        "account_servicing": "none",
+        "measurement_comparison_groups": "none",  # Plan K M131: a purpose no use case is mapped to
+    }
     assert [record["status"] for record in body["records"]] == ["granted", "withdrawn"]
     assert PERSON not in response.text
 

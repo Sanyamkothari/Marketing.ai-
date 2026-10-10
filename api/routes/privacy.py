@@ -518,6 +518,8 @@ def record_consent(
         source=body.source,
         recorded_at=recorded_at,
         expires_at=body.expires_at,
+        basis=None if body.basis is None else body.basis.value,
+        operator_registered=body.operator_registered,
     )
     set_audit_context(
         request,

@@ -27,6 +27,7 @@ __all__ = [
     "CONSENT_REPORT_FILENAME",
     "PRIVACY_RUN_ARTEFACTS",
     "AccessExportManifest",
+    "ConsentBasis",
     "ConsentImportError",
     "ConsentImportReport",
     "ConsentRecord",
@@ -63,6 +64,14 @@ class ConsentStatus(StrEnum):
     WITHDRAWN = "withdrawn"
 
 
+class ConsentBasis(StrEnum):
+    """How a consent was obtained (Plan K M131). Null on a record means not recorded, read as explicit."""
+
+    EXPLICIT = "explicit"
+    INQUIRY = "inquiry"
+    LEGACY = "legacy"
+
+
 class ConsentRecord(_Doc):
     """One row of the consent ledger, as the API and the access export show it."""
 
@@ -77,6 +86,20 @@ class ConsentRecord(_Doc):
     created_at: AwareDatetime = Field(description="When the record entered the ledger, UTC.")
     channel: str | None = Field(
         default=None, description="Channel the consent applies to; null = all channels."
+    )
+    basis: ConsentBasis | None = Field(
+        default=None,
+        description=(
+            "How the consent was obtained: `explicit`, `inquiry` (given by asking about an offer) or "
+            "`legacy` (collected before the current rules); null = not recorded, read as explicit."
+        ),
+    )
+    operator_registered: bool | None = Field(
+        default=None,
+        description=(
+            "Whether the consent is registered on the telecom operators' digital platform; "
+            "null = not recorded, never read as registered."
+        ),
     )
 
 

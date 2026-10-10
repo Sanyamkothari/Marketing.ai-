@@ -426,3 +426,58 @@ def test_a_parquet_consent_file_that_expands_past_the_limit_is_refused(
         monkeypatch.setattr(privacy_routes, "MAX_CONSENT_FILE_BYTES", len(text) + 1)
         accepted = client.post("/privacy/consent/imports/from-connection", json=body)
         assert accepted.status_code in (201, 422), accepted.text  # read and judged row by row: not too large
+
+
+def test_a_parquet_consent_file_with_a_nullable_integer_registration_flag_imports(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Plan K M131 review: a 0/1 flag with gaps is float in Parquet-as-text (`1.0`); it is still read as 1 and 0."""
+    import io
+
+    import boto3
+    import pandas as pd
+    import pyarrow.parquet as pq
+    from moto import mock_aws
+
+    columns = [*CONSENT_COLUMNS, "basis", "operator_registered"]
+    rows = [(*row, "legacy", flag) for row, flag in zip(_consent_rows(3), (1, 0, None), strict=True)]
+    frame = pd.DataFrame(rows, columns=columns)
+    buffer = io.BytesIO()
+    frame.astype({"operator_registered": "Int64"}).to_parquet(buffer, index=False)
+    factory: Any = pq.ParquetFile  # pyarrow ships no types
+    assert (
+        str(factory(io.BytesIO(buffer.getvalue())).schema_arrow.field("operator_registered").type) == "int64"
+    )
+    for name in ("AWS_PROFILE", "AWS_SESSION_TOKEN"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "testing")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "testing")
+    with mock_aws():
+        boto3.client("s3", region_name="us-east-1").create_bucket(Bucket="consent-exports")
+        boto3.client("s3", region_name="us-east-1").put_object(
+            Bucket="consent-exports", Key="consent/flags.parquet", Body=buffer.getvalue()
+        )
+        connection_id = ok(
+            client.post(
+                "/connections",
+                json={
+                    "kind": "s3",
+                    "name": "Consent exports",
+                    "config": {"bucket": "consent-exports", "region": "us-east-1"},
+                    "secrets": {"access_key_id": "testing", "secret_access_key": "testing"},
+                },
+            ),
+            201,
+        )["connection_id"]
+        imported = ok(
+            client.post(
+                "/privacy/consent/imports/from-connection",
+                json={
+                    "connection_id": connection_id,
+                    "selection": {"path": "consent/flags.parquet"},
+                    "client_id": "acme",
+                },
+            ),
+            201,
+        )
+    assert imported["imported"] is True and imported["rows_imported"] == 3, imported

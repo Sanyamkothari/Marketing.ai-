@@ -12,6 +12,7 @@ from __future__ import annotations
 import logging
 import time
 from collections.abc import Iterator
+from typing import Any
 
 import pytest
 
@@ -31,7 +32,10 @@ def _quiet() -> Iterator[None]:
 
 
 def _timed(rows: int, seed: int) -> float:
-    campaign = revenue_campaign(rows, 2.0, seed=seed, rho=0.6)
+    return _once(revenue_campaign(rows, 2.0, seed=seed, rho=0.6), rows)
+
+
+def _once(campaign: Any, rows: int) -> float:
     started = time.perf_counter()
     report = measure_incrementality(campaign.scores, campaign.outcomes, **campaign.adjusted_kwargs)
     elapsed = time.perf_counter() - started
@@ -39,9 +43,24 @@ def _timed(rows: int, seed: int) -> float:
     return elapsed
 
 
+def _best_times(rounds: int = 5) -> tuple[float, float]:
+    """The best of `rounds` runs at each size, the two sizes taking turns (each campaign is built once).
+
+    A busy machine slows a run, rarely every run, and taking turns means a burst of load that lasts a while
+    slows both sizes, not only the one measured during it, so it cannot fake a growth that is not there.
+    Quadratic work is slow on every run, so the best of five still catches it (as `test_arbitrate_scale.py`
+    does)."""
+    small_campaign = revenue_campaign(FAST_ROWS, 2.0, seed=1, rho=0.6)
+    large_campaign = revenue_campaign(ROWS, 2.0, seed=4, rho=0.6)
+    small = large = float("inf")
+    for _ in range(rounds):
+        small = min(small, _once(small_campaign, FAST_ROWS))
+        large = min(large, _once(large_campaign, ROWS))
+    return small, large
+
+
 def test_measuring_an_adjusted_amount_is_linear() -> None:
-    small = min(_timed(FAST_ROWS, seed) for seed in (1, 2, 3))
-    large = _timed(ROWS, 4)
+    small, large = _best_times()
     print(f"\n[Perf] adjusted amount: {FAST_ROWS:,} rows {small:.3f}s; {ROWS:,} rows {large:.2f}s")
     # Linear work gives about 10x for ten times the rows and quadratic work about 100x; 30x leaves room
     # for contention while still catching anything worse than linear.

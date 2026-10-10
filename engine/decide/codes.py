@@ -75,11 +75,18 @@ PLAN_J_CODES: Final[frozenset[str]] = (
             # `resolve_config`) and by `engine.pilot.roi.lookup_value_costs` for an action id the catalogue lacks.
             "CATALOGUE_ACTION_UNKNOWN",
             "ACTION_DLT_TEMPLATE_MISSING",
+            # Plan K M131 (DEC-1323 (a)): a catalogue action on `call` or `ivr` without `a2p_declared: true`
+            # when the region file requires it (`<channel>_requires_true`, `engine.decide.catalogue`).
+            "ACTION_A2P_UNDECLARED",
             "CATALOGUE_INVALID",
             # M99 (DEC-1309 (j), (m)): a consent import row whose channel is not a channel name
             # (`engine.privacy.consent`, a per-row `ConsentImportError`). The other CONSENT_* row codes predate
             # Plan J and are not in the catalogue; this one is joined because it is new and user-facing.
             "CONSENT_CHANNEL_INVALID",
+            # Plan K M131 (DEC-1323 (b)): a consent import row whose `basis` or `operator_registered` cell
+            # cannot be read (`engine.privacy.consent`, per-row `ConsentImportError`s like the one above).
+            "CONSENT_BASIS_INVALID",
+            "CONSENT_REGISTERED_INVALID",
             # M101 (DEC-1311 (l), (p), (r), (v)): `POST /decide/arbitrate` and the arbitration downloads
             # (`api.routes.decide`, `engine.decide.arbitrate`). Route codes, joined here so the catalogue
             # explains them as it does M94's campaign route errors.

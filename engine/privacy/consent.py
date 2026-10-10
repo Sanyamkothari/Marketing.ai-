@@ -18,6 +18,14 @@ by value - a consent file is personal data and an error message is shown, logged
 The import is all or nothing unless `partial=True`: half a consent file loaded silently is a ledger
 nobody can reason about (DEC-734).
 
+**How a consent was obtained (Plan K M131, DEC-1323).** A record may carry a `basis` (`explicit`,
+`inquiry` or `legacy`; null = not recorded, read as explicit) and `operator_registered` (null = not
+recorded, never read as registered); the import reads both as optional columns. `classify` applies a
+region's :class:`ConsentBasisRules` only when it is given them and a channel they list, and only to a
+grant that has not expired: an inquiry grant older than its validity is `inquiry_lapsed`, a legacy grant
+not recorded as registered is `legacy_unregistered`. Without rules everything above is what it was; the
+all-channel gate (`apply_consent_gate`) never passes any.
+
 **The scoring seam.** Phase 1 already suppresses a row whose `governance.consent_column` is not
 truthy (`consent_false`, first in `engine.stages.actions` precedence) and counts it in
 `scoring_summary.json`. When a ledger exists for the run's client and the use case's purpose,
@@ -33,13 +41,16 @@ purpose*, and model fitting is not contacting anyone.
 from __future__ import annotations
 
 import csv
+import hashlib
 import io
+import json
 import re
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from typing import TYPE_CHECKING, Final
 
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import delete, inspect
 from sqlalchemy.engine import Engine
 from sqlmodel import Session, col, select
@@ -49,6 +60,7 @@ from engine.decide.spec import CHANNEL_NAME, CHANNEL_NAME_RULE  # Plan J M99; im
 from engine.platform_db import PLATFORM_DB_FILENAME, platform_engine, sqlite_engine
 from engine.privacy.config import PrivacyConfig, privacy_config_or_none, privacy_salt
 from engine.privacy.contracts import (
+    ConsentBasis,
     ConsentImportError,
     ConsentImportReport,
     ConsentRecord,
@@ -78,6 +90,7 @@ __all__ = [
     "CONSENT_CSV_OPTIONAL",
     "CONSENT_CSV_REQUIRED",
     "LEDGER_CONSENT_COLUMN",
+    "ConsentBasisRules",
     "ConsentClassification",
     "ConsentGate",
     "ConsentLedger",
@@ -96,9 +109,19 @@ Never exported: `scores.csv` carries `scores_csv_columns(...)` and nothing else,
 only between the actions stage and the export stage of one run."""
 
 CONSENT_CSV_REQUIRED: Final[tuple[str, ...]] = ("principal_id", "purpose", "status", "recorded_at")
-CONSENT_CSV_OPTIONAL: Final[tuple[str, ...]] = ("source", "expires_at", "channel")
+CONSENT_CSV_OPTIONAL: Final[tuple[str, ...]] = (
+    "source",
+    "expires_at",
+    "channel",
+    "basis",
+    "operator_registered",
+)
 DEFAULT_IMPORT_SOURCE: Final[str] = "csv_import"
 MAX_PRINCIPAL_ID_CHARS: Final[int] = 256
+_BASES: Final[frozenset[str]] = frozenset(item.value for item in ConsentBasis)
+# "1.0" and "0.0": a 0/1 flag with gaps is read as a float column when a Parquet file is written as text.
+_TRUE_WORDS: Final[frozenset[str]] = frozenset({"true", "yes", "1", "1.0"})
+_FALSE_WORDS: Final[frozenset[str]] = frozenset({"false", "no", "0", "0.0"})
 FUTURE_TOLERANCE: Final[timedelta] = timedelta(minutes=5)
 """A record may be stamped this far in the future (clock skew) and no further."""
 
@@ -135,12 +158,64 @@ def principal_key(value: object) -> str:
 
 @dataclass(frozen=True)
 class ConsentClassification:
-    """Every looked-up principal in exactly one bucket, as of one moment."""
+    """Every looked-up principal in exactly one bucket, as of one moment.
+
+    `inquiry_lapsed` and `legacy_unregistered` (Plan K M131) are filled only when `classify` is given
+    `basis_rules` and a channel they cover; otherwise they are empty and the four older buckets are what
+    they were. A principal in either is a granted, unexpired consent that the region's rule does not let
+    count on that channel.
+    """
 
     valid: frozenset[str]
     withdrawn: frozenset[str]
     expired: frozenset[str]
     missing: frozenset[str]
+    inquiry_lapsed: frozenset[str] = frozenset()
+    legacy_unregistered: frozenset[str] = frozenset()
+
+
+class ConsentBasisRules(BaseModel):
+    """A region's rules on how a consent was obtained, per channel (Plan K M131, DEC-1323).
+
+    Read from the optional `consent_basis` block of `configs/regions/<region>.yaml`; the engine never
+    names a region. They apply only to a consent that is granted and unexpired, and only on `channels`.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    channels: tuple[str, ...] = Field(
+        description="Channels the rules apply to; on any other channel the basis is not looked at."
+    )
+    inquiry_valid_days: int | None = Field(
+        default=None,
+        gt=0,
+        description="Days an inquiry-based consent counts from when it was recorded; null = no limit.",
+    )
+    legacy_requires_operator_registration: bool = Field(
+        default=False,
+        description="Whether a legacy consent counts only when it is registered on the operators' platform.",
+    )
+
+    @field_validator("channels", mode="before")
+    @classmethod
+    def _channel_names(cls, value: object) -> object:
+        if not isinstance(value, list | tuple):
+            return value
+        names = tuple(str(item).strip().lower() for item in value)
+        for name in names:
+            if not CHANNEL_NAME.fullmatch(name):
+                raise ValueError(f"{name!r} is not a channel name ({CHANNEL_NAME_RULE})")
+        return tuple(dict.fromkeys(names))
+
+    def applies_to(self, channel: str | None) -> bool:
+        """Whether the rules look at consents on `channel` (never for the all-channel question)."""
+        normal = _channel(channel)
+        return normal is not None and normal in self.channels
+
+    def sha256(self) -> str:
+        """SHA-256 of the rules' canonical JSON, so a run can record which rules it applied."""
+        canonical = json.dumps(self.model_dump(mode="json"), sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 class ConsentLedger:
@@ -182,15 +257,22 @@ class ConsentLedger:
         recorded_at: datetime,
         expires_at: datetime | None = None,
         channel: str | None = None,
+        basis: str | None = None,
+        operator_registered: bool | None = None,
     ) -> ConsentRecord:
         """Append one record and return it. The caller has validated `purpose` against the config.
 
         A `channel` that is not a channel name (`engine.decide.spec.CHANNEL_NAME`, after stripping and
         lower-casing) raises `ValueError`: no configuration could name it, so the record would never apply.
+        So does a `basis` that is not `explicit`, `inquiry` or `legacy` (Plan K M131); null for either
+        of `basis` and `operator_registered` means not recorded.
         """
         stored_channel = _channel(channel)
         if stored_channel is not None and not CHANNEL_NAME.fullmatch(stored_channel):
             raise ValueError(f"channel is not a channel name ({CHANNEL_NAME_RULE})")
+        stored_basis = _basis(basis)
+        if stored_basis is not None and stored_basis not in _BASES:
+            raise ValueError(f"basis is not one of {', '.join(sorted(_BASES))}")
         row = ConsentRecordRow(
             client_id=client_id,
             principal_hash=self.hash(principal_id),
@@ -201,6 +283,8 @@ class ConsentLedger:
             expires_at=None if expires_at is None else to_utc(expires_at),
             created_at=utc_now(),
             channel=stored_channel,
+            basis=stored_basis,
+            operator_registered=operator_registered,
         )
         with Session(self._engine) as session:
             session.add(row)
@@ -252,7 +336,7 @@ class ConsentLedger:
             parsed = _parse_row(cells, number, position, len(header), privacy, moment, errors)
             if parsed is None:
                 continue
-            principal, purpose, status, source, recorded_at, expires_at, channel = parsed
+            principal, purpose, status, source, recorded_at, expires_at, channel, basis, registered = parsed
             rows.append(
                 ConsentRecordRow(
                     client_id=client_id,
@@ -264,6 +348,8 @@ class ConsentLedger:
                     expires_at=expires_at,
                     created_at=moment,
                     channel=channel,
+                    basis=basis,
+                    operator_registered=registered,
                 )
             )
         write = bool(rows) and (partial or not errors)
@@ -324,9 +410,13 @@ class ConsentLedger:
         principal_ids: Iterable[str],
         at: datetime,
         channel: str | None = None,
+        basis_rules: ConsentBasisRules | None = None,
     ) -> set[str]:
         """The principal ids, of those given, validly consented to `purpose` at `at` (optionally for `channel`)."""
-        return set(self.classify(client_id, purpose, principal_ids, at, channel=channel).valid)
+        verdict = self.classify(
+            client_id, purpose, principal_ids, at, channel=channel, basis_rules=basis_rules
+        )
+        return set(verdict.valid)
 
     def classify(
         self,
@@ -335,11 +425,20 @@ class ConsentLedger:
         principal_ids: Iterable[str],
         at: datetime,
         channel: str | None = None,
+        basis_rules: ConsentBasisRules | None = None,
     ) -> ConsentClassification:
-        """Every given id in one of four buckets: valid, withdrawn, expired or no record.
+        """Every given id in one bucket: valid, withdrawn, expired, no record, and (Plan K M131) inquiry
+        lapsed or legacy unregistered.
 
         When `channel` is given, checks channel-specific consent (channel records, or all-channel records
         where channel is null). When `channel` is None, checks all-channel consent.
+
+        `basis_rules` apply only when given, with a `channel` they list, to a deciding row that is a
+        grant and not expired: an `inquiry` grant at least `inquiry_valid_days` old is `inquiry_lapsed`;
+        a `legacy` grant not recorded as operator-registered (false or null) is `legacy_unregistered`
+        when the rules require registration. A later withdrawal still decides first (`withdrawn`), and an
+        expired grant stays `expired`. Without rules, or on another channel, the answer is exactly the
+        four-bucket one: a null `basis` reads as explicit.
         """
         moment = to_utc(at)
         ids = {principal_key(value) for value in principal_ids}
@@ -351,6 +450,12 @@ class ConsentLedger:
         withdrawn: set[str] = set()
         expired: set[str] = set()
         missing: set[str] = set()
+        inquiry_lapsed: set[str] = set()
+        legacy_unregistered: set[str] = set()
+        rules = basis_rules if basis_rules is not None and basis_rules.applies_to(channel) else None
+        lapse = None
+        if rules is not None and rules.inquiry_valid_days is not None:
+            lapse = timedelta(days=rules.inquiry_valid_days)
         for hashed, principals in by_hash.items():
             row = latest.get(hashed)
             if row is None or principals == [""]:  # an empty key is never a principal
@@ -359,6 +464,20 @@ class ConsentLedger:
                 withdrawn.update(principals)
             elif row.expires_at is not None and aware_utc(row.expires_at) <= moment:
                 expired.update(principals)
+            elif rules is None:
+                valid.update(principals)
+            elif (
+                row.basis == ConsentBasis.INQUIRY.value
+                and lapse is not None
+                and moment >= aware_utc(row.recorded_at) + lapse
+            ):
+                inquiry_lapsed.update(principals)
+            elif (
+                row.basis == ConsentBasis.LEGACY.value
+                and rules.legacy_requires_operator_registration
+                and row.operator_registered is not True
+            ):
+                legacy_unregistered.update(principals)
             else:
                 valid.update(principals)
         return ConsentClassification(
@@ -366,6 +485,8 @@ class ConsentLedger:
             withdrawn=frozenset(withdrawn),
             expired=frozenset(expired),
             missing=frozenset(missing),
+            inquiry_lapsed=frozenset(inquiry_lapsed),
+            legacy_unregistered=frozenset(legacy_unregistered),
         )
 
     def history(self, principal_id: str, *, client_id: str | None = None) -> tuple[ConsentRecord, ...]:
@@ -435,6 +556,8 @@ def _to_contract(row: ConsentRecordRow) -> ConsentRecord:
         expires_at=None if row.expires_at is None else aware_utc(row.expires_at),
         created_at=aware_utc(row.created_at),
         channel=row.channel,
+        basis=None if row.basis is None else ConsentBasis(row.basis),
+        operator_registered=row.operator_registered,
     )
 
 
@@ -449,7 +572,9 @@ def _parse_row(
     privacy: PrivacyConfig,
     now: datetime,
     errors: list[ConsentImportError],
-) -> tuple[str, str, ConsentStatus, str, datetime, datetime | None, str | None] | None:
+) -> (
+    tuple[str, str, ConsentStatus, str, datetime, datetime | None, str | None, str | None, bool | None] | None
+):
     """One data row, or None after appending its errors. Messages never quote a cell."""
     before = len(errors)
     if len(cells) != width:
@@ -522,13 +647,42 @@ def _parse_row(
             f"Row {number}: channel is not a channel name ({CHANNEL_NAME_RULE}), such as sms or email; "
             "leave it empty for every channel.",
         )
+    # Plan K M131: how the consent was obtained, and whether the operators' platform holds it. Blank = null.
+    basis = _basis(cell("basis"))
+    if basis is not None and basis not in _BASES:
+        fail(
+            "basis",
+            "CONSENT_BASIS_INVALID",
+            f"Row {number}: basis must be explicit, inquiry or legacy; leave it empty if not recorded.",
+        )
+    raw_registered = cell("operator_registered").lower()
+    registered: bool | None = None
+    if raw_registered in _TRUE_WORDS:
+        registered = True
+    elif raw_registered in _FALSE_WORDS:
+        registered = False
+    elif raw_registered:
+        fail(
+            "operator_registered",
+            "CONSENT_REGISTERED_INVALID",
+            f"Row {number}: operator_registered must be true, false, yes, no, 1 or 0; "
+            "leave it empty if not recorded.",
+        )
     if len(errors) > before or status is None or recorded_at is None:
         return None
-    return principal, purpose, status, source, recorded_at, expires_at, channel
+    return principal, purpose, status, source, recorded_at, expires_at, channel, basis, registered
 
 
 def _channel(value: str | None) -> str | None:
     """A record's channel as stored and compared: stripped lower case; empty is null (every channel)."""
+    if value is None:
+        return None
+    text = value.strip().lower()
+    return text or None
+
+
+def _basis(value: str | None) -> str | None:
+    """A record's basis as stored and compared: stripped lower case; empty is null (not recorded)."""
     if value is None:
         return None
     text = value.strip().lower()

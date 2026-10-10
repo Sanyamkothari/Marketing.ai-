@@ -907,6 +907,7 @@ class AuditExportRequest(StrictBase):
 # access log and every proxy record), is hashed on arrival, and appears in no response below: every
 # model here names a person by `principal_hash` or not at all (DEC-746).
 from engine.privacy.contracts import (  # noqa: E402
+    ConsentBasis,
     ConsentImportReport,
     ConsentRecord,
     ConsentReport,
@@ -994,6 +995,20 @@ class ConsentRecordRequest(StrictBase):
     )
     expires_at: AwareDatetime | None = Field(default=None, description="When a grant lapses; null = never.")
     client_id: str | None = Field(default=None, max_length=128, description=_CLIENT_ID_DESCRIPTION)
+    basis: ConsentBasis | None = Field(
+        default=None,
+        description=(
+            "How the consent was obtained: `explicit`, `inquiry` or `legacy`; null = not recorded, "
+            "read as explicit (Plan K M131)."
+        ),
+    )
+    operator_registered: bool | None = Field(
+        default=None,
+        description=(
+            "Whether the consent is registered on the telecom operators' digital platform; "
+            "null = not recorded, never read as registered (Plan K M131)."
+        ),
+    )
 
 
 class ConsentLookupRequest(StrictBase):

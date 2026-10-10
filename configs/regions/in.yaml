@@ -1,5 +1,22 @@
-# Region profile for India (IN) - Plan J M99 stub.
+# Region profile for India (IN) - Plan J M99 stub; Plan K M131 (DEC-1323) adds the TRAI rules below.
 # Data-driven requirements for channels in this region.
 sms_requires:
   - dlt_template_id
   - message_category
+
+# TRAI TCCCPR Third Amendment (notified 18 Sep 2026): automated, robo and AI-voice calls must be declared
+# to the operator as A2P, or they count as unsolicited commercial communication. An action sent on `call`
+# or `ivr` must therefore say `a2p_declared: true` in the catalogue (ACTION_A2P_UNDECLARED otherwise).
+# A call placed by a human telecaller is not A2P: give that channel another name, such as `telecaller`.
+call_requires_true:
+  - a2p_declared
+ivr_requires_true:
+  - a2p_declared
+
+# The same amendment, on how a consent was obtained (read by the consent ledger, per channel):
+# an inquiry-based consent lasts 7 days; a legacy consent counts only if it is registered on the
+# operators' digital platform. A consent whose basis is not recorded is read as explicit.
+consent_basis:
+  channels: [sms, call, ivr]
+  inquiry_valid_days: 7
+  legacy_requires_operator_registration: true

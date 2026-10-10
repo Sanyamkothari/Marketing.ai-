@@ -82,6 +82,14 @@ class ConsentRecordRow(SQLModel, table=True):
     )
     created_at: datetime = SQLField(sa_column=Column("created_at", DateTime(timezone=True), nullable=False))
     channel: str | None = SQLField(default=None, nullable=True)
+    basis: str | None = SQLField(default=None, nullable=True)
+    """Plan K M131: how the consent was obtained - `explicit`, `inquiry` or `legacy`; null = not recorded
+    (read as explicit). Added by `0008_consent_basis`."""
+    operator_registered: bool | None = SQLField(
+        default=None, sa_column=Column("operator_registered", Boolean(), nullable=True)
+    )
+    """Plan K M131: whether the consent is registered on the telecom operators' digital platform; null =
+    not recorded (never read as registered). Added by `0008_consent_basis`."""
 
 
 class ErasureRequestRow(SQLModel, table=True):
@@ -151,10 +159,13 @@ _ADDED_COLUMNS: Final[tuple[tuple[str, str, str], ...]] = (
     (ERASURE_REQUEST_TABLE, "history_all_clients", "BOOLEAN NOT NULL DEFAULT 0"),
     # Plan J M99 (DEC-1309): null = every channel, so every record already stored keeps applying to all.
     (CONSENT_RECORD_TABLE, "channel", "VARCHAR"),
+    # Plan K M131 (DEC-1323): null = not recorded, so every record already stored reads as before.
+    (CONSENT_RECORD_TABLE, "basis", "VARCHAR"),
+    (CONSENT_RECORD_TABLE, "operator_registered", "BOOLEAN"),
 )
 """Columns a later revision added to a table Phase 4b's `create_tables` may already have made in a
 SQLite file: `create_all` adds a missing table, never a missing column (DEC-341), so they are added
-here - `(table, column, SQLite DDL)`. Postgres gets them from Alembic (`0005_plan_d`, `0007_consent_channel`)."""
+here - `(table, column, SQLite DDL)`. Postgres gets them from Alembic (`0005_plan_d`, `0007_consent_channel`, `0008_consent_basis`)."""
 
 
 def create_privacy_tables(engine: Engine) -> None:
@@ -171,8 +182,9 @@ def add_missing_columns(engine: Engine) -> None:
     """On SQLite, add each `_ADDED_COLUMNS` column an existing table lacks; never create a table.
 
     The scoring seam reads the ledger without creating anything (`ConsentLedger(create=False)`), but a
-    `platform.db` written before Plan J M99 has a `consent_record` without `channel`, which every read
-    of the table now selects; this brings that file up to date in place (Postgres: `0007`).
+    `platform.db` written before Plan J M99 has a `consent_record` without `channel` (and before Plan K
+    M131, without `basis` and `operator_registered`), which every read of the table now selects; this
+    brings that file up to date in place (Postgres: `0007`, `0008`).
     """
     if engine.dialect.name != "sqlite":
         return
