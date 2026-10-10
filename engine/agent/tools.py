@@ -739,6 +739,7 @@ def _draft_outcome_labels(ctx: AgentContext, _: NoArgs) -> dict[str, Any]:
                 "already_quiet": d.already_quiet,
                 "still_active": d.still_active,
                 "no_date": d.no_date,
+                "after_reference": d.after_reference,
                 "examples": [*d.quiet_examples, *d.active_examples],
             }
             for d in drafts.drafts

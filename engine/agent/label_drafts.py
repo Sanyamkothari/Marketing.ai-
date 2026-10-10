@@ -43,9 +43,12 @@ class LabelDraft:
     window_days: int
     grace_days: int
     already_quiet: int
-    """Customers whose last activity was more than `window_days + grace_days` before the reference date."""
+    """Customers whose last activity was more than `window_days + grace_days` before the date their own row
+    describes (the row's snapshot date when the file has one, else the newest activity date in the file)."""
     still_active: int
     no_date: int
+    after_reference: int
+    """Customers whose last activity is dated after the date the file describes: not quiet, not counted active."""
     quiet_examples: tuple[str, ...]
     active_examples: tuple[str, ...]
 
@@ -57,7 +60,8 @@ class LabelDrafts:
     """The activity in one word (`recharge`, `order`)."""
     reference_column: str | None
     reference_date: str
-    """ISO date the days are counted back from: the file's snapshot date, else its newest activity date."""
+    """ISO date the sentence names: the newest snapshot date in the file, else its newest activity date. The
+    days of each row are counted back from that row's own snapshot date when there is one."""
     customers: int
     drafts: tuple[LabelDraft, ...]
 
@@ -94,15 +98,23 @@ def draft_labels(
             continue
         reference_column: str | None = None
         reference = dates.max()
+        snapshots: pd.Series[Any] | None = None
         ranked = [c for c in rank_roles(columns, root=root)["date"] if c.column != name and c.score >= 0.5]
         for candidate in ranked:
             stamp = _dates(frame[candidate.column])
             if stamp is not None and stamp.notna().any():
-                reference_column, reference = candidate.column, stamp.max()
+                reference_column, reference, snapshots = candidate.column, stamp.max(), stamp
                 break
         if pd.isna(reference):
             continue
-        age = (reference - dates).dt.days  # days between the activity and the reference date
+        # Row by row: each customer is measured from the date their own row describes, because a file of
+        # several weekly snapshots has a different "today" on each row. With no snapshot column the newest
+        # activity date stands in for everyone's.
+        activity_on = dates.reset_index(drop=True)
+        if snapshots is not None:
+            age = (snapshots.reset_index(drop=True) - activity_on).dt.days
+        else:
+            age = (reference - activity_on).dt.days
         drafts: list[LabelDraft] = []
         for window in rules.windows_days:
             limit = window + rules.grace_days
@@ -126,6 +138,7 @@ def draft_labels(
                     already_quiet=int(quiet.sum()),
                     still_active=int(active.sum()),
                     no_date=int(age.isna().sum()),
+                    after_reference=int((age < 0).sum()),
                     quiet_examples=tuple(line(i) for i in quiet_at),
                     active_examples=tuple(line(i) for i in active_at),
                 )

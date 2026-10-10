@@ -38,6 +38,11 @@ const CSS = `
 .ag-typed-input{flex:1;min-width:220px;height:32px;padding:4px 10px;border:1px solid var(--line);border-radius:6px;font-size:13px;color:var(--ink);background:var(--card)}
 .ag-typed-input:focus{border-color:var(--brand-blue);outline:none}
 .ag-stop p{margin:0;padding:14px 20px 0;line-height:1.55}
+.ag-drafts{margin:12px 20px 0;border:1px solid var(--line);border-radius:8px}
+.ag-draftopts{margin:8px 0 0;padding-left:18px;font-size:13px;color:var(--ink);line-height:1.5}
+.ag-draftopts li{overflow-wrap:anywhere}
+.ag-draftopts .ag-eff{display:block;font-size:12px;color:var(--muted)}
+.ag-assist{align-items:center;gap:12px;flex-wrap:wrap;margin:0 0 12px}
 .ag-stop .ag-stop-ask{margin:12px 20px 16px;padding-top:0;border-top:0}
 .ag-sum{margin-top:12px;display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:12px 24px}
 .ag-sum h5{margin:0 0 4px;font-size:12px;font-weight:600;color:var(--ink2)}

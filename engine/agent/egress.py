@@ -108,6 +108,7 @@ RESULT_KEYS: Final[frozenset[str]] = frozenset(
         "affected_share",
         "allowed",
         "activity",
+        "after_reference",
         "already_quiet",
         "always_empty",
         "answered",

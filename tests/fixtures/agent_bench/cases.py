@@ -60,6 +60,22 @@ def _real_ninety_nine() -> pd.DataFrame:
     return frame
 
 
+def _other_flags(column: str, rows: int = 2_000) -> pd.DataFrame:
+    """A file whose only two-valued columns are `column` and `other_flag`: neither is the use case's outcome.
+
+    The column's name shares one word with a long outcome name of the use case (`cash_back_flag` and
+    `won_back`), which must not make it the outcome (M142 review: a word of a name is not the name).
+    """
+    return pd.DataFrame(
+        {
+            "grahak_id": [f"G{i:05d}" for i in range(rows)],
+            column: [(i // 3) % 2 for i in range(rows)],
+            "other_flag": [(i // 5) % 2 for i in range(rows)],
+            "kul_kharch": [round(40 + (i * 37) % 3_960, 2) for i in range(rows)],
+        }
+    )
+
+
 CASES: Final[dict[str, Callable[[], pd.DataFrame]]] = {
     "messy": messy_frame,
     "clean": _variant("clean"),
@@ -95,7 +111,16 @@ HINGLISH_PREFIX: Final[str] = "hinglish_"
 for _spec in HINGLISH_CASES:
     CASES[HINGLISH_PREFIX + _spec.name] = lambda spec=_spec: hinglish_frame(spec)  # type: ignore[misc]
 
+# M142 review: words of the use case's long outcome names (`won_back`, `default_payment_next_month`,
+# `churn_next_60d`) are not outcome anchors one by one; each of these files must be asked, not proposed.
+CASES["other_use_case_cash_back"] = lambda: _other_flags("cash_back_flag")
+CASES["other_use_case_payment_reminder"] = lambda: _other_flags("payment_reminder_sent")
+CASES["other_use_case_next_bill"] = lambda: _other_flags("next_bill_flag")
+
 CASE_USE_CASES: Final[dict[str, str]] = {
+    "other_use_case_cash_back": "win-back-campaign",
+    "other_use_case_payment_reminder": "card-default-propensity",
+    "other_use_case_next_bill": "rca",
     "multi_row": "retail-win-back",
     "multi_row_one_date": "retail-win-back",
     "multi_row_no_dates": "retail-win-back",

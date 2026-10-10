@@ -816,19 +816,34 @@ counter, an ID `G` and a counter); no real customer, number or name exists in an
    never create one.
 5. **Short list.** Under `min_listed` (0.25) is not listed; three per role, best first, ties in file order; 0.75 and
    over is `high`, 0.5 and over `medium`, else `low`. Even `high` is "please check".
-6. **The use case's own words** (its target column and `agent.column_hints.target_synonyms`) count as outcome anchors
-   (`converted_30d` -> `converted`); a one- or two-letter piece (`d`) and a word the role only boosts never do.
+6. **The use case's own words** (its target column and `agent.column_hints.target_synonyms`) count as outcome anchors,
+   by whole name. A name of one word (`converted_30d` -> `converted`) matches that word; a name of several words
+   (`won_back`, `missed_payment`, `churn_next_60d`) matches only a header that holds all of its words in that order, so
+   `cash_back_flag`, `payment_reminder_sent` and `next_bill_flag` are not the outcome of the win-back, card-default and
+   churn use cases. A one- or two-letter piece (`d`) and a word the role only boosts (`flag`, `days`) are left out of a
+   name first.
 
 ### 13.3 Where it shows up
 
 - `find_roles` returns `header_candidates` (and extends the consent / opt-out / recently-contacted lists, after the
-  use case's own hints, with `medium`-or-better header reads). The advisor reads it; nothing else changes for a file
-  whose headers the use case already knows (the twenty-two original benchmark digests are byte-identical).
+  use case's own hints, with `medium`-or-better header reads). The advisor reads it. The twenty-two original
+  benchmark digests are byte-identical, but the change is not limited to files in Hinglish. For every file: (a)
+  `find_roles` always carries `header_candidates` (so it is in the stored evidence and in what a chat turn sends,
+  names and scores only); (b) when the file lacks the column the suppression rules read, a header-read candidate
+  becomes a non-blocking question, even for a header the use case's own hints already name (`unsubscribed_flag`,
+  `last_contact_date`); (c) the date columns are ordered by how their names read; (d) when several columns are unique
+  and the use case names none, the header read picks the ID, as a check suggestion.
+- **Default on.** Plan K's design (§11) puts its capabilities behind `agentic.enabled`. M142's rules-only reading, the
+  mapping questions and the lapse drafts are not behind it: they live in Plan G's Guided setup, which is on already,
+  and need no model. (M130's flag is not in this branch.) Once it lands, gating `_mapping_notes`, `_label_draft` and
+  the `header_candidates` key on it is a small change. The `assist` route is opt-in per request.
 - **ID.** Among the columns the profile found unique and when none is named by the use case's `primary_key_hints`, the
   one whose name reads as an ID best is proposed (check). The lexicon only chooses among columns the profile found.
 - **Outcome.** The two-valued columns the rules already found are ordered by how their names read. A clear lead
   (score at least 0.5 and at least 0.15 above the next) is proposed as a check suggestion instead of asked; otherwise
-  the question lists them in that order. A column that is not two-valued is never offered.
+  the question lists them in that order. A column that is not two-valued is never offered. When every two-valued
+  column reads as consent or an opt-out (`dnd_flag`) and none as the outcome, none is offered: the file has no
+  outcome column, which is the lapse draft's case.
 - **Date.** The date column the headers read as the date the file describes comes first among the date columns found;
   a date column read as the last contact is not offered as the date to split by.
 - **Consent, opt-out, last contact.** The columns the suppression rules read (`marketing_opt_in`, `last_contacted_at`)
@@ -842,7 +857,10 @@ counter, an ID `G` and a counter); no real customer, number or name exists in an
   (`engine.agent.label_drafts`; a first-order, sign-up or expiry date is not one) stops as before, and the stop reason
   and a non-blocking question carry the draft: "a customer lapses when there is no recharge in the 30 days after the date
   the file describes, plus 7 days' grace" (M93's lapse label, DEC-1303 (d)), with how many customers had already gone
-  quiet for 30, 60 and 90 days and example customers by row number (never an ID). No option changes anything: the
+  quiet for 30, 60 and 90 days (each customer counted from the date their own row describes, so a file of several
+  weekly snapshots is not overstated; a last activity dated after its own row is counted apart, not dropped) and example
+  customers by row number (never an ID). A stopped session's non-blocking questions are shown under the stop reason on
+  the Guided setup screen, read-only. No option changes anything: the
   outcome has to be recorded after the date the file describes, so the person adds that column and uploads again. A
   day/month date nobody has settled gives no draft.
 
@@ -867,11 +885,13 @@ is recorded under "What the AI looked at". They are given names and counts only,
 ### 13.5 Accuracy of the rules alone
 
 `python -m tests.fixtures.agent_bench.header_metrics [--misses]` prints top-1 and top-3 accuracy per role over the
-cases, for all of them and for the `dev` and `held_out` halves. **First run, before any change to the lexicon: 132 of 141
+cases, for all of them and for the `dev`, `tuned` and `held_out` splits. **First run, before any change to the lexicon: 132 of 141
 roles in the top three (93.6%); `dev` 67 of 68 (98.5%), `held_out` 65 of 73 (89.0%), so the 95% target was not reached on
 a first run.** The lexicon was then changed for three held-out misses (`attr`, `booked` / `booking`, an e-mail as a way
-of contacting a customer), so those cases are no longer held out; with that change and the later changes to the case list,
-the rules get 139 of 145 (95.9%) in the top three and as the first pick (held-out 72 of 77, 93.5%); for the 17
+of contacting a customer). The two cases they came from (`travel_app`, `wide_telecom`) are the `tuned` split and no
+longer count as held out; with that change and the later changes to the case list, the rules get 139 of 145 (95.9%) in
+the top three and as the first pick. **The untuned held-out figure is 60 of 65 (92.3%)**, below the 95% target; `dev` is
+67 of 68 and `tuned` 12 of 12 (both used for tuning, so optimistic). For the 17
 roles a file does not have, no column was suggested. The six remaining misses are in
 `tests/unit/agent/test_header_benchmark.py::KNOWN_MISSES` on purpose: a loan account number (`lan_no`), a viewing-card number
 (`VC_NO`), `prepaid_flag`, `orderedAgain`, `ok_to_contact` and `last_nudge_dt`. The cases were written by the
@@ -881,6 +901,8 @@ same author as the lexicon, so the figure is optimistic about files written by o
 
 - A header the lexicon has no word for is not read (it stays a question, or is not suggested). Add the spelling to the YAML.
 - The suppression columns cannot be remapped per run (see above); that needs `actions.suppression.opt_out_column` and
-  `recently_contacted_column` to become overridable, which is outside Plan G's area (`docs/CROSS_BRANCH_REQUESTS.md`).
-- The second opinions have no screen of their own yet: `POST …/agent-session/assist` returns the updated session and the
-  Guided setup tab shows its questions and its "What the AI looked at" like any other.
+  `recently_contacted_column` to become overridable, which is outside Plan G's area. It is announced in the
+  hand-off's cross-branch notes for the integrator to file; no request is filed from this branch.
+- The second opinions are reached by a "Second opinion" button in the Guided setup checklist (shown only when an AI
+  service is connected), which calls `POST …/agent-session/assist` and redraws the returned session; its questions and
+  its "What the AI looked at" appear like any other. It is not a chat turn: the chat loop does not call it.

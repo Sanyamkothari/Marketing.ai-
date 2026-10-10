@@ -12,8 +12,9 @@ a few headers (`last_nudge_dt`, `lan_no`) are ones the lexicon cannot read, on p
 misses.
 
 `SPLIT` marks each case `dev` (the first twelve, written before the lexicon was run on anything and
-looked at while fixing it) or `held_out` (the other twelve, written after and not used to tune).
-`rules_accuracy` reports both.
+looked at while fixing it), `tuned` (`travel_app` and `wide_telecom`: written as held-out cases, then used to
+change the lexicon, so they no longer count as untouched) or `held_out` (every other later case, not used to
+tune). `accuracy` in `header_metrics` reports each.
 """
 
 from __future__ import annotations
@@ -30,7 +31,9 @@ __all__ = ["CASES", "ROLE_ORDER", "SPLIT", "CaseSpec", "hinglish_frame", "hingli
 ROLE_ORDER: Final[tuple[str, ...]] = ("id", "outcome", "date", "consent", "opt_out", "last_contact")
 ROWS: Final[int] = 2_000
 TODAY: Final[date] = date(2026, 9, 30)
-"""The day the synthetic exports were "taken"; every date counts back from it."""
+"""The newest day the synthetic exports were "taken"; every date counts back from it."""
+_SNAPSHOT_WEEKS: Final[int] = 6
+"""A snapshot column holds this many weekly dates, row by row in turn."""
 
 
 @dataclass(frozen=True)
@@ -190,7 +193,7 @@ CASES: Final[tuple[CaseSpec, ...]] = (
         opt_out="optedout",
         last_contact="last_comm_ts",
     ),
-    # ------------------------------------------------------------------- held out: the other twelve
+    # ---------------------------------------- written after the dev cases (held out, two later tuned on)
     _spec(
         "postpaid_bills",
         "sub_id:id|bill_acct_no:id_num|churned_90d:outcome|data_as_on:snapshot|consent_given:consent|"
@@ -348,8 +351,12 @@ CASES: Final[tuple[CaseSpec, ...]] = (
     ),
 )
 
+TUNED: Final[frozenset[str]] = frozenset({"travel_app", "wide_telecom"})
+"""Held-out cases the lexicon was later changed for (`attr`, `booked`/`booking`, an e-mail as a contact)."""
+
 SPLIT: Final[dict[str, str]] = {
-    spec.name: ("dev" if index < 12 else "held_out") for index, spec in enumerate(CASES)
+    spec.name: ("dev" if index < 12 else "tuned" if spec.name in TUNED else "held_out")
+    for index, spec in enumerate(CASES)
 }
 
 
@@ -373,12 +380,18 @@ def _values(kind: str, header: str, rng: random.Random, rows: int, offset: int) 
         flags = [1 if rng.random() < 0.08 else 0 for _ in range(rows)]
         return ["Y" if f else "N" for f in flags] if kind == "optout_yn" else flags
     if kind == "snapshot":
-        days = [TODAY - timedelta(days=7 * w) for w in range(6)]
+        days = [TODAY - timedelta(days=7 * w) for w in range(_SNAPSHOT_WEEKS)]
         return [days[i % len(days)].isoformat() for i in range(rows)]
     if kind == "date_recent":
+        # Counted back from the row's own snapshot date (the same weekly cycle `snapshot` uses), so no
+        # customer's last activity is dated after the day their row describes.
         return [
-            None if rng.random() < 0.15 else (TODAY - timedelta(days=rng.randint(1, 120))).isoformat()
-            for _ in range(rows)
+            (
+                None
+                if rng.random() < 0.15
+                else (TODAY - timedelta(days=7 * (i % _SNAPSHOT_WEEKS) + rng.randint(1, 120))).isoformat()
+            )
+            for i in range(rows)
         ]
     if kind == "date_old":
         return [(TODAY - timedelta(days=rng.randint(200, 2_500))).isoformat() for _ in range(rows)]

@@ -203,8 +203,53 @@ def test_a_lapse_draft_never_shows_an_id_and_counts_what_the_file_holds() -> Non
     text = str(result)
     assert "9000" not in text and "G1" not in text  # row numbers, never an ID or a phone number
     frame = ctx.frame
-    age = (pd.Timestamp("2026-09-30") - pd.to_datetime(frame["last_rchg_dt"])).dt.days
-    assert drafts[0]["already_quiet"] == int((age > 37).sum())
+    # Each customer is measured from the date their own row describes, not from the newest date in the file.
+    age = (pd.to_datetime(frame["tareekh"]) - pd.to_datetime(frame["last_rchg_dt"])).dt.days
+    for draft in drafts:
+        limit = draft["window_days"] + draft["grace_days"]
+        assert draft["already_quiet"] == int((age > limit).sum())
+        assert draft["still_active"] == int(age.between(0, limit).sum())
+        assert draft["after_reference"] == int((age < 0).sum())
+        assert draft["no_date"] == int(age.isna().sum())
+    assert drafts[0]["already_quiet"] == int(
+        ((pd.to_datetime(frame.tareekh) - pd.to_datetime(frame.last_rchg_dt)).dt.days > 37).sum()
+    )
+    newest_only = (pd.Timestamp("2026-09-30") - pd.to_datetime(frame["last_rchg_dt"])).dt.days
+    assert drafts[0]["already_quiet"] < int(
+        (newest_only > 37).sum()
+    )  # the single-newest-date count overstated
+
+
+def test_a_recharge_dated_after_its_own_snapshot_is_counted_apart_not_dropped() -> None:
+    frame = _case("lapse_no_outcome_telco").copy()
+    frame["tareekh"] = "2026-06-30"
+    frame["last_rchg_dt"] = "2026-06-01"
+    frame.loc[:99, "last_rchg_dt"] = "2026-07-15"  # after the date the row describes
+    result = _result(context_for(frame), "draft_outcome_labels")
+    first = result["drafts"][0]
+    assert first["after_reference"] == 100
+    assert first["still_active"] == len(frame) - 100 and first["already_quiet"] == 0
+
+
+def test_a_lapse_draft_with_no_snapshot_column_counts_back_from_the_newest_activity() -> None:
+    frame = _case("lapse_no_outcome_telco").drop(columns=["tareekh"])
+    result = _result(context_for(frame), "draft_outcome_labels")
+    assert result["reference_column"] is None
+    newest = pd.to_datetime(frame["last_rchg_dt"]).max()
+    assert result["reference_date"] == newest.date().isoformat()
+    age = (newest - pd.to_datetime(frame["last_rchg_dt"])).dt.days
+    assert result["drafts"][0]["already_quiet"] == int((age > 37).sum())
+
+
+def test_an_opt_out_flag_is_not_the_outcome_of_a_file_that_has_none_and_the_draft_is_shown() -> None:
+    frame = _case("lapse_no_outcome_telco").assign(dnd_flag=[i % 2 for i in range(2_000)])
+    advice = advise(context_for(frame))
+    assert advice.target is None
+    assert not [p for p in advice.proposals if p.path == ROLE_TARGET]  # dnd_flag is not proposed
+    assert advice.stop_reason is not None and "A draft outcome to start from" in advice.stop_reason
+    draft = next(q for q in advice.questions if "no column that says whether a customer lapsed" in q.text)
+    assert not draft.blocking and "the customer on row" in draft.text
+    assert "30 days:" in draft.text and "90 days:" in draft.text  # every window's count is in the question
 
 
 def test_a_file_without_a_date_of_activity_gets_no_draft() -> None:
@@ -221,6 +266,49 @@ def test_a_day_month_date_nobody_has_settled_gives_no_draft() -> None:
     frame["last_rchg_dt"] = [f"{1 + i % 12:02d}/{1 + i % 11:02d}/2026" for i in range(len(frame))]
     result = _result(context_for(frame), "draft_outcome_labels")
     assert result["drafts"] == []  # 03/04/2026: March or April; the format question comes first
+
+
+@pytest.mark.parametrize(
+    ("use_case", "column"),
+    [
+        ("win-back-campaign", "cash_back_flag"),  # outcome name `won_back`: `back` alone is not it
+        (
+            "card-default-propensity",
+            "payment_reminder_sent",
+        ),  # `missed_payment` / `default_payment_next_month`
+        ("rca", "next_bill_flag"),  # `churn_next_60d`: `next` alone is not it
+    ],
+)
+def test_one_word_of_a_long_outcome_name_does_not_make_a_column_the_outcome(
+    use_case: str, column: str
+) -> None:
+    frame = pd.DataFrame(
+        {
+            "grahak_id": [f"G{i:05d}" for i in range(2_000)],
+            column: [(i // 3) % 2 for i in range(2_000)],
+            "other_flag": [(i // 5) % 2 for i in range(2_000)],
+            "kul_kharch": range(2_000),
+        }
+    )
+    advice = advise(context_for(frame, use_case))
+    assert advice.target is None
+    assert not [p for p in advice.proposals if p.path == ROLE_TARGET and p.from_headers]
+    asked = [q for q in advice.questions if "Which column says" in q.text]
+    assert len(asked) == 1 and asked[0].blocking
+    assert {o.label for o in asked[0].options} == {column, "other_flag"}
+
+
+def test_a_whole_multi_word_outcome_name_still_anchors_the_outcome_in_order() -> None:
+    frame = pd.DataFrame(
+        {
+            "grahak_id": [f"G{i:05d}" for i in range(2_000)],
+            "WonBack_flag": [(i // 3) % 2 for i in range(2_000)],
+            "other_flag": [(i // 5) % 2 for i in range(2_000)],
+        }
+    )
+    advice = advise(context_for(frame, "win-back-campaign"))
+    # `won_back` is a synonym: both words, in order, make the one column the use case's own hint (no question).
+    assert advice.target == "WonBack_flag"
 
 
 def test_confidence_is_never_sure_for_a_header_read_pick_that_replaced_the_rules_choice() -> None:

@@ -432,6 +432,18 @@ def _choose_target(
         if synonyms
         else {str(c["column"]): c for c in _header_rank(roles, "outcome") if c["column"] in options}
     )
+    if not synonyms:
+        # A flag whose header reads as consent or an opt-out (`dnd_flag`) says who may be contacted, not what
+        # happened afterwards. When every two-valued column is one of those, none of them is the outcome and
+        # the file has none (so a lapse draft can be offered); beside a real candidate they are still listed.
+        contact_flags = {
+            str(c["column"])
+            for kind in ("consent", "opt_out")
+            for c in _header_rank(roles, kind)
+            if c["confidence"] != "low"
+        }
+        if all(c in contact_flags and c not in read for c in options):
+            options = []
     options = [*read, *(c for c in options if c not in read)]
     if not options:
         configured = builder.ctx.config.target.column
@@ -484,11 +496,12 @@ def _label_draft(builder: _Builder) -> str:
     describes, so the person adds that column and uploads again. The sentence is returned for the stop
     reason, because a stopped session shows no questions.
     """
-    drafts = builder.call("draft_outcome_labels")
-    found = _rows(drafts, "drafts")
+    trial = call_tool(builder.ctx, "draft_outcome_labels", None, evidence_id=f"{builder.prefix}e0")
+    found = _rows(trial, "drafts")
     if not found:
-        builder.results.pop()  # nothing to draft from: an empty answer is not evidence anything cites
-        return ""
+        return ""  # nothing to draft from: an empty answer is not evidence anything cites, and uses no id
+    drafts = trial.model_copy(update={"evidence_id": f"{builder.prefix}e{next(iter(builder._evidence))}"})
+    builder.results.append(drafts)
     activity = str(_value(drafts, "activity") or "activity")
     rows = int(_value(drafts, "rows") or 0)
 
@@ -496,6 +509,12 @@ def _label_draft(builder: _Builder) -> str:
         window = int(draft["window_days"]) + int(draft["grace_days"])
         quiet = int(draft["already_quiet"])
         return f"{quiet:,} of {rows:,} customers had already gone more than {window} days without one"
+
+    def windows(found_drafts: Sequence[Mapping[str, Any]]) -> str:
+        return "; ".join(
+            f"{int(d['window_days'])} days: {int(d['already_quiet']):,} of {rows:,} already quiet"
+            for d in found_drafts
+        )
 
     def sentence(draft: Mapping[str, Any]) -> str:
         return (
@@ -507,10 +526,16 @@ def _label_draft(builder: _Builder) -> str:
     example = next(iter(first.get("examples") or []), None)
     shown = f" (for example, {example})" if example else ""
     inside = f"; for example, {example}" if example else ""
+    after = int(first.get("after_reference") or 0)
+    later = (
+        f" {after:,} customers have a last {activity} dated after the date their row describes; they are not counted."
+        if after
+        else ""
+    )
     builder.ask(
         "The file has no column that says whether a customer lapsed, but it has the date of each customer's "
-        f"last {activity}. A draft to build the outcome from: {sentence(first)}. In this file "
-        f"{counts(first)}{shown}. Which window do you mean?",
+        f"last {activity}. A draft to build the outcome from: {sentence(first)}. In this file, counting from the "
+        f"date each row describes, {windows(found)}{shown}.{later} Which window do you mean?",
         [
             *(
                 QuestionOption(
@@ -531,7 +556,8 @@ def _label_draft(builder: _Builder) -> str:
         examples=[str(e) for e in (first.get("examples") or [])[:2]],
     )
     return (
-        f" A draft outcome to start from: {sentence(first)} ({counts(first)}{inside}). "
+        f" A draft outcome to start from: {sentence(first)}. In this file, counting from the date each row "
+        f"describes, {windows(found)}{inside}.{later} "
         "Add a column with that outcome, 1 for lapsed and 0 for not, recorded after the date the file "
         "describes, and upload again."
     )

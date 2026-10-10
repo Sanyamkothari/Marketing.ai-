@@ -5,9 +5,11 @@ The target is top-3 accuracy of at least 95% on the new cases. The numbers are r
 * First run, before any change to the lexicon: 132 of 141 roles in the top three (93.6%); the twelve `dev`
   cases 67 of 68 (98.5%), the held-out ones 65 of 73 (89.0%).
 * The lexicon was then changed for three held-out misses (`attr` for attrition, `booked` and `booking`
-  for a purchase, an e-mail as a way of contacting a customer), so those cases are no longer held out. After
-  that, with two more files added, the rules get 139 of 145 (95.9%) in the top three, the held-out cases
-  72 of 77 (93.5%). The six misses below are the ones left, listed on purpose.
+  for a purchase, an e-mail as a way of contacting a customer). The two files they came from (`travel_app`,
+  `wide_telecom`) are the `tuned` split and no longer count as held out. After that, with two more files
+  added, the rules get 139 of 145 (95.9%) in the top three. The untouched held-out cases (every later case
+  but those two) get 60 of 65 (92.3%), the figure to quote as held out. The six misses below are the ones
+  left, listed on purpose.
 """
 
 from __future__ import annotations
@@ -37,7 +39,7 @@ def test_there_are_at_least_twenty_synthetic_cases_across_the_six_roles() -> Non
     assert len(CASES) >= 20
     wanted = {role: sum(1 for spec in CASES if spec.expected[role] is not None) for role in ROLE_ORDER}
     assert all(count >= 15 for count in wanted.values()), wanted
-    assert {SPLIT[spec.name] for spec in CASES} == {"dev", "held_out"}
+    assert {SPLIT[spec.name] for spec in CASES} == {"dev", "tuned", "held_out"}
 
 
 def test_the_headers_are_the_kind_the_milestone_names() -> None:
@@ -81,9 +83,12 @@ def test_the_known_misses_are_exactly_the_ones_listed() -> None:
 
 
 def test_the_dev_and_held_out_numbers() -> None:
-    dev, held_out = accuracy("dev"), accuracy("held_out")
+    dev, tuned, held_out = accuracy("dev"), accuracy("tuned"), accuracy("held_out")
     assert (dev.top3, dev.asked) == (67, 68)
-    assert (held_out.top3, held_out.asked) == (72, 77)
+    assert (tuned.top3, tuned.asked) == (12, 12)  # the two cases the lexicon was changed for
+    assert (held_out.top3, held_out.asked) == (60, 65)  # 92.3%: the untuned number
+    assert (held_out.top1, held_out.asked) == (60, 65)
+    assert {name for name, split in SPLIT.items() if split == "tuned"} == {"travel_app", "wide_telecom"}
 
 
 def test_a_role_a_file_does_not_have_is_never_suggested() -> None:

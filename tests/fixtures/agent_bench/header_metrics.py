@@ -70,7 +70,7 @@ def _ranked(spec: CaseSpec) -> dict[str, tuple[str, ...]]:
 
 
 def accuracy(split: str | None = None) -> Report:
-    """Accuracy over every case, or over the `dev` / `held_out` ones."""
+    """Accuracy over every case, or over the `dev` / `tuned` / `held_out` ones."""
     asked = top1 = top3 = absent = false = 0
     misses: list[Miss] = []
     wrong: list[Miss] = []
@@ -101,7 +101,7 @@ def main() -> None:
     parser.add_argument("--misses", action="store_true", help="list every miss and every wrong first pick")
     args = parser.parse_args()
     out: dict[str, Any] = {}
-    for split in (None, "dev", "held_out"):
+    for split in (None, "dev", "tuned", "held_out"):
         report = accuracy(split)
         out[split or "all"] = report.as_dict()
         if args.misses:

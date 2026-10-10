@@ -1707,5 +1707,65 @@
         "last_contact_dt"
       ]
     }
+  },
+  "other_use_case_cash_back": {
+    "status": "needs_review",
+    "stopped": false,
+    "primary_key": "grahak_id",
+    "target": null,
+    "proposals": [
+      "role primary_key=grahak_id (check)"
+    ],
+    "questions": [
+      {
+        "asks": "Which column says whether rejoined within 90 days of an offe",
+        "options": [
+          "cash_back_flag",
+          "other_flag"
+        ],
+        "blocking": true
+      }
+    ],
+    "hidden": []
+  },
+  "other_use_case_payment_reminder": {
+    "status": "needs_review",
+    "stopped": false,
+    "primary_key": "grahak_id",
+    "target": null,
+    "proposals": [
+      "role primary_key=grahak_id (check)"
+    ],
+    "questions": [
+      {
+        "asks": "Which column says whether the account failed to pay the mini",
+        "options": [
+          "payment_reminder_sent",
+          "other_flag"
+        ],
+        "blocking": true
+      }
+    ],
+    "hidden": []
+  },
+  "other_use_case_next_bill": {
+    "status": "needs_review",
+    "stopped": false,
+    "primary_key": "grahak_id",
+    "target": null,
+    "proposals": [
+      "role primary_key=grahak_id (check)"
+    ],
+    "questions": [
+      {
+        "asks": "Which column says whether disconnected within 60 days?",
+        "options": [
+          "next_bill_flag",
+          "other_flag"
+        ],
+        "blocking": true
+      }
+    ],
+    "hidden": []
   }
 }

@@ -374,6 +374,18 @@ def _value_score(kind: str, column: ColumnProfile, rows: int | None) -> float:
     return _CHECKS[kind](column, rows)
 
 
+def _extra_key(phrase: tuple[str, ...]) -> str:
+    """The anchor name of one of the use case's own outcome names: a single word is plain, a name of several
+    words is one phrase (`won back`), matched only when every word is in the header."""
+    return f"word:{phrase[0]}" if len(phrase) == 1 else "phrase:" + " ".join(phrase)
+
+
+def _in_order(phrase: Sequence[str], words: Sequence[str]) -> bool:
+    """Whether every word of `phrase` is in `words`, in that order (other words may sit between them)."""
+    remaining = iter(words)
+    return all(any(w == word for word in remaining) for w in phrase)
+
+
 def _name_score(rule: RoleRule, found: Iterable[str]) -> tuple[float, tuple[str, ...]]:
     present = list(dict.fromkeys(found))
     anchors = {m: rule.anchors[m] for m in present if m in rule.anchors}
@@ -404,42 +416,56 @@ def rank_roles(
     a column that is exactly unique does.
 
     `extra_anchors` adds words as anchors for one role (the use case's own outcome words: its target
-    column and `agent.column_hints.target_synonyms`), each at the role's strongest anchor weight; they
-    are matched as plain words, so `converted_30d` matches `converted` whatever the lexicon says.
+    column and `agent.column_hints.target_synonyms`), each at the role's strongest anchor weight. A name of
+    one word (`converted_30d` -> converted) matches that word whatever the lexicon says; a name of several
+    words (`won_back`, `churn_next_60d`) matches only a header that has all of them in that order, so
+    `cash_back_flag` is not `won_back` and `next_bill_flag` is not `churn_next_60d`.
     A role no column fits is an empty tuple, never a guess.
     """
     lexicon, index = _loaded(root)
     ranked: dict[str, tuple[HeaderCandidate, ...]] = {}
-    extra: dict[str, set[str]] = {
-        role: {
-            w
-            for word in words
-            for w in tokenize(word)
-            # `converted_30d` -> converted; a one- or two-letter piece (`d`) and a word the role only
-            # counts as a booster (`flag`, `days`) say nothing about the outcome by themselves.
-            if len(w) >= _MIN_EXTRA_WORD and index.words.get(w) not in lexicon.roles[role].boosters
-        }
-        for role, words in (extra_anchors or {}).items()
-    }
+    extra: dict[str, set[tuple[str, ...]]] = {}
+    for role, names in (extra_anchors or {}).items():
+        wanted: set[tuple[str, ...]] = set()
+        for name in names:
+            # `converted_30d` -> (converted,); `won_back` -> (won, back). A one- or two-letter piece (`d`)
+            # and a word the role only counts as a booster (`flag`, `days`) say nothing by themselves.
+            kept = tuple(
+                w
+                for w in tokenize(name)
+                if len(w) >= _MIN_EXTRA_WORD and index.words.get(w) not in lexicon.roles[role].boosters
+            )
+            if kept:
+                wanted.add(kept)
+        extra[role] = wanted
     read: list[tuple[str, ...]] = []  # each header read once, for all six roles
+    header_words: list[tuple[str, ...]] = []
     for column in columns:
         words = tokenize(column.name)
+        header_words.append(words)
         read.append((*_meanings(words, index), *(f"word:{w}" for w in words)))
     for role in ROLES:
         rule = lexicon.roles[role]
-        if extra.get(role):
+        phrases = sorted(extra.get(role, ()))
+        if phrases:
             top_weight = max(rule.anchors.values())
             rule = rule.model_copy(
-                update={"anchors": {**rule.anchors, **{f"word:{w}": top_weight for w in sorted(extra[role])}}}
+                update={"anchors": {**rule.anchors, **{_extra_key(p): top_weight for p in phrases}}}
             )
         kind = lexicon.value_checks[role]
         scored: list[tuple[float, int, HeaderCandidate]] = []
         for position, column in enumerate(columns):
-            name, used = _name_score(rule, read[position])
-            if name <= 0.0:
+            found = read[position]
+            if phrases:
+                found = (
+                    *found,
+                    *(_extra_key(p) for p in phrases if len(p) > 1 and _in_order(p, header_words[position])),
+                )
+            by_name, used = _name_score(rule, found)
+            if by_name <= 0.0:
                 continue
             values = _value_score(kind, column, rows)
-            score = round(name * (VALUE_FLOOR + (1.0 - VALUE_FLOOR) * values), 2)
+            score = round(by_name * (VALUE_FLOOR + (1.0 - VALUE_FLOOR) * values), 2)
             if score < lexicon.min_listed:
                 continue
             scored.append(
@@ -451,7 +477,7 @@ def rank_roles(
                         role,
                         score,
                         _band(lexicon, score),
-                        tuple(m.removeprefix("word:") for m in used),
+                        tuple(m.removeprefix("word:").removeprefix("phrase:") for m in used),
                     ),
                 )
             )
