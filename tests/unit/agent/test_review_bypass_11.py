@@ -31,9 +31,14 @@ HOSTILE = {"letters": "a" * N, "digits and hyphens": "1-" * (N // 2), "labels an
 
 
 def _seconds(fn: Callable[[], object]) -> float:
-    start = time.perf_counter()
-    fn()
-    return time.perf_counter() - start
+    """The best of three runs: a busy machine (pytest -n 4 beside other jobs) slows one run, rarely all three,
+    while a backtracking scanner is slow on every run."""
+    best = float("inf")
+    for _ in range(3):
+        start = time.perf_counter()
+        fn()
+        best = min(best, time.perf_counter() - start)
+    return best
 
 
 @pytest.mark.parametrize("shape", ["letters", "digits and hyphens"])
