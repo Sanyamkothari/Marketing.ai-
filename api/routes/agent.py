@@ -44,6 +44,7 @@ from api.routes.uploads import http_error, load_upload, load_upload_profile, pro
 from api.schemas import ErrorResponse, UploadRecord, ValidationErrorResponse
 from engine.access.roles import Role
 from engine.agent.advisor import recipe_steps, run_overrides
+from engine.agent.assist import assist_session
 from engine.agent.checks import check_plan
 from engine.agent.config import DataAccess
 from engine.agent.contracts import (
@@ -263,6 +264,13 @@ register(
             role=Role.ANALYST,
             action="agent.chat",
             purpose="ask the helper",
+            object_type="upload",
+            object_param="upload_id",
+        ),
+        ("POST", "/uploads/{upload_id}/agent-session/assist"): RoutePolicy(
+            role=Role.ANALYST,
+            action="agent.assist",
+            purpose="ask the AI service for a second opinion on the columns",
             object_type="upload",
             object_param="upload_id",
         ),
@@ -668,6 +676,41 @@ def message_agent_session(
             }
         )
         session = with_summary(session, ctx)
+        usage_key = upload_key(upload_id, LLM_USAGE_FILENAME)
+        earlier = storage.read_model(usage_key, LlmUsageReport) if storage.exists(usage_key) else None
+        storage.write_model(usage_key, add_usage(earlier, meter.usage()))
+        return _response(_save(storage, session), ctx.config, storage, request)
+
+
+@router.post(
+    "/uploads/{upload_id}/agent-session/assist",
+    response_model=AgentSessionResponse,
+    responses={404: {"model": ErrorResponse}, 409: {"model": ErrorResponse}},
+    summary="Ask the AI service for a second opinion on the columns (optional)",
+)
+def assist_agent_session(
+    upload_id: str, root: ConfigRootDep, storage: StorageDep, request: Request
+) -> AgentSessionResponse:
+    """Two optional second opinions (M142, DEC-1409): the AI service may put the rules' candidate columns in
+    a better order, and may add questions about columns that may be recorded after the outcome, beside the
+    rule-based leak check. It adds no suggestion and ticks nothing; what left is recorded under "What the AI
+    looked at" like a chat turn. No AI service connected is `409 AI_NOT_CONNECTED` and a session exactly as
+    it was: the rules' suggestions and questions never need one."""
+    with _session_lock(upload_id):
+        session = _load_session(storage, upload_id)
+        if session.status is SessionStatus.APPLIED:
+            raise _refuse(
+                409, "AGENT_SESSION_APPLIED", "This setup was already approved. Start again to change it."
+            )
+        ctx = _load_context(
+            storage, root, request, upload_id, session.use_case_id, session.model_version_id
+        ).ctx
+        generative = ctx.config.generative
+        ai = resolve_slot(generative.llm, slot="product", storage=storage, settings=get_settings(request))
+        meter = Meter(ai.client, job_id=session.session_id, llm=ai.llm, budget=generative.budget)
+        guardrails = Guardrails(load_policy(root), meter=meter, prompts_root=root)
+        result = assist_session(ctx, session, meter=meter, guardrails=guardrails, config_root=root)
+        session = result.session.model_copy(update={"transcript": cap_sent(result.session.transcript)})
         usage_key = upload_key(upload_id, LLM_USAGE_FILENAME)
         earlier = storage.read_model(usage_key, LlmUsageReport) if storage.exists(usage_key) else None
         storage.write_model(usage_key, add_usage(earlier, meter.usage()))

@@ -133,7 +133,7 @@ def test_a_viewer_can_read_a_session_but_not_chat_decide_or_approve(
         for (method, path), policy in access_policy.all_policies().items()
         if "agent-session" in path or path.endswith("/checks")
     }
-    assert len(policies) == 8
+    assert len(policies) == 9  # the eight of Plan G and M142's `…/agent-session/assist`
     for (method, path), policy in policies.items():
         expected = "viewer" if method == "GET" else "analyst"
         assert policy.role.value == expected, (method, path)

@@ -371,6 +371,8 @@ def accept_recommended(
                 continue  # left pending, for the person to decide
             if p.step is not None and p.step.kind in NEVER_TICKED_STEPS:
                 continue  # only the person decides these (DEC-1224)
+            if p.from_headers:
+                continue  # a column read from its header is only ever ticked by the person (M142)
             # Two pending suggestions for one setting: the later one, never a conflict.
             key = ("path", p.path) if p.kind is ProposalKind.SETTING and p.path else ("id", p.proposal_id)
             chosen.pop(key, None)

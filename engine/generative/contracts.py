@@ -148,6 +148,7 @@ class GenerativePurpose(StrEnum):
     JUDGE_COMPLIANCE = "judge_compliance"
     JUDGE_TOXICITY = "judge_toxicity"
     DATA_AGENT = "data_agent"  # Plan G: one step of a use case's Guided-setup helper (DEC-1017)
+    DATA_AGENT_ASSIST = "data_agent_assist"  # Plan K M142: Guided setup's optional second opinions (DEC-1409)
 
 
 class GuardrailOutcome(StrEnum):

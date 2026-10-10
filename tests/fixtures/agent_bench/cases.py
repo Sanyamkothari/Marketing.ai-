@@ -15,6 +15,8 @@ from typing import Any, Final
 import pandas as pd
 
 from engine.agent.advisor import Advice, advise
+from tests.fixtures.agent_bench.make_hinglish import CASES as HINGLISH_CASES
+from tests.fixtures.agent_bench.make_hinglish import hinglish_frame
 from tests.fixtures.agent_bench.make_messy import messy_frame
 from tests.fixtures.agent_bench.make_multirow import multirow_frame
 from tests.fixtures.make_data import GenerationSpec, generate
@@ -87,6 +89,12 @@ CASES: Final[dict[str, Callable[[], pd.DataFrame]]] = {
     "multi_row_no_dates": lambda: multirow_frame(dates=False),
 }
 
+# Plan K M142 (DEC-1409): synthetic Indian-style exports with Hinglish and abbreviated headers. The advice
+# for each is pinned like any other case; `headers` (see `run_case`) pins what the header rules read.
+HINGLISH_PREFIX: Final[str] = "hinglish_"
+for _spec in HINGLISH_CASES:
+    CASES[HINGLISH_PREFIX + _spec.name] = lambda spec=_spec: hinglish_frame(spec)  # type: ignore[misc]
+
 CASE_USE_CASES: Final[dict[str, str]] = {
     "multi_row": "retail-win-back",
     "multi_row_one_date": "retail-win-back",
@@ -121,8 +129,23 @@ def digest(advice: Advice) -> dict[str, Any]:
     }
 
 
+def header_reading(advice: Advice) -> dict[str, list[str]]:
+    """The columns the header rules listed for each role, best first (from the advice's own evidence)."""
+    roles = next(r for r in advice.tool_results if r.tool == "find_roles")
+    found: dict[str, list[str]] = {}
+    entries = roles.result.get("header_candidates")
+    for entry in entries if isinstance(entries, list) else []:
+        if isinstance(entry, dict):
+            found.setdefault(str(entry["kind"]), []).append(str(entry["column"]))
+    return found
+
+
 def run_case(name: str) -> dict[str, Any]:
-    return digest(advise(context_for(CASES[name](), CASE_USE_CASES.get(name, USE_CASE))))
+    advice = advise(context_for(CASES[name](), CASE_USE_CASES.get(name, USE_CASE)))
+    result = digest(advice)
+    if name.startswith(HINGLISH_PREFIX):
+        result["headers"] = header_reading(advice)
+    return result
 
 
 def main() -> None:

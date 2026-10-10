@@ -40,6 +40,7 @@ def test_m71_ships_only_read_tools() -> None:
         "describe_duplicates",
         "describe_placeholder_values",  # DEC-1222
         "rate_by",  # DEC-1252 (Ask your data)
+        "draft_outcome_labels",  # M142 (DEC-1409): lapse-outcome drafts for a file with no outcome
     }
     assert {tool.kind for tool in TOOLS.values()} == {ToolKind.READ}
 

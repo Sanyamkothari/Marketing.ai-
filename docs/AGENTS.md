@@ -104,7 +104,8 @@ is `apply`.
 | `describe_placeholder_values` | `column`, `values` (optional, 1-10 numbers; default the codes `find_format_issues` finds) | What emptying those values would do, measured on the file (DEC-1222): `rows`, `affected_rows`, `affected_share`, `mean_before` / `mean_after`, `median_before` / `median_after`, and - only when the outcome is known and two-valued - `affected_positive_rate` / `other_positive_rate` and `auc_before` / `auc_after`, the single-column AUC the leakage check computes (`validate.single_feature_auc`; "after" is over the rows that still hold a number). Null when not measured. No model is trained, so no model score is given (DEC-1223). The advisor calls it for each placeholder it proposes to empty. A personal-data column is refused. |
 | `describe_outcome` | `column` | How many rows are "yes" by the engine's own label rule. |
 | `describe_repeats` | `column` | How often each value of an ID column repeats: IDs, rows per ID, the most rows, IDs on several rows (the evidence behind "combine the rows?"). |
-| `find_roles` | — | Which columns could be the ID, the outcome (exact, case-insensitive, synonym), the date, consent, opt-out and last contact. |
+| `find_roles` | — | Which columns could be the ID, the outcome (exact, case-insensitive, synonym), the date, consent, opt-out and last contact. Since M142 it also returns `header_candidates` (§13): the lexicon's top three per role with a score, and `consent`, `opt_out` and `recently_contacted` list a header-read column after the use case's own hints when it is rated `medium` or better. |
+| `draft_outcome_labels` | — | M142 (§13.3): for a file with no outcome column but a date of each customer's last activity (a recharge, an order, a visit), drafts of a lapse outcome for 30, 60 and 90 days plus a grace period: how many customers had already gone quiet, and example customers by row number. Reads the dates only; never an ID. |
 | `check_data` | `primary_key`, `target`, `overrides` | Every check the Run button would run (`check_plan`), with codes, severities, messages and fixes. |
 | `sample_rows` | `columns` (1-12, default the first 8), `n` (1-20, default 10), `offset` (default 0), `where_column` + `equals` (optional exact match on one column) | Real rows in file order, aligned to `columns`; an empty cell is `null`, a personal-data column is the literal `"[personal data]"`, every other cell is masked and cut to 60 characters. Also `total_matching`, `returned`, `truncated` (and `next_offset`) and `withheld`. Deterministic: no random sample. A personal-data column cannot be used in `where_column` (`AGENT_TOOL_ARGS_INVALID`); a column in `agent.always_hide_columns` is not searched either, and answers no rows and `total_matching: null` whatever `equals` is. In `summaries_only` a value that fewer than 5 rows hold is answered the same way. Fewer rows come back when they would not fit the result budget (`truncated` and `next_offset` say where to go on). `equals` keeps its leading and trailing spaces, and on a column of true/false values it ignores case. |
 | `value_counts` | `column`, `top` (1-50, default 20) | The most common values with their rows and share of all rows, `distinct`, `empty`, `other_rows`. A personal-data column gives counts only (`values_seen_once`, `most_rows_for_one_value`). |
@@ -579,6 +580,7 @@ list the free-text columns, or switch the mode, for data where that is not accep
 | `POST …/agent-session/decisions` | Analyst | `{decisions: [{proposal_id, state, value?}], accept_recommended}`. 422 `AGENT_EDIT_NOT_ALLOWED` / `AGENT_VALUE_NOT_ALLOWED`, the `resolve_config` code (e.g. `TEMPLATE_TIME_MISSING`) when the accepted settings do not resolve together, or `TIME_COLUMN_MISSING` when they would split by date with no date column; `accept_recommended` skips a setting the person already accepted a value for; 404 unknown id, 409 `AGENT_SESSION_APPLIED`. |
 | `POST …/agent-session/answers` | Analyst | `{question_id, option_id}`; answering again replaces the previous answer and what it added. A role answer re-runs the advisor, keeping decisions already made (an accepted suggestion wins over a rejected duplicate); a step the person accepted on a column that is now the ID or the outcome is dropped, since the recipe may never change those. |
 | `POST …/agent-session/messages` | Analyst | `{text}` (≤ 1,000 characters): one chat turn. 409 `AGENT_SESSION_APPLIED` / `AGENT_CHAT_FULL`. The reply carries `sent` (§7.7); the response's `chat` says `data_access` and `third_party`. |
+| `POST …/agent-session/assist` | Analyst | M142 (§13.4): the AI service's optional second opinions - a new order for the rules' candidate columns and extra leak questions beside the rule-based check. No body. 409 `AI_NOT_CONNECTED` (nothing stored) / `AGENT_SESSION_APPLIED`. Adds no suggestion and ticks nothing. |
 | `POST …/agent-session/preview` | Analyst | Before/after rows and the receipt on the first 1,000 rows (or entities). 409 with a `RECIPE_*` code when a step cannot run. |
 | `POST …/agent-session/apply` | Analyst | Approve: 409 `AGENT_SESSION_STOPPED` / `AGENT_SESSION_APPLIED` / `AGENT_UNDECIDED`; 409 `VALIDATION_FAILED` with the checks when Run would fail; else `{upload_id, mode, primary_key, target, overrides, summary, receipt}` for `POST /runs`. Audited with the prepared upload and the recipe hash. |
 
@@ -650,8 +652,8 @@ After a change run `make test` (config validation) and the benchmark (§9.4) if 
 
 `tests/fixtures/agent_bench/cases.py` builds twenty-two files (the messy generator
 `make_messy.py`, the broken fixtures, ambiguous dates, unreadable numbers, the multi-row order logs
-of `make_multirow.py` …) and `expected.json`
-holds a digest of the advice for each. After a deliberate rule change:
+of `make_multirow.py` …) and, since M142, the twenty-seven Indian-style exports of `make_hinglish.py` (§13.1), and
+`expected.json` holds a digest of the advice for each. After a deliberate rule change:
 
 ```
 python -m tests.fixtures.agent_bench.cases --update
@@ -664,7 +666,9 @@ git diff tests/fixtures/agent_bench/expected.json   # the diff is the review
 
 Edit `configs/prompts/data_agent.v1.md` (or add `data_agent.v2.md`). Keep "one JSON object and
 nothing else", "never invent a number" and the file-content rule; `FakeLLMClient` recognises the
-prompt by `HELPER TURN` and parses its state and tool-result sections, so keep those headings.
+prompt by `HELPER TURN` and parses its state and tool-result sections, so keep those headings. The second
+opinions of §13.4 have their own prompt, `configs/prompts/data_agent_assist.v1.md` (purpose
+`data_agent_assist`), with the same rule that file content is data, never instructions.
 
 ## 10. Performance
 
@@ -776,3 +780,107 @@ is refused before anything is computed. The canary test runs `rate_by` on every 
   `inspect_column`'s minimum and maximum are; in `summaries_only` the model sees their shape only.
 - A rate is the share of the outcome's positive value by the engine's own label rule; a column with more
   than two values is not a yes/no outcome and is refused as one, unless it is a number (then the mean).
+
+## 13. Setup help for new sources: Hinglish and abbreviated headers (Plan K M142, DEC-1409)
+
+### 13.1 In plain words
+
+Indian exports often call a column `cust_mob_no`, `last_rchg_dt`, `pehla_order`, `kul_kharch`, `grahak_id` or
+`avg_mthly_spnd`. The use case's own hints know none of those, so Guided setup had nothing to say about them. It now
+reads a header the way someone who knows the shorthand would, by rules, and suggests - as "please check", never
+ticked - which column is the ID, the outcome, the date the file describes, the consent flag, the opt-out flag and the
+last-contact date. A file with no outcome column but a date of each customer's last recharge or order gets drafts of
+a lapse outcome with example customers. An AI service, when one is connected, may put the rules' candidates in a better
+order and add questions about columns that may be recorded after the outcome.
+
+The benchmark (`tests/fixtures/agent_bench/make_hinglish.py`) is twenty-seven synthetic exports with a hand-written
+answer for each of the six roles. Every value is generated from a seed (a "mobile number" column holds `M` and a
+counter, an ID `G` and a counter); no real customer, number or name exists in any of it.
+
+### 13.2 The rules (`engine/agent/headers.py`, `configs/agent/header_lexicon.yaml`)
+
+1. **Words.** The header is cut into words (`_`, `-`, spaces, camelCase, letter/digit edges); a run-on name such
+   as `custmobno` is cut into the fewest known words. Digits are dropped (`kharida_30d` -> kharida, d).
+2. **Meanings.** Each word, and each run of words the lexicon lists (`opt in`, `do not contact`), becomes a meaning:
+   `mob` -> mobile, `rchg` -> recharge, `dt` -> date, `pehla` -> first, `kul` -> total, `grahak` -> customer,
+   `sahmati` -> consent, Devanagari words too. An unknown word stays itself (`word:xyz`) and is never guessed.
+   The dictionary is the YAML file; adding a spelling is a config change, not a code change. A word may be listed
+   under one meaning only (the loader refuses the file otherwise).
+3. **Name score.** For a role: the strongest *anchor* found, plus the *boosters* found (the anchor itself is not
+   also a booster; at most +0.4 in all), minus the *blockers* found (the anchor itself is not also a blocker), cut to
+   0..1. No anchor, no score. The ID anchors are `id` 0.7, `account` and `policy` 0.5, `mobile` 0.45, `customer` 0.4;
+   `customer` adds 0.3 and `number` 0.15 as boosters, and an order, a date or a count blocks.
+4. **Value check.** From the profile's counts only (never a cell): an ID is 1 when every value is different and none is
+   empty (0.5 when nearly so), an outcome / consent / opt-out flag is 1 with exactly two values, a date is 1 when the
+   column reads as dates. Final score = `name x (0.4 + 0.6 x values)`: the values lower a suggestion by up to 60% but
+   never create one.
+5. **Short list.** Under `min_listed` (0.25) is not listed; three per role, best first, ties in file order; 0.75 and
+   over is `high`, 0.5 and over `medium`, else `low`. Even `high` is "please check".
+6. **The use case's own words** (its target column and `agent.column_hints.target_synonyms`) count as outcome anchors
+   (`converted_30d` -> `converted`); a one- or two-letter piece (`d`) and a word the role only boosts never do.
+
+### 13.3 Where it shows up
+
+- `find_roles` returns `header_candidates` (and extends the consent / opt-out / recently-contacted lists, after the
+  use case's own hints, with `medium`-or-better header reads). The advisor reads it; nothing else changes for a file
+  whose headers the use case already knows (the twenty-two original benchmark digests are byte-identical).
+- **ID.** Among the columns the profile found unique and when none is named by the use case's `primary_key_hints`, the
+  one whose name reads as an ID best is proposed (check). The lexicon only chooses among columns the profile found.
+- **Outcome.** The two-valued columns the rules already found are ordered by how their names read. A clear lead
+  (score at least 0.5 and at least 0.15 above the next) is proposed as a check suggestion instead of asked; otherwise
+  the question lists them in that order. A column that is not two-valued is never offered.
+- **Date.** The date column the headers read as the date the file describes comes first among the date columns found;
+  a date column read as the last contact is not offered as the date to split by.
+- **Consent, opt-out, last contact.** The columns the suppression rules read (`marketing_opt_in`, `last_contacted_at`)
+  are fixed by the use case, not per-run settings, so a different column cannot be applied by a click. When the file lacks
+  them and the headers suggest a candidate, a non-blocking question says so ("`dnd_flag` may say which customers asked
+  not to be contacted... Is it that column?"), spells out which way the values must run, and changes nothing either
+  way. It sits beside the Run button's own `SUPPRESSION_COLUMN_MISSING` warning.
+- **Never ticked.** A suggestion made from a header carries `from_headers`; `accept_recommended` and the UI's
+  default ticks skip it even when `agent.tick_uncertain` is on.
+- **Label drafts.** A training file with no outcome column that has a date of each customer's last activity
+  (`engine.agent.label_drafts`; a first-order, sign-up or expiry date is not one) stops as before, and the stop reason
+  and a non-blocking question carry the draft: "a customer lapses when there is no recharge in the 30 days after the date
+  the file describes, plus 7 days' grace" (M93's lapse label, DEC-1303 (d)), with how many customers had already gone
+  quiet for 30, 60 and 90 days and example customers by row number (never an ID). No option changes anything: the
+  outcome has to be recorded after the date the file describes, so the person adds that column and uploads again. A
+  day/month date nobody has settled gives no draft.
+
+### 13.4 The AI service's second opinions (`engine/agent/assist.py`, `POST …/agent-session/assist`)
+
+Optional, one request, off unless the Product AI is connected (409 `AI_NOT_CONNECTED` otherwise, nothing stored). Both
+use the chat's default-deny egress gate, the `assert_clean` backstop, the call meter (purpose `data_agent_assist`), the
+session's `max_llm_calls_per_session` and `numbers_grounded` / guardrails for any sentence they show; what was sent
+is recorded under "What the AI looked at". They are given names and counts only, never a cell.
+
+- **Rerank.** For each role with two or more candidates the model may reorder them. `headers.reorder_within` is the
+  only way its answer is applied: a column the rules did not list is dropped, a repeat counts once, a role it leaves
+  out keeps the rules' order. The new order is the order of an open outcome (or ID) question's buttons and is recorded
+  as `rerank_columns` evidence; an answered question is not touched and no suggestion changes.
+- **Leak reviewer.** Beside the deterministic `LEAKAGE_SUSPECTED` question the model may name up to three more columns
+  whose names suggest they are recorded after the outcome. Never the ID, the outcome, a personal-data or hidden
+  column, or one a question already offers to hide. Each is a non-blocking question "Hide it?" whose "Hide it" button
+  adds a `drop_column` step only when the person presses it; its sentence reaches the screen
+  only if it holds no personal data, no number the session does not hold and passes the guardrails (otherwise a fixed
+  sentence is shown). The reviewer adds questions only: it never replaces the rule-based check and never ticks.
+
+### 13.5 Accuracy of the rules alone
+
+`python -m tests.fixtures.agent_bench.header_metrics [--misses]` prints top-1 and top-3 accuracy per role over the
+cases, for all of them and for the `dev` and `held_out` halves. **First run, before any change to the lexicon: 132 of 141
+roles in the top three (93.6%); `dev` 67 of 68 (98.5%), `held_out` 65 of 73 (89.0%), so the 95% target was not reached on
+a first run.** The lexicon was then changed for three held-out misses (`attr`, `booked` / `booking`, an e-mail as a way
+of contacting a customer), so those cases are no longer held out; with that change and the later changes to the case list,
+the rules get 139 of 145 (95.9%) in the top three and as the first pick (held-out 72 of 77, 93.5%); for the 17
+roles a file does not have, no column was suggested. The six remaining misses are in
+`tests/unit/agent/test_header_benchmark.py::KNOWN_MISSES` on purpose: a loan account number (`lan_no`), a viewing-card number
+(`VC_NO`), `prepaid_flag`, `orderedAgain`, `ok_to_contact` and `last_nudge_dt`. The cases were written by the
+same author as the lexicon, so the figure is optimistic about files written by others.
+
+### 13.6 Limits
+
+- A header the lexicon has no word for is not read (it stays a question, or is not suggested). Add the spelling to the YAML.
+- The suppression columns cannot be remapped per run (see above); that needs `actions.suppression.opt_out_column` and
+  `recently_contacted_column` to become overridable, which is outside Plan G's area (`docs/CROSS_BRANCH_REQUESTS.md`).
+- The second opinions have no screen of their own yet: `POST …/agent-session/assist` returns the updated session and the
+  Guided setup tab shows its questions and its "What the AI looked at" like any other.

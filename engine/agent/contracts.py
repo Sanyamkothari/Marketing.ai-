@@ -340,6 +340,15 @@ class Proposal(StrictBase):
     confidence: AgentConfidence = Field(description="`sure` or `check`.")
     state: ProposalState = Field(default=ProposalState.PENDING, description="Only the user changes it.")
     decided_by: DecidedBy | None = Field(default=None, description="Who set the state; null while pending.")
+    from_headers: bool = Field(
+        default=False,
+        exclude_if=lambda value: not value,
+        description=(
+            "True when the column was picked by reading the header (abbreviations, romanised Hindi; M142). "
+            "Such a suggestion is always `check` and is never ticked for the person, whatever "
+            "`agent.tick_uncertain` says. Left out of the stored session while false."
+        ),
+    )
 
     @model_validator(mode="after")
     def _shape(self) -> Self:
