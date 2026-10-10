@@ -23,6 +23,17 @@ actions:
     dlt_template_id: "<your DLT template id>"   # placeholder: refused until replaced
     message_category: promotional           # promotional | service | transactional
 
+  # An automated call (a robo, IVR or AI-voice call) in a region that requires it (India, TRAI's Third
+  # Amendment: configs/regions/in.yaml `call_requires_true`) must be declared to the operator as A2P:
+  # `a2p_declared: true`. Missing or false is refused at config load with ACTION_A2P_UNDECLARED. A call
+  # placed by a human telecaller is not A2P: give that channel another name, such as `telecaller`.
+  # - action_id: example_offer_call
+  #   label: "Example offer (automated call)"
+  #   channels: [call]
+  #   offer_cost: 0.0
+  #   contact_cost: 0.0
+  #   a2p_declared: true                    # only once the client has declared the calls to the operator
+
   - action_id: example_offer_any
     label: "Example offer (email, else SMS)"
     channels: [email, sms]                  # email when contactable by email, else SMS
