@@ -20,6 +20,16 @@ Three routes, and none of them measures anything of its own:
 
 `campaign_measure.json` in the run directory remembers the outcomes file and the uplift run, so the
 step reopens where it was left.
+
+**Learning from a randomised cycle (Plan J M106, DEC-1316).** When the scoring run engaged the holdout
+service (M92: it wrote `holdout_assignment.json`), the experiment file is built from the variation the
+engine randomised instead: the list's customers and, outside it, the explore share and its
+comparison, balanced in each group (`engine.measurement.learn.build_randomised_frame`). A cycle that
+left customers outside its list with no chance of contact is refused with `409 LEARN_NO_OVERLAP`
+(and step 4 says so before anyone clicks). The record of which rows entered and why is written beside
+the training run (`learned_from.json`) and shown on step 4 (`MeasureView.learned`) and, with the
+predicted-against-measured block, on the Approver's screen. A run that did not engage the service
+learns exactly as before.
 """
 
 from __future__ import annotations
@@ -56,6 +66,16 @@ from api.schemas import (
 from engine.access.roles import Role
 from engine.config import RunMode, StrictBase, UseCaseConfig, resolve_config
 from engine.contracts import RunRecord, RunState, ScoringSummary
+from engine.holdout.spec import HoldoutAssignmentReport
+from engine.measurement.learn import (
+    LEARN_NO_OVERLAP,
+    LEARN_RECORD_FILENAME,
+    LearnFrame,
+    LearnRecord,
+    frame_refusal,
+    overlap_refusal,
+    read_learn_record,
+)
 from engine.measurement.measure import campaign_verdict_for
 from engine.pilot.roi import outcome_is_good_by_default
 from engine.runs import job_spec_key, read_job_spec
@@ -156,6 +176,11 @@ class LearnRequest(StrictBase):
     )
 
 
+def _absent(value: object) -> bool:
+    """`exclude_if` of M106's view field: a view without a learn record carries no `learned` key."""
+    return value is None
+
+
 class UpliftRunState(StrictBase):
     """The uplift training run learned from this campaign."""
 
@@ -178,6 +203,14 @@ class MeasureView(StrictBase):
     verdict: CampaignVerdict | None = Field(default=None, description="Their plain verdict.")
     learn: LearnReadiness = Field(description="Whether an uplift model can be learned from them.")
     uplift_run: UpliftRunState | None = Field(default=None, description="The uplift run learned from them.")
+    # Plan J M106 (DEC-1316, additive): absent, not null, when the run was not learned from a randomised
+    # cycle, so a default run's view is unchanged.
+    learned: LearnRecord | None = Field(
+        default=None,
+        exclude_if=_absent,
+        description="Which customers the uplift run learned from and why; absent when it was not learned "
+        "from a cycle that engaged the control-group service.",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -287,6 +320,11 @@ def create_learn(
     record = load_run(storage, run_id)
     config = use_case_config(record.use_case_id, root)
     _require_offered(config)
+    # Plan J M106: a cycle that engaged the holdout service learns from its randomised rows only, and is
+    # refused, before anything is read, when part of its customers had no chance of contact.
+    holdout = _holdout_report(storage, run_id)
+    if holdout is not None and (refusal := overlap_refusal(holdout)) is not None:
+        raise http_error(409, LEARN_NO_OVERLAP, refusal)
     measured = _stored(storage, run_key(run_id, CAMPAIGN_MEASURE_FILENAME), CampaignMeasure)
     report = _stored(storage, run_key(run_id, INCREMENTALITY_FILENAME), IncrementalityReport)
     if measured is None or report is None:
@@ -295,6 +333,8 @@ def create_learn(
     readiness = _learn_readiness(report, resolved.uplift)
     if not readiness.ready:
         raise http_error(409, MEASURE_NOT_READY, readiness.reason)
+    # Plan J M106: a model learned from a randomised cycle is always a challenger for an Approver.
+    challenger = _challenger_overrides(body.overrides) if holdout is not None else None
 
     inputs = _run_input(storage, record)
     scores = _read_scores(storage, run_id)
@@ -302,19 +342,43 @@ def create_learn(
     outcomes = _read_all(storage, outcomes_upload.source_key, outcomes_upload.file_format)
     treatment = treatment_column_for([str(name) for name in inputs.columns])
     target = _target(config)
+    learned: LearnRecord | None = None
     try:
-        frame = build_experiment_frame(
-            inputs,
-            scores,
-            outcomes,
-            primary_key=record.primary_key,
-            outcome_column=measured.outcome_column,
-            positive_label=measured.positive_label,
-            target_column=target,
-            treatment_column=treatment,
-        )
+        if holdout is None:
+            frame = build_experiment_frame(
+                inputs,
+                scores,
+                outcomes,
+                primary_key=record.primary_key,
+                outcome_column=measured.outcome_column,
+                positive_label=measured.positive_label,
+                target_column=target,
+                treatment_column=treatment,
+            )
+        else:
+            built = _randomised_frame(
+                storage,
+                request,
+                record,
+                holdout,
+                inputs=inputs,
+                scores=scores,
+                outcomes=outcomes,
+                measured=measured,
+                target=target,
+                treatment=treatment,
+                samples=resolved.uplift.bootstrap_samples,
+            )
+            frame, learned = built.frame, built.record
     except ValueError as exc:
         raise http_error(422, MEASURE_INVALID, str(exc)) from exc
+    if holdout is not None and learned is not None:
+        # Plan J M106: what the outcomes file left of the randomisation, checked before anything is written.
+        late = frame_refusal(
+            learned, explore_candidates=holdout.explore_candidates, min_rows=resolved.uplift.min_arm_rows
+        )
+        if late is not None:
+            raise http_error(409, LEARN_NO_OVERLAP, late)
     experiment = _write_upload(
         storage,
         config,
@@ -324,7 +388,9 @@ def create_learn(
         # makes the experiment, and the uplift run learned from it, synthetic.
         synthetic=record.synthetic or outcomes_upload.synthetic,
     )
-    overrides: dict[str, Any] = {**body.overrides, "target.positive_label": 1}
+    overrides: dict[str, Any] = (
+        {**body.overrides, "target.positive_label": 1} if challenger is None else challenger
+    )
     started = create_uplift_run(
         UpliftRunRequest(
             use_case=config.id,
@@ -343,6 +409,11 @@ def create_learn(
         request,
     )
     if isinstance(started, RunCreatedResponse):
+        if learned is not None:
+            storage.write_model(
+                run_key(started.run_id, LEARN_RECORD_FILENAME),
+                learned.model_copy(update={"uplift_run_id": started.run_id}),
+            )
         storage.write_model(
             run_key(run_id, CAMPAIGN_MEASURE_FILENAME),
             measured.model_copy(update={"uplift_run_id": started.run_id}),
@@ -394,6 +465,112 @@ def _run_input(storage: Storage, record: RunRecord) -> Any:
     return _read_all(storage, key, file_format)
 
 
+def _challenger_overrides(requested: dict[str, Any]) -> dict[str, Any]:
+    """The learn run's overrides on a randomised cycle: the request's, with approval always required.
+
+    Like a scheduled training run (DEC-743), a model learned from a cycle waits for an Approver
+    whatever `governance.approval_required` says; a request that asks otherwise is refused (422).
+    """
+    from engine.config import expand_paths
+
+    expanded = expand_paths(requested)
+    governance = expanded.get("governance")
+    if isinstance(governance, dict) and governance.get("approval_required") is False:
+        raise http_error(
+            422,
+            MEASURE_INVALID,
+            "A model learned from the last campaign always waits for an Approver, so "
+            "governance.approval_required cannot be set to false here.",
+        )
+    forced = {**(governance if isinstance(governance, dict) else {}), "approval_required": True}
+    return {**expanded, "target.positive_label": 1, "governance": forced}
+
+
+def _holdout_report(storage: Storage, run_id: str) -> HoldoutAssignmentReport | None:
+    """The run's `holdout_assignment.json` (M92), written only when it engaged the holdout service."""
+    from engine.holdout.spec import HOLDOUT_REPORT_FILENAME
+
+    report: HoldoutAssignmentReport | None = _stored(
+        storage, run_key(run_id, HOLDOUT_REPORT_FILENAME), HoldoutAssignmentReport
+    )
+    return report
+
+
+def _randomised_frame(
+    storage: Storage,
+    request: Request,
+    record: RunRecord,
+    holdout: HoldoutAssignmentReport,
+    *,
+    inputs: Any,
+    scores: Any,
+    outcomes: Any,
+    measured: CampaignMeasure,
+    target: str,
+    treatment: str,
+    samples: int,
+) -> LearnFrame:
+    """Plan J M106: the experiment from the cycle's randomised rows, with its record (DEC-1316)."""
+    import io
+
+    import pandas as pd
+
+    from engine.config import ResolvedConfig
+    from engine.holdout.assign import HOLDOUT_ASSIGNMENT_FILENAME
+    from engine.holdout.spec import effective_holdout_fraction
+    from engine.measurement.learn import build_randomised_frame
+    from engine.runs import RUN_CONFIG_FILENAME
+
+    try:
+        assignment = pd.read_parquet(
+            io.BytesIO(storage.read_bytes(run_key(record.run_id, HOLDOUT_ASSIGNMENT_FILENAME)))
+        )
+        run_config = storage.read_model(run_key(record.run_id, RUN_CONFIG_FILENAME), ResolvedConfig).config
+    except StorageError:
+        raise http_error(
+            409,
+            MEASURE_NOT_READY,
+            "This run's record of who was held back and who was explored is no longer stored, so there is "
+            "nothing to learn from.",
+        ) from None
+    return build_randomised_frame(
+        inputs,
+        scores,
+        assignment,
+        outcomes,
+        run_config,
+        primary_key=record.primary_key,
+        outcome_column=measured.outcome_column,
+        positive_label=measured.positive_label,
+        target_column=target,
+        treatment_column=treatment,
+        run_id=record.run_id,
+        model_id=record.model_version_id,
+        holdout_fraction=effective_holdout_fraction(run_config.actions),
+        explore_fraction=holdout.spec.explore_fraction,
+        samples=samples,
+        now=utc_now(),
+        delivery=_delivery(storage, request, record.run_id),
+    )
+
+
+def _delivery(storage: Storage, request: Request, run_id: str) -> Any:
+    """The newest contact readout (M103) of this run's campaigns, reported beside the frame; None without one."""
+    from api.routes.campaigns import get_campaign_store
+    from engine.measurement.campaign import CONTACT_READOUT_FILENAME, campaign_key
+    from engine.measurement.learn import delivery_from
+    from engine.measurement.reconcile import ContactReadout
+
+    readouts = []
+    for campaign in get_campaign_store(request).list(run_id=run_id):
+        readout = _stored(
+            storage, campaign_key(campaign.campaign_id, CONTACT_READOUT_FILENAME), ContactReadout
+        )
+        if readout is not None:
+            readouts.append(readout)
+    return delivery_from(readouts)
+
+
 def _read_scores(storage: Storage, run_id: str) -> Any:
     import io
 
@@ -413,10 +590,17 @@ def _view(storage: Storage, record: RunRecord, config: UseCaseConfig) -> Measure
     good = outcome_is_good_by_default(config.id, outcome or _target(config))
     label = config.target.definition or None
     uplift_run: UpliftRunState | None = None
+    learned_from: LearnRecord | None = None
     if measured is not None and measured.uplift_run_id is not None:
         learned = _stored(storage, run_key(measured.uplift_run_id, "run.json"), RunRecord)
         if learned is not None:
             uplift_run = UpliftRunState(run_id=learned.run_id, state=learned.state)
+        learned_from = read_learn_record(storage, measured.uplift_run_id)
+    readiness = _learn_readiness(report, config.uplift)
+    holdout = _holdout_report(storage, record.run_id)
+    if holdout is not None and (refusal := overlap_refusal(holdout)) is not None:
+        # Plan J M106: the same sentence `POST .../measure/learn` refuses with, before anyone clicks.
+        readiness = readiness.model_copy(update={"ready": False, "reason": refusal})
     return MeasureView(
         run_id=record.run_id,
         use_case_id=config.id,
@@ -428,8 +612,9 @@ def _view(storage: Storage, record: RunRecord, config: UseCaseConfig) -> Measure
         outcomes=measured,
         report=report,
         verdict=campaign_verdict_for(report, outcome_is_good=good, outcome_label=label) if report else None,
-        learn=_learn_readiness(report, config.uplift),
+        learn=readiness,
         uplift_run=uplift_run,
+        learned=learned_from,
     )
 
 

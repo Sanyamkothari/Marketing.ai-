@@ -77,8 +77,12 @@ feature and every dropped column with its reason.
 
 **Where the file comes from.** Today it is an uploaded CSV or Parquet file. Plan B also names a
 Phase 1 scoring run's own control group joined with later outcomes, and Phase 2's `campaign_events`
-role, which has a `treatment` standard column. Neither of those feeds `POST /uplift/runs` directly
-yet: the request takes an `upload_id`, not a `dataset_id`.
+role, which has a `treatment` standard column. Since Plan J M106 (DEC-1316) `POST /uplift/runs` takes
+exactly one of `upload_id` and `dataset_id` (both or neither is 422): a built dataset is read from its
+manifest and rows like `POST /runs` reads one, its id seeds the randomness check, and `run.json` names
+the dataset, its client and its fingerprint. The dataset is never written to; its checks travel on the
+run. Step 4's "Learn who to contact next time" builds the experiment from a scoring run's own control
+group and outcomes (section 9).
 
 ---
 
@@ -506,6 +510,25 @@ AI-written-text use case (`engine.uplift.measure.measure_offered`).
   as a training upload and starts `POST /uplift/runs` on it. Suppressed customers are in neither arm;
   for an uplift run only its `intended_treatment` customers are kept. The link then goes to the new
   model's contact list (`#/uplift/<use case>/output/<run>`).
+* **Learning from a randomised cycle (Plan J M106, DEC-1316).** When the scoring run engaged the
+  holdout service (a persistent control group or an explore share, section 14; it wrote
+  `holdout_assignment.json`), the experiment holds only customers whose contact was decided at
+  random - the list's customers and, outside it, the explore share's group - with `contacted` = the
+  logged contact (`treated`). In each group the smaller side enters whole and the larger side is cut to
+  its size by a salted draw on the customer id, so the frame passes `TREATMENT_NOT_RANDOM` and every
+  learner sees one chance of treatment. A cycle that left customers outside its list with no chance of
+  contact (explore share 0) is refused with `409 LEARN_NO_OVERLAP`, unless the list held every eligible
+  customer who is not a predicted sleeping dog; so is a frame whose outcomes file covers the contacted and
+  the not-contacted customers of a group unevenly (more than 5 points apart), or leaves fewer than
+  `uplift.min_arm_rows` on a side outside the list. The learned model always waits for an Approver
+  (`governance.approval_required` is forced on; a request setting it false is 422). A run that did not
+  engage the service is not checked for overlap: its frame holds the list's customers only, so set
+  `actions.explore_fraction` to 5% or more for a cycle that will be learned from.
+  `runs/<new run>/learned_from.json` records which
+  customers entered, who was left out and why, the contact file's readout when the run's campaign has
+  one (reported, never used as the treatment), and the predicted-against-measured block the Approver
+  sees beside the new model. Details: [`docs/DECIDE.md`](DECIDE.md) section 20. A run that did not
+  engage the service learns exactly as described in the bullet above.
 
 `campaign_measure.json` in the run directory records the outcomes file and the uplift run learned
 from it.
@@ -1109,7 +1132,7 @@ whether choosing per customer does better than the first offer alone; every numb
   results read both columns. Phase 1's `POST /runs` still takes a composite key only with a built
   dataset (DEC-083), so a scoring file with several snapshots per customer is scored through a
   dataset; a scoring file with one row per customer is scored with the customer column alone.
-  `POST /uplift/runs` itself still takes an `upload_id`, not a `dataset_id`.
+  `POST /uplift/runs` takes a built dataset too since Plan J M106 (`dataset_id`, section 2).
 * **Randomised data only for causal claims.** Nothing here corrects a targeted campaign. It is
   labelled not causal instead.
 * **Criteo was not run here.** The Criteo Uplift use case is configured for this problem type
@@ -1199,6 +1222,7 @@ The uplift routes answer errors in Phase 1's envelope, `{"detail": {"code", "mes
 | `MEASURE_NOT_OFFERED` | 409 | `POST /runs/{id}/measure`, `.../measure/learn` | The use case does not contact customers, or holds nobody back (section 9, step 4). | Nothing to measure; the Campaign results route still answers for any scoring run. |
 | `MEASURE_INVALID` | 422 | `POST /runs/{id}/measure`, `.../measure/learn` | The outcomes file has no customer id column, only the id, or several columns and none is the use case's outcome. | Keep the customer id and one outcome column, or name it with `outcome_column`. |
 | `MEASURE_NOT_READY` | 409 | `POST /runs/{id}/measure/learn` | The campaign was not measured yet, its window is still open, or a group is below the uplift floors (the message gives the counts). | Measure it, wait for the window, or run a larger campaign. |
+| `LEARN_NO_OVERLAP` | 409 | `POST /runs/{id}/measure/learn` (and the reason `GET /runs/{id}/measure` gives) | Plan J M106: the cycle engaged the holdout service but had no explore share, so the customers outside its list had no chance of contact and nothing shows what a contact does for them; or the outcomes file covers a group's contacted and not-contacted customers unevenly, or leaves too few outside the list (section 9). | Set `actions.explore_fraction` (5% or more) for the next cycle and learn from that one, upload outcomes for every customer the cycle scored, or train on a randomised file with `POST /uplift/runs`. |
 | `HOLDOUT_SALT_MISSING` | the run fails at ingest; 503 on `PUT /holdout` | any scoring run of a use case with a persistent holdout; `PUT /holdout` | `MARKETING_AI_HOLDOUT_SALT` is not set (section 14). | Set the salt (at least 16 characters, kept for as long as the holdout runs), or set `actions.holdout.scope` back to `run`. |
 | `HOLDOUT_SALT_CHANGED` | the run fails at ingest; 409 on `PUT /holdout` | any scoring run with a persistent holdout; `PUT /holdout` without `rotate_salt` | The configured salt is not the one the holdout was drawn with. | Set the original salt again, or have an Admin adopt the new one with `PUT /holdout` and `rotate_salt: true` (a new epoch of every holdout). |
 | `HOLDOUT_FRACTION_LOWERED` | the run fails at ingest | any scoring run with a persistent holdout | The use case asks for a smaller holdout than its current epoch has used. | Set the share back, or have an Admin start a new epoch at the lower share (`PUT /holdout`). |

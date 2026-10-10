@@ -1229,7 +1229,12 @@ class UpliftRunRequest(StrictBase):
     """
 
     use_case: str = Field(description="Use case the run belongs to.")
-    upload_id: str = Field(description="Upload uploaded in train mode.")
+    # Plan J M106 (DEC-1316): in-place, defaulted declarations - exactly one of `upload_id` and
+    # `dataset_id` (a dataset built from the client's tables), checked by `_one_source` below.
+    upload_id: str | None = Field(default=None, description="Upload uploaded in train mode.")
+    dataset_id: str | None = Field(
+        default=None, description="A built dataset to train on instead of an upload (Plan J M106)."
+    )
     primary_key: PrimaryKey = Field(
         description=(
             "Column that identifies a customer, or two columns - the customer and the snapshot date - "
@@ -1242,6 +1247,16 @@ class UpliftRunRequest(StrictBase):
         description="0/1 column recording who was treated; the configured or hinted one when null.",
     )
     overrides: dict[str, Any] = Field(default_factory=dict, description="Run overrides, nested or dotted.")
+
+    @model_validator(mode="after")
+    def _one_source(self) -> UpliftRunRequest:
+        if (self.upload_id is None) == (self.dataset_id is None):
+            given = "both" if self.upload_id is not None else "neither"
+            raise ValueError(
+                "An uplift run reads one uploaded file or one built dataset; give exactly one of upload_id "
+                f"and dataset_id ({given} given)."
+            )
+        return self
 
 
 class UpliftValidationErrorResponse(StrictBase):
