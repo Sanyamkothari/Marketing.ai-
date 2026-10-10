@@ -164,7 +164,7 @@ Contract schema version: 1.
 | POST | `/schedules/{schedule_id}/enable` | Resume a schedule | Schedule |
 | POST | `/schedules/{schedule_id}/fire` | Run a schedule's work now | ScheduleFiring |
 | GET | `/schedules/{schedule_id}/firings` | A schedule's firing history, newest first | FiringListResponse |
-| POST | `/uplift/runs` | Validate an upload as an experiment and, when it passes, start an uplift training run | RunCreatedResponse |
+| POST | `/uplift/runs` | Validate an upload or a built dataset as an experiment and, when it passes, start an uplift training run | RunCreatedResponse |
 | POST | `/uploads` | Store a CSV or Parquet file, profile it and return everything the Setup screen renders | UploadResponse |
 | GET | `/uploads/{upload_id}/agent-session` | The Guided-setup session of an upload | AgentSessionResponse |
 | POST | `/uploads/{upload_id}/agent-session` | Start (or restart) Guided setup for an upload: the helper's suggestions and questions | AgentSessionResponse |

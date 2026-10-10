@@ -23,6 +23,13 @@ cannot be enforced, and the screen says that rather than implying otherwise. A r
 and whether its predicted uplift is calibrated, each read from what its training run measured. They
 inform the Approver; the champion rule and the decision routes ignore them.
 
+**How the model that chose the last list did on that campaign (Plan J M106).** A challenger learned
+from a cycle (step 4's "Learn who to contact next time" on a run that engaged the holdout service)
+also carries `live_calibration`: the change the model that chose that cycle's list predicted, against
+the change the campaign measured, per tenth of its ranking, read from the training run's
+`learned_from.json` (`engine.measurement.learn`). That model may since have been replaced, so the block
+never calls it the model in use. It is advice too, and absent for every other model.
+
 **Every decision is recorded with its reason** in `model_decision` (the platform database, migration
 `0005_plan_d`): approved, rejected or promoted, by whom (a user id), against which champion, when.
 The registry row keeps Phase 1's `approved_by` / `promoted_by`, now the signed-in username when
@@ -51,6 +58,7 @@ from engine.contracts import (
     RunManifest,
     RunRecord,
 )
+from engine.measurement.learn import LiveCalibration, live_calibration_for
 from engine.model_gates import ApprovalCheck, approval_checks
 from engine.platform_db import create_tables
 from engine.registry import ModelRegistry, aware_utc
@@ -156,6 +164,11 @@ class HeadToHead(_Model):
     note: str | None = Field(default=None, description="What the comparison could not include, and why.")
 
 
+def _absent(value: object) -> bool:
+    """`exclude_if` of M106's field: an item without a live block carries no `live_calibration` key."""
+    return value is None
+
+
 class ApprovalItem(_Model):
     """One challenger waiting for an Approver, with everything the decision needs."""
 
@@ -172,6 +185,14 @@ class ApprovalItem(_Model):
     checks: tuple[ApprovalCheck, ...] = Field(
         default=(),
         description="Advisory checks ({code, passed, message}); passed is null when not measured.",
+    )
+    # Plan J M106 (additive): for a challenger learned from a cycle, how the model that chose that
+    # cycle's list did, predicted against measured by tenth (`engine.measurement.learn`). Absent, not
+    # null, for every other model, so their items are unchanged.
+    live_calibration: LiveCalibration | None = Field(
+        default=None,
+        exclude_if=_absent,
+        description="Predicted against measured change by tenth on the last campaign; absent when not learned from one.",
     )
 
 
@@ -293,6 +314,7 @@ def pending_approvals(
                 blocked_reason=blocked,
                 decisions=history.get(version.model_id, ()),
                 checks=approval_checks(storage, version),
+                live_calibration=live_calibration_for(storage, version),
             )
         )
     return tuple(items)

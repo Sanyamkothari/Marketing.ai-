@@ -36,7 +36,7 @@ the user downloads (the treat list).
 | 17 | Auditing a campaign another tool ran; the programme readout | M103 | written (below) |
 | 18 | The Value Proof Pack | M104 | written (below) |
 | 19 | Warnings and proven value to date | M105 | written (below) |
-| 20 | Learning from the last cycle | M106 | not yet written |
+| 20 | Learning from the last cycle | M106 | written (below) |
 | 21 | The monthly loop (read-only) | M107 | not yet written |
 | 22 | Cost before each run | M108 | written (below) |
 | 23 | Validation on real public randomised data | M110 | not yet written |
@@ -856,6 +856,87 @@ descriptive audit, generated data, a run with nobody held back) and check the to
 bound, each card in both directions, that stated-random, descriptive and generated campaigns are never added, that three
 campaigns on one run add one lower bound, that a repeated cycle cannot turn a series that does not fall into one that does,
 that two yes/no columns give two totals, and that a proven campaign beyond the newest hundred is still in the total.
+
+## 20. Learning from the last cycle (M106, DEC-1316)
+
+**Why.** The next model should learn from what the last campaign actually did. Before M106 step 4's "Learn who
+to contact next time" compared every eligible customer who was not held back with the ones who were: the list as a
+whole against its control group. That is a fair experiment of the *list*, but on a propensity run the lowest band
+was never contacted and still sat in the contacted arm, and nothing outside an uplift run's intended customers was
+ever contacted at random, so a model learned there could only guess what a contact does for them.
+
+**Which rows enter, and why** (`engine/measurement/learn.py::build_randomised_frame`). Only for a scoring run that
+engaged the holdout service (a persistent control group or an explore share, M92: it wrote
+`holdout_assignment.json`). A scored customer enters when the record gives their contact a chance strictly between
+0 and 1 (`treatment_probability`):
+
+| Group | Who | Chance of contact | Contacted when |
+|---|---|---|---|
+| on the list | selected before the hold-back (`selection_masks`: an uplift run's intended customers, a propensity run's bands but the lowest) | `1 − h` | the control group did not draw them |
+| outside the list | eligible, not selected, not a predicted sleeping dog | `(1 − h) × explore_fraction` | the explore share drew them |
+
+The treatment is `treated`, the logged contact: who the campaign **meant** to contact. Left out, and counted by
+reason in `learned_from.json` `left_out` (each scored customer exactly once): customers who could not be contacted at
+all (suppressed), predicted sleeping dogs (the rule never contacts them), customers with no chance of contact, and
+customers with no outcome in the file. **Balanced in each group:** the smaller side (contacted or not) enters whole,
+and the larger side is cut to the same number by the smallest `sha256("learn:<run seed>:<key>")` draws, which depend
+on neither the customer's data nor their outcome. Pooling the groups uncut would make contact predictable from the
+customers' own data (nine in ten on the list, a few in a hundred outside it) and the uplift checks would refuse
+it as `TREATMENT_NOT_RANDOM`; cut, the chance of contact is one half for every row, so the frame is a randomised
+experiment and the learners need no weights. `tests/integration/measurement/test_learn_from_cycle.py` shows both.
+
+**A contact file is reported, never learned from.** When one of the run's campaigns has a contact readout (M103),
+its contact rate and contamination are written into the record (`delivery`) and the notes. Who was actually reached
+is not random (a wrong number, a full inbox), so replacing the meant contact with it would let that decide the
+comparison.
+
+**When there is nothing to learn from: `LEARN_NO_OVERLAP`** (409, `POST /runs/{id}/measure/learn`; the same
+sentence is step 4's `learn.reason`). The cycle had no explore share and left eligible customers outside its list
+who are not predicted sleeping dogs (`holdout_assignment.json` `explore_candidates`). It is allowed when there are
+none: the control group then randomised everyone the list could contact, so the cycle is already randomised. A file
+from a randomised campaign is trained on directly with `POST /uplift/runs` (an upload, or since M106 a built dataset,
+`dataset_id`), where `TREATMENT_NOT_RANDOM` checks it.
+
+**The outcomes file can undo the randomisation, so the built frame is checked too** (`frame_refusal`, the same
+409 `LEARN_NO_OVERLAP`, before anything is written). Dropping customers with no outcome is harmless only when an
+outcome is as likely to be missing for a contacted customer as for one left alone. A file covering only the hand-off
+(the list, its control group and the explored customers, as a campaign tool exports it) has an outcome for every
+contacted customer outside the list and for none of the others; dropping the rest would leave that group with
+contacted customers only. So each group records the share of its contacted and of its not-contacted customers with
+an outcome (`outcome_coverage_contacted`, `outcome_coverage_not_contacted`), and learning is refused when they
+differ by more than 5 points (`COVERAGE_TOLERANCE`), or, when the cycle had customers it could explore, when fewer
+than `uplift.min_arm_rows` entered on either side from outside the list. Step 4's `learn.reason` cannot say this in
+advance: it needs the outcomes file read. **Each group has one chance of contact:** the groups come from recomputing
+"on the list" with the run's configuration, and every member's recorded `treatment_probability` must equal the
+group's rule (`1 − h` or `(1 − h) × explore_fraction`); a disagreement is a 422 rather than a balance of customers
+whose chances differ.
+
+**The learned model is always a challenger.** Like a scheduled training run (DEC-743), the run started on the frame
+has `governance.approval_required` forced on as an override (`run_config.json` shows it as `override`), whatever the
+use case says; a learn request that sets it false is refused with 422. With the default champion threshold
+(`evaluation.champion_min_improvement_pct`) a learned model that beats the model in use waits for the Approver
+(`PENDING_APPROVAL`) with the block below. One that does not clear the threshold stays a `CANDIDATE`: no approval
+item is raised, so the block is not on the Approver's screen; it stays in the training run's `learned_from.json` and
+on `GET /runs/{id}/measure` as `learned.calibration` (step 4's screen does not draw it yet).
+
+**Predicted against measured, for the Approver.** The scores of an uplift run carry the change the model that
+scored it predicted per customer (`uplift`). That is the model that chose the last list, which may have been replaced
+since, so the block is headed "How the model that chose the last list did on that campaign", never "the model in
+use". On the frame's rows, scored before the campaign and so out of sample for that
+model, the predicted change is set against the measured one per tenth, with M96's `calibration_by_decile` (the
+training run's own resampling: `uplift.bootstrap_samples` resamples, seeded from the scoring run). It is stored in
+`learned_from.json` `calibration` and shown on the Approver's screen beside the challenger learned from the cycle
+(`ApprovalItem.live_calibration`, `ui/modules/production/approvals.js`): the sentence, and per tenth the predicted
+and measured change, its 95% range and whether the range holds the prediction, all the server's. A propensity-ranked
+list predicts no change, so the block is null with that reason (`calibration_reason`).
+
+**Where it is shown.** `GET /runs/{id}/measure` carries the record as `learned` once a model was learned from the
+run (absent otherwise); `GET /approvals` carries `live_calibration` (absent for any other model). A scoring run that
+did not engage the service learns exactly as before (`tests/integration/uplift/test_measure_campaign.py`, unchanged),
+writes no record and draws no block. **That path is not checked for overlap:** its frame holds the list's customers
+only, so a model learned from it knows nothing of a contact's effect on anyone outside the list, which is the case
+`LEARN_NO_OVERLAP` describes; it is left as it was so defaults stay byte-identical. For a cycle that will be learned
+from, set `actions.explore_fraction` to 5% or more.
 
 ## 22. Cost before each run, with a cap (M108, DEC-1318)
 
