@@ -57,7 +57,7 @@ Does the campaign-effect (uplift) model beat plain risk ranking? Judged by the a
 ## The limits, said plainly
 
 - Public data and a retrospective reading. The file is an old public e-mail test; nothing was sent by the product, and the licence of the file is not stated, so it is for internal validation. A client's own campaign is the next proof.
-- The replay keeps a third of each group, counts the rest as having no outcome, and uses an outcome window of 0 days, because the product refuses to measure a window that has not passed; the file's own outcomes cover two weeks.
+- The replay keeps the outcomes of 4,263 e-mailed customers and 4,171 held back, a third of each group, and counts the other 17,165 customers the list meant to reach as having no outcome, so the campaign screens, which count the customers meant to be reached, show larger groups than the ones measured. It uses an outcome window of 0 days, because the product refuses to measure a window that has not passed; the file's own outcomes cover two weeks.
 - Rupee figures turn the file's dollars into rupees at 83 rupees to the dollar, an assumed rate, count revenue before margin, and take an e-mail to cost 0.05 rupee. Change the rate and every rupee figure moves with it.
 - The amount spent is skewed: a few large purchases dominate it, so the ranges on money may be too narrow. The other public datasets considered, Criteo among them, were not run: not reachable from here, or not licensed for this use.
 

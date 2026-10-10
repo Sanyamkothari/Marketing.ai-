@@ -32,6 +32,27 @@
       "field": "steps.campaigns.conversion.report.absolute_lift.confidence_level"
     },
     {
+      "id": "limit2.kept",
+      "text": "4,263",
+      "value": 4263.0,
+      "format": "count",
+      "field": "steps.campaigns.conversion.report.treated_rows"
+    },
+    {
+      "id": "limit2.held",
+      "text": "4,171",
+      "value": 4171.0,
+      "format": "count",
+      "field": "steps.campaigns.conversion.report.control_rows"
+    },
+    {
+      "id": "limit2.left_out",
+      "text": "17,165",
+      "value": 17165.0,
+      "format": "count",
+      "field": "steps.campaigns.conversion.report.rows_without_outcome"
+    },
+    {
       "id": "limit2.window",
       "text": "0",
       "value": 0.0,

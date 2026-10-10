@@ -704,11 +704,18 @@ def _limits(r: _Reader) -> tuple[Claim, ...]:
         ),
         Claim(
             template=(
-                "The replay keeps a third of each group, counts the rest as having no outcome, and uses an "
-                "outcome window of {window} days, because the product refuses to measure a window that has "
-                "not passed; the file's own outcomes cover two weeks."
+                "The replay keeps the outcomes of {kept} e-mailed customers and {held} held back, a third of "
+                "each group, and counts the other {left_out} customers the list meant to reach as having no "
+                "outcome, so the campaign screens, which count the customers meant to be reached, show larger "
+                "groups than the ones measured. It uses an outcome window of {window} days, because the product "
+                "refuses to measure a window that has not passed; the file's own outcomes cover two weeks."
             ),
-            figures={"window": r.fig("steps.campaigns.conversion.report.outcome_window_days", "count")},
+            figures={
+                "kept": r.fig("steps.campaigns.conversion.report.treated_rows", "count"),
+                "held": r.fig("steps.campaigns.conversion.report.control_rows", "count"),
+                "left_out": r.fig("steps.campaigns.conversion.report.rows_without_outcome", "count"),
+                "window": r.fig("steps.campaigns.conversion.report.outcome_window_days", "count"),
+            },
         ),
         Claim(
             template=(
