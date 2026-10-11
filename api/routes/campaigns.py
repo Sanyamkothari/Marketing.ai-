@@ -767,9 +767,11 @@ def campaigns_summary(
 
     Reads every campaign, not the newest page the list shows: a total "to date" that dropped older proven
     campaigns would fall from one day to the next without saying so."""
-    campaigns = get_campaign_store(request).list(limit=None)
+    store = get_campaign_store(request)
+    campaigns = store.list(limit=None)
     try:
-        return build_summary(storage, campaigns, registry=registry, root=root)
+        # Plan K M136 (DEC-1402): the store lets a summary bring the Estimated files up to date when pooling is on
+        return build_summary(storage, campaigns, registry=registry, root=root, store=store)
     except SummaryTraceError as exc:
         _LOGGER.error("campaigns summary: %d figure(s) did not trace", len(exc.failures))
         raise http_error(
@@ -992,6 +994,7 @@ def measure_campaign_results(
             ledger_engine=lambda: get_platform_engine(request),
             now=utc_now(),
             covariate_source=body.covariate_source,
+            config_root=root,  # Plan K M136 (DEC-1402): where `configs/measurement.yaml` (pooling) is read
         )
     except CycleError as exc:
         if exc.code in _AUDITED_REFUSALS:

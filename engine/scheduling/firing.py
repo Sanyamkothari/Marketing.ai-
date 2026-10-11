@@ -1253,6 +1253,7 @@ class ScheduleFirer:
                     pull=pull,
                     ledger_engine=lambda: ledger,
                     now=services.clock(),
+                    config_root=services.config_root,  # PLAN-K (M136): where measurement.yaml (pooling) is read
                 )
             else:
                 # The learning run passes the cost gate every scheduled run passes (Plan J M108), checked only

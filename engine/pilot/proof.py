@@ -648,6 +648,8 @@ class _Context:
     approvals: dict[tuple[str, str], int] = field(default_factory=dict)
     ledger_key: str | None = None
     scope: Scope = "single"
+    pooled_key: str | None = None
+    """PLAN-K (M136): `pooled_estimate.json` when pooling is on and the file was read from this report."""
 
     def key(self, name: str) -> str:
         return f"campaigns/{self.campaign_id}/{name}"
@@ -756,6 +758,7 @@ def build_proof(
         costs_key=costs_key,
         costs_source=costs_source,
         scope=_scope(report),
+        pooled_key=_pooled_key(reader, campaign_id, report, root),
     )
     _load_approvals(context)
     incremental = _incremental(context)
@@ -1301,6 +1304,9 @@ def _incremental(context: _Context) -> ProofSection:
                 missing="Not measured: one of the two groups had no customer with an outcome.",
             ),
         ]
+    # PLAN-K (M136): the Estimated line beside the measured difference, never the last (benefit) line.
+    estimated = _estimated_lines(context)
+    lines += estimated
     if context.claim == "descriptive":
         lines.append(ProofLine(label=_benefit_label(context), missing=_DESCRIPTIVE))
     else:
@@ -1325,6 +1331,8 @@ def _incremental(context: _Context) -> ProofSection:
     if context.claim == "descriptive":
         notes.append(_DESCRIPTIVE)
     notes += _scope_notes(context)
+    if estimated:
+        notes += _estimated_notes(context)
     return ProofSection(
         key="incremental", title=title, status="measured", lines=tuple(lines), table=table, notes=tuple(notes)
     )
@@ -1346,6 +1354,74 @@ def _scope_notes(context: _Context) -> list[str]:
             "Measure the campaign again to add every offer together."
         ]
     return []
+
+
+# --- PLAN-K (M136, DEC-1402): the Estimated line, beside the measured difference ----------------------------
+_ESTIMATED_LABEL: Final[str] = "Estimated difference, drawn towards comparable campaigns (not measured)"
+_ESTIMATED_COUNT_LABEL: Final[str] = "Comparable campaigns it is drawn towards, this one included"
+_NOT_POOLED: Final[str] = (
+    "Not estimated: fewer comparable campaigns have a final result than an estimate needs, so this campaign is "
+    "shown only as measured."
+)
+_ESTIMATED_NOTE: Final[str] = (
+    "The estimated line is not a measured result. It draws this campaign's measured difference towards the "
+    "average of comparable campaigns (the same use case, outcome, channels and offers, with groups chosen at "
+    "random), by as much of it as is noise, and its range allows for how little is known about that average. "
+    "Everything else in this pack, and the value proven to date, uses only the measured difference."
+)
+_NO_SPREAD_NOTE: Final[str] = (
+    "The comparable campaigns differ by no more than chance explains, so this estimate is drawn as far towards "
+    "their average as the method allows. That usually means too little data to tell them apart, not that their "
+    "effects are equal."
+)
+
+
+def _pooled_key(reader: _Reader, campaign_id: str, report: Any, root: Path | None) -> str | None:
+    """`pooled_estimate.json` when pooling is on (`configs/measurement.yaml`) and it is current: read from this report
+    and from every member's report as they stand, under the settings in force (`pooling.is_current`).
+
+    With pooling off nothing is read, so the pack, and the artefacts it lists, are exactly what they were.
+    """
+    from engine.measurement.pooling import POOLED_FILENAME, is_current, load_pooling_settings
+
+    settings = load_pooling_settings(root)
+    if not settings.enabled:
+        return None
+    key = f"campaigns/{campaign_id}/{POOLED_FILENAME}"
+
+    def report_of(member_id: str) -> Any:
+        return reader.doc(f"campaigns/{member_id}/{_REPORT}") if safe_identifier(member_id) else None
+
+    return key if is_current(reader.doc(key), report, settings=settings, report_of=report_of) else None
+
+
+def _estimated_lines(context: _Context) -> list[ProofLine]:
+    """The Estimated figure and how many campaigns it is drawn from; or why there is none."""
+    key = context.pooled_key
+    if key is None or context.claim == "descriptive":
+        return []
+    reader = context.reader
+    if reader.get(key, "status") != "pooled":
+        return [ProofLine(label=_ESTIMATED_LABEL, missing=_NOT_POOLED)]
+    fmt: FigureFormat = "signed_amount" if context.continuous else "points"
+    missing = "Not estimated: the estimate could not be read."
+    return [
+        _line(
+            _ESTIMATED_LABEL,
+            reader.fig(key, "pooled_effect", fmt),
+            reader.fig(key, "pooled_interval.ci_low", fmt),
+            reader.fig(key, "pooled_interval.ci_high", fmt),
+            missing=missing,
+        ),
+        _line(_ESTIMATED_COUNT_LABEL, reader.fig(key, "campaigns_compared", "count"), missing=missing),
+    ]
+
+
+def _estimated_notes(context: _Context) -> list[str]:
+    key = context.pooled_key
+    warnings = context.reader.get(key, "warnings") if key is not None else None
+    no_spread = isinstance(warnings, list) and "POOL_NO_SPREAD" in warnings
+    return [_ESTIMATED_NOTE, _NO_SPREAD_NOTE] if no_spread else [_ESTIMATED_NOTE]
 
 
 def _offer_table(context: _Context) -> ProofTable | None:

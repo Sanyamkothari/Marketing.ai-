@@ -1,0 +1,11 @@
+# configs/measurement.yaml - measurement options read across campaigns (Plan K M136, DEC-1402).
+#
+# Installation-wide, like privacy.yaml and guardrails.yaml: one file under the configuration root, read by
+# `engine.measurement.pooling.load_pooling_settings`. A missing file, or a missing section, means every
+# default below. Every option is off by default; with them off every summary and Value Proof Pack is
+# byte for byte what it was before Plan K.
+
+pooling:                      # Plan K M136: an Estimated figure per campaign, drawn towards comparable campaigns
+  enabled: false              # bool; write campaigns/<id>/pooled_estimate.json on every measurement and show it
+                              # beside the measured result (never instead of it; value to date never uses it)
+  min_campaigns: 3            # int >= 3; comparable campaigns a cell needs before anything is pooled
