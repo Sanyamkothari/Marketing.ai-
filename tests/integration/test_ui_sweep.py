@@ -59,6 +59,10 @@ HOST: Final[str] = "127.0.0.1"
 USE_CASE: Final[str] = "hillstrom-email"
 FONT_HOSTS: Final[frozenset[str]] = frozenset({"fonts.googleapis.com", "fonts.gstatic.com"})
 SIGN_IN_ONLY: Final[frozenset[str]] = frozenset({"signin", "account", "admin"})
+CAMPAIGNS_LAYOUT_ONLY: Final[frozenset[str]] = frozenset({"overview", "data"})
+"""Plan M's new places (M175's Overview, M179's Data page). By the phase-2 contract the classic layout does not link
+to them (they are extra routes there until M181 decides the default), so the crawler reaches them from the campaigns
+layout's sidebar (M174) instead. Every other route must still be a click away in the classic layout."""
 SETTLE_MS: Final[int] = 900
 PAGE_TIMEOUT_MS: Final[int] = 60_000
 PER_PREFIX_CAP: Final[int] = 4
@@ -250,6 +254,8 @@ def samples(e: Entities) -> dict[str, list[str]]:
             *[f"#/pilot/proof/{c}" for c in e.campaigns],
         ],
         "audit": ["#/audit"],
+        # Plan M M175 (DEC-1605): the Overview.
+        "overview": ["#/overview"],
         # Plan M M178 (DEC-1608): Reports, one page per tab (the Model reports tab draws the #/pilot lists).
         "reports": ["#/reports", "#/reports/programme", "#/reports/check", "#/reports/models"],
         "cost": ["#/cost"],
@@ -403,15 +409,16 @@ def prefix_of(hash_: str) -> str:
     return parts[0] if parts else ""
 
 
-def test_the_crawler_reaches_every_route_by_clicks(server: str, browser: Any) -> None:
-    page = new_page(browser)
-    page.goto(f"{server}/ui/")
-    settle(page)
-    wanted = registered_prefixes(page) - {"industry"} - SIGN_IN_ONLY
-    reached: dict[str, str] = {"": "#/"}
+def crawl(page: Any, wanted: set[str]) -> tuple[dict[str, str], int]:
+    """From the page where `page` is, breadth first, click links until every prefix in `wanted` is reached.
+
+    Returns the prefixes reached (each with the first address it landed on) and the number of clicks made.
+    """
+    start = page.evaluate("location.hash || '#/'")
+    reached: dict[str, str] = {prefix_of(start): start}
     per_prefix: dict[str, int] = {}
-    seen: set[str] = {"#/"}
-    queue: deque[tuple[str, str]] = deque((href, "#/") for href in page.evaluate(LINKS))
+    seen: set[str] = {start}
+    queue: deque[tuple[str, str]] = deque((href, start) for href in page.evaluate(LINKS))
     for href, _parent in queue:
         seen.add(href)
     clicks = 0
@@ -438,12 +445,55 @@ def test_the_crawler_reaches_every_route_by_clicks(server: str, browser: Any) ->
             if found not in seen:
                 seen.add(found)
                 queue.append((found, landed))
+    return reached, clicks
+
+
+def campaigns_layout_page(browser: Any, server: str) -> Any:
+    """A page in M174's campaigns layout, on its Settings place: the real `GET /auth/me` with `ui_layout` set.
+
+    That one field of that one answer is how the layout reaches the browser in production
+    (`MARKETING_AI_UI_LAYOUT=campaigns`), so the same seeded app serves both layouts.
+    """
+    page = new_page(browser)
+
+    def me(route: Any) -> None:
+        reply = route.fetch()
+        body = reply.json()
+        body["ui_layout"] = "campaigns"
+        route.fulfill(response=reply, json=body)
+
+    page.context.route(f"{server}/auth/me", me)
+    page.goto(f"{server}/ui/#/settings")
+    settle(page)
+    assert (
+        page.evaluate("document.documentElement.dataset.uiLayout") == "campaigns"
+    ), "the campaigns layout is on"
+    return page
+
+
+def test_the_crawler_reaches_every_route_by_clicks(server: str, browser: Any) -> None:
+    page = new_page(browser)
+    page.goto(f"{server}/ui/")
+    settle(page)
+    wanted = registered_prefixes(page) - {"industry"} - SIGN_IN_ONLY
+    reached, clicks = crawl(page, wanted)
+    page.context.close()
     missing = wanted - set(reached)
-    assert not missing, (
-        f"not reachable by clicks from the top bar: {sorted(missing)} "
+    # Every route but Plan M's new places must be a click away in the classic layout, as before.
+    classic_missing = missing - CAMPAIGNS_LAYOUT_ONLY
+    assert not classic_missing, (
+        f"not reachable by clicks from the top bar: {sorted(classic_missing)} "
         f"(after {clicks} clicks; reached {sorted(reached)})"
     )
-    page.context.close()
+    if missing:  # Plan M's new places: a click away from the campaigns layout's sidebar
+        page = campaigns_layout_page(browser, server)
+        reached_there, clicks = crawl(page, missing)
+        page.context.close()
+        still = missing - set(reached_there)
+        assert not still, (
+            f"not reachable by clicks from the campaigns layout's sidebar: {sorted(still)} "
+            f"(after {clicks} clicks; reached {sorted(reached_there)})"
+        )
 
 
 def press_until_focused(page: Any, selector: str, limit: int = 40) -> None:
