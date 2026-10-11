@@ -95,8 +95,9 @@ export const ROUTES = Object.freeze([
   { from: "uplift/*", to: null, home: "settings", why: "the uplift workbench, under Settings, Advanced" },
   { from: "privacy/*", to: null, home: "settings", why: "Privacy and consent, under Settings" },
   { from: "admin/*", to: null, home: "settings", why: "Users and the audit log, under Settings, Admin" },
-  // No place: signing in and one's own account
+  // No place: signing in, one's own account, and the Help menu's pages
   { from: "signin/*", to: null, home: null, why: "the sign-in screen has no sidebar place" },
+  { from: "help/*", to: null, home: null, why: "the glossary and what's new (M173), opened from Help (?) top right" },
   { from: "account/*", to: null, home: null, why: "changing one's password, from the profile menu" },
 ]);
 

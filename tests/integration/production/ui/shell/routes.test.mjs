@@ -55,7 +55,7 @@ test("every row says why, has a home, and every redirect lands on a Phase 2 page
     if (row.to) assert.ok(PHASE_2.includes(layout.partsOf(row.to)[0]), `${row.from} -> ${row.to}`);
   }
   const nowhere = layout.ROUTES.filter((row) => row.home === null).map((row) => row.from);
-  assert.deepEqual(nowhere, ["signin/*", "account/*"], "only signing in and one's own account have no place");
+  assert.deepEqual(nowhere, ["signin/*", "help/*", "account/*"], "only signing in, Help's pages and one's own account have no place");
 });
 
 test("the table says what Plan M §3 says (spec M174)", () => {
@@ -101,6 +101,9 @@ test("the table says what Plan M §3 says (spec M174)", () => {
     "#/data/doctor": "data",
     "#/reports/check": "reports",
     "#/signin": null,
+    "#/help": null,
+    "#/help/glossary": null,
+    "#/help/whats-new": null,
     "#/account": null,
   };
   for (const [hash, home] of Object.entries(kept)) {
