@@ -61,6 +61,7 @@ def test_the_routes_exist_with_their_policies(agentic_world: World) -> None:
         ("GET", "/agentic/proposals/{proposal_id}"),
         ("POST", "/agentic/proposals/{proposal_id}/approve"),
         ("POST", "/agentic/proposals/{proposal_id}/reject"),
+        ("POST", "/agentic/save-desk/card"),  # PLAN-K (M144): the save-desk card, same switch (test_save_desk.py)
     }
     policies = all_policies()
     assert policies[("POST", "/agentic/proposals/{proposal_id}/approve")].role is Role.APPROVER

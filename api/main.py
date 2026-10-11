@@ -321,6 +321,21 @@ def _install_agentic(app: FastAPI) -> None:
 
 
 PHASE_APP_HOOKS.append(_install_agentic)
+
+
+# PLAN-K (M144): move into the PLAN-K block at integration
+# Plan K M144 (DEC-1411): POST /agentic/save-desk/card, the call-centre card (Analyst, audited, rate-limited),
+# mounted only when `agentic.enabled` is on, beside M132's routes. Off - the default - nothing is imported.
+def _install_save_desk(app: FastAPI) -> None:
+    from engine.agentic.config import agentic_enabled
+
+    if agentic_enabled(app.state.config_root):
+        from api.routes.agentic_save_desk import router as save_desk_router
+
+        app.include_router(save_desk_router)
+
+
+PHASE_APP_HOOKS.append(_install_save_desk)
 # ---- END PLAN-J ----
 # ---- PLAN-L (data doctor) — append only below this line ----
 # Plan L M151 (DEC-1512): Data Doctor, the place - POST /doctor/diagnosis and POST /doctor/handoff (Analyst).
