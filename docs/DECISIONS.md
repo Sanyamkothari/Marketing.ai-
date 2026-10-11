@@ -1743,6 +1743,77 @@ DEC-1500…1509, M151 → DEC-1510…1519, …), so parallel work on two milesto
   `tests/integration/agent/test_api_doctor_memory.py` prove it; the connections import key set gains `treatment`
   and `test_hardening`'s agent-session policy count is 11. `infra/naming.OBJECT_PREFIXES` does not grant
   `doctor_memory/` yet: on AWS the memory is skipped and logged, never failing anything.
+- **DEC-1596 — After M161 (idea #5): what your file already says, a first look with no AI.** *Context:* a marketer
+  without a data team learned nothing from Data Doctor until a model was trained, yet the file already shows how
+  the outcome varies; a description must not be dressed up as a cause or a prediction, must never name a small
+  group, and must never use personal data or a column that holds the answer. *Decision:* (a) Added, defaulted
+  fields on the diagnosis, no new route: `UseCaseReadiness.first_look` for `ready`/`check` verdicts, on the chosen
+  file and the rows the diagnosis read: the base rate of "yes" by the engine's label rule and the rate by up to
+  five columns, each grouped by the Ask-your-data `rate_by` tool itself (under-10 values into "(other)", groups it
+  suppresses counted, never listed), ranked by spread = Σ rows_g/rows × |rate_g − base| (ties to the earlier
+  column), at most 20 columns scored. (b) Never used, each listed with its reason: personal data (`pii_kinds`,
+  `free_text_pii_kinds`, `agent.always_hide_columns`); columns the advisor flags `LEAKAGE_SUSPECTED`, or whose
+  groups alone separate yes from no above `validation.leakage_auc_threshold`; IDs; dates; free text; one-value
+  columns. (c) `FileDiagnosis.first_look` gives a file with no use case's outcome but a non-personal ID and a date
+  column its recency and frequency picture, in fixed periods back from its latest date. (d) Every first look
+  says "Describes your file. Not a cause and not a prediction." *Consequences:* about a second more per ready use
+  case on 200,000 rows (the advisor's run is reused); numeric outcomes get no first look and dates are not
+  bucketed. `engine/doctor/first_look.py`; `tests/unit/doctor/test_first_look.py`,
+  `tests/integration/test_api_doctor_first_look.py` and `tests/integration/test_doctor_ui.py` prove it.
+- **DEC-1597 — After M161 (idea #16): next month's file renamed a column: propose the rename, never apply it.**
+  *Context:* a saved treatment names the columns it reads, and next month's export may rename one (`amount` to
+  `bill_amount`): scoring replay stops with `RECIPE_COLUMN_MISSING`, the training file loses its M159 shape, and a
+  person without a data team is stuck. A model's recipe is frozen (DEC-1006) and `rename_column` runs last (phase 6,
+  DEC-1530), after every step that reads the old name. *Decision:* (a) `engine/doctor/renames.match_renames`
+  compares the training file's stored profile of each missing column with every column new in the next file, with
+  no AI: kind of values, empty share, distinct values, ID-likeness, numbers' average and range, a category's
+  common values, and how close the names are; score = 0.7 × values + 0.3 × name, proposed only when values ≥ 0.75
+  and either name ≥ 0.5 or values ≥ 0.9, beating every other new column of its kind by 0.1; a column matching two
+  missing ones is proposed for neither, month columns of an `unpivot` never, and a missing column with no clear
+  winner is reported with its close candidates and none chosen. (b) A file to score is compared with the model's
+  training file on the columns the model needs; a file to learn from with the remembered treatment, exact or
+  reached by renaming at most three columns. (c) Unseen spellings for `map_values` are listed as information,
+  masked, and only counted for a personal-data column. (d) The proposal travels additively: `suggested_renames`
+  and `close_candidates` in the `RECIPE_COLUMN_MISSING` 409's details, and `AgentSessionResponse.changes`, kept at
+  `agent/file_changes.json`; Guided setup shows unticked "Use 'x' as 'y'" boxes. (e) A person's yes is
+  `POST /uploads/{id}/renamed-copy` (Analyst; 422 `DOCTOR_RENAME_UNKNOWN`/`_INVALID`, 409 `DOCTOR_RENAME_PREPARED`):
+  a new upload with the columns renamed, lineage in `renamed_copy.json`; the file sent and every recipe are left as
+  they are, the model's steps replay on the copy, and a copy with a remembered shape is offered its treatment.
+  *Consequences:* `tests/unit/doctor/test_renames.py` and `tests/integration/agent/test_api_renamed_column.py` prove
+  it; the OpenAPI route list gains one route. Not covered: files that also added or dropped columns, built
+  datasets, a training upload removed by retention (the refusal stands), Manual setup's rendering.
+- **DEC-1598 — After M161 (idea #3): the data request asks only for what Data Doctor cannot read past.** *Context:*
+  `configs/pilot/data_request.yaml` (Plan E M59) asked for UTF-8 CSV with one header row, ISO dates, numbers without
+  separators or currency signs, Y/N flags and a pre-flight on a laptop; since M150-M159 the upload reads workbooks,
+  titles, two header rows, totals, `-`/`unknown` as empty, the usual delimiters and cp1252, asks about an ambiguous
+  day/month order and maps yes/no spellings, so asking clients to fix those costs them time. *Decision:* `formats`
+  keeps only what still matters: the same column names every month (`RECIPE_COLUMN_MISSING`); one customer ID
+  across files (a build tidies zeros, spaces and case; a prefix is named and counted, not applied); a date on every
+  event row; the year in month-per-column names; one file or sheet per table; amounts as plain numbers where
+  possible; and what cannot be read (`.xls`, `.xlsb`, password-protected workbooks, scanned PDFs, photos). A new
+  `not_needed` list (default empty) is rendered under "Send what you have" ("Excel is fine", "Titles and totals
+  are fine", ...). The pre-flight becomes optional and says it reads CSV and Parquet only. *Consequences:*
+  `GET /pilot/data-request` gains `not_needed` (additive); `docs/pilot/DATA_REQUEST.md` is regenerated; a test ties
+  every "no longer matters" claim to `configs/intake.yaml` and `engine/intake/excel.py`; one heading expectation
+  changed; `docs/pilot/PLAYBOOK.md` still treats the pre-flight as step 1, left to Plan E's owner.
+- **DEC-1599 — After M161 (idea #8): a result too good to be true is a warning that names the column, beside a list of
+  what the run checked.** *Context:* a test-set ROC AUC near 1 on marketing data usually means a column gives the
+  answer away, and nothing looked at the trained model's own result; a training run already writes
+  `validation.json`, `split.json`, `baseline.json`, `fairness.json`, `evaluation.json` and
+  `feature_importance.json`, but no screen gathered them. *Decision:* (a) `RESULT_SUSPICIOUSLY_GOOD` in
+  `engine/model_gates.py`, advisory in that module's `{code, passed, message}` shape: `passed=False` when the main
+  measure is above the use case's line in `configs/model_checks.yaml` (default ROC AUC 0.97; per-use-case
+  overrides; only higher-is-better measures between 0 and 1), else the ROC AUC is judged, else nothing. The
+  sentence names the rank-1 column of `feature_importance.json` and asks whether it is known only after the
+  outcome. `approval_checks` gives it to a non-uplift model whose evaluation can be read; it never blocks.
+  (b) `engine/run_checks.things_checked` and `GET /runs/{run_id}/checks` (Viewer) list, from the run's own reports
+  only, the alarm, the pre-training checks, the leak-column check ("not run" when off), the test set, the
+  yardstick and the fairness check; a missing report leaves its line out, so no check is claimed that did not
+  run. (c) A Plan L UI module adds the list at the end of a training run's Model page (`pages.js` only draws
+  module panels there, as on the Data and Output pages). *Consequences:* a propensity model on the Approver's
+  screen shows one check, so the phase-2 journey's expectation changed from `[]` to
+  `["RESULT_SUSPICIOUSLY_GOOD"]`; the OpenAPI path list gains one route; the dataset build's own checks are not
+  listed yet, and the code has no help-catalogue entry yet.
 <!-- ---- END PLAN-L ---- -->
 <!-- ---- PLAN-K (agents that check) — append only below this line ---- -->
 ## Plan K — Agents that check, not agents that send (DEC-1400 … DEC-1499)

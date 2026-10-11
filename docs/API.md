@@ -144,6 +144,7 @@ Contract schema version: 1.
 | GET | `/runs/{run_id}/campaign-results` | The stored campaign results of a scoring run | IncrementalityReport |
 | POST | `/runs/{run_id}/campaign-results` | Measure a scoring run's campaign from an uploaded outcomes file | IncrementalityReport |
 | POST | `/runs/{run_id}/cancel` | Ask a pending or running run to stop | RunCancelResponse |
+| GET | `/runs/{run_id}/checks` | What a training run checked, and whether its result is too good to be true | RunChecks |
 | GET | `/runs/{run_id}/copy_messages.csv` | The rendered campaign-copy messages of a run, one row per scored entity | - |
 | GET | `/runs/{run_id}/drift-events` | Events noted against a scoring run's change report | DriftEventsView |
 | POST | `/runs/{run_id}/drift-events` | Note an event that may explain a change in the customers | DriftEventsView |
@@ -189,6 +190,7 @@ Contract schema version: 1.
 | POST | `/uploads/{upload_id}/ask/messages` | Ask the data helper a question about an upload; it looks things up and cannot change anything | AskResponse |
 | POST | `/uploads/{upload_id}/checks` | Run the data checks for an upload without starting a run | ValidationReport |
 | GET | `/uploads/{upload_id}/profile` | The stored dataset profile of one upload | DatasetProfile |
+| POST | `/uploads/{upload_id}/renamed-copy` | A copy of the file with the columns the person ticked given their old names; the file is kept | UploadResponse |
 | GET | `/uploads/{upload_id}/treatment-candidates` | The 0/1 columns of an upload that could record who was treated | TreatmentCandidatesResponse |
 | GET | `/use-cases/{use_case_id}` | One merged use-case configuration, its Setup copy and its advanced-settings schema | UseCaseResponse |
 | GET | `/use-cases/{use_case_id}/cost-estimate` | What one run of this use case could cost at list price, and the cap on it (Plan J M108) | RunCostEstimate |

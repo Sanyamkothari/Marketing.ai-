@@ -13,10 +13,14 @@
 // (M157): the choices are radio buttons, each with what it would count, and nothing is recorded until
 // the person presses "Use this outcome" (`POST /doctor/outcome`, the sentence sent word for word).
 //
+// DEC-1596: "What your file already says" - under a ready use case, its file's rate of "yes" and the rate by
+// its most informative columns; under a file with no outcome, when its customers last appear and how often.
+// Counted by rules with no AI, always labelled "Describes your file. Not a cause and not a prediction."
+//
 // Classes are prefixed `dd-`; the stylesheet is injected once, tokens only.
 
 import { API_BASE, ApiError, getIndustries, postUpload } from "../../api.js";
-import { crumbs, errorBox, esc, fmtInt, pageHead } from "../../dom.js";
+import { barTrack, crumbs, errorBox, esc, fmtInt, pageHead } from "../../dom.js";
 import { registerForYou } from "../../overview.js";
 import { TABLE_FILE_TYPES, intakeNotesHtml } from "../intake/notes.js";
 import { registerModule } from "../router.js";
@@ -47,6 +51,15 @@ const CSS = `
 .dd .dd-next{margin-top:8px;font-size:13px;color:var(--ink2)}
 .dd .dd-next h5{margin:8px 0 2px;font-size:12px;font-weight:600;color:var(--ink2)}
 .dd .dd-next .dd-opt{margin:4px 0 0;line-height:1.5}
+.dd .dd-look{margin-top:8px;padding:10px 12px;border:1px solid var(--line);border-radius:8px;background:var(--soft);font-size:13px;color:var(--ink2)}
+.dd .dd-look h5{margin:0;font-size:13px;font-weight:600;color:var(--ink)}
+.dd .dd-look p{margin:4px 0 0;line-height:1.5}
+.dd .dd-look .dd-look-label{font-size:12px;color:var(--muted)}
+.dd .dd-look-col{margin-top:10px}
+.dd .dd-look .bars{padding:6px 0 0;gap:6px}
+.dd .dd-look .brow{grid-template-columns:minmax(72px,160px) minmax(48px,1fr) auto;gap:10px;font-size:12px}
+.dd .dd-look .brow .pct{font-variant-numeric:tabular-nums;white-space:nowrap}
+.dd .dd-look .fhint{margin-top:6px}
 `;
 
 let injected = false;
@@ -121,6 +134,78 @@ const STATUS = {
   missing: { title: "Missing something", pill: "" },
 };
 
+// DEC-1596: what a file already says, counted with no AI. Every value is escaped; groups under 10 rows never arrive.
+const LEFT_OUT = {
+  personal: "personal data",
+  may_hold_answer: "may hold the answer",
+  id: "an ID",
+  date: "a date",
+  free_text: "free text",
+  one_value: "one value only",
+};
+
+function pct1(share) {
+  if (share === null || share === undefined || !Number.isFinite(share)) return "";
+  return `${(share * 100).toFixed(1)}%`;
+}
+
+function lookBars(column, measure) {
+  const value = (g) => (measure === "rate" ? g.rate : g.share);
+  const max = Math.max(0, ...column.groups.map(value).filter((v) => Number.isFinite(v)));
+  const rows = column.groups
+    .map((g) => {
+      const text = measure === "rate" ? `${pct1(g.rate)} of ${fmtInt(g.rows)}` : `${fmtInt(g.rows)} (${pct(g.share)})`;
+      const width = Number.isFinite(value(g)) && max ? (100 * value(g)) / max : 0;
+      return `<div class="brow" data-dd-look-group><span class="lab">${esc(g.group)}</span>${barTrack(
+        width,
+        `${g.group}: ${text}`,
+      )}<span class="pct">${esc(text)}</span></div>`;
+    })
+    .join("");
+  const hidden = column.groups_hidden
+    ? `<div class="fhint">${esc(fmtInt(column.groups_hidden))} group(s) of fewer than 10 rows are not shown.</div>`
+    : "";
+  return `<div class="dd-look-col" data-dd-look-col="${esc(column.column)}"><strong>${esc(column.column)}</strong>${
+    column.summary ? `<p>${esc(column.summary)}</p>` : ""
+  }<div class="bars">${rows}</div>${hidden}</div>`;
+}
+
+/** What a file already says (DEC-1596): the outcome by column, or recency and frequency. */
+export function firstLookHtml(look) {
+  if (!look) return "";
+  const head = `<h5>What your file already says</h5><p class="dd-look-label" data-dd-look-label>${esc(
+    look.label,
+  )}</p><p>${esc(look.summary)}</p>`;
+  const sampled = look.sampled
+    ? `<div class="fhint">Counted on the first ${esc(fmtInt(look.rows))} of ${esc(fmtInt(look.file_rows))} rows.</div>`
+    : "";
+  const shown = look.kind === "recency" ? [look.recency, look.frequency].filter(Boolean) : look.columns || [];
+  const other = shown.some((column) => column.groups.some((g) => g.group === "(other)"))
+    ? `<div class="fhint">"(other)" holds values with fewer than 10 rows, together, so no small group is named.</div>`
+    : "";
+  if (look.kind === "recency") {
+    const parts = [look.recency, look.frequency].filter(Boolean).map((column) => lookBars(column, "share"));
+    return `<div class="dd-look" data-dd-look="recency">${head}${parts.join("")}${other}${sampled}</div>`;
+  }
+  const columns = (look.columns || []).map((column) => lookBars(column, "rate")).join("");
+  const reasons = {};
+  for (const item of look.left_out || []) (reasons[item.reason] = reasons[item.reason] || []).push(item.column);
+  const left = Object.entries(reasons)
+    .map(([reason, names]) =>
+      reason === "may_hold_answer"
+        ? `${names.join(", ")} (${LEFT_OUT[reason]})`
+        : `${names.length} column(s): ${LEFT_OUT[reason] || reason}`,
+    )
+    .join("; ");
+  const rule = look.rule ? `<div class="fhint">${esc(look.rule)}</div>` : "";
+  const skipped = look.not_measured
+    ? `<div class="fhint">${esc(fmtInt(look.not_measured))} more column(s) were not looked at, to keep this quick.</div>`
+    : "";
+  return `<div class="dd-look" data-dd-look="outcome">${head}${columns}${rule}${
+    left ? `<div class="fhint" data-dd-look-left>Not used: ${esc(left)}.</div>` : ""
+  }${skipped}${other}${sampled}</div>`;
+}
+
 function fileHtml(file, uploaded) {
   const rows = [
     ["What it looks like", file.kind_label],
@@ -139,9 +224,9 @@ function fileHtml(file, uploaded) {
   if (file.fixable_columns) rows.push(["Fixable", `${file.fixable_columns} column(s) Guided setup can tidy`]);
   return `<section class="card dd-file" data-dd-file="${esc(file.upload_id)}"><h4>${esc(file.file_name)}</h4>${
     file.kind_reason ? `<div class="fhint">${esc(file.kind_reason)}</div>` : ""
-  }<dl>${rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join("")}</dl>${intakeNotesHtml(
-    uploaded ? uploaded.intake : null,
-  )}</section>`;
+  }<dl>${rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join("")}</dl>${firstLookHtml(
+    file.first_look,
+  )}${intakeNotesHtml(uploaded ? uploaded.intake : null)}</section>`;
 }
 
 function pct(share) {
@@ -265,7 +350,7 @@ function useCaseHtml(item) {
     item.summary,
   )}</p>${item.needs && item.needs.length ? `<ul>${item.needs.map((n) => `<li>${esc(n)}</li>`).join("")}</ul>` : ""}${nextStepsHtml(item.next_steps)}${outcomeHtml(
     item,
-  )}</div>${button}</div>`;
+  )}${startable ? firstLookHtml(item.first_look) : ""}</div>${button}</div>`;
 }
 
 export function doctorHtml() {

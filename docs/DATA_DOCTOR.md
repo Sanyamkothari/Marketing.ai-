@@ -76,6 +76,39 @@ The verdict is Guided setup's own advisor, run on each file that has the use cas
 place never promises more than Guided setup then does. **Start** copies the file into the chosen use case, read
 the same way (the same sheet, intake on or off); nothing is trained until you approve and run.
 
+### What your file already says (DEC-1596)
+
+Before any model, and with no AI, Data Doctor shows what your file already says. Every such box is labelled
+**"Describes your file. Not a cause and not a prediction."**
+
+- **Under a use case that is Ready (or Ready after a quick check)**: how many of the file's rows are "yes"
+  (by the same rule training uses), and the rate of "yes" by up to five columns: a text column by its most
+  common values, a number column in five ranges of about equal rows. Example: *By plan_tier, the rate goes
+  from 5.0% (basic) to 30.1% (premium).*
+- **Under a file with no outcome but a customer ID and a date** (a log of recharges, say): how many customers
+  last appear in the 30 days up to the file's latest date, 31 to 90 days before, and so on, and how many rows
+  each customer has.
+
+The rules:
+
+- **No group of fewer than 10 rows is ever named.** Such values are counted together as "(other)"; when even
+  that is under 10, the next smallest value joins it, so a small group's figure cannot be worked out from the
+  others. These are the rules of Ask your data's rate tool, which does the counting.
+- **Which columns.** Each column gets a score: how far, on average over the rows, a row's group rate is from
+  the file's rate (each group weighted by its rows). The five with the highest score are shown; ties go to the
+  column that comes first in the file. At most 20 columns are scored, in file order, to keep the diagnosis
+  quick; the box says how many were not.
+- **Never used**: personal-data columns and columns your settings hide from the AI
+  (`agent.always_hide_columns`); columns that may hold the answer (the ones Guided setup's checks flag, and any
+  column whose groups alone tell "yes" from "no" almost perfectly); ID columns; date columns; free text;
+  columns with one value. The box lists what it left out.
+- Counted on the rows the diagnosis read (it says so when that is fewer than the file has).
+
+For developers: `engine/doctor/first_look.py` (`outcome_look`, `recency_look`, `attach_recency`, the
+`FirstLook` contract), the fields `UseCaseReadiness.first_look` and `FileDiagnosis.first_look` of
+`POST /doctor/diagnosis`; tests in `tests/unit/doctor/test_first_look.py`,
+`tests/integration/test_api_doctor_first_look.py` and `tests/integration/test_doctor_ui.py`.
+
 ## 3. More fixes, and who suggested each (M152, M153, M156)
 
 Guided setup's checklist can now hold these fixes, each a step our code runs on a copy and replays on next
@@ -268,7 +301,60 @@ field `treatment` of `POST /uploads` and of every Guided-setup session answer,
 `POST /uploads/{id}/agent-session/same-treatment`, the store `doctor_memory` in `engine/privacy/layout.py`,
 tests in `tests/unit/doctor/test_memory.py` and `tests/integration/agent/test_api_doctor_memory.py`.
 
-## 9. What Data Doctor will not do
+### When next month's export renamed a column (DEC-1597)
+
+If the export now calls `amount` `bill_amount`, the saved steps cannot find `amount`: scoring stops with the
+column named, and a file to learn from no longer has last month's shape. Data Doctor now compares what it
+knew about `amount` in the file the steps were approved on (the kind of values, how many are empty, how many
+differ, the average and range of numbers, a category's common values) with each column that is new in this
+file, and the names. It says *"Your file has 'bill_amount' where it had 'amount'"* only when one new column
+clearly matches: the same kind of values, values that agree, a close name (or numbers or categories that
+agree closely), and clearly better than any other new column. With two close candidates it names both and
+chooses neither; a column whose kind of values changed, or a name alone, is never proposed.
+
+Nothing is ticked for you. In Guided setup the rename is a box under **Changed since last time**; **Use the
+old names** makes a copy of your file with those columns renamed (your file is left as it is), and the helper
+starts on the copy: a file to score then runs through the model's steps unchanged, and a file to learn from
+is offered last time's treatment. A model's saved steps are never edited. The same box lists **new
+spellings** in a column whose spellings last time's steps merge (shown only: they are left as written).
+Scoring's refusal carries the same proposal in its check (`details.suggested_renames`, `close_candidates`).
+
+For developers: the matcher `engine/doctor/renames.py` (thresholds `STATS_MIN`, `STATS_ALONE`, `NAME_MIN`,
+`MARGIN`), the profiles compared and the copy `api/routes/agent_renames.py`, the session field `changes`,
+`POST /uploads/{id}/renamed-copy` (`api/routes/doctor.py`), tests in `tests/unit/doctor/test_renames.py` and
+`tests/integration/agent/test_api_renamed_column.py`.
+
+## 9. The data request: send what you have (DEC-1598)
+
+The pilot's data request (`GET /pilot/data-request`, `docs/pilot/DATA_REQUEST.md`, worded in
+[`configs/pilot/data_request.yaml`](../configs/pilot/data_request.yaml)) no longer asks for UTF-8 CSV, one date
+format or a pre-flight run on a laptop. Its **Send what you have** section keeps only what Data Doctor cannot
+repair (the same column names every month, one customer ID across files, a date on every event row, the year in
+a month-per-column name, amounts as plain numbers when tables are joined) and says what cannot be read at all
+(`.xls`, `.xlsb`, password-protected workbooks, scanned PDFs). A second list says plainly what no longer
+matters: Excel, titles and totals, `-` or `unknown` for empty, any delimiter, any date style, any yes/no
+spelling. The pre-flight check is optional, and says it reads CSV and Parquet only.
+`tests/unit/pilot/test_data_request.py` ties each "no longer matters" line to `configs/intake.yaml` and the
+workbook reader.
+
+## 10. Things we checked, and a result too good to be true (DEC-1599)
+
+A training run's Model page ends with **Things we checked**, drawn from the run's own reports
+(`GET /runs/{run_id}/checks`, `engine/run_checks.py`): the file before training (`validation.json`), a
+column that gives the answer away (`LEAKAGE_SUSPECTED`, or "not run" when the run's settings switched it
+off or the outcome is not yes-or-no), the test set kept apart (`split.json`), the simple yardstick
+(`baseline.json`) and the groups compared (`fairness.json`, or "not run" with its reason). A report the
+run did not write leaves its line out: no check is claimed that did not run.
+
+First comes the alarm. When the model's main measure on the test set is above its line - by default an
+ROC AUC above 0.97, per use case in [`configs/model_checks.yaml`](../configs/model_checks.yaml) - the warning
+`RESULT_SUSPICIOUSLY_GOOD` names the column the model leans on most (rank 1 of `feature_importance.json`)
+and asks whether it is known only after the outcome. It blocks nothing: the same check is shown, as
+advice, beside the decision on the Approver's screen (`engine.model_gates.approval_checks`). Not here
+yet: the dataset build's own checks (the future-data probe, `LABEL_RATE_UNSTABLE`) stay on the Readiness
+report.
+
+## 11. What Data Doctor will not do
 
 - **Match people across files with no shared key.** It can tidy keys (leading zeros, prefixes) and say how many
   match; it does not guess that "R. Sharma, Pune" is "Rahul Sharma".

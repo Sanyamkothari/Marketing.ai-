@@ -1,0 +1,20 @@
+# The "too good to be true" alarm (Plan L follow-up, DEC-1599; engine/model_gates.py).
+#
+# A trained model whose main measure on the test set is above its line gets the warning
+# RESULT_SUSPICIOUSLY_GOOD on its Model page ("Things we checked") and on the Approver's screen. The
+# warning names the column the model leans on most and asks whether that column is known only after
+# the outcome (a cancellation date, a closing status, a refund). It blocks nothing.
+#
+# Lines are set per measure, for measures where higher is better and 1 is perfect: roc_auc, pr_auc,
+# f1, recall, precision. A model whose main measure has no line is judged on its ROC AUC when the run
+# measured one; a model with neither (a regression) is not judged.
+schema_version: 1
+
+# Every use case. An ROC AUC above 0.97 is rare with marketing data and usually means a leak.
+default:
+  roc_auc: 0.97
+
+# A use case's own lines, replacing the default for the measures it names. For example, a use case
+# whose data really is this predictive (machine readings before a fault) could raise its line:
+#   fault-prediction: {roc_auc: 0.99}
+use_cases: {}

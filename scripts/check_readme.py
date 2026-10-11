@@ -546,6 +546,7 @@ MILESTONE_TESTS: Final[Mapping[str, tuple[str, ...]]] = {
     "M158": ("tests/unit/doctor/test_sufficiency.py", "tests/integration/test_api_doctor.py"),
     "M159": ("tests/unit/doctor/test_memory.py", "tests/integration/agent/test_api_doctor_memory.py"),
     "M160": ("tests/integration/test_plan_l_benchmark.py",),
+    "M161": ("tests/integration/test_intake_erasure.py", "tests/integration/test_doctor_ui.py"),
     # --- Plan K (docs/plans/MARKETING_AI_PLAN_K_PROPOSAL.md, docs/AGENTIC.md); each milestone adds its own entry.
     # M131, M135 and M137 were built early under Plan J's range; their entries are above, with Plan J's, and their
     # README rows are in the Plan K table. ---

@@ -76,3 +76,53 @@ test("file names and sentences are text, never markup", async () => {
   assert.equal($$('[data-dd-outcome="rca"] legend b').length, 0);
   assert.equal(window.__pwned, undefined);
 });
+
+// DEC-1596: what the file already says, counted with no AI, always labelled.
+const firstLook = fixture("first_look");
+const LABEL = "Describes your file. Not a cause and not a prediction.";
+
+test("a ready use case shows its file's rate by the most informative columns, labelled", async () => {
+  showDiagnosis(structuredClone(firstLook), []);
+  await settle();
+  const item = firstLook.use_cases.find((u) => u.use_case_id === "targeted-advertisement");
+  const box = $('[data-dd-usecase="targeted-advertisement"] [data-dd-look="outcome"]');
+  assert.ok(box, "the first look is drawn under the use case");
+  assert.equal(box.querySelector("[data-dd-look-label]").textContent, LABEL);
+  assert.ok(box.textContent.includes(item.first_look.summary));
+  assert.ok(item.first_look.columns.length > 0);
+  for (const column of item.first_look.columns) {
+    const col = [...box.querySelectorAll("[data-dd-look-col]")].find((el) => el.dataset.ddLookCol === column.column);
+    assert.ok(col, `column ${column.column} is drawn`);
+    assert.equal(col.querySelectorAll("[data-dd-look-group]").length, column.groups.length);
+    for (const group of column.groups) assert.ok(col.textContent.includes(group.group));
+  }
+  if (item.first_look.left_out.length) assert.ok(box.querySelector("[data-dd-look-left]"));
+});
+
+test("a log with no outcome shows when its customers last appear, labelled", async () => {
+  showDiagnosis(structuredClone(diagnosis), uploads);
+  await settle();
+  const file = diagnosis.files.find((f) => f.file_name === "recharges.csv");
+  const box = $(`[data-dd-file="${file.upload_id}"] [data-dd-look="recency"]`);
+  assert.ok(box, "the recency picture is drawn on the file");
+  assert.equal(box.querySelector("[data-dd-look-label]").textContent, LABEL);
+  const look = file.first_look;
+  const groups = look.recency.groups.length + (look.frequency ? look.frequency.groups.length : 0);
+  assert.equal(box.querySelectorAll("[data-dd-look-group]").length, groups);
+  // A use case that is not ready shows no first look.
+  for (const item of diagnosis.use_cases.filter((u) => u.status !== "ready" && u.status !== "check")) {
+    assert.equal($$(`[data-dd-usecase="${item.use_case_id}"] [data-dd-look]`).length, 0);
+  }
+});
+
+test("first-look groups and sentences are text, never markup", async () => {
+  const hostile = structuredClone(firstLook);
+  const look = hostile.use_cases.find((u) => u.use_case_id === "targeted-advertisement").first_look;
+  look.columns[0].groups[0].group = `<img src=x onerror="window.__pwned2=1">`;
+  look.columns[0].summary = "<b>bold</b>";
+  showDiagnosis(hostile, []);
+  await settle();
+  assert.equal($$("[data-dd-look] img").length, 0);
+  assert.equal($$("[data-dd-look] b").length, 0);
+  assert.equal(window.__pwned2, undefined);
+});

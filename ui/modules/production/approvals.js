@@ -232,6 +232,7 @@ const CHECK_TITLE = {
   UPLIFT_NOT_BETTER_THAN_RISK: "Beats plain risk ranking",
   UPLIFT_UNSTABLE_ACROSS_FOLDS: "Stable when refitted on other customers",
   UPLIFT_MISCALIBRATED: "Predicted uplift matches what was measured",
+  RESULT_SUSPICIOUSLY_GOOD: "Not too good to be true", // DEC-1599: a propensity model's one check
 };
 const CHECK_PILL = {
   true: ["ok", "Passed"],
