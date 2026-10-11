@@ -110,6 +110,7 @@ __all__ = [
     "fading_verdict",
     "interval_se",
     "sum_figures",
+    "unit_words",
 ]
 
 # ---------------------------------------------------------------------------
@@ -856,7 +857,7 @@ class _Builder:
                     reason=_APART[kind],
                     lower_bounds=bounds,
                     unit=unit if bounds else None,
-                    unit_label=_unit_words(unit, column) if bounds else None,
+                    unit_label=unit_words(unit, column) if bounds else None,
                 )
             )
             return
@@ -1036,7 +1037,7 @@ class _Builder:
                     unit=unit,
                     unit_column=column,
                     total=total,
-                    label=f"at least {total.text} {_unit_words(unit, column)}, the sum of each campaign's lower bound",
+                    label=f"at least {total.text} {unit_words(unit, column)}, the sum of each campaign's lower bound",
                     campaigns=tuple(lines),
                 )
             )
@@ -1046,7 +1047,7 @@ class _Builder:
 _UNIT_ORDER: Final[dict[str, int]] = {"outcomes": 0, "prevented": 1, "amount": 2, "rupees": 3}
 
 
-def _unit_words(unit: str, column: Figure | None) -> str:
+def unit_words(unit: str, column: Figure | None) -> str:
     """The unit in plain words after `at least <n>`; a yes/no outcome is named by its column."""
     kind = unit.partition(":")[0]
     name = column.text if column is not None else unit.partition(":")[2]

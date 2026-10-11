@@ -97,6 +97,8 @@ export const PAGES = [
   { id: "cost", hash: "#/cost", expect: /Estimates at AWS/ },
   { id: "approvals", hash: "#/approvals", expect: /Models waiting for your approval/ },
   { id: "data-request-kit", hash: "#/pilot/kit", expect: /Ask your data team/ },
+  // Plan M M175: new pages start with an EMPTY allow-list (no entry in baseline.json): they may show no never-shown word.
+  { id: "overview", hash: "#/overview", expect: /Needs your attention[\s\S]*Value proven to date/, selector: "[data-attention]" },
   // Plan M M174 (DEC-1604): the campaigns layout's shell - sidebar, bell, Help - around a page with an empty allow-list.
   // `after` puts the classic layout back, so every other page here is drawn as before.
   {
