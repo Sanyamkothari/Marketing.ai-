@@ -35,8 +35,8 @@ session:
 | Clicks from Home to a downloaded contact list (file already prepared) | at most 5, inside one wizard | The shortest path is pinned by an automated journey (section 12); the sessions count what people actually needed |
 | Task success, 5 marketers, 2 tasks, no help | at least 4 of 5 per task | Observer's sheet, section 7; rules in section 8 |
 | Engine words visible to a marketer | none outside Technical details | Automated visible-text check; in the sessions, every word that confused someone is written down |
-| Primary buttons per page | 1 | Automated; the observer notes any moment a person could not tell which button to press |
-| Places to add campaign results | 1 | The second task and the automated route check |
+| Primary buttons per page | 1 | Checked page by page in the jsdom page tests where a page asserts it; not yet one sweep over every page. The observer notes any moment a person could not tell which button to press |
+| Places to add campaign results | 1 | Not covered by this kit's tasks (neither task adds a result); checked by the campaign page tests (M176) once merged |
 
 ## 2. Who takes part
 
@@ -85,10 +85,12 @@ seeding, copy the store once for each person and serve their copy:
 
 ```
 cp -r <the store it printed> store-p1      # repeat for p2 to p5, and one for the practice session
-MARKETING_AI_UI_LAYOUT=campaigns MARKETING_AI_DEMO_MODE=true \
-  MARKETING_AI_DATA_DIR=store-p1 .venv/bin/uvicorn api.main:app --port 8000
+MARKETING_AI_UI_LAYOUT=campaigns MARKETING_AI_DATA_DIR=store-p1 \
+  .venv/bin/uvicorn api.main:app --port 8000
 ```
 
+Do not set `MARKETING_AI_DEMO_MODE`: that switch is for the synthetic Demo Company, and on this store it would put a
+"Sample data: not loaded" notice in the top bar and on the Reports page, which is false and would mislead the participant.
 `MARKETING_AI_UI_LAYOUT` is the deployment setting that arrives with the new shell (M174, DEC-1604); before that milestone is merged
 there is only the classic layout and this kit cannot be run. Open `http://localhost:8000/ui` in a fresh browser profile (no saved sign-ins, no "tour done" flag), full screen, on a
 display at least 1440 pixels wide. Close the server when the session ends and start the next copy.
@@ -97,6 +99,7 @@ display at least 1440 pixels wide. Close the server when the session ends and st
 
 - [ ] The left sidebar shows five places and the bell and Help at the top right. If the top bar shows Home, Connections,
       Results and Settings instead, the layout is `classic`: the setting was not picked up. Stop and fix it.
+- [ ] There is no "Sample data" notice in the top bar (if there is, demo mode is on: restart without `MARKETING_AI_DEMO_MODE`).
 - [ ] The answer key (section 7.3) is filled in from **this** store's Reports page, before the participant arrives.
 - [ ] The downloads folder is empty, and the browser asks where to save (or saves to a folder you can see).
 - [ ] The recorder is running and the timer is reset.
@@ -288,7 +291,8 @@ of them before the first session so that a defect a machine can find is not disc
 
 The screenshot set goes to the folder you name and is not committed. Use `--layouts campaigns` for one layout,
 `--pages overview,wizard` for some pages, and `--base http://localhost:8000` to photograph the store you will test on
-(name the layout it is running with `--layouts`). Its `INDEX.md` lists pictures that drew nothing, pages that scroll
+(name exactly the one layout it is running with `--layouts`; the pages for a run and a campaign also need
+`--run r_...` and `--campaign c_...` from that store, or they are left out and listed under "Skipped"). Its `INDEX.md` lists pictures that drew nothing, pages that scroll
 sideways on the phone, and console errors. Open the phone pictures of the Overview, Campaigns and a campaign page: Plan M
 §6 requires them to be usable at 390 pixels.
 

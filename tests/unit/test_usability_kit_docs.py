@@ -133,3 +133,13 @@ def test_the_journey_test_is_named_and_the_kit_says_what_to_do_if_it_is_missing(
     journey = REPO / "tests" / "integration" / "test_campaign_wizard_journey.py"
     if not journey.is_file():
         assert "If that file is not in the repository yet" in text
+
+
+def test_the_serve_command_does_not_turn_demo_mode_on() -> None:
+    """Demo mode is for the synthetic Demo Company. On the validated store it would show a false "Sample data: not
+    loaded" notice to every participant, so the command the kit gives must not set it, and the pre-session checklist
+    looks for the notice."""
+    text = _kit()
+    assert "DEMO_MODE=true" not in text, "the serve command turns demo mode on"
+    assert "MARKETING_AI_UI_LAYOUT=campaigns MARKETING_AI_DATA_DIR=store-p1" in text
+    assert 'no "Sample data" notice' in text.replace("There is no", "no")

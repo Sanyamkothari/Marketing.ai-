@@ -3,7 +3,8 @@
     python -m scripts.ui_screenshots OUT_DIR                      # both layouts, desktop and phone, replayed demo
     python -m scripts.ui_screenshots OUT_DIR --layouts classic    # one layout
     python -m scripts.ui_screenshots OUT_DIR --pages overview,wizard
-    python -m scripts.ui_screenshots OUT_DIR --base http://127.0.0.1:8771 --layouts campaigns
+    python -m scripts.ui_screenshots OUT_DIR --base http://127.0.0.1:8771 --layouts campaigns \\
+        --run r_... --campaign c_...
 
 Every main page in each layout, at 1440x900 (desktop) and 390x844 (phone), full page height, into OUT_DIR as
 `<layout>-<page>-<desktop|phone>.png`, plus `INDEX.md` listing them, the pages that drew nothing, the console errors a
@@ -13,7 +14,10 @@ anywhere else and the folder is not meant to be committed.
 By default the real `ui/` is served with the API answers recorded from the validated Hillstrom demo
 (`tests/fixtures/ui_replay.py`), so it needs no seeded store and no network. `--base URL` photographs a running
 application instead (for example one serving `scripts/seed_validated.py`'s store); the layout it shows is the one it
-is configured with (`MARKETING_AI_UI_LAYOUT`), so name it with `--layouts` to label the files. The campaigns layout
+is configured with (`MARKETING_AI_UI_LAYOUT`), so name exactly that one layout with `--layouts` (more than one is
+refused: the same server would be photographed twice under the wrong name). The pages for a scored run, its contact
+list and a campaign need the ids of that store (they are generated, so a fresh store never has the recorded ones):
+pass `--run` and `--campaign`, or those pages are left out and listed under "Skipped" in `INDEX.md`. The campaigns layout
 exists once `ui/layout.js` (M174) is in the tree; without it that layout is skipped, and says so.
 
 Needs playwright and a Chromium (`PLAYWRIGHT_BROWSERS_PATH=/opt/pw-browsers` where the machine keeps it).
@@ -36,15 +40,19 @@ SIZES: Final[dict[str, tuple[int, int]]] = {"desktop": (1440, 900), "phone": (39
 TRAIN_RISK: Final[str] = "r_20261010_11100001"
 SCORE_RISK: Final[str] = "r_20261010_11100004"
 CAMPAIGN: Final[str] = "c_20261011_c9276210"
+RUN_TOKEN: Final[str] = "{run}"
+CAMPAIGN_TOKEN: Final[str] = "{campaign}"
 
-# (page name, layout, hash). The names are the same across layouts where the page is the same page.
+# (page name, layout, hash). The names are the same across layouts where the page is the same page. `{run}` and
+# `{campaign}` stand for the ids of the store being photographed: the recorded ones for the replay, the ones given with
+# --run and --campaign for --base.
 PAGES: Final[tuple[tuple[str, str, str], ...]] = (
     ("home", "classic", "#/"),
     ("results", "classic", "#/results"),
     ("goal-setup", "classic", "#/uc/hillstrom-email"),
-    ("scored-run", "classic", f"#/uc/hillstrom-email/run/{SCORE_RISK}"),
-    ("contact-list", "classic", f"#/uc/hillstrom-email/output/{SCORE_RISK}"),
-    ("campaign", "classic", f"#/campaigns/{CAMPAIGN}"),
+    ("scored-run", "classic", f"#/uc/hillstrom-email/run/{RUN_TOKEN}"),
+    ("contact-list", "classic", f"#/uc/hillstrom-email/output/{RUN_TOKEN}"),
+    ("campaign", "classic", f"#/campaigns/{CAMPAIGN_TOKEN}"),
     ("reports", "classic", "#/reports"),
     ("connections", "classic", "#/connections"),
     ("settings", "classic", "#/settings"),
@@ -52,7 +60,7 @@ PAGES: Final[tuple[tuple[str, str, str], ...]] = (
     ("overview", "campaigns", "#/overview"),
     ("campaigns", "campaigns", "#/campaigns"),
     ("wizard", "campaigns", "#/campaigns/new"),
-    ("campaign", "campaigns", f"#/campaigns/{CAMPAIGN}"),
+    ("campaign", "campaigns", f"#/campaigns/{CAMPAIGN_TOKEN}"),
     ("data", "campaigns", "#/data"),
     ("reports", "campaigns", "#/reports"),
     ("settings", "campaigns", "#/settings"),
@@ -76,16 +84,46 @@ def parse(argv: Sequence[str] | None) -> argparse.Namespace:
     parser.add_argument(
         "--base", default="", help="photograph a running application at this URL instead of the replay"
     )
+    parser.add_argument("--run", default="", help="with --base: the id of a scored run in that store (r_...)")
+    parser.add_argument(
+        "--campaign", default="", help="with --base: the id of a campaign in that store (c_...)"
+    )
     return parser.parse_args(argv)
 
 
+def resolve(fragment: str, run: str, campaign: str) -> str | None:
+    """The page's address with the store's ids filled in; None when it needs an id that is not known."""
+    if RUN_TOKEN in fragment and not run:
+        return None
+    if CAMPAIGN_TOKEN in fragment and not campaign:
+        return None
+    return fragment.replace(RUN_TOKEN, run).replace(CAMPAIGN_TOKEN, campaign)
+
+
 def capture(
-    browser: Any, base: str, out_dir: Path, layout: str, names: set[str], *, offline: bool
+    browser: Any,
+    base: str,
+    out_dir: Path,
+    layout: str,
+    names: set[str],
+    *,
+    offline: bool,
+    run: str = SCORE_RISK,
+    campaign: str = CAMPAIGN,
+    skipped: list[str] | None = None,
 ) -> list[dict[str, Any]]:
-    """Take the pages of one layout at both sizes; return one record per picture."""
+    """Take the pages of one layout at both sizes; return one record per picture. A page that needs an id that is not
+    known is not taken and is added to `skipped`."""
     records: list[dict[str, Any]] = []
-    for name, page_layout, fragment in PAGES:
+    for name, page_layout, template in PAGES:
         if page_layout != layout or (names and name not in names):
+            continue
+        fragment = resolve(template, run, campaign)
+        if fragment is None:
+            if skipped is not None:
+                skipped.append(
+                    f"{layout} {name}: needs the id of a run or campaign in this store (pass --run and --campaign)"
+                )
             continue
         for size, (width, height) in SIZES.items():
             context = browser.new_context(viewport={"width": width, "height": height})
@@ -150,6 +188,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     if unknown:
         print(f"unknown layout: {', '.join(unknown)} (use classic or campaigns)", file=sys.stderr)
         return 2
+    if args.base and len(layouts) != 1:
+        print(
+            "--base photographs one running application, which shows one layout: name exactly that one with "
+            "--layouts (for example --layouts campaigns)",
+            file=sys.stderr,
+        )
+        return 2
     names = {x.strip() for x in args.pages.split(",") if x.strip()}
     out_dir: Path = args.out_dir
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -175,7 +220,17 @@ def main(argv: Sequence[str] | None = None) -> int:
                 print(skipped[-1])
                 continue
             if args.base:
-                records += capture(browser, args.base.rstrip("/"), out_dir, layout, names, offline=False)
+                records += capture(
+                    browser,
+                    args.base.rstrip("/"),
+                    out_dir,
+                    layout,
+                    names,
+                    offline=False,
+                    run=args.run,
+                    campaign=args.campaign,
+                    skipped=skipped,
+                )
             else:
                 with ReplayServer(ui_layout=layout) as server:
                     records += capture(browser, server.base, out_dir, layout, names, offline=True)

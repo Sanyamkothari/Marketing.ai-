@@ -41,18 +41,20 @@ VIEWPORT: Final[dict[str, int]] = {"width": 1440, "height": 900}
 SETTLE_MS: Final[int] = 1500
 
 KNOWN: Final[dict[str, str]] = {
-    "help menu (campaigns): Tab leaves the menu after its first entry": (
-        "In the campaigns shell, after Enter opens the Help menu, Tab reaches the first entry and the next Tab closes "
-        "the menu and drops the focus, so Glossary, Send feedback and What's new cannot be reached without the arrow "
-        "keys (which do not work there either: see the next entry). The classic bar does not do this. Fix: do not "
-        "close the menu on the Tab that moves between its own entries (ui/chrome.js closeMenus callers) and draw the "
-        "shell's bar without losing the focus. Found by running this file against the M174 tree."
+    "help menu (campaigns): the first Tab closes the menu, so no entry can be reached by Tab": (
+        "In the campaigns shell, after Enter opens the Help menu, the first Tab closes it and the focus drops (to the "
+        "page or to the next control, 'Minfy, home'): no entry (tour, Glossary, Send feedback, What's new) can be "
+        "reached by the keyboard. The cause is ui/chrome.js:629 (the focusin handler closes every menu that does not "
+        "contain the new focus target, and finds the menu with `.closest('.menu')`) while ui/shell.js:78 (helpHtml) "
+        "wraps the menu in `.sh-help`, so the focus is never seen as inside it. The classic bar does not do this. "
+        "Same fix as the next entry. Found by running this file against the M174 tree."
     ),
     "help menu (campaigns): arrow keys do not move through the entries": (
         "In the campaigns shell the Help menu is wrapped in `.sh-help`, not `.menu`, so the arrow-key handler in "
-        "ui/chrome.js (menuNavigation, which looks for `.menu`) ignores it; Enter opens the menu and Tab reaches every "
-        "entry, so nothing is out of reach. Fix: give the wrapper in ui/shell.js (helpHtml) the class `menu` too, or let "
-        "menuNavigation match `.sh-help`. Found by running this file against the M174 tree."
+        "ui/chrome.js (menuNavigation, which looks for `.menu`) ignores it; Enter opens the menu but neither the "
+        "arrow keys nor Tab reach any entry (see the previous entry). One fix for both: add the class `menu` to the "
+        "`.sh-help` wrapper in ui/shell.js (helpHtml), or let chrome.js:629 and menuNavigation match `.sh-help` too. "
+        "Found by running this file against the M174 tree."
     ),
 }
 """Keyboard defects that exist today: `"<page>: <description of the element>": reason`. Only the
@@ -83,14 +85,29 @@ SNAPSHOT: Final[str] = """
     if (el.id) bits.push('#' + el.id.replace(/\\d{3,}/g, 'N'));
     return bits.join('') + (text ? ' "' + text + '"' : '');
   };
+  // A focus style is a CHANGE between the focused and the unfocused element (or one of its 3 nearest ancestors, for a
+  // ring drawn on the wrapper). A style that is there all the time (the shadow of a popup, the fill of the current
+  // tab) is not one. Transitions are switched off so the change shows at once.
+  const look = (node) => {
+    const s = getComputedStyle(node);
+    const outline = s.outlineStyle !== 'none' && parseFloat(s.outlineWidth) > 0
+      ? [s.outlineStyle, s.outlineWidth, s.outlineColor].join(' ') : 'none';
+    return [outline, s.boxShadow, s.borderTopColor, s.borderBottomColor, s.backgroundColor].join('|');
+  };
   const ringed = (el) => {
-    for (let node = el, depth = 0; node && depth < 4; node = node.parentElement, depth += 1) {
-      const style = getComputedStyle(node);
-      const outline = style.outlineStyle !== 'none' && parseFloat(style.outlineWidth) > 0;
-      const shadow = style.boxShadow && style.boxShadow !== 'none';
-      if (outline || shadow) return true;
+    if (!document.getElementById('kb-still')) {
+      const still = document.createElement('style');
+      still.id = 'kb-still';
+      still.textContent = '*, *::before, *::after { transition: none !important; animation: none !important; }';
+      document.head.appendChild(still);
     }
-    return false;
+    const nodes = [];
+    for (let node = el, depth = 0; node && depth < 4; node = node.parentElement, depth += 1) nodes.push(node);
+    const focused = nodes.map(look);
+    el.blur();
+    const plain = nodes.map(look);
+    el.focus({ preventScroll: true });
+    return focused.some((value, i) => value !== plain[i]);
   };
   const radios = new Set();
   const all = [...document.querySelectorAll(__SELECTOR__)].filter(visible).filter((el) => {
@@ -105,11 +122,13 @@ SNAPSHOT: Final[str] = """
     return true;
   });
   window.__kb = all;
+  const active = document.activeElement && document.activeElement !== document.body ? document.activeElement : null;
+  const ring = active ? ringed(active) : false;
   return {
     labels: all.map(label),
     focusLabel: document.activeElement && document.activeElement !== document.body ? label(document.activeElement) : null,
     focusIndex: all.indexOf(document.activeElement),
-    ringed: document.activeElement ? ringed(document.activeElement) : false,
+    ringed: ring,
   };
 }
 """.replace("__SELECTOR__", repr(FOCUSABLE))
@@ -287,25 +306,33 @@ def test_the_help_menu_opens_with_the_keyboard_and_closes_with_escape(
             assert arrows in KNOWN, f"{arrows}: ArrowDown on the Help button did not move into the menu"
             key, first = "Tab", False
         visited: list[str] = []
+        in_menu = (
+            "(id) => { const e = document.activeElement; const m = document.getElementById(id);"
+            " return Boolean(e && m && m.contains(e) && !m.closest('[hidden]') && m.getBoundingClientRect().height > 0"
+            " && getComputedStyle(m).visibility !== 'hidden' && getComputedStyle(m).display !== 'none'); }"
+        )
         for _ in entries:
             if not first:
                 page.keyboard.press(key)
             first = False
+            if not page.evaluate(in_menu, menu_id):
+                break  # the focus left the open menu: the entries after this one cannot be reached this way
             visited.append(
                 page.evaluate(
                     "() => (document.activeElement.innerText || document.activeElement.getAttribute('aria-label') || '').trim()"
                 )
             )
+            # Only an entry that is inside the open menu is checked for a focus style.
             assert snapshot(page)["ringed"], f"the Help entry {visited[-1]!r} shows no focus style"
             if key == "ArrowDown":
                 page.keyboard.press("ArrowDown")
                 first = True
-        gap = f"help menu ({layout}): Tab leaves the menu after its first entry"
+        gap = f"help menu ({layout}): the first Tab closes the menu, so no entry can be reached by Tab"
         if visited == entries:
             assert gap not in KNOWN, f"{gap} is in KNOWN but it does not now; remove it"
         else:
             assert key == "Tab" and gap in KNOWN, f"{key} visited {visited}, the menu holds {entries}"
-            assert visited[:1] == entries[:1], f"even the first entry was not reached: {visited}"
+            assert visited == entries[: len(visited)], f"Tab visited {visited}, not the first of {entries}"
             page.focus("button[aria-label='Help']")
             if button.get_attribute("aria-expanded") != "true":
                 page.keyboard.press("Enter")
@@ -319,6 +346,43 @@ def test_the_help_menu_opens_with_the_keyboard_and_closes_with_escape(
     except AssertionError:
         _shot(page, f"help-{layout}")
         raise
+    finally:
+        page.context.close()
+
+
+def test_the_focus_check_tells_a_ring_from_a_style_that_is_always_there(
+    browser: Any, served: tuple[str, ReplayServer]
+) -> None:
+    """The check compares the focused element with the unfocused one: a control with no focus style inside a box that
+    always has a shadow (as every Help menu entry does) must not pass; one with an outline or a ring on focus must.
+    """
+    _layout, server = served
+    page = open_page(browser, server, "#/", width=1440)
+    try:
+        page.evaluate("""() => {
+              const style = document.createElement('style');
+              style.textContent = '#kb-plain, #kb-bare:focus, #kb-outlined { outline: none; }'
+                + ' #kb-outlined:focus-visible { outline: 3px solid rgb(200, 0, 0); }'
+                + ' #kb-ringed:focus-visible { outline: none; box-shadow: 0 0 0 3px rgb(200, 0, 0); }'
+                + ' .kb-pop { position: fixed; top: 80px; left: 80px; display: block; }';
+              document.head.appendChild(style);
+              const pop = document.createElement('div');
+              pop.className = 'menu-pop kb-pop';
+              pop.innerHTML = '<button id="kb-plain">bare</button> <button id="kb-outlined">outlined</button>'
+                + ' <button id="kb-ringed">ringed</button>';
+              document.body.appendChild(pop);
+            }""")
+        assert (
+            page.evaluate("() => getComputedStyle(document.querySelector('.kb-pop')).boxShadow") != "none"
+        ), ".menu-pop no longer has an always-on shadow; the self-test needs another shadowed container"
+        results: dict[str, bool] = {}
+        for ident in ("kb-plain", "kb-outlined", "kb-ringed"):
+            page.evaluate("() => document.activeElement && document.activeElement.blur()")
+            page.keyboard.press("Tab")  # make the browser treat the next focus as the keyboard's
+            page.focus(f"#{ident}")
+            assert page.evaluate("(id) => document.activeElement.id === id", ident)
+            results[ident] = snapshot(page)["ringed"]
+        assert results == {"kb-plain": False, "kb-outlined": True, "kb-ringed": True}, results
     finally:
         page.context.close()
 
