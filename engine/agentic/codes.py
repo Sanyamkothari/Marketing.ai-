@@ -58,6 +58,8 @@ MEASUREMENT_CODES: Final[frozenset[str]] = frozenset(
         # M136 (DEC-1402): pooling across comparable campaigns (`engine.measurement.pooling.POOLING_CODES`).
         "POOL_TOO_FEW",  # fewer than four (or pooling.min_campaigns) comparable campaigns: nothing is pooled
         "POOL_NO_SPREAD",  # a warning: the comparable campaigns differ by no more than chance
+        # M138 (DEC-1403): the early harm alarm (`engine.measurement.harm`), a warning card and an alert, never a win.
+        "HARM_ALARM",  # the contacted are doing worse than the held back by more than chance, before the planned day
     }
 )
 """The measurement milestones' codes (M136, M138), joined into `PLAN_K_CODES` below."""

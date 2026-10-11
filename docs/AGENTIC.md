@@ -205,7 +205,7 @@ each one that is done. M131, M135 and M137 were built ahead of the rest of Plan 
 | M135 Prediction covariates (MLRATE / CUPAC) | done (built early under Plan J) | DEC-1324 | `docs/DECIDE.md` §27 |
 | M136 Pooling across campaigns | done | DEC-1402 | `engine/measurement/pooling.py` (module docstring); switch `pooling.enabled` in `configs/measurement.yaml` |
 | M137 "Safe to roll out": a lower bound in rupees | done (built early under Plan J) | DEC-1325 | `docs/UPLIFT.md` §12 |
-| M138 An early harm alarm | pending | | |
+| M138 An early harm alarm | done | DEC-1403 | `docs/DECIDE.md` §28; switch `harm_alarm.enabled` in `configs/measurement.yaml` |
 | M139 The campaign planner | pending | | |
 | M140 Message variants as measured arms | pending | | |
 | M141 The verifier on client data | pending | | |

@@ -578,6 +578,12 @@ MILESTONE_TESTS: Final[Mapping[str, tuple[str, ...]]] = {
         "tests/unit/measurement/test_cycle_schedules.py",
         "tests/integration/measurement/test_campaign_pooling.py",
     ),
+    # M138 (DEC-1403), the early harm alarm. The nightly A/A and power test (tests/statistical/test_harm_alarm.py,
+    # DEC-1300 (e)) is left out, as for M137.
+    "M138": (
+        "tests/unit/measurement/test_harm_alarm.py",
+        "tests/integration/measurement/test_harm_alarm_loop.py",
+    ),
 }
 """Milestone id -> the test files (or directories, with a trailing `/`) that prove it is built.
 

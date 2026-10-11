@@ -683,6 +683,11 @@ codes:
     title: "Comparable campaigns differ by no more than chance"
     meaning: "A warning, not an error. The comparable campaigns' results differ by no more than chance explains, so each Estimated figure is drawn as far towards their average as the method allows ((k-3)/(k-1) of the way for k campaigns). This usually means there is too little data to tell the campaigns apart, not that their effects are equal. The measured figures, and the value proven to date, are unchanged."
     fix: "Read the measured figures first. The Estimated figures become more telling as comparable campaigns gather more customers."
+  # --- Plan K M138: an early harm alarm, never an early win (DEC-1403 (f), (i)) -------------------------------------------
+  HARM_ALARM:
+    title: "This campaign may be doing harm"
+    meaning: "Before the day the campaign's test plan fixed for the final reading, the customers who were contacted are doing worse than the customers held back. The gap is larger than chance explains, even though the campaign is checked at every reading. This is an alarm, not a result, and nothing has been stopped. The result itself is still read only on the planned day. The alarm is checked only when harm_alarm.enabled is true in configs/measurement.yaml (it is off by default), and only for a campaign whose registered test plan gives a smallest effect worth detecting. A benefit never raises it."
+    fix: "Open the campaign and decide whether to pause it. If you go on, the final result is still read on the planned day."
 
 settings:
   actions.bands[*].min_score:

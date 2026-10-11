@@ -2040,6 +2040,39 @@ comment in `configs/privacy.yaml` and the table in `engine/privacy/layout.py`'s 
 
 **What is needed.** Nothing; this is a record.
 
+### 2026-10-11 — plan-k M138 (on main) → Plan J (owners of M107's `engine/measurement/cycle.py` and `engine/scheduling/firing.py`, M105's `engine/measurement/summary.py`, M94's `api/routes/campaigns.py`): the early harm alarm in the measure step, the route and the summary (record of additive edits)
+
+**What changed** (DEC-1403 (f) to (k)), each inert while `harm_alarm.enabled` is off (the default):
+
+* `engine/measurement/cycle.py`: `StepOutcome` gains `harms: tuple[HarmOutcome, ...] = ()`. `measure_step` (whose
+  `config_root` M136 added) reads `configs/measurement.yaml` first and, with the alarm on, pulls and reads every live
+  campaign whose window is still open in memory (`interim_reading`, nothing stored) and checks each early look it
+  measures. `measure_recorded` is unchanged.
+* `engine/scheduling/firing.py`: the firer raises one `harm_alarm` alert per campaign whose alarm first fired, and
+  `_loop_step` maps `ConfigError` to `FiringError(code)` for MEASURE schedules only; other kinds behave as before.
+* `api/routes/campaigns.py`: `POST /campaigns/{id}/measure` loads the settings before measuring (a bad file is 422
+  with its code and nothing is written) and checks an early look or a reading with customers still inside their
+  window.
+* `engine/measurement/summary.py`: the `HARM_ALARM` warning card (`_harm_card`), shown only with the setting on and
+  an alarm under the plan in force, and no final result yet.
+* `docs/DECIDE.md`: section 28 (the builder's §26, renumbered at integration after M131's §26 and M135's §27), and
+  one row in the cards table.
+
+**What is needed.** Nothing; a branch that builds `StepOutcome` positionally or adds `measure_step` arguments should
+merge by keyword.
+
+**What I did meanwhile.** The measurement, pilot, scheduling and alert tests pass on `main` after the merge.
+
+### 2026-10-11 — plan-k M138 (on main) → Phase 4b (owner of `engine/scheduling/alerts.py`, `ui/modules/production/alerts.js`, `configs/privacy.yaml` and `engine/privacy/layout.py`): one alert kind and one aggregate campaign file (record of additive edits)
+
+**What changed** (DEC-1403 (f)): `AlertKind.HARM_ALARM = "harm_alarm"`, severity `warning`, title "A campaign may
+be doing harm", with its label in the production alerts UI (`ALERT_KIND_LABEL`). `campaigns/<id>/harm_alarm.json`
+(counts, differences and the statistic; no customer id) is listed as an aggregate campaign file in
+`engine/measurement/campaign.py`'s file table, `configs/privacy.yaml`'s comment and `engine/privacy/layout.py`'s
+table, beside M136's `pooled_estimate.json`. It is not row-level, so retention and erasure are unchanged.
+
+**What is needed.** Nothing; this is a record.
+
 ### 2026-09-23 — plan-e-pilot (on main) → all branches: every change Plan E made outside its own files and blocks
 
 **What is needed.** Nothing from anybody; this is the announcement §3 asks for. Measured with
