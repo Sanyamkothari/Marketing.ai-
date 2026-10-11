@@ -374,9 +374,9 @@ def open_campaign(
     intended_keys = (
         chosen_intended_keys(storage, record.run_id) if "intended_treatment" in scores.columns else None
     )
-    # Plan K M140 (DEC-1407): a run that drew message arms is measured within the groups its copy was written
-    # for, and each contacted customer's arm is kept. None for every other run, which is unchanged.
-    variants = variant_campaign_scope(storage, record.run_id, record.primary_key)
+    # Plan K M140 (DEC-1407): a run whose message arms are in force is measured within the groups its copy was
+    # written for, and each contacted customer's arm is kept. None for every other run, which is unchanged.
+    variants = variant_campaign_scope(storage, record.run_id, record.primary_key, use_case=config)
     try:
         assignment = build_assignment(
             scores,
@@ -620,7 +620,9 @@ def measure_recorded(
         or "binary"
     )
     offers = {} if audit is None or not audit.offers else offer_arguments(audit)  # several offers (M103)
-    offers = offers or variant_measure_arguments(assignment)  # message arms (Plan K M140, DEC-1407)
+    # Message arms (Plan K M140, DEC-1407): compared on a yes/no outcome without a covariate only; otherwise the
+    # campaign is measured as a whole, as it was before the arms were drawn.
+    offers = offers or variant_measure_arguments(assignment, outcome_kind=kind, covariate=covariate)
     try:
         report = measure_campaign(
             assignment,

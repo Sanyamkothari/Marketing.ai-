@@ -54,6 +54,7 @@ from engine.decide.treat_list import (
     policy_intended,
     with_control_group,
 )
+from engine.decide.variant_arms import VARIANT_ARMS_NOT_ARBITRATED, variant_arms_in_force
 from engine.measurement.campaign import Campaign, create_arbitrated_campaign
 from engine.runs import RUN_CONFIG_FILENAME, RUN_FILENAME
 from engine.stages.actions import CONTROL_GROUP_COLUMN
@@ -245,6 +246,23 @@ def arbitrate_treatments(
             f"Cannot arbitrate runs with different customer keys: {primary_keys}",
         )
     key_cols_tuple = key_columns(runs[0].primary_key)
+
+    # 2b. Plan K M140 (DEC-1407): a run testing message variants as arms is not arbitrated. The arbitrated list
+    # keeps a fixed set of columns and its campaigns carry no arms, so which message each customer gets would
+    # be lost without a word.
+    armed = [
+        r.run_id
+        for r in runs
+        if variant_arms_in_force(storage, r.run_id, use_case=_campaign_config(storage, r, root))
+    ]
+    if armed:
+        raise http_error(
+            409,
+            VARIANT_ARMS_NOT_ARBITRATED,
+            f"Run {', '.join(armed)} tests message variants as measured arms, and arbitration across use cases "
+            "would drop which message each customer gets. Send and measure that run's list on its own, or "
+            "arbitrate a run without variant arms.",
+        )
 
     # 3. Load treat lists for all runs, and whom each use case's policy intended to contact
     treat_lists: list[pd.DataFrame] = []

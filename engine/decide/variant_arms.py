@@ -14,6 +14,14 @@ a winner only when the comparison between messages says so (:func:`compare_varia
 otherwise (`VARIANT_ARMS_NOT_MADE`), and nothing else reads this module's files unless they exist. So a
 run that never built variant arms - every run by default - is byte for byte what it was.
 
+**Arms in force.** Every reader (the treat list, a campaign opened from the run, arbitration) uses the arms
+only while they are in force (:func:`variant_arms_in_force`): the use case still turns them on, and the
+run's `copy_batch.json` is still the batch they were drawn from, with every arm's template still approved and
+still saying the words its catalogue registration names. Otherwise the arms are set aside and the run is
+read as one that drew none: turning the setting off, regenerating an arm's template or writing the copy
+again never hands off a template whose words were not registered. The routes that change the copy also
+delete the arm files and rebuild the treat list (:func:`set_aside_variant_arms`).
+
 **The arms.**
 
 * `no_message`: the run's own held-back customers (Phase 1's control group, or M92's persistent holdout),
@@ -33,6 +41,9 @@ explicit action whose `template_ref` is the variant's text reference (:func:`var
 a registered `dlt_template_id` (not empty, not a placeholder in angle brackets); otherwise the build is
 refused with `VARIANT_TEMPLATE_UNREGISTERED`, naming the templates and the reference to register them
 under. A variant on another channel with no catalogue action is refused with `VARIANT_ACTION_MISSING`.
+Every treated customer of a variant arm must be shown the template to send: when the treat list names no
+channel for them and the copy was written for several channels (or names a channel the copy was not
+written for), the build is refused with `VARIANT_ARMS_NOT_MADE` and nothing is kept.
 The reference binds the registration to the exact words, so a later batch whose variant A says
 something else is not covered by this batch's registration. The catalogue file itself is the client's
 and is never written here; the build records the SHA-256 of the file it checked against, beside the
@@ -53,6 +64,14 @@ within exactly those customers) and `variant_arms.json` (aggregate). The treat l
 only. When a campaign is opened from the run, its assignment carries each contacted customer's arm and
 is cut to the same groups (`engine.measurement.cycle.open_campaign`), and measuring it writes
 `variant_comparison.json` beside the report.
+
+**Measured on a yes/no outcome.** `measure_campaign` compares several arms on a yes/no outcome only, and
+without a pre-campaign covariate. A campaign with message arms measured on an amount, or adjusted by a
+covariate, is measured as a whole campaign, as it was before the arms, and no comparison is written.
+
+**Not arbitrated.** Arbitration across use cases keeps a fixed set of columns and opens campaigns without
+arms, so a run whose arms are in force is refused there (`VARIANT_ARMS_NOT_ARBITRATED`), rather than
+silently losing which message each customer gets.
 
 **Not built.** Synthetic personas: the proposal allows them to screen drafts only, later.
 
@@ -90,6 +109,7 @@ __all__ = [
     "NO_MESSAGE_LEVEL",
     "VARIANT_ACTION_MISSING",
     "VARIANT_ARMS_FILENAME",
+    "VARIANT_ARMS_NOT_ARBITRATED",
     "VARIANT_ARMS_NOT_MADE",
     "VARIANT_ARMS_PARQUET",
     "VARIANT_ARM_CODES",
@@ -107,6 +127,8 @@ __all__ = [
     "compare_variant_arms",
     "draw_arms",
     "is_variant_template_ref",
+    "set_aside_variant_arms",
+    "variant_arms_in_force",
     "variant_arms_of",
     "variant_campaign_scope",
     "variant_level",
@@ -124,8 +146,15 @@ VARIANT_ACTION_MISSING: Final[str] = "VARIANT_ACTION_MISSING"
 """409: a variant chosen as an arm (not SMS) has no catalogue action carrying its text reference."""
 VARIANT_ARMS_NOT_MADE: Final[str] = "VARIANT_ARMS_NOT_MADE"
 """409: no variant arms were made (turned off, no copy, fewer than two variants approved everywhere, ...)."""
+VARIANT_ARMS_NOT_ARBITRATED: Final[str] = "VARIANT_ARMS_NOT_ARBITRATED"
+"""409: a run whose message arms are in force is not arbitrated across use cases (the arms would be lost)."""
 VARIANT_ARM_CODES: Final[frozenset[str]] = frozenset(
-    {VARIANT_TEMPLATE_UNREGISTERED, VARIANT_ACTION_MISSING, VARIANT_ARMS_NOT_MADE}
+    {
+        VARIANT_TEMPLATE_UNREGISTERED,
+        VARIANT_ACTION_MISSING,
+        VARIANT_ARMS_NOT_MADE,
+        VARIANT_ARMS_NOT_ARBITRATED,
+    }
 )
 
 # ---------------------------------------------------------------------------
@@ -211,6 +240,9 @@ class VariantArms(Artefact):
     run_id: str = Field(description="The scoring run.")
     use_case_id: str = Field(description="Its use case.")
     batch_id: str = Field(description="The copy batch the variants come from.")
+    batch_created_at: AwareDatetime = Field(
+        description="`created_at` of that batch: a batch written again later is another batch."
+    )
     treatment_levels: tuple[str, ...] = Field(
         description="The no-message level first, then every message arm: M100's `treatment_levels` shape."
     )
@@ -330,11 +362,13 @@ def build_variant_arms(
 ) -> VariantArms:
     """Draw the message arms of a scoring run's copy, write them, and rebuild the run's treat list.
 
-    Raises :class:`VariantArmsError` (nothing is written) with `VARIANT_ARMS_NOT_MADE` when the use case
-    does not turn variant arms on, the run is not a finished scoring run with copy, it chose among several
-    offers, or fewer than :data:`MIN_VARIANTS` variants are approved for every group and channel;
-    `VARIANT_TEMPLATE_UNREGISTERED` when an SMS variant has no registered template id in the catalogue;
-    `VARIANT_ACTION_MISSING` when another variant has no catalogue action. See the module docstring.
+    Raises :class:`VariantArmsError` with `VARIANT_ARMS_NOT_MADE` when the use case does not turn variant
+    arms on, the run is not a finished scoring run with copy, it chose among several offers, fewer than
+    :data:`MIN_VARIANTS` variants are approved for every group and channel, or the rebuilt treat list cannot
+    name the template a variant customer is sent; `VARIANT_TEMPLATE_UNREGISTERED` when an SMS variant has no
+    registered template id in the catalogue; `VARIANT_ACTION_MISSING` when another variant has no catalogue
+    action. A `TreatListError` from rebuilding the treat list is raised as it is. Whatever the refusal, no
+    arm file is kept and the treat list is the one without arms. See the module docstring.
     """
     from engine.config import RunMode
     from engine.contracts import RunRecord, RunState
@@ -403,6 +437,7 @@ def build_variant_arms(
         run_id=run_id,
         use_case_id=record.use_case_id,
         batch_id=batch.batch_id,
+        batch_created_at=batch.created_at,
         treatment_levels=(NO_MESSAGE_LEVEL, *levels),
         control_level=NO_MESSAGE_LEVEL,
         arms=levels,
@@ -425,9 +460,40 @@ def build_variant_arms(
     frame.to_parquet(buffer, index=False)
     storage.write_bytes(run_key(run_id, VARIANT_ARMS_PARQUET), buffer.getvalue())
     storage.write_model(run_key(run_id, VARIANT_ARMS_FILENAME), arms_file)
-    # The hand-off file must say which message each customer gets: rebuilt from the run's own artefacts.
-    build_treat_list(storage, run_id, config_root=config_root)
+    # The hand-off file must say which message each customer gets: rebuilt from the run's own artefacts. On
+    # any refusal the arm files go again, so no later rebuild or campaign acts on arms the person was refused.
+    try:
+        build_treat_list(storage, run_id, config_root=config_root)
+        unnamed = _variant_rows_without_template(storage, run_id)
+    except Exception:
+        set_aside_variant_arms(storage, run_id, config_root=config_root)
+        raise
+    if unnamed:
+        set_aside_variant_arms(storage, run_id, config_root=config_root)
+        raise VariantArmsError(
+            VARIANT_ARMS_NOT_MADE,
+            f"The treat list cannot say which template to send to {unnamed} customers of a variant arm: the "
+            "copy was written for "
+            + ", ".join(channels)
+            + ", and the list names no channel for them that the "
+            "copy covers. Write the copy for one channel, or give the run its channels per customer.",
+        )
     return arms_file
+
+
+def _variant_rows_without_template(storage: Storage, run_id: str) -> int:
+    """Treated customers of a variant arm (not the control template) whose treat-list row names no template."""
+    import pandas as pd
+
+    from engine.decide.treat_list import TREAT_LIST_PARQUET
+    from engine.storage import run_key
+
+    table = pd.read_parquet(io.BytesIO(storage.read_bytes(run_key(run_id, TREAT_LIST_PARQUET))))
+    if VARIANT_ARM_COLUMN not in table.columns:
+        return 0
+    arm = table[VARIANT_ARM_COLUMN].astype("string")
+    variant = arm.str.startswith(VARIANT_LEVEL_PREFIX).fillna(value=False).to_numpy(dtype=bool)
+    return int((variant & table[VARIANT_TEMPLATE_COLUMN].isna().to_numpy(dtype=bool)).sum())
 
 
 def _arm_letters(
@@ -618,7 +684,10 @@ def _assign(
 # Readers: the treat list and the campaign
 # ---------------------------------------------------------------------------
 def variant_arms_of(storage: Storage, run_id: str) -> VariantArms | None:
-    """The run's `variant_arms.json`, or None when it drew none (every run by default)."""
+    """The run's `variant_arms.json`, or None when it drew none (every run by default).
+
+    The file as written, in force or not: readers that act on the arms use :func:`variant_arms_in_force`.
+    """
     from engine.storage import StorageError, run_key
 
     key = run_key(run_id, VARIANT_ARMS_FILENAME)
@@ -628,6 +697,107 @@ def variant_arms_of(storage: Storage, run_id: str) -> VariantArms | None:
         return storage.read_model(key, VariantArms)
     except StorageError:
         return None
+
+
+def variant_arms_in_force(
+    storage: Storage,
+    run_id: str,
+    *,
+    use_case: UseCaseConfig | None = None,
+    config_root: Path | None = None,
+) -> VariantArms | None:
+    """The run's arms while they still hold, else None (see "Arms in force" in the module docstring).
+
+    `use_case` is the use case as it is now; without it, it is read from `config_root`, and only when the run
+    has arms at all, so a run without them reads no configuration here. A use case that can no longer be read
+    sets the arms aside.
+    """
+    from engine.config import ConfigError, load_use_case
+
+    arms = variant_arms_of(storage, run_id)
+    if arms is None:
+        return None
+    if use_case is None:
+        try:
+            use_case = load_use_case(arms.use_case_id, config_root)
+        except ConfigError:
+            return None
+    if not use_case.generative.variant_arms:
+        return None
+    return arms if _matches_copy(storage, run_id, arms) else None
+
+
+def _matches_copy(storage: Storage, run_id: str, arms: VariantArms) -> bool:
+    """The run's copy is the batch the arms were drawn from, each arm template approved and its words registered."""
+    from engine.generative.contracts import COPY_BATCH_FILENAME, CopyBatch, CopyStatus
+    from engine.storage import StorageError, run_key
+
+    try:
+        batch = storage.read_model(run_key(run_id, COPY_BATCH_FILENAME), CopyBatch)
+    except StorageError:
+        return False
+    if batch.batch_id != arms.batch_id or batch.created_at != arms.batch_created_at:
+        return False
+    by_id = {template.template_id: template for template in batch.templates}
+    for item in arms.templates:
+        template = by_id.get(item.template_id)
+        if (
+            template is None
+            or template.status is not CopyStatus.APPROVED
+            or variant_template_ref(template) != item.template_ref
+        ):
+            return False
+    return True
+
+
+def set_aside_variant_arms(
+    storage: Storage, run_id: str, *, config_root: Path | None = None, only_if_stale: bool = False
+) -> bool:
+    """Delete the run's arm files and rebuild its treat list without them; True when there were arms.
+
+    `only_if_stale`: only when they are no longer in force (an approved arm template was regenerated, the copy
+    written again, the setting turned off). The treat list is rebuilt only when one was built before; a
+    rebuild the run refuses leaves the list as it was (the readers ignore arms that are gone).
+    """
+    from engine.decide.treat_list import (
+        TREAT_LIST_CSV,
+        TREAT_LIST_PARQUET,
+        TREAT_LIST_SUMMARY_FILENAME,
+        TreatListError,
+        build_treat_list,
+    )
+    from engine.storage import run_key
+
+    files = [run_key(run_id, name) for name in (VARIANT_ARMS_FILENAME, VARIANT_ARMS_PARQUET)]
+    if not any(storage.exists(key) for key in files):
+        return False
+    if only_if_stale and variant_arms_in_force(storage, run_id, config_root=config_root) is not None:
+        return False
+    for key in files:
+        storage.delete(key)
+    if storage.exists(run_key(run_id, TREAT_LIST_SUMMARY_FILENAME)):
+        try:
+            build_treat_list(storage, run_id, config_root=config_root)
+        except TreatListError:
+            # A list that still names the arms is not served again: it is built afresh (or refused in plain
+            # words) on its next request. A list without them is left as it was handed off.
+            if _treat_list_names_arms(storage, run_id):
+                for name in (TREAT_LIST_CSV, TREAT_LIST_PARQUET, TREAT_LIST_SUMMARY_FILENAME):
+                    storage.delete(run_key(run_id, name))
+    return True
+
+
+def _treat_list_names_arms(storage: Storage, run_id: str) -> bool:
+    import pandas as pd
+
+    from engine.decide.treat_list import TREAT_LIST_PARQUET
+    from engine.storage import StorageError, run_key
+
+    try:
+        data = storage.read_bytes(run_key(run_id, TREAT_LIST_PARQUET))
+    except StorageError:
+        return False
+    return VARIANT_ARM_COLUMN in pd.read_parquet(io.BytesIO(data), columns=None).columns
 
 
 def _arm_table(storage: Storage, run_id: str, primary_key: PrimaryKey) -> pd.DataFrame | None:
@@ -666,19 +836,24 @@ def variant_treat_list_columns(
     *,
     treat: Any,
     channel: pd.Series[Any],
+    config_root: Path | None = None,
 ) -> TreatListVariants | None:
     """`variant_arm` and `variant_template` per treat-list row, joined on every key column; None without arms.
 
-    A customer is shown their arm only when the list treats them (`treat = 1`); the template is the approved
-    one their arm sends to their group on their channel (the copy's only channel when the list names none),
-    empty for the control template and for a channel the copy was not written for.
+    None also when the run's arms are not in force (:func:`variant_arms_in_force`): the list is then the one
+    without arms, byte for byte. A customer is shown their arm only when the list treats them (`treat = 1`);
+    the template is the approved one their arm sends to their group on their channel (the copy's only channel
+    when the list names none), empty for the control template and for a channel the copy was not written for
+    (:func:`build_variant_arms` refuses arms that would leave a variant customer without one).
     """
     import numpy as np
     import pandas as pd
 
-    arms = variant_arms_of(storage, run_id)
+    arms = variant_arms_in_force(storage, run_id, config_root=config_root)
+    if arms is None:
+        return None
     table = _arm_table(storage, run_id, primary_key)
-    if arms is None or table is None:
+    if table is None:
         return None
     index = pd.Index(row_keys.to_numpy())
     treated = np.asarray(treat, dtype=bool)
@@ -705,16 +880,18 @@ def variant_treat_list_columns(
 
 
 def variant_campaign_scope(
-    storage: Storage, run_id: str, primary_key: PrimaryKey
+    storage: Storage, run_id: str, primary_key: PrimaryKey, *, use_case: UseCaseConfig
 ) -> tuple[pd.Index[Any], pd.Series[Any]] | None:
     """`(customers in the copy's groups, each one's arm)` by key text, for a campaign opened from the run.
 
     The campaign is measured within exactly the groups the copy was written for, held back or not, so the
     no-message group and every arm cover the same customers (`build_assignment`'s `scope_keys`). None for a
-    run without variant arms.
+    run without variant arms, or whose arms are not in force for `use_case` as it is now.
     """
+    if variant_arms_in_force(storage, run_id, use_case=use_case) is None:
+        return None
     table = _arm_table(storage, run_id, primary_key)
-    if table is None or variant_arms_of(storage, run_id) is None:
+    if table is None:
         return None
     return table.index, table[VARIANT_ARM_COLUMN]
 
@@ -736,14 +913,18 @@ def with_variant_arms(
     return out
 
 
-def variant_measure_arguments(assignment: pd.DataFrame) -> dict[str, Any]:
+def variant_measure_arguments(
+    assignment: pd.DataFrame, *, outcome_kind: str = "binary", covariate: str | None = None
+) -> dict[str, Any]:
     """`measure_campaign`'s several-offer arguments for a campaign with message arms; empty without them.
 
     The arms are the levels the assignment names, the control template first and the variants in letter
     order; the control level is the no-message holdout. Every message together is added (`combine_offers`),
-    which the Value Proof Pack's whole-campaign lines read.
+    which the Value Proof Pack's whole-campaign lines read. Empty, too, for an amount (`outcome_kind` other
+    than binary) or with a covariate: `measure_campaign` compares arms on a yes/no outcome without one, so such
+    a campaign is measured as a whole, as it was before the arms.
     """
-    if VARIANT_ARM_COLUMN not in assignment.columns:
+    if VARIANT_ARM_COLUMN not in assignment.columns or outcome_kind != "binary" or covariate is not None:
         return {}
     named = assignment[VARIANT_ARM_COLUMN].dropna().astype(str).str.strip()
     present = set(named[named != ""])

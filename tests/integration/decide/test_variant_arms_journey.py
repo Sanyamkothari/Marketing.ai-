@@ -20,7 +20,12 @@ held-back customers). Checked:
 * the campaign is measured per arm against the no-message group, every message together, and the messages
   against each other; the planted best variant is named the winner, inside its interval, and the Proof Pack
   shows a row per message and names it, every number traced;
-* with no difference planted between the messages, no winner is named.
+* with no difference planted between the messages, no winner is named;
+* arms are kept only while they still hold (review fixes): copy on two channels with no channel per customer is
+  refused, as is a treat-list rebuild the run refuses, with no arm file left; regenerating an arm's template,
+  writing the copy again, changing the copy behind the routes' back or turning the setting off sets the arms
+  aside (the treat list is byte for byte the one without arms, the campaign has none); a campaign with arms
+  measured on an amount is measured as a whole; a run with arms is not arbitrated.
 """
 
 from __future__ import annotations
@@ -383,3 +388,209 @@ def test_no_winner_is_named_when_the_messages_do_equally_well(journey: Journey) 
     named = next(line for line in section["lines"] if line["label"] == "Best message")
     assert named["value"] is None and named["missing"].startswith("None is named")
     assert_traced(journey.data_dir, view)
+
+
+# ---------------------------------------------------------------------------
+# Review fixes: arms that would not say which words to send, or no longer match the copy, are never used
+# ---------------------------------------------------------------------------
+def _register_each_on_its_channel(journey: Journey, templates: list[dict[str, Any]]) -> None:
+    """One catalogue action per approved template, on that template's own channel (SMS with a DLT id)."""
+    actions = []
+    for index, template in enumerate(templates):
+        action: dict[str, Any] = {
+            "action_id": f"winback_variant_{index}",
+            "label": f"Win-back variant {index}",
+            "channels": [template["channel"]],
+            "template_ref": _reference(template),
+            "message_category": "promotional",
+            "dlt_template_id": f"1107{index:015d}",
+        }
+        actions.append(action)
+    path = journey.root / "decide" / "catalogue.yaml"
+    path.write_text(yaml.safe_dump({"region": "IN", "actions": actions}, sort_keys=False), encoding="utf-8")
+    clear_catalogue_cache()
+
+
+def _no_arm_files(journey: Journey) -> bool:
+    return not journey.storage.exists(
+        run_key(journey.run_id, "variant_arms.json")
+    ) and not journey.storage.exists(run_key(journey.run_id, "variant_arms.parquet"))
+
+
+def test_copy_on_two_channels_with_no_channel_on_the_list_is_refused(tmp_path: Path) -> None:
+    """The list names no channel per customer, so it cannot say which channel's variant a customer gets."""
+    for journey in _start(tmp_path, channels=("sms", "whatsapp")):
+        approved = _generate_and_approve(journey)
+        _register_each_on_its_channel(journey, approved)
+        before = journey.client.get(f"/runs/{journey.run_id}/treat_list.csv").content
+        response = journey.client.post(f"/runs/{journey.run_id}/campaign-copy/variant-arms")
+        assert response.status_code == 409, response.text
+        assert response.json()["detail"]["code"] == "VARIANT_ARMS_NOT_MADE"
+        assert "channel" in response.json()["detail"]["message"]
+        assert _no_arm_files(journey)
+        # The list was rebuilt without the arms: byte for byte the one handed off before.
+        assert journey.client.get(f"/runs/{journey.run_id}/treat_list.csv").content == before
+        created = ok(journey.client.post("/campaigns", json={"run_id": journey.run_id}), 201)
+        campaign_id = created["campaign"]["campaign_id"]
+        assignment = pd.read_parquet(
+            io.BytesIO(journey.storage.read_bytes(f"campaigns/{campaign_id}/assignment.parquet"))
+        )
+        assert "variant_arm" not in assignment.columns
+
+
+def test_a_refused_treat_list_rebuild_leaves_no_arms_behind(
+    journey: Journey, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from engine.decide import treat_list
+    from engine.decide.treat_list import TreatListError
+
+    approved = _generate_and_approve(journey)
+    _register(journey, approved, dlt="1107{index:015d}")
+    before = journey.client.get(f"/runs/{journey.run_id}/treat_list.csv").content
+
+    def refuse(*_args: Any, **_kwargs: Any) -> Any:
+        raise TreatListError("RUN_NOT_SCORED", "The run's scores are gone.")
+
+    monkeypatch.setattr(treat_list, "build_treat_list", refuse)
+    response = journey.client.post(f"/runs/{journey.run_id}/campaign-copy/variant-arms")
+    assert response.status_code == 409, response.text
+    assert response.json()["detail"]["code"] == "RUN_NOT_SCORED"
+    assert _no_arm_files(journey)
+    monkeypatch.undo()
+    assert journey.client.get(f"/runs/{journey.run_id}/treat_list.csv").content == before
+
+
+def test_regenerating_an_arm_s_template_sets_the_arms_aside(journey: Journey) -> None:
+    approved = _generate_and_approve(journey)
+    _register(journey, approved, dlt="1107{index:015d}")
+    before = journey.client.get(f"/runs/{journey.run_id}/treat_list.csv").content
+    ok(journey.client.post(f"/runs/{journey.run_id}/campaign-copy/variant-arms"))
+    template_id = str(_treat_list(journey).query("variant_arm == 'variant_b'")["variant_template"].iloc[0])
+
+    ok(journey.client.post(f"/runs/{journey.run_id}/campaign-copy/templates/{template_id}/regenerate"))
+    assert _no_arm_files(journey)
+    after = _treat_list(journey)
+    assert "variant_template" not in after.columns  # no row names the regenerated template
+    assert journey.client.get(f"/runs/{journey.run_id}/treat_list.csv").content == before
+    created = ok(journey.client.post("/campaigns", json={"run_id": journey.run_id}), 201)
+    assignment = pd.read_parquet(
+        io.BytesIO(
+            journey.storage.read_bytes(f"campaigns/{created['campaign']['campaign_id']}/assignment.parquet")
+        )
+    )
+    assert "variant_arm" not in assignment.columns
+
+
+def test_arms_that_no_longer_match_the_copy_are_never_used(journey: Journey) -> None:
+    """Changed outside the routes (no clean-up ran): the treat list and the campaign still ignore stale arms."""
+    import json
+
+    from engine.decide.treat_list import build_treat_list
+
+    approved = _generate_and_approve(journey)
+    _register(journey, approved, dlt="1107{index:015d}")
+    before = journey.client.get(f"/runs/{journey.run_id}/treat_list.csv").content
+    ok(journey.client.post(f"/runs/{journey.run_id}/campaign-copy/variant-arms"))
+
+    key = run_key(journey.run_id, "copy_batch.json")
+    batch = json.loads(journey.storage.read_bytes(key))
+    target = next(t for t in batch["templates"] if t["variant"] == "B")
+    target["text"] = target["text"] + " Reply STOP to opt out."  # other words than the registered ones
+    journey.storage.write_bytes(key, json.dumps(batch).encode("utf-8"))
+
+    build_treat_list(journey.storage, journey.run_id, config_root=journey.root)
+    assert journey.client.get(f"/runs/{journey.run_id}/treat_list.csv").content == before
+    created = ok(journey.client.post("/campaigns", json={"run_id": journey.run_id}), 201)
+    assignment = pd.read_parquet(
+        io.BytesIO(
+            journey.storage.read_bytes(f"campaigns/{created['campaign']['campaign_id']}/assignment.parquet")
+        )
+    )
+    assert "variant_arm" not in assignment.columns
+
+
+def test_writing_the_copy_again_sets_the_arms_aside(journey: Journey) -> None:
+    approved = _generate_and_approve(journey)
+    _register(journey, approved, dlt="1107{index:015d}")
+    before = journey.client.get(f"/runs/{journey.run_id}/treat_list.csv").content
+    ok(journey.client.post(f"/runs/{journey.run_id}/campaign-copy/variant-arms"))
+    _generate_and_approve(journey, letters=())  # a new batch, nothing approved yet
+    assert _no_arm_files(journey)
+    assert journey.client.get(f"/runs/{journey.run_id}/treat_list.csv").content == before
+
+
+def test_turning_the_setting_off_sets_the_arms_aside(journey: Journey) -> None:
+    from engine.decide.treat_list import build_treat_list
+
+    approved = _generate_and_approve(journey)
+    _register(journey, approved, dlt="1107{index:015d}")
+    before = journey.client.get(f"/runs/{journey.run_id}/treat_list.csv").content
+    ok(journey.client.post(f"/runs/{journey.run_id}/campaign-copy/variant-arms"))
+    assert "variant_arm" in _treat_list(journey).columns
+
+    path = journey.root / "use_cases" / "win_back_campaign.yaml"
+    document = yaml.safe_load(path.read_text(encoding="utf-8"))
+    document["generative"]["variant_arms"] = False
+    path.write_text(yaml.safe_dump(document, sort_keys=False), encoding="utf-8")
+
+    summary = build_treat_list(journey.storage, journey.run_id, config_root=journey.root)
+    assert summary.variant_arm_counts is None
+    assert journey.client.get(f"/runs/{journey.run_id}/treat_list.csv").content == before
+    created = ok(journey.client.post("/campaigns", json={"run_id": journey.run_id}), 201)
+    assignment = pd.read_parquet(
+        io.BytesIO(
+            journey.storage.read_bytes(f"campaigns/{created['campaign']['campaign_id']}/assignment.parquet")
+        )
+    )
+    assert "variant_arm" not in assignment.columns
+
+
+def test_a_campaign_with_arms_measured_on_an_amount_is_measured_as_a_whole(journey: Journey) -> None:
+    """Message arms are compared on a yes/no outcome; on an amount the campaign is still measured, as before."""
+    approved = _generate_and_approve(journey)
+    _register(journey, approved, dlt="1107{index:015d}")
+    ok(journey.client.post(f"/runs/{journey.run_id}/campaign-copy/variant-arms"))
+    treat_list = _treat_list(journey)
+    rng = np.random.default_rng(5)
+    contacted = (treat_list["treat"] == 1).to_numpy()
+    amount = np.round(rng.gamma(2.0, 200.0, len(treat_list)) * np.where(contacted, 1.3, 1.0), 2)
+    outcomes = pd.DataFrame({KEY: treat_list[KEY], "spend_90d": amount})
+
+    client = journey.client
+    created = ok(client.post("/campaigns", json={"run_id": journey.run_id}), 201)
+    campaign_id = str(created["campaign"]["campaign_id"])
+    payload = outcomes.to_csv(index=False, lineterminator="\n").encode()
+    upload_id = ok(
+        client.post(
+            "/uploads",
+            files={"file": ("outcomes.csv", payload, "text/csv")},
+            data={"use_case": USE_CASE, "mode": "score"},
+        ),
+        201,
+    )["upload_id"]
+    ok(
+        client.post(
+            f"/campaigns/{campaign_id}/outcomes", json={"upload_id": upload_id, "outcome_column": "spend_90d"}
+        )
+    )
+    measured = client.post(
+        f"/campaigns/{campaign_id}/measure",
+        json={"as_of": MATURE.isoformat(), "outcome_kind": "continuous"},
+    )
+    assert measured.status_code == 200, measured.text
+    import json
+
+    report = json.loads(journey.storage.read_bytes(f"campaigns/{campaign_id}/incrementality_report.json"))
+    assert report.get("arms") is None
+    assert report["outcome_kind"] == "continuous"
+    assert not journey.storage.exists(f"campaigns/{campaign_id}/variant_comparison.json")
+
+
+def test_a_run_with_arms_is_not_arbitrated(journey: Journey) -> None:
+    approved = _generate_and_approve(journey)
+    _register(journey, approved, dlt="1107{index:015d}")
+    ok(journey.client.post(f"/runs/{journey.run_id}/campaign-copy/variant-arms"))
+    response = journey.client.post("/decide/arbitrate", json={"run_ids": [journey.run_id]})
+    assert response.status_code == 409, response.text
+    assert response.json()["detail"]["code"] == "VARIANT_ARMS_NOT_ARBITRATED"
+    assert not journey.storage.exists(run_key(journey.run_id, "arbitrated_treat_list.csv"))

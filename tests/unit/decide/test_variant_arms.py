@@ -186,6 +186,14 @@ def test_measure_arguments_put_the_control_template_first_and_measure_against_no
     assert variant_measure_arguments(pd.DataFrame({VARIANT_ARM_COLUMN: [None, None]})) == {}
 
 
+def test_an_amount_or_a_covariate_is_measured_as_a_whole_campaign() -> None:
+    """`measure_campaign` compares arms on a yes/no outcome without a covariate only (review fix)."""
+    assignment = pd.DataFrame({VARIANT_ARM_COLUMN: ["variant_b", "control_template", "variant_a"]})
+    assert variant_measure_arguments(assignment, outcome_kind="continuous") == {}
+    assert variant_measure_arguments(assignment, covariate="spend_before") == {}
+    assert variant_measure_arguments(assignment, outcome_kind="binary")["arm_column"] == VARIANT_ARM_COLUMN
+
+
 # ---------------------------------------------------------------------------
 # Defaults and the catalogue
 # ---------------------------------------------------------------------------
@@ -213,9 +221,10 @@ def test_a_variant_s_catalogue_action_never_prices_a_channel() -> None:
     assert catalogue.channel_contact_costs() == {"sms": 0.25, "email": 0.25}
 
 
-def test_the_codes_are_the_three_the_help_text_covers() -> None:
+def test_the_codes_are_the_four_the_help_text_covers() -> None:
     assert {
         "VARIANT_TEMPLATE_UNREGISTERED",
         "VARIANT_ACTION_MISSING",
         "VARIANT_ARMS_NOT_MADE",
+        "VARIANT_ARMS_NOT_ARBITRATED",
     } == VARIANT_ARM_CODES

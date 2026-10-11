@@ -520,7 +520,7 @@ def build_treat_list(storage: Storage, run_id: str, *, config_root: Path | None 
 
     # 5c. Plan K M140 (DEC-1407): each treated customer's message arm, on a run that drew variant arms only.
     variants = variant_treat_list_columns(
-        storage, run_id, primary_key, row_keys, treat=treat, channel=channel
+        storage, run_id, primary_key, row_keys, treat=treat, channel=channel, config_root=config_root
     )
 
     # 6. Reasons, in business words.
