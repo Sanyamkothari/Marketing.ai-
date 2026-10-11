@@ -674,6 +674,16 @@ MILESTONE_TESTS: Final[Mapping[str, tuple[str, ...]]] = {
         "tests/integration/test_ui.py",
         "tests/unit/test_shared_file_markers.py",
     ),
+    # M171 (DEC-1601), one contact list: one "Download contact list" (the treat list), the sentence built from the
+    # run's own files, a shorter Output page. test_contact_list_js.py runs contact_list.test.mjs and
+    # contact_list_api.test.mjs; test_uplift_ui.py runs uplift_ui.test.mjs (the uplift sentence and download).
+    "M171": (
+        "tests/integration/decide/test_one_contact_list.py",
+        "tests/unit/decide/test_contact_list_js.py",
+        "tests/unit/uplift/test_uplift_ui.py",
+        "tests/integration/decide/test_treat_list_review.py",
+        "tests/integration/production/test_production_ui.py",
+    ),
 }
 """Milestone id -> the test files (or directories, with a trailing `/`) that prove it is built.
 

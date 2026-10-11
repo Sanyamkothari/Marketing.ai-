@@ -2526,6 +2526,38 @@ section is closed.
 
 **What I did meanwhile.** Nothing was blocked.
 
+### 2026-10-11 — plan-m M171 (on main) → all UI workstreams (owners of `ui/dom.js`, `ui/api.js`, and anyone drawing a run's download or Technical details): `techDetails`'s extra markup, one shared treat-list answer, a new module (announcement)
+
+**What changed** (DEC-1601 (a), (d), (f)). `ui/dom.js` `techDetails(pairs, summary, extraHtml = "")` gained an optional
+third argument that draws markup inside the disclosure; it is backward compatible. Use it rather than
+`String.replace` on the rendered HTML, which reads `$&`, `$$`, `` $` `` and `$'` in server text as replacement patterns.
+`ui/api.js` exports `contactListNow(runId)` (the download to draw at once: the treat list, no note) and
+`loadContactList(runId)` (the one shared answer about a run's treat list, asked once per run and kept); a page that reads
+`treat_list_summary.json` should reuse it so it makes one request, and should not wait for it before drawing (the first
+read builds the treat list on the server). `ui/contact_list.js` is a new pure module (registered in `test_ui.py`
+`MODULES`); its download anchors carry `data-download="contact-list"` and `data-run-id`, which `repaintContactList`
+matches. Only a 409 or 404 means "this run cannot have a treat list".
+
+**What is needed.** Nothing, unless a branch draws its own download of a run's list: offer the one "Download contact
+list" from `contact_list.js` instead of a second button (Plan M §2 item 2), and put `scores.csv` under Technical details
+as "All scores (for analysts)".
+
+**What I did meanwhile.** Nothing was blocked.
+
+### 2026-10-11 — plan-m M171 (on main) → Plan J (owners of `ui/modules/decide/`, M98's treat list) and Phase 4b (owner of `ui/modules/production/gate.js`): the treat-list card draws no download; the gate is pinned (record of in-place edits)
+
+**What changed** (DEC-1601 (e), (g)). `ui/modules/decide/views.js` `treatListCardHtml(summary, { error })` no longer
+takes `treatListHref` and draws no download of its own: the treat list is the page's one "Download contact list".
+`ui/modules/decide/index.js` reads the treat-list summary through `loadContactList`, which keeps the server's
+`ApiError`, so the card still says a refusal in the server's words. `ui/modules/production/gate.js`'s comment is
+reworded (the contact list is `treatListUrl`, "All scores (for analysts)" is `scoresUrl`), and
+`tests/integration/production/test_production_ui.py` now pins the gate row `a[href$="/treat_list.csv"]` to the
+`treatListUrl` builder. No route, policy or audit changed; the downloaded file is byte-identical.
+
+**What is needed.** Nothing. Keep `treatListUrl` and the gate row together if either changes.
+
+**What I did meanwhile.** Nothing was blocked.
+
 ### 2026-09-23 — plan-e-pilot (on main) → all branches: every change Plan E made outside its own files and blocks
 
 **What is needed.** Nothing from anybody; this is the announcement §3 asks for. Measured with
