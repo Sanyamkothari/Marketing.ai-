@@ -43,6 +43,8 @@ test("the advanced tools are folded away: uplift, the data kit, raw tables, Mode
       "Waiting for approval",
       "Data Doctor",
       "Check a past campaign",
+      // Plan M M178: Reports' way in while the classic layout has no sidebar
+      "Reports",
       "Campaigns waiting for results",
       "Document assistant",
     ],
@@ -54,6 +56,7 @@ test("the advanced tools are folded away: uplift, the data kit, raw tables, Mode
     "#/approvals",
     "#/doctor",
     "#/audit",
+    "#/reports",
     "#/monitoring/runs",
     "#/uc/ai-onboarding-assistant",
   ]);

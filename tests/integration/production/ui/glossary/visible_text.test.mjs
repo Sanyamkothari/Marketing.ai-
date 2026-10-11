@@ -79,6 +79,11 @@ export const PAGES = [
   { id: "proof-pack-conversion", hash: `#/pilot/proof/${C_CONVERSION}`, expect: /Value Proof Pack/ },
   { id: "proof-pack-spend", hash: `#/pilot/proof/${C_SPEND}`, expect: /Value Proof Pack/ },
   { id: "reports", hash: "#/pilot", expect: /What the models found/ },
+  // Plan M, M178: the new Reports page, one entry per tab, each with an EMPTY allow-list (a new page shows no never-shown word).
+  { id: "reports-value-proof", hash: "#/reports", expect: /Value Proof Packs/, selector: "[data-proofs]" },
+  { id: "reports-programme", hash: "#/reports/programme", expect: /Value proven to date/, selector: "[data-proven]" },
+  { id: "reports-check", hash: "#/reports/check", expect: /Who was in which group/, selector: "[data-rp-check-form]" },
+  { id: "reports-models", hash: "#/reports/models", expect: /Model reports/, selector: "[data-models-part]" },
   { id: "value-report", hash: `#/pilot/value/${SCORE_RISK}`, expect: /Value of one extra customer/ },
   { id: "settings", hash: "#/settings", expect: /AI service/ },
   { id: "connections", hash: "#/connections", expect: /The places your data lives/ },

@@ -250,6 +250,8 @@ def samples(e: Entities) -> dict[str, list[str]]:
             *[f"#/pilot/proof/{c}" for c in e.campaigns],
         ],
         "audit": ["#/audit"],
+        # Plan M M178 (DEC-1608): Reports, one page per tab (the Model reports tab draws the #/pilot lists).
+        "reports": ["#/reports", "#/reports/programme", "#/reports/check", "#/reports/models"],
         "cost": ["#/cost"],
         "doctor": ["#/doctor"],
         "generative": ["#/generative/assistant/ai-onboarding-assistant", "#/generative/connection"],
