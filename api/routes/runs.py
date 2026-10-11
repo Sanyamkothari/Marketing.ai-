@@ -203,6 +203,7 @@ __all__ = [
     "build_m2_job",
     "build_score_job",
     "build_train_job",
+    "campaign_names_run",
     "cancel_run",
     "create_run",
     "job_spec_for",
@@ -925,8 +926,8 @@ MODEL_NOT_APPROVED: Final[str] = "MODEL_NOT_APPROVED"
 CONTACT_LIST_FILES: Final[frozenset[str]] = frozenset(
     {TREAT_LIST_CSV, TREAT_LIST_PARQUET, ARBITRATED_TREAT_LIST_CSV, ARBITRATED_TREAT_LIST_PARQUET}
 )
-"""The files a sending tool is given (the contact list, and the cross-goal arbitrated one). Held while the model they
-were made with waits for approval or was turned down. `scores.csv` and the other analyst files are NOT held: a model
+"""The files a sending tool is given (the contact list, and the cross-goal arbitrated one). Held, for a run a campaign
+record names, while the model they were made with waits for approval or was turned down. `scores.csv` and the other analyst files are NOT held: a model
 named explicitly may be scored at any status, to try a candidate before approving it (DEC-050)."""
 
 
@@ -972,10 +973,25 @@ def model_not_approved_message(version: ModelVersion) -> str:
     )
 
 
-def refuse_unapproved_list(request: Request, storage: Storage, registry: ModelRegistry, run_id: str) -> None:
-    """`409 MODEL_NOT_APPROVED` when `unapproved_list_model` holds the run's list; the audit records why."""
+def campaign_names_run(request: Request, run_id: str) -> bool:
+    """Whether a campaign record names `run_id` as the list it sent (`GET /campaigns?run_id=`'s own query)."""
+    from api.routes.campaigns import get_campaign_store  # api.routes.campaigns imports this module
+
+    return bool(get_campaign_store(request).list(run_id=run_id, limit=1))
+
+
+def refuse_unapproved_list(
+    request: Request, storage: Storage, registry: ModelRegistry, run_id: str, *, for_campaign: bool = False
+) -> None:
+    """`409 MODEL_NOT_APPROVED` when `unapproved_list_model` holds the run's list; the audit records why.
+
+    `for_campaign` is true where a campaign is already in hand (registering its plan). Otherwise the hold applies
+    only to a run a campaign record names: plan.md section 11's Phase 1 journey (train, score the second upload with
+    the model it just made, download the list, no approval in between) records no campaign and is unchanged; a
+    campaign's list waits for the approval wherever it is asked for.
+    """
     version = unapproved_list_model(storage, registry, run_id)
-    if version is None:
+    if version is None or not (for_campaign or campaign_names_run(request, run_id)):
         return
     from api.access import set_audit_context  # api.access imports this package (see require_row_level_role)
 

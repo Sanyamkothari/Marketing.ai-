@@ -4,9 +4,12 @@ M181 part C lets a campaign's list be built with a new model while it still wait
 approves it in the same click as the plan). The wizard and the campaign page hold such a list; the server now holds
 it for every client, Plan J's own page and the raw routes included:
 
-* `POST /campaigns/{id}/plan` and the contact list itself (`GET /runs/{id}/treat_list.csv`, the generic artefact
-  route's `treat_list.*`) answer `409 MODEL_NOT_APPROVED` while the run's model is `pending_approval`, or was turned
-  down (`archived` and never the champion), and its run's settings require approval;
+* `POST /campaigns/{id}/plan` and, for a run a campaign record names, the contact list itself
+  (`GET /runs/{id}/treat_list.csv`, the generic artefact route's `treat_list.*`) answer `409 MODEL_NOT_APPROVED`
+  while the run's model is `pending_approval`, or was turned down (`archived` and never the champion), and its run's
+  settings require approval;
+* a run no campaign names is served as before: plan.md section 11's Phase 1 journey trains, scores the second upload
+  with the model it just made and downloads the list with nothing approved in between;
 * nothing else changes: `scores.csv` and the other analyst files stay downloadable (DEC-050: a model named
   explicitly may be scored at any status, to try a candidate before approving it), and so does the list's summary;
   an approved model, the champion, a demoted former champion and a run whose settings do not require approval are
@@ -81,16 +84,19 @@ class World:
     def treat_list(self) -> Any:
         return self.client.get(f"/runs/{RUN}/treat_list.csv")
 
-    def plan(self) -> Any:
+    def campaign(self) -> str:
+        """Record the campaign this run's list went out as: from here on the run is a campaign's list."""
         created = self.client.post("/campaigns", json={"run_id": RUN})
         assert created.status_code == 201, created.text
-        campaign_id = created.json()["campaign"]["campaign_id"]
+        return str(created.json()["campaign"]["campaign_id"])
+
+    def plan(self, campaign_id: str | None = None) -> Any:
         body = {
             "metric": "came back within 90 days",
             "outcome_column": self.target,
             "analysis_date": "2027-03-01",
         }
-        return self.client.post(f"/campaigns/{campaign_id}/plan", json=body)
+        return self.client.post(f"/campaigns/{campaign_id or self.campaign()}/plan", json=body)
 
 
 def _refused(response: Any) -> None:
@@ -98,34 +104,41 @@ def _refused(response: Any) -> None:
     assert response.json()["detail"]["code"] == "MODEL_NOT_APPROVED", response.text
 
 
-def test_a_list_of_a_model_waiting_for_approval_is_held_and_its_scores_are_not(
+def test_a_campaigns_list_of_a_model_waiting_for_approval_is_held_and_its_scores_are_not(
     tmp_path: Path, config_root: Path
 ) -> None:
     world = World(tmp_path, config_root)
     world.register()
+    # No campaign names the run: plan.md section 11's Phase 1 journey (train, score, download, nothing approved in
+    # between) is unchanged.
+    assert world.treat_list().status_code == 200
+    assert world.get(TREAT_LIST_CSV).status_code == 200
+    # Once a campaign names it, the list waits for the approval on every route, and so does the campaign's plan.
+    campaign_id = world.campaign()
     _refused(world.treat_list())
     _refused(world.get(TREAT_LIST_CSV))
     _refused(world.get("treat_list.parquet"))
-    _refused(world.plan())
+    _refused(world.plan(campaign_id))
     assert "waiting for an Approver" in world.treat_list().json()["detail"]["message"]
     # DEC-050: trying a candidate before approving it stays possible; the list's counts stay readable.
     scores = world.client.get(f"/runs/{RUN}/scores.csv")
     assert scores.status_code == 200, scores.text
     assert world.get(TREAT_LIST_SUMMARY_FILENAME).status_code == 200
 
-    # Approved: the same list and the same plan go through.
+    # Approved: the same list and the same campaign's plan go through.
     world.registry.approve(MODEL, by="approver")
     assert world.treat_list().status_code == 200
     assert world.treat_list().content == world.storage.read_bytes(run_key(RUN, TREAT_LIST_CSV))
-    assert world.plan().status_code == 201
+    assert world.plan(campaign_id).status_code == 201
 
 
-def test_a_list_of_a_model_that_was_turned_down_is_held(tmp_path: Path, config_root: Path) -> None:
+def test_a_campaigns_list_of_a_model_that_was_turned_down_is_held(tmp_path: Path, config_root: Path) -> None:
     world = World(tmp_path, config_root)
     world.register()
     world.registry.archive(MODEL, expected_status=ModelStatus.PENDING_APPROVAL)
+    campaign_id = world.campaign()
     _refused(world.treat_list())
-    _refused(world.plan())
+    _refused(world.plan(campaign_id))
     assert "turned down" in world.treat_list().json()["detail"]["message"]
 
 
@@ -136,19 +149,22 @@ def test_a_former_champion_that_was_replaced_still_serves_its_list(tmp_path: Pat
     world.register(LATER, 2)
     world.registry.approve(LATER, by="approver")
     assert world.registry.get(MODEL).status is ModelStatus.ARCHIVED, "the list's model was demoted"
+    campaign_id = world.campaign()
     assert world.treat_list().status_code == 200
-    assert world.plan().status_code == 201
+    assert world.plan(campaign_id).status_code == 201
 
 
 def test_without_approval_required_a_waiting_model_changes_nothing(tmp_path: Path, config_root: Path) -> None:
     world = World(tmp_path, config_root, overrides={"governance.approval_required": False})
     world.register()
+    campaign_id = world.campaign()
     assert world.treat_list().status_code == 200
-    assert world.plan().status_code == 201
+    assert world.plan(campaign_id).status_code == 201
 
 
 def test_a_model_the_registry_does_not_know_changes_nothing(tmp_path: Path, config_root: Path) -> None:
     """Runs written before the registry held their model (and the other suites' fixtures) are served as before."""
     world = World(tmp_path, config_root)
+    campaign_id = world.campaign()
     assert world.treat_list().status_code == 200
-    assert world.plan().status_code == 201
+    assert world.plan(campaign_id).status_code == 201

@@ -1254,7 +1254,7 @@ def register_plan(
     # Plan M final integration (DEC-1611 (p)): a list made with a model that waits for approval, or was turned
     # down, is not fixed for sending: `409 MODEL_NOT_APPROVED` (Plan J's own page gets this refusal too).
     for run_id in campaign.run_ids:
-        refuse_unapproved_list(request, storage, registry, run_id)
+        refuse_unapproved_list(request, storage, registry, run_id, for_campaign=True)
     plan = freeze_plan(
         decided,
         _realised(storage, campaign_id),
