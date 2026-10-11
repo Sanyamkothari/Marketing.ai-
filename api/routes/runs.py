@@ -149,6 +149,8 @@ from engine.holdout.assign import HOLDOUT_ASSIGNMENT_FILENAME  # Plan J M92 (DEC
 from engine.holdout.spec import HOLDOUT_REPORT_FILENAME  # Plan J M92 (DEC-1302 (e))
 from engine.jobs import JobRunner, ReconcilingJobRunner
 from engine.keys import normalise_key, split_config_for_key
+from engine.model_approval import MODEL_NOT_APPROVED as _MODEL_NOT_APPROVED  # Plan M M184 (DEC-1614 (b))
+from engine.model_approval import model_not_approved
 from engine.onboarding.specs import DatasetManifest
 from engine.pilot.demo import is_demo_client
 from engine.pipeline import STATUS_FILENAME, Pipeline
@@ -921,7 +923,9 @@ def require_row_level_role(request: Request, name: str) -> None:
 # ---------------------------------------------------------------------------
 # Plan M final integration (DEC-1611 (p)): a contact list made with a model that is not approved is held
 # ---------------------------------------------------------------------------
-MODEL_NOT_APPROVED: Final[str] = "MODEL_NOT_APPROVED"
+MODEL_NOT_APPROVED: Final[str] = _MODEL_NOT_APPROVED
+"""The code, and the rule below, are `engine.model_approval`'s: one rule for the list routes and the unattended steps
+(the scheduled firing, the campaign planner and its EXECUTE; Plan M M184, DEC-1614 (b))."""
 
 CONTACT_LIST_FILES: Final[frozenset[str]] = frozenset(
     {TREAT_LIST_CSV, TREAT_LIST_PARQUET, ARBITRATED_TREAT_LIST_CSV, ARBITRATED_TREAT_LIST_PARQUET}
@@ -953,11 +957,8 @@ def unapproved_list_model(storage: Storage, registry: ModelRegistry, run_id: str
         version = registry.get(record.model_version_id)
     except RegistryError:
         return None
-    if version.status is ModelStatus.PENDING_APPROVAL:
-        return version
-    if version.status is ModelStatus.ARCHIVED and version.promoted_at is None:
-        return version
-    return None
+    # Plan M M184 (DEC-1614 (b)): the one rule (`engine.model_approval`); a candidate a person named is served.
+    return version if model_not_approved(version, unattended=False) else None
 
 
 def model_not_approved_message(version: ModelVersion) -> str:

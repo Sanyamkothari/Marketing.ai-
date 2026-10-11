@@ -28,8 +28,10 @@ writes `1` and `0` (empty for null).
 
 **An approved campaign's limits (Plan M M184, DEC-1614 (a)).** When the campaign planner carried out an approved
 plan for the run, `campaign_scope.json` names its one channel and its number of contacts, and every build keeps to
-them (`engine.decide.campaign_scope`): other channels and anyone beyond the number, from the highest score down,
-are not contacted; held-back rows keep their flags. A run without the file is built exactly as before.
+them (`engine.decide.campaign_scope`): other channels and anyone beyond the number are not contacted, the number
+taken from the highest value of the run's own ranking column down (`net_value`, else `uplift`, on an uplift run;
+`actions.score_field` on a propensity run; never key order: no ranking column means `CAMPAIGN_LIST_NOT_AS_APPROVED`);
+held-back rows keep their flags. A run without the file is built exactly as before.
 """
 
 from __future__ import annotations
@@ -53,6 +55,7 @@ from engine.decide.campaign_scope import (
     OTHER_CHANNEL,
     OVER_LIMIT,
     CampaignScope,
+    CampaignScopeError,
     apply_campaign_scope,
     read_campaign_scope,
     scope_note,
@@ -158,6 +161,9 @@ _NOT_SCORED: Final[str] = "RUN_NOT_SCORED"
 SEGMENT_COLUMN: Final[str] = "segment"
 """The uplift treat list's group column (the propensity one has `band`). Public since M101."""
 _SEGMENT_COLUMN: Final[str] = SEGMENT_COLUMN
+_UPLIFT_COLUMN: Final[str] = "uplift"
+"""An uplift run's predicted uplift column (`engine.uplift.flow.UPLIFT_COLUMN`); ranks an approved number of contacts
+when the list holds no net value (Plan M M184)."""
 _REQUIRED_SCORE_COLUMNS: Final[tuple[str, ...]] = (
     BAND_COLUMN,
     ACTION_COLUMN,
@@ -410,6 +416,15 @@ class TreatListSummary(Artefact):
         description="Plan M M184: the approved proposal that set the limits. Absent otherwise.",
         exclude_if=lambda value: value is None,
     )
+    campaign_scope_ranked_by: str | None = Field(
+        default=None,
+        description=(
+            "Plan M M184: the column the approved number of contacts was taken by, from its highest value down: "
+            "net_value or uplift on an uplift run, the run's score column on a propensity run. Absent when the "
+            "plan set no number, or the list held no more than it and the run has no ranking column."
+        ),
+        exclude_if=lambda value: value is None,
+    )
     campaign_scope_withheld: dict[str, int] | None = Field(
         default=None,
         description=(
@@ -446,6 +461,51 @@ def _read_scope(storage: Storage, run_id: str) -> CampaignScope | None:
         return read_campaign_scope(storage, run_id)
     except ValueError as exc:
         raise TreatListError("CAMPAIGN_LIST_NOT_AS_APPROVED", str(exc)) from exc
+
+
+def _scope_ranking(
+    storage: Storage,
+    run_id: str,
+    config: UseCaseConfig,
+    scores: pd.DataFrame,
+    is_uplift: bool,
+    net_value: pd.Series[Any],
+) -> tuple[str | None, pd.Series[Any] | None, str | None]:
+    """Plan M M184 (DEC-1614 (a)): the column an approved number of contacts is taken by, from the run itself.
+
+    Returns (column, its values aligned to the rows, None), or (None, None, why there is none). On an uplift run:
+    the list's `net_value` when it holds values, else the predicted `uplift`; but a list the uplift run ranked by a
+    propensity model (`ranking_choice.json`) has none, because that model's score is not kept in the run's scores.
+    On a propensity run: the run's own `actions.score_field`. A column null on every row is no column.
+    """
+    from engine.uplift.contracts import RANKING_CHOICE_FILENAME, RankingChoice
+
+    def usable(values: pd.Series[Any]) -> bool:
+        return bool(pd.to_numeric(values, errors="coerce").notna().any())
+
+    if is_uplift:
+        key = run_key(run_id, RANKING_CHOICE_FILENAME)
+        if storage.exists(key):
+            try:
+                choice = storage.read_model(key, RankingChoice)
+            except (StorageError, ValueError):
+                return None, None, f"the run's {RANKING_CHOICE_FILENAME} cannot be read"
+            if choice.ranking == "propensity_model":
+                return (
+                    None,
+                    None,
+                    f"the run's list was ranked by the propensity model {choice.propensity_model_id}, whose scores "
+                    "the run does not keep",
+                )
+        if usable(net_value):
+            return NET_VALUE_COLUMN, net_value.reset_index(drop=True), None
+        if _UPLIFT_COLUMN in scores.columns and usable(scores[_UPLIFT_COLUMN]):
+            return _UPLIFT_COLUMN, scores[_UPLIFT_COLUMN].reset_index(drop=True), None
+        return None, None, "the run's scores hold neither net value nor predicted uplift"
+    field = config.actions.score_field
+    if field in scores.columns and usable(scores[field]):
+        return field, scores[field].reset_index(drop=True), None
+    return None, None, f"the run's scores hold no {field!r} values"
 
 
 def _scope_missed(storage: Storage, run_id: str, summary: TreatListSummary) -> bool:
@@ -735,21 +795,22 @@ def build_treat_list(storage: Storage, run_id: str, *, config_root: Path | None 
     # A run without the file - every run not carried out by the planner - is unchanged.
     scope = _read_scope(storage, run_id)
     scope_withheld: dict[str, int] | None = None
+    ranked_by: str | None = None
     if scope is not None:
-        cut = apply_campaign_scope(
-            scope,
-            treat=treat,
-            channel=channel,
-            priority=(
-                scores[config.actions.score_field]
-                if config.actions.score_field in scores.columns
-                else pd.Series(np.full(n_rows, np.nan))
-            ),
-            keys=row_keys,
+        ranked_by, priority, no_ranking = _scope_ranking(
+            storage, run_id, config, scores, is_uplift, net_value
         )
+        try:
+            cut = apply_campaign_scope(
+                scope, treat=treat, channel=channel, priority=priority, keys=row_keys, no_ranking=no_ranking
+            )
+        except CampaignScopeError as exc:
+            raise TreatListError("CAMPAIGN_LIST_NOT_AS_APPROVED", str(exc)) from exc
+        if scope.max_contacts is None:
+            ranked_by = None
         dropped = cut.other_channel | cut.over_limit
         treat, channel = cut.treat, pd.Series(cut.channel, dtype="object")
-        notes = scope_note(scope)
+        notes = scope_note(scope, ranked_by)
         offer = offer.mask(pd.Series(dropped), None)
         offer_reason = offer_reason.mask(pd.Series(cut.other_channel), notes[OTHER_CHANNEL])
         offer_reason = offer_reason.mask(pd.Series(cut.over_limit), notes[OVER_LIMIT])
@@ -850,6 +911,7 @@ def build_treat_list(storage: Storage, run_id: str, *, config_root: Path | None 
         campaign_scope_channel=None if scope is None else scope.channel,
         campaign_scope_max_contacts=None if scope is None else scope.max_contacts,
         campaign_scope_proposal_id=None if scope is None else scope.proposal_id,
+        campaign_scope_ranked_by=ranked_by,
         campaign_scope_withheld=scope_withheld,
     )
     storage.write_model(run_key(run_id, TREAT_LIST_SUMMARY_FILENAME), summary)

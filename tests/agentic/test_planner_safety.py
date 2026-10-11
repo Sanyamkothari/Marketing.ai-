@@ -108,6 +108,89 @@ def test_an_approved_plan_sends_only_on_its_channel_at_most_its_contacts_and_kee
     assert storage.exists(run_key(pw.run_id, CAMPAIGN_SCOPE_FILENAME))
 
 
+def _ranking_choice(pw: PlannerWorld, ranking: str, contacts: int) -> None:
+    """The run's `ranking_choice.json`, as the uplift scoring flow writes it (Plan J M96)."""
+    from engine.uplift.contracts import RANKING_CHOICE_FILENAME, RankingChoice
+
+    record = pw.world.storage.read_model(run_key(pw.run_id, RUN_FILENAME), RunRecord)
+    assert record.model_version_id is not None
+    pw.world.storage.write_model(
+        run_key(pw.run_id, RANKING_CHOICE_FILENAME),
+        RankingChoice(
+            run_id=pw.run_id,
+            model_version_id=record.model_version_id,
+            ranking=ranking,  # type: ignore[arg-type]
+            code=None if ranking == "uplift" else "UPLIFT_NOT_BETTER_THAN_RISK",
+            beats_risk=ranking == "uplift",
+            propensity_model_id=None if ranking == "uplift" else "m_win-back-campaign_9",
+            contacts=contacts,
+            reason="As the scoring flow wrote it.",
+            computed_at=record.finished_at or record.created_at,
+        ),
+    )
+
+
+def _sms_contacts(pw: PlannerWorld) -> int:
+    from engine.decide.treat_list import build_treat_list
+
+    build_treat_list(pw.world.storage, pw.run_id, config_root=pw.world.config_root)
+    whole = _treat_list(pw)
+    return int((whole["treat"] & (whole["channel"] == "sms")).sum())
+
+
+def test_an_approved_number_below_the_list_keeps_the_highest_ranked_customers_on_an_uplift_run(
+    fresh_planner_world: PlannerWorld,
+) -> None:
+    """Review of M184: the cut follows the uplift run's own ranking (net value, else uplift), not key text."""
+    pw = fresh_planner_world
+    storage = pw.world.storage
+    on_sms = _sms_contacts(pw)
+    planned = on_sms // 2
+    assert planned > 0
+    _ranking_choice(pw, "uplift", planned)
+    with pw.world.client() as client:
+        proposal = _draft(client)
+        payload = CampaignPlanPayload.model_validate(proposal["payload"])
+        assert payload.planned_contacts == planned < on_sms
+        approved = client.post(f"/agentic/proposals/{proposal['proposal_id']}/approve", json={})
+        assert approved.status_code == 200, approved.text
+
+    summary = storage.read_model(run_key(pw.run_id, TREAT_LIST_SUMMARY_FILENAME), TreatListSummary)
+    column = summary.campaign_scope_ranked_by
+    assert column in {"net_value", "uplift"}, column
+    assert summary.treat_rows == planned
+    assert summary.campaign_scope_withheld is not None
+    assert summary.campaign_scope_withheld["over_limit"] == on_sms - planned
+    scores = pd.read_parquet(io.BytesIO(storage.read_bytes(run_key(pw.run_id, "scores.parquet"))))
+    limited = _treat_list(pw).merge(
+        scores[["customer_id", "uplift"]], on="customer_id", how="left", validate="one_to_one"
+    )
+    rank = limited["net_value"] if column == "net_value" else limited["uplift"]
+    over = limited["offer_reason"].fillna("").str.contains("at most", regex=False)
+    assert int(over.sum()) == on_sms - planned
+    assert rank[limited["treat"]].min() >= rank[over].max(), "kept by the run's ranking, not by key text"
+    label = "net value" if column == "net_value" else "predicted uplift"
+    assert limited.loc[over, "offer_reason"].str.contains(f"highest {label} down", regex=False).all()
+
+
+def test_an_uplift_run_ranked_by_a_propensity_model_is_refused_when_the_number_needs_a_cut(
+    fresh_planner_world: PlannerWorld,
+) -> None:
+    """Its propensity scores are not kept, so the planned number cannot be taken by them: nothing is opened."""
+    pw = fresh_planner_world
+    on_sms = _sms_contacts(pw)
+    _ranking_choice(pw, "propensity_model", on_sms // 2)
+    with pw.world.client() as client:
+        proposal = _draft(client)
+        refused = client.post(f"/agentic/proposals/{proposal['proposal_id']}/approve", json={})
+        assert refused.status_code == 409, refused.text
+        assert refused.json()["detail"]["code"] == "CAMPAIGN_LIST_NOT_AS_APPROVED"
+        assert "not cut by customer key" in refused.json()["detail"]["message"]
+        assert client.get(f"/agentic/proposals/{proposal['proposal_id']}").json()["status"] == "pending"
+        assert client.get("/campaigns", params={"run_id": pw.run_id}).json()["campaigns"] == []
+    assert not pw.world.storage.exists(run_key(pw.run_id, CAMPAIGN_SCOPE_FILENAME)), "no limits left behind"
+
+
 def _proposal(pw: PlannerWorld) -> Any:
     state = start_plan(
         PlanRequest.model_validate(FORM), pw.world.context(), PlannerDeps(registry=default_registry())
@@ -207,12 +290,12 @@ def test_an_approval_of_a_run_whose_model_is_not_approved_carries_nothing_out(
         )
         refused = client.post(f"/agentic/proposals/{proposal['proposal_id']}/approve", json={})
         assert refused.status_code == 409, refused.text
-        assert refused.json()["detail"]["code"] == "MODEL_VERSION_NOT_APPROVED"
+        assert refused.json()["detail"]["code"] == "MODEL_NOT_APPROVED"
         assert client.get(f"/agentic/proposals/{proposal['proposal_id']}").json()["status"] == "pending"
         assert client.get("/campaigns", params={"run_id": pw.run_id}).json()["campaigns"] == []
     assert not pw.world.storage.exists(run_key(pw.run_id, CAMPAIGN_SCOPE_FILENAME)), "nothing was built"
     failed = [e for e in _entries(pw, proposal["proposal_id"]) if e.kind == "proposal.execution_failed"]
-    assert [e.body["codes"] for e in failed] == [["MODEL_VERSION_NOT_APPROVED"]]
+    assert [e.body["codes"] for e in failed] == [["MODEL_NOT_APPROVED"]]
 
 
 # ---------------------------------------------------------------------------

@@ -984,6 +984,17 @@ in `api/routes/generative.py`; `win_back.rerender_template_messages`.
 `approved_by` and ignores the name in the body; with sign-in off it records the typed name, as before.
 This is the rule model approval already follows (DEC-862).
 
+**Whoever asked for the copy may not approve it (Plan M M184, DEC-1614 (d)).** With sign-in on, the batch
+records who asked for it (`copy_batch.json` `requested_by`, the signed-in user who generated it), and a
+template regenerated since records who asked for its new words (`regenerated_by`). That person - the regenerator
+when there is one, else the requester - is refused the approval with `403 SEPARATION_OF_DUTIES`, as a model's
+trainer is refused its approval; another Approver approves it. A batch written before these fields existed, or
+with sign-in off, records nobody and refuses nobody, so a single-person deployment with sign-in off works as
+before (and a deployment where one person both generates and approves must now sign in a second Approver).
+With `agentic.enabled` on, each approval is also a signed `copy_template.approved` entry on the decision ledger
+(the template id and the sha256 of its words), written before the approval is stored; with sign-in off the
+entry, and the approval's audit event, carry `identity_verified: false`. See `docs/AGENTIC.md` §9b.
+
 **`GET /runs/{run_id}/copy_messages.csv?approved_only=true`** keeps only the rows of templates that
 `copy_batch.json` says are approved *now*. The `status` column of each kept row reads `approved`, and
 rows a rule refused (`block_reason` set, so there is nothing to send) are left out. The header is

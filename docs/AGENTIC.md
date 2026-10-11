@@ -160,13 +160,17 @@ index lookups; verification refuses an entry whose column disagrees with its bod
   the chain at that entry, and a re-hashed forgery breaks the next link or its signature.
 * Kinds: `proposal.drafted`, `proposal.refused`, `proposal.approved`, `proposal.rejected`, `proposal.expired`,
   `approval.refused`, `proposal.execution_failed`, `campaign_plan.executed` (M139), `test_plan.frozen` (with the campaign's holdout scope, epoch
-  and salt id: the holdout commitment), `evidence.label`. Approvals, frozen test plans and evidence labels are
-  signed over `entry_hash`.
+  and salt id: the holdout commitment), `evidence.label`, and `copy_template.approved` (Plan M M184: a copy
+  template's approval, with its `template_id` and the `template_sha256` of its words; written only while
+  `agentic.enabled` is on, §9b). Approvals (of proposals and of copy templates), frozen test plans and evidence
+  labels are signed over `entry_hash`.
 * `Signer` protocol: `FileKeySigner` (Ed25519, `cryptography`, already pinned; `<data dir>/agentic/
   ledger_signing_key.pem`, created once with 0600 permissions), `FakeSigner` for tests; AWS KMS on client
   deployments later (design §3.2, open question 2).
 * A body holds only the keys in `BODY_KEYS` (ids, digests, codes, labels, the policy version) with scalar
-  values: an approver's reason is kept as its digest. Erasure never touches the ledger.
+  values: an approver's reason is kept as its digest. `identity_verified` (Plan M M184) is `false` on an approval
+  or rejection made with sign-in off (the local operator) and absent on a signed-in one. Erasure never touches
+  the ledger.
 * `python -m engine.agentic.ledger verify [--data-dir DIR] [--key PATH] [--from-checkpoint ENTRY_HASH]` walks
   the chain in batches (linear in the entries) and checks every signature; on the first bad entry it prints
   `LEDGER_CHAIN_BROKEN` or `LEDGER_SIGNATURE_INVALID` with its `seq` and exits 1. `--from-checkpoint` walks only
@@ -548,20 +552,6 @@ claim failure; the eval report counts it apart (`narrative_errors`) and totals t
 **On the page.** "Draft a plan" is drawn only when `/auth/me` (read once at boot) lists `POST /agentic/plans`,
 which it does only while `agentic.enabled` is on: with the switch off the module sends no request.
 
-## 9b. Safety fixes from the autonomy audit (Plan M M184, DEC-1614)
-
-The audit of what would have to hold before anything ran unattended found five places where what was checked and
-what happened could differ. Each is closed below; every default is what it was, except where a hole is closed, and
-those are said plainly.
-
-| # | What could happen | What happens now | Default |
-|---|---|---|---|
-| 1 | EXECUTE built the run's **whole** treat list - every channel, every contactable customer - while the policy had checked one channel and `planned_contacts`. | EXECUTE writes the approved limits as `campaign_scope.json` beside the run and builds the list under them (`engine/decide/campaign_scope.py`): a customer the list would contact on another channel (or none) is not contacted, and beyond `planned_contacts` the highest scores (`actions.score_field` of the run's own settings, a missing score last, ties by key text) are kept. The held-back and control rows keep their flags and the campaign's comparison is built from the scores as before (intent to treat). EXECUTE then checks what the list holds and refuses with `CAMPAIGN_LIST_NOT_AS_APPROVED` (nothing opened, the proposal still pending) if anyone else is contacted. Every later build of that run's list (a download, a rebuild through the gate) keeps the limits. | Closed for every approved plan. A run the planner never carried out has no `campaign_scope.json` and its list is byte for byte what it was. |
-| 2 | A scheduled scoring firing could name any model version - a candidate, one waiting for approval - and the planner planned any run's list. | With `governance.approval_required` on, a scheduled firing that names a version never approved (`engine/model_approval.py`: approved = the champion, or a version once approved or made champion) fails with `MODEL_VERSION_NOT_APPROVED`; the planner skips runs scored with such a model (`PLANNER_NO_CANDIDATE` says so) and EXECUTE refuses one (`MODEL_VERSION_NOT_APPROVED`). `POST /runs`, where a person names the version, is unchanged (DEC-050). | Closed when approval is required (the shipped default); unchanged when it is not. |
-| 3 | The compliance gate failed open: no catalogue, an action without `message_text` or `dlt_template_text`, no URL whitelist - "not checked", but allowed. | `compliance.gate.strict` (`configs/compliance/compliance.yaml`) withholds those contacts with `COMPLIANCE_MESSAGE_NOT_CHECKED`; a check the configuration deliberately does not apply (a channel the region needs no DLT template on, a channel the whitelist does not cover) still allows. §9a. | `strict: false`: as before, byte for byte (the rules gain `strict: true` only when on). |
-| 4 | A copy template could be approved by the person who asked for it, and the approval was not on the ledger. | With sign-in on, whoever asked for the copy (`copy_batch.json` `requested_by`) or for one template's words again (`regenerated_by`) is refused with `403 SEPARATION_OF_DUTIES`, as a model's trainer is (DEC-862). With `agentic.enabled` on, each approval is a signed `copy_template.approved` entry (the template id and the sha256 of its words) on the decision ledger, written before the approval is stored. | The separation check is on wherever sign-in is; the ledger entry only with `agentic.enabled`. Sign-in off: nobody is refused, as before. |
-| 5 | With sign-in off every request is the local operator, holding every role, so separation of duties cannot hold. | Approvals with sign-in off are recorded with `identity_verified: false` (on the ledger's `proposal.approved` / `proposal.rejected` and `copy_template.approved` entries, and in the audit event of a model decision); a signed-in decision's record is unchanged. `agentic.require_sign_in` (§11) makes EXECUTE refuse an approval by anyone but a signed-in person (`AUTH_NOT_CONFIGURED`, 503) - `engine.agentic.config.require_verified_identity`, which any later unattended step must call too. | `require_sign_in: false`, because a laptop with sign-in off approves campaign plans today (and the planner's own tests do); turn it on for any deployment that acts without a person. |
-
 ## 9a. The pre-send compliance gate (`engine/compliance/`; M134, DEC-1405)
 
 Before a treat list leaves the product, every planned contact gets one decision record: may this message go to
@@ -698,6 +688,20 @@ arms' work is integer codes over the customers, and each variant's words are che
 **Not modelled.** One approved message per catalogue action outside message arms (a variant's own words are
 checked since M145); the template's DLT header (sender id) is not checked; WhatsApp's own template approval is the provider's; a message's variables
 are checked as the product holds them, not as a client's tool fills them per customer at send time.
+
+## 9b. Safety fixes from the autonomy audit (Plan M M184, DEC-1614)
+
+The audit of what would have to hold before anything ran unattended found five places where what was checked and
+what happened could differ. Each is closed below; every default is what it was, except where a hole is closed, and
+those are said plainly.
+
+| # | What could happen | What happens now | Default |
+|---|---|---|---|
+| 1 | EXECUTE built the run's **whole** treat list - every channel, every contactable customer - while the policy had checked one channel and `planned_contacts`. | EXECUTE writes the approved limits as `campaign_scope.json` beside the run and builds the list under them (`engine/decide/campaign_scope.py`): a customer the list would contact on another channel (or none) is not contacted, and beyond `planned_contacts` the customers are kept from the highest value of the run's **own ranking column** down - on an uplift run the list's `net_value` when it holds values, else the predicted `uplift`; on a propensity run its score (`actions.score_field` of the run's own settings); a row missing it last, ties by key text. The column used is in the summary (`campaign_scope_ranked_by`) and in each such row's `offer_reason`. The list is never cut by key order alone: when a cut is needed and the run has no ranking column - an uplift run whose list was ranked by a propensity model (`ranking_choice.json` says `propensity_model`) does not keep that model's score - the build refuses with `CAMPAIGN_LIST_NOT_AS_APPROVED`, and so does EXECUTE (nothing opened, the limits removed, the proposal still pending). The held-back and control rows keep their flags and the campaign's comparison is built from the scores as before (intent to treat). EXECUTE then checks what the list holds and refuses with `CAMPAIGN_LIST_NOT_AS_APPROVED` if anyone else is contacted. Every later build of that run's list (a download, a rebuild through the gate) keeps the limits. | Closed for every approved plan. A run the planner never carried out has no `campaign_scope.json` and its list is byte for byte what it was. |
+| 2 | A scheduled scoring firing could name any model version - a candidate, one waiting for approval - and the planner planned any run's list. | One rule and one code, shared with the contact-list routes (`engine/model_approval.py`; the routes' `409 MODEL_NOT_APPROVED`, Plan M final integration): a version still waiting for approval, or turned down (archived without ever being champion), is not approved anywhere; a plain **candidate** nobody approved or promoted is not approved **for a step nobody chooses the model of** only - a person who names it on `POST /runs` may still score with it and download its list (DEC-050). With `governance.approval_required` on, a scheduled firing that names such a version fails with `MODEL_NOT_APPROVED`; the planner skips runs scored with one (`PLANNER_NO_CANDIDATE` says so) and EXECUTE refuses one (`409 MODEL_NOT_APPROVED`; approval counts as required when the use case's settings or the run's own require it). The champion and a demoted former champion are always approved. | Closed when approval is required (the shipped default); unchanged when it is not. |
+| 3 | The compliance gate failed open: no catalogue, an action without `message_text` or `dlt_template_text`, no URL whitelist - "not checked", but allowed. | `compliance.gate.strict` (`configs/compliance/compliance.yaml`) withholds those contacts with `COMPLIANCE_MESSAGE_NOT_CHECKED`; a check the configuration deliberately does not apply (a channel the region needs no DLT template on, a channel the whitelist does not cover) still allows. §9a. | `strict: false`: as before, byte for byte (the rules gain `strict: true` only when on). |
+| 4 | A copy template could be approved by the person who asked for it, and the approval was not on the ledger. | With sign-in on, whoever asked for the copy (`copy_batch.json` `requested_by`) or for one template's words again (`regenerated_by`) is refused with `403 SEPARATION_OF_DUTIES`, as a model's trainer is (DEC-862). With `agentic.enabled` on, each approval is a signed `copy_template.approved` entry (the template id and the sha256 of its words) on the decision ledger, written before the approval is stored. | The separation check is on wherever sign-in is; the ledger entry only with `agentic.enabled`. Sign-in off: nobody is refused, as before. |
+| 5 | With sign-in off every request is the local operator, holding every role, so separation of duties cannot hold. | Approvals with sign-in off are recorded with `identity_verified: false` (on the ledger's `proposal.approved` / `proposal.rejected` and `copy_template.approved` entries, and in the audit event of every model decision: approve, promote and reject); a signed-in decision's record is unchanged. `agentic.require_sign_in` (§11) makes EXECUTE refuse an approval by anyone but a signed-in person (`AUTH_NOT_CONFIGURED`, 503) - `engine.agentic.config.require_verified_identity`, which any later unattended step must call too. | `require_sign_in: false`, because a laptop with sign-in off approves campaign plans today (and the planner's own tests do); turn it on for any deployment that acts without a person. |
 
 ## 10. Milestones
 

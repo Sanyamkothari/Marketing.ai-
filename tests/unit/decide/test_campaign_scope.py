@@ -2,8 +2,10 @@
 
 The policy checks a campaign plan's payload - one channel, a number of contacts - so the list that is executed
 must keep to them. `campaign_scope.json` (written by the planner's EXECUTE) limits every build of the run's treat
-list: other channels and anyone beyond the number, from the highest score down, are not contacted; the held-back
-rows keep their flags. A run without the file builds exactly what it built before.
+list: other channels and anyone beyond the number are not contacted, the number taken from the highest value of
+the run's own ranking column down (net value, else predicted uplift, on an uplift run; the run's score on a
+propensity run) and never by key order alone; the held-back rows keep their flags. A run without the file builds
+exactly what it built before.
 """
 
 from __future__ import annotations
@@ -21,6 +23,7 @@ from engine.decide.campaign_scope import (
     OTHER_CHANNEL,
     OVER_LIMIT,
     CampaignScope,
+    CampaignScopeError,
     apply_campaign_scope,
     priority_order,
     write_campaign_scope,
@@ -33,6 +36,7 @@ from engine.decide.treat_list import (
     ensure_treat_list,
 )
 from engine.storage import LocalStorage, run_key
+from engine.uplift.contracts import RANKING_CHOICE_FILENAME, RankingChoice
 from tests.fixtures.decide.treat_runs import write_run
 
 RUN = "r_20261011_0c184001"
@@ -85,6 +89,28 @@ def test_a_limit_of_zero_contacts_nobody() -> None:
         _scope("sms", 0), treat=[True, True], channel=["sms", "sms"], priority=[0.4, 0.6], keys=["a", "b"]
     )
     assert not cut.treat.any() and cut.withheld() == {OTHER_CHANNEL: 0, OVER_LIMIT: 2}
+
+
+@pytest.mark.parametrize("priority", [None, [np.nan, np.nan, np.nan]], ids=["no-column", "all-null"])
+def test_a_cut_with_nothing_to_rank_by_is_refused_not_made_by_key(priority: list[float] | None) -> None:
+    with pytest.raises(CampaignScopeError, match="not cut by customer key"):
+        apply_campaign_scope(
+            _scope("sms", 1),
+            treat=[True, True, True],
+            channel=["sms", "sms", "sms"],
+            priority=priority,
+            keys=["a", "b", "c"],
+            no_ranking="the run keeps no score",
+        )
+    # No cut needed: nothing to rank, nothing refused.
+    cut = apply_campaign_scope(
+        _scope("sms", 3),
+        treat=[True, True, True],
+        channel=["sms", "sms", "sms"],
+        priority=priority,
+        keys="abc",
+    )
+    assert cut.treat.all()
 
 
 # ---------------------------------------------------------------------------
@@ -157,6 +183,81 @@ def test_the_limits_keep_one_channel_and_the_highest_scores_and_leave_the_holdou
     assert len(cut) == int(whole.channel_rows["email"]) + 3
     assert cut["channel"].isna().all() and cut["offer"].isna().all()
     assert cut["offer_reason"].str.startswith("Not contacted: the approved campaign").all()
+    assert summary.campaign_scope_ranked_by == "winback_prob"
+    over = cut.loc[cut["customer_id"].isin(ranked[limit:])]
+    assert over["offer_reason"].str.contains("highest score (winback_prob) down", regex=False).all()
+
+
+# ---------------------------------------------------------------------------
+# An uplift run: ranked by its own net value or uplift, never by key text (review of M184)
+# ---------------------------------------------------------------------------
+def _cut_by(storage: LocalStorage, run_id: str, column: str, over: int = 5) -> tuple[pd.DataFrame, int]:
+    """The list built under an SMS limit `over` below its SMS contacts; (the list, the limit)."""
+    build_treat_list(storage, run_id)
+    before = _parquet(storage, run_id)
+    on_sms = int((before["treat"] & (before["channel"] == "sms")).sum())
+    limit = on_sms - over
+    assert limit > 0, on_sms
+    write_campaign_scope(storage, _scope("sms", limit, run_id))
+    summary = build_treat_list(storage, run_id)
+    after = _parquet(storage, run_id)
+    assert summary.treat_rows == limit and summary.campaign_scope_ranked_by == column
+    assert summary.campaign_scope_withheld is not None and summary.campaign_scope_withheld[OVER_LIMIT] == over
+    return after, limit
+
+
+@pytest.mark.parametrize(
+    ("value", "column"), [(True, "net_value"), (False, "uplift")], ids=["value", "no-value"]
+)
+def test_an_uplift_list_keeps_its_highest_value_customers(tmp_path: Path, value: bool, column: str) -> None:
+    storage = LocalStorage(tmp_path)
+    run = write_run(storage, RUN, kind="uplift", rows=400, holdout=True, channels=True, value=value)
+    after, limit = _cut_by(storage, run.run_id, column)
+    scores = pd.read_parquet(io.BytesIO(storage.read_bytes(run_key(run.run_id, "scores.parquet"))))
+    assert "winback_prob" not in scores.columns, "the run's actions.score_field is not in uplift scores"
+    rank = (
+        after if column == "net_value" else after.merge(scores[["customer_id", "uplift"]], on="customer_id")
+    )
+    over = rank["offer_reason"].fillna("").str.contains("at most")
+    kept = rank.loc[rank["treat"], column]
+    assert len(kept) == limit and int(over.sum()) == 5
+    assert (
+        kept.min() >= rank.loc[over, column].max()
+    ), "the kept customers are the highest-ranked, not key order"
+    label = "net value" if column == "net_value" else "predicted uplift"
+    assert rank.loc[over, "offer_reason"].str.contains(f"highest {label} down", regex=False).all()
+
+
+def _ranked_by_propensity(storage: LocalStorage, run_id: str) -> None:
+    choice = RankingChoice(
+        run_id=run_id,
+        model_version_id="m_x_2",
+        ranking="propensity_model",
+        code="UPLIFT_NOT_BETTER_THAN_RISK",
+        beats_risk=False,
+        propensity_model_id="m_x_1",
+        contacts=10,
+        reason="Ranked by the approved propensity model.",
+        computed_at=AT,
+    )
+    storage.write_model(run_key(run_id, RANKING_CHOICE_FILENAME), choice)
+
+
+def test_an_uplift_list_ranked_by_a_propensity_model_is_refused_when_it_must_be_cut(tmp_path: Path) -> None:
+    storage = LocalStorage(tmp_path)
+    run = write_run(storage, RUN, kind="uplift", rows=400, holdout=True, channels=True, value=True)
+    _ranked_by_propensity(storage, run.run_id)
+    build_treat_list(storage, run.run_id)
+    on_sms = int((lambda f: (f["treat"] & (f["channel"] == "sms")).sum())(_parquet(storage, run.run_id)))
+    write_campaign_scope(storage, _scope("sms", on_sms - 1, run.run_id))
+    with pytest.raises(TreatListError) as refused:
+        build_treat_list(storage, run.run_id)
+    assert refused.value.code == "CAMPAIGN_LIST_NOT_AS_APPROVED"
+    assert "m_x_1" in refused.value.message and "not cut by customer key" in refused.value.message
+    # Within the number, nothing needs ranking: the channel limit alone applies.
+    write_campaign_scope(storage, _scope("sms", on_sms, run.run_id))
+    summary = build_treat_list(storage, run.run_id)
+    assert summary.treat_rows == on_sms and summary.campaign_scope_ranked_by is None
 
 
 def test_a_list_stored_before_the_limits_is_built_again_under_them(

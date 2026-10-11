@@ -17,8 +17,8 @@ There is no route that approves on an agent's behalf: an agent drafts through th
 (`engine.agentic.registry`) or the planner, and only a signed-in person approves here. An approved campaign
 plan the planner drafted is carried out through the product's own functions (M139): the treat list
 (`build_treat_list`, limited to the approved channel and number of contacts - Plan M M184, DEC-1614 (a);
-`409 CAMPAIGN_LIST_NOT_AS_APPROVED` otherwise, and `409 MODEL_VERSION_NOT_APPROVED` for a run whose model was never
-approved while approval is required), the campaign (`open_campaign`, the engine half of `POST /campaigns`, its treatment starting
+`409 CAMPAIGN_LIST_NOT_AS_APPROVED` otherwise, and `409 MODEL_NOT_APPROVED` for a run whose model is not approved
+while its settings require approval), the campaign (`open_campaign`, the engine half of `POST /campaigns`, its treatment starting
 at the approval) and its test plan (`api.routes.campaigns.register_plan`). The planner's language-model calls are
 metered under the use case's own `generative.llm` and `generative.budget` (`get_planner_deps`). Refusals answer with the policy's code:
 `403 POLICY_ROLE_SEPARATION` for the person it was proposed for, `409 POLICY_*` when a rule refuses it now,
@@ -468,7 +468,7 @@ def _execute_campaign_plan(proposal: Proposal, request: Request, storage: Storag
     from api.routes.runs import requested_by
     from engine.config import load_use_case
     from engine.contracts import RunRecord
-    from engine.decide.campaign_scope import CampaignScope, write_campaign_scope
+    from engine.decide.campaign_scope import CAMPAIGN_SCOPE_FILENAME, CampaignScope, write_campaign_scope
     from engine.decide.treat_list import TreatListError, build_treat_list
     from engine.measurement.cycle import CycleError, open_campaign
     from engine.runs import RUN_FILENAME
@@ -493,6 +493,8 @@ def _execute_campaign_plan(proposal: Proposal, request: Request, storage: Storag
         try:
             summary = build_treat_list(storage, run_id, config_root=root)
         except TreatListError as exc:
+            # Nothing was carried out, so the limits of a plan that was not are not left on the run.
+            storage.delete(run_key(run_id, CAMPAIGN_SCOPE_FILENAME))
             raise AgenticError(exc.code, exc.message, status=409) from exc
         return BuiltList(
             total_rows=summary.total_rows,
@@ -501,16 +503,28 @@ def _execute_campaign_plan(proposal: Proposal, request: Request, storage: Storag
         )
 
     def check_model(run_id: str) -> None:
-        # Plan M M184 (DEC-1614 (b)): the run's model must be an approved one while approval is required.
-        from api.deps import get_registry
-        from engine.model_approval import MODEL_VERSION_NOT_APPROVED, unapproved_model_message
+        # Plan M M184 (DEC-1614 (b)): the run's model must be an approved one while approval is required - by the
+        # use case's settings now (as the planner's skip reads them) or by the run's own (as the contact-list
+        # routes read them, `api.routes.runs.unapproved_list_model`); either one is enough (fails closed). The
+        # rule and the code are the list routes' (`engine.model_approval`), plus a candidate nobody approved.
+        from engine.config import ResolvedConfig
+        from engine.model_approval import MODEL_NOT_APPROVED, unapproved_model_message
+        from engine.runs import RUN_CONFIG_FILENAME
+        from engine.storage import StorageError
 
         record = storage.read_model(run_key(run_id, RUN_FILENAME), RunRecord)
-        if not load_use_case(record.use_case_id, root).governance.approval_required:
+        required = load_use_case(record.use_case_id, root).governance.approval_required
+        if not required:
+            try:
+                own = storage.read_model(run_key(run_id, RUN_CONFIG_FILENAME), ResolvedConfig).config
+                required = own.governance.approval_required
+            except (StorageError, ValueError):
+                pass
+        if not required:
             return
         refusal = unapproved_model_message(get_registry(request), record.model_version_id)
         if refusal is not None:
-            raise AgenticError(MODEL_VERSION_NOT_APPROVED, refusal, status=409)
+            raise AgenticError(MODEL_NOT_APPROVED, refusal, status=409)
 
     def open_(run_id: str, window: int) -> str:
         record = storage.read_model(run_key(run_id, RUN_FILENAME), RunRecord)

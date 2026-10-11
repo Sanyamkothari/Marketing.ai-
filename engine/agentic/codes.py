@@ -157,9 +157,13 @@ PLANNER_CODES: Final[frozenset[str]] = frozenset(
         "PLANNER_CARD_NOT_FOUND",  # the warning is no longer on the Results page
         "PLANNER_NOT_FOUND",  # no plan with that id
         "PLANNER_GOAL_UNPARSED",  # the goal in words could not be matched to the form's values
+        # Plan M M184 (DEC-1614 (a)): EXECUTE's list is not the approved one (another channel, more contacts than
+        # planned, no ranking column to take the planned number by, or limits that cannot be read); nothing is
+        # opened (`engine.agentic.planner._require_within`, `engine.decide.treat_list.build_treat_list`).
+        "CAMPAIGN_LIST_NOT_AS_APPROVED",
     }
 )
-"""M139's codes (DEC-1406), joined into `PLAN_K_CODES` below."""
+"""M139's codes (DEC-1406) and Plan M M184's (DEC-1614 (a)), joined into `PLAN_K_CODES` below."""
 
 VARIANT_CODES: Final[frozenset[str]] = frozenset(
     {

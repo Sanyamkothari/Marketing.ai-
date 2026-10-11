@@ -1115,11 +1115,11 @@ class ScheduleFirer:
         # `POST /runs`, where a person names the version, is unchanged.
         named = schedule.parameters.model_version_id
         if named is not None and config.governance.approval_required:
-            from engine.model_approval import MODEL_VERSION_NOT_APPROVED, unapproved_model_message
+            from engine.model_approval import MODEL_NOT_APPROVED, unapproved_model_message
 
             refusal = unapproved_model_message(services.registry, version.model_id)
             if refusal is not None:
-                raise FiringError(MODEL_VERSION_NOT_APPROVED, refusal)
+                raise FiringError(MODEL_NOT_APPROVED, refusal)
         manifest = self._dataset(schedule, config, mode=RunMode.SCORE)
         record = self._start(resolved, manifest, mode=RunMode.SCORE, version=version)
         return _Outcome(FiringStatus.RUNNING, "SCORING_STARTED", record.run_id, manifest.dataset_id)

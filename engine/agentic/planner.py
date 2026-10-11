@@ -41,7 +41,8 @@ limits, `engine.measurement.cycle.open_campaign` - the engine half of `POST /cam
 the treat list contacts only the approved channel and at most `planned_contacts` (`engine.decide.campaign_scope`),
 or EXECUTE refuses with `CAMPAIGN_LIST_NOT_AS_APPROVED` before anything is opened; with
 `agentic.require_sign_in` on, only a signed-in Approver's approval is carried out (DEC-1614 (e)), and a run whose
-model was never approved is refused while approval is required (DEC-1614 (b)). It is idempotent: each thing it
+model is not approved (waiting, turned down, or a candidate nobody approved) is refused with `MODEL_NOT_APPROVED`
+while approval is required (DEC-1614 (b), `engine.model_approval`). It is idempotent: each thing it
 makes is written to the state before the next, so an approval retried after a failure does not open a second campaign. The campaign's treatment starts at
 the approval (nobody is contacted before it), so the drafted analysis date - the later of the run's finish and
 the draft, plus the outcome window - must still be at least a window after the approval, or the approval is
@@ -96,6 +97,7 @@ if TYPE_CHECKING:
     from engine.measurement.summary import SummaryCard
 
 __all__ = [
+    "CAMPAIGN_LIST_NOT_AS_APPROVED",
     "CARD_OBJECTIVES",
     "NOTHING_TO_PLAN",
     "OBJECTIVES",
@@ -128,6 +130,8 @@ PLANNER_NOTHING_TO_PLAN: Final[str] = "PLANNER_NOTHING_TO_PLAN"
 PLANNER_CARD_NOT_FOUND: Final[str] = "PLANNER_CARD_NOT_FOUND"
 PLANNER_NOT_FOUND: Final[str] = "PLANNER_NOT_FOUND"
 PLANNER_GOAL_UNPARSED: Final[str] = "PLANNER_GOAL_UNPARSED"
+CAMPAIGN_LIST_NOT_AS_APPROVED: Final[str] = "CAMPAIGN_LIST_NOT_AS_APPROVED"
+"""Plan M M184 (DEC-1614 (a)): EXECUTE's list is not the one the policy checked; nothing is opened."""
 PLANNER_CODES: Final[frozenset[str]] = frozenset(
     {
         PLANNER_NO_CANDIDATE,
@@ -135,6 +139,7 @@ PLANNER_CODES: Final[frozenset[str]] = frozenset(
         PLANNER_CARD_NOT_FOUND,
         PLANNER_NOT_FOUND,
         PLANNER_GOAL_UNPARSED,
+        CAMPAIGN_LIST_NOT_AS_APPROVED,
     }
 )
 
@@ -810,7 +815,7 @@ def _size(state: PlannerState, ctx: ToolContext, deps: PlannerDeps) -> PlannerSt
             raise _stop(
                 PLANNER_NO_CANDIDATE,
                 f"Every finished scoring run of {config.name} without a campaign was scored with a model that "
-                "was never approved, and approval is required. Approve the model on the Approvals page, or "
+                "was never approved (waiting, turned down, or a candidate), and approval is required. Approve the model on the Approvals page, or "
                 "score this cycle's file with the model in use; the planner then plans its list.",
             )
         raise _stop(
@@ -1361,8 +1366,8 @@ class ExecuteActions:
     """An enabled `measure` schedule of the use case, if there is one (none is created: it needs a saved
     connection and a table a person chooses)."""
     check_model: Callable[[str], None] | None = None
-    """Plan M M184 (DEC-1614 (b)): raises `MODEL_VERSION_NOT_APPROVED` when the run's model was never approved
-    and its use case requires approval (`engine.model_approval`); None checks nothing (a caller with no model
+    """Plan M M184 (DEC-1614 (b)): raises `MODEL_NOT_APPROVED` when the run's model may not be used by a step
+    nobody chooses the model of and its run requires approval (`engine.model_approval`); None checks nothing (a caller with no model
     registry - the `/agentic` route always passes one)."""
 
 
@@ -1515,7 +1520,7 @@ def _require_within(built: BuiltList, limits: ListLimits) -> None:
         else f"at most {limits.max_contacts:,}, on {limits.channel} only"
     )
     raise AgenticError(
-        "CAMPAIGN_LIST_NOT_AS_APPROVED",
+        CAMPAIGN_LIST_NOT_AS_APPROVED,
         f"The contact list built for this plan holds {found}; the approval covers {allowed}. Nothing was opened "
         "or sent, and the proposal stays pending. Draft the plan again.",
         status=409,

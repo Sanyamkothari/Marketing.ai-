@@ -38,3 +38,27 @@ def test_a_signed_in_approval_is_audited_as_before(tmp_path: Path) -> None:
     assert response.status_code == 200, response.text
     (event,) = world.events("models.approve")
     assert "identity_verified" not in event.details
+
+
+def test_with_sign_in_off_a_rejection_is_audited_as_unverified(tmp_path: Path) -> None:
+    world = World(tmp_path, auth_mode="off")
+    response = world.client.post(
+        f"/models/{CHALLENGER}/reject", json={"reason": "worse on the metric we watch"}
+    )
+    assert response.status_code == 200, response.text
+    (event,) = world.events("models.reject")
+    assert event.outcome == "success"
+    assert event.details["identity_verified"] is False
+    assert event.details["model_id"] == CHALLENGER
+
+
+def test_a_signed_in_rejection_is_audited_as_before(tmp_path: Path) -> None:
+    world = World(tmp_path)
+    response = world.client.post(
+        f"/models/{CHALLENGER}/reject",
+        json={"reason": "worse on the metric we watch"},
+        headers=world.approver,
+    )
+    assert response.status_code == 200, response.text
+    (event,) = world.events("models.reject")
+    assert "identity_verified" not in event.details
