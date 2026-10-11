@@ -2372,6 +2372,67 @@ challenger, not run). New: `configs/agentic/model_licences.yaml`, `engine/agenti
 
 **What is needed.** Nothing; this is an announcement.
 
+### 2026-10-11 — plan-k M141 (on main) → Phase 4b and Plan D (owners of `engine/approvals.py`, `engine/platform_db.py`, `alembic/`): receipt fields on `ProposalReceipt`, the `agentic_workspace_log` table and migration `0010` (record of additive edits)
+
+**What changed** (DEC-1408 (c), (d)), each additive:
+
+* `engine/approvals.py`: `ProposalReceipt` gains four defaulted fields, `ledger_seq`, `ledger_chain` (left out of the
+  JSON when absent, i.e. on the deployment's chain), `holdout_salt_fingerprint` and `holdout_salt_note`, filled by
+  `engine.agentic.receipts.receipt_for` (imported inside `decide_proposal`, so importing `engine.approvals` still
+  imports nothing of Plan K). The model decision path is unchanged.
+* `engine/platform_db.py`: `PLATFORM_TABLES` appends `agentic_workspace_log` after `agentic_decision_log`.
+* `alembic/env.py`: imports `engine.agentic.ledger.WorkspaceLogEntry` for its metadata side effect, beside
+  `DecisionLogEntry`.
+* `alembic/versions/0010_agentic_workspace_log.py` (new): creates `agentic_workspace_log`, keyed by
+  `(workspace, seq)`, with the M132 ledger's columns and indexes; it revises `0009`, so the history is one line,
+  0008 → 0009 → 0010, with one head. `agentic_decision_log` is unchanged.
+
+Nothing was renamed or removed. `alembic upgrade head` adds the empty table on every migrated database; with
+`mcp.enabled` off nothing writes to it.
+
+**What is needed.** Ratification of the edits. A later platform table takes the next revision after `0010`.
+
+**What I did meanwhile.** `tests/unit/test_alembic_migrations.py` and `test_postgres_metadata.py` pass on SQLite
+(the PostgreSQL cases skip without a server, as before).
+
+### 2026-10-11 — plan-k M141 (on main) → Phase 2 (onboarding; owner of uploads and `POST /campaigns/audit`'s inputs): record the client on an upload (request)
+
+**Why** (DEC-1408 (g)). An upload records no `client_id`, so on a deployment serving several clients over MCP an
+audited outside campaign (`POST /campaigns/audit`), and any run made from an upload, can belong only to the one MCP
+workspace that claims unattributed data. **What is needed.** Record the client on an upload, and on the campaigns
+audited from it, so M141 can scope those per client too. **What Plan K did meanwhile.** `mcp.workspaces` allows at
+most one workspace with `unattributed: true` (refused with `CONFIG_INVALID` otherwise), and `docs/AGENTIC.md` §8.7
+states the limit.
+
+### 2026-10-11 — plan-k M141 (on main) → Plan K M133's owners (`api/mcp/suppress.py`): other row counts in the Whole rules are served at 1 to 9 (request)
+
+**Why.** M133's Whole rules for reports suppress only `treated_rows` and `control_rows` (and `assignment_rows` or
+`rows`). The other scalar row counts on the same objects (`rows_immature`, `rows_without_outcome`,
+`rows_suppressed_or_untreated`, `rows_covariate_missing`, `rows_without_group`, `rows_excluded`) are served even when
+they are 1 to 9; it is the gap M141's review found, and fixed, in `check_before_contact`. **What is needed.** Decide
+whether each of these counts describes a group of customers and, if so, add it to its Whole rule, with a test that
+the rule lists every count field of its model (as M141's `test_every_count_of_the_gate_is_under_its_rule` does).
+**What M141 did meanwhile.** Nothing in M133's rules, whose tests and behaviour own them.
+
+### 2026-10-11 — plan-k M141 (on main) → Plan K owners of the ledger and proposals (M132, M139): drafting chains and a workspace check (announcement)
+
+**What changed** (DEC-1408 (c)): `engine.agentic.ledger` gains `chains_drafting(engine, proposal_id)` and the
+per-workspace chains (`WorkspaceLogEntry`, `agentic_workspace_log`). `engine.agentic.proposals.ledger_mismatch` now also
+compares the proposal file's workspace with the chain that holds its draft, and the approve and reject routes decide on
+the chain the ledger says drafted the proposal. Nothing changes for proposals on the deployment's chain: both
+workspaces are None, so the comparison is skipped.
+
+**What is needed.** Nothing; this is an announcement.
+
+### 2026-10-11 — plan-k M141 (on main) → Plan E (owner of `configs/pilot/help.yaml`): four codes and two updated entries (announcement)
+
+**What changed** (DEC-1408 (h)): entries for `MCP_WORKSPACE_DENIED`, `RECEIPT_MISMATCH`, `MCP_TASK_NOT_FOUND` and
+`MCP_TASK_CANCELLED`, which join `PLAN_K_CODES`. `MCP_DEMO_ONLY`'s fix, which said to wait for M141, now points to
+`mcp.workspace: clients` and `mcp.workspaces`; `MCP_TIMEOUT`'s meaning now says a client that supports MCP tasks gets a
+task. `tests/unit/pilot/test_help.py` is green.
+
+**What is needed.** Nothing; this is an announcement.
+
 ### 2026-09-23 — plan-e-pilot (on main) → all branches: every change Plan E made outside its own files and blocks
 
 **What is needed.** Nothing from anybody; this is the announcement §3 asks for. Measured with

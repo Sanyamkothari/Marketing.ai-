@@ -647,6 +647,16 @@ MILESTONE_TESTS: Final[Mapping[str, tuple[str, ...]]] = {
     # M143 (DEC-1410), the model licence guard and the opt-in foundation strategy (moved from tests/unit/ at
     # integration). Its CPU-fit test is `slow` and runs only under -m slow.
     "M143": ("tests/unit/agentic/test_model_licences.py",),
+    # M141 (DEC-1408), the verifier on client data: client workspaces, one ledger chain per workspace, receipts,
+    # MCP tasks and the check_before_contact read tool.
+    "M141": (
+        "tests/unit/mcp/test_workspaces.py",
+        "tests/unit/mcp/test_tasks.py",
+        "tests/unit/mcp/test_suppress.py",
+        "tests/unit/agentic/test_workspace_chains.py",
+        "tests/integration/mcp/test_client_workspaces.py",
+        "tests/integration/compliance/test_check_before_contact.py",
+    ),
 }
 """Milestone id -> the test files (or directories, with a trailing `/`) that prove it is built.
 
