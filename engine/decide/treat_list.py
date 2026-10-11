@@ -54,6 +54,7 @@ from engine.decide.contactability import (
 )
 from engine.decide.reasons import extract_and_map_reasons_from_parquet, load_reasons_dictionary
 from engine.decide.value import EXPECTED_GROSS_VALUE_FILENAME, ExpectedGrossValue, expected_gross_values
+from engine.decide.variant_arms import VARIANT_ARM_COLUMN, VARIANT_TEMPLATE_COLUMN, variant_treat_list_columns
 from engine.holdout.assign import (
     EXPLORE_COLUMN,
     HOLDOUT_ASSIGNMENT_FILENAME,
@@ -335,6 +336,19 @@ class TreatListSummary(Artefact):
         description="Plan K M134: the evidence id of that signed ledger entry.",
         exclude_if=lambda value: value is None,
     )
+    variant_arm_counts: dict[str, int] | None = Field(
+        default=None,
+        description=(
+            "Plan K M140: treat = 1 rows per message arm (the control template and each approved variant), on a "
+            "run that drew variant arms. Absent otherwise."
+        ),
+        exclude_if=lambda value: value is None,
+    )
+    variant_note: str | None = Field(
+        default=None,
+        description="Plan K M140: what the control template arm sends, when the run drew variant arms.",
+        exclude_if=lambda value: value is None,
+    )
 
 
 def ensure_treat_list(storage: Storage, run_id: str, *, config_root: Path | None = None) -> TreatListSummary:
@@ -609,6 +623,12 @@ def build_treat_list(storage: Storage, run_id: str, *, config_root: Path | None 
                     offer_choice.explore_cost,
                 )
 
+    # 5d. Plan K M140 (DEC-1407): each treated customer's message arm, on a run that drew variant arms only
+    # (after the M134 gate, so the arms read the treat flags and channels the gate left).
+    variants = variant_treat_list_columns(
+        storage, run_id, primary_key, row_keys, treat=treat, channel=channel, config_root=config_root
+    )
+
     # 6. Reasons, in business words.
     reasons = _reasons(storage, run_id, scores, row_keys, config_root)
 
@@ -631,8 +651,9 @@ def build_treat_list(storage: Storage, run_id: str, *, config_root: Path | None 
         runner_up_value=runner_up_value,
         offer_reason=offer_reason,
         control=control,
+        variants=None if variants is None else (variants.arm, variants.template),
     )
-    table = _table(out, is_uplift, key_cols)
+    table = _table(out, is_uplift, key_cols, variants=variants is not None)
     storage.write_bytes(run_key(run_id, TREAT_LIST_PARQUET), _parquet_bytes(table))
     storage.write_bytes(run_key(run_id, TREAT_LIST_CSV), _csv_bytes(table))
 
@@ -664,6 +685,8 @@ def build_treat_list(storage: Storage, run_id: str, *, config_root: Path | None 
         held_back_value_note=None if held_back_value_rows is None else _HELD_BACK_VALUE_NOTE,
         # PLAN-K (M134, DEC-1405): the pre-send compliance gate.
         **({} if gated is None else _gate_fields(gated)),
+        variant_arm_counts=None if variants is None else variants.counts,
+        variant_note=None if variants is None else variants.note,
     )
     storage.write_model(run_key(run_id, TREAT_LIST_SUMMARY_FILENAME), summary)
     _LOGGER.info(
@@ -1505,6 +1528,7 @@ def _assemble(
     runner_up_value: pd.Series[Any],
     offer_reason: pd.Series[Any],
     control: np.ndarray,
+    variants: tuple[pd.Series[Any], pd.Series[Any]] | None = None,
 ) -> pd.DataFrame:
     n = len(scores.index)
     data: dict[str, Any] = {name: key_text(scores[name]).astype("object") for name in key_cols}
@@ -1530,6 +1554,10 @@ def _assemble(
     # (DEC-1311 (al)). After offer_reason for the same reason: no earlier column moves from the start, and
     # net_value, expected_gross_value and the reasons keep their places from the end.
     data[CONTROL_GROUP_COLUMN] = pd.Series(control, dtype="bool")
+    if variants is not None:
+        # Plan K M140 (DEC-1407): only on a run with variant arms, before net_value for the same reason.
+        data[VARIANT_ARM_COLUMN] = variants[0].astype("object")
+        data[VARIANT_TEMPLATE_COLUMN] = variants[1].astype("object")
     data["net_value"] = net_value
     data[EXPECTED_GROSS_VALUE_COLUMN] = gross_value
     for name in REASON_COLUMNS:
@@ -1537,7 +1565,7 @@ def _assemble(
     return pd.DataFrame(data)
 
 
-def _schema(is_uplift: bool, key_cols: tuple[str, ...]) -> pa.Schema:
+def _schema(is_uplift: bool, key_cols: tuple[str, ...], *, variants: bool = False) -> pa.Schema:
     fields = [pa.field(name, pa.string()) for name in key_cols]
     fields += [
         pa.field("use_case", pa.string()),
@@ -1554,6 +1582,11 @@ def _schema(is_uplift: bool, key_cols: tuple[str, ...]) -> pa.Schema:
         pa.field(RUNNER_UP_VALUE_COLUMN, pa.float64()),
         pa.field(OFFER_REASON_COLUMN, pa.string()),
         pa.field(CONTROL_GROUP_COLUMN, pa.bool_()),
+        *(
+            [pa.field(VARIANT_ARM_COLUMN, pa.string()), pa.field(VARIANT_TEMPLATE_COLUMN, pa.string())]
+            if variants
+            else []
+        ),
         pa.field("net_value", pa.float64()),
         pa.field(EXPECTED_GROSS_VALUE_COLUMN, pa.float64()),
         *[pa.field(name, pa.string()) for name in REASON_COLUMNS],
@@ -1561,9 +1594,13 @@ def _schema(is_uplift: bool, key_cols: tuple[str, ...]) -> pa.Schema:
     return pa.schema(fields)
 
 
-def _table(frame: pd.DataFrame, is_uplift: bool, key_cols: tuple[str, ...]) -> pa.Table:
+def _table(
+    frame: pd.DataFrame, is_uplift: bool, key_cols: tuple[str, ...], *, variants: bool = False
+) -> pa.Table:
     """The treat list as one typed Arrow table: booleans (null where unknown), floats, strings."""
-    return pa.Table.from_pandas(frame, schema=_schema(is_uplift, key_cols), preserve_index=False)
+    return pa.Table.from_pandas(
+        frame, schema=_schema(is_uplift, key_cols, variants=variants), preserve_index=False
+    )
 
 
 def _parquet_bytes(table: pa.Table) -> bytes:

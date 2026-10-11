@@ -824,6 +824,23 @@ codes:
     title: "The compliance gate's switch is in the wrong file"
     meaning: "configs/compliance/compliance.yaml sets compliance.gate.enabled, but that file holds only the gate's settings (the opt-in channels and the longest template value). The gate is turned on or off in configs/agentic/agentic.yaml, with Plan K's other switches. The setting is refused rather than ignored, so nobody believes they turned the gate on or off where it has no effect. No contact list is built until it is fixed."
     fix: "Remove enabled from configs/compliance/compliance.yaml and set compliance: gate: enabled in configs/agentic/agentic.yaml."
+  # --- Plan K M140: message variants as measured arms (DEC-1407 (c), (g), (j)) ----------------------------------
+  VARIANT_TEMPLATE_UNREGISTERED:
+    title: "An SMS variant's words are not registered"
+    meaning: "A message variant can be tested on SMS only once its exact words are registered as a template. The variant has no action on sms in configs/decide/catalogue.yaml whose template_ref is the reference the message names (copy: followed by 16 characters) with a registered dlt_template_id (not empty, and not a placeholder such as <your DLT template id>)."
+    fix: "Add an action on sms to configs/decide/catalogue.yaml, set its template_ref to the reference the message names and its dlt_template_id to the registered template id, then draw the variant arms again."
+  VARIANT_ACTION_MISSING:
+    title: "A variant is not in the action catalogue"
+    meaning: "Every variant tested as an arm has to be entered in the action catalogue before it is sent, and this one is not."
+    fix: "Add an action on the variant's channel to configs/decide/catalogue.yaml, with template_ref set to the reference the message names. Then draw the variant arms again."
+  VARIANT_ARMS_NOT_MADE:
+    title: "No message variants were turned into arms"
+    meaning: "Variant arms were not drawn, and the treat list stays as it was; no arm file is kept. The message gives the reason: the use case does not set generative.variant_arms to true; the run is not a finished scoring run with campaign copy; it chose among several offers; fewer than two variants are approved for every group and channel the copy was written for; or the treat list cannot say which template a variant customer gets, because the copy covers several channels and the list names no channel for that customer."
+    fix: "Fix the cause the message names and draw the arms again."
+  VARIANT_ARMS_NOT_ARBITRATED:
+    title: "A run testing message variants is not arbitrated"
+    meaning: "This run is testing message variants as measured arms. Arbitration across use cases would drop which message each customer gets, so the run is refused here. Once the copy changes or generative.variant_arms is turned off, the arms are set aside and the run can be arbitrated again."
+    fix: "Send and measure that run's treat list on its own campaign, or arbitrate runs without variant arms."
 
 settings:
   actions.bands[*].min_score:

@@ -20,6 +20,7 @@ __all__ = [
     "PLANNER_CODES",
     "PLAN_K_CODES",
     "SAVE_DESK_CODES",
+    "VARIANT_CODES",
 ]
 
 AGENTIC_CODES: Final[frozenset[str]] = frozenset(
@@ -153,6 +154,17 @@ PLANNER_CODES: Final[frozenset[str]] = frozenset(
 )
 """M139's codes (DEC-1406), joined into `PLAN_K_CODES` below."""
 
+VARIANT_CODES: Final[frozenset[str]] = frozenset(
+    {
+        # M140 (DEC-1407): message variants as measured arms (`engine.decide.variant_arms.VARIANT_ARM_CODES`).
+        "VARIANT_TEMPLATE_UNREGISTERED",  # an SMS variant's exact words have no registered DLT template id
+        "VARIANT_ACTION_MISSING",  # a variant on another channel has no catalogue action with its copy: reference
+        "VARIANT_ARMS_NOT_MADE",  # no arms drawn: the setting off, no copy, fewer than two variants, or no template
+        "VARIANT_ARMS_NOT_ARBITRATED",  # a run whose arms are in force is not arbitrated across use cases
+    }
+)
+"""M140's codes (DEC-1407), joined into `PLAN_K_CODES` below."""
+
 PLAN_K_CODES: Final[frozenset[str]] = (
     frozenset()
     | AGENTIC_CODES
@@ -162,5 +174,6 @@ PLAN_K_CODES: Final[frozenset[str]] = (
     | MEASUREMENT_CODES
     | PLANNER_CODES
     | SAVE_DESK_CODES
+    | VARIANT_CODES
 )
 """Empty at M130; each Plan K milestone adds the codes it raises."""

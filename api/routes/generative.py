@@ -96,6 +96,13 @@ from engine.config import (
     leaf_paths,
 )
 from engine.contracts import LLMUsage, RunRecord, RunState
+from engine.decide.treat_list import TreatListError
+from engine.decide.variant_arms import (
+    VariantArms,
+    VariantArmsError,
+    build_variant_arms,
+    set_aside_variant_arms,
+)
 from engine.generative.assistant import Turn, answer, suggested_questions
 from engine.generative.budget import Meter
 from engine.generative.contracts import (
@@ -1641,6 +1648,12 @@ def _campaign_copy_job(
             _write_usage(storage, run_key(run_id, LLM_USAGE_FILENAME), meter)
             return
         _write_usage(storage, run_key(run_id, LLM_USAGE_FILENAME), meter)
+        # Plan K M140 (DEC-1407): message arms drawn from the earlier copy are set aside (the readers ignore
+        # them anyway: the batch is another one), and the treat list is rebuilt without them.
+        try:
+            set_aside_variant_arms(storage, run_id, config_root=config_root)
+        except Exception:  # the copy is written; arms that could not be deleted are not in force
+            _LOGGER.warning("campaign copy %s: the earlier variant arms could not be deleted", run_id)
         checks = [check for template in result.batch.templates for check in template.guardrails]
         _write_guardrail_report(
             storage,
@@ -1770,7 +1783,37 @@ def regenerate_copy_template(
         )
     storage.write_model(run_key(run_id, COPY_BATCH_FILENAME), updated_batch)
     _write_usage(storage, run_key(run_id, LLM_USAGE_FILENAME), meter)
+    # Plan K M140 (DEC-1407): a regenerated template is pending review again, with new words: message arms that
+    # send it are set aside and the treat list rebuilt without them.
+    set_aside_variant_arms(storage, run_id, config_root=root, only_if_stale=True)
     return replacement
+
+
+# ---------------------------------------------------------------------------
+# 10b. POST /runs/{run_id}/campaign-copy/variant-arms (Plan K M140, DEC-1407)
+# ---------------------------------------------------------------------------
+@router.post(
+    "/runs/{run_id}/campaign-copy/variant-arms",
+    response_model=VariantArms,
+    responses={**_GENERATIVE_ERRORS, 409: {"model": ErrorResponse}},
+    summary="Test the approved message variants as randomised, measured arms of the run's treat list",
+)
+def create_variant_arms(run_id: str, root: ConfigRootDep, storage: StorageDep) -> VariantArms:
+    """Draw each customer's message arm (the control template or an approved variant), at random by their own
+    key, and rebuild the treat list with it. Opt-in per use case (`generative.variant_arms`). Refused in plain
+    words, with no arm file kept and the treat list the one without arms: `VARIANT_TEMPLATE_UNREGISTERED` (an SMS
+    variant with no registered template id in the catalogue), `VARIANT_ACTION_MISSING` (another variant not in
+    the catalogue), `VARIANT_ARMS_NOT_MADE` (turned off, no copy, fewer than two variants approved for every
+    group and channel, or the treat list cannot name the template a variant customer is sent), or the treat
+    list's own code when the run cannot have one."""
+    run = load_run(storage, run_id)
+    config = use_case_config(run.use_case_id, root)
+    try:
+        return build_variant_arms(storage, run_id, use_case=config, config_root=root)
+    except VariantArmsError as exc:
+        raise http_error(exc.status, exc.code, exc.message) from exc
+    except TreatListError as exc:
+        raise http_error(409, exc.code, exc.message) from exc
 
 
 # ---------------------------------------------------------------------------

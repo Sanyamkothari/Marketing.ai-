@@ -334,6 +334,8 @@ Each row adds a defaulted declaration in place: in a shared file outside the PLA
 | `engine/uplift/metrics.py` `HoldoutUplift`, `engine/uplift/flow.py` `HOLDOUT_COLUMNS` | Optional per-row value columns for value weighting (additive) | M110 |
 | `engine/approvals.py` `ApprovalItem` | `checks` (the beats-risk and stability results shown beside the champion decision; advisory) | M112 |
 | `engine/stages/actions.py`, `engine/stages/export.py` | Only the functions DEC-1306 names (§3.2): `_control_mask`, `_entity_control_mask`, `_holdout_size` (M95); `suppression_rules` and `_suppression_counts` (M109) | M95, M109 |
+| `engine/config.py` `GenerativeConfig` (Phase 3a) | `variant_arms: bool = False`, left out of a dump while off. Plan K keeps no register of its own, so its in-place declarations are listed here (DEC-1407) | Plan K M140 |
+| `engine/decide/treat_list.py` `TreatListSummary`, `engine/decide/catalogue.py` `ActionItem` (Plan J M98, M100) | Six optional `compliance_*` summary fields, absent with the gate off; `dlt_template_text`, `message_text` (DEC-1405); `variant_arm_counts`, `variant_note` (DEC-1407) | Plan K M134, M140 |
 
 ---
 
