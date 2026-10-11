@@ -2073,6 +2073,61 @@ table, beside M136's `pooled_estimate.json`. It is not row-level, so retention a
 
 **What is needed.** Nothing; this is a record.
 
+### 2026-10-11 — plan-k M142 (on main) → Plan G (owner of `engine/agent/`, `api/routes/agent.py`, `ui/modules/agent/`, `docs/AGENTS.md` and `tests/fixtures/agent_bench/`): setup help for new sources inside Guided setup, behind `agentic.enabled` (record of additive edits)
+
+**What changed** (DEC-1409), all of it inert while Plan K's `agentic.enabled` is off (the default), when Guided
+setup's advice, tool results, the chat's tool list and egress payloads are byte-identical to before M142:
+
+* `engine/agent/headers.py`, `label_drafts.py`, `assist.py` (new) and `configs/agent/header_lexicon.yaml` (new): the
+  rules-only header reading, the lapse-label drafts and the optional second opinions.
+* `engine/agent/tools.py`: `find_roles` gains `header_candidates` and extends the consent / opt-out /
+  recently-contacted lists with header-read columns; a new read tool `draft_outcome_labels`; `header_help_on(ctx)`
+  and `tool_available(ctx, name)` gate both on the switch (added at integration). `engine/agent/loop.py`: `_tools`
+  takes the session (optional; none means every tool, as the static checks use it) and lists `draft_outcome_labels`
+  only while the switch is on.
+* `engine/agent/advisor.py`: the header read picks the ID among unique columns, orders and may propose the outcome
+  (check), orders the dates, asks non-blocking mapping questions and offers lapse drafts. `engine/agent/contracts.py`:
+  `Proposal.from_headers` (default false, left out of a stored session while false), beside Plan L M152's `source`.
+  `engine/agent/session.py`: `accept_recommended` never ticks a `from_headers` suggestion.
+  `engine/agent/egress.py`: `RESULT_KEYS` gains the new result keys (`header_candidates`, `after_reference`, ...).
+* `api/routes/agent.py`: `POST /uploads/{upload_id}/agent-session/assist` (Analyst, `agent.assist`), 404
+  `AGENTIC_DISABLED` while the switch is off. `tests/integration/agent/test_hardening.py` now counts 12 session
+  policies (Plan L's 11 and this one); `tests/unit/agent/test_guided_setup_static_ui.py` expects the `/assist` tail.
+* `ui/modules/agent/guided.js`, `api.js`, `styles.js`: a stopped session's non-blocking questions are shown under the
+  stop reason, read-only; a "Second opinion" button (when an AI service is connected) that hides itself on
+  `AGENTIC_DISABLED`. The jsdom UI tests could not be run on this machine (jsdom is not installed); `node --check`
+  passes.
+* `tests/fixtures/agent_bench/`: 27 Hinglish cases and three `other_use_case_*` cases, pinned in `expected.json` and
+  run with the switch on (`run_case`'s `HEADER_HELP_CASES`); the 22 earlier cases run with it off and are unchanged.
+  `tests/unit/agent/helpers.py` gains `with_header_help`, `header_help_root` and `header_help_context`.
+* `docs/AGENTS.md` section 13.
+
+**What is needed.** Nothing; this is a record. A Plan G change to `find_roles`' keys, the advisor's question order or
+the chat's tool list should keep the switch-off path byte-identical (`tests/unit/agent/test_header_switch.py`).
+
+**What I did meanwhile.** `tests/unit/agent`, `tests/integration/agent` and `tests/unit/generative` pass on `main`
+after the merge.
+
+### 2026-10-11 — plan-k M142 (on main) → Phase 3a (owner of `engine/generative/contracts.py` and `configs/prompts/`): a `data_agent_assist` purpose and prompt (announcement)
+
+**What changed** (DEC-1409 (g); the pre-approved additive edit): `GenerativePurpose.DATA_AGENT_ASSIST =
+"data_agent_assist"`, so Guided setup's optional second opinions are metered and reported by purpose like every other
+flow, and `configs/prompts/data_agent_assist.v1.md` (new), named after its purpose as
+`test_the_repository_ships_a_prompt_for_every_purpose_that_needs_one` requires; `tests/unit/generative/test_prompts.py`
+gains its prompt variables. No existing member, prompt or fake branch changed.
+
+**What is needed.** Nothing; this is an announcement.
+
+### 2026-10-11 — plan-k M142 (on main) → Plan G and trunk (owners of `actions.suppression` in `engine/config.py` and the use cases): let a header-read opt-out or last-contact column be applied by a click (request)
+
+**Why.** M142 reads a header such as `dnd_flag` or `last_cntct_dt` as the opt-out or last-contact column, but
+`actions.suppression.opt_out_column` and `recently_contacted_column` are fixed by the use case and are not per-run
+overridable, so Guided setup can only ask ("Is 'dnd_flag' that column?") and tell the person to rename the column and
+upload again. **What is needed.** Make `actions.suppression.opt_out_column` and `actions.suppression.recently_contacted_column`
+overridable per run (with whatever value-direction check the suppression rules need), so the advisor can turn the
+answer into a setting the person ticks. **What Plan K did meanwhile.** The non-blocking question, which changes
+nothing either way (DEC-1409 (e)).
+
 ### 2026-09-23 — plan-e-pilot (on main) → all branches: every change Plan E made outside its own files and blocks
 
 **What is needed.** Nothing from anybody; this is the announcement §3 asks for. Measured with

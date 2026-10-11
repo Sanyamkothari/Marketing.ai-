@@ -584,6 +584,17 @@ MILESTONE_TESTS: Final[Mapping[str, tuple[str, ...]]] = {
         "tests/unit/measurement/test_harm_alarm.py",
         "tests/integration/measurement/test_harm_alarm_loop.py",
     ),
+    # M142 (DEC-1409), setup help for new sources. test_advisor.py is Plan G's benchmark test and pins M142's cases
+    # in expected.json; test_header_switch.py pins the agentic.enabled gate added at integration.
+    "M142": (
+        "tests/unit/agent/test_headers.py",
+        "tests/unit/agent/test_header_advice.py",
+        "tests/unit/agent/test_header_benchmark.py",
+        "tests/unit/agent/test_header_switch.py",
+        "tests/unit/agent/test_assist.py",
+        "tests/unit/agent/test_advisor.py",
+        "tests/integration/agent/test_assist_api.py",
+    ),
 }
 """Milestone id -> the test files (or directories, with a trailing `/`) that prove it is built.
 

@@ -209,7 +209,7 @@ each one that is done. M131, M135 and M137 were built ahead of the rest of Plan 
 | M139 The campaign planner | pending | | |
 | M140 Message variants as measured arms | pending | | |
 | M141 The verifier on client data | pending | | |
-| M142 Setup help for integration sources | pending | | |
+| M142 Setup help for integration sources | done | DEC-1409 | `docs/AGENTS.md` §13; behind `agentic.enabled` |
 | M143 Tabular foundation model challenger | pending | | |
 | M144 Save-desk card, as a randomised pilot | pending | | |
 
