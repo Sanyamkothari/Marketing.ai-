@@ -21,7 +21,7 @@ import json
 import logging
 from datetime import datetime
 from pathlib import Path
-from typing import Annotated, Final
+from typing import Annotated, Final, Literal
 
 from fastapi import APIRouter, File, Form, HTTPException, Query, Response, UploadFile
 from fastapi.concurrency import run_in_threadpool
@@ -31,6 +31,7 @@ from api.access_policy import RoutePolicy, register
 from api.deps import ConfigRootDep, StorageDep
 from api.schemas import ErrorResponse, UploadRecord, UploadResponse
 from engine.access.roles import Role
+from engine.agent.contracts import DATA_RECIPE_FILENAME
 from engine.config import (
     ConfigError,
     RunMode,
@@ -43,8 +44,10 @@ from engine.config import (
 )
 from engine.contracts import DatasetProfile
 from engine.doctor.memory import offer_for
+from engine.doctor.renames import RENAMED_COPY_FILENAME
 from engine.intake.config import IntakeConfig, load_intake_config
 from engine.intake.run import INTAKE_REPORT_FILENAME, ReceivedFormat, intake_file, received_format_for
+from engine.measurement.pull import PULL_SOURCE_FILENAME
 from engine.stages import ingest
 from engine.storage import Storage, StorageError, upload_key
 from engine.utils.ids import new_upload_id
@@ -303,6 +306,11 @@ class _Strict(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
 
+MadeBy = Literal["file", "import", "pull", "renamed_copy", "recipe"]
+"""How an upload came to be, from the marker file beside its `upload.json`. `file` means no marker: a file posted to
+`POST /uploads`, or one a route stored without leaving a marker. It is not a claim that a person uploaded it."""
+
+
 class UploadSummary(_Strict):
     """One uploaded file as the Data page lists it: what it is and when it came, never its content."""
 
@@ -317,22 +325,42 @@ class UploadSummary(_Strict):
     synthetic: bool
     created_at: datetime
     from_connection_id: str | None = None
+    made_by: MadeBy = "file"
 
 
 class UploadListResponse(_Strict):
-    """Body of `GET /uploads`: the uploads, newest first."""
+    """Body of `GET /uploads`: the newest uploads, and how many there are in all."""
 
     uploads: tuple[UploadSummary, ...]
+    total: int
 
 
-def _imported_from(storage: Storage, upload_id: str) -> str | None:
-    """The connection an upload was imported from (`connection_source.json`), or None for a file posted directly."""
+def _connection_of(storage: Storage, key: str) -> str | None:
+    """The `connection_id` a marker file (`connection_source.json`, `pull_source.json`) records, or None."""
     try:
-        document = json.loads(storage.read_bytes(upload_key(upload_id, IMPORT_SOURCE_FILENAME)))
+        document = json.loads(storage.read_bytes(key))
     except (StorageError, ValueError):
         return None
     value = document.get("connection_id") if isinstance(document, dict) else None
     return value if isinstance(value, str) else None
+
+
+def _made_by(storage: Storage, keys: frozenset[str], upload_id: str) -> tuple[MadeBy, str | None]:
+    """How `upload_id` came to be and, for an import or a pull, which connection it came from.
+
+    The markers are looked up in the key listing the route already holds, so a plain file costs no extra read.
+    """
+    import_key = upload_key(upload_id, IMPORT_SOURCE_FILENAME)
+    if import_key in keys:
+        return "import", _connection_of(storage, import_key)
+    pull_key = upload_key(upload_id, PULL_SOURCE_FILENAME)
+    if pull_key in keys:
+        return "pull", _connection_of(storage, pull_key)
+    if upload_key(upload_id, RENAMED_COPY_FILENAME) in keys:
+        return "renamed_copy", None
+    if upload_key(upload_id, DATA_RECIPE_FILENAME) in keys:
+        return "recipe", None
+    return "file", None
 
 
 @router.get(
@@ -346,9 +374,11 @@ def list_uploads(
         int, Query(ge=1, le=LIST_MAX_LIMIT, description="How many uploads to return, newest first.")
     ] = LIST_DEFAULT_LIMIT,
 ) -> UploadListResponse:
-    """One summary per `upload.json`. A record that cannot be read is left out and logged, never fatal."""
+    """One summary per `upload.json`, with `total` counting every readable one. A record that cannot be read is left
+    out and logged, never fatal."""
     found: list[UploadRecord] = []
-    for key in storage.list_keys("uploads/"):
+    keys = frozenset(storage.list_keys("uploads/"))
+    for key in keys:
         if not key.endswith(f"/{UPLOAD_RECORD_FILENAME}"):
             continue
         try:
@@ -356,8 +386,10 @@ def list_uploads(
         except (StorageError, ValueError):
             _LOGGER.warning("uploads.unreadable key=%s", key)
     found.sort(key=lambda record: (record.created_at, record.upload_id), reverse=True)
-    return UploadListResponse(
-        uploads=tuple(
+    summaries: list[UploadSummary] = []
+    for record in found[:limit]:
+        made_by, connection_id = _made_by(storage, keys, record.upload_id)
+        summaries.append(
             UploadSummary(
                 upload_id=record.upload_id,
                 file_name=record.file_name,
@@ -369,11 +401,11 @@ def list_uploads(
                 mode=record.mode,
                 synthetic=record.synthetic,
                 created_at=record.created_at,
-                from_connection_id=_imported_from(storage, record.upload_id),
+                from_connection_id=connection_id,
+                made_by=made_by,
             )
-            for record in found[:limit]
         )
-    )
+    return UploadListResponse(uploads=tuple(summaries), total=len(found))
 
 
 # ---------------------------------------------------------------------------

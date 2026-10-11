@@ -36,6 +36,7 @@ const state = {
   kinds: [],
   connections: [],
   uploads: [],
+  uploadsTotal: 0, // how many uploaded files there are in all (the list holds only the newest)
   loadError: null,
   uploadsError: null,
   busy: {}, // connection id -> "test" | "delete"
@@ -46,7 +47,10 @@ const state = {
   showAllFiles: false,
 };
 
-let view = { app: null, tab: "sources" };
+let view = { app: null, tab: "sources", hash: "" };
+
+/** True while the person is still on the screen this page drew: an answer that arrives after they left must not paint over it. */
+const stillHere = () => window.location.hash === view.hash;
 
 // --- small pieces ----------------------------------------------------------------------------------
 
@@ -57,10 +61,43 @@ const connectionName = (id) => {
   return found ? found.name : null;
 };
 
-/** When data last came in through this connection: the newest file imported from it. */
+/** When a file last came in through this connection: the newest file imported or pulled from it, among the files listed. */
 function lastImport(connection) {
   const latest = state.uploads.find((u) => u.from_connection_id === connection.connection_id);
   return latest ? latest.created_at : null;
+}
+
+/** The files the list does not hold (older than the newest ones, or not listed at all). */
+const filesCut = () => state.uploadsTotal > state.uploads.length;
+
+/**
+ * What the "last import" cell says. It claims only what the file list shows: a file imported from here, or that no
+ * file is listed as coming from here. Data can also reach a source without a file (Setup's "add from a connection",
+ * the scheduled refresh), so the empty answer is "No file imported yet", never "nothing came in".
+ */
+function whenText(connection) {
+  const imported = lastImport(connection);
+  if (imported) return `Last import ${fmtStamp(imported)}`;
+  if (state.uploadsError) return "";
+  if (filesCut()) return `No import in the newest ${fmtInt(state.uploads.length)} files`;
+  return "No file imported yet";
+}
+
+/** How an uploaded file came to be: its second line and the word before its date. */
+function fileOrigin(u) {
+  const from = u.from_connection_id ? connectionName(u.from_connection_id) : null;
+  switch (u.made_by) {
+    case "import":
+      return { kind: from ? `Imported from ${from}` : "Imported from a saved source", verb: "Imported" };
+    case "pull":
+      return { kind: from ? `Pulled from ${from}` : "Pulled from a saved source", verb: "Pulled" };
+    case "renamed_copy":
+      return { kind: "Copy with renamed columns. The file you sent is unchanged.", verb: "Made" };
+    case "recipe":
+      return { kind: "Built by Guided setup from another file", verb: "Built" };
+    default:
+      return { kind: "File", verb: "Added" };
+  }
 }
 
 function header(tab) {
@@ -106,7 +143,7 @@ function connectionActions(c) {
 }
 
 function connectionRow(c) {
-  const imported = lastImport(c);
+  const when = whenText(c);
   const addon = c.status === "needs_addon" ? `<span class="dt-sub">Ask your administrator to turn this on.</span>` : "";
   const unreadable =
     c.secrets_readable === false
@@ -119,21 +156,20 @@ function connectionRow(c) {
   return `<li class="dt-row" data-dt-source="connection" data-dt-id="${esc(c.connection_id)}">
     <div><h3 class="dt-name">${esc(c.name)}<span class="dt-sub">${esc(c.kind_label)}</span></h3></div>
     <div class="dt-cell" data-dt-health>${statusBadge(c)}${addon}${unreadable}</div>
-    <div class="dt-cell" data-dt-when>${imported ? esc(`Last import ${fmtStamp(imported)}`) : "Nothing imported yet"}</div>
+    <div class="dt-cell" data-dt-when>${esc(when)}</div>
     <div class="dt-actions">${confirming ? "" : connectionActions(c)}</div>${detail ? `<div class="dt-wide">${detail}</div>` : ""}
   </li>`;
 }
 
 function fileRow(u) {
-  const from = u.from_connection_id ? connectionName(u.from_connection_id) : null;
-  const kind = u.from_connection_id ? (from ? `Imported from ${from}` : "Imported from a saved source") : "Uploaded file";
+  const { kind, verb } = fileOrigin(u);
   const sample = u.synthetic ? " · Sample data" : "";
   return `<li class="dt-row" data-dt-source="file" data-dt-id="${esc(u.upload_id)}">
     <div><h3 class="dt-name">${esc(u.file_name)}<span class="dt-sub">${esc(`${kind}${sample}`)}</span></h3></div>
     <div class="dt-cell" data-dt-health><span class="pill ok cn-badge" data-dt-status="read">Read correctly</span><span class="dt-sub">${esc(
       `${plural(u.row_count, "row", "rows")} · ${plural(u.column_count, "column", "columns")} · ${fmtSize(u.file_size_bytes)}`,
     )}</span></div>
-    <div class="dt-cell" data-dt-when>${esc(`${u.from_connection_id ? "Imported" : "Uploaded"} ${fmtStamp(u.created_at)}`)}</div>
+    <div class="dt-cell" data-dt-when>${esc(`${verb} ${fmtStamp(u.created_at)}`)}</div>
     <div class="dt-actions"></div>
   </li>`;
 }
@@ -160,10 +196,22 @@ function sourcesHtml() {
   const connections = state.connections.map(connectionRow).join("");
   const shown = state.showAllFiles ? state.uploads : state.uploads.slice(0, FILES_SHOWN);
   const files = shown.map(fileRow).join("");
-  const more =
-    state.uploads.length > shown.length
-      ? `<div class="dt-more"><button type="button" class="btn quiet sm" data-dt-show-all>${esc(`Show all ${fmtInt(state.uploads.length)} files`)}</button></div>`
+  const hidden = state.uploads.length > shown.length;
+  // The list holds the newest files the API sent. When there are more files than that, the button must not say "all".
+  const button = hidden
+    ? `<button type="button" class="btn quiet sm" data-dt-show-all>${esc(
+        filesCut()
+          ? `Show the newest ${fmtInt(state.uploads.length)} files`
+          : `Show all ${fmtInt(state.uploads.length)} files`,
+      )}</button>`
+    : "";
+  const cut =
+    !hidden && filesCut()
+      ? `<span class="dt-sub" data-dt-cut>${esc(
+          `Showing the newest ${fmtInt(state.uploads.length)} of ${fmtInt(state.uploadsTotal)} files.`,
+        )}</span>`
       : "";
+  const more = button || cut ? `<div class="dt-more">${button}${cut}</div>` : "";
   const list =
     connections || files
       ? `<ul class="dt-list" aria-label="Your data sources">${connections}${files}</ul>${more}`
@@ -192,7 +240,7 @@ function checkHtml() {
 
 function draw() {
   const { app, tab } = view;
-  if (!app) return;
+  if (!app || !stillHere()) return;
   injectDataStyles();
   injectConnectionStyles();
   app.innerHTML = `<main class="screen dt" data-dt-tab-shown="${tab}">${header(tab)}${tabs(tab)}${
@@ -276,7 +324,7 @@ export const tabOf = (parts) => (parts[1] === "check" ? "check" : "sources");
 /** `registerModule`'s render for `#/data[/<tab>]`: paint a skeleton, load, draw. */
 export async function renderData(app, parts) {
   const tab = tabOf(parts);
-  view = { app, tab };
+  view = { app, tab, hash: window.location.hash };
   injectDataStyles();
   if (tab === "check") {
     draw();
@@ -299,10 +347,12 @@ export async function renderData(app, parts) {
   }
   if (files.status === "fulfilled") {
     state.uploads = files.value.uploads || [];
+    state.uploadsTotal = Number.isInteger(files.value.total) ? files.value.total : state.uploads.length;
   } else {
     state.uploads = [];
+    state.uploadsTotal = 0;
     state.uploadsError = files.reason;
   }
   if (view.app !== app || view.tab !== tab) return; // the person moved on
-  draw();
+  draw(); // (which also stays quiet when the hash has changed meanwhile)
 }

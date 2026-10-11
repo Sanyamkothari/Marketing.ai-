@@ -14,10 +14,12 @@ const world = {
   uploads: fixture("uploads").uploads,
   uploadsStatus: 200,
   connectionsStatus: 200,
+  total: null, // the `total` the fake API answers with; null means "every upload", like the real route
+  gate: null, // a promise the connection test waits for, to answer after the person has left
 };
 const sent = { tests: [], deletes: [] };
 
-const server = (request) => {
+const server = async (request) => {
   const { method, path, query } = request;
   if (method === "GET" && path === "/connections/kinds") return { status: 200, body: kinds };
   if (method === "GET" && path === "/connections") {
@@ -30,7 +32,8 @@ const server = (request) => {
     if (world.uploadsStatus !== 200) {
       return { status: world.uploadsStatus, body: { detail: { code: "INTERNAL", message: "Something went wrong." } } };
     }
-    return { status: 200, body: { uploads: world.uploads.slice(0, Number(query.limit || 100)) } };
+    const uploads = world.uploads.slice(0, Number(query.limit || 100));
+    return { status: 200, body: { uploads, total: world.total ?? world.uploads.length } };
   }
   const one = /^\/connections\/([^/]+)(?:\/(\w+))?$/.exec(path);
   if (one) {
@@ -42,6 +45,7 @@ const server = (request) => {
     }
     if (method === "POST" && action === "test") {
       sent.tests.push(id);
+      if (world.gate) await world.gate;
       return { status: 200, body: id === ids.s3 ? s3Tested : pgTested };
     }
   }
@@ -84,7 +88,7 @@ test("connections and uploaded files are one list, each with its health and date
   const rows = $$("[data-dt-source]");
   assert.deepEqual(
     rows.map((r) => r.dataset.dtSource),
-    ["connection", "connection", "file", "file"],
+    ["connection", "connection", "file", "file", "file", "file"],
     "connections first, then the files, newest first",
   );
   assert.equal($$(".dt-list").length, 1, "one list");
@@ -96,16 +100,63 @@ test("connections and uploaded files are one list, each with its health and date
 
   const failed = row(ids.pg);
   assert.match(text(failed.querySelector("[data-dt-health]")), /^Failed: /);
-  assert.equal(text(failed.querySelector("[data-dt-when]")), "Nothing imported yet");
+  assert.equal(text(failed.querySelector("[data-dt-when]")), "No file imported yet", "it claims only what the list shows");
 
   const direct = row(ids.direct);
   assert.match(text(direct.querySelector("[data-dt-health]")), /^Read correctly300 rows · \d+ columns · [\d.]+ (KB|MB)$/);
-  assert.match(text(direct.querySelector("[data-dt-when]")), /^Uploaded \d{2} \w{3} \d{4}/);
-  assert.match(text(direct.querySelector(".dt-sub")), /^Uploaded file$/);
+  assert.match(text(direct.querySelector("[data-dt-when]")), /^Added \d{2} \w{3} \d{4}/);
+  assert.match(text(direct.querySelector(".dt-sub")), /^File$/, "a file with no marker is not said to be uploaded by a person");
 
   const imported = row(ids.imported);
   assert.match(text(imported.querySelector(".dt-sub")), /^Imported from Exports$/);
+  assert.match(text(imported.querySelector("[data-dt-when]")), /^Imported \d{2} \w{3} \d{4}/);
   assert.match(text(imported.querySelector("[data-dt-health]")), /^Read correctly600 rows/);
+});
+
+test("a file pulled from a connection, a renamed copy and a built dataset are each named for what they are", async () => {
+  const copyOf = world.uploads.find((u) => u.upload_id === ids.copy);
+  const built = { ...copyOf, upload_id: "u_built0000001", file_name: "customers_prepared.parquet", made_by: "recipe" };
+  world.uploads = [...world.uploads, built];
+  await show("#/data");
+
+  const pulled = row(ids.pulled);
+  assert.match(text(pulled.querySelector(".dt-sub")), /^Pulled from Exports$/);
+  assert.match(text(pulled.querySelector("[data-dt-when]")), /^Pulled \d{2} \w{3} \d{4}/);
+
+  const copy = row(ids.copy);
+  assert.equal(copyOf.file_name, ids.hostile_file, "the copy has the same name as the file sent: the row says which it is");
+  assert.match(text(copy.querySelector(".dt-sub")), /^Copy with renamed columns\. The file you sent is unchanged\.$/);
+  assert.match(text(copy.querySelector("[data-dt-when]")), /^Made /);
+  assert.match(text(row(ids.direct).querySelector(".dt-sub")), /^File$/, "the file that was sent keeps its own label");
+
+  assert.match(text(row("u_built0000001").querySelector(".dt-sub")), /^Built by Guided setup from another file$/);
+  assert.match(text(row("u_built0000001").querySelector("[data-dt-when]")), /^Built /);
+  for (const r of $$("[data-dt-source='file']")) assert.ok(!/Uploaded/.test(text(r)), "no row claims a person uploaded it");
+  world.uploads = world.uploads.filter((u) => u.upload_id !== "u_built0000001");
+});
+
+test("a connection whose data came by a pulled file dates its last import from it", async () => {
+  const saved = world.uploads;
+  world.uploads = saved.filter((u) => u.upload_id === ids.pulled);
+  await show("#/data");
+  assert.match(text(row(ids.s3).querySelector("[data-dt-when]")), /^Last import \d{2} \w{3} \d{4}/);
+  world.uploads = saved;
+});
+
+test("a connection with no file in the list never claims that nothing came in", async () => {
+  const saved = world.uploads;
+  world.uploads = [];
+  await show("#/data");
+  for (const c of world.connections) {
+    const said = text(row(c.connection_id).querySelector("[data-dt-when]"));
+    assert.equal(said, "No file imported yet");
+    assert.ok(!/nothing/i.test(said), "data can also reach a source without a file (Setup, the scheduled refresh)");
+  }
+  world.uploadsStatus = 500;
+  await show("#/data");
+  assert.equal(text(row(ids.s3).querySelector("[data-dt-when]")), "", "when the files cannot be listed it says nothing about imports");
+  world.uploadsStatus = 200;
+  world.uploads = saved;
 });
 
 test("a name that carries markup is shown as text", async () => {
@@ -231,8 +282,41 @@ test("a long list of files shows 25, then all", async () => {
   await settle();
   assert.equal($$("[data-dt-source='file']").length, 30);
   assert.equal($("[data-dt-show-all]"), null);
+  assert.equal($("[data-dt-cut]"), null, "all of them are shown: nothing to add");
   world.uploads = saved;
   world.connections = fixture("connections").connections;
+});
+
+test("when there are more files than the list holds, the button and the page say 'newest', never 'all'", async () => {
+  const saved = world.uploads;
+  world.uploads = Array.from({ length: 30 }, (_, i) => ({ ...saved[0], upload_id: `u_${String(i).padStart(12, "0")}`, file_name: `file-${i}.csv` }));
+  world.total = 120; // the API holds 120 files; the page asked for the newest and got 30
+  await show("#/data");
+  assert.equal(text($("[data-dt-show-all]")), "Show the newest 30 files");
+  assert.ok(!/Show all/.test(text($("main.dt"))));
+  $("[data-dt-show-all]").click();
+  await settle();
+  assert.equal($$("[data-dt-source='file']").length, 30);
+  assert.equal(text($("[data-dt-cut]")), "Showing the newest 30 of 120 files.");
+  assert.equal(text(row(ids.pg).querySelector("[data-dt-when]")), "No import in the newest 30 files", "an older import may exist");
+  world.total = null;
+  world.uploads = saved;
+});
+
+test("a connection test that answers after the person has left does not paint over the page they went to", async () => {
+  await show("#/data");
+  sent.tests.length = 0;
+  let release;
+  world.gate = new Promise((resolve) => (release = resolve));
+  row(ids.pg).querySelector("[data-dt-test]").click();
+  await until(() => sent.tests.length === 1, 2000, "the test call");
+  w.history.replaceState(null, "", "/ui/#/doctor");
+  app.innerHTML = '<main class="screen"><h1 class="h1">Data Doctor</h1></main>'; // what the router drew for #/doctor
+  release();
+  world.gate = null;
+  await settle(10);
+  assert.equal(text($("h1")), "Data Doctor", "Doctor is still on the screen");
+  assert.equal($("main.dt"), null, "the Data page did not come back");
 });
 
 test("drawing the page asks only for what it shows", async () => {

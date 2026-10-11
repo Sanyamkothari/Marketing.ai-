@@ -106,9 +106,6 @@ const dump = process.env.GLOSSARY_DUMP || "";
 
 const { w, state, missing } = installDemoPage({ hash: "#/__start" });
 await loadModules();
-// Plan M pages that ui/index.html does not load yet (the integrator adds their <script> tags): importing the entry
-// point registers the route, and is a no-op once index.html has loaded it.
-await import("../../../../../ui/modules/data/index.js");
 
 /** Wait until the page has stopped changing: nothing in flight and the same markup for a few ticks. */
 async function untilStable(ms = 10000) {

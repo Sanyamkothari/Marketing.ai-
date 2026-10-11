@@ -18,7 +18,9 @@ from api.access_policy import policy_for
 from api.main import create_app
 from engine.access.roles import Role
 from engine.storage import LocalStorage
+from tests.fixtures.agent_bench.make_messy import messy_frame
 from tests.fixtures.make_data import GenerationSpec, generate
+from tests.integration.agent.test_api_session import _decide_everything
 
 pytestmark = pytest.mark.integration
 
@@ -51,7 +53,7 @@ def _upload(client: TestClient, name: str, rows: int = 300) -> dict[str, Any]:
 def test_no_uploads_is_an_empty_list_not_an_error(client: TestClient) -> None:
     response = client.get("/uploads")
     assert response.status_code == 200
-    assert response.json() == {"uploads": []}
+    assert response.json() == {"uploads": [], "total": 0}
 
 
 def test_every_upload_is_listed_newest_first_with_what_the_data_page_shows(client: TestClient) -> None:
@@ -82,7 +84,10 @@ def test_every_upload_is_listed_newest_first_with_what_the_data_page_shows(clien
         "synthetic",
         "created_at",
         "from_connection_id",
+        "made_by",
     }
+    assert newest["made_by"] == "file"
+    assert body["total"] == 2
 
 
 def test_limit_keeps_the_newest(client: TestClient) -> None:
@@ -92,6 +97,14 @@ def test_limit_keeps_the_newest(client: TestClient) -> None:
     limited = [u["upload_id"] for u in client.get("/uploads", params={"limit": 2}).json()["uploads"]]
     assert limited == ids[:2]
     assert client.get("/uploads", params={"limit": 0}).status_code == 422
+
+
+def test_total_counts_every_upload_even_when_the_list_is_cut(client: TestClient) -> None:
+    for index in range(3):
+        _upload(client, f"file-{index}.csv", rows=200)
+    body = client.get("/uploads", params={"limit": 2}).json()
+    assert len(body["uploads"]) == 2
+    assert body["total"] == 3, "the page words its 'newest N' button from this"
 
 
 def test_an_unreadable_upload_record_is_skipped_not_fatal(client: TestClient, data_dir: Path) -> None:
@@ -111,6 +124,54 @@ def test_a_file_imported_from_a_connection_says_which(client: TestClient, data_d
     )
     (entry,) = client.get("/uploads").json()["uploads"]
     assert entry["from_connection_id"] == "cn_abc"
+    assert entry["made_by"] == "import"
+
+
+def test_a_file_pulled_from_a_connection_says_which(client: TestClient, data_dir: Path) -> None:
+    """Outcomes pulled from a saved connection (`POST /campaigns/{id}/measure`) leave `pull_source.json`, not an import marker."""
+    upload = _upload(client, "orders 2026-09-01 to 2026-09-30.csv", rows=200)
+    LocalStorage(data_dir).write_text(
+        f"uploads/{upload['upload_id']}/pull_source.json",
+        '{"connection_id": "cn_pull", "kind": "postgres", "path": null, "prefix": null, "schema_name": "public", '
+        '"table": "orders", "window": null, "filtered_by": null, "rows": 200, "unreadable_dates": 0, '
+        '"pulled_at": "2026-10-11T00:00:00Z"}',
+    )
+    (entry,) = client.get("/uploads").json()["uploads"]
+    assert entry["from_connection_id"] == "cn_pull"
+    assert entry["made_by"] == "pull"
+
+
+def test_a_renamed_copy_made_through_the_route_says_it_is_a_copy(client: TestClient) -> None:
+    """The copy has the same file name as the file sent, so only the marker tells the two rows apart."""
+    sent = _upload(client, "billing.csv", rows=300)
+    column = next(iter(sent["profile"]["fingerprint"]["columns"]))
+    copied = client.post(
+        f"/uploads/{sent['upload_id']}/renamed-copy",
+        json={"renames": [{"column": column, "new_name": "renamed_by_a_person"}]},
+    )
+    assert copied.status_code == 201, copied.text
+    listed = {u["upload_id"]: u for u in client.get("/uploads").json()["uploads"]}
+    assert listed[sent["upload_id"]]["made_by"] == "file"
+    assert listed[copied.json()["upload_id"]]["made_by"] == "renamed_copy"
+    assert listed[copied.json()["upload_id"]]["file_name"] == "billing.csv"
+
+
+def test_a_dataset_built_by_guided_setup_says_it_was_built(client: TestClient) -> None:
+    response = client.post(
+        "/uploads",
+        data={"use_case": USE_CASE, "mode": "train"},
+        files={"file": ("messy.csv", messy_frame(3_000, seed=7).to_csv(index=False).encode(), "text/csv")},
+    )
+    assert response.status_code == 201, response.text
+    upload_id = response.json()["upload_id"]
+    started = client.post(f"/uploads/{upload_id}/agent-session", json={"use_case": USE_CASE})
+    assert started.status_code == 201, started.text
+    assert _decide_everything(client, upload_id)["status"] == "ready"
+    applied = client.post(f"/uploads/{upload_id}/agent-session/apply")
+    assert applied.status_code == 200, applied.text
+    listed = {u["upload_id"]: u["made_by"] for u in client.get("/uploads").json()["uploads"]}
+    assert listed[applied.json()["upload_id"]] == "recipe"
+    assert listed[upload_id] == "file"
 
 
 def test_reading_the_list_needs_only_the_viewer_role() -> None:
