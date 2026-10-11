@@ -36,6 +36,7 @@ MODULES: Final[tuple[str, ...]] = (
     "chrome.js",  # the one top bar (v1, docs/ui/FOUNDATION.md)
     "cost.js",  # the cost line beside Run, its confirmation and the Cost page's markup (Plan J M108, DEC-1318)
     "dom.js",
+    "labels.js",  # the glossary as data and the never-shown words of the visible-text check (Plan M M170, DEC-1600)
     "overview.js",
     "pages.js",
     "power.js",  # the control-group size card on a scoring run's Output page (DEC-1234)

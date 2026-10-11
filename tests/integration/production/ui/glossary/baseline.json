@@ -1,0 +1,258 @@
+{
+  "add-outcomes": {
+    "run": 3,
+    "control group": 1,
+    "use case": 1
+  },
+  "approvals": {
+    "use case": 2,
+    "train": 1
+  },
+  "audit-campaign": {
+    "causal": 1,
+    "control group": 1,
+    "score": 1
+  },
+  "campaign-conversion": {
+    "control group": 1,
+    "run": 1
+  },
+  "campaign-results-scoring": {
+    "run": 4,
+    "scoring run": 2,
+    "control group": 1
+  },
+  "campaign-spend": {
+    "control group": 1,
+    "run": 1
+  },
+  "campaigns-scored-lists": {
+    "run": 1,
+    "use case": 1
+  },
+  "connections": {
+    "run": 3,
+    "score": 1,
+    "train": 1,
+    "use case": 1
+  },
+  "contact-list-uplift-scoring": {
+    "uplift": 14,
+    "propensity": 5,
+    "run": 5,
+    "holdout": 2,
+    "holdout = 1": 2,
+    "scoring run": 2,
+    "treat = 1": 2,
+    "treat list": 2,
+    "auuc": 1,
+    "control group": 1,
+    "ensemble": 1,
+    "explore = 1": 1,
+    "lightgbm": 1,
+    "score": 1,
+    "scored list": 1
+  },
+  "contact-list-uplift-training": {
+    "uplift": 11,
+    "run": 3,
+    "hold-out": 2,
+    "scoring run": 2,
+    "band": 1,
+    "score": 1,
+    "training": 1
+  },
+  "cost": {
+    "run": 10
+  },
+  "data-request-kit": {
+    "use case": 3,
+    "propensity": 2,
+    "run": 1
+  },
+  "data-scoring": {
+    "run": 6,
+    "band": 1
+  },
+  "data-training": {
+    "run": 5,
+    "training": 2,
+    "band": 1
+  },
+  "data-uplift-training": {
+    "train": 2,
+    "uplift": 2,
+    "causal": 1,
+    "training": 1
+  },
+  "home": {
+    "propensity": 1
+  },
+  "model-health": {
+    "run": 1,
+    "treat list": 1
+  },
+  "model-scoring": {
+    "run": 3,
+    "ensemble": 1,
+    "lightgbm": 1,
+    "propensity": 1,
+    "score": 1,
+    "scoring run": 1,
+    "training": 1
+  },
+  "model-training": {
+    "score": 7,
+    "run": 4,
+    "training": 3,
+    "ensemble": 1,
+    "lightgbm": 1,
+    "logistic regression": 1,
+    "propensity": 1
+  },
+  "model-uplift-training": {
+    "uplift": 3,
+    "score": 2,
+    "scoring run": 2,
+    "champion": 1,
+    "qini": 1,
+    "run": 1
+  },
+  "output-scoring": {
+    "control group": 8,
+    "run": 5,
+    "band": 4,
+    "holdout": 2,
+    "holdout = 1": 2,
+    "score": 2,
+    "treat = 1": 2,
+    "treat list": 2,
+    "explore = 1": 1,
+    "propensity": 1,
+    "scored list": 1,
+    "uplift": 1
+  },
+  "output-training": {
+    "score": 5
+  },
+  "proof-pack-conversion": {
+    "causal": 1
+  },
+  "proof-pack-spend": {
+    "causal": 1
+  },
+  "reports": {
+    "ensemble": 1,
+    "lightgbm": 1,
+    "use case": 1
+  },
+  "results": {
+    "run": 7,
+    "causal": 3,
+    "use case": 2,
+    "auuc": 1,
+    "control group": 1,
+    "score": 1,
+    "train": 1
+  },
+  "run-scoring": {
+    "lightgbm": 6,
+    "ensemble": 4,
+    "training": 2,
+    "x-learner": 2,
+    "auuc": 1,
+    "run": 1,
+    "score": 1,
+    "use case": 1
+  },
+  "run-training": {
+    "lightgbm": 6,
+    "training": 5,
+    "ensemble": 4,
+    "x-learner": 2,
+    "auuc": 1,
+    "run": 1,
+    "score": 1,
+    "train": 1,
+    "use case": 1
+  },
+  "run-uplift-scoring": {
+    "lightgbm": 6,
+    "x-learner": 4,
+    "ensemble": 2,
+    "training": 2,
+    "auuc": 1,
+    "run": 1,
+    "score": 1,
+    "use case": 1
+  },
+  "run-uplift-training": {
+    "lightgbm": 6,
+    "training": 5,
+    "auuc": 4,
+    "x-learner": 4,
+    "ensemble": 2,
+    "run": 1,
+    "score": 1,
+    "train": 1,
+    "use case": 1
+  },
+  "schedules": {
+    "run": 4,
+    "propensity": 3,
+    "recipe": 3,
+    "use case": 2,
+    "score": 1,
+    "uplift": 1
+  },
+  "settings": {
+    "run": 2,
+    "uplift": 2,
+    "score": 1,
+    "train": 1,
+    "use case": 1
+  },
+  "setup-guided-hillstrom": {
+    "lightgbm": 4,
+    "ensemble": 2,
+    "run": 2,
+    "training": 2,
+    "x-learner": 2,
+    "auuc": 1,
+    "score": 1,
+    "train": 1
+  },
+  "setup-guided-win-back": {
+    "run": 4,
+    "score": 1,
+    "train": 1
+  },
+  "setup-manual-hillstrom": {
+    "lightgbm": 4,
+    "training": 3,
+    "ensemble": 2,
+    "run": 2,
+    "x-learner": 2,
+    "auuc": 1,
+    "score": 1,
+    "train": 1
+  },
+  "setup-manual-win-back": {
+    "run": 4,
+    "score": 1,
+    "train": 1,
+    "training": 1
+  },
+  "setup-manual-win-back-score": {
+    "run": 3,
+    "score": 3,
+    "train": 3
+  },
+  "uplift-workbench": {
+    "uplift": 11,
+    "control group": 2,
+    "use case": 2,
+    "propensity": 1,
+    "train": 1
+  }
+}

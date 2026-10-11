@@ -888,7 +888,7 @@ function modelPage(uc, run, art, byPath, extra = {}) {
 
   // Collapsed by default below the default view; `bindPage` loads the plot the first time it opens.
   const shapOn = config ? readPath(config, "evaluation.shap") : undefined;
-  const detailsCard = `<section class="card"><details class="bs-details" data-beeswarm="${esc(
+  const detailsCard = `<section class="card"><details class="bs-details" data-technical data-beeswarm="${esc(
     run.run_id,
   )}" data-shap="${esc(String(shapOn))}"><summary><span class="mt">Details</span><span class="ms">SHAP beeswarm: how the top 15 details push each ${esc(entityOf(uc))}'s score up or down</span></summary><div class="bs-body"><p class="caption">Loading…</p></div></details></section>`;
 

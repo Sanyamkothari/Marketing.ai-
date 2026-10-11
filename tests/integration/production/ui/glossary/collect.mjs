@@ -1,0 +1,49 @@
+/* What a person can read on a page, for the visible-text check (Plan M, M170).
+
+   Visible text is every text node, plus the attributes a person reads (aria-label, title, placeholder),
+   EXCEPT what sits in:
+     - a technical section: any element with class "tech" (today always `<details class="tech">`),
+       any element with [data-technical], and any <details> whose summary says "Technical details";
+     - a hidden element: the `hidden` attribute, or an inline display:none / visibility:hidden;
+     - <script>, <style>, <template>, <noscript>.
+   The page's style sheet is not loaded in jsdom, so a class that hides an element in CSS cannot be seen
+   here; pages that hide content use `hidden` (or a closed <details>, whose contents count: they are one
+   click away from a marketer and must not carry engine words either, unless marked technical). */
+
+const SKIP_TAGS = new Set(["SCRIPT", "STYLE", "TEMPLATE", "NOSCRIPT", "HEAD"]);
+const READ_ATTRIBUTES = ["aria-label", "title", "placeholder"];
+
+/** Whether this element and everything inside it is left out of the visible text. */
+export function isExcluded(element) {
+  if (SKIP_TAGS.has(element.tagName.toUpperCase())) return true;
+  if (element.hasAttribute("hidden")) return true;
+  const inline = (element.getAttribute("style") || "").replace(/\s+/g, "").toLowerCase();
+  if (inline.includes("display:none") || inline.includes("visibility:hidden")) return true;
+  if (element.classList.contains("tech") || element.hasAttribute("data-technical")) return true;
+  if (element.tagName.toUpperCase() === "DETAILS") {
+    const summary = [...element.children].find((c) => c.tagName.toUpperCase() === "SUMMARY");
+    if (summary && /^\s*technical details\s*$/i.test(summary.textContent)) return true;
+  }
+  return false;
+}
+
+/** The visible text under `root`, one piece per line. */
+export function visibleText(root) {
+  const pieces = [];
+  const walk = (node) => {
+    if (node.nodeType === 3) {
+      const text = node.nodeValue.replace(/\s+/g, " ").trim();
+      if (text) pieces.push(text);
+      return;
+    }
+    if (node.nodeType !== 1) return;
+    if (isExcluded(node)) return;
+    for (const name of READ_ATTRIBUTES) {
+      const value = node.getAttribute(name);
+      if (value && value.trim()) pieces.push(value.replace(/\s+/g, " ").trim());
+    }
+    for (const child of node.childNodes) walk(child);
+  };
+  walk(root);
+  return pieces.join("\n");
+}
