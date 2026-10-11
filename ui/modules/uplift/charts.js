@@ -58,7 +58,7 @@ export function qiniChart(curve) {
     .filter((p) => present(p.fraction) && present(p.qini) && present(p.random))
     .slice()
     .sort((a, b) => a.fraction - b.fraction);
-  if (points.length < 2) return empty("Available after training.");
+  if (points.length < 2) return empty("Available once the model is built.");
   const values = points.flatMap((p) => [p.qini, p.random]);
   const ticks = niceTicks(Math.min(0, ...values), Math.max(0, ...values), 5);
   const lo = ticks[0];
@@ -92,7 +92,7 @@ export function qiniChart(curve) {
     )
     .join("");
   const last = points[points.length - 1];
-  const label = `Qini curve over ${points.length} points: gain from targeting by the model vs at random; contacting everyone gives ${fmtNum(
+  const label = `Gain curve over ${points.length} points: gain from targeting by the model vs at random; contacting everyone gives ${fmtNum(
     last.qini * 100,
     1,
   )}% extra responses`;
@@ -114,7 +114,7 @@ export function qiniChart(curve) {
  */
 export function decileChart(deciles) {
   const rows = (deciles || []).slice().sort((a, b) => a.decile - b.decile);
-  if (!rows.length) return empty("Available after training.");
+  if (!rows.length) return empty("Available once the model is built.");
   const values = rows.flatMap((d) => [d.observed_uplift, d.predicted_uplift]).filter(present);
   const ticks = niceTicks(Math.min(0, ...values), Math.max(0, ...values), 5);
   const lo = ticks[0];
@@ -173,11 +173,11 @@ export function decileChart(deciles) {
  */
 export function segmentChart(report) {
   const segments = (report && report.segments) || [];
-  if (!segments.length) return empty("Available after training.");
+  if (!segments.length) return empty("Available once the model is built.");
   const rows = segments
     .map((s) => {
       const share = present(s.share_pct) ? Math.max(0, Math.min(100, Number(s.share_pct))) : 0;
-      const uplift = present(s.mean_predicted_uplift) ? `uplift ${fmtPts(s.mean_predicted_uplift, 1, true)}` : "";
+      const uplift = present(s.mean_predicted_uplift) ? `effect ${fmtPts(s.mean_predicted_uplift, 1, true)}` : ""; // Plan M M172: "uplift" reads "effect"
       const label = `${s.label}: ${present(s.rows) ? fmtInt(s.rows) : EM_DASH} customers, ${
         present(s.share_pct) ? fmtNum(s.share_pct, 1) : EM_DASH
       }%${uplift ? `, predicted ${uplift}` : ""}`;
@@ -211,7 +211,7 @@ export function profitChart(curve, selected = null) {
     .sort((a, b) => a.contacts - b.contacts);
   const maxX = curve && present(curve.max_contacts) ? curve.max_contacts : 0;
   if (points.length < 2 || !(maxX > 0)) {
-    return empty("The net value curve needs a cost per contact, a value per conversion and a measured hold-out.");
+    return empty("The net value curve needs a cost per contact, a value per conversion and a measured comparison group.");
   }
   const banded = points.filter((p) => present(p.net_value_low) && present(p.net_value_high));
   const values = [

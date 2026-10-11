@@ -11,7 +11,10 @@ screens' tests do):
   allow-list (`baseline.json`) or is shown more often than the list allows. The same suite plants a violation and expects
   the check to fail.
 
-The baseline table the second suite prints is M172's to-do list; run this file with `-s` to see it.
+M172 (DEC-1602) emptied the baseline: every page now passes with an empty allow-list, and the file stays as an empty
+object so the check forbids any regression. A third suite, `words_numbers.test.mjs`, draws the same demo pages and pins
+M172's other changes: the goal names of Plan M section 4.2, Home's "More goals" and stage labels, the one money format
+(`ui/format.js`, exact figures in tooltips), the short campaign names and the mark on names the person supplied.
 
 Node and jsdom are a development dependency of that one directory: without them the tests skip with the install command,
 or fail under `REQUIRE_JSDOM=1` as CI sets it (`tests/fixtures/node.py`).
@@ -70,9 +73,28 @@ def test_the_baseline_is_a_plain_table_of_page_term_count() -> None:
             assert term == term.lower() and isinstance(count, int) and count > 0, (page, term, count)
 
 
+def test_the_baseline_is_empty_so_no_page_may_show_an_engine_word() -> None:
+    """Plan M M172 (DEC-1602): the sweep is done. The file stays, as an empty object, so the check forbids any regression."""
+    baseline: dict[str, dict[str, int]] = json.loads(
+        (GLOSSARY_DIR / "baseline.json").read_text(encoding="utf-8")
+    )
+    assert (
+        baseline == {}
+    ), f"M172 emptied the baseline; these pages show engine words again: {sorted(baseline)}"
+
+
 def test_the_glossary_and_the_visible_text_check_in_jsdom() -> None:
     node = skip_without_jsdom(NODE_DIR)
-    tests = [str(GLOSSARY_DIR / "labels.test.mjs"), str(GLOSSARY_DIR / "visible_text.test.mjs")]
+    tests = [
+        str(GLOSSARY_DIR / "labels.test.mjs"),
+        str(GLOSSARY_DIR / "visible_text.test.mjs"),
+        str(
+            GLOSSARY_DIR / "m172_labels.test.mjs"
+        ),  # Plan M M172: goal names, plainText, userText, short names
+        str(
+            GLOSSARY_DIR / "words_numbers.test.mjs"
+        ),  # Plan M M172: goal names, Home, numbers, short campaign names
+    ]
     result = subprocess.run(
         [node, "--test", *tests],
         cwd=NODE_DIR,

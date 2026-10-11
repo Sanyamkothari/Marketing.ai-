@@ -20,6 +20,7 @@ Contract schema version: 1.
 | POST | `/auth/login` | Sign in | LoginResponse |
 | POST | `/auth/logout` | Sign out | - |
 | GET | `/auth/me` | Who am I, and what may I do | MeResponse |
+| PUT | `/auth/me/preferences` | Change your own display choices | PreferencesView |
 | GET | `/campaigns` | Campaigns, newest first | CampaignListResponse |
 | POST | `/campaigns` | Record a campaign sent from a finished scoring run's list | CampaignView |
 | POST | `/campaigns/audit` | Audit a campaign another tool ran: who was in which group, and what happened | CampaignView |

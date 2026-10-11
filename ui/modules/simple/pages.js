@@ -37,7 +37,29 @@ import {
   present,
   sortNote,
 } from "../../dom.js";
+import { technicalSwitchHtml } from "../../technical.js"; // Plan M M180 (DEC-1610)
 import { RUNS_SHOWN } from "./api.js";
+import { campaignNameHtml, campaignNames, figureHtml } from "../../format.js"; // Plan M M172 (DEC-1602)
+import { goalName, goalShortName, plainText, term, userText } from "../../labels.js";
+
+/**
+ * Plan M M172: each campaign's two names (`GET /campaigns`), by id - the short one (goal and month) for lists and
+ * the label recorded with it as the subtitle. Empty when the list could not be read: a campaign then shows its label.
+ */
+export function campaignNameIndex(body) {
+  const index = {};
+  for (const campaign of (body && body.campaigns) || []) {
+    if (campaign && campaign.campaign_id) index[campaign.campaign_id] = campaignNames(campaign, goalShortName);
+  }
+  return index;
+}
+
+/** A campaign's name on a list: its short name and subtitle when known, else its recorded label (the person's words). */
+function campaignCell(names, id, label, { link = "", attrs = "" } = {}) {
+  if (id && names && names[id]) return campaignNameHtml(names[id], { link, attrs });
+  const shown = label ? userText(label) : esc(EM_DASH);
+  return link ? `<a href="${esc(link)}"${attrs ? ` ${attrs}` : ""}>${shown}</a>` : shown;
+}
 
 // --- Results -------------------------------------------------------------------------------------
 
@@ -55,17 +77,17 @@ function statusPill(state) {
   return tone === "neutral" ? `<span class="chip neutral">${esc(label)}</span>` : `<span class="pill ${tone}">${esc(label)}</span>`;
 }
 
-/** What the run did, in words. */
-const modeWords = (run) => (run.mode === "score" ? "Scored new data" : "Trained a model");
+/** What the run did, in words (Plan M §4.1: a run is a model built or a contact list made). */
+const modeWords = (run) => (run.mode === "score" ? "Made a contact list" : "Built a model");
 
 /** The one outcome that matters for this run, or the em dash while it has none. */
 export function outcomeText(run) {
   if (run.state === "done") {
     if (run.mode === "train") {
       const label = metricShortName(run.headline_metric, run.headline_metric_label);
-      return present(run.headline_score) && label ? `${label} ${fmtMetric(run.headline_score)}` : "Model trained";
+      return present(run.headline_score) && label ? `${label} ${fmtMetric(run.headline_score)}` : "Model built";
     }
-    return present(run.row_count) ? `${fmtInt(run.row_count)} rows scored` : "Scored";
+    return present(run.row_count) ? `${fmtInt(run.row_count)} rows ranked` : "Ranked";
   }
   if (run.state === "failed") {
     const error = run.error || {};
@@ -82,7 +104,7 @@ function approvalsNotice(waiting) {
   if (!waiting) return "";
   return noticeCard({
     title: waiting === 1 ? "1 model is waiting for approval" : `${fmtInt(waiting)} models are waiting for approval`,
-    text: "A newly trained model is used only after someone approves it.",
+    text: "A newly built model is used only after someone approves it.",
     action: { label: "Review", href: "#/approvals", kind: "primary" },
     attrs: "data-approvals",
   });
@@ -93,13 +115,16 @@ function approvalsNotice(waiting) {
  * name, the pack's one-sentence result and what its numbers can claim, all in the server's words, with a
  * link to the pack. Nothing is drawn when no pack is ready or the list could not be read.
  */
-export function proofsCardHtml(proofs) {
+export function proofsCardHtml(proofs, names = {}) {
   const ready = ((proofs && proofs.proofs) || []).filter((entry) => entry.status === "ready");
   if (!ready.length) return "";
   const rows = ready.map((entry) => [
-    `<a href="#/pilot/proof/${esc(encodeURIComponent(entry.campaign_id))}" data-proof="${esc(entry.campaign_id)}">${esc(entry.name)}</a>`,
-    esc(entry.headline || EM_DASH),
-    esc(entry.claim_label || EM_DASH),
+    campaignCell(names, entry.campaign_id, entry.name, {
+      link: `#/pilot/proof/${encodeURIComponent(entry.campaign_id)}`,
+      attrs: `data-proof="${esc(entry.campaign_id)}"`,
+    }),
+    esc(plainText(entry.headline || EM_DASH)),
+    esc(plainText(entry.claim_label || EM_DASH)),
   ]);
   return `<section class="card" data-proofs><h3>Value Proof Packs${sortNote("newest first")}</h3>${dataTable(
     [{ label: "Campaign" }, { label: "What it shows" }, { label: "What it can claim" }],
@@ -113,7 +138,7 @@ export function proofsCardHtml(proofs) {
  * Every word and number is the server's (a figure's `text`); nothing is computed or filled in here, so with no
  * answer (null: a role without it, or an API without the route) or an answer with nothing in it, nothing is drawn.
  */
-export function summaryCardHtml(summary) {
+export function summaryCardHtml(summary, names = {}) {
   if (!summary || typeof summary !== "object") return "";
   const cards = Array.isArray(summary.cards) ? summary.cards : [];
   const proven = summary.proven && typeof summary.proven === "object" ? summary.proven : null;
@@ -125,7 +150,7 @@ export function summaryCardHtml(summary) {
   const attention = cards.length
     ? `<section class="card sp-summary" data-attention><h3>Needs your attention</h3><ul class="sp-list">${cards
         .map((card) => {
-          const who = text(card.campaign_name);
+          const who = text(card.campaign_name) || (names[card.campaign_id] ? names[card.campaign_id].long : "");
           const facts = (card.facts || [])
             .filter((fact) => text(fact.value))
             .map((fact) => `<li>${esc(fact.label)}: <strong>${esc(text(fact.value))}</strong></li>`)
@@ -139,18 +164,34 @@ export function summaryCardHtml(summary) {
           }${
             // PLAN-K (M139): the card's use case, so "Draft a plan" (ui/modules/agentic) can name the card.
             card.use_case_id ? ` data-card-use-case="${esc(card.use_case_id)}"` : ""
-          }><span class="sp-label">${esc(card.title)}</span>${who ? `<span class="sp-text">${esc(who)}</span>` : ""}<span class="sp-text">${esc(
-            card.text,
-          )}</span>${facts ? `<ul class="sp-facts">${facts}</ul>` : ""}<span class="sp-text"><em>${esc(card.next_step)}</em>${pack}</span></li>`;
+          }><span class="sp-label">${esc(plainText(card.title))}</span>${
+            who ? `<span class="sp-text">${campaignCell(names, card.campaign_id, who)}</span>` : ""
+          }<span class="sp-text">${esc(plainText(card.text))}</span>${
+            facts ? `<ul class="sp-facts">${facts}</ul>` : ""
+          }<span class="sp-text"><em>${esc(plainText(card.next_step))}</em>${pack}</span></li>`;
         })
         .join("")}</ul></section>`
     : "";
+  // Plan M M172: the campaign's short name, and each lower bound in the one number format (exact in the tooltip).
   const line = (item, unit) =>
-    `<li data-line="${esc(item.campaign_id)}">${esc(text(item.campaign_name))}: ${esc(text(item.lower_bound))}${unit ? ` ${esc(unit)}` : ""}</li>`;
+    `<li data-line="${esc(item.campaign_id)}">${campaignCell(names, item.campaign_id, text(item.campaign_name))}: ${figureHtml(
+      item.lower_bound,
+    )}${unit ? ` ${esc(unit)}` : ""}</li>`;
+  // The total's own figure in the label ("at least <total> ...") is drawn by the one number format too, so the
+  // headline reads as the lines under it ("Rs 4.18 lakh", exact in the tooltip). Found by the figure's text, never
+  // by position; a label that does not carry that text is shown as the server wrote it.
+  const totalLabel = (total) => {
+    const label = plainText(total.label || "");
+    const figure = total.total;
+    const at = figure && figure.text ? label.indexOf(String(figure.text)) : -1;
+    return at < 0
+      ? esc(label)
+      : `${esc(label.slice(0, at))}${figureHtml(figure)}${esc(label.slice(at + String(figure.text).length))}`;
+  };
   const sums = totals
     .map(
       (total) =>
-        `<li class="sp-entry" data-total="${esc(total.unit)}"><span class="sp-label">${esc(total.label)}</span><ul class="sp-facts">${(
+        `<li class="sp-entry" data-total="${esc(total.unit)}"><span class="sp-label">${totalLabel(total)}</span><ul class="sp-facts">${(
           total.campaigns || []
         )
           .map((c) => line(c))
@@ -160,9 +201,11 @@ export function summaryCardHtml(summary) {
   const aside = apart
     .map(
       (item) =>
-        `<li class="sp-entry" data-apart="${esc(item.campaign_id)}"><span class="sp-label">${esc(text(item.campaign_name))}</span><span class="sp-text">${esc(
-          item.claim_label,
-        )}. ${esc(item.reason)}${text(item.counted_as) ? ` <strong data-counted-as>${esc(text(item.counted_as))}</strong>` : ""}</span>${
+        `<li class="sp-entry" data-apart="${esc(item.campaign_id)}"><span class="sp-label">${campaignCell(
+          names,
+          item.campaign_id,
+          text(item.campaign_name),
+        )}</span><span class="sp-text">${esc(plainText(item.claim_label))}. ${esc(plainText(item.reason))}${text(item.counted_as) ? ` <strong data-counted-as>${esc(text(item.counted_as))}</strong>` : ""}</span>${
           (item.lower_bounds || []).length
             ? `<ul class="sp-facts">${item.lower_bounds.map((bound) => line(bound, item.unit_label)).join("")}</ul>`
             : ""
@@ -172,9 +215,11 @@ export function summaryCardHtml(summary) {
   const left = excluded
     .map(
       (item) =>
-        `<li class="sp-entry" data-excluded="${esc(item.campaign_id)}"><span class="sp-label">${esc(text(item.campaign_name))}</span><span class="sp-text">${esc(
-          item.reason,
-        )}</span>${
+        `<li class="sp-entry" data-excluded="${esc(item.campaign_id)}"><span class="sp-label">${campaignCell(
+          names,
+          item.campaign_id,
+          text(item.campaign_name),
+        )}</span><span class="sp-text">${esc(plainText(item.reason))}</span>${
           text(item.results_available_on) && item.results_available_label
             ? `<span class="sp-text" data-available>${esc(item.results_available_label)}: <strong>${esc(text(item.results_available_on))}</strong></span>`
             : ""
@@ -184,15 +229,17 @@ export function summaryCardHtml(summary) {
   const unpricedList = unpriced
     .map(
       (item) =>
-        `<li class="sp-entry" data-unpriced="${esc(item.campaign_id)}"><span class="sp-label">${esc(text(item.campaign_name))}</span><span class="sp-text">${esc(
-          item.reason,
-        )}</span></li>`,
+        `<li class="sp-entry" data-unpriced="${esc(item.campaign_id)}"><span class="sp-label">${campaignCell(
+          names,
+          item.campaign_id,
+          text(item.campaign_name),
+        )}</span><span class="sp-text">${esc(plainText(item.reason))}</span></li>`,
     )
     .join("");
   const value =
     sums || aside || left
       ? `<section class="card sp-summary" data-proven><h3>Value proven to date</h3>${
-          proven && proven.rule ? `<p class="sp-note">${esc(proven.rule)}</p>` : ""
+          proven && proven.rule ? `<p class="sp-note">${esc(plainText(proven.rule))}</p>` : ""
         }<ul class="sp-list">${sums}</ul>${
           sums && unpricedList ? `<h4 class="sp-sub">In the totals above but not in rupees</h4><ul class="sp-list" data-unpriced-list>${unpricedList}</ul>` : ""
         }${
@@ -218,9 +265,11 @@ export function resultsHtml({
   auditHref = null,
   proofs = null,
   summary = null,
+  campaigns = null,
 } = {}) {
+  const names = campaignNameIndex(campaigns);
   const head = pageHead(
-    `${crumbs([{ label: "Results" }])}<h1 class="h1">Results</h1><p class="desc">Every run, newest first. Open one to see its scores, reasons and next steps.</p>${headActions(
+    `${crumbs([{ label: "Results" }])}<h1 class="h1">Results</h1><p class="desc">Every model and contact list, newest first. Open one to see who to contact, why, and what to do next.</p>${headActions(
       {
         secondary: auditHref ? [{ label: "Audit a campaign", href: auditHref, attrs: "data-audit-link" }] : [],
         related: { label: "All reports", href: "#/pilot" },
@@ -234,13 +283,13 @@ export function resultsHtml({
     body = `<p class="loading" role="status">Loading…</p>`;
   } else if (!runs.length) {
     body = `<section class="card" data-results-empty>${emptyState({
-      title: "No runs yet",
-      text: "Choose a use case on Home and add your data. Every run appears here.",
+      title: "Nothing here yet",
+      text: "Choose a goal on Home and add your data. Every model and contact list appears here.",
       action: { label: "Go to Home", href: "#/" },
     })}</section>`;
   } else {
     const rows = runs.map((run) => {
-      const name = run.use_case_name || run.use_case_id;
+      const name = goalName(run.use_case_id, run.use_case_name || run.use_case_id);
       const started = run.created_at ? fmtStamp(run.created_at) : EM_DASH;
       return [
         `<a href="${esc(runHref(run))}" data-run="${esc(run.run_id)}">${esc(name)}</a>`,
@@ -250,13 +299,13 @@ export function resultsHtml({
         esc(started),
         // A second, visible way in: the row reads as something to open, not only as text.
         `<a class="sp-open" href="${esc(runHref(run))}" data-run-open aria-label="${esc(
-          `Open the run: ${name}, ${modeWords(run).toLowerCase()}, started ${started}`,
+          `Open: ${name}, ${modeWords(run).toLowerCase()}, started ${started}`,
         )}">Open ›</a>`,
       ];
     });
     const cols = [
-      { label: "Use case" },
-      { label: "Run" },
+      { label: term("goal") },
+      { label: "What it made" },
       { label: "Status" },
       { label: "Outcome" },
       { label: "Started" },
@@ -264,14 +313,14 @@ export function resultsHtml({
     ];
     const more =
       runs.length >= RUNS_SHOWN
-        ? `<p class="sp-note">Showing the latest ${fmtInt(RUNS_SHOWN)} runs. Older runs are on each use case's page.</p>`
+        ? `<p class="sp-note">Showing the latest ${fmtInt(RUNS_SHOWN)}. Older ones are on each goal's page.</p>`
         : "";
-    body = `<section class="card" data-results><h3>Runs${sortNote("newest first")}</h3>${dataTable(cols, rows, {
+    body = `<section class="card" data-results><h3>Models and contact lists${sortNote("newest first")}</h3>${dataTable(cols, rows, {
       cls: "sp-runs",
     })}${more}</section>`;
   }
   const beside = [].concat(lists || []).filter(Boolean).join("");
-  return `<main class="screen sp" data-module="simple">${head}${approvalsNotice(waiting)}${summaryCardHtml(summary)}${body}${beside}${proofsCardHtml(proofs)}</main>`;
+  return `<main class="screen sp" data-module="simple">${head}${approvalsNotice(waiting)}${summaryCardHtml(summary, names)}${body}${beside}${proofsCardHtml(proofs, names)}</main>`;
 }
 
 // --- Settings ------------------------------------------------------------------------------------
@@ -301,7 +350,7 @@ export function settingsHtml({ can = () => true, status = null, version = null }
       ? entry({ label: "Privacy", href: "#/privacy/consent", text: "Consent, requests to erase or see a person's data, and how long data is kept." })
       : "",
     can("GET", "/schedules")
-      ? entry({ label: "Schedules", href: "#/monitoring/schedules", text: "Score new data every week or month without anyone clicking Run." })
+      ? entry({ label: "Schedules", href: "#/monitoring/schedules", text: "Refresh contact lists every week or month without anyone starting them." })
       : "",
     // Plan M M173: `#/cost` had no way in. What runs have cost, and the rate rupee amounts are worked out with.
     can("GET", "/cost/spend")
@@ -317,15 +366,19 @@ export function settingsHtml({ can = () => true, status = null, version = null }
         ].filter(Boolean)
       : [];
   const advanced = [
-    entry({ label: "Uplift workbench", href: "#/uplift", text: "Train an uplift model by hand from a past campaign." }),
+    entry({
+      label: "Campaign effect workbench",
+      href: "#/uplift",
+      text: "Build a model of the effect of contacting customers, by hand, from a past campaign.",
+    }),
     entry({ label: "Data request kit", href: "#/pilot/kit", text: "What data to ask for, with templates, and data readiness reports." }),
     // Plain text, not a link: building from raw tables lives inside a use case's Manual setup, and
     // no single screen opens it (a link to Home did not open what it named).
     `<li class="sp-entry" data-raw-tables><span class="sp-label">Build from raw tables</span><span class="sp-text">${esc(
-      "Open a use case, choose Manual setup, then Build from raw tables.",
+      "Open a goal, choose Manual setup, then Build from raw tables.",
     )}</span></li>`,
     can("GET", "/schedules")
-      ? entry({ label: "Model health", href: "#/monitoring/alerts", text: "Alerts for every model: data that changed, results that dropped, missed runs." })
+      ? entry({ label: "Model health", href: "#/monitoring/alerts", text: "Alerts for every model: data that changed, results that dropped, missed schedules." })
       : "",
     // Plan M M173: `#/approvals` was reached only from a notice that exists while a model waits.
     can("GET", "/approvals")
@@ -370,8 +423,20 @@ export function settingsHtml({ can = () => true, status = null, version = null }
     <section class="card sp-group" data-settings-advanced><details class="adv"><summary>Advanced tools</summary><ul class="sp-list">${advanced.join(
       "",
     )}</ul></details></section>
+    ${viewHtml()}
     <section class="card sp-group" data-settings-about><h3>About</h3><div class="sp-about">${about}</div></section>
   </div></main>`;
+}
+
+/** Plan M M180 (DEC-1610): the person's own "Show technical details" switch, remembered for them. */
+export const TECHNICAL_HINT =
+  "Shows the Data, Model and Output pages, the model reports and the settings analysts use. It changes what you see, not what you are allowed to do.";
+
+function viewHtml() {
+  return `<section class="card sp-group" data-settings-view><h3>What you see</h3><div class="sp-view">${technicalSwitchHtml({
+    hint: TECHNICAL_HINT,
+    id: "sp-tech-switch",
+  })}</div></section>`;
 }
 
 // --- styles: tokens only, so both themes apply -----------------------------------------------------
@@ -395,6 +460,7 @@ const CSS = `
 .sp .sp-card.warning{border-left:3px solid var(--bad,#b3261e)}
 .sp .sp-about{padding:12px 20px;font-size:13px;color:var(--ink2);line-height:1.5}
 .sp .sp-about p{margin:0 0 4px}
+.sp .sp-view{padding:12px 20px}
 .sp .sp-runs a{color:var(--brand-blue);font-weight:600}
 .sp .sp-runs a:hover{text-decoration:underline}
 .sp .sp-runs a.sp-open{font-weight:500;white-space:nowrap}

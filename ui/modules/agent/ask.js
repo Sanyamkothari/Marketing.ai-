@@ -147,7 +147,7 @@ export function panelHtml(st, open = new Set()) {
     return `${head}<div class="card-body">${errorBox(st.error, { title: "Ask your data could not be loaded." })}</div></section>`;
   }
   const chat = st.view.chat || {};
-  const lead = `<p class="ask-lead">Ask a question about the file this run used. The helper looks the answer up in the data and cannot change anything.</p>`;
+  const lead = `<p class="ask-lead">Ask a question about the file this was made from. The helper looks the answer up in the data and cannot change anything.</p>`;
   const messages = messagesHtml(st, open);
   const log = messages ? `<div class="gchat" data-ask-chat>${messages}</div>` : "";
   if (chat.available === false) {

@@ -439,6 +439,8 @@ def test_openapi_builds_and_documents_every_route(client: TestClient) -> None:
         "/auth/login",
         "/auth/logout",
         "/auth/me",
+        # Plan M M180: "Show technical details", remembered per signed-in person (DEC-1610)
+        "/auth/me/preferences",
         "/users",
         "/users/{user_id}",
         "/users/{user_id}/password",

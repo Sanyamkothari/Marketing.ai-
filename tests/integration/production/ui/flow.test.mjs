@@ -82,7 +82,7 @@ test("a wrong password shows the server's sentence, keeps the username, forgets 
 test("signing in keeps the token for the tab and every later call carries it", async () => {
   $("#pb-password").value = "the right one";
   submit($("#pb-signin"));
-  await until(() => $(".stage-pill"), 3000, "the overview after signing in");
+  await until(() => $("[data-goals] a.uc"), 3000, "the overview after signing in");
   assert.equal(session.readToken(), login.token);
   assert.equal(w.sessionStorage.getItem(session.TOKEN_KEY).includes(login.token), true);
   assert.equal(w.localStorage.length, 0, "never in localStorage");

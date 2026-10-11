@@ -12,6 +12,7 @@
 // page and the events, and `views.js` draws the cards on a campaign's page.
 
 import { EM_DASH, RESULTS_CRUMB, crumbs, esc, fmtDate, fmtInt, fmtPct, pageHead, present } from "../../dom.js";
+import { plainText } from "../../labels.js"; // Plan M M172 (DEC-1602): the server's sentences in plain words
 
 export const AUDIT_ROUTE = "audit";
 export const auditHref = () => "#/audit";
@@ -45,8 +46,8 @@ export function auditCardHtml(audit) {
     : "";
   return `<section class="card dc-card" data-audit-card data-causal="${audit.causal ? "true" : "false"}">
     <h3>What these numbers can claim</h3>
-    <p><span class="chip ${tone(audit)}" data-audit-label>${esc(audit.label)}</span></p>
-    <p class="dc-text" data-audit-explanation>${esc(audit.explanation)}</p>
+    <p><span class="chip ${tone(audit)}" data-audit-label>${esc(plainText(audit.label))}</span></p>
+    <p class="dc-text" data-audit-explanation>${esc(plainText(audit.explanation))}</p>
     ${checked}${offers}
     ${notes ? `<ul class="dc-text" data-audit-notes>${notes}</ul>` : ""}
   </section>`;
@@ -157,8 +158,8 @@ function auditFormHtml(state) {
     : "";
   const basis = `<fieldset class="dc-basis" data-audit-basis><legend>How were the groups chosen?</legend>
       <label class="dc-check"><input type="radio" name="assignment_basis" value="random" required> At random</label>
-      <label class="dc-check"><input type="radio" name="assignment_basis" value="not_random"> Not at random: by a score, a rule or a person's choice</label>
-      <p class="dc-text">Never assumed. If you say at random and the file has customer details, we test it; the answer decides whether the numbers can be called causal.</p>
+      <label class="dc-check"><input type="radio" name="assignment_basis" value="not_random"> Not at random: by a ranking, a rule or a person's choice</label>
+      <p class="dc-text">Never assumed. If you say at random and the file has customer details, we test it; the answer decides whether the numbers can be called proven.</p>
     </fieldset>`;
   return `<section class="card dc-card" data-audit-form-card>
     <h3>Audit a campaign another tool ran</h3>
@@ -191,7 +192,7 @@ function programmeFormHtml(state) {
     : "";
   return `<section class="card dc-card" data-programme-form-card>
     <h3>The whole programme</h3>
-    <p class="dc-text">Everything done over a period, against the customers the universal control group kept out of every campaign. Upload the outcome of every customer, not only those on a list.</p>
+    <p class="dc-text">Everything done over a period, against the customers the universal comparison group kept out of every campaign. Upload the outcome of every customer, not only those on a list.</p>
     <form data-programme-form>
       <div class="dc-form">
         ${field("period_start", "First day of the period", 'type="date" required')}

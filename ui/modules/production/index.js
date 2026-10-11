@@ -186,7 +186,7 @@ async function renderMonitoring(app, parts) {
   } else if (section === "alerts") {
     await screen(app, alertsHtml, bindAlerts, loadAlerts, "Alerts");
   } else if (section === "missed") {
-    await screen(app, missedHtml, () => {}, loadMissed, "Missed runs");
+    await screen(app, missedHtml, () => {}, loadMissed, "Missed schedules");
   } else if (section === "runs") {
     if (id) await screen(app, () => runOutcomesHtml(id), bindRunOutcomes, () => loadRunOutcomes(id), "Outcomes");
     else await screen(app, runsHtml, () => {}, loadRuns, "Scoring runs");

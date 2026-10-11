@@ -1,7 +1,8 @@
 // Reports (Plan M, M178, DEC-1608): `#/reports[/<tab>]`, one place for everything that shows what campaigns earned.
 //
 //   Value proof            the Value Proof Packs (GET /pilot/proof), each with its claim in words
-//   Programme summary      the value proven to date and its rules (GET /campaigns/summary), the block Results also draws
+//   Programme summary      the value proven to date and its rules (GET /campaigns/summary, GET /campaigns for the
+//                          campaigns' short names), the block Results also draws
 //   Check a past campaign  today's audit form, in three steps (POST /uploads, /campaigns/audit, /campaigns/programme)
 //   Model reports          today's `#/pilot` lists, in a closed technical section
 //
@@ -10,7 +11,7 @@
 // in the classic and the campaigns layout alike. Registration is the whole wiring (`ui/index.html`).
 
 import { errorBox } from "../../dom.js";
-import { getIndustries, listProofs, postAudit, postProgramme, postUpload, readSummary } from "./api.js";
+import { getCampaigns, getIndustries, listProofs, postAudit, postProgramme, postUpload, readSummary } from "./api.js";
 import { setActiveNav, canAccess, registerModule } from "../router.js";
 import { auditBody, fileOf, programmeBody } from "../decide/audit.js";
 import { injectStyles as injectSimpleStyles } from "../simple/pages.js";
@@ -45,8 +46,9 @@ async function bodyOf(tab) {
   if (tab === "check") return checkHtml({ can: canAccess, state: check });
   if (tab === "programme") {
     // A summary that cannot be read is an error with a retry, never "nothing is proven yet" (that is a 200 with no totals).
-    const answer = await settle(readSummary());
-    return answer.error ? errorBox(answer.error, { retry: true }) : programmeHtml(answer.value);
+    // Plan M M172: with the campaigns' short names (`GET /campaigns`), as Results names them; null when unreadable.
+    const [answer, campaigns] = await Promise.all([settle(readSummary()), getCampaigns()]);
+    return answer.error ? errorBox(answer.error, { retry: true }) : programmeHtml(answer.value, campaigns);
   }
   if (tab === "models") return modelReportsHtml(await loadModelReports());
   const answer = await settle(listProofs());

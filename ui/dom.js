@@ -320,7 +320,9 @@ export const glossarySetting = (path) => safely(glossary.setting, path);
 export const METRIC_SHORT = {
   roc_auc: "Ranking quality",
   pr_auc: "Top-of-list precision",
-  f1: "Balance score",
+  f1: "Balance of hits and false alarms",
+  auuc: "Gain over a random pick",
+  qini: "Gain over a random pick",
   recall: "Cases caught",
   precision: "Flags that are right",
   rmse: "Typical error",
@@ -388,9 +390,10 @@ export function techDetails(pairs, summary = "Technical details", extraHtml = ""
         )}" aria-label="Copy ${esc(label)}">Copy</button></dd></div>`,
     )
     .join("");
-  // `extraHtml` is drawn inside the disclosure after the list, as given (it is already markup).
+  // `extraHtml` is drawn inside the disclosure after the list, as given (it is already markup). Plan M M180
+  // (DEC-1610): `data-technical-details` marks it for "Show technical details" (ui/technical.js hides it when off).
   return rows || extraHtml
-    ? `<details class="tech"><summary>${esc(summary)}</summary>${rows ? `<dl class="tech-list">${rows}</dl>` : ""}${extraHtml}</details>`
+    ? `<details class="tech" data-technical-details><summary>${esc(summary)}</summary>${rows ? `<dl class="tech-list">${rows}</dl>` : ""}${extraHtml}</details>`
     : "";
 }
 

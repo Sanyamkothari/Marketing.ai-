@@ -47,7 +47,7 @@ PAGES: Final[list[tuple[str, tuple[str, ...]]]] = [
     ("#/doctor", ()),
     ("#/uc/win-back-campaign", ()),
     ("#/uc/win-back-campaign", ("Manual setup",)),
-    ("#/uc/win-back-campaign", ("Manual setup", "Score new data")),
+    ("#/uc/win-back-campaign", ("Manual setup", "Make a contact list")),  # the score mode (Plan M M172)
     (f"#/uc/{USE_CASE}", ()),
     (f"#/uc/{USE_CASE}", ("Manual setup",)),
     (f"#/uc/{USE_CASE}/run/{TRAIN_RISK}", ()),

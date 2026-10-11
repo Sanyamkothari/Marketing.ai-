@@ -213,7 +213,7 @@ test("data page: treatment and control in customers and rows, the randomness che
   assert.match(seen, /Treated share 50%/);
   assert.match(seen, /grouped by customer_id/);
   assert.match(seen, /customer_id \+ snapshot_date/);
-  assert.match(seen, /Every uplift check passed/);
+  assert.match(seen, /Every experiment check passed/); // Plan M M172: "uplift" is not a marketer's word
   assert.ok(!seen.includes("prepare.json"), "no Phase 1 prepare card on an uplift run");
   assert.ok(!seen.includes("Drift against"), "a training run has no drift card");
   noJunk(html);
@@ -232,14 +232,16 @@ test("data page: a failed, acknowledged randomness check and its finding are sho
   assert.match(seen, /Targeted, acknowledged \(AUC 0\.71\)/);
   // v1: the finding leads in words; the code stays in its own (hidden-by-default) column.
   assert.match(seen, /Treatment not random Error \(acknowledged\) Who was treated can be predicted\. TREATMENT_NOT_RANDOM/);
-  assert.match(seen, /Not causal/);
+  assert.match(seen, /Not yet proven/); // Plan M M172: the evidence label in the glossary's words
 });
 
 test("data page of a scoring run: the drift card, honest about the treated share", () => {
   const html = pages.renderPage("data", uc, scoreRun, { "uplift_drift.json": drift }, "#");
   const seen = text(html);
-  assert.match(seen, /Drift against the training data/);
-  assert.match(seen, /Watch · max PSI 0\.123/);
+  // Plan M M172: drift in a marketer's words; the PSI figure stays, under Technical details.
+  assert.match(seen, /Compared with the data the model learned from/);
+  assert.match(seen, /Customer details Watch/);
+  assert.match(seen, /Technical details Largest PSI 0\.123/);
   assert.match(seen, /has no 'treatment' column/);
   assert.match(seen, /not checked as an experiment/);
   noJunk(html);
@@ -353,14 +355,15 @@ test("scoring Output: the contact list is the one primary action, and nothing as
   assert.match(html, /<a class="btn primary" href="\/runs\/r-p1s\/treat_list\.csv"[^>]*>.*Download contact list<\/a>/);
   assert.match(html, /<details class="tech" data-tech>.*<a class="btn quiet sm" href="\/runs\/r-p1s\/scores\.csv" download data-download="scores">All scores \(for analysts\)<\/a>/s);
   assert.match(seen, /Subscribers at risk 855 High 851 \+ Medium 4/);
-  assert.match(seen, /Customers scored 2,000/);
-  assert.match(seen, /Held back to measure results 200 \(10%\)/);
+  // Plan M M172: counts and shares in the one number format (ui/format.js): a share has one decimal.
+  assert.match(seen, /Customers ranked 2,000/);
+  assert.match(seen, /Held back to measure results 200 \(10\.0%\)/);
   assert.match(seen, /The new customers look very different/);
   assert.match(seen, /Subscriber Churn likelihood % Priority Main reason Action/);
   assert.match(seen, /1000003 100% High Days since last activity is 240 \(raises it\) Retention call/);
   // The sentence under the tiles is computed from the run's own summaries: 855 are worth contacting, 700 will be.
   assert.match(seen, /855 customers are worth contacting; 700 will be contacted\. Why the difference: 200 customers in the whole list are held back at random as the comparison group/);
-  assert.match(seen, /Held back \(control group\)/);
+  assert.match(seen, /Held back \(comparison group\)/);
   for (const gone of ["decile", "Lift", ".json", "has not produced", "Available after training."]) {
     assert.ok(!seen.includes(gone), `the scoring Output shows ${gone}`);
   }
@@ -377,16 +380,16 @@ test("training Output: one lift tile in words and 'Score new customers with this
   const html = pages.renderPage("output", telco, p1Train, { "decile_lift.json": lift }, "#");
   const seen = visible(html);
   assert.equal(primaries(html), 1);
-  assert.match(html, /class="btn primary" href="#\/uc\/telco-churn">Score new customers with this model/);
+  assert.match(html, /class="btn primary" href="#\/uc\/telco-churn">Make a contact list with this model/);
   assert.match(
     seen,
-    /Lift in the top 10% 5× The 10% of subscribers with the highest scores had the outcome 5 times as often as a random 10%\./,
+    /Lift in the top 10% 5× The 10% of subscribers most likely to act had the outcome 5 times as often as a random 10%\./,
   );
   assert.match(seen, /3\.4×/);
   assert.ok(!seen.includes("0.3×"), "values are labelled on D1 to D3 only");
   assert.ok(!seen.includes("Download contact list"));
   const empty = visible(pages.renderPage("output", telco, p1Train, {}, "#"));
-  assert.match(empty, /The lift chart appears when training finishes/);
+  assert.match(empty, /The lift chart appears when the model is built/);
   assert.ok(!empty.includes(".json"));
 });
 
@@ -424,8 +427,11 @@ test("Model: a verdict, the fallback cut-off by its title, a calm baseline warni
   assert.ok(!seen.includes("THRESHOLD_FALLBACK"), "the code is not shown outside Technical details");
   assert.match(text(html), /THRESHOLD_FALLBACK/, "it is kept in Technical details");
   assert.match(seen, /A simpler yardstick model scored slightly higher/);
-  assert.match(seen, /Model LightGBM Ranking quality 0\.955 Cases caught 80%/);
-  assert.match(seen, /What drives the score \(largest first\) F 9 /);
+  // Plan M M172: which algorithm won is in Technical details (the "Algorithm" row), not a tile.
+  assert.match(seen, /Ranking quality 0\.955 Cases caught 80%/);
+  assert.ok(!seen.includes("LightGBM"), "the algorithm's name is not shown outside Technical details");
+  assert.match(text(html), /Algorithm LightGBM/, "it is kept in Technical details");
+  assert.match(seen, /What drives it \(largest first\) F 9 /);
   assert.match(seen, /Show all 10/);
   assert.ok(!seen.includes("Fairness") && !seen.includes("sensitive column"), "no fairness card unless evaluated");
   assert.match(html, /Next: Output ›/);
@@ -435,7 +441,7 @@ test("Model: a verdict, the fallback cut-off by its title, a calm baseline warni
 
 test("Model of a scoring run: points to the training run instead of empty cards", () => {
   const html = pages.renderPage("model", telco, p1Score, { "drift.json": { baseline_run_id: "r-p1t" } }, "#");
-  assert.match(html, /href="#\/uc\/telco-churn\/model\/r-p1t">Open the training run's Model page/);
+  assert.match(html, /href="#\/uc\/telco-churn\/model\/r-p1t">Open that model's page/);
   assert.ok(!visible(html).includes(".json"));
   assert.equal(primaries(html), 1);
 });
@@ -471,7 +477,8 @@ test("Data: glance tiles, lineage behind Details, the feature table sorted by mi
   const html = pages.renderPage("data", telco, run, { "profile.json": profile, "prepare.json": prepare }, "#", { lineage });
   const seen = visible(html);
   assert.match(seen, /Rows 22,000 One per subscriber per date Subscribers 2,000 Details used to predict 2 Missing values 5\.1%/);
-  assert.match(seen, /Built from 1 table: customers\.csv\./);
+  assert.match(seen, /Built from 1 table: customers\.csv ?\./);
+  assert.match(html, /<span data-user-text>customers\.csv<\/span>/, "the table's name is the person's own (M172)");
   assert.match(html, /<details class="tech" data-lineage><summary>Details: data lineage<\/summary><div class="lineage">/);
   assert.match(seen, /Extreme values capped on 2 columns/);
   assert.match(seen, /Usage MB 30 days 46\.9% .* Days since last activity Days since the subscriber last did anything\. 0%/);

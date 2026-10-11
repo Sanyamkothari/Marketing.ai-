@@ -105,7 +105,11 @@ test("programme summary: the block Results draws, the same structure and figures
   await open(w, "#/reports/programme", () => $("[data-proven]"));
   assert.equal(shape($("[data-proven]")), resultsShape, "the same cards, lines and lists");
   assert.deepEqual(pieces($("[data-proven]")), resultsText.map(plainWords), "the same sentences and figures; only the engine's words are changed");
-  assert.notDeepEqual(pieces($("[data-proven]")), resultsText, "and the recording does have engine words to change");
+  // Plan M M172 (DEC-1602) put Results into the glossary's words too, so the two pages now read the same; the server's
+  // own sentences in the recording still carry engine words, which neither page shows.
+  const raw = recorded["GET /campaigns/summary"].body.proven.rule;
+  assert.notEqual(plainWords(raw), raw, "and the recording does have engine words to change");
+  assert.ok(!resultsText.join(" ").includes(raw), "Results does not show the server's engine words either");
   assert.equal($("[data-attention]"), null, "the cards that need attention stay on Results");
   assert.match(text($("[data-proven]")), /Value proven to date/);
   const rule = plainWords(recorded["GET /campaigns/summary"].body.proven.rule);

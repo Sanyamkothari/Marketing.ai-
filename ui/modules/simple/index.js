@@ -18,7 +18,7 @@ import {
   registerResultLink,
   resultsListsHtml,
 } from "../router.js";
-import { engineVersion, getAllRuns, getProofs, getSummary, waitingForApproval } from "./api.js";
+import { engineVersion, getAllRuns, getCampaigns, getProofs, getSummary, waitingForApproval } from "./api.js";
 import { glossaryEntry, glossaryHtml, loadWhatsNew, whatsNewEntry, whatsNewHtml } from "./help.js";
 import { injectStyles, resultsHtml, settingsHtml } from "./pages.js";
 
@@ -40,7 +40,7 @@ function painter(app, parts) {
 async function renderResults(app, parts) {
   const paint = painter(app, parts);
   if (!app.querySelector('[data-module="simple"]')) paint(skeleton("list", { title: "Results" }));
-  const [answer, waiting, lists, proofs, summary] = await Promise.all([
+  const [answer, waiting, lists, proofs, summary, campaigns] = await Promise.all([
     getAllRuns().then(
       (body) => ({ runs: (body && body.runs) || [] }),
       (error) => ({ error }),
@@ -49,10 +49,11 @@ async function renderResults(app, parts) {
     resultsListsHtml(), // Plan J M94: the campaigns beside the runs
     getProofs(), // Plan J M104: the Value Proof Packs that are ready
     getSummary(), // Plan J M105: what needs attention and the value proven to date
+    getCampaigns(), // Plan M M172: the campaigns' short names (goal and month)
   ]);
   // Plan J M103: a person who may audit a campaign another tool ran gets the way to it, beside the runs.
   const auditHref = canAccess("POST", "/campaigns/audit") ? "#/audit" : null;
-  paint(resultsHtml({ ...answer, waiting, lists, auditHref, proofs, summary }));
+  paint(resultsHtml({ ...answer, waiting, lists, auditHref, proofs, summary, campaigns }));
   document.title = "Results · Marketing AI";
 }
 
@@ -99,7 +100,8 @@ const finished = (run) => Boolean(run) && run.state === "done";
 registerResultLink({
   name: "model-health",
   applies: (uc, run) => finished(run) && canAccess("GET", "/schedules"),
-  link: () => ({ label: "Model health", href: "#/monitoring/alerts" }),
+  // Plan M M180 (DEC-1610): a model's drift and health alerts are for analysts: hidden with "Show technical details" off.
+  link: () => ({ label: "Model health", href: "#/monitoring/alerts", technical: true }),
 });
 
 registerResultLink({
@@ -114,7 +116,8 @@ registerResultLink({
   link: (uc, run) =>
     run.mode === "score"
       ? { label: "Campaign value report", href: `#/pilot/value/${encodeURIComponent(run.run_id)}` }
-      : { label: "Results report", href: `#/pilot/view/results/${encodeURIComponent(uc.id)}` },
+      : // Plan M M180 (DEC-1610): the model results report is technical; the campaign value report is not.
+        { label: "Results report", href: `#/pilot/view/results/${encodeURIComponent(uc.id)}`, technical: true },
 });
 
 injectStyles();

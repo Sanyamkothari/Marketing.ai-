@@ -69,9 +69,9 @@ test("a deployment on its own machine gets no line at all", () => {
 
 test("a cap is named, and so is the confirmation it will ask for", () => {
   const plain = text(costLineHtml({ ...estimate, cap_usd: 2, needs_confirmation: true }));
-  assert.match(plain, /limit set for one run is \$2\.00, so you will be asked to confirm/);
+  assert.match(plain, /limit set for one model or list is \$2\.00, so you will be asked to confirm/); // Plan M M172
   const quiet = text(costLineHtml({ ...estimate, cap_usd: 10, needs_confirmation: false }));
-  assert.match(quiet, /limit set for one run is \$10\.00\./);
+  assert.match(quiet, /limit set for one model or list is \$10\.00\./);
   assert.doesNotMatch(quiet, /asked to confirm/);
 });
 
@@ -106,9 +106,10 @@ const spend = {
 
 test("the Cost page shows each month, and no figure where the server had none", () => {
   const plain = text(costPageHtml({ spend, fx: null }));
-  assert.match(plain, /2026-10 3 runs, 1 with no figure \$7\.50/);
-  assert.match(plain, /2026-09 no runs no figure/);
-  assert.match(plain, /2026-08 2 runs, 2 with no figure no figure/);
+  // Plan M M172 (DEC-1602): a run is a model built or a contact list made.
+  assert.match(plain, /2026-10 3 models and lists, 1 with no figure \$7\.50/);
+  assert.match(plain, /2026-09 none no figure/);
+  assert.match(plain, /2026-08 2 models and lists, 2 with no figure no figure/);
   assert.match(plain, /No exchange rate is set/);
 });
 

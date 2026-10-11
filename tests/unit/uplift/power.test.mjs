@@ -68,7 +68,7 @@ test("the card states the lift in points and relative, and says where the baseli
   const html = power.powerCardBody(uc, summary);
   assert.match(
     html,
-    /With 10,000 eligible customers and a 10% control group, this campaign can reliably detect a lift of 3 points \(30% relative\) or more\./,
+    /With 10,000 eligible customers and a 10% comparison group, this campaign can reliably detect a lift of 3 points \(30% relative\) or more\./,
   );
   assert.match(html, /average predicted chance across everyone scored/);
   assert.match(html, /convert at 10%/);

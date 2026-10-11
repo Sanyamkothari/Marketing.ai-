@@ -9,6 +9,8 @@ import { crumbs, dataTable, EM_DASH, esc, fmtDate, fmtInt, fmtMoney, pageHead, R
 import { auditCardHtml, contactsCardHtml, programmeCardHtml } from "./audit.js";
 import { planCardHtml } from "./plan.js";
 import { campaignLineHtml } from "../campaigns/links.js";
+import { campaignNameHtml, campaignNames } from "../../format.js"; // Plan M M172 (DEC-1602): short names on lists
+import { goalName, goalShortName, plainText, userText } from "../../labels.js";
 
 /** A campaign's own page. */
 export const campaignHref = (campaign) => `#/campaigns/${encodeURIComponent(campaign.campaign_id)}`;
@@ -23,7 +25,10 @@ export function campaignsListHtml(body) {
   const campaigns = (body && body.campaigns) || [];
   if (!campaigns.length) return "";
   const rows = campaigns.map((campaign) => [
-    `<a href="${esc(campaignHref(campaign))}" data-campaign="${esc(campaign.campaign_id)}">${esc(campaign.name)}</a>`,
+    campaignNameHtml(campaignNames(campaign, goalShortName), {
+      link: campaignHref(campaign),
+      attrs: `data-campaign="${esc(campaign.campaign_id)}"`,
+    }),
     esc(fmtDate(campaign.treatment_start)),
     esc(statusText(campaign)),
     esc(fmtInt((campaign.counts && campaign.counts.intended) || 0)),
@@ -47,18 +52,18 @@ function resultCard(view, { canMeasure, busy, error }) {
   let body;
   if (!report) {
     const missing = campaign.outcomes
-      ? `The outcomes file (${esc(campaign.outcomes.file_name)}) is in; the campaign has not been measured yet.`
+      ? `The outcomes file (${userText(campaign.outcomes.file_name)}) is in; the campaign has not been measured yet.`
       : "Not measured yet: the campaign's outcomes have not been added.";
     body = `<p class="dc-text" data-result-none>${missing}</p>`;
   } else if (report.early_look) {
     const when = plan ? ` The planned analysis date is ${esc(fmtDate(plan.analysis_date))}.` : "";
     body = `<p><span class="chip neutral" data-early-look>Early look</span> Not a final result.${when}</p><p class="dc-text">${esc(
-      report.summary,
+      plainText(report.summary),
     )}</p>`;
   } else {
-    const headline = verdict ? `<p class="dc-headline" data-verdict="${esc(verdict.kind)}">${esc(verdict.headline)}</p>` : "";
-    const detail = verdict ? `<p class="dc-text">${esc(verdict.detail)}</p>` : "";
-    body = `${headline}${detail}<p class="dc-text" data-result-summary>${esc(report.summary)}</p>`;
+    const headline = verdict ? `<p class="dc-headline" data-verdict="${esc(verdict.kind)}">${esc(plainText(verdict.headline))}</p>` : "";
+    const detail = verdict ? `<p class="dc-text">${esc(plainText(verdict.detail))}</p>` : "";
+    body = `${headline}${detail}<p class="dc-text" data-result-summary>${esc(plainText(report.summary))}</p>`;
   }
   // Plan M M176 (DEC-1606): the campaign page's Results tab is where results are added; this card keeps its own.
   return `<section class="card dc-card" data-campaign-result><h3>Result</h3>${body}${problem}${measure}${campaignLineHtml(
@@ -84,12 +89,18 @@ export function campaignPageHtml({
   const { campaign } = view;
   const counts = campaign.counts || {};
   const run = (campaign.run_ids || [])[0];
+  // Plan M M172: the short name (goal and month) is the title, the label recorded with the campaign its subtitle.
+  const names = campaignNames(campaign, goalShortName);
+  const listLink =
+    run && campaign.use_case_id
+      ? ` from <a href="#/uc/${esc(encodeURIComponent(campaign.use_case_id))}/run/${esc(encodeURIComponent(run))}" data-campaign-list>this contact list</a>`
+      : "";
   const head = pageHead(
-    `${crumbs([RESULTS_CRUMB, { label: campaign.name }])}<h1 class="h1">${esc(campaign.name)}</h1><p class="desc">Sent on ${esc(
-      fmtDate(campaign.treatment_start),
-    )}${run ? ` from the list of run <span class="mono">${esc(run)}</span>` : ""}. ${esc(fmtInt(counts.intended_treated || 0))} contacted and ${esc(
-      fmtInt(counts.intended_holdout || 0),
-    )} held back are compared.</p>`,
+    `${crumbs([RESULTS_CRUMB, { label: names.short }])}<h1 class="h1">${esc(names.short)}</h1>${
+      names.long ? `<p class="desc dc-label">${userText(names.long)}</p>` : ""
+    }<p class="desc">Sent on ${esc(fmtDate(campaign.treatment_start))}${listLink}. ${esc(
+      fmtInt(counts.intended_treated || 0),
+    )} contacted and ${esc(fmtInt(counts.intended_holdout || 0))} held back are compared.</p>`,
   );
   const plan = view.plan || (plans && plans.plan) || null;
   const card = planCardHtml({
@@ -191,35 +202,35 @@ export function conflictsCardHtml(summary) {
   for (const uc of Array.from(allUcs).sort()) {
     const won = (summary.winning_by_use_case && summary.winning_by_use_case[uc]) || 0;
     const dropped = (summary.dropped_by_use_case && summary.dropped_by_use_case[uc]) || 0;
-    ucRows.push([esc(uc), esc(fmtInt(won)), esc(fmtInt(dropped))]);
+    ucRows.push([esc(goalName(uc, uc)), esc(fmtInt(won)), esc(fmtInt(dropped))]);
   }
 
   const ucTable =
     ucRows.length > 0
       ? `<div style="margin-top:12px">${dataTable(
-          [{ label: "Use Case" }, { label: "Winning actions", num: true }, { label: "Dropped actions", num: true }],
+          [{ label: "Goal" }, { label: "Winning actions", num: true }, { label: "Dropped actions", num: true }],
           ucRows,
           { cls: "sp-runs" },
         )}</div>`
       : "";
 
   return `<div class="dc"><section class="card dc-card" data-arbitration-conflicts>
-    <h3>Arbitration & Conflicts</h3>
-    <p class="dc-text">One action per customer across overlapping use cases. A conflict is settled by priority times value when every action carries the same kind of value, and by priority alone when it does not. A tie goes to the use case named first.</p>
+    <h3>One message per customer</h3>
+    <p class="dc-text">One action per customer across overlapping goals. A conflict is settled by priority times value when every action carries the same kind of value, and by priority alone when it does not. A tie goes to the goal named first.</p>
     <div class="dc-kvs">
       ${row("Total customers evaluated", count(summary.total_customers))}
       ${row("Customers qualifying for actions", count(summary.customers_with_actions))}
       ${row("Customers with conflicts (>1 action)", count(summary.customers_with_conflicts))}
-      ${row("Treated customers (winners)", count(summary.treated_customers))}
+      ${row("Contacted customers (winners)", count(summary.treated_customers))}
       ${row("Dropped actions (conflict suppressed)", count(summary.dropped_actions_count))}
       ${summary.channel_capped_count ? row("Channel cap suppressed", count(summary.channel_capped_count)) : ""}
       ${summary.customers_decided_by_value ? row("Settled by priority times value", count(summary.customers_decided_by_value)) : ""}
       ${summary.customers_decided_by_priority ? row("Settled by priority alone (value missing or of a different kind)", count(summary.customers_decided_by_priority)) : ""}
-      ${summary.customers_decided_by_request_order ? row("Settled by use case order (a tie)", count(summary.customers_decided_by_request_order)) : ""}
+      ${summary.customers_decided_by_request_order ? row("Settled by goal order (a tie)", count(summary.customers_decided_by_request_order)) : ""}
       ${summary.customers_decided_by_explore ? row("Kept because chosen at random (explore)", count(summary.customers_decided_by_explore)) : ""}
-      ${summary.contested_customers_channel_capped ? row("Wanted by several use cases, left with no action by a channel cap", count(summary.contested_customers_channel_capped)) : ""}
-      ${summary.holdout_blocked_actions ? row("Actions blocked by a hold-out", count(summary.holdout_blocked_actions)) : ""}
-      ${summary.control_blocked_actions ? row("Actions blocked by another use case's control group", count(summary.control_blocked_actions)) : ""}
+      ${summary.contested_customers_channel_capped ? row("Wanted by several goals, left with no action by a channel cap", count(summary.contested_customers_channel_capped)) : ""}
+      ${summary.holdout_blocked_actions ? row("Actions blocked by a comparison group", count(summary.holdout_blocked_actions)) : ""}
+      ${summary.control_blocked_actions ? row("Actions blocked by another goal's comparison group", count(summary.control_blocked_actions)) : ""}
     </div>
     ${ucTable}
   </section></div>`;

@@ -380,7 +380,7 @@ async function uploadUseCase() {
       }
     }
   }
-  throw new Error("No use case is set up yet, so a file cannot be uploaded.");
+  throw new Error("No goal is set up yet, so a file cannot be uploaded.");
 }
 
 document.addEventListener("change", async (event) => {

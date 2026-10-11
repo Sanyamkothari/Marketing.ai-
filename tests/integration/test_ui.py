@@ -37,6 +37,7 @@ MODULES: Final[tuple[str, ...]] = (
     "contact_list.js",  # the one contact list download and its sentence (Plan M M171, DEC-1601)
     "cost.js",  # the cost line beside Run, its confirmation and the Cost page's markup (Plan J M108, DEC-1318)
     "dom.js",
+    "format.js",  # the one number and money format: rupees in lakh and crore, exact in tooltips (Plan M M172, DEC-1602)
     "labels.js",  # the glossary as data and the never-shown words of the visible-text check (Plan M M170, DEC-1600)
     "layout.js",  # the ui_layout setting and the old-to-new address table (Plan M M174, DEC-1604)
     "overview.js",
@@ -44,6 +45,7 @@ MODULES: Final[tuple[str, ...]] = (
     "power.js",  # the control-group size card on a scoring run's Output page (DEC-1234)
     "settings.js",
     "shell.js",  # the campaigns layout's sidebar, bell and Help (Plan M M174, DEC-1604)
+    "technical.js",  # "Show technical details": the switch, its class and CSS rule (Plan M M180, DEC-1610)
     "usecase.js",
 )
 """Every module `index.html` reaches, directly or through an import."""

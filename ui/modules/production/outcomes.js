@@ -76,6 +76,8 @@ import {
 } from "./controls.js";
 import { reasonFor } from "./session.js";
 import { runHref } from "./schedules.js";
+import { shortCampaignName } from "../../format.js"; // Plan M M172 (DEC-1602): short campaign names on lists
+import { goalShortName, plainText, term } from "../../labels.js";
 
 export const OUTCOME_FILE_TYPES = ".csv,.parquet,.pq";
 
@@ -213,7 +215,8 @@ function runRow(run) {
   const action = done
     ? `<a class="btn ${toAdd ? "secondary" : "quiet"} sm" href="${runHref(run.run_id)}">${toAdd ? "Add outcomes" : "View results"}</a>`
     : EM_DASH;
-  const name = esc(run.use_case_name || run.use_case_id);
+  // Plan M M172 (DEC-1602): a list of campaigns shows each one's short name (goal and month), at most 40 characters.
+  const name = esc(shortCampaignName(goalShortName(run.use_case_id, run.use_case_name || run.use_case_id), run.finished_at || run.created_at));
   return {
     attrs: `data-run="${esc(run.run_id)}"`,
     cells: [
@@ -233,16 +236,16 @@ function runsCard() {
   if (state.runsError) return `<section class="card">${title(null)}<div class="card-body">${errorBox(state.runsError, { retry: true })}</div></section>`;
   if (!state.runs) return `<section class="card">${title(null)}<p class="loading pb-pad">Loading…</p></section>`;
   if (!state.runs.length) {
-    return `<section class="card">${title(0)}<div class="empty-state"><p class="es-t">No customers have been scored yet.</p><p>Score new customers with a trained model; the list of who to contact appears here, ready for you to add what happened.</p><a class="btn primary" href="#/">Go to use cases</a></div></section>`;
+    return `<section class="card">${title(0)}<div class="empty-state"><p class="es-t">No contact list has been made yet.</p><p>Make a contact list with a model; the list of who to contact appears here, ready for you to add what happened.</p><a class="btn primary" href="#/">Go to goals</a></div></section>`;
   }
   return `<section class="card">${title(state.runs.length)}${rowsTable(
     [
-      { label: "Use case" },
-      { label: "Scored on" },
-      { label: "Customers scored", num: true },
+      { label: "Campaign" },
+      { label: "List made on" },
+      { label: "Customers on the list", num: true },
       { label: "Results" },
       { label: "", sr: "Action" },
-      { label: "Run", more: true },
+      { label: "Reference", more: true },
       { label: "Client", more: true },
     ],
     state.runs.map(runRow),
@@ -253,7 +256,7 @@ function runsCard() {
 export const runsHtml = () =>
   campaignScreen(
     "Campaigns",
-    "Every list of customers a model scored. Add what happened to them afterwards to see how the campaign and the model did.",
+    "Every list of customers a model ranked. Add what happened to them afterwards to see how the campaign and the model did.",
     ["GET", "/runs"],
     runsCard,
   );
@@ -264,23 +267,23 @@ const score = (value) => (present(value) ? fmtNum(value, 3) : EM_DASH);
 
 function uploadCard(run) {
   if (run.mode !== "score") {
-    return `<section class="card"><h3>Add what happened to these customers</h3><p class="pb-note pb-pad">Results are added to scored customer lists; this run trained a model.</p></section>`;
+    return `<section class="card"><h3>Add what happened to these customers</h3><p class="pb-note pb-pad">Results are added to contact lists; this page is about a model, not a list.</p></section>`;
   }
   if (run.state !== "done") {
-    return `<section class="card"><h3>Add what happened to these customers</h3><p class="pb-note pb-pad">This run has not finished (${esc(
+    return `<section class="card"><h3>Add what happened to these customers</h3><p class="pb-note pb-pad">This list is not finished (${esc(
       run.state,
-    )}); results can be added once it has.</p></section>`;
+    )}); results can be added once it is.</p></section>`;
   }
   const localError = isLocal(state.uploadError) ? fieldError(state.uploadError) : "";
   return `<section class="card"><h3>${state.report ? "Replace what happened to these customers" : "Add what happened to these customers"}</h3><div class="card-body">
-    ${state.report ? "" : `<p class="pb-note">No outcomes have been added for this run yet.</p>`}
+    ${state.report ? "" : `<p class="pb-note">No outcomes have been added for this list yet.</p>`}
     <form id="pb-outcomes" class="pb-stack" novalidate>
       <p class="pb-desc">Once the campaign's outcome window has passed, upload a CSV or Parquet file with each customer's ID and what happened. Only the totals below are kept; the file itself is not stored.${
         state.report ? " A new file replaces these results; the audit log keeps every upload's fingerprint." : ""
       }</p>
       ${fileField("file", "Choose the outcomes file", { accept: OUTCOME_FILE_TYPES, attrs: "required" })}
       <details class="adv"><summary>Advanced</summary><div class="pb-adv-body">${textField("outcome_column", "Outcome column", {
-        hint: "Leave empty to use the use case's own outcome column.",
+        hint: "Leave empty to use the goal's own outcome column.",
       })}</div></details>
       <div class="pb-form-actions">${actionButton("POST", "/runs/{run_id}/outcomes", {
         type: "submit",
@@ -306,7 +309,7 @@ function reportCard() {
   const alert = r.alert_raised
     ? `<div class="apierr" role="alert" data-code="PERFORMANCE_DROP"><b>The model did worse on real outcomes than in testing.</b><p class="apierr-fix">Its ${esc(
         r.metric_label,
-      )} is ${esc(drop)} lower than its test score, beyond the ${esc(
+      )} is ${esc(drop)} lower than in testing, beyond the ${esc(
         r.alert_threshold_pct,
       )}% alert level. Consider retraining it on recent data. <a href="#/monitoring/alerts">See the alert</a></p>${techDetails(
         [
@@ -318,24 +321,24 @@ function reportCard() {
     : `<div class="pb-ok" role="status">Within the ${esc(r.alert_threshold_pct)}% alert level; no alert was raised.</div>`;
   const basis =
     r.metric_basis === "control_group"
-      ? "Measured on the control group only, whom no campaign reached."
-      : "Measured on every matched customer; the run held out no control group, so campaigns may have changed outcomes.";
+      ? "Measured on the comparison group only, whom no campaign reached."
+      : "Measured on every matched customer; no comparison group was held back, so campaigns may have changed outcomes.";
   const rows = [
     ["Scored", r.rows_scored],
     ["In the file", r.rows_in_file],
     ["Matched", r.rows_matched],
     ["In the file, not scored", r.rows_unmatched_in_file],
     ["Measured on", r.rows_evaluated],
-    ["Control group matched", r.control_rows_matched],
+    ["Comparison group matched", r.control_rows_matched],
   ];
   const w = r.window || {};
   return `<section class="card"><h3>Performance on real outcomes · ${esc(r.metric_label)}</h3><div class="card-body">
     ${metric && metric.name ? `<p class="pb-note">${esc(r.metric_label)}: ${esc(metric.name)}.</p>` : ""}
-    <div class="kpis pb-kpis">${kpi("Test score", score(r.test_score))}${kpi("Real-world score", score(r.real_world_score))}${kpi(
+    <div class="kpis pb-kpis">${kpi("In testing", score(r.test_score))}${kpi("In the real world", score(r.real_world_score))}${kpi(
       "Drop since testing",
       drop,
     )}${kpi("Alert when the drop is over", `${r.alert_threshold_pct}%`)}</div>
-    ${alert}${r.metric_undefined_reason ? `<p class="pb-small">No real-world score: ${esc(r.metric_undefined_reason)}</p>` : ""}
+    ${alert}${r.metric_undefined_reason ? `<p class="pb-small">No real-world figure: ${esc(r.metric_undefined_reason)}</p>` : ""}
     <p class="pb-small">${esc(basis)}</p></div>
     ${rowsTable(
       rows.map(([label]) => ({ label, num: true })),
@@ -370,7 +373,7 @@ function incrementalityCard() {
   const inc = state.incrementality;
   if (!inc) {
     if (!state.report) return ""; // nothing to say before any outcome is added
-    return `<section class="card"><h3>Campaign effect (contacted vs control group)</h3><p class="pb-note pb-pad">This run held out no control group, so there is nothing to compare the campaign against.</p></section>`;
+    return `<section class="card"><h3>Campaign effect (contacted vs comparison group)</h3><p class="pb-note pb-pad">No comparison group was held back for this list, so there is nothing to compare the campaign against.</p></section>`;
   }
   const measure = inc.outcome_kind === "binary" ? "Outcome rate" : "Average outcome";
   const diff = present(inc.observed_difference)
@@ -380,19 +383,19 @@ function incrementalityCard() {
     : EM_DASH;
   const rows = [
     { cells: ["Contacted", ...groupCells(inc.treated, inc.outcome_kind)] },
-    { cells: ["Control group (not contacted)", ...groupCells(inc.control, inc.outcome_kind)] },
+    { cells: [`${term("comparisonGroup")} (not contacted)`, ...groupCells(inc.control, inc.outcome_kind)] },
     ...(inc.by_band || []).flatMap((b) => [
       { cells: [`${esc(b.band)} · contacted`, ...groupCells(b.treated, inc.outcome_kind)] },
-      { cells: [`${esc(b.band)} · control group`, ...groupCells(b.control, inc.outcome_kind)] },
+      { cells: [`${esc(b.band)} · comparison group`, ...groupCells(b.control, inc.outcome_kind)] },
     ]),
   ];
   const control = glossaryTerm("control group");
-  return `<section class="card"><h3>Campaign effect (contacted vs control group)</h3><div class="card-body">
-    ${control ? `<p class="pb-note">Control group: ${esc(control)}</p>` : ""}
-    <div class="kpis pb-kpis">${kpi("Difference vs control group", diff)}${kpi("Control group", fmtPct(inc.control_group_fraction))}${kpi(
+  return `<section class="card"><h3>Campaign effect (contacted vs comparison group)</h3><div class="card-body">
+    ${control ? `<p class="pb-note">Comparison group: ${esc(plainText(control))}</p>` : ""}
+    <div class="kpis pb-kpis">${kpi("Difference vs comparison group", diff)}${kpi("Comparison group", fmtPct(inc.control_group_fraction))}${kpi(
       "Left out (no contact allowed)",
       fmtInt(inc.suppressed_rows_excluded),
-    )}${kpi("Scored, not in the file", fmtInt(inc.unmatched_scored_rows))}</div></div>
+    )}${kpi("On the list, not in the file", fmtInt(inc.unmatched_scored_rows))}</div></div>
     ${rowsTable(
       [{ label: "Group" }, { label: "Customers", num: true }, { label: "With the outcome", num: true }, { label: measure, num: true }],
       rows,
@@ -417,8 +420,8 @@ function consentCard() {
 
 function runFacts(run) {
   return `<section class="card"><h3>This list</h3>
-    <div class="kv"><span class="k">Scored on</span><span class="v">${esc(fmtStamp(run.finished_at))}</span></div>
-    <div class="kv"><span class="k">Customers scored</span><span class="v">${present(run.row_count) ? esc(fmtInt(run.row_count)) : EM_DASH}</span></div>
+    <div class="kv"><span class="k">Made on</span><span class="v">${esc(fmtStamp(run.finished_at))}</span></div>
+    <div class="kv"><span class="k">Customers on the list</span><span class="v">${present(run.row_count) ? esc(fmtInt(run.row_count)) : EM_DASH}</span></div>
     <div class="kv"><span class="k">Status</span><span class="v">${statusPill(run.state)}</span></div>
     <div class="card-body">${techDetails([
       ["Run", run.run_id],
@@ -430,13 +433,14 @@ function runFacts(run) {
 
 export function runOutcomesHtml(runId) {
   const run = state.run && state.runId === runId ? state.run : null;
-  const name = run ? run.use_case_name || run.use_case_id : "Campaign";
-  const title = run ? `${name} · scored ${fmtDate(run.finished_at || run.created_at)}` : "Campaign";
+  const title = run
+    ? shortCampaignName(goalShortName(run.use_case_id, run.use_case_name || run.use_case_id), run.finished_at || run.created_at)
+    : "Campaign";
   const actions = run
     ? headActions({
         secondary: [
           {
-            label: "See this run's results",
+            label: "See this contact list",
             href: `#/uc/${encodeURIComponent(run.use_case_id)}/output/${encodeURIComponent(run.run_id)}`,
           },
         ],
@@ -444,7 +448,7 @@ export function runOutcomesHtml(runId) {
     : "";
   return campaignScreen(
     title,
-    "What really happened to the customers this run scored: how the campaign did against the control group, and how the model did.",
+    "What really happened to the customers on this list: how the campaign did against the comparison group, and how the model did.",
     ["GET", "/runs/{run_id}/outcomes"],
     () => {
       if (state.runError && state.runId === runId) {
@@ -455,7 +459,7 @@ export function runOutcomesHtml(runId) {
       if (!run) return `<p class="loading">Loading…</p>`;
       return `${state.partsError ? errorBox(state.partsError, { retry: true }) : ""}${uploadCard(run)}${reportCard()}${incrementalityCard()}${consentCard()}${runFacts(run)}`;
     },
-    { crumb: run ? name : "Campaign", actions },
+    { crumb: run ? title : "Campaign", actions },
   );
 }
 

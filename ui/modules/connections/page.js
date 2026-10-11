@@ -107,7 +107,7 @@ function connectionCard(c) {
   const kind = kindOf(c.kind);
   const addon =
     c.status === "needs_addon" && kind && kind.addon
-      ? `<p class="cn-note">${esc(`Ask whoever runs Marketing AI to install it: pip install 'marketing-ai[${kind.addon}]'.`)}</p>`
+      ? `<p class="cn-note">${esc(`Ask whoever looks after Marketing AI to install it: pip install 'marketing-ai[${kind.addon}]'.`)}</p>`
       : "";
   const unreadable = c.secrets_readable === false
     ? `<p class="cn-note">The saved password or key can no longer be read. Edit the connection and enter it again.</p>`
@@ -127,7 +127,7 @@ function kindCard(k) {
       ? ""
       : `<span class="chip neutral cn-badge" data-cn-status="not_set_up">Not set up</span>`;
   const action = !k.available
-    ? `<p class="cn-note">${esc(`Ask whoever runs Marketing AI to install it: pip install 'marketing-ai[${k.addon}]'.`)}</p>`
+    ? `<p class="cn-note">${esc(`Ask whoever looks after Marketing AI to install it: pip install 'marketing-ai[${k.addon}]'.`)}</p>`
     : `<div class="btn-row"><a class="btn secondary sm" href="${esc(`${LIST}/new/${k.kind}`)}">${used ? "Set up another" : "Set up"}</a></div>`;
   return `<article class="cn-card" data-cn-kind="${esc(k.kind)}"><h3>${esc(k.label)}</h3>${badge}<p class="cn-text">${esc(
     k.description,
@@ -161,7 +161,7 @@ function listHtml() {
     ? `<div class="cn-grid">${state.connections.map(connectionCard).join("")}</div>`
     : emptyState({
         title: "No connections yet",
-        text: "Pick a service below to connect it. You can also upload files directly in each use case.",
+        text: "Pick a service below to connect it. You can also upload files directly in each goal.",
       });
   const data = state.kinds.filter((k) => k.creatable);
   return `<main class="screen cn">${head}
@@ -169,7 +169,7 @@ function listHtml() {
     <section class="cn-sec" aria-labelledby="cn-add"><h2 id="cn-add">Add a connection</h2><p>Files in cloud storage, or tables in a database.</p><div class="cn-grid">${data
       .map(kindCard)
       .join("")}</div></section>
-    <section class="cn-sec" aria-labelledby="cn-ai"><h2 id="cn-ai">AI service</h2><p>Two settings: one that helps your team, one for what your customer gets. Neither trains or scores your models.</p><div class="cn-grid">${Object.keys(SLOTS)
+    <section class="cn-sec" aria-labelledby="cn-ai"><h2 id="cn-ai">AI service</h2><p>Two settings: one that helps your team, one for what your customer gets. Neither one builds or changes your models.</p><div class="cn-grid">${Object.keys(SLOTS)
       .map(aiCard)
       .join("")}</div></section>
   </main>`;
@@ -243,7 +243,7 @@ function formHtml() {
   );
   if (!kind.available) {
     return `<main class="screen cn">${head}<section class="card notice-card" role="status"><h3>This service needs an add-on</h3><p>${esc(
-      `Ask whoever runs Marketing AI to install it: pip install 'marketing-ai[${kind.addon}]'.`,
+      `Ask whoever looks after Marketing AI to install it: pip install 'marketing-ai[${kind.addon}]'.`,
     )}</p><div class="notice-actions"><a class="btn secondary" href="${LIST}">Back to Connections</a></div></section></main>`;
   }
   const basic = (kind.fields || []).filter((f) => !f.advanced).map((f) => fieldHtml(f, form)).join("");

@@ -775,7 +775,7 @@ class IndexComparisonResponse(StrictBase):
 
 # ---- PHASE-4B (production) — append only below this line ----
 # --- M46/M47 (access control and audit): api/routes/auth.py and api/routes/audit.py -------------
-from pydantic import ConfigDict  # noqa: E402
+from pydantic import ConfigDict, StrictBool  # noqa: E402
 
 from engine.access.roles import Role  # noqa: E402
 from engine.audit.events import AuditEvent  # noqa: E402
@@ -814,9 +814,29 @@ class PermissionView(StrictBase):
     )
 
 
+class PreferencesView(StrictBase):
+    """Plan M M180 (DEC-1610): a signed-in person's own display choices. They never change what a role may do."""
+
+    show_technical: bool | None = Field(
+        default=None,
+        description='"Show technical details": true shows technical pages and sections, false hides them; '
+        "null when the person has not chosen (the UI then uses its layout's default).",
+    )
+
+
+class PreferencesUpdateRequest(StrictBase):
+    """Body of `PUT /auth/me/preferences` (Plan M M180, DEC-1610)."""
+
+    show_technical: StrictBool = Field(description='"Show technical details": true or false.')
+
+
 class MeResponse(StrictBase):
     """`GET /auth/me`: who the caller is and what they may do, so the UI can hide and explain actions."""
 
+    # Plan M M180 (DEC-1610): added field only. Null with sign-in off (the browser remembers the choice then).
+    preferences: PreferencesView | None = Field(
+        default=None, description="The signed-in person's display choices; null when sign-in is off."
+    )
     principal: PrincipalView
     auth_mode: str = Field(description="`off` (everyone is the local operator) or `local`.")
     permissions: tuple[PermissionView, ...] = Field(description="One entry per declared route, sorted.")

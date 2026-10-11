@@ -109,7 +109,7 @@ def test_each_check_is_one_line_and_a_check_that_did_not_run_says_so(rendered: d
         "fairness": "not_run",
     }
     fairness = html[html.index('data-check="fairness"') :]
-    assert ">Not run<" in fairness[:200]
+    assert ">Not checked<" in fairness[:200]  # Plan M M172: "run" is not a marketer's word
     assert "Warnings block nothing." in html
 
 

@@ -15,7 +15,9 @@
 //
 // A few sentences are pinned word for word by the design prototype
 // (tests/prototype/consistency.test.mjs, "the uplift entry point and its words"). They change
-// together with `marketing-ai-prototype.html` (work package WP9), never here alone.
+// together with `marketing-ai-prototype.html` (work package WP9), never here alone. Plan M M172
+// (DEC-1602) renamed most of them to the glossary's words; that test pins each pair, the prototype's
+// old words in the prototype and these in the product.
 
 import {
   EM_DASH,
@@ -48,6 +50,7 @@ import {
 import { decileChart, profitChart, qiniChart, segmentChart } from "./charts.js";
 // Plan M M171 (DEC-1601): one contact list - the treat list, or the scored list with a note.
 import { allScoresSlotHtml, contactDownloadLink, contactListParts, contactSlotHtml } from "../../contact_list.js";
+import { plainText, userText } from "../../labels.js"; // Plan M M172 (DEC-1602): server sentences in plain words; names the person supplied
 import {
   fmtCi,
   fmtCount,
@@ -154,19 +157,21 @@ export const routes = {
 export function notCausalBanner(...artefacts) {
   const flagged = artefacts.some((a) => a && a.causal === false);
   if (!flagged) return "";
-  return `<div class="unotcausal" role="note"><b>Not causal</b><span>${esc(
-    NOT_CAUSAL_NOTE.replace(/^Not causal: /, ""),
-  )} TREATMENT_NOT_RANDOM was acknowledged for this run.</span></div>`;
+  // Plan M M172: the engine's note, in the glossary's words (`plainText`; the constant itself stays the engine's).
+  return `<div class="unotcausal" role="note"><b>Not yet proven</b><span>${esc(
+    plainText(NOT_CAUSAL_NOTE).replace(/^Not yet proven: /, ""),
+  )} This was confirmed as expected when the model was built.</span></div>`;
 }
 
-const upliftChip = () => `<div class="chips"><span class="chip type">Uplift</span></div>`;
+// Plan M M172 (DEC-1602): "uplift" is the effect of contacting a customer (ui/labels.js); the workbench says so.
+const upliftChip = () => `<div class="chips"><span class="chip type">Campaign effect</span></div>`;
 
 /** A screen: the `data-module` marker is how `index.js` knows the page on screen is its own. */
 const screenOf = (uc, head, body) =>
   `<main class="screen t-${esc((uc && uc.marker) || "P")}" data-module="uplift">${pageHead(head)}${body}</main>`;
 
 /** The workbench is under Settings → Advanced tools (Plan H M82), and named as Settings names it. */
-export const INDEX_LABEL = "Uplift workbench";
+export const INDEX_LABEL = "Campaign effect workbench";
 const INDEX_CRUMB = { label: INDEX_LABEL, href: routes.index() };
 
 /** Settings › Uplift workbench › <use case> › <current>. */
@@ -208,7 +213,7 @@ const detailsKv = (summary, rows, extra = "") =>
 export function upliftUnavailable(u) {
   if (!u) return "Not available";
   if (u.status === "planned") return "Coming soon";
-  if (u.ai_type === "generative") return "Writes text, so uplift does not apply";
+  if (u.ai_type === "generative") return "Writes text, so there is no campaign effect to measure";
   if (u.trainable_in_phase_1 === false) return "Not available yet";
   return "";
 }
@@ -216,8 +221,8 @@ export function upliftUnavailable(u) {
 /** A row's status line: "Uplift model trained 24 Sep 2026" / "No uplift model yet" / checking. */
 export function indexStatusHtml(status) {
   if (status === undefined) return `<span class="s" data-ustatus>Checking…</span>`;
-  if (!status) return `<span class="s" data-ustatus>No uplift model yet</span>`;
-  return `<span class="s ok" data-ustatus>${esc(`Uplift model trained ${fmtDate(status.created_at)}`)}${
+  if (!status) return `<span class="s" data-ustatus>No effect model yet</span>`;
+  return `<span class="s ok" data-ustatus>${esc(`Effect model built ${fmtDate(status.created_at)}`)}${
     status.approved ? " (approved)" : ""
   }</span>`;
 }
@@ -247,16 +252,16 @@ export function upliftIndexHtml(payload, statuses = {}) {
           )}</span></span><span class="s">${esc(upliftUnavailable(u))}</span></div>`,
       ),
     );
-  const head = `${crumbs([SETTINGS_CRUMB, { label: INDEX_LABEL }])}<h1 class="h1">Measure what a campaign changes (uplift)</h1><p class="desc">Uplift ${esc(
+  const head = `${crumbs([SETTINGS_CRUMB, { label: INDEX_LABEL }])}<h1 class="h1">Measure what a campaign changes</h1><p class="desc">A campaign effect model ${esc(
     UPLIFT_EXPLANATION,
-  )}: it compares customers who were treated with a randomly held-out control group, so you contact the persuadable and leave alone the ones who would convert anyway, would never convert, or react badly.</p>`;
+  )}: it compares customers who were contacted with a comparison group held back at random, so you contact the persuadable and leave alone the ones who would convert anyway, would never convert, or react badly.</p>`;
   const body = rows.length
-    ? `<p class="hint uhint">Pick a use case to train an uplift model on a campaign with a random control group.</p><nav class="uindex" aria-label="Use cases">${rows.join(
+    ? `<p class="hint uhint">Pick a goal to build an effect model from a campaign with a random comparison group.</p><nav class="uindex" aria-label="Goals">${rows.join(
         "",
       )}</nav>`
     : emptyState({
-        title: "No use case is set up yet",
-        text: "Uplift models are trained per use case. Use cases appear here once an industry template is configured.",
+        title: "No goal is set up yet",
+        text: "Effect models are built per goal. Goals appear here once an industry template is configured.",
         action: { label: "Go to Home", href: "#/" },
       });
   return `<main class="screen" data-module="uplift">${pageHead(head)}${body}</main>`;
@@ -269,11 +274,20 @@ const profileOf = (s) => (s.upload ? s.upload.profile : null);
 /** Model versions an uplift run registered: the only metric they are ranked on is AUUC. */
 export const upliftVersions = (models) => (models || []).filter((m) => m.version && m.version.metric === "auuc");
 
-/** How a trained uplift model reads in a list: "Uplift model trained 24 Sep 2026 (approved)". */
-export const modelOptionLabel = (v) =>
-  `Uplift model trained ${fmtDate(v.version.created_at)}${v.is_champion ? " (approved)" : ""} · ${
-    v.version.model_display_name
+/** How a built effect model reads in a list: "Effect model built 24 Sep 2026 (approved)". Plan M M172: the
+    algorithm's name is an analyst word, so it is not in the option; `modelAlgorithmHtml` shows it as technical.
+    `withTime` names the minute too, so several models built on one day stay apart in a dropdown. */
+export const modelOptionLabel = (v, { withTime = false } = {}) =>
+  `Effect model built ${withTime ? fmtStamp(v.version.created_at) : fmtDate(v.version.created_at)}${
+    v.is_champion ? " (approved)" : ""
   }`;
+
+/** A file name the person uploaded, marked as theirs (`userText`), or the em dash. */
+const fileHtml = (name) => (name ? userText(name) : esc(EM_DASH));
+
+/** The algorithm behind a model ("X-learner (LightGBM)"), marked technical (`data-technical`), or `""`. */
+export const modelAlgorithmHtml = (name) =>
+  name ? ` <span class="muted" data-technical>· ${esc(name)}</span>` : "";
 
 /** Why the Run button is disabled, or `""` when it is not. */
 export function setupBlocker(s) {
@@ -284,7 +298,7 @@ export function setupBlocker(s) {
     if (!s.treatment) return "Choose the column that says who was contacted";
     if (s.treatment === s.target) return "The contacted column and the result column must be different columns";
   } else if (!s.modelVersionId) {
-    return "Train an uplift model first";
+    return "Build an effect model first";
   }
   return "";
 }
@@ -408,7 +422,7 @@ function acknowledgeHtml(s) {
         `<label class="uack"><input type="checkbox" data-uack="${esc(g.token)}"${
           s.acknowledged.includes(g.token) ? " checked" : ""
         }> I confirm this is expected — run anyway${
-          g.token === NOT_RANDOM ? " (every result will be labelled not causal)" : ""
+          g.token === NOT_RANDOM ? " (every result will be labelled not yet proven)" : ""
         }</label>`,
     )
     .join("");
@@ -420,24 +434,26 @@ function upliftRunsCard(uc, runs, { collapsed = false } = {}) {
     const headline =
       run.state === "done"
         ? train
-          ? `Trained · ${dash(run.best_model)}`
-          : `Scored ${dash(run.row_count, fmtInt)} customers`
-        : `${train ? "Training" : "Scoring"} · ${STATE_LABEL[run.state] || run.state}`;
+          ? "Effect model built"
+          : `Contact list of ${dash(run.row_count, fmtInt)} customers`
+        : `${train ? "Building an effect model" : "Making a contact list"} · ${STATE_LABEL[run.state] || run.state}`;
     const inUse = train && run.champion && run.state === "done";
     return `<a class="runrow" href="${esc(routes.run(uc.id, run.run_id))}">
-      <div><div class="r1">${esc(headline)}${inUse ? '<span class="champ">In use</span>' : ""}</div>
-      <div class="r2">${esc(run.file_name)} · ${esc(fmtStamp(run.created_at))}</div></div>
-      <div class="r3"><span>${esc(train ? "Trained" : "Scored")}</span></div></a>`;
+      <div><div class="r1">${esc(headline)}${train && run.state === "done" ? modelAlgorithmHtml(run.best_model) : ""}${
+        inUse ? '<span class="champ">In use</span>' : ""
+      }</div>
+      <div class="r2">${fileHtml(run.file_name)} · ${esc(fmtStamp(run.created_at))}</div></div>
+      <div class="r3"><span>${esc(train ? "Model" : "Contact list")}</span></div></a>`;
   });
   const list = `<div class="runs-list">${
-    rows.length ? rows.join("") : `<div class="empty">No uplift runs yet.</div>`
+    rows.length ? rows.join("") : `<div class="empty">No effect models or contact lists yet.</div>`
   }</div>`;
   if (collapsed) {
     return `<section class="card"><details class="adv urunsfold"><summary>${esc(
-      `Previous uplift runs (${rows.length})`,
+      `Earlier effect models and contact lists (${rows.length})`,
     )}</summary>${list}</details></section>`;
   }
-  return `<section class="card"><h3>Previous uplift runs${sortNote("newest first")}</h3>${list}</section>`;
+  return `<section class="card"><h3>Earlier effect models and contact lists${sortNote("newest first")}</h3>${list}</section>`;
 }
 
 function setupBody(uc, s) {
@@ -449,14 +465,14 @@ function setupBody(uc, s) {
   const step1 = `<div class="fstep ${s.upload ? "done" : ""}"><div class="stepno">1</div><div>
     <div class="flabel">Dataset</div><div class="fhint">${esc(
       train
-        ? "One row per customer of a past campaign: the features, whether they were treated (0/1, assigned at random) and the outcome."
-        : "The customers to score. The trained uplift model ranks them by how much the action changes their outcome.",
+        ? "One row per customer of a past campaign: the details about each customer, whether they were contacted (1) or held back at random (0), and the result."
+        : "The customers to rank. The effect model ranks them by how much contacting them changes their result.",
     )}</div>
     <div class="orline"><label class="control file ${
       s.upload ? "has" : ""
-    }"><input type="file" id="u-file" class="sr" accept=".csv,.xlsx,.xlsm,.parquet"><span class="fname">${esc(
-      profile ? profile.file_name : "Upload CSV, Excel or Parquet",
-    )}</span><span class="ico" aria-hidden="true">⤒</span></label>${
+    }"><input type="file" id="u-file" class="sr" accept=".csv,.xlsx,.xlsm,.parquet"><span class="fname">${
+      profile ? userText(profile.file_name) : esc("Upload CSV, Excel or Parquet")
+    }</span><span class="ico" aria-hidden="true">⤒</span></label>${
       profile
         ? `<span>${esc(fmtInt(profile.row_count))} rows · ${esc(String(profile.column_count))} columns · ${esc(
             `file size ${fmtSize(profile.file_size_bytes)}`,
@@ -482,19 +498,19 @@ function setupBody(uc, s) {
     : "";
   const candidateNote = train
     ? s.candidatesLoading
-      ? `<div class="loading">Looking for 0/1 treatment columns…</div>`
+      ? `<div class="loading">Looking for a 0/1 column that says who was contacted…</div>`
       : s.candidatesError
         ? errorBox(s.candidatesError)
         : s.upload && !candidates.length && s.candidates
-          ? `<p class="seg-help">No 0/1 column in this file looks like a treatment. Uplift needs one: 1 for customers who got the action, 0 for the randomly held-out control group.</p>`
+          ? `<p class="seg-help">No 0/1 column in this file says who was contacted. An effect model needs one: 1 for customers who got the action, 0 for the comparison group held back at random.</p>`
           : ""
     : "";
   const ptype =
     train && s.treatment
-      ? `<div class="ptype"><span>Problem type</span><span class="pill">Uplift</span><span>${esc(
+      ? `<div class="ptype"><span>What it measures</span><span class="pill">Campaign effect</span><span>${esc(
           UPLIFT_EXPLANATION,
         )}</span>${
-          s.acknowledged.includes(NOT_RANDOM) ? `<span class="uwarn">${esc(NOT_CAUSAL_NOTE)}</span>` : ""
+          s.acknowledged.includes(NOT_RANDOM) ? `<span class="uwarn">${esc(plainText(NOT_CAUSAL_NOTE))}</span>` : ""
         }</div>`
       : "";
   // Step 2 is one line until a file exists: three empty dropdowns explain nothing.
@@ -519,20 +535,22 @@ function setupBody(uc, s) {
 
   const versions = upliftVersions(s.models);
   const chosen = versions.find((v) => v.version.model_id === s.modelVersionId);
-  const modelSelect = `<div class="field wide"><div class="control sel"><select id="u-model" aria-label="Trained uplift model">${
+  const modelSelect = `<div class="field wide"><div class="control sel"><select id="u-model" aria-label="Effect model">${
     versions.length
-      ? versions.map((v) => option(v.version.model_id, modelOptionLabel(v), s.modelVersionId)).join("")
-      : `<option value="">No trained uplift model yet</option>`
+      ? versions
+          .map((v) => option(v.version.model_id, modelOptionLabel(v, { withTime: versions.length > 1 }), s.modelVersionId))
+          .join("")
+      : `<option value="">No effect model yet</option>`
   }</select></div></div>`;
   // One model: say which, and fold the choice away. Several: the dropdown, open.
   const modelChoice =
     versions.length === 1 && chosen
-      ? `<p class="umodel">${esc(modelOptionLabel(chosen))}</p><details class="adv"><summary>Change model</summary><div class="frow">${modelSelect}</div></details>`
+      ? `<p class="umodel">${esc(modelOptionLabel(chosen))}${modelAlgorithmHtml(chosen.version.model_display_name)}</p><details class="adv"><summary>Change model</summary><div class="frow">${modelSelect}</div></details>`
       : `<div class="frow">${modelSelect}</div>`;
   const step3 = train
     ? ""
     : `<div class="fstep ${versions.length ? "done" : "locked"}"><div class="stepno">3</div><div>
-        <div class="flabel">Trained uplift model</div><div class="fhint">The saved uplift model that will rank the uploaded customers.</div>
+        <div class="flabel">Effect model</div><div class="fhint">The saved effect model that will rank the uploaded customers.</div>
         ${modelChoice}</div></div>`;
 
   const acks = acknowledgeHtml(s);
@@ -540,13 +558,13 @@ function setupBody(uc, s) {
     <section class="card"><div class="form-body">
       <div class="seg" role="group" aria-label="Mode"><button type="button" data-umode="train" class="${
         train ? "on" : ""
-      }" aria-pressed="${train}">Train uplift model</button><button type="button" data-umode="score" class="${
+      }" aria-pressed="${train}">Build an effect model</button><button type="button" data-umode="score" class="${
         train ? "" : "on"
-      }" aria-pressed="${!train}">Score new data</button></div>
+      }" aria-pressed="${!train}">Make a contact list</button></div>
       <p class="seg-help">${esc(
         train
           ? "It needs a past campaign where the action was given at random."
-          : "Scoring writes the treat list: persuadables within budget are Treat, sleeping dogs never are, and a control group is held out.",
+          : "The contact list picks the customers the campaign persuades, within budget, never the ones it puts off, and keeps a comparison group back.",
       )}</p>
       <form id="u-setup" novalidate class="uform-setup">
         ${step1}${step2}${step3}
@@ -555,7 +573,7 @@ function setupBody(uc, s) {
         ${acks ? `<div class="uacks">${acks}</div>` : ""}
         <div class="actions"><button type="submit" class="btn primary run" id="u-run"${
           why || s.submitting ? " disabled" : ""
-        }>${esc(s.submitting ? "Starting…" : train ? "Train uplift model" : "Score customers")}</button><span class="reason">${esc(
+        }>${esc(s.submitting ? "Starting…" : train ? "Build the effect model" : "Make the contact list")}</button><span class="reason">${esc(
           why,
         )}</span></div>
       </form></div></section>
@@ -563,8 +581,8 @@ function setupBody(uc, s) {
   </div>
   <p class="next">${esc(
     train
-      ? "After the run: Model (how well it finds the persuadable) → Output (segments, treat list) → Campaign results."
-      : "After scoring: download the contact list, run the campaign, then upload its outcomes to see the campaign results.",
+      ? "Once it is built: Model (how well it finds the customers contact persuades) → Contact list → Campaign results."
+      : "Once it is made: download the contact list, send the campaign, then upload its outcomes to see the campaign results.",
   )}</p>`;
 }
 
@@ -667,10 +685,10 @@ function runningBody(uc, s) {
           )}</div></div></li>`;
         })
         .join("")
-    : `<li><span class="dot">1</span><div><div class="pt">Waiting for the run to start</div><div class="pd"></div></div></li>`;
+    : `<li><span class="dot">1</span><div><div class="pt">Waiting to start</div><div class="pd"></div></div></li>`;
   const cancel = s.confirmCancel
-    ? `<div class="btn-row ucancel"><span>Cancel this run? It stops now and cannot be resumed.</span><button type="button" class="btn danger sm confirm" id="u-cancel">Yes, cancel run</button><button type="button" class="btn quiet sm" id="u-cancel-keep">Keep running</button></div>`
-    : `<div class="btn-row ucancel"><span class="spacer"></span><button type="button" class="btn danger sm" id="u-cancel">Cancel run</button></div>`;
+    ? `<div class="btn-row ucancel"><span>Cancel it? It stops now and cannot be resumed.</span><button type="button" class="btn danger sm confirm" id="u-cancel">Yes, cancel</button><button type="button" class="btn quiet sm" id="u-cancel-keep">Keep running</button></div>`
+    : `<div class="btn-row ucancel"><span class="spacer"></span><button type="button" class="btn danger sm" id="u-cancel">Cancel</button></div>`;
   const pct = status && typeof status.progress_pct === "number" && !Number.isNaN(status.progress_pct)
     ? Math.max(0, Math.min(100, Math.round(status.progress_pct)))
     : null;
@@ -679,9 +697,9 @@ function runningBody(uc, s) {
     ? `<div class="run-meter" role="progressbar" aria-valuenow="${pct}" aria-valuemin="0" aria-valuemax="100"><div class="run-meter-fill" style="width:${pct}%"></div></div>`
     : "";
   return `<div class="setup-grid"><section class="card"><div class="run-title-row"><h3>${esc(
-    train ? "Training your uplift model…" : "Scoring customers…",
+    train ? "Building your effect model…" : "Making the contact list…",
   )}</h3>${pctBadge}</div><p class="urun-intro">${esc(
-    "Running… This usually takes a few minutes. You can leave this page; the run keeps going.",
+    "Running… This usually takes a few minutes. You can leave this page; it keeps going.",
   )}</p>${meter}<ol class="progress">${rows}</ol>${cancel}${s.submitError ? errorBox(s.submitError) : ""}</section>${upliftRunsCard(
     uc,
     s.runs,
@@ -704,10 +722,10 @@ function gainSentence(evaluation) {
   if (!top) return "";
   const v = top.cv.value * 100;
   const change = v >= 0 ? "raises" : "lowers";
-  return `Contacting the top ${top.pct}% the model picks ${change} the response rate by about ${fmtNum(
-    Math.abs(v),
-    1,
-  )} points.`;
+  const points = fmtNum(Math.abs(v), 1);
+  return `Contacting the top ${top.pct}% the model picks ${change} the response rate by about ${points} ${
+    points === "1" ? "point" : "points"
+  }.`;
 }
 
 function resultsBody(uc, s) {
@@ -717,50 +735,52 @@ function resultsBody(uc, s) {
   const done = run.state === "done";
   const gain = train ? gainSentence(s.evaluation) : "";
   const headline = done
-    ? `<span class="ok">✓ ${train ? "Uplift model trained" : "Scoring complete"}</span>`
+    ? `<span class="ok">✓ ${train ? "Effect model built" : "Contact list ready"}</span>`
     : run.state === "cancelled"
-      ? `<span class="muted">Run cancelled</span>`
-      : `<span class="bad">✕ Run failed</span>`;
+      ? `<span class="muted">Cancelled</span>`
+      : `<span class="bad">✕ Did not finish</span>`;
   const detailLine = done
     ? train
-      ? `<span>${esc(gain || `${dash(run.best_model)} · ${dash(run.headline_metric_label)} ${fmtVal(run.headline_score)}`)}</span>`
-      : `<span><b>${esc(dash(run.row_count, fmtInt))}</b> customers scored</span>`
+      ? gain
+        ? `<span>${esc(gain)}</span>`
+        : `<span data-technical>${esc(`${dash(run.best_model)} · ${dash(run.headline_metric_label)} ${fmtVal(run.headline_score)}`)}</span>`
+      : `<span><b>${esc(dash(run.row_count, fmtInt))}</b> customers ranked</span>`
     : run.error
       ? `<span>${esc(run.error.message)}</span>`
       : "";
   const primary = !done
     ? { label: "Try again", href: routes.setup(uc.id) }
     : train
-      ? { label: "Score customers with this model", href: routes.score(uc.id) }
+      ? { label: "Make a contact list with this model", href: routes.score(uc.id) }
       : contactDownloadLink(contactListParts({ facts: s.contactList, scoresHref: s.scoresHref || "#" }).download, {
           icon: false,
           runId: run.run_id,
         });
   const actions = headActions({
     primary,
-    related: done ? { label: "Change settings and train again", href: routes.setup(uc.id) } : null,
+    related: done ? { label: "Change settings and build again", href: routes.setup(uc.id) } : null,
   });
   const blocks = train
     ? [
-        ["Data", routes.data(uc.id, run.run_id), run.file_name, `${dash(run.row_count, fmtInt)} customers · result ${dash(run.target)}`],
+        ["Data", routes.data(uc.id, run.run_id), fileHtml(run.file_name), `${dash(run.row_count, fmtInt)} customers · result ${dash(run.target)}`],
+        ["Model", routes.model(uc.id, run.run_id), esc("Effect model"), "How well it finds the customers contact changes"],
         [
-          "Model",
-          routes.model(uc.id, run.run_id),
-          dash(run.best_model),
-          gain ? "How well it finds the customers contact changes" : `${dash(run.headline_metric_label)} ${fmtVal(run.headline_score)}`,
+          "Contact list",
+          routes.output(uc.id, run.run_id),
+          esc("Who to contact"),
+          "Checked on the test customers; make a contact list for new customers",
         ],
-        ["Contact list", routes.output(uc.id, run.run_id), "Who to contact", "Checked on the test customers; score new data for a list"],
       ]
     : [
-        ["Data", routes.data(uc.id, run.run_id), run.file_name, `${dash(run.row_count, fmtInt)} customers`],
-        ["Contact list", routes.output(uc.id, run.run_id), "Who to contact", "Segments, recommended contacts, download"],
+        ["Data", routes.data(uc.id, run.run_id), fileHtml(run.file_name), `${dash(run.row_count, fmtInt)} customers`],
+        ["Contact list", routes.output(uc.id, run.run_id), esc("Who to contact"), "Segments, recommended contacts, download"],
         // Not "Done" when the scoring run is: its results exist only once outcomes are uploaded, which
         // run.json does not record, so the block says when it applies instead.
         [
           "Campaign results",
           routes.campaign(uc.id, run.run_id),
-          "Contacted vs not contacted",
-          "Upload outcomes once the campaign has run",
+          esc("Contacted vs not contacted"),
+          "Upload outcomes once the campaign is over",
           "After the campaign",
         ],
       ];
@@ -769,21 +789,28 @@ function resultsBody(uc, s) {
       ([label, href, value, meta, next], i) =>
         `${i ? '<div class="arrow" aria-hidden="true">→</div>' : ""}<a class="block${
           done ? "" : " pending"
-        }" href="${esc(href)}"><div><div class="lab"><span>${esc(label)}</span>${
+        }" href="${esc(href)}"${
+          // Plan M M180 (DEC-1610): the Data, Model and Contact list pages are technical pages (as on
+          // #/uc/<uc>/run/<run>); "Campaign results" is not. Hidden with "Show technical details" off.
+          label === "Campaign results" ? "" : " data-technical"
+        }><div><div class="lab"><span>${esc(label)}</span>${
           !done
             ? '<span class="bstate waiting">Not completed</span>'
             : next
               ? `<span class="bstate waiting">${esc(next)}</span>`
               : '<span class="bstate">✓ Done</span>'
-        }</div><div class="val">${esc(value)}</div><div class="meta">${esc(
+        }</div><div class="val">${value}</div><div class="meta">${esc(
           meta,
         )}</div></div><div class="go"><span>View details</span><span aria-hidden="true">›</span></div></a>`,
     )
     .join("");
-  return `<div class="results"><div class="summary">${headline}${detailLine}<span class="muted">${esc(
+  return `<div class="results"><div class="summary">${headline}${detailLine}<span class="muted">${fileHtml(
     run.file_name,
   )} · ${esc(fmtStamp(run.created_at))}</span></div>${actions}
-    <span class="cap">Uplift pipeline</span><div class="flow">${flow}</div>
+    ${
+      // Plan M M180 (DEC-1610): after a training run every block is technical, so the caption goes with them.
+      train ? '<span class="cap" data-technical>Steps</span>' : '<span class="cap">Steps</span>'
+    }<div class="flow">${flow}</div>
     <div class="runs-below">${upliftRunsCard(uc, s.runs)}</div>
     ${techDetails([
       ["Run", run.run_id],
@@ -796,12 +823,12 @@ function resultsBody(uc, s) {
 export function upliftScreenHtml(uc, s) {
   const body = s.view === "running" ? runningBody(uc, s) : s.view === "results" ? resultsBody(uc, s) : setupBody(uc, s);
   const current = s.view === "setup" || !s.view ? { label: uc.name } : { label: uc.name, href: routes.setup(uc.id) };
-  const trail = crumbs([SETTINGS_CRUMB, INDEX_CRUMB, current, s.view === "running" || s.view === "results" ? { label: "Run" } : null]);
+  const trail = crumbs([SETTINGS_CRUMB, INDEX_CRUMB, current, s.view === "running" ? { label: "In progress" } : s.view === "results" ? { label: "Result" } : null]);
   return screenOf(
     uc,
     `${trail}<h1 class="h1">${esc(
       uc.name,
-    )} · Uplift</h1><p class="desc">Uplift ${esc(UPLIFT_EXPLANATION)}.</p>${upliftChip()}`,
+    )} · Campaign effect</h1><p class="desc">A campaign effect model ${esc(UPLIFT_EXPLANATION)}.</p>${upliftChip()}`,
     body,
   );
 }
@@ -821,14 +848,14 @@ function stepper(uc, run, kind) {
   const train = run.mode === "train";
   const steps = [
     ["data", "Data", routes.data(uc.id, run.run_id), ""],
-    ["model", "Model", routes.model(uc.id, run.run_id), train && uplift ? "" : "A scoring run uses a model trained earlier"],
+    ["model", "Model", routes.model(uc.id, run.run_id), train && uplift ? "" : "A contact list uses a model built earlier"],
     [
       "output",
       uplift ? "Contact list" : "Output",
       uplift ? routes.output(uc.id, run.run_id) : routes.phase1Output(uc.id, run.run_id),
       "",
     ],
-    ["campaign", "Campaign results", routes.campaign(uc.id, run.run_id), train ? "Measured on a scoring run" : ""],
+    ["campaign", "Campaign results", routes.campaign(uc.id, run.run_id), train ? "Measured on a contact list" : ""],
   ];
   // A step that does not apply says why in words everyone gets: the reason is printed under the
   // tabs and tied to the step by `aria-describedby`, and the step is focusable (`aria-disabled`,
@@ -841,7 +868,7 @@ function stepper(uc, run, kind) {
         .map(([key, label, , off]) => `<span id="${whyId(key)}">${esc(`${label}: ${off}.`)}</span>`)
         .join(" ")}</p>`
     : "";
-  return `<nav class="tabs" aria-label="Run pages">${steps
+  return `<nav class="tabs" aria-label="Pages">${steps
     .map(([key, label, href, off]) =>
       off && key !== kind
         ? `<span class="tab off" aria-disabled="true" tabindex="0" aria-describedby="${whyId(key)}" title="${esc(off)}">${esc(
@@ -854,7 +881,7 @@ function stepper(uc, run, kind) {
     .join("")}</nav>${why}`;
 }
 
-const runWhen = (run) => `${run.mode === "train" ? "Trained" : "Scored"} ${fmtStamp(run.created_at)}`;
+const runWhen = (run) => `${run.mode === "train" ? "Built" : "Made"} ${fmtStamp(run.created_at)}`;
 
 function pageShell(uc, run, kind, { title, desc = "", actions = "", trail = null, chip = true }, body) {
   const label = { model: "Model", output: "Contact list", campaign: "Campaign results" }[kind];
@@ -977,7 +1004,7 @@ export function armsCard(evaluation, value) {
       value.best_offer_better
         ? "Choosing the offer for each customer does better than the first offer alone."
         : "Choosing the offer for each customer is not yet shown to do better than the first offer alone.",
-      value.promotion || "",
+      plainText(value.promotion || ""),
       detailsKv("How this was estimated", [
         ["Finding", dash(value.summary)],
         ["Best offer per customer", fmtCi(value.best_offer)],
@@ -1084,8 +1111,8 @@ export function modelPageHtml(uc, run, art, ope) {
   if (!evaluation) {
     verdict = emptyState({
       title: "The model's test results are not available",
-      text: "This run did not save its test results, so there is nothing to show yet. Train the model again to see them.",
-      action: { label: "Go to uplift Setup", href: routes.setup(uc.id), kind: "secondary" },
+      text: "The test results were not saved, so there is nothing to show yet. Build the model again to see them.",
+      action: { label: "Go to Setup", href: routes.setup(uc.id), kind: "secondary" },
     });
     verdict = `<section class="card">${verdict}</section>`;
   } else {
@@ -1105,8 +1132,8 @@ export function modelPageHtml(uc, run, art, ope) {
       evaluation.measurable_uplift ? "ok" : "warn",
       title,
       evaluation.measurable_uplift
-        ? "Measurable uplift: picking customers this way beats picking them at random."
-        : "No measurable uplift: it does not yet beat picking customers at random, so do not rely on its list.",
+        ? "A measurable effect: picking customers this way beats picking them at random."
+        : "No measurable effect: it does not yet beat picking customers at random, so do not rely on its list.",
     );
   }
   const auucName = (glossaryMetric("auuc") || {}).name;
@@ -1144,7 +1171,7 @@ export function modelPageHtml(uc, run, art, ope) {
           ];
         }),
       )
-    : `<div class="empty">No gain was measured for this run.</div>`;
+    : `<div class="empty">No gain was measured.</div>`;
   const deciles = e.deciles || [];
   const decileTable = deciles.length
     ? `<details class="adv utable"><summary>Show table</summary>${dataTable(
@@ -1170,8 +1197,8 @@ export function modelPageHtml(uc, run, art, ope) {
         ]),
       )}</details>`
     : "";
-  const qini = curve ? qiniChart(curve) : `<div class="empty">The gain chart is not available for this run.</div>`;
-  const decile = deciles.length ? decileChart(deciles) : `<div class="empty">The gain for each tenth of customers is not available for this run.</div>`;
+  const qini = curve ? qiniChart(curve) : `<div class="empty">The gain chart is not available.</div>`;
+  const decile = deciles.length ? decileChart(deciles) : `<div class="empty">The gain for each tenth of customers is not available.</div>`;
   const body = `${notCausalBanner(validation, evaluation, curve, art["segments.json"], art["policy_recommendation.json"])}
     ${verdict}${tileRow}
     <div class="row">
@@ -1185,7 +1212,7 @@ export function modelPageHtml(uc, run, art, ope) {
     <section class="card"><h3>Gain in each tenth of customers</h3>${decile}${decileTable}</section>
     ${armsCard(evaluation, art["arm_policy_value.json"])}
     ${opeCard(ope)}
-    <section class="card card-body udetails-card">${metrics}${detailsKv("Training setup", setupRows)}${runTech(run)}</section>`;
+    <section class="card card-body udetails-card">${metrics}${detailsKv("How the model was built", setupRows)}${runTech(run)}</section>`;
   return pageShell(
     uc,
     run,
@@ -1193,7 +1220,7 @@ export function modelPageHtml(uc, run, art, ope) {
     {
       title: "How well the model finds the persuadable",
       desc: "Tested on customers the model never saw during learning.",
-      actions: headActions({ primary: { label: "Score customers with this model", href: routes.score(uc.id) } }),
+      actions: headActions({ primary: { label: "Make a contact list with this model", href: routes.score(uc.id) } }),
     },
     body,
   );
@@ -1335,7 +1362,7 @@ export function profitCard(p, policy) {
     prefill(s.cost, "cost_per_contact"),
   )}${input("u-profit-value", "Value per response", prefill(s.value, "value_per_conversion"))}</div><div class="actions"><button type="submit" class="btn secondary"${
     s.loading ? " disabled" : ""
-  }>${s.loading ? "Working it out…" : "Recalculate"}</button><span class="reason" id="u-profit-help">Numbers of 0 or more. Leave one empty to use this run's setting. Nothing is retrained.</span></div>${
+  }>${s.loading ? "Working it out…" : "Recalculate"}</button><span class="reason" id="u-profit-help">Numbers of 0 or more. Leave one empty to use the saved setting. Nothing is rebuilt.</span></div>${
     s.error ? errorBox(s.error) : ""
   }</form>`;
   let body;
@@ -1359,9 +1386,9 @@ export function profitCard(p, policy) {
     )}</div><p class="caption">${esc(
       [
         curve.value_basis ? `Value basis: ${curve.value_basis}.` : "",
-        curve.money_note || "",
-        curve.bands_note,
-        curve.overridden ? "The cost and value used here apply to this view only; the run's settings are unchanged." : "",
+        plainText(curve.money_note || ""),
+        plainText(curve.bands_note),
+        curve.overridden ? "The cost and value used here apply to this view only; the saved settings are unchanged." : "",
         curve.max_contacts_reason === "value_below_cost"
           ? `The curve stops at ${fmtInt(curve.max_contacts)}: every other persuadable's expected gain is below the cost of contacting them.`
           : "",
@@ -1384,15 +1411,15 @@ export function profitCard(p, policy) {
 export function rankingBanner(choice) {
   if (!choice) return "";
   if (!choice.code) {
-    return `<p class="caption" data-ranking="uplift">${esc(choice.reason)}</p>`;
+    return `<p class="caption" data-ranking="uplift">${esc(plainText(choice.reason))}</p>`;
   }
   const title =
     choice.ranking === "propensity_model"
-      ? "This list is ranked by the propensity model, not by uplift"
-      : "The uplift model does not beat risk ranking";
+      ? "This list is ranked by likelihood, not by the effect of contacting them"
+      : "The effect model does not beat ranking by risk";
   return `<div class="unotcausal" role="note" data-ranking="${esc(choice.ranking)}" data-code="${esc(choice.code)}"><b>${esc(
     title,
-  )}</b><span>${esc(choice.reason)}</span></div>`;
+  )}</b><span>${esc(plainText(choice.reason))}</span></div>`;
 }
 
 /** `#/uplift/<use case>/output/<run>`: who to contact, the four segments, the contact list download. */
@@ -1412,7 +1439,7 @@ export function outputPageHtml(uc, run, art, extra = {}) {
             ? `${fmtRate(summary.control_group_rows / summary.rows_scored)} of all ${fmtInt(summary.rows_scored)} customers, chosen at random`
             : "chosen at random",
         }
-      : { value: EM_DASH, sub: train ? "Set when new customers are scored" : "" };
+      : { value: EM_DASH, sub: train ? "Set when a contact list is made" : "" };
   const tileRow = tiles([
     { label: "Customers to contact", value: dash(p.contacts_recommended, fmtInt) },
     {
@@ -1438,15 +1465,15 @@ export function outputPageHtml(uc, run, art, extra = {}) {
   });
   const scope = policy
     ? policy.computed_on === "test"
-      ? "Measured on the hold-out split of the training run."
-      : "Computed over every customer this run scored."
+      ? "Measured on test customers the model never saw while it was built."
+      : "Computed over every customer on this list."
     : "";
   const lead = policy
     ? `<p class="ulead">${esc(line)} <span class="muted">${esc(scope)}</span></p>`
     : emptyState({
-        title: "No contact list for this run",
-        text: "This run did not work out who to contact. Score new customers with an uplift model to get one.",
-        action: { label: "Score new data", href: routes.score(uc.id), kind: "secondary" },
+        title: "No contact list here",
+        text: "This did not work out who to contact. Make a contact list of new customers with an effect model to get one.",
+        action: { label: "Make a contact list", href: routes.score(uc.id), kind: "secondary" },
       });
   const t = (segments && segments.thresholds) || {};
   const segmentRows = segments
@@ -1472,7 +1499,7 @@ export function outputPageHtml(uc, run, art, extra = {}) {
         [
           "Recommended to contact",
           byPropensity
-            ? `${fmtInt(policy.contacts_recommended)} customers chosen by the propensity model`
+            ? `${fmtInt(policy.contacts_recommended)} customers chosen by likelihood`
             : `${fmtInt(policy.contacts_recommended)} of ${fmtInt(policy.eligible_persuadables)} persuadables`,
         ],
         ["Contact budget", present(policy.budget_contacts) ? fmtInt(policy.budget_contacts) : "No limit set"],
@@ -1491,11 +1518,11 @@ export function outputPageHtml(uc, run, art, extra = {}) {
       ])}${
         costs
           ? ""
-          : `<p class="caption">The value in money appears once a cost per contact and a value per response are set in the uplift settings.</p>`
+          : `<p class="caption">The value in money appears once a cost per contact and a value per response are set in the settings.</p>`
       }${detailsKv("More about this recommendation", [
         ["Expected incremental conversions", fmtCi(expected, (v) => fmtCount(v))],
         [
-          byPropensity ? "Uplift model's prediction for these customers" : "Model's own prediction",
+          byPropensity ? "Effect model's prediction for these customers" : "Model's own prediction",
           fmtCount(policy.predicted_incremental_conversions),
         ],
         ...(costs ? [] : [["Cost per contact", EM_DASH]]),
@@ -1506,7 +1533,7 @@ export function outputPageHtml(uc, run, art, extra = {}) {
   if (!train) {
     listCard = `<p class="caption ufile">${esc(
       download.kind === "scores"
-        ? "The file has every scored customer with their group and action. Treat rows are the list to contact; control-group rows are held out at random so the campaign can be measured; sleeping dogs are never Treat."
+        ? "The file has every customer ranked, with their group and action. Rows marked to contact are the list; comparison-group rows are held out at random so the campaign can be measured; sleeping dogs are never contacted."
         : "The contact list has every scored customer with their group, offer, channel and reasons. Customers marked to contact are the list; the comparison group is held out at random so the campaign can be measured; sleeping dogs are never contacted.",
     )}</p>`;
   } else {
@@ -1516,17 +1543,17 @@ export function outputPageHtml(uc, run, art, extra = {}) {
         ? `<div class="runs-list">${scoreRuns
             .map(
               (r) =>
-                `<a class="runrow" href="${esc(routes.output(uc.id, r.run_id))}"><div><div class="r1">Scored ${esc(
+                `<a class="runrow" href="${esc(routes.output(uc.id, r.run_id))}"><div><div class="r1">${esc(
                   dash(r.row_count, fmtInt),
-                )} customers</div><div class="r2">${esc(r.file_name)} · ${esc(
+                )} customers ranked</div><div class="r2">${r.file_name ? userText(r.file_name) : esc(EM_DASH)} · ${esc(
                   fmtStamp(r.created_at),
                 )}</div></div><div class="r3"><b>Contact list ›</b></div></a>`,
             )
             .join("")}</div>`
         : emptyState({
             title: "No contact list yet",
-            text: "A contact list comes from scoring new customers with this model.",
-            action: { label: "Score new data", href: routes.score(uc.id), kind: "secondary" },
+            text: "A contact list comes from ranking new customers with this model.",
+            action: { label: "Make a contact list", href: routes.score(uc.id), kind: "secondary" },
           })
     }</section>`;
   }
@@ -1548,7 +1575,7 @@ export function outputPageHtml(uc, run, art, extra = {}) {
       `${train ? "" : allScoresSlotHtml(run.run_id, download, extra.scoresHref || "#")}${extra.panelsHtml || ""}`,
     )}</section>`;
   const actions = train
-    ? headActions({ primary: { label: "Score customers with this model", href: routes.score(uc.id) } })
+    ? headActions({ primary: { label: "Make a contact list with this model", href: routes.score(uc.id) } })
     : headActions({
         primary: contactDownloadLink(download, { icon: false, runId: run.run_id }),
         secondary: [{ label: "Measure campaign results", href: routes.campaign(uc.id, run.run_id) }],
@@ -1623,7 +1650,7 @@ export function campaignVerdict(report, roi) {
       : "";
   return {
     tone: "info",
-    title: `The outcome rate of contacted customers differs from the control group by ${fmtPts(lift.value).replace(
+    title: `The outcome rate of contacted customers differs from the comparison group by ${fmtPts(lift.value).replace(
       " pts",
       " points",
     )}${range}.`,
@@ -1638,7 +1665,7 @@ export function campaignVerdict(report, roi) {
 export function reconciliationLine(report) {
   const parts = [
     [report.treated_rows, "contacted"],
-    [report.control_rows, "held back and measured as this campaign's control group"],
+    [report.control_rows, "held back and measured as this campaign's comparison group"],
     [report.rows_suppressed_or_untreated, "not part of the test (opted out or not selected)"],
     [report.rows_immature, "still inside the outcome period"],
     [report.rows_without_outcome, "with no row in the outcomes file"],
@@ -1654,7 +1681,7 @@ function reportSection(report, roi, run) {
   if (!report) {
     return `<section class="card">${emptyState({
       title: "No campaign results yet",
-      text: "No outcomes have been uploaded for this run yet. Upload them below once the campaign has run.",
+      text: "No outcomes have been uploaded for this contact list yet. Upload them below once the campaign is over.",
     })}</section>`;
   }
   const banner = notCausalBanner(report);
@@ -1710,7 +1737,7 @@ function reportSection(report, roi, run) {
     [
       ["Contacted", fmtInt(report.treated_rows), fmtInt(report.treated_conversions), fmtRate(report.treated_rate)],
       [
-        "Not contacted (control group)",
+        "Not contacted (comparison group)",
         fmtInt(report.control_rows),
         fmtInt(report.control_conversions),
         fmtRate(report.control_rate),
@@ -1753,7 +1780,7 @@ function reportSection(report, roi, run) {
       reconcile ||
         (report.causal === false
           ? "The groups were not chosen at random, so the difference is descriptive only."
-          : "The control group was chosen at random and not contacted, so the difference between the two rates is what the campaign caused."),
+          : "The comparison group was chosen at random and not contacted, so the difference between the two rates is what the campaign caused."),
     )}</p><div class="card-body">${stats}${measured}</div></section>`;
 }
 
@@ -1769,7 +1796,7 @@ function outcomesForm(c, { again }) {
     )}${names.map((n) => option(n, n, current)).join("")}</select></div>${help ? `<span class="fhelp">${esc(help)}</span>` : ""}</div>`;
   const ready = profile && f.outcome_column;
   const form = `<form id="u-camp" class="uform" novalidate>
-    <p class="seg-help">One row per customer of this run: its customer ID and whether they had the outcome. Contacted customers are compared with the control group; customers who were not part of the test are left out.</p>
+    <p class="seg-help">One row per customer on this list: their customer ID and whether they had the outcome. Contacted customers are compared with the comparison group; customers who were not part of the test are left out.</p>
     <div class="orline"><label class="control file ${profile ? "has" : ""}"><input type="file" id="u-camp-file" class="sr" accept=".csv,.xlsx,.xlsm,.parquet"><span class="fname">${esc(
       profile ? profile.file_name : "Upload outcomes CSV, Excel or Parquet",
     )}</span><span class="ico" aria-hidden="true">⤒</span></label>${
@@ -1783,7 +1810,7 @@ function outcomesForm(c, { again }) {
             "u-camp-date",
             "Date each customer was contacted (optional)",
             f.treatment_date_column,
-            "None: use the scoring time",
+            "None: use the time the list was made",
           )}</div>
     <div class="frow"><div class="field"><label class="sub" for="u-camp-window">Outcome window (days)</label><div class="control"><input type="number" id="u-camp-window" min="1" max="3650" step="1" value="${esc(
       present(f.outcome_window_days) ? f.outcome_window_days : "",
@@ -1817,9 +1844,9 @@ export function campaignPageHtml(uc, run, c) {
   const chip = isUpliftRun(run);
   if (run.mode !== "score") {
     const body = noticeCard({
-      title: "Campaign results need a scoring run",
-      text: "Campaign results are measured on a scoring run: its control group was held out at random when the treat list was written. This is a training run.",
-      action: { label: "Score new data", href: isUpliftRun(run) ? routes.score(uc.id) : routes.useCase(uc.id) },
+      title: "Campaign results need a contact list",
+      text: "Campaign results are measured on a contact list: its comparison group was held back at random when the list was made. This page is about a model, not a list.",
+      action: { label: "Make a contact list", href: isUpliftRun(run) ? routes.score(uc.id) : routes.useCase(uc.id) },
     });
     return pageShell(uc, run, "campaign", { title, trail, chip }, body);
   }

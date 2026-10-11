@@ -1,6 +1,8 @@
 // Every call the screens make. Nothing here invents a value: a field the API did not send stays
 // undefined and the renderers show an em dash for it (plan §9.4).
 
+import { goalName, plainText } from "./labels.js";
+
 export const API_BASE = (window.MARKETING_AI_API || window.location.origin).replace(/\/+$/, "");
 
 /** An API response that was not a success, carrying the server's own error envelope. */
@@ -43,8 +45,44 @@ async function request(path, options = {}) {
   throw new ApiError(response.status, code, message, body);
 }
 
-export const getIndustries = () => request("/industries");
-export const getUseCase = (id) => request(`/use-cases/${encodeURIComponent(id)}`);
+/**
+ * Plan M §4.2 (M172, DEC-1602): a goal is shown under its Plan M name (`ui/labels.js` GOAL_NAMES). The API's
+ * own name is kept as `config_name`; ids and every request are unchanged. Done here, where every screen reads a
+ * use case, so no page shows the configured name by accident.
+ */
+export function withGoalName(useCase) {
+  if (useCase && typeof useCase === "object" && useCase.id && typeof useCase.name === "string") {
+    if (!("config_name" in useCase)) useCase.config_name = useCase.name;
+    useCase.name = goalName(useCase.id, useCase.config_name);
+  }
+  return useCase;
+}
+
+export const getIndustries = () =>
+  request("/industries").then((payload) => {
+    for (const industry of (payload && payload.industries) || []) {
+      for (const stage of industry.stages || []) (stage.use_cases || []).forEach(withGoalName);
+    }
+    return payload;
+  });
+/** The Setup modes' copy (configs/engine.yaml `ui.mode_labels` and the rest) in the page's words (`plainText`). */
+function withPlainModes(useCase) {
+  const modes = useCase && useCase.setup && useCase.setup.modes;
+  for (const mode of Array.isArray(modes) ? modes : []) {
+    for (const key of ["label", "help", "dataset_hint", "columns_hint", "run_button"]) {
+      if (typeof mode[key] === "string") mode[key] = plainText(mode[key]);
+    }
+  }
+  // The Data, Model and Output pages' titles (`ui.pages`), which a use case may name in engine words.
+  const pages = useCase && useCase.pages;
+  if (pages && typeof pages === "object") {
+    for (const key of Object.keys(pages)) if (typeof pages[key] === "string") pages[key] = plainText(pages[key]);
+  }
+  return useCase;
+}
+
+export const getUseCase = (id) =>
+  request(`/use-cases/${encodeURIComponent(id)}`).then((useCase) => withPlainModes(withGoalName(useCase)));
 export const templateUrl = (path) => url(path);
 
 /**

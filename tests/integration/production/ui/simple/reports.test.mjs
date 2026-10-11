@@ -35,7 +35,7 @@ test("no approved model and a campaign not measured yet: no 'Open the latest rep
 });
 
 test("the hub has no Client column and no pilot-team words", () => {
-  assert.deepEqual(headers("value"), ["Campaign", "Scored on", "Report"]);
+  assert.deepEqual(headers("value"), ["Campaign", "List made on", "Report"]); // Plan M M172: no "scored"
   assert.doesNotMatch(text($("main")), /Client|pilot team/i);
   const foot = text($("[data-pe-export]"));
   if (foot) assert.match(foot, /^Feedback: Export all feedback$/);
@@ -60,12 +60,42 @@ test("with an approved model, its results report is offered", async () => {
   world.models = null;
 });
 
+test('Plan M M180: the model results list, and a latest-report button that opens one, are marked technical; campaign value is not', async () => {
+  world.models = fixture("models_champion");
+  world.roi = { [scoreRun.run_id]: fixture("roi_not_measured") };
+  try {
+    await open("#/pilot", () => hubReady() && $("main .btn.primary"));
+    assert.ok($('[data-pe-card="results"]').hasAttribute("data-technical"), "the model results list (algorithm names) is technical");
+    assert.equal($('[data-pe-card="value"]').hasAttribute("data-technical"), false, "campaign value is for marketers");
+    assert.equal($('[data-pe-card="proof"]').hasAttribute("data-technical"), false);
+    assert.ok($("main .btn.primary").closest("[data-technical]"), "the button opens a model results report: technical");
+    world.models = null;
+    world.roi = { [scoreRun.run_id]: fixture("roi_measured") };
+    await open("#/pilot", () => hubReady() && $("main .btn.primary"));
+    assert.equal($("main .btn.primary").closest("[data-technical]"), null, "a campaign value report's button stays");
+  } finally {
+    world.models = null;
+  }
+});
+
 test("the data request kit asks the data team, and lists use cases without an Industry column", async () => {
   await open("#/pilot/kit", () => $('[data-pe-card="build"] tbody tr') && $('[data-pe-card="kit"] .pe-body'));
   const page = text($("main"));
   assert.match(page, /Ask your data team for the right tables/);
   assert.match(page, /What to ask your data team for/);
   assert.doesNotMatch(page, /your client|Industry|Every business/i);
-  assert.deepEqual(headers("build"), ["Use case", "Set up"]);
+  assert.deepEqual(headers("build"), ["Goal", "Set up"]); // Plan M M172: a use case is a goal
   assert.doesNotMatch(text($('[data-pe-card="readiness"]')), /client/i);
+});
+
+test("the value report names the campaign by its short name and says when the list was made (M172 review)", async () => {
+  const { shortCampaignName } = await import("../../../../../ui/format.js");
+  const { goalShortName } = await import("../../../../../ui/labels.js");
+  world.roi = { [scoreRun.run_id]: fixture("roi_measured") };
+  await open(`#/pilot/value/${scoreRun.run_id}`, () => $("main .sub"));
+  const short = shortCampaignName(goalShortName(scoreRun.use_case_id, scoreRun.use_case_name), scoreRun.finished_at || scoreRun.created_at);
+  const sub = text($("main .sub"));
+  assert.ok(sub.startsWith(`${short} · list made `), sub);
+  assert.doesNotMatch(sub, /scored/i);
+  assert.ok(!sub.includes(scoreRun.use_case_name) || short.includes(scoreRun.use_case_name), "not the configured name");
 });

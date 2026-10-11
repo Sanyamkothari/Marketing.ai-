@@ -6,6 +6,7 @@
 // server's, and a figure the server did not send is not drawn - the reason it gave is.
 
 import { esc } from "./dom.js";
+import { plainText } from "./labels.js"; // Plan M M172 (DEC-1602): the server's sentences in plain words
 
 /** `ApiError.code` of the 409 `POST /runs` answers for a run above the cost cap. */
 export const COST_NEEDS_CONFIRMATION = "RUN_COST_NEEDS_CONFIRMATION";
@@ -47,13 +48,13 @@ function lineRow(line) {
 export function costLineHtml(estimate) {
   if (!estimate || estimate.backend === "local") return "";
   const cap = present(estimate.cap_usd)
-    ? ` The limit set for one run is ${usd(estimate.cap_usd)}${estimate.needs_confirmation ? ", so you will be asked to confirm" : ""}.`
+    ? ` The limit set for one model or list is ${usd(estimate.cap_usd)}${estimate.needs_confirmation ? ", so you will be asked to confirm" : ""}.`
     : "";
   const lead = present(estimate.estimated_usd)
-    ? `This run could cost up to <b>${esc(usd(estimate.estimated_usd))}</b>${
+    ? `This could cost up to <b>${esc(usd(estimate.estimated_usd))}</b>${
         estimate.inr ? ` (${inrSentence(estimate.inr)})` : ""
       }.`
-    : `${esc(estimate.reason || "The cost of this run cannot be worked out.")}`;
+    : `${esc(plainText(estimate.reason || "The cost cannot be worked out."))}`;
   const rows = (estimate.lines || []).map(lineRow).join("");
   const how = rows
     ? `<details class="cost-how"><summary>How this is worked out</summary><p class="muted">${esc(estimate.basis)}</p><ul>${rows}</ul>${
@@ -72,9 +73,10 @@ export function costConfirmHtml(message) {
 function monthRow(row) {
   const amount = present(row.estimated_usd) ? usd(row.estimated_usd) : "no figure";
   const rupees = row.inr ? ` (${inr(row.inr.amount)})` : "";
+  // Plan M M172 (DEC-1602): a run is a model built or a contact list made (ui/labels.js).
   const runs = row.runs
-    ? `${row.runs} run${row.runs === 1 ? "" : "s"}${row.unpriced_runs ? `, ${row.unpriced_runs} with no figure` : ""}`
-    : "no runs";
+    ? `${row.runs} ${row.runs === 1 ? "model or list" : "models and lists"}${row.unpriced_runs ? `, ${row.unpriced_runs} with no figure` : ""}`
+    : "none";
   return `<tr><td>${esc(row.month)}</td><td>${esc(runs)}</td><td>${esc(amount)}${esc(rupees)}</td></tr>`;
 }
 
@@ -95,8 +97,8 @@ function fxHtml(fx, canEdit) {
 export function costPageHtml({ spend, fx, canEdit = false } = {}) {
   const rows = ((spend && spend.months) || []).map(monthRow).join("");
   return `<main class="screen cost" data-module="cost"><h1 class="h1">Cost</h1>
-    <section class="card"><h3>What runs have cost</h3>
-      <p class="muted">${esc((spend && spend.basis) || "")}</p>
-      <table class="tbl"><thead><tr><th>Month</th><th>Runs</th><th>Estimated cost</th></tr></thead><tbody>${rows}</tbody></table></section>
+    <section class="card"><h3>What models and lists have cost</h3>
+      <p class="muted">${esc(plainText((spend && spend.basis) || ""))}</p>
+      <table class="tbl"><thead><tr><th>Month</th><th>Models and lists</th><th>Estimated cost</th></tr></thead><tbody>${rows}</tbody></table></section>
     <section class="card"><h3>Exchange rate</h3>${fxHtml(fx, canEdit)}</section></main>`;
 }

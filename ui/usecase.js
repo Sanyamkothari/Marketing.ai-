@@ -83,6 +83,7 @@ import {
 } from "./modules/router.js";
 import * as seams from "./modules/router.js";
 import { COST_NEEDS_CONFIRMATION, costConfirmHtml, costLineHtml } from "./cost.js"; // Plan J M108 (DEC-1318)
+import { USER_TEXT_ATTRIBUTE, plainText, userText } from "./labels.js"; // Plan M M172 (DEC-1602): the marketer's words; names the person supplied
 
 import {
   allScoresSlotHtml,
@@ -227,13 +228,13 @@ function metricName(key) {
  * the model puts someone with the outcome above someone without it; any other metric by its value.
  */
 function trainVerdict(uc, run) {
-  const model = run.best_model || "The model";
+  const model = "The model"; // which algorithm won is in Technical details (Plan M M172, DEC-1602)
   const metric = metricText(runMetricLabel(run), run.headline_score);
-  if (!metric) return `${model} is trained.`;
+  if (!metric) return `${model} is built.`;
   if (run.headline_metric === "roc_auc") {
     return `${model} ranks ${people(uc)} correctly ${Math.round(Number(run.headline_score) * 100)}% of the time (${metric}).`;
   }
-  return `${model} scored ${metric}.`;
+  return `${model} reached ${metric}.`;
 }
 
 /** A model version's standing, in words: what it means for the next scores. */
@@ -241,18 +242,18 @@ function standing(uc, status, run) {
   switch (status) {
     case "champion":
       return {
-        text: `Approved and in use: new ${people(uc)} are scored with this model.${
+        text: `Approved and in use: new ${people(uc)} are ranked with this model.${
           run && run.beat_previous_champion ? " It did better than the model used before." : ""
         }`,
       };
     case "pending_approval":
       return {
-        text: "Waiting for an Approver: another person must approve this model before it is the one in use. You can already score with it.",
+        text: "Waiting for an Approver: another person must approve this model before it is the one in use. You can already make a contact list with it.",
         link: { href: "#/approvals", label: "See what is waiting for approval" },
       };
     case "candidate":
       return {
-        text: "Not in use: it was not better than the model in use by enough to replace it. You can still pick it when scoring.",
+        text: "Not in use: it was not better than the model in use by enough to replace it. You can still pick it when you make a contact list.",
       };
     case "archived":
       return { text: "Replaced: a newer model is in use." };
@@ -616,47 +617,46 @@ function runRow(uc, s, run) {
   const version = s.models.find((v) => v.version.model_id === run.model_version_id);
   const headline = done
     ? train
-      ? `Trained ${run.best_model || "a model"}`
-      : `Scored ${present(run.row_count) ? fmtInt(run.row_count) : ""} rows`.replace("  ", " ")
-    : `${train ? "Training" : "Scoring"} ${stateLabel(run.state)}`;
+      ? "Model built"
+      : `Contact list from ${present(run.row_count) ? fmtInt(run.row_count) : ""} rows`.replace("  ", " ")
+    : `${train ? "Model" : "Contact list"} ${stateLabel(run.state)}`;
   const inUse = train && done && version && version.version.status === "champion";
   const rows = present(run.row_count) ? ` · ${fmtInt(run.row_count)} rows` : "";
-  const data = isBuilt(run) ? `Built dataset${train ? rows : ""}` : `${run.file_name || "Uploaded file"}${train ? rows : ""}`;
+  // The file's name is the person's own wording (`userText`, M172); our words around it stay checked.
+  const data = isBuilt(run) ? esc(`Built dataset${train ? rows : ""}`) : `${run.file_name ? userText(run.file_name) : "Uploaded file"}${esc(train ? rows : "")}`;
   const metric = train && done ? metricText(runMetricLabel(run), run.headline_score) : "";
   const named = metricName(run.headline_metric);
   const right = metric
     ? `<b${named ? ` title="${esc(named)}"` : ""}>${esc(metric)}</b>`
-    : !train && done && run.best_model
-      ? `<span class="r4">with ${esc(run.best_model)}</span>`
-      : "";
+    : "";
   return `<a class="runrow" href="#/uc/${esc(uc.id)}/run/${esc(run.run_id)}">
       <div><div class="r1">${esc(headline)}${inUse ? '<span class="champ">In use</span>' : ""}</div>
-      <div class="r2">${esc(data)} · ${esc(fmtStamp(run.created_at))}</div></div>
+      <div class="r2">${data} · ${esc(fmtStamp(run.created_at))}</div></div>
       <div class="r3">${right}</div></a>`;
 }
 
-/** Previous runs: this client's, newest first, five and then "Show all runs"; folded while running. */
+/** "Models and lists so far" (the runs, Plan M §4.1): this client's, newest first, five and then "Show all"; folded while running. */
 function runsCard(uc, s, { folded = false } = {}) {
   const { mine, others } = runsOfClient(s);
   const rows = mine.map((run) => runRow(uc, s, run));
   const list = rows.length
     ? `<div class="runs-list">${rows.slice(0, RUNS_SHOWN).join("")}</div>${
         rows.length > RUNS_SHOWN
-          ? `<details class="more-runs"><summary>Show all ${fmtInt(rows.length)} runs</summary><div class="runs-list">${rows
+          ? `<details class="more-runs"><summary>Show all ${fmtInt(rows.length)}</summary><div class="runs-list">${rows
               .slice(RUNS_SHOWN)
               .join("")}</div></details>`
           : ""
       }`
-    : `<div class="empty">No runs yet. Your first run will appear here.</div>`;
+    : `<div class="empty">Nothing yet. Your first model and contact lists will appear here.</div>`;
   const note = others
-    ? `<p class="runs-note">${fmtInt(others)} ${others === 1 ? "run" : "runs"} for other clients ${
+    ? `<p class="runs-note">${fmtInt(others)} ${others === 1 ? "item" : "items"} for other clients ${
         others === 1 ? "is" : "are"
       } not shown.</p>`
     : "";
   if (folded) {
-    return `<details class="card runs-fold"><summary>Previous runs (${fmtInt(mine.length)})</summary>${list}${note}</details>`;
+    return `<details class="card runs-fold"><summary>Models and lists so far (${fmtInt(mine.length)})</summary>${list}${note}</details>`;
   }
-  return `<section class="card"><h3>Previous runs${rows.length ? sortNote("newest first") : ""}</h3>${list}${note}</section>`;
+  return `<section class="card"><h3>Models and lists so far${rows.length ? sortNote("newest first") : ""}</h3>${list}${note}</section>`;
 }
 
 // --- Setup steps -----------------------------------------------------------------------------------
@@ -782,9 +782,9 @@ const modelOption = (v, current) =>
 function scoreModelStep(uc, s, n) {
   const versions = trainedVersions(s);
   return `<div class="fstep done"><div class="stepno">${n}</div><div>
-    <div class="flabel">Model</div><div class="fhint">The trained model that scores your ${esc(
+    <div class="flabel">Model</div><div class="fhint">The model that ranks your ${esc(
       people(uc),
-    )}. We start on the one in use, or the newest one trained on this client's data.</div>
+    )}. We start on the one in use, or the newest one built on this client's data.</div>
     <div class="frow wide"><div class="field"><div class="control sel"><select id="f-scorerun" aria-label="Trained model">${versions
       .map((v) => modelOption(v, s.modelVersionId))
       .join("")}</select></div></div></div></div></div>`;
@@ -794,8 +794,8 @@ function scoreModelStep(uc, s, n) {
 const noModelHtml = (uc) =>
   `<div class="nomodel">${emptyState({
     title: "No trained model yet",
-    text: `Train a model on past data first, then come back to score new ${people(uc)}.`,
-    action: { label: "Train a model", attrs: 'data-goto-mode="train"' },
+    text: `Build a model from past results first, then come back to make a contact list of new ${people(uc)}.`,
+    action: { label: plainText("Train a model"), attrs: 'data-goto-mode="train"' },
   })}</div>`;
 
 /** The Train / Score switch and its one line of help, at the top of the Setup card. */
@@ -992,7 +992,7 @@ function groupLine(group) {
 
 /**
  * The Running card, shared with the uplift screens (WP5): a title and one plain sentence, the steps
- * with their state, "Cancel run" set apart with a confirm step, and the engine's own wording of each
+ * with their state, "Cancel" set apart with a confirm step, and the engine's own wording of each
  * step behind "Technical details".
  *
  * `groups` are `groupStages(status.stages)`; `placeholder` names the rows to draw before the first
@@ -1040,12 +1040,12 @@ export function runningCard({
 }
 
 /**
- * "Cancel run", and after one click its confirm step: the same id on the confirming button (so a role
+ * "Cancel", and after one click its confirm step: the same id on the confirming button (so a role
  * gate follows it), "Keep running" as `[data-cancel-keep]`. Each screen writes its own id literally.
  */
 export const cancelControls = (button, confirm, confirming) =>
   confirming
-    ? `<span class="cancel-ask">Stop this run?</span>${confirm}<button type="button" class="btn quiet sm" data-cancel-keep>Keep running</button>`
+    ? `<span class="cancel-ask">Stop it now?</span>${confirm}<button type="button" class="btn quiet sm" data-cancel-keep>Keep running</button>`
     : button;
 
 function runningHtml(uc, s) {
@@ -1053,13 +1053,14 @@ function runningHtml(uc, s) {
   const train = s.mode === "train";
   const pct = status && typeof status.progress_pct === "number" ? status.progress_pct : null;
   return `<div class="uc-running">${runningCard({
-    title: train ? "Training your model…" : `Scoring your ${people(uc)}…`,
-    intro: "This usually takes a few minutes. You can leave this page: the run keeps going.",
+    // Plan M M172 review: the running screen in the glossary's words (no "train", "score" or "run").
+    title: train ? "Building your model…" : `Ranking your ${people(uc)}…`,
+    intro: "This usually takes a few minutes. You can leave this page: it keeps going.",
     groups: status ? groupStages(status.stages || []) : [],
     placeholder: uc.running_rows[s.mode] || [],
     cancel: cancelControls(
-      `<button type="button" class="btn danger sm" id="f-cancel">Cancel run</button>`,
-      `<button type="button" class="btn danger confirm sm" id="f-cancel" data-confirm>Yes, cancel run</button>`,
+      `<button type="button" class="btn danger sm" id="f-cancel">Cancel</button>`,
+      `<button type="button" class="btn danger confirm sm" id="f-cancel" data-confirm>Yes, cancel</button>`,
       s.cancelAsk,
     ),
     listId: "prog",
@@ -1075,7 +1076,7 @@ function flowBlocks(uc, s, run) {
   const done = run.state === "done";
   const version = s.models.find((v) => v.version.model_id === run.model_version_id);
   const rows = present(run.row_count) ? fmtInt(run.row_count) : "";
-  const trainedOn = version ? `trained ${fmtDate(version.version.created_at)}` : "";
+  const trainedOn = version ? `built ${fmtDate(version.version.created_at)}` : "";
   const items = [
     [
       "data",
@@ -1092,23 +1093,24 @@ function flowBlocks(uc, s, run) {
     [
       "model",
       "Model",
-      // A run that did not finish has no model to name, whatever its record carried over.
-      done ? run.best_model || "Model" : train ? "Not trained" : run.best_model || "Model",
+      // A run that did not finish has no model to name, whatever its record carried over. The algorithm's name
+      // is in Technical details (Plan M M172).
+      done || !train ? (version && version.is_champion ? "Approved model" : train ? "New model" : "Model") : "Not built",
       train
         ? done
           ? [metricText(runMetricLabel(run), run.headline_score), run.model_choice === AUTOML ? "picked automatically" : ""]
               .filter(Boolean)
               .join(" · ")
           : ""
-        : [version && version.is_champion ? "Approved model" : "Trained model", trainedOn].filter(Boolean).join(" · "),
+        : [version && version.is_champion ? "In use" : "Built earlier", trainedOn].filter(Boolean).join(" · "),
     ],
     [
       "output",
       "Output",
-      train ? uc.pages.output : rows ? `${rows} rows scored` : uc.pages.output,
+      train ? uc.pages.output : rows ? `${rows} rows ranked` : uc.pages.output,
       train
         ? done
-          ? `Who to contact: available after scoring new ${people(uc)} with this model.`
+          ? `Who to contact: available after you make a contact list of new ${people(uc)} with this model.`
           : ""
         : present(s.kpiDisplay)
           ? `${uc.output.kpi.label}: ${s.kpiDisplay}`
@@ -1133,10 +1135,14 @@ function flowBlocks(uc, s, run) {
     // A file name is one long word: it is cut with an ellipsis on one line, whole in its tooltip,
     // instead of breaking mid-word ("synthetic_score.cs / v", UI_AUDIT §8.4 item 6).
     const val =
-      slug === "data"
+      slug === "data" && run.file_name && value === run.file_name
+        ? `<div class="val fname" ${USER_TEXT_ATTRIBUTE} title="${esc(value)}">${esc(value)}</div>`
+        : slug === "data"
         ? `<div class="val fname" title="${esc(value)}">${esc(value)}</div>`
         : `<div class="val">${esc(value)}</div>`;
-    return `<a class="block${extra}" href="#/uc/${esc(uc.id)}/${slug}/${esc(run.run_id)}"><div><div class="lab"><span>${esc(
+    // Plan M M180 (DEC-1610): the Data, Model and Output pages are technical pages: with "Show technical details" off
+    // these links are hidden (`data-technical`); the pages still open when their address is visited.
+    return `<a class="block${extra}" href="#/uc/${esc(uc.id)}/${slug}/${esc(run.run_id)}" data-technical><div><div class="lab"><span>${esc(
       label,
     )}</span>${state}</div>${val}${
       meta ? `<div class="meta">${esc(meta)}</div>` : ""
@@ -1190,7 +1196,7 @@ function outcome(uc, s, run) {
     const named = metricName(run.headline_metric);
     const standingOf = standing(uc, version ? version.version.status : run.champion ? "champion" : null, run);
     return {
-      head: `<span class="ok">✓ Training complete</span> <span class="vt">${esc(trainVerdict(uc, run))}</span>`,
+      head: `<span class="ok">✓ Model ready</span> <span class="vt">${esc(trainVerdict(uc, run))}</span>`,
       lines: [
         named && runMetricLabel(run) ? `<p class="vsub muted">${esc(`${runMetricLabel(run)}: ${named}.`)}</p>` : "",
         standingOf
@@ -1201,9 +1207,9 @@ function outcome(uc, s, run) {
             }</p>`
           : "",
       ],
-      actions: `<button type="button" class="btn primary" id="f-score-with">Score new ${esc(
+      actions: `<button type="button" class="btn primary" id="f-score-with">Make a contact list of new ${esc(
         people(uc),
-      )} with this model</button><button type="button" class="btn quiet again" id="f-again">Change settings and train again</button>`,
+      )} with this model</button><button type="button" class="btn quiet again" id="f-again">Change settings and build again</button>`,
     };
   }
   if (run.state === "done") {
@@ -1217,13 +1223,13 @@ function outcome(uc, s, run) {
     });
     return {
       allScores: allScoresSlotHtml(run.run_id, download, scoresUrl(run.run_id)),
-      head: `<span class="ok">✓ Scoring complete</span> <span class="vt">${esc(
-        `${present(run.row_count) ? fmtInt(run.row_count) : "All"} rows scored.${kpi}`,
+      head: `<span class="ok">✓ Contact list ready</span> <span class="vt">${esc(
+        `${present(run.row_count) ? fmtInt(run.row_count) : "All"} rows ranked.${kpi}`,
       )}</span>`,
       lines: [
         run.best_model
           ? `<p class="vsub">${esc(
-              `Scored with ${run.best_model}${version ? `, trained ${fmtDate(version.version.created_at)}` : ""}${
+              `Made with the model${version ? ` built ${fmtDate(version.version.created_at)}` : " built earlier"}${
                 version && version.is_champion ? " (the approved model)" : ""
               }.`,
             )}</p>`
@@ -1232,14 +1238,14 @@ function outcome(uc, s, run) {
       ],
       actions: `${contactDownloadLink(download, { icon: false, runId: run.run_id })}<a class="btn secondary" href="#/uc/${esc(
         uc.id,
-      )}/output/${esc(run.run_id)}">See who to contact</a><button type="button" class="btn quiet again" id="f-again">Score another file</button>`,
+      )}/output/${esc(run.run_id)}">See who to contact</a><button type="button" class="btn quiet again" id="f-again">Use another file</button>`,
     };
   }
   if (run.state === "cancelled") {
     return {
-      head: `<span class="muted">Run cancelled</span>`,
+      head: `<span class="muted">Stopped</span>`,
       lines: [
-        `<p class="vsub">This run was stopped before it finished. Nothing it started was saved as a model or a list.</p>`,
+        `<p class="vsub">This was stopped before it finished. Nothing it started was saved as a model or a list.</p>`,
         // Plan J M108: a run the cost limit stopped says so, in the server's words.
         run.error && run.error.code === "RUN_COST_CAP_REACHED" ? `<p class="vsub muted" data-stop-reason>${esc(run.error.message)}</p>` : "",
       ],
@@ -1249,8 +1255,8 @@ function outcome(uc, s, run) {
   const error = run.error || {};
   const entry = error.code ? glossaryCode(error.code) : null;
   return {
-    head: `<span class="bad">✕ Run failed</span> <span class="vt">${esc(
-      (entry && entry.title) || error.message || "The run did not finish.",
+    head: `<span class="bad">✕ It did not finish</span> <span class="vt">${esc(
+      (entry && entry.title) || error.message || "It stopped before the end.",
     )}</span>`,
     lines: [
       entry && entry.fix ? `<p class="vsub">${esc(entry.fix)}</p>` : "",
@@ -1262,12 +1268,13 @@ function outcome(uc, s, run) {
 
 function resultsHtml(uc, s) {
   const run = s.detail && s.detail.run;
-  if (!run) return `<div class="loading" role="status">Loading the run…</div>`;
+  if (!run) return `<div class="loading" role="status">Loading…</div>`;
   const told = outcome(uc, s, run);
   const tech = techDetails(
     [
       ["Run ID", run.run_id],
       [isBuilt(run) ? "Dataset ID" : "File", isBuilt(run) ? run.dataset_id : run.file_name],
+      ["Model", run.best_model],
       ["Model version", run.model_version_id],
       ["Started", run.created_at ? fmtStamp(run.created_at) : null],
       ["Error code", run.error && run.error.code],

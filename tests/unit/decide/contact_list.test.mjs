@@ -203,6 +203,7 @@ test("markup put inside Technical details is drawn as given, with no `$` pattern
   const extra = "<p>Fee rose $$5; see $&amp; $` $'</p>";
   const html = techDetails([["Run", "r1"]], "Technical details", extra);
   assert.ok(html.includes(extra), html);
-  assert.match(html, /^<details class="tech"><summary>Technical details<\/summary><dl class="tech-list">.*<\/dl><p>Fee rose.*<\/p><\/details>$/);
+  // Plan M M180 (DEC-1610): the disclosure carries `data-technical-details`, the mark "Show technical details" hides.
+  assert.match(html, /^<details class="tech" data-technical-details><summary>Technical details<\/summary><dl class="tech-list">.*<\/dl><p>Fee rose.*<\/p><\/details>$/);
   assert.equal(techDetails([], "Technical details", ""), "");
 });

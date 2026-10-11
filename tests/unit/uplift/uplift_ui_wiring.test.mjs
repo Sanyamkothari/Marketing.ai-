@@ -137,7 +137,7 @@ test("the output page reads the run and its uplift artefacts, and 404s become em
   for (const name of ["uplift_validation.json", "segments.json", "policy_recommendation.json"]) {
     assert.ok(paths.includes(`/runs/r1/uplift/${name}`), name);
   }
-  assert.match(app.innerHTML, /Available after training\./);
+  assert.match(app.innerHTML, /Available once the model is built\./); // Plan M M172
   assert.match(app.innerHTML, /href="http:\/\/api\.test\/runs\/r1\/scores\.csv"/);
   assert.ok(!/undefined|NaN/.test(app.innerHTML));
 });
@@ -485,7 +485,7 @@ test("a contact list ranked by the propensity model shows the API's refusal of a
   assert.match(app.innerHTML, /What if the budget changed\?/);
   assert.match(
     app.innerHTML,
-    /ranked by the approved propensity model because the uplift model does not beat risk ranking, so it has no uplift budget curve\./,
+    /ranked by likelihood because the effect model does not beat ranking by risk, so it has no budget curve\./, // Plan M M172
   );
 });
 
