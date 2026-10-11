@@ -53,6 +53,7 @@ Format = Literal[
     "count",
     "points",
     "signed_points",
+    "signed_amount",
     "percent",
     "percent2",
     "scientific",
@@ -90,6 +91,8 @@ def format_value(fmt: Format, value: float | str) -> str:
         return f"{_zero_free(round(number * 100.0, 2)):.2f} pts"
     if fmt == "signed_points":
         return _signed(f"{_zero_free(round(number * 100.0, 2)):.2f}") + " pts"
+    if fmt == "signed_amount":  # a continuous outcome's difference, in the outcome's own unit
+        return _signed(f"{_zero_free(round(number, 2)):,.2f}")
     if fmt == "percent":
         return f"{_zero_free(round(number * 100.0, 0)):.0f} %"
     if fmt == "percent2":
@@ -475,22 +478,38 @@ def _pooling(r: _Reader, say: Any, lit: Any, head: Any, row: Any, at: str) -> No
     lit()
     if r.flag(f"{at}.pooled"):
         for index in range(len(cells)):
-            estimate = f"{at}.cells.{index}.estimates.0"
-            if r.has(f"{at}.cells.{index}.estimates") and r.raw(f"{estimate}.status") == "pooled":
-                say(
-                    "Cell {outcome}: measured {measured}, estimated after pooling {pooled}.",
-                    outcome=r.fig(f"{at}.cells.{index}.outcome_column", "text"),
-                    measured=r.fig(f"{estimate}.measured_effect", "signed_points"),
-                    pooled=r.fig(f"{estimate}.pooled_effect", "signed_points"),
+            cell = f"{at}.cells.{index}"
+            estimate = f"{cell}.estimates.0"
+            if not (r.has(f"{cell}.estimates") and r.raw(f"{estimate}.status") == "pooled"):
+                continue
+            kind = r.raw(f"{cell}.outcome_kind")
+            if kind not in ("binary", "continuous"):
+                raise PlanKReportError(
+                    f"{cell}.outcome_kind is {kind!r}, which is neither binary nor continuous"
                 )
-                lit()
+            unit: Format = "signed_points" if kind == "binary" else "signed_amount"
+            say(
+                "Cell {outcome}: measured {measured}, estimated after pooling {pooled}, range {low} to {high}"
+                + ("." if kind == "binary" else " (in the outcome's own unit)."),
+                outcome=r.fig(f"{cell}.outcome_column", "text"),
+                measured=r.fig(f"{estimate}.measured_effect", unit),
+                pooled=r.fig(f"{estimate}.pooled_effect", unit),
+                low=r.fig(f"{estimate}.pooled_interval.ci_low", unit),
+                high=r.fig(f"{estimate}.pooled_interval.ci_high", unit),
+            )
+            lit()
     else:
-        say(
+        words = (
             "**Not pooled.** No cell reaches {first} comparable campaigns, so there is no pooled figure to set beside the "
-            "raw one and none is shown. The journey scores one list, so all its campaigns share one scoring run and at "
-            "most one of them counts.",
-            first=r.fig(f"{at}.first_drawn", "count"),
+            "raw one and none is shown."
         )
+        figures = {"first": r.fig(f"{at}.first_drawn", "count")}
+        runs = {run for index in range(len(cells)) for run in r.raw(f"{at}.cells.{index}.scoring_runs")}
+        holder = next((i for i in range(len(cells)) if r.raw(f"{at}.cells.{i}.scoring_runs")), 0)
+        if len(runs) == 1:
+            words += " Every campaign was measured on the one scoring run {run}, so within a cell at most one of them counts."
+            figures["run"] = r.fig(f"{at}.cells.{holder}.scoring_runs.0", "text")
+        say(words, **figures)
         lit()
 
 

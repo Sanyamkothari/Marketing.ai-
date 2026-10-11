@@ -77,12 +77,14 @@ from engine.pipeline import Pipeline, StageContext  # noqa: E402
 from engine.registry import LocalModelRegistry  # noqa: E402
 from engine.storage import LocalStorage, run_key, upload_key  # noqa: E402
 from engine.utils.ids import new_run_id  # noqa: E402
+from library.plan_k_report import ARTEFACT as PLAN_K_ARTEFACT  # noqa: E402
 
 RUNS_DIR = Path(__file__).resolve().parent / ".runs"
 AUDIT_RESULTS_NAME = "audit.results.json"
 """The audit results, kept in `.runs/<dataset>/audit/` and committed as `library/<dataset>/` + this (DEC-1322)."""
-PLAN_K_RESULTS_NAME = "plan_k.results.json"
-"""The Plan K readout, kept in `.runs/<dataset>/journey_plan_k/` and committed as `library/<dataset>/` + this (DEC-1413)."""
+PLAN_K_RESULTS_NAME = PLAN_K_ARTEFACT
+"""The Plan K readout, kept in `.runs/<dataset>/journey_plan_k/` and committed as `library/<dataset>/` + this (DEC-1413);
+the one name is `library.plan_k_report.ARTEFACT`."""
 
 
 class _NoJobs:
@@ -365,7 +367,8 @@ def journey_report_text(
     `audit.results.json` when there is one (`committed_audit=False` renders the journey alone). Plan K's
     measurement upgrades follow as section 9 (DEC-1413): the `plan_k` results given, else the committed
     `plan_k.results.json` when there is one (`committed_plan_k=False` leaves the section out; unset, it follows
-    `committed_audit`, so `committed_audit=False` renders the journey alone); with neither the text is exactly what
+    `committed_audit`, so `committed_audit=False` renders the journey alone; the committed file is used only when it was
+    made on these results' file and campaign-effect run); with neither the text is exactly what
     it was before Plan K.
     """
     from library.journey_report import render_report
@@ -389,7 +392,9 @@ def journey_report_text(
     if committed_plan_k is None:
         committed_plan_k = committed_audit
     if plan_k is None and committed_plan_k:
-        plan_k = _read_json(committed_results_path(dataset, PLAN_K_RESULTS_NAME))
+        committed = _read_json(committed_results_path(dataset, PLAN_K_RESULTS_NAME))
+        if committed is not None and _is_readout_of(committed, results):
+            plan_k = committed
     if plan_k is not None:
         from library.plan_k_report import render_plan_k
 
@@ -403,6 +408,18 @@ def journey_report_text(
             + render_plan_k(plan_k, results_path=PLAN_K_RESULTS_NAME, command=plan_k_command)
         )
     return text
+
+
+def _is_readout_of(plan_k: dict[str, Any], journey: dict[str, Any]) -> bool:
+    """Whether a Plan K readout was made on the very file and campaign-effect run these journey results report.
+
+    The committed readout claims to reproduce the default journey above it, so it is appended to the report of
+    another file, or of a rerun whose campaign-effect run is not the one it names, never.
+    """
+    uplift = journey.get("steps", {}).get("uplift_model", {})
+    return plan_k.get("csv_sha256") == journey.get("csv_sha256") and plan_k.get(
+        "campaign_effect_run_id"
+    ) == uplift.get("run_id")
 
 
 def _read_json(path: Path) -> dict[str, Any] | None:

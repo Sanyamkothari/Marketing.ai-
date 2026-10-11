@@ -83,8 +83,6 @@ PLAN_K_UPLIFT_OVERRIDES: Final[dict[str, Any]] = {
 """What `run_journey(plan_k=True)` adds to the campaign-effect run's settings: the equal-budget comparison and, on
 it, the one-sided "safe to roll out" verdict (Plan K M137, DEC-1325, which needs the comparison). Both are off by
 default, and the journey's default run turns neither on."""
-PLAN_K_RESULTS_NAME: Final = "plan_k.results.json"
-"""The Plan K readout, kept in `.runs/<dataset>/journey_plan_k/` and committed as `library/<dataset>/` + this (DEC-1413)."""
 
 
 # ---------------------------------------------------------------------------

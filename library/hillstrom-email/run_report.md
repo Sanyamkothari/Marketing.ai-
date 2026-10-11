@@ -420,7 +420,7 @@ The journey measured 3 campaigns that can enter a pooling cell; a campaign that 
 | conversion | binary | 2 | 1 | not pooled: fewer than 4 comparable campaigns (POOL_TOO_FEW) |
 | spend | continuous | 1 | 0 | not counted: it measures the same customers as a later campaign, which counts instead |
 
-**Not pooled.** No cell reaches 4 comparable campaigns, so there is no pooled figure to set beside the raw one and none is shown. The journey scores one list, so all its campaigns share one scoring run and at most one of them counts.
+**Not pooled.** No cell reaches 4 comparable campaigns, so there is no pooled figure to set beside the raw one and none is shown. Every campaign was measured on the one scoring run r_20261010_11100003, so within a cell at most one of them counts.
 
 ### 9.4 The harm alarm (M138)
 

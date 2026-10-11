@@ -376,10 +376,58 @@ def test_four_comparable_campaigns_would_be_pooled_and_said_so(mutable: dict[str
     cell = pooling["cells"][0]
     cell["campaigns_compared"] = 4
     estimate = cell["estimates"][0]
-    estimate.update(status="pooled", code=None, reason=None, campaigns_compared=4, pooled_effect=0.004)
+    estimate.update(
+        status="pooled",
+        code=None,
+        reason=None,
+        campaigns_compared=4,
+        pooled_effect=0.004,
+        pooled_interval={"value": 0.004, "ci_low": 0.001, "ci_high": 0.007, "confidence_level": 0.95},
+    )
     pooling["pooled"], pooling["largest_cell"] = True, 4
     text = _text(mutable)
     assert "**Not pooled.**" not in text and "| pooled |" in text and "estimated after pooling" in text
+    assert "measured +0.60 pts, estimated after pooling +0.40 pts, range +0.10 pts to +0.70 pts." in text
+
+
+def test_a_pooled_continuous_cell_is_printed_in_its_own_unit_not_in_points(mutable: dict[str, Any]) -> None:
+    pooling = _at(mutable, POOLING)
+    cell = next(c for c in pooling["cells"] if c["outcome_kind"] == "continuous")
+    cell["campaigns_compared"] = 4
+    cell["estimates"] = [
+        {
+            "campaign_id": cell["campaigns_measured"][0],
+            "status": "pooled",
+            "code": None,
+            "reason": None,
+            "campaigns_compared": 4,
+            "estimate_field": "adjusted_interval",
+            "measured_effect": 0.5,
+            "measured_se": 0.1,
+            "pooled_effect": 0.4,
+            "pooled_interval": {"value": 0.4, "ci_low": 0.1, "ci_high": 0.7, "confidence_level": 0.95},
+        }
+    ]
+    pooling["pooled"], pooling["largest_cell"] = True, 4
+    sentence = next(line for line in _text(mutable).splitlines() if line.startswith("Cell spend:"))
+    assert "pts" not in sentence
+    assert (
+        "measured +0.50, estimated after pooling +0.40, range +0.10 to +0.70 (in the outcome's own unit)."
+        in sentence
+    )
+
+
+def test_the_shared_scoring_run_clause_is_printed_only_when_the_file_shows_one_run(
+    results: dict[str, Any], mutable: dict[str, Any]
+) -> None:
+    run = _at(results, POOLING + ".cells.0.scoring_runs.0")
+    assert f"measured on the one scoring run {run}, so within a cell at most one of them counts" in _text(
+        results
+    )
+    cells = _at(mutable, POOLING + ".cells")
+    cells[1]["scoring_runs"] = ["r_20261010_99999999"]
+    text = _text(mutable)
+    assert "**Not pooled.**" in text and "scoring run" not in text.split("**Not pooled.**")[1].split("\n")[0]
 
 
 def test_the_pooling_verdict_is_worded_from_the_count_not_typed(results: dict[str, Any]) -> None:
@@ -425,6 +473,20 @@ def test_the_committed_report_is_the_committed_journey_audit_and_plan_k_results(
     assert "## 9. Plan K's measurement upgrades on the same rows" in expected
     assert "## 9." not in before
     assert "python -m library.run_engine journey --dataset hillstrom-email --plan-k" in expected
+
+
+def test_the_committed_plan_k_is_not_appended_to_a_journey_of_another_file_or_run() -> None:
+    from library.run_engine import journey_report_text
+
+    journey = json.loads(JOURNEY.read_text(encoding="utf-8"))
+    assert "**Reproduced.**" in journey_report_text(journey)
+    other_file = copy.deepcopy(journey)
+    other_file["csv_sha256"] = "0" * 64
+    text = journey_report_text(other_file)
+    assert "**Reproduced.**" not in text and "Plan K's measurement upgrades" not in text
+    other_run = copy.deepcopy(journey)
+    other_run["steps"]["uplift_model"]["run_id"] = "r_20261010_99999999"
+    assert "Plan K's measurement upgrades" not in journey_report_text(other_run)
 
 
 def test_a_report_without_plan_k_results_is_what_it_was_before() -> None:
