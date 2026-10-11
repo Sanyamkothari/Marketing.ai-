@@ -332,6 +332,21 @@ def _install_agentic(app: FastAPI) -> None:
 
 
 PHASE_APP_HOOKS.append(_install_agentic)
+
+
+# Plan K M133 (DEC-1404): the verifier over MCP at /mcp, mounted only when `mcp.enabled` is on
+# (configs/agentic/mcp.yaml). Off - the default - only api.mcp.config (the switch reader) is imported: no
+# MCP SDK, no route, so every response is byte-identical to Plan J's.
+def _install_mcp(app: FastAPI) -> None:
+    from api.mcp.config import mcp_enabled
+
+    if mcp_enabled(app.state.config_root):
+        from api.mcp.http import install_mcp
+
+        install_mcp(app)
+
+
+PHASE_APP_HOOKS.append(_install_mcp)
 # ---- END PLAN-K ----
 
 app: FastAPI = create_app()
