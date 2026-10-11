@@ -34,11 +34,15 @@
 // Plan E's `#pe-bar`) is adopted into the bar's second row, so nothing it offered is lost.
 
 import { LOGO, MODULES_EVENT, esc, headerToolHtml } from "./dom.js";
+// <M174>
 // Plan M M174 (DEC-1604): with the deployment's `ui_layout` set to "campaigns" the bar is the new shell
 // (`shell.js`: the five-place sidebar, the bell, Help and the profile); in "classic" nothing below changes.
-// Both files are leaves as far as this one is concerned: neither imports the router or this file.
+// Both files are leaves as far as this one is concerned: neither imports the router or this file. The lines
+// between the M174 marks are the whole of M174 in this file: the classic layout's check removes them to draw
+// the bar as it was before (tests/integration/test_shell_ui.py).
 import { isCampaignLayout } from "./layout.js";
 import { injectShellStyles, shellBarHtml } from "./shell.js";
+// </M174>
 
 const slots = new Map();
 let access = null;
@@ -270,7 +274,9 @@ function menuItem(item, on) {
 
 /** The bar's markup for the current route, slots and access (exported for tests). */
 export function topBarHtml() {
+  // <M174>
   if (isCampaignLayout()) return campaignShellHtml();
+  // </M174>
   const state = sessionState();
   const signedOut = state === "signed-out";
   const on = activeId();
@@ -292,6 +298,7 @@ export function topBarHtml() {
   }<a class="tb-logo" href="#/" aria-label="Minfy, home">${LOGO}</a><button type="button" class="btn secondary sm tb-menu-btn" data-tb-menu aria-expanded="${ui.panel}" aria-controls="pb-bar">Menu</button></div>`;
 }
 
+// <M174>
 /** The campaigns layout's bar (Plan M M174): the same slots and state, drawn by `shell.js`. */
 function campaignShellHtml() {
   const status = sessionState();
@@ -316,6 +323,7 @@ function markShell() {
   }
 }
 
+// </M174>
 function paintChrome() {
   if (!bar) return;
   const html = topBarHtml();
@@ -329,7 +337,9 @@ function paintChrome() {
     else bar.insertBefore(holder.firstElementChild, bar.firstChild);
   }
   bar.classList.toggle("open", ui.panel);
+  // <M174>
   markShell();
+  // </M174>
   for (const [, list] of slots) {
     for (const slot of list) {
       if (typeof slot.bind === "function") {
@@ -428,12 +438,17 @@ function onClick(event) {
     }
     return;
   }
-  // The campaigns layout's folded sidebar closes when one of its places is chosen, even the one on screen.
+  // <M174>
+  // The campaigns layout's folded sidebar closes when one of its places is chosen, even the one on screen
+  // (no route change follows that one, so the Menu button is told here).
   if (ui.panel && bar && target.closest(".sh-side a")) {
     ui.panel = false;
     bar.classList.remove("open");
+    const menuBtn = bar.querySelector("[data-tb-menu]");
+    if (menuBtn) menuBtn.setAttribute("aria-expanded", "false");
     lastHtml = "";
   }
+  // </M174>
   // A click anywhere else, or on a link inside a menu, closes what was open.
   if (ui.menu && !(target.closest(".menu-pop") && !target.closest("a"))) closeMenus();
   if (!target.closest(".toggletip")) closeToggletips(doc);

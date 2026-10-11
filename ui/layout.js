@@ -42,6 +42,9 @@ export const PLACES = Object.freeze([
 export const BELL = "approvals";
 
 /*
+ * A row may say `notBy: "<module name>"`: a module of that name owning the target's first segment does not make
+ * the target a page this build has (see layoutRedirect).
+ *
  * Pattern syntax: hash segments after "#/", separated by "/". A literal matches itself, `:id` matches any
  * one segment (and is copied into `to`), and a trailing `*` matches zero or more further segments. The
  * first row that matches wins, so a specific row comes before the general one. "" is `#/` itself.
@@ -52,7 +55,15 @@ export const ROUTES = Object.freeze([
   { from: "industry/*", to: "#/overview", home: "overview", why: "the industry chooser is off; its pages were Home" },
   { from: "overview/*", to: null, home: "overview", why: "the Overview itself (M175)" },
   // Campaigns (M176, M177)
-  { from: "results/*", to: "#/campaigns", home: "campaigns", why: "Results' runs and campaigns are the Campaigns list" },
+  {
+    from: "results/*",
+    to: "#/campaigns",
+    home: "campaigns",
+    why: "Results' runs and campaigns are the Campaigns list",
+    // Plan J's `decide` module claims `campaigns` for one campaign's page and sends the bare `#/campaigns` back to
+    // `#/results`, so it is not the list: this redirect waits for the module that is (M176).
+    notBy: "decide",
+  },
   { from: "campaigns", to: null, home: "campaigns", why: "the Campaigns list (M176)" },
   { from: "campaigns/new/*", to: null, home: "campaigns", why: "the New campaign wizard (M177)" },
   { from: "campaigns/:id", to: "#/campaigns/:id/overview", home: "campaigns", why: "a campaign opens on its Overview tab" },
@@ -93,11 +104,18 @@ export const ROUTES = Object.freeze([
 
 let layout = DEFAULT_LAYOUT;
 
-// The last redirect made, and the two most recent distinct hashes this module was asked about: a page that
-// sends the browser straight back to where it was redirected from (the bare `#/campaigns` of Plan J's
-// campaign page goes back to `#/results`, until M176 owns that address) is drawn there instead of bouncing.
+// The last redirect made, until its target has been drawn, and the two most recent distinct hashes this module
+// was asked about. A page that sends the browser straight back to where it was redirected from, while it is still
+// being drawn, is a bounce: the old address is then drawn instead of going round again. Once the target has been
+// drawn (`layoutDrawn`), the redirect is forgotten, so a person who follows a link from the new page to the old
+// address - a "#/" link on the Overview - is redirected as anyone else is.
 const bounce = { from: null, to: null };
 const seen = { current: null, previous: null };
+
+function forgetBounce() {
+  bounce.from = null;
+  bounce.to = null;
+}
 
 /** "classic" or "campaigns". */
 export const uiLayout = () => layout;
@@ -115,7 +133,7 @@ export function setUiLayout(value) {
   const next = value === "campaigns" ? "campaigns" : DEFAULT_LAYOUT;
   if (next === layout) return;
   layout = next;
-  bounce.from = null;
+  forgetBounce();
   if (typeof document !== "undefined" && document.documentElement) {
     const root = document.documentElement;
     if (next === "campaigns") root.setAttribute("data-ui-layout", "campaigns");
@@ -177,9 +195,10 @@ export function targetFor(hash) {
 
 /**
  * The address to send the browser to instead of `hash`, or null to draw `hash` as it is. Always null in the
- * classic layout. `claimed(parts)` says whether a screen exists for the target (app.js passes the router's
- * `resolveRoute`): a redirect never sends anyone to a page this build does not have, so the switch can be
- * turned on before every Phase 2 page has landed, and old pages keep working until then.
+ * classic layout. `claimed(parts)` says which screen exists for the target (app.js passes the router's
+ * `resolveRoute`, which answers the owning module, `{ name }`, or null): a redirect never sends anyone to a page
+ * this build does not have - nor to one owned only by the row's `notBy` module - so the switch can be turned on
+ * before every Phase 2 page has landed, and old pages keep working until then.
  */
 export function layoutRedirect(hash, { claimed = () => true } = {}) {
   if (!isCampaignLayout()) return null;
@@ -188,26 +207,39 @@ export function layoutRedirect(hash, { claimed = () => true } = {}) {
     seen.previous = seen.current;
     seen.current = now;
   }
+  // Anywhere but the two ends of the last redirect: that redirect is over.
+  if (now !== bounce.from && now !== bounce.to) forgetBounce();
+  const hit = routeEntry(now);
   const target = targetFor(now);
-  if (!target || target === now) return null;
+  if (!hit || !target || target === now) return null;
   let ready = false;
   try {
-    ready = Boolean(claimed(partsOf(target)));
+    const owner = claimed(partsOf(target));
+    ready = Boolean(owner) && !(hit.row.notBy && owner && owner.name === hit.row.notBy);
   } catch {
     ready = false;
   }
   if (!ready) return null;
+  // Sent straight back by the target before it was drawn: draw the old address, do not go round again.
   if (bounce.from === now && bounce.to === seen.previous) return null;
   bounce.from = now;
   bounce.to = target;
   return target;
 }
 
+/**
+ * app.js says a route has been drawn and stayed (the hash did not change while it was drawn). When that is the
+ * target of the last redirect, the redirect is over: from here on, reaching the old address again - a link, the
+ * wordmark, typing it - is a person's choice and is redirected again.
+ */
+export function layoutDrawn(hash) {
+  if (bounce.to !== null && `#/${partsOf(hash).join("/")}` === bounce.to) forgetBounce();
+}
+
 /** Test seam: back to the state of a fresh page. */
 export function _resetLayoutForTests() {
   layout = DEFAULT_LAYOUT;
-  bounce.from = null;
-  bounce.to = null;
+  forgetBounce();
   seen.current = null;
   seen.previous = null;
   if (typeof document !== "undefined" && document.documentElement) document.documentElement.removeAttribute("data-ui-layout");

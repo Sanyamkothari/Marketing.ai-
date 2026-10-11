@@ -4,7 +4,9 @@
    five places. The table is checked against what the page really registers (every module's routes, read from the
    router after the whole page has loaded) plus the Phase 2 routes of the contract, so a route added later without
    a home fails here. The redirects are then followed on the whole page: only in the campaigns layout, only to a
-   page this build has, replacing the history entry, and never bouncing. */
+   page this build has (Results waits for the Campaigns list, not Plan J's campaign page), replacing the history
+   entry, never bouncing between a page that sends the browser straight back and its old address, and redirecting a
+   person who goes back to an old address from its new page (the Overview's '#/' links) again. */
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { settle } from "../harness.mjs";
@@ -169,22 +171,86 @@ test("a bare campaign address opens on its Overview tab", async () => {
   assert.equal(w.location.hash, "#/campaigns/c_20261011_c9276210/overview");
 });
 
-test("a page that sends the browser straight back is drawn, not bounced between (#/results until M176)", async () => {
+test("from the Overview, the old Home address redirects again (the wordmark, a '#/' link, typing it)", async () => {
+  await visit(state, "#/settings");
+  await visit(state, "#/");
+  assert.equal(w.location.hash, "#/overview");
+  for (let i = 0; i < 2; i += 1) {
+    const before = w.history.length;
+    await visit(state, "#/");
+    assert.equal(w.location.hash, "#/overview", `round ${i + 1}: a person going to #/ from the Overview lands on it again`);
+    assert.equal(w.history.length, before + 1, "the redirect replaced the entry");
+    assert.equal(document.querySelector(".h1, h1")?.textContent?.includes("Customer Lifecycle"), false, "not the old Home");
+    if (router.resolveRoute(["overview"]).name === "m174-test-overview") {
+      assert.ok(document.querySelector('[data-test-page="overview"]'), "the Overview is drawn");
+    }
+  }
+  assert.equal(document.querySelector('#pb-bar .sh-item[aria-current="page"]').dataset.place, "overview");
+  // the wordmark goes straight there
+  await visit(state, "#/settings");
+  document.querySelector("#pb-bar a.wordmark").click();
+  await settle(2);
+  await untilStable(state);
+  assert.equal(w.location.hash, "#/overview");
+});
+
+test("Results waits for the Campaigns list: with only Plan J's campaign page, #/results stays put", async () => {
+  const owner = router.resolveRoute(["campaigns"]);
   await visit(state, "#/settings");
   const seen = [];
   const listener = () => seen.push(w.location.hash);
   w.addEventListener("hashchange", listener);
+  const before = w.history.length;
   await visit(state, "#/results");
-  await settle(10);
-  await untilStable(state);
-  w.removeEventListener("hashchange", listener);
-  assert.ok(["#/campaigns", "#/results"].includes(w.location.hash), w.location.hash);
-  assert.ok(seen.length <= 4, `at most one round trip, saw ${seen.join(" ")}`);
-  // drawn again on the same address (a module registering, a sign-in) it still does not bounce
-  w.dispatchEvent(new w.Event("marketing-ai:modules-changed"));
   await settle(6);
   await untilStable(state);
-  assert.ok(["#/campaigns", "#/results"].includes(w.location.hash), w.location.hash);
+  w.removeEventListener("hashchange", listener);
+  if (owner && owner.name === "decide") {
+    // Plan J's module claims `campaigns` but sends a bare #/campaigns back to #/results: not the list (row notBy)
+    assert.equal(w.location.hash, "#/results", "no redirect to a page that would send it back");
+    assert.deepEqual(seen, ["#/results"], "one address, no round trip");
+    assert.equal(w.history.length, before + 1, "one history entry: Back goes to where the person was");
+  } else {
+    assert.equal(w.location.hash, "#/campaigns", "the Campaigns list (M176) owns the address: Results goes there");
+    assert.equal(w.history.length, before + 1);
+  }
+});
+
+test("a page that sends the browser straight back, while it is being drawn, is not bounced between", async () => {
+  // The Data page (this test's, or M179's after the merge) is made to send #/data/doctor straight back to #/doctor.
+  const data = router.resolveRoute(["data"]);
+  const real = data.render;
+  data.render = (app, parts) => {
+    if (parts[1] === "doctor") {
+      window.location.hash = "#/doctor";
+      return undefined;
+    }
+    return real(app, parts);
+  };
+  try {
+    await visit(state, "#/settings");
+    const seen = [];
+    const listener = () => seen.push(w.location.hash);
+    w.addEventListener("hashchange", listener);
+    await visit(state, "#/doctor");
+    await settle(10);
+    await untilStable(state);
+    w.removeEventListener("hashchange", listener);
+    assert.equal(w.location.hash, "#/doctor", "the old page is drawn");
+    assert.ok(seen.length <= 3, `one round trip at most, saw ${seen.join(" ")}`);
+    assert.ok(document.querySelector('#app [data-module="doctor"], #app .screen'), "Data Doctor's own page is drawn");
+    // drawn again on the same address (a module registering, a sign-in) it still does not bounce
+    w.dispatchEvent(new w.Event("marketing-ai:modules-changed"));
+    await settle(6);
+    await untilStable(state);
+    assert.equal(w.location.hash, "#/doctor");
+  } finally {
+    data.render = real;
+  }
+  // once the page draws, the same old address is redirected again
+  await visit(state, "#/settings");
+  await visit(state, "#/doctor");
+  assert.equal(w.location.hash, "#/data/doctor");
 });
 
 test("a redirect is decided by the table alone: the unit rules", () => {
@@ -198,6 +264,24 @@ test("a redirect is decided by the table alone: the unit rules", () => {
   assert.equal(layout.layoutRedirect("#/connections"), null, "sent straight back from #/data: drawn, not bounced");
   assert.equal(layout.layoutRedirect("#/settings"), null);
   assert.equal(layout.layoutRedirect("#/connections"), "#/data", "reached again from elsewhere: redirected again");
+  // once the target has been drawn, going back to the old address is a person's choice: redirected again
+  assert.equal(layout.layoutRedirect("#/data"), null);
+  layout.layoutDrawn("#/data");
+  assert.equal(layout.layoutRedirect("#/connections"), "#/data", "from the drawn #/data, a link to #/connections");
+  assert.equal(layout.layoutRedirect("#/data"), null);
+  layout.layoutDrawn("#/data");
+  assert.equal(layout.layoutRedirect("#/connections"), "#/data", "and again");
+  // a drawn page that is not the target does not end the redirect (the old address itself, drawn after a bounce)
+  assert.equal(layout.layoutRedirect("#/data"), null);
+  assert.equal(layout.layoutRedirect("#/connections"), null, "bounced");
+  layout.layoutDrawn("#/connections");
+  assert.equal(layout.layoutRedirect("#/connections"), null, "drawn again on the same address: still not bounced");
+  // a row's notBy module does not count as the target's page
+  assert.equal(layout.layoutRedirect("#/settings"), null);
+  assert.equal(layout.layoutRedirect("#/results", { claimed: () => ({ name: "decide" }) }), null, "Plan J's stub");
+  assert.equal(layout.layoutRedirect("#/results", { claimed: () => ({ name: "campaigns" }) }), "#/campaigns", "M176's list");
+  assert.equal(layout.layoutRedirect("#/settings"), null);
+  assert.equal(layout.layoutRedirect("#/connections", { claimed: () => ({ name: "decide" }) }), "#/data", "only its own row");
   assert.equal(layout.layoutRedirect("#/nothing-registers-this"), null, "an unknown address is left to app.js");
   assert.equal(layout.homeFor("#/nothing-registers-this"), null);
   layout.setUiLayout("anything else");

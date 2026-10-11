@@ -49,7 +49,8 @@ test("the sidebar is the five places, in order, each a link to its page", () => 
     $$("#pb-bar .sh-side a.sh-item").map((a) => a.getAttribute("href")),
     ["#/overview", "#/campaigns", "#/data", "#/reports", "#/settings"],
   );
-  assert.ok($('#pb-bar a.wordmark[href="#/"]'), "the wordmark stays");
+  assert.ok($('#pb-bar a.wordmark[href="#/overview"]'), "the wordmark stays, and opens the Overview itself");
+  assert.equal($("#pb-bar a.tb-logo").getAttribute("href"), "#/overview", "so does the logo (not '#/', which redirects)");
   assert.equal($("#pb-bar .tb-logo svg.logo").getAttribute("aria-label"), "Minfy", "the Minfy logo stays");
 });
 
@@ -170,6 +171,7 @@ test("below 900 px the Menu button opens the sidebar; choosing a place or Escape
   $('#pb-bar .sh-side a[href="#/settings"]').click();
   await settle(2);
   assert.equal(bar.classList.contains("open"), false, "choosing a place folds the sidebar");
+  assert.equal(menu().getAttribute("aria-expanded"), "false", "and the Menu button says so");
   menu().click();
   assert.ok(bar.classList.contains("open"));
   document.dispatchEvent(new w.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));

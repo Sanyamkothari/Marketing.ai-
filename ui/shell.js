@@ -13,6 +13,7 @@
    - The left sidebar is the five places of `layout.js` PLACES, the same for every role (as Plan H's four
      were): what a role may DO is still decided by each page and the API. The place marked is the route's
      `home` in layout.js's table, with `aria-current="page"`.
+   - The wordmark and the Minfy logo open the Overview (`#/overview`), where "#/" would redirect.
    - Top right: the sample-data chip (slot "demo"), the approvals bell (slot "badge:approvals" - the count
      the classic bar puts on Results, read by `production/approvals.js` for an Approver only, the same role
      rule), Help (?) (slot "help": the tour and "Send feedback", in the menu the bar's other menus use), and
@@ -86,13 +87,15 @@ export function helpHtml(entries, open) {
  * is open.
  */
 export function shellBarHtml(ctx) {
+  // The wordmark and the logo open the Overview itself, not "#/" (which redirects there): one step, no redirect.
+  const home = esc(PLACES[0].href);
   const signedOut = ctx.status === "signed-out";
   const here = homeFor(ctx.hash);
   const user = ctx.slot("user");
   if (signedOut) {
-    return `<div class="tb-row sh-row"><a class="wordmark" href="#/">Marketing AI</a><div class="tb-context"></div>${
+    return `<div class="tb-row sh-row"><a class="wordmark" href="${home}">Marketing AI</a><div class="tb-context"></div>${
       user ? `<div class="sh-utils">${user}</div>` : ""
-    }<a class="tb-logo" href="#/" aria-label="Minfy, home">${LOGO}</a></div>`;
+    }<a class="tb-logo" href="${home}" aria-label="Minfy, home">${LOGO}</a></div>`;
   }
   const menuBtn = `<button type="button" class="btn secondary sm sh-menu-btn" data-tb-menu aria-expanded="${Boolean(
     ctx.panel,
@@ -101,9 +104,9 @@ export function shellBarHtml(ctx) {
     ctx.slot("help"),
     ctx.menu === HELP_ID,
   )}${user}`;
-  return `<div class="tb-row sh-row"><a class="wordmark" href="#/">Marketing AI</a>${menuBtn}${sidebarHtml(
+  return `<div class="tb-row sh-row"><a class="wordmark" href="${home}">Marketing AI</a>${menuBtn}${sidebarHtml(
     here,
-  )}<div class="tb-context">${ctx.context || ""}</div><div class="sh-utils">${utils}</div><a class="tb-logo" href="#/" aria-label="Minfy, home">${LOGO}</a></div>`;
+  )}<div class="tb-context">${ctx.context || ""}</div><div class="sh-utils">${utils}</div><a class="tb-logo" href="${home}" aria-label="Minfy, home">${LOGO}</a></div>`;
 }
 
 // Tokens only (index.html's :root), so both themes apply. The sidebar sits under the sticky bar, fixed to
