@@ -684,6 +684,29 @@ MILESTONE_TESTS: Final[Mapping[str, tuple[str, ...]]] = {
         "tests/integration/decide/test_treat_list_review.py",
         "tests/integration/production/test_production_ui.py",
     ),
+    # M173 (DEC-1603), Help and loose ends. test_ui_sweep.py is the Playwright route sweep (zero console errors), the
+    # click crawler and the Help menu by keyboard; test_simple_ui.py runs help.test.mjs and settings.test.mjs (the
+    # menu, the tour, the orphans, #/industry, readiness by goal); test_production_ops_ui_js.py runs monitoring.test.mjs
+    # (the value-view shortcut); test_production_ui_js.py runs topbar.test.mjs and crumbs.test.mjs; test_uplift_ui.py
+    # runs uplift_ui_wiring.test.mjs (the OPE read and the propensity-ranked budget curve).
+    "M173": (
+        "tests/integration/test_ui_sweep.py",
+        "tests/integration/simple/test_simple_ui.py",
+        "tests/integration/production/test_production_ops_ui_js.py",
+        "tests/integration/production/test_production_ui_js.py",
+        "tests/unit/uplift/test_uplift_ui.py",
+        "tests/integration/test_ui_journey.py",
+    ),
+    # M178 (DEC-1608), Reports. test_reports_ui.py runs reports/tabs.test.mjs and reports/audit_equal.test.mjs and
+    # checks the audit result through the new form against the old form's on the real API; test_visible_text_ui.py
+    # draws the four tabs with empty allow-lists; test_ui_sweep.py opens them with a clean console and reaches
+    # #/reports by clicks; test_simple_ui.py runs settings.test.mjs (Reports' way in from Settings).
+    "M178": (
+        "tests/integration/test_reports_ui.py",
+        "tests/integration/test_visible_text_ui.py",
+        "tests/integration/test_ui_sweep.py",
+        "tests/integration/simple/test_simple_ui.py",
+    ),
 }
 """Milestone id -> the test files (or directories, with a trailing `/`) that prove it is built.
 

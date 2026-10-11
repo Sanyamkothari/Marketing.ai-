@@ -342,7 +342,7 @@ export function settingsHtml({ can = () => true, status = null, version = null }
       : "",
     // Plan M M173: `#/cost` had no way in. What runs have cost, and the rate rupee amounts are worked out with.
     can("GET", "/cost/spend")
-      ? entry({ label: "Costs", href: "#/cost", text: "What building models and making lists has cost each month, and the exchange rate that rupee amounts use." })
+      ? entry({ label: "Costs", href: "#/cost", text: "What building and refreshing contact lists has cost each month, and the exchange rate that rupee amounts use." })
       : "",
   ].filter(Boolean);
   // Admin only while sign-in is on: with it off there is one person, who needs no user list.
@@ -378,6 +378,11 @@ export function settingsHtml({ can = () => true, status = null, version = null }
       : "",
     can("POST", "/campaigns/audit")
       ? entry({ label: "Check a past campaign", href: "#/audit", text: "A campaign another tool ran: upload who was contacted and what happened, and see what it changed." })
+      : "",
+    // Plan M M178 (DEC-1608): Reports (`#/reports`) is in the campaigns layout's sidebar (M174); in the classic
+    // layout this is its way in, so no registered route is an orphan (the M173 crawler).
+    can("GET", "/pilot/proof")
+      ? entry({ label: "Reports", href: "#/reports", text: "Value Proof Packs, the value proven to date and a check of a past campaign, on one page." })
       : "",
     can("GET", "/runs/{run_id}/outcomes")
       ? entry({ label: "Campaigns waiting for results", href: "#/monitoring/runs", text: "Every contact list you made, and where to add what happened to those customers." })

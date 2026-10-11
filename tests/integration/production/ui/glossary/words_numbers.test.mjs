@@ -97,7 +97,7 @@ test("Home: the operational goals fold under a closed 'More goals', keeping thei
   // The other journeys' goals are named in business words too.
   const other = text($("[data-other-goals]"));
   assert.match(other, /Choose the best e-mail for each customer/);
-  assert.match(other, /Spot card accounts likely to miss a payment/);
+  assert.match(other, /Find card accounts likely to miss a payment/);
   assert.doesNotMatch(other, /Propensity|E-mail Offer Choice/);
 });
 

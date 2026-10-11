@@ -66,6 +66,6 @@ Prediction keep their names and sit under "More goals" on Home, because they con
 | `rca` | Understand why customers leave |
 | `hillstrom-email` | Choose the best e-mail for each customer |
 | `ai-onboarding-assistant` | Answer customer questions (AI assistant) |
-| `card-default-propensity` | Spot card accounts likely to miss a payment |
+| `card-default-propensity` | Find card accounts likely to miss a payment |
 | `first-purchase-propensity` | Find browsers likely to buy for the first time |
 | `criteo-uplift` | Show ads where they change what people do |
