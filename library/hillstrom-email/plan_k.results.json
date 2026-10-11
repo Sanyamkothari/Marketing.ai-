@@ -1,0 +1,528 @@
+{
+  "dataset": "hillstrom-email",
+  "use_case": "hillstrom-email",
+  "csv": "library/hillstrom-email/data/prepared.csv",
+  "csv_sha256": "434bc95c6e096dbe5b6384ca54f7198b1eed69244b2c770c6538c3023e9892f5",
+  "rows": 64000,
+  "label": "public dataset, retrospective replay, a third of each group kept",
+  "split": {
+    "seed": 20261010,
+    "eval_share": 0.5,
+    "stratified_by": [
+      "segment",
+      "conversion"
+    ],
+    "training": {
+      "rows": 32000,
+      "conversions": 289,
+      "groups": {
+        "No E-Mail": {
+          "rows": 10653,
+          "conversions": 61,
+          "conversion_rate": 0.005726086548390125,
+          "visit_rate": 0.10729372007885103,
+          "mean_spend": 0.7057129447104102
+        },
+        "Mens E-Mail": {
+          "rows": 10653,
+          "conversions": 133,
+          "conversion_rate": 0.012484746080916174,
+          "visit_rate": 0.18229606683563315,
+          "mean_spend": 1.3524331174317095
+        },
+        "Womens E-Mail": {
+          "rows": 10694,
+          "conversions": 95,
+          "conversion_rate": 0.008883486066953432,
+          "visit_rate": 0.15111277351786048,
+          "mean_spend": 1.1389068636618667
+        }
+      }
+    },
+    "evaluation": {
+      "rows": 32000,
+      "conversions": 289,
+      "groups": {
+        "No E-Mail": {
+          "rows": 10653,
+          "conversions": 61,
+          "conversion_rate": 0.005726086548390125,
+          "visit_rate": 0.10504083356800901,
+          "mean_spend": 0.5998657655120624
+        },
+        "Mens E-Mail": {
+          "rows": 10654,
+          "conversions": 134,
+          "conversion_rate": 0.012577435704899569,
+          "visit_rate": 0.18321757086540266,
+          "mean_spend": 1.4927933170640135
+        },
+        "Womens E-Mail": {
+          "rows": 10693,
+          "conversions": 94,
+          "conversion_rate": 0.008790797718133358,
+          "visit_rate": 0.15168802020013092,
+          "mean_spend": 1.0154905078088468
+        }
+      }
+    }
+  },
+  "uplift_overrides": {
+    "uplift.evidence.risk_comparison": true,
+    "uplift.evidence.rollout_verdict": true
+  },
+  "campaign_effect_run_id": "r_20261010_11100002",
+  "scoring_run_id": "r_20261010_11100003",
+  "wall_clock_seconds": 143.5,
+  "steps": {
+    "plan_k": {
+      "plans_registered_before_outcomes": {
+        "campaign_id": "c_20261011_653036ed",
+        "plan_hash": "2ecfa152442e759c03d687cb102a67a45ab54b3469daf958d6df2aeceb427ca6",
+        "covariate_source": "run_score"
+      },
+      "covariate_run_score": {
+        "campaign_id": "c_20261011_653036ed",
+        "name": "Hillstrom e-mail (conversion, adjusted) - public dataset, retrospective replay, a third of each group kept",
+        "plan": {
+          "plan_hash": "2ecfa152442e759c03d687cb102a67a45ab54b3469daf958d6df2aeceb427ca6",
+          "covariate_source": "run_score",
+          "covariate_column": null,
+          "base_rate": 0.005726086548390125,
+          "base_rate_source": "the training rows' no-e-mail group"
+        },
+        "replay": {
+          "intended": 25599,
+          "intended_treated": 12862,
+          "intended_held_back": 12737,
+          "kept_treated": 4263,
+          "kept_held_back": 4171,
+          "kept_by_offer": {
+            "Mens E-Mail": 2533,
+            "Womens E-Mail": 1730
+          }
+        },
+        "treated_rows": 4263,
+        "control_rows": 4171,
+        "treated_conversions": 48,
+        "control_conversions": 22,
+        "covariate_source": "run_score",
+        "unadjusted": {
+          "schema_version": 1,
+          "value": 0.005985161779391937,
+          "ci_low": 0.002127388010264668,
+          "ci_high": 0.010037614695899812,
+          "confidence_level": 0.95
+        },
+        "adjusted": {
+          "schema_version": 1,
+          "value": 0.005984536910973413,
+          "ci_low": 0.0021280533383385043,
+          "ci_high": 0.009841020483608322,
+          "confidence_level": 0.95
+        },
+        "variance_reduction": 3.816443649995449e-07,
+        "rows_covariate_missing": 0,
+        "adjustment_note": null,
+        "verdict": {
+          "schema_version": 1,
+          "kind": "added",
+          "headline": "The campaign added about 26 conversions",
+          "detail": "Likely between 9 and 42. Counted: The customer bought in the two weeks after the e-mail (or after the day it would have gone out). Adjusted for the chance of the outcome the scoring run predicted for each customer before the campaign, as the test plan registered.",
+          "amount": 26,
+          "likely_low": 9,
+          "likely_high": 42,
+          "results_on": null
+        },
+        "plain_campaign": {
+          "campaign_id": "c_20261011_add36596",
+          "unadjusted": {
+            "schema_version": 1,
+            "value": 0.005985161779391937,
+            "ci_low": 0.002127388010264668,
+            "ci_high": 0.010037614695899812,
+            "confidence_level": 0.95
+          },
+          "same_customers_and_outcomes": {
+            "treated_rows": true,
+            "control_rows": true,
+            "treated_conversions": true,
+            "control_conversions": true,
+            "absolute_lift": true
+          }
+        },
+        "report": {
+          "schema_version": 1,
+          "run_id": "r_20261010_11100003",
+          "campaign_id": "c_20261011_653036ed",
+          "outcome_column": "conversion",
+          "outcome_window_days": 0,
+          "as_of": "2026-10-11T05:16:36.924541Z",
+          "status": "mature",
+          "results_available_on": null,
+          "treated_rows": 4263,
+          "treated_conversions": 48,
+          "treated_rate": 0.011259676284306826,
+          "control_rows": 4171,
+          "control_conversions": 22,
+          "control_rate": 0.005274514504914889,
+          "absolute_lift": {
+            "schema_version": 1,
+            "value": 0.005985161779391937,
+            "ci_low": 0.002127388010264668,
+            "ci_high": 0.010037614695899812,
+            "confidence_level": 0.95
+          },
+          "relative_lift": 1.1347322628110805,
+          "incremental_conversions": {
+            "schema_version": 1,
+            "value": 25.51474466554783,
+            "ci_low": 9.06905508775828,
+            "ci_high": 42.790351448620896,
+            "confidence_level": 0.95
+          },
+          "p_value": 0.002452788884694676,
+          "rows_immature": 0,
+          "rows_without_outcome": 17165,
+          "rows_suppressed_or_untreated": 6401,
+          "causal": true,
+          "summary": "Treated customers converted at 1.1% against 0.5% for the control group: a lift of +0.6 points (95% CI +0.2 points to +1.0 points; p = 0.002), about 26 extra conversions caused by the campaign. Taking account of the chance of the outcome the scoring run predicted for each customer before the campaign, the difference is +0.6 points (95% CI +0.2 points to +1.0 points); this time it did not narrow the range.",
+          "computed_at": "2026-10-11T05:16:37.045114Z",
+          "test_plan_hash": "2ecfa152442e759c03d687cb102a67a45ab54b3469daf958d6df2aeceb427ca6",
+          "early_look": false,
+          "adjusted_lift": 0.005984536910973413,
+          "adjusted_interval": {
+            "schema_version": 1,
+            "value": 0.005984536910973413,
+            "ci_low": 0.0021280533383385043,
+            "ci_high": 0.009841020483608322,
+            "confidence_level": 0.95
+          },
+          "variance_reduction": 3.816443649995449e-07,
+          "rows_covariate_missing": 0,
+          "covariate_source": "run_score"
+        }
+      },
+      "rollout": {
+        "run_id": "r_20261010_11100002",
+        "artefact": "risk_comparison.json",
+        "offer": "Mens E-Mail",
+        "against": "No E-Mail",
+        "written": true,
+        "comparison": {
+          "schema_version": 1,
+          "run_id": "r_20261010_11100002",
+          "rows": 21306,
+          "rows_excluded": 0,
+          "folds": 5,
+          "top_share": 0.2,
+          "propensity_source": "treated_share",
+          "cost_per_contact": 0.05,
+          "uplift": {
+            "schema_version": 1,
+            "ranking": "uplift",
+            "contacts": 4263,
+            "incremental_conversions": {
+              "schema_version": 1,
+              "value": 17.3195040905594,
+              "ci_low": -10.7934391682649,
+              "ci_high": 45.43244734938369,
+              "confidence_level": 0.95
+            },
+            "per_rupee": {
+              "schema_version": 1,
+              "value": 0.08125500394351114,
+              "ci_low": -0.050637762928758615,
+              "ci_high": 0.2131477708157809,
+              "confidence_level": 0.95
+            },
+            "ope": {
+              "schema_version": 1,
+              "run_id": "r_20261010_11100002",
+              "policy_description": "Treat the top 20% of each fold by cross-fitted predicted uplift",
+              "rows": 21306,
+              "policy_treat_share": 0.20008448324415656,
+              "propensity": 0.5,
+              "estimates": [
+                {
+                  "schema_version": 1,
+                  "method": "ips",
+                  "value": {
+                    "schema_version": 1,
+                    "value": 0.006946400075096217,
+                    "ci_low": 0.005366437836499498,
+                    "ci_high": 0.008526362313692935,
+                    "confidence_level": 0.95
+                  }
+                },
+                {
+                  "schema_version": 1,
+                  "method": "snips",
+                  "value": {
+                    "schema_version": 1,
+                    "value": 0.006926244852115313,
+                    "ci_low": 0.005353598702821759,
+                    "ci_high": 0.008498891001408868,
+                    "confidence_level": 0.95
+                  }
+                },
+                {
+                  "schema_version": 1,
+                  "method": "dr",
+                  "value": {
+                    "schema_version": 1,
+                    "value": 0.00700641696794527,
+                    "ci_low": 0.005293084757675149,
+                    "ci_high": 0.00871974917821539,
+                    "confidence_level": 0.95
+                  }
+                }
+              ],
+              "logged_value": 0.009105416314653149,
+              "treat_all_value": {
+                "schema_version": 1,
+                "value": 0.012084945549771872,
+                "ci_low": 0.00991291356404151,
+                "ci_high": 0.014256977535502233,
+                "confidence_level": 0.95
+              },
+              "treat_none_value": {
+                "schema_version": 1,
+                "value": 0.006193523694193302,
+                "ci_low": 0.004693149900805696,
+                "ci_high": 0.007693897487580908,
+                "confidence_level": 0.95
+              },
+              "causal": true,
+              "computed_at": "2026-10-11T05:15:50.434003Z"
+            }
+          },
+          "risk": {
+            "schema_version": 1,
+            "ranking": "risk",
+            "contacts": 4263,
+            "incremental_conversions": {
+              "schema_version": 1,
+              "value": 17.370910683571456,
+              "ci_low": -11.523609909639859,
+              "ci_high": 46.26543127678277,
+              "confidence_level": 0.95
+            },
+            "per_rupee": {
+              "schema_version": 1,
+              "value": 0.08149617960859233,
+              "ci_low": -0.0540633821704896,
+              "ci_high": 0.21705574138767425,
+              "confidence_level": 0.95
+            },
+            "ope": {
+              "schema_version": 1,
+              "run_id": "r_20261010_11100002",
+              "policy_description": "Treat the top 20% of each fold by cross-fitted risk (chance of the outcome)",
+              "rows": 21306,
+              "policy_treat_share": 0.20008448324415656,
+              "propensity": 0.5,
+              "estimates": [
+                {
+                  "schema_version": 1,
+                  "method": "ips",
+                  "value": {
+                    "schema_version": 1,
+                    "value": 0.007321881160236553,
+                    "ci_low": 0.00569993200610915,
+                    "ci_high": 0.008943830314363955,
+                    "confidence_level": 0.95
+                  }
+                },
+                {
+                  "schema_version": 1,
+                  "method": "snips",
+                  "value": {
+                    "schema_version": 1,
+                    "value": 0.007289719626168224,
+                    "ci_low": 0.005677838290766299,
+                    "ci_high": 0.008901600961570149,
+                    "confidence_level": 0.95
+                  }
+                },
+                {
+                  "schema_version": 1,
+                  "method": "dr",
+                  "value": {
+                    "schema_version": 1,
+                    "value": 0.00700882974336121,
+                    "ci_low": 0.005317798984849766,
+                    "ci_high": 0.008699860501872653,
+                    "confidence_level": 0.95
+                  }
+                }
+              ],
+              "logged_value": 0.009105416314653149,
+              "treat_all_value": {
+                "schema_version": 1,
+                "value": 0.012084945549771872,
+                "ci_low": 0.00991291356404151,
+                "ci_high": 0.014256977535502233,
+                "confidence_level": 0.95
+              },
+              "treat_none_value": {
+                "schema_version": 1,
+                "value": 0.006193523694193302,
+                "ci_low": 0.004693149900805696,
+                "ci_high": 0.007693897487580908,
+                "confidence_level": 0.95
+              },
+              "causal": true,
+              "computed_at": "2026-10-11T05:15:50.436065Z"
+            }
+          },
+          "difference": {
+            "schema_version": 1,
+            "value": -0.051406593012050195,
+            "ci_low": -28.77400063081928,
+            "ci_high": 28.67118744479518,
+            "confidence_level": 0.95
+          },
+          "difference_per_rupee": {
+            "schema_version": 1,
+            "value": -0.0002411756650811644,
+            "ci_low": -0.1349941385447773,
+            "ci_high": 0.13451178721461496,
+            "confidence_level": 0.95
+          },
+          "uplift_better": false,
+          "causal": true,
+          "summary": "At the same budget (4,263 contacts, the top 20% of each fold), ranking by uplift does not beat risk ranking: -0.1 extra conversions (95% CI -28.8 to +28.7), a range that does not lie above zero.",
+          "computed_at": "2026-10-11T05:15:50.436804Z",
+          "rollout": {
+            "schema_version": 1,
+            "outcome": "cannot_tell",
+            "confidence": 0.95,
+            "lower_bound_conversions": -24.15616736984277,
+            "upper_bound_conversions": 24.05335418381867,
+            "value_basis": "net_inr",
+            "lower_bound_inr": -345750.5657500169,
+            "upper_bound_inr": 403017.3101577807,
+            "rows_without_value": 0,
+            "inr_unavailable_reason": null,
+            "rows_needed": null,
+            "summary": "Cannot tell yet: at this budget this model shows no gain over risk ranking, so there is no gain for more rows to confirm."
+          }
+        },
+        "rollout": {
+          "schema_version": 1,
+          "outcome": "cannot_tell",
+          "confidence": 0.95,
+          "lower_bound_conversions": -24.15616736984277,
+          "upper_bound_conversions": 24.05335418381867,
+          "value_basis": "net_inr",
+          "lower_bound_inr": -345750.5657500169,
+          "upper_bound_inr": 403017.3101577807,
+          "rows_without_value": 0,
+          "inr_unavailable_reason": null,
+          "rows_needed": null,
+          "summary": "Cannot tell yet: at this budget this model shows no gain over risk ranking, so there is no gain for more rows to confirm."
+        }
+      },
+      "pooling": {
+        "first_drawn": 4,
+        "setting_enabled_by_the_journey": false,
+        "campaigns_in_store": 3,
+        "campaigns_entering_a_cell": 3,
+        "cells": [
+          {
+            "cell_id": "cell_991de9fd6877cbeb",
+            "outcome_column": "conversion",
+            "outcome_kind": "binary",
+            "campaigns_measured": [
+              "c_20261011_653036ed",
+              "c_20261011_add36596"
+            ],
+            "scoring_runs": [
+              "r_20261010_11100003"
+            ],
+            "measured": 2,
+            "estimates": [
+              {
+                "campaign_id": "c_20261011_653036ed",
+                "status": "not_pooled",
+                "code": "POOL_TOO_FEW",
+                "reason": "Fewer comparable campaigns have a final result than pooling needs, so this campaign is shown only as measured.",
+                "campaigns_compared": 1,
+                "estimate_field": "adjusted_interval",
+                "measured_effect": 0.005984536910973413,
+                "measured_se": 0.001967629815167197,
+                "pooled_effect": null,
+                "pooled_interval": null
+              }
+            ],
+            "campaigns_compared": 1
+          },
+          {
+            "cell_id": "cell_f720c424f2cf3481",
+            "outcome_column": "spend",
+            "outcome_kind": "continuous",
+            "campaigns_measured": [
+              "c_20261011_dd86b87b"
+            ],
+            "scoring_runs": [
+              "r_20261010_11100003"
+            ],
+            "measured": 1,
+            "campaigns_compared": 0
+          }
+        ],
+        "pooled": false,
+        "largest_cell": 1
+      },
+      "harm_alarm": {
+        "applicable": false,
+        "setting_enabled_by_the_journey": false,
+        "readings": {
+          "conversion": {
+            "campaign_id": "c_20261011_add36596",
+            "outcome_column": "conversion",
+            "status": "mature",
+            "early_look": false,
+            "rows_immature": 0,
+            "outcome_window_days": 0,
+            "interim": false,
+            "harm_alarm_file_written": false
+          },
+          "run_score": {
+            "campaign_id": "c_20261011_653036ed",
+            "outcome_column": "conversion",
+            "status": "mature",
+            "early_look": false,
+            "rows_immature": 0,
+            "outcome_window_days": 0,
+            "interim": false,
+            "harm_alarm_file_written": false
+          },
+          "spend": {
+            "campaign_id": "c_20261011_dd86b87b",
+            "outcome_column": "spend",
+            "status": "mature",
+            "early_look": false,
+            "rows_immature": 0,
+            "outcome_window_days": 0,
+            "interim": false,
+            "harm_alarm_file_written": false
+          }
+        }
+      }
+    }
+  },
+  "reproduction": {
+    "against": "journey.results.json",
+    "csv_sha256_equal": true,
+    "identical": {
+      "split": true,
+      "risk_model": true,
+      "uplift_evaluation": true,
+      "treat_list": true,
+      "off_policy": true,
+      "campaigns": true
+    }
+  }
+}

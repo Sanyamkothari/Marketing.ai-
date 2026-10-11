@@ -77,10 +77,14 @@ from engine.pipeline import Pipeline, StageContext  # noqa: E402
 from engine.registry import LocalModelRegistry  # noqa: E402
 from engine.storage import LocalStorage, run_key, upload_key  # noqa: E402
 from engine.utils.ids import new_run_id  # noqa: E402
+from library.plan_k_report import ARTEFACT as PLAN_K_ARTEFACT  # noqa: E402
 
 RUNS_DIR = Path(__file__).resolve().parent / ".runs"
 AUDIT_RESULTS_NAME = "audit.results.json"
 """The audit results, kept in `.runs/<dataset>/audit/` and committed as `library/<dataset>/` + this (DEC-1322)."""
+PLAN_K_RESULTS_NAME = PLAN_K_ARTEFACT
+"""The Plan K readout, kept in `.runs/<dataset>/journey_plan_k/` and committed as `library/<dataset>/` + this (DEC-1413);
+the one name is `library.plan_k_report.ARTEFACT`."""
 
 
 class _NoJobs:
@@ -348,14 +352,24 @@ def committed_results_path(dataset: str, name: str) -> Path:
 
 
 def journey_report_text(
-    results: dict[str, Any], audit: dict[str, Any] | None = None, *, committed_audit: bool = True
+    results: dict[str, Any],
+    audit: dict[str, Any] | None = None,
+    *,
+    committed_audit: bool = True,
+    plan_k: dict[str, Any] | None = None,
+    committed_plan_k: bool | None = None,
 ) -> str:
     """The `run_report.md` of a journey's results, exactly as `journey_main` writes it.
 
     A function of the results alone (and of where the CLI keeps them), so the committed report can be
     checked against the run it names: `library/tests/test_hillstrom_email.py` does. The audit readout
     follows the journey as section 8 (DEC-1322): the `audit` results given, else the dataset's committed
-    `audit.results.json` when there is one (`committed_audit=False` renders the journey alone).
+    `audit.results.json` when there is one (`committed_audit=False` renders the journey alone). Plan K's
+    measurement upgrades follow as section 9 (DEC-1413): the `plan_k` results given, else the committed
+    `plan_k.results.json` when there is one (`committed_plan_k=False` leaves the section out; unset, it follows
+    `committed_audit`, so `committed_audit=False` renders the journey alone; the committed file is used only when it was
+    made on these results' file and campaign-effect run); with neither the text is exactly what
+    it was before Plan K.
     """
     from library.journey_report import render_report
 
@@ -365,15 +379,47 @@ def journey_report_text(
     text = render_report(results, results_path=link, command=command)
     if audit is None and committed_audit:
         audit = _read_json(committed_results_path(dataset, AUDIT_RESULTS_NAME))
-    if audit is None:
-        return text
-    from library.audit_report import render_audit
+    if audit is not None:
+        from library.audit_report import render_audit
 
-    audit_link = f"{AUDIT_RESULTS_NAME}"
-    audit_command = (
-        f"python library/{dataset}/fetch.py\npython -m library.run_engine audit --dataset {dataset}"
-    )
-    return text.rstrip("\n") + "\n\n" + render_audit(audit, results_path=audit_link, command=audit_command)
+        audit_link = f"{AUDIT_RESULTS_NAME}"
+        audit_command = (
+            f"python library/{dataset}/fetch.py\npython -m library.run_engine audit --dataset {dataset}"
+        )
+        text = (
+            text.rstrip("\n") + "\n\n" + render_audit(audit, results_path=audit_link, command=audit_command)
+        )
+    if committed_plan_k is None:
+        committed_plan_k = committed_audit
+    if plan_k is None and committed_plan_k:
+        committed = _read_json(committed_results_path(dataset, PLAN_K_RESULTS_NAME))
+        if committed is not None and _is_readout_of(committed, results):
+            plan_k = committed
+    if plan_k is not None:
+        from library.plan_k_report import render_plan_k
+
+        plan_k_command = (
+            f"python library/{dataset}/fetch.py\n"
+            f"python -m library.run_engine journey --dataset {dataset} --plan-k"
+        )
+        text = (
+            text.rstrip("\n")
+            + "\n\n"
+            + render_plan_k(plan_k, results_path=PLAN_K_RESULTS_NAME, command=plan_k_command)
+        )
+    return text
+
+
+def _is_readout_of(plan_k: dict[str, Any], journey: dict[str, Any]) -> bool:
+    """Whether a Plan K readout was made on the very file and campaign-effect run these journey results report.
+
+    The committed readout claims to reproduce the default journey above it, so it is appended to the report of
+    another file, or of a rerun whose campaign-effect run is not the one it names, never.
+    """
+    uplift = journey.get("steps", {}).get("uplift_model", {})
+    return plan_k.get("csv_sha256") == journey.get("csv_sha256") and plan_k.get(
+        "campaign_effect_run_id"
+    ) == uplift.get("run_id")
 
 
 def _read_json(path: Path) -> dict[str, Any] | None:
@@ -401,6 +447,12 @@ def journey_main(argv: list[str]) -> int:
     parser.add_argument(
         "--runs-dir", type=Path, default=RUNS_DIR, help="default: library/.runs; any other writes no report"
     )
+    parser.add_argument(
+        "--plan-k",
+        action="store_true",
+        help="Plan K's measurement upgrades (DEC-1413): rerun the journey with them on in "
+        "library/.runs/<dataset>/journey_plan_k/ and write plan_k.results.json; the default journey is untouched",
+    )
     args = parser.parse_args(argv)
     spec = JOURNEYS[args.dataset]
     library = Path(__file__).resolve().parent
@@ -408,6 +460,8 @@ def journey_main(argv: list[str]) -> int:
     if not csv_path.is_file():
         print(f"{csv_path} is missing: run python library/{spec.dataset}/fetch.py first", file=sys.stderr)
         return 2
+    if args.plan_k:
+        return _plan_k_main(args, spec, csv_path, library)
     outcome = run_journey(spec, csv_path=csv_path, config_root=args.config_root, runs_dir=args.runs_dir)
     results = outcome.results
     if csv_path.is_relative_to(REPO_ROOT):  # the report names the file as a checkout spells it
@@ -422,6 +476,54 @@ def journey_main(argv: list[str]) -> int:
             encoding="utf-8",
         )
         print(f"report   {report_path}")
+    return 0
+
+
+def _plan_k_main(args: argparse.Namespace, spec: Any, csv_path: Path, library: Path) -> int:
+    """`journey --plan-k`: the journey with Plan K's measurement upgrades on; writes `plan_k.results.json`.
+
+    The run's full results stay in `library/.runs/<dataset>/journey_plan_k/`. The readout (`plan_k_results`) holds
+    only what Plan K adds, and whether this run reproduced the committed default journey's numbers. For the dataset's
+    own prepared file in the default runs directory it is also committed beside the report, and `run_report.md` is
+    rendered again from the committed journey, audit and Plan K results; otherwise nothing committed changes.
+    """
+    from library.journey import plan_k_results, run_journey
+
+    outcome = run_journey(
+        spec, csv_path=csv_path, config_root=args.config_root, runs_dir=args.runs_dir, plan_k=True
+    )
+    results = outcome.results
+    if csv_path.is_relative_to(REPO_ROOT):  # the report names the file as a checkout spells it
+        results["csv"] = csv_path.relative_to(REPO_ROOT).as_posix()
+    full = outcome.directory / "journey.results.json"
+    full.write_text(json.dumps(results, indent=2, default=str), encoding="utf-8")
+    print(f"results  {full}")
+    default_journey = committed_results_path(spec.dataset, "journey.results.json")
+    committed = _read_json(default_journey)
+    readout = plan_k_results(json.loads(full.read_text(encoding="utf-8")), committed)
+    readout_file = outcome.directory / PLAN_K_RESULTS_NAME
+    readout_file.write_text(json.dumps(readout, indent=2, default=str), encoding="utf-8")
+    print(f"results  {readout_file}")
+    if args.runs_dir.resolve() != RUNS_DIR.resolve():
+        return 0
+    if csv_path != (library / spec.dataset / "data" / "prepared.csv").resolve():
+        print(
+            f"not committed: {csv_path} is not the dataset's prepared file, so the committed Plan K results and "
+            "run_report.md are left as they are",
+            file=sys.stderr,
+        )
+        return 0
+    target = committed_results_path(spec.dataset, PLAN_K_RESULTS_NAME)
+    target.write_text(readout_file.read_text(encoding="utf-8"), encoding="utf-8")
+    print(f"results  {target}")
+    if committed is None:
+        print(
+            f"no committed journey results at {default_journey}: run_report.md left as it is", file=sys.stderr
+        )
+        return 0
+    report_path = library / spec.dataset / "run_report.md"
+    report_path.write_text(journey_report_text(committed), encoding="utf-8")
+    print(f"report   {report_path}")
     return 0
 
 
