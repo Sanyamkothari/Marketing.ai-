@@ -61,7 +61,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import timedelta
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, cast
 
 if TYPE_CHECKING:
     import numpy as np
@@ -74,6 +74,17 @@ Z_95: Final = 1.959963984540054
 RUN_TIMEOUT_S: Final = 3600.0
 BOOTSTRAP_RESAMPLES: Final = 2000
 """Percentile-bootstrap resamples of the off-policy amount and rupee intervals (seeded by the split seed)."""
+RUN_SCORE: Final = "run_score"
+"""`covariate_source` of a test plan that adjusts by the scoring run's own prediction (Plan K M135, DEC-1324)."""
+PLAN_K_UPLIFT_OVERRIDES: Final[dict[str, Any]] = {
+    "uplift.evidence.risk_comparison": True,
+    "uplift.evidence.rollout_verdict": True,
+}
+"""What `run_journey(plan_k=True)` adds to the campaign-effect run's settings: the equal-budget comparison and, on
+it, the one-sided "safe to roll out" verdict (Plan K M137, DEC-1325, which needs the comparison). Both are off by
+default, and the journey's default run turns neither on."""
+PLAN_K_RESULTS_NAME: Final = "plan_k.results.json"
+"""The Plan K readout, kept in `.runs/<dataset>/journey_plan_k/` and committed as `library/<dataset>/` + this (DEC-1413)."""
 
 
 # ---------------------------------------------------------------------------
@@ -457,18 +468,26 @@ def run_journey(
     runs_dir: Path,
     extra_risk_overrides: dict[str, Any] | None = None,
     extra_uplift_overrides: dict[str, Any] | None = None,
+    plan_k: bool = False,
 ) -> JourneyOutcome:
     """Run every step on `csv_path` and return what each one produced (see the module docstring).
 
     `runs_dir` holds the API's data directory for this journey; the CLI uses `library/.runs/`, a test a
     temporary directory. The extra overrides exist for the library's tests, which run the journey on the
     committed sample with smaller floors; the report records every override used.
+
+    `plan_k=True` (opt-in, Plan K's measurement upgrades, DEC-1413) runs the same journey and adds what Plan K
+    makes measurable (`steps.plan_k`): a second conversion campaign whose registered plan adjusts by the scoring
+    run's own prediction (M135), the rollout verdict on the campaign-effect run (M137), the pooling cells the
+    journey's campaigns fall in (M136) and whether the harm alarm applies to them (M138). It works in
+    `<dataset>/journey_plan_k/`, beside the default journey's directory, and the default run is exactly what it
+    was: no extra setting, campaign or key.
     """
     import numpy as np
     import pandas as pd
 
     started = time.perf_counter()
-    directory = runs_dir / spec.dataset / "journey"
+    directory = runs_dir / spec.dataset / ("journey_plan_k" if plan_k else "journey")
     data_dir = directory / "data"
     if data_dir.exists():
         import shutil
@@ -476,7 +495,11 @@ def run_journey(
         shutil.rmtree(data_dir)  # pinned run ids: a journey always starts from an empty store
     data_dir.mkdir(parents=True)
     risk_overrides = {**spec.risk_overrides, **(extra_risk_overrides or {})}
-    uplift_overrides = {**spec.uplift_overrides, **(extra_uplift_overrides or {})}
+    uplift_overrides = {
+        **spec.uplift_overrides,
+        **(PLAN_K_UPLIFT_OVERRIDES if plan_k else {}),
+        **(extra_uplift_overrides or {}),
+    }
 
     frame = pd.read_csv(csv_path)
     train, evaluation = split_rows(frame, spec)
@@ -503,6 +526,8 @@ def run_journey(
         "label": spec.campaign_label,
         "steps": {},
     }
+    if plan_k:
+        results["plan_k"] = {"uplift_overrides": dict(PLAN_K_UPLIFT_OVERRIDES)}
     steps: dict[str, Any] = results["steps"]
 
     with _app(config_root, data_dir) as client:
@@ -637,6 +662,20 @@ def run_journey(
             outcome: {"campaign_id": o["campaign_id"], "plan_hash": o["plan"].get("plan_hash")}
             for outcome, o in opened.items()
         }
+        opened_run_score: dict[str, Any] | None = None
+        if (
+            plan_k
+        ):  # Plan K M135: the yes/no campaign again, its plan registered to adjust by the run's prediction
+            opened_run_score = _open_campaign(
+                api,
+                spec,
+                score_id=score_id,
+                train=train,
+                outcome=spec.target,
+                outcome_kind="binary",
+                scale=scale,
+                covariate_source=RUN_SCORE,
+            )
 
         # -- from here on the evaluation rows' outcomes are read -----------------------------------------
         steps["readiness"]["evaluation_checks"] = _uplift_checks_on(
@@ -671,6 +710,18 @@ def run_journey(
                 outcome_kind=outcome_kind,
                 scale=scale,
                 directory=directory,
+            )
+        if plan_k and opened_run_score is not None:
+            steps["plan_k"] = _plan_k_step(
+                api,
+                spec,
+                opened=opened_run_score,
+                uplift_id=uplift_id,
+                evaluation=eval_v,
+                choice=choice,
+                scale=scale,
+                directory=directory,
+                campaigns=steps["campaigns"],
             )
 
     results["wall_clock_seconds"] = round(time.perf_counter() - started, 1)
@@ -996,13 +1047,19 @@ def _open_campaign(
     outcome: str,
     outcome_kind: str,
     scale: dict[str, Any],
+    covariate_source: str | None = None,
 ) -> dict[str, Any]:
-    """Record the list as a campaign and register its plan, before any evaluation outcome is read."""
+    """Record the list as a campaign and register its plan, before any evaluation outcome is read.
+
+    `covariate_source="run_score"` (Plan K M135, opt-in; `run_journey(plan_k=True)`) registers the plan to adjust
+    by the scoring run's own prediction from before the campaign, and names the campaign for it.
+    """
     import numpy as np
     import pandas as pd
 
     client = api.client
-    name = f"Hillstrom e-mail ({outcome}) - {spec.campaign_label}"
+    adjusted = "" if covariate_source is None else ", adjusted"
+    name = f"Hillstrom e-mail ({outcome}{adjusted}) - {spec.campaign_label}"
     view = api.ok(
         client.post(
             "/campaigns", json={"run_id": score_id, "outcome_window_days": REPLAY_WINDOW_DAYS, "name": name}
@@ -1026,6 +1083,8 @@ def _open_campaign(
         plan["positive_label"] = "1"
         plan["base_rate"] = float(control[outcome].mean())
         plan["base_rate_source"] = "the training rows' no-e-mail group"
+        if covariate_source is not None:
+            plan["covariate_source"] = covariate_source
     else:
         rho = float(np.corrcoef(control[outcome], control[spec.covariate])[0, 1])
         plan["covariate_column"] = spec.covariate
@@ -1059,8 +1118,13 @@ def _measure_campaign(
     outcome_kind: str,
     scale: dict[str, Any],
     directory: Path,
+    proof: bool = True,
 ) -> dict[str, Any]:
-    """Add the replayed outcomes to a registered campaign, measure it and build its Value Proof Pack."""
+    """Add the replayed outcomes to a registered campaign, measure it and build its Value Proof Pack.
+
+    `proof=False` (Plan K, `run_journey(plan_k=True)`) measures the campaign and stops there: the campaign that
+    adjusts a yes/no outcome by the scoring run's prediction has no Pack of its own.
+    """
     import numpy as np
 
     from engine.measurement.campaign import ASSIGNMENT_FILENAME, campaign_key, read_frame
@@ -1102,43 +1166,46 @@ def _measure_campaign(
     api.ok(client.post(f"/campaigns/{campaign_id}/outcomes", json={"upload_id": upload_id, **outcomes_body}))
     measured = api.ok(client.post(f"/campaigns/{campaign_id}/measure", json={}))
 
-    # The campaign's own value inputs (M104), from the training rows and the stated assumptions.
-    if outcome_kind == "binary":
-        value_inputs = {
-            "value_per_outcome": round(scale["value_per_conversion_inr"], 2),
-            "outcome_is_good": True,
-            "value_basis": "Mean spend of a converting customer in the training rows, in rupees at the assumed rate; revenue before margin",
-            "contact_cost": spec.contact_cost_inr,
-        }
-    else:
-        value_inputs = {
-            "value_per_outcome": spec.fx_inr_per_usd,
-            "outcome_is_good": True,
-            "value_basis": "One dollar of spend, in rupees at the assumed rate; revenue before margin",
-            "contact_cost": spec.contact_cost_inr,
-        }
-    api.ok(client.put(f"/pilot/proof/{campaign_id}/value", json=value_inputs))
-
-    proof_json = client.get(f"/pilot/proof/{campaign_id}", params={"format": "json"})
-    pack: dict[str, Any] = {"status": proof_json.status_code}
-    if proof_json.status_code == 200:
-        view_model = ProofView.model_validate_json(proof_json.content)
-        verify_provenance(view_model, storage)  # raises when any figure does not resolve
-        html = client.get(f"/pilot/proof/{campaign_id}", params={"format": "html"})
-        pdf = client.get(f"/pilot/proof/{campaign_id}", params={"format": "pdf"})
-        (directory / f"proof_{outcome}.html").write_bytes(html.content)
-        (directory / f"proof_{outcome}.pdf").write_bytes(pdf.content)
-        pack.update(
-            {
-                "provenance_verified": True,
-                "html_status": html.status_code,
-                "pdf_status": pdf.status_code,
-                "pdf_bytes": len(pdf.content),
-                "view": json.loads(proof_json.content),
+    value_inputs: dict[str, Any] | None = None
+    pack: dict[str, Any] | None = None
+    if proof:
+        # The campaign's own value inputs (M104), from the training rows and the stated assumptions.
+        if outcome_kind == "binary":
+            value_inputs = {
+                "value_per_outcome": round(scale["value_per_conversion_inr"], 2),
+                "outcome_is_good": True,
+                "value_basis": "Mean spend of a converting customer in the training rows, in rupees at the assumed rate; revenue before margin",
+                "contact_cost": spec.contact_cost_inr,
             }
-        )
-    else:
-        pack["refusal"] = proof_json.json()
+        else:
+            value_inputs = {
+                "value_per_outcome": spec.fx_inr_per_usd,
+                "outcome_is_good": True,
+                "value_basis": "One dollar of spend, in rupees at the assumed rate; revenue before margin",
+                "contact_cost": spec.contact_cost_inr,
+            }
+        api.ok(client.put(f"/pilot/proof/{campaign_id}/value", json=value_inputs))
+
+        proof_json = client.get(f"/pilot/proof/{campaign_id}", params={"format": "json"})
+        pack = {"status": proof_json.status_code}
+        if proof_json.status_code == 200:
+            view_model = ProofView.model_validate_json(proof_json.content)
+            verify_provenance(view_model, storage)  # raises when any figure does not resolve
+            html = client.get(f"/pilot/proof/{campaign_id}", params={"format": "html"})
+            pdf = client.get(f"/pilot/proof/{campaign_id}", params={"format": "pdf"})
+            (directory / f"proof_{outcome}.html").write_bytes(html.content)
+            (directory / f"proof_{outcome}.pdf").write_bytes(pdf.content)
+            pack.update(
+                {
+                    "provenance_verified": True,
+                    "html_status": html.status_code,
+                    "pdf_status": pdf.status_code,
+                    "pdf_bytes": len(pdf.content),
+                    "view": json.loads(proof_json.content),
+                }
+            )
+        else:
+            pack["refusal"] = proof_json.json()
     return {
         "campaign_id": campaign_id,
         "name": name,
@@ -1160,4 +1227,274 @@ def _measure_campaign(
         "verdict": measured.get("verdict"),
         "value_inputs": value_inputs,
         "proof": pack,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Plan K's measurement upgrades on the same rows (opt-in: `run_journey(plan_k=True)`, DEC-1413)
+# ---------------------------------------------------------------------------
+def _plan_k_step(
+    api: _Api,
+    spec: JourneySpec,
+    *,
+    opened: dict[str, Any],
+    uplift_id: str,
+    evaluation: pd.DataFrame,
+    choice: pd.DataFrame,
+    scale: dict[str, Any],
+    directory: Path,
+    campaigns: dict[str, Any],
+) -> dict[str, Any]:
+    """Measure the run-score campaign and read what the other Plan K upgrades say about this journey.
+
+    Nothing here computes a statistic: each figure is a field of an artefact the engine wrote (the campaign's
+    report, `risk_comparison.json`, the pooling module's own answer, the harm module's own test of a reading).
+    """
+    measured = _measure_campaign(
+        api,
+        spec,
+        opened=opened,
+        evaluation=evaluation,
+        choice=choice,
+        outcome=spec.target,
+        outcome_kind="binary",
+        scale=scale,
+        directory=directory,
+        proof=False,
+    )
+    plain = campaigns[spec.target]
+    readings = {spec.target: plain, RUN_SCORE: measured, spec.amount: campaigns[spec.amount]}
+    return {
+        "plans_registered_before_outcomes": {
+            "campaign_id": opened["campaign_id"],
+            "plan_hash": opened["plan"].get("plan_hash"),
+            "covariate_source": opened["plan"].get("covariate_source"),
+        },
+        "covariate_run_score": _run_score_summary(measured, plain),
+        "rollout": _rollout_summary(api, spec, uplift_id),
+        "pooling": _pooling_summary(api, spec),
+        "harm_alarm": _harm_summary(api, readings),
+    }
+
+
+def _run_score_summary(measured: dict[str, Any], plain: dict[str, Any]) -> dict[str, Any]:
+    """The adjusted campaign's reading beside the same replay's plain one (the same customers, the same outcomes)."""
+    report, plain_report = measured["report"], plain["report"]
+    same_rows = {
+        key: report.get(key) == plain_report.get(key)
+        for key in (
+            "treated_rows",
+            "control_rows",
+            "treated_conversions",
+            "control_conversions",
+            "absolute_lift",
+        )
+    }
+    return {
+        "campaign_id": measured["campaign_id"],
+        "name": measured["name"],
+        "plan": {
+            key: measured["plan"].get(key)
+            for key in ("plan_hash", "covariate_source", "covariate_column", "base_rate", "base_rate_source")
+        },
+        "replay": measured["replay"],
+        "treated_rows": report["treated_rows"],
+        "control_rows": report["control_rows"],
+        "treated_conversions": report["treated_conversions"],
+        "control_conversions": report["control_conversions"],
+        "covariate_source": report.get("covariate_source"),
+        "unadjusted": report.get("absolute_lift"),
+        "adjusted": report.get("adjusted_interval"),
+        "variance_reduction": report.get("variance_reduction"),
+        "rows_covariate_missing": report.get("rows_covariate_missing"),
+        "adjustment_note": report.get("adjustment_note"),
+        "verdict": measured.get("verdict"),
+        "plain_campaign": {
+            "campaign_id": plain["campaign_id"],
+            "unadjusted": plain_report.get("absolute_lift"),
+            "same_customers_and_outcomes": same_rows,
+        },
+        "report": report,
+    }
+
+
+def _rollout_summary(api: _Api, spec: JourneySpec, uplift_id: str) -> dict[str, Any]:
+    """`risk_comparison.json` of the campaign-effect run, as the engine wrote it (M96 with the M137 verdict).
+
+    On a model of several offers the comparison covers the first offer against no e-mail (its binary rows).
+    """
+    comparison = api.artefact_json(uplift_id, "risk_comparison.json")
+    base = {
+        "run_id": uplift_id,
+        "artefact": "risk_comparison.json",
+        "offer": spec.levels[1],
+        "against": spec.levels[0],
+    }
+    if not isinstance(comparison, dict):
+        return {**base, "written": False}
+    return {**base, "written": True, "comparison": comparison, "rollout": comparison.get("rollout")}
+
+
+def _pooling_summary(api: _Api, spec: JourneySpec) -> dict[str, Any]:
+    """The pooling cells of the journey's measured campaigns, from the pooling module's own functions (M136).
+
+    The journey does not switch the installation setting on (`configs/measurement.yaml` is the repository's):
+    it asks `pool_entries` what it would do with the campaigns as they are, at the setting's lowest
+    `min_campaigns`, and records the answer for each cell, whichever way it falls.
+    """
+    from engine.measurement.pooling import FIRST_DRAWN, CellEntry, PoolingSettings, cell_entry, pool_entries
+    from engine.storage import LocalStorage
+    from engine.utils.time import utc_now
+
+    store = cast(Any, api.client.app).state.campaign_store
+    storage = LocalStorage(api.data_dir)
+    listed = store.list(use_case_id=spec.use_case, limit=None)
+    entries: list[CellEntry] = [e for c in listed if (e := cell_entry(storage, c)) is not None]
+    estimates = pool_entries(entries, PoolingSettings(enabled=True), utc_now())
+    cells: dict[str, dict[str, Any]] = {}
+    for entry in entries:
+        cell = cells.setdefault(
+            entry.cell.cell_id,
+            {
+                "cell_id": entry.cell.cell_id,
+                "outcome_column": entry.cell.outcome_column,
+                "outcome_kind": entry.cell.outcome_kind,
+                "campaigns_measured": [],
+                "scoring_runs": sorted({c for c in entry.customers if c not in {"runs", "campaign"}}),
+            },
+        )
+        cell["campaigns_measured"].append(entry.campaign_id)
+        cell["measured"] = len(cell["campaigns_measured"])
+    for estimate in estimates:
+        cells[estimate.cell_id].setdefault("estimates", []).append(
+            {
+                "campaign_id": estimate.campaign_id,
+                "status": estimate.status,
+                "code": estimate.code,
+                "reason": estimate.reason,
+                "campaigns_compared": estimate.campaigns_compared,
+                "estimate_field": estimate.estimate_field,
+                "measured_effect": estimate.measured_effect,
+                "measured_se": estimate.measured_se,
+                "pooled_effect": estimate.pooled_effect,
+                "pooled_interval": (
+                    None
+                    if estimate.pooled_interval is None
+                    else estimate.pooled_interval.model_dump(mode="json")
+                ),
+            }
+        )
+    for cell in cells.values():
+        cell["campaigns_compared"] = max(
+            (e["campaigns_compared"] for e in cell.get("estimates", [])), default=0
+        )
+    pooled = any(e["status"] == "pooled" for cell in cells.values() for e in cell.get("estimates", []))
+    return {
+        "first_drawn": FIRST_DRAWN,
+        "setting_enabled_by_the_journey": False,
+        "campaigns_in_store": len(listed),
+        "campaigns_entering_a_cell": len(entries),
+        "cells": list(cells.values()),
+        "pooled": pooled,
+        "largest_cell": max((cell["campaigns_compared"] for cell in cells.values()), default=0),
+    }
+
+
+def _harm_summary(api: _Api, measured: dict[str, Any]) -> dict[str, Any]:
+    """Whether the harm alarm (M138) applies to the journey's readings, from the engine's own test of a report.
+
+    The alarm watches interim readings; `engine.measurement.harm.is_interim` is the test it applies. The
+    journey records its answer for each campaign it measured and whether any `harm_alarm.json` exists.
+    """
+    from engine.measurement.harm import HARM_ALARM_FILENAME, is_interim
+    from engine.storage import LocalStorage
+    from engine.uplift.contracts import IncrementalityReport
+
+    storage = LocalStorage(api.data_dir)
+    readings: dict[str, Any] = {}
+    for name, campaign in measured.items():
+        report = IncrementalityReport.model_validate(campaign["report"])
+        readings[name] = {
+            "campaign_id": campaign["campaign_id"],
+            "outcome_column": report.outcome_column,
+            "status": report.status.value,
+            "early_look": report.early_look,
+            "rows_immature": report.rows_immature,
+            "outcome_window_days": report.outcome_window_days,
+            "interim": is_interim(report),
+            "harm_alarm_file_written": storage.exists(
+                f"campaigns/{campaign['campaign_id']}/{HARM_ALARM_FILENAME}"
+            ),
+        }
+    return {
+        "applicable": any(r["interim"] for r in readings.values()),
+        "setting_enabled_by_the_journey": False,
+        "readings": readings,
+    }
+
+
+REPRODUCED: Final = ("split", "risk_model", "uplift_evaluation", "treat_list", "off_policy", "campaigns")
+"""The groups of the default journey's numbers a Plan K run is compared against (`plan_k_results`)."""
+
+
+def plan_k_results(results: dict[str, Any], committed: dict[str, Any] | None = None) -> dict[str, Any]:
+    """The Plan K readout of a `plan_k=True` journey's results: `plan_k.results.json` (aggregates only).
+
+    `committed` is the default journey's committed results (`journey.results.json`); when given, the readout
+    records, group by group, whether this run reproduced its numbers, so a reader can see that the extra
+    settings changed nothing the default journey reports. A function of the two documents alone.
+    """
+    steps = results["steps"]
+    out: dict[str, Any] = {
+        "dataset": results["dataset"],
+        "use_case": results["use_case"],
+        "csv": results["csv"],
+        "csv_sha256": results["csv_sha256"],
+        "rows": results["rows"],
+        "label": results["label"],
+        "split": results["split"],
+        "uplift_overrides": results["plan_k"]["uplift_overrides"],
+        "campaign_effect_run_id": steps["uplift_model"]["run_id"],
+        "scoring_run_id": steps["treat_list"]["run_id"],
+        "wall_clock_seconds": results["wall_clock_seconds"],
+        "steps": {"plan_k": steps["plan_k"]},
+    }
+    if committed is not None:
+        out["reproduction"] = _reproduction(results, committed)
+    return out
+
+
+def _reproduction(results: dict[str, Any], committed: dict[str, Any]) -> dict[str, Any]:
+    """Which groups of the default journey's numbers this run reproduced exactly (after a JSON round trip)."""
+
+    def numbers(document: dict[str, Any]) -> dict[str, Any]:
+        steps = document["steps"]
+        picked = {
+            "split": document["split"],
+            "risk_model": steps["risk_model"]["test_metrics"],
+            "uplift_evaluation": steps["uplift_model"]["evaluation"]["auuc"],
+            "treat_list": steps["treat_list"]["offer_counts"],
+            "off_policy": steps["off_policy"]["estimates"],
+            "campaigns": {
+                outcome: {
+                    key: campaign["report"].get(key)
+                    for key in (
+                        "treated_rows",
+                        "control_rows",
+                        "absolute_lift",
+                        "mean_difference_ci",
+                        "adjusted_interval",
+                    )
+                }
+                for outcome, campaign in steps["campaigns"].items()
+            },
+        }
+        loaded: dict[str, Any] = json.loads(json.dumps(picked, default=str))
+        return loaded
+
+    now, then = numbers(results), numbers(committed)
+    return {
+        "against": "journey.results.json",
+        "csv_sha256_equal": results["csv_sha256"] == committed["csv_sha256"],
+        "identical": {group: now[group] == then[group] for group in REPRODUCED},
     }

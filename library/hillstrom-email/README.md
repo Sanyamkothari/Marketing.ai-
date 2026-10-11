@@ -14,7 +14,8 @@ whole Plan J journey can be validated with real effects rather than planted ones
 each customer should get, what that list is worth, and whether that can be proven (Plan J M110, DEC-1320).
 The results, whichever way they fell, are in [`run_report.md`](run_report.md): sections 1 to 7 are the journey
 (`journey.results.json`), section 8 is the audit readout on the original campaign, posted to
-`POST /campaigns/audit` as a client's past campaign would be (`audit.results.json`, DEC-1322).
+`POST /campaigns/audit` as a client's past campaign would be (`audit.results.json`, DEC-1322), and section 9 is
+Plan K's measurement upgrades run on the same journey with `--plan-k` (`plan_k.results.json`, DEC-1413).
 
 | | |
 |---|---|

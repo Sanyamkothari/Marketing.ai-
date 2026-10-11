@@ -377,3 +377,65 @@ Value inputs: one conversion is worth ₹9,658.17 (the mean spend of a customer 
 python library/hillstrom-email/fetch.py
 python -m library.run_engine audit --dataset hillstrom-email
 ```
+
+## 9. Plan K's measurement upgrades on the same rows
+
+The default journey above is unchanged. This section reruns it with Plan K's measurement upgrades switched on and reads what each one says, whichever way it falls. Label: public dataset, retrospective replay, a third of each group kept. 64,000 customers, the same split, campaign-effect run r_20261010_11100002, scoring run r_20261010_11100003, 143.5 s for the whole journey. Every range is a 95 % range.
+
+**Reproduced.** The split, the risk model's test scores, the campaign-effect model's AUUC, the offers given, the off-policy values and the replayed campaigns' differences are exactly the default journey's: the extra settings changed nothing it reports.
+
+### 9.1 The conversion, adjusted by the scoring run's own prediction (M135)
+
+The same replayed campaign as the conversion campaign above, planned again with `covariate_source` run_score: the plan, registered before any evaluation outcome was read, adjusts by the chance of buying without an e-mail that the scoring run predicted for each customer before the campaign. 4,263 contacted and 4,171 held back customers, 48 and 22 conversions.
+
+The plain campaign measured exactly the same customers and outcomes (rows, conversions and difference), so the two readings differ only in how the difference is estimated.
+
+| Reading | Difference | Range |
+|---|---|---|
+| Unadjusted (the plain difference in rates) | +0.60 pts | +0.21 pts to +1.00 pts |
+| Adjusted by the prediction | +0.60 pts | +0.21 pts to +0.98 pts |
+
+**Measured variance reduction 3.82e-07** (a share of one). The prediction left the range essentially as it was: that share of the difference's chance variation is the engine's own `variance_reduction`, reported whichever sign it has. The two ranges are made by different methods (the plain difference in rates, Newcombe's; the adjusted estimate, Welch's on the adjusted values), so their widths alone do not measure the adjustment; the variance reduction does. In both readings the whole range is above zero. 0 measured customers had no prediction.
+
+The engine's own sentence: Treated customers converted at 1.1% against 0.5% for the control group: a lift of +0.6 points (95% CI +0.2 points to +1.0 points; p = 0.002), about 26 extra conversions caused by the campaign. Taking account of the chance of the outcome the scoring run predicted for each customer before the campaign, the difference is +0.6 points (95% CI +0.2 points to +1.0 points); this time it did not narrow the range.
+
+### 9.2 Safe to roll out? (M137)
+
+The campaign-effect run's equal-budget comparison of the offer Mens E-Mail against No E-Mail (the first offer only) was read as a one-sided verdict. **cannot_tell**: the bounds include zero: this data cannot tell the two rankings apart.
+
+The comparison itself: At the same budget (4,263 contacts, the top 20% of each fold), ranking by uplift does not beat risk ranking: -0.1 extra conversions (95% CI -28.8 to +28.7), a range that does not lie above zero.
+
+At one-sided confidence 95 %, uplift ranking minus risk ranking at equal budget is between -24.2 and +24.1 conversions, over 21,306 cross-fitted rows.
+
+In rupees on the use case's value inputs (`net_inr`): between -₹345,751 and ₹403,017; 0 rows had no value and counted at zero.
+
+The engine's own sentence: Cannot tell yet: at this budget this model shows no gain over risk ranking, so there is no gain for more rows to confirm.
+
+### 9.3 Pooling comparable campaigns (M136)
+
+The journey measured 3 campaigns that can enter a pooling cell; a campaign that measures the same customers as another (the same scoring run) counts once, whatever outcome it measures: the pooling module keeps the latest measured. The pooling module needs at least 4 comparable campaigns in a cell before it moves any figure. The installation setting was not switched on: the module was asked what it would do with these campaigns as they are.
+
+| Outcome | Kind | Campaigns measured | Campaigns compared | Answer |
+|---|---|---|---|---|
+| conversion | binary | 2 | 1 | not pooled: fewer than 4 comparable campaigns (POOL_TOO_FEW) |
+| spend | continuous | 1 | 0 | not counted: it measures the same customers as a later campaign, which counts instead |
+
+**Not pooled.** No cell reaches 4 comparable campaigns, so there is no pooled figure to set beside the raw one and none is shown. The journey scores one list, so all its campaigns share one scoring run and at most one of them counts.
+
+### 9.4 The harm alarm (M138)
+
+| Campaign | Outcome | Status | Early look | Customers still inside their window | Interim reading | Alarm file written |
+|---|---|---|---|---|---|---|
+| conversion | conversion | mature | no | 0 | no | no |
+| run_score | conversion | mature | no | 0 | no | no |
+| spend | spend | mature | no | 0 | no | no |
+
+**Not applicable.** The alarm watches interim readings: an early look, or a reading with customers still inside their outcome window. Every reading here is a retrospective replay of a finished test, measured with every outcome in and read as a final result, so the engine's own test of a reading (`is_interim`) says none is interim and no alarm file exists. A final result's verdict says whether the campaign did harm.
+
+
+*Section 9 is generated from [`plan_k.results.json`](plan_k.results.json); every number in it is a field of that file, the words around the numbers contain no digits and each verdict is computed from the figures. To rebuild it:*
+
+```bash
+python library/hillstrom-email/fetch.py
+python -m library.run_engine journey --dataset hillstrom-email --plan-k
+```

@@ -426,3 +426,42 @@ product may load. Resolving a configuration refuses, with `MODEL_LICENCE_BLOCKED
 blocked (AutoGluon's `noncommercial`, TabPFN-2.5 and later) or has not been reviewed. `tests/unit/agentic/test_model_licences.py`
 reads every allowed preset through the installed AutoGluon and fails if any loads a model off the list, which is
 what a library upgrade would trip.
+
+## 10. Plan K: the measurement upgrades on the Hillstrom journey (DEC-1413)
+
+Section 7 measured a list the engine made with the measurement Plan J had. Plan K added four things to that
+measurement; this section re-runs the same journey, on the same split, with each one switched on and records what it
+says on real randomised data, whichever way it falls. It is a public dataset read retrospectively, as in section 7.
+
+**How it was run.** `python -m library.run_engine journey --dataset hillstrom-email --plan-k` (`library/journey.py`,
+`run_journey(plan_k=True)`). The default journey is unchanged: no flag, no extra setting, campaign or key, and
+`journey.results.json`, the demo summary and sections 1 to 8 of the report are untouched. The opt-in run works in
+`library/.runs/hillstrom-email/journey_plan_k/`, trains the same models under the same pinned run ids, and writes
+`library/hillstrom-email/plan_k.results.json` (committed, aggregates only), which also records whether this run
+**reproduced** the default journey's numbers: the split, the risk model's test scores, the campaign-effect model's
+AUUC, the offers given, the off-policy values and the replayed campaigns' differences are all identical, so the extra
+settings changed nothing the default journey reports. Section 9 of
+[`run_report.md`](../library/hillstrom-email/run_report.md) is rendered from that file
+(`library/plan_k_report.py`): every number is a field of it, the words hold no digit, and each verdict is computed
+(`library/tests/test_hillstrom_plan_k.py`).
+
+**What it found** (all from the run report):
+
+| Upgrade | What the journey did | Result |
+|---|---|---|
+| Adjust a yes/no outcome by the scoring run's own prediction (M135, DEC-1324) | A second conversion campaign, its plan registered with `covariate_source: run_score` before any evaluation outcome was read, on the same replayed customers as the plain one | unadjusted +0.60 pts (+0.21 to +1.00); adjusted +0.60 pts (+0.21 to +0.98). Measured variance reduction **3.82e-07**, as a share of one: the prediction removed essentially none of the chance variation. 0 measured customers had no prediction. The models on this file are weak (the risk model's ROC-AUC is 0.534, section 7), and the prediction used is the campaign-effect model's chance of buying without an e-mail |
+| "Safe to roll out" verdict on the equal-budget comparison (M137, DEC-1325) | `uplift.evidence.risk_comparison` and `rollout_verdict` on for the campaign-effect run (the first e-mail against none) | **cannot_tell**: uplift ranking minus risk ranking at equal budget is between -24.2 and +24.1 conversions (one-sided 95 %), over 21,306 cross-fitted rows; between -₹345,751 and ₹403,017 on the use case's value inputs. The point estimate is -0.1 conversions, so there is no gain for more rows to confirm and no rows-needed figure |
+| Pool comparable campaigns (M136, DEC-1402) | Asked the pooling module what it would do with the journey's three measured campaigns, without switching the installation setting on | not pooled: **POOL_TOO_FEW**, fewer than 4 comparable campaigns. The campaigns all measure the same customers (one scoring run), the module counts such a set once whatever the outcome, and keeps the latest, so one campaign counts for conversion and none for spend. No pooled figure is shown |
+| Harm alarm (M138, DEC-1403) | Asked the engine's own test of a reading (`is_interim`) of each measured campaign | **not applicable**: the campaigns are retrospective replays of a finished test, read as final results with every outcome in; no reading is interim and no alarm file exists |
+
+**Read plainly.** On this file the new measurement does not change the story section 7 told. Adjusting by the scoring
+run's prediction does not narrow the range, because a weak model predicts little before the e-mail; the rollout verdict
+agrees with the beats-risk checks that the campaign-effect ranking is not shown better than plain risk ranking, and says
+it cannot tell, in conversions and in rupees; pooling and the harm alarm have nothing to act on in one retrospective
+list. Each is reported as measured; none was tuned on the evaluation rows.
+
+**Limits.** The campaigns are replays with an outcome window of 0 days, as in section 7. The rollout verdict covers the
+first e-mail against none only (a model of several offers keeps its binary stages on that offer). The pooling answer is
+the module's reading of these campaigns, not a run with the setting on, which the journey cannot do from the repository's
+own configuration; a client with four or more comparable campaigns would see it. The conversion campaign adjusted by the
+prediction has no Value Proof Pack of its own: the Packs of section 7 stand.
