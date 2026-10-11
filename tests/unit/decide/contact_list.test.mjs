@@ -79,12 +79,35 @@ test("nobody left out says so in one clause, and singular counts read in the sin
   );
 });
 
-test("an uplift run's recommended contacts are what is worth contacting, and a reached budget is a reason", () => {
+test("an uplift run's recommended contacts are what is worth contacting; the budget limits the list but is not a reason for a gap", () => {
   const policy = { contacts_recommended: 150, stop_reason: "budget", budget_contacts: 150 };
   const sentence = cl.contactListSentence({ scoring: { control_group_rows: 0, suppressed: [] }, treat: { treat_rows: 120 }, policy });
-  assert.equal(sentence, "150 customers are worth contacting; 120 will be contacted. Why the difference: the contact budget of 150 customers was reached.");
+  assert.equal(sentence, "150 customers are worth contacting; 120 will be contacted. The contact budget of 150 customers limits the list.");
+  assert.doesNotMatch(sentence, /Why the difference/, "the budget is why the recommendation is 150, not why 120 are contacted");
   const noBudget = cl.contactListSentence({ scoring: null, treat: { treat_rows: 120 }, policy: { ...policy, stop_reason: "all_persuadables" } });
   assert.equal(noBudget, "150 customers are worth contacting; 120 will be contacted.");
+  const everyone = cl.contactListSentence({ scoring: null, treat: { treat_rows: 150 }, policy });
+  assert.equal(everyone, "150 customers are worth contacting, and everyone will be contacted. The contact budget of 150 customers limits the list.");
+});
+
+test("on an uplift run only what happens after the policy chose explains the gap, never the comparison group or the rules", () => {
+  const policy = { contacts_recommended: 150, stop_reason: "all_persuadables", budget_contacts: null };
+  // the comparison group and the contact rules were already left out of the recommended 150
+  const sentence = cl.contactListSentence({
+    scoring: { control_group_rows: 500, suppressed: [{ reason: "opted_out", rows: 40 }] },
+    treat: { treat_rows: 120, holdout_rows: 480, uncontactable_rows: 20, compliance_withheld_rows: 10 },
+    policy,
+  });
+  assert.equal(
+    sentence,
+    "150 customers are worth contacting; 120 will be contacted. Why the difference: " +
+      "20 customers cannot be reached on any channel they have agreed to; " +
+      "10 customers were taken off by the compliance check before sending.",
+  );
+  assert.doesNotMatch(sentence, /comparison group|opted out|budget/);
+  // with none of those, nothing is claimed
+  const bare = cl.contactListSentence({ scoring: { control_group_rows: 500, suppressed: [{ reason: "opted_out", rows: 40 }] }, treat: { treat_rows: 120, holdout_rows: 480 }, policy });
+  assert.equal(bare, "150 customers are worth contacting; 120 will be contacted.");
 });
 
 test("the download is the treat list unless the run said it cannot have one", () => {
@@ -115,4 +138,71 @@ test("the block escapes what it draws, and draws nothing with nothing to say", (
   assert.match(html, /data-contact-note/);
   assert.equal(cl.contactSentenceHtml("", { note: "" }), "");
   assert.equal(cl.contactSentenceHtml("", null), "");
+});
+
+test("only an answer that says the list cannot be built switches to the scored list", () => {
+  const base = { treatHref: "/t", scoresHref: "/s" };
+  // before any answer, and after a failed request that says nothing about the run, the treat list stays
+  const waiting = cl.contactListParts({ facts: null, ...base });
+  assert.deepEqual(waiting.download, { href: "/t", kind: "contact", note: "" });
+  const failed = cl.contactListParts({ facts: { summary: null, error: new Error("network"), refused: false, ...base }, ...base });
+  assert.deepEqual(failed.download, { href: "/t", kind: "contact", note: "" });
+  assert.equal(failed.sentence, "");
+  const refused = cl.contactListParts({ facts: { summary: null, error: new Error("409"), refused: true, ...base }, ...base });
+  assert.equal(refused.download.kind, "scores");
+  assert.equal(refused.download.href, "/s");
+  assert.match(refused.download.note, /list of every customer scored/);
+});
+
+// A page element with just what `repaintContactList` touches.
+const el = (attrs, html = "") => {
+  const a = new Map(Object.entries(attrs));
+  return { innerHTML: html, getAttribute: (k) => (a.has(k) ? a.get(k) : null), setAttribute: (k, v) => a.set(k, v), attr: (k) => a.get(k) };
+};
+const page = (...els) => ({
+  querySelectorAll: (sel) =>
+    els.filter((e) =>
+      sel === 'a[data-download="contact-list"]' ? e.kind === "a" : sel === "[data-contact-slot]" ? e.kind === "slot" : e.kind === "scores",
+    ),
+});
+const tag = (kind, e) => Object.assign(e, { kind });
+
+test("the answer is drawn into the page's own download, sentence and scored-list slots, matched by run", () => {
+  const link = tag("a", el({ href: "/t", "data-run-id": "r1", "data-download-kind": "contact" }));
+  const other = tag("a", el({ href: "/t2", "data-run-id": "r2", "data-download-kind": "contact" }));
+  const slot = tag("slot", el({ "data-run-id": "r1" }));
+  const scores = tag("scores", el({ "data-run-id": "r1" }));
+  const refused = { summary: null, error: new Error("409"), refused: true, treatHref: "/t", scoresHref: "/s" };
+  cl.repaintContactList(page(link, other, slot, scores), { runId: "r1", facts: refused, scoring, scoresHref: "/s" });
+  assert.equal(link.attr("href"), "/s");
+  assert.equal(link.attr("data-download-kind"), "scores");
+  assert.equal(other.attr("href"), "/t2", "another run's link is not touched");
+  assert.match(slot.innerHTML, /list of every customer scored/);
+  assert.match(slot.innerHTML, /1,645 customers are worth contacting\./);
+  assert.equal(scores.innerHTML, "", "the scored list is the main file, so no second link");
+
+  const answered = { summary: treat, error: null, refused: false, treatHref: "/t", scoresHref: "/s" };
+  cl.repaintContactList(page(link, slot, scores), { runId: "r1", facts: answered, scoring, scoresHref: "/s" });
+  assert.equal(link.attr("href"), "/t");
+  assert.equal(link.attr("data-download-kind"), "contact");
+  assert.match(slot.innerHTML, /831 will be contacted/);
+  assert.match(scores.innerHTML, /All scores \(for analysts\)/);
+  assert.doesNotThrow(() => cl.repaintContactList(null, { runId: "r1" }));
+});
+
+test("the slots are kept on the page even when empty, so a late answer has somewhere to go", () => {
+  const { download, sentence } = cl.contactListParts({ facts: null, treatHref: "/t", scoresHref: "/s" });
+  assert.equal(sentence, "");
+  assert.equal(cl.contactSlotHtml("r<1", sentence, download), '<div data-contact-slot data-run-id="r&lt;1"></div>');
+  assert.match(cl.allScoresSlotHtml("r1", download, "/s"), /^<div data-all-scores-slot data-run-id="r1"><div class="all-scores"/);
+});
+
+test("markup put inside Technical details is drawn as given, with no `$` pattern read in it", async () => {
+  globalThis.window = globalThis.window || { location: { origin: "http://localhost" } };
+  const { techDetails } = await import(new URL("../../../ui/dom.js", import.meta.url));
+  const extra = "<p>Fee rose $$5; see $&amp; $` $'</p>";
+  const html = techDetails([["Run", "r1"]], "Technical details", extra);
+  assert.ok(html.includes(extra), html);
+  assert.match(html, /^<details class="tech"><summary>Technical details<\/summary><dl class="tech-list">.*<\/dl><p>Fee rose.*<\/p><\/details>$/);
+  assert.equal(techDetails([], "Technical details", ""), "");
 });

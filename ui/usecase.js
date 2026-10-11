@@ -28,7 +28,8 @@ import {
   getModels,
   getRun,
   getRuns,
-  loadContactList, // Plan M M171 (DEC-1601): one contact list
+  contactListNow, // Plan M M171 (DEC-1601): one contact list
+  loadContactList,
   postRun,
   postUpload,
   scoresUrl,
@@ -84,11 +85,11 @@ import * as seams from "./modules/router.js";
 import { COST_NEEDS_CONFIRMATION, costConfirmHtml, costLineHtml } from "./cost.js"; // Plan J M108 (DEC-1318)
 
 import {
-  allScoresHtml,
+  allScoresSlotHtml,
   contactDownloadLink,
-  contactListDownload,
-  contactListSentence,
-  contactSentenceHtml,
+  contactListParts,
+  contactSlotHtml,
+  repaintContactList,
 } from "./contact_list.js";
 
 const AUTOML = "__automl__";
@@ -1209,15 +1210,13 @@ function outcome(uc, s, run) {
     const kpi = present(s.kpiDisplay) ? ` ${uc.output.kpi.label}: ${s.kpiDisplay}.` : "";
     // Plan M M171 (DEC-1601): one contact list - the treat list, or the scored list with a note - and the one
     // sentence on why fewer customers are contacted than are worth contacting.
-    const facts = s.contactList || {};
-    const download = contactListDownload({
-      treatHref: facts.treatHref || "",
+    const { download, sentence } = contactListParts({
+      facts: s.contactList,
       scoresHref: scoresUrl(run.run_id),
-      treatError: facts.error || null,
+      scoring: s.scoring,
     });
-    const sentence = contactListSentence({ scoring: s.scoring, treat: facts.summary || null });
     return {
-      allScores: allScoresHtml(download, scoresUrl(run.run_id)),
+      allScores: allScoresSlotHtml(run.run_id, download, scoresUrl(run.run_id)),
       head: `<span class="ok">✓ Scoring complete</span> <span class="vt">${esc(
         `${present(run.row_count) ? fmtInt(run.row_count) : "All"} rows scored.${kpi}`,
       )}</span>`,
@@ -1229,9 +1228,9 @@ function outcome(uc, s, run) {
               }.`,
             )}</p>`
           : "",
-        contactSentenceHtml(sentence, download),
+        contactSlotHtml(run.run_id, sentence, download),
       ],
-      actions: `${contactDownloadLink(download, { icon: false })}<a class="btn secondary" href="#/uc/${esc(
+      actions: `${contactDownloadLink(download, { icon: false, runId: run.run_id })}<a class="btn secondary" href="#/uc/${esc(
         uc.id,
       )}/output/${esc(run.run_id)}">See who to contact</a><button type="button" class="btn quiet again" id="f-again">Score another file</button>`,
     };
@@ -1265,13 +1264,17 @@ function resultsHtml(uc, s) {
   const run = s.detail && s.detail.run;
   if (!run) return `<div class="loading" role="status">Loading the run…</div>`;
   const told = outcome(uc, s, run);
-  const tech = techDetails([
-    ["Run ID", run.run_id],
-    [isBuilt(run) ? "Dataset ID" : "File", isBuilt(run) ? run.dataset_id : run.file_name],
-    ["Model version", run.model_version_id],
-    ["Started", run.created_at ? fmtStamp(run.created_at) : null],
-    ["Error code", run.error && run.error.code],
-  ]).replace(/<\/details>$/, `${told.allScores || ""}</details>`); // "All scores (for analysts)" (Plan M M171)
+  const tech = techDetails(
+    [
+      ["Run ID", run.run_id],
+      [isBuilt(run) ? "Dataset ID" : "File", isBuilt(run) ? run.dataset_id : run.file_name],
+      ["Model version", run.model_version_id],
+      ["Started", run.created_at ? fmtStamp(run.created_at) : null],
+      ["Error code", run.error && run.error.code],
+    ],
+    "Technical details",
+    told.allScores || "", // "All scores (for analysts)" (Plan M M171)
+  );
   const flow = flowBlocks(uc, s, run);
   // A step that needs a full-width section under the flow (Plan H M83: step 4, "Measure the campaign").
   const panels = run.mode === "score" && run.state === "done" ? runPanelsHtml(uc, run) : "";
@@ -1498,8 +1501,17 @@ export function createController(uc, rerender) {
     if (!run.artefacts || !run.artefacts["scoring_summary.json"]) return;
     const summary = await getArtefact(run.run_id, "scoring_summary.json");
     s.scoring = summary || null;
-    // Plan M M171 (DEC-1601): the one contact list - the treat list's summary, asked once for this run.
-    if (run.mode === "score" && run.state === "done") s.contactList = await loadContactList(run.run_id);
+    // Plan M M171 (DEC-1601): the one contact list. The view is drawn with the treat list assumed; the server's
+    // answer about it (the first ask builds the list) is drawn in when it arrives, and never waited for.
+    if (run.mode === "score" && run.state === "done") {
+      const runId = run.run_id;
+      s.contactList = contactListNow(runId);
+      loadContactList(runId).then((facts) => {
+        if (s.runId !== runId) return;
+        s.contactList = facts;
+        repaintContactList(document, { runId, facts, scoring: summary || null, scoresHref: scoresUrl(runId) });
+      });
+    }
     // A count is shown exactly ("1,675"), not as the engine's rounded display ("2K").
     const kpi = summary && summary.kpi;
     s.kpiDisplay = !kpi ? null : Number.isInteger(kpi.value) ? fmtInt(kpi.value) : kpi.display;

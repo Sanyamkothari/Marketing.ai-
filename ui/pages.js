@@ -44,13 +44,7 @@ import {
 } from "./dom.js";
 import { bindPower, powerCardBody } from "./power.js";
 import { indexSchema, readPath } from "./settings.js";
-import {
-  allScoresHtml,
-  contactDownloadLink,
-  contactListDownload,
-  contactListSentence,
-  contactSentenceHtml,
-} from "./contact_list.js"; // Plan M M171 (DEC-1601): one contact list
+import { allScoresSlotHtml, contactDownloadLink, contactListParts, contactSlotHtml } from "./contact_list.js"; // Plan M M171 (DEC-1601): one contact list
 
 /**
  * What each page reads, by the run's mode: `data` / `model` / `output` for a training run, the
@@ -1460,9 +1454,7 @@ function scoringOutputPage(uc, run, art, byPath, scoresHref, extra = {}) {
   );
 
   // The one file and the one sentence (Plan M M171): the treat list, or the scored list with a note.
-  const facts = extra.contactList || {};
-  const download = contactListDownload({ treatHref: facts.treatHref || "", scoresHref, treatError: facts.error || null });
-  const sentence = contactListSentence({ scoring: summary, treat: facts.summary || null });
+  const { download, sentence } = contactListParts({ facts: extra.contactList || null, scoresHref, scoring: summary });
   const testSize = `<section class="card" data-power><details class="more" data-test-size><summary>Test size</summary>${powerCardBody(
     uc,
     summary,
@@ -1470,17 +1462,17 @@ function scoringOutputPage(uc, run, art, byPath, scoresHref, extra = {}) {
 
   // Technical details: the scored list for analysts, what moved, and the modules' own sections (the contact
   // list's counts, the notes behind a change).
-  const techHtml = `${allScoresHtml(download, scoresHref)}${driftTable(drift)}${extra.panelsHtml || ""}`;
+  const techHtml = `${allScoresSlotHtml(run.run_id, download, scoresHref)}${driftTable(drift)}${extra.panelsHtml || ""}`;
 
   const body = `${outputTiles}
-    ${contactSentenceHtml(sentence, download)}
+    ${contactSlotHtml(run.run_id, sentence, download)}
     ${driftNotice}
     ${priorityCard}
     ${sampleCard(uc, run, summary, download)}
     ${testSize}
     ${settingsCard(uc, run, config, byPath, summary, drift)}`;
   return shell(uc, "output", run, body, {
-    primary: contactDownloadLink(download, { icon: true }),
+    primary: contactDownloadLink(download, { icon: true, runId: run.run_id }),
     tech: [["Training run", drift && drift.baseline_run_id]],
     techHtml,
   });

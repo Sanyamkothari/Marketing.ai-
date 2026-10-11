@@ -247,7 +247,7 @@ test("output page of a scoring run: four segments, recommended contacts, CI, tre
   assert.match(text(html), /likely 3 to 16/);
   assert.match(text(html), /10 \(95% CI 3 to 16\)/, "the interval stays under Details");
   // The primary action is the download; the campaign link is the secondary.
-  assert.match(html, /<a class="btn primary" href="\/runs\/r-score\/treat_list\.csv" download data-download="contact-list" data-download-kind="contact">Download contact list<\/a>/);
+  assert.match(html, /<a class="btn primary" href="\/runs\/r-score\/treat_list\.csv" download data-download="contact-list" data-download-kind="contact" data-run-id="r-score">Download contact list<\/a>/);
   assert.equal((html.match(/class="btn primary"[^>]* download/g) || []).length, 1, "one primary download");
   assert.match(html, /<a class="btn quiet sm" href="\/runs\/r-score\/scores\.csv" download data-download="scores">All scores \(for analysts\)<\/a>/);
   assert.match(html, /<a class="btn secondary" href="#\/campaign\/win-back\/r-score">Measure campaign results/);
@@ -629,6 +629,34 @@ test("the workbench's breadcrumbs start at Settings and name the Uplift workbenc
   ]);
 });
 
+test("the scoring pages draw before the server answers about the treat list, and keep the treat list unless it says it cannot be built (Plan M M171)", () => {
+  const art = { "segments.json": segments, "policy_recommendation.json": policy };
+  const base = { treatHref: "/runs/r-score/treat_list.csv", scoresHref: "/runs/r-score/scores.csv" };
+  const pending = { summary: null, error: null, refused: false, ...base };
+  const waiting = views.outputPageHtml(uc, scoreRun, art, { scoresHref: base.scoresHref, contactList: pending });
+  assert.match(waiting, /href="\/runs\/r-score\/treat_list\.csv" download data-download="contact-list" data-download-kind="contact"/);
+  assert.match(waiting, /<div data-contact-slot data-run-id="r-score">/, "the sentence has its place before it has anything to say");
+  assert.match(waiting, /<div data-all-scores-slot data-run-id="r-score">/);
+  assert.doesNotMatch(waiting, /data-contact-note/);
+  // a request that failed for another reason is not "this run has no contact list"
+  const failed = views.outputPageHtml(uc, scoreRun, art, { scoresHref: base.scoresHref, contactList: { ...pending, error: new Error("offline") } });
+  assert.match(failed, /data-download-kind="contact"/);
+  assert.doesNotMatch(failed, /data-contact-note/);
+  // the server said it cannot
+  const refused = views.outputPageHtml(uc, scoreRun, art, { scoresHref: base.scoresHref, contactList: { ...pending, error: new Error("409"), refused: true } });
+  assert.match(refused, /href="\/runs\/r-score\/scores\.csv" download data-download="contact-list" data-download-kind="scores"/);
+  assert.match(refused, /data-contact-note/);
+  // the campaign comparison group and the rules are already out of the policy's recommended contacts
+  const gap = views.outputPageHtml(uc, scoreRun, art, {
+    scoresHref: base.scoresHref,
+    summary: { control_group_rows: 500, rows_scored: 1000, suppressed: [{ reason: "opted_out", rows: 40 }] },
+    contactList: { ...pending, summary: { treat_rows: 120, holdout_rows: 480, uncontactable_rows: 30 } },
+  });
+  const said = text(gap);
+  assert.match(said, /150 customers are worth contacting; 120 will be contacted\. Why the difference: 30 customers cannot be reached/);
+  assert.doesNotMatch(said, /comparison group \(not contacted|opted out of marketing/);
+});
+
 test("a finished scoring run's Campaign results block says when it applies instead of saying done", () => {
   const done = { ...scoreRun, state: "done", row_count: 5 };
   const html = views.upliftScreenHtml(uc, { view: "results", detail: { run: done }, runs: [] });
@@ -642,8 +670,8 @@ test("a finished scoring run's Campaign results block says when it applies inste
     ],
   );
   assert.equal(blocks[2][2], " waiting");
-  // No treat list answer yet: the scored list is offered under the same label (Plan M M171).
-  assert.match(html, /<a class="btn primary" href="#" download data-download="contact-list" data-download-kind="scores">Download contact list<\/a>/);
+  // A state that carries no contact list facts at all offers the scored list under the same label (Plan M M171).
+  assert.match(html, /<a class="btn primary" href="#" download data-download="contact-list" data-download-kind="scores" data-run-id="r-score">Download contact list<\/a>/);
   noJunk(html);
 });
 

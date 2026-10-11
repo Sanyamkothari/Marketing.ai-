@@ -378,7 +378,7 @@ export function errorBox(error, { title = null, retry = false } = {}) {
  * button (`[data-copy]`, handled once by `chrome.js`). `pairs` are `[label, value]`; a value that is
  * not present is left out, and with nothing left the disclosure is not drawn.
  */
-export function techDetails(pairs, summary = "Technical details") {
+export function techDetails(pairs, summary = "Technical details", extraHtml = "") {
   const rows = (pairs || [])
     .filter(([, value]) => present(value))
     .map(
@@ -388,8 +388,9 @@ export function techDetails(pairs, summary = "Technical details") {
         )}" aria-label="Copy ${esc(label)}">Copy</button></dd></div>`,
     )
     .join("");
-  return rows
-    ? `<details class="tech"><summary>${esc(summary)}</summary><dl class="tech-list">${rows}</dl></details>`
+  // `extraHtml` is drawn inside the disclosure after the list, as given (it is already markup).
+  return rows || extraHtml
+    ? `<details class="tech"><summary>${esc(summary)}</summary>${rows ? `<dl class="tech-list">${rows}</dl>` : ""}${extraHtml}</details>`
     : "";
 }
 

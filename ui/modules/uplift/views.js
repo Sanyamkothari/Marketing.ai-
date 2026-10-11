@@ -47,13 +47,7 @@ import {
 } from "../../dom.js";
 import { decileChart, profitChart, qiniChart, segmentChart } from "./charts.js";
 // Plan M M171 (DEC-1601): one contact list - the treat list, or the scored list with a note.
-import {
-  allScoresHtml,
-  contactDownloadLink,
-  contactListDownload,
-  contactListSentence,
-  contactSentenceHtml,
-} from "../../contact_list.js";
+import { allScoresSlotHtml, contactDownloadLink, contactListParts, contactSlotHtml } from "../../contact_list.js";
 import {
   fmtCi,
   fmtCount,
@@ -737,14 +731,10 @@ function resultsBody(uc, s) {
     ? { label: "Try again", href: routes.setup(uc.id) }
     : train
       ? { label: "Score customers with this model", href: routes.score(uc.id) }
-      : contactDownloadLink(
-          contactListDownload({
-            treatHref: (s.contactList && s.contactList.treatHref) || "",
-            scoresHref: s.scoresHref || "#",
-            treatError: (s.contactList && s.contactList.error) || null,
-          }),
-          { icon: false },
-        );
+      : contactDownloadLink(contactListParts({ facts: s.contactList, scoresHref: s.scoresHref || "#" }).download, {
+          icon: false,
+          runId: run.run_id,
+        });
   const actions = headActions({
     primary,
     related: done ? { label: "Change settings and train again", href: routes.setup(uc.id) } : null,
@@ -876,12 +866,16 @@ function pageShell(uc, run, kind, { title, desc = "", actions = "", trail = null
   );
 }
 
-const runTech = (run, extra = []) =>
-  techDetails([
-    [run.mode === "train" ? "Training run" : "Scoring run", run.run_id],
-    ["Model version", run.model_version_id],
-    ...extra,
-  ]);
+const runTech = (run, extra = [], extraHtml = "") =>
+  techDetails(
+    [
+      [run.mode === "train" ? "Training run" : "Scoring run", run.run_id],
+      ["Model version", run.model_version_id],
+      ...extra,
+    ],
+    "Technical details",
+    extraHtml,
+  );
 
 // --- Model -------------------------------------------------------------------------------------
 
@@ -1435,13 +1429,12 @@ export function outputPageHtml(uc, run, art, extra = {}) {
   ]);
   const line = contactLine(policy, segments, train, summary ? summary.control_group_rows : null);
   // Plan M M171 (DEC-1601): the one contact list and the one sentence on why fewer are contacted than are worth it.
-  const facts = extra.contactList || {};
-  const download = contactListDownload({
-    treatHref: facts.treatHref || "",
+  const { download, sentence } = contactListParts({
+    facts: extra.contactList || null,
     scoresHref: extra.scoresHref || "#",
-    treatError: facts.error || null,
+    scoring: summary,
+    policy: policy || null,
   });
-  const sentence = contactListSentence({ scoring: summary, treat: facts.summary || null, policy });
   const scope = policy
     ? policy.computed_on === "test"
       ? "Measured on the hold-out split of the training run."
@@ -1540,7 +1533,7 @@ export function outputPageHtml(uc, run, art, extra = {}) {
   const body = `${notCausalBanner(validation, segments, policy)}
     ${rankingBanner(extra.ranking || null)}
     ${lead}${policy ? tileRow : ""}
-    ${train ? "" : contactSentenceHtml(sentence, download)}
+    ${train ? "" : contactSlotHtml(run.run_id, sentence, download)}
     <div class="row">
       <section class="card"><h3>Four groups of customers</h3>${segmentChart(segments)}${segmentRows}</section>
       <section class="card"><h3>Targeting recommendation</h3>${policyRows}</section>
@@ -1548,14 +1541,15 @@ export function outputPageHtml(uc, run, art, extra = {}) {
     ${offerChoiceCard(art["offer_choice.json"] || null)}
     ${profitCard(extra.profit, policy)}
     ${listCard}
-    <section class="card card-body udetails-card">${runTech(run).replace(
-      /<\/details>$/,
-      `${train ? "" : allScoresHtml(download, extra.scoresHref || "#")}${extra.panelsHtml || ""}</details>`,
+    <section class="card card-body udetails-card">${runTech(
+      run,
+      [],
+      `${train ? "" : allScoresSlotHtml(run.run_id, download, extra.scoresHref || "#")}${extra.panelsHtml || ""}`,
     )}</section>`;
   const actions = train
     ? headActions({ primary: { label: "Score customers with this model", href: routes.score(uc.id) } })
     : headActions({
-        primary: contactDownloadLink(download, { icon: false }),
+        primary: contactDownloadLink(download, { icon: false, runId: run.run_id }),
         secondary: [{ label: "Measure campaign results", href: routes.campaign(uc.id, run.run_id) }],
       });
   return pageShell(

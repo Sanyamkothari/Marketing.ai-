@@ -22,6 +22,7 @@ const UI = new URL("../../../ui/", import.meta.url);
 const api = await import(new URL("api.js", UI));
 const pages = await import(new URL("pages.js", UI));
 const usecase = await import(new URL("usecase.js", UI));
+const ui = await import(new URL("contact_list.js", UI));
 
 const uc = read("use_case");
 const runId = read("ids").run_id;
@@ -31,9 +32,8 @@ const art = { "scoring_summary.json": answers[`GET /runs/${runId}/artefacts/scor
 const holder = document.createElement("div");
 document.body.appendChild(holder);
 
-/** What a person sees on a page: its downloads, the sentence, the note, and what sits under Technical details. */
-function describe(html) {
-  holder.innerHTML = html;
+/** What a person sees in the holder: its downloads, the sentence, the note, and what sits under Technical details. */
+function seen() {
   const links = (selector) => [...holder.querySelectorAll(selector)].map((a) => ({ text: a.textContent.trim(), href: a.getAttribute("href") }));
   const sentence = holder.querySelector("[data-contact-sentence]");
   const note = holder.querySelector("[data-contact-note]");
@@ -48,23 +48,35 @@ function describe(html) {
     visibleText: holder.textContent.replace(/\s+/g, " "),
   };
 }
+const draw = (html) => {
+  holder.innerHTML = html;
+  return seen();
+};
 
-// The Output page: what `app.js` hands the page (`loadContactList`), then the page itself.
+// The Output page, as `app.js` draws it: at once, with the treat list assumed (nothing has been answered yet),
+// and then the server's answer is drawn into the page's own slots.
+const requestsAtFirstDraw = () => calls.filter((c) => c.path.endsWith("/treat_list_summary.json")).length;
+const outputDrawn = draw(pages.renderPage("output", uc, detail.run, art, api.scoresUrl(runId), { contactList: api.contactListNow(runId) }));
+const askedBeforeAnswer = requestsAtFirstDraw();
 const contactList = await api.loadContactList(runId);
-const outputHtml = pages.renderPage("output", uc, detail.run, art, api.scoresUrl(runId), { contactList });
+ui.repaintContactList(document, { runId, facts: contactList, scoring: art["scoring_summary.json"], scoresHref: api.scoresUrl(runId) });
+const outputAnswered = seen();
 
-// The Results view of the same run, through the screen's own controller.
+// The Results view of the same run, through the screen's own controller: drawn without waiting, then repainted.
 const controller = usecase.createController(uc, () => {});
 await controller.refreshLists();
 controller.sync();
 await controller.loadRun(runId);
-const resultsHtml = usecase.useCaseHtml(uc, controller.state);
+draw(usecase.useCaseHtml(uc, controller.state));
 await settle();
+const resultsAnswered = seen();
 
 const out = {
-  contactList: { treatError: contactList.error ? String(contactList.error.message) : null, hasSummary: !!contactList.summary },
-  output: describe(outputHtml),
-  results: describe(resultsHtml),
+  contactList: { treatError: contactList.error ? String(contactList.error.message) : null, hasSummary: !!contactList.summary, refused: contactList.refused },
+  output: outputAnswered,
+  outputDrawn,
+  results: resultsAnswered,
+  askedBeforeAnswer,
   treatSummaryRequests: calls.filter((c) => c.path.endsWith("/treat_list_summary.json")).length,
 };
 process.stdout.write(JSON.stringify(out));

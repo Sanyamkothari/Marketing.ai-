@@ -70,18 +70,28 @@ export function contactListSentence({ scoring = null, treat = null, policy = nul
   } else {
     lead = `${people(worth)} ${worth === 1 ? "is" : "are"} worth contacting.`;
   }
-  if (worth === null || treated === null || worth <= treated) return lead;
+  // An uplift run's recommended contacts are what the policy chose after it had left out the comparison group and
+  // the suppressed customers, and cut to the budget: those cannot explain a gap below that number. Only the two
+  // things that happen after the policy chose (no channel to reach a customer on, the compliance gate) can.
+  const chosen = !!(policy && count(policy.contacts_recommended));
+  const budget =
+    chosen && policy.stop_reason === "budget" && count(policy.budget_contacts)
+      ? ` The contact budget of ${people(policy.budget_contacts)} limits the list.`
+      : "";
+  if (worth === null || treated === null || worth <= treated) return `${lead}${budget}`;
 
   const why = [];
-  const comparison = treat && count(treat.holdout_rows) ? treat.holdout_rows : scoring && count(scoring.control_group_rows) ? scoring.control_group_rows : null;
-  if (comparison) {
-    why.push(
-      `${people(comparison)} in the whole list ${comparison === 1 ? "is" : "are"} held back at random as the comparison group (not contacted, so the effect of contacting can be measured)`,
-    );
-  }
-  for (const rule of (scoring && scoring.suppressed) || []) {
-    const words = SUPPRESSION_WORDS[rule.reason];
-    if (words && count(rule.rows) && rule.rows > 0) why.push(`${people(rule.rows)} ${words}`);
+  if (!chosen) {
+    const comparison = treat && count(treat.holdout_rows) ? treat.holdout_rows : scoring && count(scoring.control_group_rows) ? scoring.control_group_rows : null;
+    if (comparison) {
+      why.push(
+        `${people(comparison)} in the whole list ${comparison === 1 ? "is" : "are"} held back at random as the comparison group (not contacted, so the effect of contacting can be measured)`,
+      );
+    }
+    for (const rule of (scoring && scoring.suppressed) || []) {
+      const words = SUPPRESSION_WORDS[rule.reason];
+      if (words && count(rule.rows) && rule.rows > 0) why.push(`${people(rule.rows)} ${words}`);
+    }
   }
   if (treat && count(treat.uncontactable_rows) && treat.uncontactable_rows > 0) {
     why.push(`${people(treat.uncontactable_rows)} cannot be reached on any channel they have agreed to`);
@@ -89,10 +99,7 @@ export function contactListSentence({ scoring = null, treat = null, policy = nul
   if (treat && count(treat.compliance_withheld_rows) && treat.compliance_withheld_rows > 0) {
     why.push(`${people(treat.compliance_withheld_rows)} ${treat.compliance_withheld_rows === 1 ? "was" : "were"} taken off by the compliance check before sending`);
   }
-  if (policy && policy.stop_reason === "budget" && count(policy.budget_contacts)) {
-    why.push(`the contact budget of ${people(policy.budget_contacts)} was reached`);
-  }
-  return why.length ? `${lead} Why the difference: ${why.join("; ")}.` : lead;
+  return `${why.length ? `${lead} Why the difference: ${why.join("; ")}.` : lead}${budget}`;
 }
 
 /**
@@ -107,10 +114,10 @@ export function contactListDownload({ treatHref = "", scoresHref = "#", treatErr
 }
 
 /** The page's one primary download button. */
-export function contactDownloadLink(download, { icon = true, attrs = "" } = {}) {
+export function contactDownloadLink(download, { icon = true, attrs = "", runId = "" } = {}) {
   return `<a class="btn primary" href="${esc(download.href)}" download data-download="contact-list" data-download-kind="${esc(
     download.kind,
-  )}"${attrs ? ` ${attrs}` : ""}>${icon ? DOWNLOAD_ICON : ""}${CONTACT_LIST_LABEL}</a>`;
+  )}"${runId ? ` data-run-id="${esc(runId)}"` : ""}${attrs ? ` ${attrs}` : ""}>${icon ? DOWNLOAD_ICON : ""}${CONTACT_LIST_LABEL}</a>`;
 }
 
 /** The sentence and, when the file is the scored list, its note, as a block that can sit under a page's tiles. */
@@ -127,4 +134,46 @@ export function allScoresHtml(download, scoresHref) {
   return `<div class="all-scores" data-all-scores><p class="caption">${esc(
     SCORES_NOTE,
   )}</p><a class="btn quiet sm" href="${esc(scoresHref)}" download data-download="scores">${ALL_SCORES_LABEL}</a></div>`;
+}
+
+/**
+ * The download and the sentence for one page, from what is known so far. `facts` is what `loadContactList` has
+ * answered (null before it has), `treatHref` is where the treat list is. Only an answer that says the list cannot
+ * be built (`facts.refused`) switches to the scored list: no answer yet, or a request that failed for another
+ * reason, keeps the treat list and says nothing about the run that the server did not say.
+ */
+export function contactListParts({ facts = null, treatHref = "", scoresHref = "#", scoring = null, policy = null } = {}) {
+  const f = facts || {};
+  const download = contactListDownload({
+    treatHref: f.treatHref || treatHref,
+    scoresHref: f.scoresHref || scoresHref,
+    treatError: f.refused ? f.error || new Error("The contact list is not available.") : null,
+  });
+  return { download, sentence: contactListSentence({ scoring, treat: f.summary || null, policy }) };
+}
+
+/** The sentence's place on a page, kept even when empty so the answer can be drawn into it when it arrives. */
+export const contactSlotHtml = (runId, sentence, download) =>
+  `<div data-contact-slot data-run-id="${esc(runId)}">${contactSentenceHtml(sentence, download)}</div>`;
+
+/** The scored list's place inside Technical details, kept for the same reason. */
+export const allScoresSlotHtml = (runId, download, scoresHref) =>
+  `<div data-all-scores-slot data-run-id="${esc(runId)}">${allScoresHtml(download, scoresHref)}</div>`;
+
+/**
+ * A page was drawn before the server answered about the treat list; draw the answer into the page's own download,
+ * sentence and scored-list slots (matched by run, so a page the person has since left is not touched).
+ */
+export function repaintContactList(root, { runId, facts, scoring = null, policy = null, scoresHref = "#" } = {}) {
+  if (!root || !runId) return;
+  const mine = (el) => el.getAttribute("data-run-id") === runId;
+  const all = (selector) => Array.from((root.querySelectorAll && root.querySelectorAll(selector)) || []);
+  const { download, sentence } = contactListParts({ facts, scoresHref, scoring, policy });
+  for (const a of all('a[data-download="contact-list"]')) {
+    if (!mine(a)) continue;
+    a.setAttribute("href", download.href);
+    a.setAttribute("data-download-kind", download.kind);
+  }
+  for (const el of all("[data-contact-slot]")) if (mine(el)) el.innerHTML = contactSentenceHtml(sentence, download);
+  for (const el of all("[data-all-scores-slot]")) if (mine(el)) el.innerHTML = allScoresHtml(download, scoresHref);
 }

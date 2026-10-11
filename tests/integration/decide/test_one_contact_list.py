@@ -169,6 +169,23 @@ def test_the_pages_offer_one_download_and_it_is_the_treat_list_the_route_serves(
     assert seen["treatSummaryRequests"] == 1, "the Output page and the Results view share one request"
 
 
+def test_the_output_page_is_drawn_before_the_treat_list_is_answered(
+    tmp_path: Path, config_root: Path
+) -> None:
+    """The first ask for the summary builds the whole treat list on the server (slow on a large run), so the page
+    draws first with the treat list as its one download and no note, and the answer is drawn in when it arrives.
+    """
+    seen, _, run_id = _page(tmp_path, config_root)
+    assert seen["askedBeforeAnswer"] == 0, "the page asked the server before it drew"
+    drawn = seen["outputDrawn"]
+    assert len(drawn["primaryDownloads"]) == 1
+    assert drawn["primaryDownloads"][0]["href"].endswith(f"/runs/{run_id}/treat_list.csv")
+    assert drawn["note"] is None
+    # what the answer then adds is the part of the sentence that needs it
+    assert drawn["sentence"] is not None and "will be contacted" not in drawn["sentence"]
+    assert "will be contacted" in seen["output"]["sentence"]
+
+
 def test_the_sentence_is_computed_from_the_files_counts(tmp_path: Path, config_root: Path) -> None:
     seen, _, _ = _page(tmp_path, config_root)
     scores = pd.read_csv(tmp_path / "scores.csv", dtype=str, keep_default_na=False)
@@ -218,6 +235,10 @@ def test_a_run_without_a_treat_list_offers_the_scored_list_under_the_same_label(
 ) -> None:
     seen, _, run_id = _page(tmp_path, config_root, breakable=True)
     assert seen["contactList"]["hasSummary"] is False and seen["contactList"]["treatError"]
+    assert seen["contactList"]["refused"] is True, "a 409 says this run cannot have a treat list"
+    # drawn first with the treat list assumed, then switched to the scored list when the server said it cannot
+    assert seen["outputDrawn"]["primaryDownloads"][0]["href"].endswith(f"/runs/{run_id}/treat_list.csv")
+    assert seen["outputDrawn"]["note"] is None
     for name in ("output", "results"):
         page = seen[name]
         assert len(page["primaryDownloads"]) == 1, (name, page["primaryDownloads"])

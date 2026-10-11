@@ -108,24 +108,46 @@ export const treatListUrl = (runId) => url(`/runs/${encodeURIComponent(runId)}/t
 // Plan M M171 (DEC-1601): what a scoring run's pages ask the server once for the one contact list - the treat
 // list's summary (the route the Output page's own card has always read) and the two file addresses. The answer
 // is shared by every part of a page that needs it (the header's download, the sentence under the tiles, the
-// "Treat list" counts under Technical details), so a page makes one request. A refusal (the list cannot be built
-// for this run) is kept for a few seconds for the same reason and then forgotten, so the next visit asks again.
+// "Treat list" counts under Technical details), so a page makes one request. The first request builds the list
+// on the server, so a page never waits for it: it draws with `contactListNow` and draws the answer in when
+// `loadContactList` resolves. A refusal (the list cannot be built for this run) is kept for a few seconds for
+// the same reason and then forgotten, so the next visit asks again.
 const KEEP_REFUSAL_MS = 5000;
 const contactListAnswers = new Map();
+const TREAT_SUMMARY = "treat_list_summary.json";
 
-/** `{ summary, error, treatHref, scoresHref }` for a scoring run. Never rejects. */
+const hrefsOf = (runId) => ({ treatHref: treatListUrl(runId), scoresHref: scoresUrl(runId) });
+
+// The server says "this run cannot have a treat list" with a 409 (TreatListError) or a 404; any other failure
+// (the network, a 500, a sign-in that expired) says nothing about the run.
+const cannotHaveTreatList = (error) => error instanceof ApiError && (error.status === 409 || error.status === 404);
+
+const keepable = (entry) => !entry.settled || !entry.refused || Date.now() - entry.settled < KEEP_REFUSAL_MS;
+
+/**
+ * What is known about the contact list right now, without asking: `{ summary, error, refused, treatHref,
+ * scoresHref }` once the server has answered, else the same with nothing in it (the treat list is assumed).
+ */
+export function contactListNow(runId) {
+  const known = contactListAnswers.get(runId);
+  const answer = known && known.answer && keepable(known) ? known.answer : null;
+  return answer || { summary: null, error: null, refused: false, ...hrefsOf(runId) };
+}
+
+/** The same shape, once the server has answered. Never rejects; the server's own error is kept in `error`. */
 export function loadContactList(runId) {
   const known = contactListAnswers.get(runId);
-  if (known && (!known.settled || !known.error || Date.now() - known.settled < KEEP_REFUSAL_MS)) return known.promise;
-  const hrefs = { treatHref: treatListUrl(runId), scoresHref: scoresUrl(runId) };
-  const entry = { settled: 0, error: null, promise: null };
-  entry.promise = getArtefact(runId, "treat_list_summary.json").then(
-    (summary) => ({ summary: summary || null, error: summary ? null : new Error("The contact list is not available."), ...hrefs }),
-    (error) => ({ summary: null, error, ...hrefs }),
+  if (known && keepable(known)) return known.promise;
+  const hrefs = hrefsOf(runId);
+  const entry = { settled: 0, refused: false, answer: null, promise: null };
+  entry.promise = request(`/runs/${encodeURIComponent(runId)}/artefacts/${encodeURIComponent(TREAT_SUMMARY)}`).then(
+    (summary) => ({ summary: summary || null, error: null, refused: false, ...hrefs }),
+    (error) => ({ summary: null, error, refused: cannotHaveTreatList(error), ...hrefs }),
   );
   contactListAnswers.set(runId, entry);
   entry.promise.then((answer) => {
-    entry.error = answer.error;
+    entry.answer = answer;
+    entry.refused = answer.refused;
     entry.settled = Date.now();
   });
   return entry.promise;
