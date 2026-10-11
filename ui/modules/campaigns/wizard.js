@@ -44,10 +44,13 @@ import {
   postUpload,
   treatListUrl,
 } from "./wizard_api.js";
+import { getUpliftArtefact } from "../uplift/api.js";
 import {
   baseRateOf,
   currentModel,
+  expectedValue,
   goalCards,
+  isWizardRoute,
   parseRoute,
   planBody,
   progressOf,
@@ -90,12 +93,26 @@ const ui = {
   review: { busy: false, error: null },
   approval: { busy: false, error: null, own: false }, // the inline approval of a new model (step 2)
   advancing: new Set(), // run ids already being taken to their next step
+  listOf: new Map(), // learning run id -> the list run started from it, for a person who left and came back
 };
+
+/** Whether work started under `token` is still the page's: no newer draw, and the same route on screen. */
+const ours = (token) => token === ui.seq && onRoute();
 
 /** Whether the page still shows this run's progress (the person may have gone elsewhere meanwhile). */
 const stillOn = (runId) => parseRoute(hashParts()).runId === runId;
 
 const hashParts = () => window.location.hash.replace(/^#\/?/, "").split("/").filter(Boolean);
+
+/**
+ * Whether the page still shows the route the wizard's current work was started for. The person may have left
+ * (the progress card says they can): a poll or an answer still on its way then draws nothing over the page they
+ * went to. `ui.parts` is the route `renderWizard` last drew; `ui.seq` alone does not know about other modules.
+ */
+const onRoute = () => {
+  const now = hashParts();
+  return isWizardRoute(now) && Boolean(ui.parts) && now.join("/") === ui.parts.join("/");
+};
 
 /** May this person start a campaign: start a list (`POST /runs`) and record the campaign (`POST /campaigns`). */
 const canStart = () => canAccess("POST", "/runs") && canAccess("POST", "/campaigns");
@@ -108,13 +125,13 @@ function go(hash, { replace = false } = {}) {
 /** Draw the current screen: the page, its step, then whatever mounts into it (Guided setup). */
 function draw() {
   const screen = ui.screen;
-  if (!screen || !ui.app) return;
+  if (!screen || !ui.app || !onRoute()) return;
   ui.app.innerHTML = pageHtml(screen.step, screen.body());
   if (screen.after) screen.after(ui.app);
 }
 
 function show(token, step, body, after = null) {
-  if (token !== ui.seq) return;
+  if (!ours(token)) return;
   ui.screen = { step, body, after };
   draw();
 }
@@ -122,9 +139,16 @@ function show(token, step, body, after = null) {
 function later(token, ms) {
   clearTimeout(ui.timer);
   ui.timer = setTimeout(() => {
-    if (token === ui.seq) renderWizard(ui.app, hashParts());
+    if (ours(token)) renderWizard(ui.app, hashParts());
   }, ms);
 }
+
+// Leaving the wizard stops its poll and retires its work in flight: nothing it started draws again.
+window.addEventListener("hashchange", () => {
+  if (isWizardRoute(hashParts())) return;
+  clearTimeout(ui.timer);
+  ui.seq += 1;
+});
 
 /**
  * Draw the wizard for this route (`parts` is the hash split on "/": `campaigns`, `new`, ...). Called by the
@@ -178,19 +202,21 @@ const guidedMode = (uc) => setupModes(uc).find((mode) => mode.name === "guided")
 
 async function customersStep(token, route) {
   const uc = await getUseCase(route.ucId);
-  if (token !== ui.seq) return;
+  if (!ours(token)) return;
   // A goal that does not contact customers has no campaign: it opens its classic page (Plan M M6).
   if (campaignStep(uc) !== "measure") {
     go(`#/uc/${encodeURIComponent(uc.id)}`, { replace: true });
     return;
   }
   const models = await getModels(uc.id);
-  const current = currentModel(models);
+  const model = currentModel(models);
   if (!route.runId) {
-    showCustomers(token, uc, current);
+    showCustomers(token, uc, model);
     return;
   }
   const detail = await getRun(route.runId);
+  // Nothing more is started or redrawn for a route the person has left (the next steps post and navigate).
+  if (!ours(token)) return;
   await onRun(token, uc, models, detail);
 }
 
@@ -331,6 +357,12 @@ async function afterLearning(token, uc, models, detail) {
     );
     return;
   }
+  const made = ui.listOf.get(detail.run.run_id);
+  if (made) {
+    // The list was already started from this learning (the person left and came back): show that one.
+    go(stepHref("customers", uc.id, made), { replace: true });
+    return;
+  }
   const file = ui.captured.get(uc.id);
   if (!file) {
     // After a refresh, or a file picked from a connection: the customers are chosen once more, for the list.
@@ -349,8 +381,13 @@ async function afterLearning(token, uc, models, detail) {
       upload_id: upload.upload_id,
       primary_key: detail.run.primary_key,
       model_version_id: model.model_id,
+      // The settings the person accepted in Guided setup for the learning (the consent column, the value
+      // column, the checks they acknowledged): the list is built with the same ones. The run record keeps
+      // them, so this holds after a refresh too.
+      overrides: detail.run.overrides || {},
     });
     ui.captured.delete(uc.id);
+    ui.listOf.set(key, created.run_id);
     if (stillOn(detail.run.run_id)) go(stepHref("customers", uc.id, created.run_id), { replace: true });
   } catch (error) {
     ui.advancing.delete(key);
@@ -407,7 +444,12 @@ async function toCampaign(token, uc, detail) {
 
 async function campaignStepScreen(token, route) {
   const view = await getCampaign(route.campaignId);
-  if (token !== ui.seq) return;
+  if (!ours(token)) return;
+  // A campaign whose results were added is past the wizard: its own page shows them.
+  if (view.report) {
+    go(`#/campaigns/${encodeURIComponent(route.campaignId)}`, { replace: true });
+    return;
+  }
   const step = stepForCampaign(view, route.step);
   if (step !== route.step) {
     go(stepHref(step, route.campaignId), { replace: true });
@@ -431,9 +473,13 @@ async function campaignStepScreen(token, route) {
     });
     return;
   }
-  const [cost, compliance] = await Promise.all([
+  const [cost, compliance, policy] = await Promise.all([
     getCostEstimate(campaign.use_case_id, "score").catch(() => null),
     list && list.compliance_rule_version ? getComplianceSummary(runId).catch(() => null) : Promise.resolve(null),
+    // The engine's range for a net value, when it gives one (`expectedValue`); asked only for a net value.
+    expectedValue(list) && expectedValue(list).kind === "net"
+      ? getUpliftArtefact(runId, "policy_recommendation.json").catch(() => null)
+      : Promise.resolve(null),
   ]);
   const context = { campaign, detail, preview };
   show(
@@ -443,6 +489,7 @@ async function campaignStepScreen(token, route) {
       reviewHtml({
         campaign,
         list,
+        policy,
         preview,
         cost,
         compliance,

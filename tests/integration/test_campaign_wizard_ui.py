@@ -1,7 +1,9 @@
 """Plan M M177 (DEC-1607): the "New campaign" wizard in jsdom, against REAL API answers.
 
-The node suites in `production/ui/campaigns/` (sharing that directory's parent jsdom install) draw the wizard as
-the browser does - `app.js` and every module of `ui/index.html` - and walk its five steps:
+The node suites in `production/ui/campaigns/wizard/` (sharing the jsdom install of `production/ui/`) draw the
+wizard as the browser does - `app.js` and every module of `ui/index.html` - and walk its five steps. They sit in
+a folder of their own: the campaigns screens' runner (M176) runs every `campaigns/*.test.mjs` without the
+fixtures below, and its glob does not reach into a subfolder.
 
 * `wizard.test.mjs` answers with the bodies the app below gave over a seeded store: a finished win-back scoring
   run (Phase 1's own shape, `seed_scored_run`), the campaign record `POST /campaigns` made from it, the
@@ -39,7 +41,7 @@ from tests.integration.uplift.test_measure_campaign import USE_CASE, seed_scored
 pytestmark = pytest.mark.integration
 
 NODE_DIR: Final[Path] = Path(__file__).resolve().parent / "production" / "ui"
-TESTS_DIR: Final[Path] = NODE_DIR / "campaigns"
+TESTS_DIR: Final[Path] = NODE_DIR / "campaigns" / "wizard"
 RULES: Final[Path] = Path(__file__).resolve().parents[2] / "ui" / "modules" / "campaigns" / "wizard_rules.js"
 RUN_ID: Final[str] = "r_20261011_7a000001"
 OPS_USE_CASE: Final[str] = "order-fulfillment"

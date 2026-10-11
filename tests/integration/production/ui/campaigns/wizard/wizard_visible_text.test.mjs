@@ -11,10 +11,10 @@
    empties), so here its container is left out and everything around it is checked. */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { $, settle } from "../harness.mjs";
-import { violations, describe } from "../glossary/check.mjs";
-import { visibleText } from "../glossary/collect.mjs";
-import { installDemoPage, loadModules } from "../glossary/replay.mjs";
+import { $, settle } from "../../harness.mjs";
+import { violations, describe } from "../../glossary/check.mjs";
+import { visibleText } from "../../glossary/collect.mjs";
+import { installDemoPage, loadModules } from "../../glossary/replay.mjs";
 import {
   customersHtml,
   goalHtml,
@@ -23,7 +23,7 @@ import {
   progressHtml,
   stoppedHtml,
   waitingHtml,
-} from "../../../../../ui/modules/campaigns/wizard_views.js";
+} from "../../../../../../ui/modules/campaigns/wizard_views.js";
 
 const UC = "hillstrom-email";
 const CAMPAIGN = "c_20261011_c9276210";
@@ -34,17 +34,22 @@ const EXPECTED_UNRECORDED = new Set([`GET /use-cases/${UC}/cost-estimate?mode=sc
 const { w, state, missing } = installDemoPage({ hash: "#/__start" });
 await loadModules();
 
-// A Draft: the demo's campaigns already carry a test plan, so Audience and Review are drawn on the same campaign
-// with its plan taken out of the answer (a campaign without a plan is exactly what those two steps show).
+// The demo's campaigns are replays that already have their results (a report, status `measured`), and the wizard
+// sends a campaign with results to its own page. So each step is drawn on the same campaign as the wizard meets it:
+// just sent (no report yet, `live`) for Send, and a Draft (no plan either) for Audience and Review.
 let draft = false;
 const recordedFetch = w.fetch;
 w.fetch = async (input, init) => {
   const response = await recordedFetch(input, init);
   const url = new URL(typeof input === "string" ? input : input.url, w.location.href);
-  if (!draft || url.pathname !== `/campaigns/${CAMPAIGN}`) return response;
+  if (url.pathname !== `/campaigns/${CAMPAIGN}`) return response;
   const body = await response.json();
-  body.plan = null;
-  body.campaign = { ...body.campaign, test_plan_hash: null, test_plan_version: null };
+  body.report = null;
+  body.campaign = { ...body.campaign, status: "live" };
+  if (draft) {
+    body.plan = null;
+    body.campaign = { ...body.campaign, test_plan_hash: null, test_plan_version: null };
+  }
   return new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
 };
 

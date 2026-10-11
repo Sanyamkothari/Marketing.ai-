@@ -14,10 +14,12 @@ import {
   expectedValue,
   fmtCount,
   fmtDay,
-  fmtRupees,
   goalName,
+  heldBack,
   stepHref,
   testSizeLines,
+  valueFigure,
+  valueSentence,
 } from "./wizard_rules.js";
 
 export const TITLE = "New campaign";
@@ -216,7 +218,11 @@ const countRows = (counts) =>
     .map(([label, n]) => `<tr><td>${esc(label)}</td><td class="num">${esc(fmtCount(n))}</td></tr>`)
     .join("");
 
-/** "Who is contacted": the contact list's size, by priority, and by offer and channel when it has several. */
+/**
+ * "Who is contacted": the contact list's size, by priority, and by offer and channel when it has several. The
+ * channel table counts the customers sent on each channel (`channel_rows`: treat = 1 rows per channel), never
+ * `channel_counts`, which counts the ones a channel cannot reach.
+ */
 export function audienceCardHtml({ scoring, list }) {
   const contacted = list && typeof list.treat_rows === "number" ? list.treat_rows : null;
   const lead = contacted === null ? "" : p(`${fmtCount(contacted)} customers are on the ${term("contactList").toLowerCase()}.`, "data-cw-contacted");
@@ -236,20 +242,20 @@ export function audienceCardHtml({ scoring, list }) {
         )}</tbody></table>`
       : "";
   const channels =
-    list && list.channel_counts && Object.keys(list.channel_counts).length
+    list && list.channel_rows && Object.keys(list.channel_rows).length
       ? `<h3 class="cw-h3">Which channel</h3><table class="tbl cw-tbl" data-cw-channels><thead><tr><th>Channel</th><th class="num">Customers</th></tr></thead><tbody>${countRows(
-          list.channel_counts,
+          list.channel_rows,
         )}</tbody></table>`
       : "";
   return card("Who is contacted", `${lead}${priority}${offers}${channels}`, "data-cw-audience");
 }
 
-/** The comparison group and the plain-language test size, from the planner's point (`testSizeLines`). */
+/** The comparison group (the list's own held-back count) and the plain-language test size (`testSizeLines`). */
 export function comparisonCardHtml(preview) {
   const lines = testSizeLines(preview);
   const basis = preview && preview.basis ? `<details class="tech"><summary>Technical details</summary><p class="cw-note">${esc(preview.basis)}</p></details>` : "";
   const body = lines
-    ? `${p(lines.group, "data-cw-group")}${p(lines.size, `data-cw-test-size="${lines.ok ? "ok" : "none"}"`)}`
+    ? `${lines.group ? p(lines.group, "data-cw-group") : ""}${p(lines.size || "The size of the test cannot be worked out for this campaign.", `data-cw-test-size="${lines.ok ? "ok" : "none"}"`)}`
     : p("The size of the test cannot be worked out for this campaign.", 'data-cw-test-size="none"');
   return card(term("comparisonGroup"), `${body}${basis}`, "data-cw-comparison");
 }
@@ -269,24 +275,25 @@ const tile = (label, value, attrs) =>
 
 /**
  * Step 4: the numbers the campaign will be judged by, then Approve. Tiles: contacted, comparison group,
- * expected value (when the list has one), the results date. Lines: the test size, the cost, the compliance
- * result (when the switch is on). `canApprove` is whether this person may register the test plan.
+ * expected value (when the list has one: its range when the engine gives one, `expectedValue`), the results
+ * date. Lines: the test size, the cost, the compliance result (when the switch is on). `policy` is the list's
+ * run's `policy_recommendation.json` (or null). `canApprove` is whether this person may register the test plan.
  */
-export function reviewHtml({ campaign, list, preview, cost, compliance, resultsOn, canApprove = true, busy = false, error = null }) {
+export function reviewHtml({ campaign, list, policy = null, preview, cost, compliance, resultsOn, canApprove = true, busy = false, error = null }) {
   const lines = testSizeLines(preview);
-  const point = preview && preview.points && preview.current_index !== null ? preview.points[preview.current_index] : null;
-  const value = expectedValue(list);
+  const held = heldBack(preview);
+  const value = expectedValue(list, policy);
   const tiles = [
     list && typeof list.treat_rows === "number" ? tile("Contacted", fmtCount(list.treat_rows), "data-cw-tile=contacted") : "",
-    point ? tile(term("comparisonGroup"), fmtCount(point.n_control), "data-cw-tile=comparison") : "",
-    value ? tile("Expected value", fmtRupees(value.amount), "data-cw-tile=value") : "",
+    held ? tile(term("comparisonGroup"), fmtCount(held.count), "data-cw-tile=comparison") : "",
+    value ? tile("Expected value", valueFigure(value), "data-cw-tile=value") : "",
     resultsOn ? tile("Results from", fmtDay(resultsOn), "data-cw-tile=results") : "",
   ].join("");
   const costText = costLine(cost);
   const checked = complianceResult(compliance);
   const rows = [
     ["Test size", lines ? [lines.size].filter(Boolean).join(" ") : "", "data-cw-review-size"],
-    ["Expected value", value ? `${fmtRupees(value.amount)} ${value.text}.` : "", "data-cw-review-value"],
+    ["Expected value", value ? valueSentence(value) : "", "data-cw-review-value"],
     ["Cost", costText ? costText.text : "", "data-cw-review-cost"],
     [
       "Checked before sending",
@@ -321,8 +328,15 @@ export function reviewHtml({ campaign, list, preview, cost, compliance, resultsO
 
 // --- Step 5: Send ---------------------------------------------------------------------------------------
 
-/** Step 5: the one download, and what happens next. Offered only once the test plan is fixed. */
+/** A campaign's status as the API gives it (`live` until a report is stored, then `measured`), in words. */
+const STATUS = { live: { chip: "Live", title: "Your campaign is live" }, measured: { chip: "Measured", title: "Your campaign has its results" } };
+
+/**
+ * Step 5: the one download, and what happens next. Offered only once the test plan is fixed. The status chip
+ * and the title are the campaign's own `status`, never assumed.
+ */
 export function sendHtml({ campaign, plan, downloadHref, resultsOn }) {
+  const status = STATUS[campaign.status] || { chip: String(campaign.status || ""), title: "Your campaign" };
   const when = resultsOn ? ` Add its results after ${fmtDay(resultsOn)}: the campaign's page will ask for them.` : "";
   const tech = techDetails([
     ["Campaign", campaign.campaign_id],
@@ -330,8 +344,8 @@ export function sendHtml({ campaign, plan, downloadHref, resultsOn }) {
     ["Test plan fixed as", plan && plan.plan_hash],
   ]);
   return `${card(
-    "Your campaign is live",
-    `<p class="cw-p" data-cw-live><span class="chip" data-cw-status>Live</span> Download the ${esc(term("contactList").toLowerCase())} and send it from your e-mail or messaging tool.${esc(when)}</p>${actions(
+    status.title,
+    `<p class="cw-p" data-cw-live>${status.chip ? `<span class="chip" data-cw-status>${esc(status.chip)}</span> ` : ""}Download the ${esc(term("contactList").toLowerCase())} and send it from your e-mail or messaging tool.${esc(when)}</p>${actions(
       `<a class="btn primary" href="${esc(downloadHref)}" download data-cw-download>Download ${esc(term("contactList").toLowerCase())}</a><a class="btn quiet" href="#/campaigns/${encodeURIComponent(
         campaign.campaign_id,
       )}" data-cw-open>Open the campaign</a>`,

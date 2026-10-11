@@ -173,17 +173,30 @@ export const fmtShare = (fraction) => `${(Math.round(Number(fraction) * 1000) / 
 export const fmtPoints = (pp) => Number(pp).toLocaleString("en-US", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
 
 /**
- * The plain-language test size (Plan M §3.1): who is held back for comparison, and the smallest change that
- * comparison is sure to see - "Enough to see a 0.6-point change." Every figure is the planner's point at the
- * campaign's own split; with no figure, the planner's own reason is the second sentence.
+ * The customers this list holds back for comparison: the realised count and share the planner's answer
+ * carries (`n_holdout`, `holdout_fraction` - the stratified assignment the list was made with), never the
+ * planner's estimate of an arm at that share (`points[...].n_control`), which can differ. Null without them.
+ */
+export function heldBack(preview) {
+  if (!preview || typeof preview.n_holdout !== "number" || typeof preview.holdout_fraction !== "number") return null;
+  return { count: preview.n_holdout, share: preview.holdout_fraction };
+}
+
+/**
+ * The plain-language test size (Plan M §3.1): who is held back for comparison (`heldBack`, the list's own
+ * count), and the smallest change that comparison is sure to see - "Enough to see a 0.6-point change.", the
+ * planner's point at the campaign's own split; with no figure, the planner's own reason is the second sentence.
  */
 export function testSizeLines(preview) {
   if (!preview) return null;
+  const held = heldBack(preview);
+  const group = held
+    ? `${fmtCount(held.count)} customers (${fmtShare(held.share)}) are not contacted. They are the comparison group, so the result can be measured.`
+    : null;
   const point = ownPoint(preview);
   if (!point) {
-    return { group: null, size: preview.reason || null, ok: false };
+    return { group, size: preview.reason || null, ok: false };
   }
-  const group = `${fmtCount(point.n_control)} customers (${fmtShare(point.holdout_share)}) are not contacted. They are the comparison group, so the result can be measured.`;
   if (typeof point.mde_pp === "number") {
     return { group, size: `Enough to see a ${fmtPoints(point.mde_pp)}-point change.`, ok: true };
   }
@@ -244,20 +257,44 @@ export const fmtRupees = (n) =>
  * The expected value of the contact list, from `treat_list_summary.json`: the net value the list adds
  * (incremental, a list ranked by value, Plan J M97) or, failing that, the expected value of the customers on it
  * (not all of it because of the campaign). Null when the run has neither: then nothing is shown.
+ *
+ * A range is given only when the engine published one for this list: the list's own run's
+ * `policy_recommendation.json` with `net_value_low` and `net_value_high` (`policy`, read for a net value only).
+ * Then the range is what is shown, and the single total is not (it reads as more certain than the engine
+ * claims). Without one, the total stays and the screen says that no range can be given. Nothing is derived here.
  */
-export function expectedValue(summary) {
+export function expectedValue(summary, policy = null) {
   if (!summary) return null;
   if (typeof summary.net_value_total === "number") {
-    return { amount: summary.net_value_total, text: "more than not contacting them (estimated)", kind: "net" };
+    const low = policy && typeof policy.net_value_low === "number" ? policy.net_value_low : null;
+    const high = policy && typeof policy.net_value_high === "number" ? policy.net_value_high : null;
+    if (low !== null && high !== null) {
+      return { amount: null, low, high, text: "more than not contacting them (estimated)", kind: "net" };
+    }
+    return { amount: summary.net_value_total, low: null, high: null, text: "more than not contacting them (estimated)", kind: "net" };
   }
   if (typeof summary.expected_gross_value_total === "number") {
     return {
       amount: summary.expected_gross_value_total,
+      low: null,
+      high: null,
       text: "expected from the customers on the list; not all of it is because of the campaign",
       kind: "gross",
     };
   }
   return null;
+}
+
+/** The expected value as a tile shows it: the range, else the one figure. */
+export const valueFigure = (value) =>
+  value.low !== null && value.high !== null ? `${fmtRupees(value.low)} to ${fmtRupees(value.high)}` : fmtRupees(value.amount);
+
+/** The expected value as Review's line says it, with the range or with the plain note that there is none. */
+export function valueSentence(value) {
+  if (value.low !== null && value.high !== null) {
+    return `Estimated between ${fmtRupees(value.low)} and ${fmtRupees(value.high)} ${value.text.replace(/ \(estimated\)$/, "")}.`;
+  }
+  return `${fmtRupees(value.amount)} ${value.text}. A range cannot be given for this list.`;
 }
 
 /**
@@ -267,7 +304,10 @@ export function expectedValue(summary) {
  */
 export function costLine(estimate) {
   if (!estimate) return null;
-  if (typeof estimate.inr === "number") return { text: `About ${fmtRupees(estimate.inr)} to prepare this list, at list price.`, known: true };
+  // `inr` is `{ amount, inr_per_usd, source, as_of }` once an Admin saved an exchange rate (engine/aws/run_cost.py).
+  if (estimate.inr && typeof estimate.inr.amount === "number") {
+    return { text: `About ${fmtRupees(estimate.inr.amount)} to prepare this list, at list price.`, known: true };
+  }
   if (typeof estimate.estimated_usd === "number") {
     const usd = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 2 }).format(
       estimate.estimated_usd,
@@ -298,6 +338,7 @@ export function complianceResult(summary) {
  * without is a Draft (Audience or Review). `wanted` is the step the URL asked for.
  */
 export function stepForCampaign(view, wanted) {
+  // (A campaign with results is past the wizard altogether: `campaignStepScreen` opens its own page.)
   const planned = Boolean(view && (view.plan || (view.campaign && view.campaign.test_plan_hash)));
   if (planned) return "send";
   return wanted === "send" ? "review" : wanted;

@@ -12,12 +12,11 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
-import { $, $$, installPage, settle, until } from "../harness.mjs";
+import { $, $$, installPage, settle, until } from "../../harness.mjs";
 
 const FIXTURES = process.env.WZ_FIXTURES;
-if (!FIXTURES) throw new Error("WZ_FIXTURES is not set: run these through tests/integration/test_campaign_wizard_ui.py");
 const fx = (name) => JSON.parse(fs.readFileSync(path.join(FIXTURES, `${name}.json`), "utf8"));
-const DEMO = JSON.parse(fs.readFileSync(new URL("../../../../fixtures/ui_demo/api.json", import.meta.url), "utf8"));
+const DEMO = JSON.parse(fs.readFileSync(new URL("../../../../../fixtures/ui_demo/api.json", import.meta.url), "utf8"));
 
 const UC = "win-back-campaign";
 const scoreRun = fx("run");
@@ -49,6 +48,9 @@ const world = {
   posted: [],
   approveAnswer: null,
   runAnswer: null,
+  list, // the list's summary (treat_list_summary.json); a case may answer another
+  preview, // the planner's preview; a case may answer another
+  policy: null, // the list's policy_recommendation.json, when a case has one (else 404, as a non-uplift run)
 };
 
 const ok = (body, status = 200) => ({ status, body });
@@ -76,7 +78,8 @@ const server = (request) => {
     const [, , id, kind, name] = p.split("/");
     if (!kind) return world.runs[id] ? ok(world.runs[id]) : notFound;
     if (kind === "artefacts" && name === "scoring_summary.json") return ok(scoring);
-    if (kind === "artefacts" && name === "treat_list_summary.json") return ok(list);
+    if (kind === "artefacts" && name === "treat_list_summary.json") return ok(world.list);
+    if (kind === "uplift" && name === "policy_recommendation.json") return world.policy ? ok(world.policy) : notFound;
     return notFound;
   }
   if (method === "POST" && p.startsWith("/models/") && p.endsWith("/approve")) {
@@ -93,7 +96,7 @@ const server = (request) => {
   if (method === "GET" && p === `/campaigns/${CID}`) return ok(world.view);
   if (method === "GET" && p === `/campaigns/${CID}/plan-preview`) {
     world.previewQueries = (world.previewQueries || []).concat([query]);
-    return ok(preview);
+    return ok(world.preview);
   }
   if (method === "POST" && p === `/campaigns/${CID}/plan`) {
     world.view = fx("campaign_planned");
@@ -102,11 +105,22 @@ const server = (request) => {
   return notFound;
 };
 
-const { w } = installPage(server, { hash: "#/__start" });
+// A path in `slow` is answered after SLOW_MS, so a case can leave the page while the answer is on its way.
+const slow = new Set();
+const SLOW_MS = 400;
+const delayed = async (request) => {
+  if (slow.has(request.path)) await new Promise((resolve) => setTimeout(resolve, SLOW_MS));
+  return server(request);
+};
+const { w } = installPage(delayed, { hash: "#/__start" });
 // The page's own routing (app.js), the campaign screens that own `#/campaigns` and hand `new` to the wizard.
-const router = await import("../../../../../ui/modules/router.js");
-await import("../../../../../ui/app.js");
-await import("../../../../../ui/modules/decide/index.js");
+const router = await import("../../../../../../ui/modules/router.js");
+const wizard = await import("../../../../../../ui/modules/campaigns/wizard.js");
+const rules = await import("../../../../../../ui/modules/campaigns/wizard_rules.js");
+const rupees = (n) => rules.fmtRupees(n);
+const esc = (t) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+await import("../../../../../../ui/app.js");
+await import("../../../../../../ui/modules/decide/index.js");
 
 // The stand-in for Guided setup: draws a file control, keeps the host the wizard hands it.
 const guided = { host: null, mounts: 0 };
@@ -200,7 +214,14 @@ test("Customers, first campaign: Guided setup mounts to learn; its Approve start
 });
 
 test("Customers: a new model waiting for an approval holds the campaign; an Approver approves it here and the list starts", async () => {
-  world.runs.r_train = runAs("r_train", "train", "done", { model_version_id: "m_wb_1", target: "reactivated_90d" });
+  // The settings the person accepted in Guided setup for the learning, as the run record keeps them (expanded):
+  // the list is built with the same ones - the consent column above all, so no one who said no is contacted.
+  const accepted = { governance: { consent_column: "consent" }, validation: { acknowledged: ["V_SMALL_CLASS"] } };
+  world.runs.r_train = runAs("r_train", "train", "done", {
+    model_version_id: "m_wb_1",
+    target: "reactivated_90d",
+    overrides: accepted,
+  });
   world.models = { versions: [version("m_wb_1", "pending_approval", "r_train")] };
   world.nextRun = ["r_list"];
   world.runs.r_list = runAs("r_list", "score", "running");
@@ -219,8 +240,42 @@ test("Customers: a new model waiting for an approval holds the campaign; an Appr
     upload_id: "u_wizard_list",
     primary_key: scoreRun.run.primary_key,
     model_version_id: "m_wb_1",
+    overrides: accepted,
   });
   await until(() => $("[data-cw-working=list]"), 3000, "the list progress");
+  // The person goes back to the learning's address: the list already started from it is shown, not a new one.
+  const runs = world.posted.filter((x) => x.path === "/runs").length;
+  await open(`#/campaigns/new/customers/${UC}/r_train`);
+  await until(() => w.location.hash === `#/campaigns/new/customers/${UC}/r_list`, 3000, "the list already started");
+  assert.equal(world.posted.filter((x) => x.path === "/runs").length, runs, "no second list");
+});
+
+test("leaving the wizard while a list is prepared: the next poll does not draw the wizard over the other page", async () => {
+  world.runs.r_poll = runAs("r_poll", "score", "running");
+  await open(`#/campaigns/new/customers/${UC}/r_poll`);
+  await until(() => $("[data-cw-working=list]"), 3000, "the list progress");
+  w.location.hash = "#/approvals";
+  await settle(4);
+  await new Promise((resolve) => setTimeout(resolve, wizard.POLL_MS + 600));
+  await settle(4);
+  assert.equal(w.location.hash, "#/approvals");
+  assert.equal($("[data-module=campaign-wizard]"), null, "the wizard is not drawn over another page");
+});
+
+test("leaving the wizard while an answer is on its way: the late answer draws nothing", async () => {
+  world.runs.r_slow = runAs("r_slow", "score", "running");
+  slow.add("/runs/r_slow");
+  try {
+    await open(`#/campaigns/new/customers/${UC}/r_slow`);
+    w.location.hash = "#/approvals";
+    await settle(4);
+    await new Promise((resolve) => setTimeout(resolve, SLOW_MS + 300));
+    await settle(4);
+    assert.equal(w.location.hash, "#/approvals");
+    assert.equal($("[data-module=campaign-wizard]"), null, "the late answer does not draw the wizard");
+  } finally {
+    slow.clear();
+  }
 });
 
 test("Customers: someone who may not approve sees the campaign waiting, with the way to the approvals page", async () => {
@@ -317,11 +372,74 @@ test("Audience: who is contacted by priority, the comparison group and the test 
     $("[data-cw-test-size]").textContent,
     `Enough to see a ${point.mde_pp.toLocaleString("en-US", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}-point change.`,
   );
-  assert.match($("[data-cw-group]").textContent, new RegExp(`^${point.n_control.toLocaleString("en-US")} customers \\(`));
+  assert.match($("[data-cw-group]").textContent, new RegExp(`^${preview.n_holdout.toLocaleString("en-US")} customers \\(`));
   assert.equal(primaries().length, 1);
   $("[data-cw-next]").click();
   await settle(4);
   assert.equal(w.location.hash, `#/campaigns/new/review/${CID}`);
+});
+
+test("Audience: 'Which channel' counts the customers sent on each channel, not the ones it cannot reach", async () => {
+  world.view = fx("campaign_draft");
+  world.list = { ...list, channel_rows: { email: 300, sms: 120 }, channel_counts: { email: 7, sms: 55 } };
+  try {
+    await open(`#/campaigns/new/audience/${CID}`);
+    await until(() => $("[data-cw-channels]"), 3000, "the channel table");
+    const rows = $$("[data-cw-channels] tbody tr").map((tr) => [...tr.querySelectorAll("td")].map((td) => td.textContent));
+    assert.deepEqual(rows, [
+      ["email", "300"],
+      ["sms", "120"],
+    ]);
+  } finally {
+    world.list = list;
+  }
+});
+
+test("Audience and Review: the comparison group is the one this list holds back, not the planner's estimate", async () => {
+  world.view = fx("campaign_draft");
+  const point = preview.points[preview.current_index];
+  // The realised assignment is stratified, so it can differ from the planner's arm size at the same share.
+  world.preview = { ...preview, n_holdout: point.n_control + 3, holdout_fraction: 0.1234 };
+  try {
+    await open(`#/campaigns/new/audience/${CID}`);
+    await until(() => $("[data-cw-group]"), 3000, "the comparison group");
+    assert.match(
+      $("[data-cw-group]").textContent,
+      new RegExp(`^${(point.n_control + 3).toLocaleString("en-US")} customers \\(12\\.3%\\) are not contacted`),
+    );
+    await open(`#/campaigns/new/review/${CID}`);
+    await until(() => $("[data-cw-review]"), 3000, "the review");
+    assert.equal($("[data-cw-tile=comparison] .v").textContent, (point.n_control + 3).toLocaleString("en-US"));
+  } finally {
+    world.preview = preview;
+  }
+});
+
+test("Review: the expected value is the range the list's recommendation gives, else says no range can be given", async () => {
+  world.view = fx("campaign_draft");
+  world.list = { ...list, net_value_total: 2518304.28 };
+  world.policy = { computed_on: "scored", net_value_low: 5314.5, net_value_high: 306932.49 };
+  try {
+    await open(`#/campaigns/new/review/${CID}`);
+    await until(() => $("[data-cw-review-value]"), 3000, "the expected value");
+    assert.equal($("[data-cw-tile=value] .v").textContent, `${rupees(5314.5)} to ${rupees(306932.49)}`);
+    assert.match($("[data-cw-review-value]").textContent, new RegExp(`between ${esc(rupees(5314.5))} and ${esc(rupees(306932.49))}`));
+    world.policy = { computed_on: "scored", net_value_low: null, net_value_high: null };
+    await open(`#/campaigns/new/review/${CID}`);
+    await until(() => $("[data-cw-review-value]"), 3000, "the expected value");
+    assert.equal($("[data-cw-tile=value] .v").textContent, rupees(2518304.28));
+    assert.match($("[data-cw-review-value]").textContent, /A range cannot be given for this list\./);
+  } finally {
+    world.list = list;
+    world.policy = null;
+  }
+});
+
+test("Review: the cost in rupees once an exchange rate is saved", () => {
+  const line = rules.costLine({ estimated_usd: 1.25, inr: { amount: 104.5, inr_per_usd: 83.6, source: "admin", as_of: "2026-10-01" } });
+  assert.equal(line.text, `About ${rupees(104.5)} to prepare this list, at list price.`);
+  assert.equal(line.known, true);
+  assert.match(rules.costLine({ estimated_usd: 1.25, inr: null }).text, /^About \$1\.25 /);
 });
 
 test("Review: the figures, then Approve registers the plan with the planner's numbers before Send is offered", async () => {
@@ -329,7 +447,7 @@ test("Review: the figures, then Approve registers the plan with the planner's nu
   await open(`#/campaigns/new/review/${CID}`);
   await until(() => $("[data-cw-review]"), 3000, "the review");
   assert.equal($("[data-cw-tile=contacted] .v").textContent, list.treat_rows.toLocaleString("en-US"));
-  assert.equal($("[data-cw-tile=comparison] .v").textContent, preview.points[preview.current_index].n_control.toLocaleString("en-US"));
+  assert.equal($("[data-cw-tile=comparison] .v").textContent, preview.n_holdout.toLocaleString("en-US"));
   assert.ok($("[data-cw-review-cost]"), "the cost line");
   assert.equal($("[data-cw-review-compliance]"), null, "the compliance switch is off: no compliance line");
   assert.equal(primaries().length, 1);
@@ -359,6 +477,22 @@ test("Send: the one download, offered only with the plan fixed; the campaign is 
   assert.match($("[data-cw-live]").textContent, new RegExp(`Add its results after ${date}`));
   assert.equal(primaries().length, 1);
   assert.equal($("[data-cw-open]").getAttribute("href"), `#/campaigns/${CID}`);
+});
+
+test("Send: the status is the campaign's own; a campaign with results opens its own page", async () => {
+  const planned = fx("campaign_planned");
+  world.view = { ...planned, campaign: { ...planned.campaign, status: "measured" } };
+  try {
+    await open(`#/campaigns/new/send/${CID}`);
+    await until(() => $("[data-cw-status]"), 3000, "Send");
+    assert.equal($("[data-cw-status]").textContent, "Measured");
+    assert.doesNotMatch($("[data-cw-send]").textContent, /live/i);
+    world.view = { ...world.view, report: { campaign_id: CID } };
+    await open(`#/campaigns/new/send/${CID}`);
+    await until(() => w.location.hash === `#/campaigns/${CID}`, 3000, "the campaign's own page");
+  } finally {
+    world.view = fx("campaign_planned");
+  }
 });
 
 test("a refresh resumes from the server: a planned campaign opens on Send, a Draft never offers the download", async () => {
