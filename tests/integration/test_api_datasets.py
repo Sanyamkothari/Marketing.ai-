@@ -1139,9 +1139,18 @@ def test_every_artefact_of_a_finished_build_is_served_from_what_the_build_wrote(
     assert features_sql.status_code == 200, features_sql.text
     assert features_sql.headers["content-type"].startswith("text/plain")
 
-    listed = full_client.get("/datasets", params={"client_id": ctx["client_id"]})
-    assert listed.status_code == 200, listed.text
-    assert dataset_id in {row["dataset_id"] for row in listed.json()["datasets"]}
+    # The build writes `done` and the route registers the dataset in the client's list a moment later
+    # (the race 74d7154 fixed for the leak-check test): wait for the registration, as a person reading
+    # the list would, instead of reading the list in that gap.
+    deadline = time.monotonic() + BUILD_TIMEOUT_S
+    while True:
+        listed = full_client.get("/datasets", params={"client_id": ctx["client_id"]})
+        assert listed.status_code == 200, listed.text
+        if dataset_id in {row["dataset_id"] for row in listed.json()["datasets"]}:
+            break
+        if time.monotonic() >= deadline:
+            raise AssertionError(f"dataset {dataset_id} was never registered in the client's list")
+        time.sleep(0.05)
 
 
 # ---------------------------------------------------------------------------
