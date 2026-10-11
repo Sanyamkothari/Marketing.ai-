@@ -41,18 +41,21 @@ Starting a campaign needs the Analyst role; anyone else can look but not start.
    - The first campaign for a goal also needs a file that says what each customer did last time. Marketing AI
      learns from it, which takes a few minutes, then picks who to contact from the same customers.
    - Later campaigns for the same goal skip the learning and use the model already approved.
-   - If what Marketing AI learned needs approval, a person with the Approver role approves it. It shows under
-     **Waiting for approval** (the bell). If you are an Approver you can approve it right there.
-3. **Audience.** Check **Who is contacted**: how many customers are in each priority (High, Medium, Low), which
-   offer each gets and on which channel. The page also says how many customers are kept as the **comparison
-   group** (not contacted) and how large a change the test can detect, in a line such as "Enough to see a
-   2-point change". Choose **Continue**.
-4. **Review.** **Check and approve** shows how many are contacted, the comparison group, the expected value,
-   the date results are due, the cost and, where it is switched on, how many customers passed the compliance
-   check. Choose **Approve**. Approving fixes how the campaign will be judged, so it cannot be bent to flatter
-   the result later.
-5. **Send.** The campaign is now **Live**. Choose **Download contact list** and send that one file from your
-   e-mail or messaging tool. **Open the campaign** takes you to its page.
+   - If what Marketing AI learned needs approval, a person with the Approver role approves it. If you are an
+     Approver, you approve it on the Review step, in the same click as the campaign (unless you started the learning
+     yourself: then another Approver approves it under **Waiting for approval**, the bell). Anyone else waits
+     here, with a link to **Waiting for approval**; nothing can be sent until it is approved.
+3. **Audience.** Audience and Review share one screen. **Who is contacted** shows how many customers are in each
+   priority (High, Medium, Low), which offer each gets and on which channel. The page also says how many customers
+   are kept as the **comparison group** (not contacted) and how large a change the test can detect, in a line such
+   as "Enough to see a 2-point change".
+4. **Review.** Below it, **Check and approve** shows how many are contacted, the comparison group, the expected
+   value, the date results are due, the cost and, where it is switched on, how many customers passed the compliance
+   check. Choose **Approve and download** (on a goal's first campaign an Approver's button reads **Approve the new
+   model and this plan, then download**). Approving fixes how the campaign will be judged, so it cannot be bent to
+   flatter the result later; only then does the contact list download.
+5. **Send.** The campaign is now **Live** and your contact list is downloading. Send that one file from your e-mail
+   or messaging tool. **Open the campaign** takes you to its page; **Download again** fetches the same file.
 
 Nothing is sent to a customer by Marketing AI. It gives you the list.
 
