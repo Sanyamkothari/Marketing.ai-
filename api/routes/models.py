@@ -41,7 +41,7 @@ from api.schemas import (
     ModelVersionResponse,
 )
 from engine.access.roles import Principal
-from engine.approvals import DecisionKind, record_decision, separation_refusal, trainer_of
+from engine.approvals import DecisionKind, identity_part, record_decision, separation_refusal, trainer_of
 from engine.contracts import ModelStatus, ModelVersion
 from engine.registry import ModelRegistry, RegistryError
 from engine.storage import Storage
@@ -194,8 +194,12 @@ def _record(
     """Append the decision to `model_decision`; an app without access control has nobody to record."""
     if principal is None:
         return
-    from api.access import get_platform_engine
+    from api.access import get_platform_engine, set_audit_context
 
+    # Plan M M184 (DEC-1614 (e)): with sign-in off the decider is the local operator (every role at once), so the
+    # audit event says the identity was not verified; a signed-in decision's event is unchanged.
+    if identity_part(principal):
+        set_audit_context(request, details=identity_part(principal))
     record_decision(
         get_platform_engine(request),
         version,

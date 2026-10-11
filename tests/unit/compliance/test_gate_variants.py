@@ -259,7 +259,9 @@ def test_the_new_reasons_come_last_so_other_rows_list_theirs_as_before() -> None
         "COMPLIANCE_TEMPLATE_MISMATCH",
         "COMPLIANCE_URL_NOT_WHITELISTED",
     )
-    assert REASON_ORDER[6:] == ("COMPLIANCE_VARIANT_NO_COPY", "COMPLIANCE_VARIANT_UNREGISTERED")
+    assert REASON_ORDER[6:8] == ("COMPLIANCE_VARIANT_NO_COPY", "COMPLIANCE_VARIANT_UNREGISTERED")
+    # Plan M M184 (DEC-1614 (c)): the strict gate's reason comes after them, for the same reason.
+    assert REASON_ORDER[8:] == ("COMPLIANCE_MESSAGE_NOT_CHECKED",)
 
 
 def test_decide_lists_no_copy_and_unregistered_and_a_changed_catalogue_alone() -> None:

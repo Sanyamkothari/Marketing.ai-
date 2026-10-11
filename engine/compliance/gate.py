@@ -26,6 +26,12 @@ channel, which is never allowed (`COMPLIANCE_NO_CHANNEL`: a contact the gate cou
    message arms are in force, a customer of a variant arm is checked on that variant's own words
    (`engine.compliance.variants`): no approved words of their variant on the channel, or words with no registered
    template to check them against on it (fail closed). A row of no variant never carries either.
+9. `COMPLIANCE_MESSAGE_NOT_CHECKED` - Plan M M184 (DEC-1614 (c)), only with `compliance.gate.strict` on
+   (`rules.strict`): the words the row would send were not checked - no catalogue (or no catalogue action for the
+   row, so no words are known), an action with no `message_text`, a DLT channel whose action has no
+   `dlt_template_text`, or no URL whitelist (`MessageVerdict.unchecked`, worked out by
+   `engine.compliance.handoff`). Off (the default), such a row is allowed, as before, and its file lists the check
+   as not run.
 
 **Output** (:func:`decision_schema`): the key columns, `channel`, `purpose`, `action_id`, `allowed`, `reasons`
 (a list of codes), `ledger_ref` (the contactability file's reference where it covers the customer, and for an
@@ -81,6 +87,9 @@ REASON_ORDER: Final[tuple[str, ...]] = (
     # no variant lists its reasons exactly as before.
     "COMPLIANCE_VARIANT_NO_COPY",
     "COMPLIANCE_VARIANT_UNREGISTERED",
+    # Plan M M184 (DEC-1614 (c)): with `compliance.gate.strict` on only; appended, so every other row lists its
+    # reasons exactly as before.
+    "COMPLIANCE_MESSAGE_NOT_CHECKED",
 )
 """Every reason a row can carry, in the order a row lists them."""
 
@@ -101,6 +110,9 @@ class MessageVerdict:
     unregistered: bool = False
     """Plan K M145: a variant's words with no registered template to check them against on the channel
     (`COMPLIANCE_VARIANT_UNREGISTERED`)."""
+    unchecked: bool = False
+    """Plan M M184: a check the strict gate requires did not run on these words (`COMPLIANCE_MESSAGE_NOT_CHECKED`,
+    only when `GateRules.strict`)."""
 
 
 @dataclass(frozen=True)
@@ -113,6 +125,8 @@ class GateRules:
     """`<run file>#sha256=<hex>` of the contactability file read; null when the run wrote none."""
     opt_in_channels: tuple[str, ...] = ()
     catalogue_changed: bool = False
+    strict: bool = False
+    """Plan M M184 (DEC-1614 (c)): `compliance.gate.strict`; a row whose words were not checked is withheld."""
 
 
 def decision_schema(key_columns: Sequence[str]) -> pa.Schema:
@@ -288,14 +302,19 @@ def decide(
     url_small = np.zeros(len(pairs), dtype=bool)
     no_copy_small = np.zeros(len(pairs), dtype=bool)
     unregistered_small = np.zeros(len(pairs), dtype=bool)
+    unchecked_small = np.zeros(len(pairs), dtype=bool)
     refs_small: list[str | None] = [None] * len(pairs)
     for position, pair in enumerate(pairs):
         action_code, channel_code = divmod(int(pair), width)
         if action_code == 0 or channel_code == 0:
+            # Plan M M184: strict, a contact with no catalogue action sends words nobody checked.
+            unchecked_small[position] = rules.strict and channel_code != 0
             continue
         verdict = (messages or {}).get((str(actions[action_code - 1]), str(channels[channel_code - 1])))
         if verdict is None:
+            unchecked_small[position] = rules.strict
             continue
+        unchecked_small[position] = rules.strict and verdict.unchecked
         template_small[position] = verdict.template_mismatch
         url_small[position] = verdict.url_not_whitelisted
         refs_small[position] = verdict.catalogue_ref
@@ -308,6 +327,7 @@ def decide(
     # registration is read from it, so like the other message checks it is not read from a changed one.
     no_copy_fail = has_channel & no_copy_small[pair_codes]
     unregistered_fail = message_ok & unregistered_small[pair_codes]
+    unchecked_fail = message_ok & unchecked_small[pair_codes]
 
     # The reasons as a list column: one nonzero() over the (rows x reasons) matrix, row-major.
     matrix = np.column_stack(
@@ -320,6 +340,7 @@ def decide(
             url_fail,
             no_copy_fail,
             unregistered_fail,
+            unchecked_fail,
         ]
     )
     rows_hit, which = np.nonzero(matrix)

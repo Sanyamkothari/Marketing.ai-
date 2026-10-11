@@ -1110,6 +1110,16 @@ class ScheduleFirer:
             )
         except ScoreError as exc:
             raise FiringError(exc.code, exc.message) from exc
+        # Plan M M184 (DEC-1614 (b)): nobody chooses the model when a schedule fires, so while approval is
+        # required a named version must be an approved one. The champion (no version named) always is, and
+        # `POST /runs`, where a person names the version, is unchanged.
+        named = schedule.parameters.model_version_id
+        if named is not None and config.governance.approval_required:
+            from engine.model_approval import MODEL_NOT_APPROVED, unapproved_model_message
+
+            refusal = unapproved_model_message(services.registry, version.model_id)
+            if refusal is not None:
+                raise FiringError(MODEL_NOT_APPROVED, refusal)
         manifest = self._dataset(schedule, config, mode=RunMode.SCORE)
         record = self._start(resolved, manifest, mode=RunMode.SCORE, version=version)
         return _Outcome(FiringStatus.RUNNING, "SCORING_STARTED", record.run_id, manifest.dataset_id)

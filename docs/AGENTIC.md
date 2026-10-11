@@ -160,13 +160,17 @@ index lookups; verification refuses an entry whose column disagrees with its bod
   the chain at that entry, and a re-hashed forgery breaks the next link or its signature.
 * Kinds: `proposal.drafted`, `proposal.refused`, `proposal.approved`, `proposal.rejected`, `proposal.expired`,
   `approval.refused`, `proposal.execution_failed`, `campaign_plan.executed` (M139), `test_plan.frozen` (with the campaign's holdout scope, epoch
-  and salt id: the holdout commitment), `evidence.label`. Approvals, frozen test plans and evidence labels are
-  signed over `entry_hash`.
+  and salt id: the holdout commitment), `evidence.label`, and `copy_template.approved` (Plan M M184: a copy
+  template's approval, with its `template_id` and the `template_sha256` of its words; written only while
+  `agentic.enabled` is on, §9b). Approvals (of proposals and of copy templates), frozen test plans and evidence
+  labels are signed over `entry_hash`.
 * `Signer` protocol: `FileKeySigner` (Ed25519, `cryptography`, already pinned; `<data dir>/agentic/
   ledger_signing_key.pem`, created once with 0600 permissions), `FakeSigner` for tests; AWS KMS on client
   deployments later (design §3.2, open question 2).
 * A body holds only the keys in `BODY_KEYS` (ids, digests, codes, labels, the policy version) with scalar
-  values: an approver's reason is kept as its digest. Erasure never touches the ledger.
+  values: an approver's reason is kept as its digest. `identity_verified` (Plan M M184) is `false` on an approval
+  or rejection made with sign-in off (the local operator) and absent on a signed-in one. Erasure never touches
+  the ledger.
 * `python -m engine.agentic.ledger verify [--data-dir DIR] [--key PATH] [--from-checkpoint ENTRY_HASH]` walks
   the chain in batches (linear in the entries) and checks every signature; on the first bad entry it prints
   `LEDGER_CHAIN_BROKEN` or `LEDGER_SIGNATURE_INVALID` with its `seq` and exits 1. `--from-checkpoint` walks only
@@ -525,7 +529,7 @@ proposal, so a crash inside it never leaves two pending proposals for one plan:
 | SELECT | Rules only: `safe` first, then the most contactable, then the use case's channel order; the first candidate every policy rule allows; when none is, the first, so the refusal is drafted and on the ledger. Nothing left: `PLANNER_NO_CANDIDATE`. | - |
 | CHECK, DRAFT | The M132 policy's decisions; `Proposal(kind=campaign_plan)` citing every tool result, with the test plan to register on approval (`test.registered` allows a new campaign carrying its test plan, DEC-1406 (b)). The narrative is stored beside the payload and its digest on the ledger entry; the payload digest never includes prose. | The narrative, as structured claims. |
 | INTERRUPT | A person approves at `POST /agentic/proposals/{id}/approve` (the policy checked again). | - |
-| EXECUTE | Through the product's own functions, each result written to the state before the next, so a retried approval opens no second campaign: the treat list (`ensure_treat_list`), the campaign (`open_campaign`, the engine half of `POST /campaigns`, its treatment starting at the approval), the test plan (`register_plan`, signed `test_plan.frozen`, its holdout commitment from the one `engine.agentic.ledger.holdout_commitment`), and the use case's enabled `measure` schedule when there is one; `campaign_plan.executed` on the ledger. An approval later than the drafted analysis date minus the window is `PROPOSAL_STALE` (draft again), so a frozen plan never reads its result before the window closes. **Agreed deviation from the spec's "schedule measure":** no measure schedule is created - one needs a saved connection and a table a person chooses, which an approval does not carry - so the hand-off names the enabled schedule or says when and how to measure. | - |
+| EXECUTE | Through the product's own functions, each result written to the state before the next, so a retried approval opens no second campaign: the treat list, limited to the approved channel and number of contacts (`build_treat_list` under `campaign_scope.json`; M184, §9b), the campaign (`open_campaign`, the engine half of `POST /campaigns`, its treatment starting at the approval), the test plan (`register_plan`, signed `test_plan.frozen`, its holdout commitment from the one `engine.agentic.ledger.holdout_commitment`), and the use case's enabled `measure` schedule when there is one; `campaign_plan.executed` on the ledger. An approval later than the drafted analysis date minus the window is `PROPOSAL_STALE` (draft again), so a frozen plan never reads its result before the window closes. **Agreed deviation from the spec's "schedule measure":** no measure schedule is created - one needs a saved connection and a table a person chooses, which an approval does not carry - so the hand-off names the enabled schedule or says when and how to measure. | - |
 
 **Claims, not prose** (design §4, `engine/agentic/claims.py`). The model returns
 `{"sentences": [{"template", "claim"}]}`; each claim references evidence by `ev_<id>:<path>`. The verifier checks
@@ -556,7 +560,10 @@ this customer on this channel, for this purpose, and if not, why. Off by default
 (`opt_in_channels`, `dlt_var_max_chars`) are in `configs/compliance/compliance.yaml`, which refuses an `enabled` of
 its own (`COMPLIANCE_SWITCH_MISPLACED`) rather than ignore it. Off, a treat list build reads those two files,
 nothing else of `engine/compliance` runs, nothing new is written, and every treat list is byte for byte what it
-was. The gate does not need `agentic.enabled`.
+was. The gate does not need `agentic.enabled`. Plan M M184 (DEC-1614 (c)): with `compliance.gate.strict: true`
+in the same settings file, a contact whose words the gate could not check (no catalogue, no catalogue action for
+the contact, no `message_text`, no `dlt_template_text` on a DLT channel, no URL whitelist) is withheld with
+`COMPLIANCE_MESSAGE_NOT_CHECKED` instead of allowed (§9b).
 
 **When it runs.** On, `engine.decide.treat_list.build_treat_list` calls `engine.compliance.handoff.gate_treat_list`
 after it has chosen every customer's treat flag, offer and channel and before it writes anything. Every route and
@@ -682,6 +689,20 @@ arms' work is integer codes over the customers, and each variant's words are che
 checked since M145); the template's DLT header (sender id) is not checked; WhatsApp's own template approval is the provider's; a message's variables
 are checked as the product holds them, not as a client's tool fills them per customer at send time.
 
+## 9b. Safety fixes from the autonomy audit (Plan M M184, DEC-1614)
+
+The audit of what would have to hold before anything ran unattended found five places where what was checked and
+what happened could differ. Each is closed below; every default is what it was, except where a hole is closed, and
+those are said plainly.
+
+| # | What could happen | What happens now | Default |
+|---|---|---|---|
+| 1 | EXECUTE built the run's **whole** treat list - every channel, every contactable customer - while the policy had checked one channel and `planned_contacts`. | EXECUTE writes the approved limits as `campaign_scope.json` beside the run and builds the list under them (`engine/decide/campaign_scope.py`): a customer the list would contact on another channel (or none) is not contacted, and beyond `planned_contacts` the customers are kept from the highest value of the run's **own ranking column** down - on an uplift run the list's `net_value` when it holds values, else the predicted `uplift`; on a propensity run its score (`actions.score_field` of the run's own settings); a row missing it last, ties by key text. The column used is in the summary (`campaign_scope_ranked_by`) and in each such row's `offer_reason`. The list is never cut by key order alone: when a cut is needed and the run has no ranking column - an uplift run whose list was ranked by a propensity model (`ranking_choice.json` says `propensity_model`) does not keep that model's score - the build refuses with `CAMPAIGN_LIST_NOT_AS_APPROVED`, and so does EXECUTE (nothing opened, the limits removed, the proposal still pending). The held-back and control rows keep their flags and the campaign's comparison is built from the scores as before (intent to treat). EXECUTE then checks what the list holds and refuses with `CAMPAIGN_LIST_NOT_AS_APPROVED` if anyone else is contacted. Every later build of that run's list (a download, a rebuild through the gate) keeps the limits. | Closed for every approved plan. A run the planner never carried out has no `campaign_scope.json` and its list is byte for byte what it was. |
+| 2 | A scheduled scoring firing could name any model version - a candidate, one waiting for approval - and the planner planned any run's list. | One rule and one code, shared with the contact-list routes (`engine/model_approval.py`; the routes' `409 MODEL_NOT_APPROVED`, Plan M final integration): a version still waiting for approval, or turned down (archived without ever being champion), is not approved anywhere; a plain **candidate** nobody approved or promoted is not approved **for a step nobody chooses the model of** only - a person who names it on `POST /runs` may still score with it and download its list (DEC-050). With `governance.approval_required` on, a scheduled firing that names such a version fails with `MODEL_NOT_APPROVED`; the planner skips runs scored with one (`PLANNER_NO_CANDIDATE` says so) and EXECUTE refuses one (`409 MODEL_NOT_APPROVED`; approval counts as required when the use case's settings or the run's own require it). The champion and a demoted former champion are always approved. | Closed when approval is required (the shipped default); unchanged when it is not. |
+| 3 | The compliance gate failed open: no catalogue, an action without `message_text` or `dlt_template_text`, no URL whitelist - "not checked", but allowed. | `compliance.gate.strict` (`configs/compliance/compliance.yaml`) withholds those contacts with `COMPLIANCE_MESSAGE_NOT_CHECKED`; a check the configuration deliberately does not apply (a channel the region needs no DLT template on, a channel the whitelist does not cover) still allows. §9a. | `strict: false`: as before, byte for byte (the rules gain `strict: true` only when on). |
+| 4 | A copy template could be approved by the person who asked for it, and the approval was not on the ledger. | With sign-in on, whoever asked for the copy (`copy_batch.json` `requested_by`) or for one template's words again (`regenerated_by`) is refused with `403 SEPARATION_OF_DUTIES`, as a model's trainer is (DEC-862). With `agentic.enabled` on, each approval is a signed `copy_template.approved` entry (the template id and the sha256 of its words) on the decision ledger, written before the approval is stored. | The separation check is on wherever sign-in is; the ledger entry only with `agentic.enabled`. Sign-in off: nobody is refused, as before. |
+| 5 | With sign-in off every request is the local operator, holding every role, so separation of duties cannot hold. | Approvals with sign-in off are recorded with `identity_verified: false` (on the ledger's `proposal.approved` / `proposal.rejected` and `copy_template.approved` entries, and in the audit event of every model decision: approve, promote and reject); a signed-in decision's record is unchanged. `agentic.require_sign_in` (§11) makes EXECUTE refuse an approval by anyone but a signed-in person (`AUTH_NOT_CONFIGURED`, 503) - `engine.agentic.config.require_verified_identity`, which any later unattended step must call too. | `require_sign_in: false`, because a laptop with sign-in off approves campaign plans today (and the planner's own tests do); turn it on for any deployment that acts without a person. |
+
 ## 10. Milestones
 
 The milestones are in `docs/plans/MARKETING_AI_PLAN_K_PROPOSAL.md` §3.2; the README's Plan K table lists the tests of
@@ -717,4 +738,5 @@ refused (`CONFIG_INVALID`), never ignored. `tests/unit/agentic/test_flags.py` pi
 |---|---|---|
 | `agentic.enabled` | M132 | no `/agentic` route, no table created and no file written by the app (§1) |
 | `compliance.gate.enabled` | M134 | no pre-send gate: every treat list byte for byte as before (§9a); its settings (opt-in channels, the longest DLT slot value) are in `configs/compliance/compliance.yaml`, which refuses a switch of its own |
+| `agentic.require_sign_in` | M184 (Plan M, DEC-1614 (e)) | an approved campaign plan is carried out whoever approved it, as before; with sign-in off the ledger marks the approval `identity_verified: false` (§9b). Not written in the shipped file (its comment documents it), so the file still names exactly the three switches |
 | `mcp.enabled` | M133 | no `/mcp` route and the MCP SDK not imported (§8); its settings (workspace, demo use cases, rate limits, call timeout, and M141's client workspaces and tasks, §8.7) are in `configs/agentic/mcp.yaml` |

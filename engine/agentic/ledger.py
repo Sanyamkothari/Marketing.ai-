@@ -111,9 +111,15 @@ TEST_PLAN_FROZEN: Final[str] = "test_plan.frozen"
 EVIDENCE_LABEL: Final[str] = "evidence.label"
 CAMPAIGN_PLAN_EXECUTED: Final[str] = "campaign_plan.executed"
 """Plan K M139: an approved campaign plan carried out (treat list, campaign, frozen test plan)."""
+COPY_TEMPLATE_APPROVED: Final[str] = "copy_template.approved"
+"""Plan M M184 (DEC-1614 (d)): a person approved one campaign-copy template (`api.routes.generative`); written only
+while `agentic.enabled` is on. Its body holds the template's id and the sha256 of its words, never the words."""
 
-SIGNED_KINDS: Final[frozenset[str]] = frozenset({PROPOSAL_APPROVED, TEST_PLAN_FROZEN, EVIDENCE_LABEL})
-"""Approvals, test plans and evidence labels are signed (design §3.2)."""
+SIGNED_KINDS: Final[frozenset[str]] = frozenset(
+    {PROPOSAL_APPROVED, TEST_PLAN_FROZEN, EVIDENCE_LABEL, COPY_TEMPLATE_APPROVED}
+)
+"""Approvals (of proposals and, since Plan M M184, of copy templates), test plans and evidence labels are signed
+(design §3.2)."""
 
 BODY_KEYS: Final[frozenset[str]] = frozenset(
     {
@@ -153,6 +159,11 @@ BODY_KEYS: Final[frozenset[str]] = frozenset(
         # sha256 of the rules it applied (`engine.compliance.handoff`).
         "artefact_sha256",
         "rule_version",
+        # Plan M M184 (DEC-1614 (d), (e)): a copy template's approval - its id and the sha256 of its words - and,
+        # on an approval with sign-in off (the local operator, every role at once), `identity_verified: false`.
+        "template_id",
+        "template_sha256",
+        "identity_verified",
     }
 )
 """The only keys a body may hold: ids, digests, codes and labels, never a row (see the module docstring)."""

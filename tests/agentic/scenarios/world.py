@@ -42,7 +42,7 @@ from engine.agentic.ledger import signer_for_data_dir
 from engine.agentic.registry import ToolContext
 from engine.agentic.service import agentic_context
 from engine.config import ResolvedConfig, RunMode, resolve_config
-from engine.contracts import RunState
+from engine.contracts import ModelStatus, RunState
 from engine.jobs import CancelToken, NullJobRunner
 from engine.measurement.campaign import SqlCampaignStore
 from engine.pipeline import Pipeline, StageContext
@@ -258,6 +258,11 @@ def build_world(source_configs: Path, base: Path) -> World:
         record = Pipeline(storage, registry, NullJobRunner()).run_train(train)
         assert record.state is RunState.DONE, record.error
         assert record.model_version_id is not None
+        # Plan M M184 (DEC-1614 (b)): the campaign planner plans only lists scored with an approved model while
+        # the use case requires approval (the shipped default). The uplift champion rule left this one a
+        # candidate, so an Approver makes it the model in use, as a deployment would before planning on it.
+        if registry.get(record.model_version_id).status is not ModelStatus.CHAMPION:
+            registry.promote(record.model_version_id, by="u_ravi", note="Approved for the scenario world.")
         storage.write_model(run_key(SCORE_RUN, "run_config.json"), resolved)  # as `POST /runs` does
         source = upload_key("u_a13200000002", "source.csv")
         _write_csv(storage, source, scoring_frame())

@@ -7,8 +7,10 @@
   was (DEC-1404 (a)). With it off a treat list build reads the two files and nothing else of `engine.compliance`,
   and every treat list is byte for byte what it was.
 * `configs/compliance/compliance.yaml` - the gate's settings only: `opt_in_channels` (default `[whatsapp]`: the
-  channels sent on only with a grant on that channel itself in the consent ledger) and `dlt_var_max_chars`
-  (default 30; null for no limit). A missing file is the defaults. A switch written here
+  channels sent on only with a grant on that channel itself in the consent ledger), `dlt_var_max_chars`
+  (default 30; null for no limit) and, since Plan M M184 (DEC-1614 (c)), `strict` (default false: a check that
+  could not run is listed as not run and the contact allowed; true: the contact is withheld with
+  `COMPLIANCE_MESSAGE_NOT_CHECKED`). A missing file is the defaults. A switch written here
   (`compliance.gate.enabled`) is refused with `COMPLIANCE_SWITCH_MISPLACED`, never ignored, so nobody believes
   they turned the gate on (or off) in a file that does not decide it.
 * `configs/compliance/url_whitelist.yaml` (`engine.compliance.urls.UrlWhitelist`), absent by default; else a
@@ -62,6 +64,15 @@ class GateSettings(_Strict):
     dlt_var_max_chars: Annotated[int, Field(ge=1, le=500)] | None = Field(
         default=30,
         description="The longest value of a {#var#}, {#numeric#} or {#alphanumeric#} slot; null for no limit.",
+    )
+    strict: bool = Field(
+        default=False,
+        description=(
+            "Plan M M184 (DEC-1614 (c)): withhold a contact whose words the gate could not check - no catalogue "
+            "(or no catalogue action for the contact), an action with no message_text, a DLT channel whose action "
+            "has no dlt_template_text, or no URL whitelist - with COMPLIANCE_MESSAGE_NOT_CHECKED. False (the "
+            "default) allows them and lists the check as not run, as before."
+        ),
     )
 
     @field_validator("opt_in_channels", mode="before")

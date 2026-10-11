@@ -31,7 +31,7 @@ from api.routes.models import registry_http
 from api.routes.uploads import http_error
 from api.schemas import ApprovalListResponse, ErrorResponse, ModelDecisionResponse, ModelRejectRequest
 from engine.access.roles import Role
-from engine.approvals import pending_approvals, record_decision
+from engine.approvals import identity_part, pending_approvals, record_decision
 from engine.contracts import ModelStatus
 from engine.registry import RegistryError
 
@@ -135,5 +135,9 @@ def reject_model(
         reason=body.reason,
         champion_id=None if champion is None else champion.model_id,
     )
-    set_audit_context(request, details={"use_case_id": version.use_case_id, "model_id": model_id})
+    # Plan M M184 (DEC-1614 (e)): with sign-in off, `identity_verified: false`, as an approval or promotion says.
+    set_audit_context(
+        request,
+        details={"use_case_id": version.use_case_id, "model_id": model_id, **identity_part(principal)},
+    )
     return ModelDecisionResponse(version=archived, is_champion=False, decision=decision)

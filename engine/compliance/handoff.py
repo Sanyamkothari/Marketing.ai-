@@ -14,7 +14,11 @@ before it writes anything. For the customers the list would contact:
    so a reader can recompute it. A check that was not applied is written there as `null`.
 2. **Per message** (once per action and channel): the DLT matcher on the DLT channels, when the action has both
    `dlt_template_text` and `message_text`; the whitelist on its channels, when the action has `message_text`.
-   What was not checked, and why, is listed per action and channel in `messages`.
+   What was not checked, and why, is listed per action and channel in `messages`. Plan M M184 (DEC-1614 (c)):
+   with `compliance.gate.strict` on, a contact whose words a check could not run on - no catalogue (or no catalogue
+   action for the contact), no `message_text`, no `dlt_template_text` on a DLT channel, no URL whitelist - is
+   withheld with `COMPLIANCE_MESSAGE_NOT_CHECKED` instead of allowed, and the rules gain `strict: true`. Off (the
+   default) the gate fails open on these as before, and nothing it writes changes.
 3. **Per customer:** `engine.compliance.gate.decide`, over the run's own `channel_contactability.parquet` and the
    opt-in grants (`engine.compliance.optin.channel_grants`, read for the customers who plan an opt-in channel).
 4. **The list.** A customer is sent on the first planned channel the gate allows - the channel they had, or the
@@ -309,6 +313,36 @@ def message_checks(
     return verdicts, tuple(checks)
 
 
+def _mark_unchecked(
+    verdicts: dict[tuple[str, str], MessageVerdict],
+    checks: Sequence[MessageCheck],
+    *,
+    dlt_channels: tuple[str, ...],
+    whitelist: Any,
+) -> dict[tuple[str, str], MessageVerdict]:
+    """Plan M M184 (DEC-1614 (c)), strict only: each verdict whose words a required check did not run on, marked
+    `unchecked` - the DLT template on a DLT channel, or the links (unless a whitelist exists and deliberately does
+    not cover the channel). A variant arm's verdict (no `MessageCheck` of its own: its template check already fails
+    closed) is marked when there is no whitelist at all. A row with no verdict at all is withheld by `decide`.
+    """
+    from dataclasses import replace
+
+    by_key = {(check.action_id, check.channel): check for check in checks}
+    out: dict[tuple[str, str], MessageVerdict] = {}
+    for key, verdict in verdicts.items():
+        check = by_key.get(key)
+        if check is None:
+            missing = whitelist is None
+        else:
+            template_missing = check.channel in dlt_channels and not check.template_checked
+            urls_missing = not check.urls_checked and (
+                whitelist is None or whitelist.applies_to(check.channel)
+            )
+            missing = template_missing or urls_missing
+        out[key] = replace(verdict, unchecked=True) if missing else verdict
+    return out
+
+
 def _opt_ins(
     storage: Storage,
     *,
@@ -506,6 +540,9 @@ def gate_treat_list(
     }
     if variants is not None:
         rules["variant_arms"] = variants.rules()
+    if settings.strict:
+        # Plan M M184 (DEC-1614 (c)): written only when on, so the rules and rule_version are unchanged by default.
+        rules["strict"] = True
     rule_version = digest(rules)
 
     # 2. The customers the list would contact, and their planned channels. Plan K M145: a variant customer's
@@ -550,6 +587,8 @@ def gate_treat_list(
             whitelist=whitelist,
             var_max_chars=settings.dlt_var_max_chars,
         )
+    if settings.strict:
+        verdicts = _mark_unchecked(verdicts, checks, dlt_channels=dlt_on, whitelist=whitelist)
     opt_ins = _opt_ins(
         storage,
         customers=customers,
@@ -571,6 +610,7 @@ def gate_treat_list(
             contactability_ref=contactability_ref,
             opt_in_channels=settings.opt_in_channels,
             catalogue_changed=changed,
+            strict=settings.strict,
         ),
         contactability=contactability,
         opt_ins=opt_ins,
