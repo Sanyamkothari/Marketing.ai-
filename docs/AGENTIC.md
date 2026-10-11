@@ -30,7 +30,7 @@ Every Plan K change keeps these, and a test enforces each one (design §0).
 | # | Invariant | Enforced by | Test |
 |---|---|---|---|
 | I1 | No tool can write outside our storage or send anything. | `ToolKind` has `read` and `propose` only; `ToolRegistry.register` refuses anything else. | `tests/unit/agentic/test_registry.py::test_there_is_no_write_kind`, `::test_every_registered_tool_reads_or_proposes`, `::test_the_registry_refuses_a_write_tool_and_other_lax_tools` |
-| I2 | Every number a person or another agent sees comes from a deterministic tool result. | Tools read stored artefacts and never call a language model; results carry a content-hash `evidence_id`. M139 adds the claim verifier (design §4). | `test_registry.py::test_the_evidence_id_is_a_content_hash`, `tests/agentic/test_read_tools.py` |
+| I2 | Every number a person or another agent sees comes from a deterministic tool result. | Tools read stored artefacts and never call a language model; results carry a content-hash `evidence_id`. M139: the claim verifier and renderer (§9) - every number in a narrative is a slot filled from evidence. | `test_registry.py::test_the_evidence_id_is_a_content_hash`, `tests/agentic/test_read_tools.py`, `tests/unit/agentic/test_claims.py`, `tests/agentic/scenarios/test_planner_scenarios.py::test_no_rendered_sentence_carries_an_ungrounded_number` |
 | I3 | Nothing becomes real without a person; limits are enforced by the server. | Proposal → default-deny policy → `engine.approvals.decide_proposal` (Approver, re-checked) → the product's own route function. | `tests/unit/agentic/test_policy.py`, `tests/agentic/test_proposal_routes.py` |
 | I4 | The holdout cannot be shrunk, skipped or reassigned by any agent path. | `holdout.immutable`, plus the holdout service's own epoch and fingerprint checks (DEC-1302). | `test_policy.py::test_each_rule_refuses_with_its_code[holdout …]`, the `*holdout*` scenarios |
 | I5 | Every proposal, approval, refusal and evidence label is on a tamper-evident record. | `engine.agentic.ledger`: hash-chained, signed, verified by `python -m engine.agentic.ledger verify`. | `tests/unit/agentic/test_ledger.py` |
@@ -138,10 +138,15 @@ never gets a second path to anything.
 |---|---|---|
 | `GET /agentic/proposals` | Viewer | Every proposal, newest first; `?status=` narrows. |
 | `GET /agentic/proposals/{proposal_id}` | Viewer | One proposal with its evidence ids and decisions. |
-| `POST /agentic/proposals/{proposal_id}/approve` | Approver, audited | `{reason?}`. 200 with the receipt (`ledger_checkpoint`: the ledger head after the approval; keep it). 403 `POLICY_ROLE_SEPARATION`, 409 `POLICY_*`, `PROPOSAL_TAMPERED`, `PROPOSAL_STALE`, `PROPOSAL_EXPIRED`, `PROPOSAL_NOT_PENDING`, `PROPOSAL_NOT_EXECUTABLE` (a campaign plan: nothing carries one out until M139; it stays pending), the executing route's own code; 404 `PROPOSAL_NOT_FOUND`. |
+| `POST /agentic/proposals/{proposal_id}/approve` | Approver, audited | `{reason?}`. 200 with the receipt (`ledger_checkpoint`: the ledger head after the approval; keep it). 403 `POLICY_ROLE_SEPARATION`, 409 `POLICY_*`, `PROPOSAL_TAMPERED`, `PROPOSAL_STALE`, `PROPOSAL_EXPIRED`, `PROPOSAL_NOT_PENDING`, `PROPOSAL_NOT_EXECUTABLE` (a campaign plan the planner did not draft: nothing carries it out; it stays pending), the executing route's own code; 404 `PROPOSAL_NOT_FOUND`. |
 | `POST /agentic/proposals/{proposal_id}/reject` | Approver, audited | `{reason?}`. 200 with the receipt. |
+| `POST /agentic/plans` | Analyst, audited | M139 (§9): `{card}`, `{goal}` or `{goal_text}`. 201 with the plan and its proposal; a plan that stops answers its code (404 `PLANNER_CARD_NOT_FOUND`, 409 `PLANNER_NOTHING_TO_PLAN`, `PLANNER_NO_CANDIDATE`, `AI_NOT_CONNECTED`, 422 `PLANNER_GOAL_UNPARSED`) and is kept. |
+| `GET /agentic/plans/{plan_id}` | Viewer | M139: the plan's state (`agentic_runs/<id>/state.json`) and its proposal. 404 `PLANNER_NOT_FOUND`. |
+| `POST /agentic/plans/{plan_id}/resume` | Analyst, audited | M139: a plan a crash left part-way continues from the last step it wrote; a plan at its interrupt, done or stopped is answered as it is. 404 `PLANNER_NOT_FOUND`; a stop answers its code as a draft does. |
 
-There is no route that drafts or approves for an agent; the routes exist only while `agentic.enabled` is on.
+No route approves for an agent; the routes exist only while `agentic.enabled` is on. M139 carries out an
+approved campaign plan the planner drafted (§9); M132's campaign plans drafted any other way stay
+`PROPOSAL_NOT_EXECUTABLE`.
 
 ## 6. The decision ledger (`engine/agentic/ledger.py`; M132)
 
@@ -154,7 +159,7 @@ index lookups; verification refuses an entry whose column disagrees with its bod
 * `entry_hash = sha256(prev_hash ‖ canonical({seq, kind, actor, created_at, body}))`, so any edited field breaks
   the chain at that entry, and a re-hashed forgery breaks the next link or its signature.
 * Kinds: `proposal.drafted`, `proposal.refused`, `proposal.approved`, `proposal.rejected`, `proposal.expired`,
-  `approval.refused`, `proposal.execution_failed`, `test_plan.frozen` (with the campaign's holdout scope, epoch
+  `approval.refused`, `proposal.execution_failed`, `campaign_plan.executed` (M139), `test_plan.frozen` (with the campaign's holdout scope, epoch
   and salt id: the holdout commitment), `evidence.label`. Approvals, frozen test plans and evidence labels are
   signed over `entry_hash`.
 * `Signer` protocol: `FileKeySigner` (Ed25519, `cryptography`, already pinned; `<data dir>/agentic/
@@ -190,6 +195,12 @@ with an offer budget, a cost cap, arbitration caps and a persistent holdout on a
 * **Mutation test**: each policy rule is removed in turn; at least one scenario - in particular the ones written
   to guard it - must then fail. With every rule removed a kind is still refused (default deny).
 * The report is `EvalReport`, written by `write_report` as canonical JSON (`reports/agentic_eval.json` by default).
+* **M139** adds planner scenarios (`PlannerScenarioRequest`; `tests/agentic/scenarios/planner_scenarios.py`): every
+  M105 card type, goals through the form and in words, a planted instruction, and models that word their claims
+  differently on every call, write a wrong direction (against an interval that excludes zero: `CLAIM_DIRECTION`),
+  a number or an unreferenced claim. Their expected payload digests are computed from the stored artefacts
+  independently of the planner. Model calls, their cost, claim failures (by code) and AI service errors are
+  totalled in the report and are not part of an outcome's key: wording may vary, decisions may not.
 
 ## 7a. The save-desk card (`engine/agentic/save_desk.py`, `api/routes/agentic_save_desk.py`; M144)
 
@@ -288,7 +299,7 @@ about the **demo library only** (Hillstrom and generated data); client data wait
 
 ### 8.2 Connect a client
 
-1. Switch it on: `agentic.enabled: true` and `mcp.enabled: true`, both in `configs/agentic/agentic.yaml` (§10;
+1. Switch it on: `agentic.enabled: true` and `mcp.enabled: true`, both in `configs/agentic/agentic.yaml` (§11;
    `configs/agentic/mcp.yaml` holds the server's settings, not its switch). Off - the default - nothing is mounted
    and the MCP SDK is not even imported.
 2. Sign-in must be on (`MARKETING_AI_AUTH_MODE=local`); with sign-in off the endpoint answers
@@ -391,30 +402,70 @@ the tool-list walk, sign-in and scopes, POST only, the malicious proposal, demo-
 campaign, a small offer refused, rate limits, audit (also of a 2025 client), injection canaries, the differencing
 attack).
 
-## 9. Milestones
+## 9. The campaign planner and the claim verifier (`engine/agentic/planner.py`, `claims.py`; M139)
+
+A warning card on Results ("Draft a plan", `ui/modules/agentic/`; no new top-bar item) or a goal becomes one
+drafted campaign plan for a person to approve. A **state machine with one interrupt** (design §6), each
+transition written to `agentic_runs/<plan_id>/state.json` under a lock per plan, so a crash resumes from the last
+step written (`resume_plan`, `POST /agentic/plans/{plan_id}/resume`). DRAFT is idempotent: the proposal id is
+written to the state (`reserved_proposal_id`) before the proposal is drafted, and a resumed DRAFT reuses the stored
+proposal, so a crash inside it never leaves two pending proposals for one plan:
+
+| Step | What happens | Model |
+|---|---|---|
+| FRAME | A card is found by the server among `GET /campaigns/summary`'s cards (the client names it; its content is not taken from the client). `no_control`, `underpowered`, `contamination`, `uplift_not_better_than_risk`, `uplift_fading` frame the next cycle (`restore_holdout`, `larger_test`, `protect_holdout`, `rank_by_risk`, `confirm_effect`); `early_look`, `drift`, `challenger_ready`, `backfire` plan nothing and say why (`PLANNER_NOTHING_TO_PLAN`). The form takes enumerated values and numbers the person types. | Words only: the model picks each field from the values offered (use cases, objectives, channels, and the amounts code read from the words); anything else is `PLANNER_GOAL_UNPARSED`. Words without an AI service: `AI_NOT_CONNECTED`. |
+| SIZE | The newest finished scoring run of the use case with no campaign yet (a list goes out once); `check_contactable` (its eligible rows and, from `scoring_summary.json`, its held-back rows); the use case's measured campaigns, newest first by when each was opened (`measure`); the outcome kind of the newest one - an amount (M102, `continuous`) is planned as an amount, with its smallest effect and spread left for the campaign page (points given for an amount: `PLANNER_NO_CANDIDATE`); for a rate, the base rate is the held-back rate of the card's own campaign when it has one, else the newest; `plan_test` on everyone the campaign compares (eligible plus held back, as the product's preview sizes it) at the holdout in force; the test plan: the use case's outcome window, the analysis date (the later of the run's finish and the draft, plus the window), the smallest effect the test can see, rounded up to a tenth of a point. | - |
+| CANDIDATES | One per configured channel: contactable rows, at most the run's own treat count, offer spend from `cost_per_contact` (null when unset); `value_segment`; `evaluate_policy` on the model's training run for M137's verdict. A candidate is excluded with a reason: another channel than the goal's, nobody contactable, an uplift list whose verdict is `not_safe`, or a budget the spend exceeds or cannot be checked against. | - |
+| SELECT | Rules only: `safe` first, then the most contactable, then the use case's channel order; the first candidate every policy rule allows; when none is, the first, so the refusal is drafted and on the ledger. Nothing left: `PLANNER_NO_CANDIDATE`. | - |
+| CHECK, DRAFT | The M132 policy's decisions; `Proposal(kind=campaign_plan)` citing every tool result, with the test plan to register on approval (`test.registered` allows a new campaign carrying its test plan, DEC-1406 (b)). The narrative is stored beside the payload and its digest on the ledger entry; the payload digest never includes prose. | The narrative, as structured claims. |
+| INTERRUPT | A person approves at `POST /agentic/proposals/{id}/approve` (the policy checked again). | - |
+| EXECUTE | Through the product's own functions, each result written to the state before the next, so a retried approval opens no second campaign: the treat list (`ensure_treat_list`), the campaign (`open_campaign`, the engine half of `POST /campaigns`, its treatment starting at the approval), the test plan (`register_plan`, signed `test_plan.frozen`, its holdout commitment from the one `engine.agentic.ledger.holdout_commitment`), and the use case's enabled `measure` schedule when there is one; `campaign_plan.executed` on the ledger. An approval later than the drafted analysis date minus the window is `PROPOSAL_STALE` (draft again), so a frozen plan never reads its result before the window closes. **Agreed deviation from the spec's "schedule measure":** no measure schedule is created - one needs a saved connection and a table a person chooses, which an approval does not carry - so the hand-off names the enabled schedule or says when and how to measure. | - |
+
+**Claims, not prose** (design §4, `engine/agentic/claims.py`). The model returns
+`{"sentences": [{"template", "claim"}]}`; each claim references evidence by `ev_<id>:<path>`. The verifier checks
+`comparison` (gt/lt against the difference's 95% interval; a direction the interval does not support is written
+"is not distinguishable from"; the opposite direction fails), `label` (equal to the tool's), `trend` (three or more
+points, one direction, endpoints apart) and `recommendation` (a proposal the policy allowed). The renderer fills
+every slot - arm names, labels, comparison words and every number - from the evidence. The model's own words may
+carry no digit, no spelled-out number or multiplier (`ten`, `twice`, `times`, `a third`, `tenfold`, `lakh`), no
+direction or outcome word (`up`, `more`, `grow`, `improve`, `surge`), no cause or certainty (`because`, `sure`,
+`win`), and must pass the deterministic guardrails. Codes: `CLAIM_DIRECTION`,
+`CLAIM_LABEL`, `CLAIM_UNREFERENCED`, `CLAIM_FREE_TEXT`, `CLAIM_MALFORMED`. One failed sentence is dropped; more
+than one, or an answer that is not the JSON asked for, is replaced by the rules-only summary, which code writes
+from the same evidence and which is also what is shown without an AI service. LLM calls go through the `Meter`
+with `GenerativePurpose.AGENT_PLANNER` and `AGENT_NARRATIVE` (`configs/prompts/agent_planner.v1.md`,
+`agent_narrative.v1.md`): the narrative under the use case's own `generative.llm` and `generative.budget`, as every
+metered route; goal words, before any use case is known, under the deployment's configured AI and the default
+budget. An AI service or budget error writes the rules-only summary and is recorded as `narrative_error`, not as a
+claim failure; the eval report counts it apart (`narrative_errors`) and totals the Meter's spend (`cost_usd`).
+
+**On the page.** "Draft a plan" is drawn only when `/auth/me` (read once at boot) lists `POST /agentic/plans`,
+which it does only while `agentic.enabled` is on: with the switch off the module sends no request.
+
+## 10. Milestones
 
 The milestones are in `docs/plans/MARKETING_AI_PLAN_K_PROPOSAL.md` §3.2; the README's Plan K table lists the tests of
 each one that is done. M131, M135 and M137 were built ahead of the rest of Plan K, under Plan J's decision range.
 
 | Milestone | State | Decision | Where |
 |---|---|---|---|
-| M130 Plan K set-up | done | DEC-1400 | the decision range, the `PLAN-K` blocks, `PLAN_K_CODES`, the three switches (§10) |
+| M130 Plan K set-up | done | DEC-1400 | the decision range, the `PLAN-K` blocks, `PLAN_K_CODES`, the three switches (§11) |
 | M131 TRAI Third Amendment, and the measurement purpose | done (built early under Plan J) | DEC-1323 | `docs/DECIDE.md` §26 |
 | M132 The agent-safe core | done | DEC-1401 | this document's §3–§7 |
-| M133 The verifier over MCP, demo data only | done | DEC-1404 | this document's §8; switch `mcp.enabled` (§10), settings in `configs/agentic/mcp.yaml` |
+| M133 The verifier over MCP, demo data only | done | DEC-1404 | this document's §8; switch `mcp.enabled` (§11), settings in `configs/agentic/mcp.yaml` |
 | M134 The pre-send compliance gate | pending | | |
 | M135 Prediction covariates (MLRATE / CUPAC) | done (built early under Plan J) | DEC-1324 | `docs/DECIDE.md` §27 |
 | M136 Pooling across campaigns | done | DEC-1402 | `engine/measurement/pooling.py` (module docstring); switch `pooling.enabled` in `configs/measurement.yaml` |
 | M137 "Safe to roll out": a lower bound in rupees | done (built early under Plan J) | DEC-1325 | `docs/UPLIFT.md` §12 |
 | M138 An early harm alarm | done | DEC-1403 | `docs/DECIDE.md` §28; switch `harm_alarm.enabled` in `configs/measurement.yaml` |
-| M139 The campaign planner | pending | | |
+| M139 The campaign planner | done | DEC-1406 | this document's §9; behind `agentic.enabled` |
 | M140 Message variants as measured arms | pending | | |
 | M141 The verifier on client data | pending | | |
 | M142 Setup help for integration sources | done | DEC-1409 | `docs/AGENTS.md` §13; behind `agentic.enabled` |
 | M143 Tabular foundation model challenger | pending | | |
 | M144 Save-desk card, as a randomised pilot | done (a pilot design; no result claimed) | DEC-1411 | this document's §7a; behind `agentic.enabled` |
 
-## 10. The switches (`configs/agentic/agentic.yaml`)
+## 11. The switches (`configs/agentic/agentic.yaml`)
 
 Every switch is off by default, and with all three off the product is byte-identical to Plan J's (design §11).
 They live in `configs/agentic/agentic.yaml`, read by `engine/agentic/config.py` from the configuration root like every

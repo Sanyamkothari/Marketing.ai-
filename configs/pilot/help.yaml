@@ -754,6 +754,47 @@ codes:
     title: "You are not in the group given the card in this pilot"
     meaning: "While a randomised pilot is active (configs/agentic/save_desk_pilot.yaml, status active), only the staff drawn in advance to have the card are served one, so that the comparison with staff working as usual stays fair. The draw is not redone during the pilot."
     fix: "If you think you should be in the card group, ask the pilot owner."
+  # --- Plan K M139: the campaign planner and the claim checker (DEC-1406 (d), (a)) -------------------------------------
+  CLAIM_DIRECTION:
+    title: "A sentence said more than the numbers show"
+    meaning: "The AI service wrote a comparison or a trend that the measured range does not support (for example, that one group did better when the range of the difference includes zero, or the opposite of what was measured). Every sentence of a drafted plan's summary is checked against the numbers before anyone sees it, so this sentence was dropped. More than one failed sentence replaces the whole summary with the one the product writes by rules."
+    fix: "Nothing to do. Read the plan's figures, which come straight from the product; draft again if you want a new summary."
+  CLAIM_LABEL:
+    title: "A sentence gave a result the wrong kind of evidence"
+    meaning: "The AI service called a figure Causal, Estimated, Descriptive or Not proven when the product's own tool labelled it otherwise (only a randomised comparison is Causal). The sentence was dropped; more than one failed sentence replaces the summary with the one the product writes by rules."
+    fix: "Nothing to do. The label shown beside each figure is the product's own."
+  CLAIM_UNREFERENCED:
+    title: "A sentence pointed at something that is not there"
+    meaning: "The AI service's sentence named a figure, a place in a figure or a proposal that the plan's evidence does not hold, so it could not be checked and was dropped. More than one failed sentence replaces the summary with the one the product writes by rules."
+    fix: "Nothing to do; draft again if you want a new summary."
+  CLAIM_FREE_TEXT:
+    title: "A sentence put a number or a verdict in its own words"
+    meaning: "Every number in a plan's summary is filled in by the product from the evidence. This sentence's own words carried a number (also spelled out, such as 'twice' or 'a third'), a direction ('up', 'more', 'improve'), a cause or a certainty ('because', 'sure'), or failed the product's text checks, so it was dropped."
+    fix: "Nothing to do. The figures in the plan itself are the product's own."
+  CLAIM_MALFORMED:
+    title: "The AI service's summary could not be read"
+    meaning: "The AI service did not answer in the structured form the planner asks for, so none of its sentences could be checked. The plan's summary is the one the product writes by rules from the same evidence, as it is when no AI service is connected."
+    fix: "Nothing to do. If it happens often, check the AI service connection on the Settings page."
+  PLANNER_NO_CANDIDATE:
+    title: "No campaign can be planned yet"
+    meaning: "The planner found nothing it can draft: no finished scoring run of the use case without a campaign yet, no run that recorded how many customers were held back, no channel on which anyone may be contacted, a list judged not safe to roll out, a spend over the budget or one that cannot be checked against it, or a smallest effect given in points for an outcome measured as an amount. The message says which."
+    fix: "Do what the message names (for example score a new list, or set the channel's cost), then draft again."
+  PLANNER_NOTHING_TO_PLAN:
+    title: "This warning does not call for a new campaign"
+    meaning: "The warning card asks for waiting (an early look, a model not yet ready) or for a person's decision (drift, a campaign that did harm), not for a campaign the planner could draft. Nothing was drafted."
+    fix: "Follow the warning's own next step on the Results page."
+  PLANNER_CARD_NOT_FOUND:
+    title: "That warning is no longer on the Results page"
+    meaning: "The planner looks the warning up again on the server before drafting, and it is gone: the situation it described has changed since the page was drawn."
+    fix: "Reload the Results page and draft from a warning that is shown now."
+  PLANNER_NOT_FOUND:
+    title: "There is no such plan"
+    meaning: "No drafted campaign plan has that id, or it was recorded in another workspace."
+    fix: "Open the plan again from its warning card, or draft a new one."
+  PLANNER_GOAL_UNPARSED:
+    title: "The goal in words could not be matched to the form"
+    meaning: "The goal you typed was read by the AI service, but it could not be matched to the form's own choices (a use case, an objective, a channel) or a number in it could not be read, so nothing was drafted."
+    fix: "Fill in the form instead, or type the goal again naming the use case, the channel and any budget plainly."
 
 settings:
   actions.bands[*].min_score:

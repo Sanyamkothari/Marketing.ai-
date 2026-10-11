@@ -666,22 +666,13 @@ def _record_frozen_plan(
     ledger: Any, tool_ctx: Any, principal: Principal, proposal: Any, plan_hash: str, now: datetime
 ) -> None:
     """`test_plan.frozen` (signed): the plan's hash and the holdout's commitment (scope, epoch, salt id)."""
-    from engine.agentic.ledger import TEST_PLAN_FROZEN
+    from engine.agentic.ledger import TEST_PLAN_FROZEN, holdout_commitment
 
     campaign_id = str(proposal.payload.get("campaign_id"))
     body: dict[str, Any] = {
         "proposal_id": proposal.proposal_id,
         "campaign_id": campaign_id,
         "plan_hash": plan_hash,
+        **holdout_commitment(tool_ctx, campaign_id),
     }
-    campaign = None if tool_ctx.campaigns is None else tool_ctx.campaigns.get(campaign_id)
-    if campaign is not None:
-        body["plan_version"] = campaign.test_plan_version
-        body["holdout_scope"] = campaign.holdout_scope
-        body["holdout_epoch"] = campaign.holdout_epoch
-        if campaign.holdout_scope != "run" and tool_ctx.platform_engine is not None:
-            from engine.holdout.salt import HoldoutLedger, salt_id
-
-            fingerprint = HoldoutLedger(tool_ctx.platform_engine).fingerprint()
-            body["holdout_salt_id"] = None if fingerprint is None else salt_id(fingerprint)
     ledger.append(TEST_PLAN_FROZEN, principal.user_id, body, at=now)

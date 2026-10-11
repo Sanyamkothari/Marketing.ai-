@@ -21,7 +21,7 @@ refusal lists every rule it breaks.
 | `budget.cap` | the M108 estimate above `governance.max_run_cost_usd` (or unpriced while a cap is set), offer spending above `uplift.policy.total_budget`, contacts above `uplift.policy.budget_contacts` (`POLICY_BUDGET_CAP`) |
 | `consent.channel` | a plan reaching more customers on the channel than the run's contactable eligible rows there (the list on a channel holds only those, M99), a channel whose contactability the run did not record, or one recorded without a configured column (`POLICY_CONSENT_CHANNEL`); row counts and reasons only |
 | `frequency.cap` | more contacts per customer than `contact_cap_per_customer`, or more on the channel than its `channel_caps` entry (`POLICY_FREQUENCY_CAP`) |
-| `test.registered` | a campaign plan with no frozen test plan for its campaign, or a different one from the plan cited (`POLICY_TEST_NOT_REGISTERED`); a test plan for a campaign that already has another frozen plan, or was measured before one was registered (`POLICY_TEST_PLAN_FIXED`) |
+| `test.registered` | a campaign plan with no frozen test plan for its campaign, or a different one from the plan cited, unless it opens a new campaign and carries the test plan its approval registers (M139) (`POLICY_TEST_NOT_REGISTERED`); a test plan for a campaign that already has another frozen plan, or was measured before one was registered (`POLICY_TEST_PLAN_FIXED`) |
 | `role.separation` | at approval, the person who proposed it approving it (`POLICY_ROLE_SEPARATION`), the existing rule of `engine.approvals.separation_refusal` |
 
 The thresholds live in `configs/agentic/policy.yaml`; its sha256 is the policy version every ledger entry
@@ -117,6 +117,32 @@ class CampaignPlanPayload(StrictBase):
     contacts_per_customer: int = Field(default=1, ge=1)
     planned_contacts: int | None = Field(default=None, ge=0)
     offer_spend_inr: float | None = Field(default=None, ge=0.0)
+    # Plan K M139 (DEC-1406): what the planner drafts beside the M132 fields. Each is left out of the
+    # canonical payload while unset, so a campaign plan without them hashes exactly as it did under M132.
+    test_plan: TestPlanInput | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+        description=(
+            "M139: the test plan registered when the plan is approved, for a campaign the approval opens "
+            "(campaign_id null): frozen before the list can be downloaded or anything measured."
+        ),
+    )
+    objective: str | None = Field(
+        default=None,
+        max_length=64,
+        exclude_if=lambda value: value is None,
+        description="M139: what the plan is for, one of the planner's enumerated objectives.",
+    )
+    ranking: Literal["uplift", "propensity_model", "risk"] | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+        description="M139: what ordered the run's list (its ranking_choice.json; risk for a propensity run).",
+    )
+    rollout: Literal["safe", "not_safe", "cannot_tell"] | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+        description="M139: M137's verdict on the model's equal-budget comparison, when it was computed.",
+    )
 
 
 _PAYLOADS: Final[dict[str, type[StrictBase]]] = {
@@ -443,6 +469,14 @@ def plan_registered(subject: ProposalSubject, ctx: PolicyContext) -> Decision | 
         return None
     payload = CampaignPlanPayload.model_validate(subject.payload)
     code = "POLICY_TEST_NOT_REGISTERED"
+    if payload.campaign_id is None and payload.test_plan is not None:
+        # Plan K M139 (DEC-1406 (b)): a plan for a campaign that does not exist yet carries the test plan
+        # its approval registers - the campaign is opened and the plan frozen before the list is handed
+        # off or any outcome read, so the test is still fixed in advance. Citing a frozen hash with no
+        # campaign is a contradiction, refused.
+        if payload.test_plan_hash is not None:
+            return _refuse(_TEST, code, "The plan cites a frozen test plan but names no campaign.")
+        return _allow(_TEST, registers_on_approval=True)
     if payload.campaign_id is None or ctx.registered_plan_hash is None:
         return _refuse(_TEST, code, "There is no frozen test plan for this campaign; register one first.")
     if payload.test_plan_hash != ctx.registered_plan_hash:

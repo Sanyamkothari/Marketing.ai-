@@ -68,6 +68,7 @@ __all__ = [
     "Signer",
     "VerifyReport",
     "compute_entry_hash",
+    "holdout_commitment",
     "main",
     "signer_for_data_dir",
     "verify_entries",
@@ -89,6 +90,8 @@ APPROVAL_REFUSED: Final[str] = "approval.refused"
 EXECUTION_FAILED: Final[str] = "proposal.execution_failed"
 TEST_PLAN_FROZEN: Final[str] = "test_plan.frozen"
 EVIDENCE_LABEL: Final[str] = "evidence.label"
+CAMPAIGN_PLAN_EXECUTED: Final[str] = "campaign_plan.executed"
+"""Plan K M139: an approved campaign plan carried out (treat list, campaign, frozen test plan)."""
 
 SIGNED_KINDS: Final[frozenset[str]] = frozenset({PROPOSAL_APPROVED, TEST_PLAN_FROZEN, EVIDENCE_LABEL})
 """Approvals, test plans and evidence labels are signed (design §3.2)."""
@@ -122,6 +125,11 @@ BODY_KEYS: Final[frozenset[str]] = frozenset(
         "holdout_epoch",
         "holdout_salt_id",
         "result_ref",
+        # Plan K M139 (DEC-1406): the planner's run, the narrative's digest, and what executing a
+        # campaign plan made.
+        "plan_id",
+        "narrative_digest",
+        "measure_schedule_id",
     }
 )
 """The only keys a body may hold: ids, digests, codes and labels, never a row (see the module docstring)."""
@@ -270,6 +278,29 @@ class FileKeySigner:
         except (InvalidSignature, ValueError):
             return False
         return True
+
+
+def holdout_commitment(tool_ctx: Any, campaign_id: str) -> dict[str, Any]:
+    """The holdout commitment a `test_plan.frozen` entry records for `campaign_id`: the plan's version, the
+    holdout's scope and epoch and, beyond one run, the salt's id. Empty when the campaign is not found.
+
+    Computed here once for every writer of that kind (an approved test plan, `engine.approvals`; an approved
+    campaign plan, `engine.agentic.planner.execute_plan`), so their signed entries cannot drift apart.
+    """
+    campaign = None if tool_ctx.campaigns is None else tool_ctx.campaigns.get(campaign_id)
+    if campaign is None:
+        return {}
+    body: dict[str, Any] = {
+        "plan_version": campaign.test_plan_version,
+        "holdout_scope": campaign.holdout_scope,
+        "holdout_epoch": campaign.holdout_epoch,
+    }
+    if campaign.holdout_scope != "run" and tool_ctx.platform_engine is not None:
+        from engine.holdout.salt import HoldoutLedger, salt_id
+
+        fingerprint = HoldoutLedger(tool_ctx.platform_engine).fingerprint()
+        body["holdout_salt_id"] = None if fingerprint is None else salt_id(fingerprint)
+    return body
 
 
 def signer_for_data_dir(data_dir: Path, *, create: bool = True) -> FileKeySigner:
