@@ -26,6 +26,21 @@ before it writes anything. For the customers the list would contact:
    sha256 and `rule_version` (`engine.agentic.ledger`), then `compliance_decisions.json` (counts, the rules, the
    evidence id and the ledger entry). A ledger that cannot be written stops the build: no list without its record.
 
+**Message arms** (Plan K M145, DEC-1412). On a run whose M140 message arms are in force the treat list passes
+`variants` (`engine.compliance.variants.VariantMessages`), and a customer of a variant arm is checked on the words
+their arm sends them - per (arm, group, channel), against the variant's own registered catalogue action - instead
+of their band's `message_text`; the control template's customers are checked as above. The catalogue the
+messages are tied to is then the one the arms were drawn under (`variant_arms.json` `catalogue_sha256`, which
+registers the variants' words and was checked when they were drawn): registering the variants necessarily changed
+the catalogue after the run. It stands in for the run's stamp only when the arms were drawn over that stamp
+(`run_catalogue_sha256` is the run's `catalogue_stamp.json`); a run with no stamp, arms drawn over another stamp,
+or any other catalogue now fails closed, as in 1. The rules gain a `variant_arms` block (the batch, both
+catalogues, and every arm template's reference), the decision file a `variant_arm` column and each variant row its
+variant's own `action_id`, and the summary `variant_messages`, `withheld_by_arm` and `withheld_for_words_by_arm`
+(the customers of each arm withheld with a reason read of the words: a template mismatch, a link not on the
+whitelist, no words on the channel, or words with no registered template). Without `variants` none of this exists
+and every file is what it was.
+
 The ledger is the deployment's platform database (SQLite beside a local store's files, else the settings'
 database) and the signer the data folder's Ed25519 key (`engine.agentic.ledger.signer_for_data_dir`), as the
 `/agentic` routes use them; a caller may pass its own.
@@ -52,6 +67,7 @@ from engine.compliance.gate import (
     decide,
     explode,
 )
+from engine.compliance.variants import VariantMessageCheck
 from engine.contracts import Artefact
 from engine.utils.logging import get_logger
 
@@ -61,6 +77,7 @@ if TYPE_CHECKING:
     import pyarrow as pa
 
     from engine.agentic.ledger import DecisionLedger
+    from engine.compliance.variants import VariantMessages, VariantWords
     from engine.decide.catalogue import ActionCatalogue
     from engine.storage import Storage
 
@@ -136,6 +153,33 @@ class ComplianceDecisionsSummary(Artefact):
     ledger_entry_hash: str = Field(description="That entry's entry_hash (a checkpoint for verification).")
     note: str = Field(default=_NOTE)
     created_at: datetime
+    # Plan K M145 (DEC-1412): a run whose message arms are in force. Absent otherwise.
+    variant_messages: tuple[VariantMessageCheck, ...] | None = Field(
+        default=None,
+        description=(
+            "Per variant arm, group and planned channel: what was checked of the words it sends. Absent unless "
+            "the run's message arms are in force."
+        ),
+        exclude_if=lambda value: value is None,
+    )
+    withheld_by_arm: dict[str, int] | None = Field(
+        default=None,
+        description=(
+            "Customers withheld per message arm drawn (the control template and each variant). Absent unless the "
+            "run's message arms are in force."
+        ),
+        exclude_if=lambda value: value is None,
+    )
+    withheld_for_words_by_arm: dict[str, int] | None = Field(
+        default=None,
+        description=(
+            "Of those, per arm, the customers withheld with a reason read of the words they would be sent "
+            "(COMPLIANCE_TEMPLATE_MISMATCH, COMPLIANCE_URL_NOT_WHITELISTED, COMPLIANCE_VARIANT_NO_COPY or "
+            "COMPLIANCE_VARIANT_UNREGISTERED on a planned channel): the arm's words, not the customer's consent, "
+            "stopped them. Absent unless the run's message arms are in force."
+        ),
+        exclude_if=lambda value: value is None,
+    )
 
 
 @dataclass(frozen=True)
@@ -384,11 +428,13 @@ def gate_treat_list(
     config_root: Path | None,
     ledger: DecisionLedger | None = None,
     at: datetime | None = None,
+    variants: VariantMessages | None = None,
 ) -> GateOutcome:
     """Gate the treat list of `run_id` (see the module docstring).
 
     `key_frame` holds the key columns as the treat list writes them (text), one row per scored row;
-    `treat`, `channel` and `actions` (each row's catalogue action, None for none) are aligned to it.
+    `treat`, `channel` and `actions` (each row's catalogue action, None for none) are aligned to it, and so are
+    `variants.arm` and `variants.unit` when the run's message arms are in force (Plan K M145).
     """
     import numpy as np
     import pyarrow as pa
@@ -412,9 +458,17 @@ def gate_treat_list(
     settings = load_compliance_config(root).gate
     key_columns = tuple(str(name) for name in key_frame.columns)
 
-    # 1. The rules.
+    # 1. The rules. Plan K M145: with message arms in force, tied to the catalogue the arms were drawn under, and
+    # only when they were drawn over this run's own stamp (a run with no stamp fails closed, as M134's does).
     now_sha = catalogue_sha256(root)
-    changed = now_sha != stamp_sha256
+    if variants is None:
+        changed = now_sha != stamp_sha256
+    else:
+        changed = (
+            now_sha != variants.catalogue_sha256
+            or stamp_sha256 is None
+            or variants.run_catalogue_sha256 != stamp_sha256
+        )
     try:
         catalogue = None if changed else catalogue_or_none(root)
     except ConfigError as exc:
@@ -450,11 +504,16 @@ def gate_treat_list(
             None if contact_summary is None else contact_summary.consent_basis_rules_sha256
         ),
     }
+    if variants is not None:
+        rules["variant_arms"] = variants.rules()
     rule_version = digest(rules)
 
-    # 2. The customers the list would contact, and their planned channels.
+    # 2. The customers the list would contact, and their planned channels. Plan K M145: a variant customer's
+    # message is their arm's words, under the gate's own key for (arm, group, band action).
     treated = np.flatnonzero(np.asarray(treat, dtype=bool))
-    row_actions = np.asarray(actions, dtype=object)[treated]
+    band_actions = np.asarray(actions, dtype=object)[treated]
+    plan = None if variants is None else _variant_plan(variants, treated, band_actions)
+    row_actions = band_actions if plan is None else plan.row_actions
     customers = pa.Table.from_arrays(
         [
             *(pa.array(key_frame[name].to_numpy(dtype=object)[treated], pa.string()) for name in key_columns),
@@ -463,6 +522,8 @@ def gate_treat_list(
         names=[*key_columns, ACTION_COLUMN],
     )
     present = sorted({str(action) for action in row_actions if action is not None})
+    if plan is not None:
+        present = [action for action in present if action not in plan.keys]
     planned: dict[str | None, tuple[str, ...]] = {None: tuple(configured)}
     for action in present:
         planned[action] = tuple(planned_by_action.get(action, configured))
@@ -475,6 +536,20 @@ def gate_treat_list(
         whitelist=whitelist,
         var_max_chars=settings.dlt_var_max_chars,
     )
+    variant_checks = None
+    if plan is not None:
+        variant_checks = _variant_verdicts(
+            plan,
+            planned,
+            verdicts,
+            catalogue=catalogue,
+            catalogue_sha=now_sha,
+            planned_by_action=planned_by_action,
+            configured=tuple(configured),
+            dlt_channels=dlt_on,
+            whitelist=whitelist,
+            var_max_chars=settings.dlt_var_max_chars,
+        )
     opt_ins = _opt_ins(
         storage,
         customers=customers,
@@ -504,6 +579,8 @@ def gate_treat_list(
 
     # 3. The list: the first planned channel allowed, else not treated.
     exploded = explode(customers, planned)
+    if plan is not None:
+        decisions = _variant_columns(decisions, plan, exploded)
     allowed = np.asarray(decisions["allowed"].to_numpy(zero_copy_only=False), dtype=bool)
     open_rows = np.flatnonzero(allowed)
     sent, first = np.unique(exploded.parent[open_rows], return_index=True)
@@ -521,6 +598,12 @@ def gate_treat_list(
     no_evidence = decisions["ledger_ref"].is_null().to_numpy(zero_copy_only=False) & ~decisions[
         "channel"
     ].is_null().to_numpy(zero_copy_only=False)
+    withheld_by_arm = None
+    withheld_for_words = None
+    if plan is not None and variants is not None:
+        withheld_by_arm = _withheld_by_arm(plan, variants.levels, ~kept)
+        by_words = ~kept & _stopped_by_words(decisions, exploded.parent, len(treated))
+        withheld_for_words = _withheld_by_arm(plan, variants.levels, by_words)
 
     # 4. The record: the file, the signed ledger entry, the summary.
     buffer = io.BytesIO()
@@ -581,6 +664,9 @@ def gate_treat_list(
         ledger_seq=entry.seq,
         ledger_entry_hash=entry.entry_hash,
         created_at=moment,
+        variant_messages=variant_checks,
+        withheld_by_arm=withheld_by_arm,
+        withheld_for_words_by_arm=withheld_for_words,
     )
     storage.write_model(run_key(run_id, COMPLIANCE_SUMMARY_FILENAME), summary)
     _LOGGER.info(
@@ -595,3 +681,191 @@ def gate_treat_list(
         entry.seq,
     )
     return GateOutcome(treat=treat_out, channel=channel_out, summary=summary)
+
+
+# ---------------------------------------------------------------------------
+# Plan K M145 (DEC-1412): message arms in force - each customer checked on the words they will receive
+# ---------------------------------------------------------------------------
+VARIANT_ARM_COLUMN: Final[str] = "variant_arm"
+"""`compliance_decisions.parquet`, on a run whose message arms are in force: the arm drawn for the customer."""
+_VARIANT_KEY: Final[str] = "\x1fvariant\x1f"
+"""Starts the gate's own key for a variant customer's message (arm, group, band action). A catalogue action id is
+never spelt with a control character, so the key cannot be taken for one; it never reaches a file."""
+
+
+@dataclass(frozen=True)
+class _VariantPlan:
+    """The contacted customers' messages on a run with message arms, aligned to the gate's `customers`.
+
+    Everything per customer is an integer code into a short list, so the work over the customers is column work.
+    """
+
+    row_actions: np.ndarray
+    """Per contacted customer: their band's action, or for a variant customer the gate's variant key."""
+    arm_code: np.ndarray
+    """Per contacted customer: the position of the arm drawn in `arm_names`, -1 outside the arms."""
+    arm_names: list[str]
+    band_code: np.ndarray
+    """Per contacted customer: the position of their band's action in `band_names`, -1 for none."""
+    band_names: list[str | None]
+    key_code: np.ndarray
+    """Per contacted customer: the position of their variant key in `key_values`, -1 for no variant."""
+    key_values: list[tuple[str, str, str | None]]
+    """Per variant key: (arm, group, band action)."""
+    keys: dict[str, tuple[str, str, str | None]]
+    """Variant key -> (arm, group, band action)."""
+    words: Mapping[tuple[str, str, str], VariantWords]
+
+
+def _codes(values: np.ndarray) -> tuple[np.ndarray, list[Any]]:
+    import numpy as np
+    import pandas as pd
+
+    codes, uniques = pd.factorize(pd.Series(values, dtype=object), use_na_sentinel=True)
+    return np.asarray(codes, dtype=np.int64), list(uniques)
+
+
+def _variant_plan(variants: VariantMessages, treated: np.ndarray, band_actions: np.ndarray) -> _VariantPlan:
+    """Each contacted customer's message: a variant customer's is keyed by (arm, group, band action), each key
+    once (see `_VariantPlan`)."""
+    import numpy as np
+
+    from engine.compliance.variants import is_variant_level
+
+    arm_code, arm_names = _codes(np.asarray(variants.arm, dtype=object)[treated])
+    unit_code, unit_names = _codes(np.asarray(variants.unit, dtype=object)[treated])
+    band_code, band_names = _codes(np.asarray(band_actions, dtype=object))
+    variant_arm = np.asarray([is_variant_level(name) for name in arm_names] + [False], dtype=bool)
+    rows = np.flatnonzero(variant_arm[arm_code])  # -1 reads the trailing False
+    combined = (arm_code[rows] * (len(unit_names) + 1) + unit_code[rows] + 1) * (len(band_names) + 1)
+    combined = combined + band_code[rows] + 1
+    distinct, inverse = np.unique(combined, return_inverse=True)
+    key_values: list[tuple[str, str, str | None]] = []
+    for value in distinct.tolist():
+        rest, band = divmod(int(value), len(band_names) + 1)
+        arm, unit = divmod(rest, len(unit_names) + 1)
+        action = None if band == 0 else band_names[band - 1]
+        key_values.append((str(arm_names[arm]), str(unit_names[unit - 1]) if unit else "", action))
+    names = [_VARIANT_KEY + "\x1f".join((arm, unit, action or "")) for arm, unit, action in key_values]
+    key_code = np.full(len(arm_code), -1, dtype=np.int64)
+    key_code[rows] = np.asarray(inverse, dtype=np.int64).reshape(-1)
+    row_actions = np.asarray(band_actions, dtype=object).copy()
+    if len(rows):
+        row_actions[rows] = np.asarray(names, dtype=object)[key_code[rows]]
+    return _VariantPlan(
+        row_actions=row_actions,
+        arm_code=arm_code,
+        arm_names=[str(name) for name in arm_names],
+        band_code=band_code,
+        band_names=[None if name is None else str(name) for name in band_names],
+        key_code=key_code,
+        key_values=key_values,
+        keys=dict(zip(names, key_values, strict=True)),
+        words=variants.words,
+    )
+
+
+WORD_CODES: Final[tuple[str, ...]] = (
+    "COMPLIANCE_TEMPLATE_MISMATCH",
+    "COMPLIANCE_URL_NOT_WHITELISTED",
+    "COMPLIANCE_VARIANT_NO_COPY",
+    "COMPLIANCE_VARIANT_UNREGISTERED",
+)
+"""The reasons read of the words a customer would be sent, not of the customer (Plan K M145): an arm whose customers
+are withheld for one of them was stopped by its words (`engine.decide.variant_arms.variant_arms_not_sent`)."""
+
+
+def _stopped_by_words(decisions: pa.Table, parent: np.ndarray, customers: int) -> np.ndarray:
+    """Per contacted customer: True when one of their rows carries a reason of :data:`WORD_CODES`."""
+    import numpy as np
+    import pyarrow.compute as _pc
+
+    pc: Any = _pc  # untyped: its stubs miss most kernels
+    reasons = decisions["reasons"].combine_chunks()
+    values = np.asarray(reasons.flatten().to_numpy(zero_copy_only=False), dtype=object)
+    rows = np.asarray(pc.list_parent_indices(reasons).to_numpy(), dtype=np.int64)
+    hit = rows[np.isin(values, np.asarray(WORD_CODES, dtype=object))]
+    return np.bincount(parent[hit], minlength=customers)[:customers] > 0
+
+
+def _withheld_by_arm(plan: _VariantPlan, levels: Sequence[str], withheld: np.ndarray) -> dict[str, int]:
+    """Customers withheld per arm drawn, every arm named (0 when none of its customers was withheld)."""
+    import numpy as np
+
+    hit = plan.arm_code[withheld & (plan.arm_code >= 0)]
+    counts = np.bincount(hit, minlength=len(plan.arm_names))
+    by_name = {name: int(counts[position]) for position, name in enumerate(plan.arm_names)}
+    return {level: by_name.get(level, 0) for level in levels}
+
+
+def _variant_verdicts(
+    plan: _VariantPlan,
+    planned: dict[str | None, tuple[str, ...]],
+    verdicts: dict[tuple[str, str], MessageVerdict],
+    *,
+    catalogue: ActionCatalogue | None,
+    catalogue_sha: str | None,
+    planned_by_action: Mapping[str, tuple[str, ...]],
+    configured: tuple[str, ...],
+    dlt_channels: tuple[str, ...],
+    whitelist: Any,
+    var_max_chars: int | None,
+) -> tuple[VariantMessageCheck, ...]:
+    """Plan every variant key on its band action's channels (as the band's own customers are planned), add its
+    verdicts - checked once per arm, group and channel - to `verdicts`, and return what was checked."""
+    from engine.compliance.variants import variant_message_checks
+
+    wanted: list[tuple[str, str, str]] = []
+    for name, (level, group, action) in plan.keys.items():
+        channels = configured if action is None else tuple(planned_by_action.get(action, configured))
+        planned[name] = tuple(channels)
+        wanted.extend((level, group, channel) for channel in channels)
+    found, checks = variant_message_checks(
+        catalogue,
+        catalogue_sha,
+        wanted,
+        plan.words,
+        dlt_channels=dlt_channels,
+        whitelist=whitelist,
+        var_max_chars=var_max_chars,
+    )
+    for name, (level, group, _action) in plan.keys.items():
+        for channel in planned[name]:
+            verdict = found.get((level, group, channel))
+            if verdict is not None:
+                verdicts[(name, channel)] = verdict
+    return checks
+
+
+def _variant_columns(decisions: pa.Table, plan: _VariantPlan, exploded: Any) -> pa.Table:
+    """The decision file of a run with message arms: a variant row names its variant's own catalogue action on
+    the row's channel (null where the variant has no words there), and every row the arm drawn for its customer.
+
+    Built by codes: each row's action is one of the bands' actions or one per (variant key, channel), so the
+    column is a `take` from a short list of names.
+    """
+    import numpy as np
+    import pyarrow as pa
+
+    parent = np.asarray(exploded.parent, dtype=np.int64)
+    key = plan.key_code[parent]
+    channel_code, channel_names = _codes(np.asarray(exploded.channel, dtype=object))
+    width = len(channel_names) + 1
+    variant_rows = key >= 0
+    pairs, inverse = np.unique(
+        key[variant_rows] * width + channel_code[variant_rows] + 1, return_inverse=True
+    )
+    named: list[str | None] = []
+    for value in pairs.tolist():
+        position, channel = divmod(int(value), width)
+        level, group, _action = plan.key_values[position]
+        words = None if channel == 0 else plan.words.get((level, group, str(channel_names[channel - 1])))
+        named.append(None if words is None else words.catalogue_action_id)
+    names = [*plan.band_names, *named]
+    code = plan.band_code[parent]
+    code[variant_rows] = len(plan.band_names) + np.asarray(inverse, dtype=np.int64).reshape(-1)
+    actions = pa.array(names, pa.string()).take(pa.array(code, mask=code < 0))
+    out = decisions.set_column(decisions.schema.get_field_index(ACTION_COLUMN), ACTION_COLUMN, actions)
+    arm = plan.arm_code[parent]
+    arms = pa.array(plan.arm_names, pa.string()).take(pa.array(arm, mask=arm < 0))
+    return out.append_column(VARIANT_ARM_COLUMN, arms)

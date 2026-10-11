@@ -22,6 +22,10 @@ channel, which is never allowed (`COMPLIANCE_NO_CHANNEL`: a contact the gate cou
    under, so its message cannot be tied to the run.
 5. `COMPLIANCE_TEMPLATE_MISMATCH` and 6. `COMPLIANCE_URL_NOT_WHITELISTED` - the per-message verdicts of the row's
    (action, channel) (`messages`, computed once per action and channel, never per customer).
+7. `COMPLIANCE_VARIANT_NO_COPY` and 8. `COMPLIANCE_VARIANT_UNREGISTERED` - Plan K M145 (DEC-1412): on a run whose
+   message arms are in force, a customer of a variant arm is checked on that variant's own words
+   (`engine.compliance.variants`): no approved words of their variant on the channel, or words with no registered
+   template to check them against on it (fail closed). A row of no variant never carries either.
 
 **Output** (:func:`decision_schema`): the key columns, `channel`, `purpose`, `action_id`, `allowed`, `reasons`
 (a list of codes), `ledger_ref` (the contactability file's reference where it covers the customer, and for an
@@ -73,6 +77,10 @@ REASON_ORDER: Final[tuple[str, ...]] = (
     "COMPLIANCE_CATALOGUE_CHANGED",
     "COMPLIANCE_TEMPLATE_MISMATCH",
     "COMPLIANCE_URL_NOT_WHITELISTED",
+    # Plan K M145 (DEC-1412): a variant arm's own words (`engine.compliance.variants`); appended, so a row of
+    # no variant lists its reasons exactly as before.
+    "COMPLIANCE_VARIANT_NO_COPY",
+    "COMPLIANCE_VARIANT_UNREGISTERED",
 )
 """Every reason a row can carry, in the order a row lists them."""
 
@@ -88,6 +96,11 @@ class MessageVerdict:
     template_mismatch: bool = False
     url_not_whitelisted: bool = False
     catalogue_ref: str | None = None
+    no_copy: bool = False
+    """Plan K M145: a variant arm with no approved words on the channel (`COMPLIANCE_VARIANT_NO_COPY`)."""
+    unregistered: bool = False
+    """Plan K M145: a variant's words with no registered template to check them against on the channel
+    (`COMPLIANCE_VARIANT_UNREGISTERED`)."""
 
 
 @dataclass(frozen=True)
@@ -273,6 +286,8 @@ def decide(
     pair_codes, pairs = _factorize(plan_of * width + (channel_codes + 1))
     template_small = np.zeros(len(pairs), dtype=bool)
     url_small = np.zeros(len(pairs), dtype=bool)
+    no_copy_small = np.zeros(len(pairs), dtype=bool)
+    unregistered_small = np.zeros(len(pairs), dtype=bool)
     refs_small: list[str | None] = [None] * len(pairs)
     for position, pair in enumerate(pairs):
         action_code, channel_code = divmod(int(pair), width)
@@ -284,12 +299,29 @@ def decide(
         template_small[position] = verdict.template_mismatch
         url_small[position] = verdict.url_not_whitelisted
         refs_small[position] = verdict.catalogue_ref
+        no_copy_small[position] = verdict.no_copy
+        unregistered_small[position] = verdict.unregistered
     message_ok = has_channel & ~changed_fail
     template_fail = message_ok & template_small[pair_codes]
     url_fail = message_ok & url_small[pair_codes]
+    # Plan K M145: no words of the customer's variant on the channel is known without the catalogue; a missing
+    # registration is read from it, so like the other message checks it is not read from a changed one.
+    no_copy_fail = has_channel & no_copy_small[pair_codes]
+    unregistered_fail = message_ok & unregistered_small[pair_codes]
 
     # The reasons as a list column: one nonzero() over the (rows x reasons) matrix, row-major.
-    matrix = np.column_stack([~has_channel, consent_fail, opt_in_fail, changed_fail, template_fail, url_fail])
+    matrix = np.column_stack(
+        [
+            ~has_channel,
+            consent_fail,
+            opt_in_fail,
+            changed_fail,
+            template_fail,
+            url_fail,
+            no_copy_fail,
+            unregistered_fail,
+        ]
+    )
     rows_hit, which = np.nonzero(matrix)
     counts = np.bincount(rows_hit, minlength=total)
     offsets = np.zeros(total + 1, dtype=np.int64)

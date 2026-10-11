@@ -69,6 +69,15 @@ is cut to the same groups (`engine.measurement.cycle.open_campaign`), and measur
 without a pre-campaign covariate. A campaign with message arms measured on an amount, or adjusted by a
 covariate, is measured as a whole campaign, as it was before the arms, and no comparison is written.
 
+**Checked before they are sent (Plan K M145, DEC-1412).** With the pre-send compliance gate on, the treat list
+reads the arms in force once (:func:`variant_rows`) before the gate, which checks each customer of a variant arm on
+that variant's own words and registered action (`engine.compliance.variants`); the arm columns are then added from
+the treat flags and channels the gate left, so a withheld customer shows no arm. A campaign opened from the run
+sets aside, whole, every arm the gate stopped by its words or sent to nobody (:func:`variant_arms_not_sent`): its
+customers are put in neither campaign arm, as `scope_keys` does, and `variant_comparison.json` lists it as not sent,
+with no difference. Every other arm keeps each drawn customer, sent or withheld for their consent (intention to
+treat): the draw is independent of the customer, so the remaining arms and the no-message group stay comparable.
+
 **Not arbitrated.** Arbitration across use cases keeps a fixed set of columns and opens campaigns without
 arms, so a run whose arms are in force is refused there (`VARIANT_ARMS_NOT_ARBITRATED`), rather than
 silently losing which message each customer gets.
@@ -122,17 +131,21 @@ __all__ = [
     "VariantArms",
     "VariantArmsError",
     "VariantComparison",
+    "VariantNotSent",
     "VariantPair",
+    "VariantRows",
     "build_variant_arms",
     "compare_variant_arms",
     "draw_arms",
     "is_variant_template_ref",
     "set_aside_variant_arms",
     "variant_arms_in_force",
+    "variant_arms_not_sent",
     "variant_arms_of",
     "variant_campaign_scope",
     "variant_level",
     "variant_measure_arguments",
+    "variant_rows",
     "variant_template_ref",
     "variant_treat_list_columns",
 ]
@@ -284,6 +297,17 @@ class VariantPair(Artefact):
     )
 
 
+class VariantNotSent(Artefact):
+    """A message arm the compliance gate stopped (Plan K M145, DEC-1412): set aside, not compared."""
+
+    arm: str = Field(description="The arm level.")
+    reason: str = Field(description="Why it is not compared, in plain words.")
+    difference: ConfidenceValue | None = Field(
+        default=None,
+        description="Always null: a message that was not sent as drawn has no measured difference.",
+    )
+
+
 class VariantComparison(Artefact):
     """`campaigns/<id>/variant_comparison.json`: which message did best, named only when the interval says so.
 
@@ -315,6 +339,14 @@ class VariantComparison(Artefact):
         default=None, description="The leader's rate minus the closest arm's, at the family's confidence."
     )
     summary: str = Field(description="One plain sentence.")
+    not_sent: tuple[VariantNotSent, ...] | None = Field(
+        default=None,
+        description=(
+            "Plan K M145: the message arms the compliance gate stopped, set aside from the campaign and from every "
+            "pair (`Campaign.variant_arms_set_aside`). Absent when every arm drawn was sent."
+        ),
+        exclude_if=lambda value: value is None,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -729,13 +761,25 @@ def variant_arms_in_force(
 
 def _matches_copy(storage: Storage, run_id: str, arms: VariantArms) -> bool:
     """The run's copy is the batch the arms were drawn from, each arm template approved and its words registered."""
-    from engine.generative.contracts import COPY_BATCH_FILENAME, CopyBatch, CopyStatus
+    return _copy_in_force(storage, run_id, arms) is not None
+
+
+def _copy_in_force(storage: Storage, run_id: str, arms: VariantArms) -> CopyBatch | None:
+    """The run's `copy_batch.json` when it is the batch the arms were drawn from, every arm template still
+    approved with its words the registered ones; None otherwise."""
+    from engine.generative.contracts import COPY_BATCH_FILENAME, CopyBatch
     from engine.storage import StorageError, run_key
 
     try:
         batch = storage.read_model(run_key(run_id, COPY_BATCH_FILENAME), CopyBatch)
     except StorageError:
-        return False
+        return None
+    return batch if _batch_matches(batch, arms) else None
+
+
+def _batch_matches(batch: CopyBatch, arms: VariantArms) -> bool:
+    from engine.generative.contracts import CopyStatus
+
     if batch.batch_id != arms.batch_id or batch.created_at != arms.batch_created_at:
         return False
     by_id = {template.template_id: template for template in batch.templates}
@@ -828,6 +872,61 @@ class TreatListVariants:
         self.note = note
 
 
+class VariantRows:
+    """A run's message arms in force, read once for a treat list (Plan K M145, DEC-1412): the arms, the copy batch
+    they were drawn from, and per treat-list row the arm drawn and the group, None outside the arms."""
+
+    def __init__(self, arms: VariantArms, batch: CopyBatch, arm: Any, unit: Any) -> None:
+        self.arms = arms
+        self.batch = batch
+        self.arm = arm
+        self.unit = unit
+
+
+def variant_rows(
+    storage: Storage,
+    run_id: str,
+    primary_key: PrimaryKey,
+    row_keys: pd.Series[Any],
+    *,
+    config_root: Path | None = None,
+) -> VariantRows | None:
+    """Each treat-list row's arm and group, joined on every key column; None unless the arms are in force.
+
+    Read before the compliance gate (`engine.decide.treat_list`, step 5c), so the gate checks each customer on the
+    words their arm sends (`engine.compliance.variants`), and then given to :func:`variant_treat_list_columns`
+    (step 5d): the arms, the copy and `variant_arms.parquet` are read once. The rule for "in force" is
+    :func:`variant_arms_in_force`'s, with the copy batch it checked kept.
+    """
+    import numpy as np
+    import pandas as pd
+
+    from engine.config import ConfigError, load_use_case
+
+    arms = variant_arms_of(storage, run_id)
+    if arms is None:
+        return None
+    try:
+        use_case = load_use_case(arms.use_case_id, config_root)
+    except ConfigError:
+        return None
+    if not use_case.generative.variant_arms:
+        return None
+    batch = _copy_in_force(storage, run_id, arms)
+    if batch is None:
+        return None
+    table = _arm_table(storage, run_id, primary_key)
+    if table is None:
+        return None
+    index = pd.Index(row_keys.to_numpy())
+    arm = table[VARIANT_ARM_COLUMN].reindex(index).astype("object").to_numpy()
+    unit = table[COPY_UNIT_COLUMN].reindex(index).astype("object").to_numpy()
+    empty = np.full(len(index), None, dtype=object)
+    return VariantRows(
+        arms, batch, np.where(pd.notna(arm), arm, empty), np.where(pd.notna(unit), unit, empty)
+    )
+
+
 def variant_treat_list_columns(
     storage: Storage,
     run_id: str,
@@ -837,6 +936,7 @@ def variant_treat_list_columns(
     treat: Any,
     channel: pd.Series[Any],
     config_root: Path | None = None,
+    rows: VariantRows | None = None,
 ) -> TreatListVariants | None:
     """`variant_arm` and `variant_template` per treat-list row, joined on every key column; None without arms.
 
@@ -844,21 +944,21 @@ def variant_treat_list_columns(
     without arms, byte for byte. A customer is shown their arm only when the list treats them (`treat = 1`);
     the template is the approved one their arm sends to their group on their channel (the copy's only channel
     when the list names none), empty for the control template and for a channel the copy was not written for
-    (:func:`build_variant_arms` refuses arms that would leave a variant customer without one).
+    (:func:`build_variant_arms` refuses arms that would leave a variant customer without one). `rows` is
+    :func:`variant_rows` already read for this list (Plan K M145); read here when not given.
     """
     import numpy as np
     import pandas as pd
 
-    arms = variant_arms_in_force(storage, run_id, config_root=config_root)
-    if arms is None:
+    if rows is None:
+        rows = variant_rows(storage, run_id, primary_key, row_keys, config_root=config_root)
+    if rows is None:
         return None
-    table = _arm_table(storage, run_id, primary_key)
-    if table is None:
-        return None
+    arms = rows.arms
     index = pd.Index(row_keys.to_numpy())
     treated = np.asarray(treat, dtype=bool)
-    arm = table[VARIANT_ARM_COLUMN].reindex(index).astype("object").to_numpy()
-    unit = table[COPY_UNIT_COLUMN].reindex(index).astype("object").to_numpy()
+    arm = rows.arm
+    unit = rows.unit
     arm = np.where(treated & pd.notna(arm), arm, np.full(len(index), None, dtype=object))
     lookup: dict[tuple[Any, Any, Any], str] = {
         (item.arm, item.unit, item.channel): item.template_id for item in arms.templates
@@ -894,6 +994,47 @@ def variant_campaign_scope(
     if table is None:
         return None
     return table.index, table[VARIANT_ARM_COLUMN]
+
+
+_NOT_SENT_WORDS: Final[str] = (
+    "Not sent: the compliance gate stopped its words for every customer drawn into it, so it is not compared."
+)
+_NOT_SENT_SOME_WORDS: Final[str] = (
+    "Set aside: the compliance gate stopped its words for some of the customers drawn into it, so the message "
+    "was not sent as drawn and is not compared."
+)
+_NOT_SENT_NOBODY: Final[str] = (
+    "Not sent: the compliance gate allowed none of the customers drawn into it, so it is not compared."
+)
+
+
+def variant_arms_not_sent(storage: Storage, run_id: str) -> dict[str, str]:
+    """The message arms the compliance gate stopped on the run's treat list, each with why (Plan K M145, DEC-1412).
+
+    An arm is stopped when the gate withheld any of its customers for the words they would be sent (a reason of
+    `engine.compliance.handoff.WORD_CODES`: chosen by the arm, so not spread evenly across the arms as a
+    customer's consent is), or when it sent the arm to none of its customers. A campaign sets such an arm aside
+    whole. Empty unless the list was decided by the gate with the arms in force (`variant_arm_withheld` set), so
+    a run without the gate, or without arms, is unchanged.
+    """
+    from engine.decide.treat_list import TREAT_LIST_SUMMARY_FILENAME, TreatListSummary
+    from engine.storage import StorageError, run_key
+
+    try:
+        summary = storage.read_model(run_key(run_id, TREAT_LIST_SUMMARY_FILENAME), TreatListSummary)
+    except StorageError:
+        return {}
+    if summary.variant_arm_withheld is None or summary.variant_arm_counts is None:
+        return {}
+    words = summary.variant_arm_words_withheld or {}
+    out: dict[str, str] = {}
+    for arm, withheld in summary.variant_arm_withheld.items():
+        sent = summary.variant_arm_counts.get(arm, 0)
+        if words.get(arm, 0) > 0:
+            out[arm] = _NOT_SENT_WORDS if sent == 0 else _NOT_SENT_SOME_WORDS
+        elif withheld > 0 and sent == 0:
+            out[arm] = _NOT_SENT_NOBODY
+    return out
 
 
 def with_variant_arms(
@@ -943,18 +1084,26 @@ def variant_measure_arguments(
 # ---------------------------------------------------------------------------
 # Comparing the messages
 # ---------------------------------------------------------------------------
-def compare_variant_arms(report: IncrementalityReport) -> VariantComparison | None:
+def compare_variant_arms(
+    report: IncrementalityReport, *, set_aside: Mapping[str, str] | None = None
+) -> VariantComparison | None:
     """Every pair of message arms compared directly, and the winner when there is one (see the class).
 
     Read from the report's own `arms` counts (measured once, by `measure_campaign`): None when the report
-    has fewer than two arms with measured customers.
+    has fewer than two arms with measured customers. `set_aside` (Plan K M145): the arms the campaign set aside
+    because the compliance gate stopped them (`Campaign.variant_arms_set_aside`), each with why; never compared,
+    listed in `not_sent`.
     """
     from engine.uplift.incrementality import newcombe_interval
 
+    aside = dict(set_aside or {})
     measured = [
         arm
         for arm in report.arms or ()
-        if arm.treated_rows and arm.treated_conversions is not None and arm.treated_rows > 0
+        if arm.treated_rows
+        and arm.treated_conversions is not None
+        and arm.treated_rows > 0
+        and arm.arm not in aside
     ]
     if len(measured) < 2:
         return None
@@ -987,6 +1136,8 @@ def compare_variant_arms(report: IncrementalityReport) -> VariantComparison | No
         if wins
         else "No message is named the best: the leader's range is not above every other message's."
     )
+    if aside:
+        summary += f" Not sent, so not compared: {', '.join(aside)}."
     return VariantComparison(
         campaign_id=report.campaign_id,
         report_computed_at=report.computed_at,
@@ -1000,4 +1151,7 @@ def compare_variant_arms(report: IncrementalityReport) -> VariantComparison | No
         closest=closest,
         margin=margin,
         summary=summary,
+        not_sent=(
+            tuple(VariantNotSent(arm=arm, reason=reason) for arm, reason in aside.items()) if aside else None
+        ),
     )
