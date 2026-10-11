@@ -2608,6 +2608,24 @@ fails a new route that logs a console error.
 
 **What I did meanwhile.** Nothing was blocked.
 
+### 2026-10-11 — plan-m M178 (on main) → Plan M M174 to M179 (builders of the Phase 2 routes) and trunk / Plan H (owner of `ui/modules/simple/pages.js` Settings): a new route needs a sample page and a way in, or M173's sweep fails (announcement and record of an in-place edit)
+
+**What changed** (DEC-1608 (i)). M173's `tests/integration/test_ui_sweep.py` (a `slow` Playwright test, on `main`) reads
+the route prefixes the modules registered and fails a prefix that has no entry in its `samples()` or that no click
+from the top bar reaches. At M178's integration `#/reports` failed both; the fix was four sample pages in
+`samples()` and a "Reports" entry in Settings' Advanced tools (`settingsHtml` in `ui/modules/simple/pages.js`, shown
+when `can("GET", "/pilot/proof")`, next to M173's "Check a past campaign"; `settings.test.mjs` lists it). M178's
+module lines sit inside main's one `PLAN-M (simple UI)` block of `ui/index.html`, and its four `reports-*` entries
+follow `reports` in `visible_text.test.mjs`'s `PAGES`.
+
+**What is needed.** Each Phase 2 milestone that registers a route prefix (`#/overview`, `#/campaigns` list and pages,
+`#/campaigns/new`, `#/data`) adds its sample pages to `samples()` and, until M174's sidebar is the default, a way in
+the classic layout's clicks reach (the contract's "nobody links to it yet" no longer passes the crawler); M174 may
+replace the Settings entry with the sidebar's link once the crawler runs in the campaigns layout. Append your
+`ui/index.html` lines and `PAGES` entries inside the existing blocks, keeping every milestone's lines.
+
+**What I did meanwhile.** Nothing was blocked.
+
 ### 2026-09-23 — plan-e-pilot (on main) → all branches: every change Plan E made outside its own files and blocks
 
 **What is needed.** Nothing from anybody; this is the announcement §3 asks for. Measured with
