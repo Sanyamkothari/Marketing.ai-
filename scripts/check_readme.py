@@ -787,6 +787,13 @@ MILESTONE_TESTS: Final[Mapping[str, tuple[str, ...]]] = {
         "tests/integration/production/test_model_not_approved.py",
         "tests/unit/test_getting_started_doc.py",
     ),
+    # M182 (DEC-1612), the brand as configuration. test_brand_ui.py runs the brand node suites and the differential
+    # test against main's pages; test_brand_browser.py is slow (Chromium).
+    "M182": (
+        "tests/integration/production/test_brand_setting.py",
+        "tests/integration/test_brand_ui.py",
+        "tests/integration/test_brand_browser.py",
+    ),
     # M184 (DEC-1614), safety fixes from the autonomy audit: an approved plan's list keeps its limits, unattended
     # steps use only approved models, the strict compliance gate, copy approval's separation of duties, identity.
     "M184": (

@@ -2763,6 +2763,29 @@ page now gets the server's refusal and shows it like any other error. `ui/module
 waiting model (no campaign: list served; a campaign's: list and plan refused, `scores.csv` served; approved: both
 served), a refused one, a demoted former champion, approval not required and a model the registry does not know.
 
+### 2026-10-11 — plan-m M182 (on main) → trunk (owners of `api/routes/auth.py`, `api/schemas.py`, `engine/settings.py`, `infra/naming.py` and `docs/API.md`), Phase 4a (owner of `docs/AWS_DEPLOYMENT.md`), trunk / Plan H (owners of `ui/app.js`, `ui/chrome.js` and `ui/index.html`) and every branch that appends settings or edits the top bar: the brand as configuration (announcement and record of additive edits)
+
+**What changed** (DEC-1612). Four settings, `brand_name`, `brand_logo_url`, `brand_logo_alt` and `brand_color`
+(`MARKETING_AI_BRAND_*`), are appended after M174's `ui_layout` at the end of `engine/settings.py` `ENV_VARS` and of
+`infra/naming.py` `SETTINGS_FIELDS`, in the same order, with rows in `docs/AWS_DEPLOYMENT.md`. `GET /auth/me` gains
+an added `brand` object (`BrandView` in `api/schemas.py`; `docs/API.md`, which lists response models, not fields, is unchanged), so its key set is now
+`principal`, `auth_mode`, `permissions`, `ui_layout`, `preferences`, `brand`
+(`tests/integration/production/test_ui_layout_setting.py` pins it). The new `ui/brand.js` applies the brand; `ui/app.js`,
+`ui/chrome.js` and `ui/shell.js` call it between `// <M182>` and `// </M182>` marks, which
+`tests/integration/test_brand_ui.py` strips to build the "before" tree of its differential test. `ui/index.html` is
+not edited: for a custom colour only, `brand.js` writes a `#brand-styles` `<style>` that overrides `html .run-pct`
+(a hard-coded 20% tint of #1E57BD) and keeps Minfy's own mark (`html .logo .b`, `.s`) in Minfy's blue.
+
+**What is needed.** A test that pins the exact key set of `GET /auth/me` includes `brand`. A branch that appends
+settings keeps `ENV_VARS` and `SETTINGS_FIELDS` in the same order (M181 part D's branch, which waits for the
+usability test, will need this when it merges). Later edits to the top bar's markup or to document titles keep
+calling `brandNameHtml()`, `brandLogoAlt()` and `brandLogoHtml(LOGO)` and keep the marks. A branch that changes the
+`.run-pct` rule or adds another accent-derived constant to `ui/index.html` adds it to `brandRules()` in
+`ui/brand.js`.
+
+**What I did meanwhile.** Nothing was blocked. With sign-in on, the sign-in page shows the brand only in a browser
+that has signed in before (DEC-1612 (g)); a public `GET /brand` is proposed, not built.
+
 ### 2026-10-11 — plan-m M184 (on main) → Plan J (owner of `engine/decide/`), trunk (owner of `api/routes/runs.py`), Phase 4b (owner of `engine/scheduling/`), Phase 3a (owner of `engine/generative/` and `api/routes/generative.py`) and Plan K (owners of `engine/compliance/` and `engine/agentic/`): safety fixes from the autonomy audit in other owners' files (record of in-place edits and announcement)
 
 **What changed** (DEC-1614). Plan J: `engine/decide/treat_list.py` and the new `engine/decide/campaign_scope.py`.
