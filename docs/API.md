@@ -104,6 +104,7 @@ Contract schema version: 1.
 | GET | `/monitoring/alerts` | List alerts | AlertListResponse |
 | POST | `/monitoring/alerts/{alert_id}/acknowledge` | Acknowledge an alert | Alert |
 | GET | `/monitoring/missed-firings` | Scheduled runs that were missed, across schedules | FiringListResponse |
+| GET | `/overview` | The Overview page: what needs attention, value proven to date, live campaigns, first-visit checklist | Overview |
 | GET | `/pilot/data-request` | The client-facing data request for the pilot's use cases | - |
 | GET | `/pilot/demo` | Whether demo mode is on, and what the seeded demo contains | PilotDemoResponse |
 | GET | `/pilot/demo/raw/{variant}` | The demo's raw tables as a zip, for trying the pre-flight check (clean or broken) | - |
@@ -175,6 +176,7 @@ Contract schema version: 1.
 | POST | `/schedules/{schedule_id}/fire` | Run a schedule's work now | ScheduleFiring |
 | GET | `/schedules/{schedule_id}/firings` | A schedule's firing history, newest first | FiringListResponse |
 | POST | `/uplift/runs` | Validate an upload or a built dataset as an experiment and, when it passes, start an uplift training run | RunCreatedResponse |
+| GET | `/uploads` | The uploaded files, newest first | UploadListResponse |
 | POST | `/uploads` | Store a CSV, Excel or Parquet file, read it, profile it and return everything the Setup screen renders | UploadResponse |
 | GET | `/uploads/{upload_id}/agent-session` | The Guided-setup session of an upload | AgentSessionResponse |
 | POST | `/uploads/{upload_id}/agent-session` | Start (or restart) Guided setup for an upload: the helper's suggestions and questions | AgentSessionResponse |

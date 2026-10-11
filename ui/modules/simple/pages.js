@@ -343,6 +343,14 @@ export function settingsHtml({ can = () => true, status = null, version = null }
     can("GET", "/pilot/proof")
       ? entry({ label: "Reports", href: "#/reports", text: "Value Proof Packs, the value proven to date and a check of a past campaign, on one page." })
       : "",
+    // Plan M M175 (DEC-1605) and M179 (DEC-1609): the Overview and the Data page are in the campaigns layout's sidebar
+    // (M174); in the classic layout these are their ways in, as for Reports above.
+    can("GET", "/overview")
+      ? entry({ label: "Overview", href: "#/overview", text: "What needs your attention, the value proven to date and the campaigns under way, on one page." })
+      : "",
+    can("GET", "/uploads")
+      ? entry({ label: "Data", href: "#/data", text: "Where your customer data comes from: your files and saved connections, and a check of your data." })
+      : "",
     can("GET", "/runs/{run_id}/outcomes")
       ? entry({ label: "Campaigns waiting for results", href: "#/monitoring/runs", text: "Every contact list you made, and where to add what happened to those customers." })
       : "",

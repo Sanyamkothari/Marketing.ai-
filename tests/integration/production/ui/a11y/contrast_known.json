@@ -1,0 +1,156 @@
+{
+  "palette": {
+    "palette: blue tag": {
+      "reason": "The blue token --p (#2F6FDB) as text on its own tint --p-t (#EDF3FD) is 4.26:1, just below 4.5:1 for text under 24px.",
+      "where": "ui/index.html:17 (--p, --p-t)",
+      "fix": "Use --brand-blue (#1E57BD, 5.97:1 on the tint) as the text colour under .t-P, or darken --p to #2A63C6 or below."
+    }
+  },
+  "rules": {
+    ".crumbs .sep :: var(--faint) on its ground": {
+      "reason": "A decorative glyph (an arrow, a chevron or a separator, marked aria-hidden) is drawn in --faint (#9CA3AF), 2.4 to 2.5:1. WCAG 1.4.3 exempts pure decoration, so this is not a failure for a reader; it is listed so that no other use of --faint slips in.",
+      "where": "ui/index.html:46",
+      "fix": "None needed while the glyph stays aria-hidden and carries no meaning. If it ever carries meaning, use --muted."
+    },
+    ".chip.type [.t-P] :: var(--c) on var(--t)": {
+      "reason": "The blue token --p (#2F6FDB) as text on its own tint --p-t (#EDF3FD) is 4.26:1, just below 4.5:1 for text under 24px.",
+      "where": "ui/index.html:52",
+      "fix": "Use --brand-blue (#1E57BD, 5.97:1 on the tint) as the text colour under .t-P, or darken --p to #2A63C6 or below."
+    },
+    ".uc .chev :: var(--faint) on its ground": {
+      "reason": "A decorative glyph (an arrow, a chevron or a separator, marked aria-hidden) is drawn in --faint (#9CA3AF), 2.4 to 2.5:1. WCAG 1.4.3 exempts pure decoration, so this is not a failure for a reader; it is listed so that no other use of --faint slips in.",
+      "where": "ui/index.html:69",
+      "fix": "None needed while the glyph stays aria-hidden and carries no meaning. If it ever carries meaning, use --muted."
+    },
+    ".uc:hover .chev [.t-H] :: var(--c) on its ground": {
+      "reason": "The teal token --h (#12957F) is used as a text colour: 3.4 to 3.7:1 on white and on its own tint, below 4.5:1 for text under 24px.",
+      "where": "ui/index.html:70",
+      "fix": "Add a darker text token (for example --h-ink: #0F766E, 4.9:1 on the tint and 5.5:1 on white) and use it where `color:var(--c)` is set under .t-H."
+    },
+    ".flow .arrow :: var(--faint) on its ground": {
+      "reason": "A decorative glyph (an arrow, a chevron or a separator, marked aria-hidden) is drawn in --faint (#9CA3AF), 2.4 to 2.5:1. WCAG 1.4.3 exempts pure decoration, so this is not a failure for a reader; it is listed so that no other use of --faint slips in.",
+      "where": "ui/index.html:75",
+      "fix": "None needed while the glyph stays aria-hidden and carries no meaning. If it ever carries meaning, use --muted."
+    },
+    ".block .go [.t-H] :: var(--c) on its ground": {
+      "reason": "The teal token --h (#12957F) is used as a text colour: 3.4 to 3.7:1 on white and on its own tint, below 4.5:1 for text under 24px.",
+      "where": "ui/index.html:80",
+      "fix": "Add a darker text token (for example --h-ink: #0F766E, 4.9:1 on the tint and 5.5:1 on white) and use it where `color:var(--c)` is set under .t-H."
+    },
+    ".stepno [.t-P] :: var(--c) on var(--t)": {
+      "reason": "The blue token --p (#2F6FDB) as text on its own tint --p-t (#EDF3FD) is 4.26:1, just below 4.5:1 for text under 24px.",
+      "where": "ui/index.html:94",
+      "fix": "Use --brand-blue (#1E57BD, 5.97:1 on the tint) as the text colour under .t-P, or darken --p to #2A63C6 or below."
+    },
+    ".stepno [.t-H] :: var(--c) on var(--t)": {
+      "reason": "The teal token --h (#12957F) is used as a text colour: 3.4 to 3.7:1 on white and on its own tint, below 4.5:1 for text under 24px.",
+      "where": "ui/index.html:94",
+      "fix": "Add a darker text token (for example --h-ink: #0F766E, 4.9:1 on the tint and 5.5:1 on white) and use it where `color:var(--c)` is set under .t-H."
+    },
+    ".control.file .ico :: var(--faint) on its ground": {
+      "reason": "A decorative glyph (an arrow, a chevron or a separator, marked aria-hidden) is drawn in --faint (#9CA3AF), 2.4 to 2.5:1. WCAG 1.4.3 exempts pure decoration, so this is not a failure for a reader; it is listed so that no other use of --faint slips in.",
+      "where": "ui/index.html:113",
+      "fix": "None needed while the glyph stays aria-hidden and carries no meaning. If it ever carries meaning, use --muted."
+    },
+    ".control.file.has [.t-P] :: var(--c) on var(--t)": {
+      "reason": "The blue token --p (#2F6FDB) as text on its own tint --p-t (#EDF3FD) is 4.26:1, just below 4.5:1 for text under 24px.",
+      "where": "ui/index.html:114",
+      "fix": "Use --brand-blue (#1E57BD, 5.97:1 on the tint) as the text colour under .t-P, or darken --p to #2A63C6 or below."
+    },
+    ".control.file.has [.t-H] :: var(--c) on var(--t)": {
+      "reason": "The teal token --h (#12957F) is used as a text colour: 3.4 to 3.7:1 on white and on its own tint, below 4.5:1 for text under 24px.",
+      "where": "ui/index.html:114",
+      "fix": "Add a darker text token (for example --h-ink: #0F766E, 4.9:1 on the tint and 5.5:1 on white) and use it where `color:var(--c)` is set under .t-H."
+    },
+    ".control.file.has .ico [.t-H] :: var(--c) on its ground": {
+      "reason": "The teal token --h (#12957F) is used as a text colour: 3.4 to 3.7:1 on white and on its own tint, below 4.5:1 for text under 24px.",
+      "where": "ui/index.html:115",
+      "fix": "Add a darker text token (for example --h-ink: #0F766E, 4.9:1 on the tint and 5.5:1 on white) and use it where `color:var(--c)` is set under .t-H."
+    },
+    ".colchip.t [.t-H] :: var(--c) on its ground": {
+      "reason": "The teal token --h (#12957F) is used as a text colour: 3.4 to 3.7:1 on white and on its own tint, below 4.5:1 for text under 24px.",
+      "where": "ui/index.html:131",
+      "fix": "Add a darker text token (for example --h-ink: #0F766E, 4.9:1 on the tint and 5.5:1 on white) and use it where `color:var(--c)` is set under .t-H."
+    },
+    ".stage-d[open]>summary .sc [.t-H] :: var(--c) on its ground": {
+      "reason": "The teal token --h (#12957F) is used as a text colour: 3.4 to 3.7:1 on white and on its own tint, below 4.5:1 for text under 24px.",
+      "where": "ui/index.html:170",
+      "fix": "Add a darker text token (for example --h-ink: #0F766E, 4.9:1 on the tint and 5.5:1 on white) and use it where `color:var(--c)` is set under .t-H."
+    },
+    ".ptype .pill [.t-P] :: var(--c) on var(--t)": {
+      "reason": "The blue token --p (#2F6FDB) as text on its own tint --p-t (#EDF3FD) is 4.26:1, just below 4.5:1 for text under 24px.",
+      "where": "ui/index.html:178",
+      "fix": "Use --brand-blue (#1E57BD, 5.97:1 on the tint) as the text colour under .t-P, or darken --p to #2A63C6 or below."
+    },
+    ".ptype .pill [.t-H] :: var(--c) on var(--t)": {
+      "reason": "The teal token --h (#12957F) is used as a text colour: 3.4 to 3.7:1 on white and on its own tint, below 4.5:1 for text under 24px.",
+      "where": "ui/index.html:178",
+      "fix": "Add a darker text token (for example --h-ink: #0F766E, 4.9:1 on the tint and 5.5:1 on white) and use it where `color:var(--c)` is set under .t-H."
+    },
+    ".run-pct [.t-P] :: var(--c) on var(--t)": {
+      "reason": "The blue token --p (#2F6FDB) as text on its own tint --p-t (#EDF3FD) is 4.26:1, just below 4.5:1 for text under 24px.",
+      "where": "ui/index.html:182",
+      "fix": "Use --brand-blue (#1E57BD, 5.97:1 on the tint) as the text colour under .t-P, or darken --p to #2A63C6 or below."
+    },
+    ".run-pct [.t-H] :: var(--c) on var(--t)": {
+      "reason": "The teal token --h (#12957F) is used as a text colour: 3.4 to 3.7:1 on white and on its own tint, below 4.5:1 for text under 24px.",
+      "where": "ui/index.html:182",
+      "fix": "Add a darker text token (for example --h-ink: #0F766E, 4.9:1 on the tint and 5.5:1 on white) and use it where `color:var(--c)` is set under .t-H."
+    },
+    ".progress .dot :: var(--faint) on var(--soft)": {
+      "reason": "The number in a step that has not started yet (a pending step in a progress list) is --faint on --soft, 2.43:1. It is real text, but the step's title beside it says the same thing.",
+      "where": "ui/index.html:188",
+      "fix": "Use --muted for .progress .dot."
+    },
+    ".progress li.active .dot [.t-P] :: var(--c) on var(--t)": {
+      "reason": "The blue token --p (#2F6FDB) as text on its own tint --p-t (#EDF3FD) is 4.26:1, just below 4.5:1 for text under 24px.",
+      "where": "ui/index.html:189",
+      "fix": "Use --brand-blue (#1E57BD, 5.97:1 on the tint) as the text colour under .t-P, or darken --p to #2A63C6 or below."
+    },
+    ".progress li.active .dot [.t-H] :: var(--c) on var(--t)": {
+      "reason": "The teal token --h (#12957F) is used as a text colour: 3.4 to 3.7:1 on white and on its own tint, below 4.5:1 for text under 24px.",
+      "where": "ui/index.html:189",
+      "fix": "Add a darker text token (for example --h-ink: #0F766E, 4.9:1 on the tint and 5.5:1 on white) and use it where `color:var(--c)` is set under .t-H."
+    },
+    ".tabs .arr :: var(--faint) on its ground": {
+      "reason": "A decorative glyph (an arrow, a chevron or a separator, marked aria-hidden) is drawn in --faint (#9CA3AF), 2.4 to 2.5:1. WCAG 1.4.3 exempts pure decoration, so this is not a failure for a reader; it is listed so that no other use of --faint slips in.",
+      "where": "ui/index.html:215",
+      "fix": "None needed while the glyph stays aria-hidden and carries no meaning. If it ever carries meaning, use --muted."
+    },
+    ".steps .no [.t-P] :: var(--c) on var(--t)": {
+      "reason": "The blue token --p (#2F6FDB) as text on its own tint --p-t (#EDF3FD) is 4.26:1, just below 4.5:1 for text under 24px.",
+      "where": "ui/index.html:244",
+      "fix": "Use --brand-blue (#1E57BD, 5.97:1 on the tint) as the text colour under .t-P, or darken --p to #2A63C6 or below."
+    },
+    ".steps .no [.t-H] :: var(--c) on var(--t)": {
+      "reason": "The teal token --h (#12957F) is used as a text colour: 3.4 to 3.7:1 on white and on its own tint, below 4.5:1 for text under 24px.",
+      "where": "ui/index.html:244",
+      "fix": "Add a darker text token (for example --h-ink: #0F766E, 4.9:1 on the tint and 5.5:1 on white) and use it where `color:var(--c)` is set under .t-H."
+    },
+    ".cm .cell.good b [.t-H] :: var(--c) on its ground": {
+      "reason": "The teal token --h (#12957F) is used as a text colour: 3.4 to 3.7:1 on white and on its own tint, below 4.5:1 for text under 24px.",
+      "where": "ui/index.html:258",
+      "fix": "Add a darker text token (for example --h-ink: #0F766E, 4.9:1 on the tint and 5.5:1 on white) and use it where `color:var(--c)` is set under .t-H."
+    },
+    ".pickcard.on .pt1 [.t-H] :: var(--c) on its ground": {
+      "reason": "The teal token --h (#12957F) is used as a text colour: 3.4 to 3.7:1 on white and on its own tint, below 4.5:1 for text under 24px.",
+      "where": "ui/index.html:497",
+      "fix": "Add a darker text token (for example --h-ink: #0F766E, 4.9:1 on the tint and 5.5:1 on white) and use it where `color:var(--c)` is set under .t-H."
+    },
+    ".pickcard .ptag [.t-H] :: var(--c) on its ground": {
+      "reason": "The teal token --h (#12957F) is used as a text colour: 3.4 to 3.7:1 on white and on its own tint, below 4.5:1 for text under 24px.",
+      "where": "ui/index.html:499",
+      "fix": "Add a darker text token (for example --h-ink: #0F766E, 4.9:1 on the tint and 5.5:1 on white) and use it where `color:var(--c)` is set under .t-H."
+    },
+    ".lin .li [.t-H] :: var(--c) on its ground": {
+      "reason": "The teal token --h (#12957F) is used as a text colour: 3.4 to 3.7:1 on white and on its own tint, below 4.5:1 for text under 24px.",
+      "where": "ui/index.html:511",
+      "fix": "Add a darker text token (for example --h-ink: #0F766E, 4.9:1 on the tint and 5.5:1 on white) and use it where `color:var(--c)` is set under .t-H."
+    },
+    ".uindex .go :: var(--faint) on its ground": {
+      "reason": "A decorative glyph (an arrow, a chevron or a separator, marked aria-hidden) is drawn in --faint (#9CA3AF), 2.4 to 2.5:1. WCAG 1.4.3 exempts pure decoration, so this is not a failure for a reader; it is listed so that no other use of --faint slips in.",
+      "where": "ui/modules/uplift/styles.js:143",
+      "fix": "None needed while the glyph stays aria-hidden and carries no meaning. If it ever carries meaning, use --muted."
+    }
+  }
+}

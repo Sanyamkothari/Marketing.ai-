@@ -230,7 +230,16 @@ def samples(e: Entities) -> dict[str, list[str]]:
             f"#/uplift/{uc}/output/{e.train_uplift}",
         ],
         "campaign": [f"#/campaign/{uc}/{e.score_unmeasured}"],
-        "campaigns": [f"#/campaigns/{c}" for c in e.campaigns],
+        "campaigns": [f"#/campaigns/{c}" for c in e.campaigns]
+        # Plan M M176 (DEC-1606): the Campaigns list and every tab of each campaign's page.
+        + ["#/campaigns"]
+        + [
+            f"#/campaigns/{c}/{tab}"
+            for c in e.campaigns
+            for tab in ("overview", "audience", "results", "technical")
+        ]
+        # Plan M M177 (DEC-1607): the New campaign wizard.
+        + ["#/campaigns/new"],
         "results": ["#/results"],
         "settings": ["#/settings"],
         "help": ["#/help/glossary", "#/help/whats-new"],
@@ -250,6 +259,10 @@ def samples(e: Entities) -> dict[str, list[str]]:
             *[f"#/pilot/proof/{c}" for c in e.campaigns],
         ],
         "audit": ["#/audit"],
+        # Plan M M175 (DEC-1605): the Overview.
+        "overview": ["#/overview"],
+        # Plan M M179 (DEC-1609): the Data page, one page per tab.
+        "data": ["#/data", "#/data/check"],
         # Plan M M178 (DEC-1608): Reports, one page per tab (the Model reports tab draws the #/pilot lists).
         "reports": ["#/reports", "#/reports/programme", "#/reports/check", "#/reports/models"],
         "cost": ["#/cost"],

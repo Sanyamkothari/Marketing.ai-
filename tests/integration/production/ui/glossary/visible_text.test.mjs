@@ -97,6 +97,32 @@ export const PAGES = [
   { id: "cost", hash: "#/cost", expect: /Estimates at AWS/ },
   { id: "approvals", hash: "#/approvals", expect: /Models waiting for your approval/ },
   { id: "data-request-kit", hash: "#/pilot/kit", expect: /Ask your data team/ },
+  // Plan M M175: new pages start with an EMPTY allow-list (no entry in baseline.json): they may show no never-shown word.
+  { id: "overview", hash: "#/overview", expect: /Needs your attention[\s\S]*Value proven to date/, selector: "[data-attention]" },
+  // Plan M, M179 (DEC-1609): the Data page. New pages carry no allow-list: they must not show a never-shown word.
+  { id: "data-sources", hash: "#/data", expect: /Where your customer data comes from/, selector: "[data-dt-source='file']" },
+  { id: "data-check", hash: "#/data/check", expect: /Data Doctor looks at your files/ },
+  // Plan M M176 (DEC-1606): the Campaigns list and every tab of both campaigns' pages, with empty allow-lists.
+  { id: "campaigns-list", hash: "#/campaigns", expect: /Every campaign: where it stands/, selector: "[data-campaigns-list]" },
+  ...[
+    ["conversion", C_CONVERSION],
+    ["spend", C_SPEND],
+  ].flatMap(([name, id]) => [
+    { id: `campaign-${name}-overview`, hash: `#/campaigns/${id}/overview`, expect: /Where it stands/, selector: "[data-overview]" },
+    { id: `campaign-${name}-audience`, hash: `#/campaigns/${id}/audience`, expect: /to contact, out of/, selector: "[data-audience-search]" },
+    { id: `campaign-${name}-results`, hash: `#/campaigns/${id}/results`, expect: /Open the full report/, selector: "[data-results-measured]" },
+    { id: `campaign-${name}-technical`, hash: `#/campaigns/${id}/technical`, expect: /Choose the best e-mail/, selector: "[data-technical-tab]" },
+  ]),
+  // Plan M M174 (DEC-1604): the campaigns layout's shell - sidebar, bell, Help - around a page with an empty allow-list.
+  // `after` puts the classic layout back, so every other page here is drawn as before.
+  {
+    id: "shell-campaigns",
+    hash: `#/pilot/value/${SCORE_RISK}`,
+    steps: [async () => (await import("../../../../../ui/layout.js")).setUiLayout("campaigns")],
+    after: [async () => (await import("../../../../../ui/layout.js")).setUiLayout("classic")],
+    expect: /Overview[\s\S]*Campaigns[\s\S]*Data[\s\S]*Reports[\s\S]*Settings[\s\S]*Value of one extra customer/,
+    selector: "#pb-bar nav.sh-side a[href='#/overview']",
+  },
 ];
 
 /** Requests a page may make that the recording does not hold (none today). Anything else fails the page. */
@@ -146,12 +172,19 @@ for (const page of PAGES) {
       await untilStable();
     }
     const text = visibleText(document.body);
+    const drewSelector = !page.selector || Boolean($(page.selector));
+    // A page that changed something for the whole app in its steps (the layout, M174) puts it back now.
+    for (const step of page.after || []) {
+      await step();
+      await settle(2);
+      await untilStable();
+    }
     if (dump) {
       fs.mkdirSync(dump, { recursive: true });
       fs.writeFileSync(path.join(dump, `${page.id}.txt`), text);
     }
     assert.match(text, page.expect, `${page.id} did not draw (it showed: ${text.slice(0, 200)})`);
-    if (page.selector) assert.ok($(page.selector), `${page.id} did not draw: nothing matches ${page.selector}`);
+    if (page.selector) assert.ok(drewSelector, `${page.id} did not draw: nothing matches ${page.selector}`);
     // A page that asks for an answer the recording lacks would draw an empty or error state and so be tested
     // against fewer words; fail it instead, and say how to refresh the recording.
     const unrecorded = [...missing].filter((k) => !k.includes("/__") && !EXPECTED_UNRECORDED.has(k));

@@ -67,6 +67,9 @@
     "run": 6,
     "band": 1
   },
+  "data-sources": {
+    "training": 1
+  },
   "data-training": {
     "run": 5,
     "training": 2,

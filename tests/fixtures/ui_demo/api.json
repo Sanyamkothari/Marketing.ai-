@@ -2907,6 +2907,121 @@
    "built_at": "2026-10-11T12:48:46.120628Z"
   }
  },
+ "GET /campaigns?run_id=r_20261010_11100003": {
+  "status": 200,
+  "content_type": "application/json",
+  "body": {
+   "campaigns": [
+    {
+     "schema_version": 1,
+     "campaign_id": "c_20261011_5ee8a5d4",
+     "kind": "scored",
+     "name": "Hillstrom e-mail (spend) - public dataset, retrospective replay, a third of each group kept",
+     "use_case_id": "hillstrom-email",
+     "run_ids": [
+      "r_20261010_11100003"
+     ],
+     "primary_key": "customer_id",
+     "treatment_start": "2026-10-11T11:56:14.880873Z",
+     "treatment_start_source": "run_finished",
+     "outcome_window_days": 0,
+     "population": "intended",
+     "bands": null,
+     "causal": true,
+     "causal_basis": "engine_random",
+     "holdout_scope": "run",
+     "holdout_scope_key": null,
+     "holdout_epoch": null,
+     "counts": {
+      "rows": 32000,
+      "suppressed": 0,
+      "treated": 16000,
+      "holdout": 16000,
+      "intended": 25599,
+      "intended_treated": 12862,
+      "intended_holdout": 12737,
+      "explore": 0
+     },
+     "status": "measured",
+     "outcomes": {
+      "upload_id": "u_9004eb6ff852",
+      "file_name": "replayed_spend.csv",
+      "outcome_column": "spend",
+      "outcome_named": true,
+      "positive_label": null,
+      "treatment_date_column": null,
+      "rows": 8434,
+      "added_at": "2026-10-11T11:56:30.652478Z",
+      "covariate_column": "history",
+      "covariate_date_column": "history_date"
+     },
+     "arbitration_id": null,
+     "intended_source": "offer_choice",
+     "test_plan_hash": "b48731e3b1f36ea1da73903e1b4fb615b4c1ef74acd7fd19cf28a207c3e5509d",
+     "test_plan_version": 1,
+     "created_at": "2026-10-11T11:56:21.263485Z",
+     "created_by": "local-operator",
+     "measured_at": "2026-10-11T11:56:30.851802Z"
+    },
+    {
+     "schema_version": 1,
+     "campaign_id": "c_20261011_c9276210",
+     "kind": "scored",
+     "name": "Hillstrom e-mail (conversion) - public dataset, retrospective replay, a third of each group kept",
+     "use_case_id": "hillstrom-email",
+     "run_ids": [
+      "r_20261010_11100003"
+     ],
+     "primary_key": "customer_id",
+     "treatment_start": "2026-10-11T11:56:14.880873Z",
+     "treatment_start_source": "run_finished",
+     "outcome_window_days": 0,
+     "population": "intended",
+     "bands": null,
+     "causal": true,
+     "causal_basis": "engine_random",
+     "holdout_scope": "run",
+     "holdout_scope_key": null,
+     "holdout_epoch": null,
+     "counts": {
+      "rows": 32000,
+      "suppressed": 0,
+      "treated": 16000,
+      "holdout": 16000,
+      "intended": 25599,
+      "intended_treated": 12862,
+      "intended_holdout": 12737,
+      "explore": 0
+     },
+     "status": "measured",
+     "outcomes": {
+      "upload_id": "u_e3a96c85fda7",
+      "file_name": "replayed_conversion.csv",
+      "outcome_column": "conversion",
+      "outcome_named": true,
+      "positive_label": "1",
+      "treatment_date_column": null,
+      "rows": 8434,
+      "added_at": "2026-10-11T11:56:28.312229Z"
+     },
+     "arbitration_id": null,
+     "intended_source": "offer_choice",
+     "test_plan_hash": "f6a3f10fed172e7fa43a781c221595fd65d8eac36b10b94def5dc873f548df7e",
+     "test_plan_version": 1,
+     "created_at": "2026-10-11T11:56:20.968698Z",
+     "created_by": "local-operator",
+     "measured_at": "2026-10-11T11:56:28.447132Z"
+    }
+   ]
+  }
+ },
+ "GET /campaigns?run_id=r_20261010_11100004": {
+  "status": 200,
+  "content_type": "application/json",
+  "body": {
+   "campaigns": []
+  }
+ },
  "GET /clients": {
   "status": 200,
   "content_type": "application/json",
@@ -4672,6 +4787,94 @@
   "content_type": "application/json",
   "body": {
    "firings": []
+  }
+ },
+ "GET /overview": {
+  "status": 200,
+  "content_type": "application/json",
+  "body": {
+   "schema_version": 1,
+   "cards": [
+    {
+     "code": "UPLIFT_NOT_BETTER_THAN_RISK",
+     "kind": "uplift_not_better_than_risk",
+     "severity": "warning",
+     "title": "The model that picks who to contact does not beat ranking by risk",
+     "text": "The model that predicts who a campaign changes was checked on customers it had not seen and did not clearly beat plain risk ranking. This contact list was ranked by the approved risk model instead.",
+     "next_step": "Approve a risk model for this use case, or train the model on more customers, before the next list is made.",
+     "campaign_id": "c_20261011_5ee8a5d4",
+     "campaign_name": {
+      "value": "Hillstrom e-mail (spend) - public dataset, retrospective replay, a third of each group kept",
+      "text": "Hillstrom e-mail (spend) - public dataset, retrospective replay, a third of each group kept",
+      "format": "text",
+      "sources": [
+       {
+        "artefact": "campaigns/c_20261011_5ee8a5d4/campaign.json",
+        "field": "name"
+       }
+      ],
+      "formula": null
+     },
+     "use_case_id": "hillstrom-email",
+     "facts": [],
+     "read": [
+      "runs/r_20261010_11100003/ranking_choice.json"
+     ]
+    }
+   ],
+   "cards_total": 1,
+   "headline": {
+    "unit": "rupees",
+    "total": {
+     "value": 81033.97395476769,
+     "text": "\u20b981,034",
+     "format": "inr",
+     "sources": [
+      {
+       "artefact": "campaigns/c_20261011_5ee8a5d4/incrementality_report.json",
+       "field": "adjusted_interval.ci_low"
+      },
+      {
+       "artefact": "campaigns/c_20261011_5ee8a5d4/incrementality_report.json",
+       "field": "treated_rows"
+      },
+      {
+       "artefact": "campaigns/c_20261011_5ee8a5d4/pilot_roi_inputs.json",
+       "field": "value_per_outcome"
+      },
+      {
+       "artefact": "campaigns/c_20261011_5ee8a5d4/campaign.json",
+       "field": "counts.intended_treated"
+      },
+      {
+       "artefact": "campaigns/c_20261011_5ee8a5d4/pilot_roi_inputs.json",
+       "field": "contact_cost"
+      },
+      {
+       "artefact": "campaigns/c_20261011_5ee8a5d4/incrementality_report.json",
+       "field": "treated_conversions"
+      },
+      {
+       "artefact": "campaigns/c_20261011_5ee8a5d4/pilot_roi_inputs.json",
+       "field": "offer_cost"
+      }
+     ],
+     "formula": "(s0*s1*s2 - s3*s4 - s5*s6)"
+    },
+    "label": "at least \u20b981,034 net of what contacts and offers cost, the sum of each campaign's lower bound",
+    "unit_words": "net of what contacts and offers cost",
+    "rule": "Each total is the sum of every campaign's measured lower bound, so it is a floor, not an estimate. Only campaigns whose control group the engine drew at random, or whose random assignment it verified, are added, customers measured by more than one campaign are counted once, and each unit has a total of its own.",
+    "campaigns_counted": 1
+   },
+   "summary_checked": true,
+   "campaigns": [],
+   "campaigns_total": 0,
+   "checklist": {
+    "connected": true,
+    "campaign": true,
+    "results": true
+   },
+   "built_at": "2026-10-11T12:00:00Z"
   }
  },
  "GET /pilot/data-request?format=json": {
@@ -10852,6 +11055,17 @@
   "status": 200,
   "content_type": "text/html",
   "body": "<!doctype html>\n<html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><title>Campaign value</title><style>\n:root { --ink:#1b2430; --muted:#5b6675; --line:#d9dee5; --bg:#ffffff; --panel:#f5f7fa;\n  --green:#1f7a4a; --green-bg:#e7f5ec; --amber:#8a5a00; --amber-bg:#fdf3dc; --red:#a3261b;\n  --red-bg:#fbe9e7; --blue:#1d4f91; --blue-bg:#e8f0fb; --bar:#2f6fb3; }\n* { box-sizing: border-box; }\nbody { margin:0; background:var(--bg); color:var(--ink);\n  font:15px/1.5 -apple-system, \"Segoe UI\", Roboto, \"Helvetica Neue\", Arial, sans-serif; }\nmain { max-width: 860px; margin: 0 auto; padding: 24px 16px 48px; }\n.brand { display:flex; justify-content:space-between; gap:12px; margin-bottom:18px; }\n.logo { border:1px dashed var(--line); color:var(--muted); font-size:12px; padding:8px 12px;\n  border-radius:6px; min-width:120px; text-align:center; }\nh1 { font-size:24px; margin:0 0 4px; }\nh2 { font-size:18px; margin:28px 0 8px; border-bottom:1px solid var(--line); padding-bottom:4px; }\nh3 { font-size:15px; margin:18px 0 6px; }\n.subtitle { color:var(--muted); margin:0 0 12px; }\n.facts { display:grid; grid-template-columns: max-content 1fr; gap:2px 14px; font-size:13px;\n  color:var(--muted); margin: 8px 0 16px; }\n.facts dt { font-weight:600; } .facts dd { margin:0; }\n.verdict { border-radius:8px; padding:14px 16px; margin:12px 0; border-left:6px solid; }\n.verdict .state { font-weight:700; text-transform:uppercase; font-size:12px; letter-spacing:.04em; }\n.verdict .title { font-size:17px; font-weight:600; margin:2px 0; }\n.v-ready { background:var(--green-bg); border-color:var(--green); }\n.v-ready .state { color:var(--green); }\n.v-warnings { background:var(--amber-bg); border-color:var(--amber); }\n.v-warnings .state { color:var(--amber); }\n.v-not_ready { background:var(--red-bg); border-color:var(--red); }\n.v-not_ready .state { color:var(--red); }\n.v-info { background:var(--panel); border-color:var(--muted); }\np.muted { color:var(--muted); font-size:13px; }\ntable { width:100%; border-collapse:collapse; margin:8px 0; font-size:13px; }\n.table-wrap { overflow-x:auto; }\nth, td { text-align:left; padding:6px 8px; border-bottom:1px solid var(--line); vertical-align:top; }\nth { background:var(--panel); font-weight:600; }\ncaption { caption-side:bottom; text-align:left; color:var(--muted); font-size:12px; padding-top:4px; }\n.kv { display:grid; grid-template-columns: minmax(140px, max-content) 1fr; gap:4px 16px; margin:8px 0; }\n.kv dt { color:var(--muted); } .kv dd { margin:0; font-weight:600; }\n.callout { border-radius:8px; padding:10px 14px; margin:10px 0; border:1px solid var(--line); }\n.callout .ct { font-weight:600; margin-bottom:2px; }\n.synthetic { border:2px solid var(--amber); background:var(--amber-bg); color:var(--amber);\n  border-radius:8px; padding:10px 14px; margin:12px 0; }\n.synthetic .st { font-weight:700; font-size:16px; } .synthetic div + div { color:var(--ink); font-size:13px; }\n.c-info { background:var(--blue-bg); } .c-warning { background:var(--amber-bg); }\n.c-error { background:var(--red-bg); } .c-success { background:var(--green-bg); }\n.bars { margin:8px 0; }\n.bar-row { display:grid; grid-template-columns: minmax(90px, 180px) 1fr minmax(60px, max-content);\n  gap:8px; align-items:center; font-size:13px; margin:3px 0; }\n.bar-track { background:var(--panel); height:14px; border-radius:3px; }\n.bar-fill { background:var(--bar); height:14px; border-radius:3px; }\nfooter { margin-top:32px; color:var(--muted); font-size:12px; border-top:1px solid var(--line);\n  padding-top:8px; }\n@media print { main { padding:0; } .verdict, .callout { break-inside: avoid; } }\n</style></head><body><main data-report=\"roi\"><div class=\"brand\"><div class=\"logo\">Minfy logo</div><div class=\"logo\">Client logo</div></div><h1>Campaign value</h1><dl class=\"facts\"><dt>Client</dt><dd>not recorded</dd><dt>Campaign run</dt><dd>r_20261010_11100004</dd><dt>Outcome</dt><dd>not recorded yet</dd><dt>Measured from</dt><dd>not measured yet</dd></dl><div class=\"verdict v-info\" role=\"status\"><div class=\"state\">For information</div><div class=\"title\">No results recorded yet</div><div>No outcomes have been recorded for this campaign yet.</div></div>\n<ul><li>A 95% confidence interval is the range the true number very probably lies in; a range that does not include zero means the effect is real, not luck.</li><li>The control group is customers chosen at random and deliberately not contacted.</li></ul><footer>Measured numbers come from the platform&#x27;s campaign records; rupee values use the inputs shown. Generated 11 Oct 2026, 12:50 UTC by Marketing AI from the platform's own records.</footer></main></body></html>\n"
+ },
+ "GET /privacy/runs/r_20261010_11100003/consent-report": {
+  "status": 404,
+  "content_type": "application/json",
+  "body": {
+   "detail": {
+    "code": "CONSENT_REPORT_NOT_FOUND",
+    "message": "This run was not gated by a consent ledger, so it has no consent report.",
+    "path": null
+   }
+  }
  },
  "GET /privacy/runs/r_20261010_11100004/consent-report": {
   "status": 404,
@@ -20301,6 +20515,17 @@
    }
   }
  },
+ "GET /runs/r_20261010_11100003/incrementality-input": {
+  "status": 404,
+  "content_type": "application/json",
+  "body": {
+   "detail": {
+    "code": "INCREMENTALITY_INPUT_NOT_FOUND",
+    "message": "This run has no incrementality input: add its outcomes first, and it needs a control group.",
+    "path": null
+   }
+  }
+ },
  "GET /runs/r_20261010_11100003/measure": {
   "status": 200,
   "content_type": "application/json",
@@ -20335,6 +20560,11 @@
     "path": null
    }
   }
+ },
+ "GET /runs/r_20261010_11100003/treat_list.csv": {
+  "status": 200,
+  "content_type": "text/csv",
+  "body": "customer_id,use_case,model_version,segment,treat,holdout,explore,suppression_reason,offer,channel,contactable_channels,runner_up_offer,runner_up_net_value,offer_reason,control_group,net_value,expected_gross_value,reason_1,reason_2,reason_3\n1,hillstrom-email,m_hillstrom-email_2,lost_cause,1,,,,Womens E-Mail,,,Mens E-Mail,8.92,,0,19.82,,history \u2193 (142.44),recency \u2191 (10),zip_code = Surburban\n2,hillstrom-email,m_hillstrom-email_2,persuadable,0,,,,,,,,,,1,163.32,,recency \u2193 (6),history_segment = 3) $200 - $350,history \u2193 (329.08)\n3,hillstrom-email,m_hillstrom-email_2,sleeping_dog,0,,,,,,,,,\"Every offer this customer could get is predicted to make them less likely to respond, so none is sent.\",0,,,history \u2193 (180.65),zip_code = Surburban,newbie \u2193 (1)\n5,hillstrom-email,m_hillstrom-email_2,sleeping_dog,1,,,,Womens E-Mail,,,,,,0,62.24,,history \u2193 (45.34),zip_code = Urban,history_segment = 1) $0 - $100\n6,hillstrom-email,m_hillstrom-email_2,lost_cause,0,,,,,,,,,,1,13.79,,history \u2193 (134.83),zip_code = Surburban,recency \u2191 (6)\n7,hillstrom-email,m_hillstrom-email_2,sleeping_dog,0,,,,,,,,,,1,,,history \u2193 (280.2),womens \u2193 (0),recency \u2191 (9)\n8,hillstrom-email,m_hillstrom-email_2,sleeping_dog,0,,,,,,,,,,1,18.48,,history \u2193 (46.42),zip_code = Urban,channel = Phone\n9,hillstrom-email,m_hillstrom-email_2,sleeping_dog,1,,,,Womens E-Mail,,,,,,0,293.93,,recency \u2193 (9),channel = Phone,history_segment = 5) $500 - $750\n11,hillstrom-email,m_hillstrom-email_2,persuadable,1,,,,Womens E-Mail,,,Mens E-Mail,105.14,,0,535.36,,zip_code = Urban,history_segment = 5) $500 - $750,history \u2191 (548.91)\n12,hillstrom-email,m_hillstrom-email_2,sleeping_dog,0,,,,,,,,,,1,126.98,,recency \u2193 (1),zip_code = Urban,mens \u2193 (0)\n14,hillstrom-email,m_hillstrom-email_2,persuadable,0,,,,,,,,,,1,55.07,,recency \u2191 (2),channel = Web,history_segment = 2) $100 - $200\n16,hillstrom-email,m_hillstrom-email_2,sleeping_dog,0,,,,,,,,,\"Every offer this customer could get is predicted to make them less likely to respond, so none is sent.\",0,,,history \u2193 (58.13),zip_code = Urban,recency \u2193 (3)\n19,hillstrom-email,m_hillstrom-email_2,persuadable,0,,,,,,,,,,1,72.3,,history \u2193 (219.04),history_segment = 3) $200 - $350,zip_code = Surburban\n21,hillstrom-email,m_hillstrom-email_2,lost_cause,1,,,,Mens E-Mail,,,Womens E-Mail,2.02,,0,2.35,,channel = Phone,history \u2193 (29.99),newbie \u2191 (1)\n22,hillstrom-email,m_hillstrom-email_2,sleeping_dog,0,,,,,,,,,\"Every offer this customer could get is predicted to make them less likely to respond, so none is sent.\",0,,,recency \u2193 (11),womens \u2193 (0),zip_code = Surburban\n23,hillstrom-email,m_hillstrom-email_2,persuadable,1,,,,Mens E-Mail,,,Womens E-Mail,10.53,,0,32.42,,channel = Web,history_segment = 2) $100 - $200,recency \u2191 (2)\n26,hillstrom-email,m_hillstrom-email_2,lost_cause,0,,,,,,,,,,1,23.9,,history \u2193 (139.87),recency \u2193 (6),channel = Web\n27,hillstrom-email,m_hillstrom-email_2,persuadable,0,,,,,,,,,,1,34.74,,history \u2193 (115.39),womens \u2191 (1),history_segment = 2) $100 - $200\n30,hillstrom-email,m_hillstrom-email_2,persuadable,1,,,,Mens E-Mail,,,Womens E-Mail,97.31,,0,489.01,,recency \u2191 (2),history \u2191 (203.35),history_segment = 3) $200 - $350\n32,hillstrom-email,m_hillstrom-email_2,sleeping_dog,1,,,,Womens E-Mail,,,,,,0,57.71,,history \u2193 (334.24),recency \u2193 (9),zip_code = Urban\n36,hillstrom-email,m_hillstrom-email_2,persuadable,1,,,,Mens E-Mail,,,Womens E-Mail,1.41,,0,85.63,,recency \u2191 (4),channel = Multichannel,newbie \u2191 (0)\n40,hillstrom-email,m_hillstrom-email_2,persuadable,1,,,,Womens E-Mail,,,Mens E-Mail,381.09,,0,636.63,,history \u2191 (520.43),history_segment = 5) $500 - $750,mens \u2191 (0)\n41,hillstrom-email,m_hillstrom-email_2,sleeping_dog,0,,,,,,,Womens E-Mail,-0.48,No offer is expected to earn more than it costs for this customer.,0,,,history \u2193 (236.97),recency \u2193 (11),zip_code = Urban\n42,hillstrom-email,m_hillstrom-email_2,persuadable,1,,,,Mens E-Mail,,,,,,0,94.32,,history \u2191 (99.23),recency \u2191 (3),zip_code = Rural\n43,hillstrom-email,m_hillstrom-email_2,persuadable,0,,,,,,,,,,1,81.74,,history \u2193 (204.18),history_segment = 3) $200 - $350,zip_code = Surburban\n44,hillstrom-email,m_hillstrom-email_2,persuadable,0,,,,,,,,,,1,489.33,,history \u2191 (492.02),womens \u2193 (0),recency \u2191 (2)\n47,hillstrom-email,m_hillstrom-email_2,lost_cause,1,,,,Womens E-Mail,,,Mens E-Mail,-3.61,,0,570.04,,recency \u2191 (2),womens \u2193 (0),history \u2193 (391.33)\n48,hillstrom-email,m_hillstrom-email_2,persuadable,0,,,,,,,,,,1,1896.09,,history \u2191 (729.7),recency \u2191 (1),womens \u2191 (1)\n49,hillstrom-email,m_hillstrom-email_2,persuadable,1,,,,Mens E-Mail,,,,,,0,29.72,,history \u2193 (134.59),recency \u2191 (3),channel = Phone\n50,hillstrom-email,m_hillstrom-email_2,persuadable,0,,,,,,,,,,1,41.4,,history_segment = 1) $0 - $100,history \u2193 (61.09),zip_code = Surburban\n53,hillstrom-email,m_hillstrom-email_2,lost_cause,0,,,,,,,,,,1,12.47,,history \u2193 (29.99),newbie \u2191 (1),history_segment = 1) $0 - $100\n54,hillstrom-email,m_hillstrom-email_2,lost_cause,0,,,,,,,,,,1,52.85,,recency \u2193 (9),channel = Web,history \u2193 (78.62)\n56,hillstrom-email,m_hillstrom-email_2,persuadable,0,,,,,,,,,,1,14.46,,zip_code = Surburban,history_segment = 1) $0 - $100,history \u2191 (42.66)\n58,hillstrom-email,m_hillstrom-email_2,lost_cause,1,,,,Womens E-Mail,,,Mens E-Mail,7.08,,0,925.24,,history_segment = 5) $500 - $750,history \u2193 (549.29),zip_code = Surburban\n59,hillstrom-email,m_hillstrom-email_2,persuadable,1,,,,Womens E-Mail,,,Mens E-Mail,402.81,,0,761.87,,history \u2191 (506.83),history_segment = 5) $500 - $750,zip_code = Rural\n60,hillstrom-email,m_hillstrom-email_2,lost_cause,0,,,,,,,,,,1,,,history \u2193 (143.93),zip_code = Surburban,newbie \u2193 (0)\n62,hillstrom-email,m_hillstrom-email_2,sleeping_dog,0,,,,,,,,,\"Every offer this customer could get is predicted to make them less likely to respond, so none is sent.\",0,,,history \u2193 (96.91),history_segment = 1) $0 - $100,womens \u2193 (0)\n65,hillstrom-email,m_hillstrom-email_2,persuadable,1,,,,Womens E-Mail,,,Mens E-Mail,21.89,,0,60.48,,history \u2191 (61.57),zip_code = Surburban,newbie \u2191 (1)\n66,hillstrom-email,m_hillstrom-email_2,lost_cause,0,,,,,,,,,,1,18.35,,recency \u2193 (5),history \u2193 (222.07),history_segment = 3) $200 - $350\n67,hillstrom-email,m_hillstrom-email_2,persuadable,1,,,,Mens E-Mail,,,Womens E-Mail,64.16,,0,226.75,,history \u2191 (259.91),channel = Web,zip_code = Surburban\n69,hillstrom-email,m_hillstrom-email_2,persuadable,0,,,,,,,,,,1,130.73,,history \u2193 (154.15),zip_code = Surburban,womens \u2191 (1)\n72,hillstrom-email,m_hillstrom-email_2,persuadable,1,,,,Mens E-Mail,,,Womens E-Mail,3.27,,0,5.87,,history \u2191 (31.12),mens \u2191 (1),newbie \u2193 (0)\n74,hillstrom-email,m_hillstrom-email_2,persuadable,0,,,,,,,,,,1,256.7,,history \u2191 (612.28),channel = Phone,womens \u2193 (0)\n76,hillstrom-email,m_hillstrom-email_2,lost_cause,1,,,,Mens E-Mail,,,,,,0,22.65,,history \u2191 (640.58),channel = Phone,womens \u2191 (1)\n77,hillstrom-email,m_hillstrom-email_2,persuadable,0,,,,,,,,,,1,162.61,,recency \u2191 (4),channel = Phone,newbie \u2191 (0)\n79,hillstrom-email,m_hillstrom-email_2,lost_cause,0,,,,,,,,,,1,8.54,,history \u2193 (235.14),zip_code = Urban,history_segment = 3) $200 - $350\n80,hillstrom-email,m_hillstrom-email_2,sleeping_dog,1,,,,Womens E-Mail,,,,,,0,14.97,,history \u2193 (29.99),history_segment = 1) $0 - $100,recency \u2191 (2)\n82,hillstrom-email,m_hillstrom-email_2,persuadable,1,,,,Mens E-Mail,,,Womens E-Mail,-3.9,,0,31.48,,recency \u2191 (2),history \u2193 (95.33),channel = Web\n86,hillstrom-email,m_hillstrom-email_2,lost_cause,0,,,,,,,,,,1,,,history \u2193 (237.85),zip_code = Urban,history_segment = 3) $200 - $350\n87,hillstrom-email,m_hillstrom-email_2,sleeping_dog,0,,,,,,,Womens E-Mail,-3.77,No offer is expected to earn more than it costs for this customer.,0,,,history_segment = 1) $0 - $100,recency \u2191 (2),history \u2193 (82.59)\n90,hillstrom-email,m_hillstrom-email_2,lost_cause,1,,,,Womens E-Mail,,,Mens E-Mail,6.09,,0,13.91,,history \u2193 (52.64),channel = Web,zip_code = Surburban\n95,hillstrom-email,m_hillstrom-email_2,sleeping_dog,0,,,,,,,,,,1,699.47,,womens \u2193 (0),history \u2193 (1973.87),recency \u2191 (3)\n100,hillstrom-email,m_hillstrom-email_2,lost_cause,0,,,,,,,,,,1,15.41,,history \u2193 (215.46),recency \u2193 (11),zip_code = Urban\n101,hillstrom-email,m_hillstrom-email_2,persuadable,0,,,,,,,,,,1,62.19,,history \u2191 (189.25),zip_code = Urban,recency \u2193 (11)\n102,hillstrom-email,m_hillstrom-email_2,persuadable,0,,,,,,,,,,1,45.79,,history \u2191 (108.12),zip_code = Urban,channel = Web\n103,hillstrom-email,m_hillstrom-email_2,persuadable,1,,,,Mens E-Mail,,,,,,0,17.72,,newbie \u2191 (1),zip_code = Surburban,channel = Phone\n106,hillstrom-email,m_hillstrom-email_2,persuadable,0,,,,,,,,,,1,1839.74,,history \u2191 (493.17),recency \u2191 (2),womens \u2191 (1)\n107,hillstrom-email,m_hillstrom-email_2,persuadable,1,,,,Mens E-Mail,,,Womens E-Mail,1.94,,0,50.79,,zip_code = Surburban,womens \u2191 (1),history \u2193 (146.04)\n108,hillstrom-email,m_hillstrom-email_2,persuadable,1,,,,Womens E-Mail,,,Mens E-Mail,20.05,,0,52.57,,newbie \u2191 (1),recency \u2191 (12),channel = Web\n111,hillstrom-email,m_hillstrom-email_2,sleeping_dog,0,,,,,,,,,,1,29.63,,history \u2193 (54.41),newbie \u2193 (1),channel = Phone\n112,hillstrom-email,m_hillstrom-email_2,sleeping_dog,0,,,,,,,,,\"Every offer this customer could get is predicted to make them less likely to respond, so none is sent.\",0,,,history \u2193 (1172.42),recency \u2193 (9),womens \u2191 (1)\n114,hillstrom-email,m_hillstrom-email_2,persuadable,0,,,,,,,,,,1,79.25,,history \u2193 (287.04),womens \u2191 (1),history_segment = 3) $200 - $350\n116,hillstrom-email,m_hillstrom-email_2,persuadable,0,,,,,,,,,,1,30.11,,history \u2193 (151.01),zip_code = Surburban,recency \u2191 (9)\n119,hillstrom-email,m_hillstrom-email_2,persuadable,1,,,,Mens E-Mail,,,Womens E-Mail,-15.09,,0,335.98,,history \u2191 (313.6),recency \u2191 (3),history_segment = 3) $200 - $350\n122,hillstrom-email,m_hillstrom-email_2,lost_cause,1,,,,Womens E-Mail,,,Mens E-Mail,-29.07,,0,922.17,,history \u2193 (1167.93),channel = Web,womens \u2191 (1)\n124,hillstrom-email,m_hillstrom-email_2,persuadable,1,,,,Mens E-Mail,,,,,,0,33.12,,channel = Web,recency \u2193 (1),zip_code = Urban\n127,hillstrom-email,m_hillstrom-email_2,lost_cause,1,,,,Womens E-Mail,,,Mens E-Mail,-3.97,,0,126.13,,recency \u2193 (11),history \u2193 (160.04),channel = Web\n128,hillstrom-email,m_hillstrom-email_2,persuadable,1,,,,Mens E-Mail,,,Womens E-Mail,57.31,,0,845.31,,history \u2191 (418.68),womens \u2191 (1),zip_code = Surburban\n129,hillstrom-email,m_hillstrom-email_2,sleeping_dog,0,,,,,,,,,\"Every offer this customer could get is predicted to make them less likely to respond, so none is sent.\",0,,,recency \u2193 (11),zip_code = Urban,history_segment = 3) $200 - $350\n131,hillstrom-email,m_hillstrom-email_2,persuadable,0,,,,,,,,,,1,163.1,,history_segment = 3) $200 - $350,zip_code = Surburban,newbie \u2193 (1)\n132,hillstrom-email,m_hillstrom-email_2,persuadable,1,,,,Mens E-Mail,,,Womens E-Mail,80.37,,0,145.31,,recency \u2191 (7),history \u2191 (185.73),zip_code = Surburban\n134,hillstrom-email,m_hillstrom-email_2,persuadable,1,,,,Mens E-Mail,,,Womens E-Mail,294.89,,0,771.07,,history \u2191 (616.73),channel = Web,recency \u2193 (1)\n135,hillstrom-email,m_hillstrom-email_2,lost_cause,0,,,,,,,,,,1,23.33,,zip_code = Urban,womens \u2193 (0),channel = Phone\n139,hillstrom-email,m_hillstrom-email_2,sleeping_dog,0,,,,,,,Womens E-Mail,-0.67,No offer is expected to earn more than it costs for this customer.,0,,,history \u2193 (77.37),channel = Phone,history_segment = 1) $0 - $100\n142,hillstrom-email,m_hillstrom-email_2,persuadable,0,,,,,,,,,,1,21.61,,recency \u2191 (3),history \u2193 (80.18),channel = Phone\n147,hillstrom-email,m_hillstrom-email_2,lost_cause,1,,,,Womens E-Mail,,,Mens E-Mail,-1.26,,0,19.33,,history \u2193 (29.99),mens \u2193 (0),newbie \u2193 (0)\n148,hillstrom-email,m_hillstrom-email_2,lost_cause,1,,,,Womens E-Mail,,,Mens E-Mail,2.26,,0,28.52,,zip_code = Urban,history_segment = 1) $0 - $100,history \u2193 (59.96)\n152,hillstrom-email,m_hillstrom-email_2,persuadable,1,,,,Mens E-Mail,,,,,,0,254.7,,history \u2191 (229.53),history_segment = 3) $200 - $350,zip_code = Surburban\n153,hillstrom-email,m_hillstrom-email_2,lost_cause,1,,,,Womens E-Mail,,,Mens E-Mail,-24.53,,0,231.99,,recency \u2193 (1),womens \u2191 (1),history \u2193 (439.93)\n155,hillstrom-email,m_hillstrom-email_2,lost_cause,0,,,,,,,,,,1,0.68,,history \u2193 (29.99),recency \u2193 (7),womens \u2193 (0)\n159,hillstrom-email,m_hillstrom-email_2,sleeping_dog,0,,,,,,,,,\"Every offer this customer could get is predicted to make them less likely to respond, so none is sent.\",0,,,history \u2193 (274.29),womens \u2193 (0),recency \u2191 (9)\n161,hillstrom-email,m_hillstrom-email_2,persuadable,1,,,,Mens E-Mail,,,,,,0,6.79,,history \u2191 (29.99),newbie \u2191 (1),recency \u2193 (12)\n163,hillstrom-email,m_hillstrom-email_2,sleeping_dog,0,,,,,,,,,\"Every offer this customer could get is predicted to make them less likely to respond, so none is sent.\",0,,,history \u2193 (142.4),recency \u2193 (1),newbie \u2193 (0)\n164,hillstrom-email,m_hillstrom-email_2,sleeping_dog,1,,,,Womens E-Mail,,,,,,0,45.86,,recency \u2193 (1),history \u2193 (29.99),zip_code = Urban\n166,hillstrom-email,m_hillstrom-email_2,lost_cause,1,,,,Womens E-Mail,,,Mens E-Mail,3.73,,0,84.72,,history \u2193 (60.2),recency \u2191 (2),channel = Web\n173,hillstrom-email,m_hillstrom-email_2,persuadable,1,,,,Mens E-Mail,,,Womens E-Mail,1629.52,,0,1736.67,,history \u2191 (790.36),\"history_segment = 6) $750 - $1,000\",zip_code = Urban\n176,hillstrom-email,m_hillstrom-email_2,sleeping_dog,0,,,,,,,,,\"Every offer this customer could get is predicted to make them less likely to respond, so none is sent.\",0,,,history \u2193 (399.46),history_segment = 4) $350 - $500,channel = Web\n179,hillstrom-email,m_hillstrom-email_2,sleeping_dog,1,,,,Womens E-Mail,,,,,,0,13.49,,history \u2193 (269.99),recency \u2193 (5),channel = Phone\n181,hillstrom-email,m_hillstrom-email_2,persuadable,0,,,,,,,,,,1,157.43,,recency \u2191 (4),history \u2191 (292.61),womens \u2193 (0)\n185,hillstrom-email,m_hillstrom-email_2,sleeping_dog,0,,,,,,,,,\"Every offer this customer could get is predicted to make them less likely to respond, so none is sent.\",0,,,recency \u2193 (5),history \u2193 (29.99),history_segment = 1) $0 - $100\n186,hillstrom-email,m_hillstrom-email_2,lost_cause,0,,,,,,,,,,1,45.69,,recency \u2193 (3),zip_code = Urban,newbie \u2191 (1)\n187,hillstrom-email,m_hillstrom-email_2,sleeping_dog,0,,,,,,,,,,1,,,history \u2193 (968.65),recency \u2193 (7),womens \u2191 (1)\n189,hillstrom-email,m_hillstrom-email_2,sleeping_dog,0,,,,,,,,,,1,42.31,,zip_code = Urban,recency \u2193 (9),history \u2193 (311.81)\n195,hillstrom-email,m_hillstrom-email_2,sleeping_dog,1,,,,Womens E-Mail,,,,,,0,384.22,,history \u2193 (481.56),womens \u2193 (0),history_segment = 4) $350 - $500\n196,hillstrom-email,m_hillstrom-email_2,lost_cause,0,,,,,,,,,,1,2.69,,newbie \u2193 (0),history \u2193 (29.99),recency \u2191 (10)\n197,hillstrom-email,m_hillstrom-email_2,persuadable,0,,,,,,,,,,1,488.78,,recency \u2193 (1),channel = Web,womens \u2191 (1)\n199,hillstrom-email,m_hillstrom-email_2,persuadable,0,,,,,,,,,,1,73.37,,history \u2191 (36.28),recency \u2191 (10),channel = Web\n200,hillstrom-email,m_hillstrom-email_2,persuadable,1,,,,Mens E-Mail,,,,,,0,741.7,,history \u2191 (413.46),womens \u2191 (1),recency \u2191 (4)\n201,hillstrom-email,m_hillstrom-email_2,lost_cause,0,,,,,,,,,,1,3.52,,recency \u2193 (7),history_segment = 1) $0 - $100,womens \u2193 (0)\n203,hillstrom-email,m_hillstrom-email_2,sleeping_dog,0,,,,,,,,,,1,,,recency \u2193 (1),history \u2193 (150.93),womens \u2193 (0)\n207,hillstrom-email,m_hillstrom-email_2,lost_cause,0,,,,,,,,,,1,7.9,,history \u2193 (29.99),zip_code = Surburban,newbie \u2193 (0)\n209,hillstrom-email,m_hillstrom-email_2,persuadable,1,,,,Mens E-Mail,,,,,,0,20.69,,history \u2191 (29.99),mens \u2191 (1),zip_code = Rural\n210,hillstrom-email,m_hillstrom-email_2,persuadable,1,,,,Mens E-Mail,,,Womens E-Mail,-8.27,,0,178.28,,history \u2191 (428),womens \u2193 (0),zip_code = Surburban\n211,hillstrom-email,m_hillstrom-email_2,persuadable,1,,,,Mens E-Mail,,,Womens E-Mail,-26.7,,0,492.2,,history \u2191 (604.39),recency \u2193 (6),channel = Phone\n216,hillstrom-email,m_hillstrom-email_2,persuadable,0,,,,,,,,,,1,44.41,,womens \u2193 (0),channel = Web,history \u2191 (209.98)\n217,hillstrom-email,m_hillstrom-email_2,persuadable,1,,,,Mens E-Mail,,,,,,0,98.2,,recency \u2191 (3),history_segment = 2) $100 - $200,zip_code = Urban\n220,hillstrom-email,m_hillstrom-email_2,lost_cause,1,,,,Womens E-Mail,,,Mens E-Mail,6.27,,0,97.45,,zip_code = Rural,recency \u2193 (1),channel = Phone\n221,hillstrom-email,m_hillstrom-email_2,sleeping_dog,0,,,,,,,,,,1,,,zip_code = Surburban,history_segment = 4) $350 - $500,mens \u2193 (0)\n224,hillstrom-email,m_hillstrom-email_2,sleeping_dog,0,,,,,,,,,\"Every offer this customer could get is predicted to make them less likely to respond, so none is sent.\",0,,,history \u2193 (277.81),womens \u2193 (0),newbie \u2191 (1)\n227,hillstrom-email,m_hillstrom-email_2,sleeping_dog,0,,,,,,,,,\"Every offer this customer could get is predicted to make them less likely to respond, so none is sent.\",0,,,recency \u2193 (5),history \u2193 (29.99),mens \u2193 (0)\n229,hillstrom-email,m_hillstrom-email_2,sleeping_dog,0,,,,,,,,,,1,,,history \u2193 (64.16),recency \u2193 (8),history_segment = 1) $0 - $100\n233,hillstrom-email,m_hillstrom-email_2,persuadable,0,,,,,,,,,,1,28.54,,history \u2193 (130.31),zip_code = Surburban,newbie \u2191 (1)\n236,hillstrom-email,m_hillstrom-email_2,persuadable,0,,,,,,,,,,1,117.63,,history \u2191 (225.89),newbie \u2193 (1),zip_code = Rural\n237,hillstrom-email,m_hillstrom-email_2,persuadable,1,,,,Mens E-Mail,,,Womens E-Mail,17.5,,0,39.94,,history \u2193 (115.56),channel = Web,recency \u2191 (2)\n240,hillstrom-email,m_hillstrom-email_2,sleeping_dog,0,,,,,,,,,,1,11.34,,history \u2193 (47.47),history_segment = 1) $0 - $100,channel = Phone\n248,hillstrom-email,m_hillstrom-email_2,sleeping_dog,1,,,,Womens E-Mail,,,,,,0,68.14,,womens \u2193 (0),recency \u2193 (5),channel = Web\n251,hillstrom-email,m_hillstrom-email_2,lost_cause,0,,,,,,,,,,1,8.62,,history \u2193 (55.11),recency \u2191 (10),zip_code = Urban\n253,hillstrom-email,m_hillstrom-email_2,persuadable,0,,,,,,,,,,1,1022.46,,history \u2191 (770.38),zip_code = Rural,recency \u2191 (4)\n257,hillstrom-email,m_hillstrom-email_2,persuadable,0,,,,,,,,,,1,856.88,,history \u2191 (752.8),womens \u2191 (1),zip_code = Urban\n260,hillstrom-email,m_hillstrom-email_2,sleeping_dog,0,,,,,,,,,\"Every offer this customer could get is predicted to make them less likely to respond, so none is sent.\",0,,,history \u2193 (43.16),zip_code = Urban,recency \u2191 (8)\n261,hillstrom-email,m_hillstrom-email_2,persuadable,0,,,,,,,,,,1,1770.35,,history \u2191 (418.81),recency \u2191 (2),womens \u2191 (1)\n262,hillstrom-email,m_hillstrom-email_2,persuadable,0,,,,,,,,,,1,94.27,,zip_code = Urban,history_segment = 3) $200 - $350,womens \u2191 (1)\n266,hillstrom-email,m_hillstrom-email_2,lost_cause,0,,,,,,,,,,1,32.5,,history \u2193 (54.25),history_segment = 1) $0 - $100,channel = Web\n268,hillstrom-email,m_hillstrom-email_2,persuadable,1,,,,Mens E-Mail,,,Womens E-Mail,113.12,,0,402.33,,history \u2191 (297.8),recency \u2191 (4),history_segment = 3) $200 - $350\n269,hillstrom-email,m_hillstrom-email_2,lost_cause,1,,,,Mens E-Mail,,,Womens E-Mail,8.9,,0,14.38,,zip_code = Surburban,recency \u2191 (4),channel = Phone\n270,hillstrom-email,m_hillstrom-email_2,lost_cause,1,,,,Mens E-Mail,,,Womens E-Mail,15.03,,0,47.73,,zip_code = Urban,history_segment = 3) $200 - $350,history \u2193 (329.26)\n271,hillstrom-email,m_hillstrom-email_2,persuadable,0,,,,,,,,,,1,20.69,,history \u2191 (29.99),mens \u2191 (1),zip_code = Rural\n272,hillstrom-email,m_hillstrom-email_2,lost_cause,0,,,,,,,,,,1,20.01,,history \u2193 (249.61),newbie \u2193 (1),recency \u2191 (4)\n275,hillstrom-email,m_hillstrom-email_2,sleeping_dog,0,,,,,,,,,,1,,,history \u2193 (92.32),zip_code = Urban,recency \u2193 (6)\n279,hillstrom-email,m_hillstrom-email_2,lost_cause,0,,,,,,,,,,1,49.69,,recency \u2193 (10),history \u2191 (375.9),history_segment = 4) $350 - $500\n280,hillstrom-email,m_hillstrom-email_2,lost_cause,0,,,,,,,,,,1,21.35,,newbie \u2193 (0),recency \u2193 (9),history_segment = 1) $0 - $100\n283,hillstrom-email,m_hillstrom-email_2,lost_cause,0,,,,,,,,,,1,8.12,,history \u2193 (78.69),history_segment = 1) $0 - $100,channel = Phone\n285,hillstrom-email,m_hillstrom-email_2,lost_cause,0,,,,,,,,,,1,41.52,,zip_code = Surburban,history_segment = 4) $350 - $500,channel = Phone\n287,hillstrom-email,m_hillstrom-email_2,lost_cause,0,,,,,,,,,,1,17.11,,history \u2193 (164.51),zip_code = Surburban,womens \u2193 (0)\n289,hillstrom-email,m_hillstrom-email_2,lost_cause,1,,,,Womens E-Mail,,,Mens E-Mail,2.53,,0,45.83,,newbie \u2193 (0),history \u2193 (29.99),zip_code = Surburban\n291,hillstrom-email,m_hillstrom-email_2,sleeping_dog,0,,,,,,,,,,1,,,history \u2193 (143),recency \u2193 (1),newbie \u2193 (0)\n292,hillstrom-email,m_hillstrom-email_2,persuadable,0,,,,,,,,,,1,193.02,,history \u2191 (320.17),recency \u2191 (4),mens \u2193 (0)\n294,hillstrom-email,m_hillstrom-email_2,persuadable,1,,,,Mens E-Mail,,,,,,0,30.43,,history \u2191 (35.84),channel = Phone,recency \u2191 (10)\n295,hillstrom-email,m_hillstrom-email_2,persuadable,0,,,,,,,,,,1,40.83,,recency \u2193 (3),history \u2191 (190.66),zip_code = Surburban\n297,hillstrom-email,m_hillstrom-email_2,sleeping_dog,1,,,,Womens E-Mail,,,,,,0,47.97,,recency \u2193 (5),history \u2193 (215.03),history_segment = 3) $200 - $350\n303,hillstrom-email,m_hillstrom-email_2,sleeping_dog,0,,,,,,,,,,1,78.36,,recency \u2193 (1),zip_code = Urban,newbie \u2193 (1)\n306,hillstrom-email,m_hillstrom-email_2,persuadable,0,,,,,,,,,,1,31.89,,recency \u2191 (3),mens \u2191 (1),channel = Phone\n309,hillstrom-email,m_hillstrom-email_2,persuadable,0,,,,,,,,,,1,512.63,,history \u2191 (290.55),womens \u2191 (1),history_segment = 3) $200 - $350\n311,hillstrom-email,m_hillstrom-email_2,persuadable,0,,,,,,,,,,1,73.81,,history \u2191 (87.69),zip_code = Surburban,recency \u2191 (4)\n313,hillstrom-email,m_hillstrom-email_2,lost_cause,1,,,,Womens E-Mail,,,Mens E-Mail,56.52,,0,1047.47,,history \u2193 (465.37),history_segment = 4) $350 - $500,zip_code = Rural\n314,hillstrom-email,m_hillstrom-email_2,sleeping_dog,0,,,,,,,,,,1,,,recency \u2193 (12),channel = Phone,newbie \u2191 (1)\n315,hillstrom-email,m_hillstrom-email_2,persuadable,1,,,,Mens E-Mail,,,Womens E-Mail,-0.62,,0,54.12,,zip_code = Urban,history_segment = 3) $200 - $350,history \u2193 (327.18)\n316,hillstrom-email,m_hillstrom-email_2,persuadable,1,,,,Mens E-Mail,,,Womens E-Mail,80.98,,0,139.52,,history \u2191 (188.89),womens \u2191 (1),channel = Web\n318,hillstrom-email,m_hillstrom-email_2,lost_cause,1,,,,Womens E-Mail,,,Mens E-Mail,-3.73,,0,139.14,,recency \u2193 (7),history \u2191 (688.51),zip_code = Rural\n319,hillstrom-email,m_hillstrom-email_2,lost_cause,0,,,,,,,,,,1,30.27,,recency \u2193 (3),channel = Multichannel,history \u2191 (229.42)\n321,hillstrom-email,m_hillstrom-email_2,persuadable,1,,,,Womens E-Mail,,,Mens E-Mail,27.54,,0,37.61,,history \u2193 (156.4),recency \u2191 (2),history_segment = 2) $100 - $200\n322,hillstrom-email,m_hillstrom-email_2,lost_cause,0,,,,,,,,,,1,149.12,,recency \u2191 (2),history \u2193 (196.93),history_segment = 2) $100 - $200\n324,hillstrom-email,m_hillstrom-email_2,persuadable,0,,,,,,,,,,1,44.7,,recency \u2193 (12),history \u2191 (177.66),womens \u2193 (0)\n325,hillstrom-email,m_hillstrom-email_2,sleeping_dog,1,,,,Womens E-Mail,,,,,,0,3.89,,history \u2193 (29.99),history_segment = 1) $0 - $100,newbie \u2193 (0)\n329,hillstrom-email,m_hillstrom-email_2,lost_cause,1,,,,Womens E-Mail,,,Mens E-Mail,1.73,,0,13.21,,zip_code = Surburban,recency \u2191 (4),history \u2193 (164.7)\n333,hillstrom-email,m_hillstrom-email_2,lost_cause,0,,,,,,,,,,1,2.69,,newbie \u2193 (0),history \u2193 (29.99),recency \u2191 (10)\n334,hillstrom-email,m_hillstrom-email_2,persuadable,0,,,,,,,,,,1,9.17,,history \u2191 (35.23),newbie \u2193 (1),mens \u2191 (1)\n336,hillstrom-email,m_hillstrom-email_2,sleeping_dog,1,,,,Womens E-Mail,,,,,,0,590.68,,history \u2193 (550.59),channel = Web,history_segment = 5) $500 - $750\n338,hillstrom-email,m_hillstrom-email_2,lost_cause,0,,,,,,,,,,1,2.22,,channel = Web,zip_code = Urban,recency \u2193 (11)\n339,hillstrom-email,m_hillstrom-email_2,sleeping_dog,1,,,,Womens E-Mail,,,,,,0,709.31,,womens \u2193 (0),channel = Multichannel,history_segment = 5) $500 - $750\n343,hillstrom-email,m_hillstrom-email_2,persuadable,0,,,,,,,,,,1,30.75,,mens \u2191 (1),history \u2191 (29.99),recency \u2191 (3)\n348,hillstrom-email,m_hillstrom-email_2,persuadable,0,,,,,,,,,,1,337.42,,recency \u2191 (2),zip_code = Urban,history \u2191 (373.14)\n349,hillstrom-email,m_hillstrom-email_2,persuadable,1,,,,Mens E-Mail,,,Womens E-Mail,17.91,,0,35.15,,recency \u2191 (7),zip_code = Surburban,history \u2191 (60.02)\n350,hillstrom-email,m_hillstrom-email_2,sleeping_dog,0,,,,,,,,,\"Every offer this customer could get is predicted to make them less likely to respond, so none is sent.\",0,,,channel = Phone,zip_code = Urban,history \u2193 (68.5)\n352,hillstrom-email,m_hillstrom-email_2,lost_cause,0,,,,,,,,,,1,43.92,,zip_code = Urban,history_segment = 1) $0 - $100,channel = Web\n355,hillstrom-email,m_hillstrom-email_2,persuadable,0,,,,,,,,,,1,25.36,,history \u2191 (98.8),recency \u2193 (6),zip_code = Rural\n356,hillstrom-email,m_hillstrom-email_2,lost_cause,0,,,,,,,,,,1,21.35,,newbie \u2193 (0),recency \u2193 (9),history_segment = 1) $0 - $100\n357,hillstrom-email,m_hillstrom-email_2,persuadable,1,,,,Mens E-Mail,,,,,,0,138.97,,history \u2191 (556.5),zip_code = Rural,history_segment = 5) $500 - $750\n358,hillstrom-email,m_hillstrom-email_2,persuadable,0,,,,,,,,,,1,13.2,,recency \u2191 (4),channel = Phone,zip_code = Urban\n359,hillstrom-email,m_hillstrom-email_2,lost_cause,0,,,,,,,,,,1,3.58,,recency \u2193 (6),history \u2193 (136.26),zip_code = Rural\n360,hillstrom-email,m_hillstrom-email_2,sleeping_dog,0,,,,,,,,,,1,,,womens \u2193 (0),recency \u2191 (2),channel = Phone\n362,hillstrom-email,m_hillstrom-email_2,persuadable,0,,,,,,,,,,1,90.17,,recency \u2191 (2),channel = Multichannel,history_segment = 3) $200 - $350\n363,hillstrom-email,m_hillstrom-email_2,lost_cause,1,,,,Mens E-Mail,,,,,,0,33.19,,zip_code = Urban,history \u2191 (422.81),womens \u2191 (1)\n364,hillstrom-email,m_hillstrom-email_2,persuadable,0,,,,,,,,,,1,304.01,,history \u2191 (320.11),history_segment = 3) $200 - $350,zip_code = Rural\n365,hillstrom-email,m_hillstrom-email_2,lost_cause,1,,,,Womens E-Mail,,,Mens E-Mail,1.67,,0,13.85,,history \u2193 (29.99),history_segment = 1) $0 - $100,newbie \u2193 (0)\n367,hillstrom-email,m_hillstrom-email_2,lost_cause,1,,,,Womens E-Mail,,,Mens E-Mail,10.95,,0,37.97,,history \u2193 (164.9),womens \u2191 (1),recency \u2193 (11)\n369,hillstrom-email,m_hillstrom-email_2,persuadable,1,,,,Womens E-Mail,,,Mens E-Mail,279.71,,0,530.88,,history \u2191 (744.22),channel = Web,recency \u2193 (9)\n371,hillstrom-email,m_hillstrom-email_2,persuadable,0,,,,,,,,,,1,15.39,,recency \u2193 (5),zip_code = Rural,history_segment = 1) $0 - $100\n372,hillstrom-email,m_hillstrom-email_2,lost_cause,1,,,,Mens E-Mail,,,,,,0,0.18,,channel = Phone,history \u2191 (72.66),history_segment = 1) $0 - $100\n373,hillstrom-email,m_hillstrom-email_2,persuadable,1,,,,Mens E-Mail,,,Womens E-Mail,70.4,,0,215.43,,history_segment = 3) $200 - $350,zip_code = Surburban,history \u2193 (333.65)\n378,hillstrom-email,m_hillstrom-email_2,sleeping_dog,0,,,,,,,Womens E-Mail,-2.9,No offer is expected to earn more than it costs for this customer.,0,,,history \u2193 (283.55),womens \u2193 (0),channel = Phone\n379,hillstrom-email,m_hillstrom-email_2,lost_cause,1,,,,Womens E-Mail,,,Mens E-Mail,4.34,,0,5.9,,recency \u2193 (9),channel = Phone,zip_code = Rural\n384,hillstrom-email,m_hillstrom-email_2,sleeping_dog,0,,,,,,,,,,1,,,history \u2193 (233.4),zip_code = Urban,channel = Multichannel\n385,hillstrom-email,m_hillstrom-email_2,persuadable,0,,,,,,,,,,1,128.87,,history \u2191 (189.67),recency \u2191 (2),zip_code = Rural\n389,hillstrom-email,m_hillstrom-email_2,sleeping_dog,1,,,,Womens E-Mail,,,,,,0,8.3,,history \u2193 (57.71),channel = Web,recency \u2191 (10)\n391,hillstrom-email,m_hillstrom-email_2,persuadable,0,,,,,,,,,,1,24.77,,zip_code = Surburban,recency \u2191 (6),history \u2191 (40.24)\n392,hillstrom-email,m_hillstrom-email_2,persuadable,0,,,,,,,,,,1,216.29,,history_segment = 5) $500 - $750,mens \u2191 (0),womens \u2191 (1)\n395,hillstrom-email,m_hillstrom-email_2,persuadable,0,,,,,,,,,,1,1634.28,,womens \u2191 (1),channel = Web,zip_code = Urban\n398,hillstrom-email,m_hillstrom-email_2,sleeping_dog,0,,,,,,,,,\"Every offer this customer could get is predicted to make them less likely to respond, so none is sent.\",0,,,history \u2193 (68.81),channel = Phone,zip_code = Urban\n402,hillstrom-email,m_hillstrom-email_2,persuadable,1,,,,Mens E-Mail,,,Womens E-Mail,8.07,,0,371.75,,history \u2191 (568.26),history_segment = 5) $500 - $750,zip_code = Surburban\n403,hillstrom-email,m_hillstrom-email_2,lost_cause,0,,,,,,,,,,1,21.85,,zip_code = Urban,history \u2193 (145.89),history_segment = 2) $100 - $200\n404,hillstrom-email,m_hillstrom-email_2,persuadable,1,,,,Womens E-Mail,,,Mens E-Mail,46.67,,0,144.17,,recency \u2191 (2),history_segment = 2) $100 - $200,newbie \u2193 (1)\n405,hillstrom-email,m_hillstrom-email_2,sleeping_dog,1,,,,Womens E-Mail,,,,,,0,1.9,,history \u2193 (964.59),recency \u2193 (5),channel = Phone\n406,hillstrom-email,m_hillstrom-email_2,persuadable,0,,,,,,,,,,1,72.18,,recency \u2191 (10),history \u2193 (158.55),womens \u2191 (1)\n408,hillstrom-email,m_hillstrom-email_2,sleeping_dog,0,,,,,,,,,,1,,,history \u2193 (93.33),recency \u2193 (7),zip_code = Urban\n415,hillstrom-email,m_hillstrom-email_2,lost_cause,1,,,,Mens E-Mail,,,Womens E-Mail,-6.12,,0,14.19,,womens \u2193 (0),history_segment = 3) $200 - $350,history \u2191 (291.88)\n417,hillstrom-email,m_hillstrom-email_2,persuadable,1,,,,Mens E-Mail,,,Womens E-Mail,62.32,,0,219.21,,recency \u2191 (2),history_segment = 3) $200 - $350,zip_code = Urban\n418,hillstrom-email,m_hillstrom-email_2,persuadable,1,,,,Mens E-Mail,,,,,,0,9.75,,history \u2191 (32.17),recency \u2193 (6),mens \u2191 (1)\n419,hillstrom-email,m_hillstrom-email_2,sleeping_dog,1,,,,Womens E-Mail,,,,,,0,1059.74,,history \u2193 (553.42),channel = Web,history_segment = 5) $500 - $750\n427,hillstrom-email,m_hillstrom-email_2,sleeping_dog,1,,,,Womens E-Mail,,,,,,0,62.11,,recency \u2193 (8),history_segment = 4) $350 - $500,womens \u2193 (0)\n428,hillstrom-email,m_hillstrom-email_2,sleeping_dog,0,,,,,,,,,,1,,,history \u2193 (276.21),history_segment = 3) $200 - $350,womens \u2193 (0)\n429,hillstrom-email,m_hillstrom-email_2,lost_cause,1,,,,Mens E-Mail,,,,,,0,75.91,,history \u2193 (960.02),womens \u2191 (1),recency \u2193 (1)\n431,hillstrom-email,m_hillstrom-email_2,lost_cause,1,,,,Mens E-Mail,,,,,,0,83.37,,recency \u2193 (7),history \u2191 (770.87),\"history_segment = 6) $750 - $1,000\"\n432,hillstrom-email,m_hillstrom-email_2,lost_cause,0,,,,,,,Mens E-Mail,-1.66,No offer is expected to earn more than it costs for this customer.,0,,,zip_code = Urban,history \u2193 (63.95),history_segment = 1) $0 - $100\n433,hillstrom-email,m_hillstrom-email_2,persuadable,1,,,,Mens E-Mail,,,,,,0,143.6,,history \u2193 (348.44),history_segment = 3) $200 - $350,recency \u2191 (7)\n435,hillstrom-email,m_hillstrom-email_2,persuadable,1,,,,Womens E-Mail,,,Mens E-Mail,35.08,,0,39.59,,zip_code = Urban,history \u2193 (216.08),newbie \u2191 (0)\n439,hillstrom-email,m_hillstrom-email_2,persuadable,0,,,,,,,,,,1,40.94,,history \u2193 (149.31),womens \u2191 (1),channel = Phone\n440,hillstrom-email,m_hillstrom-email_2,persuadable,0,,,,,,,,,,1,42.76,,history \u2193 (218.92),zip_code = Surburban,channel = Web\n442,hillstrom-email,m_hillstrom-email_2,lost_cause,1,,,,Womens E-Mail,,,Mens E-Mail,4.88,,0,10.27,,history \u2191 (32.18),history_segment = 1) $0 - $100,womens \u2193 (0)\n443,hillstrom-email,m_hillstrom-email_2,persuadable,0,,,,,,,,,,1,187.7,,womens \u2191 (1),history \u2191 (287.73),zip_code = Urban\n444,hillstrom-email,m_hillstrom-email_2,sleeping_dog,0,,,,,,,,,,1,41.53,,history \u2193 (29.99),channel = Phone,mens \u2193 (0)\n447,hillstrom-email,m_hillstrom-email_2,persuadable,1,,,,Mens E-Mail,,,Womens E-Mail,47.87,,0,599.48,,history \u2191 (728.99),history_segment = 5) $500 - $750,channel = Web\n448,hillstrom-email,m_hillstrom-email_2,sleeping_dog,0,,,,,,,,,,1,6.08,,zip_code = Urban,womens \u2191 (1),history_segment = 4) $350 - $500\n450,hillstrom-email,m_hillstrom-email_2,persuadable,0,,,,,,,,,,1,614.66,,recency \u2191 (2),history_segment = 5) $500 - $750,womens \u2191 (1)\n452,hillstrom-email,m_hillstrom-email_2,persuadable,1,,,,Mens E-Mail,,,Womens E-Mail,35.1,,0,80.27,,history \u2191 (265.61),channel = Multichannel,history_segment = 3) $200 - $350\n453,hillstrom-email,m_hillstrom-email_2,persuadable,1,,,,Mens E-Mail,,,Womens E-Mail,112.99,,0,129.14,,recency \u2191 (4),channel = Phone,zip_code = Rural\n454,hillstrom-email,m_hillstrom-email_2,persuadable,0,,,,,,,,,,1,21.5,,recency \u2193 (8),zip_code = Rural,channel = Web\n456,hillstrom-email,m_hillstrom-email_2,sleeping_dog,1,,,,Womens E-Mail,,,,,,0,169.04,,recency \u2193 (1),channel = Phone,womens \u2191 (1)\n457,hillstrom-email,m_hillstrom-email_2,sleeping_dog,0,,,,,,,,,,1,,,history \u2193 (132.46),recency \u2193 (1),newbie \u2193 (0)\n458,hillstrom-email,m_hillstrom-email_2,lost_cause,1,,,,Womens E-Mail,,,Mens E-Mail,-5.86,,0,79.53,,recency \u2193 (8),history \u2193 (167.05),history_segment = 2) $100 - $200\n460,hillstrom-email,m_hillstrom-email_2,persuadable,1,,,,Mens E-Mail,,,Womens E-Mail,-6.27,,0,84.35,,channel = Web,history \u2191 (101.99),womens \u2191 (1)\n461,hillstrom-email,m_hillstrom-email_2,persuadable,0,,,,,,,,,,1,297.22,,history \u2191 (290.03),womens \u2191 (1),mens \u2191 (1)\n462,hillstrom-email,m_hillstrom-email_2,persuadable,0,,,,,,,,,,1,117.26,,history \u2191 (89.59),channel = Web,zip_code = Surburban\n464,hillstrom-email,m_hillstrom-email_2,persuadable,1,,,,Mens E-Mail,,,Womens E-Mail,8.77,,0,1141.72,,recency \u2191 (2),history \u2191 (851.45),womens \u2191 (1)\n465,hillstrom-email,m_hillstrom-email_2,persuadable,0,,,,,,,,,,1,51.65,,history \u2191 (248.43),recency \u2193 (1),channel = Phone\n467,hillstrom-email,m_hillstrom-email_2,persuadable,1,,,,Mens E-Mail,,,Womens E-Mail,-1.5,,0,16.26,,channel = Web,history \u2193 (69.9),womens \u2193 (0)\n471,hillstrom-email,m_hillstrom-email_2,lost_cause,0,,,,,,,Mens E-Mail,-10.52,No offer is expected to earn more than it costs for this customer.,0,,,womens \u2193 (0),recency \u2193 (9),history_segment = 3) $200 - $350\n472,hillstrom-email,m_hillstrom-email_2,persuadable,1,,,,Mens E-Mail,,,Womens E-Mail,8.62,,0,16.22,,history \u2191 (73.99),channel = Phone,recency \u2191 (3)\n473,hillstrom-email,m_hillstrom-email_2,persuadable,0,,,,,,,,,,1,41.35,,channel = Web,womens \u2191 (1),history_segment = 1) $0 - $100\n474,hillstrom-email,m_hillstrom-email_2,sleeping_dog,0,,,,,,,,,,1,,,recency \u2193 (12),womens \u2193 (0),history \u2191 (103.6)\n476,hillstrom-email,m_hillstrom-email_2,persuadable,0,,,,,,,,,,1,15.57,,channel = Phone,history \u2191 (34.8),recency \u2191 (8)\n479,hillstrom-email,m_hillstrom-email_2,sleeping_dog,0,,,,,,,,,,1,,,history \u2193 (452.72),recency \u2193 (1),womens \u2191 (1)\n480,hillstrom-email,m_hillstrom-email_2,sleeping_dog,0,,,,,,,Womens E-Mail,-1.8,No offer is expected to earn more than it costs for this customer.,0,,,recency \u2193 (5),history \u2193 (29.99),history_segment = 1) $0 - $100\n482,hillstrom-email,m_hillstrom-email_2,sleeping_dog,0,,,,,,,,,\"Every offer this customer could get is predicted to make them less likely to respond, so none is sent.\",0,,,recency \u2193 (8),history_segment = 1) $0 - $100,newbie \u2193 (0)\n484,hillstrom-email,m_hillstrom-email_2,lost_cause,1,,,,Womens E-Mail,,,Mens E-Mail,7.03,,0,36.36,,history \u2193 (141.74),zip_code = Surburban,womens \u2193 (0)\n485,hillstrom-email,m_hillstrom-email_2,lost_cause,1,,,,Womens E-Mail,,,Mens E-Mail,-7.85,,0,42.99,,history \u2193 (205.33),recency \u2193 (9),history_segment = 3) $200 - $350\n486,hillstrom-email,m_hillstrom-email_2,lost_cause,1,,,,Womens E-Mail,,,Mens E-Mail,99.73,,0,177.36,,womens \u2193 (0),recency \u2193 (1),channel = Web\n491,hillstrom-email,m_hillstrom-email_2,sleeping_dog,0,,,,,,,,,\"Every offer this customer could get is predicted to make them less likely to respond, so none is sent.\",0,,,history \u2193 (143.65),zip_code = Urban,recency \u2193 (11)\n492,hillstrom-email,m_hillstrom-email_2,sleeping_dog,0,,,,,,,,,,1,,,zip_code = Urban,newbie \u2191 (1),channel = Phone\n493,hillstrom-email,m_hillstrom-email_2,lost_cause,1,,,,Womens E-Mail,,,Mens E-Mail,6.42,,0,15.19,,zip_code = Urban,channel = Phone,recency \u2193 (6)\n494,hillstrom-email,m_hillstrom-email_2,persuadable,0,,,,,,,,,,1,178.63,,recency \u2191 (4),history \u2191 (121.87),newbie \u2191 (0)\n497,hillstrom-email,m_hillstrom-email_2,persuadable,0,,,,,,,,,,1,386.77,,recency \u2191 (4),channel = Multichannel,history \u2191 (614.83)\n498,hillstrom-email,m_hillstrom-email_2,lost_cause,0,,,,,,,,,,1,,,recency \u2193 (5),history \u2191 (103.44),history_segment = 2) $100 - $200\n500,hillstrom-email,m_hillstrom-email_2,persuadable,0,,,,,,,,,,1,398.2,,recency \u2191 (4),history \u2191 (224.04),newbie \u2191 (0)\n502,hillstrom-email,m_hillstrom-email_2,persuadable,1,,,,Mens E-Mail,,,Womens E-Mail,11.35,,0,62.46,,zip_code = Rural,history \u2191 (66.47),channel = Web\n504,hillstrom-email,m_hillstrom-email_2,sleeping_dog,0,,,,,,,,,,1,80.18,,recency \u2193 (6),zip_code = Urban,history_segment = 5) $500 - $750\n508,hillstrom-email,m_hillstrom-email_2,persuadable,0,,,,,,,,,,1,291.47,,history \u2193 (161.43),zip_code = Surburban,recency \u2191 (10)\n509,hillstrom-email,m_hillstrom-email_2,persuadable,1,,,,Mens E-Mail,,,,,,0,56.69,,history \u2191 (90.15),channel = Web,zip_code = Surburban\n510,hillstrom-email,m_hillstrom-email_2,persuadable,1,,,,Mens E-Mail,,,Womens E-Mail,-3.18,,0,606.49,,history \u2191 (567.13),zip_code = Rural,recency \u2193 (1)\n511,hillstrom-email,m_hillstrom-email_2,persuadable,1,,,,Mens E-Mail,,,,,,0,252.39,,history \u2191 (681.12),womens \u2193 (0),zip_code = Rural\n512,hillstrom-email,m_hillstrom-email_2,persuadable,1,,,,Mens E-Mail,,,Womens E-Mail,10.14,,0,45.98,,zip_code = Urban,history \u2191 (198.54),recency \u2193 (9)\n513,hillstrom-email,m_hillstrom-email_2,persuadable,1,,,,Mens E-Mail,,,Womens E-Mail,-11.55,,0,234.28,,history \u2191 (301),recency \u2193 (11),history_segment = 3) $200 - $350\n517,hillstrom-email,m_hillstrom-email_2,sleeping_dog,0,,,,,,,,,,1,14.66,,history \u2193 (375.34),zip_code = Rural,history_segment = 4) $350 - $500\n522,hillstrom-email,m_hillstrom-email_2,persuadable,1,,,,Womens E-Mail,,,Mens E-Mail,387.46,,0,1009.56,,womens \u2191 (1),recency \u2193 (1),channel = Multichannel\n523,hillstrom-email,m_hillstrom-email_2,persuadable,0,,,,,,,,,,1,21.03,,channel = Phone,womens \u2191 (1),recency \u2191 (2)\n524,hillstrom-email,m_hillstrom-email_2,sleeping_dog,0,,,,,,,,,,1,,,zip_code = Urban,recency \u2193 (10),history_segment = 3) $200 - $350\n525,hillstrom-email,m_hillstrom-email_2,persuadable,0,,,,,,,,,,1,188.06,,womens \u2193 (0),history \u2191 (297.6),history_segment = 3) $200 - $350\n526,hillstrom-email,m_hillstrom-email_2,persuadable,1,,,,Mens E-Mail,,,,,,0,1547.62,,history \u2191 (599.06),channel = Web,womens \u2191 (1)\n529,hillstrom-email,m_hillstrom-email_2,persuadable,1,,,,Mens E-Mail,,,Womens E-Mail,5.96,,0,84.71,,history \u2191 (89.96),channel = Web,zip_code = Surburban\n530,hillstrom-email,m_hillstrom-email_2,lost_cause,1,,,,Mens E-Mail,,,Womens E-Mail,1.67,,0,3.03,,history \u2193 (155.75),recency \u2193 (8),zip_code = Urban\n532,hillstrom-email,m_hillstrom-email_2,sleeping_dog,0,,,,,,,,,,1,0.76,,recency \u2193 (5),history \u2193 (47.98),zip_code = Urban\n533,hillstrom-email,m_hillstrom-email_2,lost_cause,1,,,,Mens E-Mail,,,Womens E-Mail,1.21,,0,8.16,,recency \u2193 (8),womens \u2191 (0),mens \u2193 (1)\n534,hillstrom-email,m_hillstrom-email_2,persuadable,1,,,,Womens E-Mail,,,Mens E-Mail,419.05,,0,637.81,,history \u2191 (504.86),zip_code = Rural,recency \u2193 (11)\n536,hillstrom-email,m_hillstrom-email_2,sleeping_dog,0,,,,,,,,,,1,,,recency \u2193 (11),zip_code = Urban,history \u2193 (312.41)\n539,hillstrom-email,m_hillstrom-email_2,sleeping_dog,0,,,,,,,,,,1,45.89,,recency \u2193 (1),history \u2193 (30.01),zip_code = Urban\n544,hillstrom-email,m_hillstrom-email_2,persuadable,0,,,,,,,,,,1,215.75,,history \u2191 (265.2),history_segment = 3) $200 - $350,womens \u2191 (0)\n545,hillstrom-email,m_hillstrom-email_2,persuadable,0,,,,,,,,,,1,192.19,,history \u2191 (357.56),mens \u2193 (0),recency \u2191 (1)\n546,hillstrom-email,m_hillstrom-email_2,lost_cause,0,,,,,,,,,,1,10.76,,history \u2193 (206.97),recency \u2193 (11),history_segment = 3) $200 - $350\n549,hillstrom-email,m_hillstrom-email_2,lost_cause,0,,,,,,,,,,1,28.17,,recency \u2193 (9),history \u2191 (108.59),history_segment = 2) $100 - $200\n552,hillstrom-email,m_hillstrom-email_2,lost_cause,1,,,,Womens E-Mail,,,Mens E-Mail,-0.7,,0,0.16,,zip_code = Urban,history \u2193 (40.16),channel = Phone\n553,hillstrom-email,m_hillstrom-email_2,persuadable,1,,,,Mens E-Mail,,,Womens E-Mail,-1.12,,0,43.33,,recency \u2191 (4),newbie \u2193 (1),channel = Web\n556,hillstrom-email,m_hillstrom-email_2,sleeping_dog,0,,,,,,,,,,1,,,history \u2193 (145.27),recency \u2193 (12),zip_code = Urban\n559,hillstrom-email,m_hillstrom-email_2,persuadable,0,,,,,,,,,,1,945.41,,history \u2191 (745.63),womens \u2191 (1),zip_code = Urban\n560,hillstrom-email,m_hillstrom-email_2,sleeping_dog,0,,,,,,,,,,1,4.11,,history \u2193 (29.99),recency \u2193 (6),history_segment = 1) $0 - $100\n561,hillstrom-email,m_hillstrom-email_2,persuadable,1,,,,Mens E-Mail,,,Womens E-Mail,9.48,,0,41.89,,history \u2191 (37.79),recency \u2193 (5),zip_code = Surburban\n564,hillstrom-email,m_hillstrom-email_2,lost_cause,0,,,,,,,,,,1,11.83,,history \u2193 (115.07),recency \u2191 (7),history_segment = 2) $100 - $200\n565,hillstrom-email,m_hillstrom-email_2,sleeping_dog,0,,,,,,,,,\"Every offer this customer could get is predicted to make them less likely to respond, so none is sent.\",0,,,recency \u2193 (3),history_segment = 3) $200 - $350,channel = Multichannel\n568,hillstrom-email,m_hillstrom-email_2,persuadable,1,,,,Mens E-Mail,,,Womens E-Mail,29.69,,0,199.85,,history \u2191 (297.59),newbie \u2193 (1),history_segment = 3) $200 - $350\n569,hillstrom-email,m_hillstrom-email_2,sleeping_dog,0,,,,,,,,,\"Every offer this customer could get is predicted to make them less likely to respond, so none is sent.\",0,,,history \u2193 (409.76),zip_code = Urban,womens \u2191 (1)\n571,hillstrom-email,m_hillstrom-email_2,persuadable,1,,,,Mens E-Mail,,,Womens E-Mail,6.65,,0,95.71,,channel = Web,history \u2191 (111.37),zip_code = Surburban\n572,hillstrom-email,m_hillstrom-email_2,sleeping_dog,1,,,,Womens E-Mail,,,,,,0,4.23,,history \u2193 (29.99),history_segment = 1) $0 - $100,newbie \u2193 (0)\n573,hillstrom-email,m_hillstrom-email_2,persuadable,0,,,,,,,,,,1,39.59,,history \u2191 (87),channel = Phone,zip_code = Rural\n574,hillstrom-email,m_hillstrom-email_2,lost_cause,0,,,,,,,,,,1,131.95,,history \u2193 (46.47),history_segment = 1) $0 - $100,zip_code = Surburban\n581,hillstrom-email,m_hillstrom-email_2,lost_cause,1,,,,Womens E-Mail,,,Mens E-Mail,6.39,,0,96.35,,zip_code = Urban,history \u2193 (113.33),recency \u2193 (10)\n583,hillstrom-email,m_hillstrom-email_2,persuadable,0,,,,,,,,,,1,23.38,,history \u2191 (29.99),newbie \u2191 (1),channel = Web\n584,hillstrom-email,m_hillstrom-email_2,sleeping_dog,0,,,,,,,,,\"Every offer this customer could get is predicted to make them less likely to respond, so none is sent.\",0,,,history \u2193 (1292.1),recency \u2193 (6),womens \u2193 (0)\n585,hillstrom-email,m_hillstrom-email_2,sleeping_dog,0,,,,,,,,,,1,,,history \u2193 (272.89),womens \u2193 (0),newbie \u2191 (1)\n586,hillstrom-email,m_hillstrom-email_2,persuadable,1,,,,Mens E-Mail,,,Womens E-Mail,44.13,,0,103.69,,history \u2191 (302.86),history_segment = 3) $200 - $350,mens \u2193 (0)\n588,hillstrom-email,m_hillstrom-email_2,lost_cause,1,,,,Mens E-Mail,,,,,,0,1.74,,recency \u2193 (7),history \u2193 (758.59),mens \u2191 (0)\n589,hillstrom-email,m_hillstrom-email_2,persuadable,1,,,,Mens E-Mail,,,Womens E-Mail,2.35,,0,164.33,,history \u2191 (174.55),recency \u2191 (4),newbie \u2193 (1)\n595,hillstrom-email,m_hillstrom-email_2,sleeping_dog,0,,,,,,,,,,1,,,history \u2193 (367.27),zip_code = Surburban,history_segment = 4) $350 - $500\n597,hillstrom-email,m_hillstrom-email_2,persuadable,0,,,,,,,,,,1,62.84,,recency \u2191 (10),zip_code = Surburban,history \u2191 (102.82)\n601,hillstrom-email,m_hillstrom-email_2,persuadable,0,,,,,,,,,,1,32.77,,recency \u2193 (6),history \u2193 (161.43),zip_code = Surburban\n602,hillstrom-email,m_hillstrom-email_2,sleeping_dog,0,,,,,,,,,,1,,,recency \u2193 (8),history_segment = 3) $200 - $350,history \u2193 (346.57)\n604,hillstrom-email,m_hillstrom-email_2,persuadable,0,,,,,,,,,,1,16.43,,history \u2193 (51.33),recency \u2191 (10),zip_code = Surburban\n605,hillstrom-email,m_hillstrom-email_2,persuadable,1,,,,Womens E-Mail,,,Mens E-Mail,28.04,,0,47.97,,history \u2193 (159.22),recency \u2191 (2),history_segment = 2) $100 - $200\n607,hillstrom-email,m_hillstrom-email_2,persuadable,1,,,,Mens E-Mail,,,Womens E-Mail,-1.94,,0,23.71,,recency \u2191 (10),history \u2191 (29.99),newbie \u2191 (1)\n609,hillstrom-email,m_hillstrom-email_2,lost_cause,1,,,,Womens E-Mail,,,Mens E-Mail,0.07,,0,292.21,,history \u2193 (163.8),zip_code = Urban,channel = Web\n612,hillstrom-email,m_hillstrom-email_2,lost_cause,0,,,,,,,,,,1,115.7,,history \u2193 (168.93),recency \u2193 (5),zip_code = Urban\n613,hillstrom-email,m_hillstrom-email_2,sleeping_dog,0,,,,,,,,,,1,817.93,,history \u2193 (1462.5),womens \u2193 (0),recency \u2193 (6)\n"
  },
  "GET /runs/r_20261010_11100003/uplift/offer_choice.json": {
   "status": 200,
@@ -23937,6 +24167,71 @@
     "third_party": false
    },
    "charts": []
+  }
+ },
+ "GET /uploads?limit=100": {
+  "status": 200,
+  "content_type": "application/json",
+  "body": {
+   "uploads": [
+    {
+     "upload_id": "u_9004eb6ff852",
+     "file_name": "replayed_spend.csv",
+     "file_format": "csv",
+     "file_size_bytes": 231403,
+     "row_count": 8434,
+     "column_count": 4,
+     "use_case_id": "hillstrom-email",
+     "mode": "score",
+     "synthetic": false,
+     "created_at": "2026-10-11T11:56:30.584163Z",
+     "from_connection_id": null,
+     "made_by": "file"
+    },
+    {
+     "upload_id": "u_e3a96c85fda7",
+     "file_name": "replayed_conversion.csv",
+     "file_format": "csv",
+     "file_size_bytes": 66011,
+     "row_count": 8434,
+     "column_count": 2,
+     "use_case_id": "hillstrom-email",
+     "mode": "score",
+     "synthetic": false,
+     "created_at": "2026-10-11T11:56:28.267528Z",
+     "from_connection_id": null,
+     "made_by": "file"
+    },
+    {
+     "upload_id": "u_e3a795557365",
+     "file_name": "evaluation_features.csv",
+     "file_format": "csv",
+     "file_size_bytes": 1818961,
+     "row_count": 32000,
+     "column_count": 10,
+     "use_case_id": "hillstrom-email",
+     "mode": "score",
+     "synthetic": false,
+     "created_at": "2026-10-11T11:55:42.782292Z",
+     "from_connection_id": null,
+     "made_by": "file"
+    },
+    {
+     "upload_id": "u_99486d9c9512",
+     "file_name": "training.csv",
+     "file_format": "csv",
+     "file_size_bytes": 2457298,
+     "row_count": 32000,
+     "column_count": 14,
+     "use_case_id": "hillstrom-email",
+     "mode": "train",
+     "synthetic": false,
+     "created_at": "2026-10-11T11:53:27.663686Z",
+     "from_connection_id": null,
+     "made_by": "file"
+    }
+   ],
+   "total": 4
   }
  },
  "GET /use-cases/ai-onboarding-assistant": {

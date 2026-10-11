@@ -1,0 +1,148 @@
+/* Plan M M177 (DEC-1607): the visible-text check (M170) on the "New campaign" wizard, with an EMPTY allow-list.
+
+   Each step is drawn as the browser draws it - app.js and every module of ui/index.html, Guided setup included -
+   against the API answers recorded from the validated Hillstrom demo (tests/fixtures/ui_demo/api.json), and the
+   text a person can read (M170's collector: technical sections and hidden elements left out) must hold no glossary
+   "never shown" word at all. The states no recorded answer can reach (learning in progress, waiting for an approval,
+   a refusal) are drawn by the wizard's own builders and checked the same way.
+
+   One part of step 2 is not the wizard's: Guided setup (Plan G/L), embedded unchanged as Plan M asks. Its words are
+   checked where it is the page (the `setup-guided-*` pages of visible_text.test.mjs, with their baselines, which M172
+   empties), so here its container is left out and everything around it is checked. */
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { $, settle } from "../../harness.mjs";
+import { violations, describe } from "../../glossary/check.mjs";
+import { visibleText } from "../../glossary/collect.mjs";
+import { installDemoPage, loadModules } from "../../glossary/replay.mjs";
+import {
+  customersHtml,
+  goalHtml,
+  noticeHtml,
+  pageHtml,
+  progressHtml,
+  stoppedHtml,
+  waitingHtml,
+} from "../../../../../../ui/modules/campaigns/wizard_views.js";
+
+const UC = "hillstrom-email";
+const CAMPAIGN = "c_20261011_c9276210";
+
+/** Answers the recording does not hold, which the wizard asks for and does without (the cost line is left out). */
+const EXPECTED_UNRECORDED = new Set([`GET /use-cases/${UC}/cost-estimate?mode=score`]);
+
+const { w, state, missing } = installDemoPage({ hash: "#/__start" });
+await loadModules();
+
+// The demo's campaigns are replays that already have their results (a report, status `measured`), and the wizard
+// sends a campaign with results to its own page. So each step is drawn on the same campaign as the wizard meets it:
+// just sent (no report yet, `live`) for Send, and a Draft (no plan either) for Audience and Review.
+let draft = false;
+const recordedFetch = w.fetch;
+w.fetch = async (input, init) => {
+  const response = await recordedFetch(input, init);
+  const url = new URL(typeof input === "string" ? input : input.url, w.location.href);
+  if (url.pathname !== `/campaigns/${CAMPAIGN}`) return response;
+  const body = await response.json();
+  body.report = null;
+  body.campaign = { ...body.campaign, status: "live" };
+  if (draft) {
+    body.plan = null;
+    body.campaign = { ...body.campaign, test_plan_hash: null, test_plan_version: null };
+  }
+  return new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
+};
+
+async function untilStable(ms = 10000) {
+  const started = Date.now();
+  let last = null;
+  let same = 0;
+  while (Date.now() - started < ms) {
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    const now = `${$("#app")?.innerHTML.length}:${document.body.innerHTML.length}`;
+    if (state.inFlight === 0 && now === last) same += 1;
+    else same = 0;
+    last = now;
+    if (same >= 6) return;
+  }
+}
+
+async function visit(hash) {
+  w.location.hash = "#/__between";
+  await untilStable();
+  w.location.hash = hash;
+  await settle(2);
+  await untilStable();
+}
+
+/** The page's visible text, without Guided setup's own container (checked on its own page). */
+function wizardText() {
+  const copy = document.body.cloneNode(true);
+  copy.querySelectorAll("[data-cw-guided]").forEach((el) => el.remove());
+  return visibleText(copy);
+}
+
+const STEPS = [
+  { id: "wizard-goal", hash: "#/campaigns/new", selector: "[data-cw-goal-card]" },
+  { id: "wizard-customers", hash: `#/campaigns/new/customers/${UC}`, selector: "[data-cw-customers]", guided: true },
+  { id: "wizard-audience", hash: `#/campaigns/new/audience/${CAMPAIGN}`, selector: "[data-cw-audience]", draft: true },
+  { id: "wizard-review", hash: `#/campaigns/new/review/${CAMPAIGN}`, selector: "[data-cw-review]", draft: true },
+  { id: "wizard-send", hash: `#/campaigns/new/send/${CAMPAIGN}`, selector: "[data-cw-send]" },
+];
+
+for (const step of STEPS) {
+  test(`${step.id}: no engine word outside technical details (empty allow-list)`, async () => {
+    missing.clear();
+    draft = Boolean(step.draft);
+    await visit(step.hash);
+    assert.ok($(step.selector), `${step.id} did not draw: ${$("#app").textContent.slice(0, 300)}`);
+    if (step.guided) assert.ok($("[data-cw-guided] #ag-file"), "Guided setup itself is mounted, unchanged");
+    const unrecorded = [...missing].filter((k) => !k.includes("/__") && !EXPECTED_UNRECORDED.has(k));
+    assert.deepEqual(unrecorded, [], `${step.id} asked for answers that are not recorded`);
+    const text = wizardText();
+    const v = violations(text, {});
+    assert.ok(v.ok, describe(step.id, v));
+  });
+}
+
+test("the states no recording reaches carry no engine word either", () => {
+  const uc = { id: UC, name: "E-mail Offer Choice" };
+  const holder = document.createElement("div");
+  const bodies = {
+    "goal-no-role": goalHtml({ canStart: false }),
+    "goal-none": goalHtml({ goals: [], more: [] }),
+    "customers-first": customersHtml({ uc, first: true }),
+    "customers-again": customersHtml({ uc, first: false, busy: "Starting the contact list…" }),
+    "customers-checks": customersHtml({
+      uc,
+      first: true,
+      problem: { validation: { checks: [{ severity: "error", message: "The outcome column is empty.", suggestion: null }] } },
+    }),
+    "customers-cost": customersHtml({ uc, first: true, problem: { confirm: "This could cost more than the cap." } }),
+    "customers-no-guided": customersHtml({ uc, first: true, hasGuided: false }),
+    "customers-no-role": customersHtml({ uc, first: true, canStart: false }),
+    learning: progressHtml({ learning: true, share: 0.4 }),
+    list: progressHtml({ learning: false, share: null }),
+    "waiting-approver": waitingHtml({ canApprove: true }),
+    "waiting-other": waitingHtml({ canApprove: false }),
+    "waiting-own": waitingHtml({ canApprove: true, own: true }),
+    stopped: stoppedHtml({ ucId: UC, detail: { run: { run_id: "r_x", error: { message: "Training failed: run out of memory" } } }, reason: "The work stopped before the list was ready." }),
+    refused: noticeHtml({ title: "The contact list could not be started", text: ["Choose the file of customers once more; it is checked against what Marketing AI learned."] }),
+  };
+  for (const [id, body] of Object.entries(bodies)) {
+    holder.innerHTML = pageHtml("customers", body);
+    holder.querySelectorAll("[data-cw-guided]").forEach((el) => el.remove());
+    const v = violations(visibleText(holder), {});
+    assert.ok(v.ok, describe(id, v));
+  }
+});
+
+test("the check would catch an engine word on a wizard step (planted)", async () => {
+  draft = false;
+  await visit("#/campaigns/new");
+  const planted = document.createElement("p");
+  planted.textContent = "Download the treat list";
+  $("[data-cw-goal-card]").appendChild(planted);
+  assert.equal(violations(wizardText(), {}).ok, false);
+  planted.remove();
+});

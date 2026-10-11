@@ -32,6 +32,7 @@
 // /runs/{run_id}/campaign-results` answers 200, 404 before) or outcomes were added here.
 
 import { getRun } from "../../api.js";
+import { runResultsLineHtml } from "../campaigns/links.js"; // Plan M M176 (DEC-1606)
 import {
   EM_DASH,
   RESULTS_CRUMB,
@@ -291,6 +292,7 @@ function uploadCard(run) {
     </form>
     ${state.uploadError && !localError ? errorBox(state.uploadError) : ""}
     ${state.uploaded ? `<div class="pb-ok" role="status">Measured. The results below are this upload's.</div>` : ""}
+    ${runResultsLineHtml(run.run_id)}
   </div></section>`;
 }
 

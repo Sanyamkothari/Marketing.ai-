@@ -1,0 +1,83 @@
+{
+ "about": "Plan M DEC-1606 (b): the one status rule for a campaign, as cases. The Campaigns list and page (M176, ui/modules/campaigns/status.js campaignStatus) and the Overview (M175, engine/measurement/overview.py campaign_state) must both give `status` for each case. A campaign is the API's record (only the fields the rule reads), `plan` the test plan in force (null: none), `report` the stored report (null: none), `today` the day it is judged on. `results_date` is the date the rule waits for: the plan's analysis date, else the end of the outcome window (treatment_start + outcome_window_days), else null.",
+ "cases": [
+  {
+   "name": "our campaign, no plan, nothing in, window open: a Draft",
+   "campaign": {"kind": "scored", "status": "live", "treatment_start": "2026-10-01T09:00:00Z", "outcome_window_days": 30, "outcomes": null, "test_plan_hash": null},
+   "plan": null, "report": null, "today": "2026-10-05",
+   "status": "draft", "results_date": "2026-10-31"
+  },
+  {
+   "name": "our campaign, no plan, no window: a Draft with no date",
+   "campaign": {"kind": "scored", "status": "live", "treatment_start": "2026-10-01T09:00:00Z", "outcome_window_days": null, "outcomes": null, "test_plan_hash": null},
+   "plan": null, "report": null, "today": "2027-06-01",
+   "status": "draft", "results_date": null
+  },
+  {
+   "name": "no plan, outcome window closed: Waiting for results (not Draft for ever)",
+   "campaign": {"kind": "scored", "status": "live", "treatment_start": "2026-05-01T09:00:00Z", "outcome_window_days": 90, "outcomes": null, "test_plan_hash": null},
+   "plan": null, "report": null, "today": "2026-10-11",
+   "status": "waiting_for_results", "results_date": "2026-07-30"
+  },
+  {
+   "name": "plan fixed, analysis date to come: Live",
+   "campaign": {"kind": "scored", "status": "live", "treatment_start": "2026-10-01T09:00:00Z", "outcome_window_days": 30, "outcomes": null, "test_plan_hash": "abc"},
+   "plan": {"analysis_date": "2026-11-12"}, "report": null, "today": "2026-11-11",
+   "status": "live", "results_date": "2026-11-12"
+  },
+  {
+   "name": "results file in before the analysis date: still Live (the date decides)",
+   "campaign": {"kind": "scored", "status": "live", "treatment_start": "2026-10-01T09:00:00Z", "outcome_window_days": 30, "outcomes": {"file_name": "oct.csv"}, "test_plan_hash": "abc"},
+   "plan": {"analysis_date": "2026-11-12"}, "report": null, "today": "2026-10-05",
+   "status": "live", "results_date": "2026-11-12"
+  },
+  {
+   "name": "an early look before the analysis date: still Live",
+   "campaign": {"kind": "scored", "status": "live", "treatment_start": "2026-10-01T09:00:00Z", "outcome_window_days": 30, "outcomes": {"file_name": "oct.csv"}, "test_plan_hash": "abc"},
+   "plan": {"analysis_date": "2026-11-12"}, "report": {"early_look": true}, "today": "2026-10-20",
+   "status": "live", "results_date": "2026-11-12"
+  },
+  {
+   "name": "analysis date reached: Waiting for results",
+   "campaign": {"kind": "scored", "status": "live", "treatment_start": "2026-10-01T09:00:00Z", "outcome_window_days": 30, "outcomes": null, "test_plan_hash": "abc"},
+   "plan": {"analysis_date": "2026-11-12"}, "report": null, "today": "2026-11-12",
+   "status": "waiting_for_results", "results_date": "2026-11-12"
+  },
+  {
+   "name": "analysis date reached, file in: Waiting for results",
+   "campaign": {"kind": "scored", "status": "live", "treatment_start": "2026-10-01T09:00:00Z", "outcome_window_days": 30, "outcomes": {"file_name": "oct.csv"}, "test_plan_hash": "abc"},
+   "plan": {"analysis_date": "2026-11-12"}, "report": null, "today": "2026-12-01",
+   "status": "waiting_for_results", "results_date": "2026-11-12"
+  },
+  {
+   "name": "the plan's analysis date wins over the outcome window",
+   "campaign": {"kind": "scored", "status": "live", "treatment_start": "2026-10-01T09:00:00Z", "outcome_window_days": 7, "outcomes": null, "test_plan_hash": "abc"},
+   "plan": {"analysis_date": "2026-11-12"}, "report": null, "today": "2026-10-20",
+   "status": "live", "results_date": "2026-11-12"
+  },
+  {
+   "name": "another tool's campaign, no plan, window open: Live, never a Draft",
+   "campaign": {"kind": "external", "status": "live", "treatment_start": "2026-10-01T09:00:00Z", "outcome_window_days": 30, "outcomes": null, "test_plan_hash": null},
+   "plan": null, "report": null, "today": "2026-10-05",
+   "status": "live", "results_date": "2026-10-31"
+  },
+  {
+   "name": "another tool's campaign, window closed: Waiting for results",
+   "campaign": {"kind": "external", "status": "live", "treatment_start": "2026-10-01T09:00:00Z", "outcome_window_days": 30, "outcomes": null, "test_plan_hash": null},
+   "plan": null, "report": null, "today": "2026-10-31",
+   "status": "waiting_for_results", "results_date": "2026-10-31"
+  },
+  {
+   "name": "our campaign, no plan, a results file in, window open: Live (a file is not a Draft)",
+   "campaign": {"kind": "scored", "status": "live", "treatment_start": "2026-10-01T09:00:00Z", "outcome_window_days": 30, "outcomes": {"file_name": "x.csv"}, "test_plan_hash": null},
+   "plan": null, "report": null, "today": "2026-10-02",
+   "status": "live", "results_date": "2026-10-31"
+  },
+  {
+   "name": "the final result stored: Measured, whatever the date",
+   "campaign": {"kind": "scored", "status": "measured", "treatment_start": "2026-10-01T09:00:00Z", "outcome_window_days": 30, "outcomes": {"file_name": "oct.csv"}, "test_plan_hash": null},
+   "plan": null, "report": {"early_look": false}, "today": "2026-10-05",
+   "status": "measured", "results_date": "2026-10-31"
+  }
+ ]
+}

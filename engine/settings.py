@@ -92,6 +92,9 @@ SchedulerBackend = Literal["none", "local", "eventbridge"]
 AlertBackend = Literal["log", "sns"]
 """Where alerts go (Phase 4b): the log and the alert history only, or also an SNS topic (email)."""
 
+UiLayout = Literal["classic", "campaigns"]
+"""Which shell the UI draws (Plan M M174): today's top bar (`classic`) or the five-place sidebar (`campaigns`)."""
+
 ENV_PREFIX: Final[str] = "MARKETING_AI_"
 """Every variable this module reads starts with it; nothing outside the prefix is consulted."""
 
@@ -168,6 +171,8 @@ ENV_VARS: Final[Mapping[str, str]] = {
     "allow_fake_ai": f"{ENV_PREFIX}ALLOW_FAKE_AI",
     # --- Plan J M92 (holdout). One more extension; nothing above changes meaning (DEC-1302).
     "holdout_salt": f"{ENV_PREFIX}HOLDOUT_SALT",
+    # --- Plan M M174 (the new shell). One more extension; nothing above changes meaning (DEC-1604).
+    "ui_layout": f"{ENV_PREFIX}UI_LAYOUT",
 }
 """Field name to environment variable. One mapping, so docs, tests and readers agree."""
 
@@ -413,6 +418,15 @@ class Settings(BaseModel):
     holdout_salt: SecretStr | None = Field(
         default=None,
         description="Salt of the persistent holdout's membership hash. A secret; needed only by a persistent holdout.",
+    )
+
+    # --- Plan M M174 (the new shell, DEC-1604) -----------------------------------------------------
+    # Added field only, defaulted to today's UI. It changes what the browser draws, nothing the API
+    # does: `GET /auth/me` hands it to the UI, which draws the five-place sidebar and sends old links to
+    # their new homes when it is `campaigns`, and today's top bar, unchanged, when it is `classic`.
+    ui_layout: UiLayout = Field(
+        default="classic",
+        description="`classic` (today's top bar) or `campaigns` (the five-place sidebar). Presentation only.",
     )
 
     @field_validator("sagemaker_subnet_ids", "sagemaker_security_group_ids", "cors_origins", mode="before")

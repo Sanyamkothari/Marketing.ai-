@@ -32,6 +32,9 @@ import { repaintContactList } from "./contact_list.js"; // Plan M M171
 import { createController, useCaseHtml } from "./usecase.js";
 import { MODULES_CHANGED, pagePanelsHtml, resolveRoute } from "./modules/router.js";
 import { aiNoticeHtml, needsAiNotice } from "./availability.js";
+// <M174>
+import { layoutDrawn, layoutRedirect } from "./layout.js";
+// </M174>
 
 const app = document.getElementById("app");
 const PAGES = ["data", "model", "output"];
@@ -303,6 +306,18 @@ async function lineageOf(kind, run) {
 }
 
 async function renderNow() {
+  // <M174>
+  // Plan M M174 (DEC-1604): in the campaigns layout an old address goes to its new home (`layout.js`'s
+  // table), when this build has a screen there. Always null in the classic layout. The lines between the
+  // M174 marks are the whole of M174 in this file: the classic layout's check removes them to draw the
+  // pages as they were before (tests/integration/test_shell_ui.py).
+  const moved = layoutRedirect(window.location.hash, { claimed: (target) => resolveRoute(target) });
+  if (moved) {
+    window.location.replace(moved);
+    return;
+  }
+  const drawing = window.location.hash;
+  // </M174>
   const parts = window.location.hash.replace(/^#\/?/, "").split("/").filter(Boolean);
   try {
     // A phase branch registers whole screens of its own through `modules/router.js`; nothing is
@@ -338,6 +353,11 @@ async function renderNow() {
     document.title = `${uc.name} · Marketing AI`;
   } catch (error) {
     await failure(error, parts);
+    // <M174>
+  } finally {
+    // drawn and stayed (the page did not send the browser on): a redirect to here is over (layout.js)
+    if (window.location.hash === drawing) layoutDrawn(drawing);
+    // </M174>
   }
 }
 
