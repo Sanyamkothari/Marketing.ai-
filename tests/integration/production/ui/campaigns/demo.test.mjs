@@ -21,6 +21,7 @@ const UC = "hillstrom-email";
 const { w, state, missing } = installDemoPage({ hash: "#/__start" });
 await loadModules();
 const campaigns = await import("../../../../../ui/modules/campaigns/index.js");
+const { NET_VALUE_LABEL } = await import("../../../../../ui/modules/campaigns/views.js");
 
 async function untilStable(ms = 10000) {
     const started = Date.now();
@@ -112,7 +113,7 @@ for (const [name, id] of [
         assert.equal(text("[data-tile-comparison] .v"), "12,737 customers");
         const net = proof(id)
             .sections.find((s) => s.key === "net_value")
-            .lines.find((l) => l.label === "Net value");
+            .lines.find((l) => NET_VALUE_LABEL.test(l.label));
         assert.equal(text("[data-tile-value] .v"), `${net.low.text} to ${net.high.text}`);
         const sent = $$("[data-what-was-sent] .cp-kv-row").map((r) => [...r.children].map((c) => c.textContent));
         assert.deepEqual(sent, [
@@ -136,20 +137,22 @@ for (const [name, id] of [
         const firstKeys = () => $$("[data-audience-table] tbody tr").map((tr) => tr.querySelector("td").textContent);
         assert.equal(firstKeys().length, 25);
         assert.equal(firstKeys()[0], "1");
-        assert.match(text("[data-page-of]"), /^Showing 1 to 25 of 12,862 customers · page 1 of 515$/);
+        // The recording keeps the list's first 300 rows (126 to contact); its counts above are the whole list's.
+        assert.match(text("[data-page-of]"), /^Showing 1 to 25 of 126 customers · page 1 of 6$/);
         // Next, then Previous: the table alone is repainted.
         const before = firstKeys();
         $('[data-audience-table] [data-page="2"]').click();
-        assert.match(text("[data-page-of]"), /^Showing 26 to 50 of 12,862 customers · page 2 of 515$/);
+        assert.match(text("[data-page-of]"), /^Showing 26 to 50 of 126 customers · page 2 of 6$/);
         assert.notDeepEqual(firstKeys(), before);
         $('[data-audience-table] [data-page="1"]').click();
         assert.deepEqual(firstKeys(), before);
         // Search by customer id: every row shown contains it, and the box keeps its value.
         const box = $("[data-audience-search]");
-        box.value = "1077";
+        box.value = "12";
         box.dispatchEvent(new w.Event("input", { bubbles: true }));
         const found = firstKeys();
-        assert.ok(found.length > 0 && found.every((k) => k.includes("1077")), found.join(","));
+        assert.ok(found.length > 0 && found.every((k) => k.includes("12")), found.join(","));
+        assert.ok(found.length < 25, "the search narrows the list");
         assert.equal($("[data-audience-search]"), box, "the search box is not redrawn while typing");
         box.value = "no such customer";
         box.dispatchEvent(new w.Event("input", { bubbles: true }));
@@ -160,8 +163,7 @@ for (const [name, id] of [
         // Why these customers: three reasons, each with how many customers it is the strongest reason for.
         const reasons = $$("[data-why] [data-reason]");
         assert.equal(reasons.length, 3);
-        for (const li of reasons)
-            assert.match(li.textContent, /^Their .+ for [\d,]+ of 12,862 customers \(\d+\.\d%\)$/);
+        for (const li of reasons) assert.match(li.textContent, /^Their .+ for [\d,]+ of 126 customers \(\d+\.\d%\)$/);
     });
 
     test(`${name}: Results shows the Proof Pack's headline, the evidence in words and the full report one click away`, async () => {
@@ -195,13 +197,77 @@ test("Plan J's campaign page: a bare id still draws it in the classic layout, an
     assert.equal(w.location.hash, `#/campaigns/${C_CONVERSION}`);
     assert.ok($(`[data-campaign-page="${C_CONVERSION}"]`), "Plan J's page");
     assert.match($("#app").textContent, /Plan the test/);
-    // Its result card points to the one place to add results.
-    assert.equal(
-        $("[data-campaign-result] [data-campaign-results-line] a").getAttribute("href"),
-        `#/campaigns/${C_CONVERSION}/results`,
-    );
+    // Its result card points to the campaign page's Results tab; the campaign is measured, so it offers the result.
+    const card = $("[data-campaign-result] [data-campaign-results-line] a");
+    assert.equal(card.getAttribute("href"), `#/campaigns/${C_CONVERSION}/results`);
+    assert.equal(card.textContent, "See the result on the campaign page ›");
     await visit(`#/campaigns/${C_CONVERSION}/plan`);
     assert.ok($(`[data-campaign-page="${C_CONVERSION}"]`));
+});
+
+test("Plan J's page never repaints over a campaign tab after one of its own requests", async () => {
+    // Plan J's page is drawn first, then the person opens the Results tab while Plan J's "Measure now" is in flight.
+    await visit(`#/campaigns/${C_CONVERSION}`);
+    assert.ok($(`[data-campaign-page="${C_CONVERSION}"]`));
+    await visit(`#/campaigns/${C_CONVERSION}/results`);
+    assert.ok($(`[data-campaign-view="${C_CONVERSION}"]`));
+    // Plan J's click handler (delegated from `document`) repaints when its request starts and when it ends.
+    const button = w.document.createElement("button");
+    button.setAttribute("data-measure", "");
+    w.document.body.appendChild(button);
+    try {
+        button.click();
+        await settle(4);
+        await untilStable();
+    } finally {
+        button.remove();
+    }
+    assert.equal(w.location.hash, `#/campaigns/${C_CONVERSION}/results`);
+    assert.ok($(`[data-campaign-view="${C_CONVERSION}"]`), "the Results tab is still drawn");
+    assert.equal($(`[data-campaign-page="${C_CONVERSION}"]`), null, "Plan J's page did not paint over it");
+});
+
+test("moving to another campaign while the first one loads draws the second, with no error", async () => {
+    const errors = [];
+    const onError = (reason) => errors.push(reason);
+    process.on("unhandledRejection", onError);
+    // Anything painted meanwhile counts: an error screen that a later draw covers was still shown.
+    const painted = [];
+    const watcher = new w.MutationObserver(() => painted.push($("#app").textContent));
+    watcher.observe($("#app"), { childList: true, subtree: true, characterData: true });
+    // Both records answer late, B's later than A's: A's answer arrives after the person moved to B, while B loads.
+    const fetchFirst = w.fetch;
+    const late = { [C_CONVERSION]: 150, [C_SPEND]: 500 };
+    w.fetch = (input, init) => {
+        const url = String(typeof input === "string" ? input : input.url);
+        const id = Object.keys(late).find((c) => url.endsWith(`/campaigns/${c}`));
+        if (id) return new Promise((resolve) => setTimeout(resolve, late[id])).then(() => fetchFirst(input, init));
+        return fetchFirst(input, init);
+    };
+    try {
+        w.location.hash = "#/campaigns";
+        await untilStable(); // A's page is not the last one drawn: it starts from nothing
+        w.location.hash = `#/campaigns/${C_CONVERSION}/audience`;
+        await new Promise((resolve) => setTimeout(resolve, 30)); // A's page starts loading ...
+        w.location.hash = `#/campaigns/${C_SPEND}/overview`; // ... and the person is already on B
+        await settle(4);
+        await untilStable();
+        await new Promise((resolve) => setTimeout(resolve, 700));
+        await untilStable();
+    } finally {
+        process.off("unhandledRejection", onError);
+        watcher.disconnect();
+        w.fetch = fetchFirst;
+    }
+    assert.deepEqual(errors, []);
+    assert.deepEqual(
+        painted.filter((t) => /UI_ERROR|TypeError|Cannot read properties/.test(t)),
+        [],
+        "no error was painted while the two campaigns loaded",
+    );
+    assert.ok($(`[data-campaign-view="${C_SPEND}"][data-tab-shown="overview"]`), "B's Overview is drawn");
+    assert.equal($("#app .apierr"), null, "no error box over it");
+    assert.ok(!/UI_ERROR|TypeError/.test($("#app").textContent));
 });
 
 test("in the campaigns layout a bare campaign id opens the new page's Overview", async () => {
@@ -218,13 +284,21 @@ test("in the campaigns layout a bare campaign id opens the new page's Overview",
 });
 
 test("the older places that add results point to the campaign's Results tab when the list is a campaign", async () => {
-    // The uplift scoring run's list became both campaigns; the newest one is linked.
-    await visit(`#/uc/${UC}/run/${SCORE_UPLIFT}`);
-    const newest = recorded[`GET /campaigns?run_id=${SCORE_UPLIFT}`].body.campaigns[0].campaign_id;
-    const line = $("[data-measure-panel] [data-campaign-results-line] a");
-    assert.ok(line, "the Measure panel draws the line");
-    assert.equal(line.textContent, "Add results from the campaign page ›");
-    assert.equal(line.getAttribute("href"), `#/campaigns/${newest}/results`);
+    // The uplift scoring run's list became both campaigns; the newest one is linked, in each of the run's places.
+    const newest = recorded[`GET /campaigns?run_id=${SCORE_UPLIFT}`].body.campaigns[0];
+    for (const [hash, where] of [
+        [`#/uc/${UC}/run/${SCORE_UPLIFT}`, "[data-measure-panel] "],
+        [`#/campaign/${UC}/${SCORE_UPLIFT}`, ""],
+        [`#/monitoring/runs/${SCORE_UPLIFT}`, ""],
+    ]) {
+        await visit(hash);
+        const line = $(`${where}[data-campaign-results-for="${SCORE_UPLIFT}"] [data-campaign-results-line] a`);
+        assert.ok(line, `${hash} draws the line`);
+        assert.equal(line.getAttribute("href"), `#/campaigns/${newest.campaign_id}/results`, hash);
+        // Both campaigns are measured: the tab shows the result, so the line offers the result, not an upload.
+        assert.equal(newest.status, "measured");
+        assert.equal(line.textContent, "See the result on the campaign page ›", hash);
+    }
     // The risk run's list is no campaign: no line, rather than a line to nowhere.
     for (const hash of [
         `#/uc/${UC}/run/${SCORE_RISK}`,
@@ -239,7 +313,7 @@ test("the older places that add results point to the campaign's Results tab when
 
 test("+ New campaign opens M177's wizard when it is on this build, and says what to do when it is not", async () => {
     await visit("#/campaigns/new");
-    const wizard = new URL("../../../../../ui/modules/campaigns/wizard.js", import.meta.url);
+    const wizard = new URL("../../../../../ui/modules/campaigns/wizard_index.js", import.meta.url);
     if (fs.existsSync(wizard)) {
         assert.equal($("[data-new-campaign-pending]"), null);
     } else {

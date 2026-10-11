@@ -3,18 +3,24 @@
 // The ONE rule for a campaign's status chip, used by the Campaigns list and by the campaign page, so the two
 // can never disagree. It reads only what the API already answers: the campaign record (`GET /campaigns` or
 // `GET /campaigns/{id}`), its test plan (the `plan` of `GET /campaigns/{id}`) and its stored report. Nothing here
-// changes what the engine decided; it only puts it in four words.
+// changes what the engine decided; it only puts it in four words. In order:
 //
 //   Measured             the campaign's final result is stored (`status: measured`). An early look never makes a
 //                        campaign Measured: the engine keeps it `live` until the analysis date (DEC-1304).
-//   Draft                one of our own campaigns with no test plan, no results file and no result: how it will be
-//                        judged is not fixed yet, and Plan M sends no list out before it is (§3.1).
-//   Waiting for results  a results file is in but the result is not final yet, or the results date has come.
-//   Live                 the list went out and the results date has not come yet.
+//   Waiting for results  the results date has come and the result is not stored yet.
+//   Draft                one of our own campaigns with no test plan, no results file and no result, whose results
+//                        date has not come: how it will be judged is not fixed yet, and Plan M sends no list out
+//                        before it is (§3.1; M177's wizard records such a campaign before its plan is approved).
+//   Live                 anything else: the list went out and the results date has not come yet. A results file
+//                        that is in, or an early look, before that date does not change it (the date decides).
 //
 // The results date is the test plan's analysis date; without a plan, the day every customer's outcome window
 // has closed (the day the campaign went out plus the outcome window). With neither, there is no date to wait
-// for, and the campaign stays Live until its results are added.
+// for, and the campaign stays Live (or Draft) until its result is stored.
+//
+// Live and Waiting for results are decided by the date alone, as M175's `campaign_state()` decides them for the
+// Overview (`engine/measurement/overview.py`); the cases both must agree on are in
+// `tests/fixtures/campaigns/status_cases.json` (DEC-1606 (b)).
 //
 // Every function is pure: no request, no DOM, so node tests can call it directly.
 
@@ -58,15 +64,18 @@ export function resultsDue(campaign, plan = null) {
 export function campaignStatus({ campaign, plan = null, report = null, today = new Date() } = {}) {
   if (!campaign) return STATUS.draft;
   if (campaign.status === "measured") return STATUS.measured;
-  const ours = !campaign.kind || campaign.kind === "scored";
-  if (ours && !campaign.test_plan_hash && !plan && !campaign.outcomes && !report) return STATUS.draft;
   const due = resultsDue(campaign, plan);
   const day = isoDay(today);
-  if (campaign.outcomes || report || (due && day && day >= due)) return STATUS.waiting;
+  if (due && day && day >= due) return STATUS.waiting;
+  const ours = !campaign.kind || campaign.kind === "scored";
+  if (ours && !campaign.test_plan_hash && !plan && !campaign.outcomes && !report) return STATUS.draft;
   return STATUS.live;
 }
 
-/** A campaign another tool ran and that was audited here (Plan M §8 q3): listed, marked "Run elsewhere". */
+/**
+ * A campaign another tool ran and that was audited here (Plan M §8 q3): listed, and marked "Sent by another tool"
+ * (DEC-1606 (e): the plan's "Run elsewhere" uses "run", a word §4.1 never shows).
+ */
 export const runElsewhere = (campaign) => !!campaign && campaign.kind === "external";
 
 /** A whole-programme readout (every customer against the universal comparison group), not one campaign. */
@@ -146,13 +155,16 @@ export function nextStep({ status, campaign, plan = null, report = null }, fmtDa
     case "draft":
       return "Next step: fix how the result will be judged, then download the contact list.";
     case "live":
+      if (report && report.early_look && plan && plan.analysis_date) {
+        return `An early look is in. The result is final on ${fmtDay(isoDay(plan.analysis_date))}: add the results again then.`;
+      }
+      if (campaign && campaign.outcomes && due) {
+        return `The results file is in. The result can be read on or after ${fmtDay(due)}.`;
+      }
       return due
         ? `Next step: add results on or after ${fmtDay(due)}.`
         : "Next step: add results once customers have had time to respond.";
     case "waiting":
-      if (report && report.early_look && plan) {
-        return `An early look is in. The result is final on ${fmtDay(isoDay(plan.analysis_date))}: add the results again then.`;
-      }
       if (campaign && campaign.outcomes) return "The results file is in. Read the result on the Results tab.";
       return due ? `Next step: add results. They were due on ${fmtDay(due)}.` : "Next step: add results.";
     case "measured":

@@ -1,12 +1,13 @@
 /* Plan M M176 (DEC-1606): the campaign page in each state, adding results through its Results tab, and "Refresh the
    list", against a fake API that answers with what the real app answered (`tests/integration/test_campaigns_page_ui.py`
-   writes it to $M176_FIXTURES): one Phase 1 scoring run and four campaigns made from its list - a Draft (no plan),
-   a Live one (plan read on 15 Jan 2027), one whose results date has passed (plan read on 15 Sep 2026) and one sent
-   yesterday, whose results are not all in.
+   writes it to $M176_FIXTURES): one Phase 1 scoring run and five campaigns made from its list - a Draft (sent
+   yesterday, no plan), one with no plan whose outcome window closed in July, a Live one (plan read on 15 Jan 2027),
+   one whose results date has passed (plan read on 15 Sep 2026) and one sent yesterday, whose results are not all in.
 
    The requests the Results tab sends are pinned to the ones the Python side sent to the real app (`expected.json`),
-   where they gave a report whose every figure equals today's routes. "Refresh the list"'s two answers (the cost
-   question, then the new run) are this file's own: the request it sends is what is checked. */
+   where they gave a report whose every figure equals today's routes. "Refresh the list" sends the body the Python
+   side sent to the real `POST /runs` (`expected.refresh`); the real answer is replayed, and so are a cost question
+   and a started run (this file's own answers). */
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -27,6 +28,7 @@ const RUN = ids.run;
 const world = {
     views: {
         [ids.draft]: fixture("view_draft"),
+        [ids.old]: fixture("view_old"),
         [ids.live]: fixture("view_live"),
         [ids.due]: fixture("view_due"),
         [ids.fresh]: fixture("view_fresh"),
@@ -132,7 +134,14 @@ test("the list shows each campaign's state with the one rule", async () => {
             ],
         ]),
     );
-    assert.deepEqual(byName["Win-back, July list"], ["Win back lapsed customers · May 2026", "Draft", "—"]);
+    // A Draft has no results date yet: it is fixed with its test plan.
+    assert.deepEqual(byName["Win-back, July list"].slice(1), ["Draft", "—"]);
+    // No plan, and every customer's outcome window closed on 30 Jul 2026: waiting for results, not a Draft.
+    assert.deepEqual(byName["Win-back, March list"], [
+        "Win back lapsed customers · May 2026",
+        "Waiting for results",
+        "Results due 30 Jul 2026",
+    ]);
     assert.deepEqual(byName["Win-back, August list"], [
         "Win back lapsed customers · May 2026",
         "Live",
@@ -163,6 +172,12 @@ test("each state has its own next step and one primary button", async () => {
     assert.equal(primaries().length, 1);
     assert.equal(primaries()[0].textContent, "Add results");
     assert.equal(primaries()[0].getAttribute("href"), `#/campaigns/${ids.due}/results`);
+
+    await open(`#/campaigns/${ids.old}/overview`);
+    assert.equal(text("[data-overview] [data-status]"), "Waiting for results");
+    assert.equal(text("[data-next-step]"), "Next step: add results. They were due on 30 Jul 2026.");
+    assert.equal(primaries().length, 1);
+    assert.equal(primaries()[0].textContent, "Add results");
 });
 
 test("adding results on the Results tab sends exactly what gave today's report, then shows the result", async () => {
@@ -220,9 +235,13 @@ test("results not all in yet: the day to come back, never a number, and the file
         [`POST /campaigns/${ids.fresh}/measure`],
     );
     assert.equal(text("[data-results-notice]"), refusal.body.detail.message);
+    // A results file in before the results date does not change the chip: the date decides (M175's rule).
     await open(`#/campaigns/${ids.fresh}/overview`);
-    assert.equal(text("[data-overview] [data-status]"), "Waiting for results");
-    assert.equal(text("[data-next-step]"), "The results file is in. Read the result on the Results tab.");
+    assert.equal(text("[data-overview] [data-status]"), "Live");
+    assert.match(
+        text("[data-next-step]"),
+        /^The results file is in\. The result can be read on or after \d{1,2} [A-Z][a-z]{2} \d{4}\.$/,
+    );
 });
 
 test("Refresh the list asks first, says what the cost check said, and starts a scoring of the same customers", async () => {
@@ -258,18 +277,30 @@ test("Refresh the list asks first, says what the cost check said, and starts a s
     assert.equal(text("[data-refresh-yes]"), "Start it anyway");
     $("[data-refresh-yes]").click();
     await until(() => $("[data-refresh-started]"), 3000, "the started notice");
-    const body = {
-        use_case: run.use_case_id,
-        mode: "score",
-        primary_key: run.primary_key,
-        overrides: run.overrides || {},
-        upload_id: run.upload_id,
-    };
+    // The body the Python side sent to the real `POST /runs`, which accepted its shape.
+    const body = expected.refresh;
+    assert.equal(body.upload_id, run.upload_id);
     assert.deepEqual(world.writes, [
         { method: "POST", path: "/runs", body },
         { method: "POST", path: "/runs", body: { ...body, confirm_cost: true } },
     ]);
     assert.equal($("[data-refresh-started] a").getAttribute("href"), `#/uc/${run.use_case_id}/run/r_20261011_99999999`);
+});
+
+test("Refresh the list shows the real app's answer when the goal has no model to score with", async () => {
+    const real = fixture("refresh_real");
+    assert.equal(real.status, 409, "the real POST /runs answered on the merits, not with a 422");
+    world.onRun = () => answered(real);
+    await open(`#/campaigns/${ids.old}/overview`); // another campaign first: the page forgets the last refresh
+    await open(`#/campaigns/${ids.live}/overview`);
+    world.writes.length = 0;
+    $("[data-refresh-ask]").click();
+    await settle(2);
+    $("[data-refresh-yes]").click();
+    await until(() => $("[data-refresh-confirm] .apierr"), 3000, "the error");
+    assert.deepEqual(world.writes, [{ method: "POST", path: "/runs", body: expected.refresh }]);
+    assert.ok(text("[data-refresh-confirm]").includes(real.body.detail.message));
+    assert.equal($("[data-refresh-started]"), null);
 });
 
 test("a person who may not add results is told so, and sees no upload", () => {

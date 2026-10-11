@@ -6,7 +6,7 @@
 // answers false. What this module draws:
 //
 //   #/campaigns                       the list (it used to redirect to Results)
-//   #/campaigns/new[/<step>]          M177's wizard (`./wizard.js`, M177's file), loaded when asked for
+//   #/campaigns/new[/<step>]          M177's wizard (`./wizard_index.js`, M177's entry point), loaded when asked for
 //   #/campaigns/<id>/<tab>            the campaign page, one of the four tabs
 //   #/campaigns/<id>                  in the campaigns layout (M174's `ui.layout`), a redirect to .../overview;
 //                                     in the classic layout it stays Plan J's page, exactly as before
@@ -25,11 +25,9 @@
 import { COST_NEEDS_CONFIRMATION } from "../../cost.js";
 import { skeleton } from "../../dom.js";
 import { canAccess, setActiveNav } from "../router.js";
-import { contactList } from "./audience.js";
 import {
   getCampaign,
   getCampaigns,
-  getContactListCsv,
   loadContactList,
   getIndustries,
   getProof,
@@ -39,6 +37,7 @@ import {
   postOutcomes,
   postRun,
   postUpload,
+  readContactList,
   treatListUrl,
 } from "./api.js";
 import { resetRunResultsLines } from "./links.js";
@@ -172,11 +171,11 @@ async function renderNew(app, parts) {
   setActiveNav("campaigns");
   let wizard = null;
   try {
-    wizard = await import("./wizard.js");
+    wizard = await import("./wizard_index.js"); // M177's declared entry point
   } catch {
     wizard = null; // M177 not on this build yet
   }
-  const render = wizard && (wizard.renderWizard || wizard.render || wizard.default);
+  const render = wizard && wizard.renderWizard;
   if (typeof render === "function") {
     await render(app, parts);
     return;
@@ -275,7 +274,7 @@ async function loadAudience(runId, primaryKey) {
   const entry = { loading: true, error: null, list: null, query: "", page: 1 };
   audiences.set(runId, entry);
   try {
-    entry.list = contactList(await getContactListCsv(runId), primaryKey);
+    entry.list = await readContactList(runId, primaryKey); // one pass, as the file arrives
   } catch (error) {
     entry.error = error;
   }
@@ -296,10 +295,22 @@ async function renderCampaign(app, id, tab) {
     if (page.id === id && currentTab()) app.innerHTML = campaignShellHtml({ error });
     return;
   }
+  // The person may have moved to another campaign while this one loaded: that one draws itself.
+  if (page.id !== id || !page.view) return;
   draw(app);
   if (tab === "audience" && hasContactList(page.view.campaign)) {
     await loadAudience(runIdOf(page.view.campaign), page.view.campaign.primary_key);
   }
+}
+
+/**
+ * True when `parts` is an address this module draws in either layout: the list, the wizard, or a campaign's tab.
+ * (A bare campaign id is this module's only in the campaigns layout, where it is redirected to a tab at once.)
+ * Plan J's page asks this before it repaints after one of its own requests, so it never draws over these.
+ */
+export function ownsHash(parts) {
+  if (!Array.isArray(parts) || parts[0] !== ROUTE) return false;
+  return parts.length === 1 || parts[1] === WIZARD || TABS.includes(parts[2]);
 }
 
 /**

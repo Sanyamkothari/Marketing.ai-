@@ -123,11 +123,21 @@ function listRow(entry) {
   ];
 }
 
+/**
+ * The most campaigns `GET /campaigns` answers with (`CAMPAIGNS_SHOWN` in `api/routes/campaigns.py`): a list that
+ * long may be cut, so the page says it shows the newest ones rather than every campaign.
+ */
+export const LIST_CAP = 100;
+
 /** `#/campaigns`: every campaign, newest first, with "+ New campaign". `entries` as `listRow` reads them. */
 export function campaignsListHtml({ entries = [], error = null, canCreate = true } = {}) {
   const action = canCreate ? { label: "+ New campaign", href: "#/campaigns/new", attrs: "data-new-campaign" } : null;
+  const capped = entries.length >= LIST_CAP;
+  const lead = capped
+    ? `The newest ${fmtInt(LIST_CAP)} campaigns: where each stands, how many customers it reached and what it earned.`
+    : "Every campaign: where it stands, how many customers it reached and what it earned.";
   const head = pageHead(
-    `${crumbs([CAMPAIGNS_CRUMB])}<h1 class="h1">Campaigns</h1><p class="desc">Every campaign: where it stands, how many customers it reached and what it earned.</p>${
+    `${crumbs([CAMPAIGNS_CRUMB])}<h1 class="h1">Campaigns</h1><p class="desc">${esc(lead)}</p>${
       entries.length ? headActions({ primary: action }) : ""
     }`,
   );
@@ -147,7 +157,11 @@ export function campaignsListHtml({ entries = [], error = null, canCreate = true
       { label: "Contacted", num: true },
       { label: "Result" },
     ];
-    body = `<section class="card" data-campaigns-list><h3>All campaigns <span class="sort-note">(newest first)</span></h3>${dataTable(
+    const title = capped ? `The newest ${fmtInt(LIST_CAP)} campaigns` : "All campaigns";
+    const older = capped
+      ? `<p class="cp-pad muted" data-campaigns-capped>Older campaigns are not listed here.</p>`
+      : "";
+    body = `<section class="card" data-campaigns-list><h3>${esc(title)} <span class="sort-note">(newest first)</span></h3>${older}${dataTable(
       cols,
       entries.map(listRow),
       { cls: "cp-table" },
@@ -175,12 +189,20 @@ const tile = (label, value, { exact = null, attrs = "" } = {}) =>
     exact ? ` title="${esc(exact)}"` : ""
   }>${esc(value)}</div></div>`;
 
-/** The Proof Pack's net value range in rupees, as its own server text: `{ low, high }` or null. */
+/**
+ * The net value line's label, as `engine/pilot/proof.py` writes it: "Net value", or, for a Pack whose claim is
+ * `stated_random`, "If the groups were random as you said: net value" (`_conditional`). Nothing else matches.
+ */
+export const NET_VALUE_LABEL = /(^|: )net value$/i;
+
+/**
+ * The Proof Pack's net value range in rupees, as its own server text: `{ low, high }` or null. The line is found
+ * by its label only: no line is ever taken by its position, so a Pack without that line shows no range.
+ */
 export function netValueRange(proof) {
   const section = proof && (proof.sections || []).find((s) => s.key === "net_value");
   const lines = (section && section.lines) || [];
-  // The Pack's last line is the net value; its label is matched first in case a line is added after it.
-  const line = lines.find((l) => l.label === "Net value") || lines[lines.length - 1];
+  const line = lines.find((l) => NET_VALUE_LABEL.test(String((l && l.label) || "").trim()));
   if (!line || !line.low || !line.high) return null;
   return { low: line.low.text, high: line.high.text };
 }
@@ -368,7 +390,12 @@ function audienceHtml(model) {
     }</div></section>`;
   }
   const { rows, total } = audience.list;
-  const lead = `${fmtCustomers(rows.length)} to contact, out of ${fmtCustomers(total)} on the list.`;
+  // The counts are the list's own summary (`treat_list_summary.json`, the same file's counts) when it answered.
+  const summary = model.summary || {};
+  const known = (n) => n !== null && n !== undefined;
+  const toContact = known(summary.treat_rows) ? summary.treat_rows : rows.length;
+  const onList = known(summary.total_rows) ? summary.total_rows : total;
+  const lead = `${fmtCustomers(toContact)} to contact, out of ${fmtCustomers(onList)} on the list.`;
   return `<section class="card" data-audience><h3>${esc(term("contactList"))}</h3><div class="card-body">
       <p data-audience-lead>${esc(lead)}</p>
       <div class="cp-search"><label for="cp-search">Search by customer id</label><input id="cp-search" type="search" autocomplete="off" data-audience-search value="${esc(
@@ -436,7 +463,7 @@ function uploadHtml(model) {
       ${early}${inFile}
       <form class="cp-upload" data-results-form novalidate>
         <p>Upload a CSV or Parquet file with each customer's id and${what}: one row per customer.</p>
-        <label class="cp-field">Results file<input type="file" name="file" accept=".csv,.parquet,.xlsx,.xls" data-results-file-input required></label>
+        <label class="cp-field">Results file<input type="file" name="file" accept=".csv,.parquet" data-results-file-input required></label>
         ${covariate}
         <div class="btn-row"><button type="submit" class="btn primary" data-results-submit${results.busy ? " disabled" : ""}>Add results</button>${read}</div>
       </form>

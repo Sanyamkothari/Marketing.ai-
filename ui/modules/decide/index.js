@@ -30,7 +30,7 @@ import { driftEventsCardHtml } from "./drift_events.js";
 import { AUDIT_ROUTE, auditBody, auditPageHtml, fileOf, programmeBody } from "./audit.js";
 import { planBody, previewHtml, previewReadoutHtml } from "./plan.js";
 import { campaignPageHtml, campaignsListHtml, conflictsCardHtml, injectStyles, treatListCardHtml } from "./views.js";
-import { campaignsRoute } from "../campaigns/index.js";
+import { campaignsRoute, ownsHash } from "../campaigns/index.js";
 
 export { conflictsCardHtml, treatListCardHtml };
 export const ROUTES = ["campaigns"];
@@ -50,6 +50,7 @@ const screen = {
 
 function draw(app) {
   if (!screen.view || hashParts()[0] !== "campaigns" || decodeURIComponent(hashParts()[1] || "") !== screen.id) return;
+  if (ownsHash(hashParts())) return; // Plan M M176: the campaign's tabs are drawn by ../campaigns, not this page
   app.innerHTML = campaignPageHtml({
     view: screen.view,
     plans: screen.plans,
