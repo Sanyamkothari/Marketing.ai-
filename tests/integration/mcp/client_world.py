@@ -227,6 +227,16 @@ def build_world(config_root: Path, base: Path) -> ClientWorld:
             )["run_id"],
         )
         world.acme_train_run, world.target = str(trained["run_id"]), str(trained["target"])
+        # Plan M final integration (DEC-1611 (p)): a campaign's list made with a model still waiting for an Approver
+        # gets no test plan (409 MODEL_NOT_APPROVED), and this world's campaigns take plans; acme's Approver approves
+        # the new model first, as in the product.
+        _ok(
+            client.post(
+                f"/models/{trained['model_version_id']}/approve",
+                json={"approved_by": "ravi"},
+                headers=world.headers("acme_approver"),
+            )
+        )
         score_dataset = _build(client, client_id, score_spec_id, "score")
         scored = _wait_run(
             client,
