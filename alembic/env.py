@@ -36,7 +36,10 @@ from sqlmodel import SQLModel
 # Imported for their side effect: a `table=True` class registers itself with `SQLModel.metadata`,
 # and a table this process has not imported is a table autogenerate would propose dropping.
 from engine.access.users import AuthSessionRow, PlatformUserRow
-from engine.agentic.ledger import DecisionLogEntry  # Plan K M132: `agentic_decision_log` (0009)
+from engine.agentic.ledger import (
+    DecisionLogEntry,  # Plan K M132: `agentic_decision_log` (0009)
+    WorkspaceLogEntry,  # Plan K M141: `agentic_workspace_log` (0010)
+)
 from engine.approvals import ModelDecisionRow
 from engine.audit.store import AuditEventRow
 from engine.aws.postgres import METADATA_TABLES, PostgresConfig, normalise_url, postgres_engine
@@ -67,6 +70,7 @@ _ = (
     PlatformSettingRow,
     CampaignRow,
     DecisionLogEntry,
+    WorkspaceLogEntry,
 )
 
 INCLUDED_TABLES: frozenset[str] = frozenset(METADATA_TABLES) | frozenset(PLATFORM_TABLES)

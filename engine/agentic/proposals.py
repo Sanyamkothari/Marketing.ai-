@@ -108,6 +108,14 @@ class Proposal(StrictBase):
     ledger_checkpoint: str | None = Field(
         default=None, description="The ledger head after the decision: the client's receipt checkpoint."
     )
+    workspace: str | None = Field(
+        default=None,
+        description=(
+            "Plan K M141: the client workspace whose chain it was drafted on (an MCP client's); its decision goes "
+            "on the same chain. Absent for a proposal on the deployment's chain."
+        ),
+        exclude_if=lambda value: value is None,
+    )
 
     @property
     def codes(self) -> tuple[str, ...]:
@@ -290,6 +298,7 @@ def submit_proposal(
         policy_version=policy_version(tool_ctx.config_root),
         created_at=now,
         expires_at=now + timedelta(days=policy.proposals.expire_after_days),
+        workspace=tool_ctx.ledger.chain,
     )
     tool_ctx.ledger.append(
         PROPOSAL_DRAFTED if status == "pending" else PROPOSAL_REFUSED,

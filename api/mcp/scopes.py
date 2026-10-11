@@ -54,6 +54,8 @@ class McpCaller:
     """sha256 of the bearer token: the rate-limit key. The token itself is never kept."""
     client_id: str
     """`mcp:<the name the client declared>`, cleaned; `mcp:unnamed` when it declared none."""
+    workspace: str | None = None
+    """M141: the client workspace the sign-in is bound to (its data, its ledger chain); None on the demo server."""
 
 
 def scopes_for(principal: Principal) -> frozenset[str]:

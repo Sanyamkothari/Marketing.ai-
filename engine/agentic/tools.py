@@ -9,6 +9,7 @@
 | `audit_campaign` | read | the campaign's stored `audit.json` and report (`engine.measurement.audit`, M103) | `GET /campaigns/{campaign_id}` (Viewer) |
 | `get_proof_pack` | read | `engine.pilot.proof.build_proof` (M104) | `GET /pilot/proof/{campaign_id}` (Viewer) |
 | `evaluate_policy` | read | the run's stored `ope_report.json` and `risk_comparison.json` (`engine.uplift.ope`, M96, M137) | `GET /runs/{run_id}/risk-comparison` (Viewer) |
+| `check_before_contact` | read | the run's stored `compliance_decisions.json` (`engine.compliance.handoff`, M134): counts allowed and withheld by reason, never a row (M141) | `GET /runs/{run_id}/artefacts/{name}` (Viewer; audited as that route is) |
 | `draft_test_plan` | propose | `engine.measurement.plan.freeze_plan` in dry mode (`engine.agentic.proposals`) | `POST /campaigns/{campaign_id}/plan` (Analyst) |
 
 **Compute once.** A read tool reads what the product already computed and stored; it never measures,
@@ -591,6 +592,116 @@ EVALUATE_POLICY: Final[AgentTool[RunInput, EvaluatePolicyOut]] = AgentTool(
 
 
 # ---------------------------------------------------------------------------
+# check_before_contact (Plan K M141, DEC-1408 (f))
+# ---------------------------------------------------------------------------
+class GateCounts(StrictBase):
+    """What the pre-send compliance gate did to a run's planned list, in customers (never rows of a file)."""
+
+    customers: int = Field(description="Customers the list would have contacted before the gate.")
+    sent_rows: int = Field(description="Of those, customers the list sends (on a channel the gate allowed).")
+    withheld_rows: int = Field(
+        description="Customers the gate took off the list: no planned channel allowed."
+    )
+    rerouted_rows: int = Field(description="Customers sent on another planned channel than the list chose.")
+    rows_without_consent_evidence: int = Field(
+        description="Decision rows the run's contactability file did not cover (their consent reference is null)."
+    )
+
+
+class CheckBeforeContactOut(StrictBase):
+    run_id: str
+    checked: bool = Field(description="Whether the gate decided the run's current list.")
+    reason: str | None = Field(description="Why not, when it did not; null otherwise.")
+    use_case_id: str | None = None
+    purpose: str | None = Field(default=None, description="The consent purpose the gate decided for.")
+    counts: GateCounts | None = Field(
+        default=None, description="Customers allowed, withheld and moved; null when not checked or withheld."
+    )
+    withheld: dict[str, int] = Field(
+        default_factory=dict,
+        description=(
+            "Customers withheld per reason code (COMPLIANCE_*). A customer counts under each reason that closed "
+            "one of their channels, so the counts can add up to more than withheld_rows."
+        ),
+    )
+    rule_version: str | None = Field(default=None, description="sha256 of the rules the gate applied.")
+    decisions_sha256: str | None = Field(
+        default=None, description="sha256 of the gate's decision file, as signed on the ledger."
+    )
+    gate_evidence_id: str | None = Field(
+        default=None, description="The evidence id of the gate's own signed ledger entry."
+    )
+    gate_ledger_entry_hash: str | None = Field(
+        default=None, description="That entry's entry_hash on the deployment's chain."
+    )
+
+
+def _check_before_contact(given: RunInput, ctx: ToolContext) -> CheckBeforeContactOut:
+    from engine.compliance.handoff import COMPLIANCE_SUMMARY_FILENAME, ComplianceDecisionsSummary
+    from engine.decide.treat_list import TREAT_LIST_SUMMARY_FILENAME
+    from engine.storage import run_key
+
+    _run_exists(ctx, given.run_id)
+
+    def unchecked(reason: str) -> CheckBeforeContactOut:
+        return CheckBeforeContactOut(run_id=given.run_id, checked=False, reason=reason)
+
+    listed = _stored_json(ctx, run_key(given.run_id, TREAT_LIST_SUMMARY_FILENAME))
+    if listed is None:
+        return unchecked("No list has been built for this run yet: it is built with the run's treat list.")
+    signed = listed.get("compliance_decisions_sha256")
+    if not isinstance(signed, str):
+        return unchecked(
+            "The run's list was built with the pre-send compliance gate off (compliance.gate.enabled), so no "
+            "contact was checked before it."
+        )
+    summary = _stored_model(
+        ctx, run_key(given.run_id, COMPLIANCE_SUMMARY_FILENAME), ComplianceDecisionsSummary
+    )
+    if summary is None or summary.decisions_sha256 != signed:
+        return unchecked(
+            "The gate's decision record is not the one the run's current list was built with; build the list "
+            "again to check it."
+        )
+    return CheckBeforeContactOut(
+        run_id=given.run_id,
+        checked=True,
+        reason=None,
+        use_case_id=summary.use_case_id,
+        purpose=summary.purpose,
+        counts=GateCounts(
+            customers=summary.customers,
+            sent_rows=summary.customers - summary.withheld_rows,
+            withheld_rows=summary.withheld_rows,
+            rerouted_rows=summary.rerouted_rows,
+            rows_without_consent_evidence=summary.rows_without_consent_evidence,
+        ),
+        withheld=dict(summary.withheld),
+        rule_version=summary.rule_version,
+        decisions_sha256=summary.decisions_sha256,
+        gate_evidence_id=summary.evidence_id,
+        gate_ledger_entry_hash=summary.ledger_entry_hash,
+    )
+
+
+CHECK_BEFORE_CONTACT: Final[AgentTool[RunInput, CheckBeforeContactOut]] = AgentTool(
+    name="check_before_contact",
+    kind=ToolKind.READ,
+    description=(
+        "Before a planned list is sent: how many customers the pre-send compliance gate allowed, moved to another "
+        "channel or withheld, by reason code (consent, WhatsApp opt-in, DLT template, links). Counts only."
+    ),
+    input_model=RunInput,
+    output_model=CheckBeforeContactOut,
+    route_policy=_ARTEFACT_POLICY,
+    mirrors=_ARTEFACT_ROUTE,
+    evidence_label=lambda _out: "Descriptive",
+    run=_check_before_contact,
+    artefact_refs=lambda given, _out: (given.run_id,),
+)
+
+
+# ---------------------------------------------------------------------------
 # draft_test_plan (propose)
 # ---------------------------------------------------------------------------
 class DraftOut(StrictBase):
@@ -642,12 +753,13 @@ ALL_TOOLS: Final[tuple[AgentTool[Any, Any], ...]] = (
     AUDIT_CAMPAIGN,
     GET_PROOF_PACK,
     EVALUATE_POLICY,
+    CHECK_BEFORE_CONTACT,
     DRAFT_TEST_PLAN,
 )
 
 
 def default_registry() -> ToolRegistry:
-    """A registry holding every M132 tool."""
+    """A registry holding every agent-safe tool (M132's, and M141's `check_before_contact`)."""
     registry = ToolRegistry()
     for tool in ALL_TOOLS:
         registry.register(tool)

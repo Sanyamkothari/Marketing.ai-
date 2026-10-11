@@ -199,7 +199,8 @@ Another company's agent - Claude, ChatGPT, an in-house agent - can connect to Ma
 Context Protocol and ask it what the product already knows: how big a test needs to be, who may be contacted,
 what a list is worth, what a campaign measured, how an outside campaign audits, its Value Proof Pack. It can
 also **draft** a test plan, which then waits for a person to approve it in the product. In M133 it answers
-about the **demo library only** (Hillstrom and generated data); client data waits for M141.
+about the **demo library only** (Hillstrom and generated data); since M141 a deployment can serve its clients'
+own data instead, one workspace per client (§8.7).
 
 ### 8.2 Connect a client
 
@@ -221,8 +222,9 @@ The server speaks the stateless 2026-07-28 revision (one self-contained POST per
 sits behind the existing load balancer with no sticky sessions; clients of the 2025 revisions are served
 statelessly too. The endpoint takes POST only: GET (an event stream) and DELETE (ending a session) have no use
 on a stateless server and are answered `405` before sign-in. The token is the product's own session, checked by the deployment's identity provider: the
-endpoint is a resource server and issues nothing (OAuth client registration and audience-bound tokens come with
-M141).
+endpoint is a resource server and issues nothing. On a client-data server (§8.7) the token is bound to the
+one client workspace its person belongs to; OAuth client registration and audience-bound tokens wait for the
+deployment's identity provider (Plan C's decision P5).
 
 ### 8.3 What it exposes
 
@@ -292,7 +294,7 @@ in the session's concurrency budget until it ends.
   its bytes came from: the product keeps no other provenance for an upload, and the library's derived files
   (the assignment and outcomes files `library.audit` builds) have no recorded hash. Anyone who may upload could
   file client data under `hillstrom-email`. `mcp.workspace: demo` declares the whole deployment a demo one: a
-  deployment that holds client data keeps `mcp.enabled` off until M141 scopes the server per client.
+  deployment that holds client data uses `mcp.workspace: clients` instead (§8.7).
 * The text gate's instruction screen is a pattern list: wide on purpose, but a pattern list. What protects a
   client's model is that results are typed aggregates first; the screen is the second line.
 * `POST /campaigns/audit` with an assignment column whose name holds a JSON special character (`:`, `"`, `[`,
@@ -304,6 +306,103 @@ surface) and `tests/integration/mcp/` (a scripted client gets Hillstrom's number
 the tool-list walk, sign-in and scopes, POST only, the malicious proposal, demo-only on a client's measured
 campaign, a small offer refused, rate limits, audit (also of a 2025 client), injection canaries, the differencing
 attack).
+
+### 8.7 On client data (M141, DEC-1408)
+
+**In plain words.** A client's own agent can check its work against what Marketing AI measured for that client:
+its campaigns, its lists, its Value Proof Packs, what the compliance gate allowed before a list went out. One
+deployment can serve several clients; each client's agent sees its own workspace and nothing else, gets every
+figure with its evidence label and a receipt it keeps, and can later check that the record behind those receipts
+was not rewritten. Still nothing over MCP writes, sends or approves.
+
+**Set it up** (`configs/agentic/mcp.yaml`): `mcp.workspace: clients`, and one entry per client under
+`mcp.workspaces`:
+
+```yaml
+mcp:
+  enabled: true
+  workspace: clients
+  workspaces:
+    - id: acme                  # names the workspace and its ledger chain
+      client_id: c_acme_1       # the onboarded client whose runs (and campaigns made from them) it holds
+      members: [u-0123456789abcdef, u-fedcba9876543210]   # user ids (GET /admin/users)
+    - id: house
+      unattributed: true        # the data no client is recorded on: uploads, upload runs, audited campaigns
+      members: [u-1111222233334444]
+```
+
+A person is a member of one workspace at most, so every bearer token of theirs reaches exactly that workspace;
+a signed-in person in none is refused at `/mcp` with `403 MCP_WORKSPACE_DENIED`. At most one workspace claims the
+unattributed data (on a deployment serving one client, that client's). A file that breaks any of this is refused
+when it loads (`CONFIG_INVALID`).
+
+**What belongs to a workspace** (`api/mcp/workspace.py`). A run: by the client its `run.json` records (every run
+made from an onboarded client's dataset records it), or, with no client recorded, the workspace that claims the
+unattributed data. A campaign: where all its scoring runs belong; one with no scoring run (an audited outside
+campaign, the programme) to the unattributed workspace, since the product records no client on an upload.
+Anything else is `MCP_WORKSPACE_DENIED`, worded the same for "not yours" and "not there", never repeating the
+id. A request naming another workspace in `_meta` is refused the same way. Small groups are refused or withheld
+exactly as on the demo server (§8.4).
+
+**Aggregates only.** No tool reads or returns a row; the audited row-level downloads stay HTTP routes for a
+person, and a Viewer's token reads aggregates and cannot propose.
+
+**`check_before_contact`** (read, Viewer; M141): before a planned list is sent, what the pre-send compliance gate
+(§9) did to it - customers the list would contact, sent, withheld and moved to another channel, withheld per
+reason code, the rule version, the decision file's sha256 and the gate's own signed ledger entry - read from
+`compliance_decisions.json`, never from the row-level file. A list built with the gate off, a run with no list
+yet, or a record that is not the one the current list was built with is answered `checked: false` with the
+reason. The plan named it `check_before_send`; it is `check_before_contact` because no tool name may carry a verb
+of action (`send`, `approve`, ...: M133's surface test), so no client's model can read it as one that sends.
+
+**Receipts and one chain per workspace** (`engine/agentic/ledger.py`, `engine/agentic/receipts.py`). Each
+workspace keeps its own hash-chained ledger (`agentic_workspace_log`, Alembic `0010`): its own `seq` from 1, its
+own genesis, its workspace id inside every hash. Every MCP answer carries `_meta` `marketing-ai/receipt`:
+
+```json
+{"ledger_chain": "acme", "ledger_seq": 42, "ledger_checkpoint": "<entry_hash>",
+ "holdout_salt_fingerprint": "<sha256>" , "holdout_salt_note": null, "evidence_id": "ev_..."}
+```
+
+- the evidence label entry the answer was recorded under, and the holdout salt's fingerprint the platform records
+(null, with a note, when no persistent holdout has used a salt). A proposal drafted over MCP is decided in the
+product on the same chain, and the approval receipt (`POST /agentic/proposals/{id}/approve`) carries the same
+fields. The client keeps them; at any time:
+
+```bash
+python -m engine.agentic.ledger verify --against receipts.json        # a JSON list, or {"receipts": [...]}
+python -m engine.agentic.ledger verify --workspace acme               # the chain alone
+```
+
+walks the workspace's chain (every hash and signature) and looks every receipt up in it. Whoever holds the
+database and the signing key could rewrite history and redo every hash and signature, and plain verification
+would pass - but the receipts the client already holds no longer match: `RECEIPT_MISMATCH`, exit 1.
+
+**Tasks for long audits** (`api/mcp/tasks.py`). A client that supports the tasks extension
+(`io.modelcontextprotocol/tasks`, declared per request) gets a task handle for `mcp.tasks.tools`
+(`audit_campaign`, `get_proof_pack`), polls `tasks/get`, reads `tasks/result` - the same answer a synchronous call
+gives - and may `tasks/cancel`. The record lives in the artefact store, so any API process answers for it; it
+answers only the session that started it (`MCP_TASK_NOT_FOUND` to any other), is kept `mcp.tasks.ttl_seconds`,
+fails at `call_timeout_seconds` (`MCP_TIMEOUT`), and holds its place in the session's concurrency budget until
+its work ends. Other clients get the synchronous answer, as before. `api/mcp/task_client.py` is the reference
+client side.
+
+**Limits.**
+
+* The binding is per person, from the configuration file: a person who works for two clients needs two
+  sign-ins. Tokens are the product's sessions; audience-bound OAuth tokens wait for the identity provider.
+* An upload records no client, so on a deployment serving several clients an audited outside campaign belongs
+  only to the workspace that claims unattributed data. Recording a client on an upload is Phase 2's (raised as a
+  cross-branch request).
+* The compliance gate's own signed entry (M134) stays on the deployment's chain: the gate runs inside a list
+  build, not for an MCP caller. `check_before_contact` names it by evidence id and `entry_hash`.
+* A task runs on a worker thread of the API process that accepted it, not on the scheduler's workers; if that
+  process stops, the task fails at its deadline. Rate limits are still counted per API process.
+
+Tests: `tests/unit/mcp/test_workspaces.py`, `tests/unit/mcp/test_tasks.py`, `tests/unit/agentic/test_workspace_chains.py`,
+`tests/integration/mcp/test_client_workspaces.py` (an onboarded client's measured campaign through the product's
+API: its agent gets the Proof Pack's figures exactly; workspaces; a Viewer; tasks; receipts against a rewritten
+history; the injection canary; the switch off) and `tests/integration/compliance/test_check_before_contact.py`.
 
 ## 9. The pre-send compliance gate (`engine/compliance/`; M134)
 
@@ -409,7 +508,7 @@ each one that is done. M131, M135 and M137 were built ahead of the rest of Plan 
 | M138 An early harm alarm | pending | | |
 | M139 The campaign planner | pending | | |
 | M140 Message variants as measured arms | pending | | |
-| M141 The verifier on client data | pending | | |
+| M141 The verifier on client data | done | DEC-1408 | this document's §8.7 |
 | M142 Setup help for integration sources | pending | | |
 | M143 Tabular foundation model challenger | pending | | |
 | M144 Save-desk card, as a randomised pilot | pending | | |
@@ -425,4 +524,4 @@ refused (`CONFIG_INVALID`), never ignored. `tests/unit/agentic/test_flags.py` pi
 |---|---|---|
 | `agentic.enabled` | M132 | no `/agentic` route, no table created and no file written by the app (§1) |
 | `compliance.gate.enabled` | M134 | no pre-send gate (§9); read from `configs/compliance/compliance.yaml` |
-| `mcp.enabled` | M133 | no MCP server (§8); lives in `configs/agentic/mcp.yaml` |
+| `mcp.enabled` | M133 | no MCP server (§8); lives in `configs/agentic/mcp.yaml` (M141's client workspaces too, §8.7) |

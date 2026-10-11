@@ -39,13 +39,19 @@ def agentic_context(
     campaigns: CampaignStore | None = None,
     actor: str | None = None,
     clock: Callable[[], datetime] | None = None,
+    workspace: str | None = None,
 ) -> ToolContext:
-    """A `ToolContext` with the ledger attached; refuses with `AGENTIC_DISABLED` while the switch is off."""
+    """A `ToolContext` with the ledger attached; refuses with `AGENTIC_DISABLED` while the switch is off.
+
+    `workspace` puts every entry the context writes on that client workspace's chain (Plan K M141, the MCP
+    server on client data); None, the default, is the deployment's chain."""
     from engine.measurement.campaign import SqlCampaignStore
     from engine.utils.time import utc_now
 
     require_enabled(config_root)
-    ledger = DecisionLedger(platform_engine, signer=signer, policy_version=policy_version(config_root))
+    ledger = DecisionLedger(
+        platform_engine, signer=signer, policy_version=policy_version(config_root), chain=workspace
+    )
     return ToolContext(
         storage=storage,
         principal=principal,

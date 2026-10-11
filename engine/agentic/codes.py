@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from typing import Final
 
-__all__ = ["AGENTIC_CODES", "COMPLIANCE_CODES", "MCP_CODES", "PLAN_K_CODES"]
+__all__ = ["AGENTIC_CODES", "CLIENT_MCP_CODES", "COMPLIANCE_CODES", "MCP_CODES", "PLAN_K_CODES"]
 
 AGENTIC_CODES: Final[frozenset[str]] = frozenset(
     {
@@ -86,5 +86,19 @@ COMPLIANCE_CODES: Final[frozenset[str]] = frozenset(
 )
 """M134's codes (DEC-1405), joined into `PLAN_K_CODES` below."""
 
-PLAN_K_CODES: Final[frozenset[str]] = frozenset() | AGENTIC_CODES | MCP_CODES | COMPLIANCE_CODES
+CLIENT_MCP_CODES: Final[frozenset[str]] = frozenset(
+    {
+        # M141 (DEC-1408): the verifier on client data (`api.mcp.workspace`, `api.mcp.tasks`,
+        # `engine.agentic.receipts`).
+        "MCP_WORKSPACE_DENIED",  # a sign-in bound to no workspace, or data outside the caller's workspace
+        "RECEIPT_MISMATCH",  # a receipt the client kept is not in the chain any more: the history was rewritten
+        "MCP_TASK_NOT_FOUND",  # tasks/get, tasks/result or tasks/cancel on a task this session did not start
+        "MCP_TASK_CANCELLED",  # the task was cancelled (its result discarded), or it ended before the cancel
+    }
+)
+"""M141's codes (DEC-1408), joined into `PLAN_K_CODES` below."""
+
+PLAN_K_CODES: Final[frozenset[str]] = (
+    frozenset() | AGENTIC_CODES | MCP_CODES | COMPLIANCE_CODES | CLIENT_MCP_CODES
+)
 """Empty at M130; each Plan K milestone adds the codes it raises."""

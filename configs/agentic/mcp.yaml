@@ -8,8 +8,10 @@
 mcp:
   enabled: false
 
-  # M133 serves the demo library only. Any other workspace is refused with MCP_DEMO_ONLY until M141 adds
-  # per-client scoping; "demo" is the only value this milestone accepts.
+  # demo (M133): the demo library only; anything else asked about is refused with MCP_DEMO_ONLY.
+  # clients (M141, DEC-1408): client data, one workspace per client (`workspaces` below); every sign-in reaches
+  # exactly one workspace and anything outside it is refused with MCP_WORKSPACE_DENIED. Any other value is
+  # refused with MCP_DEMO_ONLY.
   workspace: demo
 
   # What counts as demo data: a run or upload made for one of these use cases (the public datasets of
@@ -27,6 +29,25 @@ mcp:
     calls_per_minute: 60
     concurrent_calls: 2
 
-  # The 2026-07-28 Tasks extension is not in the pinned SDK (mcp 2.3.0), so a long tool (audit_campaign,
-  # get_proof_pack) runs synchronously and is refused with MCP_TIMEOUT after this many seconds.
+  # A call that runs synchronously is refused with MCP_TIMEOUT after this many seconds; a task fails after it.
   call_timeout_seconds: 120
+
+  # M141: the client workspaces of a `workspace: clients` server. Each names the onboarded client whose data it
+  # holds (`client_id`: its runs, and the campaigns made from them) or claims the data no client is recorded on
+  # (`unattributed: true`: uploads, runs made from uploads, audited campaigns; at most one workspace, the
+  # single-client deployment's), and lists the people bound to it by user id (`members`; GET /admin/users shows
+  # them). A person may be in one workspace only, so every token of theirs reaches that workspace alone. Each
+  # workspace keeps its own ledger chain: `python -m engine.agentic.ledger verify --workspace <id>`.
+  #   workspaces:
+  #     - id: acme
+  #       client_id: c_acme_1
+  #       members: [u-0123456789abcdef]
+  workspaces: []
+
+  # M141: long tools run as MCP tasks for a client that supports the tasks extension (io.modelcontextprotocol/
+  # tasks); other clients get the synchronous answer, refused with MCP_TIMEOUT after call_timeout_seconds. A
+  # finished task is kept ttl_seconds; poll_interval_ms is the polling interval the server suggests.
+  tasks:
+    tools: [audit_campaign, get_proof_pack]
+    ttl_seconds: 3600
+    poll_interval_ms: 1000

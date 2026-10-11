@@ -7,7 +7,7 @@ exist and the API is byte-identical to Plan J's (the `PLAN-K` hook in `api/main.
 |---|---|---|
 | `GET /agentic/proposals` | Viewer | Every proposal, newest first; `status` narrows the list. |
 | `GET /agentic/proposals/{proposal_id}` | Viewer | One proposal: its payload, the evidence it cites and the policy's decisions. |
-| `POST /agentic/proposals/{proposal_id}/approve` | Approver, audited | Re-checks the policy with the facts as they are now, then executes it through the route function the product already has (a test plan: `api.routes.campaigns.register_plan`). Answers the receipt with the ledger checkpoint. |
+| `POST /agentic/proposals/{proposal_id}/approve` | Approver, audited | Re-checks the policy with the facts as they are now, then executes it through the route function the product already has (a test plan: `api.routes.campaigns.register_plan`). Answers the receipt with the ledger checkpoint, its seq and chain, and the holdout salt's fingerprint (M141). |
 | `POST /agentic/proposals/{proposal_id}/reject` | Approver, audited | Rejects it. |
 
 There is no route that drafts or approves on an agent's behalf: an agent drafts through the tool registry
@@ -92,7 +92,12 @@ def _http(exc: AgenticError) -> HTTPException:
 
 
 def _context(
-    request: Request, storage: Storage, root: Any, settings: Settings, principal: Principal
+    request: Request,
+    storage: Storage,
+    root: Any,
+    settings: Settings,
+    principal: Principal,
+    workspace: str | None = None,
 ) -> ToolContext:
     from api.routes.campaigns import get_campaign_store
 
@@ -106,6 +111,7 @@ def _context(
             signer=signer_for_data_dir(data_dir),
             settings=settings,
             campaigns=get_campaign_store(request),
+            workspace=workspace,
         )
     except AgenticError as exc:
         raise _http(exc) from exc
@@ -176,7 +182,14 @@ def _decide(
     settings: Settings,
     principal: Principal,
 ) -> ProposalReceipt:
-    ctx = _context(request, storage, root, settings, principal)
+    # Plan K M141 (DEC-1408 (c)): a proposal an MCP client drafted in its workspace is decided on that
+    # workspace's chain. The stored file names the chain; a file edited to name another one finds no draft there
+    # and is refused as PROPOSAL_TAMPERED (`ledger_mismatch`), never decided on the wrong chain.
+    try:
+        workspace = ProposalStore(storage).get(proposal_id).workspace
+    except AgenticError:
+        workspace = None  # decide_proposal answers PROPOSAL_NOT_FOUND itself
+    ctx = _context(request, storage, root, settings, principal, workspace)
     try:
         receipt = decide_proposal(
             proposal_id,

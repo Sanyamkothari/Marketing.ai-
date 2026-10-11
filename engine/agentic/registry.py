@@ -34,7 +34,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final, Generic, Literal, TypeVar
 
-from pydantic import AwareDatetime, BaseModel, Field, ValidationError
+from pydantic import AwareDatetime, BaseModel, Field, PrivateAttr, ValidationError
 
 from engine.access.roles import Principal, Role
 from engine.agentic.canonical import canonical_bytes, digest, sha256_hex
@@ -45,7 +45,7 @@ if TYPE_CHECKING:
     from sqlalchemy.engine import Engine
 
     from api.access_policy import RoutePolicy
-    from engine.agentic.ledger import DecisionLedger
+    from engine.agentic.ledger import DecisionLedger, LedgerEntry
     from engine.measurement.campaign import CampaignStore
     from engine.settings import Settings
     from engine.storage import Storage
@@ -116,6 +116,14 @@ class ToolResult(StrictBase):
     label: EvidenceLabel
     computed_at: AwareDatetime = Field(description="When it was computed; not part of evidence_id.")
     artefact_refs: tuple[str, ...] = Field(description="Run ids, campaign ids and plan hashes it rests on.")
+    _ledger_entry: Any = PrivateAttr(default=None)
+
+    @property
+    def ledger_entry(self) -> LedgerEntry | None:
+        """The `evidence.label` entry this result was recorded under (Plan K M141: every MCP answer names it);
+        None when the context had no ledger. Not a field: the result's JSON is what it was."""
+        entry: LedgerEntry | None = self._ledger_entry
+        return entry
 
 
 def evidence_id_for(tool: str, given: Mapping[str, Any], output: Mapping[str, Any]) -> str:
@@ -232,7 +240,7 @@ class ToolRegistry:
         if ctx.ledger is not None:
             from engine.agentic.ledger import EVIDENCE_LABEL
 
-            ctx.ledger.append(
+            result._ledger_entry = ctx.ledger.append(
                 EVIDENCE_LABEL,
                 ctx.actor,
                 {

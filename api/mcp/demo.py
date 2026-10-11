@@ -55,6 +55,7 @@ __all__ = [
     "guard",
     "is_demo_run",
     "is_demo_upload",
+    "refuse_small_campaign",
 ]
 
 WORKSPACE_META_KEY: Final[str] = "marketing-ai/workspace"
@@ -183,12 +184,17 @@ def _check_campaign(ctx: ToolContext, campaign_id: str, settings: McpSettings, *
         raise _refuse("campaign")
     if not all(is_demo_upload(ctx.storage, upload_id, settings) for upload_id in uploads):
         raise _refuse("campaign")
-    if reads and any(
-        _small(count, settings.min_group_rows) for count in _group_counts(ctx.storage, campaign)
-    ):
+    if reads:
+        refuse_small_campaign(ctx.storage, campaign, settings.min_group_rows)
+
+
+def refuse_small_campaign(storage: Storage, campaign: Any, minimum: int) -> None:
+    """`MCP_GROUP_TOO_SMALL` when any group the campaign's figures describe holds 1 to `minimum - 1` customers
+    (see the module docstring). The client workspaces of M141 apply the same check (`api.mcp.workspace`)."""
+    if any(_small(count, minimum) for count in _group_counts(storage, campaign)):
         raise AgenticError(
             "MCP_GROUP_TOO_SMALL",
-            f"An arm of this campaign holds fewer than {settings.min_group_rows} customers, so its figures "
+            f"An arm of this campaign holds fewer than {minimum} customers, so its figures "
             "would describe a group that small; they are not served over MCP.",
             status=403,
         )

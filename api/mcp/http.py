@@ -14,7 +14,10 @@ per POST, and clients of the 2025 revisions are served statelessly too.
   as the local operator, even on a laptop;
 * no valid bearer session: **401 `AUTH_REQUIRED`** with `WWW-Authenticate: Bearer`;
 * otherwise the principal's roles give its scopes (`api.mcp.scopes`); every signed-in person holds
-  `marketing-ai:read`.
+  `marketing-ai:read`;
+* on a client-data server (`mcp.workspace: clients`, Plan K M141) the person must be a member of a client
+  workspace, which binds every token of theirs to it: otherwise **403 `MCP_WORKSPACE_DENIED`**
+  (`api.mcp.workspace`).
 
 The bearer token is the product's own session (`POST /auth/login`), resolved by the deployment's identity
 provider exactly as `api.access.enforce_access` resolves it; the endpoint is a resource server and issues
@@ -77,6 +80,7 @@ class _SignedIn:
     principal: Principal
     scopes: frozenset[str]
     token_key: str
+    workspace: str | None = None
 
 
 def _error(status: int, code: str, message: str, headers: dict[str, str] | None = None) -> JSONResponse:
@@ -110,6 +114,7 @@ def caller_of(ctx: ServerRequestContext[Any, Any]) -> McpCaller:
         scopes=signed_in.scopes,
         token_key=signed_in.token_key,
         client_id=client_label(declared),
+        workspace=signed_in.workspace,
     )
 
 
@@ -128,6 +133,7 @@ class McpEndpoint:
         from api.mcp.config import load_mcp_config
         from api.mcp.limits import RateLimiter
         from api.mcp.server import Verifier
+        from api.mcp.tasks import TaskStore
         from api.routes.campaigns import get_campaign_store
         from engine.agentic.ledger import signer_for_data_dir
         from engine.agentic.service import agentic_context
@@ -148,6 +154,7 @@ class McpEndpoint:
                 settings=app_settings,
                 campaigns=get_campaign_store(request),
                 actor=f"agent:{caller.client_id}",
+                workspace=caller.workspace,
             )
 
         return Verifier(
@@ -159,6 +166,7 @@ class McpEndpoint:
                 concurrent_calls=settings.rate_limit.concurrent_calls,
             ),
             audit_log=get_audit_log(request),
+            tasks=TaskStore(get_storage(request)),
         )
 
     @asynccontextmanager
@@ -199,7 +207,18 @@ class McpEndpoint:
         scopes = scopes_for(principal)
         if SCOPE_READ not in scopes:
             return _error(403, "MCP_SCOPE_DENIED", "This sign-in holds no scope on the MCP server.")
-        return _SignedIn(principal=principal, scopes=scopes, token_key=token_key(token))
+        workspace: str | None = None
+        verifier = self.verifier
+        if verifier is not None and verifier.settings.serves_clients:
+            # Plan K M141: every token is bound to the one client workspace its person is a member of.
+            from api.mcp.workspace import workspace_for
+            from engine.agentic.errors import AgenticError
+
+            try:
+                workspace = workspace_for(verifier.settings, principal.user_id).id
+            except AgenticError as exc:
+                return _error(exc.status, exc.code, exc.message)
+        return _SignedIn(principal=principal, scopes=scopes, token_key=token_key(token), workspace=workspace)
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         from api.access import set_audit_context
