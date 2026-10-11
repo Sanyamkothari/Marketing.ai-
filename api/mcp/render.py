@@ -11,6 +11,8 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from typing import Any, Final
 
+from engine.pilot.proof import FigureFormat, format_value
+
 __all__ = ["render", "render_error"]
 
 _LABELS: Final[dict[str, str]] = {
@@ -25,22 +27,20 @@ def _int(value: Any) -> str:
     return f"{value:,}" if isinstance(value, int) and not isinstance(value, bool) else "not known"
 
 
-def _points(value: Any) -> str:
-    return (
-        f"{value * 100:.2f}"
-        if isinstance(value, int | float) and not isinstance(value, bool)
-        else "not known"
-    )
+def _number(value: Any) -> int | float | None:
+    return value if isinstance(value, int | float) and not isinstance(value, bool) else None
 
 
-def _interval(block: Any) -> str:
-    if not isinstance(block, Mapping):
+def _difference(block: Any, fmt: FigureFormat) -> str:
+    """`<value> (95% interval <low> to <high>)` in the Value Proof Pack's own words for `fmt`."""
+    centre = _number(block.get("value")) if isinstance(block, Mapping) else None
+    if centre is None:
         return "not measured"
-    low, high = block.get("ci_low"), block.get("ci_high")
-    centre = _points(block.get("value"))
-    if isinstance(low, int | float) and isinstance(high, int | float):
-        return f"{centre} percentage points (95% interval {_points(low)} to {_points(high)})"
-    return f"{centre} percentage points"
+    value = format_value(fmt, centre)
+    low, high = _number(block.get("ci_low")), _number(block.get("ci_high"))
+    if low is not None and high is not None:
+        return f"{value} (95% interval {format_value(fmt, low)} to {format_value(fmt, high)})"
+    return value
 
 
 def _plan_test(out: Mapping[str, Any]) -> list[str]:
@@ -79,12 +79,40 @@ def _value(out: Mapping[str, Any]) -> list[str]:
     ]
 
 
+def _scope(report: Mapping[str, Any]) -> str:
+    """What the report's figures describe, as the Value Proof Pack decides it (`engine.pilot.proof._scope`):
+    one offer; every offer together (`offers_combined`); or, for several offers measured before
+    `offers_combined` existed, the first offer alone, said so."""
+    arms = report.get("arms")
+    if not isinstance(arms, list) or len(arms) < 2:
+        return "single"
+    return "combined" if isinstance(report.get("offers_combined"), Mapping) else "first_offer"
+
+
 def _report(report: Any) -> list[str]:
+    """The campaign's comparison in the Pack's scope: never the first offer's figures as the campaign's."""
     if not isinstance(report, Mapping):
         return ["No measurement is shown."]
+    scope = _scope(report)
+    figures: Mapping[str, Any] = report["offers_combined"] if scope == "combined" else report
+    whose = {
+        "single": "",
+        "combined": ", every offer together against the shared control group",
+        "first_offer": ", for the first offer alone (the report does not add the offers together)",
+    }[scope]
+    if report.get("outcome_kind") == "continuous":
+        if scope == "combined":
+            difference = "the difference in averages is given for each offer in the structured result"
+        else:
+            interval = report.get("adjusted_interval")
+            if not isinstance(interval, Mapping):
+                interval = report.get("mean_difference_ci")
+            difference = f"difference per contacted customer {_difference(interval, 'signed_amount')}"
+    else:
+        difference = f"difference {_difference(figures.get('absolute_lift'), 'points')}"
     return [
-        f"{_int(report.get('treated_rows'))} treated against {_int(report.get('control_rows'))} held back; "
-        f"difference {_interval(report.get('absolute_lift'))}.",
+        f"{_int(figures.get('treated_rows'))} treated against {_int(figures.get('control_rows'))} held back"
+        f"{whose}; {difference}.",
     ]
 
 

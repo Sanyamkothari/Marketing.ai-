@@ -4,8 +4,9 @@ audited through the product's own route (Plan K M133).
 Nothing is hand-written: the Hillstrom sample (`library/hillstrom-email/sample.csv`, the committed tenth of the
 public file) is split into the two files a client sends with `library.audit`'s own builders and posted as
 `POST /uploads` twice and `POST /campaigns/audit` (the conversion case: each e-mail against no e-mail), then
-the Value Proof Pack's value inputs are entered (`PUT /pilot/proof/{id}/value`). A second, non-demo campaign is
-the scenario world's (`tests/agentic`), measured on the win-back use case; it must stay out of reach.
+the Value Proof Pack's value inputs are entered (`PUT /pilot/proof/{id}/value`). A second campaign is a client's:
+the same two files posted the same way but for the retail win-back use case (`retail-win-back`, not a demo use
+case), so it is a real, measured, non-demo campaign that must stay out of reach (`MCP_DEMO_ONLY`).
 
 The configuration root is a copy of `configs/` with `agentic.enabled` and `mcp.enabled` on.
 """
@@ -32,6 +33,8 @@ from engine.settings import Settings
 PASSWORD: Final[str] = "correct horse battery staple"
 FAST_ITERATIONS: Final[int] = 300
 SAMPLE: Final[Path] = Path(__file__).resolve().parents[3] / "library" / "hillstrom-email" / "sample.csv"
+CLIENT_USE_CASE: Final[str] = "retail-win-back"
+"""A use case that is not in `mcp.demo_use_cases`: what it is filed under is a client's data."""
 POWER_BODY: Final[dict[str, Any]] = {
     "eligible": 6_400,
     "base_rate": 0.006,
@@ -73,6 +76,7 @@ class Demo:
     data_dir: Path
     users: dict[str, str] = field(default_factory=dict)
     campaign_id: str = ""
+    client_campaign_id: str = ""
     frame: pd.DataFrame | None = None
 
     def app(self, *, auth_mode: str = "local") -> FastAPI:
@@ -103,16 +107,23 @@ def upload(client: TestClient, headers: dict[str, str], frame: pd.DataFrame, nam
 
 
 def audit_hillstrom(
-    client: TestClient, headers: dict[str, str], frame: pd.DataFrame, *, name: str = "Hillstrom e-mail test"
+    client: TestClient,
+    headers: dict[str, str],
+    frame: pd.DataFrame,
+    *,
+    name: str = "Hillstrom e-mail test",
+    use_case: str | None = None,
 ) -> str:
-    """Hillstrom's conversion case through `POST /campaigns/audit`, as `library.audit.run_audit` posts it."""
+    """Hillstrom's conversion case through `POST /campaigns/audit`, as `library.audit.run_audit` posts it; the
+    two files are filed under `use_case` (Hillstrom's own when None)."""
     from library.audit import AUDIT_CASES, HILLSTROM_AUDIT, assignment_file, outcomes_file
 
     spec = HILLSTROM_AUDIT
     case = next(item for item in AUDIT_CASES if item.key == "conversion")
     assert case.treated is not None
-    outcomes_id = upload(client, headers, outcomes_file(frame, spec), "outcomes", spec.use_case)
-    assignment_id = upload(client, headers, assignment_file(frame, spec, case), "assignment", spec.use_case)
+    filed = use_case or spec.use_case
+    outcomes_id = upload(client, headers, outcomes_file(frame, spec), "outcomes", filed)
+    assignment_id = upload(client, headers, assignment_file(frame, spec, case), "assignment", filed)
     body = {
         "name": name,
         "primary_key": spec.journey.primary_key,
@@ -165,4 +176,11 @@ def demo(config_root: Path, tmp_path_factory: pytest.TempPathFactory) -> Demo:
     world.frame = pd.read_csv(SAMPLE)
     with TestClient(app) as client:
         world.campaign_id = audit_hillstrom(client, world.headers("analyst"), world.frame)
+        world.client_campaign_id = audit_hillstrom(
+            client,
+            world.headers("analyst"),
+            world.frame,
+            name="A client's e-mail test",
+            use_case=CLIENT_USE_CASE,
+        )
     return world

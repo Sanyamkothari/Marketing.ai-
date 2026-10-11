@@ -1,8 +1,9 @@
 """The `/mcp` endpoint: sign-in, then the SDK's streamable HTTP transport, stateless (Plan K M133, DEC-1404 (c)).
 
 `install_mcp` is the hook `api.main` registers. With `mcp.enabled` off it returns at once - nothing mounted, the
-SDK never imported. On, it adds one plain route, `/mcp` (POST; GET and DELETE answer as the transport does), and
-starts the SDK's `StreamableHTTPSessionManager` (`stateless=True`, JSON responses) with the app's lifespan, a
+SDK never imported. On, it adds one plain route, `/mcp`, **POST only** - the stateless server has no GET stream
+and no session to delete, so GET and DELETE are answered 405 by the router before sign-in or the transport runs,
+and no request can hold a connection open outside the per-session limits - and starts the SDK's `StreamableHTTPSessionManager` (`stateless=True`, JSON responses) with the app's lifespan, a
 fresh manager each time the app starts. Stateless means no session is kept between requests, so the server sits
 behind the existing load balancer with no sticky sessions; 2026-07-28 clients send one self-contained request
 per POST, and clients of the 2025 revisions are served statelessly too.
@@ -17,7 +18,14 @@ per POST, and clients of the 2025 revisions are served statelessly too.
 
 The bearer token is the product's own session (`POST /auth/login`), resolved by the deployment's identity
 provider exactly as `api.access.enforce_access` resolves it; the endpoint is a resource server and issues
-nothing. The audit middleware's event for the HTTP request names the principal and the action `mcp.request`;
+nothing.
+
+**The client id.** A call is audited, and recorded on the ledger, as `mcp:<name>`: the name the client declared
+in the request (`clientInfo`, which a 2026-07-28 client sends with every request). A client of the 2025
+revisions declares it once, in an `initialize` POST of its own that the stateless server does not keep, so its
+later calls are named from their HTTP `User-Agent` instead (`mcp:ua-<agent>`), never left unnamed.
+
+The audit middleware's event for the HTTP request names the principal and the action `mcp.request`;
 each tool call adds its own `mcp.tool_call` event (`api.mcp.server`).
 """
 
@@ -83,7 +91,8 @@ def _request_for(app: FastAPI) -> Request:
 
 
 def caller_of(ctx: ServerRequestContext[Any, Any]) -> McpCaller:
-    """Who an HTTP request is: the sign-in the endpoint resolved, and the name the client declared."""
+    """Who an HTTP request is: the sign-in the endpoint resolved, and the name the client declared (or, for a
+    client of the 2025 revisions, which declared it in an earlier request, its `User-Agent`)."""
     from api.mcp.scopes import McpCaller, client_label
 
     request = ctx.request
@@ -93,6 +102,9 @@ def caller_of(ctx: ServerRequestContext[Any, Any]) -> McpCaller:
         raise RuntimeError("an MCP request reached the server without a sign-in")
     params = ctx.session.client_params
     declared = params.client_info.name if params is not None and params.client_info is not None else None
+    if not declared and request is not None:
+        agent = getattr(request, "headers", {}).get("user-agent")
+        declared = f"ua-{agent}" if agent else None
     return McpCaller(
         principal=signed_in.principal,
         scopes=signed_in.scopes,
@@ -213,7 +225,7 @@ def install_mcp(app: FastAPI) -> None:
     """Mount `/mcp` and start its manager with the app (`api.main` calls it only when `mcp.enabled` is on)."""
     endpoint = McpEndpoint(app)
     app.state.mcp_endpoint = endpoint
-    app.router.routes.append(Route(MCP_PATH, endpoint=endpoint, methods=["GET", "POST", "DELETE"]))
+    app.router.routes.append(Route(MCP_PATH, endpoint=endpoint, methods=["POST"]))
     inner: Callable[[Any], AbstractAsyncContextManager[Any]] = app.router.lifespan_context
 
     @asynccontextmanager

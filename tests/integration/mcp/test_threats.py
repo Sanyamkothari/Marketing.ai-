@@ -22,7 +22,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from api.mcp.transport import AsgiTransport
-from engine.agentic.ledger import PROPOSAL_DRAFTED, PROPOSAL_REFUSED, DecisionLedger
+from engine.agentic.ledger import EVIDENCE_LABEL, PROPOSAL_DRAFTED, PROPOSAL_REFUSED, DecisionLedger
 from engine.agentic.registry import ToolKind
 from engine.agentic.tools import default_registry
 from engine.audit.events import AuditQuery
@@ -141,6 +141,18 @@ def test_only_demo_data_is_served(demo: Demo, tmp_path: Path) -> None:
     )
     assert _code(client_data) == "MCP_DEMO_ONLY"
     assert client_data.content[0].text == no_campaign.content[0].text
+    # A client's campaign, measured by the product on this very deployment (its files filed under a use case
+    # that is not demo data): refused by every tool that reads a campaign, with the same answer again.
+    client_calls = [
+        (name, {"campaign_id": demo.client_campaign_id})
+        for name in ("audit_campaign", "measure", "get_proof_pack")
+    ]
+    _, refused = anyio.run(_calls, demo.app(), demo.token("analyst"), client_calls)
+    assert [_code(result) for result in refused] == ["MCP_DEMO_ONLY"] * 3
+    assert {result.content[0].text for result in refused} == {no_campaign.content[0].text}
+    with TestClient(demo.app()) as client:
+        own = client.get(f"/campaigns/{demo.client_campaign_id}", headers=demo.headers("analyst"))
+    assert own.status_code == 200 and own.json()["report"] is not None, "the product itself serves it"
     # A request that names another workspace is refused too.
     elsewhere = partial(_calls, meta={"marketing-ai/workspace": "client-acme"})
     _, (other,) = anyio.run(elsewhere, demo.app(), demo.token("analyst"), [("plan_test", POWER_BODY)])
@@ -185,6 +197,44 @@ def test_a_client_of_the_2025_revision_is_served_statelessly_too(demo: Demo) -> 
             result = await client.call_tool("audit_campaign", {"campaign_id": demo.campaign_id})
             return client.protocol_version, result
 
+    log = SqlAuditLog(sqlite_engine(demo.data_dir / PLATFORM_DB_FILENAME))
+
+    def calls() -> dict[str, Any]:
+        events = log.query(AuditQuery(action="mcp.tool_call", limit=5000))
+        return {event.event_id: event for event in events if event.actor_id == demo.users["viewer"]}
+
+    before = calls()
     protocol, result = anyio.run(legacy)
     assert protocol != "2026-07-28" and result.is_error is False
     assert result.meta["marketing-ai/label"] == "Causal"
+    # Its clientInfo went with an initialize POST the stateless server did not keep: the call is still named,
+    # from the request's User-Agent, in the audit event and on the ledger.
+    (event,) = [event for key, event in calls().items() if key not in before]
+    client_id = event.details["client_id"]
+    assert client_id != "mcp:unnamed" and str(client_id).startswith("mcp:ua-"), client_id
+    labelled = {
+        entry.body["evidence_id"]: entry.actor for entry in _ledger(demo).entries(kind=EVIDENCE_LABEL)
+    }
+    assert labelled[result.meta["marketing-ai/evidence_id"]] == f"agent:{client_id}"
+
+
+def test_the_endpoint_takes_post_only(demo: Demo) -> None:
+    """A GET would open the transport's event stream and hold the connection outside every per-session limit;
+    the stateless server has no stream and no session to delete. Both are answered 405 by the router."""
+
+    async def probe() -> list[Any]:
+        import httpx2
+
+        app = demo.app()
+        headers = {"Authorization": f"Bearer {demo.token('viewer')}", "Accept": "text/event-stream"}
+        async with app.router.lifespan_context(app):
+            transport = httpx2.ASGITransport(app=app)
+            async with httpx2.AsyncClient(transport=transport, base_url="http://testserver") as http:
+                with anyio.fail_after(10):  # on a server that serves GET, the stream never answers
+                    return [
+                        await http.request(method, "/mcp", headers=headers) for method in ("GET", "DELETE")
+                    ]
+
+    for response in anyio.run(probe):
+        assert response.status_code == 405, response.text
+        assert response.headers["allow"] == "POST", "the router refused it, before sign-in or the transport"

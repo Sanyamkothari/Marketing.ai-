@@ -7,6 +7,9 @@ A propensity scoring run with a value column, written by the product's own actio
 it (Plan I's complementary rule). The test then asks the overlapping questions an attacker would - every band,
 then each band on its own - and checks that no answer, and no difference of two answers, isolates a group of
 fewer than 10 customers. The run is demo data because this deployment's `mcp.demo_use_cases` names its use case.
+
+A campaign whose totals are thousands but one of whose offers is 5 customers is refused by every tool that reads
+it: the Value Proof Pack prints that offer's figures as text, where suppression cannot reach.
 """
 
 from __future__ import annotations
@@ -15,17 +18,20 @@ from pathlib import Path
 from typing import Any
 
 import anyio
+import pandas as pd
 import pytest
+from fastapi.testclient import TestClient
 
 from api.mcp.transport import AsgiTransport
 from engine.access.roles import Role
 from engine.storage import LocalStorage
 from tests.fixtures.decide.treat_runs import USE_CASE, write_run
-from tests.integration.mcp.conftest import PASSWORD, mcp_config_root, signed_in_app
+from tests.integration.mcp.conftest import PASSWORD, Demo, audit_hillstrom, mcp_config_root, signed_in_app
 
 pytestmark = pytest.mark.integration
 
 RUN = "r_20261010_a1330001"
+SMALL_OFFER = 5
 
 
 async def _ask(app: Any, token: str, calls: list[dict[str, Any]]) -> list[Any]:
@@ -70,3 +76,29 @@ def test_overlapping_questions_cannot_isolate_a_small_band(config_root: Path, tm
     # A band that does not exist is answered like a withheld one: the answer says nothing about which it was.
     (missing,) = anyio.run(_ask, app, token, [{"run_id": RUN, "band": "Platinum"}])
     assert missing.structured_content["reason"] == high.structured_content["reason"]
+
+
+def test_a_campaign_with_a_small_offer_is_refused_by_every_tool_that_reads_it(demo: Demo) -> None:
+    """Hillstrom's two e-mails, with the women's e-mail cut to 5 customers: the campaign's totals are thousands,
+    but one offer is a small group. The Value Proof Pack prints that offer's figures as text (its offer table,
+    and, for a report that does not add the offers together, every whole-campaign line), which suppression
+    cannot reach; so `get_proof_pack` is refused, and `measure` and `audit_campaign` answer the same."""
+    assert demo.frame is not None
+    womens = demo.frame[demo.frame["segment"] == "Womens E-Mail"].head(SMALL_OFFER)
+    frame = pd.concat([demo.frame[demo.frame["segment"] != "Womens E-Mail"], womens], ignore_index=True)
+    with TestClient(demo.app()) as client:
+        campaign_id = audit_hillstrom(client, demo.headers("analyst"), frame, name="A small offer")
+        view = client.get(f"/campaigns/{campaign_id}", headers=demo.headers("analyst")).json()
+    arms = {arm["arm"]: arm["treated_rows"] for arm in view["report"]["arms"]}
+    assert arms["Womens E-Mail"] == SMALL_OFFER and view["campaign"]["counts"]["treated"] > 1_000
+
+    async def ask() -> list[Any]:
+        async with AsgiTransport(demo.app(), demo.token("analyst")).connect() as client:
+            return [
+                await client.call_tool(name, {"campaign_id": campaign_id})
+                for name in ("get_proof_pack", "measure", "audit_campaign")
+            ]
+
+    for result in anyio.run(ask):
+        assert result.is_error is True and result.structured_content is None
+        assert result.meta["marketing-ai/code"] == "MCP_GROUP_TOO_SMALL"

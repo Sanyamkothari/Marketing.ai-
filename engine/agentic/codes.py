@@ -47,7 +47,7 @@ AGENTIC_CODES: Final[frozenset[str]] = frozenset(
         # Existing engine codes the agent-safe core also raises, listed so the catalogue explains them:
         # neither was in `known_codes()` before (`engine.decide.treat_list`, `api.routes.pilot` and
         # `engine.config` raise them too, so their entries are written for every caller).
-        "CONFIG_INVALID",  # configs/agentic/agentic.yaml or policy.yaml missing or not valid
+        "CONFIG_INVALID",  # configs/agentic/agentic.yaml, policy.yaml or mcp.yaml missing or not valid
         "RUN_NOT_FOUND",  # a read tool asked about a run that does not exist
     }
 )
@@ -60,7 +60,7 @@ MCP_CODES: Final[frozenset[str]] = frozenset(
         "MCP_SCOPE_DENIED",  # the sign-in's roles do not map to the scope the tool needs (propose: Analyst)
         "MCP_RATE_LIMITED",  # over the per-session calls per minute, or too many calls running at once
         "MCP_TIMEOUT",  # a tool ran longer than mcp.call_timeout_seconds (no Tasks in the pinned SDK)
-        "MCP_GROUP_TOO_SMALL",  # a campaign with an arm of 1 to 9 customers: its figures are not served
+        "MCP_GROUP_TOO_SMALL",  # a campaign with a group of 1 to 9 (totals, an offer, a segment): not served
         "MCP_RESULT_WITHHELD",  # outside text sat in a result field that cannot be left out
         "MCP_NOT_STARTED",  # a request reached /mcp before the server had started, or after it stopped
         "MCP_TOOL_FAILED",  # an unexpected fault inside a tool: answered with a code, never its message

@@ -39,6 +39,14 @@ def _product(demo: Demo) -> dict[str, Any]:
     return {"power": power.json(), "campaign": campaign.json(), "proof": proof.json()}
 
 
+def _printed(figure: Any) -> str | None:
+    return None if figure is None else str(figure["text"])
+
+
+def _text(result: Any) -> str:
+    return "".join(block.text for block in result.content if block.type == "text")
+
+
 def test_a_scripted_client_gets_the_products_own_numbers_for_hillstrom(demo: Demo) -> None:
     calls = [
         ("plan_test", POWER_BODY),
@@ -78,6 +86,41 @@ def test_a_scripted_client_gets_the_products_own_numbers_for_hillstrom(demo: Dem
         pack["artefacts"],
     )
     assert [section["key"] for section in out["sections"]] == [section["key"] for section in pack["sections"]]
+    for served, drawn in zip(out["sections"], pack["sections"], strict=True):
+        assert (served["status"], served["reason"]) == (drawn["status"], drawn.get("reason"))
+        assert [
+            (line["label"], line["value"], line["low"], line["high"], line["missing"])
+            for line in served["lines"]
+        ] == [
+            (
+                line["label"],
+                _printed(line.get("value")),
+                _printed(line.get("low")),
+                _printed(line.get("high")),
+                line.get("missing"),
+            )
+            for line in drawn["lines"]
+        ], f"section {served['key']}: every printed figure is the Pack's"
+
+    # The text beside the audit and the measurement states the campaign's result in the Pack's scope: Hillstrom
+    # has two offers, so every offer together against the shared control - never the first offer's figures
+    # presented as the campaign's.
+    assert len(report["arms"]) == 2 and isinstance(report["offers_combined"], dict)
+    combined = report["offers_combined"]
+    incremental = next(section for section in pack["sections"] if section["key"] == "incremental")
+    difference = next(line for line in incremental["lines"] if line["label"] == "Difference")
+    said = (
+        f"difference {difference['value']['text']} "
+        f"(95% interval {difference['low']['text']} to {difference['high']['text']})"
+    )
+    for result in (audit, measure):
+        text = _text(result)
+        assert said in text, text
+        assert f"{combined['treated_rows']:,} treated against {combined['control_rows']:,} held back" in text
+        assert "every offer together" in text
+        assert (
+            f"{report['treated_rows']:,} treated" not in text
+        ), "the first offer's count is not the campaign's"
 
     # Every answer is evidence on the ledger, under the id the result carries, recorded as the MCP client.
     ledger = DecisionLedger(
@@ -91,7 +134,7 @@ def test_a_scripted_client_gets_the_products_own_numbers_for_hillstrom(demo: Dem
 def test_the_text_beside_a_result_is_ours_and_carries_no_string_from_the_data(demo: Demo) -> None:
     session = anyio.run(_session, demo, "viewer", [("audit_campaign", {"campaign_id": demo.campaign_id})])
     (audit,) = session["results"]
-    text = "".join(block.text for block in audit.content if block.type == "text")
+    text = _text(audit)
     assert audit.meta["marketing-ai/evidence_id"] in text and "Causal" in text
     for third_party in ("Mens E-Mail", "Womens E-Mail", "No E-Mail", "assignment.csv", "Hillstrom"):
         assert third_party not in text

@@ -219,7 +219,8 @@ about the **demo library only** (Hillstrom and generated data); client data wait
 
 The server speaks the stateless 2026-07-28 revision (one self-contained POST per request, no session id), so it
 sits behind the existing load balancer with no sticky sessions; clients of the 2025 revisions are served
-statelessly too. The token is the product's own session, checked by the deployment's identity provider: the
+statelessly too. The endpoint takes POST only: GET (an event stream) and DELETE (ending a session) have no use
+on a stateless server and are answered `405` before sign-in. The token is the product's own session, checked by the deployment's identity provider: the
 endpoint is a resource server and issues nothing (OAuth client registration and audience-bound tokens come with
 M141).
 
@@ -239,7 +240,10 @@ whose route needs an Approver or an Admin maps to no scope and is never exposed.
 approves.**
 
 A result is `structuredContent` that validates against the tool's output model, a short text written by our code
-from numbers only (never an arm's name, a column or a file name), and `_meta`: `marketing-ai/evidence_id` (the
+from numbers only (never an arm's name, a column or a file name), and `_meta`. The text states a campaign's
+result in the Value Proof Pack's scope and words: for a campaign of several offers, every offer together against
+the shared control (`offers_combined`), or, for a report that does not add them, the first offer alone, said
+so - never one offer's figures as the campaign's. Then `_meta` carries `marketing-ai/evidence_id` (the
 ledger's evidence id, recorded with the actor `agent:mcp:<client>`), `marketing-ai/label` (Causal, Estimated,
 Not proven, Descriptive) and, when something was withheld, `marketing-ai/withheld`. A refusal is a tool error
 with `marketing-ai/code`; a fault inside a tool is `MCP_TOOL_FAILED`, never its message.
@@ -257,7 +261,9 @@ with `marketing-ai/code`; a fault inside a tool is `MCP_TOOL_FAILED`, never its 
   reason codes, arms, segments, whole reports; `api.mcp.suppress`): a group of 1 to 9 shows no figure, and the
   next smallest joins it until what is withheld adds up to 10. A narrowed question (`value_segment` for one
   band) is answered from the suppressed full answer, so two overlapping questions cannot isolate a small band.
-  A campaign with an arm of 1 to 9 customers is not served at all (`MCP_GROUP_TOO_SMALL`).
+  A campaign with a group of 1 to 9 customers anywhere the Proof Pack reads one - its totals, an offer's arm of
+  the stored report, a group of `segment_effects.json` - is not served at all by any tool that reads it
+  (`MCP_GROUP_TOO_SMALL`): the Pack prints figures as text, which suppression cannot reach.
 * Pass on text from outside the product (`api.mcp.gate`): arguments are never echoed, instruction-shaped text
   (also written as `snake_case` or with look-alike letters) is withheld, personal data is masked with Plan G's
   scanners. The product's own sentences pass byte for byte.
@@ -265,7 +271,8 @@ with `marketing-ai/code`; a fault inside a tool is `MCP_TOOL_FAILED`, never its 
   (`MCP_RATE_LIMITED`, with `retry_after_seconds`).
 
 Every call writes one audit event (`mcp.tool_call`: the principal, `client_id` = `mcp:<the name the client
-declared>`, the tool, the outcome and its code, and the sha256 of what was served); the HTTP request is
+declared>` - for a client of the 2025 revisions, whose name went with an `initialize` the stateless server does
+not keep, `mcp:ua-<its User-Agent>` - the tool, the outcome and its code, and the sha256 of what was served); the HTTP request is
 audited as `mcp.request`; a read the product's route would audit is audited again by the registry (§3).
 
 ### 8.5 Long jobs
@@ -281,16 +288,22 @@ in the session's concurrency budget until it ends.
 * The rate limits are counted in the API process; several API processes divide the budget among them.
 * The client id is what the client declares about itself (cleaned to letters, digits, `.`, `_`, `-`): it names,
   it does not authenticate. The principal is the authenticated part.
+* What is demo data is decided by the use case a run or upload was filed under (or `synthetic`), not by where
+  its bytes came from: the product keeps no other provenance for an upload, and the library's derived files
+  (the assignment and outcomes files `library.audit` builds) have no recorded hash. Anyone who may upload could
+  file client data under `hillstrom-email`. `mcp.workspace: demo` declares the whole deployment a demo one: a
+  deployment that holds client data keeps `mcp.enabled` off until M141 scopes the server per client.
 * The text gate's instruction screen is a pattern list: wide on purpose, but a pattern list. What protects a
   client's model is that results are typed aggregates first; the screen is the second line.
 * `POST /campaigns/audit` with an assignment column whose name holds a JSON special character (`:`, `"`, `[`,
   ...) fails inside the randomness check (LightGBM refuses the feature name) - found while planting header
-  canaries; reported to Plan J.
+  canaries; raised with Plan J as a cross-branch request (M133's hand-off).
 
 Tests: `tests/unit/mcp/` (switch, scopes, guard, suppression and its coverage walk, gate, limits, the in-process
 surface) and `tests/integration/mcp/` (a scripted client gets Hillstrom's numbers from the product's own API,
-the tool-list walk, sign-in and scopes, the malicious proposal, demo-only, rate limits, audit, injection canaries,
-the differencing attack).
+the tool-list walk, sign-in and scopes, POST only, the malicious proposal, demo-only on a client's measured
+campaign, a small offer refused, rate limits, audit (also of a 2025 client), injection canaries, the differencing
+attack).
 
 ## 9. Milestones
 

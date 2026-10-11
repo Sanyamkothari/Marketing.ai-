@@ -18,9 +18,20 @@ The guard reads the parsed input, so it sees exactly the ids the tool will read.
 input field that points at an artefact; `tests/unit/mcp/test_demo_guard.py` walks every exposed tool's input
 model so a new id field cannot reach a tool unguarded.
 
-**Small campaigns.** A campaign with an arm of 1 to 9 customers is refused for the read tools with
-`MCP_GROUP_TOO_SMALL`: its figures are a small group's (the Proof Pack prints them as text, which the
-suppression of `api.mcp.suppress` cannot reach).
+**Small campaigns.** A campaign with a group of 1 to 9 customers is refused for the read tools with
+`MCP_GROUP_TOO_SMALL`: its figures are a small group's, and the Value Proof Pack prints them as text, which
+the suppression of `api.mcp.suppress` cannot reach. The groups checked are every group the Pack reads figures
+from: the campaign's own totals (treated, held back, intended), each offer's arm of the stored
+`incrementality_report.json` (a report of several offers with no `offers_combined` is the first offer's alone
+in the Pack), and each group of `segment_effects.json` (the Pack's offer-money and backfire lines). All three
+read tools on a campaign get the same answer, so none of them serves what another withholds.
+
+**Known limit (DEC-1404 (d)).** What is demo data is decided from the run's or upload's recorded use case (and
+`synthetic`), not from where the bytes came from: the product records no provenance for an upload beyond its
+use case, and the library's derived files (the assignment and outcomes files `library.audit` builds) carry no
+recorded hash. Anyone allowed to upload could therefore file client data under a demo use case. The
+deployment's `mcp.workspace: demo` declares the whole deployment a demo one; a deployment that holds client
+data keeps `mcp.enabled` off until M141 scopes the server per client.
 """
 
 from __future__ import annotations
@@ -130,6 +141,34 @@ def _small(count: int, minimum: int) -> bool:
     return 0 < count < minimum
 
 
+def _rows(groups: Any) -> list[int]:
+    """The `treated_rows` and `control_rows` of each group in a stored list of groups."""
+    if not isinstance(groups, list):
+        return []
+    return [
+        count
+        for group in groups
+        if isinstance(group, Mapping)
+        for count in (group.get("treated_rows"), group.get("control_rows"))
+        if isinstance(count, int) and not isinstance(count, bool)
+    ]
+
+
+def _group_counts(storage: Storage, campaign: Any) -> list[int]:
+    """Every group size the campaign's figures describe: its totals, each offer's arm of the stored report,
+    and each group of `segment_effects.json` (the artefacts the Value Proof Pack reads, by campaign id)."""
+    from engine.measurement.campaign import REPORT_FILENAME, campaign_key
+    from engine.measurement.segments import SEGMENT_EFFECTS_FILENAME
+
+    counts = campaign.counts
+    sizes = [counts.treated, counts.holdout, counts.intended_treated, counts.intended_holdout]
+    report = _record(storage, campaign_key(campaign.campaign_id, REPORT_FILENAME)) or {}
+    sizes += _rows(report.get("arms"))
+    segments = _record(storage, campaign_key(campaign.campaign_id, SEGMENT_EFFECTS_FILENAME)) or {}
+    sizes += _rows(segments.get("cells"))
+    return sizes
+
+
 def _check_campaign(ctx: ToolContext, campaign_id: str, settings: McpSettings, *, reads: bool) -> None:
     campaign = None if ctx.campaigns is None else ctx.campaigns.get(campaign_id)
     if campaign is None:
@@ -144,9 +183,9 @@ def _check_campaign(ctx: ToolContext, campaign_id: str, settings: McpSettings, *
         raise _refuse("campaign")
     if not all(is_demo_upload(ctx.storage, upload_id, settings) for upload_id in uploads):
         raise _refuse("campaign")
-    counts = campaign.counts
-    arms = (counts.treated, counts.holdout, counts.intended_treated, counts.intended_holdout)
-    if reads and any(_small(count, settings.min_group_rows) for count in arms):
+    if reads and any(
+        _small(count, settings.min_group_rows) for count in _group_counts(ctx.storage, campaign)
+    ):
         raise AgenticError(
             "MCP_GROUP_TOO_SMALL",
             f"An arm of this campaign holds fewer than {settings.min_group_rows} customers, so its figures "
