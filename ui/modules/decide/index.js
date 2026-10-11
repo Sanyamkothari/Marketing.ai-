@@ -327,16 +327,28 @@ function drawAudit(app) {
       if (typeof value === "string") kept[key] = value;
     }
   }
+  // FormData leaves an unticked box out, so its state is read from the box: otherwise an unticked "More of the
+  // outcome is better" would come back ticked by its default, and the audit would be sent the other way round.
+  const ticks = {};
+  for (const box of document.querySelectorAll(
+    "[data-audit-form] input[type=checkbox], [data-programme-form] input[type=checkbox]",
+  )) {
+    ticks[box.name] = box.checked;
+  }
   app.innerHTML = auditPageHtml({ can: canAccess, state: audit });
   for (const [key, value] of Object.entries(kept)) {
     const input = app.querySelector(`[name="${key}"]`);
-    if (!input) continue;
+    if (!input || input.type === "checkbox") continue;
     if (input.type === "radio") {
       const chosen = app.querySelector(`[name="${key}"][value="${value}"]`);
       if (chosen) chosen.checked = true;
     } else {
       input.value = value;
     }
+  }
+  for (const [key, on] of Object.entries(ticks)) {
+    const box = app.querySelector(`input[type=checkbox][name="${key}"]`);
+    if (box) box.checked = on;
   }
   document.title = "Audit a campaign · Marketing AI";
   setActiveNav("results");
