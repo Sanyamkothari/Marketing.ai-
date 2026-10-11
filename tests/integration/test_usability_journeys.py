@@ -71,7 +71,7 @@ sync_api = pytest.importorskip(
 REPO_ROOT: Final[Path] = Path(__file__).resolve().parents[2]
 CUSTOMER_FILE: Final[Path] = REPO_ROOT / "library" / "hillstrom-email" / "sample.csv"
 GOAL: Final[str] = "win-back-campaign"
-"""The goal behind "win them back": the wizard's "Win back lapsed customers" card (`wizard_rules.js` GOAL_NAMES)."""
+"""The goal behind "win them back": the wizard's "Win back lapsed customers" card (`ui/labels.js` GOAL_NAMES)."""
 GOAL_NAME: Final[str] = "Win back lapsed customers"
 LATER_GOAL: Final[str] = "hillstrom-email"
 LATER_GOAL_NAME: Final[str] = "Choose the best e-mail for each customer"
@@ -527,6 +527,7 @@ class Task2:
     campaign_id: str
     campaign_problems: list[str]
     overview_tile: str
+    overview_tile_title: str
 
 
 @pytest.fixture(scope="module")
@@ -544,6 +545,7 @@ def task2(pristine_store: Path, workdir: Path, playwright_driver: Any) -> Iterat
             reports.open(f"{base}/ui/#/overview")
             page.locator("[data-value]").wait_for(timeout=PAGE_TIMEOUT_MS)
             tile = page.locator("[data-value-amount]").inner_text()  # on screen with no click at all
+            tile_title = page.locator("[data-value-amount]").get_attribute("title") or ""
             reports.click(TASK2_REPORTS_CLICKS[0], "nav.sh-side a[href='#/reports']")
             page.locator("[data-proofs]").wait_for(timeout=PAGE_TIMEOUT_MS)
             rows: dict[str, str] = {}
@@ -593,6 +595,7 @@ def task2(pristine_store: Path, workdir: Path, playwright_driver: Any) -> Iterat
             campaign_id=wanted,
             campaign_problems=campaign_problems,
             overview_tile=tile,
+            overview_tile_title=tile_title,
         )
 
 
@@ -631,6 +634,13 @@ def test_the_overviews_value_tile_is_the_programme_total_and_needs_no_click(task
     """
     headline = task2.overview["headline"]
     assert headline is not None and task2.overview["summary_checked"] is True
-    assert headline["total"]["text"] in task2.overview_tile, (headline["total"]["text"], task2.overview_tile)
+    # The API's own figure: exactly, in the tile's tooltip; on screen in ui/format.js's one format (M172), which
+    # writes a real minus sign and, from one lakh, lakh and crore (Plan M final integration).
+    exact = headline["total"]["text"]
+    assert task2.overview_tile_title == exact, (exact, task2.overview_tile_title)
+    if abs(headline["total"]["value"]) < 100_000:
+        assert exact.replace("-", "\u2212") in task2.overview_tile, (exact, task2.overview_tile)
+    else:
+        assert "lakh" in task2.overview_tile or "crore" in task2.overview_tile, task2.overview_tile
     assert headline["campaigns_counted"] >= 1
     assert len(task2.proofs) >= headline["campaigns_counted"]
