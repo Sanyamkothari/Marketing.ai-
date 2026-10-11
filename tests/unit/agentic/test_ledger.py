@@ -324,12 +324,13 @@ def test_the_stored_body_is_hashed_as_written(signer: FileKeySigner) -> None:
 
 
 def test_an_append_takes_milliseconds(engine: Engine) -> None:
-    """Design §11 budget: an append under 5 ms (best of three batches of 50, after a warm-up)."""
+    """Design §11 budget: an append under 5 ms (best of five batches of 50, after a warm-up: the machine may be
+    running several suites and builders at once, and a busy machine slows a batch, rarely every batch)."""
     ledger = DecisionLedger(engine, signer=FakeSigner(), policy_version=POLICY)
     for index in range(20):
         ledger.append("proposal.drafted", "agent:x", {"proposal_id": f"prop_w{index}"})
     timings = []
-    for batch in range(3):
+    for batch in range(5):
         start = time.perf_counter()
         for index in range(50):
             ledger.append("evidence.label", "agent:x", {"evidence_id": f"ev_{batch:02d}{index:014d}"})
