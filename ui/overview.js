@@ -7,8 +7,9 @@
 // "Goals for other kinds of business", and the chooser comes back with the flag.
 //
 // The header is breadcrumb "Home", the journey's own label as the H1 and one sentence of what to do.
-// The AI type of each use case is its card's coloured edge, explained once by "What do the colours
-// mean?" (the legend and the per-stage type chips said the same thing three times). A planned card
+// Plan M M172 (DEC-1602): the goals are cards in lifecycle order, each named in business words (§4.2, through
+// `ui/api.js`) with its lifecycle stage as a small label, so no colour legend is needed; the operational goals
+// (`MORE_GOALS`: they contact no customer) fold under a closed "More goals". A planned card
 // is muted and tagged "Coming soon"; in demo mode the demo's use cases are tagged "Sample data ready",
 // and an AI-writing use case is tagged "Needs AI service" (the notice it opens to) while no AI service
 // is connected (`GET /ai-service`, through `availability.js`).
@@ -21,6 +22,7 @@
 // (`api.js`, `availability.js`) are imported on demand.
 
 import { MODULES_EVENT, esc, pageHead } from "./dom.js";
+import { MORE_GOALS } from "./labels.js";
 
 /** The industry `wanted` names, else the API's default, else the first listed. */
 export function chooseIndustry(payload, wanted) {
@@ -198,37 +200,33 @@ function sampleIds() {
 
 // --- the page -----------------------------------------------------------------------------------
 
-/** Colour names for the three AI-type markers, as the coloured card edges show them. */
-const COLOUR = { P: "Blue", G: "Purple", H: "Green" };
-
-function coloursTip(industry) {
-  const rows = (industry.legend || [])
-    .map(
-      (entry) =>
-        `<span class="ov-key t-${esc(entry.marker)}"><span class="ov-sw" aria-hidden="true"></span>${esc(
-          COLOUR[entry.marker] || entry.marker,
-        )}: ${esc(entry.label)}</span>`,
-    )
-    .join("");
-  if (!rows) return "";
-  return `<span class="toggletip ov-colours"><button type="button" class="btn quiet sm" data-toggletip aria-expanded="false">What do the colours mean?</button><span class="tt-pop" role="status" hidden><span class="ov-keys">The coloured edge of each card shows the kind of AI it uses.${rows}</span></span></span>`;
-}
-
-function cardHtml(u, sample) {
+/**
+ * One goal card: its name, the lifecycle stage as a small label (Plan M §4.2: the label replaces the colour
+ * legend), and the tags that apply. The name is the Plan M goal name (`ui/api.js` `withGoalName`).
+ */
+function cardHtml(u, sample, stage) {
   const planned = !isAvailable(u);
   const tags = [
     planned ? `<span class="chip neutral">Coming soon</span>` : "",
     !planned && sample.has(u.id) ? `<span class="pill ok">Sample data ready</span>` : "",
     !planned && extras.needsAi.has(u.id) ? `<span class="chip neutral">Needs AI service</span>` : "",
   ].join("");
-  return `<a class="uc${planned ? " planned" : ""}" href="#/uc/${esc(u.id)}"><span class="uc-b"><span>${esc(
+  const label = stage ? `<span class="uc-stage">${esc(stage)}</span>` : "";
+  return `<a class="uc${planned ? " planned" : ""}" href="#/uc/${esc(u.id)}"><span class="uc-b">${label}<span class="uc-name">${esc(
     u.name,
   )}</span>${tags ? `<span class="uc-tags">${tags}</span>` : ""}</span><span class="chev" aria-hidden="true">›</span></a>`;
 }
 
+/** The journey's goals in lifecycle order, each with its stage's name: `[{u, stage}]`. */
+const goalsOf = (industry) =>
+  (industry.stages || []).flatMap((stage) => (stage.use_cases || []).map((u) => ({ u, stage: stage.name })));
+
+/** Whether a goal is operational (contacts no customer) and so folds under "More goals" (Plan M §1 M6). */
+export const isMoreGoal = (u) => MORE_GOALS.includes(u.id);
+
 /**
  * The goals that belong to another industry's journey, which Home no longer opens as a page of its own
- * (Plan M M173): one closed section under the timeline, a link per available goal that Home does not
+ * (Plan M M173): one closed section under the goals, a link per available goal that Home does not
  * already show, grouped by the industry that lists it. Nothing a person could open before is lost.
  */
 export function otherGoalsHtml(payload, current) {
@@ -262,37 +260,35 @@ export function overviewHtml(payload, wanted = null) {
   }
   refreshExtras(industry);
   const sample = sampleIds();
-  const stages = industry.stages || [];
-  const columns = stages
-    .map(
-      (stage) =>
-        `<div class="stage-col t-${esc(stage.marker)}">
-      <div class="stage-pill">${esc(stage.name)}</div>
-      <div class="uc-list">${(stage.use_cases || []).map((u) => cardHtml(u, sample)).join("")}</div>
-    </div>`,
-    )
-    .join("");
+  const goals = goalsOf(industry);
+  const main = goals.filter((g) => !isMoreGoal(g.u));
+  const more = goals.filter((g) => isMoreGoal(g.u));
+  const cards = (list) => list.map((g) => cardHtml(g.u, sample, g.stage)).join("");
+  const moreHtml = more.length
+    ? `<details class="adv ov-more" data-more-goals><summary>More goals (${more.length})</summary><p class="ov-line">For operations teams: these goals do not contact customers.</p><div class="uc-list ov-goals">${cards(
+        more,
+      )}</div></details>`
+    : "";
   const empty =
     extras.noRuns && !sample.size
-      ? `<p class="ov-line">No models yet. Choose a use case below and upload your data to train the first one.</p>`
+      ? `<p class="ov-line">No models yet. Choose a goal below and upload your data to get started.</p>`
       : "";
   return `<main class="screen ov">
     ${pageHead(
-      `${home}<h1 class="h1">${esc(industry.journey_label)}</h1><p class="desc">Pick what you want to predict or improve. Each card opens its setup.</p>${industryChooser(
+      `${home}<h1 class="h1">${esc(industry.journey_label)}</h1><p class="desc">Pick what you want to achieve. Each goal opens its setup.</p>${industryChooser(
         payload,
         industry,
       )}`,
     )}
     ${forYouHtml()}${empty}
-    <div class="ov-tools">${coloursTip(industry)}</div>
-    <div class="timeline-wrap"><div class="timeline">${columns}</div></div>
+    <div class="uc-list ov-goals" data-goals>${cards(main)}</div>
+    ${moreHtml}
     ${otherGoalsHtml(payload, industry)}
   </main>`;
 }
 
-// Home's own layout rules, beside the prototype's `.timeline` / `.stage-*` / `.uc` in `index.html`:
-// tokens only, so both themes apply. The stage columns size themselves (no inline style) and stack
-// below 700px with no arrows.
+// Home's own layout rules, beside the prototype's `.uc` in `index.html`: tokens only, so both themes apply.
+// The goal cards fill a grid that sizes itself (no inline style) and is one column below 700px.
 const CSS = `
 .ov .ov-industry{display:flex;align-items:center;gap:8px;margin-top:4px}
 .ov .ov-industry label{font-size:12px;font-weight:500;color:var(--muted)}
@@ -306,20 +302,18 @@ const CSS = `
 .ov .ov-other h3{margin:12px 0 4px;font-size:13px;color:var(--ink2)}
 .ov .ov-other-list{margin:0;padding:0 0 0 18px;font-size:13px}
 .ov .ov-other-list a{color:var(--brand-blue)}
-.ov .ov-tools{display:flex;justify-content:flex-end}
-.ov .ov-keys{display:flex;flex-direction:column;gap:8px}
-.ov .ov-key{display:flex;align-items:center;gap:8px;color:var(--ink)}
-.ov .ov-sw{width:4px;height:16px;border-radius:2px;background:var(--c)}
-.ov .timeline-wrap{margin-top:16px}
-.ov .timeline{grid-template-columns:none;grid-auto-flow:column;grid-auto-columns:minmax(200px,1fr);min-width:0}
+.ov .ov-goals{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:12px;margin-top:16px}
+.ov .ov-goals .uc{--c:var(--brand-blue);align-items:flex-start}
+.ov .uc-stage{font-size:11px;font-weight:600;letter-spacing:.02em;text-transform:uppercase;color:var(--muted)}
+.ov .uc-name{font-weight:500}
+.ov .ov-more{margin-top:24px}
+.ov .ov-more .ov-line{margin:8px 0 0}
 .ov .uc-b{display:flex;flex-direction:column;align-items:flex-start;gap:8px;min-width:0}
 .ov .uc-tags{display:flex;flex-wrap:wrap;gap:4px}
 .ov .uc.planned{background:var(--soft);border-color:var(--line);color:var(--muted)}
 .ov .uc.planned::before{background:var(--line2)}
 @media (max-width:700px){
-  .ov .timeline{grid-auto-flow:row;grid-template-columns:minmax(0,1fr);row-gap:24px}
-  .ov .stage-col:not(:last-child) .stage-pill::after{content:none}
-  .ov .ov-tools{justify-content:flex-start}
+  .ov .ov-goals{grid-template-columns:minmax(0,1fr)}
   .ov .ov-industry .control{width:auto;flex:1}
 }
 `;

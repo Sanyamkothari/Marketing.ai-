@@ -125,7 +125,7 @@ test("a new schedule sends only what was chosen; the cron line only for a custom
     parameters: { onboarding_spec_id: "sp_sched" },
     enabled: true,
   });
-  assert.match($(".pb-ok").textContent, /Created Score new data/);
+  assert.match($(".pb-ok").textContent, /Created Refresh the contact list/); // Plan M M172: the kind in the glossary's words
 
   const again = $("#pb-schedule-create");
   setField(w, again, "kind", "drift_check");
@@ -172,7 +172,7 @@ test("Run now shows the firing as recorded; Pause and Delete (asked twice) call 
 
 test("Sync retraining schedules reports what the server created, updated and removed", async () => {
   $("#pb-retraining-sync").click();
-  await until(() => /recipe\(s\):/.test(text()), 2000, "the sync result");
+  await until(() => /goal and client pair\(s\):/.test(text()), 2000, "the sync result");
   const sync = fixture("retraining_sync");
   assert.match(text(), new RegExp(`${sync.created.length} created, ${sync.updated.length} updated, ${sync.removed.length} removed`));
 });
@@ -192,14 +192,14 @@ test("one schedule: its firing history with the missed slots, filtered by status
 
 test("editing a schedule sends its whole cadence, zone and parameters", async () => {
   w.location.hash = `#/monitoring/schedules/${ids.score_schedule}`;
-  await until(() => /^Score new data ·/.test(heading()) && $("#pb-schedule-edit"), 3000, "the edit form");
+  await until(() => /^Refresh the contact list ·/.test(heading()) && $("#pb-schedule-edit"), 3000, "the edit form");
   const form = $("#pb-schedule-edit");
   assert.equal(form.elements.namedItem("preset").value, "monthly");
   assert.equal(form.elements.namedItem("onboarding_spec_id").value, "sp_sched");
   setField(w, form, "preset", "custom");
   setField(w, form, "cron", "0 6 1 * *");
   submit(w, form);
-  await until(() => /Saved\. Next run/.test(text()), 2000, "the save");
+  await until(() => /Saved\. Next time/.test(text()), 2000, "the save");
   assert.deepEqual(last("PATCH", `/schedules/${ids.score_schedule}`).body, {
     cadence: "0 6 1 * *",
     timezone: "Asia/Kolkata",
@@ -210,8 +210,8 @@ test("editing a schedule sends its whole cadence, zone and parameters", async ()
 
 test("missed runs lists every due slot nobody fired", async () => {
   w.location.hash = "#/monitoring/missed";
-  await until(() => /^Missed runs ·/.test(cardTitles()), 3000, "the missed slots");
-  assert.deepEqual(crumbTrail(), [SETTINGS, ["Model health", "#/monitoring/alerts"], ["Missed runs", null]]);
+  await until(() => /^Missed schedules ·/.test(cardTitles()), 3000, "the missed slots");
+  assert.deepEqual(crumbTrail(), [SETTINGS, ["Model health", "#/monitoring/alerts"], ["Missed schedules", null]]);
   assert.equal($$("tbody tr").length, fixture("missed").firings.length);
   assert.match(text(), /SCHEDULE_MISSED/);
   assert.ok($(`a[href="#/monitoring/schedules/${ids.drift_schedule}"]`));
@@ -243,7 +243,9 @@ test("the Campaigns list links each run to its Campaign results page and reads M
   await until(() => row() && row().querySelector("[data-status]"), 3000, "the run and its results");
   const link = row().querySelector("a[data-campaign]");
   assert.equal(link.getAttribute("href"), `#/campaign/${run.use_case_id}/${ids.run_id}`);
-  assert.equal(link.textContent, run.use_case_name || run.use_case_id);
+  // Plan M M172: a campaign on a list is named by its goal and month, at most 40 characters.
+  assert.match(link.textContent, /^Keep customers from leaving \u2014 [A-Z][a-z]{2} \d{4}$/);
+  assert.ok(link.textContent.length <= 40);
   const pill = () => row().querySelector("[data-status]");
   assert.equal(pill().dataset.status, "not_added");
   assert.equal(pill().textContent, "Not added yet");
@@ -275,7 +277,7 @@ test("a finished scoring run: no outcomes yet, then an upload measures it agains
   w.location.hash = `#/monitoring/runs/${ids.run_id}`;
   await until(() => $("#pb-outcomes"), 3000, "the upload form");
   assert.deepEqual(crumbTrail().slice(0, 2), [RESULTS, ["Campaigns", "#/monitoring/runs"]]);
-  assert.match(text(), /No outcomes have been added for this run yet\./);
+  assert.match(text(), /No outcomes have been added for this list yet\./);
   assert.equal($$(".apierr").length, 0, "a report not written yet is not an error");
 
   const form = $("#pb-outcomes");
@@ -292,9 +294,9 @@ test("a finished scoring run: no outcomes yet, then an upload measures it agains
   assert.match(text(), new RegExp(`Performance on real outcomes · ${report.metric_label}`));
   assert.match($(".apierr").textContent, /PERFORMANCE_DROP/);
   assert.ok($('.apierr a[href="#/monitoring/alerts"]'));
-  assert.match(text(), /Campaign effect \(contacted vs control group\)/);
-  assert.match(text(), /Difference vs control group/);
-  assert.equal($$("tbody tr").some((tr) => /· control/.test(tr.textContent)), true, "by band");
+  assert.match(text(), /Campaign effect \(contacted vs comparison group\)/);
+  assert.match(text(), /Difference vs comparison group/);
+  assert.equal($$("tbody tr").some((tr) => /· comparison group/.test(tr.textContent)), true, "by band");
 });
 
 test("a Viewer reads everything but every change is refused in place, and a refused click sends nothing", async () => {
@@ -334,7 +336,7 @@ test("with nothing scheduled: one primary (the open form's Create schedule), no 
   w.location.hash = "#/monitoring/alerts";
   await until(() => heading() === "Alerts", 3000, "another screen");
   w.location.hash = "#/monitoring/schedules";
-  await until(() => /Nothing runs on its own yet\./.test(text()), 3000, "the empty state");
+  await until(() => /Nothing happens on its own yet\./.test(text()), 3000, "the empty state");
   const primaries = $$("main .btn.primary");
   assert.equal(primaries.length, 1, "one primary");
   assert.equal(primaries[0].id, "pb-schedule-create-submit");
@@ -425,7 +427,7 @@ test("one run still maturing: the empty page, and no request for outcomes, the c
   calls.length = 0;
   w.location.hash = `#/monitoring/runs/${ids.run_id}`;
   await until(() => $("#pb-outcomes"), 3000, "the upload form");
-  assert.match(text(), /No outcomes have been added for this run yet\./);
+  assert.match(text(), /No outcomes have been added for this list yet\./);
   assert.equal($$(".apierr").length, 0);
   assert.equal(reads(/\/runs\/[^/]+\/(outcomes|incrementality-input)$/).length, 0);
   assert.equal(reads(/\/privacy\/runs\//).length, 0, "no consent report: the run's own record lists none");
@@ -465,7 +467,7 @@ test("not measured with no source but a window already past: recorded outcomes a
   w.location.hash = `#/monitoring/runs/${ids.run_id}`;
   await until(() => reads(new RegExp(`/runs/${ids.run_id}/outcomes$`)).length > 0, 3000, "the outcomes to be asked for");
   await settle(8);
-  assert.doesNotMatch(text(), /No outcomes have been added for this run yet\./);
+  assert.doesNotMatch(text(), /No outcomes have been added for this list yet\./);
   measured = false;
   roi = null;
 });
@@ -478,7 +480,7 @@ test("not measured with no source and a window already past, nothing stored: the
   calls.length = 0;
   w.location.hash = `#/monitoring/runs/${ids.run_id}`;
   await until(() => $("#pb-outcomes"), 3000, "the upload form");
-  assert.match(text(), /No outcomes have been added for this run yet\./);
+  assert.match(text(), /No outcomes have been added for this list yet\./);
   assert.equal(reads(/\/runs\/[^/]+\/incrementality-input$/).length, 0, "no report, so no control-group input is asked for");
   roi = null;
 });

@@ -247,14 +247,17 @@ test("#/industry/<id> goes Home, which lists the goals of the other industries",
   await until(() => $("[data-other-goals]"), 3000, "Home");
   const link = $(`[data-other-goals] a[href="#/uc/${goal.id}"]`);
   assert.ok(link, "the goal that only the old journey page listed is still one click from Home");
-  assert.equal(link.textContent, goal.name);
+  assert.equal(link.textContent, "Choose the best e-mail for each customer", "under its Plan M goal name (M172, §4.2)");
   assert.equal($("[data-other-goals]").tagName, "DETAILS");
   assert.equal($("[data-other-goals]").open, false, "folded");
   assert.equal($("#industry-select"), null);
   const generic = fixture("industries").industries[0];
+  // Plan M M172: the journey's goals in order, the operational ones folded under "More goals" after the rest.
+  const ids = generic.stages.flatMap((s) => s.use_cases.map((u) => u.id));
+  const more = ["order-fulfillment", "fault-prediction"];
   assert.deepEqual(
     $$(".uc-list a.uc").map((a) => a.getAttribute("href")),
-    generic.stages.flatMap((s) => s.use_cases.map((u) => `#/uc/${u.id}`)),
+    [...ids.filter((id) => !more.includes(id)), ...ids.filter((id) => more.includes(id))].map((id) => `#/uc/${id}`),
     "the journey itself is unchanged",
   );
   // a goal the generic journey already lists is not repeated in the folded list
@@ -287,7 +290,7 @@ test("a readiness link for a goal nothing was built for says so, without asking 
   calls.length = 0;
   await go("#/pilot/view/readiness/hillstrom-email");
   await until(() => $("main .notice-card, main [role='status']") && /No data check for/.test($("main").textContent), 3000, "the sentence");
-  assert.match($("main").textContent, /No data check for E-mail Offer Choice yet/);
+  assert.match($("main").textContent, /No data check for Choose the best e-mail for each customer yet/); // the goal's name (M172)
   assert.match($("main").textContent, /nothing has been built for this goal yet/);
   assert.ok($('main a[href="#/pilot/kit"]'), "with the way to Build data");
   assert.ok(!calls.some((c) => c.path.startsWith("/pilot/readiness/")), "no readiness request was made");

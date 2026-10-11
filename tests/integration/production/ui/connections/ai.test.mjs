@@ -417,7 +417,7 @@ test("saving the Deliverable AI's own service and disconnecting it", async () =>
   assert.equal(text($("#ai-status")), "Connected · Claude (Anthropic) · claude-example");
   assert.equal(text($("#ai-disconnect")), "Disconnect");
   click("#ai-disconnect");
-  assert.match(text($("[data-cn-status]") ? $("#ai-disconnect-zone") : app), /Disconnect\? Text features stop/);
+  assert.match(text($("[data-cn-status]") ? $("#ai-disconnect-zone") : app), /Disconnect\? Text writing and search stop/);
   click("#ai-disconnect-yes");
   await until(() => /Not connected/.test(text($("#ai-status"))), 2000, "disconnected");
   assert.deepEqual(seen.deletes.at(-1), "deliverable");
@@ -428,7 +428,7 @@ test("a locked slot is read-only: the reason, what is set, and Test, with no fie
   slots.product = saved({ source: "config", editable: false, locked_reason: "Set by the operator in the deployment's settings.", has_key: false, provider: "bedrock", provider_label: "Amazon Bedrock", model: "example.bedrock-model-v1", region: "us-east-1", third_party: false });
   await show("product");
   const locked = $("[data-locked]");
-  assert.match(text(locked), /This is managed by whoever runs Marketing AI/);
+  assert.match(text(locked), /This is managed by whoever looks after Marketing AI/);
   assert.match(text(locked), /Set by the operator in the deployment's settings\./);
   assert.equal(facts().Service, "Amazon Bedrock");
   assert.equal(facts().Region, "us-east-1");

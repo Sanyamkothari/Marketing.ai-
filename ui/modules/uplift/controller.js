@@ -49,7 +49,7 @@ const POLL_MS = 2000;
 
 /** The API's own sentence for `409 PROFIT_CURVE_UNAVAILABLE` on a list ranked by the propensity model (Plan J M96). */
 const PROFIT_CURVE_BY_RISK =
-  "This contact list is ranked by the approved propensity model because the uplift model does not beat risk ranking, so it has no uplift budget curve.";
+  "This contact list is ranked by likelihood because the effect model does not beat ranking by risk, so it has no budget curve.";
 
 const isUplift = (run) => run && run.problem_type === "uplift";
 

@@ -37,6 +37,7 @@ MODULES: Final[tuple[str, ...]] = (
     "contact_list.js",  # the one contact list download and its sentence (Plan M M171, DEC-1601)
     "cost.js",  # the cost line beside Run, its confirmation and the Cost page's markup (Plan J M108, DEC-1318)
     "dom.js",
+    "format.js",  # the one number and money format: rupees in lakh and crore, exact in tooltips (Plan M M172, DEC-1602)
     "labels.js",  # the glossary as data and the never-shown words of the visible-text check (Plan M M170, DEC-1600)
     "overview.js",
     "pages.js",

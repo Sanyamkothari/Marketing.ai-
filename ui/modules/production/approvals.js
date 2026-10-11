@@ -193,7 +193,7 @@ function headToHead(h) {
   const firstModel = !h.measured_against_champion_id;
   const rows = h.rows_evaluated === null || h.rows_evaluated === undefined ? null : fmtInt(h.rows_evaluated);
   const lead = firstModel
-    ? "This is the first model for this use case: there is no model in use to compare it with."
+    ? "This is the first model for this goal: there is no model in use to compare it with."
     : `Compared with the model in use on the same ${rows ? `${rows} customers` : "customers"}, which neither model saw while learning.${
         h.improvement_pct === null || h.improvement_pct === undefined
           ? ""
@@ -231,7 +231,7 @@ function headToHead(h) {
 const CHECK_TITLE = {
   UPLIFT_NOT_BETTER_THAN_RISK: "Beats plain risk ranking",
   UPLIFT_UNSTABLE_ACROSS_FOLDS: "Stable when refitted on other customers",
-  UPLIFT_MISCALIBRATED: "Predicted uplift matches what was measured",
+  UPLIFT_MISCALIBRATED: "Predicted effect matches what was measured",
   RESULT_SUSPICIOUSLY_GOOD: "Not too good to be true", // DEC-1599: a propensity model's one check
 };
 const CHECK_PILL = {
@@ -404,7 +404,7 @@ function listHtml() {
       ? ""
       : `<p class="pb-note" role="note">Sign-in is off, so the rule that whoever trained a model cannot approve it is not enforced here.</p>`;
   if (!state.items.length) {
-    return `${done}${note}<section class="card"><div class="empty-state"><p class="es-t">No model is waiting for approval.</p><p>When an Analyst trains a model that beats the current one, or the first model of a use case, it appears here.</p></div></section>`;
+    return `${done}${note}<section class="card"><div class="empty-state"><p class="es-t">No model is waiting for approval.</p><p>When an Analyst builds a model that beats the current one, or the first model of a goal, it appears here.</p></div></section>`;
   }
   return `${done}${note}${state.items.map(itemCard).join("")}`;
 }
@@ -413,7 +413,7 @@ export function approvalsHtml() {
   const head = screenHead({
     trail: [RESULTS_CRUMB],
     title: "Waiting for approval",
-    desc: "Models waiting for your approval: new models that beat the one in use, and the first model of a use case.",
+    desc: "Models waiting for your approval: new models that beat the one in use, and the first model of a goal.",
   });
   const refused = reasonFor("GET", "/approvals");
   if (refused) return `<main class="screen pb-screen">${head}${refusal(refused)}</main>`;

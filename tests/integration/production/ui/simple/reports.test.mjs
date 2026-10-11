@@ -35,7 +35,7 @@ test("no approved model and a campaign not measured yet: no 'Open the latest rep
 });
 
 test("the hub has no Client column and no pilot-team words", () => {
-  assert.deepEqual(headers("value"), ["Campaign", "Scored on", "Report"]);
+  assert.deepEqual(headers("value"), ["Campaign", "List made on", "Report"]); // Plan M M172: no "scored"
   assert.doesNotMatch(text($("main")), /Client|pilot team/i);
   const foot = text($("[data-pe-export]"));
   if (foot) assert.match(foot, /^Feedback: Export all feedback$/);
@@ -66,6 +66,6 @@ test("the data request kit asks the data team, and lists use cases without an In
   assert.match(page, /Ask your data team for the right tables/);
   assert.match(page, /What to ask your data team for/);
   assert.doesNotMatch(page, /your client|Industry|Every business/i);
-  assert.deepEqual(headers("build"), ["Use case", "Set up"]);
+  assert.deepEqual(headers("build"), ["Goal", "Set up"]); // Plan M M172: a use case is a goal
   assert.doesNotMatch(text($('[data-pe-card="readiness"]')), /client/i);
 });

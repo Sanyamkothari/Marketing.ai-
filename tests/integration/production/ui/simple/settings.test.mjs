@@ -34,7 +34,7 @@ test("the advanced tools are folded away: uplift, the data kit, raw tables, Mode
   assert.deepEqual(
     $$("[data-settings-advanced] .sp-entry").map((li) => (li.querySelector("a, .sp-label") || {}).textContent),
     [
-      "Uplift workbench",
+      "Campaign effect workbench", // Plan M M172: "uplift" is the effect of contacting them
       "Data request kit",
       "Build from raw tables",
       "Model health",
@@ -64,7 +64,7 @@ test("Build from raw tables is plain text saying where it is, not a link to Home
   assert.ok(raw, "the entry is there");
   assert.equal(raw.querySelector("a"), null, "no link that does not open what it names");
   assert.equal($('[data-settings-advanced] a[href="#/"]'), null);
-  assert.match(raw.textContent, /Open a use case, choose Manual setup, then Build from raw tables\./);
+  assert.match(raw.textContent, /Open a goal, choose Manual setup, then Build from raw tables\./);
 });
 
 test("the Advanced tools card has no padding band above its summary", () => {

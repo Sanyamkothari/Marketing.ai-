@@ -229,7 +229,7 @@ function fieldsHtml() {
       )}" placeholder="${esc((p.embedding_suggestions || [])[0] || "")}" autocomplete="off" spellcheck="false"></div><datalist id="ai-embed-list">${optionsHtml(
         [...(p.embedding_suggestions || []), ...(local ? [local] : [])],
       )}</datalist><span class="sub">Used to search your documents. Leave blank and the document assistant will match by keywords.${
-        local ? ` ${esc(local)} runs on this server instead (it needs the local-embeddings add-on).` : ""
+        local ? ` ${esc(local)} works on this server instead (it needs the local-embeddings add-on).` : ""
       }</span></div>`
     : `<p class="ai-note" data-ai-keywords>${esc(p.label)} has no embeddings. The document assistant will match by keywords${
         local ? ", unless you use the local model below" : ""
@@ -287,7 +287,7 @@ function readOnlyHtml() {
     d.base_url ? row("Address", d.base_url) : "",
     d.provider && d.provider !== "bedrock" ? row("Key", d.has_key ? "Saved" : "None") : "",
   ].join("");
-  return `<section class="card notice-card" role="status" data-locked><h3>This is managed by whoever runs Marketing AI</h3><p>${esc(
+  return `<section class="card notice-card" role="status" data-locked><h3>This is managed by whoever looks after Marketing AI</h3><p>${esc(
     d.locked_reason || "It is set on the server, so it cannot be changed from this screen.",
   )}</p>${d.connected ? `<dl class="ai-facts" data-ai-facts>${rows}</dl>` : `<p>No AI service is connected.</p>`}</section>`;
 }
@@ -296,7 +296,7 @@ function disconnectHtml() {
   if (!s.data || s.data.source !== "saved") return "";
   const label = "Disconnect";
   if (s.confirming) {
-    const ask = "Disconnect? Text features stop until you connect one again.";
+    const ask = "Disconnect? Text writing and search stop until you connect one again.";
     return `<span class="cn-confirm" role="group" aria-label="${esc(label)}?"><span>${esc(ask)}</span><button type="button" class="btn danger confirm sm" id="ai-disconnect-yes">${esc(
       "Disconnect",
     )}</button><button type="button" class="btn quiet sm" id="ai-disconnect-no">Keep it</button></span>`;

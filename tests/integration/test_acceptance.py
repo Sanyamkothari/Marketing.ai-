@@ -63,7 +63,8 @@ sync_api = pytest.importorskip(
 
 REPO_ROOT: Final[Path] = Path(__file__).resolve().parents[2]
 USE_CASE: Final[str] = "targeted-advertisement"
-USE_CASE_NAME: Final[str] = "Targeted Advertisement"
+USE_CASE_NAME: Final[str] = "Find customers likely to buy"
+"""The goal's name on screen (Plan M M172, §4.2); its id and the API's `name` are unchanged."""
 PRIMARY_KEY: Final[str] = "customer_id"
 TARGET: Final[str] = "converted_30d"
 EM_DASH: Final[str] = "—"
@@ -376,7 +377,7 @@ def journey(page: sync_api.Page, server: str, workdir: Path, config_root: Path) 
     assert (
         page.locator("#f-adv").evaluate("node => node.open") is False
     ), "Advanced settings was open before Run; this journey must keep every default."
-    run = page.get_by_role("button", name="Run training")
+    run = page.get_by_role("button", name="Build the model")  # Plan M M172: the run button in plain words
     expect(run).to_be_enabled()
     run.click()
     expect(page.locator("#prog")).to_be_visible(timeout=ACTION_TIMEOUT_MS)
@@ -408,7 +409,7 @@ def journey(page: sync_api.Page, server: str, workdir: Path, config_root: Path) 
     page.locator(".crumbs a").nth(1).click()  # Home › the use case (the one journey is Home, UI_AUDIT §8.4)
     expect(page.locator(".summary")).to_be_visible()
     page.locator("#f-again").click()
-    page.get_by_role("button", name="Score new data").click()
+    page.get_by_role("button", name="Make a contact list", exact=True).click()  # Plan M M172: the score mode
     expect(page.locator("#f-scorerun")).to_be_visible()
     seen.model_choices = [
         option.strip() for option in page.locator("#f-scorerun option").all_inner_texts() if option.strip()
@@ -419,7 +420,7 @@ def journey(page: sync_api.Page, server: str, workdir: Path, config_root: Path) 
     )
     page.set_input_files("#f-file", str(score_csv))
     expect(page.locator("#f-pk")).to_have_value(PRIMARY_KEY, timeout=UPLOAD_TIMEOUT_MS)
-    score = page.get_by_role("button", name="Score data")
+    score = page.get_by_role("button", name="Make the contact list", exact=True)
     expect(score).to_be_enabled()
     score.click()
     wait_for_results(page, timeout_s=SCORE_TIMEOUT_S, log=log, label="scoring")
@@ -475,7 +476,7 @@ def test_the_upload_was_read_and_profiled_on_the_screen(journey: Journey) -> Non
 
 def test_the_run_reached_results_and_the_summary_carries_real_values(journey: Journey) -> None:
     """ "...clicks Run...": Results, with the model and its score spelled out, no em dash."""
-    assert "Training complete" in journey.train_summary
+    assert "Model ready" in journey.train_summary  # Plan M M172: "Training complete" in a marketer's words
     assert EM_DASH not in journey.train_summary, journey.train_summary
     assert "Ranking quality" in journey.train_summary  # ROC-AUC, by its plain name (v1)
     score = re.search(r"Ranking quality\s+([0-9.]+)", journey.train_summary)
@@ -542,8 +543,9 @@ def test_the_trained_model_is_offered_for_scoring_without_an_ml_team(journey: Jo
 
 def test_the_second_upload_came_back_scored(journey: Journey) -> None:
     """ "...receives a scored file ... for a second upload": Results says how many rows, with which model."""
-    assert "Scoring complete" in journey.score_summary
-    assert f"{SCORE_ROWS:,} rows scored" in journey.score_summary, journey.score_summary
+    # Plan M M172: "Scoring complete" and "rows scored" in a marketer's words.
+    assert "Contact list ready" in journey.score_summary
+    assert f"{SCORE_ROWS:,} rows ranked" in journey.score_summary, journey.score_summary
     assert EM_DASH not in journey.score_summary, journey.score_summary
 
 
@@ -551,7 +553,7 @@ def test_the_output_page_of_the_scoring_run_renders_the_kpi(journey: Journey) ->
     """Output page after scoring: `scoring_summary.json`'s KPI, row count and control group."""
     kpi = journey.score_output_tiles.get("Target audience", EM_DASH)
     assert kpi not in ("", EM_DASH), journey.score_output_tiles
-    assert journey.score_output_tiles.get("Customers scored") == f"{SCORE_ROWS:,}", journey.score_output_tiles
+    assert journey.score_output_tiles.get("Customers ranked") == f"{SCORE_ROWS:,}", journey.score_output_tiles
     control = journey.score_output_tiles.get("Held back to measure results", EM_DASH)
     assert control not in ("", EM_DASH), journey.score_output_tiles
 

@@ -22,7 +22,7 @@ const open = async (hash) => {
 test("an empty installation: Results says there are no runs yet and points to Home", async () => {
   await until(() => $("[data-results-empty]"), 3000, "the empty state");
   assert.equal($("main h1").textContent, "Results");
-  assert.match($("[data-results-empty]").textContent, /No runs yet/);
+  assert.match($("[data-results-empty]").textContent, /Nothing here yet/); // Plan M M172: a run is not a marketer's word
   assert.ok($('[data-results-empty] a[href="#/"]'), "one way to start");
   assert.equal($("[data-approvals]"), null, "nothing waits");
   assert.equal($("#pb-bar .tn-item.on").textContent.trim(), "Results");
@@ -39,16 +39,17 @@ test("every run, newest first, with its use case, what it did, its status and it
     "in the API's order, which is newest first",
   );
   const cells = rows().map((tr) => [...tr.querySelectorAll("td")].map((td) => td.textContent.trim()));
-  assert.equal(cells[0][0], "Telco Customer Churn");
+  // Plan M M172 (DEC-1602): the goal's name (§4.2) and what the run made, in the glossary's words.
+  assert.equal(cells[0][0], "Keep customers likely to leave");
   assert.deepEqual(
     cells.map((c) => c[1]),
-    ["Trained a model", "Scored new data", "Trained a model"],
+    ["Built a model", "Made a contact list", "Built a model"],
   );
   assert.deepEqual(
     cells.map((c) => c[2]),
     ["Failed", "Finished", "Finished"],
   );
-  assert.equal(cells[1][3], "1,200 rows scored");
+  assert.equal(cells[1][3], "1,200 rows ranked");
   assert.match(cells[2][3], /0\.912$/, "a training run's headline metric");
   assert.notEqual(cells[0][3], "", "a failure says it did not finish");
   assert.equal(
@@ -66,7 +67,7 @@ test("each row reads as something to open: the name in link colour and a trailin
     assert.ok(open, `row ${i} has an Open link`);
     assert.equal(open.textContent, "Open ›");
     assert.equal(open.getAttribute("href"), `#/uc/${runs[i].use_case_id}/run/${runs[i].run_id}`, "a real link to the run");
-    assert.match(open.getAttribute("aria-label"), /^Open the run: /, "a screen reader hears which run");
+    assert.match(open.getAttribute("aria-label"), /^Open: Keep customers likely to leave, /, "a screen reader hears which one");
   });
   const css = w.document.getElementById("sp-styles").textContent;
   assert.match(css, /\.sp \.sp-runs a\{color:var\(--brand-blue\)/, "links in the runs table use the link colour");

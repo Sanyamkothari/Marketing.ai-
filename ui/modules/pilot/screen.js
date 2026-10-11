@@ -18,6 +18,8 @@
 // handler adds the sign-in to them when one is held.
 
 import { getIndustries } from "../../api.js";
+import { campaignNameHtml, campaignNames, figureHtml, shortCampaignName } from "../../format.js"; // Plan M M172 (DEC-1602)
+import { goalName, goalShortName, plainText, userText } from "../../labels.js";
 import {
   RESULTS_CRUMB,
   SETTINGS_CRUMB,
@@ -43,11 +45,13 @@ import {
   dataRequestUrl,
   demoRawUrl,
   feedbackExportUrl,
+  getCampaign,
   getDataRequest,
   getProof,
   getReportDoc,
   getReportHtml,
   getRoi,
+  listCampaigns,
   listDatasets,
   listModels,
   listProofs,
@@ -228,8 +232,8 @@ async function renderReports(app, demo) {
         "results",
         emptyState({
           title: "No approved model yet",
-          text: "A model's results report appears here once a trained model is approved.",
-          action: { label: "Train a model", href: "#/", kind: "secondary" },
+          text: "A model's results report appears here once a model is approved.",
+          action: { label: "Choose a goal", href: "#/", kind: "secondary" },
         }),
       );
       return;
@@ -242,7 +246,8 @@ async function renderReports(app, demo) {
         `<span class="pe-name">${esc(ucName(index, id))}</span>`,
         `Version ${esc(c.version.version)}`,
         esc(fmtDate(c.version.approved_at || c.version.created_at)),
-        cell(c.version.model_display_name),
+        // Which algorithm won is technical (Plan M §4.1): the cell sits in the folded "Show more columns" column.
+        `<span data-technical>${cell(c.version.model_display_name)}</span>`,
         reportActions(href, "Open", resultsUrl(id, "pdf")),
       ];
     });
@@ -250,7 +255,7 @@ async function renderReports(app, demo) {
       main,
       "results",
       dataTable(
-        [{ label: "Use case" }, { label: "Model" }, { label: "In use since" }, { label: "Method", more: true }, { label: "Report", num: true }],
+        [{ label: "Goal" }, { label: "Model" }, { label: "In use since" }, { label: "Method", more: true }, { label: "Report", num: true }],
         rows,
       ),
     );
@@ -273,9 +278,9 @@ async function renderReports(app, demo) {
         main,
         "value",
         emptyState({
-          title: "No campaign has been scored yet",
-          text: "Score a list of customers with an approved model; once the campaign's results are in, its value in rupees appears here.",
-          action: { label: "Score customers", href: "#/", kind: "secondary" },
+          title: "No contact list has been made yet",
+          text: "Make a contact list with an approved model; once the campaign's results are in, its value in rupees appears here.",
+          action: { label: "Make a contact list", href: "#/", kind: "secondary" },
         }),
       );
       return;
@@ -283,8 +288,13 @@ async function renderReports(app, demo) {
     scoredRuns = scored;
     const rows = scored.map((r) => {
       const href = `#/pilot/value/${encodeURIComponent(r.run_id)}`;
+      // Plan M M172: the campaign's short name (goal and month), its recorded title under it.
+      const names = {
+        short: shortCampaignName(goalShortName(r.use_case_id, r.use_case_name || ucName(index, r.use_case_id)), r.finished_at || r.created_at),
+        long: campaignTitle(demo, r.run_id) || "",
+      };
       return [
-        `<span class="pe-name">${esc(campaignTitle(demo, r.run_id) || r.use_case_name || ucName(index, r.use_case_id))}</span>`,
+        `<span class="pe-name">${campaignNameHtml(names)}</span>`,
         esc(fmtDate(r.finished_at || r.created_at)),
         reportActions(href, "Value in rupees", roiUrl(r.run_id, "pdf")),
       ];
@@ -292,14 +302,14 @@ async function renderReports(app, demo) {
     fill(
       main,
       "value",
-      dataTable([{ label: "Campaign" }, { label: "Scored on" }, { label: "Report", num: true }], rows),
+      dataTable([{ label: "Campaign" }, { label: "List made on" }, { label: "Report", num: true }], rows),
     );
   })();
 
   // Plan J M104: each measured campaign's Value Proof Pack, or the server's reason there is none yet.
-  const proofs = settle(listProofs()).then((answer) => {
+  const proofs = Promise.all([settle(listProofs()), settle(listCampaigns())]).then(([answer, campaigns]) => {
     if (!live()) return;
-    fill(main, "proof", answer.error ? unavailable : proofsBody(answer.value));
+    fill(main, "proof", answer.error ? unavailable : proofsBody(answer.value, campaigns.value));
   });
 
   await Promise.all([results, value, proofs]);
@@ -321,8 +331,10 @@ async function renderReports(app, demo) {
 }
 
 /** `GET /pilot/proof`'s list as the hub's card: ready packs open, refused ones say why (server words only). */
-function proofsBody(list) {
+function proofsBody(list, campaigns = null) {
   const proofs = (list && list.proofs) || [];
+  // Plan M M172: each campaign by its short name (goal and month), the label recorded with it underneath.
+  const named = new Map(((campaigns && campaigns.campaigns) || []).map((c) => [c.campaign_id, campaignNames(c, goalShortName)]));
   if (!proofs.length) {
     return emptyState({
       title: "No campaign has been recorded yet",
@@ -333,8 +345,8 @@ function proofsBody(list) {
     const href = `#/pilot/proof/${encodeURIComponent(entry.campaign_id)}`;
     const ready = entry.status === "ready";
     return [
-      `<span class="pe-name">${esc(entry.name)}</span>`,
-      ready ? cell(entry.headline) : cell(entry.message),
+      `<span class="pe-name">${named.has(entry.campaign_id) ? campaignNameHtml(named.get(entry.campaign_id)) : userText(entry.name)}</span>`,
+      ready ? cell(plainText(entry.headline)) : cell(plainText(entry.message)),
       ready ? reportActions(href, "Open", proofUrl(entry.campaign_id, "pdf")) : "—",
     ];
   });
@@ -391,7 +403,7 @@ function kitBody(request, demo) {
   return `<div class="pe-body">
     <p>What to ask your data team for, in plain words: the tables and columns we need, how much history, how to hide customer identities, and what never to send.</p>
     ${list}
-    <details class="adv"><summary>For your IT team</summary><div>
+    <details class="adv"><summary>For your IT team</summary><div data-technical>
       ${templates}
       <p>Before sending anything, they can run the pre-flight check on their own computer. Nothing is uploaded:</p>
       <div class="pe-code"><code>${esc(PREFLIGHT)}</code><button type="button" class="btn quiet sm" data-copy="${esc(
@@ -405,13 +417,13 @@ function buildBody(index) {
   const predictive = index.list.filter((u) => u.ai_type === "predictive" && u.status === "available");
   if (!predictive.length) {
     return emptyState({
-      title: "No use case can build a dataset yet",
-      text: "Use cases that learn from your data appear here.",
+      title: "No goal can build a dataset yet",
+      text: "Goals that learn from your data appear here.",
       action: { label: "Go to Home", href: "#/", kind: "secondary" },
     });
   }
   return dataTable(
-    [{ label: "Use case" }, { label: "Set up", num: true }],
+    [{ label: "Goal" }, { label: "Set up", num: true }],
     predictive.map((u) => [
       `<span class="pe-name">${esc(u.name)}</span>`,
       `<span class="pe-acts"><a class="btn secondary sm" href="#/uc/${encodeURIComponent(u.id)}">Set up</a></span>`,
@@ -439,7 +451,7 @@ function readinessBody(datasets, index, demo) {
   return dataTable(
     [{ label: "Dataset" }, { label: "Rows", num: true }, { label: "Built" }, { label: "Report", num: true }],
     rows.map((r) => [
-      `<span class="pe-name">${esc(ucName(index, r.uc))}</span><span class="chip neutral">${r.train ? "For training" : "For scoring"}</span>${
+      `<span class="pe-name">${esc(ucName(index, r.uc))}</span><span class="chip neutral">${r.train ? "For building a model" : "For a contact list"}</span>${
         r.practice ? `<span class="chip neutral">Practice data with problems</span>` : ""
       }`,
       present(r.n) ? esc(fmtInt(r.n)) : "—",
@@ -460,7 +472,7 @@ async function renderKit(app, demo) {
     )}${demoNotice(demo)}<div data-pe-error></div>
     <div class="stack">
       ${card("kit", "Data request kit")}
-      ${card("build", "Build a dataset from raw tables", `<div class="pe-body"><p>Choose the use case the data is for. Its Setup screen maps your tables, builds the dataset and checks it.</p></div>`)}
+      ${card("build", "Build a dataset from raw tables", `<div class="pe-body"><p>Choose the goal the data is for. Its Setup screen maps your tables, builds the dataset and checks it.</p></div>`)}
       ${card("readiness", `Data readiness${sortNote("newest first")}`)}
     </div></main>`,
   );
@@ -605,13 +617,13 @@ async function renderReport(app, kind, id) {
           }
         : missing.code === "RESULTS_NOT_FOUND"
           ? {
-              title: "This use case has no approved model yet",
-              text: "Its results report appears here once a trained model is approved.",
+              title: "This goal has no approved model yet",
+              text: "Its results report appears here once a model is approved.",
               action: { label: "Back to Reports", href: "#/pilot" },
             }
           : {
               title: "This report could not be found",
-              text: "The use case may have been removed, or the link is incomplete.",
+              text: "The goal may have been removed, or the link is incomplete.",
               action: { label: "Back to Reports", href: "#/pilot" },
             },
     )}${techDetails(
@@ -627,7 +639,7 @@ async function renderReport(app, kind, id) {
     headHtml = head([place, parent, { label: noun }], noun, null);
   } else {
     const report = doc.value;
-    const name = fact(report, "Use case") || ucName(index, id);
+    const name = goalName(id, fact(report, "Use case") || ucName(index, id));
     const title = `${noun} · ${name}`;
     let pill = "";
     let sub;
@@ -966,6 +978,37 @@ function proposalsCard(view, canApprove) {
     <ul class="pe-tables">${items}</ul><p class="pe-status" data-pe-proposal-status role="status"></p></div></section>`;
 }
 
+/**
+ * Plan M M172 (DEC-1602): the pack's headline figures as tiles above it - what the campaign changed and its net value,
+ * each a range - in the one number format (rupees in lakh and crore, the pack's exact text in the tooltip). Every
+ * figure is the pack's own (`GET /pilot/proof/{id}?format=json`); a section the pack did not measure has no tile.
+ */
+export function proofTilesHtml(view) {
+  const sections = (view && view.sections) || [];
+  const section = (key) => sections.find((s) => s.key === key) || null;
+  const ranged = (s) => (s && s.status === "measured" ? s.lines || [] : []).filter((line) => line.value && line.low && line.high);
+  // A section the pack could not measure is one tile with the em dash, its reason (the pack's words) as the tooltip.
+  const missing = (s, label) => (s && s.status !== "measured" ? [{ label, reason: plainText(s.reason || "") }] : []);
+  const incremental = section("incremental");
+  const net = section("net_value");
+  const picks = [
+    ...ranged(incremental).slice(-1),
+    ...missing(incremental, "What the campaign changed"),
+    ...ranged(net).filter((line) => line.value.format === "inr"),
+    ...missing(net, "Net value"),
+  ].slice(0, 3);
+  if (!picks.length) return "";
+  const tile = (line) =>
+    line.value
+      ? `<div class="kpi"><div class="l">${esc(plainText(line.label))}</div><div class="v">${figureHtml(line.value)}</div><div class="s">likely ${figureHtml(
+          line.low,
+        )} to ${figureHtml(line.high)}</div></div>`
+      : `<div class="kpi" data-pe-tile-missing><div class="l">${esc(line.label)}</div><div class="v">${figureHtml(null, {
+          reason: line.reason,
+        })}</div>${line.reason ? `<div class="s">${esc(line.reason)}</div>` : ""}</div>`;
+  return `<div class="kpis" data-pe-proof-tiles>${picks.map(tile).join("")}</div>`;
+}
+
 async function renderProof(app, campaignId, rerender) {
   const crumbsFor = (title) => [RESULTS_CRUMB, { label: "Reports", href: "#/pilot" }, { label: title }];
   const screen = mount(
@@ -974,7 +1017,11 @@ async function renderProof(app, campaignId, rerender) {
   );
   document.title = "Value Proof Pack · Marketing AI";
   const { main, live } = screen;
-  const [proof, page] = await Promise.all([settle(getProof(campaignId)), settle(getReportHtml(proofUrl(campaignId, "html")))]);
+  const [proof, page, record] = await Promise.all([
+    settle(getProof(campaignId)),
+    settle(getReportHtml(proofUrl(campaignId, "html"))),
+    settle(getCampaign(campaignId)), // Plan M M172: the campaign's goal and month, for its short name
+  ]);
   if (!live()) return;
   const error = proof.error || page.error;
   if (error) {
@@ -1001,6 +1048,8 @@ async function renderProof(app, campaignId, rerender) {
   }
   const view = proof.value;
   const name = view.campaign_name.text;
+  const campaign = (record.value && record.value.campaign) || { use_case_id: view.use_case_id, name };
+  const names = campaignNames({ ...campaign, name }, goalShortName);
   const canApprove = await mayCall("POST", "/pilot/proof/{campaign_id}/suppressions");
   const canValue = await mayCall("PUT", "/pilot/proof/{campaign_id}/value");
   if (!live()) return;
@@ -1014,11 +1063,13 @@ async function renderProof(app, campaignId, rerender) {
       )}</details></div></section>`
     : "";
   main.innerHTML = `${pageHead(
-    `${crumbs(crumbsFor(name))}<h1 class="h1">Value Proof Pack</h1><p class="sub">${esc(name)} · ${esc(view.claim_label)}</p>${headActions({
+    `${crumbs(crumbsFor(names.short))}<h1 class="h1">Value Proof Pack</h1><p class="sub">${esc(names.short)} · ${esc(
+      plainText(view.claim_label),
+    )}</p><p class="sub">${userText(name)}</p>${headActions({
       primary: { label: "Download PDF", href: proofUrl(campaignId, "pdf"), attrs: "download" },
     })}`,
-  )}<div class="stack">${proposalsCard(view, canApprove)}${estimates}${frame(page.value, `Value Proof Pack · ${name}`)}</div>`;
-  document.title = `Value Proof Pack · ${name} · Marketing AI`;
+  )}<div class="stack">${proofTilesHtml(view)}${proposalsCard(view, canApprove)}${estimates}${frame(page.value, `Value Proof Pack · ${names.short}`)}</div>`;
+  document.title = `Value Proof Pack · ${names.short} · Marketing AI`;
   wireFrames(main);
   screen.commit();
 

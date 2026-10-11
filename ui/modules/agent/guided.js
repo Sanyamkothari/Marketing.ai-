@@ -558,7 +558,7 @@ function mainHtml(entry) {
       score
         ? "After upload: the helper checks the file against what the model was trained on."
         : "After upload: the helper checks your data and suggests fixes, with a reason for each.",
-    )}${laterStep(three, "Summary", "What will change, and what happens when you run. Then approve.")}`;
+    )}${laterStep(three, "Summary", "What will change, and what happens when you start. Then approve.")}`;
   }
   if (g.session.status === "stopped") return `${uploadStep(entry, one)}${stopHtml(entry, two)}`;
   const closed = Boolean(g.applied) || g.session.status === "applied";

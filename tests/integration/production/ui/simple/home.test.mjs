@@ -36,19 +36,30 @@ test("the top bar is exactly Home, Connections, Results and Settings", async () 
 });
 
 test("Home is the generic journey: the customer lifecycle in order, and no industry chooser", async () => {
-  await until(() => $$(".stage-pill").length === 5, 3000, "the journey");
+  // Plan M M172 (DEC-1602): the lifecycle stage is a small label on each goal card (no stage columns, no colour
+  // legend), and the operational goals fold under a closed "More goals" after the rest, in the journey's order.
+  await until(() => $$("[data-goals] a.uc").length === 5, 3000, "the journey");
   const generic = fixture("industries").industries[0];
   assert.equal(generic.id, "generic");
   assert.equal($("main h1").textContent, generic.journey_label);
+  const stageOf = Object.fromEntries(generic.stages.flatMap((s) => s.use_cases.map((u) => [u.id, s.name])));
   assert.deepEqual(
-    $$(".stage-pill").map((p) => p.textContent.trim()),
-    ["Awareness", "Onboarding", "Service", "Churn", "Win-back"],
+    $$(".uc-list a.uc").map((a) => a.querySelector(".uc-stage").textContent.trim()),
+    $$(".uc-list a.uc").map((a) => stageOf[a.getAttribute("href").replace("#/uc/", "")]),
   );
+  assert.deepEqual(
+    [...new Set($$(".uc-list a.uc .uc-stage").map((p) => p.textContent.trim()))].sort(),
+    ["Awareness", "Churn", "Onboarding", "Service", "Win-back"],
+  );
+  const ids = generic.stages.flatMap((s) => s.use_cases.map((u) => u.id));
+  const more = ["order-fulfillment", "fault-prediction"];
   const cards = $$(".uc-list a.uc").map((a) => a.getAttribute("href"));
   assert.deepEqual(
     cards,
-    generic.stages.flatMap((s) => s.use_cases.map((u) => `#/uc/${u.id}`)),
+    [...ids.filter((id) => !more.includes(id)), ...ids.filter((id) => more.includes(id))].map((id) => `#/uc/${id}`),
   );
+  assert.equal($("[data-more-goals]").open, false, "More goals is closed");
+  assert.doesNotMatch($("main").textContent, /What do the colours mean/);
   assert.equal($("#industry-select"), null, "no industry chooser");
   assert.doesNotMatch($("main").textContent, /Industry/);
 });

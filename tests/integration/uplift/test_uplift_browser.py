@@ -74,7 +74,8 @@ sync_api = pytest.importorskip(
 
 REPO_ROOT: Final[Path] = Path(__file__).resolve().parents[3]
 USE_CASE: Final[str] = "win-back-campaign"
-USE_CASE_NAME: Final[str] = "Win-back Campaign"
+USE_CASE_NAME: Final[str] = "Win back lapsed customers"
+"""The goal's name on screen (Plan M M172, §4.2); its id and the API's `name` are unchanged."""
 PRIMARY_KEY: Final[str] = "customer_id"
 TARGET: Final[str] = "reactivated_90d"
 TREATMENT: Final[str] = "treatment"
@@ -433,8 +434,9 @@ def journey(browser: Any, server: Server, workdir: Path, shots: Path) -> Journey
     seen.screens["overview"] = capture(page, console, shots, "01-overview")
     settings.click()
     page.locator("[data-settings-advanced] summary").click()
-    page.locator("[data-settings-advanced] a", has_text="Uplift workbench").click()
-    expect(page.get_by_role("heading", name="Measure what a campaign changes (uplift)")).to_be_visible()
+    # Plan M M172: the workbench in the glossary's words ("uplift" is the effect of contacting them).
+    page.locator("[data-settings-advanced] a", has_text="Campaign effect workbench").click()
+    expect(page.get_by_role("heading", name="Measure what a campaign changes")).to_be_visible()
     seen.screens["index"] = capture(page, console, shots, "02-uplift-index")
     page.get_by_role("link", name=USE_CASE_NAME).click()
     expect(page.locator("#u-file")).to_be_attached()
@@ -472,7 +474,8 @@ def journey(browser: Any, server: Server, workdir: Path, shots: Path) -> Journey
         console,
         shots,
         "07-model",
-        disclosures=("Technical metrics", "Training setup"),
+        # Plan M M172: "Training setup" in plain words.
+        disclosures=("Technical metrics", "How the model was built"),
         qini_model=page.locator(".uchart polyline.model").count(),
         qini_random=page.locator(".uchart polyline.rand").count(),
         qini_points=len((page.locator(".uchart polyline.model").get_attribute("points") or "").split()),
@@ -520,12 +523,12 @@ def journey(browser: Any, server: Server, workdir: Path, shots: Path) -> Journey
     page.goto(f"{server.base_url}/ui/#/uc/{USE_CASE}", wait_until="domcontentloaded")
     page.get_by_role("button", name="Manual setup").click()  # Plan H M82: Setup opens on Guided setup
     expect(page.locator("#f-file")).to_be_attached()
-    page.get_by_role("button", name="Score new data").click()
+    page.get_by_role("button", name="Make a contact list", exact=True).click()  # Plan M M172: the score mode
     expect(page.locator("#f-scorerun")).to_be_visible()
     phase1_models = page.locator("#f-scorerun option").all_inner_texts()
     page.set_input_files("#f-file", str(scoring_csv))
     expect(page.locator("#f-pk")).to_have_value(PRIMARY_KEY, timeout=UPLOAD_TIMEOUT_MS)
-    score = page.get_by_role("button", name="Score data")
+    score = page.get_by_role("button", name="Make the contact list", exact=True)
     expect(score).to_be_enabled()
     score.click()
     wait_for(page, lambda: page.locator(".summary .ok").count() > 0, "the Phase 1 scoring run", log)
@@ -713,11 +716,12 @@ def test_no_card_is_cut_off_at_the_edge_of_a_phone(journey: Journey) -> None:
 
 def test_the_top_bar_leads_to_uplift_and_the_index_lists_the_use_case(journey: Journey) -> None:
     index = journey.screens["index"].text
-    assert "Uplift workbench" in index  # the breadcrumb, Settings › Uplift workbench (UI_AUDIT §8.4)
+    # The breadcrumb, Settings › Campaign effect workbench (UI_AUDIT §8.4; renamed by Plan M M172).
+    assert "Campaign effect workbench" in index
     assert USE_CASE_NAME in index
-    # Each row says whether a model exists ("No uplift model yet" / "Uplift model trained ...");
+    # Each row says whether a model exists ("No effect model yet" / "Effect model built ...");
     # this used to pass on the old breadcrumb "Uplift modelling" alone.
-    assert "No uplift model yet" in index or "Uplift model trained" in index
+    assert "No effect model yet" in index or "Effect model built" in index
 
 
 def test_setup_detects_the_treatment_column_and_explains_the_problem_type(journey: Journey) -> None:
@@ -776,7 +780,9 @@ def test_the_off_policy_estimate_is_the_stored_report(journey: Journey, server: 
 
 def test_the_output_page_shows_segments_and_the_recommendation(journey: Journey, server: Server) -> None:
     check_output(journey.screens["output"], server, journey.train_run)
-    assert "Measured on the hold-out split of the training run." in journey.screens["output"].text
+    assert (
+        "Measured on test customers the model never saw while it was built." in journey.screens["output"].text
+    )
 
 
 def check_output(screen: Screen, server: Server, run_id: str) -> None:
@@ -807,12 +813,13 @@ def test_both_score_screens_offer_the_uplift_model(journey: Journey) -> None:
         journey.screens["phase1_score_results"].extra["models"],
     ):
         assert len(models) == 1 and "X-learner (LightGBM)" in models[0], models
-    assert journey.screens["uplift_score_setup"].extra["models"][0].startswith("Uplift model trained ")
+    assert journey.screens["uplift_score_setup"].extra["models"][0].startswith("Effect model built ")
 
 
 def test_phase1_scoring_of_the_uplift_model_came_back(journey: Journey, server: Server) -> None:
     summary = journey.screens["phase1_score_results"].text
-    assert "Scoring complete" in summary and f"{CAMPAIGN_ROWS:,} rows scored" in summary, summary
+    # Plan M M172: "Scoring complete" and "rows scored" in a marketer's words.
+    assert "Contact list ready" in summary and f"{CAMPAIGN_ROWS:,} rows ranked" in summary, summary
     run = server.artefact(journey.score_run, "run.json")
     assert run["mode"] == "score" and run["problem_type"] == "uplift"
 
@@ -820,7 +827,7 @@ def test_phase1_scoring_of_the_uplift_model_came_back(journey: Journey, server: 
 def test_the_score_output_is_the_treat_list_the_browser_downloaded(journey: Journey, server: Server) -> None:
     screen = journey.screens["score_output"]
     check_output(screen, server, journey.score_run)
-    assert "Computed over every customer this run scored." in screen.text
+    assert "Computed over every customer on this list." in screen.text
     treat_list = journey.treat_list
     assert treat_list is not None and len(treat_list.index) == CAMPAIGN_ROWS
     policy = server.artefact(journey.score_run, "policy_recommendation.json")
@@ -866,7 +873,7 @@ def test_a_mature_campaign_shows_the_lift_with_its_interval(journey: Journey) ->
     assert f"{report['treated_rows']:,}" in screen.text and f"{report['control_rows']:,}" in screen.text
     assert screen.rows["Outcome window"] == "90 days"
     assert screen.rows["Judged as of"] == "15 Aug 2026, 11:59 pm"
-    assert "Not causal" not in screen.text
+    assert "Not yet proven" not in screen.text  # Plan M M172: "Not causal" in the glossary's words
 
 
 def test_a_targeted_file_is_refused_until_acknowledged(journey: Journey) -> None:
@@ -878,7 +885,7 @@ def test_a_targeted_file_is_refused_until_acknowledged(journey: Journey) -> None
     assert "bad" in (refused.extra["randomness_pill"] or ""), "a failed randomness check is red"
     acknowledged = journey.screens["acknowledged"].text
     assert "Nothing left to fix before training" in acknowledged, acknowledged
-    assert "Not causal: the treatment was not randomly assigned" in acknowledged
+    assert "Not yet proven: the customers contacted were not chosen at random" in acknowledged
 
 
 def test_the_acknowledged_run_is_labelled_not_causal(journey: Journey, server: Server) -> None:
@@ -886,6 +893,8 @@ def test_the_acknowledged_run_is_labelled_not_causal(journey: Journey, server: S
     assert evaluation["causal"] is False
     for name in ("targeted_model", "targeted_output"):
         text = journey.screens[name].text
-        assert "Not causal" in text and f"{NOT_RANDOM} was acknowledged for this run" in text, name
+        assert (
+            "Not yet proven" in text and "This was confirmed as expected when the model was built" in text
+        ), name
     for name in ("model", "output", "score_output", "campaign_mature"):
-        assert "TREATMENT_NOT_RANDOM was acknowledged" not in journey.screens[name].text, name
+        assert "This was confirmed as expected" not in journey.screens[name].text, name

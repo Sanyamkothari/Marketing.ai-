@@ -320,7 +320,9 @@ export const glossarySetting = (path) => safely(glossary.setting, path);
 export const METRIC_SHORT = {
   roc_auc: "Ranking quality",
   pr_auc: "Top-of-list precision",
-  f1: "Balance score",
+  f1: "Balance of hits and false alarms",
+  auuc: "Gain over a random pick",
+  qini: "Gain over a random pick",
   recall: "Cases caught",
   precision: "Flags that are right",
   rmse: "Typical error",

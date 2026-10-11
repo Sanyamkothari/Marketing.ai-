@@ -43,6 +43,8 @@ import {
   typeChip,
 } from "./dom.js";
 import { bindPower, powerCardBody } from "./power.js";
+import { count, percent } from "./format.js";
+import { plainText, term, userText } from "./labels.js"; // Plan M M172 (DEC-1602): engine sentences in plain words; names the person supplied
 import { indexSchema, readPath } from "./settings.js";
 import { allScoresSlotHtml, contactDownloadLink, contactListParts, contactSlotHtml } from "./contact_list.js"; // Plan M M171 (DEC-1601): one contact list
 
@@ -215,7 +217,7 @@ function columnDescriptions(uc) {
   const add = (list) => {
     for (const column of list || []) {
       if (column && column.name && column.description && !map.has(column.name)) {
-        map.set(column.name, String(column.description).split(/(?<=\.)\s/)[0]);
+        map.set(column.name, plainText(String(column.description).split(/(?<=\.)\s/)[0]));
       }
     }
   };
@@ -304,11 +306,11 @@ function tabKinds(run) {
 const DESCRIPTION = {
   data: {
     train: "The data this model learned from, and how it was prepared.",
-    score: "The data this run scored, and how it was prepared.",
+    score: "The data this contact list was made from, and how it was prepared.",
   },
   model: {
-    train: "How well the model predicts, and which details drive its scores.",
-    score: "The model this run used to score.",
+    train: "How well the model predicts, and which details drive it.",
+    score: "The model this contact list was made with.",
   },
   output: {
     train: "How well the top of the list is picked out, before any customer is contacted.",
@@ -400,7 +402,7 @@ function leakageLine(validation, config) {
       .join(" · ");
   }
   const enabled = readPath(config || {}, "validation.leakage_check");
-  if (enabled === false) return "Not run";
+  if (enabled === false) return "Not checked";
   if (!validation) return null;
   return "Passed: no column gives the answer away";
 }
@@ -446,12 +448,12 @@ function sourceCard(run, profile, extra) {
     return card(
       "Where this data came from",
       `<p class="pg-p">Built from ${fmtInt(files.length)} ${files.length === 1 ? "table" : "tables"}${
-        files.length ? `: ${esc(files.join(", "))}` : ""
-      }.</p><p class="pg-p muted">The same recipe can be replayed on next month's tables.</p><div class="card-body"><details class="tech" data-lineage><summary>Details: data lineage</summary>${block}</details></div>`,
+        files.length ? `: ${files.map((f) => userText(f)).join(", ")}` : ""
+      }.</p><p class="pg-p muted">The same steps can be applied again to next month's tables.</p><div class="card-body"><details class="tech" data-lineage><summary>Details: data lineage</summary>${block}</details></div>`,
     );
   }
   if (profile && present(profile.file_name) && !run.dataset_id) {
-    return card("Where this data came from", `<p class="pg-p">Uploaded file <b>${esc(profile.file_name)}</b>.</p><div class="pg-body"></div>`);
+    return card("Where this data came from", `<p class="pg-p">Uploaded file <b>${userText(profile.file_name)}</b>.</p><div class="pg-body"></div>`);
   }
   return "";
 }
@@ -598,8 +600,8 @@ function dataPage(uc, run, art, byPath, extra) {
         .map((c) => {
           const entry = codeEntry(c.code);
           const titled = !!(entry && entry.title);
-          const rest = (titled ? [c.message, c.suggestion] : [c.suggestion]).filter(Boolean).join(" ");
-          return `<li data-code="${esc(c.code)}">${esc(titled ? entry.title : c.message)}${
+          const rest = (titled ? [c.message, c.suggestion] : [c.suggestion]).filter(Boolean).map(plainText).join(" ");
+          return `<li data-code="${esc(c.code)}">${esc(titled ? entry.title : plainText(c.message))}${
             rest ? ` <span class="muted">${esc(rest)}</span>` : ""
           }</li>`;
         })
@@ -666,7 +668,7 @@ function dataPage(uc, run, art, byPath, extra) {
           esc(title),
           dataTable(
             [{ label: "Column" }, { label: "Why" }, { label: "Detail" }],
-            rows.map((c) => [esc(columnWords(c.name)), esc(why || DROP_WORDS[c.reason] || humanise(c.reason)), esc(dash(c.detail))]),
+            rows.map((c) => [esc(columnWords(c.name)), esc(why || DROP_WORDS[c.reason] || humanise(c.reason)), esc(dash(plainText(c.detail)))]),
           ),
         )
       : "";
@@ -773,13 +775,13 @@ function baselineNotice(evaluation, baseline) {
   });
 }
 
-/** "What drives the score": the top 8, largest first, the rest behind "Show all". */
+/** "What drives it" (the glossary's words for feature importance): the top 8, largest first, the rest behind "Show all". */
 function driversCard(uc, importance) {
   const items = ((importance && importance.items) || []).slice().sort((a, b) => b.share_pct - a.share_pct);
   if (!items.length) {
-    return pendingCard("What drives the score", {
-      title: "This appears when training finishes",
-      text: "Each detail's share of the score is measured on the test data at the end of training.",
+    return pendingCard("What drives it", {
+      title: "This appears when the model is built",
+      text: "Each detail's share of the likelihood is measured on the test data once the model is built.",
     });
   }
   const maxShare = Math.max(...items.map((i) => i.share_pct));
@@ -791,14 +793,14 @@ function driversCard(uc, importance) {
   const top = items.slice(0, 8);
   const rest = items.slice(8);
   return card(
-    `What drives the score${sortNote("largest first")}`,
+    `What drives it${sortNote("largest first")}`,
     `<div class="bars">${top.map(bar).join("")}</div>${
       rest.length
         ? `<details class="tbl-more pg-more"><summary>Show all ${fmtInt(items.length)}</summary><div class="bars">${rest
             .map(bar)
             .join("")}</div></details>`
         : ""
-    }<p class="caption">Each detail's share of how much the score depends on it, measured on customers the model never saw.</p>`,
+    }<p class="caption">Each detail's share of how much the likelihood depends on it, measured on customers the model never saw.</p>`,
   );
 }
 
@@ -814,11 +816,11 @@ function evaluationCard(evaluation, baseline) {
       name(r.id, r.label),
       esc(fmtMetric(r.model_value)),
       esc(fmtMetric(r.baseline_value)),
-      `<code class="mono">${esc(r.label)}</code>`,
+      `<code class="mono" data-technical>${esc(r.label)}</code>`,
     ]);
   } else {
     cols = [{ label: "Measure" }, { label: "This model", num: true }, { label: "Code", more: true }];
-    rows = metrics.map((m) => [name(m.id, m.label), esc(fmtMetric(m.value)), `<code class="mono">${esc(m.label)}</code>`]);
+    rows = metrics.map((m) => [name(m.id, m.label), esc(fmtMetric(m.value)), `<code class="mono" data-technical>${esc(m.label)}</code>`]);
   }
   const yardstick = baseline ? termText("baseline") : null;
   return card(
@@ -850,8 +852,8 @@ function modelPage(uc, run, art, byPath, extra = {}) {
       "model",
       run,
       pendingCard("How good is this model?", {
-        title: "The model's results appear when training finishes",
-        text: "This run has not finished training. Open the use case to see its progress.",
+        title: "The model's results appear when it is built",
+        text: "The model is still being built. Open the goal to see its progress.",
       }, { label: "Go to Setup", href: `#/uc/${uc.id}`, kind: "secondary" }),
     );
   }
@@ -860,8 +862,9 @@ function modelPage(uc, run, art, byPath, extra = {}) {
   const recall = metrics.find((m) => m.id === "recall");
   const primary = evaluation && evaluation.primary_metric;
   const second = recall && primary !== "recall" ? recall : metrics.find((m) => m.id !== primary);
+  // Plan M M172 (DEC-1602): which algorithm won is hidden from a marketer; it is the "Algorithm" row of the
+  // technical details below.
   const modelTiles = tiles([
-    ["Model", dash((best && best.display_name) || run.best_model)],
     evaluation
       ? [metricShort(primary, evaluation.primary_metric_label), dash(evaluation.headline_score, fmtMetric)]
       : null,
@@ -897,7 +900,7 @@ function modelPage(uc, run, art, byPath, extra = {}) {
   const shapOn = config ? readPath(config, "evaluation.shap") : undefined;
   const detailsCard = `<section class="card"><details class="bs-details" data-beeswarm="${esc(
     run.run_id,
-  )}" data-shap="${esc(String(shapOn))}"><summary><span class="mt">Details</span><span class="ms">SHAP beeswarm: how the top 15 details push each ${esc(entityOf(uc))}'s score up or down</span></summary><div class="bs-body" data-technical><p class="caption">Loading…</p></div></details></section>`;
+  )}" data-shap="${esc(String(shapOn))}"><summary><span class="mt">Details</span><span class="ms">How the top 15 details push each ${esc(entityOf(uc))}'s likelihood up or down</span></summary><div class="bs-body" data-technical><p class="caption">Loading…</p></div></details></section>`;
 
   const matrixBlock = matrix
     ? `<h4>Confusion matrix</h4><div class="cm">
@@ -982,17 +985,17 @@ function scoringModelPage(uc, run, art) {
   const drift = art["drift.json"];
   const trainingRun = drift && drift.baseline_run_id;
   const body = noticeCard({
-    title: `This run used the ${run.best_model || "approved"} model`,
+    title: "This contact list was made with a model built earlier",
     text: [
-      "A scoring run only applies a trained model, so there is nothing new to measure here.",
-      "How well the model predicts was measured when it was trained.",
+      "Making a contact list only applies a model built earlier, so there is nothing new to measure here.",
+      "How well the model predicts was measured when it was built.",
     ],
     action: trainingRun
-      ? { label: "Open the training run's Model page", href: `#/uc/${uc.id}/model/${trainingRun}`, kind: "secondary" }
+      ? { label: "Open that model's page", href: `#/uc/${uc.id}/model/${trainingRun}`, kind: "secondary" }
       : { label: `Back to ${uc.name}`, href: `#/uc/${uc.id}`, kind: "secondary" },
     attrs: "data-scoring-model",
   });
-  return shell(uc, "model", run, body, { tech: [["Training run", trainingRun]] });
+  return shell(uc, "model", run, body, { tech: [["Model", run.best_model], ["Training run", trainingRun]] });
 }
 
 // --- Model: the Details beeswarm ---------------------------------------------------------------
@@ -1152,7 +1155,7 @@ const retrainStarted = () =>
 
 // --- Output ------------------------------------------------------------------------------------
 
-/** "Settings used for this run", closed, worded from help.yaml; rows that cannot apply are left out. */
+/** "Settings used", closed, worded from help.yaml; rows that cannot apply are left out. */
 function settingsCard(uc, run, config, byPath, summary, drift) {
   if (!config) return "";
   const scoring = isScoring(run);
@@ -1232,7 +1235,7 @@ function settingsCard(uc, run, config, byPath, summary, drift) {
   );
   return card(
     "",
-    `<div class="card-body"><details class="tech" data-settings><summary>Settings used for this run</summary>${kvs(
+    `<div class="card-body"><details class="tech" data-settings><summary>Settings used</summary>${kvs(
       rows,
     )}<h4>Technical</h4>${tech}</details></div>`,
     "data-pg-tech",
@@ -1263,7 +1266,7 @@ function reasonText(reason) {
   return `${columnWords(reason.feature)}${value}${direction}`;
 }
 
-const ACTION_WORDS = { "Control (hold out)": "Held back (control group)" };
+const ACTION_WORDS = { "Control (hold out)": `Held back (${term("comparisonGroup").toLowerCase()})` };
 const actionText = (row) =>
   row.suppressed_reason
     ? `Not contacted (${humanise(row.suppressed_reason).toLowerCase()})`
@@ -1296,7 +1299,7 @@ function sampleCard(uc, run, summary, download = null) {
         { label: "Main reason" },
         { label: "Action" },
         { label: `Record key (${keyText(run.primary_key)})`, more: true },
-        { label: `Score (${summary.score_field})`, more: true },
+        { label: `Likelihood (${summary.score_field})`, more: true },
       ],
       rows,
     )}<p class="caption">${
@@ -1373,7 +1376,7 @@ function scoringOutputPage(uc, run, art, byPath, scoresHref, extra = {}) {
         "Who to contact",
         emptyState({
           title: "No contact list yet",
-          text: "The contact list is written when a scoring run finishes. Score new customers to get one.",
+          text: "The contact list is written when a list is made from new customers. Make one from Setup to get it.",
           action: { label: "Go to Setup", href: `#/uc/${uc.id}` },
         }),
       ),
@@ -1399,12 +1402,11 @@ function scoringOutputPage(uc, run, art, byPath, scoresHref, extra = {}) {
       summary.kpi && Number.isInteger(summary.kpi.value) ? fmtInt(summary.kpi.value) : dash(summary.kpi && summary.kpi.display),
       kpiNote,
     ],
-    ["Customers scored", dash(summary.rows_scored, fmtInt)],
+    // Plan M M172 (DEC-1602): counts and shares in the one number format (ui/format.js).
+    ["Customers ranked", count(summary.rows_scored)],
     [
       "Held back to measure results",
-      present(held)
-        ? `${fmtInt(held)}${summary.rows_scored ? ` (${fmtPct(held / summary.rows_scored, 0)})` : ""}`
-        : EM_DASH,
+      present(held) ? `${count(held)}${summary.rows_scored ? ` (${percent(held / summary.rows_scored)})` : ""}` : EM_DASH,
       "Chosen at random, not contacted",
     ],
   ]);
@@ -1492,9 +1494,9 @@ function trainingOutputPage(uc, run, art, byPath) {
     const top = values[0];
     const sentence =
       unit === "x"
-        ? `The 10% of ${plural(entity)} with the highest scores had the outcome ${fmtNum(top, 1)} times as often as a random 10%.`
-        : `The 10% of ${plural(entity)} with the highest scores averaged ${fmtNum(top, 1)}${unit}.`;
-    liftTiles = tiles([[unit === "x" ? "Lift in the top 10%" : "Top 10% of scores", `${fmtNum(top, 1)}${times}`, sentence]]).replace(
+        ? `The 10% of ${plural(entity)} most likely to act had the outcome ${fmtNum(top, 1)} times as often as a random 10%.`
+        : `The 10% of ${plural(entity)} ranked highest averaged ${fmtNum(top, 1)}${unit}.`;
+    liftTiles = tiles([[unit === "x" ? "Lift in the top 10%" : "Top 10% of the ranking", `${fmtNum(top, 1)}${times}`, sentence]]).replace(
       'class="kpis"',
       'class="kpis pg-one" data-lift',
     );
@@ -1514,19 +1516,19 @@ function trainingOutputPage(uc, run, art, byPath) {
           )}<span class="bl">${esc(bin.label || `D${i + 1}`)}</span></div>`;
         })
         .join("")}</div><p class="caption">${esc(
-        `D1 is the 10% of ${plural(entity)} with the highest scores, D10 the lowest. Measured on the test set.`,
+        `D1 is the 10% of ${plural(entity)} ranked highest, D10 the lowest. Measured on the test set.`,
       )}${term ? ` ${esc(term)}` : ""}</p>`
     : emptyState({
-        title: "The lift chart appears when training finishes",
-        text: "It is measured on the test set at the end of training.",
+        title: "The lift chart appears when the model is built",
+        text: "It is measured on the test set once the model is built.",
       });
 
   const body = `${liftTiles}
-    <p class="pg-p muted">${esc(`How many ${plural(entity)} to contact appears after you score new customers with this model.`)}</p>
-    ${card(esc(unit === "x" || !lift ? "Lift by score decile" : "Actual rate by score decile"), chart)}
+    <p class="pg-p muted">${esc(`How many ${plural(entity)} to contact appears after you make a contact list with this model.`)}</p>
+    ${card(esc(unit === "x" || !lift ? "Lift by tenth of the ranking" : "Actual rate by tenth of the ranking"), chart)}
     ${settingsCard(uc, run, config, byPath, null, null)}`;
   return shell(uc, "output", run, body, {
-    primary: { label: "Score new customers with this model", href: `#/uc/${uc.id}`, kind: "primary" },
+    primary: { label: "Make a contact list with this model", href: `#/uc/${uc.id}`, kind: "primary" },
   });
 }
 
@@ -1550,7 +1552,7 @@ function outputPage(uc, run, art, byPath, scoresHref, extra = {}) {
 // uplift run redirects to `#/uplift/<uc>/{model,output}/<run>` (docs/UI_AUDIT.md C14).
 
 const NOT_CAUSAL =
-  "Not causal: the treatment was not randomly assigned, so these numbers describe who was contacted, not what contacting them changed.";
+  "Not yet proven: the customers contacted were not chosen at random, so these numbers describe who was contacted, not what contacting them changed.";
 
 const fmtShare = (v) => dash(v, (x) => fmtPct(x, 1));
 
@@ -1589,18 +1591,16 @@ function randomnessLine(report, config) {
 
 function driftRows(drift) {
   const t = drift.treatment || {};
-  const features = drift.features
-    ? `${humanise(drift.features.status)} · max PSI ${fmtNum(drift.features.max_psi, 3)}`
-    : dash(drift.features_reason);
+  const features = drift.features ? humanise(drift.features.status) : dash(drift.features_reason);
   const share =
     t.status === "not_applicable"
       ? dash(t.reason)
-      : `${fmtShare(t.current_treated_share)} now, ${fmtShare(t.training_treated_share)} in training · ${humanise(
+      : `${fmtShare(t.current_treated_share)} now, ${fmtShare(t.training_treated_share)} when the model was built · ${humanise(
           t.status,
         )} (tolerance ${fmtNum(t.tolerance, 2)})`;
   return [
-    ["Feature drift", features],
-    ["Treated share", share],
+    ["Customer details", features],
+    ["Contacted share", share],
   ];
 }
 
@@ -1609,9 +1609,13 @@ function driftCard(drift, scoring) {
   if (!scoring && !drift) return "";
   const drifted = drift && drift.features ? drift.features.drifted_features || [] : [];
   const body = drift
-    ? `${kvs(driftRows(drift))}${drifted.length ? `<p class="caption">Drifted: ${esc(drifted.join(", "))}</p>` : ""}`
-    : `<div class="empty">The comparison with the training data appears when this scoring run finishes.</div>`;
-  return card("Drift against the training data", body);
+    ? `${kvs(driftRows(drift))}${drifted.length ? `<p class="caption">Details that changed: ${esc(drifted.join(", "))}</p>` : ""}${
+        drift.features && present(drift.features.max_psi)
+          ? `<details class="tech"><summary>Technical details</summary>${kvs([["Largest PSI", fmtNum(drift.features.max_psi, 3)]])}</details>`
+          : ""
+      }`
+    : `<div class="empty">The comparison with the data the model learned from appears when this list is ready.</div>`;
+  return card("Compared with the data the model learned from", body);
 }
 
 function upliftDataPage(uc, run, art, byPath, extra) {
@@ -1645,12 +1649,12 @@ function upliftDataPage(uc, run, art, byPath, extra) {
     ["Control", armLine(uv, "control")],
     ["Treated share", treatedShare(uv)],
     ["Randomness check", randomnessLine(uv, config)],
-    ["Causal", uv ? (uv.causal ? "Yes" : "No") : EM_DASH],
+    ["Can prove the effect (random comparison)", uv ? (uv.causal ? "Yes" : "No") : EM_DASH],
     ["Rows set aside (outcome not final)", dash(uv && uv.rows_immature, fmtInt)],
     [
-      "Train / test",
+      "Learning / test",
       parts.length
-        ? `${parts.map((p) => `${p.name} ${fmtInt(p.rows)}`).join(" · ")}${
+        ? `${parts.map((p) => `${p.name === "train" ? "learning" : p.name} ${fmtInt(p.rows)}`).join(" · ")}${
             split.group_column ? ` · grouped by ${split.group_column}` : ""
           }`
         : EM_DASH,
@@ -1672,11 +1676,11 @@ function upliftDataPage(uc, run, art, byPath, extra) {
             ];
           }),
         )
-      : `<div class="empty">Every uplift check passed.</div>`
+      : `<div class="empty">Every experiment check passed.</div>`
     : `<div class="empty">${
         scoring
-          ? "A scoring run is not checked as an experiment; its treated share is compared with training's in the drift card."
-          : "The experiment checks appear when this training run has read its data."
+          ? "A new contact list is not checked as an experiment; its contacted share is compared with the one the model learned from below."
+          : "The experiment checks appear once the data has been read."
       }</div>`;
 
   const body = `${upliftTiles}
@@ -1688,7 +1692,7 @@ function upliftDataPage(uc, run, art, byPath, extra) {
         `${kvs(experimentRows)}${uv && uv.causal === false ? `<p class="caption">${esc(NOT_CAUSAL)}</p>` : ""}`,
       )}
     </div>
-    ${card("Uplift checks", checksBody)}
+    ${card("Experiment checks", checksBody)}
     ${driftCard(drift, scoring)}`;
   return shell(uc, "data", run, body, { techHtml: fileDetails(profile) });
 }

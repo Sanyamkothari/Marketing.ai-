@@ -34,11 +34,11 @@ test("returns empty string when no summary or zero actions", () => {
 test("renders conflict metrics and counts", () => {
   const html = conflictsCardHtml(summary);
   const plain = text(html);
-  assert.match(plain, /Arbitration & Conflicts/);
+  assert.match(plain, /One message per customer/); // Plan M M172: arbitration in the glossary's words
   assert.match(plain, /Total customers evaluated 100/);
   assert.match(plain, /Customers qualifying for actions 80/);
   assert.match(plain, /Customers with conflicts \((>|&gt;)1 action\) 30/);
-  assert.match(plain, /Treated customers \(winners\) 50/);
+  assert.match(plain, /Contacted customers \(winners\) 50/);
   assert.match(plain, /Dropped actions \(conflict suppressed\) 35/);
   assert.match(plain, /Channel cap suppressed 5/);
 });
@@ -46,8 +46,9 @@ test("renders conflict metrics and counts", () => {
 test("renders use case breakdown table", () => {
   const html = conflictsCardHtml(summary);
   const plain = text(html);
-  assert.match(plain, /win-back-campaign/);
-  assert.match(plain, /targeted-advertisement/);
+  // Plan M M172: each goal by its name (§4.2), not its id.
+  assert.match(plain, /Win back lapsed customers/);
+  assert.match(plain, /Find customers likely to buy/);
   assert.match(plain, /Winning actions/);
   assert.match(plain, /Dropped actions/);
 });
@@ -65,22 +66,22 @@ test("says how conflicts were settled, only for the ways that happened", () => {
   );
   assert.match(plain, /Settled by priority times value 12/);
   assert.match(plain, /Settled by priority alone \(value missing or of a different kind\) 7/);
-  assert.match(plain, /Settled by use case order \(a tie\) 3/);
+  assert.match(plain, /Settled by goal order \(a tie\) 3/);
   assert.match(plain, /Kept because chosen at random \(explore\) 2/);
-  assert.match(plain, /Actions blocked by a hold-out 4/);
+  assert.match(plain, /Actions blocked by a comparison group 4/);
   const none = text(conflictsCardHtml(summary));
   assert.doesNotMatch(none, /Settled by/);
-  assert.doesNotMatch(none, /hold-out/);
+  assert.doesNotMatch(none, /comparison group/);
 });
 
 test("names the contested customers a channel cap left with no action, only when there are some", () => {
   const plain = text(conflictsCardHtml({ ...summary, contested_customers_channel_capped: 6 }));
-  assert.match(plain, /Wanted by several use cases, left with no action by a channel cap 6/);
+  assert.match(plain, /Wanted by several goals, left with no action by a channel cap 6/);
   assert.doesNotMatch(text(conflictsCardHtml(summary)), /left with no action/);
 });
 
 test("names the actions another use case's control group blocked, only when there are some", () => {
   const plain = text(conflictsCardHtml({ ...summary, control_blocked_actions: 9 }));
-  assert.match(plain, /Actions blocked by another use case's control group 9/);
-  assert.doesNotMatch(text(conflictsCardHtml(summary)), /control group/);
+  assert.match(plain, /Actions blocked by another goal's comparison group 9/);
+  assert.doesNotMatch(text(conflictsCardHtml(summary)), /comparison group/);
 });

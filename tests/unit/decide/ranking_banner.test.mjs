@@ -49,7 +49,8 @@ test("a list ranked by the propensity model says so, with the server's reason, a
   const html = views.outputPageHtml(uc, scoreRun, { "policy_recommendation.json": policy }, { ranking: fallback });
   assert.match(html, /data-ranking="propensity_model"/);
   assert.match(html, /data-code="UPLIFT_NOT_BETTER_THAN_RISK"/);
-  assert.match(html, /This list is ranked by the propensity model, not by uplift/);
+  // Plan M M172 (DEC-1602): the banner and the server's reason in the glossary's words (`plainText`).
+  assert.match(html, /This list is ranked by likelihood, not by the effect of contacting them/);
   assert.ok(html.includes("does not beat risk ranking"));
   assert.ok(html.indexOf('data-ranking="propensity_model"') < html.indexOf("Targeting recommendation"));
 });
@@ -62,14 +63,14 @@ test("an uplift ranking that failed the check, with nothing to fall back to, war
     reason: "This model does not beat risk ranking (…). This use case has no approved propensity model to rank by instead, so the list keeps the uplift ranking: treat its order with caution.",
   };
   const html = views.rankingBanner(kept);
-  assert.match(html, /The uplift model does not beat risk ranking/);
-  assert.match(html, /no approved propensity model/);
+  assert.match(html, /The effect model does not beat ranking by risk/);
+  assert.match(html, /no approved likelihood model/);
   assert.match(html, /data-ranking="uplift"/);
 });
 
 test("a model that passed gets one quiet line, and an older run nothing", () => {
   const passed = { ...fallback, ranking: "uplift", code: null, beats_risk: true, reason: "Ranked by predicted uplift. It beats risk ranking." };
-  assert.match(views.rankingBanner(passed), /^<p class="caption" data-ranking="uplift">Ranked by predicted uplift\./);
+  assert.match(views.rankingBanner(passed), /^<p class="caption" data-ranking="uplift">Ranked by predicted effect\./); // Plan M M172
   assert.equal(views.rankingBanner(null), "");
   const html = views.outputPageHtml(uc, scoreRun, { "policy_recommendation.json": policy }, {});
   assert.equal(html.includes("data-ranking"), false);
@@ -82,9 +83,10 @@ test("the reason is escaped, never markup", () => {
 
 test("a list ranked by the propensity model is not described as the uplift policy's persuadables", () => {
   const html = views.outputPageHtml(uc, scoreRun, { "policy_recommendation.json": policy }, { ranking: fallback });
-  assert.ok(html.includes("80 customers chosen by the propensity model"));
+  // Plan M M172: "propensity" reads "likelihood" and "uplift" reads "effect"; the distinction the test pins is kept.
+  assert.ok(html.includes("80 customers chosen by likelihood"));
   assert.equal(html.includes("80 of 300 persuadables"), false);
-  assert.ok(html.includes("Uplift model&#39;s prediction for these customers") || html.includes("Uplift model's prediction for these customers"));
+  assert.ok(html.includes("Effect model&#39;s prediction for these customers") || html.includes("Effect model's prediction for these customers"));
   const plain = views.outputPageHtml(uc, scoreRun, { "policy_recommendation.json": policy }, {});
   assert.ok(plain.includes("80 of 300 persuadables"));
 });

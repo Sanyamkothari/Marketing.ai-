@@ -17,6 +17,7 @@
 // `data-code` and under Details); a person is a name, never a user id.
 
 import { getIndustries } from "../../api.js";
+import { goalName } from "../../labels.js";
 import { EM_DASH, crumbs, esc, glossaryCode, pageHead, present, techDetails } from "../../dom.js";
 import { getUsers } from "./api.js";
 import { can, currentMe, reasonFor } from "./session.js";
@@ -409,7 +410,7 @@ export function loadUseCaseNames() {
 export const useCaseList = () => (useCases ? [...useCases].map(([id, name]) => ({ id, name })) : null);
 
 /** A use case's name, or its id when the catalogue could not be read. */
-export const useCaseName = (id, name = null) => name || (useCases && useCases.get(id)) || id || EM_DASH;
+export const useCaseName = (id, name = null) => goalName(id, name || (useCases && useCases.get(id)) || "") || EM_DASH; // Plan M §4.2: the goal's name
 
 // --- the audit reference ----------------------------------------------------------------------------
 

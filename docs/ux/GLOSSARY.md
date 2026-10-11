@@ -5,7 +5,8 @@
 
 One word for each thing. The right-hand column lists the words that are never shown outside a
 "Technical details" section; a test renders the main pages and fails on any of them beyond each page's
-recorded baseline (`tests/integration/production/ui/glossary/baseline.json`), which M172 empties (Plan M §4.1).
+recorded baseline (`tests/integration/production/ui/glossary/baseline.json`), which M172 emptied (Plan M §4.1):
+the baseline is now an empty object, so any of these words outside technical details fails the check.
 
 | Concept | Shown to a marketer | Never shown outside Technical details | Why |
 |---|---|---|---|
@@ -37,3 +38,34 @@ recorded baseline (`tests/integration/production/ui/glossary/baseline.json`), wh
   a `<details>` whose summary reads exactly "Technical details"), hidden elements, scripts and styles are
   left out; `aria-label`, `title` and `placeholder` count as text. The summary of an excluded `<details>`
   stays on screen when closed, so it is still checked unless it reads "Technical details" or "Details".
+
+## Names the person supplied
+
+A file name (`training.csv`), a campaign label someone typed or a column of their data is not our wording,
+so the glossary cannot rename it. The page draws each one inside an element with the `data-user` attribute
+(`userText(value)` in `ui/labels.js`), and the visible-text check leaves that element out. Only the person's
+own string goes inside the mark, never a sentence of ours around it.
+
+## Engine sentences in the page's words
+
+Some text a page shows is written by the engine or the configuration (a mode label, a check's message, a
+server sentence) and is pinned there by tests that read its meaning. The page rewords it with `plainText()`
+(`ENGINE_TEXT` in `ui/labels.js`, 43 rules); the API answer itself is unchanged.
+
+## Goal names (Plan M §4.2)
+
+Display names only: ids, configuration keys and API answers are unchanged. Order Fulfillment and Fault
+Prediction keep their names and sit under "More goals" on Home, because they contact no customer.
+
+| Goal id | Shown as |
+|---|---|
+| `targeted-advertisement` | Find customers likely to buy |
+| `win-back-campaign` | Win back lapsed customers |
+| `telco-churn` | Keep customers likely to leave |
+| `payment-propensity` | Get customers to pay on time |
+| `rca` | Understand why customers leave |
+| `hillstrom-email` | Choose the best e-mail for each customer |
+| `ai-onboarding-assistant` | Answer customer questions (AI assistant) |
+| `card-default-propensity` | Spot card accounts likely to miss a payment |
+| `first-purchase-propensity` | Find browsers likely to buy for the first time |
+| `criteo-uplift` | Show ads where they change what people do |

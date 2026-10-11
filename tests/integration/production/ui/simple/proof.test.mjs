@@ -10,6 +10,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { $, $$, settle, until } from "../harness.mjs";
 import { fixture, installWholePage } from "./fake.mjs";
+import { plainText } from "../../../../../ui/labels.js";
 
 const proofs = fixture("proofs");
 const [entry] = proofs.proofs;
@@ -43,7 +44,8 @@ test("Results lists the ready packs in the server's words, each a link to its pa
   assert.equal(text(link), entry.name);
   const row = text(link.closest("tr"));
   assert.ok(row.includes(entry.headline), "the pack's own sentence");
-  assert.ok(row.includes(entry.claim_label), "what its numbers can claim");
+  // Plan M M172: the claim in the glossary's words ("Causal" reads "Proven"), its meaning unchanged.
+  assert.ok(row.includes(plainText(entry.claim_label)), "what its numbers can claim");
 });
 
 test("the Reports hub lists the pack with its page and its PDF", async () => {
@@ -56,7 +58,9 @@ test("the Reports hub lists the pack with its page and its PDF", async () => {
 test("a pack's page shows the server's report and the suggestion an Analyst approves", async () => {
   await open(`#/pilot/proof/${entry.campaign_id}`, () => $("iframe.pe-frame") && $("[data-pe-proposals]"));
   assert.equal($("main h1").textContent, "Value Proof Pack");
-  assert.ok(text($("main .sub")).includes(pack.campaign_name.text));
+  // Plan M M172: the campaign's short name and what it can claim, then the label recorded with it (the person's words).
+  assert.ok($$("main .sub").map(text).join(" ").includes(pack.campaign_name.text));
+  assert.ok($("main .sub [data-user]"), "the recorded label is marked as the person's own");
   const [proposal] = pack.proposals;
   assert.ok(text($("[data-pe-proposals]")).includes(proposal.segment.text));
   assert.ok(text($("[data-pe-proposals]")).includes(proposal.worst_case.text));

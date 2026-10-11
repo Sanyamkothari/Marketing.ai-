@@ -29,9 +29,9 @@ export function generalSteps() {
   return [
     {
       title: "Home",
-      text: "Your goals, laid out by customer stage. The bar at the top takes you anywhere: Home, Connections, Results and Settings.",
+      text: "Your goals, each labelled with its customer stage. The bar at the top takes you anywhere: Home, Connections, Results and Settings.",
       hash: "#/",
-      targets: [".timeline-wrap", ".uc-list"],
+      targets: [".uc-list"],
       optional: true,
     },
     {
@@ -80,31 +80,31 @@ export function tourSteps(demo) {
   return [
     {
       title: "Home",
-      text: "Every use case, laid out by goal. The bar at the top takes you anywhere: Home, Connections, Results and Settings.",
+      text: "Every goal, labelled with its customer stage. The bar at the top takes you anywhere: Home, Connections, Results and Settings.",
       hash: "#/",
-      targets: ["#pb-bar .topnav", ".timeline-wrap", ".uc-list"],
+      targets: ["#pb-bar .topnav", ".uc-list"],
     },
     {
       title: "Set up a model",
-      text: "Guided setup checks your file and recommends the settings; you approve, then click Run training.",
+      text: "Guided setup checks your file and recommends the settings; you approve, then click Build the model.",
       hash: m ? `#/uc/${uc}` : null,
       targets: ["#f-run", ".setup-grid", ".pick"],
     },
     {
-      title: "Training results",
-      text: "Each run reads Data, Model, Output: what was checked, which model won and how good it is, and what to do next.",
+      title: "The model's results",
+      text: "Each model reads Data, Model, Output: what was checked, how good the model is, and what to do next.",
       hash: m ? `#/uc/${uc}/run/${encodeURIComponent(m.train_run_id)}` : null,
       targets: [".flow", ".tabs"],
     },
     {
       title: "Who to contact",
-      text: "Next month's customers, scored: a band, an action and a reason for every customer, and a control group held back to measure the effect. Every run is listed under Results.",
+      text: "Next month's customers, ranked: a priority, an action and a reason for every customer, and a comparison group held back to measure the effect. Every contact list is listed under Results.",
       hash: m ? `#/uc/${uc}/output/${encodeURIComponent(m.score_run_id)}` : null,
       targets: [".head-actions .btn.primary", ".kpis", "main.screen .card"],
     },
     {
       title: "Campaign results",
-      text: "After the outcome period, the customers you contacted are compared with the control group: whether the campaign made a measurable difference, with a range.",
+      text: "After the outcome period, the customers you contacted are compared with the comparison group: whether the campaign made a measurable difference, with a range.",
       hash: m ? `#/campaign/${uc}/${encodeURIComponent(m.score_run_id)}` : null,
       targets: ["[data-verdict]", ".kpis", "main.screen .card"],
     },
