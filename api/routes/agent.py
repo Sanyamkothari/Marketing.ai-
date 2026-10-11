@@ -38,6 +38,7 @@ from api.routes.agent_recipes import (
     scoring_source,
     write_derived_upload,
 )
+from api.routes.agent_renames import load_changes, memory_changes, model_changes, save_changes
 from api.routes.ai_service import resolve_slot
 from api.routes.runs import read_frame, requested_by, score_version, validation_conflict
 from api.routes.uploads import http_error, load_upload, load_upload_profile, profile_row_cap, use_case_config
@@ -87,6 +88,7 @@ from engine.doctor.memory import (
     use_same_treatment,
     used_in,
 )
+from engine.doctor.renames import FileChanges
 from engine.generative.budget import Meter
 from engine.generative.contracts import LlmUsageReport
 from engine.generative.guardrails import Guardrails, load_policy
@@ -180,7 +182,7 @@ def check_upload(
             refuse_other_roles(recipe, primary_key=primary_key, target=None, training=False)
         # As `POST /runs` does (DEC-1006): the model's recipe prepares the file before it is checked
         # against the model's columns - here in memory, since a dry run writes nothing.
-        prepared = prepare_in_memory(storage, config, upload, recipe)
+        prepared = prepare_in_memory(storage, config, upload, recipe, version)
         if isinstance(prepared, ValidationReport):
             return prepared
         frame, row_count = prepared
@@ -384,6 +386,12 @@ class AgentSessionResponse(StrictBase):
     treatment: TreatmentOffer | None = Field(
         default=None,
         description="The treatment of a file of the same shape, offered until it is used; null when there is none.",
+    )
+    # Plan L #16 (DEC-1597): a column renamed since the saved steps were approved, and new spellings (shown only).
+    changes: FileChanges | None = Field(
+        default=None,
+        description="What changed in this file against the file the saved steps were approved on: renames to "
+        "tick, columns no new one clearly matches, new spellings; null when nothing did.",
     )
 
 
@@ -590,7 +598,39 @@ def _response(
             data_access=config.agent.ai_data_access,
             third_party=is_third_party(effective.llm, effective.provider),
         )
-    return AgentSessionResponse(session=session, chat=chat, treatment=_treatment(storage, session))
+    return AgentSessionResponse(
+        session=session,
+        chat=chat,
+        treatment=_treatment(storage, session),
+        changes=(
+            None
+            if session.status is SessionStatus.APPLIED or session.explore
+            else load_changes(storage, session.upload_id)
+        ),
+    )
+
+
+def _find_changes(storage: Storage, loaded: _Loaded) -> None:
+    """Plan L #16 (DEC-1597): what changed in this file against the one the saved steps were approved on,
+    kept beside the session. A courtesy: it never fails a start."""
+    ctx, upload = loaded.ctx, loaded.upload
+    try:
+        changes = None
+        if ctx.mode is RunMode.SCORE and loaded.version is not None:
+            recipe = model_recipe(storage, loaded.version)
+            chosen = scoring_source(storage, upload, recipe)
+            if not isinstance(chosen, ValidationReport) and not (chosen.ready and recipe is not None):
+                changes = model_changes(storage, ctx.config, loaded.version, chosen.upload, recipe)
+        elif ctx.mode is RunMode.TRAIN:
+            intake = (
+                storage.read_model(upload.intake_key, IntakeReport)
+                if upload.intake_key is not None and storage.exists(upload.intake_key)
+                else None
+            )
+            changes = memory_changes(storage, ctx.config, upload, ctx.profile, intake, ctx.frame)
+        save_changes(storage, upload.upload_id, changes)
+    except Exception as exc:
+        _LOGGER.warning("doctor.renames.find_failed upload=%s error=%s", upload.upload_id, type(exc).__name__)
 
 
 def _treatment(storage: Storage, session: AgentSession, *, unused: bool = True) -> TreatmentOffer | None:
@@ -668,6 +708,7 @@ def _start_agent_session(
         session = start_session(ctx, session_id=session_id)
     # Every later call checks against the same model this one did (the one Run will score with).
     session = session.model_copy(update={"model_version_id": body.model_version_id})
+    _find_changes(storage, loaded)
     return _response(_save(storage, session), ctx.config, storage, request)
 
 

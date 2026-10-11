@@ -82,6 +82,12 @@ export const postEdit = (uploadId, edit) => call(session(uploadId, "/edits"), { 
 export const postSameTreatment = (uploadId, recipeId) =>
   call(session(uploadId, "/same-treatment"), { method: "POST", body: { recipe_id: recipeId } });
 
+/** Plan L #16 (DEC-1597): a copy of the file with the ticked columns given their old names; the answer is
+ * `POST /uploads`'s (`{ upload_id, profile, intake, treatment }`), and the file sent is left as it is.
+ * `renames` is `[{ column, new_name }]`. */
+export const postRenamedCopy = (uploadId, renames) =>
+  call(`/uploads/${enc(uploadId)}/renamed-copy`, { method: "POST", body: { renames } });
+
 /** Approve: `{ upload_id, mode, primary_key, target, overrides, summary, receipt }`, or a 409. */
 export const postApply = (uploadId) => call(session(uploadId, "/apply"), { method: "POST" });
 

@@ -20,10 +20,14 @@ import secrets
 from pathlib import Path
 from typing import Final
 
-from fastapi import APIRouter, Response
+from fastapi import APIRouter, Request, Response
 
+from api.access import set_audit_context
 from api.access_policy import RoutePolicy, register
 from api.deps import ConfigRootDep, StorageDep
+from api.routes.agent_recipes import load_recipe
+from api.routes.agent_renames import write_renamed_copy
+from api.routes.runs import requested_by
 from api.routes.uploads import (
     finish_upload,
     http_error,
@@ -55,6 +59,7 @@ from engine.doctor.outcomes import (
     next_steps,
     offer_outcome,
 )
+from engine.doctor.renames import ColumnRename, RenamedCopyRequest
 from engine.intake.config import load_intake_config
 from engine.intake.contracts import IntakeReport
 from engine.intake.run import received_format_for
@@ -82,6 +87,14 @@ register(
             action="doctor.handoff",
             purpose="start a use case from a file Data Doctor looked at",
             object_type="upload",
+        ),
+        # Plan L #16 (DEC-1597): a copy of the file with the columns the person ticked renamed back.
+        ("POST", "/uploads/{upload_id}/renamed-copy"): RoutePolicy(
+            role=Role.ANALYST,
+            action="doctor.renamed_copy",
+            purpose="use a renamed column under its old name",
+            object_type="upload",
+            object_param="upload_id",
         ),
         ("POST", "/doctor/outcome"): RoutePolicy(
             role=Role.ANALYST,
@@ -326,3 +339,62 @@ def agree_outcome(body: OutcomeRequest, storage: StorageDep, root: ConfigRootDep
     agreement = agreement.model_copy(update={"next_steps": next_steps(agreement)})
     storage.write_model(outcome_agreement_key(offer.entity_upload_id, config.id), agreement)
     return agreement
+
+
+@router.post(
+    "/uploads/{upload_id}/renamed-copy",
+    response_model=UploadResponse,
+    status_code=201,
+    responses={404: {"model": ErrorResponse}, 409: {"model": ErrorResponse}, 422: {"model": ErrorResponse}},
+    summary="A copy of the file with the columns the person ticked given their old names; the file is kept",
+)
+def renamed_copy(
+    upload_id: str,
+    body: RenamedCopyRequest,
+    request: Request,
+    response: Response,
+    storage: StorageDep,
+    root: ConfigRootDep,
+) -> UploadResponse:
+    """Plan L #16 (DEC-1597): "Your file has 'bill_amount' where last month had 'amount'. Use it?" - yes.
+
+    The file is copied, every row, with those columns renamed, into a new upload of the same use case and
+    mode; the upload asked about is left as it is. Saved steps then replay on the copy unchanged, and a copy
+    with a remembered shape is offered its treatment. Any column of the file may be renamed to a name the
+    file does not have: the person chooses, as with two close candidates the matcher never chooses between.
+    """
+    record = load_upload(storage, upload_id)
+    config = use_case_config(record.use_case_id, root)
+    if load_recipe(storage, upload_id) is not None:
+        raise http_error(
+            409,
+            "DOCTOR_RENAME_PREPARED",
+            "This file was prepared by Guided setup. Rename columns in the file you sent instead.",
+        )
+    columns = list(load_upload_profile(storage, upload_id).fingerprint.columns)
+    olds = [r.column for r in body.renames]
+    news = [r.new_name.strip() for r in body.renames]
+    unknown = [name for name in olds if name not in columns]
+    if unknown:
+        raise http_error(422, "DOCTOR_RENAME_UNKNOWN", f"The file has no column {unknown[0]!r}.")
+    if len(set(olds)) != len(olds) or len(set(news)) != len(news) or not all(news):
+        raise http_error(
+            422, "DOCTOR_RENAME_INVALID", "Rename each column once, each to a different, non-empty name."
+        )
+    taken = [new for new, old in zip(news, olds, strict=True) if new != old and new in columns]
+    if taken or any(new == old for new, old in zip(news, olds, strict=True)):
+        raise http_error(
+            422,
+            "DOCTOR_RENAME_INVALID",
+            f"The file already has a column called {taken[0]!r}." if taken else "A new name must differ.",
+        )
+    renames = tuple(ColumnRename(column=old, new_name=new) for old, new in zip(olds, news, strict=True))
+    copied = write_renamed_copy(storage, config, record, renames, requested_by=requested_by(request))
+    set_audit_context(
+        request,
+        object_id=copied.upload_id,
+        object_type="upload",
+        details={"source_upload_id": upload_id, "count": len(renames)},
+    )
+    response.headers["Location"] = f"/uploads/{copied.upload_id}/profile"
+    return copied

@@ -528,6 +528,8 @@ def test_openapi_builds_and_documents_every_route(client: TestClient) -> None:
         "/uploads/{upload_id}/agent-session/rows",
         # Plan L M159: use the same treatment as a file of the same shape last time (DEC-1594)
         "/uploads/{upload_id}/agent-session/same-treatment",
+        # Plan L #16: a copy of next month's file with a renamed column given its old name (DEC-1597)
+        "/uploads/{upload_id}/renamed-copy",
         "/privacy/consent/imports/from-connection",
     }
 
