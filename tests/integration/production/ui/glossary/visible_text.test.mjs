@@ -92,6 +92,9 @@ export const PAGES = [
   { id: "cost", hash: "#/cost", expect: /Estimates at AWS/ },
   { id: "approvals", hash: "#/approvals", expect: /Models waiting for your approval/ },
   { id: "data-request-kit", hash: "#/pilot/kit", expect: /Ask your data team/ },
+  // Plan M, M179 (DEC-1609): the Data page. New pages carry no allow-list: they must not show a never-shown word.
+  { id: "data-sources", hash: "#/data", expect: /Where your customer data comes from/, selector: "[data-dt-source='file']" },
+  { id: "data-check", hash: "#/data/check", expect: /Data Doctor looks at your files/ },
 ];
 
 /** Requests a page may make that the recording does not hold (none today). Anything else fails the page. */
@@ -103,6 +106,9 @@ const dump = process.env.GLOSSARY_DUMP || "";
 
 const { w, state, missing } = installDemoPage({ hash: "#/__start" });
 await loadModules();
+// Plan M pages that ui/index.html does not load yet (the integrator adds their <script> tags): importing the entry
+// point registers the route, and is a no-op once index.html has loaded it.
+await import("../../../../../ui/modules/data/index.js");
 
 /** Wait until the page has stopped changing: nothing in flight and the same markup for a few ticks. */
 async function untilStable(ms = 10000) {
