@@ -231,10 +231,15 @@ def samples(e: Entities) -> dict[str, list[str]]:
         ],
         "campaign": [f"#/campaign/{uc}/{e.score_unmeasured}"],
         "campaigns": [f"#/campaigns/{c}" for c in e.campaigns]
+        # Plan M M176 (DEC-1606): the Campaigns list and every tab of each campaign's page.
+        + ["#/campaigns"]
         + [
-            # Plan M M177 (DEC-1607): the New campaign wizard.
-            "#/campaigns/new",
-        ],
+            f"#/campaigns/{c}/{tab}"
+            for c in e.campaigns
+            for tab in ("overview", "audience", "results", "technical")
+        ]
+        # Plan M M177 (DEC-1607): the New campaign wizard.
+        + ["#/campaigns/new"],
         "results": ["#/results"],
         "settings": ["#/settings"],
         "help": ["#/help/glossary", "#/help/whats-new"],
