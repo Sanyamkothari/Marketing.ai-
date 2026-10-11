@@ -637,6 +637,13 @@ MILESTONE_TESTS: Final[Mapping[str, tuple[str, ...]]] = {
         "tests/integration/compliance/test_gate_offer_choice_run.py",
         "tests/integration/decide/test_treat_list_golden.py",
     ),
+    # M140 (DEC-1407), message variants as measured arms. The nightly test (tests/statistical/test_variant_arms.py,
+    # DEC-1300 (e)) is left out, as for M137; test_api_config.py is trunk's OpenAPI path set, which gained the route.
+    "M140": (
+        "tests/unit/decide/test_variant_arms.py",
+        "tests/integration/decide/test_variant_arms_journey.py",
+        "tests/integration/test_api_config.py",
+    ),
 }
 """Milestone id -> the test files (or directories, with a trailing `/`) that prove it is built.
 

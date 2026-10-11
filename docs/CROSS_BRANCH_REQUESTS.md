@@ -2289,6 +2289,46 @@ evidence label), beside M139's keys. `tests/unit/agentic/test_flags.py` is uncha
 has to reach `engine.compliance.handoff.message_checks` keyed by (action, channel) for its DLT and URL checks to apply,
 including the bare-host link rule (`engine.compliance.urls.find_links`).
 
+### 2026-10-11 — plan-k M140 (on main) → Plan J (owners of `engine/decide/`, `engine/measurement/` and `api/routes/decide.py`): message variants as arms in the treat list, the campaign and arbitration (record of additive, opt-in edits)
+
+**What changed** (DEC-1407 (e), (f), (h)–(j)): (1) `engine/decide/treat_list.py` calls
+`variant_treat_list_columns(..., config_root=...)` as step 5d, after M134's gate; it returns None unless the run has
+variant arms in force, so the default list is byte for byte the same, and `TreatListSummary` gains `variant_arm_counts`
+and `variant_note`, absent otherwise. (2) `engine/measurement/cycle.py` `open_campaign` passes `scope_keys` and arm labels
+only for a run with arms in force; `measure_recorded` adds the several-arm arguments only for a yes/no outcome with no
+covariate (a column or M135's `run_score`). (3) `POST /decide/arbitrate` refuses a run whose arms are in force with 409
+`VARIANT_ARMS_NOT_ARBITRATED`; other runs are unaffected. (4) `engine/decide/catalogue.py` `channel_contact_costs` skips
+actions whose `template_ref` starts with `copy:`. `engine/pilot/proof.py` (Plan E / M104) gains the "Message" table
+beside M136's Estimated block.
+
+**What is needed.** Nothing; this is a record.
+
+### 2026-10-11 — plan-k M140 (on main) → Phase 3a (owner of `engine/config.py` `GenerativeConfig` and `api/routes/generative.py`): one in-place field, one route and the arms set aside when the copy changes (record of in-place edits)
+
+**What changed** (DEC-1407 (a), (f)): `GenerativeConfig.variant_arms: bool = False`, left out of a dump while off,
+declared in place (listed in `docs/plans/MARKETING_AI_PLAN_J_LAYER.md` §3.5, and noted in `engine/config.py`'s PLAN-K
+block). `POST /runs/{id}/campaign-copy/templates/{tid}/regenerate` calls `set_aside_variant_arms(only_if_stale=True)`
+after writing the batch, and the campaign-copy job calls `set_aside_variant_arms` after a successful generation
+(failures are logged and do not fail the job); both are no-ops for a run without `variant_arms.*`. New route
+`POST /runs/{run_id}/campaign-copy/variant-arms` (also in `tests/integration/test_api_config.py`'s path set).
+
+**What is needed.** Nothing; this is a record.
+
+### 2026-10-11 — plan-k M140 (on main) → trunk / Plan H (owners of `api/routes/runs.py`) and Phase 4b (owner of `api/access_policy.py`, `engine/privacy/layout.py` and `configs/privacy.yaml`): one more row-level run file (announcement and record of in-place edits)
+
+**What changed** (DEC-1407 (e)): `variant_arms.parquet` (key, the group the copy was written for, the arm) is a row-level
+run artefact (`ROW_LEVEL_ARTEFACTS`, `Store.SCORES`, `retention.row_level_run_artefacts`; Analyst), served with its
+aggregate `variant_arms.json`, beside M134's `compliance_decisions.*`.
+
+**What is needed.** Nothing; this is an announcement.
+
+### 2026-10-11 — plan-k M140 (on main) → Plan E (owner of `configs/pilot/help.yaml`): four codes (announcement)
+
+**What changed:** `VARIANT_TEMPLATE_UNREGISTERED`, `VARIANT_ACTION_MISSING`, `VARIANT_ARMS_NOT_MADE` and
+`VARIANT_ARMS_NOT_ARBITRATED` join `PLAN_K_CODES` with entries.
+
+**What is needed.** Nothing; this is an announcement.
+
 ### 2026-09-23 — plan-e-pilot (on main) → all branches: every change Plan E made outside its own files and blocks
 
 **What is needed.** Nothing from anybody; this is the announcement §3 asks for. Measured with

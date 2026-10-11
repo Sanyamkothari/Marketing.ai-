@@ -547,7 +547,7 @@ each one that is done. M131, M135 and M137 were built ahead of the rest of Plan 
 | M137 "Safe to roll out": a lower bound in rupees | done (built early under Plan J) | DEC-1325 | `docs/UPLIFT.md` §12 |
 | M138 An early harm alarm | done | DEC-1403 | `docs/DECIDE.md` §28; switch `harm_alarm.enabled` in `configs/measurement.yaml` |
 | M139 The campaign planner | done | DEC-1406 | this document's §9; behind `agentic.enabled` |
-| M140 Message variants as measured arms | pending | | |
+| M140 Message variants as measured arms | done | DEC-1407 | `docs/DECIDE.md` §29; setting `generative.variant_arms` on the use case |
 | M141 The verifier on client data | pending | | |
 | M142 Setup help for integration sources | done | DEC-1409 | `docs/AGENTS.md` §13; behind `agentic.enabled` |
 | M143 Tabular foundation model challenger | pending | | |
