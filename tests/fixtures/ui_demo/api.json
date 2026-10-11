@@ -4674,6 +4674,93 @@
    "firings": []
   }
  },
+ "GET /overview": {
+  "status": 200,
+  "content_type": "application/json",
+  "body": {
+   "schema_version": 1,
+   "cards": [
+    {
+     "code": "UPLIFT_NOT_BETTER_THAN_RISK",
+     "kind": "uplift_not_better_than_risk",
+     "severity": "warning",
+     "title": "The model that picks who to contact does not beat ranking by risk",
+     "text": "The model that predicts who a campaign changes was checked on customers it had not seen and did not clearly beat plain risk ranking. This contact list was ranked by the approved risk model instead.",
+     "next_step": "Approve a risk model for this use case, or train the model on more customers, before the next list is made.",
+     "campaign_id": "c_20261011_5ee8a5d4",
+     "campaign_name": {
+      "value": "Hillstrom e-mail (spend) - public dataset, retrospective replay, a third of each group kept",
+      "text": "Hillstrom e-mail (spend) - public dataset, retrospective replay, a third of each group kept",
+      "format": "text",
+      "sources": [
+       {
+        "artefact": "campaigns/c_20261011_5ee8a5d4/campaign.json",
+        "field": "name"
+       }
+      ],
+      "formula": null
+     },
+     "use_case_id": "hillstrom-email",
+     "facts": [],
+     "read": [
+      "runs/r_20261010_11100003/ranking_choice.json"
+     ]
+    }
+   ],
+   "cards_total": 1,
+   "headline": {
+    "unit": "rupees",
+    "total": {
+     "value": 81033.97395476769,
+     "text": "\u20b981,034",
+     "format": "inr",
+     "sources": [
+      {
+       "artefact": "campaigns/c_20261011_5ee8a5d4/incrementality_report.json",
+       "field": "adjusted_interval.ci_low"
+      },
+      {
+       "artefact": "campaigns/c_20261011_5ee8a5d4/incrementality_report.json",
+       "field": "treated_rows"
+      },
+      {
+       "artefact": "campaigns/c_20261011_5ee8a5d4/pilot_roi_inputs.json",
+       "field": "value_per_outcome"
+      },
+      {
+       "artefact": "campaigns/c_20261011_5ee8a5d4/campaign.json",
+       "field": "counts.intended_treated"
+      },
+      {
+       "artefact": "campaigns/c_20261011_5ee8a5d4/pilot_roi_inputs.json",
+       "field": "contact_cost"
+      },
+      {
+       "artefact": "campaigns/c_20261011_5ee8a5d4/incrementality_report.json",
+       "field": "treated_conversions"
+      },
+      {
+       "artefact": "campaigns/c_20261011_5ee8a5d4/pilot_roi_inputs.json",
+       "field": "offer_cost"
+      }
+     ],
+     "formula": "(s0*s1*s2 - s3*s4 - s5*s6)"
+    },
+    "label": "at least \u20b981,034 net of what contacts and offers cost, the sum of each campaign's lower bound",
+    "rule": "Each total is the sum of every campaign's measured lower bound, so it is a floor, not an estimate. Only campaigns whose control group the engine drew at random, or whose random assignment it verified, are added, customers measured by more than one campaign are counted once, and each unit has a total of its own.",
+    "campaigns_counted": 1
+   },
+   "summary_checked": true,
+   "campaigns": [],
+   "campaigns_total": 0,
+   "checklist": {
+    "connected": true,
+    "campaign": true,
+    "results": true
+   },
+   "built_at": "2026-10-11T12:00:00Z"
+  }
+ },
  "GET /pilot/data-request?format=json": {
   "status": 200,
   "content_type": "application/json",

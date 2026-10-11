@@ -537,6 +537,8 @@ def test_openapi_builds_and_documents_every_route(client: TestClient) -> None:
         "/privacy/consent/imports/from-connection",
         # Plan K M142: the optional second opinion in Guided setup, 404 AGENTIC_DISABLED with Plan K off (DEC-1409)
         "/uploads/{upload_id}/agent-session/assist",
+        # Plan M M175: the Overview page's four parts in one call, Viewer, from existing sources only (DEC-1605)
+        "/overview",
     }
 
 

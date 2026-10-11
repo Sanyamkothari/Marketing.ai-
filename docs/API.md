@@ -104,6 +104,7 @@ Contract schema version: 1.
 | GET | `/monitoring/alerts` | List alerts | AlertListResponse |
 | POST | `/monitoring/alerts/{alert_id}/acknowledge` | Acknowledge an alert | Alert |
 | GET | `/monitoring/missed-firings` | Scheduled runs that were missed, across schedules | FiringListResponse |
+| GET | `/overview` | The Overview page: what needs attention, value proven to date, live campaigns, first-visit checklist | Overview |
 | GET | `/pilot/data-request` | The client-facing data request for the pilot's use cases | - |
 | GET | `/pilot/demo` | Whether demo mode is on, and what the seeded demo contains | PilotDemoResponse |
 | GET | `/pilot/demo/raw/{variant}` | The demo's raw tables as a zip, for trying the pre-flight check (clean or broken) | - |

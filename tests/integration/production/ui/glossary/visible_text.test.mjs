@@ -92,6 +92,8 @@ export const PAGES = [
   { id: "cost", hash: "#/cost", expect: /Estimates at AWS/ },
   { id: "approvals", hash: "#/approvals", expect: /Models waiting for your approval/ },
   { id: "data-request-kit", hash: "#/pilot/kit", expect: /Ask your data team/ },
+  // Plan M M175: new pages start with an EMPTY allow-list (no entry in baseline.json): they may show no never-shown word.
+  { id: "overview", hash: "#/overview", expect: /Needs your attention[\s\S]*Value proven to date/, selector: "[data-attention]" },
 ];
 
 /** Requests a page may make that the recording does not hold (none today). Anything else fails the page. */
