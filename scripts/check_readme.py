@@ -794,6 +794,11 @@ MILESTONE_TESTS: Final[Mapping[str, tuple[str, ...]]] = {
         "tests/integration/test_brand_ui.py",
         "tests/integration/test_brand_browser.py",
     ),
+    # M183 (DEC-1613), the usability session pack (the command, the recruitment note and the consent form).
+    "M183": (
+        "tests/unit/test_usability_session.py",
+        "tests/unit/test_usability_kit_docs.py",
+    ),
     # M184 (DEC-1614), safety fixes from the autonomy audit: an approved plan's list keeps its limits, unattended
     # steps use only approved models, the strict compliance gate, copy approval's separation of duties, identity.
     "M184": (
