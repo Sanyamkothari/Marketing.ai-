@@ -213,7 +213,7 @@ def message_checks(
 ) -> tuple[dict[tuple[str, str], MessageVerdict], tuple[MessageCheck, ...]]:
     """The per-message verdicts of every (action, planned channel), and what was checked of each."""
     from engine.compliance.dlt import TemplateMatcher, parse_template
-    from engine.compliance.urls import find_urls
+    from engine.compliance.urls import find_links
 
     verdicts: dict[tuple[str, str], MessageVerdict] = {}
     checks: list[MessageCheck] = []
@@ -245,7 +245,7 @@ def message_checks(
             elif item.message_text is None:
                 notes.append("The action has no message_text: links were not checked.")
             else:
-                bad = sum(1 for url in find_urls(item.message_text) if not whitelist.allows(url))
+                bad = sum(1 for url in find_links(item.message_text) if not whitelist.allows(url))
             verdicts[(action_id, channel)] = MessageVerdict(
                 template_mismatch=bool(mismatch),
                 url_not_whitelisted=bool(bad),

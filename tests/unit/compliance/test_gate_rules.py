@@ -413,3 +413,43 @@ def test_rows_join_on_every_key_column_never_by_position() -> None:
     )
     assert table.column("allowed").to_pylist() == [False, True, False]
     assert table.column_names[:2] == ["account", "snapshot"]
+
+
+def test_url_a_bare_domain_in_a_var_slot_is_refused(root: Path) -> None:
+    """The first review: a link with no scheme typed into a `{#var#}` slot passed the template and the whitelist."""
+    bare = """\
+  - action_id: offer_bare_link
+    label: Offer with a bare link
+    channels: [sms]
+    dlt_template_id: "1107000000000000003"
+    message_category: promotional
+    dlt_template_text: "Dear customer, get Rs {#numeric#} off at {#var#} - Acme"
+    message_text: "Dear customer, get Rs 200 off at deals-x.in/a - Acme"
+  - action_id: offer_listed_bare_link
+    label: Offer with a listed bare link
+    channels: [sms]
+    dlt_template_id: "1107000000000000003"
+    message_category: promotional
+    dlt_template_text: "Dear customer, get Rs {#numeric#} off at {#var#} - Acme"
+    message_text: "Dear customer, get Rs 200 off at shop.example.in/a - Acme"
+"""
+    (root / "decide" / "catalogue.yaml").write_text(CATALOGUE + bare, encoding="utf-8")
+    clear_catalogue_cache()
+    planned: dict[str | None, tuple[str, ...]] = {
+        None: (),
+        "offer_bare_link": ("sms",),
+        "offer_listed_bare_link": ("sms",),
+    }
+    table = decide(
+        _customers([("V1", "offer_bare_link"), ("V2", "offer_listed_bare_link")]),
+        key_columns=KEYS,
+        planned=planned,
+        rules=_rules(),
+        contactability=_contactability(["V1", "V2"], contactable_sms=[True, True]),
+        messages=_verdicts(root, planned),
+    )
+    rows = table.to_pylist()
+    assert [(row["customer_id"], row["allowed"], row["reasons"]) for row in rows] == [
+        ("V1", False, ["COMPLIANCE_URL_NOT_WHITELISTED"]),
+        ("V2", True, []),
+    ]

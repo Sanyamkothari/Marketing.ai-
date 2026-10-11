@@ -35,7 +35,8 @@ def channel_grants(
 ) -> dict[str, int]:
     """Per principal (as `principal_key` writes it) holding a valid grant on `channel` itself at `at`: the
     `seq` of that grant's record. A principal not in the answer has no opt-in record on the channel."""
-    from sqlmodel import Session, col, select
+    from sqlalchemy import select
+    from sqlmodel import col
 
     from engine.privacy.consent import principal_key
     from engine.privacy.contracts import ConsentStatus
@@ -49,33 +50,41 @@ def channel_grants(
         if principal:
             by_hash.setdefault(ledger.hash(principal), []).append(principal)
     hashes = list(by_hash)
-    latest: dict[str, ConsentRecordRow] = {}
-    with Session(ledger.engine) as session:
+    # Plain columns, not ORM rows: at a million customers, building a row object per record is most of the time.
+    latest: dict[str, tuple[datetime, int, str, datetime | None]] = {}
+    with ledger.engine.connect() as connection:
         for start in range(0, len(hashes), _CHUNK):
             statement = (
-                select(ConsentRecordRow)
+                select(
+                    col(ConsentRecordRow.principal_hash),
+                    col(ConsentRecordRow.channel),
+                    col(ConsentRecordRow.recorded_at),
+                    col(ConsentRecordRow.seq),
+                    col(ConsentRecordRow.status),
+                    col(ConsentRecordRow.expires_at),
+                )
                 .where(col(ConsentRecordRow.client_id) == client_id)
                 .where(col(ConsentRecordRow.purpose) == purpose)
                 .where(col(ConsentRecordRow.principal_hash).in_(hashes[start : start + _CHUNK]))
                 .where(col(ConsentRecordRow.channel).is_not(None))
             )
-            for row in session.exec(statement).all():
-                if row.channel is None or row.channel.strip().lower() != wanted:
+            for hashed, row_channel, recorded_at, seq, status, expires_at in connection.execute(
+                statement
+            ).all():
+                if row_channel is None or row_channel.strip().lower() != wanted:
                     continue
-                if aware_utc(row.recorded_at) > moment:
+                recorded = aware_utc(recorded_at)
+                if recorded > moment:
                     continue
-                current = latest.get(row.principal_hash)
-                if current is None or (aware_utc(row.recorded_at), row.seq or 0) > (
-                    aware_utc(current.recorded_at),
-                    current.seq or 0,
-                ):
-                    latest[row.principal_hash] = row
+                current = latest.get(hashed)
+                if current is None or (recorded, seq or 0) > (current[0], current[1]):
+                    latest[hashed] = (recorded, int(seq or 0), status, expires_at)
     granted: dict[str, int] = {}
-    for hashed, row in latest.items():
-        if row.status != ConsentStatus.GRANTED.value:
+    for hashed, (_recorded, seq, status, expires_at) in latest.items():
+        if status != ConsentStatus.GRANTED.value:
             continue
-        if row.expires_at is not None and aware_utc(row.expires_at) <= moment:
+        if expires_at is not None and aware_utc(expires_at) <= moment:
             continue
         for principal in by_hash[hashed]:
-            granted[principal] = int(row.seq or 0)
+            granted[principal] = seq
     return granted

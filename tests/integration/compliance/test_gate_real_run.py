@@ -16,6 +16,9 @@ run wrote, under a config root whose `compliance.gate.enabled` is on.
 * A catalogue edited after the run: every contact is withheld (`COMPLIANCE_CATALOGUE_CHANGED`), fail closed.
 * With the gate off (the switch false, or no `configs/compliance/` at all): the treat list is byte for byte the
   list without the gate, and no compliance file is written.
+* A list built before the gate was turned on (the second review): once it is on, `ensure_treat_list` and the
+  treat list route build it again through the gate instead of serving it ungated; a list the gate decided is
+  served as it is, and with the gate off a stored list is served as it is, as before.
 
 On the unchanged code (no `engine.compliance`) the gate-on list sends every treated customer on WhatsApp, the
 first planned channel, and writes no decision file: these tests fail there.
@@ -40,7 +43,12 @@ import pytest
 import yaml
 
 from engine.agentic.ledger import EVIDENCE_LABEL, verify_ledger
-from engine.decide.treat_list import TREAT_LIST_CSV, TREAT_LIST_SUMMARY_FILENAME, build_treat_list
+from engine.decide.treat_list import (
+    TREAT_LIST_CSV,
+    TREAT_LIST_SUMMARY_FILENAME,
+    build_treat_list,
+    ensure_treat_list,
+)
 from engine.platform_db import PLATFORM_DB_FILENAME, sqlite_engine
 from engine.privacy.config import load_privacy_config
 from engine.privacy.consent import ConsentLedger
@@ -355,3 +363,57 @@ def test_with_the_gate_off_the_treat_list_is_byte_for_byte_the_list_without_it(g
     sent = off.out[off.out["treat"] == "1"]
     assert set(sent["channel"]) == {"whatsapp"}
     assert not (gated.snapshot.parent / "built_off" / "agentic").exists(), "no signing key is created"
+
+
+# ---------------------------------------------------------------------------
+# A list built before the gate was turned on
+# ---------------------------------------------------------------------------
+def test_a_list_built_before_the_gate_was_turned_on_is_gated_before_it_is_handed_off(
+    gated: Gated, on: Built
+) -> None:
+    before = _build(gated, "built_before_gate", "gate_off")
+    assert before.summary.compliance_rule_version is None
+    storage, root_on = before.storage, gated.world.roots["gate_on"]
+    ungated = storage.read_bytes(run_key(RUN_GATE, TREAT_LIST_CSV))
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setenv("MARKETING_AI_CLIENT_ID", CLIENT)
+        patch.setenv("MARKETING_AI_PRIVACY_SALT", PRIVACY_SALT)
+        patch.setenv("MARKETING_AI_CONFIG_DIR", str(root_on))
+        # The gate off: a stored list is served as it is.
+        kept = ensure_treat_list(storage, RUN_GATE, config_root=gated.world.roots["gate_off"])
+        assert kept.compliance_rule_version is None and not storage.exists(run_key(RUN_GATE, DECISIONS))
+        # The gate on: built again, through the gate, before it is handed off.
+        summary = ensure_treat_list(storage, RUN_GATE, config_root=root_on)
+        assert summary.compliance_rule_version == on.summary.compliance_rule_version
+        assert storage.exists(run_key(RUN_GATE, DECISIONS))
+        gated_csv = storage.read_bytes(run_key(RUN_GATE, TREAT_LIST_CSV))
+        assert gated_csv != ungated, "the list handed off is the gated one"
+        assert gated_csv == on.storage.read_bytes(run_key(RUN_GATE, TREAT_LIST_CSV))
+        # A list the gate decided is served as it is: no second record.
+        again = ensure_treat_list(storage, RUN_GATE, config_root=root_on)
+        assert again.compliance_evidence_id == summary.compliance_evidence_id
+
+
+def test_the_treat_list_route_gates_a_list_built_before_the_gate_was_turned_on(
+    gated: Gated, on: Built
+) -> None:
+    from fastapi.testclient import TestClient
+
+    from api.main import create_app
+
+    before = _build(gated, "built_before_route", "gate_off")
+    root_on = gated.world.roots["gate_on"]
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setenv("MARKETING_AI_CLIENT_ID", CLIENT)
+        patch.setenv("MARKETING_AI_PRIVACY_SALT", PRIVACY_SALT)
+        patch.setenv("MARKETING_AI_CONFIG_DIR", str(root_on))
+        with TestClient(create_app(config_root=root_on, data_dir=before.data_dir)) as client:
+            response = client.get(f"/runs/{RUN_GATE}/treat_list.csv")
+            assert response.status_code == 200, response.text
+            served = pd.read_csv(io.StringIO(response.text), dtype=str, keep_default_na=False)
+            assert before.storage.exists(run_key(RUN_GATE, DECISIONS))
+            summary = client.get(f"/runs/{RUN_GATE}/artefacts/{TREAT_LIST_SUMMARY_FILENAME}")
+            assert summary.status_code == 200 and summary.json()["compliance_rule_version"]
+    sent = served[served["treat"] == "1"]
+    assert set(sent[PRIMARY_KEY]) == set(on.out.loc[on.out["treat"] == "1", PRIMARY_KEY])
+    assert (served["channel"].to_numpy() == on.out["channel"].to_numpy()).all()

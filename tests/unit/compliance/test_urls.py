@@ -88,3 +88,47 @@ def test_the_list_is_read_from_its_file_else_the_region_block_else_not_at_all(tm
     with pytest.raises(ComplianceError) as caught:
         load_url_whitelist(tmp_path)
     assert caught.value.code == "CONFIG_INVALID"
+
+
+def test_bare_hosts_are_links_too_but_not_e_mail_addresses_or_words() -> None:
+    """The first review: a link with no scheme (`deals-x.in/a`) was never found, so never checked."""
+    from engine.compliance.urls import find_links
+
+    text = (
+        "Shop at deals-x.in/a, or bit.ly/x9. Visit https://shop.example.in/d and WWW.y.in/b. "
+        "Mail help@acme.in; Rs.500 off, e.g. now, 4.5 stars, file v2.0 - not shop.example.in2 - ftp://w.in"
+    )
+    assert find_links(text) == (
+        "deals-x.in/a",
+        "bit.ly/x9",
+        "https://shop.example.in/d",
+        "WWW.y.in/b",
+        "w.in",
+    )
+    assert find_urls(text) == ("https://shop.example.in/d", "WWW.y.in/b"), "find_urls keeps its meaning"
+
+
+@pytest.mark.parametrize(
+    ("url", "allowed"),
+    [
+        ("shop.example.in/diwali", True),  # a host entry: any link to exactly this host, scheme or not
+        ("SHOP.example.in", True),
+        ("x.deals.in/a", True),
+        ("deals-x.in/a", False),
+        ("cdn.example.in:8443/a.png", True),
+        ("example.in/offers", False),  # no scheme: host entries only, never a prefix
+    ],
+)
+def test_a_bare_host_is_matched_against_the_host_entries(url: str, allowed: bool) -> None:
+    assert LIST.allows(url) is allowed
+
+
+def test_finding_links_stays_linear_on_long_dotted_and_undotted_words() -> None:
+    import time
+
+    from engine.compliance.urls import find_links
+
+    for text in ("a." * 50_000 + "1", "a" * 100_000 + ".", ("x-" * 50_000) + "@y"):
+        start = time.perf_counter()
+        find_links(text)
+        assert time.perf_counter() - start < 1.0

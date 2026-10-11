@@ -216,7 +216,17 @@ byte what it was.
 
 **When it runs.** On, `engine.decide.treat_list.build_treat_list` calls `engine.compliance.handoff.gate_treat_list`
 after it has chosen every customer's treat flag, offer and channel and before it writes anything. Every route and
-schedule that builds a treat list goes through that function, so none bypasses the gate.
+schedule that builds a treat list goes through that function. The gate applies when a list is **built**: a list
+already stored when the switch is turned on was not decided by it, so `ensure_treat_list` and the treat list route
+(`GET /runs/{id}/treat_list.csv`, and the treat list files through `/runs/{id}/artefacts/`) build it again, through
+the gate, before handing it off (`treat_list_awaits_gate`: the gate on and no `compliance_rule_version` in the stored
+summary). A list the gate decided is served as it is; with the gate off, a stored list is served as it is, as before.
+
+**Which action a customer is planned on.** A band's `action_id` (propensity) or `uplift.policy.treat_action_id`
+(uplift); on a run that chose the offer per customer, the catalogue action of the offer the customer was given,
+**by its arm** - `offer_choice.json` `arms[].action_id`, else the file's `offer_action_id` - never by its label,
+which two actions may share. An offer with no catalogue action is planned, as the choice planned it, on the use
+case's configured channels.
 
 **What decides, per customer the list would contact and per planned channel** (`engine.compliance.gate.decide`;
 the reasons in this order, `allowed` when there is none):
@@ -228,7 +238,7 @@ the reasons in this order, `allowed` when there is none):
 | `COMPLIANCE_WHATSAPP_NO_OPT_IN` | a channel of `opt_in_channels` (default `[whatsapp]`) and no valid grant **on that channel itself** in the consent ledger: a ledger channel grant on WhatsApp is the opt-in record; an all-channel grant is not |
 | `COMPLIANCE_CATALOGUE_CHANGED` | the catalogue is not the one the run ran under (`catalogue_stamp.json`), so no message can be tied to the run: fail closed |
 | `COMPLIANCE_TEMPLATE_MISMATCH` | on a channel whose region rule requires a DLT template (`<channel>_requires: [dlt_template_id]`), the action's `message_text` is not its `dlt_template_text` with each slot filled by a value of its tag |
-| `COMPLIANCE_URL_NOT_WHITELISTED` | a link in the action's `message_text`, on a channel the whitelist covers, is not on it |
+| `COMPLIANCE_URL_NOT_WHITELISTED` | a link in the action's `message_text`, on a channel the whitelist covers, is not on it - an `http(s)://` or `www.` link, or a bare host such as `deals-x.in/a` (in the text or filling a `{#var#}` slot) |
 
 An undeclared automated call never reaches the gate: the catalogue does not load (`ACTION_A2P_UNDECLARED`, M131).
 
@@ -242,13 +252,19 @@ message as sent, every variable filled); without them the check is not applied a
 
 **The URL whitelist** (`engine/compliance/urls.py`): `configs/compliance/url_whitelist.yaml`
 (`url_whitelist.example.yaml` shows the format: `channels`, and `urls` as hosts, `*.` sub-domains or URL
-prefixes), else the region file's `url_whitelist` block, else not applied.
+prefixes), else the region file's `url_whitelist` block, else not applied. A link with no scheme - `www.` or a bare
+host (dot-separated labels ending in 2 to 24 letters, not part of an e-mail address) - is matched against the host
+entries only. Bare-host reading fails closed: text written with no space after a full stop (`Dr.Smith`) reads as a
+host, is not listed, and stops the message; `compliance_decisions.json` `messages` shows the count.
 
 **What the list does.** A customer is sent on the first planned channel the gate allows - the one they had, or
 the next - and is not treated when it allows none; never `treat = 1` with no channel. `treat_list_summary.json`
 gains `compliance_withheld` (customers withheld per reason; a customer counts under each reason that closed one
 of their channels), `compliance_withheld_rows`, `compliance_rerouted_rows`, `compliance_rule_version`,
-`compliance_decisions_sha256` and `compliance_evidence_id` - all absent with the gate off.
+`compliance_decisions_sha256` and `compliance_evidence_id` - all absent with the gate off. On a run that chose
+the offer per customer, a customer the gate withheld keeps no offer, net value or runner-up (nothing was done, as
+for an offer the choice did not give), and `offer_counts`, `explore_offer_counts` and `explore_cost` count what is
+sent.
 
 **What it writes.**
 
@@ -265,9 +281,12 @@ of their channels), `compliance_withheld_rows`, `compliance_rerouted_rows`, `com
   block's digest, the DLT channels and tags, the whitelist or null, the opt-in channels, the run's consent-basis
   rules digest), what was checked per action and channel and why not, the evidence id and the ledger entry.
 
-**Scale.** `decide` is column operations only: 1,000,000 customers x 3 channels in about 4 s on the shared
-4-CPU machine, 100,000 in 0.25 s (`tests/unit/compliance/test_gate_scale.py`; design budget 60 s). The opt-in
-lookup reads the ledger per customer who plans an opt-in channel, in chunks of 500, as M131's classification does.
+**Scale.** `decide` is column operations only: 1,000,000 customers x 3 channels in about 5 s on the shared
+4-CPU machine, 100,000 in 0.3 s. The whole hand-off `gate_treat_list` - with the opt-in lookup over a SQLite
+consent ledger holding WhatsApp grants for a third of the customers, the decision file, its sha256 and the signed
+entry - takes about 23 s at 1,000,000 and 1.7 s at 100,000 (`tests/unit/compliance/test_gate_scale.py`, both
+slow tests; design budget 60 s). The opt-in lookup reads the ledger per customer who plans an opt-in channel, in
+chunks of 500, as M131's classification does, as plain columns rather than row objects.
 
 **Not modelled.** One approved message per action (per-channel copy comes with M140's variants); the template's
 DLT header (sender id) is not checked; WhatsApp's own template approval is the provider's; a message's variables

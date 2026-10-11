@@ -1,11 +1,12 @@
 # Plan K M134 (DEC-1405): the pre-send compliance gate (docs/AGENTIC.md section 9, design §8.2 and §11).
 #
 # compliance.gate.enabled: off (the default), a treat list is built exactly as before - nothing of
-# engine/compliance runs, nothing new is written. On, every treat list first decides, per customer it would
-# contact and per planned channel, whether the message may go (consent on the channel from the run's own
+# engine/compliance runs, nothing new is written. On, every treat list built first decides, per customer it
+# would contact and per planned channel, whether the message may go (consent on the channel from the run's own
 # channel_contactability.parquet, the DLT template, whitelisted links, a WhatsApp opt-in), writes
 # compliance_decisions.parquet, signs its sha256 on the decision ledger, and sends a customer only on a
-# channel the gate allows (the next planned one, else not at all).
+# channel the gate allows (the next planned one, else not at all). A treat list stored before the switch was
+# turned on was not decided by the gate: it is built again, through the gate, the next time it is asked for.
 compliance:
   gate:
     enabled: false
