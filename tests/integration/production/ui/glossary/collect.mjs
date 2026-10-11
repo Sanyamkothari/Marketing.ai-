@@ -10,7 +10,15 @@
      - <script>, <style>, <template>, <noscript>.
    The page's style sheet is not loaded in jsdom, so a class that hides an element in CSS cannot be seen
    here; pages that hide content use `hidden` (or a closed <details>, whose contents count: they are one
-   click away from a marketer and must not carry engine words either, unless marked technical). */
+   click away from a marketer and must not carry engine words either, unless marked technical).
+
+   Plan M M180 (DEC-1610) adds a MODE, the person's "Show technical details" switch (ui/technical.js):
+     - "on" (the default): exactly the rules above, as M170 wrote them - the marks are read;
+     - "off": the marks are NOT read. What is left out is what the page's real style sheet hides, read from the
+       computed style (`display: none` or `visibility: hidden`), with <html> carrying the switch's class and its
+       CSS rule injected by technical.js; plus the `hidden` attribute and the tags that never show text. So the
+       "off" text is what a person with the switch off really sees, and a technical section the CSS fails to hide
+       is counted. */
 
 const SKIP_TAGS = new Set(["SCRIPT", "STYLE", "TEMPLATE", "NOSCRIPT", "HEAD"]);
 const READ_ATTRIBUTES = ["aria-label", "title", "placeholder"];
@@ -29,7 +37,11 @@ function isHidden(element) {
 
 /** Whether this element and everything inside it is left out of the visible text. */
 export function isExcluded(element) {
-  if (isHidden(element)) return true;
+  return isHidden(element) || isTechnical(element);
+}
+
+/** Whether this element carries a technical mark (class "tech", [data-technical], a "Technical details" <details>). */
+export function isTechnical(element) {
   if (element.classList.contains("tech") || element.hasAttribute("data-technical")) return true;
   if (element.tagName.toUpperCase() === "DETAILS") {
     const summary = summaryOf(element);
@@ -46,8 +58,30 @@ function keptSummary(element) {
   return summary;
 }
 
-/** The visible text under `root`, one piece per line. */
-export function visibleText(root) {
+/** Whether the page's style sheet hides this element (M180's "off" mode): its computed style. */
+export function hiddenByStyle(element) {
+  const view = element.ownerDocument && element.ownerDocument.defaultView;
+  if (!view || typeof view.getComputedStyle !== "function") return false;
+  const style = view.getComputedStyle(element);
+  return style.display === "none" || style.visibility === "hidden";
+}
+
+/** Whether `element` or one of its ancestors is hidden by the style sheet, the attribute, or an inline style. */
+export function hiddenOnScreen(element) {
+  for (let el = element; el && el.nodeType === 1; el = el.parentElement) {
+    if (isHidden(el) || hiddenByStyle(el)) return true;
+  }
+  return false;
+}
+
+/** Every element carrying a technical mark under `root`: the elements the "on" mode leaves out by their mark. */
+export function technicalElements(root) {
+  return [...root.querySelectorAll("*")].filter((el) => isTechnical(el));
+}
+
+/** The visible text under `root`, one piece per line. `mode` is "on" (M170's marks) or "off" (the real CSS). */
+export function visibleText(root, { mode = "on" } = {}) {
+  if (mode !== "on" && mode !== "off") throw new Error(`visibleText: mode is "on" or "off", not ${mode}`);
   const pieces = [];
   const walk = (node) => {
     if (node.nodeType === 3) {
@@ -56,7 +90,9 @@ export function visibleText(root) {
       return;
     }
     if (node.nodeType !== 1) return;
-    if (isExcluded(node)) {
+    if (mode === "off") {
+      if (isHidden(node) || hiddenByStyle(node)) return;
+    } else if (isExcluded(node)) {
       const summary = keptSummary(node);
       if (summary) walk(summary);
       return;

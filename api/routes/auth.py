@@ -34,6 +34,7 @@ from api.access import (
     UserStoreDep,
     client_address,
     get_login_throttle,
+    get_platform_engine,
     get_user_store,
     set_audit_context,
 )
@@ -47,6 +48,8 @@ from api.schemas import (
     MeResponse,
     PasswordChangeRequest,
     PermissionView,
+    PreferencesUpdateRequest,
+    PreferencesView,
     PrincipalView,
     UserCreateRequest,
     UserListResponse,
@@ -54,6 +57,7 @@ from api.schemas import (
     UserView,
 )
 from engine.access.identity import bearer_token
+from engine.access.preferences import SqlPreferenceStore
 from engine.access.roles import Principal, Role, effective_roles
 from engine.access.throttle import LockScope, account_key
 from engine.access.users import AccessError, UserRecord
@@ -72,6 +76,14 @@ POLICIES: Final[dict[tuple[str, str], RoutePolicy]] = {
     ),
     ("GET", "/auth/me"): RoutePolicy(
         role=Role.VIEWER, action="auth.me", purpose="see who you are signed in as"
+    ),
+    # Plan M M180 (DEC-1610): anybody signed in sets their own display choices (only their own: the route takes no
+    # user id). The choice hides or shows screens; it never grants or removes a permission.
+    ("PUT", "/auth/me/preferences"): RoutePolicy(
+        role=Role.VIEWER,
+        action="auth.preferences_update",
+        object_type="user",
+        purpose="change your own display choices",
     ),
     ("GET", "/users"): RoutePolicy(role=Role.ADMIN, action="users.list", purpose="see the users"),
     ("POST", "/users"): RoutePolicy(
@@ -259,10 +271,58 @@ def me(request: Request, principal: PrincipalDep, settings: SettingsDep) -> MeRe
             )
         )
     return MeResponse(
+        preferences=_own_preferences(request, principal, settings.auth_mode),
         principal=principal_view(principal, display_name=display_name),
         auth_mode=settings.auth_mode,
         permissions=tuple(permissions),
     )
+
+
+# ---------------------------------------------------------------------------
+# Plan M M180 (DEC-1610): "Show technical details", remembered per signed-in person
+# ---------------------------------------------------------------------------
+def get_preference_store(request: Request) -> SqlPreferenceStore:
+    """Per-user display choices, on the platform database the user store uses (`engine.access.preferences`)."""
+    state = request.app.state
+    store = getattr(state, "preference_store", None)
+    if not isinstance(store, SqlPreferenceStore):
+        store = SqlPreferenceStore(get_platform_engine(request))
+        state.preference_store = store
+    return store
+
+
+def _own_preferences(request: Request, principal: Principal, auth_mode: str) -> PreferencesView | None:
+    """The caller's saved choices, when there is a person to keep them for; `None` with sign-in off."""
+    if auth_mode != "local" or principal.kind != "user":
+        return None
+    saved = get_preference_store(request).get(principal.user_id)
+    return PreferencesView(show_technical=saved.show_technical)
+
+
+@router.put(
+    "/auth/me/preferences",
+    response_model=PreferencesView,
+    responses=_ERRORS,
+    summary="Change your own display choices",
+)
+def update_preferences(
+    body: PreferencesUpdateRequest, request: Request, principal: PrincipalDep, settings: SettingsDep
+) -> PreferencesView:
+    """Save "Show technical details" for the person signed in; any role may, for themselves only (DEC-1610).
+
+    With sign-in off there is no person to remember it for: **409 `AUTH_OFF`**, and the UI keeps the choice in
+    the browser instead. A service principal (`system`) has no screens, and gets the same answer.
+    """
+    set_audit_context(request, object_id=principal.user_id, details={"setting": "show_technical"})
+    if settings.auth_mode != "local" or principal.kind != "user":
+        set_audit_context(request, details={"reason_code": "AUTH_OFF"})
+        raise http_error(
+            409,
+            "AUTH_OFF",
+            "Sign-in is switched off on this deployment, so this browser remembers your display choices instead.",
+        )
+    saved = get_preference_store(request).set_show_technical(principal.user_id, body.show_technical)
+    return PreferencesView(show_technical=saved.show_technical)
 
 
 # ---------------------------------------------------------------------------

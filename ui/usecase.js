@@ -1136,7 +1136,9 @@ function flowBlocks(uc, s, run) {
       slug === "data"
         ? `<div class="val fname" title="${esc(value)}">${esc(value)}</div>`
         : `<div class="val">${esc(value)}</div>`;
-    return `<a class="block${extra}" href="#/uc/${esc(uc.id)}/${slug}/${esc(run.run_id)}"><div><div class="lab"><span>${esc(
+    // Plan M M180 (DEC-1610): the Data, Model and Output pages are technical pages: with "Show technical details" off
+    // these links are hidden (`data-technical`); the pages still open when their address is visited.
+    return `<a class="block${extra}" href="#/uc/${esc(uc.id)}/${slug}/${esc(run.run_id)}" data-technical><div><div class="lab"><span>${esc(
       label,
     )}</span>${state}</div>${val}${
       meta ? `<div class="meta">${esc(meta)}</div>` : ""
