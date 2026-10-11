@@ -2329,6 +2329,49 @@ aggregate `variant_arms.json`, beside M134's `compliance_decisions.*`.
 
 **What is needed.** Nothing; this is an announcement.
 
+### 2026-10-11 — plan-k M143 (on main) → protocol owner (frozen `engine/stages/train.py`): the `foundation` strategy loads no foundation model (request)
+
+**What is needed** (DEC-1410 (e)): when `model_search.strategy` is `foundation`, `autogluon_fit_kwargs` should pass the
+preset's portfolio (`get_hyperparameter_config("commercial_2026_08_05")`, each key checked by
+`ModelLicences.check_model_key` from `engine/agentic/model_licences.py`) in place of its per-family `hyperparameters`
+dict, and `num_bag_folds`, `num_stack_levels`, `auto_stack` and `dynamic_stacking` should stop overriding the preset for
+this strategy. Evidence: AutoGluon 1.6.3 lets explicit `hyperparameters` override a preset's portfolio; a 600-row fit
+with `presets="extreme_quality"` and `hyperparameters={"XGB": {}, "GBM": {}}` fitted only LightGBM, XGBoost and a
+weighted ensemble, and the slow test's leaderboard holds only the selected families.
+
+**What I did meanwhile.** `FOUNDATION_NOT_LOADED_WARNING` on every resolve that picks `foundation`; the slow test
+(`tests/unit/agentic/test_model_licences.py`) pins the warning and the absence of foundation models, so it fails when
+`train.py` changes, forcing the warning's removal and an update of `docs/LIBRARY.md` section 9.
+
+### 2026-10-11 — plan-k M143 (on main) → library owners (`library/journey.py`, `library/run_engine.py`): the benchmark needs `--override` on `journey` (request)
+
+**What is needed** (DEC-1410 (f)): a repeatable `--override path=value` on the `journey` subcommand reaching
+`run_journey(extra_risk_overrides=...)`, and the Hillstrom risk step's `model_search.candidates` lifted when the strategy
+is `foundation` (it is fixed to `fast` + `[LightGBM]` today). Only after this and the `train.py` request above can
+`foundation` and `balanced` be compared at equal budget; the weights also need Hugging Face access (blocked here) and
+ideally a GPU.
+
+**What I did meanwhile.** `docs/LIBRARY.md` section 9 says the comparison was not run, gives no command, and
+`foundation` is recommended nowhere.
+
+### 2026-10-11 — plan-k M143 (on main) → trunk (owner of `engine/config.py`, `configs/engine.yaml` and `docs/API.md`) and library-datasets (owner of `docs/LIBRARY.md`): the licence guard and one opt-in strategy (record of in-place edits)
+
+**What changed** (DEC-1410 (a)–(c), (g), (h)): in place in `engine/config.py`, outside any block: `Strategy.FOUNDATION`,
+its `CHOICE_LABELS` entry, the one-line opt-in filter in `_choices_for` (it keeps the configuration's current value), the
+opt-in exemption in `Catalog._complete`, and the calls to the licence check in `load_use_case` and `resolve_config` (the
+helpers and `_OPT_IN_CHOICES` are in the PLAN-K block). `configs/engine.yaml` gains
+`strategy_presets.foundation: extreme_quality` (listed in `docs/API.md`); a deployment's own `engine.yaml` without it
+still loads, and selecting `foundation` there is `CATALOG_INCOMPLETE`. `docs/LIBRARY.md` gains section 9 (the
+challenger, not run). New: `configs/agentic/model_licences.yaml`, `engine/agentic/model_licences.py`.
+
+**What is needed.** Nothing; this is a record.
+
+### 2026-10-11 — plan-k M143 (on main) → Plan E (owner of `configs/pilot/help.yaml`): one code (announcement)
+
+**What changed:** `MODEL_LICENCE_BLOCKED` joins `PLAN_K_CODES` with an entry.
+
+**What is needed.** Nothing; this is an announcement.
+
 ### 2026-09-23 — plan-e-pilot (on main) → all branches: every change Plan E made outside its own files and blocks
 
 **What is needed.** Nothing from anybody; this is the announcement §3 asks for. Measured with

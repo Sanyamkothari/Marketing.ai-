@@ -644,6 +644,9 @@ MILESTONE_TESTS: Final[Mapping[str, tuple[str, ...]]] = {
         "tests/integration/decide/test_variant_arms_journey.py",
         "tests/integration/test_api_config.py",
     ),
+    # M143 (DEC-1410), the model licence guard and the opt-in foundation strategy (moved from tests/unit/ at
+    # integration). Its CPU-fit test is `slow` and runs only under -m slow.
+    "M143": ("tests/unit/agentic/test_model_licences.py",),
 }
 """Milestone id -> the test files (or directories, with a trailing `/`) that prove it is built.
 

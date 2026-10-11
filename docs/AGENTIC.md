@@ -550,7 +550,7 @@ each one that is done. M131, M135 and M137 were built ahead of the rest of Plan 
 | M140 Message variants as measured arms | done | DEC-1407 | `docs/DECIDE.md` §29; setting `generative.variant_arms` on the use case |
 | M141 The verifier on client data | pending | | |
 | M142 Setup help for integration sources | done | DEC-1409 | `docs/AGENTS.md` §13; behind `agentic.enabled` |
-| M143 Tabular foundation model challenger | pending | | |
+| M143 Tabular foundation model challenger | done (a licence guard; `foundation` loads no foundation model yet, not benchmarked) | DEC-1410 | `engine/agentic/model_licences.py` (module docstring), `configs/agentic/model_licences.yaml`; `docs/LIBRARY.md` §9 |
 | M144 Save-desk card, as a randomised pilot | done (a pilot design; no result claimed) | DEC-1411 | this document's §7a; behind `agentic.enabled` |
 
 ## 11. The switches (`configs/agentic/agentic.yaml`)
