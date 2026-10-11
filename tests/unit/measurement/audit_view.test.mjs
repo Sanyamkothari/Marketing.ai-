@@ -13,6 +13,9 @@ import test from "node:test";
 
 import { auditBody, auditCardHtml, auditPageHtml, contactsCardHtml, fileOf, programmeBody, programmeCardHtml } from "../../../ui/modules/decide/audit.js";
 import { campaignPageHtml } from "../../../ui/modules/decide/views.js";
+// Plan M M172 (DEC-1602): the server's words are drawn through the glossary's `plainText` ("Causal" reads "Proven",
+// "control group" reads "comparison group"); what they say is unchanged, so the tests compare against the same mapping.
+import { plainText } from "../../../ui/labels.js";
 
 const dir = process.env.CP_FIXTURES;
 const read = (name) => JSON.parse(fs.readFileSync(path.join(dir, `${name}.json`), "utf8"));
@@ -22,8 +25,8 @@ test("the label, the reason and the check are the server's own words", () => {
   for (const name of ["verified", "declared", "descriptive"]) {
     const view = read(name);
     const html = auditCardHtml(view.audit);
-    assert.ok(html.includes(`>${view.audit.label}<`), `${name}: the label`);
-    assert.ok(text(html).includes(view.audit.explanation), `${name}: the explanation`);
+    assert.ok(html.includes(`>${plainText(view.audit.label)}<`), `${name}: the label`);
+    assert.ok(text(html).includes(plainText(view.audit.explanation)), `${name}: the explanation`);
     assert.ok(html.includes(`data-causal="${view.audit.causal}"`));
   }
   assert.equal(read("verified").audit.label, "Causal");
@@ -52,8 +55,8 @@ test("a campaign's page shows the result, the claim and nothing else invented", 
   const page = campaignPageHtml({ view: descriptive });
   assert.equal(descriptive.verdict, null);
   assert.ok(!page.includes("data-verdict="), "no verdict is drawn for a descriptive-only campaign");
-  assert.ok(text(page).includes(descriptive.report.summary), "its own sentence is shown");
-  assert.ok(!/campaign added|caused/i.test(text(page).replace(descriptive.audit.explanation, "")), "no causal wording");
+  assert.ok(text(page).includes(plainText(descriptive.report.summary)), "its own sentence is shown");
+  assert.ok(!/campaign added|caused/i.test(text(page).replace(plainText(descriptive.audit.explanation), "")), "no causal wording");
   const scored = { ...read("verified"), audit: undefined, contacts: undefined, programme: undefined };
   const plain = campaignPageHtml({ view: scored });
   assert.ok(!plain.includes("data-audit-card") && !plain.includes("data-contacts-card"), "a scored campaign is drawn as before");

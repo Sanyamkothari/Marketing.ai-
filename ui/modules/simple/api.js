@@ -67,6 +67,18 @@ export async function getSummary() {
   }
 }
 
+/**
+ * Plan M M172 (DEC-1602): every campaign record (`GET /campaigns`), for the short names Results gives them (goal and
+ * month); null when it cannot be read, and Results then shows each campaign under its recorded label.
+ */
+export async function getCampaigns() {
+  try {
+    return await request("/campaigns");
+  } catch {
+    return null;
+  }
+}
+
 /** The engine version this API serves (`GET /healthz`), or null. */
 export async function engineVersion() {
   try {

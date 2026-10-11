@@ -268,7 +268,7 @@ export function resultLinksHtml(uc, run) {
     })
     .filter((l) => l && l.label && l.href)
     .map((l) => `<a class="uc-link" href="${escHtml(l.href)}">${escHtml(l.label)}<span aria-hidden="true"> ›</span></a>`);
-  return links.length ? `<nav class="uc-links" aria-label="More for this use case">${links.join("")}</nav>` : "";
+  return links.length ? `<nav class="uc-links" aria-label="More for this goal">${links.join("")}</nav>` : "";
 }
 
 // Plan H M80 (shares this block): the Connections module (`modules/connections/index.js`, route

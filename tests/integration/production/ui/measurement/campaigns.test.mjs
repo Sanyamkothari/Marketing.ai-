@@ -39,8 +39,15 @@ test("Results lists the campaigns beside the runs, newest first, each linking to
   await until(() => $("[data-campaigns]"), 3000, "the campaigns list");
   assert.ok($("[data-results]"), "the runs are still there");
   const links = $$("[data-campaigns] a[data-campaign]");
+  // Plan M M172 (DEC-1602): a campaign on a list is named by its goal and the month it went out (at most 40
+  // characters); the label recorded with it is the subtitle under it, marked as the person's own words.
+  const month = (iso) => new Date(iso).toLocaleDateString("en-GB", { month: "short", year: "numeric", timeZone: "UTC" });
   assert.deepEqual(
     links.map((a) => a.textContent),
+    world.campaigns.campaigns.map((c) => `Win back lapsed customers \u2014 ${month(c.treatment_start || c.created_at)}`),
+  );
+  assert.deepEqual(
+    $$("[data-campaigns] [data-campaign-name] [data-user-text]").map((s) => s.textContent),
     world.campaigns.campaigns.map((c) => c.name),
   );
   assert.deepEqual(

@@ -46,10 +46,21 @@ EXPECTED_FILES: Final[frozenset[str]] = frozenset(
     {"api.js", "feedback.js", "help.js", "index.js", "screen.js", "styles.js", "tour.js"}
 )
 
-SHARED_IMPORTS: Final[frozenset[str]] = frozenset({"dom.js", "api.js", "modules/router.js"})
-"""What outside its own folder the module may import (paths relative to `ui/`)."""
+SHARED_IMPORTS: Final[frozenset[str]] = frozenset(
+    {"dom.js", "api.js", "modules/router.js", "labels.js", "format.js"}
+)
+"""What outside its own folder the module may import (paths relative to `ui/`). Plan M added two primitives every
+page shares: the glossary (`labels.js`, M170/M172) and the one number and money format (`format.js`, M172)."""
 
-API_PREFIXES: Final[tuple[str, ...]] = ("/pilot", "/datasets", "/runs", "/models", "/clients", "/auth")
+API_PREFIXES: Final[tuple[str, ...]] = (
+    "/pilot",
+    "/datasets",
+    "/runs",
+    "/models",
+    "/clients",
+    "/auth",
+    "/campaigns",  # Plan M M172: the campaign records behind the short campaign names
+)
 
 RUPEE: Final[str] = "₹"
 PILOT_SAMPLE_VALUES: Final[tuple[str, ...]] = tuple(v for v in SAMPLE_VALUES if v != RUPEE)

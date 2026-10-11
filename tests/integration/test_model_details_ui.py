@@ -121,9 +121,10 @@ def test_details_is_collapsed_and_names_the_run_it_loads(rendered: dict[str, str
     assert " open" not in details.group(0)
     assert 'data-beeswarm="r_20260924_00000001"' in details.group(0)
     assert "<summary>" in page and ">Details<" in page
-    assert "push each customer's score" in page
-    # The default view - what drives the score - is still there, ahead of the section.
-    assert page.index("What drives the score") < page.index('<details class="bs-details"')
+    # Plan M M172 (DEC-1602): "score" and "SHAP" are not a marketer's words; the section says what it shows.
+    assert "push each customer's likelihood" in page
+    # The default view - what drives it - is still there, ahead of the section.
+    assert page.index("What drives it") < page.index('<details class="bs-details"')
 
 
 def test_every_dot_in_the_file_is_drawn_once(rendered: dict[str, str]) -> None:

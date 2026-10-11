@@ -9,7 +9,9 @@
 
    Each page has an allow-list of today's violations, the BASELINE (baseline.json: page, term, count). A page
    fails when it shows a term that is not on its list, or shows more of one than the list allows, so nothing
-   gets worse. The table the test prints is M172's to-do list; M172 empties the file.
+   gets worse. M172 (DEC-1602) emptied the file: it stays as an empty object, so any never-shown word outside
+   technical details now fails its page. A name the person supplied (a file name, a campaign label) is marked
+   `data-user-text` (ui/labels.js `userText`) and left out, as their words are not ours.
 
    Environment:
      GLOSSARY_UPDATE_BASELINE=lower  rewrite baseline.json with every count at most what the pages show now
@@ -44,7 +46,8 @@ const click = (selector) => async () => {
 /** id, where to go, what to do there, and what the page must show so a blank or error page cannot pass.
     `expect` is a sentence the page draws from its own content and `selector` an element it must contain; both
     are chosen so that they are NOT glossary words, because M172 renames those and must not need to edit this
-    guard to finish its own task. */
+    guard to finish its own task. (M172 did edit three: two goal names that Plan M section 4.2 renamed, and the
+    schedules guard, which contained the never-shown word "run".) */
 export const PAGES = [
   { id: "home", hash: "#/", expect: /Customer Lifecycle/ },
   { id: "results", hash: "#/results", expect: /Needs your attention/ },
@@ -54,7 +57,7 @@ export const PAGES = [
     id: "setup-manual-win-back-score",
     hash: `#/uc/${WIN}`,
     steps: [click('[data-setup-tab="manual"]'), click('.seg button[data-mode="score"]')],
-    expect: /Win-back Campaign/,
+    expect: /Win back lapsed customers/,
     selector: '.seg button[data-mode="score"]',
   },
   { id: "setup-guided-hillstrom", hash: `#/uc/${UC}`, expect: /Guided setup/ },
@@ -68,7 +71,7 @@ export const PAGES = [
   { id: "model-scoring", hash: `#/uc/${UC}/model/${SCORE_RISK}`, expect: /nothing new to measure/ },
   { id: "output-scoring", hash: `#/uc/${UC}/output/${SCORE_RISK}`, expect: /Customers worth an e-mail/ },
   { id: "campaign-results-scoring", hash: `#/campaign/${UC}/${SCORE_RISK}`, expect: /Campaign results/ },
-  { id: "run-uplift-training", hash: `#/uc/${UC}/run/${TRAIN_UPLIFT}`, expect: /E-mail Offer Choice[\s\S]*View details/ },
+  { id: "run-uplift-training", hash: `#/uc/${UC}/run/${TRAIN_UPLIFT}`, expect: /Choose the best e-mail for each customer[\s\S]*View details/ },
   { id: "data-uplift-training", hash: `#/uc/${UC}/data/${TRAIN_UPLIFT}`, expect: /how it was prepared/ },
   { id: "model-uplift-training", hash: `#/uplift/${UC}/model/${TRAIN_UPLIFT}`, expect: /Top 10% gain/ },
   { id: "contact-list-uplift-training", hash: `#/uplift/${UC}/output/${TRAIN_UPLIFT}`, expect: /Customers to contact/ },
@@ -89,11 +92,16 @@ export const PAGES = [
   { id: "connections", hash: "#/connections", expect: /The places your data lives/ },
   { id: "data-doctor", hash: "#/doctor", expect: /Data Doctor|Bring your data/ },
   { id: "uplift-workbench", hash: "#/uplift", expect: /Measure what a campaign changes/ },
+  // The workbench's own setup screens, one click from the index (M172 review: they were not swept).
+  { id: "uplift-setup", hash: `#/uplift/${UC}`, expect: /Upload CSV, Excel or Parquet/, selector: "[data-umode]" },
+  { id: "uplift-setup-score", hash: `#/uplift/${UC}/score`, expect: /Upload CSV, Excel or Parquet/, selector: "[data-umode=score]" },
+  { id: "uplift-result-training", hash: `#/uplift/${UC}/run/${TRAIN_UPLIFT}`, expect: /How well it finds the customers contact changes/ },
+  { id: "uplift-result-scoring", hash: `#/uplift/${UC}/run/${SCORE_UPLIFT}`, expect: /Contacted vs not contacted/ },
   { id: "campaigns-scored-lists", hash: "#/monitoring/runs", expect: /Every list of customers/ },
   { id: "add-outcomes", hash: `#/monitoring/runs/${SCORE_RISK}`, expect: /What really happened to the customers/ },
   { id: "audit-campaign", hash: "#/audit", expect: /Measure a campaign another tool ran/ },
   { id: "model-health", hash: "#/monitoring/alerts", expect: /Problems Marketing AI found on its own/ },
-  { id: "schedules", hash: "#/monitoring/schedules", expect: /that run on their own/ },
+  { id: "schedules", hash: "#/monitoring/schedules", expect: /on their own/ },
   { id: "cost", hash: "#/cost", expect: /Estimates at AWS/ },
   { id: "approvals", hash: "#/approvals", expect: /Models waiting for your approval/ },
   { id: "data-request-kit", hash: "#/pilot/kit", expect: /Ask your data team/ },
@@ -234,6 +242,31 @@ test("a page that shows an engine word outside technical details fails (planted 
     '<details class="tech"><summary>Settings used for this run</summary><p>psi</p></details>' +
     '<details class="tech" hidden><summary>Uplift settings</summary></details>';
   assert.deepEqual(violations(visibleText(holder), {}).found, { uplift: 1, run: 1 });
+  holder.remove();
+});
+
+test("a name the person supplied is left out, with its title; our words around it still count (M172)", () => {
+  const holder = document.createElement("div");
+  holder.innerHTML =
+    '<p>Uploaded file <span data-user-text title="training.csv">training.csv</span>.</p>' +
+    '<p class="sub" data-user-text>Holdout test of the treat list</p>' +
+    '<span class="cn">Win back lapsed customers — Oct 2026<span data-user-text>Q4 uplift run</span></span>';
+  document.body.appendChild(holder);
+  assert.deepEqual(violations(visibleText(holder), {}).found, {}, "the person's own names are theirs, not ours");
+  // The mark covers the name only: a sentence of ours beside it is read as before.
+  holder.insertAdjacentHTML("beforeend", '<p>Scored by run <span data-user-text>training.csv</span></p>');
+  assert.deepEqual(violations(visibleText(holder), {}).found, { run: 1 });
+  holder.remove();
+});
+
+test("the Users page's data-user (a user id on our own forms and buttons) does not hide our words (M172 review)", () => {
+  const holder = document.createElement("div");
+  holder.innerHTML =
+    '<form data-user="u_1"><label>Score the run password</label></form>' +
+    '<button type="button" data-user="u1">Retrain uplift</button>';
+  document.body.appendChild(holder);
+  assert.match(visibleText(holder), /Score the run password[\s\S]*Retrain uplift/);
+  assert.deepEqual(violations(visibleText(holder), {}).found, { score: 1, run: 1, uplift: 1 });
   holder.remove();
 });
 

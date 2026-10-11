@@ -11,6 +11,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { $, $$, settle, until } from "../harness.mjs";
 import { fixture, installWholePage } from "./fake.mjs";
+import { plainText } from "../../../../../ui/labels.js";
 
 const summary = fixture("campaign_summary");
 const full = fixture("campaign_summary_full");
@@ -19,6 +20,22 @@ const { w } = await installWholePage({ hash: "#/results", world });
 const { resultsHtml, summaryCardHtml } = await import("../../../../../ui/modules/simple/pages.js");
 
 const text = (el) => (el ? el.textContent.replace(/\s+/g, " ").trim() : "");
+
+/* Plan M M172 (DEC-1602): a lower bound is drawn in the one number format (ui/format.js `figureHtml`): rounded for
+   display, with the server's own text in the tooltip when rounding changed it. `shown` is what a person reads. */
+const { figureHtml } = await import("../../../../../ui/format.js");
+const shown = (figure) => {
+  const box = w.document.createElement("span");
+  box.innerHTML = figureHtml(figure);
+  return text(box);
+};
+/** The figure a line shows reads as `figureHtml` draws it, and its tooltip (when there is one) is the server's text. */
+function assertFigure(li, figure) {
+  assert.ok(text(li).includes(shown(figure)), `${text(li)} shows ${shown(figure)}`);
+  const fmt = li.querySelector(".fmt[title]");
+  if (fmt) assert.equal(fmt.getAttribute("title"), figure.text, "the exact figure, in the server's words");
+  else assert.equal(shown(figure), figure.text, "no tooltip only when nothing was rounded");
+}
 
 async function open(hash, ready) {
   w.location.hash = "#/";
@@ -37,9 +54,10 @@ test("Results shows the server's cards, each with its words, its figures and the
     "one card for each the server sent, in its order",
   );
   const [card] = summary.cards;
-  const shown = text(cards[0]);
-  for (const part of [card.title, card.text, card.next_step, card.campaign_name.text]) assert.ok(shown.includes(part), part);
-  for (const fact of card.facts) assert.ok(shown.includes(fact.value.text), "a figure the server sent");
+  const shownText = text(cards[0]);
+  // Plan M M172: the server's sentences in the glossary's words (`plainText`); their figures as sent.
+  for (const part of [card.title, card.text, card.next_step, card.campaign_name.text]) assert.ok(shownText.includes(plainText(part)), part);
+  for (const fact of card.facts) assert.ok(shownText.includes(fact.value.text), "a figure the server sent");
   assert.equal(
     cards[0].querySelector("[data-card-pack]").getAttribute("href"),
     `#/pilot/proof/${card.campaign_id}`,
@@ -52,12 +70,17 @@ test("the total is labelled exactly as the server labelled it, with each campaig
   const row = $(`[data-proven] [data-total="${total.unit}"]`);
   assert.ok(row, "the total of its unit");
   assert.match(total.label, /^at least .*, the sum of each campaign's lower bound$/);
-  assert.ok(text(row).includes(total.label));
+  // Plan M M172 review: the total's own figure in the label is drawn in the one number format, the server's text in
+  // its tooltip; every other word of the label is the server's.
+  assert.ok(total.label.includes(total.total.text), "the server's label carries its total's text");
+  assert.ok(text(row).includes(total.label.replace(total.total.text, shown(total.total))), text(row));
+  assertFigure(row.querySelector(".sp-label"), total.total);
   for (const line of total.campaigns) {
     const li = row.querySelector(`[data-line="${line.campaign_id}"]`);
-    assert.ok(li && text(li).includes(line.lower_bound.text), "each lower bound that was added");
+    assert.ok(li, "each lower bound that was added");
+    assertFigure(li, line.lower_bound);
   }
-  assert.ok(text($("[data-proven]")).includes(summary.proven.rule));
+  assert.ok(text($("[data-proven]")).includes(plainText(summary.proven.rule)));
 });
 
 test("every number on the two cards is one the server sent, and the words are plain", () => {
@@ -109,8 +132,31 @@ test("each campaign of a total ends with its own lower bound, never with its pla
   const lines = [...row.querySelectorAll("[data-line]")];
   assert.equal(lines.length, 3);
   for (const [li, item] of lines.map((li, i) => [li, [first, second, third][i]])) {
-    assert.equal(text(li), `${item.campaign_name.text}: ${item.lower_bound.text}`, "no stray index after the figure");
+    assert.equal(text(li), `${item.campaign_name.text}: ${shown(item.lower_bound)}`, "no stray index after the figure");
   }
+});
+
+test("a rupee total of a lakh or more is drawn in the one number format, exact in its tooltip (M172 review)", () => {
+  // The server's words for a total of Rs 4,18,250 (engine/measurement/summary.py `totals`, engine/pilot/roi.py `format_inr`).
+  const exact = "₹4,18,250 (4.18 lakh)";
+  const figure = { value: 418250, text: exact, format: "inr" };
+  const [first] = summary.proven.totals[0].campaigns;
+  const total = {
+    unit: "rupees",
+    unit_column: null,
+    total: figure,
+    label: `at least ${exact} net of what contacts and offers cost, the sum of each campaign's lower bound`,
+    campaigns: [{ ...first, lower_bound: figure }],
+  };
+  const row = html({ ...summary, proven: { ...summary.proven, totals: [total] } }).querySelector('[data-total="rupees"]');
+  const label = row.querySelector(".sp-label");
+  assert.equal(text(label), "at least ₹4.18 lakh net of what contacts and offers cost, the sum of each campaign's lower bound");
+  assert.equal(label.querySelector(".fmt").getAttribute("title"), exact, "the exact total in the tooltip");
+  assert.equal(text(label.querySelector(".fmt")), text(row.querySelector("[data-line] .fmt")), "the headline reads as its line");
+  // A label that does not carry the figure's text is shown as the server wrote it, never with a number put in.
+  const odd = { ...total, label: "at least a lot, the sum of each campaign's lower bound" };
+  const plain = html({ ...summary, proven: { ...summary.proven, totals: [odd] } }).querySelector('[data-total="rupees"] .sp-label');
+  assert.equal(text(plain), "at least a lot, the sum of each campaign's lower bound");
 });
 
 test("a lower bound listed apart carries the unit the server sent, never a bare number", () => {
@@ -120,7 +166,8 @@ test("a lower bound listed apart carries the unit the server sent, never a bare 
   const row = body.querySelector(`[data-apart="${stated.campaign_id}"]`);
   for (const bound of stated.lower_bounds) {
     const li = row.querySelector(`[data-line="${bound.campaign_id}"]`);
-    assert.ok(text(li).endsWith(`${bound.lower_bound.text} ${stated.unit_label}`), text(li));
+    assert.ok(text(li).endsWith(`${shown(bound.lower_bound)} ${stated.unit_label}`), text(li));
+    assertFigure(li, bound.lower_bound);
   }
 });
 

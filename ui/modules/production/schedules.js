@@ -82,24 +82,24 @@ import { reasonFor } from "./session.js";
 export const MONITORING_TABS = [
   ["alerts", "Alerts", "#/monitoring/alerts"],
   ["schedules", "Schedules", "#/monitoring/schedules"],
-  ["missed", "Missed runs", "#/monitoring/missed"],
+  ["missed", "Missed schedules", "#/monitoring/missed"],
 ];
 
 export const KIND_LABEL = {
-  score: "Score new data",
+  score: "Refresh the contact list",
   drift_check: "Check if new customers look different",
   retrain: "Retrain the model",
 };
 const KIND_HELP = {
   drift_check:
-    "Compares the newest customers with the ones the model learned from. If they look very different, its scores may be less reliable and an alert is raised.",
-  retrain: "Trains a new model on recent data. It is used only after an Approver approves it.",
+    "Compares the newest customers with the ones the model learned from. If they look very different, its rankings may be less reliable and an alert is raised.",
+  retrain: "Builds a new model from recent data. It is used only after an Approver approves it.",
 };
 export const PRESETS = ["daily", "weekly", "monthly"];
 const PRESET_LABEL = { daily: "Daily", weekly: "Weekly", monthly: "Monthly" };
 export const DEFAULT_TIMEZONE = "Asia/Kolkata";
 export const FIRING_STATUSES = ["queued", "running", "succeeded", "failed", "missed"];
-const TRIGGER_WORDS = { scheduled: "On schedule", manual: "Run now", catch_up: "Catch-up", missed: "Missed" };
+const TRIGGER_WORDS = { scheduled: "On schedule", manual: "Started by hand", catch_up: "Catch-up", missed: "Missed" };
 
 // --- the Model health header and tabs --------------------------------------------------------------
 
@@ -251,12 +251,12 @@ async function loadFirings() {
 function useCaseField() {
   const list = useCaseList();
   if (!list && (state.useCasesLoading || !state.schedules)) {
-    return `<label class="field pb-field"><span class="sub">Use case</span><span class="control sel"><select name="use_case_id" disabled><option value="">Loading use cases…</option></select></span></label>`;
+    return `<label class="field pb-field"><span class="sub">Goal</span><span class="control sel"><select name="use_case_id" disabled><option value="">Loading goals…</option></select></span></label>`;
   }
-  if (!list || !list.length) return textField("use_case_id", "Use case id", { attrs: "required" });
+  if (!list || !list.length) return textField("use_case_id", "Goal id", { attrs: "required" });
   return selectField(
     "use_case_id",
-    "Use case",
+    "Goal",
     list.map((uc) => [uc.id, uc.name]),
   );
 }
@@ -279,8 +279,8 @@ function advancedFields(current = null, parameters = {}) {
     hint: "Used only when How often is Custom.",
   })}${textField("timezone", "Time zone", { value: current ? current.timezone : DEFAULT_TIMEZONE })}${textField(
     "onboarding_spec_id",
-    "Recipe id",
-    { value: parameters.onboarding_spec_id || "", hint: "Rebuilds the dataset from the client's newest tables." },
+    "Saved fixes id",
+    { value: parameters.onboarding_spec_id || "", hint: "Rebuilds the dataset from the client's newest tables, with the fixes you approved." },
   )}${textField("dataset_id", "Or a fixed dataset id", { value: parameters.dataset_id || "" })}${textField(
     "model_version_id",
     "Model version id",
@@ -300,13 +300,13 @@ function newCard() {
           "kind",
           "What it does",
           Object.entries(KIND_LABEL).map(([kind, label]) => [kind, label]),
-          { hint: "Scoring reads a recipe or a dataset: name one under Advanced." },
+          { hint: "Refreshing a list reads the fixes you approved or a dataset: name one under Advanced." },
         )}
         ${cadenceField()}
       </div>
       <label class="check"><input type="checkbox" name="enabled" checked> Start it now (untick to create it paused)</label>
       <details class="adv"><summary>Advanced</summary><div class="pb-adv-body"><div class="frow">
-        ${textField("client_id", "Client id", { hint: "Leave empty to use the recipe's client." })}
+        ${textField("client_id", "Client id", { hint: "Leave empty to use the client the saved fixes belong to." })}
         ${advancedFields()}
       </div></div></details>
       <div class="pb-form-actions">${actionButton("POST", "/schedules", {
@@ -341,7 +341,7 @@ function rowActions(s) {
   return `<div class="pb-row-actions">${actionButton("POST", "/schedules/{schedule_id}/fire", {
     cls: "btn quiet sm",
     attrs: `data-fire="${id}"`,
-    label: "Run now",
+    label: "Start now",
   })}${toggle}<span class="spacer"></span>${actionButton("DELETE", "/schedules/{schedule_id}", {
     cls: "btn quiet sm pb-quiet-bad",
     attrs: `data-delete="${id}"`,
@@ -360,13 +360,13 @@ function messageFor(s) {
 
 const LIST_COLUMNS = [
   { label: "What" },
-  { label: "Use case" },
+  { label: "Goal" },
   { label: "How often" },
-  { label: "Next run" },
+  { label: "Next time" },
   { label: "Status" },
   { label: "", sr: "Actions" },
   { label: "Client", more: true },
-  { label: "Last run", more: true },
+  { label: "Last time", more: true },
 ];
 
 const activePill = (s) =>
@@ -378,14 +378,14 @@ function scheduleRow(s) {
     attrs: `data-schedule="${esc(s.schedule_id)}"`,
     cells: [
       `<a href="${scheduleHref(s.schedule_id)}">${esc(KIND_LABEL[s.kind] || s.kind)}</a>${
-        s.managed_by ? `<div class="pb-small">Follows the use case's retraining setting</div>` : ""
+        s.managed_by ? `<div class="pb-small">Follows the goal's rebuild setting</div>` : ""
       }`,
       esc(useCaseName(s.use_case_id)),
       esc(cadenceText(s)),
       yourTime(s.next_due_at),
       activePill(s),
       rowActions(s),
-      s.client_id ? mono(s.client_id) : `<span class="pb-small">The recipe's</span>`,
+      s.client_id ? mono(s.client_id) : `<span class="pb-small">From the saved fixes</span>`,
       yourTime(s.last_fired_at),
     ],
     after: message ? spanRow(LIST_COLUMNS.length, message) : "",
@@ -398,34 +398,34 @@ function moreActions({ inline = false } = {}) {
   const button = actionButton("POST", "/schedules/retraining/sync", {
     cls: inline ? "btn quiet sm" : "btn secondary sm",
     attrs: 'id="pb-retraining-sync"',
-    label: state.syncing ? "Updating…" : "Update retraining schedules now",
+    label: state.syncing ? "Updating…" : "Update rebuild schedules now",
     busy: state.syncing,
   });
   const r = state.synced;
   const result = state.syncError
     ? errorBox(state.syncError)
     : r
-      ? `<span class="pb-small" role="status">Checked ${esc(r.targets)} recipe(s): ${esc(r.created.length)} created, ${esc(
+      ? `<span class="pb-small" role="status">Checked ${esc(r.targets)} goal and client pair(s): ${esc(r.created.length)} created, ${esc(
           r.updated.length,
         )} updated, ${esc(r.removed.length)} removed.</span>`
       : "";
-  const hint = `<span class="pb-hint">Brings the retraining schedules in line with each use case's settings now, instead of at the next restart.</span>`;
+  const hint = `<span class="pb-hint">Brings the rebuild schedules in line with each goal's settings now, instead of at the next restart.</span>`;
   if (inline) return `<div class="card-body"><div class="pb-row-actions">${button}${hint}${result}</div></div>`;
   const open = state.syncing || r || state.syncError;
-  return `<div class="card-body"><details class="pb-more-actions"${open ? " open" : ""}><summary class="btn quiet sm">More actions</summary><div class="pb-row-actions">${button}<span class="pb-hint">Brings the retraining schedules in line with each use case's settings now, instead of at the next restart.</span>${result}</div></details></div>`;
+  return `<div class="card-body"><details class="pb-more-actions"${open ? " open" : ""}><summary class="btn quiet sm">More actions</summary><div class="pb-row-actions">${button}<span class="pb-hint">Brings the rebuild schedules in line with each goal's settings now, instead of at the next restart.</span>${result}</div></details></div>`;
 }
 
 function missedNotice() {
   if (!missedCount) return "";
   return noticeCard({
-    title: `${missedCount} scheduled run${missedCount === 1 ? " was" : "s were"} missed`,
-    text: "Runs that should have happened while Marketing AI was switched off. Each schedule ran once to catch up.",
-    action: { label: "See missed runs", href: "#/monitoring/missed" },
+    title: `${missedCount} scheduled ${missedCount === 1 ? "time was" : "times were"} missed`,
+    text: "Scheduled work that should have happened while Marketing AI was switched off. Each schedule caught up once.",
+    action: { label: "See missed schedules", href: "#/monitoring/missed" },
   });
 }
 
 function listCard() {
-  const title = (n) => `<h3>Schedules${n === null ? "" : ` · ${esc(n)}`} <span class="sort-note">(next run first)</span></h3>`;
+  const title = (n) => `<h3>Schedules${n === null ? "" : ` · ${esc(n)}`} <span class="sort-note">(soonest first)</span></h3>`;
   if (state.loadError) {
     return `<section class="card">${title(null)}<div class="card-body">${errorBox(state.loadError, { retry: true })}</div></section>`;
   }
@@ -433,10 +433,10 @@ function listCard() {
   const created = state.created
     ? `<div class="card-body"><div class="pb-ok" role="status">Created <a href="${scheduleHref(state.created.schedule_id)}">${esc(
         KIND_LABEL[state.created.kind] || state.created.kind,
-      )} · ${esc(useCaseName(state.created.use_case_id))}</a>; next run ${esc(fmtStamp(state.created.next_due_at))} your time.</div></div>`
+      )} · ${esc(useCaseName(state.created.use_case_id))}</a>; next time ${esc(fmtStamp(state.created.next_due_at))} your time.</div></div>`
     : "";
   if (!state.schedules.length) {
-    return `<section class="card">${title(0)}${created}<div class="empty-state"><p class="es-t">Nothing runs on its own yet.</p><p>Schedule monthly scoring or a check on new customers, so you don't have to remember. Use the form below.</p></div>${moreActions({ inline: true })}</section>`;
+    return `<section class="card">${title(0)}${created}<div class="empty-state"><p class="es-t">Nothing happens on its own yet.</p><p>Schedule a monthly contact list or a check on new customers, so you don't have to remember. Use the form below.</p></div>${moreActions({ inline: true })}</section>`;
   }
   const sorted = [...state.schedules].sort(
     (a, b) => Number(!a.enabled) - Number(!b.enabled) || String(a.next_due_at).localeCompare(String(b.next_due_at)),
@@ -450,7 +450,7 @@ export const schedulesHtml = () =>
   monitoringScreen(
     "schedules",
     "Schedules",
-    "Scoring, checks on new customers and retraining that run on their own. Every change and every run is in the audit log.",
+    "Contact lists, checks on new customers and model rebuilds that happen on their own. Every change, and every time one starts, is in the audit log.",
     ["GET", "/schedules"],
     () => `${missedNotice()}${listCard()}${newCard()}`,
     headActions({
@@ -471,7 +471,7 @@ function firingRow(f) {
     cells: [
       esc(fmtStamp(f.fired_at)),
       `${statusPill(f.status)}${code ? `<div class="pb-small">${codeWords(code)}</div>` : ""}`,
-      f.run_id ? `<a href="${runHref(f.run_id)}">See this run</a>` : EM_DASH,
+      f.run_id ? `<a href="${runHref(f.run_id)}">See what it made</a>` : EM_DASH,
       esc(TRIGGER_WORDS[f.trigger] || String(f.trigger || EM_DASH).replace(/_/g, " ")),
       esc(fmtStamp(f.scheduled_for)),
       [mono(f.result_code), mono(f.error_code)].filter((v) => v !== EM_DASH).join(" ") || EM_DASH,
@@ -485,10 +485,10 @@ function historyCard() {
   const filter = `<form id="pb-firings-filter" class="pb-filters">${selectField(
     "status",
     "Show",
-    [["", "Every run"], ...FIRING_STATUSES.map((s) => [s, statusWord(s)])],
+    [["", "Every time"], ...FIRING_STATUSES.map((s) => [s, statusWord(s)])],
     { value: state.firingStatus },
   )}</form>`;
-  const title = (n) => `<h3>Run history${n === null ? "" : ` · ${esc(n)}`} <span class="sort-note">(newest first)</span></h3>`;
+  const title = (n) => `<h3>History${n === null ? "" : ` · ${esc(n)}`} <span class="sort-note">(newest first)</span></h3>`;
   if (state.firingsError) return `<section class="card">${title(null)}<div class="card-body">${filter}${errorBox(state.firingsError)}</div></section>`;
   const firings = state.firings || [];
   const table = firings.length
@@ -500,7 +500,7 @@ function historyCard() {
           { label: "How it started", more: true },
           { label: "Due", more: true },
           { label: "Code", more: true },
-          { label: "Run id", more: true },
+          { label: "Reference", more: true },
           { label: "Models to retrain", more: true },
         ],
         firings.map(firingRow),
@@ -531,7 +531,7 @@ function editCard(s) {
       })}</div>
     </form>
     ${state.saveError ? errorBox(state.saveError) : ""}
-    ${state.saved ? `<div class="pb-ok" role="status">Saved. Next run ${esc(fmtStamp(s.next_due_at))} your time.</div>` : ""}
+    ${state.saved ? `<div class="pb-ok" role="status">Saved. Next time ${esc(fmtStamp(s.next_due_at))} your time.</div>` : ""}
   </div></details></div></section>`;
 }
 
@@ -539,11 +539,11 @@ function factsCard(s) {
   const p = s.parameters || {};
   const pairs = [
     ["What it does", esc(KIND_LABEL[s.kind] || s.kind)],
-    ["Use case", esc(useCaseName(s.use_case_id))],
+    ["Goal", esc(useCaseName(s.use_case_id))],
     ["How often", esc(cadenceText(s))],
     ["Status", activePill(s)],
-    ["Next run", `${esc(fmtStamp(s.next_due_at))} your time`],
-    ["Last run", s.last_fired_at ? `${esc(fmtStamp(s.last_fired_at))} your time` : "Not yet"],
+    ["Next time", `${esc(fmtStamp(s.next_due_at))} your time`],
+    ["Last time", s.last_fired_at ? `${esc(fmtStamp(s.last_fired_at))} your time` : "Not yet"],
     ["Created", `${esc(fmtDate(s.created_at))} by ${esc(personName(s.created_by))}`],
   ];
   const deleteArea =
@@ -582,7 +582,7 @@ export function scheduleHtml(scheduleId) {
         primary: actionButton("POST", "/schedules/{schedule_id}/fire", {
           cls: "btn primary",
           attrs: `data-fire="${esc(s.schedule_id)}"`,
-          label: "Run now",
+          label: "Start now",
         }),
         secondary: [
           s.enabled
@@ -600,7 +600,7 @@ export function scheduleHtml(scheduleId) {
         related: { label: "All schedules", href: "#/monitoring/schedules" },
       })
     : "";
-  const desc = s ? `Runs ${cadenceSentence(s)}.` : "One schedule and every time it ran.";
+  const desc = s ? `Happens ${cadenceSentence(s)}.` : "One schedule and every time it started.";
   return monitoringScreen(
     "schedules",
     title,
@@ -656,7 +656,7 @@ export function createPayload(form) {
 
 function firedNotice(firing) {
   const code = firing.error_code || firing.result_code;
-  const run = firing.run_id ? ` <a href="${runHref(firing.run_id)}">See this run</a>.` : "";
+  const run = firing.run_id ? ` <a href="${runHref(firing.run_id)}">See what it made</a>.` : "";
   return `Ran now: ${statusPill(firing.status)}${code ? ` ${codeWords(code)}` : ""}.${run}${techDetails([
     ["Result", firing.status],
     ["Code", code],
@@ -697,7 +697,7 @@ function bindRowActions(main, repaint, reload, afterDelete) {
       rowAction(id, () => postScheduleDisable(id), repaint, reload, () => "Paused: it will not fire until resumed.");
     } else if ((el = hit("data-enable"))) {
       const id = el.getAttribute("data-enable");
-      rowAction(id, () => postScheduleEnable(id), repaint, reload, (s) => `Resumed; next run ${esc(fmtStamp(s.next_due_at))} your time.`);
+      rowAction(id, () => postScheduleEnable(id), repaint, reload, (s) => `Resumed; next time ${esc(fmtStamp(s.next_due_at))} your time.`);
     } else if ((el = hit("data-delete-yes"))) {
       const id = el.getAttribute("data-delete-yes");
       rowAction(id, () => deleteSchedule(id), repaint, afterDelete, null);

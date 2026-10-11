@@ -39,9 +39,9 @@ export const ALERT_KIND_LABEL = {
   drift_above_threshold: "New customers look very different",
   performance_drop: "The model did worse on real outcomes",
   scheduled_job_failed: "A scheduled job failed",
-  schedule_missed: "Scheduled runs were missed",
+  schedule_missed: "Scheduled work was missed",
   // Plan J M107 (DEC-1317): the monthly loop's own alerts, information only.
-  treat_list_ready: "A treat list is ready",
+  treat_list_ready: "A contact list is ready",
   campaign_measured: "A campaign was measured",
   challenger_waiting: "A new model was learned",
   // Plan K M138 (DEC-1403): a campaign's interim reading crossed the harm line; a warning, nothing stops.
@@ -157,7 +157,7 @@ function retrainControl(alert) {
 
 function whatHappened(alert) {
   const links = [
-    alert.run_id ? `<a href="${runHref(alert.run_id)}">See the run</a>` : "",
+    alert.run_id ? `<a href="${runHref(alert.run_id)}">See the details</a>` : "",
     alert.schedule_id ? `<a href="#/monitoring/schedules/${encodeURIComponent(alert.schedule_id)}">Open the schedule</a>` : "",
   ]
     .filter(Boolean)
@@ -211,7 +211,7 @@ function alertsCard() {
   if (!state.alerts) return `<section class="card">${title(null)}<p class="loading pb-pad">Loading…</p></section>`;
   const table = state.alerts.length
     ? rowsTable(
-        [{ label: "Severity" }, { label: "What happened" }, { label: "Use case" }, { label: "Raised" }, { label: "", sr: "Action" }],
+        [{ label: "Severity" }, { label: "What happened" }, { label: "Goal" }, { label: "Raised" }, { label: "", sr: "Action" }],
         [...state.alerts].sort(byUrgency).map(alertRow),
         { cls: "pb-alerts" },
       )
@@ -251,7 +251,7 @@ function missedRow(f) {
 }
 
 function missedCard() {
-  const title = (n) => `<h3>Missed runs${n === null ? "" : ` · ${esc(n)}`} <span class="sort-note">(newest first)</span></h3>`;
+  const title = (n) => `<h3>Missed schedules${n === null ? "" : ` · ${esc(n)}`} <span class="sort-note">(newest first)</span></h3>`;
   if (state.missedError) return `<section class="card">${title(null)}<div class="card-body">${errorBox(state.missedError, { retry: true })}</div></section>`;
   if (!state.missed) return `<section class="card">${title(null)}<p class="loading pb-pad">Loading…</p></section>`;
   const table = state.missed.length
@@ -259,7 +259,7 @@ function missedCard() {
         [
           { label: "Due" },
           { label: "What" },
-          { label: "Use case" },
+          { label: "Goal" },
           { label: "Schedule" },
           { label: "Result" },
           { label: "Code", more: true },
@@ -268,15 +268,15 @@ function missedCard() {
         ],
         state.missed.map(missedRow),
       )
-    : `<div class="empty-state"><p class="es-t">No scheduled run has been missed.</p></div>`;
+    : `<div class="empty-state"><p class="es-t">No scheduled work has been missed.</p></div>`;
   return `<section class="card">${title(state.missed.length)}${table}</section>`;
 }
 
 export const missedHtml = () =>
   monitoringScreen(
     "missed",
-    "Missed runs",
-    "Runs that should have happened while Marketing AI was switched off. It runs each schedule once to catch up, never once per missed run.",
+    "Missed schedules",
+    "Scheduled work that should have happened while Marketing AI was switched off. It catches up once for each schedule, never once for every time it missed.",
     ["GET", "/monitoring/missed-firings"],
     missedCard,
   );
@@ -309,7 +309,7 @@ export function bindAlerts(root, repaint) {
         if (firing.status === "failed") {
           state.retrainError = {
             alertId: alert.alert_id,
-            error: { code: firing.error_code || "FIRING_FAILED", message: "The retraining run could not start." },
+            error: { code: firing.error_code || "FIRING_FAILED", message: "Rebuilding the model could not start." },
           };
         } else {
           state.retrained = { alertId: alert.alert_id, firing };

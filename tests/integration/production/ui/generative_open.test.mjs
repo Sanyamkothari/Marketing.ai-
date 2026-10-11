@@ -28,7 +28,7 @@ await import("../../../../ui/app.js");
 await import("../../../../ui/modules/generative/index.js");
 
 test("opening the use case lands on the assistant, and Back returns to where the person came from", async () => {
-  await until(() => w.document.querySelector(".stage-pill"), 3000, "the overview");
+  await until(() => w.document.querySelector("[data-goals] a.uc"), 3000, "the overview");
   const before = w.history.length;
   w.location.hash = `#/uc/${ID}`;
   await until(() => w.location.hash === ASSISTANT, 3000, "the assistant's address");

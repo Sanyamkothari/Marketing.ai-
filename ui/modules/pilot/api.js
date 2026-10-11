@@ -93,6 +93,11 @@ export const putProofValue = (campaignId, inputs) =>
 export const approveSuppression = (campaignId, payload) =>
   request(`/pilot/proof/${encodeURIComponent(campaignId)}/suppressions`, send("POST", payload));
 
+/** Plan M M172 (DEC-1602): the campaign records, for each campaign's short name (goal and month); null if unreadable. */
+export const listCampaigns = () => orNull(request("/campaigns"));
+/** One campaign record (`GET /campaigns/{id}`), for the Value Proof Pack's short name; null if unreadable. */
+export const getCampaign = (campaignId) => orNull(request(`/campaigns/${encodeURIComponent(campaignId)}`));
+
 export const listDatasets = () => request("/datasets");
 export const listScoringRuns = () => request(`/runs${q({ mode: "score", limit: 50 })}`);
 export const listModels = () => request("/models");

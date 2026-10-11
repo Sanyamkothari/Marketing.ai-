@@ -76,7 +76,8 @@ sync_api = pytest.importorskip(
 
 REPO_ROOT: Final[Path] = Path(__file__).resolve().parents[2]
 USE_CASE: Final[str] = "telco-churn"
-USE_CASE_NAME: Final[str] = "Telco Customer Churn"
+USE_CASE_NAME: Final[str] = "Keep customers likely to leave"
+"""The goal's name on screen (Plan M M172, §4.2); its id and the API's `name` are unchanged."""
 KEY_LABEL: Final[str] = "entity_key + snapshot_date"
 SAVED: Final[re.Pattern[str]] = re.compile(r"^Saved$")
 """A mapping card's saved state, matched whole: "Not saved yet" contains the word too."""
@@ -343,7 +344,8 @@ def journey(
     # 1. The product opens on Home; one company, so there is no client picker (Plan H M81).
     page.goto(f"{server}/ui/", wait_until="domcontentloaded")
     expect(page.get_by_role("heading", name="Customer Lifecycle")).to_be_visible()
-    expect(page.locator(".stage-pill").first).to_be_visible(timeout=ACTION_TIMEOUT_MS)
+    # Plan M M172: Home's goal cards (the stage columns became a label on each card).
+    expect(page.locator("[data-goals] a.uc").first).to_be_visible(timeout=ACTION_TIMEOUT_MS)
     seen.pickers_on_home = page.locator("[data-client-picker], #f-client").count()
     at = mark("create_client", started)
 
@@ -398,7 +400,7 @@ def journey(
     at = mark("build", at)
 
     # 3. Train on it.
-    run = page.get_by_role("button", name="Run training")
+    run = page.get_by_role("button", name="Build the model")  # Plan M M172: the run button in plain words
     expect(run).to_be_enabled()
     run.click()
     wait_for_results(page, timeout_s=TRAIN_TIMEOUT_S, log=log, label="training")
@@ -422,7 +424,7 @@ def journey(
     page.locator(".crumbs a").nth(1).click()  # Home › the use case (the one journey is Home, UI_AUDIT §8.4)
     expect(page.locator(".summary")).to_be_visible()
     page.locator("#f-again").click()
-    page.get_by_role("button", name="Score new data").click()
+    page.get_by_role("button", name="Make a contact list", exact=True).click()  # Plan M M172: the score mode
     expect(page.locator("#f-scorerun")).to_be_visible()
     page.locator('.pickcard[data-source="raw"]').click()
     files = page.locator('#f-onboarding input[data-act="pick-files"]')
@@ -441,7 +443,7 @@ def journey(
     seen.score_mapping_note = (note or "").strip()
     build_and_use(page, log)
     seen.score_pk_after_use = selected_text(page, "#f-pk")
-    score = page.get_by_role("button", name="Score data")
+    score = page.get_by_role("button", name="Make the contact list", exact=True)
     expect(score).to_be_enabled()
     score.click()
     wait_for_results(page, timeout_s=SCORE_TIMEOUT_S, log=log, label="scoring")
@@ -526,7 +528,7 @@ def test_use_this_dataset_split_the_snapshots_by_time(journey: Journey, workdir:
 
 def test_the_training_run_read_the_built_dataset(journey: Journey) -> None:
     """ "train": Results, on the dataset rather than a file, keyed on both columns."""
-    assert "Training complete" in journey.train_summary, journey.train_summary
+    assert "Model ready" in journey.train_summary, journey.train_summary  # Plan M M172
     value, meta = journey.data_block
     assert value == "Built dataset", value
     assert f"ID {KEY_LABEL}" in meta and f"predicting {LABEL}" in meta, meta
@@ -545,8 +547,8 @@ def test_next_months_tables_replayed_the_recipe_without_a_mapping_to_review(jour
 
 
 def test_the_scoring_run_scored_every_customer(journey: Journey) -> None:
-    assert "Scoring complete" in journey.score_summary, journey.score_summary
-    assert f"{CUSTOMERS:,} rows scored" in journey.score_summary, journey.score_summary
+    assert "Contact list ready" in journey.score_summary, journey.score_summary  # Plan M M172
+    assert f"{CUSTOMERS:,} rows ranked" in journey.score_summary, journey.score_summary
 
 
 def test_scores_csv_is_keyed_by_the_clients_own_customer_ids(journey: Journey, next_month: RawTables) -> None:

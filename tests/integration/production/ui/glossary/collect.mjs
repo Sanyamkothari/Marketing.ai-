@@ -7,10 +7,15 @@
        The <summary> of a technical <details> is still read, because it is on screen whether the section
        is open or closed, unless it says only "Technical details" or "Details" (the generic labels);
      - a hidden element: the `hidden` attribute, or an inline display:none / visibility:hidden;
+     - a name the person supplied (M172, DEC-1602): any element with [data-user-text], which pages write with
+       ui/labels.js `userText(value)` around a file name, a campaign label or a column of their data, and
+       nothing else. It is their wording, not ours, so the glossary cannot rename it;
      - <script>, <style>, <template>, <noscript>.
    The page's style sheet is not loaded in jsdom, so a class that hides an element in CSS cannot be seen
    here; pages that hide content use `hidden` (or a closed <details>, whose contents count: they are one
    click away from a marketer and must not carry engine words either, unless marked technical). */
+
+import { USER_TEXT_ATTRIBUTE } from "../../../../../ui/labels.js";
 
 const SKIP_TAGS = new Set(["SCRIPT", "STYLE", "TEMPLATE", "NOSCRIPT", "HEAD"]);
 const READ_ATTRIBUTES = ["aria-label", "title", "placeholder"];
@@ -31,6 +36,7 @@ function isHidden(element) {
 export function isExcluded(element) {
   if (isHidden(element)) return true;
   if (element.classList.contains("tech") || element.hasAttribute("data-technical")) return true;
+  if (element.hasAttribute(USER_TEXT_ATTRIBUTE)) return true;
   if (element.tagName.toUpperCase() === "DETAILS") {
     const summary = summaryOf(element);
     if (summary && /^\s*technical details\s*$/i.test(summary.textContent)) return true;

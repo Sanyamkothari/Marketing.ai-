@@ -8,7 +8,7 @@
 // in: the rule, each campaign's claim and each reason. Names and figures are never touched.
 
 import { emptyState } from "../../dom.js";
-import { summaryCardHtml } from "../simple/pages.js";
+import { campaignNameIndex, summaryCardHtml } from "../simple/pages.js";
 import { claimOf } from "./value_proof.js";
 
 /** The glossary's word for the engine's: whole words, the first letter's case kept. */
@@ -51,10 +51,14 @@ export function plainProven(proven) {
   };
 }
 
-/** `summary` is `GET /campaigns/summary`'s answer (a read that failed never gets here: `index.js` shows its error). */
-export function programmeHtml(summary) {
+/**
+ * `summary` is `GET /campaigns/summary`'s answer (a read that failed never gets here: `index.js` shows its error).
+ * `campaigns` is `GET /campaigns`'s (Plan M M172): each campaign by its short name, as Results names it; null when it
+ * could not be read, and each campaign then shows its recorded label, as on Results.
+ */
+export function programmeHtml(summary, campaigns = null) {
   const proven = summary && typeof summary === "object" && summary.proven ? summary.proven : null;
-  const block = proven ? summaryCardHtml({ cards: [], proven: plainProven(proven) }) : "";
+  const block = proven ? summaryCardHtml({ cards: [], proven: plainProven(proven) }, campaignNameIndex(campaigns)) : "";
   if (block) return block;
   return `<section class="card" data-programme-empty>${emptyState({
     title: "Nothing is proven yet",

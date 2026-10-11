@@ -46,7 +46,7 @@ const RESULTS = ["Results", "#/results"];
 
 const CASES = [
   // Settings
-  ["#/uplift", [SETTINGS, ["Uplift workbench", null]]],
+  ["#/uplift", [SETTINGS, ["Campaign effect workbench", null]]],
   ["#/pilot/kit", [SETTINGS, ["Build data", null]]],
   ["#/pilot/view/readiness/ds-missing", [SETTINGS, ["Build data", "#/pilot/kit"], ["Data readiness", null]]],
   ["#/monitoring/schedules", [SETTINGS, ["Schedules", null]]],
@@ -64,7 +64,7 @@ const CASES = [
   ["#/connections/ai/product", [["Connections", "#/connections"], ["Product AI", null]]],
   ["#/connections/ai/deliverable", [["Connections", "#/connections"], ["Deliverable AI", null]]],
   // Home: the one journey is Home's own page, so it is not a crumb of its own
-  ["#/uc/targeted-advertisement", [["Home", "#/"], ["Targeted Advertisement", null]]],
+  ["#/uc/targeted-advertisement", [["Home", "#/"], ["Find customers likely to buy", null]]], // Plan M M172: the goal's name (§4.2)
 ];
 
 for (const [hash, expected] of CASES) {

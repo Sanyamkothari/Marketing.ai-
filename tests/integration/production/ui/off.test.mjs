@@ -21,7 +21,7 @@ await import("../../../../ui/modules/production/index.js");
 await import("../../../../ui/modules/simple/index.js");
 
 test("the overview renders and no call carries a token", async () => {
-  await until(() => $(".stage-pill"), 3000, "the overview");
+  await until(() => $("[data-goals] a.uc"), 3000, "the overview");
   await settle();
   assert.ok(calls.length >= 2);
   assert.ok(calls.every((c) => c.auth === null));

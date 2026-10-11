@@ -167,7 +167,7 @@ export function headlineText(inputs) {
   }
   if (heldRows <= 0) {
     return {
-      text: "Nobody was held back in this run, so the campaign's effect cannot be measured. Set a control group to measure it.",
+      text: "Nobody was held back for this list, so the campaign's effect cannot be measured. Set a comparison group to measure it.",
       ok: false,
     };
   }
@@ -179,7 +179,7 @@ export function headlineText(inputs) {
   }
   const fraction = heldRows / eligible;
   const found = minDetectableLift(eligible, fraction, baseline);
-  const lead = `With ${fmtInt(eligible)} eligible customers and a ${pctText(fraction)} control group`;
+  const lead = `With ${fmtInt(eligible)} eligible customers and a ${pctText(fraction)} comparison group`;
   if (!found) {
     return { text: `${lead}, this campaign cannot reliably detect any lift: the held-back group is too small.`, ok: false };
   }
@@ -200,7 +200,7 @@ export function tryText(inputs, controlPercent, targetPoints) {
   if (control !== "") {
     const percent = Number(control);
     if (!(percent > 0 && percent <= MAX_CONTROL_FRACTION * 100)) {
-      lines.push("Enter a control group between 0% and 50%.");
+      lines.push("Enter a comparison group between 0% and 50%.");
     } else {
       const found = minDetectableLift(eligible, percent / 100, baseline);
       lines.push(
@@ -241,7 +241,7 @@ export function powerCardBody(uc, summary) {
     : ` It assumes customers who are not contacted would convert at ${fmtNum(inputs.baseline * 100, 1)}%, ${inputs.baselineSource}. The real rate may differ, so treat this as a guide.`;
   const tryIt = canTry
     ? `<div class="frow" data-power-try>
-        <div class="field sm"><label class="flabel" for="power-control">Try a different control group (%)</label>
+        <div class="field sm"><label class="flabel" for="power-control">Try a different comparison group (%)</label>
           <div class="control"><input id="power-control" type="number" min="0.1" max="50" step="0.5" inputmode="decimal" value="${esc(String(controlDefault))}" data-power-control></div></div>
         <div class="field sm"><label class="flabel" for="power-lift">Or: the lift you want to detect (points)</label>
           <div class="control"><input id="power-lift" type="number" min="0.1" step="0.5" inputmode="decimal" placeholder="for example 2" data-power-lift></div></div>
