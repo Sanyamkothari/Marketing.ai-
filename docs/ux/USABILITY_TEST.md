@@ -321,30 +321,36 @@ Pinned by `tests/integration/test_usability_journeys.py` (`test_task_1_*`), whic
 `tests/integration/test_campaign_wizard_journey.py`, added with M177 (DEC-1607). If that file is not in the repository
 yet, M177 has not been merged and the New campaign wizard is not ready to test.
 
+The task card says "win them back". On the demo store (default industry) the wizard's card for that is **"Win back lapsed
+customers"**, a goal with no model and no prepared file yet, so the participant's path is a **first campaign**: it learns
+from the file and the new model is approved too. That is the walk the test makes, in a real browser, from the Overview.
+
 | # | Click | Where |
 |---|---|---|
 | 1 | + New campaign | Overview |
-| 2 | The goal ("Choose the best e-mail for each customer") | New campaign, step 1 |
+| 2 | The goal ("Win back lapsed customers") | New campaign, step 1 |
 | | *(choose the prepared customer file: one file choice, not a click)* | step 2, Customers |
 | 3 | Approve | step 2, Guided setup |
-| 4 | Continue | step 3, Audience (once the list is built) |
-| 5 | Approve | step 4, Review (this fixes the test plan) |
-| 6 | Download contact list | step 5, Send |
+| 4 | Approve the new model | step 2, what was learned |
+| 5 | Continue | step 3, Audience (once the list is built) |
+| 6 | Approve | step 4, Review (this fixes the test plan) |
+| 7 | Download contact list | step 5, Send |
 
-- **Pinned: 6 clicks and 1 file choice, from the Overview** (later campaign: the goal already has an approved model, as
-  the demo store does for this goal). A goal's first campaign learns first and the new model is approved too:
-  **7 clicks** (`test_campaign_wizard_journey.py` pins its five decisions after the goal and the file; the two before
-  them are added).
-- Inside the wizard, M177's own measure (decisions after the goal and the file are chosen) is **4**, within 5.
-- The file downloaded is checked to be the contact list the API serves for the campaign's run, byte for byte, and the test
-  plan is checked to be registered before the download is offered.
-- **Plan M section 0 target: at most 5 clicks. Not met from the Overview: 6.** The test of the target
-  (`test_task_1_meets_plan_ms_target_of_five_clicks`) is marked `xfail(strict=True)`, so it fails loudly on the day the
-  count drops to 5 and the marker has to come off. The gap is recorded for the default-layout decision (section 8). The
-  smallest change that closes it is one fewer click on the way (for example, Audience and Review on one screen, so
-  Continue goes), which is a design decision for the product owner, not something this kit does.
-
-Paste the six rows into the observer's sheet (section 7.4) for the comparison with what the participant actually clicked.
+- **Pinned: 7 clicks and 1 file choice, from the Overview** (a goal's first campaign). A **later** campaign, for a goal
+  that already has an approved model ("Choose the best e-mail for each customer" on the demo store), has no model to
+  approve: **6 clicks**. It is pinned by the same file as a secondary walk and is not the task as the card words it.
+- Inside the wizard, M177's own measure (decisions after the goal and the file are chosen) is **5** for a first campaign,
+  within 5.
+- The test plan is checked through the API to be registered and frozen *before* the download is clicked (one version,
+  its hash equal to the campaign's, nothing measured yet). The file downloaded is checked to be the contact list the API
+  serves for the very run the Download button points at, byte for byte.
+- **Plan M section 0 target: at most 5 clicks. Not met from the Overview: 7** (6 for a later campaign). The test of the
+  target (`test_task_1_meets_plan_ms_target_of_five_clicks`) is marked `xfail(strict=True)`, so it fails loudly on the day
+  the count drops to 5 and the marker has to come off. The gap is recorded for the default-layout decision (section 8).
+  The smallest changes that would close it are for the product owner to decide, not this kit: for example Audience and
+  Review on one screen (Continue goes), and the new model approved in the same click as Guided setup.
+- The observer's sheet (section 7.4): write the seven rows above in as the reference path for Task 1, for the comparison
+  with what the participant actually clicked.
 
 ### Task 2: Overview to a campaign's proven value
 
@@ -357,10 +363,12 @@ no click at all; it is not one campaign's figure, so it is not counted as the an
 | Overview, **Reports** in the sidebar | **1** | Each campaign's Value Proof Pack row: what it earned (the pack's headline) and what it can claim ("Proven") |
 | Overview, **Campaigns** in the sidebar, the campaign, its **Results** tab | **3** | The campaign's result sentence, the evidence label in words ("Proven") and the link to the full report |
 
-- **Pinned: 1 click by Reports, 3 by the campaign page.** The observer's reference path (section 7.4) is the first; a
-  participant who looks for the campaign itself takes the second, and neither is an error.
+- **Pinned: 1 click by Reports, 3 by the campaign page.** Write the first (Overview, Reports) into the observer's sheet
+  (section 7.4) as the reference path for Task 2; a participant who looks for the campaign itself takes the second, and
+  neither is an error.
 - The amounts on screen are checked to equal the API's own: the Reports rows against `GET /pilot/proof`, the Results tab
-  against `GET /pilot/proof/{campaign}`. On the committed sample the figures are not the validated ones (the answer key in
+  against `GET /pilot/proof/{campaign}`, and each Reports row's evidence label (Proven, Estimated, Not yet proven)
+  against that pack's own `claim`. On the committed sample the figures are not the validated ones (the answer key in
   section 7.3 says which file the store was made from).
 - Plan M section 0 sets no click target for this task; the pin is the shortest path found.
 
