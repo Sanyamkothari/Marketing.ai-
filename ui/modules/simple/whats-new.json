@@ -1,0 +1,29 @@
+{
+  "entries": [
+    {
+      "when": "11 October 2026",
+      "title": "A Help menu",
+      "text": "The ? at the top right opens a short tour, the glossary, a way to send feedback and this list. The tour works on your own data as well as on the sample."
+    },
+    {
+      "when": "11 October 2026",
+      "title": "Costs and tools are easier to find",
+      "text": "Settings now links to Costs, to the Data Doctor, to checking a campaign another tool ran, and to the campaigns that are waiting for their results."
+    },
+    {
+      "when": "11 October 2026",
+      "title": "Quieter pages",
+      "text": "Pages no longer ask for results that cannot exist yet, such as the results of a campaign that has not finished. An empty page now says what to do next."
+    },
+    {
+      "when": "October 2026",
+      "title": "Value Proof Packs",
+      "text": "Each measured campaign has a one-page proof of what it was worth in rupees, with the range and the groups it did not help. It is under Reports."
+    },
+    {
+      "when": "October 2026",
+      "title": "A worked example on public data",
+      "text": "E-mail Offer Choice shows the whole journey on a public e-mail test: who to contact, which offer, and what the campaign changed against a comparison group."
+    }
+  ]
+}

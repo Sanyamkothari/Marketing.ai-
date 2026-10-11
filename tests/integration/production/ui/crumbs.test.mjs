@@ -95,8 +95,9 @@ test("Campaign copy (marked Results) starts at Results and goes back to its scor
   assert.deepEqual(got, [RESULTS, ["Win-back Campaign", "#/uc/win-back-campaign/run/r1"], ["Campaign copy", null]]);
 });
 
-test("a use case of another journey (a URL-only industry) keeps that journey's crumb: it is a page of its own", async () => {
-  const banking = industries.industries.find((i) => i.id === "banking");
+test("a use case of another journey has no crumb of its own: that journey is not a page any more (Plan M M173)", async () => {
+  // It used to be `Home › Client Lifecycle › ...`, the middle crumb opening `#/industry/banking`. That route now
+  // goes Home, which lists every industry's goals, so the crumb would open the page Home already opens.
   const got = await open("#/uc/primary-bank-attrition");
-  assert.deepEqual(got, [["Home", "#/"], [banking.journey_label, "#/industry/banking"], ["Primary Bank Attrition", null]]);
+  assert.deepEqual(got, [["Home", "#/"], ["Primary Bank Attrition", null]]);
 });

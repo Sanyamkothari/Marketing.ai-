@@ -158,17 +158,113 @@ test("a run opened from Results keeps Results marked, on all its pages and after
   assert.equal(chrome.navFor("#/uc/telco-churn/data/r9"), "home", "navFor itself still reads the route alone");
 });
 
-test("no Help menu is drawn, and the Minfy logo is the last thing in the bar, top right", async () => {
-  chrome.addNavSlot("help", { html: () => `<button type="button">Take the tour</button>` });
+// Plan M M173 (DEC-1603): the Help menu is drawn again. DEC-1123 had hidden it (the Minfy logo took its place),
+// which left the tour and "Send feedback" with no trigger. It is a "?" button beside the user menu, filled
+// from the `help` slot; the logo stays the last thing in the bar.
+test("with nothing in the help slot no Help menu is drawn", async () => {
   await redraw();
-  assert.equal($('#pb-bar [data-menu="tn-help"]'), null, "Help is not drawn, even when a slot fills it");
+  assert.equal($('#pb-bar [data-menu="tn-help"]'), null, "no entries, no button");
   assert.equal($("#tn-help"), null);
+});
+
+test("the Help menu is a ? button top right, filled from the help slot in `order`, and the Minfy logo is still last", async () => {
+  // Registered out of order on purpose: the entries are sorted by `order`, then by registration.
+  chrome.addNavSlot("help", { html: () => `<button type="button" id="h-feedback">Send feedback</button>`, order: 30 });
+  chrome.addNavSlot("help", { html: () => `<button type="button" id="h-tour">Take the tour</button>`, order: 10 });
+  chrome.addNavSlot("help", { html: () => `<a href="#/help/whats-new" id="h-new">What's new</a>`, order: 40 });
+  chrome.addNavSlot("help", { html: () => `<a href="#/help/glossary" id="h-gloss">Glossary</a>`, order: 20 });
+  await redraw();
+  const button = $('#pb-bar [data-menu="tn-help"]');
+  assert.ok(button, "Help is drawn");
+  assert.equal(button.getAttribute("aria-label"), "Help");
+  assert.equal(button.getAttribute("aria-expanded"), "false");
+  assert.equal(button.getAttribute("aria-controls"), "tn-help");
+  assert.equal($("#tn-help").hidden, true, "closed until asked for");
+  assert.deepEqual(
+    $$("#tn-help a, #tn-help button").map((el) => el.textContent.trim()),
+    ["Take the tour", "Glossary", "Send feedback", "What's new"],
+  );
+  assert.ok(button.closest(".tb-utils"), "it sits with the user menu, not among the four places");
+  assert.equal($("#pb-bar nav[aria-label='Main'] [data-menu]"), null, "and the four places still have no menu");
   const logo = $("#pb-bar .tb-row > .tb-logo");
   assert.ok(logo, "the logo is a direct child of the bar's row");
   assert.equal(logo.querySelector("svg.logo").getAttribute("aria-label"), "Minfy");
   const row = $("#pb-bar .tb-row");
   const order = [...row.children].filter((el) => el.classList.contains("tb-logo") || el.classList.contains("tb-utils"));
-  assert.equal(order[order.length - 1], logo, "the logo comes after the user menu");
+  assert.equal(order[order.length - 1], logo, "the logo comes after the Help and user menus");
+});
+
+const key = (target, name) => {
+  const event = new w.KeyboardEvent("keydown", { key: name, bubbles: true, cancelable: true });
+  target.dispatchEvent(event);
+  return event;
+};
+
+test("the Help menu works from the keyboard: Enter opens, arrows move, Escape closes and returns to the button", async () => {
+  const button = $('#pb-bar [data-menu="tn-help"]');
+  button.focus();
+  button.click(); // what Enter or Space on a focused button does
+  assert.equal(button.getAttribute("aria-expanded"), "true");
+  assert.equal($("#tn-help").hidden, false);
+  assert.equal(key(button, "ArrowDown").defaultPrevented, true);
+  assert.equal(w.document.activeElement.id, "h-tour", "Down from the button lands on the first entry");
+  key(w.document.activeElement, "ArrowDown");
+  assert.equal(w.document.activeElement.id, "h-gloss");
+  key(w.document.activeElement, "ArrowDown");
+  key(w.document.activeElement, "ArrowDown");
+  assert.equal(w.document.activeElement.id, "h-new");
+  key(w.document.activeElement, "ArrowDown");
+  assert.equal(w.document.activeElement.id, "h-tour", "Down from the last wraps to the first");
+  key(w.document.activeElement, "ArrowUp");
+  assert.equal(w.document.activeElement.id, "h-new", "Up from the first wraps to the last");
+  key(w.document.activeElement, "Home");
+  assert.equal(w.document.activeElement.id, "h-tour");
+  key(w.document.activeElement, "End");
+  assert.equal(w.document.activeElement.id, "h-new");
+  key(w.document.activeElement, "Escape");
+  assert.equal($("#tn-help").hidden, true, "Escape closes it");
+  assert.equal(button.getAttribute("aria-expanded"), "false");
+  assert.equal(w.document.activeElement, button, "and focus goes back to the button");
+});
+
+test("Down on a closed Help button opens it and lands on the first entry", async () => {
+  const button = $('#pb-bar [data-menu="tn-help"]');
+  button.focus();
+  key(button, "ArrowDown");
+  assert.equal($("#tn-help").hidden, false);
+  assert.equal(w.document.activeElement.id, "h-tour");
+  key(w.document.activeElement, "Escape");
+});
+
+test("tabbing out of the open Help menu closes it", async () => {
+  const button = $('#pb-bar [data-menu="tn-help"]');
+  button.click();
+  assert.equal($("#tn-help").hidden, false);
+  $('#pb-bar a.wordmark').focus(); // focus moves outside the menu
+  assert.equal($("#tn-help").hidden, true);
+});
+
+test("a redraw while someone is arrowing through the Help menu keeps their place", async () => {
+  const button = $('#pb-bar [data-menu="tn-help"]');
+  button.click();
+  key(button, "ArrowDown");
+  key(w.document.activeElement, "ArrowDown");
+  assert.equal(w.document.activeElement.id, "h-gloss");
+  await redraw(); // a module registering late redraws the whole row
+  chrome.addNavSlot("badge:approvals", { html: () => "" });
+  await redraw();
+  assert.equal($("#tn-help").hidden, false, "still open");
+  assert.equal(w.document.activeElement.id, "h-gloss", "and still on the same entry");
+  key(w.document.activeElement, "Escape");
+});
+
+test("signed out, the bar draws no Help menu (the sign-in screen is all there is)", async () => {
+  state.status = "signed-out";
+  await redraw();
+  assert.equal($('#pb-bar [data-menu="tn-help"]'), null);
+  state.status = "signed-in";
+  await redraw();
+  assert.ok($('#pb-bar [data-menu="tn-help"]'));
 });
 
 test("with no access provider the four places are drawn (a deployment without sign-in)", async () => {

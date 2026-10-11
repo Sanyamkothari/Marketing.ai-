@@ -43,13 +43,8 @@ Campaign copy (`modules/generative/copy.js`) is not one any more: the top bar ma
 breadcrumb starts at Results and goes back to the scoring run (docs/UI_AUDIT.md §8.4 item 12)."""
 
 HOME: Final[str] = '<a href="#/">Home</a>'
-SEP: Final[str] = '<span class="sep" aria-hidden="true">›</span>'
-"""v1 (docs/ui/FOUNDATION.md): every breadcrumb starts at Home, then the journey - unless the journey
-is the default one, which opens the page Home opens (docs/UI_AUDIT.md §8.4 item 3)."""
-
-
-def _trail(href: str, label: str) -> str:
-    return f'{HOME}{SEP}<a href="{href}">{label}</a>'
+"""Every breadcrumb starts at Home. Plan M M173: no journey is a page of its own any more (`#/industry/<id>`
+redirects Home), so none adds a crumb after it (docs/UI_AUDIT.md §8.4 item 3 for the default journey)."""
 
 
 def _nav(inner: str) -> str:
@@ -85,7 +80,9 @@ def _owner(use_case_id: str) -> str:
 
 
 def _href(industry_id: str) -> str:
-    return "#/" if industry_id == DEFAULT_INDUSTRY else f"#/industry/{industry_id}"
+    """Plan M M173: `#/industry/<id>` is no longer a page (it goes Home, which lists every industry's goals),
+    so every journey opens at the bare `#/`."""
+    return "#/"
 
 
 @pytest.mark.parametrize("name", USE_CASE_SCREENS)
@@ -125,10 +122,9 @@ def test_every_card_goes_back_to_the_journey_that_lists_it(journeys: dict[str, d
     cards = {card for i in list_industries() for card in _cards(i)}
     for card in cards:
         owner = _owner(card)
-        assert journeys[card]["journey"] == {
-            "href": _href(owner),
-            "label": load_industry(owner).journey_label,
-        }, card
+        # Only the default journey is the page Home opens; another industry's goal goes back to Home under that name.
+        label = load_industry(owner).journey_label if owner == DEFAULT_INDUSTRY else "Home"
+        assert journeys[card]["journey"] == {"href": _href(owner), "label": label}, card
 
 
 def test_a_default_journey_screen_names_home_once(journeys: dict[str, dict[str, object]]) -> None:
@@ -146,17 +142,24 @@ def test_a_default_journey_screen_names_home_once(journeys: dict[str, dict[str, 
         assert label not in str(journeys[card]["back"]), card
 
 
-def test_another_industrys_screen_names_and_opens_that_industry(
+def test_another_industrys_screen_goes_back_to_home_which_lists_its_goals(
     journeys: dict[str, dict[str, object]],
 ) -> None:
+    """Plan M M173: another industry's journey was a page of its own (`#/industry/<id>`, a crumb after Home).
+    That route now goes Home, which lists the other industries' goals, so the journey opens `#/` and its crumb is
+    the Home crumb already there: one crumb, never a second link to the same page (the `_trail` form is gone).
+    The "Back to ..." button says "Home", not the other industry's journey label: it opens Home, which shows the
+    default journey, so naming the other one would send the person to a page that is not what the button says.
+    """
     others = [i for i in list_industries() if i != DEFAULT_INDUSTRY]
     assert others
     for industry_id in others:
         label = load_industry(industry_id).journey_label
         for card in (c for c in _cards(industry_id) if _owner(c) == industry_id):
-            href = f"#/industry/{industry_id}"
-            assert journeys[card]["back"] == _nav(_trail(href, label)), card
-            assert journeys[card]["crumb"] == _trail(href, label), card
+            assert journeys[card]["journey"] == {"href": "#/", "label": "Home"}, card
+            assert label not in str(journeys[card]["back"]), card
+            assert journeys[card]["back"] == _nav(HOME), card
+            assert journeys[card]["crumb"] == HOME, card
 
 
 def test_a_use_case_no_file_lists_goes_back_to_the_default_journey(

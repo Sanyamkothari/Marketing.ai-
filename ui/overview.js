@@ -3,7 +3,8 @@
 // One journey at a time. The API lists every industry file and names the one to open on
 // (`default_industry`). Plan H M81 (DEC-1110): that is the generic journey, the same for every
 // business, and Home offers no choice of industry any more (`SHOW_INDUSTRY_CHOOSER`). The other
-// journeys stay reachable by URL (`#/industry/<id>`), and the chooser comes back with the flag.
+// journeys are no longer pages (Plan M M173: `#/industry/<id>` redirects Home); their goals are listed on Home under
+// "Goals for other kinds of business", and the chooser comes back with the flag.
 //
 // The header is breadcrumb "Home", the journey's own label as the H1 and one sentence of what to do.
 // The AI type of each use case is its card's coloured edge, explained once by "What do the colours
@@ -32,9 +33,12 @@ export function chooseIndustry(payload, wanted) {
   );
 }
 
-/** The route of an industry's overview; the default one keeps the bare `#/` it always had. */
-export const industryHref = (payload, id) =>
-  id === payload.default_industry ? "#/" : `#/industry/${encodeURIComponent(id)}`;
+/**
+ * Where an industry's journey is opened. Plan M M173: there is one Home for every business, and
+ * `#/industry/<id>` is no longer a page (it goes Home), so every journey opens at the bare `#/`. The
+ * goals of the other industries are listed on Home itself (`otherGoalsHtml`).
+ */
+export const industryHref = () => "#/";
 
 /**
  * Where a use case's screens lead back to, as `{ href, label }`: the journey of the industry file
@@ -42,13 +46,18 @@ export const industryHref = (payload, id) =>
  * back to the journey it was opened from. Industries are searched in the order the API lists them,
  * default first, so a use case two files share belongs to the default journey. One that no file
  * lists goes back to the default journey; null only when there is no industry at all.
+ *
+ * Plan M M173: only the default journey is a page (Home). A goal of another industry goes back to Home under
+ * the name "Home", not under its own journey's label, since the button would open a page that is not that journey.
  */
 export function journeyFor(payload, useCaseId) {
   const industries = (payload && payload.industries) || [];
   const lists = (industry) =>
     (industry.stages || []).some((stage) => (stage.use_cases || []).some((u) => u.id === useCaseId));
   const owner = industries.find(lists) || chooseIndustry(payload || {}, null);
-  return owner ? { href: industryHref(payload, owner.id), label: owner.journey_label } : null;
+  if (!owner) return null;
+  const home = chooseIndustry(payload || {}, null);
+  return { href: industryHref(payload, owner.id), label: owner === home ? owner.journey_label : "Home" };
 }
 
 const cardsOf = (industry) => (industry.stages || []).flatMap((stage) => stage.use_cases || []);
@@ -217,6 +226,42 @@ function cardHtml(u, sample) {
   )}</span>${tags ? `<span class="uc-tags">${tags}</span>` : ""}</span><span class="chev" aria-hidden="true">›</span></a>`;
 }
 
+/**
+ * The goals that belong to another industry's journey, which Home no longer opens as a page of its own
+ * (Plan M M173): one closed section under the timeline, a link per available goal that Home does not
+ * already show, grouped by the industry that lists it. Nothing a person could open before is lost.
+ */
+/**
+ * Display names in business words (Plan M §4.2: display names only; ids, configs and APIs unchanged) for the goals
+ * this section lists whose configured name is an engine word. Added at M173's integration: the section put
+ * "Card Default Propensity" on Home, a never-shown word (`ui/labels.js`). M172 owns the full table of goal names.
+ */
+const OTHER_GOAL_NAMES = Object.freeze({
+  "card-default-propensity": "Find card accounts likely to miss a payment",
+});
+
+const otherGoalName = (u) => OTHER_GOAL_NAMES[u.id] || u.name;
+
+export function otherGoalsHtml(payload, current) {
+  const shown = new Set(cardsOf(current).map((u) => u.id));
+  const groups = [];
+  for (const industry of payload.industries || []) {
+    if (industry.id === current.id) continue;
+    const goals = cardsOf(industry).filter((u) => isAvailable(u) && !shown.has(u.id));
+    for (const u of goals) shown.add(u.id);
+    if (goals.length) groups.push({ name: industry.name, goals });
+  }
+  if (!groups.length) return "";
+  return `<details class="adv ov-other" data-other-goals><summary>Goals for other kinds of business</summary>${groups
+    .map(
+      (g) =>
+        `<h3>${esc(g.name)}</h3><ul class="ov-other-list">${g.goals
+          .map((u) => `<li><a href="#/uc/${esc(u.id)}">${esc(otherGoalName(u))}</a></li>`)
+          .join("")}</ul>`,
+    )
+    .join("")}</details>`;
+}
+
 export function overviewHtml(payload, wanted = null) {
   injectStyles();
   const industry = chooseIndustry(payload, wanted);
@@ -252,6 +297,7 @@ export function overviewHtml(payload, wanted = null) {
     ${forYouHtml()}${empty}
     <div class="ov-tools">${coloursTip(industry)}</div>
     <div class="timeline-wrap"><div class="timeline">${columns}</div></div>
+    ${otherGoalsHtml(payload, industry)}
   </main>`;
 }
 
@@ -267,6 +313,10 @@ const CSS = `
 .ov .foryou a{color:var(--brand-blue);font-weight:500}
 .ov .foryou a:hover{text-decoration:underline}
 .ov .ov-line{margin:0 0 16px;font-size:13px;color:var(--muted)}
+.ov .ov-other{margin-top:24px}
+.ov .ov-other h3{margin:12px 0 4px;font-size:13px;color:var(--ink2)}
+.ov .ov-other-list{margin:0;padding:0 0 0 18px;font-size:13px}
+.ov .ov-other-list a{color:var(--brand-blue)}
 .ov .ov-tools{display:flex;justify-content:flex-end}
 .ov .ov-keys{display:flex;flex-direction:column;gap:8px}
 .ov .ov-key{display:flex;align-items:center;gap:8px;color:var(--ink)}
