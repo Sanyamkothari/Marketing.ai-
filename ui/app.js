@@ -29,6 +29,7 @@ import { bindPage, isUplift, pageArtefacts, renderPage } from "./pages.js";
 import { createController, useCaseHtml } from "./usecase.js";
 import { MODULES_CHANGED, pagePanelsHtml, resolveRoute } from "./modules/router.js";
 import { aiNoticeHtml, needsAiNotice } from "./availability.js";
+import { layoutRedirect } from "./layout.js";
 
 const app = document.getElementById("app");
 const PAGES = ["data", "model", "output"];
@@ -274,6 +275,13 @@ async function lineageOf(kind, run) {
 }
 
 async function renderNow() {
+  // Plan M M174 (DEC-1604): in the campaigns layout an old address goes to its new home (`layout.js`'s
+  // table), when this build has a screen there. Always null in the classic layout.
+  const moved = layoutRedirect(window.location.hash, { claimed: (target) => Boolean(resolveRoute(target)) });
+  if (moved) {
+    window.location.replace(moved);
+    return;
+  }
   const parts = window.location.hash.replace(/^#\/?/, "").split("/").filter(Boolean);
   try {
     // A phase branch registers whole screens of its own through `modules/router.js`; nothing is

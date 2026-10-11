@@ -37,10 +37,12 @@ MODULES: Final[tuple[str, ...]] = (
     "cost.js",  # the cost line beside Run, its confirmation and the Cost page's markup (Plan J M108, DEC-1318)
     "dom.js",
     "labels.js",  # the glossary as data and the never-shown words of the visible-text check (Plan M M170, DEC-1600)
+    "layout.js",  # the ui_layout setting and the old-to-new address table (Plan M M174, DEC-1604)
     "overview.js",
     "pages.js",
     "power.js",  # the control-group size card on a scoring run's Output page (DEC-1234)
     "settings.js",
+    "shell.js",  # the campaigns layout's sidebar, bell and Help (Plan M M174, DEC-1604)
     "usecase.js",
 )
 """Every module `index.html` reaches, directly or through an import."""

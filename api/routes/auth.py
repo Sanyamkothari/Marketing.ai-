@@ -262,6 +262,7 @@ def me(request: Request, principal: PrincipalDep, settings: SettingsDep) -> MeRe
         principal=principal_view(principal, display_name=display_name),
         auth_mode=settings.auth_mode,
         permissions=tuple(permissions),
+        ui_layout=settings.ui_layout,  # Plan M M174 (DEC-1604): which shell the UI draws
     )
 
 

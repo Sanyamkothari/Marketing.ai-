@@ -34,6 +34,11 @@
 // Plan E's `#pe-bar`) is adopted into the bar's second row, so nothing it offered is lost.
 
 import { LOGO, MODULES_EVENT, esc, headerToolHtml } from "./dom.js";
+// Plan M M174 (DEC-1604): with the deployment's `ui_layout` set to "campaigns" the bar is the new shell
+// (`shell.js`: the five-place sidebar, the bell, Help and the profile); in "classic" nothing below changes.
+// Both files are leaves as far as this one is concerned: neither imports the router or this file.
+import { isCampaignLayout } from "./layout.js";
+import { injectShellStyles, shellBarHtml } from "./shell.js";
 
 const slots = new Map();
 let access = null;
@@ -265,6 +270,7 @@ function menuItem(item, on) {
 
 /** The bar's markup for the current route, slots and access (exported for tests). */
 export function topBarHtml() {
+  if (isCampaignLayout()) return campaignShellHtml();
   const state = sessionState();
   const signedOut = state === "signed-out";
   const on = activeId();
@@ -286,6 +292,30 @@ export function topBarHtml() {
   }<a class="tb-logo" href="#/" aria-label="Minfy, home">${LOGO}</a><button type="button" class="btn secondary sm tb-menu-btn" data-tb-menu aria-expanded="${ui.panel}" aria-controls="pb-bar">Menu</button></div>`;
 }
 
+/** The campaigns layout's bar (Plan M M174): the same slots and state, drawn by `shell.js`. */
+function campaignShellHtml() {
+  const status = sessionState();
+  return shellBarHtml({
+    hash: currentHash(),
+    status,
+    slot: slotHtml,
+    context: status === "signed-out" ? "" : headerToolHtml(),
+    menu: ui.menu,
+    panel: ui.panel,
+  });
+}
+
+/** The campaigns layout's styles and the bar's two marks (the shell is on; it has a sidebar), or none. */
+function markShell() {
+  if (isCampaignLayout()) {
+    injectShellStyles(bar.ownerDocument);
+    bar.classList.add("sh-on");
+    bar.classList.toggle("sh-side-on", Boolean(bar.querySelector(".sh-side")));
+  } else if (bar.classList.contains("sh-on")) {
+    bar.classList.remove("sh-on", "sh-side-on");
+  }
+}
+
 function paintChrome() {
   if (!bar) return;
   const html = topBarHtml();
@@ -299,6 +329,7 @@ function paintChrome() {
     else bar.insertBefore(holder.firstElementChild, bar.firstChild);
   }
   bar.classList.toggle("open", ui.panel);
+  markShell();
   for (const [, list] of slots) {
     for (const slot of list) {
       if (typeof slot.bind === "function") {
@@ -396,6 +427,12 @@ function onClick(event) {
       );
     }
     return;
+  }
+  // The campaigns layout's folded sidebar closes when one of its places is chosen, even the one on screen.
+  if (ui.panel && bar && target.closest(".sh-side a")) {
+    ui.panel = false;
+    bar.classList.remove("open");
+    lastHtml = "";
   }
   // A click anywhere else, or on a link inside a menu, closes what was open.
   if (ui.menu && !(target.closest(".menu-pop") && !target.closest("a"))) closeMenus();
