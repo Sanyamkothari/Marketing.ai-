@@ -1,0 +1,21 @@
+{
+  "defects": {
+    "campaigns": {
+      "reports-models": {
+        "heading-jump|h4": 1
+      }
+    },
+    "classic": {
+      "reports-models": {
+        "heading-jump|h4": 1
+      }
+    }
+  },
+  "reasons": {
+    "heading-jump|h4": {
+      "reason": "The Reports > Model reports page goes from its H1 straight to H4 section titles, so a screen reader's heading list skips two levels.",
+      "where": "ui/modules/reports/models.js:43",
+      "fix": "Make the section title an <h2> (restyle the .rp-models-part heading if the size must stay)."
+    }
+  }
+}
