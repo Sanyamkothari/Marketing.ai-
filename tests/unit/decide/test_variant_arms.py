@@ -235,3 +235,93 @@ def test_the_codes_are_plan_k_codes() -> None:
 
     assert VARIANT_ARM_CODES == VARIANT_CODES
     assert VARIANT_CODES <= PLAN_K_CODES
+
+
+# ---------------------------------------------------------------------------
+# Plan K M145 (DEC-1412): arms the compliance gate stopped are set aside, never compared
+# ---------------------------------------------------------------------------
+def test_an_arm_set_aside_is_listed_as_not_sent_and_left_out_of_every_pair() -> None:
+    report = _report((0.03, 0.03, 0.15), seed=5)
+    reason = "Not sent: the compliance gate stopped its words for every customer drawn into it."
+    comparison = compare_variant_arms(report, set_aside={"variant_b": reason})  # type: ignore[arg-type]
+    assert comparison is not None
+    assert comparison.arms == ("control_template", "variant_a")
+    assert comparison.family_size == 1 and comparison.family_confidence == pytest.approx(0.95)
+    assert [(pair.first, pair.second) for pair in comparison.pairs] == [("control_template", "variant_a")]
+    assert comparison.leader != "variant_b" and comparison.winner != "variant_b"
+    assert comparison.not_sent is not None
+    (aside,) = comparison.not_sent
+    assert (aside.arm, aside.reason, aside.difference) == ("variant_b", reason, None)
+    assert "Not sent, so not compared: variant_b." in comparison.summary
+    dumped = comparison.model_dump(mode="json")
+    (listed,) = dumped["not_sent"]
+    assert (listed["arm"], listed["reason"], listed["difference"]) == ("variant_b", reason, None)
+
+
+def test_without_arms_set_aside_the_comparison_is_unchanged() -> None:
+    report = _report((0.03, 0.03, 0.15), seed=5)
+    plain = compare_variant_arms(report)  # type: ignore[arg-type]
+    empty = compare_variant_arms(report, set_aside={})  # type: ignore[arg-type]
+    assert plain is not None and empty is not None
+    assert plain.not_sent is None and "not_sent" not in plain.model_dump(mode="json")
+    assert plain.model_dump_json() == empty.model_dump_json()
+
+
+def test_one_message_left_after_the_set_aside_is_not_compared() -> None:
+    report = _report((0.03, 0.15), seed=5)
+    assert compare_variant_arms(report, set_aside={"variant_a": "x"}) is None  # type: ignore[arg-type]
+
+
+def test_the_arms_not_sent_are_read_from_the_gated_treat_list(tmp_path: object) -> None:
+    from datetime import UTC, datetime
+    from pathlib import Path
+
+    from engine.decide.treat_list import TREAT_LIST_SUMMARY_FILENAME, TreatListSummary
+    from engine.decide.variant_arms import variant_arms_not_sent
+    from engine.storage import LocalStorage, run_key
+
+    run = "r_20261011_0c145a02"
+    storage = LocalStorage(Path(str(tmp_path)))
+    assert variant_arms_not_sent(storage, run) == {}, "no list: nothing set aside"
+    base = TreatListSummary(
+        run_id=run,
+        use_case_id="win-back-campaign",
+        total_rows=100,
+        treat_rows=40,
+        created_at=datetime.now(UTC),
+    )
+    counts = {"control_template": 20, "variant_a": 20, "variant_b": 0, "variant_c": 5, "variant_d": 0}
+    cases = {
+        "gate off": (base.model_copy(update={"variant_arm_counts": counts}), {}),
+        "gated": (
+            base.model_copy(
+                update={
+                    "compliance_rule_version": "r" * 64,
+                    "variant_arm_counts": counts,
+                    "variant_arm_withheld": {
+                        "control_template": 3,  # consent only: kept, intention to treat
+                        "variant_a": 0,
+                        "variant_b": 20,  # every customer, for its words
+                        "variant_c": 15,  # some of them for its words
+                        "variant_d": 20,  # nobody allowed, for consent alone
+                    },
+                    "variant_arm_words_withheld": {
+                        "control_template": 0,
+                        "variant_a": 0,
+                        "variant_b": 20,
+                        "variant_c": 2,
+                        "variant_d": 0,
+                    },
+                }
+            ),
+            {"variant_b", "variant_c", "variant_d"},
+        ),
+    }
+    for name, (summary, expected) in cases.items():
+        storage.write_model(run_key(run, TREAT_LIST_SUMMARY_FILENAME), summary)
+        found = variant_arms_not_sent(storage, run)
+        assert set(found) == set(expected), name
+    assert found["variant_b"].startswith("Not sent: the compliance gate stopped its words for every")
+    assert found["variant_c"].startswith("Set aside: the compliance gate stopped its words for some")
+    assert found["variant_d"].startswith("Not sent: the compliance gate allowed none")
+    assert not any(character.isdigit() for reason in found.values() for character in reason)

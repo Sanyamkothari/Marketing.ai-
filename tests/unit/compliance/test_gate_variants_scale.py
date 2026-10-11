@@ -111,6 +111,7 @@ def _variants(root: Path, arm: np.ndarray, unit: np.ndarray) -> VariantMessages:
         batch_id="b1",
         batch_created_at=NOW.isoformat(),
         catalogue_sha256=str(catalogue_sha256(root)),
+        run_catalogue_sha256=str(catalogue_sha256(root)),  # the arms were drawn over the run's own stamp
         templates=tuple(
             sorted((w.arm, w.unit, w.channel, w.template_ref, w.catalogue_action_id) for w in words.values())
         ),
@@ -174,6 +175,7 @@ def _hand_off(root: Path, data_dir: Path, rows: int, seed: int, *, arms: bool) -
         assert summary.withheld_by_arm is not None
         assert summary.withheld_by_arm["variant_c"] == int((arm == "variant_c").sum())
         assert summary.withheld_by_arm["variant_a"] == summary.withheld_by_arm["variant_b"] == 0
+        assert summary.withheld_for_words_by_arm == summary.withheld_by_arm, "C's words stopped every one"
         sent = np.asarray(outcome.channel, dtype=object)
         assert (sent[arm == "variant_b"] == "email").all()
     return elapsed

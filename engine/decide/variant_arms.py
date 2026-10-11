@@ -72,8 +72,11 @@ covariate, is measured as a whole campaign, as it was before the arms, and no co
 **Checked before they are sent (Plan K M145, DEC-1412).** With the pre-send compliance gate on, the treat list
 reads the arms in force once (:func:`variant_rows`) before the gate, which checks each customer of a variant arm on
 that variant's own words and registered action (`engine.compliance.variants`); the arm columns are then added from
-the treat flags and channels the gate left, so a withheld customer shows no arm. A campaign still keeps every drawn
-customer in their arm (intention to treat).
+the treat flags and channels the gate left, so a withheld customer shows no arm. A campaign opened from the run
+sets aside, whole, every arm the gate stopped by its words or sent to nobody (:func:`variant_arms_not_sent`): its
+customers are put in neither campaign arm, as `scope_keys` does, and `variant_comparison.json` lists it as not sent,
+with no difference. Every other arm keeps each drawn customer, sent or withheld for their consent (intention to
+treat): the draw is independent of the customer, so the remaining arms and the no-message group stay comparable.
 
 **Not arbitrated.** Arbitration across use cases keeps a fixed set of columns and opens campaigns without
 arms, so a run whose arms are in force is refused there (`VARIANT_ARMS_NOT_ARBITRATED`), rather than
@@ -128,6 +131,7 @@ __all__ = [
     "VariantArms",
     "VariantArmsError",
     "VariantComparison",
+    "VariantNotSent",
     "VariantPair",
     "VariantRows",
     "build_variant_arms",
@@ -136,6 +140,7 @@ __all__ = [
     "is_variant_template_ref",
     "set_aside_variant_arms",
     "variant_arms_in_force",
+    "variant_arms_not_sent",
     "variant_arms_of",
     "variant_campaign_scope",
     "variant_level",
@@ -292,6 +297,17 @@ class VariantPair(Artefact):
     )
 
 
+class VariantNotSent(Artefact):
+    """A message arm the compliance gate stopped (Plan K M145, DEC-1412): set aside, not compared."""
+
+    arm: str = Field(description="The arm level.")
+    reason: str = Field(description="Why it is not compared, in plain words.")
+    difference: ConfidenceValue | None = Field(
+        default=None,
+        description="Always null: a message that was not sent as drawn has no measured difference.",
+    )
+
+
 class VariantComparison(Artefact):
     """`campaigns/<id>/variant_comparison.json`: which message did best, named only when the interval says so.
 
@@ -323,6 +339,14 @@ class VariantComparison(Artefact):
         default=None, description="The leader's rate minus the closest arm's, at the family's confidence."
     )
     summary: str = Field(description="One plain sentence.")
+    not_sent: tuple[VariantNotSent, ...] | None = Field(
+        default=None,
+        description=(
+            "Plan K M145: the message arms the compliance gate stopped, set aside from the campaign and from every "
+            "pair (`Campaign.variant_arms_set_aside`). Absent when every arm drawn was sent."
+        ),
+        exclude_if=lambda value: value is None,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -972,6 +996,47 @@ def variant_campaign_scope(
     return table.index, table[VARIANT_ARM_COLUMN]
 
 
+_NOT_SENT_WORDS: Final[str] = (
+    "Not sent: the compliance gate stopped its words for every customer drawn into it, so it is not compared."
+)
+_NOT_SENT_SOME_WORDS: Final[str] = (
+    "Set aside: the compliance gate stopped its words for some of the customers drawn into it, so the message "
+    "was not sent as drawn and is not compared."
+)
+_NOT_SENT_NOBODY: Final[str] = (
+    "Not sent: the compliance gate allowed none of the customers drawn into it, so it is not compared."
+)
+
+
+def variant_arms_not_sent(storage: Storage, run_id: str) -> dict[str, str]:
+    """The message arms the compliance gate stopped on the run's treat list, each with why (Plan K M145, DEC-1412).
+
+    An arm is stopped when the gate withheld any of its customers for the words they would be sent (a reason of
+    `engine.compliance.handoff.WORD_CODES`: chosen by the arm, so not spread evenly across the arms as a
+    customer's consent is), or when it sent the arm to none of its customers. A campaign sets such an arm aside
+    whole. Empty unless the list was decided by the gate with the arms in force (`variant_arm_withheld` set), so
+    a run without the gate, or without arms, is unchanged.
+    """
+    from engine.decide.treat_list import TREAT_LIST_SUMMARY_FILENAME, TreatListSummary
+    from engine.storage import StorageError, run_key
+
+    try:
+        summary = storage.read_model(run_key(run_id, TREAT_LIST_SUMMARY_FILENAME), TreatListSummary)
+    except StorageError:
+        return {}
+    if summary.variant_arm_withheld is None or summary.variant_arm_counts is None:
+        return {}
+    words = summary.variant_arm_words_withheld or {}
+    out: dict[str, str] = {}
+    for arm, withheld in summary.variant_arm_withheld.items():
+        sent = summary.variant_arm_counts.get(arm, 0)
+        if words.get(arm, 0) > 0:
+            out[arm] = _NOT_SENT_WORDS if sent == 0 else _NOT_SENT_SOME_WORDS
+        elif withheld > 0 and sent == 0:
+            out[arm] = _NOT_SENT_NOBODY
+    return out
+
+
 def with_variant_arms(
     assignment: pd.DataFrame, arms: pd.Series[Any], primary_key: PrimaryKey
 ) -> pd.DataFrame:
@@ -1019,18 +1084,26 @@ def variant_measure_arguments(
 # ---------------------------------------------------------------------------
 # Comparing the messages
 # ---------------------------------------------------------------------------
-def compare_variant_arms(report: IncrementalityReport) -> VariantComparison | None:
+def compare_variant_arms(
+    report: IncrementalityReport, *, set_aside: Mapping[str, str] | None = None
+) -> VariantComparison | None:
     """Every pair of message arms compared directly, and the winner when there is one (see the class).
 
     Read from the report's own `arms` counts (measured once, by `measure_campaign`): None when the report
-    has fewer than two arms with measured customers.
+    has fewer than two arms with measured customers. `set_aside` (Plan K M145): the arms the campaign set aside
+    because the compliance gate stopped them (`Campaign.variant_arms_set_aside`), each with why; never compared,
+    listed in `not_sent`.
     """
     from engine.uplift.incrementality import newcombe_interval
 
+    aside = dict(set_aside or {})
     measured = [
         arm
         for arm in report.arms or ()
-        if arm.treated_rows and arm.treated_conversions is not None and arm.treated_rows > 0
+        if arm.treated_rows
+        and arm.treated_conversions is not None
+        and arm.treated_rows > 0
+        and arm.arm not in aside
     ]
     if len(measured) < 2:
         return None
@@ -1063,6 +1136,8 @@ def compare_variant_arms(report: IncrementalityReport) -> VariantComparison | No
         if wins
         else "No message is named the best: the leader's range is not above every other message's."
     )
+    if aside:
+        summary += f" Not sent, so not compared: {', '.join(aside)}."
     return VariantComparison(
         campaign_id=report.campaign_id,
         report_computed_at=report.computed_at,
@@ -1076,4 +1151,7 @@ def compare_variant_arms(report: IncrementalityReport) -> VariantComparison | No
         closest=closest,
         margin=margin,
         summary=summary,
+        not_sent=(
+            tuple(VariantNotSent(arm=arm, reason=reason) for arm, reason in aside.items()) if aside else None
+        ),
     )

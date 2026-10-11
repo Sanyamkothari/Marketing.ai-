@@ -31,11 +31,15 @@ before it writes anything. For the customers the list would contact:
 their arm sends them - per (arm, group, channel), against the variant's own registered catalogue action - instead
 of their band's `message_text`; the control template's customers are checked as above. The catalogue the
 messages are tied to is then the one the arms were drawn under (`variant_arms.json` `catalogue_sha256`, which
-registers the variants' words and was checked when they were drawn), not the run's stamp: registering the variants
-necessarily changed the catalogue after the run. Any other catalogue fails closed, as in 1. The rules gain a
-`variant_arms` block (the batch, that catalogue, and every arm template's reference), the decision file a
-`variant_arm` column and each variant row its variant's own `action_id`, and the summary `variant_messages` and
-`withheld_by_arm`. Without `variants` none of this exists and every file is what it was.
+registers the variants' words and was checked when they were drawn): registering the variants necessarily changed
+the catalogue after the run. It stands in for the run's stamp only when the arms were drawn over that stamp
+(`run_catalogue_sha256` is the run's `catalogue_stamp.json`); a run with no stamp, arms drawn over another stamp,
+or any other catalogue now fails closed, as in 1. The rules gain a `variant_arms` block (the batch, both
+catalogues, and every arm template's reference), the decision file a `variant_arm` column and each variant row its
+variant's own `action_id`, and the summary `variant_messages`, `withheld_by_arm` and `withheld_for_words_by_arm`
+(the customers of each arm withheld with a reason read of the words: a template mismatch, a link not on the
+whitelist, no words on the channel, or words with no registered template). Without `variants` none of this exists
+and every file is what it was.
 
 The ledger is the deployment's platform database (SQLite beside a local store's files, else the settings'
 database) and the signer the data folder's Ed25519 key (`engine.agentic.ledger.signer_for_data_dir`), as the
@@ -163,6 +167,16 @@ class ComplianceDecisionsSummary(Artefact):
         description=(
             "Customers withheld per message arm drawn (the control template and each variant). Absent unless the "
             "run's message arms are in force."
+        ),
+        exclude_if=lambda value: value is None,
+    )
+    withheld_for_words_by_arm: dict[str, int] | None = Field(
+        default=None,
+        description=(
+            "Of those, per arm, the customers withheld with a reason read of the words they would be sent "
+            "(COMPLIANCE_TEMPLATE_MISMATCH, COMPLIANCE_URL_NOT_WHITELISTED, COMPLIANCE_VARIANT_NO_COPY or "
+            "COMPLIANCE_VARIANT_UNREGISTERED on a planned channel): the arm's words, not the customer's consent, "
+            "stopped them. Absent unless the run's message arms are in force."
         ),
         exclude_if=lambda value: value is None,
     )
@@ -444,10 +458,17 @@ def gate_treat_list(
     settings = load_compliance_config(root).gate
     key_columns = tuple(str(name) for name in key_frame.columns)
 
-    # 1. The rules. Plan K M145: with message arms in force, tied to the catalogue the arms were drawn under.
+    # 1. The rules. Plan K M145: with message arms in force, tied to the catalogue the arms were drawn under, and
+    # only when they were drawn over this run's own stamp (a run with no stamp fails closed, as M134's does).
     now_sha = catalogue_sha256(root)
-    reference_sha = stamp_sha256 if variants is None else variants.catalogue_sha256
-    changed = now_sha != reference_sha
+    if variants is None:
+        changed = now_sha != stamp_sha256
+    else:
+        changed = (
+            now_sha != variants.catalogue_sha256
+            or stamp_sha256 is None
+            or variants.run_catalogue_sha256 != stamp_sha256
+        )
     try:
         catalogue = None if changed else catalogue_or_none(root)
     except ConfigError as exc:
@@ -578,8 +599,11 @@ def gate_treat_list(
         "channel"
     ].is_null().to_numpy(zero_copy_only=False)
     withheld_by_arm = None
+    withheld_for_words = None
     if plan is not None and variants is not None:
         withheld_by_arm = _withheld_by_arm(plan, variants.levels, ~kept)
+        by_words = ~kept & _stopped_by_words(decisions, exploded.parent, len(treated))
+        withheld_for_words = _withheld_by_arm(plan, variants.levels, by_words)
 
     # 4. The record: the file, the signed ledger entry, the summary.
     buffer = io.BytesIO()
@@ -642,6 +666,7 @@ def gate_treat_list(
         created_at=moment,
         variant_messages=variant_checks,
         withheld_by_arm=withheld_by_arm,
+        withheld_for_words_by_arm=withheld_for_words,
     )
     storage.write_model(run_key(run_id, COMPLIANCE_SUMMARY_FILENAME), summary)
     _LOGGER.info(
@@ -738,6 +763,29 @@ def _variant_plan(variants: VariantMessages, treated: np.ndarray, band_actions: 
         keys=dict(zip(names, key_values, strict=True)),
         words=variants.words,
     )
+
+
+WORD_CODES: Final[tuple[str, ...]] = (
+    "COMPLIANCE_TEMPLATE_MISMATCH",
+    "COMPLIANCE_URL_NOT_WHITELISTED",
+    "COMPLIANCE_VARIANT_NO_COPY",
+    "COMPLIANCE_VARIANT_UNREGISTERED",
+)
+"""The reasons read of the words a customer would be sent, not of the customer (Plan K M145): an arm whose customers
+are withheld for one of them was stopped by its words (`engine.decide.variant_arms.variant_arms_not_sent`)."""
+
+
+def _stopped_by_words(decisions: pa.Table, parent: np.ndarray, customers: int) -> np.ndarray:
+    """Per contacted customer: True when one of their rows carries a reason of :data:`WORD_CODES`."""
+    import numpy as np
+    import pyarrow.compute as _pc
+
+    pc: Any = _pc  # untyped: its stubs miss most kernels
+    reasons = decisions["reasons"].combine_chunks()
+    values = np.asarray(reasons.flatten().to_numpy(zero_copy_only=False), dtype=object)
+    rows = np.asarray(pc.list_parent_indices(reasons).to_numpy(), dtype=np.int64)
+    hit = rows[np.isin(values, np.asarray(WORD_CODES, dtype=object))]
+    return np.bincount(parent[hit], minlength=customers)[:customers] > 0
 
 
 def _withheld_by_arm(plan: _VariantPlan, levels: Sequence[str], withheld: np.ndarray) -> dict[str, int]:

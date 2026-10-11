@@ -364,6 +364,17 @@ class TreatListSummary(Artefact):
         ),
         exclude_if=lambda value: value is None,
     )
+    variant_arm_words_withheld: dict[str, int] | None = Field(
+        default=None,
+        description=(
+            "Plan K M145: of `variant_arm_withheld`, per arm, the customers the gate withheld for the words they "
+            "would be sent (a template mismatch, a link not on the whitelist, no words or no registered template "
+            "on the channel), not for their consent. A campaign sets an arm with any of them aside "
+            "(`engine.decide.variant_arms.variant_arms_not_sent`). Absent unless the gate is on and the run's arms "
+            "are in force."
+        ),
+        exclude_if=lambda value: value is None,
+    )
 
 
 def ensure_treat_list(storage: Storage, run_id: str, *, config_root: Path | None = None) -> TreatListSummary:
@@ -728,6 +739,7 @@ def build_treat_list(storage: Storage, run_id: str, *, config_root: Path | None 
         variant_note=None if variants is None else variants.note,
         # PLAN-K (M145, DEC-1412): the arms' customers the gate withheld, per arm.
         variant_arm_withheld=None if gated is None else gated.summary.withheld_by_arm,
+        variant_arm_words_withheld=None if gated is None else gated.summary.withheld_for_words_by_arm,
     )
     storage.write_model(run_key(run_id, TREAT_LIST_SUMMARY_FILENAME), summary)
     _LOGGER.info(

@@ -328,6 +328,15 @@ class Campaign(Artefact):
     measured_at: AwareDatetime | None = Field(
         default=None, description="When the stored report was measured."
     )
+    variant_arms_set_aside: dict[str, str] | None = Field(
+        default=None,
+        description=(
+            "Plan K M145 (DEC-1412): the message arms the compliance gate stopped on the run's list, each with why. "
+            "Their customers are in neither campaign arm, and `variant_comparison.json` lists them as not sent. "
+            "Absent when none was stopped."
+        ),
+        exclude_if=lambda value: value is None,
+    )
 
 
 # ---------------------------------------------------------------------------

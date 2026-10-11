@@ -311,7 +311,11 @@ ROWS: dict[str, tuple[bool, str | None, str | None, str | None, bool]] = {
 LEVELS = ("control_template", "variant_a", "variant_b", "variant_c")
 
 
-def _variants(root: Path, arms_sha: str | None = None) -> VariantMessages:
+STAMP = "0" * 64
+"""The run's own catalogue stamp, from before the variants were registered: the stamp the arms were drawn over."""
+
+
+def _variants(root: Path, arms_sha: str | None = None, run_sha: str | None = STAMP) -> VariantMessages:
     keys = list(ROWS)
     return VariantMessages(
         arm=np.asarray([ROWS[k][1] for k in keys], dtype=object),
@@ -321,6 +325,7 @@ def _variants(root: Path, arms_sha: str | None = None) -> VariantMessages:
         batch_id="b1",
         batch_created_at=datetime(2026, 10, 11, tzinfo=UTC).isoformat(),
         catalogue_sha256=arms_sha or str(catalogue_sha256(root)),
+        run_catalogue_sha256=run_sha,
         templates=tuple(
             sorted(
                 (w.arm, w.unit, w.channel, w.template_ref, w.catalogue_action_id)
@@ -332,12 +337,21 @@ def _variants(root: Path, arms_sha: str | None = None) -> VariantMessages:
 
 
 def _gate(
-    root: Path, tmp_path: Path, *, variants: VariantMessages | None, stamp: str | None
+    root: Path,
+    tmp_path: Path,
+    *,
+    variants: VariantMessages | None,
+    stamp: str | None,
+    no_email: frozenset[str] = frozenset(),
 ) -> tuple[Any, pd.DataFrame]:
     storage = LocalStorage(tmp_path / "data")
     keys = list(ROWS)
     flags = pd.DataFrame(
-        {KEY: keys, "contactable_sms": [ROWS[k][4] for k in keys], "contactable_email": [True] * len(keys)}
+        {
+            KEY: keys,
+            "contactable_sms": [ROWS[k][4] for k in keys],
+            "contactable_email": [k not in no_email for k in keys],
+        }
     )
     buffer = io.BytesIO()
     flags.to_parquet(buffer, index=False)
@@ -368,7 +382,7 @@ def _gate(
 
 def test_each_customer_is_sent_on_the_first_channel_their_own_words_pass(root: Path, tmp_path: Path) -> None:
     # The run was stamped before the variants were registered: the arms' catalogue is the reference.
-    outcome, decisions = _gate(root, tmp_path, variants=_variants(root), stamp="0" * 64)
+    outcome, decisions = _gate(root, tmp_path, variants=_variants(root), stamp=STAMP)
     assert list(outcome.treat) == [True, True, True, False, False, True, False]
     assert list(outcome.channel) == ["sms", "sms", "email", None, None, "sms", None]
     rows = {
@@ -396,7 +410,7 @@ def test_each_customer_is_sent_on_the_first_channel_their_own_words_pass(root: P
 
 
 def test_the_summary_counts_per_reason_and_per_arm_and_names_the_words(root: Path, tmp_path: Path) -> None:
-    outcome, _ = _gate(root, tmp_path, variants=_variants(root), stamp="0" * 64)
+    outcome, _ = _gate(root, tmp_path, variants=_variants(root), stamp=STAMP)
     summary = outcome.summary
     assert summary.withheld == {
         "COMPLIANCE_TEMPLATE_MISMATCH": 1,
@@ -427,7 +441,10 @@ def test_the_summary_counts_per_reason_and_per_arm_and_names_the_words(root: Pat
 
 def test_a_catalogue_other_than_the_arms_fails_closed(root: Path, tmp_path: Path) -> None:
     outcome, decisions = _gate(
-        root, tmp_path, variants=_variants(root, arms_sha="9" * 64), stamp=catalogue_sha256(root)
+        root,
+        tmp_path,
+        variants=_variants(root, arms_sha="9" * 64, run_sha=catalogue_sha256(root)),
+        stamp=catalogue_sha256(root),
     )
     assert not outcome.treat.any()
     assert outcome.summary.variant_messages == () and outcome.summary.messages == ()
@@ -435,13 +452,92 @@ def test_a_catalogue_other_than_the_arms_fails_closed(root: Path, tmp_path: Path
     assert decisions["reasons"].map(lambda value: "COMPLIANCE_CATALOGUE_CHANGED" in list(value)).all()
 
 
+@pytest.mark.parametrize(
+    ("stamp", "run_sha"),
+    [
+        pytest.param(None, None, id="the run has no stamp"),
+        pytest.param(None, STAMP, id="no stamp, arms drawn over one"),
+        pytest.param(STAMP, None, id="arms drawn over no stamp"),
+        pytest.param(STAMP, "1" * 64, id="arms drawn over another stamp"),
+    ],
+)
+def test_arms_stand_in_for_the_run_s_stamp_only_when_drawn_over_it(
+    root: Path, tmp_path: Path, stamp: str | None, run_sha: str | None
+) -> None:
+    """M134 fails closed on a run with no stamp; the arms' catalogue does not lift that, nor tie another run's.
+
+    The arms' own catalogue is the current one, so only the tie to the run's stamp can fail here.
+    """
+    outcome, decisions = _gate(root, tmp_path, variants=_variants(root, run_sha=run_sha), stamp=stamp)
+    assert not outcome.treat.any()
+    assert outcome.summary.messages == () and outcome.summary.variant_messages == ()
+    contacted = sum(1 for row in ROWS.values() if row[0])
+    assert outcome.summary.withheld["COMPLIANCE_CATALOGUE_CHANGED"] == contacted
+    assert decisions["reasons"].map(lambda value: "COMPLIANCE_CATALOGUE_CHANGED" in list(value)).all()
+    assert outcome.summary.rules["variant_arms"]["run_catalogue_sha256"] == run_sha
+
+
+def test_without_arms_a_run_with_no_stamp_still_fails_closed(root: Path, tmp_path: Path) -> None:
+    outcome, _ = _gate(root, tmp_path, variants=None, stamp=None)
+    assert not outcome.treat.any()
+    contacted = sum(1 for row in ROWS.values() if row[0])
+    assert outcome.summary.withheld["COMPLIANCE_CATALOGUE_CHANGED"] == contacted
+
+
+def test_the_summary_counts_the_customers_each_arm_s_words_stopped(root: Path, tmp_path: Path) -> None:
+    """B's and C's customers are withheld for their words; a consent-only withholding is not counted."""
+    outcome, _ = _gate(root, tmp_path, variants=_variants(root), stamp=STAMP)
+    assert outcome.summary.withheld_for_words_by_arm == {
+        "control_template": 0,
+        "variant_a": 0,
+        "variant_b": 1,
+        "variant_c": 1,
+    }
+    # C3 (variant A) reachable on neither channel: withheld for their consent alone, which is not A's words.
+    consent = _gate(
+        root, tmp_path / "consent", variants=_variants(root), stamp=STAMP, no_email=frozenset({"C3"})
+    )
+    assert consent[0].summary.withheld_by_arm == {
+        "control_template": 0,
+        "variant_a": 1,
+        "variant_b": 1,
+        "variant_c": 1,
+    }
+    assert consent[0].summary.withheld_for_words_by_arm == {
+        "control_template": 0,
+        "variant_a": 0,
+        "variant_b": 1,
+        "variant_c": 1,
+    }
+    no_email = VariantMessages(
+        **{
+            **_variants(root).__dict__,
+            "words": {
+                key: value
+                for key, value in WORDS.items()
+                if key[0] != "variant_d" and key != ("variant_a", "High", "email")
+            },
+        }
+    )
+    words_gone = _gate(root, tmp_path / "words", variants=no_email, stamp=STAMP)[0]
+    # Without A's e-mail words, C3 (no SMS consent) meets VARIANT_NO_COPY on e-mail: A's words, so it counts.
+    assert words_gone.summary.withheld_for_words_by_arm == {
+        "control_template": 0,
+        "variant_a": 1,
+        "variant_b": 1,
+        "variant_c": 1,
+    }
+
+
 def test_without_arms_the_gate_is_m134_s(root: Path, tmp_path: Path) -> None:
     outcome, decisions = _gate(root, tmp_path, variants=None, stamp=catalogue_sha256(root))
     assert "variant_arm" not in decisions.columns
     assert "variant_arms" not in outcome.summary.rules
     assert outcome.summary.variant_messages is None and outcome.summary.withheld_by_arm is None
+    assert outcome.summary.withheld_for_words_by_arm is None
     dumped = outcome.summary.model_dump(mode="json")
     assert "variant_messages" not in dumped and "withheld_by_arm" not in dumped
+    assert "withheld_for_words_by_arm" not in dumped
     # Every contacted customer gets the band's message, checked as M134 checks it; C3 moves to e-mail.
     assert list(outcome.treat) == [True, True, True, True, True, True, False]
     assert set(decisions["action_id"]) == {"winback"}

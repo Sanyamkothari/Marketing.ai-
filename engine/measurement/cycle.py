@@ -352,7 +352,7 @@ def open_campaign(
     """
     import pandas as pd
 
-    from engine.decide.variant_arms import variant_campaign_scope, with_variant_arms
+    from engine.decide.variant_arms import variant_arms_not_sent, variant_campaign_scope, with_variant_arms
     from engine.holdout.assign import run_holdout_spec
     from engine.stages import export
     from engine.uplift.measure import measure_offered
@@ -383,6 +383,13 @@ def open_campaign(
     # Plan K M140 (DEC-1407): a run whose message arms are in force is measured within the groups its copy was
     # written for, and each contacted customer's arm is kept. None for every other run, which is unchanged.
     variants = variant_campaign_scope(storage, record.run_id, record.primary_key, use_case=config)
+    # Plan K M145 (DEC-1412): an arm the compliance gate stopped by its words (or sent to nobody) is set aside
+    # whole - its customers in neither campaign arm, as `scope_keys` cuts any customer - so no message that was
+    # not sent as drawn is measured. Empty without the gate or the arms: nothing changes.
+    set_aside = {} if variants is None else variant_arms_not_sent(storage, record.run_id)
+    if variants is not None and set_aside:
+        keep = ~variants[1].isin(list(set_aside)).to_numpy(dtype=bool)
+        variants = (variants[0][keep], variants[1][keep])
     try:
         assignment = build_assignment(
             scores,
@@ -422,6 +429,7 @@ def open_campaign(
         status=CampaignStatus.LIVE,
         created_at=now,
         created_by=created_by,
+        variant_arms_set_aside=set_aside or None,
     )
     assignment_key = campaign_key(campaign.campaign_id, ASSIGNMENT_FILENAME)
     write_frame(storage, assignment_key, assignment)
@@ -693,7 +701,11 @@ def measure_recorded(
     )
     storage.write_model(campaign_key(campaign_id, REPORT_FILENAME), report)
     storage.write_model(campaign_key(campaign_id, SEGMENT_EFFECTS_FILENAME), segments)
-    comparison = compare_variant_arms(report) if offers.get("arm_column") == VARIANT_ARM_COLUMN else None
+    comparison = (
+        compare_variant_arms(report, set_aside=campaign.variant_arms_set_aside)
+        if offers.get("arm_column") == VARIANT_ARM_COLUMN
+        else None
+    )
     if comparison is not None:  # the messages against each other (Plan K M140, DEC-1407)
         storage.write_model(campaign_key(campaign_id, VARIANT_COMPARISON_FILENAME), comparison)
     updated = campaign.model_copy(

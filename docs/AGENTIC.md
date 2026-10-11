@@ -483,12 +483,16 @@ whose words of the same variant pass, or are withheld - never sent another messa
 M134 lets an action with no `dlt_template_text` pass unchecked, a variant without one (or without a real
 `dlt_template_id`) on a DLT channel is not sent (`COMPLIANCE_VARIANT_UNREGISTERED`): fail closed. The catalogue the
 messages are tied to is the one the arms were drawn under (`variant_arms.json` `catalogue_sha256`, which registers
-the variants' words): registering them necessarily changed the catalogue after the run, so the run's stamp cannot
-be the reference. Any other catalogue withholds every row with a catalogue action (`COMPLIANCE_CATALOGUE_CHANGED`).
-The order in `build_treat_list` is unchanged - the gate (5c), then the arm columns (5d) from what the gate left -
-because the arms are drawn before the list is built and the gate reads them; a withheld customer shows no arm, and
-`variant_arm_counts` counts those sent. The campaign keeps every drawn customer in their arm (intention to treat,
-as for any customer the gate withheld): `docs/DECIDE.md` §29.
+the variants' words): registering them necessarily changed the catalogue after the run, so the run's stamp alone
+cannot be the reference. The arms stand in for the stamp only when they were drawn over it: the run must have a
+`catalogue_stamp.json` and the arms' `run_catalogue_sha256` must be its sha256. A run with no stamp (which M134
+fails closed), arms drawn over another stamp, or any other catalogue withholds every row with a catalogue action
+(`COMPLIANCE_CATALOGUE_CHANGED`). The order in `build_treat_list` is unchanged - the gate (5c), then the arm columns
+(5d) from what the gate left - because the arms are drawn before the list is built and the gate reads them; a
+withheld customer shows no arm, and `variant_arm_counts` counts those sent. A campaign opened from the run sets
+aside, whole, every arm the gate stopped by its words (any of its customers withheld for a template mismatch, a link
+not on the whitelist, no words or no registered template on the channel) or sent to nobody; every other arm keeps
+each drawn customer, sent or withheld for their consent (intention to treat): `docs/DECIDE.md` §29.
 
 **What decides, per customer the list would contact and per planned channel** (`engine.compliance.gate.decide`;
 the reasons in this order, `allowed` when there is none):
@@ -498,7 +502,7 @@ the reasons in this order, `allowed` when there is none):
 | `COMPLIANCE_NO_CHANNEL` | the contact has no planned channel at all: nothing to clear it on |
 | `COMPLIANCE_CONSENT` | not contactable on the channel, from the run's own `channel_contactability.parquet` (M99/M131: the uploaded consent columns and the consent ledger with the region's consent-basis rules - an inquiry consent past its validity, a legacy consent not registered), joined on every key column; it is read, not computed again |
 | `COMPLIANCE_WHATSAPP_NO_OPT_IN` | a channel of `opt_in_channels` (default `[whatsapp]`) and no valid grant **on that channel itself** in the consent ledger: a ledger channel grant on WhatsApp is the opt-in record; an all-channel grant is not |
-| `COMPLIANCE_CATALOGUE_CHANGED` | the catalogue is not the one the run ran under (`catalogue_stamp.json`), so no message can be tied to the run: fail closed |
+| `COMPLIANCE_CATALOGUE_CHANGED` | the catalogue is not the one the run ran under (`catalogue_stamp.json`), so no message can be tied to the run: fail closed (with message arms in force, M145: the catalogue the arms were drawn under, `variant_arms.json` `catalogue_sha256`, and only when they were drawn over the run's own stamp) |
 | `COMPLIANCE_TEMPLATE_MISMATCH` | on a channel whose region rule requires a DLT template (`<channel>_requires: [dlt_template_id]`), the action's `message_text` is not its `dlt_template_text` with each slot filled by a value of its tag |
 | `COMPLIANCE_URL_NOT_WHITELISTED` | a link in the action's `message_text`, on a channel the whitelist covers, is not on it - an `http(s)://` or `www.` link, or a bare host such as `deals-x.in/a` (in the text or filling a `{#var#}` slot) |
 | `COMPLIANCE_VARIANT_NO_COPY` | (M145) a customer of a variant arm, on a channel their variant has no approved words on: they cannot get their arm's message there |
@@ -550,9 +554,10 @@ sent.
 * With message arms in force (M145), and only then: the decision file gains `variant_arm` (the arm drawn for the
   customer) and a variant row's `action_id` / `catalogue_ref` name the variant's own action (null where the variant
   has no words on the channel); `rules` gains `variant_arms` (the copy batch, the catalogue the arms were drawn
-  under, and every arm template's `copy:` reference and action), so `rule_version` covers the words checked;
-  `compliance_decisions.json` gains `variant_messages` (per arm, group and channel: what was checked of its words,
-  and why not) and `withheld_by_arm`; the treat list summary gains `variant_arm_withheld`. The signed ledger entry
+  under, the run's stamp they were drawn over, and every arm template's `copy:` reference and action), so
+  `rule_version` covers the words checked; `compliance_decisions.json` gains `variant_messages` (per arm, group and
+  channel: what was checked of its words, and why not), `withheld_by_arm` and `withheld_for_words_by_arm`; the
+  treat list summary gains `variant_arm_withheld` and `variant_arm_words_withheld`. The signed ledger entry
   carries the file's sha256, that `rule_version` and the codes, as for any list. A stored list with arms that the
   gate decided before it checked the variants' words (no `variant_arm_withheld`) is built again before it is
   handed off, as (m) does for an ungated list.
@@ -563,7 +568,7 @@ consent ledger holding WhatsApp grants for a third of the customers, the decisio
 entry - takes about 23 s at 1,000,000 and 1.7 s at 100,000 (`tests/unit/compliance/test_gate_scale.py`, both
 slow tests; design budget 60 s). The opt-in lookup reads the ledger per customer who plans an opt-in channel, in
 chunks of 500, as M131's classification does, as plain columns rather than row objects. With message arms in force
-(M145) the hand-off at 1,000,000 customers on two channels, four arms and twelve variant templates took 5.0 s
+(M145) the hand-off at 1,000,000 customers on two channels, four arms and twelve variant templates took 5.2 s
 against 3.6 s without arms on the same machine (`tests/unit/compliance/test_gate_variants_scale.py`, slow; the
 arms' work is integer codes over the customers, and each variant's words are checked once).
 

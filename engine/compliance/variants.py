@@ -23,6 +23,11 @@ customer will actually receive.
 
 * **no_message** - the held-back customers: never contacted, never gated.
 
+The catalogue the messages are tied to is the one the arms were drawn under (`variant_arms.json`
+`catalogue_sha256`, which registers the variants' words), and only when the arms were drawn over this run's own
+stamp (`run_catalogue_sha256` equal to the run's `catalogue_stamp.json`): a run with no stamp, or arms drawn over
+another stamp, fails closed as M134 does (`COMPLIANCE_CATALOGUE_CHANGED`).
+
 Each (arm, group, channel) is checked **once**, however many customers it reaches; `engine.compliance.gate.decide`
 then applies the verdicts by column operations, as for an action's. A variant's placeholders (`{{field}}`) are
 checked as the template holds them, each in a `{#var#}` slot, not as a client's tool fills them per customer.
@@ -104,6 +109,10 @@ class VariantMessages:
     """The catalogue the arms were drawn under and their words registered in (`variant_arms.json`)."""
     templates: tuple[tuple[str, str, str, str, str], ...] = field(default=())
     """(arm, unit, channel, template_ref, catalogue action) of every arm template, sorted: part of the rules."""
+    run_catalogue_sha256: str | None = None
+    """The run's own catalogue stamp the arms were drawn over (`variant_arms.json` `run_catalogue_sha256`); null
+    when the run had none. The gate stands the arms' catalogue in for the run's stamp only when this is the stamp
+    the gate is given: otherwise every row with a catalogue action is `COMPLIANCE_CATALOGUE_CHANGED`."""
 
     def rules(self) -> dict[str, Any]:
         """The arms' part of the gate's `rules` document (only on a run whose arms are in force)."""
@@ -111,6 +120,7 @@ class VariantMessages:
             "batch_id": self.batch_id,
             "batch_created_at": self.batch_created_at,
             "catalogue_sha256": self.catalogue_sha256,
+            "run_catalogue_sha256": self.run_catalogue_sha256,
             "templates": [list(item) for item in self.templates],
         }
 
@@ -143,6 +153,7 @@ def variant_messages(rows: VariantRows) -> VariantMessages:
         batch_id=rows.arms.batch_id,
         batch_created_at=rows.arms.batch_created_at.isoformat(),
         catalogue_sha256=rows.arms.catalogue_sha256,
+        run_catalogue_sha256=rows.arms.run_catalogue_sha256,
         templates=tuple(
             sorted(
                 (item.arm, item.unit, item.channel, item.template_ref, item.catalogue_action_id)

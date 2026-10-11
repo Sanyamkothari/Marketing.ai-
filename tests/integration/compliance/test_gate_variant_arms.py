@@ -20,12 +20,20 @@ The four variants:
 Checked: the control template's customers and variant A's are sent; B's, C's and D's are withheld with
 `COMPLIANCE_TEMPLATE_MISMATCH`, `COMPLIANCE_URL_NOT_WHITELISTED` and `COMPLIANCE_VARIANT_UNREGISTERED`; the
 decision file names each variant's own catalogue action and arm, the summaries count per reason and per arm, and
-the signed ledger entry carries the file's sha256 and the codes. A campaign opened from the run keeps every drawn
-customer in their arm (intention to treat, as for M134's withheld customers). A catalogue changed after the arms
-were drawn fails closed. With the gate off, or the arms set aside, the list is the one without this milestone.
+the signed ledger entry carries the file's sha256 and the codes. A campaign opened from the run sets B, C and D
+aside whole (their words were stopped: no such message went out) and keeps every other drawn customer in their
+arm; measured, `variant_comparison.json` compares the control template and A only and lists B, C and D as not
+sent. A catalogue changed after the arms were drawn fails closed. With the gate off, or the arms set aside, the
+list is the one without this milestone.
 
-On the unchanged code (the gate checks the band's catalogue action only) every arm's customers are sent: B's, C's
-and D's customers are treated and these tests fail there.
+What the unchanged code (merge-base 443115c) does with this world: its gate ties every message to the run's stamp,
+and registering the variants changed the catalogue after the stamp, so every customer with a catalogue action -
+the control template's included - is withheld as `COMPLIANCE_CATALOGUE_CHANGED`. That fails these tests, but it
+is not the failure this milestone mends. The original failure - a variant whose words break the rules handed off
+under the band's approved message - is reproduced by the second world (`stamped_after`): the variants are
+registered before the run is stamped, so the stamp is the catalogue that registers them, and the unchanged gate,
+checking only the band's action, sends B's, C's and D's customers. There the test fails on the unchanged code and
+passes here.
 """
 
 from __future__ import annotations
@@ -457,21 +465,84 @@ def test_the_ledger_entry_signs_the_variant_decisions(world: World, armed: Local
     assert (stored["ledger_seq"], stored["ledger_entry_hash"]) == (entry.seq, entry.entry_hash)
 
 
-def test_a_campaign_keeps_every_drawn_customer_in_their_arm(world: World) -> None:
-    """Intention to treat, as for M134's withheld customers: the arm is what was drawn, sent or not."""
+STOPPED: Final[tuple[str, ...]] = ("variant_b", "variant_c", "variant_d")
+OUTCOME: Final[str] = "reactivated_90d"
+MATURE: Final[datetime] = datetime(2026, 7, 1, tzinfo=UTC)
+"""Every 90-day outcome window from the run's finish has closed by then."""
+
+
+def test_a_campaign_sets_aside_the_arms_the_gate_stopped_and_keeps_the_rest(world: World) -> None:
+    """B, C and D were never sent: their customers are in neither campaign arm. The control template's and A's
+    drawn customers stay in their arm (intention to treat, as for a customer withheld for their consent)."""
     storage = world.copy(world.armed, "campaign")
     with TestClient(create_app(config_root=world.roots["gate_on"], data_dir=storage.root)) as client:
         created = ok(client.post("/campaigns", json={"run_id": world.run_id}), 201)
-    campaign_id = created["campaign"]["campaign_id"]
+    campaign = created["campaign"]
+    assert set(campaign["variant_arms_set_aside"]) == set(STOPPED)
+    assert all(reason.startswith("Not sent") for reason in campaign["variant_arms_set_aside"].values())
     assignment = pd.read_parquet(
-        io.BytesIO(storage.read_bytes(f"campaigns/{campaign_id}/assignment.parquet"))
+        io.BytesIO(storage.read_bytes(f"campaigns/{campaign['campaign_id']}/assignment.parquet"))
     )
+    keys = assignment[KEY].astype(str)
     drawn = _drawn(storage, world.run_id).dropna()
+    kept = drawn[~drawn.isin(STOPPED)]
+    aside = drawn[drawn.isin(STOPPED)]
     treated = assignment[assignment["arm"] == "treated"]
-    assert set(treated[KEY].astype(str)) == set(drawn.index)
-    joined = drawn.reindex(treated[KEY].astype(str)).to_numpy(dtype=object)
+    assert set(treated[KEY].astype(str)) == set(kept.index)
+    joined = kept.reindex(treated[KEY].astype(str)).to_numpy(dtype=object)
     assert (treated["variant_arm"].astype(str).to_numpy(dtype=object) == joined).all()
-    assert treated["variant_arm"].value_counts().to_dict() == world.arms["arm_rows"]
+    assert treated["variant_arm"].value_counts().to_dict() == {
+        level: count for level, count in world.arms["arm_rows"].items() if level not in STOPPED
+    }
+    stopped = assignment[keys.isin(aside.index).to_numpy()]
+    assert len(stopped) == len(aside) and (stopped["arm"] == "suppressed").all()
+    assert not stopped["intended"].any() and stopped["variant_arm"].isna().all()
+    # The no-message group is every held-back customer of the copy's groups, as without the gate.
+    held = _drawn(storage, world.run_id)
+    held_back = held[held.isna()].index
+    assert set(keys[assignment["arm"] == "holdout"]) == set(held_back)
+
+
+def test_measured_the_stopped_arms_are_listed_not_sent_and_never_compared(world: World) -> None:
+    import numpy as np
+
+    storage = world.copy(world.armed, "measured")
+    out = _csv(storage, world.run_id)
+    rng = np.random.default_rng(3)
+    outcomes = pd.DataFrame({KEY: out[KEY], OUTCOME: (rng.random(len(out)) < 0.2).astype(int)})
+    payload = outcomes.to_csv(index=False, lineterminator="\n").encode()
+    with TestClient(create_app(config_root=world.roots["gate_on"], data_dir=storage.root)) as client:
+        campaign_id = ok(client.post("/campaigns", json={"run_id": world.run_id}), 201)["campaign"][
+            "campaign_id"
+        ]
+        upload_id = ok(
+            client.post(
+                "/uploads",
+                files={"file": ("outcomes.csv", payload, "text/csv")},
+                data={"use_case": USE_CASE, "mode": "score"},
+            ),
+            201,
+        )["upload_id"]
+        ok(
+            client.post(
+                f"/campaigns/{campaign_id}/outcomes", json={"upload_id": upload_id, "outcome_column": OUTCOME}
+            )
+        )
+        ok(client.post(f"/campaigns/{campaign_id}/measure", json={"as_of": MATURE.isoformat()}))
+    report = json.loads(storage.read_bytes(f"campaigns/{campaign_id}/incrementality_report.json"))
+    assert [arm["arm"] for arm in report["arms"]] == ["control_template", "variant_a"]
+    comparison = json.loads(storage.read_bytes(f"campaigns/{campaign_id}/variant_comparison.json"))
+    assert comparison["arms"] == ["control_template", "variant_a"]
+    assert comparison["family_size"] == 1
+    assert [(pair["first"], pair["second"]) for pair in comparison["pairs"]] == [
+        ("control_template", "variant_a")
+    ]
+    named = {pair[name] for pair in comparison["pairs"] for name in ("first", "second")}
+    assert not named & set(STOPPED)
+    assert comparison["leader"] not in STOPPED and comparison["winner"] not in STOPPED
+    assert [item["arm"] for item in comparison["not_sent"]] == list(STOPPED)
+    assert all(item["difference"] is None for item in comparison["not_sent"])
+    assert all("compliance gate" in item["reason"] for item in comparison["not_sent"])
 
 
 def test_a_catalogue_changed_after_the_arms_were_drawn_fails_closed(world: World) -> None:
@@ -523,3 +594,72 @@ def test_with_the_arms_set_aside_the_gate_decides_as_it_did_before(world: World)
     assert "variant_arms" not in stored["rules"] and "variant_messages" not in stored
     assert "withheld_by_arm" not in stored
     assert "variant_arm" not in _decisions(aside, world.run_id).columns
+
+
+# ---------------------------------------------------------------------------
+# The original failure: the run stamped with the catalogue that registers the variants
+# ---------------------------------------------------------------------------
+@pytest.fixture(scope="module")
+def stamped_after(config_root: Path, tmp_path_factory: pytest.TempPathFactory) -> Iterator[World]:
+    """The variants are registered first, then the run is stamped (its stamp is the catalogue that registers
+    them), then the arms are drawn: the unchanged gate finds the catalogue unchanged and checks the band's
+    action only, so every variant's customers would be handed off whatever their own words say."""
+    base = tmp_path_factory.mktemp("gate-variants-stamped-after")
+    root = _root(config_root, base / "gate_on")
+    data_dir = base / "data"
+    data_dir.mkdir()
+    storage = LocalStorage(data_dir)
+    run_id = write_run(
+        storage,
+        RunSpec(
+            use_case_id=USE_CASE,
+            mode=RunMode.SCORE,
+            rows=ROWS,
+            positive_rate=0.6,
+            created_at=SCORED_AT,
+            config_root=root,
+        ),
+    )
+    clear_catalogue_cache()
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(FakeLLMClient, "_copy", _scripted(FakeLLMClient._copy))
+        with TestClient(create_app(config_root=root, data_dir=data_dir)) as client:
+            approved = _generate_and_approve(client, run_id)
+            actions = _register(root, approved)
+            stamp = stamp_checked_catalogue(
+                storage, run_id, load_use_case(USE_CASE, root), root=root, created_at=SCORED_AT
+            )
+            clear_catalogue_cache()
+            assert stamp is not None and stamp.planned_channels.get(CONTROL_ACTION) == ("sms",)
+            registered = base / "registered"
+            shutil.copytree(data_dir, registered)
+            arms = ok(client.post(f"/runs/{run_id}/campaign-copy/variant-arms"))
+    assert arms["run_catalogue_sha256"] == arms["catalogue_sha256"] == stamp.catalogue_sha256
+    yield World(base, run_id, {"gate_on": root}, registered, data_dir, arms, actions)
+    clear_catalogue_cache()
+
+
+def test_a_variant_with_bad_words_is_not_handed_off_under_the_band_s_message(stamped_after: World) -> None:
+    """The fail-open the milestone mends: on the unchanged code B's, C's and D's customers are all sent here."""
+    storage = LocalStorage(stamped_after.armed)
+    run_id = stamped_after.run_id
+    out = _csv(storage, run_id)
+    drawn = _drawn(storage, run_id).dropna()
+    arm = pd.Series(drawn.reindex(out[KEY]).to_numpy(dtype=object))
+    treat = (out["treat"] == "1").to_numpy()
+    for level in ("control_template", "variant_a"):
+        rows = (arm == level).to_numpy()
+        assert rows.sum() > 100 and treat[rows].all(), level
+    for level in STOPPED:
+        rows = (arm == level).to_numpy()
+        assert rows.sum() > 100 and not treat[rows].any(), level
+    decisions = _decisions(storage, run_id)
+    for level, reasons in ARM_REASON.items():
+        rows = decisions[decisions["variant_arm"] == level]
+        assert all(list(item) == reasons for item in rows["reasons"]), level
+    from engine.decide.treat_list import TREAT_LIST_SUMMARY_FILENAME, TreatListSummary
+
+    summary = storage.read_model(run_key(run_id, TREAT_LIST_SUMMARY_FILENAME), TreatListSummary)
+    assert "COMPLIANCE_CATALOGUE_CHANGED" not in (summary.compliance_withheld or {})
+    assert summary.variant_arm_words_withheld == summary.variant_arm_withheld
+    assert {level for level, count in (summary.variant_arm_withheld or {}).items() if count} == set(STOPPED)
