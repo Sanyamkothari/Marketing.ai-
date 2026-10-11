@@ -2626,6 +2626,120 @@ replace the Settings entry with the sidebar's link once the crawler runs in the 
 
 **What I did meanwhile.** Nothing was blocked.
 
+### 2026-10-11 — plan-m M174, M175, M179 and M180 (on main) → trunk (owners of `api/routes/auth.py`, `api/schemas.py`, `engine/settings.py`, `infra/naming.py` and `docs/API.md`), Phase 4b (owner of `api/access_policy.py` and `docs/CLIENT_ISOLATION.md`) and Plan J (owner of `engine/measurement/`): three additive routes, two added fields and one setting (announcement and record of additive edits)
+
+**What changed.** `GET /overview` (Viewer, M175, DEC-1605: `api/routes/overview.py`, built by the new
+`engine/measurement/overview.py` from the summary, the campaign store, each campaign's test plan, the connection
+store and the upload keys); `GET /uploads` (Viewer, M179, DEC-1609: one summary per `upload.json` with `made_by`,
+`from_connection_id` and `total`; not client-scoped by design, listed in `docs/CLIENT_ISOLATION.md`);
+`PUT /auth/me/preferences` (any role, the caller's own choice only, audited `auth.preferences_update`, 409 `AUTH_OFF`
+with sign-in off; M180, DEC-1610, kept in `platform_setting`, no migration). `GET /auth/me` gains two fields:
+`ui_layout` (M174, DEC-1604) and `preferences` (M180), null with sign-in off. The setting `ui_layout`
+(`MARKETING_AI_UI_LAYOUT`, `classic` or `campaigns`) sits inline in `engine/settings.py` after Plan J's `holdout_salt`,
+not in the file's `PLAN-M` block, because a pydantic field must sit inside the class; `infra/naming.py`
+`SETTINGS_FIELDS` and `docs/AWS_DEPLOYMENT.md` have it. `engine.measurement.summary._unit_words` is public as
+`unit_words`; `engine.measurement.overview.campaign_state()` and `results_date()` are the one campaign status rule,
+with its case table `tests/fixtures/campaigns/status_cases.json` (DEC-1605 (c)). Every route has its RoutePolicy;
+`docs/API.md` is regenerated; `tests/integration/test_api_config.py` lists the paths.
+
+**What is needed.** Nothing. A branch that changes a campaign's status words should change `campaign_state`, the
+browser rule in `ui/modules/campaigns/status.js` and the case table together.
+
+**What I did meanwhile.** Nothing was blocked.
+
+### 2026-10-11 — plan-m M174 and M180 (on main) → trunk / Plan H (owners of `ui/app.js`, `ui/chrome.js` and `ui/modules/router.js`) and every UI workstream: marked shell code, a menu-entry constant, a `technical` flag on result links, one address table (announcement and record of in-place edits)
+
+**What changed.** M174's code in `ui/app.js` and `ui/chrome.js` sits between `// <M174>` and `// </M174>` marks;
+`tests/integration/test_shell_ui.py` removes the marked lines from a scratch copy and requires the classic app to be
+byte for byte the same (DEC-1604 (g)). M180 named the profile and Help menus' entry selector `MENU_ENTRY`
+(`a[href], button, input[data-tech-switch]`) inside its own marks, and `popEntries` and `menuNavigation` use it.
+`router.js` `registerResultLink`'s `link()` may return `{ label, href, technical: true }`; `resultLinksHtml` marks such
+a link `data-technical`, hidden with "Show technical details" off. `ui/layout.js` `ROUTES` places every route.
+
+**What is needed.** Keep M174's marks paired and put no M174 code outside them; keep `MENU_ENTRY` if you edit those
+lines. A new top-level route needs a row in `ui/layout.js` `ROUTES` (home place and redirect or `to: null`):
+`routes.test.mjs` fails on a registered route with none. A link to a model or data page should return
+`technical: true`. A page that cannot import `ui/layout.js` reads `document.documentElement.dataset.uiLayout`
+("campaigns" only) or listens for `marketing-ai:layout-changed`.
+
+**What I did meanwhile.** Nothing was blocked.
+
+### 2026-10-11 — plan-m M176 and M177 (on main) → Plan J (owners of `ui/modules/decide/`): the `campaigns` route hands its new addresses to the Campaigns pages and the wizard (record of an in-place edit)
+
+**What changed** (DEC-1606 (g), DEC-1607 (a)). `ui/modules/decide/index.js` `renderCampaign` asks M176's
+`campaignsRoute(app, parts)` first: the bare `#/campaigns` (the list), `#/campaigns/<id>/overview|audience|results|technical`
+and `#/campaigns/new[/...]` (handed to M177's `renderWizard`) are drawn by `ui/modules/campaigns/`; a bare
+`#/campaigns/<id>` and `…/plan` are still Plan J's page in the classic layout. `draw()` returns when `ownsHash()` says
+the address is M176's, so its requests never repaint over a tab. Plan J's campaign page, the Measure panel,
+`#/campaign/<uc>/<run>` and `#/monitoring/runs/<run>` each draw one line to the campaign's Results tab
+(`ui/modules/campaigns/links.js` `campaignLineHtml`).
+
+**What is needed.** Keep `campaignsRoute` first in `renderCampaign` and do not rename `renderWizard`; M177's jsdom case
+"only `new` is the wizard's" fails on a missed hand-off.
+
+**What I did meanwhile.** Nothing was blocked.
+
+### 2026-10-11 — plan-m M174, M175, M179 and M180 (on main) → trunk / Plan H (owner of `ui/modules/simple/pages.js` Settings): two Advanced tools entries and a "What you see" section (record of in-place edits)
+
+**What changed.** Settings' Advanced tools gained Overview (shown when `GET /overview` is allowed) and Data (when
+`GET /uploads` is allowed), beside M178's Reports, so M173's click crawler reaches the new routes in the classic layout
+without an exemption (batch 2, 2dc2200); `settings.test.mjs` lists them. M180 added a section "What you see" with the
+"Show technical details" switch (`ui/technical.js` `technicalSwitchHtml`).
+
+**What is needed.** Keep the entries until the campaigns layout is the default; then the sidebar is the way in and the
+crawler can run in that layout.
+
+**What I did meanwhile.** Nothing was blocked.
+
+### 2026-10-11 — plan-m M172 and M180, found at batch 3 (on main) → trunk / Plan H (owner of `ui/pages.js`), Plan E (owner of `ui/modules/pilot/screen.js`), Phase 3b (owner of `ui/modules/uplift/`) and Phase 3a: words, marks and one unwrap fix in other owners' pages (record of in-place edits)
+
+**What changed.** Presentation only. `ui/pages.js`: the Output page's unwrap of the Technical details box now allows
+attributes on its tag (M180 added `data-technical-details`; the old match left an unclosed box that hid "All scores
+(for analysts)" and broke `test_acceptance.py` and `test_onboarding_acceptance.py`); a jsdom test pins it.
+`ui/modules/pilot/screen.js`: `data-technical` sits on the `<details>` of "For your IT team", so the whole box, template
+downloads included, is hidden with the switch off and shown with it on; the Model results card and "Open the latest
+report" (when it opens a model report) are technical. `ui/modules/uplift/`: M172's words ("Build an effect model",
+"Make a contact list", "Earlier effect models and contact lists"), the algorithm in a `data-technical` span, and M180's
+marks on the run page's Data, Model and Contact list blocks. M173's `OTHER_GOAL_NAMES` in `ui/overview.js` is gone:
+`ui/labels.js` `GOAL_NAMES` names every goal.
+
+**What is needed.** Draw a name the person supplied with `ui/labels.js` `userText(value)` (`data-user-text`; not
+`data-user`, the Users page's id attribute). A new goal name goes in `ui/labels.js` `GOAL_NAMES` only. Every new page
+goes into `visible_text.test.mjs` `PAGES` with no baseline entry: it is drawn in both layouts and both switch positions.
+
+**What I did meanwhile.** Nothing was blocked.
+
+### 2026-10-11 — plan-m M172 (on main) → Plan E (owner of `engine/pilot/proof.py`): a key for the benefit line would let the UI stop matching words (request)
+
+**What is needed.** `_tone()` takes the incremental section's `lines[-1]` as the benefit line; with message arms,
+`_variant_lines` appends "How far the best message is ahead of it" after it, so the headline box's colour follows the
+margin. The UI (`ui/modules/pilot/screen.js` `proofTilesHtml`) now picks the benefit by format and label (DEC-1602
+(g)). A key on `ProofLine` (for example `benefit`) would let both sides select it without matching words.
+
+**What I did meanwhile.** Nothing was blocked; the UI's rule is tested.
+
+### 2026-10-11 — plan-m M176 and M179 (on main) → every branch that re-records `tests/fixtures/ui_demo/api.json` (announcement)
+
+**What changed.** `tests/fixtures/capture_ui_demo.py` caps any `treat_list.csv` answer to its header and first 300
+rows (`cap_contact_list`), records `#/campaign/hillstrom-email/r_20261010_11100003`, `#/monitoring/runs/r_20261010_11100003`,
+`GET /overview` (assembled by `tests/fixtures/build_overview_fixture.py`, `--check` gates drift) and the real
+`GET /uploads?limit=100` answer; M172 changed one recorded step's button name ("Make a contact list").
+
+**What is needed.** Re-record with the script, never by hand, and keep every answer.
+
+**What I did meanwhile.** Nothing was blocked.
+
+### 2026-10-11 — plan-m M181 (on main) → anyone serving the validated Hillstrom store to people, and owners of `scripts/ui_screenshots.py` and the wizard (announcement)
+
+**What is needed.** Do not set `MARKETING_AI_DEMO_MODE` for the usability sessions (with no Demo Company manifest the
+top bar says "Sample data: not loaded"); a test forbids it in the kit. A page added to `scripts/ui_screenshots.py`
+`PAGES` with a run or campaign id uses the `{run}` / `{campaign}` tokens so `--base` can skip it. Anyone changing the
+wizard's or the Overview's controls (`data-new-campaign`, `data-cw-*`, `#ag-approve`), the sidebar's Reports and
+Campaigns links or the Reports claim attributes updates the pins in `tests/integration/test_usability_journeys.py` and
+the kit's section 12 in the same commit (DEC-1611).
+
+**What I did meanwhile.** Nothing was blocked.
+
 ### 2026-09-23 — plan-e-pilot (on main) → all branches: every change Plan E made outside its own files and blocks
 
 **What is needed.** Nothing from anybody; this is the announcement §3 asks for. Measured with

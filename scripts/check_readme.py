@@ -684,6 +684,20 @@ MILESTONE_TESTS: Final[Mapping[str, tuple[str, ...]]] = {
         "tests/integration/decide/test_treat_list_review.py",
         "tests/integration/production/test_production_ui.py",
     ),
+    # M172 (DEC-1602), words and numbers. test_visible_text_ui.py draws every page with an empty baseline and runs
+    # m172_labels.test.mjs and words_numbers.test.mjs; test_format_js.py runs format.test.mjs (ui/format.js); the
+    # simple, measurement, reports and uplift runners pin the reworded pages; test_acceptance.py and
+    # test_uplift_browser.py are the Playwright journeys whose words changed.
+    "M172": (
+        "tests/integration/test_visible_text_ui.py",
+        "tests/unit/ux/test_format_js.py",
+        "tests/integration/simple/test_simple_ui.py",
+        "tests/integration/measurement/test_campaign_ui.py",
+        "tests/integration/test_reports_ui.py",
+        "tests/unit/uplift/test_uplift_ui.py",
+        "tests/integration/test_acceptance.py",
+        "tests/integration/uplift/test_uplift_browser.py",
+    ),
     # M173 (DEC-1603), Help and loose ends. test_ui_sweep.py is the Playwright route sweep (zero console errors), the
     # click crawler and the Help menu by keyboard; test_simple_ui.py runs help.test.mjs and settings.test.mjs (the
     # menu, the tour, the orphans, #/industry, readiness by goal); test_production_ops_ui_js.py runs monitoring.test.mjs
@@ -697,6 +711,31 @@ MILESTONE_TESTS: Final[Mapping[str, tuple[str, ...]]] = {
         "tests/unit/uplift/test_uplift_ui.py",
         "tests/integration/test_ui_journey.py",
     ),
+    # M174 (DEC-1604), the new shell. test_shell_ui.py runs shell.test.mjs, routes.test.mjs (every registered route
+    # has a home) and classic.test.mjs (the classic bar is byte for byte the same, checked differentially);
+    # test_shell_browser.py is Playwright in both layouts; test_ui_layout_setting.py the setting and /auth/me field.
+    "M174": (
+        "tests/integration/test_shell_ui.py",
+        "tests/integration/test_shell_browser.py",
+        "tests/integration/production/test_ui_layout_setting.py",
+        "tests/integration/test_visible_text_ui.py",
+        "tests/integration/test_ui.py",
+    ),
+    # M175 (DEC-1605), the Overview and GET /overview. test_campaign_state_cases.py runs the one status rule over the
+    # case table M176's rules.test.mjs runs too.
+    "M175": (
+        "tests/integration/overview/test_overview_api.py",
+        "tests/integration/overview/test_overview_fixture.py",
+        "tests/integration/test_overview_ui.py",
+        "tests/unit/measurement/test_campaign_state_cases.py",
+        "tests/integration/test_visible_text_ui.py",
+    ),
+    # M176 (DEC-1606), the Campaigns list and the campaign page. test_campaigns_page_ui.py runs rules.test.mjs,
+    # demo.test.mjs and results.test.mjs (results added from the tab against a real API).
+    "M176": (
+        "tests/integration/test_campaigns_page_ui.py",
+        "tests/integration/test_visible_text_ui.py",
+    ),
     # M178 (DEC-1608), Reports. test_reports_ui.py runs reports/tabs.test.mjs and reports/audit_equal.test.mjs and
     # checks the audit result through the new form against the old form's on the real API; test_visible_text_ui.py
     # draws the four tabs with empty allow-lists; test_ui_sweep.py opens them with a clean console and reaches
@@ -706,6 +745,25 @@ MILESTONE_TESTS: Final[Mapping[str, tuple[str, ...]]] = {
         "tests/integration/test_visible_text_ui.py",
         "tests/integration/test_ui_sweep.py",
         "tests/integration/simple/test_simple_ui.py",
+    ),
+    # M179 (DEC-1609), the Data page and GET /uploads. test_data_ui.py runs the sources, actions, check and loaded
+    # node suites.
+    "M179": (
+        "tests/integration/test_api_uploads_list.py",
+        "tests/integration/data_page/test_data_ui.py",
+        "tests/integration/test_visible_text_ui.py",
+    ),
+    # M180 (DEC-1610), "Show technical details". test_production_ui_js.py runs technical_signed_in.test.mjs;
+    # test_simple_ui.py runs technical.test.mjs and reports.test.mjs; test_visible_text_ui.py checks both switch
+    # positions in both layouts; test_technical_switch_browser.py is the switch in Chromium.
+    "M180": (
+        "tests/integration/test_api_config.py",
+        "tests/integration/production/test_preferences_routes.py",
+        "tests/integration/production/test_production_ui_js.py",
+        "tests/integration/simple/test_simple_ui.py",
+        "tests/integration/test_visible_text_ui.py",
+        "tests/integration/test_technical_switch_browser.py",
+        "tests/unit/decide/test_contact_list_js.py",
     ),
 }
 """Milestone id -> the test files (or directories, with a trailing `/`) that prove it is built.

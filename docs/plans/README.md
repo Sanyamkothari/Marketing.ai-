@@ -22,7 +22,7 @@ actually written to justify.
 | Plan K: agents that check, not agents that send (proposal for the manager review) | [`MARKETING_AI_PLAN_K_PROPOSAL.md`](MARKETING_AI_PLAN_K_PROPOSAL.md); evidence in [`docs/research/AGENTIC_AI_OPPORTUNITIES_2026_10.md`](../research/AGENTIC_AI_OPPORTUNITIES_2026_10.md) | M130 … M144, DEC-1400 … 1499 (proposed; not claimed) |
 | Plan K technical design: registry, policy, ledger, claim verifier, evals, MCP, statistics | [`PLAN_K_TECHNICAL_DESIGN.md`](PLAN_K_TECHNICAL_DESIGN.md) | design for review; optional M145 … M148 |
 | Plan L: Data Doctor, one agent for messy data (proposal) | [`MARKETING_AI_PLAN_L_DATA_DOCTOR.md`](MARKETING_AI_PLAN_L_DATA_DOCTOR.md) | new branch from `main`, M150 … M161, DEC-1500 … 1599 (proposed; not claimed) |
-| Plan M: a product a marketer understands in minutes (campaign-centred UI, one glossary, quick wins first) | [`MARKETING_AI_PLAN_M_SIMPLE_UI.md`](MARKETING_AI_PLAN_M_SIMPLE_UI.md) | M170 … M181, DEC-1600 … 1699 (claimed by M170) |
+| Plan M: a product a marketer understands in minutes (campaign-centred UI, one glossary, quick wins first) | [`MARKETING_AI_PLAN_M_SIMPLE_UI.md`](MARKETING_AI_PLAN_M_SIMPLE_UI.md) | M170 … M181, DEC-1600 … 1699 (claimed by M170); built M170–M181; layout switch-over pending the usability test (`docs/ux/USABILITY_TEST.md`) |
 | The parallel-work protocol (the contract between the phase branches, not a phase plan) | [`PARALLEL_WORK_PROTOCOL.md`](../../PARALLEL_WORK_PROTOCOL.md) | all |
 
 ## Missing
