@@ -40,6 +40,7 @@ const TECH_SUMMARY = /^\s*technical details\s*$/i;
 
 export const CSS = `
 html.${HIDE_CLASS} .tech,html.${HIDE_CLASS} [data-technical],html.${HIDE_CLASS} details[data-technical-details]{display:none !important}
+html.${HIDE_CLASS} .flow>[data-technical]+.arrow{display:none !important}
 .tech-switch{display:flex;align-items:flex-start;gap:10px;cursor:pointer;font-size:14px;color:var(--ink)}
 .tech-switch input{margin:2px 0 0;width:16px;height:16px;flex:none;accent-color:var(--brand-blue)}
 .tech-switch .ts-text{display:flex;flex-direction:column;gap:2px}

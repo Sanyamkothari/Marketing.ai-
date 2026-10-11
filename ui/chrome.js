@@ -472,8 +472,13 @@ function onClick(event) {
   if (!target.closest(".toggletip")) closeToggletips(doc);
 }
 
-/** The entries of an open menu, in order: its links and buttons that are not disabled. */
-const popEntries = (pop) => [...pop.querySelectorAll("a[href], button")].filter((el) => !el.disabled && !el.hidden);
+// <M180>
+// Plan M M180 (DEC-1610): the profile menu's "Show technical details" switch is a menu entry too, so the arrow
+// keys (M173) reach it and a repaint keeps focus on it.
+const MENU_ENTRY = "a[href], button, input[data-tech-switch]";
+// </M180>
+/** The entries of an open menu, in order: its links, buttons and switches that are not disabled. */
+const popEntries = (pop) => [...pop.querySelectorAll(MENU_ENTRY)].filter((el) => !el.disabled && !el.hidden);
 
 /**
  * Arrow keys in a menu (Plan M M173): from its button, Down opens it and lands on the first entry;
@@ -499,7 +504,7 @@ function menuNavigation(event) {
   if (!pop.contains(target)) return false;
   const entries = popEntries(pop);
   if (!entries.length) return false;
-  const at = entries.indexOf(target.closest("a[href], button"));
+  const at = entries.indexOf(target.closest(MENU_ENTRY));
   let next;
   if (event.key === "ArrowDown") next = (at + 1) % entries.length;
   else if (event.key === "ArrowUp") next = (at - 1 + entries.length) % entries.length;

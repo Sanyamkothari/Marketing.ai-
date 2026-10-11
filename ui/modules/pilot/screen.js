@@ -107,8 +107,9 @@ function mount(app, html) {
 
 const loadingRows = `<div class="skel-screen pe-body" aria-busy="true"><div class="skel-list"><span class="skel skel-row"></span><span class="skel skel-row"></span><span class="skel skel-row"></span></div><span class="sr">Loading…</span></div>`;
 
-const card = (name, title, extra = "") =>
-  `<section class="card" data-pe-card="${name}"><h3>${title}</h3>${extra}<div data-pe-slot>${loadingRows}</div></section>`;
+// Plan M M180 (DEC-1610): `attrs` lets a card be marked `data-technical` (the model results list).
+const card = (name, title, extra = "", attrs = "") =>
+  `<section class="card" data-pe-card="${name}"${attrs}><h3>${title}</h3>${extra}<div data-pe-slot>${loadingRows}</div></section>`;
 
 function fill(main, name, html) {
   const slot = main.querySelector(`[data-pe-card="${name}"] [data-pe-slot]`);
@@ -191,7 +192,11 @@ async function renderReports(app, demo) {
       `<div data-pe-head-actions></div>`,
     )}${demoNotice(demo)}<div data-pe-error></div>
     <div class="stack" data-pe-reports>
-      ${card("results", `Model results${sortNote("newest first")}`)}
+      ${
+        // Plan M M180 (DEC-1610): each approved model's results report, with its algorithm's name, is technical:
+        // hidden with "Show technical details" off. The campaign value and Proof Pack lists are not.
+        card("results", `Model results${sortNote("newest first")}`, "", " data-technical")
+      }
       ${card("value", `Campaign value${sortNote("newest first")}`)}
       ${card("proof", `Value Proof Packs${sortNote("newest first")}`)}
     </div><p class="pe-foot" data-pe-export></p></main>`,
@@ -307,7 +312,13 @@ async function renderReports(app, demo) {
   await considerMeasured(scoredRuns, latest, consider);
   if (!live()) return;
   const actions = main.querySelector("[data-pe-head-actions]");
-  if (actions && latest) actions.outerHTML = headActions({ primary: { label: "Open the latest report", href: latest.href } });
+  if (actions && latest) {
+    const html = headActions({ primary: { label: "Open the latest report", href: latest.href } });
+    // Plan M M180 (DEC-1610): when the newest report is a model results report, its button is technical too.
+    actions.outerHTML = latest.href.startsWith("#/pilot/view/results/")
+      ? html.replace('<div class="head-actions">', '<div class="head-actions" data-technical>')
+      : html;
+  }
   screen.commit();
   // Exporting everyone's feedback is an Admin action: offered only to whom the API allows it.
   if (await mayCall("GET", "/pilot/feedback/export")) {

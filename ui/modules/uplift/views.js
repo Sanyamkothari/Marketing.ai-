@@ -768,7 +768,11 @@ function resultsBody(uc, s) {
       ([label, href, value, meta, next], i) =>
         `${i ? '<div class="arrow" aria-hidden="true">→</div>' : ""}<a class="block${
           done ? "" : " pending"
-        }" href="${esc(href)}"><div><div class="lab"><span>${esc(label)}</span>${
+        }" href="${esc(href)}"${
+          // Plan M M180 (DEC-1610): the Data, Model and Contact list pages are technical pages (as on
+          // #/uc/<uc>/run/<run>); "Campaign results" is not. Hidden with "Show technical details" off.
+          label === "Campaign results" ? "" : " data-technical"
+        }><div><div class="lab"><span>${esc(label)}</span>${
           !done
             ? '<span class="bstate waiting">Not completed</span>'
             : next
@@ -782,7 +786,10 @@ function resultsBody(uc, s) {
   return `<div class="results"><div class="summary">${headline}${detailLine}<span class="muted">${esc(
     run.file_name,
   )} · ${esc(fmtStamp(run.created_at))}</span></div>${actions}
-    <span class="cap">Uplift pipeline</span><div class="flow">${flow}</div>
+    <span class="cap"${
+      // Plan M M180 (DEC-1610): after a training run every block is technical, so the caption goes with them.
+      train ? " data-technical" : ""
+    }>Uplift pipeline</span><div class="flow">${flow}</div>
     <div class="runs-below">${upliftRunsCard(uc, s.runs)}</div>
     ${techDetails([
       ["Run", run.run_id],

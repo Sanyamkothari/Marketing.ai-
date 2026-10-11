@@ -61,6 +61,33 @@ test("the profile menu has a labelled switch; a person who has not chosen gets t
   assert.ok(pop.querySelector('a[href="#/account"]'));
 });
 
+const key = (target, name) => {
+  const event = new w.KeyboardEvent("keydown", { key: name, bubbles: true, cancelable: true });
+  target.dispatchEvent(event);
+  return event;
+};
+
+test("the switch is a menu entry: the arrow keys reach it, as they reach the menu's links and buttons", async () => {
+  const button = $('#pb-bar [data-menu="tn-user"]');
+  button.focus();
+  assert.equal(key(button, "ArrowDown").defaultPrevented, true, "Down on the profile button opens the menu");
+  assert.equal($("#tn-user").hidden, false);
+  const visited = [];
+  for (let i = 0; i < 8; i += 1) {
+    visited.push(w.document.activeElement);
+    key(w.document.activeElement, "ArrowDown");
+  }
+  assert.ok(visited.includes(menuSwitch()), "ArrowDown through the profile menu lands on the switch");
+  // From the switch, Down and Up move on to its neighbours and back (never stuck on it).
+  menuSwitch().focus();
+  key(menuSwitch(), "ArrowDown");
+  assert.notEqual(w.document.activeElement, menuSwitch());
+  key(w.document.activeElement, "ArrowUp");
+  assert.equal(w.document.activeElement, menuSwitch(), "Up comes back to the switch");
+  key(w.document.activeElement, "Escape");
+  assert.equal($("#tn-user").hidden, true);
+});
+
 test("turning it off is saved on the server for this person, not in the browser, and hides technical details", async () => {
   const before = $$("#pb-bar a").map((a) => a.getAttribute("href"));
   try {

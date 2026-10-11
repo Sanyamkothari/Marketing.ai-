@@ -299,6 +299,69 @@ test("a page that shows an engine word outside technical details fails (planted 
   holder.remove();
 });
 
+test("with the switch off the run page's model report and Model health links are hidden; the campaign value report stays (M180)", async () => {
+  await visit(`#/uc/${UC}/run/${TRAIN_RISK}`);
+  const report = $(`a.uc-link[href="#/pilot/view/results/${UC}"]`);
+  assert.ok(report, "a finished training run links to its model results report");
+  assert.ok(report.hasAttribute("data-technical"), "and the link is marked technical");
+  assert.match(visibleText(document.body, { mode: "off" }), /Results report/, "with the switch on it is on screen");
+  const health = $('a.uc-link[href="#/monitoring/alerts"]');
+  if (health) assert.ok(health.hasAttribute("data-technical"), "Model health is a technical link too");
+  try {
+    await technical.setShowTechnical(false);
+    await settle(2);
+    const off = visibleText(document.body, { mode: "off" });
+    assert.doesNotMatch(off, /Results report/, "with the switch off the model report link is not on screen");
+    assert.doesNotMatch(off, /Model health/);
+    assert.match(off, /Ranking quality/, "the run's own verdict stays");
+    // Between hidden blocks no lone arrow is left over.
+    const arrows = [...document.querySelectorAll(".flow > .arrow")].filter((a) => !hiddenOnScreen(a));
+    assert.deepEqual(arrows.length, 0, "no arrow is left between hidden blocks");
+    // A scoring run's "Campaign value report" is for marketers: it stays.
+    await visit(`#/uc/${UC}/run/${SCORE_RISK}`);
+    const value = $('a.uc-link[href^="#/pilot/value/"]');
+    if (value) {
+      assert.equal(value.hasAttribute("data-technical"), false);
+      assert.equal(hiddenOnScreen(value), false, "the campaign value report link stays on screen");
+    }
+  } finally {
+    await technical.setShowTechnical(true);
+  }
+});
+
+test("the uplift workbench's run page: its Data, Model and Contact list blocks are technical; Campaign results is not (M180)", async () => {
+  for (const [run, technicalHrefs, plain] of [
+    [TRAIN_UPLIFT, [`#/uc/${UC}/data/${TRAIN_UPLIFT}`, `#/uplift/${UC}/model/${TRAIN_UPLIFT}`, `#/uplift/${UC}/output/${TRAIN_UPLIFT}`], null],
+    [SCORE_UPLIFT, [`#/uc/${UC}/data/${SCORE_UPLIFT}`, `#/uplift/${UC}/output/${SCORE_UPLIFT}`], `#/campaign/${UC}/${SCORE_UPLIFT}`],
+  ]) {
+    await visit(`#/uplift/${UC}/run/${run}`);
+    for (const href of technicalHrefs) {
+      const a = $(`a.block[href="${href}"]`);
+      assert.ok(a, `the uplift run page links to ${href}`);
+      assert.ok(a.hasAttribute("data-technical"), `${href} is marked technical`);
+    }
+    const blocks = [...document.querySelectorAll(".flow a.block")];
+    const plainBlock = blocks.find((a) => !a.hasAttribute("data-technical"));
+    if (plain) assert.ok(plainBlock && /Campaign results/.test(plainBlock.textContent), "Campaign results stays unmarked");
+    else assert.equal(plainBlock, undefined, "after a training run every block is technical");
+    try {
+      await technical.setShowTechnical(false);
+      await settle(2);
+      for (const href of technicalHrefs) assert.ok(hiddenOnScreen($(`a.block[href="${href}"]`)), `${href} is hidden off`);
+      if (plainBlock) assert.equal(hiddenOnScreen(plainBlock), false, "Campaign results stays on screen");
+      const arrows = [...document.querySelectorAll(".flow > .arrow")].filter((a) => !hiddenOnScreen(a));
+      assert.equal(arrows.length, 0, "no arrow is left between hidden blocks");
+      const off = visibleText(document.body, { mode: "off" });
+      // Only the Campaign results block (a scoring run's) still offers "View details".
+      assert.equal((off.match(/View details/g) || []).length, plain ? 1 : 0, off);
+      if (!plain) assert.doesNotMatch(off, /Uplift pipeline/, "nothing is left under the pipeline caption, so it goes too");
+    } finally {
+      await technical.setShowTechnical(true);
+      await settle(1);
+    }
+  }
+});
+
 test("with the switch off a technical page still opens at its address: only the links to it are hidden (M180)", async () => {
   try {
     await technical.setShowTechnical(false);
