@@ -5,7 +5,8 @@
 //   1. "Needs your attention": up to five cards, each with ONE action;
 //   2. "Value proven to date": one headline, a floor, with one sentence of what it means and "How this is counted";
 //   3. "Live campaigns": up to five rows (short name, status, next step), each a link to its campaign;
-//   4. the one primary button, "+ New campaign" (in the page header, where every page keeps its one primary button);
+//   4. the one primary button, "+ New campaign" (in the page header, where every page keeps its one primary button;
+//      DEC-1605 records this as the one place the plan's order is not followed to the letter);
 //   5. the first-visit checklist (connect or upload data, start the first campaign, add its results): ticked from real
 //      state, hidden once all three are done or the person hid it.
 //
@@ -169,6 +170,16 @@ function attentionHtml(overview, places) {
 
 // --- 2. value proven to date ---------------------------------------------------------------------------------------
 
+/** What a total that is not in rupees is counted in, when the server's words hold an engine word: its kind alone. */
+const UNIT_FALLBACK = { outcomes: "extra outcomes", prevented: "outcomes prevented", amount: "in total" };
+
+/** The unit after the number, in plain words: the server's own, else the kind of unit alone. Rupees carry their own sign. */
+export function unitText(headline) {
+  if (headline.unit === "rupees") return "";
+  const words = showable(headline.unit_words);
+  return words || UNIT_FALLBACK[String(headline.unit).split(":")[0]] || "";
+}
+
 function valueHtml(overview, places) {
   const headline = overview.headline;
   const link = `<a class="ov-link" href="${esc(places.reports)}" data-how-counted>How this is counted</a>`;
@@ -176,18 +187,26 @@ function valueHtml(overview, places) {
   if (!overview.summary_checked) {
     body = `<p class="ov-note">This figure is not shown because it could not be checked against its records.</p>`;
   } else if (!headline) {
-    body = `<p class="ov-amount" data-value-empty>${EM_DASH}</p><p class="ov-meaning">Nothing is proven yet. Once a campaign's results are added, the least it earned appears here.</p>`;
+    // No total can mean two things: nothing has results yet, or every campaign with results is set apart or not final.
+    const hasResults = Boolean(overview.checklist && overview.checklist.results);
+    const why = hasResults
+      ? "None of your measured campaigns is counted as proven yet. How this is counted explains why."
+      : "Nothing is proven yet. Once a campaign's results are added, the least it earned appears here.";
+    body = `<p class="ov-amount" data-value-empty>${EM_DASH}</p><p class="ov-meaning" data-value-meaning>${esc(why)}</p>`;
   } else {
     const rupees = headline.unit === "rupees";
-    const meaning = rupees
+    const fallback = rupees
       ? "A floor, not a forecast: the least your measured campaigns earned, after the cost of contacts and offers."
-      : `${headline.label.charAt(0).toUpperCase()}${headline.label.slice(1)}.`;
+      : "A floor, not a forecast: the least your measured campaigns achieved, added up.";
+    const sentence = `${headline.label.charAt(0).toUpperCase()}${headline.label.slice(1)}.`;
+    const meaning = rupees ? fallback : showable(sentence) || fallback;
+    const unit = unitText(headline);
     const counted = headline.campaigns_counted
       ? ` <span class="ov-based">Based on ${esc(plural(headline.campaigns_counted, "measured campaign", "measured campaigns"))}.</span>`
       : "";
     body = `<p class="ov-amount" data-value-amount title="${esc(headline.total.text)}"><span class="ov-atleast">At least</span> ${esc(
       fmtRupees(headline.total),
-    )}</p><p class="ov-meaning" data-value-meaning>${esc(meaning)}${counted}</p>`;
+    )}${unit ? ` <span class="ov-unit">${esc(unit)}</span>` : ""}</p><p class="ov-meaning" data-value-meaning>${esc(meaning)}${counted}</p>`;
   }
   return `<section class="card ov-value" data-value aria-labelledby="ov-h-value"><h2 class="ov-h" id="ov-h-value">Value proven to date</h2><div class="ov-value-body">${body}${link}</div></section>`;
 }
@@ -308,7 +327,8 @@ const CSS = `
 .ov .ov-more a:hover,.ov .ov-link:hover,.ov .ov-row-name:hover,.ov .ov-check-label[href]:hover{text-decoration:underline}
 .ov .ov-value-body{padding:14px 20px 16px;display:flex;flex-direction:column;gap:6px}
 .ov .ov-amount{margin:0;font-size:30px;font-weight:600;line-height:1.15;font-feature-settings:"tnum";color:var(--ink)}
-.ov .ov-atleast{font-size:13px;font-weight:500;color:var(--muted);margin-right:4px}
+.ov .ov-atleast,.ov .ov-unit{font-size:13px;font-weight:500;color:var(--muted)}
+.ov .ov-atleast{margin-right:4px}
 .ov .ov-meaning{margin:0;font-size:13px;color:var(--ink2);line-height:1.45}
 .ov .ov-based{color:var(--muted)}
 .ov .ov-link{font-size:13px}

@@ -6,8 +6,10 @@
 // and draws what comes back (`page.js`). It reads no layout setting, so it merges in any order with M174.
 //
 // Where its links lead is resolved when the page is drawn: `#/data` and `#/reports` (M179, M178) when a module has
-// claimed them, else the screens that do the same job today (`#/connections`, `#/pilot`), so no link in this branch
-// leads nowhere whichever branch merges first.
+// claimed them, else the screens that do the same job today (`#/connections`, `#/pilot`). "+ New campaign" and the
+// checklist's "Start your first campaign" lead to `#/campaigns/new`, the wizard of M177: until M177 is merged that
+// address reaches Plan J's campaign page, which answers "not found". The page does not hide this; the integrator
+// merges M177 with it (DEC-1605).
 
 import { skeleton } from "../../dom.js";
 import { announceModulesChanged, phaseModules, registerModule } from "../router.js";
@@ -98,6 +100,5 @@ registerModule({
   },
 });
 
-injectStyles();
 // A deep link to this page was resolved by `app.js` before this module existed: draw it now.
 if (ROUTES.includes(hashParts()[0])) announceModulesChanged();

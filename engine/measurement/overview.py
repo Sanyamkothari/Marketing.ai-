@@ -43,7 +43,7 @@ from pydantic import AwareDatetime, Field
 from engine.config import StrictBase
 from engine.measurement.campaign import Campaign, CampaignStatus
 from engine.measurement.plan import TestPlan
-from engine.measurement.summary import CampaignSummary, ProvenTotal, SummaryCard
+from engine.measurement.summary import CampaignSummary, ProvenTotal, SummaryCard, unit_words
 from engine.pilot.proof import Figure
 
 __all__ = [
@@ -54,6 +54,7 @@ __all__ = [
     "OverviewChecklist",
     "OverviewHeadline",
     "build_overview",
+    "campaign_state",
     "headline_total",
 ]
 
@@ -77,6 +78,9 @@ class OverviewHeadline(StrictBase):
     )
     label: str = Field(
         description="The summary's own sentence: `at least <total> <unit>, the sum of each campaign's lower bound`."
+    )
+    unit_words: str = Field(
+        description="The unit in plain words, the part of `label` after the total (`extra <column> outcomes`, `in <column>`)."
     )
     rule: str = Field(description="How the totals are made, in the summary's one sentence.")
     campaigns_counted: int = Field(description="How many campaigns are added in this total.")
@@ -132,9 +136,14 @@ def headline_total(summary: CampaignSummary) -> ProvenTotal | None:
     return next((t for t in totals if t.unit == "rupees"), totals[0] if totals else None)
 
 
-def _state(
+def campaign_state(
     campaign: Campaign, plan: TestPlan | None, today: date
 ) -> tuple[CampaignState, NextStep, date | None]:
+    """A campaign's status, its next step and the date its result is final, from the record and its test plan.
+
+    The one rule for "Live" and "Waiting for results": any page that shows those two words (the Overview, the Campaigns
+    list) calls this, so a campaign never shows a different word on two pages.
+    """
     when = plan.analysis_date if plan is not None else None
     if when is None:
         return "live", "plan", None
@@ -159,7 +168,7 @@ def build_overview(
     live = [c for c in campaigns if c.status == CampaignStatus.LIVE]
     rows: list[OverviewCampaign] = []
     for campaign in live[:CAMPAIGNS_SHOWN]:
-        state, step, when = _state(campaign, plan_of(campaign.campaign_id), now.date())
+        state, step, when = campaign_state(campaign, plan_of(campaign.campaign_id), now.date())
         rows.append(
             OverviewCampaign(
                 campaign_id=campaign.campaign_id,
@@ -181,6 +190,7 @@ def build_overview(
                 unit=total.unit,
                 total=total.total,
                 label=total.label,
+                unit_words=unit_words(total.unit, total.unit_column),
                 rule=summary.proven.rule,
                 campaigns_counted=len(total.campaigns),
             )

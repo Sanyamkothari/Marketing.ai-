@@ -4,8 +4,8 @@
 Overview page asks for one more answer, `GET /overview`, which is not in a recording made before M175 existed. The
 answer is *assembled*, never invented: `engine.measurement.overview.build_overview` is run over the answers the same
 recording already holds, `GET /campaigns/summary`, `GET /campaigns` and each campaign's `GET /campaigns/<id>/plan`,
-which is exactly what the route reads. (The demo's store holds uploads, as its `GET /uploads/<id>/ask` answers show, so
-"a connection or an upload exists" is true there.)
+which is exactly what the route reads. "A connection or an upload exists" is read from the same recording
+(`GET /connections`, or any `GET /uploads/<id>/...` answer), never assumed.
 
     python -m tests.fixtures.build_overview_fixture            # add or refresh the key in tests/fixtures/ui_demo/api.json
     python -m tests.fixtures.build_overview_fixture --check    # exit 1 when the recorded key is not what the builder gives
@@ -44,7 +44,14 @@ def overview_from(recorded: dict[str, Any]) -> Overview:
         plan = answer["body"].get("plan") if answer and answer["status"] == 200 else None
         return TestPlan.model_validate(plan) if plan else None
 
-    return build_overview(summary=summary, campaigns=campaigns, plan_of=plan_of, connected=True, now=BUILT_AT)
+    # "A connection or an upload exists", read as the route reads it: saved connections, else uploaded files. The recording
+    # holds `GET /connections` and one `GET /uploads/<id>/ask` per upload the app was asked about.
+    connected = bool(recorded.get("GET /connections", {}).get("body", {}).get("connections")) or any(
+        key.startswith("GET /uploads/") for key in recorded
+    )
+    return build_overview(
+        summary=summary, campaigns=campaigns, plan_of=plan_of, connected=connected, now=BUILT_AT
+    )
 
 
 def answer_for(recorded: dict[str, Any]) -> dict[str, Any]:

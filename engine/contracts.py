@@ -1748,3 +1748,5 @@ def _plan_j_check_codes() -> frozenset[str]:
 # ---- END PLAN-L ----
 # ---- PLAN-K (agents that check) — append only below this line ----
 # ---- END PLAN-K ----
+# ---- PLAN-M (simple UI) — append only below this line ----
+# ---- END PLAN-M ----

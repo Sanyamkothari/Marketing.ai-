@@ -19,7 +19,13 @@ from typing import Any
 import pytest
 
 from engine.measurement.campaign import Campaign, CampaignStatus
-from engine.measurement.overview import CAMPAIGNS_SHOWN, CARDS_SHOWN, build_overview, headline_total
+from engine.measurement.overview import (
+    CAMPAIGNS_SHOWN,
+    CARDS_SHOWN,
+    build_overview,
+    campaign_state,
+    headline_total,
+)
 from engine.measurement.plan import TestPlan
 from engine.measurement.summary import CampaignSummary
 from tests.fixtures.build_overview_fixture import KEY, RECORDING, answer_for, overview_from, render
@@ -51,6 +57,9 @@ def test_the_demo_overview_is_what_its_own_sources_say(recorded: dict[str, Any])
     assert body["cards"] == summary["cards"][:CARDS_SHOWN]
     rupees = next(t for t in summary["proven"]["totals"] if t["unit"] == "rupees")
     assert body["headline"]["total"] == rupees["total"] and body["headline"]["label"] == rupees["label"]
+    assert body["headline"]["label"].endswith(
+        f"{body['headline']['unit_words']}, the sum of each campaign's lower bound"
+    )
     campaigns = recorded["GET /campaigns"]["body"]["campaigns"]
     assert all(c["status"] == "measured" for c in campaigns), "both demo campaigns are measured: none is live"
     assert body["campaigns"] == [] and body["campaigns_total"] == 0
@@ -163,3 +172,45 @@ def test_only_unmeasured_campaigns_are_listed_and_the_list_is_capped(recorded: d
 
 def test_overview_from_is_deterministic(recorded: dict[str, Any]) -> None:
     assert overview_from(recorded) == overview_from(recorded)
+
+
+def test_the_headline_carries_the_unit_words_of_its_total(recorded: dict[str, Any]) -> None:
+    summary = _summary(recorded)
+    no_rupees = summary.model_copy(
+        update={
+            "proven": summary.proven.model_copy(
+                update={"totals": tuple(t for t in summary.proven.totals if t.unit != "rupees")}
+            )
+        }
+    )
+    built = build_overview(
+        summary=no_rupees, campaigns=(), plan_of=lambda _id: None, connected=False, now=NOW
+    )
+    assert built.headline is not None and built.headline.unit == "amount:spend"
+    assert built.headline.unit_words == "in spend", "a total that is not in rupees names its unit"
+    assert (
+        built.headline.label
+        == f"at least {built.headline.total.text} in spend, the sum of each campaign's lower bound"
+    )
+
+
+def test_connected_is_derived_from_the_recording_not_assumed(recorded: dict[str, Any]) -> None:
+    assert overview_from(recorded).checklist.connected is True
+    bare = {k: v for k, v in recorded.items() if not k.startswith("GET /uploads/")}
+    bare["GET /connections"] = {**recorded["GET /connections"], "body": {"connections": []}}
+    assert overview_from(bare).checklist.connected is False, "no connection and no upload in the recording"
+    saved = {
+        **bare,
+        "GET /connections": {**recorded["GET /connections"], "body": {"connections": [{"id": "x"}]}},
+    }
+    assert overview_from(saved).checklist.connected is True, "a saved connection alone is enough"
+
+
+def test_campaign_state_is_the_one_public_rule(recorded: dict[str, Any]) -> None:
+    today = NOW.date()
+    assert campaign_state(_live(recorded, 1), _plan(recorded, today), today) == (
+        "waiting_for_results",
+        "add_results",
+        today,
+    )
+    assert campaign_state(_live(recorded, 1), None, today) == ("live", "plan", None)

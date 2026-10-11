@@ -363,7 +363,7 @@ def _install_save_desk(app: FastAPI) -> None:
 
 PHASE_APP_HOOKS.append(_install_save_desk)
 # ---- END PLAN-K ----
-# ---- PLAN-M (a simple UI) — append only below this line ----
+# ---- PLAN-M (simple UI) — append only below this line ----
 # Plan M M175 (DEC-1605): GET /overview (Viewer), the Overview page's four parts in one call, from existing sources only.
 from api.routes.overview import router as overview_router  # noqa: E402
 

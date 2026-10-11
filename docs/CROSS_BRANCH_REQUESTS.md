@@ -2483,6 +2483,49 @@ default journey is unchanged: `journey.results.json`, the demo summary and secti
 
 **What is needed.** Nothing; this is a record. M143's request above (`--override` on `journey`) is still open.
 
+### 2026-10-11 — plan-m M170 (on main) → Plan M M172 (words sweep): the visible-text baseline is your to-do list (announcement)
+
+**What is needed.** M172 empties `tests/integration/production/ui/glossary/baseline.json` (`{page: {term: count}}`,
+DEC-1600 (f)). Today it allows 405 never-shown occurrences on 38 of the 40 pages drawn; `tests/integration/test_visible_text_ui.py`
+prints the table. It includes the summaries of folded technical sections, which stay on screen when closed:
+model-training has `shap: 1` and `score: 8` (the "Details / SHAP beeswarm … score" summary in `ui/pages.js`
+`modelPage`), output-training `run: 1` and output-scoring `run: 6` ("Settings used for this run"), and
+model-uplift-training `training: 1` ("Training setup"). A page may show fewer words than its count, never more;
+lower the file as you go with `GLOSSARY_UPDATE_BASELINE=lower` (it only lowers). The "did it draw" check of each page
+in `visible_text.test.mjs` uses a sentence or element that is not a glossary word (DEC-1600 (h)), so the sweep should
+not need to touch it unless it rewords one of those sentences.
+
+**What I did meanwhile.** Nothing was blocked. The glossary (`ui/labels.js`, with `term()`) and the generated
+`docs/ux/GLOSSARY.md` are in place for the sweep.
+
+### 2026-10-11 — plan-m M170 (on main) → Plan M M171 and M173: a page that asks for an unrecorded answer fails the visible-text test (announcement)
+
+**What is needed.** The visible-text test draws each page against the API answers recorded from the validated
+Hillstrom demo (`tests/fixtures/ui_demo/api.json`, 118 answers). A GET with no recorded answer is answered 404 and
+fails the page under test, naming the re-record command (DEC-1600 (g)). If your page adds or renames a GET (the contact
+list on Output, the Help menu, the readiness fix), re-record with `python -m tests.fixtures.capture_ui_demo <base url>`
+(see its docstring) in the same commit. A deliberate miss goes on the explicit `EXPECTED_UNRECORDED` allow-list (empty
+today). A page you change that now draws fewer never-shown words should lower its baseline with
+`GLOSSARY_UPDATE_BASELINE=lower`.
+
+**What I did meanwhile.** Nothing was blocked; no page asks for an unrecorded answer today.
+
+### 2026-10-11 — plan-m M170 (on main) → trunk / Plan H (owners of `ui/pages.js`, `ui/usecase.js` and `tests/integration/test_ui.py`), and anyone adding a technical section: presentation-only `data-technical` marks (record of in-place edits)
+
+**What changed** (DEC-1600 (c), (d)). Two attributes, no change to what any page draws or does:
+`ui/usecase.js` `setupForm` marks the Advanced settings disclosure (`<details class="adv-wrap" id="f-adv" data-technical>`);
+`ui/pages.js` `modelPage` marks the folded body of the SHAP beeswarm disclosure (`<div class="bs-body" data-technical>`;
+`bindPage` fills only that element's contents, so the attribute stays). The disclosure and its summary are not
+marked, so the summary's words are counted. `tests/integration/test_ui.py` `MODULES` gained `labels.js`, the module
+registration the new `ui/labels.js` needs. Nothing was renamed, removed or loosened.
+
+**What is needed.** Only a convention, for anyone adding a technical section: mark it with class `tech`, put
+`data-technical` on the folded body, or use a `<details>` whose summary says exactly "Technical details". Do not mark
+a whole `<details>` whose summary is visible text: the check reads that summary anyway, since it is on screen when the
+section is closed.
+
+**What I did meanwhile.** Nothing was blocked.
+
 ### 2026-09-23 — plan-e-pilot (on main) → all branches: every change Plan E made outside its own files and blocks
 
 **What is needed.** Nothing from anybody; this is the announcement §3 asks for. Measured with

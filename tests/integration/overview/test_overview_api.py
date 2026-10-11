@@ -133,6 +133,9 @@ def test_the_headline_is_the_summarys_own_total_and_the_cards_are_its_own(
     assert overview["headline"]["unit"] == "rupees"
     assert overview["headline"]["total"] == totals["rupees"]["total"], "the very same traced figure"
     assert overview["headline"]["label"] == totals["rupees"]["label"]
+    assert overview["headline"]["label"].endswith(
+        f"{overview['headline']['unit_words']}, the sum of each campaign's lower bound"
+    )
     assert overview["headline"]["rule"] == summary["proven"]["rule"]
     assert overview["headline"]["campaigns_counted"] == len(totals["rupees"]["campaigns"]) >= 1
     assert overview["cards"] == summary["cards"][:CARDS_SHOWN]

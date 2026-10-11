@@ -4747,6 +4747,7 @@
      "formula": "(s0*s1*s2 - s3*s4 - s5*s6)"
     },
     "label": "at least \u20b981,034 net of what contacts and offers cost, the sum of each campaign's lower bound",
+    "unit_words": "net of what contacts and offers cost",
     "rule": "Each total is the sum of every campaign's measured lower bound, so it is a floor, not an estimate. Only campaigns whose control group the engine drew at random, or whose random assignment it verified, are added, customers measured by more than one campaign are counted once, and each unit has a total of its own.",
     "campaigns_counted": 1
    },

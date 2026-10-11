@@ -133,7 +133,7 @@ const fresh = () => ({
 
 // --- the demo ----------------------------------------------------------------------------------------------------
 
-test("the demo: one H1, one sentence, one primary button, in the order the plan gives", async () => {
+test("the demo: one H1, one sentence, the one primary button in the header, then attention, value and live in the plan's order", async () => {
   clear();
   await visit();
   assert.equal($$("main h1").length, 1);
@@ -147,6 +147,9 @@ test("the demo: one H1, one sentence, one primary button, in the order the plan 
     (s) => s.getAttribute("aria-labelledby"),
   );
   assert.deepEqual(order, ["ov-h-attention", "ov-h-value", "ov-h-live"], "attention, then value, then live campaigns");
+  // DEC-1605: the button sits in the page header, before the sections (the plan lists it fourth), as on every page.
+  const first = $('[data-module="overview"] section');
+  assert.ok(primary[0].compareDocumentPosition(first) & 4, "the button is in the header, above attention, value and live");
   assert.equal(document.title, "Overview · Marketing AI");
 });
 
@@ -271,11 +274,27 @@ test("a number that could not be traced: the cards and the value are not shown, 
   assert.equal($$("[data-live-row]").length, 5);
 });
 
-test("a total that is not in rupees is the server's own sentence", async () => {
-  const label = "at least 984.06 in spend, the sum of each campaign's lower bound";
-  await visit(answer({ ...demo, headline: { ...demo.headline, unit: "amount:spend", total: figure(984.06, "984.06", "amount"), label } }));
-  assert.equal($("[data-value-amount]").textContent.replace(/\s+/g, " ").trim(), "At least 984.06");
-  assert.match($("[data-value-meaning]").textContent, /^At least 984\.06 in spend, the sum of each campaign's lower bound\./);
+test("a total that is not in rupees carries its unit and the server's own sentence", async () => {
+  const label = "at least 984.06 extra reactivated_90d outcomes, the sum of each campaign's lower bound";
+  const unit_words = "extra reactivated_90d outcomes";
+  await visit(answer({ ...demo, headline: { ...demo.headline, unit: "outcomes:reactivated_90d", unit_words, total: figure(984.06, "984.06", "number"), label } }));
+  assert.equal($("[data-value-amount]").textContent.replace(/\s+/g, " ").trim(), "At least 984.06 extra reactivated_90d outcomes");
+  assert.match($("[data-value-meaning]").textContent, /^At least 984\.06 extra reactivated_90d outcomes, the sum of each campaign's lower bound\./);
+});
+
+test("a unit sentence that holds an engine word is replaced by the kind of unit alone", async () => {
+  const label = "at least 984.06 in a holdout column, the sum of each campaign's lower bound";
+  await visit(answer({ ...demo, headline: { ...demo.headline, unit: "amount:holdout_flag", unit_words: "in a holdout column and treat = 1", total: figure(984.06, "984.06", "number"), label: `${label} treat = 1` } }));
+  assert.equal($("[data-value-amount]").textContent.replace(/\s+/g, " ").trim(), "At least 984.06 in total");
+  assert.match($("[data-value-meaning]").textContent, /^A floor, not a forecast: the least your measured campaigns achieved/);
+  assert.deepEqual(findNeverShown(text()), {});
+});
+
+test("no total while campaigns have results says so, instead of asking for results", async () => {
+  await visit(answer({ ...demo, headline: null, checklist: { connected: true, campaign: true, results: true } }));
+  assert.ok($("[data-value-empty]"));
+  assert.match($("[data-value-meaning]").textContent, /None of your measured campaigns is counted as proven yet/);
+  assert.doesNotMatch($("[data-value]").textContent, /Once a campaign's results are added/);
 });
 
 // --- a fresh install and the checklist ------------------------------------------------------------------------
