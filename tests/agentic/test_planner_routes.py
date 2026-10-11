@@ -167,6 +167,27 @@ def test_words_read_by_the_model_give_the_forms_plan(planner_world: PlannerWorld
         assert words.json()["plan"]["frame"]["source"] == "words"
 
 
+def test_a_narrative_edited_after_the_draft_is_refused_as_tampered(planner_world: PlannerWorld) -> None:
+    """The wording shown under a proposal is checked like its payload: its digest is on the ledger."""
+    from engine.agentic.proposals import ProposalStore
+
+    pw = planner_world
+    store = ProposalStore(pw.world.storage)
+    with pw.world.client() as client:
+        drafted = client.post("/agentic/plans", json=_card(pw))
+        assert drafted.status_code == 201, drafted.text
+        proposal = store.get(drafted.json()["proposal"]["proposal_id"])
+        assert proposal.narrative is not None
+        forged = {
+            **proposal.narrative,
+            "sentences": [{"text": "Sales rose 40%.", "claim_type": None, "refs": []}],
+        }
+        store.save(proposal.model_copy(update={"narrative": forged}))
+        response = client.post(f"/agentic/proposals/{proposal.proposal_id}/approve", json={})
+        assert response.status_code == 409 and response.json()["detail"]["code"] == "PROPOSAL_TAMPERED"
+        assert client.get("/campaigns", params={"run_id": pw.run_id}).json()["campaigns"] == []
+
+
 def test_a_card_that_is_not_there_or_asks_for_waiting_plans_nothing(planner_world: PlannerWorld) -> None:
     pw = planner_world
     with pw.world.client() as client:
