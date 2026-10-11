@@ -1,0 +1,10 @@
+src2 index (06_gap_fill, 11 Oct 2026). Clones deleted after reading.
+googleapis/googleapis @525d4c8 (2026-10-09), sparse google/ads/googleads/v25:
+  resources/campaign.proto  -> TextGuidelines (term_exclusions <=25 x 30 chars; messaging_restrictions <=40 x 300 chars, RESTRICTION_BASED_EXCLUSION only), AiMaxSetting (enable_ai_max; bundling_required: brand lists/text automation require AI Max), brand_guidelines_enabled (immutable; cannot disable once on)
+  resources/performance_max_placement_view.proto ("impression metrics" only), channel_aggregate_asset_view.proto, campaign_search_term_view.proto, campaign_search_term_insight.proto, ai_max_search_term_ad_combination_view.proto
+  resources/lift_measurement_config.proto (conversion_lift_holdback_ratio_micros; present v25, absent v23/v24)
+facebook/facebook-python-business-sdk @efd8423 (2026-09-17), API v26.0:
+  adobjects/adset.py -> existing_customer_budget_percentage, placement_soft_opt_out, brand_safety_config
+  adobjects/campaign.py -> advantage_state_info, migrate_to_advantage_plus; adcampaigngroupadvantagestate.py (audience/budget/placement states)
+  adobjects/adcreativefeaturesspec.py -> 84 creative-enhancement features, each with enroll_status (adcreativefeaturedetails.py)
+Not reachable: braze-inc/braze-docs (404/403), all non-GitHub hosts (curl 000).
