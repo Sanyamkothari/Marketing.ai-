@@ -122,6 +122,60 @@ test("a step whose elements are not on the page is skipped, and Back skips the s
   assert.equal($("#pe-tour"), null, "Escape closes the tour");
 });
 
+test("a step whose element was found stays put when the page repaints it later (a skeleton), however long the person reads", async () => {
+  await go("#/");
+  await until(() => $(".uc-list"), 3000, "Home");
+  TOUR_TIMING.skipAfterMs = 120;
+  w.document.querySelector("#pb-bar .tb-help-btn").click();
+  $("[data-pe-tour-start]").click();
+  await until(() => $("#pe-tour") && $("#pe-tour h2").textContent === "Home" && $(".pe-target"), 2000, "Home, its element found");
+  await new Promise((r) => setTimeout(r, TOUR_TIMING.skipAfterMs * 2)); // read it for longer than the skip delay
+  const main = $("main");
+  const saved = main.innerHTML;
+  main.innerHTML = `<div data-skeleton><div class="uc-list"></div></div>`; // a repaint draws a skeleton
+  await new Promise((r) => setTimeout(r, TOUR_TIMING.skipAfterMs * 4));
+  assert.equal($("#pe-tour h2").textContent, "Home", "the step the person is reading is not skipped");
+  main.innerHTML = saved;
+  key(w.document, "Escape");
+});
+
+test("Back from the first step after the step before it was skipped turns round instead of showing the same absent step again", async () => {
+  await go("#/");
+  TOUR_TIMING.skipAfterMs = 120;
+  hidden = (el) => el.matches(".timeline-wrap, .uc-list"); // Home draws, but neither of its elements is there
+  w.document.querySelector("#pb-bar .tb-help-btn").click();
+  $("[data-pe-tour-start]").click();
+  const title = () => ($("#pe-tour") ? $("#pe-tour h2").textContent : null);
+  await until(() => title() === "Home", 2000, "Home is shown first");
+  await until(() => title() === "Connections", 3000, "Home is skipped after a moment");
+  $("#pe-tour [data-pe-tour='back']").click();
+  await until(() => title() === "Home", 2000, "back to Home");
+  await until(() => title() === "Connections", 3000, "Home is skipped again and the tour goes forward, not round and round");
+  hidden = () => false;
+  key(w.document, "Escape");
+});
+
+test("on a phone the bar hides its tools: the Help step points at the Menu button and the tour does not close by itself", async () => {
+  await go("#/");
+  TOUR_TIMING.skipAfterMs = 4000;
+  w.document.querySelector("#pb-bar .tb-help-btn").click();
+  $("[data-pe-tour-start]").click();
+  hidden = (el) => el.matches(".tb-help-btn"); // display:none at narrow width until the panel is open
+  const card = () => $("#pe-tour");
+  for (let i = 1; i <= 5; i++) {
+    await until(() => card() && card().textContent.includes(`Step ${i} of 6`) && $(".pe-target"), 3000, `step ${i}`);
+    card().querySelector("[data-pe-tour='next']").click();
+  }
+  TOUR_TIMING.skipAfterMs = 120;
+  await until(() => card() && card().textContent.includes("Step 6 of 6") && $(".pe-target"), 3000, "the Help step, on the Menu button");
+  assert.ok($(".pe-target").matches("[data-tb-menu]"));
+  await new Promise((r) => setTimeout(r, 600));
+  assert.ok(card(), "still open after the skip delay");
+  assert.match(card().textContent, /Step 6 of 6/);
+  hidden = () => false;
+  key(w.document, "Escape");
+});
+
 test("the tour offers itself from the menu every time, however often it was seen", async () => {
   w.localStorage.setItem("marketing-ai:pilot-tour-seen", "1");
   await go("#/");

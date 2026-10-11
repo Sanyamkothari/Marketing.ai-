@@ -75,6 +75,7 @@ globalThis.fetch = async (url, options = {}) => {
   const path = String(url).replace("http://api.test", "");
   calls.push([options.method || "GET", path, options.body || null]);
   const found = replies.get(path) || { status: 404, body: { detail: { code: "NOT_FOUND", message: "no" } } };
+  if (found.gate) await found.gate; // a test holds an answer back to see what arrives first
   return {
     ok: found.status < 400,
     status: found.status,
@@ -548,4 +549,56 @@ test("opening the estimate card when nothing was estimated leaves it open and em
   assert.equal(model.state.ope.error, null, "no estimate yet is not an error");
   const html = modelPageHtml({ id: "win-back", name: "Win-back" }, model.state.run, model.state.art, model.state.ope);
   assert.match(html, /<details class="adv ufold uwhatif" open>/, "the card stays open once opened");
+});
+
+test("a saved estimate that arrives after the person has estimated does not replace their result or the share they typed", async () => {
+  const controller = await import(new URL("modules/uplift/controller.js", UI));
+  reply("/runs/r_race", 200, {
+    run: { run_id: "r_race", mode: "train", state: "done", created_at: "2026-09-01T00:00:00Z", file_name: "f.csv", problem_type: "uplift", artefacts: { "run.json": "k" } },
+    status: { stages: [] },
+  });
+  let release = () => {};
+  const gate = new Promise((resolve) => (release = resolve));
+  replies.set("/runs/r_race/uplift/ope_report.json", { status: 200, body: { run_id: "r_race", policy_description: "OLD saved", rows: 1, estimates: [] }, gate });
+  reply("/runs/r_race/uplift/ope", 200, { run_id: "r_race", policy_description: "NEW just now", rows: 2, estimates: [] });
+  const model = controller.createModelController("r_race", () => {});
+  await model.load();
+  const listeners = {};
+  const card = { open: true, addEventListener: (event, fn) => (listeners[event] = fn) };
+  const form = { addEventListener: (event, fn) => (listeners[`form:${event}`] = fn) };
+  const input = { value: "25" };
+  model.bind({ querySelector: (sel) => ({ "details.uwhatif": card, "#u-ope": form, "#u-ope-share": input })[sel] || null });
+  const reading = listeners.toggle(); // the saved estimate is on its way
+  await listeners["form:submit"]({ preventDefault() {} }); // the person submits first
+  assert.equal(model.state.ope.report.policy_description, "NEW just now");
+  release();
+  await reading;
+  assert.equal(model.state.ope.report.policy_description, "NEW just now", "the late saved estimate did not overwrite it");
+});
+
+test("a failure that is not the API's while reading the saved estimate is shown on the card, not thrown out of the listener", async () => {
+  const controller = await import(new URL("modules/uplift/controller.js", UI));
+  reply("/runs/r_net", 200, {
+    run: { run_id: "r_net", mode: "train", state: "done", created_at: "2026-09-01T00:00:00Z", file_name: "f.csv", problem_type: "uplift", artefacts: { "run.json": "k" } },
+    status: { stages: [] },
+  });
+  const model = controller.createModelController("r_net", () => {});
+  await model.load();
+  const listeners = {};
+  const card = { open: true, addEventListener: (event, fn) => (listeners[event] = fn) };
+  model.bind({ querySelector: (sel) => (sel === "details.uwhatif" ? card : null) });
+  const before = globalThis.fetch;
+  globalThis.fetch = async () => ({
+    ok: true,
+    status: 200,
+    text: async () => {
+      throw new TypeError("the body stream broke"); // not an ApiError: it used to leave the listener as a rejection
+    },
+  });
+  try {
+    await listeners.toggle(); // must not reject
+  } finally {
+    globalThis.fetch = before;
+  }
+  assert.ok(model.state.ope.error, "the failure is kept for the card to show");
 });

@@ -330,22 +330,51 @@ export async function hasCampaignResults(runId) {
 
 /**
  * What the value view (`GET /pilot/roi/{run_id}`) says was measured for a scoring run, as
- * `{ status, source, campaign }` (`campaign`: the id of the campaign whose report it read, or `null`), or
- * `null` when it cannot be read. `status` "not_measured" with a `source` of `null` means no outcomes were
- * recorded and no campaign results exist; `source` "outcome_ingestion" means outcomes were added here.
- * Asking this first lets a screen draw "nothing yet" without the 404s that `getOutcomes`,
- * `hasCampaignResults` and `getIncrementalityInput` would answer (Plan M M173): the browser logs every
- * one of them as an error, however the page handles it.
+ * `{ status, source, campaign, availableOn }` (`campaign`: the id of the campaign whose report it read, or
+ * `null`; `availableOn`: `results_available_on`, a `YYYY-MM-DD` string or `null`), or `null` when it cannot be
+ * read. `source` "outcome_ingestion" means outcomes were added here. `status` "not_measured" with a `source`
+ * of `null` does NOT by itself mean nothing was recorded: a run that held out no control group (or whose
+ * outcomes file covered only contacted customers) has a saved outcome report and the value view answers the
+ * same way. `outcomesImpossible` says when it does prove it (Plan M M173).
  */
 export async function getMeasurementState(runId) {
   try {
     const view = await request(`/pilot/roi/${encodeURIComponent(runId)}`);
     return view && typeof view === "object"
-      ? { status: view.status, source: view.source, campaign: view.campaign_id || null }
+      ? {
+          status: view.status,
+          source: view.source,
+          campaign: view.campaign_id || null,
+          availableOn: typeof view.results_available_on === "string" ? view.results_available_on : null,
+        }
       : null;
   } catch {
     return null;
   }
+}
+
+/**
+ * True when the value view proves no outcomes can have been recorded, so a screen may draw "nothing yet"
+ * without the 404s that `getOutcomes`, `hasCampaignResults` and `getIncrementalityInput` would answer (the
+ * browser logs every one as an error, however the page handles it). Ingestion refuses a run whose outcome
+ * window is unknown (the use case defines no horizon) and one whose window has not matured, so a view that
+ * says "not measured, no source" proves it in two cases only:
+ *
+ * - the window is ahead: `availableOn` is later than today by both the local and the UTC calendar, so a clock
+ *   a day off never hides a real result;
+ * - the window is unknown: there is no `availableOn` at all.
+ *
+ * With a window already past the same answer may sit on top of a saved report (no control group, or none
+ * matched), so those runs are asked for their files as before.
+ */
+export function outcomesImpossible(known, now = new Date()) {
+  if (!known || known.status !== "not_measured" || known.source !== null) return false;
+  if (!known.availableOn) return true;
+  const utc = now.toISOString().slice(0, 10);
+  const local = [now.getFullYear(), now.getMonth() + 1, now.getDate()]
+    .map((n, i) => String(n).padStart(i ? 2 : 4, "0"))
+    .join("-");
+  return known.availableOn > (utc > local ? utc : local);
 }
 
 /** `IncrementalityInput`, or null when the run held out no control group (or has no outcomes yet). */

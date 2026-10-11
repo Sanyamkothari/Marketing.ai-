@@ -3,7 +3,8 @@
 // One journey at a time. The API lists every industry file and names the one to open on
 // (`default_industry`). Plan H M81 (DEC-1110): that is the generic journey, the same for every
 // business, and Home offers no choice of industry any more (`SHOW_INDUSTRY_CHOOSER`). The other
-// journeys stay reachable by URL (`#/industry/<id>`), and the chooser comes back with the flag.
+// journeys are no longer pages (Plan M M173: `#/industry/<id>` redirects Home); their goals are listed on Home under
+// "Goals for other kinds of business", and the chooser comes back with the flag.
 //
 // The header is breadcrumb "Home", the journey's own label as the H1 and one sentence of what to do.
 // The AI type of each use case is its card's coloured edge, explained once by "What do the colours
@@ -45,13 +46,18 @@ export const industryHref = () => "#/";
  * back to the journey it was opened from. Industries are searched in the order the API lists them,
  * default first, so a use case two files share belongs to the default journey. One that no file
  * lists goes back to the default journey; null only when there is no industry at all.
+ *
+ * Plan M M173: only the default journey is a page (Home). A goal of another industry goes back to Home under
+ * the name "Home", not under its own journey's label, since the button would open a page that is not that journey.
  */
 export function journeyFor(payload, useCaseId) {
   const industries = (payload && payload.industries) || [];
   const lists = (industry) =>
     (industry.stages || []).some((stage) => (stage.use_cases || []).some((u) => u.id === useCaseId));
   const owner = industries.find(lists) || chooseIndustry(payload || {}, null);
-  return owner ? { href: industryHref(payload, owner.id), label: owner.journey_label } : null;
+  if (!owner) return null;
+  const home = chooseIndustry(payload || {}, null);
+  return { href: industryHref(payload, owner.id), label: owner === home ? owner.journey_label : "Home" };
 }
 
 const cardsOf = (industry) => (industry.stages || []).flatMap((stage) => stage.use_cases || []);

@@ -56,6 +56,7 @@ import {
   getOutcomes,
   getScoringRuns,
   hasCampaignResults,
+  outcomesImpossible,
   postOutcomes,
 } from "./api.js";
 import {
@@ -107,9 +108,11 @@ export const campaignHref = (useCaseId, runId) =>
  * measured on the Campaign results page (`hasCampaignResults`: 200 yes, 404 no).
  */
 async function measuredOf(runId) {
-  // Plan M M173: the value view first, so a run nothing was recorded for (the usual case) costs no 404s.
+  // Plan M M173: the value view first, so a run no outcomes can exist for (its window is ahead or unknown) costs
+  // no 404s. Its "not measured, no source" alone is not proof: a run with a saved outcome report but no matched
+  // control group answers the same way, so `outcomesImpossible` says when it is.
   const known = await getMeasurementState(runId);
-  if (known && known.status === "not_measured" && known.source === null) return { outcomes: false, campaign: false };
+  if (outcomesImpossible(known)) return { outcomes: false, campaign: false };
   if (known && known.source === "outcome_ingestion") return { outcomes: true, campaign: null };
   // Measured through one of the run's campaigns (Plan J): the campaign's report is the measurement, so the
   // run is measured; its own `campaign-results` file is not what the answer rests on, and asking for it
@@ -163,18 +166,20 @@ export async function loadRunOutcomes(runId) {
     return;
   }
   try {
-    // Plan M M173: ask only for what can exist, so a run with nothing recorded draws its empty page without
-    // a string of 404s. The value view says whether anything was recorded; the run's own record lists the
-    // files it wrote, and `consent_report.json` is written only by a run the consent ledger gated.
+    // Plan M M173: ask only for what can exist, so a run no outcomes can exist for draws its empty page without a
+    // string of 404s (`outcomesImpossible`: the outcome window is ahead or unknown, never a window already past); the
+    // run's own record lists the files it wrote, and `consent_report.json` is written only by a run the
+    // consent ledger gated. The control-group input is written together with the outcome report, so it is
+    // asked for only when the report exists.
     const known = await getMeasurementState(runId);
-    const nothingYet = Boolean(known) && known.status === "not_measured" && known.source === null;
+    const nothingYet = outcomesImpossible(known);
     const listed = state.run && state.run.artefacts;
     const gated = !listed || typeof listed !== "object" || Object.prototype.hasOwnProperty.call(listed, "consent_report.json");
-    const [report, incrementality, consent] = await Promise.all([
+    const [report, consent] = await Promise.all([
       nothingYet ? null : getOutcomes(runId),
-      nothingYet ? null : getIncrementalityInput(runId),
       gated ? getConsentReport(runId) : null,
     ]);
+    const incrementality = report ? await getIncrementalityInput(runId) : null;
     Object.assign(state, { report, incrementality, consent, partsError: null });
   } catch (error) {
     state.partsError = error;

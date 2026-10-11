@@ -421,8 +421,8 @@ export function createModelController(runId, rerender) {
     s.run = detail.run;
     // Plan M M173: `ope_report.json` is written only when someone asks for an estimate, and nothing on the
     // run says whether anyone has, so it is not asked for with the page (a 404 the browser logs as an error
-    // on every visit). It is read when the person opens the card (`bind`) - and it is there, opened, when
-    // they have estimated before.
+    // on every visit). It is read when the person opens the card (`bind`), so a saved estimate shows once the
+    // card is opened; the card is no longer opened by the page for a person who estimated before.
     const art = await artefactsOf(
       runId,
       s.run,
@@ -438,12 +438,22 @@ export function createModelController(runId, rerender) {
         s.ope.open = card.open;
         if (!card.open || s.ope.checked) return;
         s.ope.checked = true;
+        let saved = null;
         try {
-          s.ope.report = await getUpliftArtefact(runId, "ope_report.json");
+          saved = await getUpliftArtefact(runId, "ope_report.json");
         } catch (error) {
-          if (!(error instanceof ApiError)) throw error;
+          // No saved estimate (404) is the usual answer and not an error; anything else (a network failure)
+          // is shown on the card rather than thrown out of an event listener.
+          if (!(error instanceof ApiError)) s.ope.error = error;
         }
-        if (s.ope.report) rerender();
+        // The answer may come after the person has already estimated: their result is newer than the saved one.
+        if (s.ope.report || s.ope.submitting) return;
+        if (saved) {
+          const input = root.querySelector("#u-ope-share"); // keep a share typed while the read was under way
+          if (input && input.value !== undefined) s.ope.topSharePct = input.value;
+          s.ope.report = saved;
+        }
+        if (saved || s.ope.error) rerender();
       });
     }
     const form = root.querySelector("#u-ope");

@@ -66,7 +66,8 @@ export function generalSteps() {
       title: "Help",
       text: "The question mark is always here. Take this tour again, read the glossary, send feedback or see what is new.",
       hash: null,
-      targets: ["#pb-bar .tb-help-btn"],
+      // On a phone the bar's tools are hidden until the Menu is open: point at the Menu button then.
+      targets: ["#pb-bar .tb-help-btn", "[data-tb-menu]"],
       optional: true,
     },
   ];
@@ -195,28 +196,39 @@ function outline(step) {
 function watchTarget(step) {
   clearInterval(finder);
   let waited = 0;
+  let found = false; // an element of this step was outlined at least once: a repaint later does not skip it
   finder = setInterval(() => {
     outline(step);
+    if (outlined) found = true;
     waited += TOUR_TIMING.findEveryMs;
     // An optional step whose elements never appeared (a role that may not open the page, a page that
     // is not there) is skipped, in the direction the person was going.
-    if (step.optional && !outlined && waited >= TOUR_TIMING.skipAfterMs) move(current.dir);
+    if (step.optional && !found && waited >= TOUR_TIMING.skipAfterMs) move(current.dir);
   }, TOUR_TIMING.findEveryMs);
   outline(step);
+  found = Boolean(outlined);
 }
 
 /** How often a step looks for its elements, and how long it waits for them before an optional one is skipped. */
 export const TOUR_TIMING = { findEveryMs: 300, skipAfterMs: 3000 };
 
-/** Go `dir` steps from the current one: past the end finishes, before the start stays on the first. */
+/**
+ * Go `dir` steps from the current one: past the end finishes. Back from the first step (reached when
+ * the step before it was skipped as absent) turns round and goes forward, so it never shows the same
+ * absent step again and again.
+ */
 function move(dir) {
   const { steps, index } = current;
   const next = index + dir;
-  if (next >= steps.length) {
+  if (next >= steps.length || (next < 0 && steps.length < 2)) {
     close();
     return;
   }
-  show(steps, Math.max(next, 0), dir);
+  if (next < 0) {
+    show(steps, index + 1, 1);
+    return;
+  }
+  show(steps, next, dir);
 }
 
 function close() {

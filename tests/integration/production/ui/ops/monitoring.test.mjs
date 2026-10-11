@@ -357,9 +357,13 @@ test("with nothing scheduled: one primary (the open form's Create schedule), no 
 // for draws its empty page without a string of requests that can only answer 404.
 
 const reads = (re) => calls.filter((c) => c.method === "GET" && re.test(c.path));
-const NOTHING = { run_id: ids.run_id, status: "not_measured", source: null, campaign_id: null };
+const inDays = (n) => new Date(Date.now() + n * 86400000).toISOString().slice(0, 10);
+// Not measured, no source, and the outcome window still ahead: ingestion refuses it, so no outcomes can exist.
+const NOTHING = { run_id: ids.run_id, status: "not_measured", source: null, campaign_id: null, results_available_on: inDays(30) };
+// The same answer the value view gives for a run whose outcomes WERE recorded but have no matched control rows.
+const NOT_PRICED = { ...NOTHING, results_available_on: inDays(-30) };
 
-test("the Campaigns list asks neither for outcomes nor for campaign results of a run the value view says nothing was recorded for", async () => {
+test("the Campaigns list asks neither for outcomes nor for campaign results of a run the value view says is still maturing", async () => {
   roi = NOTHING;
   w.location.hash = "#/monitoring/alerts";
   await until(() => heading() === "Alerts", 3000, "another screen");
@@ -412,7 +416,7 @@ test("a run the value view cannot speak for is asked about the old way", async (
   assert.ok(reads(new RegExp(`/runs/${ids.run_id}/campaign-results$`)).length > 0);
 });
 
-test("one run with nothing recorded: the empty page, and no request for outcomes, the control-group input or a consent report it cannot have", async () => {
+test("one run still maturing: the empty page, and no request for outcomes, the control-group input or a consent report it cannot have", async () => {
   roi = NOTHING;
   const record = fixture("run").run;
   assert.ok(!("consent_report.json" in (record.artefacts || {})), "this run was not gated by a consent ledger");
@@ -440,5 +444,55 @@ test("a run whose record lists a consent report asks for it; one the value view 
   await settle(8);
   assert.ok(reads(new RegExp(`/runs/${ids.run_id}/outcomes$`)).length > 0, "outcomes exist: they are asked for");
   runBody = record;
+  roi = null;
+});
+
+test("not measured with no source but a window already past: recorded outcomes are still asked for and shown (no control group)", async () => {
+  // compute_roi answers not_measured/null for a run with a saved outcome report but no matched control rows;
+  // that must not read as "nothing recorded".
+  roi = NOT_PRICED;
+  measured = true; // the fake `GET /runs/{id}/outcomes` now has a report
+  w.location.hash = "#/monitoring/alerts";
+  await until(() => heading() === "Alerts", 3000, "another screen");
+  calls.length = 0;
+  w.location.hash = "#/monitoring/runs";
+  const row = () => $(`tr[data-run="${ids.run_id}"]`);
+  await until(() => row() && row().querySelector("[data-status]"), 3000, "the run and its results");
+  assert.equal(row().querySelector("[data-status]").dataset.status, "measured");
+  assert.equal(row().querySelector(`a[href="#/monitoring/runs/${ids.run_id}"]`).textContent, "View results");
+  assert.ok(reads(new RegExp(`/runs/${ids.run_id}/outcomes$`)).length > 0, "the report was asked for");
+  calls.length = 0;
+  w.location.hash = `#/monitoring/runs/${ids.run_id}`;
+  await until(() => reads(new RegExp(`/runs/${ids.run_id}/outcomes$`)).length > 0, 3000, "the outcomes to be asked for");
+  await settle(8);
+  assert.doesNotMatch(text(), /No outcomes have been added for this run yet\./);
+  measured = false;
+  roi = null;
+});
+
+test("not measured with no source and a window already past, nothing stored: the plain empty page", async () => {
+  roi = NOT_PRICED;
+  measured = false;
+  w.location.hash = "#/monitoring/alerts";
+  await until(() => heading() === "Alerts", 3000, "another screen");
+  calls.length = 0;
+  w.location.hash = `#/monitoring/runs/${ids.run_id}`;
+  await until(() => $("#pb-outcomes"), 3000, "the upload form");
+  assert.match(text(), /No outcomes have been added for this run yet\./);
+  assert.equal(reads(/\/runs\/[^/]+\/incrementality-input$/).length, 0, "no report, so no control-group input is asked for");
+  roi = null;
+});
+
+test("not measured with no source and no outcome window at all (the use case defines no horizon): nothing can exist, nothing is asked for", async () => {
+  // Ingestion refuses a run whose window is unknown (OUTCOME_WINDOW_UNKNOWN), so there is no report to hide.
+  roi = { ...NOTHING, results_available_on: null };
+  w.location.hash = "#/monitoring/alerts";
+  await until(() => heading() === "Alerts", 3000, "another screen");
+  calls.length = 0;
+  w.location.hash = "#/monitoring/runs";
+  const row = () => $(`tr[data-run="${ids.run_id}"]`);
+  await until(() => row() && row().querySelector("[data-status]"), 3000, "the run and its results");
+  assert.equal(row().querySelector("[data-status]").dataset.status, "not_added");
+  assert.equal(reads(/\/runs\/[^/]+\/(outcomes|campaign-results)$/).length, 0);
   roi = null;
 });
