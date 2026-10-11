@@ -40,25 +40,10 @@ CHROMIUM: Final[Path] = Path(os.environ.get("PLAYWRIGHT_BROWSERS_PATH", "/opt/pw
 VIEWPORT: Final[dict[str, int]] = {"width": 1440, "height": 900}
 SETTLE_MS: Final[int] = 1500
 
-KNOWN: Final[dict[str, str]] = {
-    "help menu (campaigns): the first Tab closes the menu, so no entry can be reached by Tab": (
-        "In the campaigns shell, after Enter opens the Help menu, the first Tab closes it and the focus drops (to the "
-        "page or to the next control, 'Minfy, home'): no entry (tour, Glossary, Send feedback, What's new) can be "
-        "reached by the keyboard. The cause is ui/chrome.js:629 (the focusin handler closes every menu that does not "
-        "contain the new focus target, and finds the menu with `.closest('.menu')`) while ui/shell.js:78 (helpHtml) "
-        "wraps the menu in `.sh-help`, so the focus is never seen as inside it. The classic bar does not do this. "
-        "Same fix as the next entry. Found by running this file against the M174 tree."
-    ),
-    "help menu (campaigns): arrow keys do not move through the entries": (
-        "In the campaigns shell the Help menu is wrapped in `.sh-help`, not `.menu`, so the arrow-key handler in "
-        "ui/chrome.js (menuNavigation, which looks for `.menu`) ignores it; Enter opens the menu but neither the "
-        "arrow keys nor Tab reach any entry (see the previous entry). One fix for both: add the class `menu` to the "
-        "`.sh-help` wrapper in ui/shell.js (helpHtml), or let chrome.js:629 and menuNavigation match `.sh-help` too. "
-        "Found by running this file against the M174 tree."
-    ),
-}
-"""Keyboard defects that exist today: `"<page>: <description of the element>": reason`. Only the
-campaigns layout's Help menu (M174 is merged separately; a tree without `ui/layout.js` never runs those cases)."""
+KNOWN: Final[dict[str, str]] = {}
+"""Keyboard defects that exist today: `"<page>: <description of the element>": reason`. None: the campaigns
+layout's Help menu (its wrapper now carries the class `menu`, so focus inside it and the arrow keys are seen) was
+fixed when M174 and this file met on one branch."""
 
 FOCUSABLE: Final[str] = (
     "a[href], button, input:not([type=hidden]), select, textarea, summary, "

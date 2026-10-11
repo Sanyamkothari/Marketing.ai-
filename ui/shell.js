@@ -75,7 +75,7 @@ export function bellHtml(rawCount, on) {
 /** Help (?): the registered "help" entries in a menu, or nothing when no module registered any. */
 export function helpHtml(entries, open) {
   if (!String(entries || "").trim()) return "";
-  return `<div class="sh-help"><button type="button" class="sh-icon" data-menu="${HELP_ID}" aria-expanded="${open}" aria-controls="${HELP_ID}" aria-label="Help" title="Help"><span aria-hidden="true">?</span></button><div class="menu-pop right" id="${HELP_ID}"${
+  return `<div class="menu sh-help"><button type="button" class="sh-icon" data-menu="${HELP_ID}" aria-expanded="${open}" aria-controls="${HELP_ID}" aria-label="Help" title="Help"><span aria-hidden="true">?</span></button><div class="menu-pop right" id="${HELP_ID}"${
     open ? "" : " hidden"
   }>${entries}</div></div>`;
 }
@@ -119,6 +119,7 @@ export const SHELL_CSS = `
 .sh-icon.on{box-shadow:inset 0 -2px 0 var(--brand-blue)}
 .sh-bell .count{position:absolute;top:-2px;right:-4px;min-width:18px;height:18px;padding:0 5px;font-size:11px}
 .sh-help{position:relative}
+.sh-help .menu-pop a:focus-visible,.sh-help .menu-pop button:focus-visible{outline:2px solid var(--brand-blue);outline-offset:-2px}
 .sh-menu-btn{display:none}
 .sh-side{position:fixed;top:57px;left:0;bottom:0;z-index:40;width:216px;padding:16px 12px;overflow-y:auto;background:var(--surface);border-right:1px solid var(--line)}
 .sh-side>ul{display:flex;flex-direction:column;gap:4px;margin:0;padding:0;list-style:none}
