@@ -8,16 +8,19 @@ in Chromium, against the real app in the `campaigns` layout on the validated Hil
 * **Task 1, "Plan a win-back campaign and download who to contact".** The task card says "win them back", and on the
   demo store (default industry) the wizard's card for that is "Win back lapsed customers", a goal with no model and no
   prepared file yet: the participant's path is a FIRST campaign, so that is the pinned walk. Overview, "+ New campaign",
-  the goal, the prepared customer file, then the wizard's own decisions (Approve, approve the new model, Continue,
-  Approve, Download), to the downloaded contact list. The Plan M §0 measure is "Clicks from Home to a downloaded contact
-  list (file already prepared): at most 5, inside one wizard". The reading used here is the strict one: every mouse
-  click from the Overview to the download counts, and choosing the file on disk is not a click (it is the "file already
-  prepared" the measure allows for) but is recorded beside the clicks as a file choice so nobody mistakes it for free.
-  The model search is capped on a copy of the configs, as `test_campaign_wizard_journey.py` does. A secondary walk, a
-  LATER campaign (the goal already has an approved model: "Choose the best e-mail for each customer" on the demo
-  store), has no learning and no model to approve, and is pinned as such. In both, the test plan is checked through
-  the API to be registered and frozen before the download is clicked, and the download is checked to be the contact
-  list the API serves for the very run the button points at, byte for byte.
+  the goal, the prepared customer file, then the wizard's own decisions (Guided setup's Approve, then on the Review
+  screen, which shows Audience too, the one button "Approve the new model and this plan, then download"), to the
+  downloaded contact list. The Plan M §0 measure is "Clicks from Home to a downloaded contact list (file already
+  prepared): at most 5, inside one wizard". The reading used here is the strict one: every mouse click from the
+  Overview to the download counts, and choosing the file on disk is not a click (it is the "file already prepared" the
+  measure allows for) but is recorded beside the clicks as a file choice so nobody mistakes it for free. The model
+  search is capped on a copy of the configs, as `test_campaign_wizard_journey.py` does. A secondary walk, a LATER
+  campaign (the goal already has an approved model: "Choose the best e-mail for each customer" on the demo store), has
+  no learning and no model to approve: its last click is "Approve and download". In both, the test plan is checked
+  through the API to be absent before the last click and registered and frozen AT THE MOMENT the browser asks for the
+  file (the page reads the server at the moment it starts the download), the new model (first campaign) to be
+  approved before the plan, and the download is checked to be the contact list the API serves for the campaign's run,
+  byte for byte, and the same file "Download again" on the Send step points at.
 
 * **Task 2, "Show what last month's campaign earned".** From the Overview, the shortest real path to a measured
   campaign's earned value AND how sure the product is (the evidence label): the sidebar's Reports (one click: the
@@ -27,10 +30,10 @@ in Chromium, against the real app in the `campaigns` layout on the validated Hil
   total, not one campaign's figure, so it is compared with `GET /overview` and is not counted as an answer to the task.
 
 Each count is what the screens take TODAY. A change that adds a click fails here; one that removes a click updates the
-pin and the kit (`docs/ux/USABILITY_TEST.md` section 12). Task 1 does not meet Plan M §0's target of 5, so that
-target is asserted in a test marked `xfail(strict=True)`: it turns into a failure the day the gap is closed, and the
-default-layout switch-over (M181) waits for it. Neither task replaces a person: the sessions decide whether people find
-the path, these tests prove the path exists and how long it is.
+pin and the kit (`docs/ux/USABILITY_TEST.md` section 12). Task 1 met Plan M §0's target of 5 with M181 part C
+(DEC-1611: Audience and Review on one screen, "Approve and download", and the new model approved in the same click),
+so the target is asserted directly, for the first and the later campaign alike. Neither task replaces a person: the
+sessions decide whether people find the path, these tests prove the path exists and how long it is.
 
 Skips without playwright or a usable Chromium, like the other browser journeys. The seed trains two small models
 (about two minutes); `USABILITY_STORE` names a store that is already seeded (the `data` folder `scripts.seed_validated`
@@ -55,6 +58,7 @@ from typing import Any, Final
 import pytest
 import yaml
 
+from tests.fixtures import last_click
 from tests.fixtures.make_data import CLEAN, GenerationSpec, write_csv
 from tests.integration.test_acceptance import HOST, TEST_BUDGET, free_port, wait_for_health
 
@@ -85,28 +89,27 @@ TASK1_CLICKS: Final[tuple[str, ...]] = (
     "overview: + New campaign",
     "wizard goal: the goal card",
     "customers: Approve (Guided setup)",
-    "learned: Approve the new model",
-    "audience: Continue",
-    "review: Approve",
-    "send: Download contact list",
+    "review: Approve the new model and this plan, then download",
 )
 """Every click from the Overview to the downloaded file, in order, for a goal's first campaign (the file is chosen
-between the 2nd and the 3rd)."""
-TASK1_CLICKS_PINNED: Final[int] = 7
+between the 2nd and the 3rd). Before M181 part C it was 7: the new model's own "Approve and continue", Audience's
+"Continue", Review's "Approve" and Send's "Download" are now the one last click."""
+TASK1_CLICKS_PINNED: Final[int] = 4
 TASK1_FILE_CHOICES_PINNED: Final[int] = 1
-TASK1_WIZARD_DECISIONS_PINNED: Final[int] = 5
+TASK1_WIZARD_DECISIONS_PINNED: Final[int] = 2
 """M177's own measure (`test_campaign_wizard_journey.py` DECISIONS_PINNED): the decisions after the goal and the file
-are chosen, which for a first campaign includes approving the new model."""
+are chosen, which for a first campaign includes approving the new model (in the last click)."""
+TASK1_LAST_BUTTON: Final[str] = "Approve the new model and this plan, then download"
 LATER_CAMPAIGN_CLICKS: Final[tuple[str, ...]] = (
     "overview: + New campaign",
     "wizard goal: the goal card",
     "customers: Approve (Guided setup)",
-    "audience: Continue",
-    "review: Approve",
-    "send: Download contact list",
+    "review: Approve and download",
 )
-LATER_CAMPAIGN_CLICKS_PINNED: Final[int] = 6
-"""A goal that already has an approved model: no learning, so no model to approve."""
+LATER_CAMPAIGN_CLICKS_PINNED: Final[int] = 4
+"""A goal that already has an approved model: no learning, so no model to approve; the last click is the same one,
+worded without the model."""
+LATER_LAST_BUTTON: Final[str] = "Approve and download"
 
 TASK2_REPORTS_CLICKS: Final[tuple[str, ...]] = ("sidebar: Reports",)
 TASK2_CAMPAIGN_CLICKS: Final[tuple[str, ...]] = (
@@ -277,6 +280,7 @@ class Task1:
     served: bytes
     wizard_decisions: int
     problems: list[str]
+    proof: DownloadProof
 
 
 @pytest.fixture(scope="module")
@@ -305,25 +309,73 @@ def win_back_customers(workdir: Path, capped_configs: Path) -> Path:
     return write_csv(spec, workdir / "win_back_customers.csv")
 
 
-def _download_and_check(
-    base: str, page: Any, walk: Walk, label: str, saved_to: Path, *, campaign_id: str
-) -> tuple[bytes, bytes, str]:
-    """On the Send step: the plan is frozen BEFORE the download is clicked; then download, and fetch the very run's list."""
-    plans = _get(base, f"/campaigns/{campaign_id}/plan")
+@dataclass
+class DownloadProof:
+    """What the server said while the last click's calls were made, in the order the page made them."""
+
+    before_click: dict[str, Any]
+    """`GET /campaigns/{id}/plan` just before the last click: a Draft has no plan."""
+    at_download: list[dict[str, Any]] = field(default_factory=list)
+    """`GET /campaigns/{id}/plan` and `GET /campaigns/{id}`, read the moment the page started the download."""
+    order: list[str] = field(default_factory=list)
+    """The last click's calls as the page made them: approve (first campaign), plan, the file."""
+    download_url: str = ""
+    again_href: str = ""
+    """The "Download again" link the Send step shows after the download."""
+
+
+def approve_and_download(
+    base: str, page: Any, walk: Walk, label: str, button: str, saved_to: Path, *, campaign_id: str
+) -> tuple[bytes, bytes, str, DownloadProof]:
+    """The Review screen's last click (M181 part C): the plan is registered and frozen before the file is asked for.
+
+    The page records its own calls in order and reads the server the moment it starts the download
+    (`tests/fixtures/last_click.py`): the plan must already be there, frozen, with nothing measured, so a download started
+    before the plan's answer, or a plan registered before the new model's approval, fails. A download started any
+    other way than the watched one is not seen, and fails the check that the file was asked for once.
+    """
+    proof = DownloadProof(before_click=_get(base, f"/campaigns/{campaign_id}/plan"))
+    last = page.locator("[data-cw-approve]")
+    last.wait_for(state="visible", timeout=PAGE_TIMEOUT_MS)
+    assert last.inner_text() == button, last.inner_text()
+    last_click.install(page, campaign_id)
+    with page.expect_download(timeout=PAGE_TIMEOUT_MS) as caught:
+        walk.click(label, "[data-cw-approve]")
+    download = caught.value
+    download.save_as(saved_to)
+    proof.download_url = download.url
+    page.locator('[data-cw-download="again"]').wait_for(timeout=PAGE_TIMEOUT_MS)
+    proof.again_href = page.locator('[data-cw-download="again"]').get_attribute("href") or ""
+    watched = last_click.recorded(page)
+    proof.order = list(watched["order"])
+    proof.at_download = list(watched["atDownload"])
     view = _get(base, f"/campaigns/{campaign_id}")
+    run_ids = [str(run) for run in view["campaign"]["run_ids"]]
+    assert len(run_ids) == 1, run_ids
+    return saved_to.read_bytes(), _get(base, f"/runs/{run_ids[0]}/treat_list.csv"), run_ids[0], proof
+
+
+def assert_plan_frozen_before_the_file(task: Task1, *, approves_model: bool) -> None:
+    """The checks M181 part B made on the Send step, now made at the moment the browser asks for the file."""
+    proof = task.proof
+    assert (
+        proof.before_click["plan"] is None and proof.before_click["versions"] == []
+    ), "a Draft has no plan yet"
+    assert len(proof.at_download) == 1, ("the file was asked for once", proof.order)
+    assert (
+        proof.at_download[0]["href"] == proof.download_url
+    ), "the watched download is the one the browser saved"
+    plans, view = proof.at_download[0]["plans"], proof.at_download[0]["view"]
     assert (
         plans["plan"] is not None and len(plans["versions"]) == 1
     ), "the test plan was registered and frozen"
     assert plans["plan"]["plan_hash"] == view["campaign"]["test_plan_hash"]
     assert view["report"] is None, "nothing has been measured: the plan was fixed in advance"
-    run_ids = [str(run) for run in view["campaign"]["run_ids"]]
-    assert len(run_ids) == 1, run_ids
-    href = page.locator("[data-cw-download]").get_attribute("href") or ""
-    assert f"/runs/{run_ids[0]}/treat_list.csv" in href, (href, run_ids)
-    with page.expect_download(timeout=PAGE_TIMEOUT_MS) as caught:
-        walk.click(label, "[data-cw-download]")
-    caught.value.save_as(saved_to)
-    return saved_to.read_bytes(), _get(base, f"/runs/{run_ids[0]}/treat_list.csv"), run_ids[0]
+    first = ["approve the model: asked", "approve the model: 200"] if approves_model else []
+    assert proof.order == [*first, "plan: asked", "plan: 201", "file: asked"], proof.order
+    wanted = f"/runs/{task.run_id}/treat_list.csv"
+    assert proof.download_url.endswith(wanted), (proof.download_url, wanted)
+    assert proof.again_href.endswith(wanted), ("Download again is the same file", proof.again_href)
 
 
 @pytest.fixture(scope="module")
@@ -351,22 +403,25 @@ def task1(
             walk.choose_file("the prepared customer file", "#ag-file", win_back_customers)
             page.locator("#ag-approve:not([disabled])").wait_for(timeout=180_000)
             walk.click(TASK1_CLICKS[2], "#ag-approve")
-            walk.click(TASK1_CLICKS[3], "[data-cw-approve-model]", timeout=WAIT_MS)
-            page.locator("[data-cw-next]").wait_for(timeout=WAIT_MS)  # the list is built; Audience
-            walk.click(TASK1_CLICKS[4], "[data-cw-next]")
-            walk.click(TASK1_CLICKS[5], "[data-cw-approve]")
-            page.locator("[data-cw-download]").wait_for(timeout=PAGE_TIMEOUT_MS)
+            # The model learns, then the list is built with it; Audience and Review on one screen
+            page.locator("[data-cw-review] [data-cw-approve]").wait_for(timeout=WAIT_MS)
+            assert page.locator("[data-cw-audience]").count() == 1, "Audience is on the Review screen"
             campaign_id = str(page.evaluate("location.hash")).rsplit("/", 1)[-1]
-            saved_to = workdir / "task1_contact_list.csv"
-            saved, served, run_id = _download_and_check(
-                base, page, walk, TASK1_CLICKS[6], saved_to, campaign_id=campaign_id
+            saved, served, run_id, proof = approve_and_download(
+                base,
+                page,
+                walk,
+                TASK1_CLICKS[3],
+                TASK1_LAST_BUTTON,
+                workdir / "task1_contact_list.csv",
+                campaign_id=campaign_id,
             )
             page.screenshot(path=str(workdir / "task1_last.png"), full_page=True)
         finally:
             browser.close()
     # M177's own measure: the decisions after the goal and the file were chosen
     wizard_decisions = len(walk.clicks) - 2
-    return Task1(walk, campaign_id, run_id, saved, served, wizard_decisions, problems)
+    return Task1(walk, campaign_id, run_id, saved, served, wizard_decisions, problems, proof)
 
 
 @pytest.fixture(scope="module")
@@ -383,22 +438,21 @@ def task1_later(pristine_store: Path, workdir: Path, playwright_driver: Any) -> 
             walk.choose_file("the prepared customer file", "#ag-file", CUSTOMER_FILE)
             page.locator("#ag-approve:not([disabled])").wait_for(timeout=180_000)
             walk.click(LATER_CAMPAIGN_CLICKS[2], "#ag-approve")
-            page.locator("[data-cw-next]").wait_for(timeout=300_000)  # the list is built; Audience
-            walk.click(LATER_CAMPAIGN_CLICKS[3], "[data-cw-next]")
-            walk.click(LATER_CAMPAIGN_CLICKS[4], "[data-cw-approve]")
-            page.locator("[data-cw-download]").wait_for(timeout=PAGE_TIMEOUT_MS)
+            # the list is built; Audience and Review on one screen
+            page.locator("[data-cw-review] [data-cw-approve]").wait_for(timeout=300_000)
             campaign_id = str(page.evaluate("location.hash")).rsplit("/", 1)[-1]
-            saved, served, run_id = _download_and_check(
+            saved, served, run_id, proof = approve_and_download(
                 base,
                 page,
                 walk,
-                LATER_CAMPAIGN_CLICKS[5],
+                LATER_CAMPAIGN_CLICKS[3],
+                LATER_LAST_BUTTON,
                 workdir / "task1_later_contact_list.csv",
                 campaign_id=campaign_id,
             )
         finally:
             browser.close()
-    return Task1(walk, campaign_id, run_id, saved, served, len(walk.clicks) - 2, problems)
+    return Task1(walk, campaign_id, run_id, saved, served, len(walk.clicks) - 2, problems, proof)
 
 
 # --- Task 1 ------------------------------------------------------------------------------------------------
@@ -427,28 +481,30 @@ def test_task_1_the_download_is_the_campaigns_contact_list(task1: Task1) -> None
     assert rows, "the contact list holds customers"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "Plan M section 0 targets at most 5 clicks from Home to a downloaded contact list (file already prepared); "
-        "the screens take 7 from the Overview for a goal's first campaign (+ New campaign, the goal, Approve, "
-        "Approve the new model, Continue, Approve, Download) and 6 for a later one. The gap blocks the switch of "
-        "the default layout to campaigns (M181)."
-    ),
-)
-def test_task_1_meets_plan_ms_target_of_five_clicks(task1: Task1) -> None:
+def test_task_1_approves_the_new_model_then_freezes_the_plan_before_the_file_is_served(task1: Task1) -> None:
+    """The one last click of a first campaign: the model's approval, then the plan, then the file, in that order;
+    the plan is registered and frozen at the moment the browser asks for the file."""
+    assert_plan_frozen_before_the_file(task1, approves_model=True)
+
+
+def test_task_1_meets_plan_ms_target_of_five_clicks(task1: Task1, task1_later: Task1) -> None:
+    """Plan M section 0: at most 5 clicks from Home to a downloaded contact list (file already prepared), for the
+    first campaign of a goal and for a later one (M181 part C closed the gap: it was 7 and 6)."""
     assert len(task1.walk.clicks) <= TASK1_TARGET, task1.walk.clicks
+    assert len(task1_later.walk.clicks) <= TASK1_TARGET, task1_later.walk.clicks
 
 
-def test_task_1_for_a_later_campaign_is_one_click_shorter_and_ends_in_the_same_list(
+def test_task_1_for_a_later_campaign_takes_as_many_clicks_and_ends_in_the_same_list(
     task1_later: Task1,
 ) -> None:
-    """Secondary pin: a goal that already has an approved model needs no approval of a new one."""
+    """Secondary pin: a goal that already has an approved model needs no approval of a new one; its last click is
+    "Approve and download", so it takes as many clicks as a first campaign."""
     walk = task1_later.walk
     assert tuple(walk.clicks) == LATER_CAMPAIGN_CLICKS, walk.clicks
-    assert len(walk.clicks) == LATER_CAMPAIGN_CLICKS_PINNED == TASK1_CLICKS_PINNED - 1, walk.clicks
+    assert len(walk.clicks) == LATER_CAMPAIGN_CLICKS_PINNED == TASK1_CLICKS_PINNED, walk.clicks
     assert len(walk.file_choices) == TASK1_FILE_CHOICES_PINNED
     assert task1_later.saved and task1_later.saved == task1_later.served
+    assert_plan_frozen_before_the_file(task1_later, approves_model=False)
     assert task1_later.problems == [], task1_later.problems
 
 

@@ -238,7 +238,7 @@ the plan it says so, and the product owner can change it before the first sessio
 | # | Rule | Source |
 |---|---|---|
 | R1 | **At least 4 of the 5 participants succeed at Task 1, and at least 4 of 5 at Task 2**, unaided and inside the time limit. "Success with difficulty" counts. | Plan M §0, last row |
-| R2 | **Task 1: the shortest path to a saved contact list is at most 5 clicks** (pinned by the automated journey), **and the median participant who succeeded needed at most 7** (the shortest path plus two for ordinary exploring). | Plan M §0, "at most 5 clicks"; the allowance of two is this kit's, not the plan's |
+| R2 | **Task 1: the shortest path to a saved contact list is at most 5 clicks** (pinned by the automated journey: **4** today, section 12), **and the median participant who succeeded needed at most the pinned shortest path plus two: 6 clicks** (two for ordinary exploring). If the pin in section 12 changes, this limit moves with it and is never above 7. | Plan M §0, "at most 5 clicks"; the allowance of two is this kit's, not the plan's |
 | R3 | **Nobody was told which button to press.** Any session in which the facilitator helped counts that task as a fail. | Plan M §0 ("no help") |
 | R4 | **No word confused two or more participants without an action to change it.** Every word on the confusion list (section 7.1) that two people named is either changed or explained in the results, with an owner. | Plan M §0 (engine words), §4 |
 | R5 | **The average ease rating (section 9.1) is at least 5.5 out of 7 for each task.** Lower is not a veto; it creates an action list. 5.5 is a commonly used benchmark for this question and is this kit's choice. | This kit |
@@ -331,26 +331,29 @@ from the file and the new model is approved too. That is the walk the test makes
 | 2 | The goal ("Win back lapsed customers") | New campaign, step 1 |
 | | *(choose the prepared customer file: one file choice, not a click)* | step 2, Customers |
 | 3 | Approve | step 2, Guided setup |
-| 4 | Approve the new model | step 2, what was learned |
-| 5 | Continue | step 3, Audience (once the list is built) |
-| 6 | Approve | step 4, Review (this fixes the test plan) |
-| 7 | Download contact list | step 5, Send |
+| 4 | Approve the new model and this plan, then download | steps 3 and 4, Audience and Review on one screen (once the list is built); the campaign then shows as Live on step 5, Send |
 
-- **Pinned: 7 clicks and 1 file choice, from the Overview** (a goal's first campaign). A **later** campaign, for a goal
+- **Pinned: 4 clicks and 1 file choice, from the Overview** (a goal's first campaign). A **later** campaign, for a goal
   that already has an approved model ("Choose the best e-mail for each customer" on the demo store), has no model to
-  approve: **6 clicks**. It is pinned by the same file as a secondary walk and is not the task as the card words it.
-- Inside the wizard, M177's own measure (decisions after the goal and the file are chosen) is **5** for a first campaign,
+  approve; its last button reads **"Approve and download"**: also **4 clicks**. It is pinned by the same file as a
+  secondary walk and is not the task as the card words it.
+- Inside the wizard, M177's own measure (decisions after the goal and the file are chosen) is **2** for a first campaign,
   within 5.
-- The test plan is checked through the API to be registered and frozen *before* the download is clicked (one version,
-  its hash equal to the campaign's, nothing measured yet). The file downloaded is checked to be the contact list the API
-  serves for the very run the Download button points at, byte for byte.
-- **Plan M section 0 target: at most 5 clicks. Not met from the Overview: 7** (6 for a later campaign). The test of the
-  target (`test_task_1_meets_plan_ms_target_of_five_clicks`) is marked `xfail(strict=True)`, so it fails loudly on the day
-  the count drops to 5 and the marker has to come off. The gap is recorded for the default-layout decision (section 8).
-  The smallest changes that would close it are for the product owner to decide, not this kit: for example Audience and
-  Review on one screen (Continue goes), and the new model approved in the same click as Guided setup.
-- The observer's sheet (section 7.4): write the seven rows above in as the reference path for Task 1, for the comparison
-  with what the participant actually clicked.
+- The last click does, in order and each only after the one before it worked: approve the new model (first campaign
+  only, and only for a person with the Approver role; anyone else waits on step 2 with the way to Waiting for approval,
+  as before), register the test plan, then download the contact list. The test checks, through the API, that no plan
+  exists before that click and that the plan is registered and frozen (one version, its hash equal to the campaign's,
+  nothing measured yet) at the moment the page starts the download: the page records its own calls in order and reads
+  the server then, before the browser asks for the file (`tests/fixtures/last_click.py`). The file downloaded is checked to be the contact list the API serves for the campaign's run,
+  byte for byte, and the Send step's "Download again" link points at the same file.
+- **Plan M section 0 target: at most 5 clicks. Met from the Overview: 4** (4 for a later campaign too), asserted by
+  `test_task_1_meets_plan_ms_target_of_five_clicks`. It was 7 (6 for a later campaign) until M181 part C (DEC-1611)
+  put Audience and Review on one screen (Continue went), made Review's button "Approve and download" (Send's Download
+  went), and moved the new model's approval into that same click (its separate button went). The step indicator still
+  shows the five named steps.
+- The observer's sheet (section 7.4): write the four rows above in as the reference path for Task 1, for the comparison
+  with what the participant actually clicked. Section 8's R2 allows the median participant the pinned path plus two:
+  6 clicks.
 
 ### Task 2: Overview to a campaign's proven value
 

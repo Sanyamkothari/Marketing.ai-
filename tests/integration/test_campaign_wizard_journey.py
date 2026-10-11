@@ -5,14 +5,17 @@ decisions once the file is chosen. This module starts the real app under uvicorn
 of `test_acceptance.py`, with its one-minute model search, the only change to the product's defaults), opens
 `#/campaigns/new` in Chromium - the address "+ New campaign" opens - and walks it as a marketer would:
 
-    Goal -> choose the file -> [1] Approve (Guided setup) -> [2] Approve and continue (what was learned)
-         -> [3] Continue (Audience) -> [4] Approve (Review) -> [5] Download contact list
+    Goal -> choose the file -> [1] Approve (Guided setup)
+         -> [2] Approve the new model and this plan, then download (Audience and Review, one screen)
 
 It is a goal's first campaign, so the wizard learns from the file and then builds the list from the same
 customers; a new model waits for an approval by default (`governance.approval_required`), and the person here
-holds every role (sign-in is off), so the approval is one of the five. The test plan is checked through the API
-to be registered and frozen before the download is clicked, and the file downloaded is the contact list the API
-serves for the campaign's list, byte for byte. Nothing in the engine is new: every call is an existing route.
+holds every role (sign-in is off), so the list is built with the new model and the last decision approves it too
+(M181 part C, DEC-1611: before it, the journey took five decisions - a separate approval of the model, Continue,
+Approve and Download). The test plan is checked through the API to be absent before the last click and registered
+and frozen at the moment the page starts the download (`tests/fixtures/last_click.py` reads the server then), the model to
+be approved before the plan, and the file downloaded is the contact list the API serves for the campaign's list,
+byte for byte. Nothing in the engine is new: every call is an existing route.
 
 Skips without playwright or a usable Chromium, like the other browser journeys.
 """
@@ -33,6 +36,7 @@ from typing import Any, Final
 import pytest
 import yaml
 
+from tests.fixtures import last_click
 from tests.fixtures.make_data import CLEAN, GenerationSpec, write_csv
 from tests.integration.test_acceptance import HOST, TEST_BUDGET, free_port, wait_for_health
 
@@ -49,8 +53,9 @@ ROWS: Final[int] = 4000
 SEED: Final[int] = 20_261_011
 MAX_DECISIONS: Final[int] = 5
 """Plan M §0: "Clicks from Home to a downloaded contact list (file already prepared): <= 5, inside one wizard"."""
-DECISIONS_PINNED: Final[int] = 5
-"""What the journey takes today. A change that adds a decision fails here; one that removes one updates the pin."""
+DECISIONS_PINNED: Final[int] = 2
+"""What the journey takes today (5 before M181 part C). A change that adds a decision fails here; one that removes one
+updates the pin."""
 WAIT_MS: Final[int] = 900_000
 """Learning runs a one-minute model search plus preparing, evaluating and explaining; building the list follows."""
 
@@ -123,7 +128,7 @@ def _get(base: str, path: str) -> Any:
     return json.loads(body) if body[:1] in (b"{", b"[") else body
 
 
-def test_new_campaign_to_a_downloaded_contact_list_in_five_decisions(
+def test_new_campaign_to_a_downloaded_contact_list_within_five_decisions(
     server: str, customers: Path, workdir: Path
 ) -> None:
     with sync_api.sync_playwright() as playwright:
@@ -156,35 +161,51 @@ def test_new_campaign_to_a_downloaded_contact_list_in_five_decisions(
             page.locator("#ag-approve:not([disabled])").wait_for(timeout=180_000)
 
             decide("#ag-approve")  # 1
-            decide("[data-cw-approve-model]", timeout=WAIT_MS)  # 2: what was learned waits for an Approver
-            page.locator("[data-cw-next]").wait_for(timeout=WAIT_MS)  # Audience, once the list is built
+            # The model learns and the list is built with it; Audience and Review on one screen.
+            page.locator("[data-cw-review] [data-cw-approve]").wait_for(timeout=WAIT_MS)
             size = page.locator("[data-cw-test-size]").inner_text()
             assert re.fullmatch(r"Enough to see a \d+\.\d-point change\.", size), size
-            decide("[data-cw-next]")  # 3
-            decide("[data-cw-approve]")  # 4: Review
-            page.locator("[data-cw-download]").wait_for(timeout=60_000)
+            assert page.locator("[data-cw-approve]").inner_text() == (
+                "Approve the new model and this plan, then download"
+            ), "the one button says it approves the new model"
 
             campaign_id = page.evaluate("location.hash").rsplit("/", 1)[-1]
-            # The test plan is registered and frozen BEFORE the download is offered (and clicked).
-            plans = _get(server, f"/campaigns/{campaign_id}/plan")
-            view = _get(server, f"/campaigns/{campaign_id}")
-            assert plans["plan"] is not None and len(plans["versions"]) == 1
-            assert plans["plan"]["plan_hash"] == view["campaign"]["test_plan_hash"]
-            assert view["report"] is None, "nothing has been measured: the plan was fixed in advance"
-            assert plans["plan"]["n_holdout"] > 0, "a comparison group is held back"
-
+            before = _get(server, f"/campaigns/{campaign_id}/plan")
+            assert before["plan"] is None, "nothing is fixed before the last decision"
+            # The page records its calls in order and reads the server the moment it starts the download.
+            last_click.install(page, campaign_id)
             with page.expect_download(timeout=60_000) as caught:
-                decide("[data-cw-download]")  # 5
+                decide("[data-cw-approve]")  # 2: the new model, the plan, then the download
             download = caught.value
             saved = workdir / "contact_list.csv"
             download.save_as(saved)
+            page.locator('[data-cw-download="again"]').wait_for(
+                timeout=60_000
+            )  # Send: Live, "Download again"
+            watched = last_click.recorded(page)
         finally:
             page.screenshot(path=str(workdir / "wizard_last.png"), full_page=True)
             browser.close()
 
     assert len(decisions) <= MAX_DECISIONS, decisions
     assert len(decisions) == DECISIONS_PINNED, decisions
+    # The test plan was registered and frozen BEFORE the file was served, after the new model's approval.
+    assert watched["order"] == [
+        "approve the model: asked",
+        "approve the model: 200",
+        "plan: asked",
+        "plan: 201",
+        "file: asked",
+    ], watched["order"]
+    assert len(watched["atDownload"]) == 1, watched["atDownload"]
+    assert watched["atDownload"][0]["href"] == download.url
+    plans, view = watched["atDownload"][0]["plans"], watched["atDownload"][0]["view"]
+    assert plans["plan"] is not None and len(plans["versions"]) == 1
+    assert plans["plan"]["plan_hash"] == view["campaign"]["test_plan_hash"]
+    assert view["report"] is None, "nothing has been measured: the plan was fixed in advance"
+    assert plans["plan"]["n_holdout"] > 0, "a comparison group is held back"
     run_id = view["campaign"]["run_ids"][0]
+    assert download.url.endswith(f"/runs/{run_id}/treat_list.csv"), download.url
     served = _get(server, f"/runs/{run_id}/treat_list.csv")
     assert saved.read_bytes() == served, "the file downloaded is the campaign's contact list"
     assert errors == [], errors
