@@ -65,15 +65,23 @@ export function shortName(name) {
   return first.length > 40 ? `${first.slice(0, 39).trimEnd()}…` : first;
 }
 
+// The four chips of the one status rule (Plan M DEC-1606 (b)), worded as the Campaigns pages word them
+// (ui/modules/campaigns/status.js STATUS). Only campaigns not yet measured are listed here.
 const STATUS = {
+  draft: ["Draft", "neutral"],
   live: ["Live", "ok"],
   waiting_for_results: ["Waiting for results", "warn"],
+  measured: ["Measured", "ok"],
 };
 
 /** The sentence for a campaign's next step, from the server's code and date. */
 export function nextStepText(campaign) {
   const day = campaign.results_date ? fmtDay(campaign.results_date) : "";
+  // A Draft's next step is the Campaigns page's: how the result will be judged is not fixed yet (DEC-1606 (b)).
+  if (campaign.status === "draft") return "Fix how the result will be judged, then download the contact list";
   switch (campaign.next_step) {
+    case "read":
+      return "See its result";
     case "wait":
       return day ? `Add its results after ${day}` : "Add its results when they are due";
     case "add_results":

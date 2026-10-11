@@ -7,7 +7,8 @@ tests keep the recording from drifting from the code, and pin the rules that nee
 
 * the headline prefers the rupee total, else the summary's first, else none;
 * cards and live campaigns are capped, and the totals say how many there are;
-* a campaign's status and next step follow its plan's analysis date and whether outcomes are in.
+* a campaign's status and next step follow the one status rule (Plan M DEC-1606 (b)): its results date (the plan's
+  analysis date, else the end of the outcome window) and whether a plan, outcomes or a report are in.
 """
 
 from __future__ import annotations
@@ -136,12 +137,20 @@ def test_status_and_next_step_follow_the_plan_date_and_the_outcomes(recorded: di
         "c_20261011_00000002": _plan(recorded, today),
         "c_20261011_00000003": _plan(recorded, today - timedelta(days=5)),
         "c_20261011_00000004": None,
+        "c_20261011_00000005": None,
     }
+    # Plan M DEC-1606 (b): with no plan, the results date is the end of the outcome window (the recorded campaign's
+    # window is 0 days, so it is the day it went out: today); our own campaign with no plan and nothing in before
+    # that date is a Draft.
+    draft = _live(recorded, 5).model_copy(
+        update={"outcome_window_days": 30, "test_plan_hash": None, "measured_at": None}
+    )
     campaigns = (
         _live(recorded, 1),
         _live(recorded, 2),
         _live(recorded, 3, outcomes=True),
         _live(recorded, 4),
+        draft,
     )
     built = build_overview(
         summary=None, campaigns=campaigns, plan_of=lambda cid: plans.get(cid), connected=False, now=NOW
@@ -151,7 +160,8 @@ def test_status_and_next_step_follow_the_plan_date_and_the_outcomes(recorded: di
         ("live", "wait", today + timedelta(days=1)),
         ("waiting_for_results", "add_results", today),
         ("waiting_for_results", "measure", today - timedelta(days=5)),
-        ("live", "plan", None),
+        ("waiting_for_results", "add_results", today),
+        ("draft", "plan", today + timedelta(days=30)),
     ]
 
 
@@ -213,4 +223,7 @@ def test_campaign_state_is_the_one_public_rule(recorded: dict[str, Any]) -> None
         "add_results",
         today,
     )
-    assert campaign_state(_live(recorded, 1), None, today) == ("live", "plan", None)
+    no_window = _live(recorded, 1).model_copy(update={"outcome_window_days": None})
+    assert campaign_state(no_window, None, today) == ("live", "plan", None), "a plan once fixed: not a Draft"
+    measured = Campaign.model_validate(recorded["GET /campaigns"]["body"]["campaigns"][0])
+    assert campaign_state(measured, None, today) == ("measured", "read", today)

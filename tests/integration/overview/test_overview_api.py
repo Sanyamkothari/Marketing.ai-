@@ -156,8 +156,20 @@ def test_the_live_campaigns_are_the_unmeasured_ones_with_a_status_and_a_next_ste
         for c in ok(client.get("/campaigns"))["campaigns"]
         if c["campaign_id"] != ids["measured"]
     ], "newest first, as the campaign list"
-    assert (by_id[ids["no_plan"]]["status"], by_id[ids["no_plan"]]["next_step"]) == ("live", "plan")
-    assert by_id[ids["no_plan"]]["results_date"] is None
+    # Plan M DEC-1606 (b), the one rule shared with the Campaigns pages: with no plan, the results date is the end of
+    # the outcome window; before it, our own campaign with nothing in is a Draft, on or after it, Waiting for results.
+    record = ok(client.get(f"/campaigns/{ids['no_plan']}"))["campaign"]
+    window_ends = (
+        datetime.fromisoformat(record["treatment_start"]).astimezone(UTC)
+        + timedelta(days=record["outcome_window_days"])
+    ).date()
+    assert by_id[ids["no_plan"]]["results_date"] == window_ends.isoformat()
+    expected = (
+        ("waiting_for_results", "add_results")
+        if window_ends <= datetime.now(UTC).date()
+        else ("draft", "plan")
+    )
+    assert (by_id[ids["no_plan"]]["status"], by_id[ids["no_plan"]]["next_step"]) == expected
     assert (by_id[ids["in_a_while"]]["status"], by_id[ids["in_a_while"]]["next_step"]) == ("live", "wait")
     assert (
         by_id[ids["in_a_while"]]["results_date"]

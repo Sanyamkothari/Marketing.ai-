@@ -113,7 +113,8 @@ const busy = () => ({
     row(2, { status: "waiting_for_results", next_step: "add_results" }),
     row(3, { status: "waiting_for_results", next_step: "measure" }),
     row(4, { next_step: "plan", results_date: null }),
-    row(5),
+    // Plan M DEC-1606 (b): the one status rule's Draft (our own campaign, no plan, nothing in, before its date)
+    row(5, { status: "draft", next_step: "plan", results_date: "2026-11-10" }),
   ],
   campaigns_total: 7,
   checklist: { connected: true, campaign: true, results: false },
@@ -235,6 +236,7 @@ test("a busy day: five cards with one action each, five live rows, and how many 
   assert.deepEqual(cells[1].slice(1, 3), ["Waiting for results", "Add its results"]);
   assert.deepEqual(cells[2].slice(1, 3), ["Waiting for results", "Measure its results"]);
   assert.deepEqual(cells[3].slice(1, 3), ["Live", "Set the date its results are due"]);
+  assert.deepEqual(cells[4].slice(1, 3), ["Draft", "Fix how the result will be judged, then download the contact list"]);
   for (const r of rows) assert.ok(r.querySelector(".ov-row-name").textContent.length <= 40, "a short name");
   assert.equal(rows[0].querySelector(".ov-row-name").getAttribute("title"), busy().campaigns[0].name, "the long name is the tooltip");
   assert.match($("[data-more-campaigns]").textContent, /2 more live campaigns/);

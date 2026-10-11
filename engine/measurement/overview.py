@@ -13,18 +13,20 @@ from, and reshapes, answers other functions already give:
                                       (the value a campaign earned after contacts and offers), else the first
                                       total in its own unit. A floor: the sum of each campaign's lower bound
 `campaigns`                           the first five campaigns that are not yet measured (``CampaignStatus.LIVE``),
-                                      newest first, each with the date its test plan reads the result as final
+                                      newest first, each with its status, next step and results date
 `checklist`                           three yes/no facts: a connection or an upload exists, a campaign exists, a
                                       campaign has results (measured, or outcomes added)
 ====================================  ==========================================================================
 
-**A campaign's status here.** Read from the record and its registered test plan, nothing else:
-
-* ``live`` - results are not due yet (the plan's analysis date is still ahead), or no plan names a date;
-* ``waiting_for_results`` - the analysis date has come (or passed) and the result is not measured yet.
+**A campaign's status here.** Read from the record and its registered test plan, nothing else, by the one rule the
+Campaigns pages use too (Plan M DEC-1606 (b), :func:`campaign_state`): ``draft`` (our own campaign, no plan and nothing
+in yet, before its results date), ``live``, ``waiting_for_results`` (the results date has come) or ``measured``. The
+results date is the plan's analysis date, else the end of the outcome window. Only campaigns not yet measured are
+listed, so ``measured`` is not seen on this page.
 
 ``next_step`` says what to do about it: ``wait`` (results are not due), ``add_results`` (the date has come, no
-outcomes yet), ``measure`` (outcomes are in, not yet read) or ``plan`` (no test plan names a date). The page turns
+outcomes yet), ``measure`` (outcomes are in, not yet read), ``plan`` (a draft, or no date to wait for) or ``read``
+(measured). The page turns
 the code and the date into a sentence; no sentence is made here, so the same code cannot be worded two ways.
 
 A traced figure that does not resolve (:class:`~engine.measurement.summary.SummaryTraceError`) leaves the cards and the
@@ -35,13 +37,13 @@ in the log, never a number it could not trace.
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
-from datetime import date, datetime
+from datetime import UTC, date, datetime, timedelta
 from typing import Final, Literal
 
 from pydantic import AwareDatetime, Field
 
 from engine.config import StrictBase
-from engine.measurement.campaign import Campaign, CampaignStatus
+from engine.measurement.campaign import Campaign, CampaignKind, CampaignStatus
 from engine.measurement.plan import TestPlan
 from engine.measurement.summary import CampaignSummary, ProvenTotal, SummaryCard, unit_words
 from engine.pilot.proof import Figure
@@ -56,6 +58,7 @@ __all__ = [
     "build_overview",
     "campaign_state",
     "headline_total",
+    "results_date",
 ]
 
 CARDS_SHOWN: Final[int] = 5
@@ -63,8 +66,8 @@ CARDS_SHOWN: Final[int] = 5
 CAMPAIGNS_SHOWN: Final[int] = 5
 """The most live campaigns the Overview lists (Plan M §3: up to five)."""
 
-CampaignState = Literal["live", "waiting_for_results"]
-NextStep = Literal["wait", "add_results", "measure", "plan"]
+CampaignState = Literal["draft", "live", "waiting_for_results", "measured"]
+NextStep = Literal["wait", "add_results", "measure", "plan", "read"]
 
 
 class OverviewHeadline(StrictBase):
@@ -96,7 +99,10 @@ class OverviewCampaign(StrictBase):
     next_step: NextStep
     results_date: date | None = Field(
         default=None,
-        description="The date the registered test plan reads the result as final; null without a plan.",
+        description=(
+            "The results date: the registered test plan's analysis date; without a plan, the day the outcome window "
+            "closes (treatment_start + outcome_window_days); null with neither."
+        ),
     )
 
 
@@ -136,20 +142,44 @@ def headline_total(summary: CampaignSummary) -> ProvenTotal | None:
     return next((t for t in totals if t.unit == "rupees"), totals[0] if totals else None)
 
 
-def campaign_state(
-    campaign: Campaign, plan: TestPlan | None, today: date
-) -> tuple[CampaignState, NextStep, date | None]:
-    """A campaign's status, its next step and the date its result is final, from the record and its test plan.
+def results_date(campaign: Campaign, plan: TestPlan | None) -> date | None:
+    """The day a campaign's result can be read: the test plan's analysis date; without a plan, the day every
+    customer's outcome window has closed (`treatment_start` + `outcome_window_days`, in UTC); else None."""
+    if plan is not None:
+        return plan.analysis_date
+    if campaign.outcome_window_days is None:
+        return None
+    start = campaign.treatment_start.astimezone(UTC)
+    return (start + timedelta(days=campaign.outcome_window_days)).date()
 
-    The one rule for "Live" and "Waiting for results": any page that shows those two words (the Overview, the Campaigns
-    list) calls this, so a campaign never shows a different word on two pages.
+
+def campaign_state(
+    campaign: Campaign, plan: TestPlan | None, today: date, *, report: bool | None = None
+) -> tuple[CampaignState, NextStep, date | None]:
+    """A campaign's status, its next step and its results date (:func:`results_date`), from the record and its plan.
+
+    The ONE status rule (Plan M DEC-1606 (b)), the same as the Campaigns pages' `ui/modules/campaigns/status.js`
+    `campaignStatus()`; both are pinned to `tests/fixtures/campaigns/status_cases.json`. In order:
+
+    * ``measured`` - the final result is stored (an early look never counts: the record stays live);
+    * ``waiting_for_results`` - the results date has come;
+    * ``draft`` - one of our own (scored) campaigns with no test plan, no results file and no stored report, whose
+      results date has not come;
+    * ``live`` - anything else. A results file or an early look before the date does not change it (the date decides).
+
+    `report` says whether a report is stored (an early look included); None reads it from the record, which sets
+    `measured_at` whenever one is stored.
     """
-    when = plan.analysis_date if plan is not None else None
-    if when is None:
-        return "live", "plan", None
-    if when > today:
-        return "live", "wait", when
-    return "waiting_for_results", ("measure" if campaign.outcomes is not None else "add_results"), when
+    when = results_date(campaign, plan)
+    if campaign.status == CampaignStatus.MEASURED:
+        return "measured", "read", when
+    if when is not None and when <= today:
+        return "waiting_for_results", ("measure" if campaign.outcomes is not None else "add_results"), when
+    stored = campaign.measured_at is not None if report is None else report
+    ours = campaign.kind == CampaignKind.SCORED
+    if ours and plan is None and campaign.test_plan_hash is None and campaign.outcomes is None and not stored:
+        return "draft", "plan", when
+    return "live", ("wait" if when is not None else "plan"), when
 
 
 def build_overview(
