@@ -233,9 +233,14 @@ that it helps is the pilot below. The card says so in its `caution`.
   in the trail or in a log line.
 * **Rate limited.** `configs/agentic/save_desk.yaml`, `rate_limit_per_minute` (default 30) per signed-in person in a
   sliding minute, in memory per process; past it `429 SAVE_DESK_RATE_LIMITED` with `Retry-After`.
+* **A customer picked at random to learn from** (M92's explore slice, which can draw a customer the model expects to
+  stay anyway) is still made the offer: the card carries an `explored` line, and "likely to stay anyway" stays on
+  the card as the model's view without the instruction "Do not discount", because following that would undo the
+  random draw that off-policy evaluation depends on.
 * **It builds nothing.** If the run's treat list has not been built (the Results page or `treat_list.csv` builds it
   on first open), the answer is `409 SAVE_DESK_NO_TREAT_LIST`. A lookup must not start a build over a million rows.
-* Refusals: `404 SAVE_DESK_CUSTOMER_NOT_FOUND`, `422 SAVE_DESK_KEY_INVALID` (wrong number of key parts),
+* Refusals: `404 SAVE_DESK_CUSTOMER_NOT_FOUND`, `422 SAVE_DESK_KEY_INVALID` (empty, over 200 characters, or the wrong number of key parts; the
+  message never holds the key),
   `409 SAVE_DESK_KEY_AMBIGUOUS` (two rows with that key), `403 SAVE_DESK_NOT_IN_PILOT_ARM`, and the existing
   `RUN_NOT_FOUND`, `RUN_NOT_SCORED`, `TOOL_ARTEFACT_UNREADABLE`.
 
@@ -256,7 +261,7 @@ more customers. `configs/agentic/save_desk_pilot.yaml` is the registered templat
    `n / DEFF` with `DEFF = 1 + (calls per staff - 1) x ICC`. For 200 staff with 30 calls each, a 60% base
    retention and an assumed ICC of 0.05, the design effect is 2.45 and the smallest change the pilot reliably sees is
    5.6 points; the same customers, wrongly treated as independent, would have seen 3.6. Seeing 5 points needs 121
-   staff in each arm. **The ICC is an assumption** (`icc_source` says where it came from); it is not measured here.
+   staff in each arm (with an uneven split `pilot_power` gives the card arm's and the no-card arm's staff separately). **The ICC is an assumption** (`icc_source` says where it came from); it is not measured here.
    The number of staff, not of calls, is what limits a cluster pilot.
 5. **Active means enforced.** With `status: active` only staff in `card_access` are served a card (everyone else
    gets `SAVE_DESK_NOT_IN_PILOT_ARM`); `status: example` is not enforced.

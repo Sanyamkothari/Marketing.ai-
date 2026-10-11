@@ -58,7 +58,7 @@ SAVE_DESK_CODES: Final[frozenset[str]] = frozenset(
         # M144 (DEC-1411): the save-desk card (`engine.agentic.save_desk`, `api.routes.agentic_save_desk`).
         "SAVE_DESK_NO_TREAT_LIST",  # the run's treat list has not been built yet: open the contact list once
         "SAVE_DESK_CUSTOMER_NOT_FOUND",  # no customer with that key in the run's treat list
-        "SAVE_DESK_KEY_INVALID",  # the key has the wrong number of parts for this run's key columns
+        "SAVE_DESK_KEY_INVALID",  # the key is empty, over 200 characters, or has the wrong number of parts for this run's key columns
         "SAVE_DESK_KEY_AMBIGUOUS",  # more than one treat-list row has that key: no single customer to show
         "SAVE_DESK_RATE_LIMITED",  # too many cards asked for by one person in a minute
         "SAVE_DESK_NOT_IN_PILOT_ARM",  # an active pilot gives the card only to staff drawn in advance

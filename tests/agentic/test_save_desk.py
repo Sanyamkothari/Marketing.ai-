@@ -17,6 +17,7 @@ import json
 import logging
 import shutil
 from collections.abc import Iterator
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -234,7 +235,11 @@ def test_a_customer_not_in_the_list_is_refused_without_naming_them(desk: tuple[W
         extra = client.post(CARD, json={"run_id": world.run_id, "customer_key": "C0000001", "extra": 1})
         assert extra.status_code == 422, "a field the route does not know is refused"
         empty = client.post(CARD, json={"run_id": world.run_id, "customer_key": "  "})
-        assert empty.status_code == 422
+        assert empty.status_code == 422 and empty.json()["detail"]["code"] == "SAVE_DESK_KEY_INVALID"
+        long_key = "SECRETCUSTOMER-" + "9" * 200
+        too_long = _ask(client, world, long_key)
+        assert too_long.status_code == 422 and too_long.json()["detail"]["code"] == "SAVE_DESK_KEY_INVALID"
+        assert "SECRETCUSTOMER" not in too_long.text, "a refusal never echoes the key it refused"
 
 
 def test_a_run_whose_treat_list_is_not_built_says_so_and_builds_nothing(
@@ -275,7 +280,8 @@ def test_the_customer_key_is_only_ever_in_the_body(desk: tuple[World, pd.DataFra
 
 def test_the_route_has_its_policy_and_is_an_analysts(desk: tuple[World, pd.DataFrame]) -> None:
     policy = all_policies()[("POST", CARD)]
-    assert policy.role is Role.ANALYST and policy.audit_reads is True
+    # a POST is audited by the middleware on every call (see the audit tests below); `audit_reads` is for GETs
+    assert policy.role is Role.ANALYST and policy.audit_reads is False
     assert policy.action == "agentic.save_desk_card" and policy.purpose
 
 
@@ -454,6 +460,9 @@ def test_the_examples_test_plan_registers_through_the_campaign_route(
     design = load_pilot(world.config_root)
     assert design is not None
     body = json.loads(json.dumps(design.test_plan, default=str))
+    # The campaign starts when the run finished, so the analysis date must follow a window from now, or this
+    # test would start failing the day the template's example date falls inside the window.
+    body["analysis_date"] = (date.today() + timedelta(days=design.outcome_window_days + 30)).isoformat()
     with world.client() as client:
         campaign_id = world.new_campaign(client)
         response = client.post(f"/campaigns/{campaign_id}/plan", json=body)

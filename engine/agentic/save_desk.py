@@ -73,6 +73,7 @@ __all__ = [
     "assign_card_access",
     "build_card",
     "card_access_allowed",
+    "check_key",
     "load_pilot",
     "load_settings",
     "pilot_power",
@@ -97,20 +98,14 @@ class CardRequest(StrictBase):
 
     run_id: str = Field(pattern=ID_PATTERN, description="The finished scoring run whose treat list is read.")
     customer_key: str = Field(
-        min_length=1,
-        max_length=MAX_KEY_CHARS,
         description=(
             "The customer's key as the run's own key column holds it. A run keyed by several columns "
             "(customer and snapshot date) takes the parts in the run's order, joined by `|`."
         ),
     )
 
-    @field_validator("customer_key")
-    @classmethod
-    def _not_blank(cls, value: str) -> str:
-        if not value.strip():
-            raise ValueError("The customer key is empty.")
-        return value
+    # Length and blankness are checked in `build_card`, not here: a pydantic refusal echoes the value it
+    # refused, and the key must never come back in an answer (`check_key`).
 
 
 class LabelledLine(StrictBase):
@@ -173,6 +168,12 @@ class KeptBackLine(LabelledLine):
     text: str
 
 
+class ExploredLine(LabelledLine):
+    text: str = Field(
+        description="Says the customer was picked at random to learn from, so the offer stands."
+    )
+
+
 class SaveDeskCard(StrictBase):
     """The card. Aggregates nothing and echoes no key: one customer's stored values with their labels."""
 
@@ -186,6 +187,13 @@ class SaveDeskCard(StrictBase):
     kept_back: KeptBackLine | None = Field(
         default=None,
         description="Set when no offer is to be made because the customer is kept back or covered by a rule.",
+    )
+    explored: ExploredLine | None = Field(
+        default=None,
+        description=(
+            "Set when the customer was picked at random to learn from (M92's explore slice): the offer is made "
+            "as planned even if the model expects them to stay anyway, or the random draw is spoiled."
+        ),
     )
     text_source: Literal["rules"] = Field(
         default="rules", description="Every sentence is a fixed template; no model wrote any of it."
@@ -208,6 +216,14 @@ _NO_SEGMENT: Final[str] = (
 _STAY_YES: Final[str] = (
     "The model expects this customer to stay without an offer, so a discount would cost money and change "
     "nothing. Do not discount."
+)
+_STAY_EXPLORED: Final[str] = (
+    "The model expects this customer to stay anyway, but they were picked at random to learn from: "
+    "make the offer as planned."
+)
+_EXPLORED: Final[str] = (
+    "This customer was picked at random to learn from, so the offer is made as planned, whatever the "
+    "model expects."
 )
 _STAY_NO: Final[str] = "The model does not place this customer among those who would stay anyway."
 _CONTROL: Final[str] = (
@@ -252,6 +268,8 @@ _RESERVED_COLUMNS: Final[tuple[str, ...]] = (
     "reason_3",
     "use_case",
 )
+_EXPLORE_COLUMN: Final[str] = "explore"
+"""Read when present: a treat list written before M92's explore slice has no such column."""
 
 # ---------------------------------------------------------------------------
 # Reading the row
@@ -277,6 +295,18 @@ def _key_columns(storage: Storage, run_id: str) -> tuple[str, ...]:
     return key_columns(record.primary_key)
 
 
+def check_key(customer_key: str) -> None:
+    """Refuses an empty or over-long key with a message that does not hold it (`SAVE_DESK_KEY_INVALID`)."""
+    if not customer_key.strip():
+        raise AgenticError("SAVE_DESK_KEY_INVALID", "The customer key is empty.", status=422)
+    if len(customer_key) > MAX_KEY_CHARS:
+        raise AgenticError(
+            "SAVE_DESK_KEY_INVALID",
+            f"The customer key is longer than {MAX_KEY_CHARS} characters, so it cannot be a key of this run.",
+            status=422,
+        )
+
+
 def _candidates(part: str) -> list[str]:
     """The texts a stored key part may take: as typed, and as the consent ledger writes it (`00104` is `104`)."""
     from engine.privacy.consent import principal_key
@@ -287,6 +317,23 @@ def _candidates(part: str) -> list[str]:
     if normal != typed:
         found.append(normal)
     return found
+
+
+def _exact_rows(table: Any, columns: tuple[str, ...], parts: list[str]) -> Any:
+    """The rows whose key reads exactly as typed when there are any; else all the rows the ledger form found.
+
+    `00104` and `104` are one customer to the consent ledger, but a text key column may hold both as two
+    customers. Someone who types `00104` means the first, so the typed text wins and the normalised form is
+    only the fallback when nothing reads as typed. Only the few rows the filter found are looked at.
+    """
+    typed = [part.strip() for part in parts]
+    values = [table[name].to_pylist() for name in columns]
+    exact = [
+        index
+        for index in range(table.num_rows)
+        if all(str(column[index]).strip() == want for column, want in zip(values, typed, strict=True))
+    ]
+    return table.take(exact) if exact else table
 
 
 def _read_row(storage: Storage, run_id: str, columns: tuple[str, ...], customer_key: str) -> dict[str, Any]:
@@ -324,6 +371,7 @@ def _read_row(storage: Storage, run_id: str, columns: tuple[str, ...], customer_
             status=500,
             detail={"file": TREAT_LIST_PARQUET, "object_id": run_id},
         ) from exc
+    table = _exact_rows(table, columns, parts)
     if table.num_rows == 0:
         raise AgenticError(
             "SAVE_DESK_CUSTOMER_NOT_FOUND",
@@ -444,6 +492,13 @@ def _kept_back(row: dict[str, Any]) -> KeptBackLine | None:
     return None
 
 
+def _explored(row: dict[str, Any], kept_back: KeptBackLine | None) -> ExploredLine | None:
+    """Set for a customer M92 picked at random to learn from and the list treats: the draw must not be undone."""
+    if kept_back is not None or not bool(_clean(row.get(_EXPLORE_COLUMN))) or not bool(row["treat"]):
+        return None
+    return ExploredLine(label="Descriptive", source="treat_list.parquet: explore", text=_EXPLORED)
+
+
 def _reasons(row: dict[str, Any]) -> tuple[ReasonLine, ...]:
     lines: list[ReasonLine] = []
     for slot in ("reason_1", "reason_2", "reason_3"):
@@ -453,7 +508,9 @@ def _reasons(row: dict[str, Any]) -> tuple[ReasonLine, ...]:
     return tuple(lines)
 
 
-def _stay_anyway(row: dict[str, Any], segment_column: str | None) -> StayAnywayLine:
+def _stay_anyway(
+    row: dict[str, Any], segment_column: str | None, explored: ExploredLine | None
+) -> StayAnywayLine:
     source = "treat_list.parquet: segment"
     if segment_column is None:
         return StayAnywayLine(label="Estimated", source=source, flag=None, reason=_NO_SEGMENT)
@@ -468,6 +525,10 @@ def _stay_anyway(row: dict[str, Any], segment_column: str | None) -> StayAnywayL
     from engine.uplift.contracts import Segment
 
     sure = segment == Segment.SURE_THING.value
+    if sure and explored is not None:  # the model's view stays on the card; the instruction does not say no
+        return StayAnywayLine(
+            label="Estimated", source=source, flag=True, segment=segment, reason=_STAY_EXPLORED
+        )
     return StayAnywayLine(
         label="Estimated", source=source, flag=sure, segment=segment, reason=_STAY_YES if sure else _STAY_NO
     )
@@ -512,11 +573,13 @@ def _money(row: dict[str, Any], storage: Storage, run_id: str, kept_back: KeptBa
 
 def build_card(storage: Storage, given: CardRequest) -> SaveDeskCard:
     """The card for one customer of a finished scoring run, read from its stored treat list. Writes nothing."""
+    check_key(given.customer_key)
     columns = _key_columns(storage, given.run_id)
     row = _read_row(storage, given.run_id, columns, given.customer_key)
     segment_column = "segment" if "segment" in row else None
     kept_back = _kept_back(row)
     reasons = _reasons(row)
+    explored = _explored(row, kept_back)
     return SaveDeskCard(
         run_id=given.run_id,
         use_case_id=_text(row["use_case"]),
@@ -524,8 +587,9 @@ def build_card(storage: Storage, given: CardRequest) -> SaveDeskCard:
         reasons=reasons,
         reasons_note=None if reasons else _NO_REASONS,
         net_value=_money(row, storage, given.run_id, kept_back),
-        stay_anyway=_stay_anyway(row, segment_column),
+        stay_anyway=_stay_anyway(row, segment_column, explored),
         kept_back=kept_back,
+        explored=explored,
         caution=CAUTION,
     )
 
@@ -587,11 +651,14 @@ class CardRateLimiter:
         now = self._clock()
         window = timedelta(minutes=1)
         with self._lock:
-            hits = self._seen.get(person)
+            hits = self._seen.pop(
+                person, None
+            )  # re-inserted below: the table is in least-recently-seen order
             if hits is None:
                 if len(self._seen) >= _MAX_TRACKED:
                     self._seen.pop(next(iter(self._seen)))
-                hits = self._seen[person] = deque()
+                hits = deque()
+            self._seen[person] = hits
             while hits and now - hits[0] >= window:
                 hits.popleft()
             if len(hits) >= self._limit:
@@ -745,8 +812,12 @@ class PilotPower(StrictBase):
     ignoring_clusters_pp: float | None = Field(
         description="What the same customers would have seen if they were independent: too optimistic."
     )
-    staff_per_arm_for_target: int | None = Field(
-        default=None, description="Staff each arm needs to see `target_pp`, when a target was given."
+    staff_card_for_target: int | None = Field(
+        default=None, description="Staff the card arm needs to see `target_pp`, when a target was given."
+    )
+    staff_no_card_for_target: int | None = Field(
+        default=None,
+        description="Staff the no-card arm needs to see `target_pp`: differs from the card arm unless the split is even.",
     )
     reason: str | None = Field(default=None, description="Why a figure is null.")
     assumption: str = Field(description="The ICC used and that it is assumed, not measured.")
@@ -776,7 +847,8 @@ def pilot_power(
     naive = planner.mde_two_proportions(
         customers[0], customers[1], planning.base_retention, planning.alpha, planning.power
     )
-    staff_needed: int | None = None
+    staff_card_needed: int | None = None
+    staff_no_card_needed: int | None = None
     reason = clustered.reason
     if target_pp is not None:
         sizes = planner.n_for_mde(
@@ -786,10 +858,11 @@ def pilot_power(
             planning.power,
             control_ratio=n_plain / n_card,
         )
-        if sizes.n_treat is None:
+        if sizes.n_treat is None or sizes.n_control is None:
             reason = reason or sizes.reason
         else:
-            staff_needed = math.ceil(sizes.n_treat * deff / planning.calls_per_staff)
+            staff_card_needed = math.ceil(sizes.n_treat * deff / planning.calls_per_staff)
+            staff_no_card_needed = math.ceil(sizes.n_control * deff / planning.calls_per_staff)
     return PilotPower(
         staff_card=n_card,
         staff_no_card=n_plain,
@@ -800,7 +873,8 @@ def pilot_power(
         effective_customers_no_card=effective[1],
         smallest_detectable_change_pp=clustered.points,
         ignoring_clusters_pp=naive.points,
-        staff_per_arm_for_target=staff_needed,
+        staff_card_for_target=staff_card_needed,
+        staff_no_card_for_target=staff_no_card_needed,
         reason=reason,
         assumption=(
             f"Assumes an intra-cluster correlation of {planning.assumed_icc} ({planning.icc_source}); "

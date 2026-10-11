@@ -138,12 +138,26 @@ def test_the_staff_needed_for_a_target_are_the_plain_sample_times_the_design_eff
     power = pilot_power(planning, target_pp=5.0)
     plain = planner.n_for_mde(0.6, 0.05, 0.05, 0.8)
     assert plain.n_treat is not None
-    assert power.staff_per_arm_for_target == math.ceil(plain.n_treat * power.design_effect / 30)
+    assert power.staff_card_for_target == math.ceil(plain.n_treat * power.design_effect / 30)
+    assert power.staff_no_card_for_target == power.staff_card_for_target, "an even split needs the same staff"
+
+
+def test_an_uneven_split_needs_different_staff_in_each_arm() -> None:
+    """With 30% of staff given the card the two arms are not the same size, and nor is the staff each needs."""
+    planning = _planning()
+    power = pilot_power(planning, card_share=0.3, target_pp=5.0)
+    ratio = power.staff_no_card / power.staff_card
+    sizes = planner.n_for_mde(0.6, 0.05, 0.05, 0.8, control_ratio=ratio)
+    assert sizes.n_treat is not None and sizes.n_control is not None
+    assert power.staff_card_for_target == math.ceil(sizes.n_treat * power.design_effect / 30)
+    assert power.staff_no_card_for_target == math.ceil(sizes.n_control * power.design_effect / 30)
+    assert power.staff_card_for_target is not None and power.staff_no_card_for_target is not None
+    assert power.staff_no_card_for_target > power.staff_card_for_target
 
 
 def test_a_target_the_rate_cannot_move_by_is_null_with_the_planners_reason() -> None:
     power = pilot_power(_planning(base_retention=0.97), target_pp=20.0)
-    assert power.staff_per_arm_for_target is None and power.reason
+    assert power.staff_card_for_target is None and power.staff_no_card_for_target is None and power.reason
 
 
 def test_the_planning_inputs_are_checked() -> None:
@@ -233,4 +247,5 @@ def test_the_numbers_the_document_quotes_are_the_ones_the_code_computes() -> Non
     assert f"design effect is {power.design_effect:.2f}" in text
     assert f"{power.smallest_detectable_change_pp:.1f} points" in text
     assert f"would have seen {power.ignoring_clusters_pp:.1f}" in text
-    assert f"needs {power.staff_per_arm_for_target} staff in each arm" in text
+    assert design.card_share == 0.5 and power.staff_card_for_target == power.staff_no_card_for_target
+    assert f"needs {power.staff_card_for_target} staff in each arm" in text

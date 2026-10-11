@@ -67,10 +67,12 @@ POLICIES: Final[dict[tuple[str, str], RoutePolicy]] = {
         action="agentic.save_desk_card",
         purpose="look up a customer's save-desk card",
         object_type="run",
-        audit_reads=True,
     ),
 }
-"""This router's row of the access table: an Analyst (who may already download customer rows), audited."""
+"""This router's row of the access table: an Analyst (who may already download customer rows).
+
+No `audit_reads`: that flag is for GET routes, and the middleware audits every POST once per call anyway.
+"""
 
 register(POLICIES)
 

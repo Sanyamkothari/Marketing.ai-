@@ -29,6 +29,7 @@ from engine.agentic.save_desk import (
 from engine.decide.treat_list import TREAT_LIST_PARQUET, build_treat_list
 from engine.pilot.plain import jargon_in
 from engine.storage import LocalStorage, run_key
+from engine.uplift.contracts import SegmentThresholds
 from tests.fixtures.decide.treat_runs import write_run
 
 
@@ -219,6 +220,84 @@ def test_a_zero_padded_key_finds_the_customer_the_ledger_would(tmp_path: Path) -
     assert _card(storage, run_id, "0105").run_id == run_id
 
 
+def test_a_key_that_reads_as_typed_wins_over_the_ledgers_form_of_another_customer(tmp_path: Path) -> None:
+    """A text key column may hold `00104` and `104` as two customers: each is found by its own text."""
+    storage = LocalStorage(tmp_path)
+    run_id = "r_20261001_0a000022"
+    write_run(storage, run_id, kind="propensity", rows=20)
+    build_treat_list(storage, run_id)
+    frame = _treat_list(storage, run_id)
+    frame["customer_id"] = [str(200 + position) for position in range(len(frame))]
+    frame.loc[0, "customer_id"] = "00104"
+    frame.loc[1, "customer_id"] = "104"
+    buffer = io.BytesIO()
+    frame.to_parquet(buffer, index=False)
+    storage.write_bytes(run_key(run_id, TREAT_LIST_PARQUET), buffer.getvalue())
+    padded = _card(storage, run_id, "00104")
+    plain = _card(storage, run_id, "104")
+    assert padded.recommendation.advice or padded.recommendation.why_not
+    assert plain.run_id == run_id
+    # Two rows with the very same text are still not guessed at.
+    frame.loc[1, "customer_id"] = "00104"
+    buffer = io.BytesIO()
+    frame.to_parquet(buffer, index=False)
+    storage.write_bytes(run_key(run_id, TREAT_LIST_PARQUET), buffer.getvalue())
+    with pytest.raises(AgenticError) as caught:
+        _card(storage, run_id, "00104")
+    assert caught.value.code == "SAVE_DESK_KEY_AMBIGUOUS"
+
+
+def test_an_empty_or_over_long_key_is_refused_without_holding_it(
+    uplift_value: tuple[LocalStorage, str, pd.DataFrame],
+) -> None:
+    storage, run_id, _ = uplift_value
+    for key in ("   ", "SECRET-" + "9" * 250):
+        with pytest.raises(AgenticError) as caught:
+            _card(storage, run_id, key)
+        assert caught.value.code == "SAVE_DESK_KEY_INVALID" and caught.value.status == 422
+        assert "SECRET" not in caught.value.message
+
+
+def test_a_customer_picked_at_random_to_learn_from_is_never_told_not_to_be_offered(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """M92's explore slice draws among customers who are not selected, and sure things can be drawn. The
+    treat list then holds `treat = True` for one the model expects to stay anyway. The card must not say "Do
+    not discount": following it would undo the random draw that off-policy evaluation depends on."""
+    import tests.fixtures.decide.treat_runs as fixture
+
+    monkeypatch.setattr(
+        fixture,
+        "THRESHOLDS",
+        SegmentThresholds(
+            persuadable_min_uplift=0.02,
+            sleeping_dog_max_uplift=-0.01,
+            sure_thing_min_probability=0.25,
+            sure_thing_from_base_rate=False,
+        ),
+    )
+    storage = LocalStorage(tmp_path)
+    run_id = "r_20261001_0a000023"
+    write_run(storage, run_id, kind="uplift", holdout=True, rows=400, value=True, channels=True)
+    build_treat_list(storage, run_id)
+    treat = _treat_list(storage, run_id)
+    sure = treat[treat["segment"] == "sure_thing"]
+    explored = sure[sure["explore"].fillna(False).astype(bool) & sure["treat"].astype(bool)]
+    plain = sure[~sure["treat"].astype(bool)]
+    assert len(explored) >= 1 and len(plain) >= 1, "the run has both kinds of sure thing"
+    for key in explored["customer_id"].astype(str):
+        card = _card(storage, run_id, key)
+        assert card.recommendation.make_offer is True
+        assert card.explored is not None and card.explored.label == "Descriptive"
+        assert "picked at random" in card.explored.text
+        assert card.stay_anyway.flag is True, "the model's view stays on the card"
+        assert "Do not discount" not in card.stay_anyway.reason
+        assert "do not discount" not in card.recommendation.advice.lower()
+    for key in plain["customer_id"].astype(str).head(5):
+        card = _card(storage, run_id, key)
+        assert card.explored is None and "Do not discount" in card.stay_anyway.reason
+
+
 def test_the_card_writes_nothing(
     uplift_value: tuple[LocalStorage, str, pd.DataFrame], tmp_path: Path
 ) -> None:
@@ -334,6 +413,22 @@ def test_the_limiter_keeps_a_bounded_table(monkeypatch: pytest.MonkeyPatch) -> N
     for person in range(50):
         limiter.allow(f"u_{person}")
     assert len(limiter._seen) <= 5
+
+
+def test_the_limiter_forgets_the_least_recently_seen_not_the_first_seen(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import engine.agentic.save_desk as module
+
+    monkeypatch.setattr(module, "_MAX_TRACKED", 3)
+    clock = _Clock()
+    limiter = CardRateLimiter(2, clock=clock)
+    for person in ("u_a", "u_b", "u_c"):
+        assert limiter.allow(person) is None
+    assert limiter.allow("u_a") is None, "u_a is in the middle of a burst"
+    assert limiter.allow("u_d") is None, "a fourth person pushes the oldest out"
+    assert set(limiter._seen) == {"u_a", "u_c", "u_d"}, "u_b was the least recently seen"
+    assert limiter.allow("u_a") == 60, "u_a's count was kept, so the burst is still limited"
 
 
 def test_the_limit_is_read_from_the_file_with_a_default(config_root: Path, tmp_path: Path) -> None:
