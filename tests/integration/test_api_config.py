@@ -530,6 +530,8 @@ def test_openapi_builds_and_documents_every_route(client: TestClient) -> None:
         "/uploads/{upload_id}/agent-session/same-treatment",
         # Plan L follow-up (DEC-1599): things a training run checked, and the too-good-to-be-true alarm
         "/runs/{run_id}/checks",
+        # Plan L #16: a copy of next month's file with a renamed column given its old name (DEC-1597)
+        "/uploads/{upload_id}/renamed-copy",
         "/privacy/consent/imports/from-connection",
     }
 

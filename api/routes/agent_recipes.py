@@ -24,6 +24,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Final
 
+from api.routes.agent_renames import with_rename_suggestions  # Plan L #16 (DEC-1597)
 from api.routes.uploads import (
     UPLOAD_FINGERPRINT_FILENAME,
     UPLOAD_PROFILE_FILENAME,
@@ -327,13 +328,17 @@ def scoring_source(
 
 
 def prepare_in_memory(
-    storage: Storage, config: UseCaseConfig, upload: UploadRecord, recipe: DataRecipe | None
+    storage: Storage,
+    config: UseCaseConfig,
+    upload: UploadRecord,
+    recipe: DataRecipe | None,
+    version: ModelVersion | None = None,
 ) -> tuple[Any, int] | ValidationReport:
     """The frame and row count `POST /runs` would check for a scoring `upload`, with nothing written.
 
     `replay_for_scoring` without the derived upload: the same source, the same recipe run on every
     row of it, then capped as `POST /runs` reads its prepared upload. A file the recipe cannot
-    prepare is the same one-error report.
+    prepare is the same one-error report (with `version`, carrying the proposed renames, DEC-1597).
     """
     chosen = scoring_source(storage, upload, recipe)
     if isinstance(chosen, ValidationReport):
@@ -352,7 +357,10 @@ def prepare_in_memory(
             leak_check=_leak_check(source),
         )
     except RecipeError as exc:
-        return recipe_failure_report(exc, upload_id=upload.upload_id, mode=RunMode.SCORE)
+        report = recipe_failure_report(exc, upload_id=upload.upload_id, mode=RunMode.SCORE)
+        if version is None:
+            return report
+        return with_rename_suggestions(report, storage, config, version, source, recipe)
     frame = consistent_types(run.frame)
     return frame.head(cap).reset_index(drop=True), len(frame)
 
@@ -374,7 +382,9 @@ def replay_for_scoring(
     try:
         derived = write_derived_upload(storage, config, chosen.upload, recipe)
     except RecipeError as exc:
-        return recipe_failure_report(exc, upload_id=upload.upload_id, mode=RunMode.SCORE)
+        report = recipe_failure_report(exc, upload_id=upload.upload_id, mode=RunMode.SCORE)
+        # Plan L #16 (DEC-1597): a renamed column comes back with the column that looks like it.
+        return with_rename_suggestions(report, storage, config, version, chosen.upload, recipe)
     return derived.record, derived.profile
 
 

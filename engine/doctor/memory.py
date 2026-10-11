@@ -56,6 +56,7 @@ __all__ = [
     "offer_for",
     "recall",
     "remember",
+    "remembered",
     "remembered_recipe",
     "shape_of",
     "use_same_treatment",
@@ -214,6 +215,14 @@ def _entries(storage: Storage, use_case_id: str) -> list[TreatmentMemory]:
         except (StorageError, ValueError):
             continue
     return found
+
+
+def remembered(storage: Storage, use_case_id: str) -> list[TreatmentMemory]:
+    """Every shape remembered for the use case whose recipe is still kept (DEC-1597: a file of a shape close
+    to one of these may be offered its renames, `engine.doctor.renames`)."""
+    return [
+        m for m in _entries(storage, use_case_id) if recall(storage, use_case_id, m.shape_hash) is not None
+    ]
 
 
 # ---------------------------------------------------------------------------

@@ -190,6 +190,7 @@ Contract schema version: 1.
 | POST | `/uploads/{upload_id}/ask/messages` | Ask the data helper a question about an upload; it looks things up and cannot change anything | AskResponse |
 | POST | `/uploads/{upload_id}/checks` | Run the data checks for an upload without starting a run | ValidationReport |
 | GET | `/uploads/{upload_id}/profile` | The stored dataset profile of one upload | DatasetProfile |
+| POST | `/uploads/{upload_id}/renamed-copy` | A copy of the file with the columns the person ticked given their old names; the file is kept | UploadResponse |
 | GET | `/uploads/{upload_id}/treatment-candidates` | The 0/1 columns of an upload that could record who was treated | TreatmentCandidatesResponse |
 | GET | `/use-cases/{use_case_id}` | One merged use-case configuration, its Setup copy and its advanced-settings schema | UseCaseResponse |
 | GET | `/use-cases/{use_case_id}/cost-estimate` | What one run of this use case could cost at list price, and the cap on it (Plan J M108) | RunCostEstimate |

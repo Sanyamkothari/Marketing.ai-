@@ -1747,6 +1747,28 @@ DEC-1500…1509, M151 → DEC-1510…1519, …), so parallel work on two milesto
   case on 200,000 rows (the advisor's run is reused); numeric outcomes get no first look and dates are not
   bucketed. `engine/doctor/first_look.py`; `tests/unit/doctor/test_first_look.py`,
   `tests/integration/test_api_doctor_first_look.py` and `tests/integration/test_doctor_ui.py` prove it.
+- **DEC-1597 — After M161 (idea #16): next month's file renamed a column: propose the rename, never apply it.**
+  *Context:* a saved treatment names the columns it reads, and next month's export may rename one (`amount` to
+  `bill_amount`): scoring replay stops with `RECIPE_COLUMN_MISSING`, the training file loses its M159 shape, and a
+  person without a data team is stuck. A model's recipe is frozen (DEC-1006) and `rename_column` runs last (phase 6,
+  DEC-1530), after every step that reads the old name. *Decision:* (a) `engine/doctor/renames.match_renames`
+  compares the training file's stored profile of each missing column with every column new in the next file, with
+  no AI: kind of values, empty share, distinct values, ID-likeness, numbers' average and range, a category's
+  common values, and how close the names are; score = 0.7 × values + 0.3 × name, proposed only when values ≥ 0.75
+  and either name ≥ 0.5 or values ≥ 0.9, beating every other new column of its kind by 0.1; a column matching two
+  missing ones is proposed for neither, month columns of an `unpivot` never, and a missing column with no clear
+  winner is reported with its close candidates and none chosen. (b) A file to score is compared with the model's
+  training file on the columns the model needs; a file to learn from with the remembered treatment, exact or
+  reached by renaming at most three columns. (c) Unseen spellings for `map_values` are listed as information,
+  masked, and only counted for a personal-data column. (d) The proposal travels additively: `suggested_renames`
+  and `close_candidates` in the `RECIPE_COLUMN_MISSING` 409's details, and `AgentSessionResponse.changes`, kept at
+  `agent/file_changes.json`; Guided setup shows unticked "Use 'x' as 'y'" boxes. (e) A person's yes is
+  `POST /uploads/{id}/renamed-copy` (Analyst; 422 `DOCTOR_RENAME_UNKNOWN`/`_INVALID`, 409 `DOCTOR_RENAME_PREPARED`):
+  a new upload with the columns renamed, lineage in `renamed_copy.json`; the file sent and every recipe are left as
+  they are, the model's steps replay on the copy, and a copy with a remembered shape is offered its treatment.
+  *Consequences:* `tests/unit/doctor/test_renames.py` and `tests/integration/agent/test_api_renamed_column.py` prove
+  it; the OpenAPI route list gains one route. Not covered: files that also added or dropped columns, built
+  datasets, a training upload removed by retention (the refusal stands), Manual setup's rendering.
 - **DEC-1598 — After M161 (idea #3): the data request asks only for what Data Doctor cannot read past.** *Context:*
   `configs/pilot/data_request.yaml` (Plan E M59) asked for UTF-8 CSV with one header row, ISO dates, numbers without
   separators or currency signs, Y/N flags and a pre-flight on a laptop; since M150-M159 the upload reads workbooks,

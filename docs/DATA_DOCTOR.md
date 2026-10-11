@@ -301,6 +301,29 @@ field `treatment` of `POST /uploads` and of every Guided-setup session answer,
 `POST /uploads/{id}/agent-session/same-treatment`, the store `doctor_memory` in `engine/privacy/layout.py`,
 tests in `tests/unit/doctor/test_memory.py` and `tests/integration/agent/test_api_doctor_memory.py`.
 
+### When next month's export renamed a column (DEC-1597)
+
+If the export now calls `amount` `bill_amount`, the saved steps cannot find `amount`: scoring stops with the
+column named, and a file to learn from no longer has last month's shape. Data Doctor now compares what it
+knew about `amount` in the file the steps were approved on (the kind of values, how many are empty, how many
+differ, the average and range of numbers, a category's common values) with each column that is new in this
+file, and the names. It says *"Your file has 'bill_amount' where it had 'amount'"* only when one new column
+clearly matches: the same kind of values, values that agree, a close name (or numbers or categories that
+agree closely), and clearly better than any other new column. With two close candidates it names both and
+chooses neither; a column whose kind of values changed, or a name alone, is never proposed.
+
+Nothing is ticked for you. In Guided setup the rename is a box under **Changed since last time**; **Use the
+old names** makes a copy of your file with those columns renamed (your file is left as it is), and the helper
+starts on the copy: a file to score then runs through the model's steps unchanged, and a file to learn from
+is offered last time's treatment. A model's saved steps are never edited. The same box lists **new
+spellings** in a column whose spellings last time's steps merge (shown only: they are left as written).
+Scoring's refusal carries the same proposal in its check (`details.suggested_renames`, `close_candidates`).
+
+For developers: the matcher `engine/doctor/renames.py` (thresholds `STATS_MIN`, `STATS_ALONE`, `NAME_MIN`,
+`MARGIN`), the profiles compared and the copy `api/routes/agent_renames.py`, the session field `changes`,
+`POST /uploads/{id}/renamed-copy` (`api/routes/doctor.py`), tests in `tests/unit/doctor/test_renames.py` and
+`tests/integration/agent/test_api_renamed_column.py`.
+
 ## 9. The data request: send what you have (DEC-1598)
 
 The pilot's data request (`GET /pilot/data-request`, `docs/pilot/DATA_REQUEST.md`, worded in
