@@ -4,19 +4,26 @@
 //   #/campaigns/new                              1 Goal
 //   #/campaigns/new/customers/<goal>              2 Customers: Guided setup (Plan G/L), unchanged
 //   #/campaigns/new/customers/<goal>/<run>        2 ... while the list is being prepared, or waiting
-//   #/campaigns/new/audience/<campaign>           3 Audience (the campaign record exists: a Draft)
-//   #/campaigns/new/review/<campaign>             4 Review, then Approve (registers the test plan)
-//   #/campaigns/new/send/<campaign>               5 Send: the one download; the campaign is Live
+//   #/campaigns/new/review/<campaign>             3 Audience and 4 Review on one screen (a Draft campaign),
+//                                                   then "Approve and download"
+//   #/campaigns/new/audience/<campaign>           (the address of step 3 before M181 part C: opens Review)
+//   #/campaigns/new/send/<campaign>               5 Send: the campaign is Live; the download (again)
 //
 // Under the hood, existing routes only (Plan M M7): the first campaign of a goal learns from the approved
 // file (`POST /runs`, train) and then builds the list from the same customers (`POST /uploads` and
 // `POST /runs`, score); a later one builds the list with the current model. A finished list becomes a campaign
-// record (`POST /campaigns`), and Approve registers its test plan (`POST /campaigns/{id}/plan`) with the
-// planner's own numbers - so the plan is fixed before the download is offered. A new model waiting for an
-// approval holds the campaign, and the wizard says so and links to the approvals page.
+// record (`POST /campaigns`). "Approve and download" registers its test plan (`POST /campaigns/{id}/plan`) with
+// the planner's own numbers and, only once the server has accepted it, downloads the list's served file - so
+// the plan is fixed before any download - then shows Send.
+//
+// A new model waiting for an approval (M181 part C, DEC-1611): for a person with the Approver role the list is
+// built with it straight away, and the Review screen's one button says it approves the new model too: it
+// calls the approvals page's own route (`POST /models/{id}/approve`) first, then the plan, then the download,
+// each only once the one before it worked. Anyone else is held on step 2, as before, with the way to the
+// approvals page; nothing is built for them before an Approver has approved.
 //
 // The step a URL asks for is checked against the server: a campaign with a test plan opens on Send, one
-// without on its Draft steps. The only thing kept in the browser is the file chosen for a first campaign,
+// without on its Draft screen (Review). The only thing kept in the browser is the file chosen for a first campaign,
 // so the list can be built from it once the learning is done; after a refresh the person chooses it again.
 
 import { canAccess, setActiveNav, setupModes } from "../router.js";
@@ -51,6 +58,7 @@ import {
   expectedValue,
   goalCards,
   isWizardRoute,
+  modelState,
   parseRoute,
   planBody,
   progressOf,
@@ -62,7 +70,6 @@ import {
 } from "./wizard_rules.js";
 import {
   TITLE,
-  audienceHtml,
   customersHtml,
   goalHtml,
   loadingHtml,
@@ -90,8 +97,10 @@ const ui = {
   started: null, // the upload id the last start used, so Guided setup knows its approval was taken
   lastStart: null, // { uc, current, fill } of the last start, for "Start it anyway"
   customers: { problem: null, busy: "" },
-  review: { busy: false, error: null },
-  approval: { busy: false, error: null, own: false }, // the inline approval of a new model (step 2)
+  // The Review screen's one button: `busy` is its label while its calls are on their way (else ""), `own` says
+  // the server refused this person's approval of the new model because they started the learning.
+  review: { busy: "", error: null, own: false },
+  justDownloaded: null, // the Send address "Approve and download" went to after starting the download
   advancing: new Set(), // run ids already being taken to their next step
   listOf: new Map(), // learning run id -> the list run started from it, for a person who left and came back
 };
@@ -148,6 +157,9 @@ window.addEventListener("hashchange", () => {
   if (isWizardRoute(hashParts())) return;
   clearTimeout(ui.timer);
   ui.seq += 1;
+  ui.justDownloaded = null;
+  // Coming back is a fresh visit: the screen's own state (a refusal, "downloading") is not carried over.
+  ui.parts = null;
 });
 
 /**
@@ -166,9 +178,10 @@ export async function renderWizard(app, parts) {
   const sameRoute = Boolean(ui.parts) && ui.parts.join("/") === parts.join("/");
   if (!sameRoute) {
     ui.customers = { problem: null, busy: "" };
-    ui.review = { busy: false, error: null };
-    ui.approval = { busy: false, error: null, own: false };
+    ui.review = { busy: "", error: null, own: false };
   }
+  // Send says "downloading" only on the screen the download was started for; any other address forgets it.
+  if (ui.justDownloaded !== `#/${parts.join("/")}`) ui.justDownloaded = null;
   ui.app = app;
   ui.parts = [...parts];
   if (!sameRoute || !app.querySelector('[data-module="campaign-wizard"]')) {
@@ -331,26 +344,22 @@ async function onRun(token, uc, models, detail) {
   await toCampaign(token, uc, detail);
 }
 
-/** The model learned: use it when it is the current one; wait while it waits for an approval. */
+/**
+ * The model learned: use it when it is the current one. A new model waiting for an approval is used straight
+ * away by a person with the Approver role, who approves it on the Review screen together with the plan (M181
+ * part C); anyone else waits here, as before, until an Approver has approved it.
+ */
 async function afterLearning(token, uc, models, detail) {
   const version = versionById(models, detail.run.model_version_id);
   const status = version && version.status;
   const current = currentModel(models);
-  if (status === "pending_approval") {
-    const canApprove = canAccess("POST", "/models/{model_id}/approve");
-    show(
-      token,
-      "customers",
-      () => waitingHtml({ canApprove, own: ui.approval.own, busy: ui.approval.busy, error: ui.approval.error }),
-      (app) => {
-        const button = app.querySelector("[data-cw-approve-model]");
-        if (button) button.addEventListener("click", () => approveModel(version));
-      },
-    );
-    if (!canApprove || ui.approval.own) later(token, WAIT_POLL_MS); // an Approver elsewhere may approve it
+  const waiting = status === "pending_approval";
+  if (waiting && !canAccess("POST", "/models/{model_id}/approve")) {
+    show(token, "customers", () => waitingHtml());
+    later(token, WAIT_POLL_MS); // an Approver elsewhere may approve it
     return;
   }
-  const model = status === "champion" ? version : current;
+  const model = status === "champion" || waiting ? version : current;
   if (!model) {
     show(token, "customers", () =>
       stoppedHtml({ ucId: uc.id, detail, reason: "Nothing was learned that the contact list can use." }),
@@ -402,30 +411,7 @@ async function afterLearning(token, uc, models, detail) {
   }
 }
 
-/**
- * Approve the new model here (`POST /models/{id}/approve`, the approvals page's own call), for a person with
- * the Approver role. The name sent is the signed-in user's (the server takes it from the session when sign-in
- * is on); no reason is made up for them. The trainer's own approval is refused by the server (separation of
- * duties): the screen then says another Approver must do it.
- */
-async function approveModel(version) {
-  if (ui.approval.busy) return;
-  const here = window.location.hash;
-  ui.approval = { busy: true, error: null, own: false };
-  draw();
-  try {
-    const me = await getMe().catch(() => null);
-    const who = (me && me.principal && (me.principal.username || me.principal.user_id)) || "local operator";
-    await postApprove(version.model_id, { approved_by: who });
-    ui.approval = { busy: false, error: null, own: false };
-  } catch (error) {
-    const own = error instanceof ApiError && error.code === "SEPARATION_OF_DUTIES";
-    ui.approval = { busy: false, error: own ? null : error, own };
-  }
-  if (window.location.hash === here) renderWizard(ui.app, hashParts());
-}
-
-/** The list is ready: the campaign record made from it (once, even across a refresh), then Audience. */
+/** The list is ready: the campaign record made from it (once, even across a refresh), then Review. */
 async function toCampaign(token, uc, detail) {
   const runId = detail.run.run_id;
   if (ui.advancing.has(runId)) return;
@@ -434,13 +420,13 @@ async function toCampaign(token, uc, detail) {
     const existing = await getCampaignsOfRun(runId);
     let campaign = ((existing && existing.campaigns) || [])[0] || null;
     if (!campaign) campaign = (await postCampaign({ run_id: runId })).campaign;
-    if (stillOn(runId)) go(stepHref("audience", campaign.campaign_id), { replace: true });
+    if (stillOn(runId)) go(stepHref("review", campaign.campaign_id), { replace: true });
   } finally {
     ui.advancing.delete(runId);
   }
 }
 
-// --- 3 Audience, 4 Review, 5 Send ------------------------------------------------------------------------
+// --- 3 Audience and 4 Review (one screen), 5 Send ------------------------------------------------------------
 
 async function campaignStepScreen(token, route) {
   const view = await getCampaign(route.campaignId);
@@ -460,19 +446,23 @@ async function campaignStepScreen(token, route) {
   if (step === "send") {
     const plan = view.plan;
     show(token, "send", () =>
-      sendHtml({ campaign, plan, downloadHref: treatListUrl(runId), resultsOn: (plan && plan.analysis_date) || resultsDate(campaign) }),
+      sendHtml({
+        campaign,
+        plan,
+        downloadHref: treatListUrl(runId),
+        resultsOn: (plan && plan.analysis_date) || resultsDate(campaign),
+        downloaded: ui.justDownloaded === `#/${ui.parts.join("/")}`,
+      }),
     );
     return;
   }
-  const [detail, scoring, list] = await Promise.all([getRun(runId), getScoringSummary(runId), getTreatListSummary(runId)]);
+  const [detail, scoring, list, models] = await Promise.all([
+    getRun(runId),
+    getScoringSummary(runId),
+    getTreatListSummary(runId),
+    getModels(campaign.use_case_id).catch(() => null),
+  ]);
   const preview = await getPlanPreview(campaign.campaign_id, baseRateOf(detail.run, scoring)).catch(() => null);
-  if (step === "audience") {
-    show(token, "audience", () => audienceHtml({ ucId: campaign.use_case_id, scoring, list, preview }), (app) => {
-      const next = app.querySelector("[data-cw-next]");
-      if (next) next.addEventListener("click", () => go(stepHref("review", campaign.campaign_id)));
-    });
-    return;
-  }
   const [cost, compliance, policy] = await Promise.all([
     getCostEstimate(campaign.use_case_id, "score").catch(() => null),
     list && list.compliance_rule_version ? getComplianceSummary(runId).catch(() => null) : Promise.resolve(null),
@@ -481,13 +471,22 @@ async function campaignStepScreen(token, route) {
       ? getUpliftArtefact(runId, "policy_recommendation.json").catch(() => null)
       : Promise.resolve(null),
   ]);
-  const context = { campaign, detail, preview };
+  // The model the list was built with, and whether this person may approve it while it waits (M181 part C).
+  const version = versionById(models, detail.run.model_version_id);
+  const model = {
+    state: modelState(version),
+    canApprove: canAccess("POST", "/models/{model_id}/approve"),
+    own: ui.review.own,
+    version,
+  };
+  const context = { campaign, detail, preview, model, runId };
   show(
     token,
     "review",
     () =>
       reviewHtml({
         campaign,
+        scoring,
         list,
         policy,
         preview,
@@ -495,6 +494,7 @@ async function campaignStepScreen(token, route) {
         compliance,
         resultsOn: resultsDate(campaign),
         canApprove: canAccess("POST", "/campaigns/{campaign_id}/plan"),
+        model,
         busy: ui.review.busy,
         error: ui.review.error,
       }),
@@ -503,6 +503,8 @@ async function campaignStepScreen(token, route) {
       if (button) button.addEventListener("click", () => approve(context));
     },
   );
+  // Held for an Approver elsewhere: the screen carries on by itself once the new model is approved.
+  if (model.state === "pending" && (!model.canApprove || model.own)) later(token, WAIT_POLL_MS);
 }
 
 /**
@@ -523,21 +525,83 @@ async function outcomeColumnOf(uc, detail) {
   return uc.target && uc.target.column;
 }
 
-/** Approve: register the test plan with the planner's numbers, then Send. */
-async function approve({ campaign, detail, preview }) {
+/**
+ * Start the download of a served file, as the person's own click on a download link does: the browser saves
+ * the file the server sends (the address is the one Send's "Download" link has always pointed at).
+ */
+export function startDownload(href) {
+  const link = document.createElement("a");
+  link.href = href;
+  link.setAttribute("download", "");
+  link.setAttribute("data-cw-autodownload", "");
+  link.hidden = true;
+  document.body.appendChild(link);
+  try {
+    link.click();
+  } finally {
+    link.remove();
+  }
+}
+
+/**
+ * Approve the new model (`POST /models/{id}/approve`, the approvals page's own call), for a person with the
+ * Approver role. The name sent is the signed-in user's (the server takes it from the session when sign-in is
+ * on); no reason is made up for them.
+ */
+async function approveModel(version) {
+  const me = await getMe().catch(() => null);
+  const who = (me && me.principal && (me.principal.username || me.principal.user_id)) || "local operator";
+  await postApprove(version.model_id, { approved_by: who });
+}
+
+/**
+ * The Review screen's one button (M181 part C, DEC-1611), each call only once the one before it worked:
+ *   1. when the list's model still waits for an approval, approve it (the trainer's own approval is refused by
+ *      the server, separation of duties: the screen then says another Approver must do it, and nothing else
+ *      happens);
+ *   2. register the test plan with the planner's numbers (`POST /campaigns/{id}/plan`), so it is fixed;
+ *   3. only once the server has accepted the plan, download the list's served file, and show Send.
+ * A refusal at any point shows its error and nothing after it happens: no plan without the model's approval,
+ * no download without the plan. A person who left the page meanwhile gets no download over another page.
+ */
+async function approve({ campaign, detail, preview, model, runId }) {
   if (ui.review.busy) return;
   const here = window.location.hash;
-  ui.review = { busy: true, error: null };
-  draw();
+  const stay = () => window.location.hash === here;
+  let approvedNow = false;
   try {
+    if (model && model.state === "pending") {
+      ui.review = { busy: "Approving the new model…", error: null, own: false };
+      draw();
+      try {
+        await approveModel(model.version);
+        approvedNow = true;
+      } catch (error) {
+        if (error instanceof ApiError && error.code === "SEPARATION_OF_DUTIES") {
+          ui.review = { busy: "", error: null, own: true };
+          if (stay()) renderWizard(ui.app, hashParts());
+          return;
+        }
+        throw error;
+      }
+    }
+    ui.review = { busy: "Approving…", error: null, own: false };
+    draw();
     const uc = await getUseCase(campaign.use_case_id);
     const outcomeColumn = await outcomeColumnOf(uc, detail);
     await postPlan(campaign.campaign_id, planBody({ campaign, preview, uc, outcomeColumn }));
-    ui.review = { busy: false, error: null };
-    if (window.location.hash === here) go(stepHref("send", campaign.campaign_id));
+    ui.review = { busy: "", error: null, own: false };
+    if (!stay()) return;
+    startDownload(treatListUrl(runId));
+    ui.justDownloaded = stepHref("send", campaign.campaign_id);
+    go(ui.justDownloaded);
   } catch (error) {
-    ui.review = { busy: false, error };
-    if (window.location.hash === here) draw();
+    ui.review = { busy: "", error, own: false };
+    if (!stay()) return;
+    // The new model was approved before the refusal: the screen is drawn again from the server, so trying
+    // again only fixes the plan.
+    if (approvedNow) renderWizard(ui.app, hashParts());
+    else draw();
   }
 }
 

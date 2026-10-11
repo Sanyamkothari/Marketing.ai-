@@ -21,6 +21,8 @@ import {
   noticeHtml,
   pageHtml,
   progressHtml,
+  reviewHtml,
+  sendHtml,
   stoppedHtml,
   waitingHtml,
 } from "../../../../../../ui/modules/campaigns/wizard_views.js";
@@ -123,15 +125,33 @@ test("the states no recording reaches carry no engine word either", () => {
     "customers-no-role": customersHtml({ uc, first: true, canStart: false }),
     learning: progressHtml({ learning: true, share: 0.4 }),
     list: progressHtml({ learning: false, share: null }),
-    "waiting-approver": waitingHtml({ canApprove: true }),
-    "waiting-other": waitingHtml({ canApprove: false }),
-    "waiting-own": waitingHtml({ canApprove: true, own: true }),
+    "waiting-other": waitingHtml(),
     stopped: stoppedHtml({ ucId: UC, detail: { run: { run_id: "r_x", error: { message: "Training failed: run out of memory" } } }, reason: "The work stopped before the list was ready." }),
     refused: noticeHtml({ title: "The contact list could not be started", text: ["Choose the file of customers once more; it is checked against what Marketing AI learned."] }),
   };
   for (const [id, body] of Object.entries(bodies)) {
     holder.innerHTML = pageHtml("customers", body);
     holder.querySelectorAll("[data-cw-guided]").forEach((el) => el.remove());
+    const v = violations(visibleText(holder), {});
+    assert.ok(v.ok, describe(id, v));
+  }
+  // M181 part C: the Review screen's states for the model behind a list, and Send after its download started.
+  const campaign = { campaign_id: CAMPAIGN, use_case_id: UC, run_ids: ["r_x"], status: "live" };
+  const list = { treat_rows: 1200 };
+  const review = (model, extra = {}) => reviewHtml({ campaign, list, preview: null, cost: null, compliance: null, resultsOn: null, model, ...extra });
+  const steps = {
+    "review-approved": ["review", review({ state: "approved", canApprove: true, own: false })],
+    "review-busy": ["review", review({ state: "approved", canApprove: true, own: false }, { busy: "Approving…" })],
+    "review-new-model": ["review", review({ state: "pending", canApprove: true, own: false })],
+    "review-new-model-busy": ["review", review({ state: "pending", canApprove: true, own: false }, { busy: "Approving the new model…" })],
+    "review-new-model-held": ["review", review({ state: "pending", canApprove: false, own: false })],
+    "review-new-model-own": ["review", review({ state: "pending", canApprove: true, own: true })],
+    "review-model-refused": ["review", review({ state: "refused", canApprove: true, own: false })],
+    "review-no-role": ["review", review({ state: "pending", canApprove: true, own: false }, { canApprove: false })],
+    "send-downloaded": ["send", sendHtml({ campaign, plan: null, downloadHref: "/runs/r_x/treat_list.csv", resultsOn: null, downloaded: true })],
+  };
+  for (const [id, [step, body]] of Object.entries(steps)) {
+    holder.innerHTML = pageHtml(step, body);
     const v = violations(visibleText(holder), {});
     assert.ok(v.ok, describe(id, v));
   }

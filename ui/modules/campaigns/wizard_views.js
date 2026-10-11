@@ -8,6 +8,7 @@
 import { term } from "../../labels.js";
 import { crumbs, errorBox, esc, pageHead, techDetails } from "../../dom.js";
 import {
+  SHARED_STEPS,
   STEPS,
   complianceResult,
   costLine,
@@ -26,13 +27,18 @@ export const TITLE = "New campaign";
 export const LEAD =
   "Plan a campaign in five steps: choose a goal, add your customers, check who is contacted, review it, and send the list.";
 
-/** The step indicator: done steps, the current one (`aria-current="step"`), the ones still to come. */
+/**
+ * The step indicator: done steps, the current one (`aria-current="step"`), the ones still to come. The five
+ * named steps are always drawn. A screen that covers two of them (Review shows Audience too, `SHARED_STEPS`)
+ * marks both as on screen; `aria-current` stays on the step whose button the screen ends with.
+ */
 export function stepperHtml(current) {
   const at = STEPS.findIndex((s) => s.id === current);
+  const shown = new Set(SHARED_STEPS[current] || [current]);
   return `<ol class="cw-steps" aria-label="Steps">${STEPS.map((s, i) => {
-    const state = i < at ? "done" : i === at ? "now" : "todo";
+    const state = shown.has(s.id) ? "now" : i < at ? "done" : "todo";
     return `<li class="cw-step ${state}" data-cw-stepper="${esc(s.id)}"${i === at ? ' aria-current="step"' : ""}><span class="cw-no" aria-hidden="true">${
-      i < at ? "✓" : i + 1
+      state === "done" ? "✓" : i + 1
     }</span><span class="cw-sl">${esc(s.label)}</span></li>`;
   }).join("")}</ol>`;
 }
@@ -165,30 +171,17 @@ export function progressHtml({ learning, share = null }) {
 }
 
 /**
- * Step 2 when the new model waits for an approval. A person who may approve does it here, in one click (the
- * details stay one link away, on the approvals page); anyone else sees that the campaign waits, and where an
- * Approver will find it (the bell, `#/approvals`). `own` says the server refused because this person started
- * the learning themselves (separation of duties).
+ * Step 2 when the new model waits for an approval and this person does not have the Approver role: the
+ * campaign waits, and the notice says where an Approver will find it (the bell, `#/approvals`). A person with
+ * that role is not held here: their list is built straight away and they approve the new model on the Review
+ * screen, in the same click as the plan (M181 part C, DEC-1611; `reviewHtml`).
  */
-export function waitingHtml({ canApprove, own = false, busy = false, error = null }) {
-  const lead =
-    "Marketing AI has learned from your customers. Before it builds the contact list, someone with the Approver role must approve what it learned.";
-  if (canApprove && !own) {
-    return card(
-      "Approve what Marketing AI learned",
-      `${p(lead)}${p("You have that role. Approve it here and the contact list is built straight away.")}${error ? errorBox(error) : ""}${actions(
-        `<button type="button" class="btn primary" data-cw-approve-model${busy ? " disabled" : ""}>${busy ? "Approving…" : "Approve and continue"}</button><a class="btn quiet" href="#/approvals" data-cw-approvals>See the details first</a>`,
-      )}`,
-      'data-cw-waiting="approve"',
-    );
-  }
+export function waitingHtml() {
   return noticeHtml({
     title: "Waiting for an approval",
     text: [
-      `${lead} The campaign waits until then and carries on here.`,
-      own
-        ? "You started this learning, so another person with the Approver role must approve it. They find it under Waiting for approval."
-        : "An Approver finds it under Waiting for approval. Come back to this page once it is approved.",
+      "Marketing AI has learned from your customers. Before it builds the contact list, someone with the Approver role must approve what it learned. The campaign waits until then and carries on here.",
+      "An Approver finds it under Waiting for approval. Come back to this page once it is approved.",
     ],
     action: { label: "Open Waiting for approval", href: "#/approvals" },
     attrs: 'data-cw-waiting="wait"',
@@ -260,27 +253,103 @@ export function comparisonCardHtml(preview) {
   return card(term("comparisonGroup"), `${body}${basis}`, "data-cw-comparison");
 }
 
-export function audienceHtml({ ucId, scoring, list, preview }) {
-  return `${audienceCardHtml({ scoring, list })}${comparisonCardHtml(preview)}${actions(
-    `<button type="button" class="btn primary" data-cw-next>Continue</button><a class="btn quiet" href="${esc(
-      stepHref("customers", ucId),
-    )}" data-cw-again>Start again with another file</a>`,
-  )}`;
+/** Step 3's part of the Review screen: who is contacted and the comparison group (no button of its own). */
+export function audienceHtml({ scoring, list, preview }) {
+  return `${audienceCardHtml({ scoring, list })}${comparisonCardHtml(preview)}`;
 }
 
-// --- Step 4: Review --------------------------------------------------------------------------------------
+// --- Step 4: Review (with step 3 on the same screen) -------------------------------------------------------
 
 const tile = (label, value, attrs) =>
   `<div class="kpi" ${attrs}><div class="l">${esc(label)}</div><div class="v">${esc(value)}</div></div>`;
 
+/** The Review screen's one primary button, by where the list's model stands (`modelState`). */
+export const APPROVE_LABEL = "Approve and download";
+export const APPROVE_BOTH_LABEL = "Approve the new model and this plan, then download";
+
 /**
- * Step 4: the numbers the campaign will be judged by, then Approve. Tiles: contacted, comparison group,
- * expected value (when the list has one: its range when the engine gives one, `expectedValue`), the results
- * date. Lines: the test size, the cost, the compliance result (when the switch is on). `policy` is the list's
- * run's `policy_recommendation.json` (or null). `canApprove` is whether this person may register the test plan.
+ * What the Review card ends with, by where the list's model stands (`model.state`, `modelState`):
+ *   - approved: "Approve and download" fixes the test plan, then downloads the contact list;
+ *   - pending, for an Approver: one button that says it approves the new model too, with its details one link
+ *     away; the model is approved first, then the plan, then the download, each only once the one before it
+ *     worked;
+ *   - pending, for anyone else (or for the person who started the learning, whom the server does not let
+ *     approve it, `model.own`): the campaign waits, with the way to Waiting for approval, and no Approve;
+ *   - refused: the list cannot be sent; start again.
+ * Returns `{ lead, buttons, note }`.
  */
-export function reviewHtml({ campaign, list, policy = null, preview, cost, compliance, resultsOn, canApprove = true, busy = false, error = null }) {
-  const lines = testSizeLines(preview);
+function decisionParts({ campaign, model, canApprove, busy }) {
+  const restart = stepHref("customers", campaign.use_case_id);
+  const again = `<a class="btn quiet" href="${esc(restart)}" data-cw-again>Start again with another file</a>`;
+  const state = (model && model.state) || "approved";
+  if (state === "refused") {
+    return {
+      lead: p(
+        "An Approver turned down the new model this list was built with, so this list cannot be sent. Start again: Marketing AI learns once more from the file you choose.",
+        "data-cw-model-refused",
+      ),
+      buttons: `<a class="btn primary" href="${esc(restart)}" data-cw-restart>Start again</a>`,
+      note: "",
+    };
+  }
+  if (state === "pending" && (!model.canApprove || model.own)) {
+    const who = model.own
+      ? "You started this learning, so another person with the Approver role must approve the new model. They find it under Waiting for approval."
+      : "This is the first campaign for this goal, and the list was built with a new model that someone with the Approver role must approve first. They find it under Waiting for approval.";
+    return {
+      lead: `<div class="cw-problem" data-cw-waiting="review">${p(who)}${p("This page carries on once it is approved. Nothing is downloaded before then.")}</div>`,
+      buttons: `<a class="btn primary" href="#/approvals" data-cw-approvals>Open Waiting for approval</a>${again}`,
+      note: "",
+    };
+  }
+  const disabled = !canApprove || Boolean(busy);
+  if (state === "pending") {
+    return {
+      lead: p(
+        "This is the first campaign for this goal, so the list was built with what Marketing AI learned from your customers: a new model that still needs an Approver's approval. You have that role.",
+        "data-cw-new-model",
+      ),
+      buttons: `<button type="button" class="btn primary" data-cw-approve="model-and-plan"${disabled ? " disabled" : ""}>${esc(
+        busy || APPROVE_BOTH_LABEL,
+      )}</button><a class="btn quiet" href="#/approvals" data-cw-approvals>See the new model's details first</a>${again}`,
+      note: canApprove
+        ? "This one click approves the new model, then fixes how this campaign will be judged, then downloads the contact list. Each happens only once the one before it has worked. After that the plan changes only with a written reason."
+        : "Approving needs the Analyst role.",
+    };
+  }
+  return {
+    lead: "",
+    buttons: `<button type="button" class="btn primary" data-cw-approve="plan"${disabled ? " disabled" : ""}>${esc(busy || APPROVE_LABEL)}</button>${again}`,
+    note: canApprove
+      ? "Approving fixes how this campaign will be judged, then the contact list downloads. After that the plan changes only with a written reason."
+      : "Approving needs the Analyst role.",
+  };
+}
+
+/**
+ * Steps 3 and 4 on one screen (M181 part C, DEC-1611; Plan M §3.1, "five steps, one screen"): who is
+ * contacted, the comparison group and the test size (`audienceHtml`), then the numbers the campaign will be
+ * judged by and the one primary button (`decisionParts`). Tiles: contacted, comparison group, expected value
+ * (when the list has one: its range when the engine gives one, `expectedValue`), the results date. Lines: the
+ * expected value, the cost, the compliance result (when the switch is on), the results date. `policy` is the
+ * list's run's `policy_recommendation.json` (or null). `canApprove` is whether this person may register the
+ * test plan; `model` is `{ state, canApprove, own }` for the model behind the list. `busy` is the button's
+ * label while its calls are on their way, else "".
+ */
+export function reviewHtml({
+  campaign,
+  scoring = null,
+  list,
+  policy = null,
+  preview,
+  cost,
+  compliance,
+  resultsOn,
+  canApprove = true,
+  model = null,
+  busy = "",
+  error = null,
+}) {
   const held = heldBack(preview);
   const value = expectedValue(list, policy);
   const tiles = [
@@ -292,7 +361,6 @@ export function reviewHtml({ campaign, list, policy = null, preview, cost, compl
   const costText = costLine(cost);
   const checked = complianceResult(compliance);
   const rows = [
-    ["Test size", lines ? [lines.size].filter(Boolean).join(" ") : "", "data-cw-review-size"],
     ["Expected value", value ? valueSentence(value) : "", "data-cw-review-value"],
     ["Cost", costText ? costText.text : "", "data-cw-review-cost"],
     [
@@ -314,14 +382,12 @@ export function reviewHtml({ campaign, list, policy = null, preview, cost, compl
     ["How the cost is worked out", cost && cost.basis],
     ["Why the cost is not known", cost && !(costText && costText.known) ? cost.reason : null],
   ]);
-  const why = canApprove ? "Approving fixes how this campaign will be judged. After that it changes only with a written reason." : "Approving needs the Analyst role.";
-  return `${card(
+  const decision = decisionParts({ campaign, model, canApprove, busy });
+  return `${audienceHtml({ scoring, list, preview })}${card(
     "Check and approve",
-    `${tiles ? `<div class="kpis cw-kpis">${tiles}</div>` : ""}<dl class="cw-kvs">${rows}</dl>${error ? errorBox(error) : ""}${actions(
-      `<button type="button" class="btn primary" data-cw-approve${!canApprove || busy ? " disabled" : ""}>${busy ? "Approving…" : "Approve"}</button><a class="btn quiet" href="${esc(
-        stepHref("audience", campaign.campaign_id),
-      )}" data-cw-back>Back</a>`,
-    )}${p(why, "data-cw-approve-note")}`,
+    `${tiles ? `<div class="kpis cw-kpis">${tiles}</div>` : ""}<dl class="cw-kvs">${rows}</dl>${decision.lead}${error ? errorBox(error) : ""}${actions(
+      decision.buttons,
+    )}${p(decision.note, "data-cw-approve-note")}`,
     "data-cw-review",
   )}${tech ? `<div class="cw-tech">${tech}</div>` : ""}`;
 }
@@ -332,10 +398,15 @@ export function reviewHtml({ campaign, list, policy = null, preview, cost, compl
 const STATUS = { live: { chip: "Live", title: "Your campaign is live" }, measured: { chip: "Measured", title: "Your campaign has its results" } };
 
 /**
- * Step 5: the one download, and what happens next. Offered only once the test plan is fixed. The status chip
- * and the title are the campaign's own `status`, never assumed.
+ * Step 5: the download, and what happens next. Reached only once the test plan is fixed. The status chip and
+ * the title are the campaign's own `status`, never assumed.
+ *
+ * `downloaded` says the Review screen's Approve has just started the download (M181 part C, DEC-1611): the
+ * page says so, the next step (the campaign's page) is the primary button and "Download again" is a secondary
+ * link to the same file. Otherwise (a refresh, a person who comes back later) the download is the primary
+ * button, as it always was: nothing claims a download this page did not start.
  */
-export function sendHtml({ campaign, plan, downloadHref, resultsOn }) {
+export function sendHtml({ campaign, plan, downloadHref, resultsOn, downloaded = false }) {
   const status = STATUS[campaign.status] || { chip: String(campaign.status || ""), title: "Your campaign" };
   const when = resultsOn ? ` Add its results after ${fmtDay(resultsOn)}: the campaign's page will ask for them.` : "";
   const tech = techDetails([
@@ -343,13 +414,18 @@ export function sendHtml({ campaign, plan, downloadHref, resultsOn }) {
     ["List", (campaign.run_ids || [])[0]],
     ["Test plan fixed as", plan && plan.plan_hash],
   ]);
+  const listWord = esc(term("contactList").toLowerCase());
+  const open = (kind) =>
+    `<a class="btn ${kind}" href="#/campaigns/${encodeURIComponent(campaign.campaign_id)}" data-cw-open>Open the campaign</a>`;
+  const lead = downloaded
+    ? `Your ${listWord} is downloading. Send it from your e-mail or messaging tool.`
+    : `Download the ${listWord} and send it from your e-mail or messaging tool.`;
+  const buttons = downloaded
+    ? `${open("primary")}<a class="btn secondary" href="${esc(downloadHref)}" download data-cw-download="again">Download again</a>`
+    : `<a class="btn primary" href="${esc(downloadHref)}" download data-cw-download>Download ${listWord}</a>${open("quiet")}`;
   return `${card(
     status.title,
-    `<p class="cw-p" data-cw-live>${status.chip ? `<span class="chip" data-cw-status>${esc(status.chip)}</span> ` : ""}Download the ${esc(term("contactList").toLowerCase())} and send it from your e-mail or messaging tool.${esc(when)}</p>${actions(
-      `<a class="btn primary" href="${esc(downloadHref)}" download data-cw-download>Download ${esc(term("contactList").toLowerCase())}</a><a class="btn quiet" href="#/campaigns/${encodeURIComponent(
-        campaign.campaign_id,
-      )}" data-cw-open>Open the campaign</a>`,
-    )}`,
+    `<p class="cw-p" data-cw-live>${status.chip ? `<span class="chip" data-cw-status>${esc(status.chip)}</span> ` : ""}${lead}${esc(when)}</p>${actions(buttons)}`,
     "data-cw-send",
   )}${tech ? `<div class="cw-tech">${tech}</div>` : ""}`;
 }

@@ -335,11 +335,35 @@ export function complianceResult(summary) {
 
 /**
  * The step a campaign record allows: a campaign with a test plan is past Review (only Send is left), one
- * without is a Draft (Audience or Review). `wanted` is the step the URL asked for.
+ * without is a Draft, shown on the Review screen. `wanted` is the step the URL asked for.
+ *
+ * Audience and Review share one screen (M181 part C, DEC-1611): who is contacted, then the figures and the one
+ * Approve. So `audience/<campaign>`, an address the wizard drew before, opens that screen (`review/<campaign>`).
  */
 export function stepForCampaign(view, wanted) {
   // (A campaign with results is past the wizard altogether: `campaignStepScreen` opens its own page.)
   const planned = Boolean(view && (view.plan || (view.campaign && view.campaign.test_plan_hash)));
   if (planned) return "send";
-  return wanted === "send" ? "review" : wanted;
+  return wanted === "send" || wanted === "audience" ? "review" : wanted;
+}
+
+/** The steps a screen covers: the Review screen shows Audience too (M181 part C), every other one its own. */
+export const SHARED_STEPS = Object.freeze({ review: Object.freeze(["audience", "review"]) });
+
+/**
+ * Where the model behind a list stands, for the Review screen (M181 part C, DEC-1611), from the registry's own
+ * row (`GET /models`):
+ *   - `approved`: the current model, or one an Approver approved (or the registry promoted) at some point;
+ *   - `pending`: a new model still waiting for an approval. On a goal's first campaign an Approver's list is
+ *     built with it, and the Approver approves it in the same click as the plan;
+ *   - `refused`: archived without ever being approved or promoted, which is what turning a waiting model down
+ *     does (`POST /models/{model_id}/reject`); its list cannot be sent.
+ * Anything else (a version the registry does not answer for, a candidate scored by name on the classic pages)
+ * is `approved`, as before this change: nothing is held on a guess.
+ */
+export function modelState(version) {
+  if (!version) return "approved";
+  if (version.status === "pending_approval") return "pending";
+  if (version.status === "archived" && !version.approved_at && !version.promoted_at) return "refused";
+  return "approved";
 }

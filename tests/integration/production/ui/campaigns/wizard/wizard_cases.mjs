@@ -99,6 +99,7 @@ const server = (request) => {
     return ok(world.preview);
   }
   if (method === "POST" && p === `/campaigns/${CID}/plan`) {
+    if (world.planAnswer) return world.planAnswer;
     world.view = fx("campaign_planned");
     return ok(fx("plan_registered"), 201);
   }
@@ -134,6 +135,21 @@ router.registerSetupMode({
     main.innerHTML = `<div data-standin><input type="file" id="ag-file"></div>`;
   },
 });
+
+// The downloads the page starts (M181 part C): the address of each, and how many calls the page had made to the
+// server by then, so a case can say the plan was registered BEFORE the file was asked for. jsdom does not save
+// files, so the click is recorded and its default (a navigation jsdom does not implement) is prevented.
+const downloads = [];
+w.addEventListener(
+  "click",
+  (event) => {
+    const link = event.target && event.target.closest && event.target.closest("a[download]");
+    if (!link) return;
+    downloads.push({ href: link.href, auto: link.hasAttribute("data-cw-autodownload"), after: world.posted.map((x) => x.path) });
+    event.preventDefault();
+  },
+  true,
+);
 
 const denied = new Set();
 const access = { can: (method, p) => !denied.has(`${method} ${p}`) };
@@ -213,7 +229,9 @@ test("Customers, first campaign: Guided setup mounts to learn; its Approve start
   assert.ok($("[role=progressbar]"));
 });
 
-test("Customers: a new model waiting for an approval holds the campaign; an Approver approves it here and the list starts", async () => {
+test("Customers: a new model waiting for an approval does not hold an Approver: the list is built with it straight away, nothing approved yet", async () => {
+  // M181 part C (DEC-1611): the Approver approves the new model on the Review screen, in the same click as the
+  // plan, so step 2 asks nothing of them. Before part C this screen held them on a separate "Approve and continue".
   // The settings the person accepted in Guided setup for the learning, as the run record keeps them (expanded):
   // the list is built with the same ones - the consent column above all, so no one who said no is contacted.
   const accepted = { governance: { consent_column: "consent" }, validation: { acknowledged: ["V_SMALL_CLASS"] } };
@@ -226,12 +244,9 @@ test("Customers: a new model waiting for an approval holds the campaign; an Appr
   world.nextRun = ["r_list"];
   world.runs.r_list = runAs("r_list", "score", "running");
   await open(`#/campaigns/new/customers/${UC}/r_train`);
-  await until(() => $("[data-cw-waiting=approve]"), 3000, "the approval card");
-  assert.equal(primaries().length, 1);
-  assert.equal($("[data-cw-approvals]").getAttribute("href"), "#/approvals");
-  $("[data-cw-approve-model]").click();
   await until(() => w.location.hash === `#/campaigns/new/customers/${UC}/r_list`, 3000, "the list being built");
-  assert.deepEqual(lastPost("/models/m_wb_1/approve").body, { approved_by: "local operator" });
+  assert.equal($("[data-cw-waiting]"), null, "no approval card on step 2");
+  assert.equal(lastPost("/models/m_wb_1/approve"), undefined, "nothing is approved before the Review screen");
   const upload = lastPost("/uploads");
   assert.ok(upload, "the chosen file is uploaded again, for the list");
   assert.deepEqual(lastPost("/runs").body, {
@@ -283,26 +298,24 @@ test("Customers: someone who may not approve sees the campaign waiting, with the
   world.runs.r_train2 = runAs("r_train2", "train", "done", { model_version_id: "m_wb_2" });
   denied.add("POST /models/{model_id}/approve");
   try {
+    // The file is chosen (kept for the list), so only the role decides that nothing is built.
+    guided.host = null;
+    await open(`#/campaigns/new/customers/${UC}`);
+    await until(() => guided.host, 3000, "Guided setup mounted");
+    const input = $("#ag-file");
+    Object.defineProperty(input, "files", { value: [new w.File(["customer_id\n1\n"], "customers.csv", { type: "text/csv" })] });
+    input.dispatchEvent(new w.Event("change", { bubbles: true }));
+    const runsBefore = world.posted.filter((x) => x.path === "/runs").length;
     await open(`#/campaigns/new/customers/${UC}/r_train2`);
     await until(() => $("[data-cw-waiting=wait]"), 3000, "the waiting notice");
-    assert.equal($("[data-cw-approve-model]"), null);
+    assert.equal($("[data-cw-approve]"), null);
     assert.equal($("[data-cw-waiting=wait] a.btn.primary").getAttribute("href"), "#/approvals");
     assert.match(text(), /The campaign waits until then/);
+    assert.equal(primaries().length, 1);
+    assert.equal(world.posted.filter((x) => x.path === "/runs").length, runsBefore, "no list is built for them");
   } finally {
     denied.clear();
   }
-});
-
-test("Customers: the server refuses the trainer's own approval, and the wizard says another Approver must do it", async () => {
-  world.models = { versions: [version("m_wb_3", "pending_approval", "r_train3")] };
-  world.runs.r_train3 = runAs("r_train3", "train", "done", { model_version_id: "m_wb_3" });
-  world.approveAnswer = { status: 403, body: { detail: { code: "SEPARATION_OF_DUTIES", message: "You trained it." } } };
-  await open(`#/campaigns/new/customers/${UC}/r_train3`);
-  await until(() => $("[data-cw-approve-model]"), 3000, "the approval card");
-  $("[data-cw-approve-model]").click();
-  await until(() => $("[data-cw-waiting=wait]"), 3000, "the waiting notice");
-  assert.match(text(), /You started this learning, so another person/);
-  world.approveAnswer = null;
 });
 
 test("Customers, later campaign: the current model checks the file and builds the list - nothing learns again", async () => {
@@ -315,7 +328,8 @@ test("Customers, later campaign: the current model checks the file and builds th
   assert.equal(guided.host.modelVersionId, "m_wb_1");
   world.nextRun = [RUN];
   guided.host.approved(fill("score"));
-  await until(() => w.location.hash === `#/campaigns/new/audience/${CID}`, 4000, "the campaign made from the list");
+  // M181 part C: the finished list opens the Review screen, which shows Audience too (it was `audience/<id>`).
+  await until(() => w.location.hash === `#/campaigns/new/review/${CID}`, 4000, "the campaign made from the list");
   assert.deepEqual(lastPost("/runs").body, {
     use_case: UC,
     mode: "score",
@@ -353,12 +367,31 @@ test("Customers: work that stopped says so and offers to start again", async () 
   assert.equal($("[data-cw-restart]").getAttribute("href"), `#/campaigns/new/customers/${UC}`);
 });
 
-test("Audience: who is contacted by priority, the comparison group and the test size, all from the API", async () => {
+test("Audience: who is contacted by priority, the comparison group and the test size, all from the API, on the Review screen", async () => {
   world.view = fx("campaign_draft");
   world.previewQueries = [];
+  // M181 part C: Audience's old address opens the one screen that shows Audience and Review (no "Continue").
   await open(`#/campaigns/new/audience/${CID}`);
-  await until(() => $("[data-cw-audience]"), 3000, "the audience");
-  assert.equal($("[data-cw-stepper=audience]").getAttribute("aria-current"), "step");
+  await until(() => w.location.hash === `#/campaigns/new/review/${CID}`, 3000, "the Review screen");
+  await until(() => $("[data-cw-audience]") && $("[data-cw-review]"), 3000, "the audience and the review");
+  // The five named steps stay in the indicator; Audience and Review are both on screen, Review is the current one.
+  assert.deepEqual(
+    $$("[data-cw-stepper]").map((li) => [li.getAttribute("data-cw-stepper"), li.querySelector(".cw-sl").textContent]),
+    [
+      ["goal", "Goal"],
+      ["customers", "Customers"],
+      ["audience", "Audience"],
+      ["review", "Review"],
+      ["send", "Send"],
+    ],
+  );
+  assert.deepEqual(
+    $$("[data-cw-stepper]").map((li) => li.className.replace("cw-step ", "")),
+    ["done", "done", "now", "now", "todo"],
+  );
+  assert.equal($("[data-cw-stepper=review]").getAttribute("aria-current"), "step");
+  assert.equal($$("[aria-current=step]").length, 1);
+  assert.equal($("[data-cw-next]"), null, "no Continue: Audience and Review share the screen");
   assert.equal($("[data-cw-contacted]").textContent, `${list.treat_rows.toLocaleString("en-US")} customers are on the contact list.`);
   const rows = $$("[data-cw-priority] tbody tr").map((tr) => [...tr.querySelectorAll("td")].map((td) => td.textContent));
   assert.deepEqual(
@@ -373,10 +406,8 @@ test("Audience: who is contacted by priority, the comparison group and the test 
     `Enough to see a ${point.mde_pp.toLocaleString("en-US", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}-point change.`,
   );
   assert.match($("[data-cw-group]").textContent, new RegExp(`^${preview.n_holdout.toLocaleString("en-US")} customers \\(`));
-  assert.equal(primaries().length, 1);
-  $("[data-cw-next]").click();
-  await settle(4);
-  assert.equal(w.location.hash, `#/campaigns/new/review/${CID}`);
+  assert.equal(primaries().length, 1, "one primary button on the shared screen");
+  assert.equal($("[data-cw-again]").getAttribute("href"), `#/campaigns/new/customers/${UC}`);
 });
 
 test("Audience: 'Which channel' counts the customers sent on each channel, not the ones it cannot reach", async () => {
@@ -401,14 +432,12 @@ test("Audience and Review: the comparison group is the one this list holds back,
   // The realised assignment is stratified, so it can differ from the planner's arm size at the same share.
   world.preview = { ...preview, n_holdout: point.n_control + 3, holdout_fraction: 0.1234 };
   try {
-    await open(`#/campaigns/new/audience/${CID}`);
-    await until(() => $("[data-cw-group]"), 3000, "the comparison group");
+    await open(`#/campaigns/new/review/${CID}`);
+    await until(() => $("[data-cw-group]") && $("[data-cw-review]"), 3000, "the comparison group and the review");
     assert.match(
       $("[data-cw-group]").textContent,
       new RegExp(`^${(point.n_control + 3).toLocaleString("en-US")} customers \\(12\\.3%\\) are not contacted`),
     );
-    await open(`#/campaigns/new/review/${CID}`);
-    await until(() => $("[data-cw-review]"), 3000, "the review");
     assert.equal($("[data-cw-tile=comparison] .v").textContent, (point.n_control + 3).toLocaleString("en-US"));
   } finally {
     world.preview = preview;
@@ -442,8 +471,14 @@ test("Review: the cost in rupees once an exchange rate is saved", () => {
   assert.match(rules.costLine({ estimated_usd: 1.25, inr: null }).text, /^About \$1\.25 /);
 });
 
-test("Review: the figures, then Approve registers the plan with the planner's numbers before Send is offered", async () => {
+const treatHref = new RegExp(`/runs/${RUN}/treat_list\\.csv$`);
+const planPath = `/campaigns/${CID}/plan`;
+/** The calls the page made after the `n`th one, by path. */
+const postedSince = (n) => world.posted.slice(n).map((x) => x.path);
+
+test("Review: the figures, then 'Approve and download' registers the plan, and only then downloads the list and shows Send", async () => {
   world.view = fx("campaign_draft");
+  downloads.length = 0;
   await open(`#/campaigns/new/review/${CID}`);
   await until(() => $("[data-cw-review]"), 3000, "the review");
   assert.equal($("[data-cw-tile=contacted] .v").textContent, list.treat_rows.toLocaleString("en-US"));
@@ -451,11 +486,188 @@ test("Review: the figures, then Approve registers the plan with the planner's nu
   assert.ok($("[data-cw-review-cost]"), "the cost line");
   assert.equal($("[data-cw-review-compliance]"), null, "the compliance switch is off: no compliance line");
   assert.equal(primaries().length, 1);
-  assert.equal(lastPost(`/campaigns/${CID}/plan`), undefined, "nothing registered before Approve");
+  assert.equal($("[data-cw-approve]").textContent, "Approve and download");
+  assert.equal($("[data-cw-approve]").getAttribute("data-cw-approve"), "plan");
+  assert.equal(lastPost(planPath), undefined, "nothing registered before Approve");
+  assert.equal(downloads.length, 0, "nothing downloaded before Approve");
+  const before = world.posted.length;
   $("[data-cw-approve]").click();
   await until(() => w.location.hash === `#/campaigns/new/send/${CID}`, 3000, "Send");
   // Exactly the body the real API accepted and froze (test_campaign_wizard_ui.py registered it).
-  assert.deepEqual(lastPost(`/campaigns/${CID}/plan`).body, fx("plan_body"));
+  assert.deepEqual(lastPost(planPath).body, fx("plan_body"));
+  assert.deepEqual(postedSince(before), [planPath], "the plan only: no model to approve");
+  // One download, of the list's served file, started after the server had accepted the plan.
+  assert.equal(downloads.length, 1, JSON.stringify(downloads));
+  assert.ok(downloads[0].auto);
+  assert.match(downloads[0].href, treatHref);
+  assert.ok(downloads[0].after.includes(planPath), "the plan was registered before the download");
+  // Send: the campaign is Live, the list is on its way, "Download again" is a secondary link to the same file.
+  await until(() => $("[data-cw-send]"), 3000, "Send drawn");
+  assert.equal($("[data-cw-status]").textContent, "Live");
+  assert.match($("[data-cw-live]").textContent, /Your contact list is downloading\./);
+  const again = $("[data-cw-download]");
+  assert.equal(again.getAttribute("data-cw-download"), "again");
+  assert.equal(again.textContent, "Download again");
+  assert.ok(!again.classList.contains("primary") && again.hasAttribute("download"));
+  assert.match(again.getAttribute("href"), treatHref);
+  assert.equal(new URL(again.href).href, downloads[0].href, "the same file as the download");
+  assert.equal(primaries().length, 1);
+  assert.equal($("#app .btn.primary").getAttribute("data-cw-open"), "", "the next step is the campaign's page");
+});
+
+test("Review: when the plan is refused nothing is downloaded, the error is shown, and the screen stays", async () => {
+  world.view = fx("campaign_draft");
+  world.planAnswer = { status: 409, body: { detail: { code: "PLAN_ALREADY_REGISTERED", message: "This campaign already has a plan." } } };
+  downloads.length = 0;
+  try {
+    await open(`#/campaigns/new/review/${CID}`);
+    await until(() => $("[data-cw-approve]"), 3000, "the review");
+    $("[data-cw-approve]").click();
+    await until(() => $("[data-cw-review] .apierr"), 3000, "the error");
+    assert.match($("[data-cw-review]").textContent, /This campaign already has a plan\./);
+    assert.equal(downloads.length, 0, "no download without the plan");
+    assert.equal(w.location.hash, `#/campaigns/new/review/${CID}`);
+    assert.equal($("[data-cw-approve]").disabled, false, "the person can try again");
+  } finally {
+    world.planAnswer = null;
+  }
+});
+
+test("Review, a goal's first campaign: an Approver approves the new model, the plan and the download in one click, in that order", async () => {
+  const LIST_MODEL = scoreRun.run.model_version_id;
+  assert.ok(LIST_MODEL, "the list's run names the model it was built with");
+  world.view = fx("campaign_draft");
+  world.models = { versions: [version(LIST_MODEL, "pending_approval", "r_train")] };
+  downloads.length = 0;
+  await open(`#/campaigns/new/review/${CID}`);
+  await until(() => $("[data-cw-approve]"), 3000, "the review");
+  const button = $("[data-cw-approve]");
+  assert.equal(button.textContent, "Approve the new model and this plan, then download");
+  assert.equal(button.getAttribute("data-cw-approve"), "model-and-plan");
+  assert.match($("[data-cw-new-model]").textContent, /a new model that still needs an Approver's approval\. You have that role\./);
+  assert.match($("[data-cw-approve-note]").textContent, /approves the new model, then fixes how this campaign will be judged, then downloads/);
+  assert.equal($("[data-cw-approvals]").getAttribute("href"), "#/approvals", "the details stay one link away");
+  assert.equal(primaries().length, 1);
+  assert.equal(lastPost(`/models/${LIST_MODEL}/approve`), undefined, "nothing approved before the click");
+  const before = world.posted.length;
+  button.click();
+  await until(() => w.location.hash === `#/campaigns/new/send/${CID}`, 3000, "Send");
+  // The approvals page's own call, then the plan; then the download.
+  assert.deepEqual(postedSince(before), [`/models/${LIST_MODEL}/approve`, planPath]);
+  assert.deepEqual(lastPost(`/models/${LIST_MODEL}/approve`).body, { approved_by: "local operator" });
+  assert.deepEqual(lastPost(planPath).body, fx("plan_body"));
+  assert.equal(downloads.length, 1);
+  assert.match(downloads[0].href, treatHref);
+  assert.deepEqual(downloads[0].after.slice(before), [`/models/${LIST_MODEL}/approve`, planPath]);
+});
+
+test("Review, first campaign: a refused model approval stops everything - no plan, no download - and the error is shown", async () => {
+  const LIST_MODEL = scoreRun.run.model_version_id;
+  world.view = fx("campaign_draft");
+  world.models = { versions: [version(LIST_MODEL, "pending_approval", "r_train")] };
+  world.approveAnswer = { status: 409, body: { detail: { code: "CHAMPION_CHANGED", message: "Another model became current meanwhile." } } };
+  downloads.length = 0;
+  try {
+    await open(`#/campaigns/new/review/${CID}`);
+    await until(() => $("[data-cw-approve=model-and-plan]"), 3000, "the review");
+    const before = world.posted.length;
+    $("[data-cw-approve]").click();
+    await until(() => /Another model became current meanwhile\./.test($("[data-cw-review]").textContent), 3000, "the error");
+    assert.deepEqual(postedSince(before), [`/models/${LIST_MODEL}/approve`], "no plan after a refused approval");
+    assert.equal(downloads.length, 0);
+    assert.equal(w.location.hash, `#/campaigns/new/review/${CID}`);
+  } finally {
+    world.approveAnswer = null;
+  }
+});
+
+test("Review, first campaign: the model approved but the plan refused - trying again only registers the plan", async () => {
+  const LIST_MODEL = scoreRun.run.model_version_id;
+  world.view = fx("campaign_draft");
+  world.models = { versions: [version(LIST_MODEL, "pending_approval", "r_train")] };
+  world.planAnswer = { status: 503, body: { detail: { code: "STORE_BUSY", message: "Try again in a moment." } } };
+  downloads.length = 0;
+  try {
+    await open(`#/campaigns/new/review/${CID}`);
+    await until(() => $("[data-cw-approve=model-and-plan]"), 3000, "the review");
+    $("[data-cw-approve]").click();
+    // Drawn again from the server: the model is approved now, so the button is the plain one, with the error.
+    await until(() => $("[data-cw-approve=plan]") && /Try again in a moment\./.test($("[data-cw-review]").textContent), 3000, "the error");
+    assert.equal(downloads.length, 0, "no download without the plan");
+    world.planAnswer = null;
+    const before = world.posted.length;
+    $("[data-cw-approve]").click();
+    await until(() => w.location.hash === `#/campaigns/new/send/${CID}`, 3000, "Send");
+    assert.deepEqual(postedSince(before), [planPath], "the model is not approved twice");
+    assert.equal(downloads.length, 1);
+  } finally {
+    world.planAnswer = null;
+  }
+});
+
+test("Review, first campaign: the server refuses the trainer's own approval; the screen says another Approver must do it", async () => {
+  const LIST_MODEL = scoreRun.run.model_version_id;
+  world.view = fx("campaign_draft");
+  world.models = { versions: [version(LIST_MODEL, "pending_approval", "r_train")] };
+  world.approveAnswer = { status: 403, body: { detail: { code: "SEPARATION_OF_DUTIES", message: "You trained it." } } };
+  downloads.length = 0;
+  try {
+    await open(`#/campaigns/new/review/${CID}`);
+    await until(() => $("[data-cw-approve=model-and-plan]"), 3000, "the review");
+    const before = world.posted.length;
+    $("[data-cw-approve]").click();
+    await until(() => $("[data-cw-waiting=review]"), 3000, "the waiting notice");
+    assert.match(text(), /You started this learning, so another person with the Approver role must approve the new model/);
+    assert.equal($("[data-cw-approve]"), null, "no Approve while it waits");
+    assert.equal($("#app .btn.primary").getAttribute("href"), "#/approvals");
+    assert.equal(primaries().length, 1);
+    assert.deepEqual(postedSince(before), [`/models/${LIST_MODEL}/approve`], "no plan");
+    assert.equal(downloads.length, 0, "no download");
+  } finally {
+    world.approveAnswer = null;
+  }
+});
+
+test("Review, first campaign: someone who may not approve models is held, with the way to Waiting for approval", async () => {
+  const LIST_MODEL = scoreRun.run.model_version_id;
+  world.view = fx("campaign_draft");
+  world.models = { versions: [version(LIST_MODEL, "pending_approval", "r_train")] };
+  denied.add("POST /models/{model_id}/approve");
+  try {
+    await open(`#/campaigns/new/review/${CID}`);
+    await until(() => $("[data-cw-waiting=review]"), 3000, "the waiting notice");
+    assert.equal($("[data-cw-approve]"), null);
+    assert.equal($("#app .btn.primary").getAttribute("href"), "#/approvals");
+    assert.match(text(), /someone with the Approver role must approve first/);
+  } finally {
+    denied.clear();
+  }
+});
+
+test("Review: a list built with a model an Approver turned down cannot be sent; the screen offers to start again", async () => {
+  const LIST_MODEL = scoreRun.run.model_version_id;
+  world.view = fx("campaign_draft");
+  world.models = { versions: [version(LIST_MODEL, "archived", "r_train")] };
+  world.models.versions[0].version = { ...world.models.versions[0].version, approved_at: null, promoted_at: null };
+  try {
+    await open(`#/campaigns/new/review/${CID}`);
+    await until(() => $("[data-cw-model-refused]"), 3000, "the refusal");
+    assert.equal($("[data-cw-approve]"), null);
+    assert.equal($("[data-cw-restart]").getAttribute("href"), `#/campaigns/new/customers/${UC}`);
+    assert.equal(primaries().length, 1);
+  } finally {
+    world.models = fx("models_empty");
+  }
+});
+
+test("the model behind a list, as the Review screen reads it", () => {
+  assert.equal(rules.modelState(null), "approved", "nothing known: nothing held");
+  assert.equal(rules.modelState({ status: "champion" }), "approved");
+  assert.equal(rules.modelState({ status: "pending_approval" }), "pending");
+  assert.equal(rules.modelState({ status: "archived", approved_at: null, promoted_at: null }), "refused");
+  assert.equal(rules.modelState({ status: "archived", approved_at: "2026-10-01T00:00:00Z" }), "approved", "a former current model");
+  assert.equal(rules.modelState({ status: "archived", promoted_at: "2026-10-01T00:00:00Z" }), "approved");
+  assert.equal(rules.modelState({ status: "candidate" }), "approved", "a version scored by name on the classic pages, as before");
 });
 
 test("Send: the one download, offered only with the plan fixed; the campaign is Live with its results date", async () => {
@@ -510,7 +722,7 @@ test("a finished list already made into a campaign is not recorded twice", async
   world.campaignsOfRun = fx("campaigns_of_run");
   const before = world.posted.filter((x) => x.path === "/campaigns").length;
   await open(`#/campaigns/new/customers/${UC}/${RUN}`);
-  await until(() => w.location.hash === `#/campaigns/new/audience/${CID}`, 3000, "Audience");
+  await until(() => w.location.hash === `#/campaigns/new/review/${CID}`, 3000, "Audience and Review");
   assert.equal(world.posted.filter((x) => x.path === "/campaigns").length, before);
 });
 
