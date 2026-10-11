@@ -1,8 +1,9 @@
-# configs/measurement.yaml - measurement options read across campaigns (Plan K).
+# configs/measurement.yaml - measurement options read across campaigns; each section names its milestone.
 #
 # Installation-wide, like privacy.yaml and guardrails.yaml: one file under the configuration root. A missing
 # file, or a missing section, means every default below. Every option is off by default; with them off every
-# summary, alert and campaign file is byte for byte what it was before Plan K.
+# summary, alert and campaign file is byte for byte what it was. A file that cannot be read (not YAML, not a
+# mapping, an unknown key or a value out of range) is refused with a ConfigError before anything is measured.
 
 harm_alarm:                   # Plan K M138 (DEC-1403): an early alarm when a campaign is doing harm, never a win
   enabled: false              # bool; check every interim reading (an early look, or outcomes still to come in)

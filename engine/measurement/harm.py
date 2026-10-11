@@ -26,7 +26,7 @@ property; `tests/statistical/test_harm_alarm.py` checks it over many refresh sch
 
 **Never a win.** The same statistic is never read the other way. A benefit, however large, raises nothing, and
 nothing here writes a verdict: M94's early-look rule stands, and the result is read on the planned day only.
-`tests/unit/measurement/test_harm_alarm.py` greps every output path for win wording on an early look.
+`tests/integration/measurement/test_harm_alarm_loop.py` greps every output path for win wording on an early look.
 
 **Sticky, and nothing stops.** An alarm, once fired under a plan, stands until the final result is read (an
 mSPRT is a stopping rule: the evidence that crossed the line is not withdrawn because a later refresh looks
@@ -34,16 +34,27 @@ calmer). It raises a warning card on the campaigns' summary (`HARM_ALARM`, `engi
 one alert when it first fires (`harm_alarm`, the scheduling alert path). Nothing is paused or stopped: a person
 decides.
 
-**Where it runs.** On every interim reading of a campaign that has its outcomes - an early look, or a reading
-with some customers still inside their outcome window: the monthly loop's measure step
-(`engine.measurement.cycle.measure_step`) and, on demand, `POST /campaigns/{id}/measure`. It reads the report the
-measurement just computed (never a second computation of the difference) and writes
+**Where it runs.** On every interim reading of a campaign, in two places.
+
+* The monthly loop's measure step (`engine.measurement.cycle.measure_step`). While a live campaign's outcome
+  window is still open, each firing reads the outcomes recorded so far (`[treatment start, now]`, from the same
+  saved connection) and builds an interim reading in memory (`engine.measurement.cycle.interim_reading`): every
+  customer counted, each outcome as it stands now, so both groups are compared over exactly the same days. That
+  reading is checked and then dropped: no report, no outcomes copy and no change to the campaign are stored, as
+  for any reading refused with `CAMPAIGN_NOT_MATURED`. Once the window has closed the step measures the
+  campaign as before, and every reading before the plan's analysis date (an early look) is checked too.
+* On demand, `POST /campaigns/{id}/measure`, for a reading that is an early look or still has customers inside
+  their outcome window (per-row treatment dates).
+
+It reads the report the measurement just computed (never a second computation of the difference) and writes
 `campaigns/<id>/harm_alarm.json` (`HarmCheck`, aggregate: no customer id). A final result is never checked: its
 verdict says whether the campaign did harm.
 
 **Opt-in.** `harm_alarm.enabled` in `configs/measurement.yaml` (installation-wide, read by
-`load_harm_alarm_settings`) is false by default: then nothing is read or written and every output is byte for
-byte what it was.
+`load_harm_alarm_settings`) is false by default: then nothing is checked or written, no card is shown (even for a
+`harm_alarm.json` left from a time the setting was on) and every output is byte for byte what it was. The file is
+read before anything is measured, so a file that cannot be read refuses the measurement up front with a
+`ConfigError` (HTTP 422, or a failed firing with the error's code) and writes nothing.
 """
 
 from __future__ import annotations
@@ -133,19 +144,49 @@ class HarmAlarmSettings(StrictBase):
 def load_harm_alarm_settings(root: Path | None = None) -> HarmAlarmSettings:
     """`harm_alarm` of `configs/measurement.yaml` under the configuration root; every default when absent.
 
-    Raises `ValueError` (a pydantic `ValidationError`) for a section with an unknown key or a value out of range,
-    so a typo cannot silently leave the alarm off. Other sections of the file (M136's `pooling`) are not read.
+    Raises `engine.config.ConfigError`, the coded error every route already answers with its code and a plain
+    message (HTTP 422), never a bare 500, as M136's `load_pooling_settings` does for the same file:
+    `CONFIG_YAML_ERROR` or `CONFIG_NOT_A_MAPPING` for a file that is not a mapping of settings, `CONFIG_INVALID`
+    for a section that is not a mapping, names an unknown key or holds a value out of range, so a typo cannot
+    silently leave the alarm off. Other sections of the file (M136's `pooling`) are not validated here.
     """
     import yaml
+    from pydantic import ValidationError
 
-    from engine.config import config_root
+    from engine.config import ConfigError, config_root
 
     path = config_root(root) / MEASUREMENT_SETTINGS_FILENAME
     if not path.is_file():
         return HarmAlarmSettings()
-    document = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-    section = document.get("harm_alarm") if isinstance(document, dict) else None
-    return HarmAlarmSettings.model_validate(section or {})
+    try:
+        document = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except yaml.YAMLError as exc:
+        raise ConfigError(
+            "CONFIG_YAML_ERROR", f"{MEASUREMENT_SETTINGS_FILENAME} is not valid YAML: {exc}.", path=str(path)
+        ) from exc
+    if document is None:  # an empty file, or comments only: every default
+        return HarmAlarmSettings()
+    if not isinstance(document, dict):
+        raise ConfigError(
+            "CONFIG_NOT_A_MAPPING",
+            f"{MEASUREMENT_SETTINGS_FILENAME} must contain a mapping of settings, not {type(document).__name__}.",
+            path=str(path),
+        )
+    section = document.get("harm_alarm")
+    if section is not None and not isinstance(section, dict):
+        raise ConfigError(
+            "CONFIG_INVALID",
+            f"{MEASUREMENT_SETTINGS_FILENAME}: `harm_alarm` must be a mapping of settings.",
+            path="harm_alarm",
+        )
+    try:
+        return HarmAlarmSettings.model_validate(section or {})
+    except ValidationError as exc:
+        first = exc.errors()[0]
+        dotted = ".".join(["harm_alarm", *(str(part) for part in first["loc"])])
+        raise ConfigError(
+            "CONFIG_INVALID", f"{MEASUREMENT_SETTINGS_FILENAME} {dotted}: {first['msg']}.", path=dotted
+        ) from exc
 
 
 # ---------------------------------------------------------------------------
@@ -410,7 +451,8 @@ def outcome_is_good_for(
     """Which way round the outcome counts, decided as the Value Proof Pack decides it (`engine.pilot.proof`).
 
     The value inputs (the campaign's own, else its scoring run's), else the audit's or programme's readout, else
-    the use case's rule (`outcome_is_good_by_default`) for the column the campaign page judges.
+    the use case's rule (`outcome_is_good_by_default`) for the column the campaign page judges. A campaign with
+    no outcomes recorded yet (the loop's interim reading of an open window) is judged on the column `report` read.
     """
     from engine.config import load_use_case
     from engine.measurement.audit import AUDIT_FILENAME
@@ -432,7 +474,7 @@ def outcome_is_good_for(
     if campaign.use_case_id is None:
         return True
     column = report.outcome_column
-    if campaign.outcomes is None or not campaign.outcomes.outcome_named:
+    if campaign.outcomes is not None and not campaign.outcomes.outcome_named:
         try:
             column = load_use_case(campaign.use_case_id, root).target.column or "outcome"
         except (
@@ -493,17 +535,20 @@ def check_campaign_harm(
     root: Path | None,
     now: datetime,
     settings: HarmAlarmSettings | None = None,
+    interim: bool = False,
 ) -> HarmOutcome | None:
     """Check an interim reading of `campaign` for harm and write `harm_alarm.json`; None when nothing was done.
 
     Nothing is read or written when the alarm is off (`configs/measurement.yaml` under `root`) or `report` is a
-    final result. `report` is the one the measurement just computed for this campaign.
+    final result. `report` is the one the measurement just computed for this campaign; `interim` marks a reading
+    the caller knows is not final although the report alone does not say so (the loop's reading of an open
+    window, `engine.measurement.cycle.interim_reading`).
     """
     from engine.measurement.campaign import TEST_PLAN_FILENAME, campaign_key
     from engine.measurement.plan import TestPlan
 
     settings = settings if settings is not None else load_harm_alarm_settings(root)
-    if not settings.enabled or not is_interim(report):
+    if not settings.enabled or not (interim or is_interim(report)):
         return None
     cid = campaign.campaign_id
     plan = _stored(storage, campaign_key(cid, TEST_PLAN_FILENAME), TestPlan)
@@ -595,11 +640,10 @@ def harm_alert_message(outcome: HarmOutcome, *, use_case_name: str | None) -> st
     whose = f" for {use_case_name}" if use_case_name else ""
     offers = sorted({alarm.arm for alarm in outcome.new_alarms} - {WHOLE_CAMPAIGN})
     which = f" (offer {', '.join(offers)})" if offers else ""
-    when = (
-        f" The result is still read only on {check.analysis_date.isoformat()}."
-        if check.analysis_date is not None
-        else ""
-    )
+    if check.early_look and check.analysis_date is not None:
+        when = f" The result is still read only on {check.analysis_date.isoformat()}."
+    else:  # outcomes still to come in, perhaps after the planned day: the result waits for every one of them
+        when = " The final result is read once every customer's outcome is in."
     return (
         f"The campaign {check.campaign_id}{whose} may be doing harm{which}: at this reading the customers "
         f"contacted are doing worse than those held back, by more than chance explains. This is an alarm, not a "

@@ -1284,6 +1284,11 @@ class ScheduleFirer:
             raise FiringError(exc.code, exc.message) from exc
         except ConnectorErrorType as exc:
             raise FiringError(exc.code, exc.message) from exc
+        except ConfigError as exc:
+            if schedule.kind is not ScheduleKind.MEASURE:
+                raise
+            # PLAN-K (M138): configs/measurement.yaml that cannot be read refuses the step up front, with its code.
+            raise FiringError(exc.code, exc.message) from exc
         self._alert_step(schedule, step)
         self._alert_harm(schedule, step, config.name)  # PLAN-K (M138)
         status = FiringStatus.RUNNING if step.running else FiringStatus.SUCCEEDED
@@ -1312,22 +1317,21 @@ class ScheduleFirer:
         )
 
     def _alert_harm(self, schedule: Schedule, step: StepOutcome, use_case_name: str) -> None:
-        """PLAN-K (M138, DEC-1403): one `harm_alarm` warning when a harm alarm fired for the first time at this step."""
+        """PLAN-K (M138, DEC-1403): one `harm_alarm` warning per campaign whose harm alarm first fired at this step."""
         from engine.measurement.harm import harm_alert
 
-        if step.harm is None:
-            return
-        alert = harm_alert(
-            step.harm,
-            use_case_id=schedule.use_case_id,
-            use_case_name=use_case_name,
-            client_id=schedule.client_id,
-            schedule_id=schedule.schedule_id,
-            run_id=step.run_id,
-            now=self.services.clock(),
-        )
-        if alert is not None:
-            self.services.alerts.raise_alert(alert)
+        for outcome in step.harms:
+            alert = harm_alert(
+                outcome,
+                use_case_id=schedule.use_case_id,
+                use_case_name=use_case_name,
+                client_id=schedule.client_id,
+                schedule_id=schedule.schedule_id,
+                run_id=step.run_id,
+                now=self.services.clock(),
+            )
+            if alert is not None:
+                self.services.alerts.raise_alert(alert)
 
     def _alert_learned(self, firing: ScheduleFiring, record: RunRecord, result_code: str) -> None:
         """A settled learning run: its challenger waits for an Approver, was not put forward, or was not made.

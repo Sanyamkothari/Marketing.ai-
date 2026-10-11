@@ -1152,8 +1152,15 @@ the Value Proof Pack decides it). A benefit never fires, however strong. Several
 shared control at `alpha / m`. Fewer than `min_rows_per_arm` (100) customers counted in a group, no registered plan, a
 plan with no smallest effect, or groups not drawn at random: nothing is judged, and `harm_alarm.json` says why.
 
-**Where it runs.** On an early look, or a reading with outcomes still to come in: the monthly loop's `measure` step and,
-on demand, `POST /campaigns/{id}/measure`. It writes `campaigns/<id>/harm_alarm.json` (`HarmCheck`, aggregate, kept
+**Where it runs.** On every interim reading. In the monthly loop's `measure` step: while a live campaign's outcome window
+is still open, each firing pulls the outcomes recorded so far (`[treatment start, now]`, the step's saved connection) and
+reads them in memory (`engine.measurement.cycle.interim_reading`: the window cut to the whole days since the send, so
+both groups are read over the same days; customers with no outcome row yet are left out, never counted as
+non-conversions). That reading is checked and dropped: no report, outcomes copy, upload or campaign change is stored, and
+the step still answers `CAMPAIGN_NOT_MATURED`. Every open campaign is read, and every reading succeeds before any check
+is written, so a failed firing leaves no alarm whose alert was never raised. Once the window has closed, every early
+look the step measures is checked as well. On demand, `POST /campaigns/{id}/measure` checks an early look or a reading
+with customers still inside their window (per-row treatment dates). It writes `campaigns/<id>/harm_alarm.json` (`HarmCheck`, aggregate, kept
 with the report). An alarm stands once fired under a plan (an amended plan sets it aside) until the final result is
 read; a final result is never checked. When it first fires: the `HARM_ALARM` warning card on the campaigns' summary
 (§19) and one `harm_alarm` alert (severity `warning`) through the scheduling alert path. **Nothing stops**: a person
@@ -1161,7 +1168,11 @@ decides. The result is still read only on the planned day, and no output of an e
 (`tests/integration/measurement/test_harm_alarm_loop.py` greps them).
 
 **Opt-in.** `harm_alarm.enabled` in `configs/measurement.yaml` (installation-wide; also `alpha`, `min_rows_per_arm`)
-is false by default: then nothing is read or written and every output is as before.
+is false by default: then nothing is checked, pulled or written, no card is shown (even for a `harm_alarm.json` left
+from a time the setting was on) and every output is as before. The file is read before anything is measured; one that
+cannot be read is a coded `ConfigError` as M136's loader of the same file gives (`CONFIG_YAML_ERROR`,
+`CONFIG_NOT_A_MAPPING`, `CONFIG_INVALID` with the dotted path): HTTP 422 on demand, a failed firing with that code in
+the loop, and nothing written either way.
 
 **Measured** (`tests/statistical/test_harm_alarm.py`, nightly, 4,000 campaigns per case, staggered sends over eight
 weeks, 14-day windows). On no effect the share of campaigns with any alarm before the analysis date stays far below
@@ -1169,5 +1180,8 @@ weeks, 14-day windows). On no effect the share of campaigns with any alarm befor
 one-sided 95% test read daily cries wolf in about a quarter of them. A harm of the smallest effect (3 points on 10%)
 is caught before the analysis date in about 87% of campaigns read daily with 2,712 customers per group, twice what a
 single reading needs for 80% power; at the planner's own 1,356 it is about 53%: reading every day without false alarms
-costs sample size.
+costs sample size. Inside an open 30-day window read as the loop reads it (everyone sent on day 0, each outcome
+counting from the day it happens), the A/A share stays at 0.3% to 0.7% read daily, every third day or weekly through
+the window and on to the analysis date, and harm of 3 points is caught before the window closes in about 87% of
+campaigns read daily at 2,712 per group.
 

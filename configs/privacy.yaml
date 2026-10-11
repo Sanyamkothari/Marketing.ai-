@@ -60,7 +60,9 @@ retention:
   # segment_effects.json (counts, rates and ranges per band, segment and offer), suppression_proposals.json
   # (the groups an Analyst approved leaving out next cycle, with who and when) and pilot_roi_inputs.json (the
   # campaign's own value inputs, with the username that entered them). None holds a customer id; the Value
-  # Proof Pack reads only them and the other aggregate files, never a row-level one.
+  # Proof Pack reads only them and the other aggregate files, never a row-level one. Plan K M138 adds one
+  # more such file, harm_alarm.json (the latest harm check and every alarm under the plan in force: counts,
+  # differences and the statistic, no customer id), kept with the report likewise.
   # Aggregate reports that nevertheless carry a handful of example rows. They are kept, and the
   # listed fields are emptied instead: a list becomes empty, anything else becomes null. A path is
   # dotted; `*` stands for every element of a list.

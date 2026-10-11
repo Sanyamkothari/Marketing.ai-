@@ -22,6 +22,13 @@ b. **Planted harm of the smallest effect** is caught before the analysis date in
    daily, with twice the customers per group that the planner (`engine.measurement.planner.n_for_mde`) says a
    single reading needs for 80% power. That is the price of reading every day without false alarms; the share
    caught at the planner's own size is printed (`-s`), not gated.
+d. **Inside an open window, as the monthly loop reads it** (`engine.measurement.cycle.interim_reading`). Every
+   customer is contacted on day 0 and counted from the first reading; each outcome happens on a day uniform over
+   the 30-day window and counts from that day on, so each reading compares what has happened so far, over the
+   same days in both groups. Read daily, every third day or weekly until the window closes and then until the
+   analysis date (the readings after the window are the whole result, as the loop's early looks read it), the
+   share of A/A campaigns with any alarm stays within the same band as (a), and planted harm of the smallest
+   effect is caught before the window closes in at least 80% of campaigns read daily at (b)'s size.
 c. **The production chain agrees.** On campaigns measured by `measure_campaign` at weekly readings (the per-row
    treatment dates, the maturity rule, the report) and judged by `harm_looks`, every reading's decision is the
    one the arithmetic of (a) gives; so (a) and (b) speak for the engine's own path.
@@ -296,3 +303,52 @@ def test_the_measured_reports_give_the_same_decision_at_every_reading(effect: fl
     assert disagreements == 0
     if effect < 0:
         assert alarms > 0, "harm is seen through the chain"
+
+
+# --- (d) inside an open window, as the monthly loop's interim reading counts outcomes ----------------------------
+OPEN_WINDOW = 30
+OPEN_ANALYSIS_DAY = OPEN_WINDOW + 14
+"""The window closes on day 30; the plan's analysis date is two weeks later (readings in between are early looks)."""
+
+
+def _running_stream(rng: np.random.Generator, per_arm: int, base_rate: float, effect: float) -> Stream:
+    """Everyone sent on day 0 and counted from the start; an outcome counts from the day it happens."""
+    n = 2 * per_arm
+    control = np.zeros(n, dtype=bool)
+    control[rng.choice(n, size=per_arm, replace=False)] = True
+    converted = rng.random(n) < np.where(control, base_rate, base_rate + effect)
+    happens = rng.integers(0, OPEN_WINDOW, size=n)  # the day each outcome happens, when it does
+
+    def hits(mask: np.ndarray) -> np.ndarray:
+        return np.cumsum(np.bincount(happens[mask & converted], minlength=OPEN_ANALYSIS_DAY + 1))
+
+    days = OPEN_ANALYSIS_DAY + 1
+    return Stream(
+        np.full(days, int((~control).sum())),
+        hits(~control)[:days],
+        np.full(days, int(control.sum())),
+        hits(control)[:days],
+    )
+
+
+@pytest.mark.parametrize("every", [1, 3, 7], ids=["daily", "every_third_day", "weekly"])
+def test_on_no_effect_reading_an_open_window_as_the_loop_does_keeps_alarms_within_alpha(every: int) -> None:
+    alarms = 0
+    for seed in seeds(138_700 + every, SIMS_AA):
+        rng = np.random.default_rng(seed)
+        stream = _running_stream(rng, GATE_ROWS, 0.10, 0.0)
+        alarms += any(_fires(stream, day, mde=0.03) for day in range(every, OPEN_ANALYSIS_DAY, every))
+    share = alarms / SIMS_AA
+    _, high = band(ALPHA, SIMS_AA)
+    print(f"\n[Harm alarm] A/A open window read every {every} day(s): alarms {share:.2%} of {SIMS_AA:,}")
+    assert share <= high, f"{share:.4f} of campaigns that change nothing raised the alarm, above {high:.4f}"
+
+
+def test_planted_harm_is_caught_inside_the_open_window() -> None:
+    caught = 0
+    for seed in seeds(138_710, SIMS_POWER):
+        stream = _running_stream(np.random.default_rng(seed), GATE_ROWS, 0.10, -0.03)
+        caught += any(_fires(stream, day, mde=0.03) for day in range(1, OPEN_WINDOW))
+    share = caught / SIMS_POWER
+    print(f"\n[Harm alarm] harm of 3 points caught before the window closes, read daily: {share:.2%}")
+    assert share >= 0.80, f"only {share:.4f} of harmful campaigns were caught inside the window"

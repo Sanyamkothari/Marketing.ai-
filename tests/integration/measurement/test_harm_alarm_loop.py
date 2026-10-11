@@ -13,7 +13,11 @@ so each reading in between is an early look: exactly where M94 refuses a verdict
 * a planted benefit raises nothing, and no output of an early look - the summary's sentences, the card text,
   the Value Proof Pack, the campaign page, the alert, the check's own file - reads as a win;
 * on demand (`POST /campaigns/{id}/measure`) the same check runs; no registered plan, or a plan with no
-  smallest effect worth detecting, means no alarm and says why; an amended plan sets the alarm aside.
+  smallest effect worth detecting, means no alarm and says why; an amended plan sets the alarm aside;
+* while the outcome window is still open (a plan whose analysis date is the day the window closes) the loop
+  reads what is in so far, raises the card and one alert, and stores nothing else;
+* the card follows the setting and names the offer; a `configs/measurement.yaml` that cannot be read refuses a
+  measurement before anything is written (422 on demand, a failed firing with the code in the loop).
 """
 
 from __future__ import annotations
@@ -296,12 +300,19 @@ def _about(summary: dict[str, Any], campaign_id: str) -> list[Any]:
 
 def test_no_output_of_an_early_look_reads_as_a_win_whether_it_harmed_or_helped(harness: Harness) -> None:
     harmful = _harmful_campaign(harness)
+    # The scheduled reading comes before the helpful campaign exists: both campaigns go out at SENT, so with
+    # both live the step would pick between them by their random ids.
+    firing = harness.firer().fire(harness.measure_schedule()) or pytest.fail("not fired")
+    assert firing.result_code == "EARLY_LOOK", firing
+    first = harness.check(harmful)
+    assert (
+        first is not None and first.status == "alarm"
+    ), "the scheduled reading measured the harmful campaign"
     run = propensity_run(harness.world.storage, RUN_GOOD, rows=8_000, seed=1382)
     later = (utc_now() + timedelta(days=60)).date().isoformat()
     helpful = harness.campaign(
         RUN_GOOD, "Helpful win-back", plan={"analysis_date": later, "mde_pp": MDE_PP, "base_rate": BASE_RATE}
     )
-    harness.firer().fire(harness.measure_schedule()) or pytest.fail("not fired")
     outcomes = _outcomes(run.scores, BENEFIT, seed=13802)
     uploaded = upload(harness.client, outcomes, name="helpful_outcomes.csv")
     ok(
@@ -432,3 +443,143 @@ def test_the_card_is_traced_and_disappears_once_the_final_result_is_read(harness
     assert [card.code for card in after.cards if card.campaign_id == campaign_id].count(HARM_ALARM) == 0
     check = harness.check(campaign_id)
     assert check is not None and check.checked_at == CLOCK, "a final result is never checked"
+
+
+# --- inside the outcome window (review fix: the loop reads immature data) --------------------------------------
+def test_inside_the_outcome_window_the_loop_reads_what_is_in_so_far_and_stores_nothing_else(
+    harness: Harness,
+) -> None:
+    """The natural plan: the analysis date is the day the window closes, so every reading before it is mid-window."""
+    run = propensity_run(harness.world.storage, RUN_HARM, rows=8_000, seed=1384)
+    closes = SENT + timedelta(days=WINDOW)
+    campaign_id = harness.campaign(
+        RUN_HARM,
+        "Harmful, read mid-window",
+        plan={"analysis_date": closes.date().isoformat(), "mde_pp": MDE_PP, "base_rate": BASE_RATE},
+    )
+    harness.into_crm(_outcomes(run.scores, HARM, seed=13804))  # recorded on day 12 of the window
+    schedule = harness.measure_schedule()
+    storage = harness.world.storage
+    uploads_before = sorted(storage.list_keys("uploads/"))
+
+    # Day 5: nothing is recorded yet. The reading is checked, finds too few customers, and raises nothing.
+    harness.world.clock.now = SENT + timedelta(days=5)
+    early = harness.firer().fire(schedule) or pytest.fail("not fired")
+    assert (early.status, early.result_code) == (FiringStatus.SUCCEEDED, "CAMPAIGN_NOT_MATURED"), early
+    quiet = harness.check(campaign_id)
+    assert quiet is not None and quiet.status == "no_alarm" and quiet.early_look is True
+    (look,) = quiet.looks
+    assert (look.treated_rows, look.control_rows, look.fired) == (0, 0, False) and look.reason is not None
+    assert harness.alerts() == ()
+
+    # Day 15: the outcomes recorded so far show the harm. The card and one alert; nothing else is stored.
+    harness.world.clock.now = SENT + timedelta(days=15)
+    firing = harness.firer().fire(schedule) or pytest.fail("not fired")
+    assert (firing.status, firing.result_code) == (FiringStatus.SUCCEEDED, "CAMPAIGN_NOT_MATURED"), firing
+    check = harness.check(campaign_id)
+    assert check is not None and check.status == "alarm" and check.early_look is True
+    assert check.as_of == SENT + timedelta(days=15) and check.analysis_date == closes.date()
+    (alarm,) = check.alarms
+    assert alarm.difference < 0 and alarm.treated_rows > 0 and alarm.control_rows > 0
+    (alert,) = harness.alerts()
+    assert campaign_id in alert.message and alert.schedule_id == schedule.schedule_id
+    assert f"read only on {closes.date().isoformat()}" in alert.message
+    (card,) = _card(harness.summary(), campaign_id)
+    facts = {fact["label"]: fact["value"] for fact in card["facts"]}
+    assert facts["Day the final result can be read"]["value"] == closes.date().isoformat()
+    assert "Offer" not in facts, "a campaign of one treated group names no offer"
+    files = {key.rsplit("/", 1)[-1] for key in storage.list_keys(f"campaigns/{campaign_id}/")}
+    assert HARM_ALARM_FILENAME in files
+    assert not files & {"incrementality_report.json", "outcomes.parquet", "segment_effects.json"}, files
+    assert sorted(storage.list_keys("uploads/")) == uploads_before, "no copy of the client's rows is kept"
+    stored = harness.campaigns.get(campaign_id)
+    assert stored is not None and stored.status.value == "live" and stored.outcomes is None
+
+    # Day 16: the alarm stands and raises no second alert.
+    harness.world.clock.now = SENT + timedelta(days=16)
+    again = harness.firer().fire(schedule) or pytest.fail("not fired")
+    assert again.result_code == "CAMPAIGN_NOT_MATURED"
+    later = harness.check(campaign_id)
+    assert later is not None and later.alarms == check.alarms and len(harness.alerts()) == 1
+
+    # The window closes on the analysis date: the final result is read, and the card goes.
+    harness.world.clock.now = closes + timedelta(hours=1)
+    final = harness.firer().fire(harness.measure_schedule_stored()) or pytest.fail("not fired")
+    assert final.result_code == "CAMPAIGN_MEASURED", final
+    assert _card(harness.summary(), campaign_id) == []
+    last = harness.check(campaign_id)
+    assert last is not None and last.checked_at == SENT + timedelta(
+        days=16
+    ), "a final result is never checked"
+
+
+# --- the card follows the setting and names the offer ----------------------------------------------------------
+def _set_enabled(root: Path, enabled: bool) -> None:
+    path = root / "measurement.yaml"
+    text = path.read_text(encoding="utf-8")
+    old, new = ("  enabled: false", "  enabled: true") if enabled else ("  enabled: true", "  enabled: false")
+    assert old in text
+    path.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+
+def test_the_card_follows_the_setting_and_names_the_offer_of_a_campaign_of_several(harness: Harness) -> None:
+    campaign_id = _harmful_campaign(harness)
+    harness.firer().fire(harness.measure_schedule()) or pytest.fail("not fired")
+    assert len(_card(harness.summary(), campaign_id)) == 1
+
+    # Turned off after the alarm fired: the file stays, but no card is shown.
+    _set_enabled(harness.root, False)
+    assert harness.check(campaign_id) is not None
+    assert _card(harness.summary(), campaign_id) == []
+    _set_enabled(harness.root, True)
+
+    # An alarm raised for one offer of several names that offer on the card.
+    key = f"campaigns/{campaign_id}/{HARM_ALARM_FILENAME}"
+    document = json.loads(harness.world.storage.read_bytes(key))
+    document["alarms"][0]["arm"] = "second_offer"
+    harness.world.storage.write_bytes(key, json.dumps(document).encode())
+    (card,) = _card(harness.summary(), campaign_id)
+    facts = {fact["label"]: fact["value"] for fact in card["facts"]}
+    assert facts["Offer"]["text"] == "second_offer"
+    assert facts["Offer"]["sources"] == [{"artefact": key, "field": "alarms.0.arm"}]
+
+
+# --- a settings file that cannot be read --------------------------------------------------------------------------
+@pytest.mark.parametrize(
+    ("text", "code"),
+    [
+        ("harm_alarm: [not closed\n", "CONFIG_YAML_ERROR"),
+        ("- harm_alarm\n", "CONFIG_NOT_A_MAPPING"),
+        ("harm_alarm: true\n", "CONFIG_INVALID"),
+        ("pooling:\n  enabled: false\nharm_alarm:\n  enable: false\n", "CONFIG_INVALID"),
+    ],
+    ids=["not-yaml", "not-a-mapping", "section-not-a-mapping", "typo"],
+)
+def test_a_settings_file_that_cannot_be_read_refuses_the_measurement_before_anything_is_written(
+    harness_off: Harness, text: str, code: str
+) -> None:
+    harness = harness_off
+    run = propensity_run(harness.world.storage, RUN_HARM, rows=2_000, seed=1385)
+    later = (utc_now() + timedelta(days=60)).date().isoformat()
+    campaign_id = harness.campaign(
+        RUN_HARM, "Bad settings", plan={"analysis_date": later, "mde_pp": MDE_PP, "base_rate": BASE_RATE}
+    )
+    uploaded = upload(harness.client, _outcomes(run.scores, HARM, seed=13805))
+    ok(
+        harness.client.post(
+            f"/campaigns/{campaign_id}/outcomes", json={"upload_id": uploaded, "outcome_column": "converted"}
+        )
+    )
+    (harness.root / "measurement.yaml").write_text(text, encoding="utf-8")
+    storage = harness.world.storage
+    before = sorted(storage.list_keys(f"campaigns/{campaign_id}/"))
+
+    refused = harness.client.post(f"/campaigns/{campaign_id}/measure", json={})
+    assert refused.status_code == 422, refused.text
+    assert refused.json()["detail"]["code"] == code
+    assert sorted(storage.list_keys(f"campaigns/{campaign_id}/")) == before, "nothing written"
+
+    harness.into_crm(_outcomes(run.scores, HARM, seed=13806))
+    firing = harness.firer().fire(harness.measure_schedule()) or pytest.fail("not fired")
+    assert (firing.status, firing.error_code) == (FiringStatus.FAILED, code), firing
+    assert sorted(storage.list_keys(f"campaigns/{campaign_id}/")) == before, "nothing written"

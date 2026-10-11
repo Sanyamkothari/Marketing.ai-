@@ -22,8 +22,8 @@ import numpy as np
 import pandas as pd
 import pytest
 import yaml
-from pydantic import ValidationError
 
+from engine.config import ConfigError
 from engine.measurement.harm import (
     HARM_ALARM,
     HARM_CODES,
@@ -187,13 +187,37 @@ def test_the_alarm_is_off_by_default_in_the_model_and_in_the_shipped_file(config
 def test_a_missing_file_is_every_default_and_a_typo_is_refused(tmp_path: Path) -> None:
     assert load_harm_alarm_settings(tmp_path) == HarmAlarmSettings()
     (tmp_path / "measurement.yaml").write_text("harm_alarm:\n  enable: true\n", encoding="utf-8")
-    with pytest.raises(ValidationError):
+    with pytest.raises(ConfigError) as typo:
         load_harm_alarm_settings(tmp_path)
+    assert (typo.value.code, typo.value.path) == ("CONFIG_INVALID", "harm_alarm.enable")
     (tmp_path / "measurement.yaml").write_text("harm_alarm:\n  alpha: 0.5\n", encoding="utf-8")
-    with pytest.raises(ValidationError):
+    with pytest.raises(ConfigError) as out_of_range:
         load_harm_alarm_settings(tmp_path)
+    assert (out_of_range.value.code, out_of_range.value.path) == ("CONFIG_INVALID", "harm_alarm.alpha")
     (tmp_path / "measurement.yaml").write_text("pooling:\n  enabled: true\n", encoding="utf-8")
     assert load_harm_alarm_settings(tmp_path) == HarmAlarmSettings(), "another section is not read"
+    (tmp_path / "measurement.yaml").write_text("# comments only\n", encoding="utf-8")
+    assert load_harm_alarm_settings(tmp_path) == HarmAlarmSettings(), "an empty file is every default"
+
+
+@pytest.mark.parametrize(
+    ("text", "code", "path"),
+    [
+        ("harm_alarm: [not closed\n", "CONFIG_YAML_ERROR", None),
+        ("- harm_alarm\n", "CONFIG_NOT_A_MAPPING", None),
+        ("harm_alarm: true\n", "CONFIG_INVALID", "harm_alarm"),
+    ],
+    ids=["not-yaml", "not-a-mapping", "section-not-a-mapping"],
+)
+def test_a_file_that_cannot_be_read_is_a_coded_config_error_as_m136s_loader_gives(
+    tmp_path: Path, text: str, code: str, path: str | None
+) -> None:
+    (tmp_path / "measurement.yaml").write_text(text, encoding="utf-8")
+    with pytest.raises(ConfigError) as refused:
+        load_harm_alarm_settings(tmp_path)
+    assert refused.value.code == code
+    if path is not None:
+        assert refused.value.path == path
 
 
 def test_the_code_is_named_once() -> None:
@@ -217,3 +241,29 @@ def test_the_alert_says_what_to_do_and_never_reads_as_a_result() -> None:
     assert "cmp_1" in message and "Win-back Campaign" in message
     assert "nothing has been stopped" in message and "not a result" in message
     assert jargon_in(message) == ()
+
+
+def test_the_alert_names_the_planned_day_only_for_an_early_look() -> None:
+    from datetime import date
+
+    from engine.measurement.harm import HarmCheck, HarmOutcome
+
+    planned = date(2026, 6, 1)
+    check = HarmCheck(
+        campaign_id="cmp_1",
+        checked_at=START,
+        as_of=START,
+        status="alarm",
+        reason="-",
+        alpha=0.05,
+        outcome_kind="binary",
+        early_look=True,
+        analysis_date=planned,
+    )
+    early = harm_alert_message(HarmOutcome(check, ()), use_case_name=None)
+    assert "still read only on 2026-06-01" in early
+    # Read after the planned day, with outcomes still to come in: that day is past, so it is not named.
+    after = check.model_copy(update={"early_look": False})
+    message = harm_alert_message(HarmOutcome(after, ()), use_case_name=None)
+    assert "2026-06-01" not in message and "read only on" not in message
+    assert "once every customer's outcome is in" in message and jargon_in(message) == ()
