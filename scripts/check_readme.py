@@ -623,6 +623,20 @@ MILESTONE_TESTS: Final[Mapping[str, tuple[str, ...]]] = {
         "tests/agentic/scenarios/test_planner_scenarios.py",
         "tests/agentic/test_proposal_routes.py",
     ),
+    # M134 (DEC-1405), the pre-send compliance gate. test_gate_scale.py's two 1M tests are `slow` (the fast suite
+    # runs its 100k test); test_treat_list_golden.py is Plan J M98's golden, unchanged, which proves the gate off
+    # leaves every treat list byte-identical.
+    "M134": (
+        "tests/unit/compliance/test_compliance_config.py",
+        "tests/unit/compliance/test_dlt.py",
+        "tests/unit/compliance/test_urls.py",
+        "tests/unit/compliance/test_gate_rules.py",
+        "tests/unit/compliance/test_gate_offer_arms.py",
+        "tests/unit/compliance/test_gate_scale.py",
+        "tests/integration/compliance/test_gate_real_run.py",
+        "tests/integration/compliance/test_gate_offer_choice_run.py",
+        "tests/integration/decide/test_treat_list_golden.py",
+    ),
 }
 """Milestone id -> the test files (or directories, with a trailing `/`) that prove it is built.
 

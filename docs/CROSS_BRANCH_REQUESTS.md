@@ -2234,6 +2234,61 @@ that adds a card kind to `engine/measurement/summary.py` adds it to one of the t
 
 **What is needed.** Nothing; this is an announcement.
 
+### 2026-10-11 — plan-k M134 (on main) → Plan J (owners of M98's `engine/decide/treat_list.py` and M100's `engine/decide/catalogue.py`): the compliance gate inside the treat list build (record of in-place edits)
+
+**What changed** (DEC-1405 (a), (h), (j), (k), (m)): `build_treat_list` gains step 5c, which calls
+`engine.compliance.handoff.gate_treat_list` only when `compliance.gate.enabled` is on, after every treat flag, offer and
+channel is chosen and before anything is written; `TreatListSummary` gains six optional `compliance_*` fields, absent
+with the gate off. `_OfferChoice` gains `action_id` (the file's `offer_action_id`); `_Applied` gains `offered`,
+`explored` and `label`, all with defaults; `_apply_offer_choice` computes its counts with the shared helper
+`_offer_tallies`, and its output is unchanged. `ensure_treat_list` rebuilds a stored list only when the gate is on and
+the summary has no `compliance_rule_version` (`treat_list_awaits_gate`). Catalogue actions gain two optional fields,
+`dlt_template_text` and `message_text`, and a template with an unknown tag is refused when the catalogue loads. With the
+gate off the only change is that a build reads the switch (`configs/agentic/agentic.yaml`) and the gate's settings
+(`configs/compliance/compliance.yaml`); M98's golden is unchanged. The builder's integration markers were in these
+files, which have no PLAN-K block, so the code stays where it is, marked `PLAN-K (M134, DEC-1405)` or by its comment.
+M131's open item above (the consent-basis and region rules read from the process's config root, not the stamped one)
+is not closed by M134: the gate records the run's `consent_basis_rules_sha256` in its rule version but reads the
+region file from its own root.
+
+**What is needed.** Nothing; this is a record.
+
+### 2026-10-11 — plan-k M134 (on main) → trunk / Plan H (owners of `api/routes/runs.py`) and Phase 4b (owner of `api/access_policy.py`, `engine/privacy/layout.py` and `configs/privacy.yaml`): one more row-level run file, and a stored list gated before it is served (announcement and record of in-place edits)
+
+**What changed** (DEC-1405 (i), (m)): `compliance_decisions.parquet` (one row per customer and planned channel) is a
+row-level run artefact (`ROW_LEVEL_ARTEFACTS`, `_RUN_FILE_STORES` as `Store.SCORES`, `retention.row_level_run_artefacts`;
+Analyst); `compliance_decisions.json` (aggregate) is served beside it. `read_artefact` rebuilds `treat_list.csv`,
+`treat_list.parquet` and `treat_list_summary.json` when `treat_list_awaits_gate` says so (gate on, list not decided by
+the gate), and answers 409 with the code when the gate's configuration is refused (`CONFIG_INVALID`,
+`COMPLIANCE_SWITCH_MISPLACED`). With the gate off nothing is served differently.
+
+**What is needed.** Nothing; this is an announcement.
+
+### 2026-10-11 — plan-k M134 (on main) → Plan K M130's switch file (`configs/agentic/agentic.yaml`, `engine/agentic/config.py`) and M132's ledger: `compliance.gate.enabled` is now read; two ledger body keys (record of in-place edits)
+
+**What changed** (DEC-1405 (a), (i)): `compliance.gate.enabled` is read by `engine.compliance.config.gate_enabled`, and
+the file's comment and the model's description say so. It is the gate's only switch: the builder's own `enabled` in
+`configs/compliance/compliance.yaml` was removed at integration, and one written there is refused with
+`COMPLIANCE_SWITCH_MISPLACED`. `engine.agentic.ledger.BODY_KEYS` gains `artefact_sha256` and `rule_version` (the gate's
+evidence label), beside M139's keys. `tests/unit/agentic/test_flags.py` is unchanged and still pins all three off.
+
+**What is needed.** Nothing; this is a record.
+
+### 2026-10-11 — plan-k M134 (on main) → Plan E (owner of `configs/pilot/help.yaml`): seven codes and one updated entry (announcement)
+
+**What changed:** `COMPLIANCE_CONSENT`, `COMPLIANCE_WHATSAPP_NO_OPT_IN`, `COMPLIANCE_TEMPLATE_MISMATCH`,
+`COMPLIANCE_URL_NOT_WHITELISTED`, `COMPLIANCE_NO_CHANNEL`, `COMPLIANCE_CATALOGUE_CHANGED` and
+`COMPLIANCE_SWITCH_MISPLACED` join `PLAN_K_CODES` with entries; `CONFIG_INVALID`'s entry now names
+`configs/compliance/compliance.yaml`.
+
+**What is needed.** Nothing; this is an announcement.
+
+### 2026-10-11 — plan-k M134 (on main) → Plan K M140 (message variants): per-variant copy must reach the gate's message checks (request)
+
+**What is needed.** The gate checks one approved `message_text` per catalogue action. Per-channel or per-variant copy
+has to reach `engine.compliance.handoff.message_checks` keyed by (action, channel) for its DLT and URL checks to apply,
+including the bare-host link rule (`engine.compliance.urls.find_links`).
+
 ### 2026-09-23 — plan-e-pilot (on main) → all branches: every change Plan E made outside its own files and blocks
 
 **What is needed.** Nothing from anybody; this is the announcement §3 asks for. Measured with
