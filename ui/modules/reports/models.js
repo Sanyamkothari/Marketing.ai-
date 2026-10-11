@@ -40,7 +40,7 @@ function campaignTitle(demo, runId) {
 const unavailable = `<p class="rp-note">This list could not be loaded.</p>`;
 
 function section(name, title, body) {
-  return `<section class="rp-models-part" data-models-part="${name}"><h4>${title}</h4>${body}</section>`;
+  return `<section class="rp-models-part" data-models-part="${name}"><h2>${title}</h2>${body}</section>`;
 }
 
 function resultsPart(models, name) {

@@ -87,7 +87,7 @@ const CSS = `
 .rp .rp-models{border:1px solid var(--line);border-radius:10px;background:var(--surface);padding:0 20px}
 .rp .rp-models>summary{padding:16px 0;font-size:14px;font-weight:600;color:var(--ink);cursor:pointer}
 .rp .rp-models-part{padding-bottom:20px}
-.rp .rp-models-part h4{margin:0 0 8px;font-size:13px;font-weight:600;color:var(--ink2)}
+.rp .rp-models-part h2{margin:0 0 8px;font-size:13px;font-weight:600;color:var(--ink2)}
 .rp .tabs-bar{margin-top:8px}
 .rp .stack>.head-actions{margin:0}
 `;
