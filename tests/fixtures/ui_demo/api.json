@@ -24027,6 +24027,71 @@
    "charts": []
   }
  },
+ "GET /uploads?limit=100": {
+  "status": 200,
+  "content_type": "application/json",
+  "body": {
+   "uploads": [
+    {
+     "upload_id": "u_9004eb6ff852",
+     "file_name": "replayed_spend.csv",
+     "file_format": "csv",
+     "file_size_bytes": 231403,
+     "row_count": 8434,
+     "column_count": 4,
+     "use_case_id": "hillstrom-email",
+     "mode": "score",
+     "synthetic": false,
+     "created_at": "2026-10-11T11:56:30.584163Z",
+     "from_connection_id": null,
+     "made_by": "file"
+    },
+    {
+     "upload_id": "u_e3a96c85fda7",
+     "file_name": "replayed_conversion.csv",
+     "file_format": "csv",
+     "file_size_bytes": 66011,
+     "row_count": 8434,
+     "column_count": 2,
+     "use_case_id": "hillstrom-email",
+     "mode": "score",
+     "synthetic": false,
+     "created_at": "2026-10-11T11:56:28.267528Z",
+     "from_connection_id": null,
+     "made_by": "file"
+    },
+    {
+     "upload_id": "u_e3a795557365",
+     "file_name": "evaluation_features.csv",
+     "file_format": "csv",
+     "file_size_bytes": 1818961,
+     "row_count": 32000,
+     "column_count": 10,
+     "use_case_id": "hillstrom-email",
+     "mode": "score",
+     "synthetic": false,
+     "created_at": "2026-10-11T11:55:42.782292Z",
+     "from_connection_id": null,
+     "made_by": "file"
+    },
+    {
+     "upload_id": "u_99486d9c9512",
+     "file_name": "training.csv",
+     "file_format": "csv",
+     "file_size_bytes": 2457298,
+     "row_count": 32000,
+     "column_count": 14,
+     "use_case_id": "hillstrom-email",
+     "mode": "train",
+     "synthetic": false,
+     "created_at": "2026-10-11T11:53:27.663686Z",
+     "from_connection_id": null,
+     "made_by": "file"
+    }
+   ],
+   "total": 4
+  }
+ },
  "GET /use-cases/ai-onboarding-assistant": {
   "status": 200,
   "content_type": "application/json",

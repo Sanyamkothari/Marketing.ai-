@@ -260,6 +260,8 @@ def samples(e: Entities) -> dict[str, list[str]]:
         "reports": ["#/reports", "#/reports/programme", "#/reports/check", "#/reports/models"],
         "cost": ["#/cost"],
         "doctor": ["#/doctor"],
+        # Plan M M179 (DEC-1609): the Data page, one page per tab.
+        "data": ["#/data", "#/data/check"],
         "generative": ["#/generative/assistant/ai-onboarding-assistant", "#/generative/connection"],
         "signin": ["#/signin"],
         "account": ["#/account"],

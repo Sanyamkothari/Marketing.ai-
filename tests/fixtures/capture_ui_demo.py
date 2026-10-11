@@ -40,6 +40,8 @@ PAGES: Final[list[tuple[str, tuple[str, ...]]]] = [
     ("#/results", ()),
     ("#/settings", ()),
     ("#/connections", ()),
+    ("#/data", ()),
+    ("#/data/check", ()),
     ("#/doctor", ()),
     ("#/uc/win-back-campaign", ()),
     ("#/uc/win-back-campaign", ("Manual setup",)),
