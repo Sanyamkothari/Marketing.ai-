@@ -56,6 +56,8 @@ test("matching: case-insensitive, whole words, with plurals", () => {
   assert.deepEqual(findNeverShown("running, a prune and the rerun"), {}, "'run' inside a longer word is not a match");
   assert.deepEqual(findNeverShown("Three bands: a Band each"), { band: 2 });
   assert.deepEqual(findNeverShown("Recipes and one recipe"), { recipe: 2 });
+  assert.deepEqual(findNeverShown("shapes and runes"), {}, "'es' is not a plural of every word: 'shapes' is not SHAP");
+  assert.deepEqual(findNeverShown("Two boxes of prunes"), {});
   assert.deepEqual(findNeverShown("Propensities and propensity"), { propensity: 1, propensities: 1 });
   assert.deepEqual(findNeverShown("SHAP and PSI, AUUC and Qini"), { shap: 1, psi: 1, auuc: 1, qini: 1 });
   assert.deepEqual(findNeverShown("An X-learner (LightGBM) and an Ensemble"), { "x-learner": 1, lightgbm: 1, ensemble: 1 });

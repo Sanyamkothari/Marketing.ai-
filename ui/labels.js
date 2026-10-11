@@ -5,7 +5,7 @@
 
    - pages, through `term(key)`, to get the word to show (M172 sweeps every page onto it);
    - the visible-text check (tests/integration/production/ui/glossary/visible_text.test.mjs), through
-     `neverShown()` and `findNeverShown(text)`, which fail a page that shows a never-shown word;
+     `neverShown()` and `findNeverShown(text)`, which fail a page that shows a never-shown word beyond that page's recorded baseline;
    - docs/ux/GLOSSARY.md, which `glossaryMarkdown()` writes and a test compares, so the document for humans
      cannot drift from this file.
 
@@ -13,8 +13,9 @@
 
    How a never-shown term is matched (`findNeverShown`):
    - case-insensitive, and as a whole word: "run" does not match "running" or "prune";
-   - an optional plural "s" or "es" is allowed after any term ("band" matches "bands", "recipe" matches
-     "recipes"); an irregular plural is listed on its own ("propensities");
+   - an optional plural is allowed after any term: "s" ("band" matches "bands", "recipe" matches
+     "recipes"), or "es" after a term ending in s, x, z, ch or sh; an irregular plural is listed on its
+     own ("propensities");
    - a space in a term matches any run of white space, and "=" matches with or without spaces around it
      ("treat = 1" matches "treat=1");
    - the text a person reads is matched, never the markup: the collector in the test removes technical
@@ -214,8 +215,8 @@ export function termPattern(text) {
         .map((part) => part.trim().split(/\s+/).map(escapeRegex).join("\\s+"))
         .join("\\s*=\\s*")
     : words.map(escapeRegex).join("\\s+");
-  // A term ending in a non-word character (such as "= 1") takes no plural.
-  const plural = /[a-z]$/i.test(text) && !/s$/i.test(text) ? "(?:e?s)?" : /s$/i.test(text) ? "(?:es)?" : "";
+  // A term ending in a non-letter (such as "= 1") takes no plural; "es" only after s, x, z, ch, sh.
+  const plural = !/[a-z]$/i.test(text) ? "" : /(s|x|z|ch|sh)$/i.test(text) ? "(?:es)?" : "(?:s)?";
   return new RegExp(`(?<![A-Za-z0-9_])${body}${plural}(?![A-Za-z0-9_])`, "gi");
 }
 
@@ -257,7 +258,8 @@ export function glossaryMarkdown() {
     "     node -e \"import('./ui/labels.js').then((m) => process.stdout.write(m.glossaryMarkdown()))\" > docs/ux/GLOSSARY.md -->",
     "",
     "One word for each thing. The right-hand column lists the words that are never shown outside a",
-    '"Technical details" section; a test renders the main pages and fails on any of them (Plan M §4.1).',
+    '"Technical details" section; a test renders the main pages and fails on any of them beyond each page\'s',
+    "recorded baseline (`tests/integration/production/ui/glossary/baseline.json`), which M172 empties (Plan M §4.1).",
     "",
     "| Concept | Shown to a marketer | Never shown outside Technical details | Why |",
     "|---|---|---|---|",
@@ -272,10 +274,13 @@ export function glossaryMarkdown() {
     "## How a term is matched",
     "",
     "- Case-insensitive, whole words: `run` does not match `running`.",
-    "- An optional plural (`s` or `es`) is allowed after any term; irregular plurals are listed separately.",
+    "- An optional plural is allowed after any term (`s`, or `es` after a term ending in s, x, z, ch or sh);",
+    "  irregular plurals are listed separately.",
     '- A space in a term matches any white space, and `=` matches with or without spaces around it.',
-    "- Only text a person can read is checked: technical sections (`<details class=\"tech\">`, `[data-technical]`),",
-    "  hidden elements, scripts and styles are left out; `aria-label`, `title` and `placeholder` count as text.",
+    "- Only text a person can read is checked: technical sections (`<details class=\"tech\">`, `[data-technical]`,",
+    '  a `<details>` whose summary reads exactly "Technical details"), hidden elements, scripts and styles are',
+    "  left out; `aria-label`, `title` and `placeholder` count as text. The summary of an excluded `<details>`",
+    '  stays on screen when closed, so it is still checked unless it reads "Technical details" or "Details".',
     "",
   );
   return lines.join("\n");

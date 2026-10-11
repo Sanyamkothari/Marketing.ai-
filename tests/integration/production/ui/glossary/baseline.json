@@ -102,13 +102,14 @@
     "training": 1
   },
   "model-training": {
-    "score": 7,
+    "score": 8,
     "run": 4,
     "training": 3,
     "ensemble": 1,
     "lightgbm": 1,
     "logistic regression": 1,
-    "propensity": 1
+    "propensity": 1,
+    "shap": 1
   },
   "model-uplift-training": {
     "uplift": 3,
@@ -116,11 +117,12 @@
     "scoring run": 2,
     "champion": 1,
     "qini": 1,
-    "run": 1
+    "run": 1,
+    "training": 1
   },
   "output-scoring": {
     "control group": 8,
-    "run": 5,
+    "run": 6,
     "band": 4,
     "holdout": 2,
     "holdout = 1": 2,
@@ -133,7 +135,8 @@
     "uplift": 1
   },
   "output-training": {
-    "score": 5
+    "score": 5,
+    "run": 1
   },
   "proof-pack-conversion": {
     "causal": 1

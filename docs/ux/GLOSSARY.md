@@ -4,7 +4,8 @@
      node -e "import('./ui/labels.js').then((m) => process.stdout.write(m.glossaryMarkdown()))" > docs/ux/GLOSSARY.md -->
 
 One word for each thing. The right-hand column lists the words that are never shown outside a
-"Technical details" section; a test renders the main pages and fails on any of them (Plan M §4.1).
+"Technical details" section; a test renders the main pages and fails on any of them beyond each page's
+recorded baseline (`tests/integration/production/ui/glossary/baseline.json`), which M172 empties (Plan M §4.1).
 
 | Concept | Shown to a marketer | Never shown outside Technical details | Why |
 |---|---|---|---|
@@ -29,7 +30,10 @@ One word for each thing. The right-hand column lists the words that are never sh
 ## How a term is matched
 
 - Case-insensitive, whole words: `run` does not match `running`.
-- An optional plural (`s` or `es`) is allowed after any term; irregular plurals are listed separately.
+- An optional plural is allowed after any term (`s`, or `es` after a term ending in s, x, z, ch or sh);
+  irregular plurals are listed separately.
 - A space in a term matches any white space, and `=` matches with or without spaces around it.
-- Only text a person can read is checked: technical sections (`<details class="tech">`, `[data-technical]`),
-  hidden elements, scripts and styles are left out; `aria-label`, `title` and `placeholder` count as text.
+- Only text a person can read is checked: technical sections (`<details class="tech">`, `[data-technical]`,
+  a `<details>` whose summary reads exactly "Technical details"), hidden elements, scripts and styles are
+  left out; `aria-label`, `title` and `placeholder` count as text. The summary of an excluded `<details>`
+  stays on screen when closed, so it is still checked unless it reads "Technical details" or "Details".
