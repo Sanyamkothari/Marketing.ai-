@@ -2283,11 +2283,15 @@ evidence label), beside M139's keys. `tests/unit/agentic/test_flags.py` is uncha
 
 **What is needed.** Nothing; this is an announcement.
 
-### 2026-10-11 — plan-k M134 (on main) → Plan K M140 (message variants): per-variant copy must reach the gate's message checks (request)
+### 2026-10-11 — plan-k M134 (on main) → Plan K M140 (message variants): per-variant copy must reach the gate's message checks (request; closed 2026-10-11)
 
 **What is needed.** The gate checks one approved `message_text` per catalogue action. Per-channel or per-variant copy
 has to reach `engine.compliance.handoff.message_checks` keyed by (action, channel) for its DLT and URL checks to apply,
 including the bare-host link rule (`engine.compliance.urls.find_links`).
+
+**Closed 2026-10-11** by Plan K M145 (DEC-1412): with the gate on and a run's message arms in force, each variant
+customer is checked on their own variant's words against that variant's own registered catalogue action (DLT template
+and every link, including bare hosts), and an arm the gate stopped by its words is set aside from the campaign.
 
 ### 2026-10-11 — plan-k M140 (on main) → Plan J (owners of `engine/decide/`, `engine/measurement/` and `api/routes/decide.py`): message variants as arms in the treat list, the campaign and arbitration (record of additive, opt-in edits)
 
@@ -2430,6 +2434,37 @@ workspaces are None, so the comparison is skipped.
 `MCP_TASK_CANCELLED`, which join `PLAN_K_CODES`. `MCP_DEMO_ONLY`'s fix, which said to wait for M141, now points to
 `mcp.workspace: clients` and `mcp.workspaces`; `MCP_TIMEOUT`'s meaning now says a client that supports MCP tasks gets a
 task. `tests/unit/pilot/test_help.py` is green.
+
+**What is needed.** Nothing; this is an announcement.
+
+### 2026-10-11 — plan-k M145 (on main) → Plan J (owners of `engine/decide/treat_list.py`, `engine/decide/variant_arms.py`, `engine/measurement/campaign.py` and `engine/measurement/cycle.py`): a message arm the gate stopped is set aside (record of additive edits)
+
+**What changed** (DEC-1412 (a), (d), (e), (f)): `Campaign` gains `variant_arms_set_aside: dict[str, str] | None`, left
+out of the dump when None. `open_campaign` sets it only for a run whose treat list the compliance gate decided with
+message arms in force, and puts those arms' customers in neither campaign arm through the existing `scope_keys` path.
+`TreatListSummary` gains `variant_arm_withheld` and `variant_arm_words_withheld`, both None unless the gate is on and
+arms are in force. `compare_variant_arms` takes an optional keyword `set_aside`, and `VariantComparison` gains
+`not_sent` (None when absent). `build_treat_list` reads the arms in force once (`variant_rows`) before the gate (step 5c)
+and hands them to it; a stored list with arms that the gate decided before it checked the variants' words is built again
+before hand-off. Default runs are byte-identical: no field is written and no campaign changes.
+
+**What is needed.** Nothing; this is a record.
+
+### 2026-10-11 — plan-k M145 (on main) → Plan E (owner of `engine/pilot/proof.py`): arms not sent in `variant_comparison.json` (announcement and optional request)
+
+**What changed** (DEC-1412 (e)): `variant_comparison.json` can now carry `not_sent` (the message arms the compliance
+gate stopped, each with a plain reason and a null difference), and its `summary` sentence then ends with "Not sent, so
+not compared: <arms>.". The Value Proof Pack keeps working unchanged: those arms are absent from the report's arms and
+from every pair.
+
+**What is needed (optional).** The Pack's incremental section could name the arms not sent beside the "Message" table,
+traced to `variant_comparison.json`. The reason texts hold no digits.
+
+### 2026-10-11 — plan-k M145 (on main) → Plan E (owner of `configs/pilot/help.yaml`): two codes (announcement)
+
+**What changed** (DEC-1412 (b)): entries for `COMPLIANCE_VARIANT_NO_COPY` and `COMPLIANCE_VARIANT_UNREGISTERED`, which
+join `PLAN_K_CODES` (`COMPLIANCE_CODES`) and are appended to `engine.compliance.gate.REASON_ORDER`.
+`tests/unit/pilot/test_help.py` is green.
 
 **What is needed.** Nothing; this is an announcement.
 

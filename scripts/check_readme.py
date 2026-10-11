@@ -657,6 +657,14 @@ MILESTONE_TESTS: Final[Mapping[str, tuple[str, ...]]] = {
         "tests/integration/mcp/test_client_workspaces.py",
         "tests/integration/compliance/test_check_before_contact.py",
     ),
+    # M145 (DEC-1412), message variants pass the compliance gate (a follow-up found at the integration of M134 and
+    # M140). test_gate_variants_scale.py's 1M test is `slow` (the fast suite runs its 100k test).
+    "M145": (
+        "tests/unit/compliance/test_gate_variants.py",
+        "tests/unit/compliance/test_gate_variants_scale.py",
+        "tests/integration/compliance/test_gate_variant_arms.py",
+        "tests/unit/decide/test_variant_arms.py",
+    ),
 }
 """Milestone id -> the test files (or directories, with a trailing `/`) that prove it is built.
 

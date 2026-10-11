@@ -863,6 +863,15 @@ codes:
     title: "The task was cancelled"
     meaning: "The long tool call running as a task (for example audit_campaign or get_proof_pack) was cancelled with tasks/cancel, so its result was thrown away when the work ended. The same code is also returned when a cancel arrives after the task had already finished; in that case the task keeps its result and its status."
     fix: "Call the tool again if you still need the answer."
+  # --- Plan K M145: message variants pass the compliance gate (DEC-1412 (b)) ---------------------------------------
+  COMPLIANCE_VARIANT_NO_COPY:
+    title: "No approved words for this message variant on this channel"
+    meaning: "The customer was drawn into a message variant (a test of different wordings), and that variant has no approved template for their group on this channel. They cannot get their variant here, and the gate never sends a different message in its place. They go on the next planned channel where the variant has approved words that pass, or they are not sent. A campaign does not compare a variant whose customers were withheld for this."
+    fix: "Write and approve the variant's copy for this channel and register its words in the catalogue, then draw the variant arms again. Or plan the use case only on channels the copy was written for."
+  COMPLIANCE_VARIANT_UNREGISTERED:
+    title: "Variant's words have no registered template to check against"
+    meaning: "A message variant's words cannot be checked on this channel, so they are not sent (fail closed). Either no catalogue action registers those exact words on the channel (its template_ref names them), or the channel's region rule requires a DLT template (for example SMS in India) and the variant's action has no dlt_template_text, or no real dlt_template_id. A campaign does not compare a variant whose customers were withheld for this."
+    fix: "Add the variant's catalogue action for this channel with its registered DLT template id and template text, then draw the variant arms again."
 
 settings:
   actions.bands[*].min_score:
