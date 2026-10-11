@@ -178,8 +178,8 @@ export const CONNECTIONS_CRUMB = Object.freeze({ label: "Connections", href: "#/
 /**
  * A crumb that opens the page the Home crumb already opens: the default journey (`#/`). Plan H has
  * one journey for every business (DEC-1110), so "Home › Customer Lifecycle › ..." named one page
- * twice (docs/UI_AUDIT.md §8.4 item 3). A journey with a page of its own (`#/industry/<id>`, reachable
- * by URL) is still a crumb.
+ * twice (docs/UI_AUDIT.md §8.4 item 3). Plan M M173: no other journey has a page of its own
+ * either (`#/industry/<id>` redirects Home), so the crumb is always left out.
  */
 const sameAsHome = (item) => Boolean(item) && item.href === HOME.href;
 

@@ -5,7 +5,8 @@
 //   * Reports (`#/pilot`), Build data (`#/pilot/kit`) and the report viewers (registered with
 //     `modules/router.js`);
 //   * in the top bar (through its slots): the "Sample data: Demo Company" chip in demo mode, and the
-//     Help menu - "Take the tour" when the demo is seeded, and "Send feedback";
+//     Help (?) menu's "Take the tour" (the sample data's tour when it is seeded, else the real pages)
+//     and "Send feedback";
 //   * the plain-language catalogue as the router's glossary, so every screen's error leads with the
 //     catalogue's title for its code;
 //   * "What does this mean?" beside every warning code and every advanced setting;
@@ -28,7 +29,7 @@ import { feedbackMenuItem, mountFeedback } from "./feedback.js";
 import { installHelp } from "./help.js";
 import { renderPilot } from "./screen.js";
 import { injectPilotStyles } from "./styles.js";
-import { maybeStartTour, startTour, tourAvailable } from "./tour.js";
+import { maybeStartTour, startTour } from "./tour.js";
 
 let demo = null;
 let demoLoading = false;
@@ -41,10 +42,11 @@ function demoChip() {
   return `<span class="chip neutral pe-demo" title="Everything shown belongs to a made-up client">${esc(label)}</span>`;
 }
 
-function helpEntries() {
-  const tour = tourAvailable(demo) ? `<button type="button" data-pe-tour-start>Take the tour</button>` : "";
-  return `${tour}${feedbackMenuItem()}`;
-}
+// The Help menu's entries (Plan M M173). The tour is offered everywhere now: with the sample data it
+// walks the sample, anywhere else the real pages. `order` keeps the entries in the order the menu
+// gives them with the Glossary and What's new that `modules/simple` adds: tour, glossary, feedback,
+// what's new.
+const tourEntry = () => `<button type="button" data-pe-tour-start>Take the tour</button>`;
 
 function loadDemo() {
   if (demoLoading) return;
@@ -89,7 +91,8 @@ registerModule({
 });
 
 registerNavSlot("demo", { html: demoChip });
-registerNavSlot("help", { html: helpEntries });
+registerNavSlot("help", { html: tourEntry, order: 10 });
+registerNavSlot("help", { html: feedbackMenuItem, order: 30 });
 
 injectPilotStyles();
 mountFeedback();

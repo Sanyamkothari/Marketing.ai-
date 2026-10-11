@@ -170,7 +170,7 @@ async function failure(error, parts) {
   );
 }
 
-/** `industryId` comes from `#/industry/<id>`; null opens the API's default journey. */
+/** `industryId` names a journey; null (always, since `#/industry/<id>` goes Home, M173) opens the API's default one. */
 async function showOverview(industryId) {
   active = null;
   loading("list", "Marketing AI");
@@ -313,8 +313,14 @@ async function renderNow() {
       await claimed.render(app, parts);
       return;
     }
+    if (parts[0] === "industry") {
+      // Plan M M173: one Home for every business. An old `#/industry/<id>` link goes Home, which lists the
+      // goals of the other industries (`otherGoalsHtml`); `replace`, so Back does not return to the redirect.
+      window.location.replace("#/");
+      return;
+    }
     if (parts[0] !== "uc" || !parts[1]) {
-      await showOverview(parts[0] === "industry" && parts[1] ? decodeURIComponent(parts[1]) : null);
+      await showOverview(null);
       document.title = "Marketing AI · Minfy";
       return;
     }

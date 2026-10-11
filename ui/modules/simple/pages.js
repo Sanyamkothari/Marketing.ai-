@@ -303,6 +303,10 @@ export function settingsHtml({ can = () => true, status = null, version = null }
     can("GET", "/schedules")
       ? entry({ label: "Schedules", href: "#/monitoring/schedules", text: "Score new data every week or month without anyone clicking Run." })
       : "",
+    // Plan M M173: `#/cost` had no way in. What runs have cost, and the rate rupee amounts are worked out with.
+    can("GET", "/cost/spend")
+      ? entry({ label: "Costs", href: "#/cost", text: "What finished runs have cost each month, and the exchange rate that rupee amounts use." })
+      : "",
   ].filter(Boolean);
   // Admin only while sign-in is on: with it off there is one person, who needs no user list.
   const admin =
@@ -322,6 +326,20 @@ export function settingsHtml({ can = () => true, status = null, version = null }
     )}</span></li>`,
     can("GET", "/schedules")
       ? entry({ label: "Model health", href: "#/monitoring/alerts", text: "Alerts for every model: data that changed, results that dropped, missed runs." })
+      : "",
+    // Plan M M173: `#/approvals` was reached only from a notice that exists while a model waits.
+    can("GET", "/approvals")
+      ? entry({ label: "Waiting for approval", href: "#/approvals", text: "New models that need an approver before they are used." })
+      : "",
+    // Plan M M173: a second way in to three screens that had one each (Home, Results, a run's links).
+    can("POST", "/doctor/diagnosis")
+      ? entry({ label: "Data Doctor", href: "#/doctor", text: "Drop your files and see what each one is, what it can power and what to fix first." })
+      : "",
+    can("POST", "/campaigns/audit")
+      ? entry({ label: "Check a past campaign", href: "#/audit", text: "A campaign another tool ran: upload who was contacted and what happened, and see what it changed." })
+      : "",
+    can("GET", "/runs/{run_id}/outcomes")
+      ? entry({ label: "Campaigns waiting for results", href: "#/monitoring/runs", text: "Every contact list you made, and where to add what happened to those customers." })
       : "",
     entry({
       label: "Document assistant",
@@ -355,6 +373,7 @@ const CSS = `
 .sp .sp-entry a:hover{text-decoration:underline}
 .sp .sp-entry .sp-label{font-weight:600;color:var(--ink)}
 .sp .sp-text{font-size:13px;color:var(--muted);line-height:1.45}
+.sp .sp-when{font-size:12px;color:var(--muted)}
 .sp details.adv>summary{padding:16px 20px;font-size:14px;font-weight:600;color:var(--ink);cursor:pointer}
 .sp details.adv[open]>summary{border-bottom:1px solid var(--line)}
 .sp .sp-sub{margin:0;padding:12px 20px 0;font-size:13px;font-weight:600;color:var(--ink2)}

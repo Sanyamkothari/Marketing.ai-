@@ -17,10 +17,11 @@ const hrefs = (sel) => $$(`${sel} a`).map((a) => a.getAttribute("href"));
 test("Settings groups what a new user does not need, each a link to a screen that already exists", async () => {
   await until(() => $("[data-settings-main]") && $("[data-signin-off]"), 3000, "the Settings page");
   assert.equal($("main h1").textContent, "Settings");
-  assert.deepEqual(hrefs("[data-settings-main]"), ["#/connections", "#/privacy/consent", "#/monitoring/schedules"]);
+  // Plan M M173: Costs (`#/cost`) had no way in; it is the fourth entry.
+  assert.deepEqual(hrefs("[data-settings-main]"), ["#/connections", "#/privacy/consent", "#/monitoring/schedules", "#/cost"]);
   assert.deepEqual(
     $$("[data-settings-main] a").map((a) => a.textContent),
-    ["AI service", "Privacy", "Schedules"],
+    ["AI service", "Privacy", "Schedules", "Costs"],
   );
   assert.equal($("#pb-bar .tn-item.on").textContent.trim(), "Settings");
 });
@@ -32,12 +33,28 @@ test("the advanced tools are folded away: uplift, the data kit, raw tables, Mode
   assert.equal(details.querySelector("summary").textContent, "Advanced tools");
   assert.deepEqual(
     $$("[data-settings-advanced] .sp-entry").map((li) => (li.querySelector("a, .sp-label") || {}).textContent),
-    ["Uplift workbench", "Data request kit", "Build from raw tables", "Model health", "Document assistant"],
+    [
+      "Uplift workbench",
+      "Data request kit",
+      "Build from raw tables",
+      "Model health",
+      // Plan M M173: `#/approvals` had a notice that exists only while a model waits; and a second way in to
+      // three screens that had one each
+      "Waiting for approval",
+      "Data Doctor",
+      "Check a past campaign",
+      "Campaigns waiting for results",
+      "Document assistant",
+    ],
   );
   assert.deepEqual(hrefs("[data-settings-advanced]"), [
     "#/uplift",
     "#/pilot/kit",
     "#/monitoring/alerts",
+    "#/approvals",
+    "#/doctor",
+    "#/audit",
+    "#/monitoring/runs",
     "#/uc/ai-onboarding-assistant",
   ]);
 });
