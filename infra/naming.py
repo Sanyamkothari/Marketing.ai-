@@ -180,6 +180,11 @@ SETTINGS_FIELDS: Final[tuple[str, ...]] = (
     "holdout_salt",
     # Plan M M174 (DEC-1604): one added field, presentation only (which shell the UI draws).
     "ui_layout",
+    # Plan M M182 (DEC-1612): four added fields, presentation only (the brand the UI draws).
+    "brand_name",
+    "brand_logo_url",
+    "brand_logo_alt",
+    "brand_color",
 )
 """Every field of `engine.settings.Settings`, in `engine.settings.ENV_VARS` order.
 

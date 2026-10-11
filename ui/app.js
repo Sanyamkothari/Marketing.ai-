@@ -35,6 +35,9 @@ import { aiNoticeHtml, needsAiNotice } from "./availability.js";
 // <M174>
 import { layoutDrawn, layoutRedirect } from "./layout.js";
 // </M174>
+// <M182>
+import { brandName } from "./brand.js"; // Plan M M182 (DEC-1612): the loading heading names the deployment's product
+// </M182>
 
 const app = document.getElementById("app");
 const PAGES = ["data", "model", "output"];
@@ -176,7 +179,7 @@ async function failure(error, parts) {
 /** `industryId` names a journey; null (always, since `#/industry/<id>` goes Home, M173) opens the API's default one. */
 async function showOverview(industryId) {
   active = null;
-  loading("list", "Marketing AI");
+  loading("list", brandName());
   paint(overviewHtml(await allIndustries(), industryId), () => bindOverview(app));
 }
 

@@ -30,6 +30,7 @@ root of the engine's import graph (`tests/integration/test_engine_imports.py`).
 from __future__ import annotations
 
 import os
+import re
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Final, Literal, Protocol, Self, runtime_checkable
@@ -40,6 +41,7 @@ from pydantic import (
     Field,
     SecretStr,
     ValidationError,
+    ValidationInfo,
     field_validator,
     model_validator,
 )
@@ -94,6 +96,48 @@ AlertBackend = Literal["log", "sns"]
 
 UiLayout = Literal["classic", "campaigns"]
 """Which shell the UI draws (Plan M M174): today's top bar (`classic`) or the five-place sidebar (`campaigns`)."""
+
+# --- Plan M M182 (the brand, DEC-1612) ---------------------------------------------------------------
+DEFAULT_BRAND_NAME: Final[str] = "Marketing AI"
+"""The product's name in the top bar and the browser tab's title."""
+
+DEFAULT_BRAND_LOGO_ALT: Final[str] = "Minfy"
+"""What the logo is called: the built-in logo is Minfy's, and a deployment's own logo names itself here."""
+
+DEFAULT_BRAND_COLOR: Final[str] = "#1E57BD"
+"""The page's accent colour, `--brand-blue` of `ui/index.html` exactly (a test compares the two)."""
+
+BRAND_GROUNDS: Final[Mapping[str, str]] = {
+    "--surface": "#FFFFFF",
+    "--bg": "#F5F6F8",
+    "--soft": "#F9FAFB",
+    "--p-t": "#EDF3FD",
+}
+"""The light backgrounds the accent colour is drawn on as text, by the token of `ui/index.html` that holds each:
+the card, the page, the soft panel and the active menu item's tint (a test compares them with the page)."""
+
+BRAND_MIN_CONTRAST: Final[float] = 4.5
+"""WCAG 2.x AA for normal text: the least ratio of white text on the colour, or of the colour on a ground."""
+
+_HEX_COLOUR: Final[re.Pattern[str]] = re.compile(r"#[0-9A-Fa-f]{6}")
+
+
+def _channel(value: int) -> float:
+    """One sRGB channel (0-255) as linear light, as WCAG 2.x defines it (the same maths as the UI's contrast check)."""
+    scaled = value / 255
+    return scaled / 12.92 if scaled <= 0.03928 else ((scaled + 0.055) / 1.055) ** 2.4
+
+
+def contrast_ratio(first: str, second: str) -> float:
+    """The WCAG 2.x contrast ratio, 1 to 21, of two `#RRGGBB` colours."""
+
+    def luminance(colour: str) -> float:
+        red, green, blue = (int(colour[i : i + 2], 16) for i in (1, 3, 5))
+        return 0.2126 * _channel(red) + 0.7152 * _channel(green) + 0.0722 * _channel(blue)
+
+    high, low = sorted((luminance(first), luminance(second)), reverse=True)
+    return (high + 0.05) / (low + 0.05)
+
 
 ENV_PREFIX: Final[str] = "MARKETING_AI_"
 """Every variable this module reads starts with it; nothing outside the prefix is consulted."""
@@ -173,6 +217,11 @@ ENV_VARS: Final[Mapping[str, str]] = {
     "holdout_salt": f"{ENV_PREFIX}HOLDOUT_SALT",
     # --- Plan M M174 (the new shell). One more extension; nothing above changes meaning (DEC-1604).
     "ui_layout": f"{ENV_PREFIX}UI_LAYOUT",
+    # --- Plan M M182 (the brand). More extensions; nothing above changes meaning (DEC-1612).
+    "brand_name": f"{ENV_PREFIX}BRAND_NAME",
+    "brand_logo_url": f"{ENV_PREFIX}BRAND_LOGO_URL",
+    "brand_logo_alt": f"{ENV_PREFIX}BRAND_LOGO_ALT",
+    "brand_color": f"{ENV_PREFIX}BRAND_COLOR",
 }
 """Field name to environment variable. One mapping, so docs, tests and readers agree."""
 
@@ -428,6 +477,79 @@ class Settings(BaseModel):
         default="classic",
         description="`classic` (today's top bar) or `campaigns` (the five-place sidebar). Presentation only.",
     )
+
+    # --- Plan M M182 (the brand, DEC-1612) ---------------------------------------------------------
+    # Added fields only, defaulted to today's product. They change what the browser draws, nothing the
+    # API does: `GET /auth/me` hands them to the UI in a `brand` object. The defaults are today's name,
+    # the built-in Minfy logo (an empty URL) and today's accent colour.
+    brand_name: str = Field(
+        default=DEFAULT_BRAND_NAME,
+        description="The product's name in the top bar and the tab's title; 1 to 40 characters.",
+    )
+    brand_logo_url: str = Field(
+        default="",
+        description="Where the logo image is: an https:// address, or a path this site serves (such as /ui/acme-logo.svg, a file placed in the image's ui/ directory); empty draws the built-in logo, and so does an image that fails to load.",
+    )
+    brand_logo_alt: str = Field(
+        default=DEFAULT_BRAND_LOGO_ALT,
+        description="What the logo is called, for people who cannot see it; 1 to 80 characters.",
+    )
+    brand_color: str = Field(
+        default=DEFAULT_BRAND_COLOR,
+        description="The accent colour as #RRGGBB; refused when it fails WCAG AA contrast on the page.",
+    )
+
+    @field_validator("brand_name", "brand_logo_alt")
+    @classmethod
+    def _brand_text(cls, value: str, info: ValidationInfo) -> str:
+        """A name is one line of printable text, trimmed (it is drawn in the bar and the tab's title)."""
+        limit = 40 if info.field_name == "brand_name" else 80
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("must not be empty")
+        if len(cleaned) > limit:
+            raise ValueError(f"must be at most {limit} characters")
+        if not cleaned.isprintable():
+            raise ValueError("must be one line of printable text")
+        return cleaned
+
+    @field_validator("brand_logo_url")
+    @classmethod
+    def _brand_logo_url(cls, value: str) -> str:
+        """Empty, `https://...`, or a path from the site's root (`/ui/acme-logo.svg`); no script, data or plain-http address."""
+        cleaned = value.strip()
+        if not cleaned:
+            return ""
+        if len(cleaned) > 2048:
+            raise ValueError("must be at most 2048 characters")
+        if any(ch.isspace() or ch in "\"'<>\\`" or not ch.isprintable() for ch in cleaned):
+            raise ValueError("must not contain spaces, quotes, angle brackets or backslashes")
+        if cleaned.startswith("/") and not cleaned.startswith("//"):
+            return cleaned
+        if cleaned.startswith("https://") and len(cleaned) > len("https://"):
+            return cleaned
+        raise ValueError("must start with https:// or be a path this site serves, such as /ui/acme-logo.svg")
+
+    @field_validator("brand_color")
+    @classmethod
+    def _brand_color(cls, value: str) -> str:
+        """`#RRGGBB`, in capitals, readable as white-on-colour and as colour-on-page (WCAG AA, 4.5:1)."""
+        cleaned = value.strip()
+        if not _HEX_COLOUR.fullmatch(cleaned):
+            raise ValueError("must be a colour written as #RRGGBB, such as #1E57BD")
+        colour = cleaned.upper()
+        measured = [("white text on the colour", contrast_ratio("#FFFFFF", colour))]
+        measured += [
+            (f"the colour as text on {ground}", contrast_ratio(colour, ground))
+            for ground in BRAND_GROUNDS.values()
+        ]
+        what, worst = min(measured, key=lambda pair: pair[1])
+        if worst < BRAND_MIN_CONTRAST:
+            raise ValueError(
+                f"{colour} is too light to read: the contrast of {what} is {worst:.2f}:1, and WCAG AA needs "
+                f"{BRAND_MIN_CONTRAST}:1. Choose a darker colour"
+            )
+        return colour
 
     @field_validator("sagemaker_subnet_ids", "sagemaker_security_group_ids", "cors_origins", mode="before")
     @classmethod

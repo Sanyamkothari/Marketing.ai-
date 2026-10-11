@@ -42,6 +42,7 @@ from api.access_policy import RoutePolicy, all_policies, refusal_message, regist
 from api.deps import SettingsDep
 from api.routes.uploads import http_error
 from api.schemas import (
+    BrandView,
     ErrorResponse,
     LoginRequest,
     LoginResponse,
@@ -276,6 +277,12 @@ def me(request: Request, principal: PrincipalDep, settings: SettingsDep) -> MeRe
         auth_mode=settings.auth_mode,
         permissions=tuple(permissions),
         ui_layout=settings.ui_layout,  # Plan M M174 (DEC-1604): which shell the UI draws
+        brand=BrandView(  # Plan M M182 (DEC-1612): the name, logo and colour the UI draws
+            name=settings.brand_name,
+            logo_url=settings.brand_logo_url,
+            logo_alt=settings.brand_logo_alt,
+            color=settings.brand_color,
+        ),
     )
 
 

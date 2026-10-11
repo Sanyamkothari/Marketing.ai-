@@ -63,6 +63,6 @@ def test_the_default_answer_says_classic(tmp_path: Path) -> None:
     with TestClient(app) as client:
         body = client.get("/auth/me").json()
     assert body["ui_layout"] == "classic"
-    # M180 (DEC-1610) added `preferences` to the same answer, null with sign-in off (reconciled at the final integration).
-    assert set(body) == {"principal", "auth_mode", "permissions", "ui_layout", "preferences"}
+    # M180 (DEC-1610) added `preferences` (null with sign-in off, but sent); M182 added `brand`: both additive.
+    assert set(body) == {"principal", "auth_mode", "permissions", "ui_layout", "preferences", "brand"}
     assert body["preferences"] is None

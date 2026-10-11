@@ -26,6 +26,10 @@
    and `chrome.js` keeps all of the behaviour. */
 
 import { LOGO, esc } from "./dom.js";
+// <M182>
+// Plan M M182 (DEC-1612): the wordmark and the logo are the deployment's brand (`brand.js`); today's by default.
+import { brandLogoAlt, brandLogoHtml, brandNameHtml } from "./brand.js";
+// </M182>
 import { BELL, PLACES, homeFor } from "./layout.js";
 
 export const SIDEBAR_ID = "sh-side";
@@ -93,9 +97,9 @@ export function shellBarHtml(ctx) {
   const here = homeFor(ctx.hash);
   const user = ctx.slot("user");
   if (signedOut) {
-    return `<div class="tb-row sh-row"><a class="wordmark" href="${home}">Marketing AI</a><div class="tb-context"></div>${
+    return `<div class="tb-row sh-row"><a class="wordmark" href="${home}">${brandNameHtml()}</a><div class="tb-context"></div>${
       user ? `<div class="sh-utils">${user}</div>` : ""
-    }<a class="tb-logo" href="${home}" aria-label="Minfy, home">${LOGO}</a></div>`;
+    }<a class="tb-logo" href="${home}" aria-label="${esc(brandLogoAlt())}, home">${brandLogoHtml(LOGO)}</a></div>`;
   }
   const menuBtn = `<button type="button" class="btn secondary sm sh-menu-btn" data-tb-menu aria-expanded="${Boolean(
     ctx.panel,
@@ -104,9 +108,9 @@ export function shellBarHtml(ctx) {
     ctx.slot("help"),
     ctx.menu === HELP_ID,
   )}${user}`;
-  return `<div class="tb-row sh-row"><a class="wordmark" href="${home}">Marketing AI</a>${menuBtn}${sidebarHtml(
+  return `<div class="tb-row sh-row"><a class="wordmark" href="${home}">${brandNameHtml()}</a>${menuBtn}${sidebarHtml(
     here,
-  )}<div class="tb-context">${ctx.context || ""}</div><div class="sh-utils">${utils}</div><a class="tb-logo" href="${home}" aria-label="Minfy, home">${LOGO}</a></div>`;
+  )}<div class="tb-context">${ctx.context || ""}</div><div class="sh-utils">${utils}</div><a class="tb-logo" href="${home}" aria-label="${esc(brandLogoAlt())}, home">${brandLogoHtml(LOGO)}</a></div>`;
 }
 
 // Tokens only (index.html's :root), so both themes apply. The sidebar sits under the sticky bar, fixed to
