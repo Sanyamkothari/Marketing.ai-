@@ -1233,3 +1233,44 @@ hold-outs under the DPDP Act is pending, so nothing here says a hold-out is lawf
 > "We also use information about our customers, including customers who did not receive a particular message,
 > to measure whether our messages help. To do this we sometimes choose at random who receives a message and
 > who does not, and compare the two groups. This is used only to measure our own communications."
+
+## 27. Message variants as measured arms (Plan K M140, DEC-1407)
+
+Campaign copy (`POST /runs/{id}/campaign-copy`) writes up to four variants of a message per band or segment and
+channel. With `generative.variant_arms: true` in the use case, the approved variants become **arms** of the
+run's treat list, randomised and measured; off (the default), nothing here runs and every file is what it was.
+
+**Steps.** Generate the copy and approve the variants to test (the guardrails screen every draft first; a
+blocked draft cannot be approved). Enter each variant in `configs/decide/catalogue.yaml` as an action whose
+`template_ref` is the variant's text reference (`copy:` and 16 hex digits; the refusal names it). An SMS
+variant also needs its registered `dlt_template_id`. Then `POST /runs/{id}/campaign-copy/variant-arms` (Analyst).
+
+**The arms.** `no_message` (the run's held-back customers, never redrawn), `control_template` (the message the
+customer would get without variants: their band's own action and template, as sent today) and `variant_a`,
+`variant_b`, ... (each letter approved for every group and channel the copy was written for). At least two
+variants are needed; with one the treat list stays as it is. Each customer of the copy's groups gets one message
+arm in equal shares, from a SHA-256 draw of the run's seed and their own key (M92's draw), never their position.
+The arms keep M100's level spelling, so a later model of several treatments can learn from them.
+
+**Refusals (nothing is written).** `VARIANT_TEMPLATE_UNREGISTERED`: an SMS variant with no catalogue action
+carrying its reference and a registered template id (empty, or still a placeholder such as
+`<your DLT template id>`). `VARIANT_ACTION_MISSING`: a variant on another channel that is not in the catalogue.
+`VARIANT_ARMS_NOT_MADE`: the use case does not opt in, the run has no copy, it chose among several offers, or
+fewer than two variants are approved everywhere. Under a region rule (India's `sms_requires`), a catalogue
+action without a template id is refused at load first (`ACTION_DLT_TEMPLATE_MISSING`, M99).
+
+**What is written.** `variant_arms.parquet` (row-level, Analyst; key, the copy's group, the arm) and
+`variant_arms.json` (the arms, their templates and catalogue actions, customers per arm, the catalogue's
+SHA-256 beside the run's own stamp). The treat list is rebuilt with two more columns before `net_value`,
+`variant_arm` and `variant_template` (the approved template the arm sends on the customer's channel; empty for
+the control template), on a run with arms only; its summary gains `variant_arm_counts`.
+
+**Measuring.** `POST /campaigns` from such a run measures the campaign within the copy's groups only (both
+sides), and keeps each contacted customer's arm. `POST /campaigns/{id}/measure` measures every arm against the
+no-message group (M100), every message together (M104's `offers_combined`), each arm in
+`segment_effects.json`, and writes `variant_comparison.json`: every pair of messages compared directly at the
+Bonferroni level over the pairs. The Value Proof Pack shows a row per message and names the best message only
+when its interval is above every other message's; otherwise it says none is named.
+
+**Not built.** Simulated personas (screening drafts only, later). A variant's catalogue action never sets a
+channel's contact cost (`channel_contact_costs` skips `copy:` references).

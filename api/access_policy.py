@@ -285,6 +285,9 @@ LEGACY_POLICIES: Final[dict[PolicyKey, RoutePolicy]] = {
         object_type="copy_template",
         object_param="template_id",
     ),
+    ("POST", "/runs/{run_id}/campaign-copy/variant-arms"): _policy(  # Plan K M140 (DEC-1407)
+        _AN, "copy.variant_arms", "test approved messages as arms", object_type="run", object_param="run_id"
+    ),
     ("GET", "/runs/{run_id}/copy_messages.csv"): _policy(  # Analyst: customer rows (M91)
         _AN,
         "copy.messages_download",
@@ -357,6 +360,7 @@ ROW_LEVEL_ARTEFACTS: Final[frozenset[str]] = frozenset(
         "arbitrated_treat_list.csv",  # Plan J M101 (DEC-1311): cross-use-case arbitrated treat list
         "arbitrated_treat_list.parquet",
         "offer_choice.parquet",  # Plan J M100 part B (DEC-1310): the offer chosen per customer, net value
+        "variant_arms.parquet",  # Plan K M140 (DEC-1407): the message arm drawn per customer
     }
 )
 """Run files that hold one row per customer (Plan J M91, M92). `configs/privacy.yaml`

@@ -140,6 +140,7 @@ Contract schema version: 1.
 | POST | `/runs/{run_id}/campaign-copy` | Start campaign-copy generation over a finished scoring run | GenerativeJobStartedResponse |
 | POST | `/runs/{run_id}/campaign-copy/templates/{template_id}/approve` | Record that a person approved one campaign-copy template | CopyTemplate |
 | POST | `/runs/{run_id}/campaign-copy/templates/{template_id}/regenerate` | Re-run generation for one campaign-copy template in place | CopyTemplate |
+| POST | `/runs/{run_id}/campaign-copy/variant-arms` | Test the approved message variants as randomised, measured arms of the run's treat list | VariantArms |
 | GET | `/runs/{run_id}/campaign-results` | The stored campaign results of a scoring run | IncrementalityReport |
 | POST | `/runs/{run_id}/campaign-results` | Measure a scoring run's campaign from an uploaded outcomes file | IncrementalityReport |
 | POST | `/runs/{run_id}/cancel` | Ask a pending or running run to stop | RunCancelResponse |
@@ -486,6 +487,7 @@ A fully merged, validated use case. This is what the whole engine consumes.
 | `reference_set` | ReferenceSetConfig | no | The Q&A file an index is graded against.  Named for what it is rather than `evaluation`, which already means the model's evaluation on `UseCaseConfig`; one word cannot carry both without a reader having to ask which (DEC-200). |
 | `root_cause` | RootCauseConfig | no |  |
 | `campaign_copy` | CampaignCopyConfig | no | Spelled in full because a pydantic field called `copy` shadows `BaseModel.copy` (DEC-201). |
+| `variant_arms` | boolean | no | Plan K M140 (DEC-1407): approved copy variants become randomised, measured arms of the treat list (`engine.decide.variant_arms`). Off by default and left out of a dump while off. |
 
 #### OutputConfig
 

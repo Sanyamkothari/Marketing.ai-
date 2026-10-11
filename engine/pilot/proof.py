@@ -1292,10 +1292,15 @@ def _incremental(context: _Context) -> ProofSection:
                 missing="Not measured: one of the two groups is too small to compare.",
             )
         )
-    table = _offer_table(context)
+    variants = _variant_key(context)
+    if variants is not None and context.claim != "descriptive":
+        lines += _variant_lines(context, variants)
+    table = _offer_table(context, messages=variants is not None)
     notes = [
         "Each range is a confidence interval at that level: the true number very probably lies inside it."
     ]
+    if variants is not None:
+        notes.append(_VARIANT_NOTE)
     if context.claim == "stated_random":
         notes.append(
             "If the groups were not in fact chosen at random, these differences may not be the campaign's doing."
@@ -1326,8 +1331,64 @@ def _scope_notes(context: _Context) -> list[str]:
     return []
 
 
-def _offer_table(context: _Context) -> ProofTable | None:
-    """Per offer: the report's own arms (an audited campaign), else the offer groups of `segment_effects.json`."""
+_VARIANTS: Final[str] = "variant_comparison.json"
+_VARIANT_NOTE: Final[str] = (
+    "The messages were given at random among the same customers: the table compares each with "
+    "the customers who got no message, and the best message is named only when its range against every other "
+    "message lies above zero at the comparison's confidence, which allows for every pair of messages compared."
+)
+
+
+def _variant_key(context: _Context) -> str | None:
+    """`variant_comparison.json` of a campaign with message arms, when it belongs to the stored report."""
+    key = context.key(_VARIANTS)
+    document = context.reader.doc(key)
+    if not isinstance(document, dict) or document.get("report_computed_at") != context.report.get(
+        "computed_at"
+    ):
+        return None
+    return key
+
+
+def _variant_lines(context: _Context, key: str) -> list[ProofLine]:
+    """The best message, named only when the comparison between the messages says so (Plan K M140, DEC-1407)."""
+    reader = context.reader
+    lines = [
+        _line(
+            "Confidence of the comparison between the messages",
+            reader.fig(key, "family_confidence", "share"),
+            missing="Not measured: the messages could not be compared with each other.",
+        )
+    ]
+    if reader.get(key, "winner") is None:
+        lines.append(
+            ProofLine(
+                label="Best message",
+                missing=(
+                    "None is named: the leading message's range is not above every other message's, so this test "
+                    "cannot tell which message is best."
+                ),
+            )
+        )
+        return lines
+    lines += [
+        _line("Best message", reader.fig(key, "winner", "text"), missing="Not measured."),
+        _line("Closest other message", reader.fig(key, "closest", "text"), missing="Not measured."),
+        _line(
+            "How far the best message is ahead of it",
+            reader.fig(key, "margin.value", "points"),
+            reader.fig(key, "margin.ci_low", "points"),
+            reader.fig(key, "margin.ci_high", "points"),
+            missing="Not measured.",
+        ),
+    ]
+    return lines
+
+
+def _offer_table(context: _Context, *, messages: bool = False) -> ProofTable | None:
+    """Per offer: the report's own arms (an audited campaign), else the offer groups of `segment_effects.json`.
+
+    `messages` (Plan K M140): the arms are messages, so the first column says so."""
     reader = context.reader
     arms = reader.get(context.report_key, "arms")
     rows: list[tuple[Cell, ...]] = []
@@ -1359,7 +1420,8 @@ def _offer_table(context: _Context) -> ProofTable | None:
                 rows.append((name, treated, effect, FigureRange(low=low, high=high)))
     if not rows:
         return None
-    return ProofTable(columns=("Offer", "Contacted, measured", "Difference", "Range"), rows=tuple(rows))
+    first = "Message" if messages else "Offer"
+    return ProofTable(columns=(first, "Contacted, measured", "Difference", "Range"), rows=tuple(rows))
 
 
 def _cells(context: _Context, dimension: str) -> list[tuple[int, dict[str, Any]]]:

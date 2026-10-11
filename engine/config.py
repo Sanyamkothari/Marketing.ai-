@@ -1127,6 +1127,14 @@ class GenerativeConfig(_Base):
     reference_set: ReferenceSetConfig = ReferenceSetConfig()
     root_cause: RootCauseConfig = RootCauseConfig()
     campaign_copy: CampaignCopyConfig = CampaignCopyConfig()
+    variant_arms: bool = Field(
+        default=False,
+        exclude_if=lambda value: not value,
+        description=(
+            "Plan K M140 (DEC-1407): approved copy variants become randomised, measured arms of the treat list "
+            "(`engine.decide.variant_arms`). Off by default and left out of a dump while off."
+        ),
+    )
 
     @property
     def enabled(self) -> bool:
@@ -3900,6 +3908,9 @@ def _plan_j_validate_action_ids(config: UseCaseConfig, root: Path | None) -> Non
     validate_action_ids(config, root=root)
 
 
+# PLAN-K (M140): move into the PLAN-K block at integration.
+# `GenerativeConfig.variant_arms` (DEC-1407) is the one in-place edit: a model field cannot live in a block, so
+# it is declared on the model, off by default and left out of a dump while off (as M99's in-place fields are).
 # ---- END PLAN-J ----
 # ---- PLAN-L (data doctor) — append only below this line ----
 # ---- END PLAN-L ----

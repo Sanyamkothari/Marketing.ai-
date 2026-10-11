@@ -360,6 +360,8 @@ def test_openapi_builds_and_documents_every_route(client: TestClient) -> None:
         "/runs/{run_id}/campaign-copy/templates/{template_id}/approve",
         "/runs/{run_id}/campaign-copy/templates/{template_id}/regenerate",
         "/runs/{run_id}/copy_messages.csv",
+        # Plan K M140 (DEC-1407): approved message variants as randomised, measured arms
+        "/runs/{run_id}/campaign-copy/variant-arms",
         # Phase 3a: which AWS identity Bedrock is called as - chosen by name, never a key
         "/connection/aws",
         "/connection/aws/test",

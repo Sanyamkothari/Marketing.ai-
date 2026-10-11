@@ -130,6 +130,7 @@ from engine.decide.treat_list import (  # Plan J M98 (DEC-1308)
     build_treat_list,
     ensure_treat_list,
 )
+from engine.decide.variant_arms import VARIANT_ARMS_FILENAME, VARIANT_ARMS_PARQUET  # Plan K M140 (DEC-1407)
 from engine.generative.budget import load_prices  # Plan J M108 (DEC-1318)
 from engine.generative.contracts import GENERATIVE_ARTEFACTS, GENERATIVE_TABULAR_SCHEMAS
 from engine.holdout.assign import HOLDOUT_ASSIGNMENT_FILENAME  # Plan J M92 (DEC-1302 (e))
@@ -664,6 +665,9 @@ def read_artefact(run_id: str, name: str, storage: StorageDep, request: Request)
     # The offer chosen per customer of a run of several offers (Plan J M100 part B, DEC-1310): row-level
     # (Analyst, `ROW_LEVEL_ARTEFACTS`); its summary, `offer_choice.json`, is in `UPLIFT_ARTEFACTS`.
     known = known or name == OFFER_CHOICE_FILENAME
+    # The message arm drawn per customer of a run with variant arms (Plan K M140, DEC-1407): row-level
+    # (Analyst, `ROW_LEVEL_ARTEFACTS`), and its aggregate summary.
+    known = known or name in (VARIANT_ARMS_FILENAME, VARIANT_ARMS_PARQUET)
     if not ARTEFACT_NAME.fullmatch(name) or not known:
         raise http_error(404, "ARTEFACT_UNKNOWN", f"There is no artefact called {name!r}.")
     require_row_level_role(request, name)

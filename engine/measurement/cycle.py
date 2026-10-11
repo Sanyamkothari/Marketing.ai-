@@ -346,6 +346,7 @@ def open_campaign(
     """
     import pandas as pd
 
+    from engine.decide.variant_arms import variant_campaign_scope, with_variant_arms
     from engine.holdout.assign import run_holdout_spec
     from engine.stages import export
     from engine.uplift.measure import measure_offered
@@ -373,6 +374,9 @@ def open_campaign(
     intended_keys = (
         chosen_intended_keys(storage, record.run_id) if "intended_treatment" in scores.columns else None
     )
+    # Plan K M140 (DEC-1407): a run that drew message arms is measured within the groups its copy was written
+    # for, and each contacted customer's arm is kept. None for every other run, which is unchanged.
+    variants = variant_campaign_scope(storage, record.run_id, record.primary_key)
     try:
         assignment = build_assignment(
             scores,
@@ -380,9 +384,12 @@ def open_campaign(
             bands=bands,
             holdout=holdout_table,
             intended_keys=intended_keys,
+            scope_keys=None if variants is None else variants[0],
         )
     except ValueError as exc:
         raise CycleError(CAMPAIGN_INVALID, str(exc), status=422, path="bands" if bands else None) from exc
+    if variants is not None:
+        assignment = with_variant_arms(assignment, variants[1], record.primary_key)
     counts = assignment_counts(assignment)
     holdout_scope, holdout_key, holdout_epoch = holdout_identity(run_holdout_spec(storage, record.run_id))
     uplift_run = "intended_treatment" in scores.columns
@@ -570,6 +577,12 @@ def measure_recorded(
     outcome windows are still open stores nothing and answers `matured=False`. `now` stamps a recomputed
     contact readout; `as_of` is the moment the outcomes are read as of.
     """
+    from engine.decide.variant_arms import (
+        VARIANT_ARM_COLUMN,
+        VARIANT_COMPARISON_FILENAME,
+        compare_variant_arms,
+        variant_measure_arguments,
+    )
     from engine.measurement.audit import AUDIT_FILENAME, AuditReadout, label_report
     from engine.measurement.campaign import CAMPAIGN_EPOCH_MISMATCH
     from engine.measurement.continuous import COVARIATE_NOT_BEFORE_CAMPAIGN, CovariateNotBeforeCampaignError
@@ -607,6 +620,7 @@ def measure_recorded(
         or "binary"
     )
     offers = {} if audit is None or not audit.offers else offer_arguments(audit)  # several offers (M103)
+    offers = offers or variant_measure_arguments(assignment)  # message arms (Plan K M140, DEC-1407)
     try:
         report = measure_campaign(
             assignment,
@@ -648,6 +662,9 @@ def measure_recorded(
     )
     storage.write_model(campaign_key(campaign_id, REPORT_FILENAME), report)
     storage.write_model(campaign_key(campaign_id, SEGMENT_EFFECTS_FILENAME), segments)
+    comparison = compare_variant_arms(report) if offers.get("arm_column") == VARIANT_ARM_COLUMN else None
+    if comparison is not None:  # the messages against each other (Plan K M140, DEC-1407)
+        storage.write_model(campaign_key(campaign_id, VARIANT_COMPARISON_FILENAME), comparison)
     updated = campaign.model_copy(
         update={
             "status": CampaignStatus.LIVE if report.early_look else CampaignStatus.MEASURED,
@@ -674,12 +691,15 @@ def segment_effects(
     The offers are the audited file's (each treated customer's offer, against the shared control), else, for
     a run that chose the offer per customer, the offer its policy gave every customer (DEC-1311 (af)).
     """
+    from engine.decide.variant_arms import VARIANT_ARM_COLUMN
     from engine.measurement.measure import measure_campaign_segments
     from engine.measurement.segments import policy_offers
 
     offers = None
     if "offer" in assignment.columns:
         offers = assignment["offer"]
+    elif VARIANT_ARM_COLUMN in assignment.columns:  # each contacted customer's message arm (Plan K M140)
+        offers = assignment[VARIANT_ARM_COLUMN]
     elif campaign.intended_source == "offer_choice" and campaign.run_ids:
         offers = policy_offers(storage, campaign.run_ids[0], assignment, campaign.primary_key)
     return measure_campaign_segments(
