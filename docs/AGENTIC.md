@@ -198,10 +198,77 @@ with an offer budget, a cost cap, arbitration caps and a persistent holdout on a
 | M131 TRAI rules and the measurement purpose | built early under Plan J (DEC-1323) |
 | M132 The agent-safe core | this document's §3–§7 (DEC-1401) |
 | M133 The verifier over MCP, demo data | pending |
-| M134 Pre-send compliance gate | pending |
+| M134 Pre-send compliance gate | §9 (DEC-1405) |
 | M135 Prediction covariates | built early under Plan J (DEC-1324) |
 | M136 Pooling across campaigns | pending |
 | M137 Safe to roll out | built early under Plan J (DEC-1325) |
 | M138 Harm alarm | pending |
 | M139 Campaign planner | pending |
 | M140 – M144 | pending |
+
+## 9. The pre-send compliance gate (`engine/compliance/`; M134)
+
+Before a treat list leaves the product, every planned contact gets one decision record: may this message go to
+this customer on this channel, for this purpose, and if not, why. Off by default
+(`configs/compliance/compliance.yaml` `compliance.gate.enabled: false`): off, a treat list build reads that one
+switch file, nothing else of `engine/compliance` runs, nothing new is written, and every treat list is byte for
+byte what it was.
+
+**When it runs.** On, `engine.decide.treat_list.build_treat_list` calls `engine.compliance.handoff.gate_treat_list`
+after it has chosen every customer's treat flag, offer and channel and before it writes anything. Every route and
+schedule that builds a treat list goes through that function, so none bypasses the gate.
+
+**What decides, per customer the list would contact and per planned channel** (`engine.compliance.gate.decide`;
+the reasons in this order, `allowed` when there is none):
+
+| Reason | Rule |
+|---|---|
+| `COMPLIANCE_NO_CHANNEL` | the contact has no planned channel at all: nothing to clear it on |
+| `COMPLIANCE_CONSENT` | not contactable on the channel, from the run's own `channel_contactability.parquet` (M99/M131: the uploaded consent columns and the consent ledger with the region's consent-basis rules - an inquiry consent past its validity, a legacy consent not registered), joined on every key column; it is read, not computed again |
+| `COMPLIANCE_WHATSAPP_NO_OPT_IN` | a channel of `opt_in_channels` (default `[whatsapp]`) and no valid grant **on that channel itself** in the consent ledger: a ledger channel grant on WhatsApp is the opt-in record; an all-channel grant is not |
+| `COMPLIANCE_CATALOGUE_CHANGED` | the catalogue is not the one the run ran under (`catalogue_stamp.json`), so no message can be tied to the run: fail closed |
+| `COMPLIANCE_TEMPLATE_MISMATCH` | on a channel whose region rule requires a DLT template (`<channel>_requires: [dlt_template_id]`), the action's `message_text` is not its `dlt_template_text` with each slot filled by a value of its tag |
+| `COMPLIANCE_URL_NOT_WHITELISTED` | a link in the action's `message_text`, on a channel the whitelist covers, is not on it |
+
+An undeclared automated call never reaches the gate: the catalogue does not load (`ACTION_A2P_UNDECLARED`, M131).
+
+**The DLT matcher** (`engine/compliance/dlt.py`). Five tags and no others - `{#var#}` (any text up to
+`dlt_var_max_chars`, 30 by default), `{#numeric#}`, `{#alphanumeric#}`, `{#url#}`, `{#cbn#}` (a call-back number);
+a template with another tag is refused when the catalogue loads (`CATALOGUE_INVALID`). Literal text must match
+exactly. The template is compiled into a Thompson automaton and the message read once, so the work is linear in
+the message length with no backtracking. A language model is never used: one may only suggest a template, as a
+proposal. Catalogue actions carry two new optional fields, `dlt_template_text` and `message_text` (the approved
+message as sent, every variable filled); without them the check is not applied and the summary says so.
+
+**The URL whitelist** (`engine/compliance/urls.py`): `configs/compliance/url_whitelist.yaml`
+(`url_whitelist.example.yaml` shows the format: `channels`, and `urls` as hosts, `*.` sub-domains or URL
+prefixes), else the region file's `url_whitelist` block, else not applied.
+
+**What the list does.** A customer is sent on the first planned channel the gate allows - the one they had, or
+the next - and is not treated when it allows none; never `treat = 1` with no channel. `treat_list_summary.json`
+gains `compliance_withheld` (customers withheld per reason; a customer counts under each reason that closed one
+of their channels), `compliance_withheld_rows`, `compliance_rerouted_rows`, `compliance_rule_version`,
+`compliance_decisions_sha256` and `compliance_evidence_id` - all absent with the gate off.
+
+**What it writes.**
+
+* `compliance_decisions.parquet` (row-level: `configs/privacy.yaml`, `engine/privacy/layout.py`,
+  `ROW_LEVEL_ARTEFACTS`; Analyst, audited): the key columns, `channel`, `purpose`, `action_id`, `allowed`,
+  `reasons` (codes), `ledger_ref` (`channel_contactability.parquet#sha256=…`, and `;consent_record.seq=<n>` for
+  the opt-in grant used; null where the run's file does not cover the customer), `catalogue_ref`
+  (`<catalogue sha256>#<action_id>`) and `rule_version`.
+* A **signed** `evidence.label` entry on the decision ledger (actor `system:compliance_gate`, tool
+  `compliance_gate`) with the file's `artefact_sha256`, `rule_version`, the run and the codes; the ledger is the
+  platform database and the signer the data folder's Ed25519 key, as in §6. A ledger that cannot be written stops
+  the build. The gate runs whether or not `agentic.enabled` is on: it needs only the ledger, not the routes.
+* `compliance_decisions.json`: counts, the `rules` document (`rule_version` is its canonical sha256: the region
+  block's digest, the DLT channels and tags, the whitelist or null, the opt-in channels, the run's consent-basis
+  rules digest), what was checked per action and channel and why not, the evidence id and the ledger entry.
+
+**Scale.** `decide` is column operations only: 1,000,000 customers x 3 channels in about 4 s on the shared
+4-CPU machine, 100,000 in 0.25 s (`tests/unit/compliance/test_gate_scale.py`; design budget 60 s). The opt-in
+lookup reads the ledger per customer who plans an opt-in channel, in chunks of 500, as M131's classification does.
+
+**Not modelled.** One approved message per action (per-channel copy comes with M140's variants); the template's
+DLT header (sender id) is not checked; WhatsApp's own template approval is the provider's; a message's variables
+are checked as the product holds them, not as a client's tool fills them per customer at send time.

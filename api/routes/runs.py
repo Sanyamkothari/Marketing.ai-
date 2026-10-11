@@ -683,6 +683,10 @@ def read_artefact(run_id: str, name: str, storage: StorageDep, request: Request)
     # The offer chosen per customer of a run of several offers (Plan J M100 part B, DEC-1310): row-level
     # (Analyst, `ROW_LEVEL_ARTEFACTS`); its summary, `offer_choice.json`, is in `UPLIFT_ARTEFACTS`.
     known = known or name == OFFER_CHOICE_FILENAME
+    # PLAN-K (M134): move into the PLAN-K block at integration
+    # Plan K M134 (DEC-1405): the compliance gate's record of a treat list - one row per customer and planned
+    # channel (Analyst, `ROW_LEVEL_ARTEFACTS`) - and its summary (counts, the rules, the signed ledger entry).
+    known = known or name in ("compliance_decisions.parquet", "compliance_decisions.json")
     if not ARTEFACT_NAME.fullmatch(name) or not known:
         raise http_error(404, "ARTEFACT_UNKNOWN", f"There is no artefact called {name!r}.")
     require_row_level_role(request, name)
