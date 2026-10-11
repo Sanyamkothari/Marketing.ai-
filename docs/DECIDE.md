@@ -43,6 +43,7 @@ the user downloads (the treat list).
 | 24 | The manager demo | M111 | not yet written |
 | 25 | Small fixes that make existing things work better | M109 | written (below) |
 | 26 | India: TRAI Third Amendment and consent basis | M131 | written (below) |
+| 27 | The scoring run's prediction as the adjustment (CUPAC) | Plan K M135 | written (below) |
 
 ## 4. Running the statistical suite
 
@@ -591,7 +592,7 @@ reports recorded on the commit before M102).
   `theta` the within-arm slope) and `variance_reduction` (`1 - adjusted variance / unadjusted variance` of the
   difference, about `rho²`: 0.36 at `rho = 0.6`). A customer with no earlier amount keeps their row with the mean of
   the known ones (`rows_covariate_missing`); a covariate that does not vary gives `adjustment_note`, never a number.
-  A yes/no outcome never uses a covariate.
+  A yes/no outcome never uses a covariate column (since Plan K M135 it may use the scoring run's own prediction: §27).
 * **Only a covariate registered in advance.** `measure_campaign` uses a covariate only when the test plan in force
   names it: a different one, or a covariate on an amount with no plan registered, is `409 TEST_PLAN_CHANGED`,
   because choosing the adjustment after seeing the outcomes is one more way to move the goalposts. On a yes/no
@@ -842,6 +843,7 @@ figures read from them (the same `Figure` as the Value Proof Pack):
 | A group did worse (`GROUP_BACKFIRED`) | the Value Proof Pack proposes leaving a group out and nobody has approved it yet: exactly M104's rule | `segment_effects.json`, `incrementality_report.json` |
 | Does not beat risk ranking (`UPLIFT_NOT_BETTER_THAN_RISK`) | the run's `ranking_choice.json` says so (M96) | `ranking_choice.json` |
 | Effect falling (`EFFECT_FADING`) | the rule below | the cycles' `incrementality_report.json` |
+| May be doing harm (`HARM_ALARM`, Plan K M138) | the harm alarm (opt-in) fired under the plan in force and no final result is read yet: §28 | `harm_alarm.json`, `test_plan.json` |
 
 A campaign on generated data raises no card; its only line is the reason it is not counted.
 
@@ -1234,7 +1236,124 @@ hold-outs under the DPDP Act is pending, so nothing here says a hold-out is lawf
 > to measure whether our messages help. To do this we sometimes choose at random who receives a message and
 > who does not, and compare the two groups. This is used only to measure our own communications."
 
-## 27. Message variants as measured arms (Plan K M140, DEC-1407)
+## 27. The scoring run's prediction as the adjustment (Plan K M135, DEC-1324)
+
+Plan K's M135, built early under Plan J's decision range. §16's adjustment narrows an **amount**'s range with an
+amount each customer had before the campaign. A **yes/no** outcome (churn, conversion) had nothing of the kind: a
+past column predicts it weakly. But the scoring run that chose who to contact already predicted, **before** the
+campaign, each customer's chance of the outcome. That prediction is reused as the covariate (CUPAC: DoorDash 2020;
+MLRATE: Meta 2021). Nothing new is trained: compute once.
+
+* **What it is.** The propensity run's predicted probability - its own `actions.score_field` column of
+  `scores.parquet`, read from the run's `run_config.json` (`churn_prob` for telco churn) - or, on an uplift run,
+  `p_control`, the chance of the outcome without contact (`engine/measurement/run_score.py`,
+  `load_run_prediction`). Only the key column(s) and that column are read.
+* **Why it is valid.** The prediction was fixed before the treatment, so the campaign cannot have changed it: its
+  difference between the two randomised groups is chance alone, and removing the part of the outcome it predicts
+  removes noise without bias. The point-in-time rule is enforced, not assumed: a run that finished after the
+  campaign's `treatment_start`, or after the day a customer's own treatment date names (compared by day: a date
+  with no time may be any moment of it; the record holds the exact send time), is refused with
+  `422 COVARIATE_NOT_BEFORE_CAMPAIGN` and a sentence saying the prediction was made after the campaign began.
+* **How to register it.** In the test plan, before the outcomes are read: `covariate_source: run_score`, with
+  `covariate_column` left null (both together are refused). Allowed for `outcome_kind` binary and continuous. The
+  field is part of the plan's content and its `plan_hash`, and is left out of the stored plan while unset, so every
+  plan registered before keeps its hash. An amendment that adds or drops it is a new version like any other, and
+  measuring with it against a plan that did not register it (or with no plan) is `409 TEST_PLAN_CHANGED`
+  (`POST /campaigns/{id}/measure {covariate_source}`; null means the plan's). Registering it on a campaign with no
+  scoring run (an audit, a programme readout) or several runs is `422 TEST_PLAN_INVALID`: the assignment does not
+  record which run scored which customer, so the product refuses rather than guesses. Several offers are refused
+  too, as §16 refuses an amount there.
+* **The computation.** The prediction is joined to the measured customers on **every key column** (the same text
+  keys the outcomes are joined on), never by position. A measured customer with no prediction keeps their row with
+  the mean of the known ones and is counted in `rows_covariate_missing`. The estimator is §16's
+  `adjusted_difference`, unchanged (the pooled within-arm slope, Welch on the adjusted values); on a yes/no outcome
+  the arrays are 0/1 and the adjusted difference is a difference in rates. The report reuses `adjusted_lift`,
+  `adjusted_interval`, `variance_reduction`, `rows_covariate_missing` and `adjustment_note`, adds
+  `covariate_source: run_score` (absent otherwise, so every other report's JSON is byte for byte what it was), keeps
+  `covariate_column` null and always keeps the unadjusted estimate beside it. When the estimate cannot be adjusted
+  the adjusted fields are null and `adjustment_note` says why, in one of four sentences: no measured customer has a
+  prediction; a group has fewer than two customers with an outcome; the prediction is the same for everyone; or it
+  does not vary within either group (constant inside each group but different between them, checked exactly
+  before any slope is fitted, so a slope is never fitted to the rounding of the group means).
+* **What reads it.** It is the analysis the plan registered, so the verdict (`campaign_verdict_for`), the Value
+  Proof Pack ("Difference (adjusted for the predicted chance registered in the plan)", on an amount too, since the
+  run's prediction is a chance; the extra outcomes and their value from it times the contacted customers, every
+  figure traced to `adjusted_interval`; in "Method and limits" the customers with no prediction and the share of the
+  noise removed, with a note that the adjustment used the chance the scoring run predicted before the campaign, and
+  never §16's "earlier amount" line), the value view
+  (`adjusted: true`) and the fading rule of the summary read the adjusted estimate, each with a plain sentence.
+* **Planning.** A yes/no plan that registers it may give `expected_rho2`, the share of the outcome's spread the
+  person expects the prediction to explain (never assumed by the product); `achieved_power`,
+  `mde_two_proportions` and the plan preview then shrink both spreads by `sqrt(1 - rho2)`. With 0 (the default)
+  every number is as before.
+* **Measured, not promised.** Published reductions are 27% (Etsy, against 7% from CUPED) and about 19% beyond a
+  CUPED-style adjustment (Meta). For sparse yes/no retention outcomes we promise nothing: `variance_reduction` is
+  always reported, negative too, and the summary says when the prediction did not narrow the range.
+
+**How we know it is honest.** `tests/statistical/test_run_score_coverage.py` (nightly; the M95 band of four Monte
+Carlo standard errors) draws campaigns from `engine.measurement.simulate.predicted_campaign` - a yes/no outcome
+whose chance depends on two features, a prediction computed from the same features with noise and fixed before the
+treatment, a known effect - and checks (a) that the adjusted 95% interval covers the true effect (at a 15% and a 3%
+outcome) and removes variance on average, (b) that with no effect it excludes zero about 5% of the time, and (c)
+that a useless prediction (pure noise) leaves the interval no wider than 2% per campaign and 0.5% on average. The
+fast tests (`tests/unit/measurement/test_run_score.py`, `test_run_score_scale.py`,
+`tests/integration/measurement/test_campaign_run_score.py`) check the plan rules and the hash, the hand computation
+on a key join, row order, composite keys, the point-in-time refusals, the plan gate, the loader on a propensity and
+an uplift run (`p_control`) and each of its refusals, a reason for every null, the report pinned byte for byte to the
+one made before M135, a real train-and-score journey through the API with the Proof Pack's every line and the value
+view, and that the join and adjustment on 1,000,000 customers take
+about ten times as long as on 100,000.
+
+## 28. An early harm alarm, never an early win (Plan K M138, DEC-1403)
+
+**Why.** M94 refuses a verdict on an early look, which is right for "did it work?". But an offer that is hurting
+customers should not run on until the planned day. `engine/measurement/harm.py` watches every interim reading of a
+campaign for **harm only**, with a test that may be read at every data refresh without raising the false-alarm rate.
+
+**The rule** (design §9.4). For the difference `d` (contacted minus held back) read from the report the measurement
+just computed, its variance `V = s_T^2/n_T + s_C^2/n_C` (for a yes/no outcome `p(1 - p)/n` per group; for an amount
+the planned estimate's range, `((high - low) / 2z)^2`, never smaller than Welch's own) and `tau` = the registered test
+plan's smallest effect worth detecting in the outcome's unit (`mde_pp / 100`, or `mde_value`):
+`L = sqrt(V / (V + tau^2)) * exp(tau^2 d^2 / (2 V (V + tau^2)))`. The alarm fires when `L >= 1/alpha` (`alpha` = 0.05)
+**and** `d` is on the harmful side: below zero, or above zero for an outcome the campaign exists to prevent (decided as
+the Value Proof Pack decides it). A benefit never fires, however strong. Several offers are each judged against the
+shared control at `alpha / m`. Fewer than `min_rows_per_arm` (100) customers counted in a group, no registered plan, a
+plan with no smallest effect, or groups not drawn at random: nothing is judged, and `harm_alarm.json` says why.
+
+**Where it runs.** On every interim reading. In the monthly loop's `measure` step: while a live campaign's outcome window
+is still open, each firing pulls the outcomes recorded so far (`[treatment start, now]`, the step's saved connection) and
+reads them in memory (`engine.measurement.cycle.interim_reading`: the window cut to the whole days since the send, so
+both groups are read over the same days; customers with no outcome row yet are left out, never counted as
+non-conversions). That reading is checked and dropped: no report, outcomes copy, upload or campaign change is stored, and
+the step still answers `CAMPAIGN_NOT_MATURED`. Every open campaign is read, and every reading succeeds before any check
+is written, so a failed firing leaves no alarm whose alert was never raised. Once the window has closed, every early
+look the step measures is checked as well. On demand, `POST /campaigns/{id}/measure` checks an early look or a reading
+with customers still inside their window (per-row treatment dates). It writes `campaigns/<id>/harm_alarm.json` (`HarmCheck`, aggregate, kept
+with the report). An alarm stands once fired under a plan (an amended plan sets it aside) until the final result is
+read; a final result is never checked. When it first fires: the `HARM_ALARM` warning card on the campaigns' summary
+(§19) and one `harm_alarm` alert (severity `warning`) through the scheduling alert path. **Nothing stops**: a person
+decides. The result is still read only on the planned day, and no output of an early look reads as a win
+(`tests/integration/measurement/test_harm_alarm_loop.py` greps them).
+
+**Opt-in.** `harm_alarm.enabled` in `configs/measurement.yaml` (installation-wide; also `alpha`, `min_rows_per_arm`)
+is false by default: then nothing is checked, pulled or written, no card is shown (even for a `harm_alarm.json` left
+from a time the setting was on) and every output is as before. The file is read before anything is measured; one that
+cannot be read is a coded `ConfigError` as M136's loader of the same file gives (`CONFIG_YAML_ERROR`,
+`CONFIG_NOT_A_MAPPING`, `CONFIG_INVALID` with the dotted path): HTTP 422 on demand, a failed firing with that code in
+the loop, and nothing written either way.
+
+**Measured** (`tests/statistical/test_harm_alarm.py`, nightly, 4,000 campaigns per case, staggered sends over eight
+weeks, 14-day windows). On no effect the share of campaigns with any alarm before the analysis date stays far below
+5% whether read daily, every third day, weekly, at irregular moments or twice (about 0.1% to 1%), where a plain
+one-sided 95% test read daily cries wolf in about a quarter of them. A harm of the smallest effect (3 points on 10%)
+is caught before the analysis date in about 87% of campaigns read daily with 2,712 customers per group, twice what a
+single reading needs for 80% power; at the planner's own 1,356 it is about 53%: reading every day without false alarms
+costs sample size. Inside an open 30-day window read as the loop reads it (everyone sent on day 0, each outcome
+counting from the day it happens), the A/A share stays at 0.3% to 0.7% read daily, every third day or weekly through
+the window and on to the analysis date, and harm of 3 points is caught before the window closes in about 87% of
+campaigns read daily at 2,712 per group.
+
+## 29. Message variants as measured arms (Plan K M140, DEC-1407)
 
 Campaign copy (`POST /runs/{id}/campaign-copy`) writes up to four variants of a message per band or segment and
 channel. With `generative.variant_arms: true` in the use case, the approved variants become **arms** of the
@@ -1283,8 +1402,8 @@ no-message group (M100), every message together (M104's `offers_combined`), each
 Bonferroni level over the pairs. The Value Proof Pack shows a row per message and names the best message only
 when its interval is above every other message's; otherwise it says none is named. The arms are compared on a
 yes/no outcome without a covariate only (`measure_campaign`'s several-offer rule): measured on an amount, or
-with a pre-campaign covariate (named, or registered in the plan), the campaign is measured as a whole, as it
-was before the arms, and no `variant_comparison.json` is written.
+adjusted by a pre-campaign covariate (a column named or registered in the plan, or §27's run prediction), the
+campaign is measured as a whole, as it was before the arms, and no `variant_comparison.json` is written.
 
 **Arbitration.** `POST /decide/arbitrate` refuses a run whose arms are in force (409
 `VARIANT_ARMS_NOT_ARBITRATED`): the arbitrated list keeps a fixed set of columns and its campaigns carry no

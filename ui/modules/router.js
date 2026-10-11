@@ -477,3 +477,5 @@ export function bindUploadNotes(root, handlers = {}) {
   if (uploadNotesProvider) uploadNotesProvider.bind(root, handlers);
 }
 // ---- END PLAN-L ----
+// ---- PLAN-K (agents that check) — append only below this line ----
+// ---- END PLAN-K ----

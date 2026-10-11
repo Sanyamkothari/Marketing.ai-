@@ -109,15 +109,27 @@ def add_edit(
         column = ctx.resolve(column)
     except AgentToolError as exc:
         raise SessionError(exc.code, exc.message) from exc
-    personal = {c.name for c in ctx.profile.columns if c.pii_kinds}
+    personal = {c.name for c in ctx.profile.columns if c.pii_kinds} | set(
+        ctx.config.agent.always_hide_columns
+    )
     if column in personal and kind is not RecipeStepKind.DROP_COLUMN:
         raise SessionError("AGENT_EDIT_NOT_ALLOWED", "A column holding personal data can only be hidden.")
     params = dict(params)
-    if kind is RecipeStepKind.CORRECT_CELLS and "key_column" not in params:
+    if kind is RecipeStepKind.CORRECT_CELLS:
+        # Always the ID column: a correction found by any other column would be a lookup on it (and
+        # would keep what was typed, an email say, in the session).
         key_column = roles_of(session)[0]
         if key_column is None:
             raise SessionError(
                 "AGENT_EDIT_INVALID", "Choose the ID column first: a correction is found by it."
+            )
+        if params.get("key_column", key_column) != key_column:
+            raise SessionError("AGENT_EDIT_NOT_ALLOWED", "A correction is found by the ID column only.")
+        if key_column in personal:
+            raise SessionError(
+                "AGENT_EDIT_NOT_ALLOWED",
+                "The ID column holds personal data, so a cell cannot be corrected by it; change the value "
+                "everywhere instead.",
             )
         params["key_column"] = key_column
     earlier: Proposal | None = None

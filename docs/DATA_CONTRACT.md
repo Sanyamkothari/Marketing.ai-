@@ -987,8 +987,12 @@ always for a model trained on files as sent - the file the person sent is used. 
 upload must name the recipe's ID column and outcome, and a scoring run the model recipe's ID column
 when it named one (409 `RECIPE_ROLES_MISMATCH`, from `POST /runs`, the dry run and Guided setup's
 Approve alike, before anything is prepared). Scoring a built
-dataset (`POST /runs` with `dataset_id`, or a scheduled score) with a model that has a recipe is
-refused with 409 `RECIPE_DATASET_UNSUPPORTED` until datasets can be prepared too.
+dataset (`POST /runs` with `dataset_id`, or a scheduled score) with a model that has a recipe prepares
+the dataset by that recipe first (Plan L M155): every row of `datasets/<id>/dataset.parquet` is
+prepared into `datasets/<id>/prepared_<identity>.parquet`, which the run's job reads while `run.json`
+still names the dataset. The recipe's ID column must name the dataset's customers and no step may touch
+the rest of a periodic dataset's key (409 `RECIPE_ROLES_MISMATCH`); a recipe that cannot run on the
+dataset answers 409 with one of the errors below, and a scheduled firing fails with the same code.
 
 When a scoring file cannot be prepared, `POST /runs` answers 409 with one of these errors, and the
 dry run `POST /uploads/{id}/checks`, which prepares it the same way in memory, answers 200 with a

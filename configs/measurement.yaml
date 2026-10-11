@@ -1,0 +1,24 @@
+# configs/measurement.yaml - measurement options read across campaigns; each section names its milestone.
+#
+# Installation-wide, like privacy.yaml and guardrails.yaml: one file under the configuration root. Each section
+# is read by its own loader (`pooling`: `engine.measurement.pooling.load_pooling_settings`, Plan K M136;
+# `harm_alarm`: `engine.measurement.harm`, Plan K M138), which validates only its own section. A missing file, or
+# a missing section, means every default below. Every option is off by default; with them off every summary,
+# Value Proof Pack, alert and campaign file is byte for byte what it was before Plan K. A file that cannot be read
+# (not YAML, not a mapping, an unknown key or a value out of range) is refused with a ConfigError
+# (CONFIG_YAML_ERROR, CONFIG_NOT_A_MAPPING or CONFIG_INVALID with the setting's path) before anything is measured.
+
+pooling:                      # Plan K M136 (DEC-1402): an Estimated figure per campaign, drawn towards comparable campaigns
+  enabled: false              # bool; write campaigns/<id>/pooled_estimate.json on every measurement and show it
+                              # beside the measured result (never instead of it; value to date never uses it)
+  min_campaigns: 3            # int >= 3; comparable campaigns a cell needs before anything is pooled (at least
+                              # four are always needed: Morris's estimator cannot move a figure with three)
+
+harm_alarm:                   # Plan K M138 (DEC-1403): an early alarm when a campaign is doing harm, never a win
+  enabled: false              # bool; check every interim reading (an early look, or outcomes still to come in)
+                              # with a one-sided sequential test, write campaigns/<id>/harm_alarm.json, and on an
+                              # alarm show a warning card and raise one alert. Nothing is ever stopped on its own
+  alpha: 0.05                 # float 0 < a <= 0.1; the most often it may fire on a campaign that does no harm,
+                              # however often it is read (split across the offers of a campaign of several)
+  min_rows_per_arm: 100       # int >= 30; customers each group needs with an outcome counted before a reading
+                              # is judged at all

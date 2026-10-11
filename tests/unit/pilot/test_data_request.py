@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import io
+import re
 from pathlib import Path
 
 import pytest
@@ -117,7 +118,7 @@ def test_the_request_explains_pseudonymisation_formats_and_the_preflight(request
     for heading in (
         "## How much history",
         "## The tables",
-        "## File formats",
+        "## Send what you have",
         "## Pseudonymising",
         "## What not to send",
         "## Before you send",
@@ -146,3 +147,64 @@ def test_every_requested_table_has_a_template_file(
 def test_a_single_use_case_request_is_narrower(config_root: Path) -> None:
     churn = build_data_request(("telco-churn",), config_root)
     assert "campaign_events" not in {table.role for table in churn.tables}
+
+
+# ---------------------------------------------------------------------------
+# Send what you have (Plan L follow-up, DEC-1598): ask only for what Data Doctor cannot read past
+# ---------------------------------------------------------------------------
+def test_the_request_says_plainly_what_no_longer_matters(
+    request_, default_request, config_root: Path
+) -> None:
+    wording = load_wording(config_root)
+    for request in (request_, default_request):
+        markdown = render_markdown(request, wording)
+        assert "What you do not need to fix first:" in markdown
+        assert "Excel is fine." in markdown and "Titles and totals are fine." in markdown
+        assert request.not_needed == wording.not_needed and request.not_needed
+        # The old asks are gone: no UTF-8-only CSV, no one fixed date format.
+        assert "UTF-8" not in markdown
+        assert "YYYY-MM-DD" not in markdown
+
+
+def test_the_request_keeps_asking_for_what_still_matters(request_, config_root: Path) -> None:
+    markdown = render_markdown(request_, load_wording(config_root))
+    still = " ".join(request_.formats)
+    assert "column names the same from one month's export to the next" in still
+    assert "same customer in every file" in still
+    assert "date on every row" in still
+    assert "put the year in the column names" in still
+    assert "## How much history" in markdown and "## What not to send" in markdown
+    assert any("Notes and remarks" in note for note in request_.do_not_send_notes)
+
+
+def test_what_no_longer_matters_is_what_intake_reads(config_root: Path) -> None:
+    """Every shape the request calls fine is one `configs/intake.yaml` and the workbook reader handle."""
+    from engine.intake.config import load_intake_config
+    from engine.intake.excel import EXCEL_SUFFIXES, LEGACY_EXCEL_SUFFIXES
+
+    intake = load_intake_config(config_root)
+    not_needed = " ".join(load_wording(config_root).not_needed)
+    for word in ("-", "unknown", "not known", "#DIV/0!"):
+        assert word in not_needed and word.casefold() in intake.missing_words
+    for word in ("Grand Total", "Sub-total"):
+        assert word in not_needed and word.casefold() in intake.total_words
+    for suffix in EXCEL_SUFFIXES:
+        assert suffix in not_needed
+    still = " ".join(load_wording(config_root).formats)
+    for suffix in LEGACY_EXCEL_SUFFIXES:  # ".xls" is a prefix of ".xlsx": match the whole suffix
+        whole = re.compile(re.escape(suffix) + r"(?![a-z])")
+        assert whole.search(still) and not whole.search(not_needed)
+    assert "password-protected workbooks cannot be read" in still
+    assert "Scanned PDFs and photos of tables cannot be read" in still
+
+
+def test_the_preflight_is_optional_and_says_it_reads_no_workbook(config_root: Path) -> None:
+    from engine.pilot.preflight import READABLE_SUFFIXES
+
+    preflight = load_wording(config_root).preflight
+    assert preflight[0].startswith("Optional.")
+    assert "CSV and Parquet files only, not Excel workbooks" in " ".join(preflight)
+    assert set(READABLE_SUFFIXES.values()) == {
+        "csv",
+        "parquet",
+    }, "the pre-flight sentence names what it reads"

@@ -40,6 +40,11 @@ has three or more words or a colon. A clean CSV is stored and read byte for byte
 **Old Excel files** (`.xls`, `.xlsb`) cannot be read: open them in Excel and save as `.xlsx` or CSV.
 **Password-protected** workbooks cannot be read either.
 
+**How big.** A CSV of a million rows is read in seconds. A workbook is slower: about 5,000 rows a second, so a
+million-row sheet takes a few minutes. For very large tables, save the sheet as CSV. A workbook that would
+unpack to more than 1 GB, or whose texts alone would unpack to more than 64 MB, is refused before it is opened.
+So is a sheet whose values sit far apart with mostly empty cells between them.
+
 The words and limits are in [`configs/intake.yaml`](../configs/intake.yaml): which words mean "no value",
 which mean "total", how far down to look for the column names, how many rows may be left out at the end.
 
@@ -71,7 +76,40 @@ The verdict is Guided setup's own advisor, run on each file that has the use cas
 place never promises more than Guided setup then does. **Start** copies the file into the chosen use case, read
 the same way (the same sheet, intake on or off); nothing is trained until you approve and run.
 
-## 3. More fixes, and who suggested each (M152, M153)
+### What your file already says (DEC-1596)
+
+Before any model, and with no AI, Data Doctor shows what your file already says. Every such box is labelled
+**"Describes your file. Not a cause and not a prediction."**
+
+- **Under a use case that is Ready (or Ready after a quick check)**: how many of the file's rows are "yes"
+  (by the same rule training uses), and the rate of "yes" by up to five columns: a text column by its most
+  common values, a number column in five ranges of about equal rows. Example: *By plan_tier, the rate goes
+  from 5.0% (basic) to 30.1% (premium).*
+- **Under a file with no outcome but a customer ID and a date** (a log of recharges, say): how many customers
+  last appear in the 30 days up to the file's latest date, 31 to 90 days before, and so on, and how many rows
+  each customer has.
+
+The rules:
+
+- **No group of fewer than 10 rows is ever named.** Such values are counted together as "(other)"; when even
+  that is under 10, the next smallest value joins it, so a small group's figure cannot be worked out from the
+  others. These are the rules of Ask your data's rate tool, which does the counting.
+- **Which columns.** Each column gets a score: how far, on average over the rows, a row's group rate is from
+  the file's rate (each group weighted by its rows). The five with the highest score are shown; ties go to the
+  column that comes first in the file. At most 20 columns are scored, in file order, to keep the diagnosis
+  quick; the box says how many were not.
+- **Never used**: personal-data columns and columns your settings hide from the AI
+  (`agent.always_hide_columns`); columns that may hold the answer (the ones Guided setup's checks flag, and any
+  column whose groups alone tell "yes" from "no" almost perfectly); ID columns; date columns; free text;
+  columns with one value. The box lists what it left out.
+- Counted on the rows the diagnosis read (it says so when that is fewer than the file has).
+
+For developers: `engine/doctor/first_look.py` (`outcome_look`, `recency_look`, `attach_recency`, the
+`FirstLook` contract), the fields `UseCaseReadiness.first_look` and `FileDiagnosis.first_look` of
+`POST /doctor/diagnosis`; tests in `tests/unit/doctor/test_first_look.py`,
+`tests/integration/test_api_doctor_first_look.py` and `tests/integration/test_doctor_ui.py`.
+
+## 3. More fixes, and who suggested each (M152, M153, M156)
 
 Guided setup's checklist can now hold these fixes, each a step our code runs on a copy and replays on next
 month's file: merge spellings that mean the same (`Bombay` → `Mumbai`), read words like `unknown` as empty,
@@ -83,6 +121,29 @@ Each suggestion says who made it. **Found by our checks**: the rules (an age of 
 and never ticked for you). **Suggested by the AI**: the chat, when you ask ("Bombay and Mumbai are the same
 city"); the AI must look at the column first, the fix is tried on your first 1,000 rows and shows what it
 changes, and it is never ticked for you. **Your edit**: what you did by hand (M154).
+
+### A column per month (M156)
+
+A sheet kept by hand often has one column per month: `customer_id, 2024_01_spend, 2024_02_spend, 2024_01_calls,
+2024_02_calls`. For a use case that may reshape data, Guided setup asks *"Your sheet has one column per month for
+spend and calls. Turn them into rows (one row per customer per month)?"*
+
+- **Turn into rows** makes one row per customer per month, with a `month` column (the first day of the month)
+  and one column each for spend and calls. Guided setup then offers to combine those rows back into one row per
+  customer, with each customer's total, average, largest and latest spend, instead of a separate column per
+  month. The outcome is copied onto every row of its customer and is never turned into rows.
+- **Keep as columns** leaves the sheet as it is; each month stays a separate column.
+
+It reads the column names only, by a fixed list: months with a year (`2024_01`, `2024-01`, `Jan_2024`),
+quarters (`2024_Q1`), years (`2024`), with the month either side of the measure (`spend_2024_01` works too). A
+single month's column is not a wide sheet, and columns that merely share a word (`total_spend`, `avg_spend`) are
+not either. **Months without a year** (`Jan_spend`) cannot be put in date order, so Guided setup only notes them
+and keeps them as columns; name them with the year to have them turned into rows.
+
+Next month's sheet is turned into rows by exactly the same list of columns. A column it no longer has stops
+scoring with the column named; a new month's column is left out and counted on the receipt, and when it holds
+more than the use case's failure limit of the cells, scoring stops rather than use part of the months: start
+Guided setup again on the new sheet.
 
 ## 4. Editing by hand (M154)
 
@@ -97,7 +158,203 @@ Under Guided setup's suggestions, **Edit by hand** opens your rows (personal-dat
 Each edit appears in the list above, ticked and labelled **Your edit**; untick it to undo it. Many
 corrections in one column are kept as one step.
 
-## 5. What Data Doctor will not do
+## 5. How several files fit together (M155)
+
+The page's **How your files fit together** card shows what follows for every log and every set of monthly
+files.
+
+With a customer list and some logs (bills, tickets, ...), **Bring your data** also says how they fit:
+
+- **Do the logs meet the customer list?** For every log, the share of its rows whose customer is on the list,
+  counted. When the IDs are written differently (`CUST-00123` on the list, `123` in the bills), it names the tidy-up
+  that makes them meet - take `CUST-` off, drop the zeros at the start, ignore spaces or upper and lower case - and
+  counts the share again with it. It names a tidy-up only when it brings the share above 80%, the bar the
+  raw-tables builder itself uses, and says so plainly when none does.
+- **Are these the same report for different months?** Files of the same kind with the same columns can be stacked
+  into one table. When a later file added a column, lost one or renamed one (same place or a close name, same
+  type), it lists the difference.
+
+Every share is measured on the files; a file longer than the rows read says so.
+
+A model trained on a file Guided setup prepared can now also score a **built dataset**: the dataset is prepared by
+the model's saved steps first, exactly as a scoring file is, and a dataset the steps cannot run on is refused with
+the column it misses. The dataset itself is never changed.
+
+### For developers
+
+- `engine/doctor/joins.py`: `file_links` measures each event file against the customer list with onboarding's
+  `join_coverage` and `key_format_mismatch` (a one-sided prefix is taken off first, then the same two functions are
+  asked again); `file_stacks` groups files of one kind whose columns agree; `how_files_fit` fills
+  `Diagnosis.links` and `Diagnosis.stacks` in `POST /doctor/diagnosis`.
+- `engine/agent/dataset_recipe.py`: `prepare_dataset` runs a model's recipe on a built dataset into
+  `datasets/<id>/prepared_<identity>.parquet`; `POST /runs` (`agent_recipes.replay_on_dataset`) and the scheduled
+  firing (`engine/scheduling/firing.start_dataset_run`) both call it (docs/AGENTS.md §6.3, "Built datasets").
+- The tests: `tests/unit/doctor/test_joins.py`, `tests/integration/test_api_doctor_joins.py`,
+  `tests/integration/agent/test_dataset_recipe_refusal.py`.
+
+## 6. The outcome from your events (M157)
+
+Most people have no "churned" column. They have a log of what customers did: recharges, orders, logins. When
+no file has a use case's outcome but one file is a customer list and another is such a log, **Missing
+something** also shows the outcome as a sentence you can agree to:
+
+> When has a customer churned? *A customer has churned when there is no recharge for **30 / 60 / 90** days
+> after the snapshot.*
+
+Under each choice it says, counted on your files, how many customers it would make "yes": *At 30 Apr 2025, the
+latest month-end whose 60 days are over, 412 of 2,000 customers (20.6%) are 'yes'. 2 later month-ends not
+counted: their 60 days are not over yet.*
+
+- **The counts are the builder's own.** Each choice is an onboarding outcome definition (a `LabelSpec`, see
+  [`ONBOARDING.md`](ONBOARDING.md) §5), and the count is what onboarding's label builder gives for it on your
+  two files: every customer in the list, at the month-ends near the end of your log. Nothing is estimated.
+- **Customers whose window is not over are not counted.** If your log ends on 30 June, nobody can know yet
+  whether a customer quiet since 25 May will recharge in the 60 days after 31 May. Such a customer is
+  neither "yes" nor "no"; that month-end is left out, here and in the dataset (`LABEL_HORIZON_CENSORED`). This
+  is *censoring*, and the sentence says so in plain words.
+- **Which column is which.** The customer list's ID column, the log's column holding the same IDs (the one
+  whose values match the list best, not the log's own row number), and the log's best date column are shown
+  with the sentence. "Recharge" comes from the file's name when it has a word from the list in
+  `configs/outcomes.yaml`; otherwise from what the file was read as ("payment", "order", "activity").
+- **On the page**, pick a choice and press **Use this outcome**; the steps that build the data from it are listed
+  under the sentence.
+- **Nothing is built until you say yes to one sentence.** Agreeing sends the sentence you read, word for
+  word, with your choice. If the files have changed since, or the sentence on screen is not the one the
+  choice now reads, nothing is recorded and the new sentence is shown. A choice with no month-end whose
+  window is over (a 90-day window on two months of data) cannot be agreed: there is nothing to learn from yet.
+
+What is offered, per use case, is configuration, not code: [`configs/outcomes.yaml`](../configs/outcomes.yaml)
+holds each sentence, the kind of outcome it builds (*nothing happened in the window* or *something did*), which
+kinds of log it reads and the choices. Only those two kinds are offered, because they need nothing but an ID and
+a date; an outcome that tests a value ("a bill paid more than 7 days late") is written in *Build from raw
+tables*. RCA, Win-back, Targeted Advertisement and Fault Prediction ship with sentences (and Telco Churn, for
+its own industry).
+
+### For developers
+
+- `engine/doctor/outcomes.py` — the catalogue (`load_outcome_catalogue`), `offer_outcome` (the measured offer)
+  and `attach_outcome_offers` (the diagnosis hook). Counts come from `engine.onboarding.labels.build_labels` on
+  month-ends planned by `engine.onboarding.snapshots.plan_snapshots`; dates are read with
+  `engine.onboarding.transforms.cast_series`, keys matched with `engine.onboarding.sources.join_coverage`.
+- `POST /doctor/diagnosis`: a `missing` use case's `outcome_offer` (null when no sentence fits the files).
+- `POST /doctor/outcome` (Analyst): `{use_case, entity_upload_id, event_upload_id, date_column, days,
+  sentence, agreed}`. The offer is measured again; `422 OUTCOME_NOT_AGREED` without `agreed: true`,
+  `422 OUTCOME_CHOICE_UNKNOWN` for a window not offered, `409 OUTCOME_SENTENCE_CHANGED` when `sentence` is not
+  the choice's sentence word for word, `409 OUTCOME_NOT_OFFERED` when the two files cannot define it,
+  `409 OUTCOME_NOT_MEASURABLE` when no window is over yet, `404 OUTCOME_NO_SENTENCE` for a use case with no
+  sentence. The `201` is the agreement, kept at `uploads/<customer list>/outcome_<use case>.json` (so erasing
+  the upload erases it), with the `LabelSpec` and `next_steps`.
+- **What the screen does next** (until M155 lets Data Doctor drive the builder itself): add the customer list
+  as the client's `entity` source and the log as a source of the agreement's `event_role`
+  (`POST /clients/{id}/sources`); map the list's `entity_id_column` to `entity_key`, and the log's
+  `event_id_column` to `entity_key` and its `date_column` to `event_time` (`POST /clients/{id}/mappings/suggest`,
+  `PUT /clients/{id}/mappings/{mapping_id}`); save the recipe with the agreement's `label_spec` unchanged
+  (`POST /clients/{id}/onboarding-specs`); build (`POST /datasets`). The label is named after the use case's
+  `target.column`, so the dataset trains as the use case expects.
+- The chat does not propose an outcome yet (`propose_label`): Guided setup's chat works on one file, and an
+  outcome from events needs two.
+- Tests: `tests/unit/doctor/test_outcomes.py` (every count recomputed directly; censoring; no dates, no offer),
+  `tests/integration/test_api_doctor_outcome.py` (the offer, the agreement, the refusals, and the agreed
+  `LabelSpec` building a dataset through the onboarding API).
+
+## 7. Not enough data yet: what to do instead (M158)
+
+When a use case is **Not enough data yet** (or Guided setup's advisor stops on the file), Data Doctor never
+just stops. Under the verdict it says:
+
+- **What is short, and by how much**, counted the way the Run button counts it and against the use case's
+  own minimums (`validation.min_rows`, `validation.min_positive`): "tiny.csv has 60 customers; the model
+  needs at least 1,000, so 940 more."
+- **What you can do now**, only what the product can do: start another use case your files already power
+  (with its **Start** button), and, for a use case that contacts customers, collect the outcome with your
+  next campaign - kept back at random in the use case's control group, with the smallest change such a
+  campaign can show worked out by the test planner on your file's customers and outcome rate. "Audit a
+  campaign" on the Results page reads it afterwards.
+- **What to collect, and from whom**: how many more customers (at your file's outcome rate, how many it
+  takes to reach the minimum), where the outcome usually comes from, and the pilot's data request for the
+  use case (the tables to ask for and how much history), with a download link.
+
+Every number is measured on your file or is a configured minimum. Nothing here offers "a longer history":
+no date window is applied before the verdict, so there is nothing shorter to undo.
+
+For developers: `engine/doctor/sufficiency.py` (`enough_data`, `with_alternatives`), the field
+`UseCaseReadiness.next_steps`, tests in `tests/unit/doctor/test_sufficiency.py` and
+`tests/integration/test_api_doctor.py`.
+
+## 8. Next month's file: the same treatment (M159)
+
+When you approve Guided setup on a file with fixes, Data Doctor remembers the file's **shape** - its
+column names in order, and the sheet for a workbook - and which fixes treated it (and how the file was
+read: the sheet, intake on or off). When a file of the same shape arrives, the upload and Guided setup say
+"This looks like billing_sept.csv, which you prepared with Guided setup on 3 Sep 2026 (4 steps). Use the
+same treatment?" **Use the same treatment** ticks last time's fixes in the checklist; they are still shown,
+previewed and approved like any other. Nothing is applied until you approve. A workbook whose remembered
+sheet is there but was not the one read says so, so you can read that sheet instead.
+
+The memory is kept per use case (uploads are not tied to a client; one deployment serves one client,
+`docs/CLIENT_ISOLATION.md`). It holds column names and ids only, never a value: the fixes themselves stay
+with the prepared file. It is deleted with that file by the retention job, or when it outlives the use
+case's retention setting, and an erasure request deletes an entry that holds the person's id.
+
+For developers: `engine/doctor/memory.py` (store `doctor_memory/<use case>/<shape>.json`), the response
+field `treatment` of `POST /uploads` and of every Guided-setup session answer,
+`POST /uploads/{id}/agent-session/same-treatment`, the store `doctor_memory` in `engine/privacy/layout.py`,
+tests in `tests/unit/doctor/test_memory.py` and `tests/integration/agent/test_api_doctor_memory.py`.
+
+### When next month's export renamed a column (DEC-1597)
+
+If the export now calls `amount` `bill_amount`, the saved steps cannot find `amount`: scoring stops with the
+column named, and a file to learn from no longer has last month's shape. Data Doctor now compares what it
+knew about `amount` in the file the steps were approved on (the kind of values, how many are empty, how many
+differ, the average and range of numbers, a category's common values) with each column that is new in this
+file, and the names. It says *"Your file has 'bill_amount' where it had 'amount'"* only when one new column
+clearly matches: the same kind of values, values that agree, a close name (or numbers or categories that
+agree closely), and clearly better than any other new column. With two close candidates it names both and
+chooses neither; a column whose kind of values changed, or a name alone, is never proposed.
+
+Nothing is ticked for you. In Guided setup the rename is a box under **Changed since last time**; **Use the
+old names** makes a copy of your file with those columns renamed (your file is left as it is), and the helper
+starts on the copy: a file to score then runs through the model's steps unchanged, and a file to learn from
+is offered last time's treatment. A model's saved steps are never edited. The same box lists **new
+spellings** in a column whose spellings last time's steps merge (shown only: they are left as written).
+Scoring's refusal carries the same proposal in its check (`details.suggested_renames`, `close_candidates`).
+
+For developers: the matcher `engine/doctor/renames.py` (thresholds `STATS_MIN`, `STATS_ALONE`, `NAME_MIN`,
+`MARGIN`), the profiles compared and the copy `api/routes/agent_renames.py`, the session field `changes`,
+`POST /uploads/{id}/renamed-copy` (`api/routes/doctor.py`), tests in `tests/unit/doctor/test_renames.py` and
+`tests/integration/agent/test_api_renamed_column.py`.
+
+## 9. The data request: send what you have (DEC-1598)
+
+The pilot's data request (`GET /pilot/data-request`, `docs/pilot/DATA_REQUEST.md`, worded in
+[`configs/pilot/data_request.yaml`](../configs/pilot/data_request.yaml)) no longer asks for UTF-8 CSV, one date
+format or a pre-flight run on a laptop. Its **Send what you have** section keeps only what Data Doctor cannot
+repair (the same column names every month, one customer ID across files, a date on every event row, the year in
+a month-per-column name, amounts as plain numbers when tables are joined) and says what cannot be read at all
+(`.xls`, `.xlsb`, password-protected workbooks, scanned PDFs). A second list says plainly what no longer
+matters: Excel, titles and totals, `-` or `unknown` for empty, any delimiter, any date style, any yes/no
+spelling. The pre-flight check is optional, and says it reads CSV and Parquet only.
+`tests/unit/pilot/test_data_request.py` ties each "no longer matters" line to `configs/intake.yaml` and the
+workbook reader.
+
+## 10. Things we checked, and a result too good to be true (DEC-1599)
+
+A training run's Model page ends with **Things we checked**, drawn from the run's own reports
+(`GET /runs/{run_id}/checks`, `engine/run_checks.py`): the file before training (`validation.json`), a
+column that gives the answer away (`LEAKAGE_SUSPECTED`, or "not run" when the run's settings switched it
+off or the outcome is not yes-or-no), the test set kept apart (`split.json`), the simple yardstick
+(`baseline.json`) and the groups compared (`fairness.json`, or "not run" with its reason). A report the
+run did not write leaves its line out: no check is claimed that did not run.
+
+First comes the alarm. When the model's main measure on the test set is above its line - by default an
+ROC AUC above 0.97, per use case in [`configs/model_checks.yaml`](../configs/model_checks.yaml) - the warning
+`RESULT_SUSPICIOUSLY_GOOD` names the column the model leans on most (rank 1 of `feature_importance.json`)
+and asks whether it is known only after the outcome. It blocks nothing: the same check is shown, as
+advice, beside the decision on the Approver's screen (`engine.model_gates.approval_checks`). Not here
+yet: the dataset build's own checks (the future-data probe, `LABEL_RATE_UNSTABLE`) stay on the Readiness
+report.
+
+## 11. What Data Doctor will not do
 
 - **Match people across files with no shared key.** It can tidy keys (leading zeros, prefixes) and say how many
   match; it does not guess that "R. Sharma, Pune" is "Rahul Sharma".

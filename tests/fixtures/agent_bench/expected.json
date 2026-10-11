@@ -368,5 +368,1404 @@
     ],
     "questions": [],
     "hidden": []
+  },
+  "hinglish_telco_prepaid_abbr": {
+    "status": "needs_review",
+    "stopped": false,
+    "primary_key": "cust_mob_no",
+    "target": "churn_flg",
+    "proposals": [
+      "role primary_key=cust_mob_no (sure)",
+      "role target=churn_flg (check)",
+      "setting model_search.time_limit_minutes=10 (sure)"
+    ],
+    "questions": [
+      {
+        "asks": "'mkt_optin' may say which customers agreed to marketing cont",
+        "options": [
+          "Yes, it is",
+          "No, it is something else"
+        ],
+        "blocking": false
+      },
+      {
+        "asks": "'dnd_flag' may say which customers asked not to be contacted",
+        "options": [
+          "Yes, it is",
+          "No, it is something else"
+        ],
+        "blocking": false
+      },
+      {
+        "asks": "'last_cntct_dt' may say when each customer was last contacte",
+        "options": [
+          "Yes, it is",
+          "No, it is something else"
+        ],
+        "blocking": false
+      }
+    ],
+    "hidden": [],
+    "headers": {
+      "id": [
+        "cust_mob_no"
+      ],
+      "outcome": [
+        "churn_flg"
+      ],
+      "date": [
+        "snpsht_dt"
+      ],
+      "consent": [
+        "mkt_optin"
+      ],
+      "opt_out": [
+        "dnd_flag"
+      ],
+      "last_contact": [
+        "last_cntct_dt"
+      ]
+    }
+  },
+  "hinglish_telco_hinglish": {
+    "status": "needs_review",
+    "stopped": false,
+    "primary_key": "grahak_id",
+    "target": "kharida_30d",
+    "proposals": [
+      "role primary_key=grahak_id (check)",
+      "role target=kharida_30d (check)",
+      "setting model_search.time_limit_minutes=10 (sure)"
+    ],
+    "questions": [
+      {
+        "asks": "'sahmati' may say which customers agreed to marketing contac",
+        "options": [
+          "Yes, it is",
+          "No, it is something else"
+        ],
+        "blocking": false
+      },
+      {
+        "asks": "'pichhla_sampark' may say when each customer was last contac",
+        "options": [
+          "Yes, it is",
+          "No, it is something else"
+        ],
+        "blocking": false
+      }
+    ],
+    "hidden": [
+      "cust_mob_no: looks like an ID, not a signal"
+    ],
+    "headers": {
+      "id": [
+        "grahak_id",
+        "cust_mob_no"
+      ],
+      "outcome": [
+        "kharida_30d"
+      ],
+      "date": [
+        "tareekh"
+      ],
+      "consent": [
+        "sahmati"
+      ],
+      "last_contact": [
+        "pichhla_sampark"
+      ]
+    }
+  },
+  "hinglish_retail_runon": {
+    "status": "needs_review",
+    "stopped": false,
+    "primary_key": "custid",
+    "target": "conv_30d",
+    "proposals": [
+      "role primary_key=custid (sure)",
+      "role target=conv_30d (check)",
+      "recipe_step parse_number:pincode (sure)",
+      "setting model_search.time_limit_minutes=10 (sure)"
+    ],
+    "questions": [
+      {
+        "asks": "'optin' may say which customers agreed to marketing contact",
+        "options": [
+          "Yes, it is",
+          "No, it is something else"
+        ],
+        "blocking": false
+      },
+      {
+        "asks": "'optout' may say which customers asked not to be contacted",
+        "options": [
+          "Yes, it is",
+          "No, it is something else"
+        ],
+        "blocking": false
+      },
+      {
+        "asks": "'lastcontactdate' may say when each customer was last contac",
+        "options": [
+          "Yes, it is",
+          "No, it is something else"
+        ],
+        "blocking": false
+      }
+    ],
+    "hidden": [],
+    "headers": {
+      "id": [
+        "custid"
+      ],
+      "outcome": [
+        "conv_30d"
+      ],
+      "date": [
+        "data_dt"
+      ],
+      "consent": [
+        "optin"
+      ],
+      "opt_out": [
+        "optout"
+      ],
+      "last_contact": [
+        "lastcontactdate"
+      ]
+    }
+  },
+  "hinglish_bank_cards": {
+    "status": "needs_review",
+    "stopped": false,
+    "primary_key": "acct_no",
+    "target": "dflt_flg",
+    "proposals": [
+      "role primary_key=acct_no (sure)",
+      "role target=dflt_flg (check)",
+      "setting model_search.time_limit_minutes=10 (sure)"
+    ],
+    "questions": [
+      {
+        "asks": "'dnc_flag' may say which customers asked not to be contacted",
+        "options": [
+          "Yes, it is",
+          "No, it is something else"
+        ],
+        "blocking": false
+      },
+      {
+        "asks": "'last_comm_dt' may say when each customer was last contacted",
+        "options": [
+          "Yes, it is",
+          "No, it is something else"
+        ],
+        "blocking": false
+      }
+    ],
+    "hidden": [],
+    "headers": {
+      "id": [
+        "acct_no"
+      ],
+      "outcome": [
+        "dflt_flg"
+      ],
+      "date": [
+        "as_on_dt"
+      ],
+      "consent": [
+        "consent_flg"
+      ],
+      "opt_out": [
+        "dnc_flag"
+      ],
+      "last_contact": [
+        "last_comm_dt"
+      ]
+    }
+  },
+  "hinglish_insurance_renewal": {
+    "status": "needs_review",
+    "stopped": false,
+    "primary_key": "policy_no",
+    "target": "renewed_flag",
+    "proposals": [
+      "role primary_key=policy_no (check)",
+      "role target=renewed_flag (check)",
+      "setting model_search.time_limit_minutes=10 (sure)"
+    ],
+    "questions": [
+      {
+        "asks": "'unsubscribed' may say which customers asked not to be conta",
+        "options": [
+          "Yes, it is",
+          "No, it is something else"
+        ],
+        "blocking": false
+      },
+      {
+        "asks": "'last_contacted_on' may say when each customer was last cont",
+        "options": [
+          "Yes, it is",
+          "No, it is something else"
+        ],
+        "blocking": false
+      }
+    ],
+    "hidden": [],
+    "headers": {
+      "id": [
+        "policy_no"
+      ],
+      "outcome": [
+        "renewed_flag"
+      ],
+      "date": [
+        "report_dt"
+      ],
+      "consent": [
+        "comm_consent"
+      ],
+      "opt_out": [
+        "unsubscribed"
+      ],
+      "last_contact": [
+        "last_contacted_on"
+      ]
+    }
+  },
+  "hinglish_fintech_lending": {
+    "status": "needs_review",
+    "stopped": false,
+    "primary_key": "user_id",
+    "target": "responded",
+    "proposals": [
+      "role primary_key=user_id (sure)",
+      "role target=responded (check)",
+      "setting model_search.time_limit_minutes=10 (sure)"
+    ],
+    "questions": [
+      {
+        "asks": "'unsub_flag' may say which customers asked not to be contact",
+        "options": [
+          "Yes, it is",
+          "No, it is something else"
+        ],
+        "blocking": false
+      },
+      {
+        "asks": "'lst_contact_dt' may say when each customer was last contact",
+        "options": [
+          "Yes, it is",
+          "No, it is something else"
+        ],
+        "blocking": false
+      }
+    ],
+    "hidden": [],
+    "headers": {
+      "id": [
+        "user_id"
+      ],
+      "outcome": [
+        "responded"
+      ],
+      "date": [
+        "run_date"
+      ],
+      "consent": [
+        "mktg_consent"
+      ],
+      "opt_out": [
+        "unsub_flag"
+      ],
+      "last_contact": [
+        "lst_contact_dt"
+      ]
+    }
+  },
+  "hinglish_ecom_titlecase": {
+    "status": "needs_review",
+    "stopped": false,
+    "primary_key": "Customer Id",
+    "target": "Khareeda",
+    "proposals": [
+      "role primary_key=Customer Id (sure)",
+      "role target=Khareeda (check)",
+      "setting model_search.time_limit_minutes=10 (sure)"
+    ],
+    "questions": [
+      {
+        "asks": "'Marketing OptIn' may say which customers agreed to marketin",
+        "options": [
+          "Yes, it is",
+          "No, it is something else"
+        ],
+        "blocking": false
+      },
+      {
+        "asks": "'Do Not Contact' may say which customers asked not to be con",
+        "options": [
+          "Yes, it is",
+          "No, it is something else"
+        ],
+        "blocking": false
+      },
+      {
+        "asks": "'Last Contacted' may say when each customer was last contact",
+        "options": [
+          "Yes, it is",
+          "No, it is something else"
+        ],
+        "blocking": false
+      }
+    ],
+    "hidden": [],
+    "headers": {
+      "id": [
+        "Customer Id"
+      ],
+      "outcome": [
+        "Khareeda"
+      ],
+      "date": [
+        "Snapshot Date"
+      ],
+      "consent": [
+        "Marketing OptIn"
+      ],
+      "opt_out": [
+        "Do Not Contact"
+      ],
+      "last_contact": [
+        "Last Contacted"
+      ]
+    }
+  },
+  "hinglish_dth_hinglish": {
+    "status": "needs_review",
+    "stopped": false,
+    "primary_key": "subscriber_id",
+    "target": null,
+    "proposals": [
+      "role primary_key=subscriber_id (sure)"
+    ],
+    "questions": [
+      {
+        "asks": "Which column says whether purchased within 30 days of ad exp",
+        "options": [
+          "recharge_kiya",
+          "sahmati_flag",
+          "dnd_flag"
+        ],
+        "blocking": true
+      },
+      {
+        "asks": "'sahmati_flag' may say which customers agreed to marketing c",
+        "options": [
+          "Yes, it is",
+          "No, it is something else"
+        ],
+        "blocking": false
+      },
+      {
+        "asks": "'dnd_flag' may say which customers asked not to be contacted",
+        "options": [
+          "Yes, it is",
+          "No, it is something else"
+        ],
+        "blocking": false
+      },
+      {
+        "asks": "'pichhla_sampark_dt' may say when each customer was last con",
+        "options": [
+          "Yes, it is",
+          "No, it is something else"
+        ],
+        "blocking": false
+      }
+    ],
+    "hidden": [],
+    "headers": {
+      "id": [
+        "subscriber_id"
+      ],
+      "outcome": [
+        "recharge_kiya"
+      ],
+      "date": [
+        "tareekh_dt"
+      ],
+      "consent": [
+        "sahmati_flag"
+      ],
+      "opt_out": [
+        "dnd_flag"
+      ],
+      "last_contact": [
+        "pichhla_sampark_dt"
+      ]
+    }
+  },
+  "hinglish_kirana_orders": {
+    "status": "needs_review",
+    "stopped": false,
+    "primary_key": "retailer_id",
+    "target": "reorder_flag",
+    "proposals": [
+      "role primary_key=retailer_id (sure)",
+      "role target=reorder_flag (check)",
+      "recipe_step parse_number:pin (sure)",
+      "setting model_search.time_limit_minutes=10 (sure)"
+    ],
+    "questions": [],
+    "hidden": [],
+    "headers": {
+      "id": [
+        "retailer_id"
+      ],
+      "outcome": [
+        "reorder_flag"
+      ],
+      "date": [
+        "report_wk_dt"
+      ]
+    }
+  },
+  "hinglish_edtech_whatsapp": {
+    "status": "needs_review",
+    "stopped": false,
+    "primary_key": "learner_id",
+    "target": "is_converted",
+    "proposals": [
+      "role primary_key=learner_id (sure)",
+      "role target=is_converted (check)",
+      "setting model_search.time_limit_minutes=10 (sure)"
+    ],
+    "questions": [
+      {
+        "asks": "'whatsapp_optin' may say which customers agreed to marketing",
+        "options": [
+          "Yes, it is",
+          "No, it is something else"
+        ],
+        "blocking": false
+      },
+      {
+        "asks": "'wa_dnd' may say which customers asked not to be contacted",
+        "options": [
+          "Yes, it is",
+          "No, it is something else"
+        ],
+        "blocking": false
+      }
+    ],
+    "hidden": [],
+    "headers": {
+      "id": [
+        "learner_id"
+      ],
+      "outcome": [
+        "is_converted"
+      ],
+      "date": [
+        "as_of_date"
+      ],
+      "consent": [
+        "whatsapp_optin"
+      ],
+      "opt_out": [
+        "wa_dnd"
+      ]
+    }
+  },
+  "hinglish_savings_hinglish": {
+    "status": "needs_review",
+    "stopped": false,
+    "primary_key": "khata_sankhya",
+    "target": "product_kharida",
+    "proposals": [
+      "role primary_key=khata_sankhya (sure)",
+      "role target=product_kharida (check)",
+      "setting model_search.time_limit_minutes=10 (sure)"
+    ],
+    "questions": [
+      {
+        "asks": "'ijazat' may say which customers agreed to marketing contact",
+        "options": [
+          "Yes, it is",
+          "No, it is something else"
+        ],
+        "blocking": false
+      },
+      {
+        "asks": "'dnd_status' may say which customers asked not to be contact",
+        "options": [
+          "Yes, it is",
+          "No, it is something else"
+        ],
+        "blocking": false
+      },
+      {
+        "asks": "'aakhri_sampark_dt' may say when each customer was last cont",
+        "options": [
+          "Yes, it is",
+          "No, it is something else"
+        ],
+        "blocking": false
+      }
+    ],
+    "hidden": [],
+    "headers": {
+      "id": [
+        "khata_sankhya"
+      ],
+      "outcome": [
+        "product_kharida"
+      ],
+      "date": [
+        "tarikh"
+      ],
+      "consent": [
+        "ijazat"
+      ],
+      "opt_out": [
+        "dnd_status"
+      ],
+      "last_contact": [
+        "aakhri_sampark_dt"
+      ]
+    }
+  },
+  "hinglish_upi_wallet": {
+    "status": "needs_review",
+    "stopped": false,
+    "primary_key": "msisdn",
+    "target": "repeat_txn_30d",
+    "proposals": [
+      "role primary_key=msisdn (sure)",
+      "role target=repeat_txn_30d (check)",
+      "setting model_search.time_limit_minutes=10 (sure)"
+    ],
+    "questions": [
+      {
+        "asks": "'optedout' may say which customers asked not to be contacted",
+        "options": [
+          "Yes, it is",
+          "No, it is something else"
+        ],
+        "blocking": false
+      },
+      {
+        "asks": "'last_comm_ts' may say when each customer was last contacted",
+        "options": [
+          "Yes, it is",
+          "No, it is something else"
+        ],
+        "blocking": false
+      }
+    ],
+    "hidden": [
+      "msisdn: personal data"
+    ],
+    "headers": {
+      "id": [
+        "msisdn"
+      ],
+      "outcome": [
+        "repeat_txn_30d"
+      ],
+      "date": [
+        "ts_snapshot"
+      ],
+      "consent": [
+        "promo_consent"
+      ],
+      "opt_out": [
+        "optedout"
+      ],
+      "last_contact": [
+        "last_comm_ts"
+      ]
+    }
+  },
+  "hinglish_postpaid_bills": {
+    "status": "needs_review",
+    "stopped": false,
+    "primary_key": "sub_id",
+    "target": "churned_90d",
+    "proposals": [
+      "role primary_key=sub_id (check)",
+      "role target=churned_90d (check)",
+      "setting model_search.time_limit_minutes=10 (sure)",
+      "setting uplift.policy.value_column=arpu (check)"
+    ],
+    "questions": [
+      {
+        "asks": "'dnd_registered' may say which customers asked not to be con",
+        "options": [
+          "Yes, it is",
+          "No, it is something else"
+        ],
+        "blocking": false
+      },
+      {
+        "asks": "'last_outreach_dt' may say when each customer was last conta",
+        "options": [
+          "Yes, it is",
+          "No, it is something else"
+        ],
+        "blocking": false
+      }
+    ],
+    "hidden": [
+      "bill_acct_no: looks like an ID, not a signal"
+    ],
+    "headers": {
+      "id": [
+        "sub_id"
+      ],
+      "outcome": [
+        "churned_90d"
+      ],
+      "date": [
+        "data_as_on",
+        "bill_cycle_dt"
+      ],
+      "consent": [
+        "consent_given"
+      ],
+      "opt_out": [
+        "dnd_registered"
+      ],
+      "last_contact": [
+        "last_outreach_dt"
+      ]
+    }
+  },
+  "hinglish_auto_loans": {
+    "status": "needs_review",
+    "stopped": false,
+    "primary_key": "cust_no",
+    "target": "npa_flag",
+    "proposals": [
+      "role primary_key=cust_no (sure)",
+      "role target=npa_flag (check)",
+      "setting model_search.time_limit_minutes=10 (sure)"
+    ],
+    "questions": [
+      {
+        "asks": "'do_not_call' may say which customers asked not to be contac",
+        "options": [
+          "Yes, it is",
+          "No, it is something else"
+        ],
+        "blocking": false
+      },
+      {
+        "asks": "'last_call_dt' may say when each customer was last contacted",
+        "options": [
+          "Yes, it is",
+          "No, it is something else"
+        ],
+        "blocking": false
+      }
+    ],
+    "hidden": [],
+    "headers": {
+      "id": [
+        "cust_no"
+      ],
+      "outcome": [
+        "npa_flag"
+      ],
+      "date": [
+        "snap_dt"
+      ],
+      "consent": [
+        "marketing_consent"
+      ],
+      "opt_out": [
+        "do_not_call"
+      ],
+      "last_contact": [
+        "last_call_dt"
+      ]
+    }
+  },
+  "hinglish_housing_finance": {
+    "status": "needs_review",
+    "stopped": false,
+    "primary_key": "lan_no",
+    "target": null,
+    "proposals": [
+      "role primary_key=lan_no (sure)"
+    ],
+    "questions": [
+      {
+        "asks": "Which column says whether purchased within 30 days of ad exp",
+        "options": [
+          "prepaid_flag",
+          "ok_to_contact"
+        ],
+        "blocking": true
+      },
+      {
+        "asks": "'last_contacted_dt' may say when each customer was last cont",
+        "options": [
+          "Yes, it is",
+          "No, it is something else"
+        ],
+        "blocking": false
+      }
+    ],
+    "hidden": [],
+    "headers": {
+      "date": [
+        "report_date"
+      ],
+      "last_contact": [
+        "last_contacted_dt",
+        "ok_to_contact"
+      ]
+    }
+  },
+  "hinglish_dth_recharge": {
+    "status": "needs_review",
+    "stopped": false,
+    "primary_key": "VC_NO",
+    "target": null,
+    "proposals": [
+      "role primary_key=VC_NO (sure)"
+    ],
+    "questions": [
+      {
+        "asks": "Which column says whether purchased within 30 days of ad exp",
+        "options": [
+          "RECHARGED_30D",
+          "MKT_CONSENT",
+          "OPT_OUT_FLG"
+        ],
+        "blocking": true
+      },
+      {
+        "asks": "'OPT_OUT_FLG' may say which customers asked not to be contac",
+        "options": [
+          "Yes, it is",
+          "No, it is something else"
+        ],
+        "blocking": false
+      },
+      {
+        "asks": "'LAST_CNTCT_DT' may say when each customer was last contacte",
+        "options": [
+          "Yes, it is",
+          "No, it is something else"
+        ],
+        "blocking": false
+      }
+    ],
+    "hidden": [],
+    "headers": {
+      "outcome": [
+        "RECHARGED_30D"
+      ],
+      "date": [
+        "SNAPSHOT_DT"
+      ],
+      "consent": [
+        "MKT_CONSENT"
+      ],
+      "opt_out": [
+        "OPT_OUT_FLG"
+      ],
+      "last_contact": [
+        "LAST_CNTCT_DT"
+      ]
+    }
+  },
+  "hinglish_food_delivery_camel": {
+    "status": "needs_review",
+    "stopped": false,
+    "primary_key": "userId",
+    "target": null,
+    "proposals": [
+      "role primary_key=userId (sure)"
+    ],
+    "questions": [
+      {
+        "asks": "Which column says whether purchased within 30 days of ad exp",
+        "options": [
+          "orderedAgain",
+          "marketingOptIn",
+          "doNotDisturb"
+        ],
+        "blocking": true
+      },
+      {
+        "asks": "'marketingOptIn' may say which customers agreed to marketing",
+        "options": [
+          "Yes, it is",
+          "No, it is something else"
+        ],
+        "blocking": false
+      },
+      {
+        "asks": "'doNotDisturb' may say which customers asked not to be conta",
+        "options": [
+          "Yes, it is",
+          "No, it is something else"
+        ],
+        "blocking": false
+      },
+      {
+        "asks": "'lastContactedAt' may say when each customer was last contac",
+        "options": [
+          "Yes, it is",
+          "No, it is something else"
+        ],
+        "blocking": false
+      }
+    ],
+    "hidden": [],
+    "headers": {
+      "id": [
+        "userId"
+      ],
+      "date": [
+        "asOfDate"
+      ],
+      "consent": [
+        "marketingOptIn"
+      ],
+      "opt_out": [
+        "doNotDisturb"
+      ],
+      "last_contact": [
+        "lastContactedAt"
+      ]
+    }
+  },
+  "hinglish_gold_loan": {
+    "status": "needs_review",
+    "stopped": false,
+    "primary_key": "grahek_id",
+    "target": "khareed_flag",
+    "proposals": [
+      "role primary_key=grahek_id (sure)",
+      "role target=khareed_flag (check)",
+      "setting model_search.time_limit_minutes=10 (sure)"
+    ],
+    "questions": [
+      {
+        "asks": "'anumati' may say which customers agreed to marketing contac",
+        "options": [
+          "Yes, it is",
+          "No, it is something else"
+        ],
+        "blocking": false
+      },
+      {
+        "asks": "'sms_unsub' may say which customers asked not to be contacte",
+        "options": [
+          "Yes, it is",
+          "No, it is something else"
+        ],
+        "blocking": false
+      },
+      {
+        "asks": "'pichhla_sampark' may say when each customer was last contac",
+        "options": [
+          "Yes, it is",
+          "No, it is something else"
+        ],
+        "blocking": false
+      }
+    ],
+    "hidden": [],
+    "headers": {
+      "id": [
+        "grahek_id"
+      ],
+      "outcome": [
+        "khareed_flag"
+      ],
+      "date": [
+        "dinank"
+      ],
+      "consent": [
+        "anumati"
+      ],
+      "opt_out": [
+        "sms_unsub"
+      ],
+      "last_contact": [
+        "pichhla_sampark"
+      ]
+    }
+  },
+  "hinglish_pharmacy_chain": {
+    "status": "needs_review",
+    "stopped": false,
+    "primary_key": "member_cd",
+    "target": "redeemed_offer",
+    "proposals": [
+      "role primary_key=member_cd (sure)",
+      "role target=redeemed_offer (check)",
+      "setting model_search.time_limit_minutes=10 (sure)"
+    ],
+    "questions": [
+      {
+        "asks": "'promo_optin' may say which customers agreed to marketing co",
+        "options": [
+          "Yes, it is",
+          "No, it is something else"
+        ],
+        "blocking": false
+      },
+      {
+        "asks": "'dnd' may say which customers asked not to be contacted",
+        "options": [
+          "Yes, it is",
+          "No, it is something else"
+        ],
+        "blocking": false
+      },
+      {
+        "asks": "'last_sms_dt' may say when each customer was last contacted",
+        "options": [
+          "Yes, it is",
+          "No, it is something else"
+        ],
+        "blocking": false
+      }
+    ],
+    "hidden": [],
+    "headers": {
+      "id": [
+        "member_cd"
+      ],
+      "outcome": [
+        "redeemed_offer"
+      ],
+      "date": [
+        "extract_dt"
+      ],
+      "consent": [
+        "promo_optin"
+      ],
+      "opt_out": [
+        "dnd"
+      ],
+      "last_contact": [
+        "last_sms_dt"
+      ]
+    }
+  },
+  "hinglish_mobile_postpaid_short": {
+    "status": "needs_review",
+    "stopped": false,
+    "primary_key": "cid",
+    "target": "cnvrt",
+    "proposals": [
+      "role primary_key=cid (sure)",
+      "role target=cnvrt (check)",
+      "setting model_search.time_limit_minutes=10 (sure)"
+    ],
+    "questions": [
+      {
+        "asks": "'optin' may say which customers agreed to marketing contact",
+        "options": [
+          "Yes, it is",
+          "No, it is something else"
+        ],
+        "blocking": false
+      },
+      {
+        "asks": "'dnc' may say which customers asked not to be contacted",
+        "options": [
+          "Yes, it is",
+          "No, it is something else"
+        ],
+        "blocking": false
+      },
+      {
+        "asks": "'lst_cntct' may say when each customer was last contacted",
+        "options": [
+          "Yes, it is",
+          "No, it is something else"
+        ],
+        "blocking": false
+      }
+    ],
+    "hidden": [],
+    "headers": {
+      "id": [
+        "cid"
+      ],
+      "outcome": [
+        "cnvrt"
+      ],
+      "date": [
+        "dt"
+      ],
+      "consent": [
+        "optin"
+      ],
+      "opt_out": [
+        "dnc"
+      ],
+      "last_contact": [
+        "lst_cntct"
+      ]
+    }
+  },
+  "hinglish_travel_app": {
+    "status": "needs_review",
+    "stopped": false,
+    "primary_key": "traveller_id",
+    "target": "booked_30d",
+    "proposals": [
+      "role primary_key=traveller_id (sure)",
+      "role target=booked_30d (check)",
+      "setting model_search.time_limit_minutes=10 (sure)"
+    ],
+    "questions": [
+      {
+        "asks": "'unsubscribed_flag' may say which customers asked not to be ",
+        "options": [
+          "Yes, it is",
+          "No, it is something else"
+        ],
+        "blocking": false
+      },
+      {
+        "asks": "'last_email_dt' may say when each customer was last contacte",
+        "options": [
+          "Yes, it is",
+          "No, it is something else"
+        ],
+        "blocking": false
+      }
+    ],
+    "hidden": [
+      "email_consent: personal data",
+      "last_email_dt: personal data"
+    ],
+    "headers": {
+      "id": [
+        "traveller_id"
+      ],
+      "outcome": [
+        "booked_30d"
+      ],
+      "date": [
+        "run_dt"
+      ],
+      "consent": [
+        "email_consent"
+      ],
+      "opt_out": [
+        "unsubscribed_flag"
+      ],
+      "last_contact": [
+        "last_email_dt"
+      ]
+    }
+  },
+  "hinglish_no_flags_hinglish": {
+    "status": "needs_review",
+    "stopped": false,
+    "primary_key": "grahak_sankhya",
+    "target": "dobara_kharida",
+    "proposals": [
+      "role primary_key=grahak_sankhya (sure)",
+      "role target=dobara_kharida (check)",
+      "setting model_search.time_limit_minutes=10 (sure)"
+    ],
+    "questions": [],
+    "hidden": [],
+    "headers": {
+      "id": [
+        "grahak_sankhya"
+      ],
+      "outcome": [
+        "dobara_kharida"
+      ],
+      "date": [
+        "tareekh"
+      ]
+    }
+  },
+  "hinglish_wide_telecom": {
+    "status": "needs_review",
+    "stopped": false,
+    "primary_key": "cust_id",
+    "target": "attr_flag",
+    "proposals": [
+      "role primary_key=cust_id (sure)",
+      "role target=attr_flag (check)",
+      "setting split.type=time_based (check)",
+      "setting split.time_column=snapshot_date (check)",
+      "setting model_search.time_limit_minutes=10 (sure)"
+    ],
+    "questions": [
+      {
+        "asks": "'dnd_flg' may say which customers asked not to be contacted",
+        "options": [
+          "Yes, it is",
+          "No, it is something else"
+        ],
+        "blocking": false
+      },
+      {
+        "asks": "'last_contact_date' may say when each customer was last cont",
+        "options": [
+          "Yes, it is",
+          "No, it is something else"
+        ],
+        "blocking": false
+      }
+    ],
+    "hidden": [
+      "msisdn: personal data, looks like an ID, not a signal"
+    ],
+    "headers": {
+      "id": [
+        "cust_id",
+        "msisdn"
+      ],
+      "outcome": [
+        "attr_flag"
+      ],
+      "date": [
+        "snapshot_date"
+      ],
+      "consent": [
+        "mkt_consent_flg"
+      ],
+      "opt_out": [
+        "dnd_flg"
+      ],
+      "last_contact": [
+        "last_contact_date"
+      ]
+    }
+  },
+  "hinglish_yes_no_values": {
+    "status": "needs_review",
+    "stopped": false,
+    "primary_key": "customer_code",
+    "target": "bought_after_ad",
+    "proposals": [
+      "role primary_key=customer_code (sure)",
+      "role target=bought_after_ad (check)",
+      "recipe_step map_boolean:consent (sure)",
+      "recipe_step map_boolean:do_not_contact (sure)",
+      "setting model_search.time_limit_minutes=10 (sure)"
+    ],
+    "questions": [
+      {
+        "asks": "'do_not_contact' may say which customers asked not to be con",
+        "options": [
+          "Yes, it is",
+          "No, it is something else"
+        ],
+        "blocking": false
+      },
+      {
+        "asks": "'last_contacted' may say when each customer was last contact",
+        "options": [
+          "Yes, it is",
+          "No, it is something else"
+        ],
+        "blocking": false
+      }
+    ],
+    "hidden": [],
+    "headers": {
+      "id": [
+        "customer_code"
+      ],
+      "outcome": [
+        "bought_after_ad"
+      ],
+      "date": [
+        "snapshot_dt"
+      ],
+      "consent": [
+        "consent"
+      ],
+      "opt_out": [
+        "do_not_contact"
+      ],
+      "last_contact": [
+        "last_contacted"
+      ]
+    }
+  },
+  "hinglish_lapse_no_outcome_telco": {
+    "status": "stopped",
+    "stopped": true,
+    "primary_key": "cust_mob_no",
+    "target": null,
+    "proposals": [
+      "role primary_key=cust_mob_no (sure)"
+    ],
+    "questions": [
+      {
+        "asks": "The file has no column that says whether a customer lapsed",
+        "options": [
+          "30 days",
+          "60 days",
+          "90 days",
+          "None of these"
+        ],
+        "blocking": false
+      }
+    ],
+    "hidden": [],
+    "headers": {
+      "id": [
+        "cust_mob_no"
+      ],
+      "date": [
+        "tareekh"
+      ]
+    }
+  },
+  "hinglish_lapse_no_outcome_retail": {
+    "status": "stopped",
+    "stopped": true,
+    "primary_key": "grahak_id",
+    "target": null,
+    "proposals": [
+      "role primary_key=grahak_id (sure)"
+    ],
+    "questions": [
+      {
+        "asks": "The file has no column that says whether a customer lapsed",
+        "options": [
+          "30 days",
+          "60 days",
+          "90 days",
+          "None of these"
+        ],
+        "blocking": false
+      }
+    ],
+    "hidden": [],
+    "headers": {
+      "id": [
+        "grahak_id"
+      ],
+      "date": [
+        "snapshot_dt"
+      ]
+    }
+  },
+  "hinglish_ambiguous_ids": {
+    "status": "needs_review",
+    "stopped": false,
+    "primary_key": "customer_ref",
+    "target": "churn_label",
+    "proposals": [
+      "role primary_key=customer_ref (check)",
+      "role target=churn_label (check)",
+      "setting model_search.time_limit_minutes=10 (sure)"
+    ],
+    "questions": [
+      {
+        "asks": "'last_contact_dt' may say when each customer was last contac",
+        "options": [
+          "Yes, it is",
+          "No, it is something else"
+        ],
+        "blocking": false
+      }
+    ],
+    "hidden": [
+      "order_id: looks like an ID, not a signal",
+      "contact_name: personal data"
+    ],
+    "headers": {
+      "id": [
+        "customer_ref"
+      ],
+      "outcome": [
+        "churn_label"
+      ],
+      "date": [
+        "extract_date"
+      ],
+      "consent": [
+        "consent"
+      ],
+      "last_contact": [
+        "last_contact_dt"
+      ]
+    }
+  },
+  "other_use_case_cash_back": {
+    "status": "needs_review",
+    "stopped": false,
+    "primary_key": "grahak_id",
+    "target": null,
+    "proposals": [
+      "role primary_key=grahak_id (check)"
+    ],
+    "questions": [
+      {
+        "asks": "Which column says whether rejoined within 90 days of an offe",
+        "options": [
+          "cash_back_flag",
+          "other_flag"
+        ],
+        "blocking": true
+      }
+    ],
+    "hidden": []
+  },
+  "other_use_case_payment_reminder": {
+    "status": "needs_review",
+    "stopped": false,
+    "primary_key": "grahak_id",
+    "target": null,
+    "proposals": [
+      "role primary_key=grahak_id (check)"
+    ],
+    "questions": [
+      {
+        "asks": "Which column says whether the account failed to pay the mini",
+        "options": [
+          "payment_reminder_sent",
+          "other_flag"
+        ],
+        "blocking": true
+      }
+    ],
+    "hidden": []
+  },
+  "other_use_case_next_bill": {
+    "status": "needs_review",
+    "stopped": false,
+    "primary_key": "grahak_id",
+    "target": null,
+    "proposals": [
+      "role primary_key=grahak_id (check)"
+    ],
+    "questions": [
+      {
+        "asks": "Which column says whether disconnected within 60 days?",
+        "options": [
+          "next_bill_flag",
+          "other_flag"
+        ],
+        "blocking": true
+      }
+    ],
+    "hidden": []
   }
 }

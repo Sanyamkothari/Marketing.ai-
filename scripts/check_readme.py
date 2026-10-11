@@ -496,6 +496,14 @@ MILESTONE_TESTS: Final[Mapping[str, tuple[str, ...]]] = {
         "tests/integration/measurement/test_connection_pulls_api.py",
         "tests/integration/production/test_privacy_routes.py",
     ),
+    # M135 (DEC-1324), a Plan K milestone built early under Plan J's range: the scoring run's prediction as the
+    # adjustment (CUPAC). The nightly test (tests/statistical/test_run_score_coverage.py, DEC-1300 (e)) is left out,
+    # as for M96 and M137.
+    "M135": (
+        "tests/unit/measurement/test_run_score.py",
+        "tests/unit/measurement/test_run_score_scale.py",
+        "tests/integration/measurement/test_campaign_run_score.py",
+    ),
     # M137 (DEC-1325), a Plan K milestone built early under Plan J's range: "safe to roll out". The nightly test
     # (tests/statistical/test_rollout_verdict.py, DEC-1300 (e)) is left out, as for M96. test_compare.py and
     # test_model_gates.py are M96's files and gained the verdict's tests; test_compare.py keeps a fast test beside its
@@ -524,7 +532,97 @@ MILESTONE_TESTS: Final[Mapping[str, tuple[str, ...]]] = {
         "tests/unit/agent/test_recipe_plan_l.py",
         "tests/unit/agent/test_range_advice.py",
     ),
+    "M155": (
+        "tests/unit/doctor/test_joins.py",
+        "tests/integration/test_api_doctor_joins.py",
+        "tests/integration/agent/test_dataset_recipe_refusal.py",
+    ),
+    "M156": (
+        "tests/unit/agent/test_unpivot.py",
+        "tests/unit/agent/test_advisor_unpivot.py",
+        "tests/integration/agent/test_unpivot_api.py",
+    ),
+    "M157": ("tests/unit/doctor/test_outcomes.py", "tests/integration/test_api_doctor_outcome.py"),
+    "M158": ("tests/unit/doctor/test_sufficiency.py", "tests/integration/test_api_doctor.py"),
+    "M159": ("tests/unit/doctor/test_memory.py", "tests/integration/agent/test_api_doctor_memory.py"),
     "M160": ("tests/integration/test_plan_l_benchmark.py",),
+    "M161": ("tests/integration/test_intake_erasure.py", "tests/integration/test_doctor_ui.py"),
+    # --- Plan K (docs/plans/MARKETING_AI_PLAN_K_PROPOSAL.md, docs/AGENTIC.md); each milestone adds its own entry.
+    # M131, M135 and M137 were built early under Plan J's range; their entries are above, with Plan J's, and their
+    # README rows are in the Plan K table. ---
+    # M130 (DEC-1400), the set-up: the PLAN-K blocks, PLAN_K_CODES in the catalogue check, the three switches.
+    "M130": (
+        "tests/unit/test_shared_file_markers.py",
+        "tests/unit/pilot/test_help.py",
+        "tests/unit/agentic/test_flags.py",
+    ),
+    # M132 (DEC-1401), the agent-safe core. tests/unit/measurement/test_campaign_migration.py is Plan J's file; M132
+    # made it pin the platform tables' order (agentic_decision_log after campaign).
+    "M132": (
+        "tests/unit/agentic/test_canonical.py",
+        "tests/unit/agentic/test_ledger.py",
+        "tests/unit/agentic/test_policy.py",
+        "tests/unit/agentic/test_registry.py",
+        "tests/unit/agentic/test_switch.py",
+        "tests/agentic/scenarios/test_scenarios.py",
+        "tests/agentic/test_proposal_routes.py",
+        "tests/agentic/test_read_tools.py",
+        "tests/unit/measurement/test_campaign_migration.py",
+    ),
+    # M136 (DEC-1402), pooling across comparable campaigns. The nightly coverage test
+    # (tests/statistical/test_pooling_coverage.py, DEC-1300 (e)) is left out, as for M137. test_cycle_schedules.py is
+    # M107's file and gained the test that the measure firing hands the config root to pooling.
+    "M136": (
+        "tests/unit/measurement/test_pooling.py",
+        "tests/unit/measurement/test_pooling_summary.py",
+        "tests/unit/measurement/test_cycle_schedules.py",
+        "tests/integration/measurement/test_campaign_pooling.py",
+    ),
+    # M138 (DEC-1403), the early harm alarm. The nightly A/A and power test (tests/statistical/test_harm_alarm.py,
+    # DEC-1300 (e)) is left out, as for M137.
+    "M138": (
+        "tests/unit/measurement/test_harm_alarm.py",
+        "tests/integration/measurement/test_harm_alarm_loop.py",
+    ),
+    # M142 (DEC-1409), setup help for new sources. test_advisor.py is Plan G's benchmark test and pins M142's cases
+    # in expected.json; test_header_switch.py pins the agentic.enabled gate added at integration.
+    "M142": (
+        "tests/unit/agent/test_headers.py",
+        "tests/unit/agent/test_header_advice.py",
+        "tests/unit/agent/test_header_benchmark.py",
+        "tests/unit/agent/test_header_switch.py",
+        "tests/unit/agent/test_assist.py",
+        "tests/unit/agent/test_advisor.py",
+        "tests/integration/agent/test_assist_api.py",
+    ),
+    # M133 (DEC-1404), the verifier over MCP on demo data.
+    "M133": (
+        "tests/unit/mcp/",
+        "tests/integration/mcp/test_scripted_client.py",
+        "tests/integration/mcp/test_threats.py",
+        "tests/integration/mcp/test_small_groups.py",
+        "tests/integration/mcp/test_injection_canaries.py",
+    ),
+    # M144 (DEC-1411), the save-desk card as a randomised pilot design. test_proposal_routes.py is M132's exact
+    # /agentic route set, which gained the card's route.
+    "M144": (
+        "tests/unit/agentic/test_save_desk.py",
+        "tests/unit/agentic/test_save_desk_pilot.py",
+        "tests/agentic/test_save_desk.py",
+        "tests/agentic/test_proposal_routes.py",
+    ),
+    # M139 (DEC-1406), the campaign planner and the claim verifier. test_planner_hillstrom.py is a `slow` journey and
+    # is left out, as the fast suite leaves it out; test_proposal_routes.py is M132's exact route set, which gained
+    # the planner's routes.
+    "M139": (
+        "tests/unit/agentic/test_claims.py",
+        "tests/unit/agentic/test_planner.py",
+        "tests/agentic/test_planner_routes.py",
+        "tests/agentic/test_planner_select.py",
+        "tests/agentic/test_planner_ui.py",
+        "tests/agentic/scenarios/test_planner_scenarios.py",
+        "tests/agentic/test_proposal_routes.py",
+    ),
 }
 """Milestone id -> the test files (or directories, with a trailing `/`) that prove it is built.
 

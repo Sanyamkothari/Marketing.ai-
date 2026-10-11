@@ -1,0 +1,31 @@
+# The verifier over MCP (Plan K M133, DEC-1404; docs/AGENTIC.md §8): what the server does once it is on.
+#
+# The switch is NOT here: it is mcp.enabled in configs/agentic/agentic.yaml, beside agentic.enabled (Plan K's
+# three switches live in that one file, DEC-1400 (d)). Off - the default - nothing is mounted at /mcp, the MCP
+# SDK is never imported, this file is not read and every response is byte-identical to Plan J's. The server is
+# a front to the agent-safe core, so agentic.enabled must be on as well: with it off every tool call is refused
+# with AGENTIC_DISABLED. Sign-in is required (MARKETING_AI_AUTH_MODE=local): with sign-in off the endpoint
+# answers 503 AUTH_NOT_CONFIGURED.
+mcp:
+  # M133 serves the demo library only. Any other workspace is refused with MCP_DEMO_ONLY until M141 adds
+  # per-client scoping; "demo" is the only value this milestone accepts.
+  workspace: demo
+
+  # What counts as demo data: a run or upload made for one of these use cases (the public datasets of
+  # library/), or generated data (`synthetic: true`). A run that belongs to an onboarded client
+  # (`client_id` set) is never demo data.
+  demo_use_cases: [hillstrom-email]
+
+  # Small-group suppression on every grouped output (Plan I's rate_by rule): a group of 1 to 9 customers
+  # shows no figure, and the next smallest group joins it until what is withheld adds up to 10.
+  min_group_rows: 10
+
+  # Per signed-in session (the bearer token, kept as its sha256 only): calls in any 60 seconds, and calls
+  # running at once. Over either, a call is refused with MCP_RATE_LIMITED.
+  rate_limit:
+    calls_per_minute: 60
+    concurrent_calls: 2
+
+  # The 2026-07-28 Tasks extension is not in the pinned SDK (mcp 2.3.0), so a long tool (audit_campaign,
+  # get_proof_pack) runs synchronously and is refused with MCP_TIMEOUT after this many seconds.
+  call_timeout_seconds: 120

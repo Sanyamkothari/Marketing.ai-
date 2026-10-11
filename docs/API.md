@@ -81,6 +81,7 @@ Contract schema version: 1.
 | GET | `/decide/conflicts` | Get arbitration conflicts summary for Results UI | dict |
 | POST | `/doctor/diagnosis` | What each uploaded file is, and which use cases the files can power | Diagnosis |
 | POST | `/doctor/handoff` | The file as an upload of the chosen use case, read the same way, for its Guided setup | UploadResponse |
+| POST | `/doctor/outcome` | Agree the outcome built from an event file, as the sentence the person picked | OutcomeAgreement |
 | GET | `/healthz` | Liveness probe | HealthResponse |
 | GET | `/holdout` | The holdout: salt, epochs, use cases | HoldoutView |
 | PUT | `/holdout` | Start a new holdout epoch (Admin): a lower share, or a new salt | HoldoutView |
@@ -144,6 +145,7 @@ Contract schema version: 1.
 | GET | `/runs/{run_id}/campaign-results` | The stored campaign results of a scoring run | IncrementalityReport |
 | POST | `/runs/{run_id}/campaign-results` | Measure a scoring run's campaign from an uploaded outcomes file | IncrementalityReport |
 | POST | `/runs/{run_id}/cancel` | Ask a pending or running run to stop | RunCancelResponse |
+| GET | `/runs/{run_id}/checks` | What a training run checked, and whether its result is too good to be true | RunChecks |
 | GET | `/runs/{run_id}/copy_messages.csv` | The rendered campaign-copy messages of a run, one row per scored entity | - |
 | GET | `/runs/{run_id}/drift-events` | Events noted against a scoring run's change report | DriftEventsView |
 | POST | `/runs/{run_id}/drift-events` | Note an event that may explain a change in the customers | DriftEventsView |
@@ -178,16 +180,19 @@ Contract schema version: 1.
 | POST | `/uploads/{upload_id}/agent-session` | Start (or restart) Guided setup for an upload: the helper's suggestions and questions | AgentSessionResponse |
 | POST | `/uploads/{upload_id}/agent-session/answers` | Answer one of the helper's questions | AgentSessionResponse |
 | POST | `/uploads/{upload_id}/agent-session/apply` | Approve: prepare the data with the accepted steps and return what Run needs | ApplyResponse |
+| POST | `/uploads/{upload_id}/agent-session/assist` | Ask the AI service for a second opinion on the columns (optional) | AgentSessionResponse |
 | POST | `/uploads/{upload_id}/agent-session/decisions` | Accept or reject the helper's suggestions | AgentSessionResponse |
 | POST | `/uploads/{upload_id}/agent-session/edits` | Add an edit made by hand: a step like every other, ticked, undone by unticking | AgentSessionResponse |
 | POST | `/uploads/{upload_id}/agent-session/messages` | Ask the helper something; its reply is checked before it is kept | AgentSessionResponse |
 | POST | `/uploads/{upload_id}/agent-session/preview` | The first rows before and after the accepted steps, and what each step did | PreviewResponse |
 | POST | `/uploads/{upload_id}/agent-session/rows` | A page of the file being set up, for editing by hand (personal data hidden) | RowsResponse |
+| POST | `/uploads/{upload_id}/agent-session/same-treatment` | Use the same treatment as last time: tick the remembered steps, still to be checked and approved | AgentSessionResponse |
 | DELETE | `/uploads/{upload_id}/ask` | Start a new Ask-your-data chat on an upload; the old one is deleted | AskResponse |
 | GET | `/uploads/{upload_id}/ask` | Ask your data: an upload's read-only chat with the data helper, and its charts | AskResponse |
 | POST | `/uploads/{upload_id}/ask/messages` | Ask the data helper a question about an upload; it looks things up and cannot change anything | AskResponse |
 | POST | `/uploads/{upload_id}/checks` | Run the data checks for an upload without starting a run | ValidationReport |
 | GET | `/uploads/{upload_id}/profile` | The stored dataset profile of one upload | DatasetProfile |
+| POST | `/uploads/{upload_id}/renamed-copy` | A copy of the file with the columns the person ticked given their old names; the file is kept | UploadResponse |
 | GET | `/uploads/{upload_id}/treatment-candidates` | The 0/1 columns of an upload that could record who was treated | TreatmentCandidatesResponse |
 | GET | `/use-cases/{use_case_id}` | One merged use-case configuration, its Setup copy and its advanced-settings schema | UseCaseResponse |
 | GET | `/use-cases/{use_case_id}/cost-estimate` | What one run of this use case could cost at list price, and the cap on it (Plan J M108) | RunCostEstimate |

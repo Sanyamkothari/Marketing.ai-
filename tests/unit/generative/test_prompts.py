@@ -86,6 +86,9 @@ VALUES: dict[str, object] = {
     # Plan I: copy written per segment (copy_segment_*, DEC-1244)
     "segment_rule": "every customer in it has months_since_churn as the strongest reason behind their score",
     "figures": ["42 customers, 30.0% of those this campaign writes to", "By band: High 20, Medium 22"],
+    # Plan K M142: Guided setup's optional second opinions (data_agent_assist)
+    "task": "rerank",
+    "payload": '{"header_candidates": []}',
 }
 """One plausible value per variable any shipped prompt declares, so the sweep can render them all."""
 

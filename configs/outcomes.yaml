@@ -1,0 +1,92 @@
+# Outcomes from events (Plan L M157, DEC-1570): the sentences Data Doctor offers when no file has a use
+# case's outcome but an event log can define it ("a customer has churned when there is no recharge for
+# 60 days after the snapshot").
+#
+# Read by engine/doctor/outcomes.py. Each template is a sentence with blanks, the kind of outcome it
+# builds (an onboarding `LabelSpec`: `event_absence` - nothing happened in the window - or
+# `event_presence` - something did) and the choices the person picks from. Only those two kinds are
+# offered: they need nothing but a customer ID and a date, so every count Data Doctor shows is one the
+# onboarding label builder measured on the files. A `column` outcome is a column a file already has
+# (that is M151's diagnosis), and a `value_threshold` outcome needs a condition the person writes
+# (Build from raw tables). Nothing here is ever built until the person picks one sentence and says yes.
+#
+# Placeholders in `sentence`: {An_entity} ("A customer", "An asset"), {entity}, {an_event} ("a
+# recharge", "an order"), {event}, {days}. A use case with no template here is offered no sentence.
+schema_version: 1
+
+# Words that, found in an event file's name, name what happened in the sentence: a file called
+# `recharges_2025.csv` reads "no recharge", one called `orders.csv` "no order". Compared to the file
+# name's words lower-cased, with or without a trailing "s".
+event_words:
+  - recharge
+  - top-up
+  - topup
+  - order
+  - purchase
+  - payment
+  - login
+  - visit
+  - booking
+  - renewal
+  - transaction
+  - bill
+  - invoice
+  - ticket
+  - fault
+  - alarm
+  - call
+  - session
+
+# What happened, in plain words, by what Data Doctor read the file as, when its name has none of the
+# words above.
+kind_words:
+  activity: activity
+  orders: order
+  payments: payment
+  bills: bill
+  usage: usage record
+  complaints: ticket
+  campaign_events: campaign touch
+  plan_changes: plan change
+  other_event: event
+
+templates:
+  rca:
+    question: When has a customer churned?
+    sentence: "{An_entity} has churned when there is no {event} for {days} days after the snapshot."
+    label_type: event_absence
+    event_kinds: [activity, payments, usage, orders, bills, other_event]
+    days: [30, 60, 90]
+    default_days: 60
+
+  telco-churn:
+    question: When has a subscriber churned?
+    sentence: "{An_entity} has churned when there is no {event} for {days} days after the snapshot."
+    label_type: event_absence
+    event_kinds: [activity, payments, usage, bills, other_event]
+    days: [30, 60, 90]
+    default_days: 60
+
+  win-back-campaign:
+    question: When has a lapsed customer come back?
+    sentence: "{An_entity} has come back when there is {an_event} within {days} days after the snapshot."
+    label_type: event_presence
+    event_kinds: [activity, orders, payments, usage, other_event]
+    days: [30, 60, 90]
+    default_days: 90
+
+  targeted-advertisement:
+    question: When has a customer converted?
+    sentence: "{An_entity} has converted when there is {an_event} within {days} days after the snapshot."
+    label_type: event_presence
+    event_kinds: [orders, payments]
+    days: [7, 14, 30]
+    default_days: 30
+
+  fault-prediction:
+    question: When has an asset had a fault?
+    sentence: "{An_entity} has had a fault when there is {an_event} within {days} days after the snapshot."
+    label_type: event_presence
+    event_kinds: [complaints, other_event]
+    days: [1, 3, 7]
+    default_days: 3

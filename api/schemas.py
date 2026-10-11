@@ -33,6 +33,9 @@ from engine.contracts import (
     ValidationReport,
 )
 
+# Plan L M159 (DEC-1593): and what treated a file of the same shape before.
+from engine.doctor.memory import TreatmentOffer
+
 # Plan L M150 (DEC-1501): the upload response says how the file was read.
 from engine.intake.contracts import IntakeReport
 
@@ -258,6 +261,8 @@ class UploadResponse(StrictBase):
     profile: DatasetProfile
     # Plan L M150 (DEC-1501): what intake did on the way in, with the sentences the upload screen shows.
     intake: IntakeReport | None = None
+    # Plan L M159 (DEC-1593): a file of a shape treated before is offered that treatment (never applied).
+    treatment: TreatmentOffer | None = None
 
 
 class RunRequest(StrictBase):
@@ -1406,3 +1411,5 @@ class PilotFeedbackResponse(StrictBase):
 # ---- END PLAN-J ----
 # ---- PLAN-L (data doctor) — append only below this line ----
 # ---- END PLAN-L ----
+# ---- PLAN-K (agents that check) — append only below this line ----
+# ---- END PLAN-K ----

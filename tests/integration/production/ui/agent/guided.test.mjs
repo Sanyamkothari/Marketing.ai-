@@ -43,13 +43,36 @@ const hostileChat = (() => {
   return copy;
 })();
 
+/** Plan L #16 (DEC-1597): a file to score whose column was renamed; the person's yes makes a copy. */
+const RENAMED = "u_renamed";
+const RENAMED_COPY = "u_renamed_copy";
+const CHANGES = {
+  basis: "model",
+  source_upload_id: "u_sept",
+  source_file_name: "billing_sept.csv",
+  suggested_renames: [
+    {
+      missing: "amount",
+      candidate: "bill_amount",
+      reason: "Your file has no 'amount' but has 'bill_amount', which is new.",
+      score: 0.93,
+      values: 0.99,
+      name: 0.8,
+    },
+  ],
+  unresolved: [],
+  unseen_values: [{ column: "region", step: 1, values: ["<b>Bengaluru</b>"], distinct: 1, rows: 3 }],
+  then_same_treatment: false,
+  sentence: "Your file has 'bill_amount' where it had 'amount' in the file the model was trained on (billing_sept.csv).",
+};
+
 const flows = {
   [ids.main]: { start: "main_start", messages: "main_chat", answers: "main_answer", decisions: "main_decided", preview: "main_preview", apply: "main_apply" },
   [ids.conflict]: { start: "conflict_start", answers: "conflict_answer", decisions: "conflict_decided", apply: "conflict_apply" },
   [ids.placeholder]: { start: "placeholder_start", decisions: "placeholder_decided", preview: "placeholder_preview" },
   [ids.stopped]: { start: "stopped_start", messages: "stopped_start" },
 };
-const sent = { decisions: [], runs: [], messages: [], answers: [], starts: 0 };
+const sent = { decisions: [], runs: [], messages: [], answers: [], starts: 0, renames: [] };
 let nextUpload = "main";
 
 const server = (request) => {
@@ -59,6 +82,7 @@ const server = (request) => {
   if (method === "POST" && path === "/uploads") {
     if (nextUpload === "tricky") return { status: 201, body: { ...fixture("upload_main"), upload_id: TRICKY } };
     if (nextUpload === "no_chat") return { status: 201, body: { ...fixture("upload_main"), upload_id: NO_CHAT } };
+    if (nextUpload === "renamed") return { status: 201, body: { ...fixture("upload_main"), upload_id: RENAMED } };
     if (nextUpload === "no_outcome") {
       return { status: 201, body: { ...fixture("upload_placeholder"), upload_id: NO_OUTCOME } };
     }
@@ -70,6 +94,10 @@ const server = (request) => {
     return { status: 202, body: fixture("run_created") };
   }
   if (method === "GET" && path === `/runs/${ids.run}`) return { status: 200, body: fixture("run") };
+  if (method === "POST" && path === `/uploads/${RENAMED}/renamed-copy`) {
+    sent.renames.push(body);
+    return { status: 201, body: { ...fixture("upload_main"), upload_id: RENAMED_COPY } };
+  }
   const session = /^\/uploads\/([^/]+)\/agent-session(?:\/(\w+))?$/.exec(path);
   if (session && method === "POST") {
     const [, uploadId, action = "start"] = session;
@@ -77,6 +105,10 @@ const server = (request) => {
     if (uploadId === NO_OUTCOME && action === "start") {
       return { status: 201, body: withoutOutcome(fixture("placeholder_start")) };
     }
+    if (uploadId === RENAMED && action === "start") {
+      return { status: 201, body: { ...fixture("stopped_start"), changes: CHANGES } };
+    }
+    if (uploadId === RENAMED_COPY && action === "start") return { status: 201, body: fixture("main_start") };
     if (uploadId === NO_CHAT && action === "start") {
       return { status: 201, body: { ...fixture("main_start"), chat: { available: false, reason: "AI_NOT_CONNECTED" } } };
     }
@@ -479,4 +511,25 @@ test("on a stopped session, what the person types is sent to the helper as writt
   await until(() => sent.messages.length > messages && !$("#ag-chat .loading"), 2000, "the message");
   assert.deepEqual(sent.messages.at(-1), { text: "drop the duplicate rows" });
   assert.ok($("[data-ag-stop]"), "a message does not make unusable data usable");
+});
+
+test("a renamed column is offered unticked; the person's yes makes a copy and the helper starts on it", async () => {
+  await chooseFile("renamed");
+  assert.ok(text("[data-ag-changes]").includes(CHANGES.sentence), "the change is said in the API's words");
+  const rename = $('[data-ag-rename="0"]');
+  assert.ok(rename && !rename.checked, "nothing is ticked for the person");
+  assert.ok(text("[data-ag-changes]").includes("Use “bill_amount” as “amount”"));
+  assert.equal($("[data-ag-unseen] b"), null, "a new spelling is plain text");
+  assert.ok(text("[data-ag-unseen]").includes("<b>Bengaluru</b>"));
+  const go = $("[data-ag-rename-go]");
+  assert.ok(go.disabled, "no copy until a rename is ticked");
+  rename.checked = true;
+  rename.dispatchEvent(new w.Event("change", { bubbles: true }));
+  assert.ok(!$("[data-ag-rename-go]").disabled);
+  const starts = sent.starts;
+  $("[data-ag-rename-go]").click();
+  await until(() => sent.starts > starts && $(".ag [data-ag-group]"), 3000, "the session on the copy");
+  assert.deepEqual(sent.renames.at(-1), { renames: [{ column: "bill_amount", new_name: "amount" }] });
+  assert.equal($("[data-ag-stop]"), null, "the copy fits the model's steps");
+  assert.equal($("[data-ag-changes]"), null, "the copy has nothing left to rename");
 });

@@ -13,7 +13,8 @@ step before it wrote, so each can run on its own cadence and a missed day simply
   quoted date-window `WHERE` for a SQL database), kept as an ordinary upload with `pull_source.json` beside
   it, given to the campaign (`record_outcomes`, what `POST /campaigns/{id}/outcomes` does) and measured
   through the one measurement path against its test plan (`measure_recorded`, what
-  `POST /campaigns/{id}/measure` does).
+  `POST /campaigns/{id}/measure` does). Plan K M138: with the harm alarm on, a campaign whose window is still
+  open is read so far in memory (`interim_reading`) and checked for harm, nothing else stored.
 * **learn** (`learn_step`) - the newest measured campaign that was not learned from yet teaches the next
   model (`learn_from_campaign`): the frame M106 builds from the cycle's randomised rows
   (`engine.measurement.learn`), trained as an uplift run whose challenger always waits for an Approver.
@@ -71,6 +72,8 @@ from engine.storage import Storage, StorageError, run_key, upload_key
 from engine.utils.logging import get_logger
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     import pandas as pd
     from sqlalchemy.engine import Engine
 
@@ -78,6 +81,7 @@ if TYPE_CHECKING:
     from engine.connections.store import ConnectionStore
     from engine.jobs import JobRunner
     from engine.measurement.audit import AuditReadout
+    from engine.measurement.harm import HarmAlarmSettings, HarmOutcome
     from engine.measurement.pull import OutcomePullSpec
     from engine.measurement.reconcile import ContactReadout, UnlistedRule
     from engine.measurement.segments import SegmentEffects
@@ -177,6 +181,8 @@ class StepOutcome:
     campaign_id: str | None = None
     alert: str | None = None
     """A sentence for a person when the step produced something to act on; None for a quiet step."""
+    harms: tuple[HarmOutcome, ...] = ()
+    """PLAN-K (M138, DEC-1403): the harm checks of this step's interim readings; their new alarms are alerted."""
 
 
 class CampaignLearned(StrictBase):
@@ -569,6 +575,8 @@ def measure_recorded(
     outcome_kind: Literal["binary", "continuous"] | None,
     ledger_engine: Callable[[], Engine | None] | None,
     now: datetime,
+    covariate_source: Literal["column", "run_score"] | None = None,
+    config_root: Path | None = None,
 ) -> Measured:
     """Measure a campaign that has its outcomes through the one path, against its plan (`POST /campaigns/{id}/measure`).
 
@@ -576,6 +584,14 @@ def measure_recorded(
     `TEST_PLAN_CHANGED`, `COVARIATE_NOT_BEFORE_CAMPAIGN`, `CAMPAIGN_INVALID`. A campaign some of whose
     outcome windows are still open stores nothing and answers `matured=False`. `now` stamps a recomputed
     contact readout; `as_of` is the moment the outcomes are read as of.
+
+    `covariate_source` (Plan K M135): `run_score` adjusts by the scoring run's prediction. Null: the plan's
+    (a `covariate_column` named alone means a column). The prediction is read from the campaign's scoring run
+    only when the plan in force registered it; otherwise the measurement is refused as a change of plan.
+
+    Plan K M136 (DEC-1402): once the report is stored, the Estimated figure of every comparable campaign of the use
+    case is rewritten (`engine.measurement.pooling`) when `configs/measurement.yaml` under `config_root` turns
+    pooling on; with it off (the default) nothing more is read or written.
     """
     from engine.decide.variant_arms import (
         VARIANT_ARM_COLUMN,
@@ -588,10 +604,12 @@ def measure_recorded(
     from engine.measurement.continuous import COVARIATE_NOT_BEFORE_CAMPAIGN, CovariateNotBeforeCampaignError
     from engine.measurement.measure import measure_campaign
     from engine.measurement.plan import TEST_PLAN_CHANGED, TestPlan, TestPlanChangedError
+    from engine.measurement.pooling import load_pooling_settings, refresh_pooled_estimates  # PLAN-K (M136)
     from engine.measurement.programme import PROGRAMME_FILENAME, ProgrammeReadout
     from engine.measurement.segments import SEGMENT_EFFECTS_FILENAME
     from engine.uplift.contracts import IncrementalityStatus
 
+    pooling = load_pooling_settings(config_root)  # PLAN-K (M136): read before anything is stored
     campaign_id = campaign.campaign_id
     if campaign.outcomes is None:
         raise CycleError(CAMPAIGN_OUTCOMES_MISSING, "Add the campaign's outcomes file first.")
@@ -604,8 +622,11 @@ def measure_recorded(
         raise CycleError(CAMPAIGN_EPOCH_MISMATCH, mismatch)
     # The pre-registered covariate is measured with unless another one is named: leaving it out of the
     # request is not a change of plan.
+    source = covariate_source or ("column" if covariate_column is not None else None)
+    if source is None and plan is not None:
+        source = plan.covariate_source
     covariate = covariate_column
-    if covariate is None and plan is not None:
+    if covariate is None and plan is not None and source != "run_score":
         covariate = plan.covariate_column
     # Plan J M102: the outcome is read as the plan registered it (a different kind named is a change of plan,
     # refused by `measure_campaign`), else as asked, else as yes/no. An audited or programme campaign that
@@ -620,10 +641,16 @@ def measure_recorded(
         or "binary"
     )
     offers = {} if audit is None or not audit.offers else offer_arguments(audit)  # several offers (M103)
-    # Message arms (Plan K M140, DEC-1407): compared on a yes/no outcome without a covariate only; otherwise the
-    # campaign is measured as a whole, as it was before the arms were drawn.
-    offers = offers or variant_measure_arguments(assignment, outcome_kind=kind, covariate=covariate)
+    # Message arms (Plan K M140, DEC-1407): compared on a yes/no outcome without a covariate (a column, or M135's
+    # run prediction) only; otherwise the campaign is measured as a whole, as it was before the arms were drawn.
+    adjusted_by = covariate if covariate is not None else ("run_score" if source == "run_score" else None)
+    offers = offers or variant_measure_arguments(assignment, outcome_kind=kind, covariate=adjusted_by)
     try:
+        prediction = None
+        if source == "run_score" and plan is not None and plan.covariate_source == "run_score" and not offers:
+            from engine.measurement.run_score import load_run_prediction
+
+            prediction = load_run_prediction(storage, campaign)  # Plan K M135: the run's own prediction
         report = measure_campaign(
             assignment,
             outcomes,
@@ -641,6 +668,8 @@ def measure_recorded(
             covariate_column=covariate,
             outcome_kind=kind,
             covariate_date_column=covariate_date_column(campaign.outcomes, covariate),
+            covariate_source="run_score" if source == "run_score" else None,
+            run_prediction=prediction,
             **offers,
         )
     except TestPlanChangedError as exc:
@@ -675,6 +704,8 @@ def measure_recorded(
     )
     save_campaign(store, storage, updated)
     refresh_contacts(storage, updated, report, audit=audit, now=now)
+    if pooling.enabled:  # PLAN-K (M136): the Estimated figures, beside every comparable campaign's report
+        refresh_pooled_estimates(storage, store, updated, settings=pooling, now=now)
     return Measured(report=report, campaign=updated, matured=True)
 
 
@@ -911,10 +942,22 @@ def measure_step(
     pull: OutcomePullSpec,
     ledger_engine: Callable[[], Engine | None] | None,
     now: datetime,
+    config_root: Path | None = None,
 ) -> StepOutcome:
-    """Once the newest live campaign's window has closed: read its outcomes for that window and measure it."""
+    """Once the newest live campaign's window has closed: read its outcomes for that window and measure it.
+
+    `config_root` is the installation's configuration root, where `configs/measurement.yaml` is read, exactly as
+    `POST /campaigns/{id}/measure` reads it: Plan K M136's pooling, and Plan K M138's harm alarm.
+
+    PLAN-K (M138, DEC-1403): when `configs/measurement.yaml` under `config_root` turns the harm alarm on, every
+    interim reading is checked for harm (`engine.measurement.harm`): the measured campaign's early look, and an
+    interim reading (`interim_reading`, nothing stored) of each live campaign whose window is still open. The file
+    is read first, so one that cannot be read refuses the step (`ConfigError`) before anything is pulled or written.
+    """
+    from engine.measurement.harm import check_campaign_harm, load_harm_alarm_settings
     from engine.measurement.pull import PULL_SOURCE_FILENAME, DateWindow, pull_frame
 
+    harm_settings = load_harm_alarm_settings(config_root)
     live = [
         campaign
         for campaign in store.list(use_case_id=config.id, limit=None)
@@ -925,9 +968,17 @@ def measure_step(
     if not live:
         return StepOutcome("NOTHING_TO_MEASURE")
     closed = [campaign for campaign in live if _window_end(campaign) <= now]
+    # PLAN-K (M138): the open windows are read first and nothing is written until every reading has succeeded,
+    # so a failed pull or measurement leaves no alarm behind whose alert the failed firing never raised.
+    interim = (
+        _interim_readings(storage, connections, live, config=config, pull=pull, now=now)
+        if harm_settings.enabled
+        else []
+    )
     if not closed:
         newest = max(live, key=lambda campaign: (campaign.treatment_start, campaign.campaign_id))
-        return StepOutcome("CAMPAIGN_NOT_MATURED", campaign_id=newest.campaign_id)
+        harms = _check_interim(storage, interim, settings=harm_settings, config_root=config_root, now=now)
+        return StepOutcome("CAMPAIGN_NOT_MATURED", campaign_id=newest.campaign_id, harms=harms)
     campaign = max(closed, key=lambda campaign: (campaign.treatment_start, campaign.campaign_id))
     window = DateWindow(
         column=pull.date_column,
@@ -991,6 +1042,7 @@ def measure_step(
             outcome_kind=None,
             ledger_engine=ledger_engine,
             now=now,
+            config_root=config_root,  # PLAN-K (M136): pooling reads this installation's measurement.yaml
         )
     except CycleError:
         # Refused before any of the measurement was written: the campaign is put back as it was and this
@@ -1007,20 +1059,161 @@ def measure_step(
         if given is None:  # nothing refers to the copy yet
             _discard_upload(storage, upload.upload_id)
         raise
+    harm = check_campaign_harm(  # PLAN-K (M138): None when the alarm is off or the reading is final
+        storage,
+        measured.campaign or given or campaign,
+        measured.report,
+        root=config_root,
+        now=now,
+        settings=harm_settings,
+    )
+    harms = (
+        *((harm,) if harm is not None else ()),
+        *_check_interim(storage, interim, settings=harm_settings, config_root=config_root, now=now),
+    )
     if not measured.matured:
-        return StepOutcome("CAMPAIGN_NOT_MATURED", campaign_id=campaign.campaign_id)
+        return StepOutcome("CAMPAIGN_NOT_MATURED", campaign_id=campaign.campaign_id, harms=harms)
     if measured.report.early_look:
-        return StepOutcome("EARLY_LOOK", campaign_id=campaign.campaign_id)
+        return StepOutcome("EARLY_LOOK", campaign_id=campaign.campaign_id, harms=harms)
     _LOGGER.info("cycle.measure campaign=%s rows=%d", campaign.campaign_id, record.rows)
     return StepOutcome(
         "CAMPAIGN_MEASURED",
         run_id=campaign.run_ids[0] if campaign.run_ids else None,
         campaign_id=campaign.campaign_id,
+        harms=harms,
         alert=(
             f"The campaign {campaign.campaign_id} for {config.name} has been measured: its outcomes were read "
             f"from the saved connection for {window.date_from.isoformat()} to {window.date_to.isoformat()}. "
             "Open the campaign to see the result."
         ),
+    )
+
+
+# ---------------------------------------------------------------------------
+# PLAN-K (M138, DEC-1403): the harm alarm's interim reading of an open window
+# ---------------------------------------------------------------------------
+def _interim_readings(
+    storage: Storage,
+    connections: ConnectionStore,
+    campaigns: list[Campaign],
+    *,
+    config: UseCaseConfig,
+    pull: OutcomePullSpec,
+    now: datetime,
+) -> list[tuple[Campaign, IncrementalityReport]]:
+    """Each live campaign whose window is still open, read as it stands at `now` (`interim_reading`).
+
+    The outcomes recorded so far are pulled from the step's saved connection (`[treatment start, now]`) and read
+    in memory; nothing is stored. A campaign sent later than now is skipped: nothing can have happened yet.
+    Raises `ConnectorError` and `CycleError` as the measure step does.
+    """
+    from engine.measurement.pull import DateWindow, pull_frame
+
+    opened = [
+        campaign for campaign in campaigns if campaign.treatment_start < now and _window_end(campaign) > now
+    ]
+    readings: list[tuple[Campaign, IncrementalityReport]] = []
+    for campaign in sorted(opened, key=lambda item: (item.treatment_start, item.campaign_id)):
+        window = DateWindow(
+            column=pull.date_column, date_from=campaign.treatment_start.date(), date_to=now.date()
+        )
+        frame, _ = pull_frame(
+            connections,
+            pull.connection_id,
+            pull.selection,
+            window=window,
+            limit_bytes=config.validation.max_file_size_mb * 1024 * 1024,
+            now=now,
+        )
+        outcome, _ = outcome_columns(
+            [str(name) for name in frame.columns],
+            campaign,
+            config=config,
+            outcome_column=pull.outcome_column,
+            treatment_date_column=None,
+            covariate_column=None,
+            covariate_date_column=None,
+        )
+        report = interim_reading(
+            storage, campaign, frame, outcome_column=outcome, positive_label=pull.positive_label, now=now
+        )
+        _LOGGER.info("cycle.interim campaign=%s rows=%d", campaign.campaign_id, len(frame.index))
+        readings.append((campaign, report))
+    return readings
+
+
+def _check_interim(
+    storage: Storage,
+    readings: list[tuple[Campaign, IncrementalityReport]],
+    *,
+    settings: HarmAlarmSettings,
+    config_root: Any,
+    now: datetime,
+) -> tuple[HarmOutcome, ...]:
+    """Each interim reading checked for harm (`harm_alarm.json` written); the checks that ran."""
+    from engine.measurement.harm import check_campaign_harm
+
+    found = (
+        check_campaign_harm(
+            storage, campaign, report, root=config_root, now=now, settings=settings, interim=True
+        )
+        for campaign, report in readings
+    )
+    return tuple(outcome for outcome in found if outcome is not None)
+
+
+def interim_reading(
+    storage: Storage,
+    campaign: Campaign,
+    outcomes: Any,
+    *,
+    outcome_column: str,
+    positive_label: str | None,
+    now: datetime,
+) -> IncrementalityReport:
+    """A campaign whose outcome window is still open, read as it stands at `now`, in memory (Plan K M138).
+
+    Each customer with an outcome recorded so far is counted as it stands: the window is cut to the whole days
+    since the campaign went out, so every customer is read over exactly the same days whichever group they are
+    in, and the two groups stay comparable however early the reading is (a customer with no outcome row yet is
+    left out, never counted as a non-conversion, as the measurement always does). That is a reading for the harm alarm only: it is
+    never stored, gives no verdict and changes nothing on the campaign, and the plan is not checked against it
+    (its window is the planned one cut short on purpose). With a registered plan the report carries the plan's
+    hash and `early_look`. The outcome is read as the plan registered it (else yes/no); a covariate is not used,
+    since the step pulls none. Raises `CycleError` (`CAMPAIGN_INVALID`) for outcomes the measurement refuses.
+    """
+    from engine.measurement.audit import AUDIT_FILENAME, AuditReadout
+    from engine.measurement.measure import measure_campaign
+    from engine.measurement.plan import TestPlan, is_early_look
+
+    campaign_id = campaign.campaign_id
+    assignment = read_frame(storage, campaign_key(campaign_id, ASSIGNMENT_FILENAME))
+    plan = _stored(storage, campaign_key(campaign_id, TEST_PLAN_FILENAME), TestPlan)
+    audit: AuditReadout | None = _stored(storage, campaign_key(campaign_id, AUDIT_FILENAME), AuditReadout)
+    offers = {} if audit is None or not audit.offers else offer_arguments(audit)
+    elapsed = max((now - campaign.treatment_start).days, 0)
+    try:
+        report = measure_campaign(
+            assignment,
+            outcomes,
+            run_id=campaign.run_ids[0] if campaign.run_ids else campaign_id,
+            primary_key=campaign.primary_key,
+            outcome_column=outcome_column,
+            positive_label=positive_label,
+            intended_column=INTENDED_COLUMN,
+            treatment_time=campaign.treatment_start,
+            outcome_window_days=elapsed,
+            as_of=now,
+            campaign_id=campaign_id,
+            outcome_kind=plan.outcome_kind if plan is not None else "binary",
+            **offers,
+        )
+    except ValueError as exc:
+        raise CycleError(CAMPAIGN_INVALID, str(exc), status=422) from exc
+    if plan is None:
+        return report
+    return report.model_copy(
+        update={"test_plan_hash": plan.plan_hash, "early_look": is_early_look(plan, now)}
     )
 
 
@@ -1176,9 +1369,16 @@ def learn_from_campaign(
         now=now,
     )
     if learned is not None:
+        from engine.measurement.pooling import pooled_prior  # PLAN-K (M136): information only, None when off
+
         storage.write_model(
             run_key(started.run_id, LEARN_RECORD_FILENAME),
-            learned.model_copy(update={"uplift_run_id": started.run_id}),
+            learned.model_copy(
+                update={
+                    "uplift_run_id": started.run_id,
+                    "pooled_prior": pooled_prior(storage, campaign.campaign_id, root=config_root),
+                }
+            ),
         )
     storage.write_model(
         campaign_key(campaign.campaign_id, LEARNED_FILENAME),

@@ -648,6 +648,8 @@ class _Context:
     approvals: dict[tuple[str, str], int] = field(default_factory=dict)
     ledger_key: str | None = None
     scope: Scope = "single"
+    pooled_key: str | None = None
+    """PLAN-K (M136): `pooled_estimate.json` when pooling is on and the file was read from this report."""
 
     def key(self, name: str) -> str:
         return f"campaigns/{self.campaign_id}/{name}"
@@ -756,6 +758,7 @@ def build_proof(
         costs_key=costs_key,
         costs_source=costs_source,
         scope=_scope(report),
+        pooled_key=_pooled_key(reader, campaign_id, report, root),
     )
     _load_approvals(context)
     incremental = _incremental(context)
@@ -1014,15 +1017,41 @@ def _oriented(
     return out[0], out[1], out[2]
 
 
+def _adjusted(context: _Context) -> bool:
+    """True when the report carries the adjusted estimate its test plan registered (M102, Plan K M135)."""
+    return isinstance(context.reader.get(context.report_key, "adjusted_interval"), dict)
+
+
 def _estimate_base(context: _Context) -> str | None:
-    """The report field of the per-customer difference an amount is valued from (adjusted when registered)."""
+    """The report field of the difference the campaign is valued from (adjusted when registered).
+
+    A yes/no outcome adjusted by the scoring run's prediction (Plan K M135) is valued from the adjusted
+    difference in rates, per contacted customer, as an amount is; otherwise from the outcomes it caused.
+    """
+    if _adjusted(context):
+        return "adjusted_interval"
     if not context.continuous:
         return "incremental_conversions"
-    if isinstance(context.reader.get(context.report_key, "adjusted_interval"), dict):
-        return "adjusted_interval"
     if isinstance(context.reader.get(context.report_key, "mean_difference_ci"), dict):
         return "mean_difference_ci"
     return None
+
+
+def _per_customer(context: _Context, base: str | None) -> bool:
+    """True when `base` is a difference per customer, to be multiplied by the contacted customers."""
+    return context.continuous or base == "adjusted_interval"
+
+
+def _rate_base(context: _Context) -> str:
+    """The difference in rates of a yes/no outcome: the adjusted one when registered (Plan K M135)."""
+    return "adjusted_interval" if _adjusted(context) else "absolute_lift"
+
+
+def _adjusted_words(context: _Context) -> str:
+    """What the registered adjustment took account of, in the words of a line's label."""
+    if context.reader.get(context.report_key, "covariate_source") == "run_score":
+        return " (adjusted for the predicted chance registered in the plan)"
+    return " (adjusted for the earlier amount registered in the plan)"
 
 
 def _benefit(
@@ -1032,7 +1061,7 @@ def _benefit(
     base = _estimate_base(context)
     if base is None:
         return None, None, None
-    rows = (context.r("treated_rows", "count"),) if context.continuous else ()
+    rows = (context.r("treated_rows", "count"),) if _per_customer(context, base) else ()
     return _oriented(context, base, multipliers=(*rows, *extra), fmt=fmt)
 
 
@@ -1248,11 +1277,7 @@ def _incremental(context: _Context) -> ProofSection:
                         if context.kind == "programme"
                         else "Difference per contacted customer"
                     )
-                    + (
-                        " (adjusted for the earlier amount registered in the plan)"
-                        if base == "adjusted_interval"
-                        else ""
-                    ),
+                    + (_adjusted_words(context) if base == "adjusted_interval" else ""),
                     context.r(f"{base}.value", "signed_amount"),
                     context.r(f"{base}.ci_low", "signed_amount"),
                     context.r(f"{base}.ci_high", "signed_amount"),
@@ -1272,13 +1297,16 @@ def _incremental(context: _Context) -> ProofSection:
                 missing=f"Not measured: the result has no rate for the {held}.",
             ),
             _line(
-                "Difference",
-                context.r("absolute_lift.value", "points"),
-                context.r("absolute_lift.ci_low", "points"),
-                context.r("absolute_lift.ci_high", "points"),
+                "Difference" + (_adjusted_words(context) if _adjusted(context) else ""),
+                context.r(f"{_rate_base(context)}.value", "points"),
+                context.r(f"{_rate_base(context)}.ci_low", "points"),
+                context.r(f"{_rate_base(context)}.ci_high", "points"),
                 missing="Not measured: one of the two groups had no customer with an outcome.",
             ),
         ]
+    # PLAN-K (M136): the Estimated line beside the measured difference, never the last (benefit) line.
+    estimated = _estimated_lines(context)
+    lines += estimated
     if context.claim == "descriptive":
         lines.append(ProofLine(label=_benefit_label(context), missing=_DESCRIPTIVE))
     else:
@@ -1308,6 +1336,8 @@ def _incremental(context: _Context) -> ProofSection:
     if context.claim == "descriptive":
         notes.append(_DESCRIPTIVE)
     notes += _scope_notes(context)
+    if estimated:
+        notes += _estimated_notes(context)
     return ProofSection(
         key="incremental", title=title, status="measured", lines=tuple(lines), table=table, notes=tuple(notes)
     )
@@ -1329,6 +1359,75 @@ def _scope_notes(context: _Context) -> list[str]:
             "Measure the campaign again to add every offer together."
         ]
     return []
+
+
+# --- PLAN-K (M136, DEC-1402): the Estimated line, beside the measured difference ----------------------------
+_ESTIMATED_LABEL: Final[str] = "Estimated difference, drawn towards comparable campaigns (not measured)"
+_ESTIMATED_COUNT_LABEL: Final[str] = "Comparable campaigns it is drawn towards, this one included"
+_NOT_POOLED: Final[str] = (
+    "Not estimated: fewer comparable campaigns have a final result than an estimate needs, so this campaign is "
+    "shown only as measured."
+)
+_ESTIMATED_NOTE: Final[str] = (
+    "The estimated line is not a measured result. It draws this campaign's measured difference towards the "
+    "average of comparable campaigns (the same use case, outcome, channels and offers, with groups chosen at "
+    "random), by as much of it as is noise, and its range allows for how little is known about that average. "
+    "Everything else in this pack, and the value proven to date, uses only the measured difference."
+)
+_NO_SPREAD_NOTE: Final[str] = (
+    "The comparable campaigns differ by no more than chance explains, so this estimate is drawn as far towards "
+    "their average as the method allows. That usually means too little data to tell them apart, not that their "
+    "effects are equal."
+)
+
+
+def _pooled_key(reader: _Reader, campaign_id: str, report: Any, root: Path | None) -> str | None:
+    """`pooled_estimate.json` when pooling is on (`configs/measurement.yaml`) and it is current: read from this report
+    and from every member's report as they stand, under the settings in force (`pooling.is_current`).
+
+    With pooling off nothing is read, so the pack, and the artefacts it lists, are exactly what they were.
+    """
+    from engine.measurement.pooling import POOLED_FILENAME, is_current, load_pooling_settings
+
+    settings = load_pooling_settings(root)
+    if not settings.enabled:
+        return None
+    key = f"campaigns/{campaign_id}/{POOLED_FILENAME}"
+
+    def report_of(member_id: str) -> Any:
+        return reader.doc(f"campaigns/{member_id}/{_REPORT}") if safe_identifier(member_id) else None
+
+    return key if is_current(reader.doc(key), report, settings=settings, report_of=report_of) else None
+
+
+def _estimated_lines(context: _Context) -> list[ProofLine]:
+    """The Estimated figure and how many campaigns it is drawn from; or why there is none."""
+    key = context.pooled_key
+    if key is None or context.claim == "descriptive":
+        return []
+    reader = context.reader
+    if reader.get(key, "status") != "pooled":
+        return [ProofLine(label=_ESTIMATED_LABEL, missing=_NOT_POOLED)]
+    fmt: FigureFormat = "signed_amount" if context.continuous else "points"
+    missing = "Not estimated: the estimate could not be read."
+    return [
+        _line(
+            _ESTIMATED_LABEL,
+            reader.fig(key, "pooled_effect", fmt),
+            reader.fig(key, "pooled_interval.ci_low", fmt),
+            reader.fig(key, "pooled_interval.ci_high", fmt),
+            missing=missing,
+        ),
+        _line(_ESTIMATED_COUNT_LABEL, reader.fig(key, "campaigns_compared", "count"), missing=missing),
+    ]
+
+
+def _estimated_notes(context: _Context) -> list[str]:
+    key = context.pooled_key
+    warnings = context.reader.get(key, "warnings") if key is not None else None
+    no_spread = isinstance(warnings, list) and "POOL_NO_SPREAD" in warnings
+    return [_ESTIMATED_NOTE, _NO_SPREAD_NOTE] if no_spread else [_ESTIMATED_NOTE]
+
 
 
 _VARIANTS: Final[str] = "variant_comparison.json"
@@ -1456,11 +1555,21 @@ def _gross(context: _Context) -> ProofSection:
         expected = derived(
             [context.r("control_rate", "share"), context.r("treated_rows", "count")], "s0*s1", "count"
         )
-        incremental = (
-            context.r("incremental_conversions.value", "signed_count"),
-            context.r("incremental_conversions.ci_low", "signed_count"),
-            context.r("incremental_conversions.ci_high", "signed_count"),
-        )
+        if _adjusted(context):
+            # Plan K M135: the registered adjusted difference in rates, times the contacted customers.
+            treated_rows = context.r("treated_rows", "count")
+            incremental = tuple(
+                derived(
+                    [context.r(f"adjusted_interval.{n}", "points"), treated_rows], "s0*s1", "signed_count"
+                )
+                for n in ("value", "ci_low", "ci_high")
+            )
+        else:
+            incremental = (
+                context.r("incremental_conversions.value", "signed_count"),
+                context.r("incremental_conversions.ci_low", "signed_count"),
+                context.r("incremental_conversions.ci_high", "signed_count"),
+            )
         gross_label = f"{_cap(_treated_words(context))} with the outcome (gross)"
         expected_label = f"How many would have had it anyway, at the rate of the {_held_words(context)}"
     lines = [
@@ -1488,7 +1597,19 @@ def _gross(context: _Context) -> ProofSection:
             )
         )
         share = (
-            derived([context.r("incremental_conversions.value", "count"), gross], "s0/s1", "share")
+            derived(
+                (
+                    [
+                        context.r("adjusted_interval.value", "points"),
+                        context.r("treated_rows", "count"),
+                        gross,
+                    ]
+                    if _adjusted(context)
+                    else [context.r("incremental_conversions.value", "count"), gross]
+                ),
+                "s0*s1/s2" if _adjusted(context) else "s0/s1",
+                "share",
+            )
             if not context.continuous
             else None
         )
@@ -1776,7 +1897,7 @@ def _test_cost(context: _Context) -> ProofSection:
                 else (None, None, None)
             )
         else:
-            forgone = _oriented(context, "absolute_lift", multipliers=(held,), fmt="signed_count")
+            forgone = _oriented(context, _rate_base(context), multipliers=(held,), fmt="signed_count")
         lines.append(
             _line(
                 _conditional(
@@ -1806,7 +1927,7 @@ def _test_cost(context: _Context) -> ProofSection:
         if value is None:
             lines.append(ProofLine(label="In rupees", missing=reason))
         else:
-            base = _estimate_base(context) if context.continuous else "absolute_lift"
+            base = _estimate_base(context) if context.continuous else _rate_base(context)
             money = (
                 _oriented(context, base, multipliers=(held, value), fmt="inr")
                 if base is not None
@@ -2089,7 +2210,11 @@ def _net_value(context: _Context) -> ProofSection:
     gains: list[Figure | None] = []
     for name in names:
         estimate = context.r(f"{base}.{name}", "count")
-        gain_parts: list[Figure | None] = [estimate, *((rows,) if context.continuous else ()), value]
+        gain_parts: list[Figure | None] = [
+            estimate,
+            *((rows,) if _per_customer(context, base) else ()),
+            value,
+        ]
         gain = sign + "*".join(f"s{i}" for i in range(len(gain_parts)))
         gains.append(derived(gain_parts, gain, "inr"))
         parts = [*gain_parts, paid, contact, *take_parts, offer]
@@ -2195,19 +2320,28 @@ def _method(context: _Context) -> ProofSection:
             missing="Not recorded: the result does not say how many customers had no outcome.",
         ),
     ]
+    run_score = context.reader.get(context.report_key, "covariate_source") == "run_score"
     if _estimate_base(context) == "adjusted_interval":
-        lines += [
+        lines.append(
             _line(
+                "Customers with no prediction from the scoring run (given the average one)",
+                context.r("rows_covariate_missing", "count"),
+                missing="Not recorded: the result does not say how many customers had no prediction.",
+            )
+            if run_score
+            else _line(
                 "Adjusted for each customer's earlier amount in",
                 context.r("covariate_column", "text"),
                 missing="Not recorded: the result does not name the earlier amount.",
-            ),
+            )
+        )
+        lines.append(
             _line(
                 "Share of the noise the adjustment removed",
                 context.r("variance_reduction", "share"),
                 missing="Not recorded: the result does not say how much noise the adjustment removed.",
-            ),
-        ]
+            )
+        )
     notes = [
         _BASIS_TEXT.get(basis, _BASIS_TEXT["not_random"]),
         {
@@ -2226,6 +2360,11 @@ def _method(context: _Context) -> ProofSection:
         "Results for each group are read without any adjustment by an earlier amount, and judged by the rule in "
         "the backfire section.",
     ]
+    if run_score and _estimate_base(context) == "adjusted_interval":
+        notes.append(
+            "Adjusted for the chance of the outcome the scoring run predicted for each customer before the "
+            "campaign, as the test plan registered."
+        )
     if context.kind == "programme":
         notes.append(
             "A programme readout compares everyone outside the universal control group with its members, over a "

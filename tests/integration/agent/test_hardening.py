@@ -131,10 +131,12 @@ def test_a_viewer_can_read_a_session_but_not_chat_decide_or_approve(
     policies = {
         (method, path): policy
         for (method, path), policy in access_policy.all_policies().items()
-        if "agent-session" in path or path.endswith("/checks")
+        if "agent-session" in path or (path.startswith("/uploads/") and path.endswith("/checks"))
     }
-    # Plan L M154 (DEC-1541) added two Analyst POSTs: an edit by hand, and the table view's rows.
-    assert len(policies) == 10
+    # Plan L M154 (DEC-1541) added two Analyst POSTs: an edit by hand, and the table view's rows; Plan L
+    # M159 (DEC-1594) one more: use the same treatment as last time. Plan K M142 (DEC-1409) one more:
+    # `…/agent-session/assist`, the optional second opinion.
+    assert len(policies) == 12
     for (method, path), policy in policies.items():
         expected = "viewer" if method == "GET" else "analyst"
         assert policy.role.value == expected, (method, path)

@@ -12,12 +12,15 @@ are the customers measured, `treated_conversions` and `control_conversions` the 
 is above zero (who spent anything), and the rates, `absolute_lift` and `incremental_conversions` are
 null - a rate of an amount means nothing. `relative_lift` is the difference over the held-back mean
 (when that mean is above zero) and `p_value` is Welch's. Every M102 field is set.
+
+Plan K M135 (DEC-1324): the covariate may be the scoring run's own prediction (`covariate_source="run_score"`)
+instead of a column; the report then carries `covariate_source` and no `covariate_column`.
 """
 
 from __future__ import annotations
 
 from datetime import UTC, date, datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 import numpy as np
 
@@ -28,6 +31,12 @@ from engine.measurement.continuous import (
     adjusted_difference,
     mean_difference,
     skewed_arms,
+)
+from engine.measurement.run_score import (
+    NOTE_NO_PREDICTION,
+    NOTE_NO_SPREAD_WITHIN,
+    NOTE_SAME_PREDICTION,
+    varies_within,
 )
 
 if TYPE_CHECKING:
@@ -72,12 +81,16 @@ def amount_report(
     rows_without_outcome: int,
     rows_outside: int,
     has_control_group: bool,
+    covariate_source: Literal["run_score"] | None = None,
 ) -> IncrementalityReport:
     """The report of a measured amount. `treated` / `control` are the usable amounts of each arm.
 
     With `covariate_column`, `treated_covariate` and `control_covariate` hold each usable customer's
     amount from before the campaign, an unknown one already set to the mean of the known
     (`rows_covariate_missing` of them); both None when no customer had a known one.
+
+    `covariate_source="run_score"` (Plan K M135): the two hold the scoring run's prediction instead, and
+    `covariate_column` is None.
     """
     from engine.uplift.contracts import ConfidenceValue, IncrementalityReport, IncrementalityStatus
 
@@ -85,7 +98,22 @@ def amount_report(
     compared = mean_difference(treated, control) if measurable else None
     adjusted: AdjustedDifference | None = None
     note: str | None = None
-    if covariate_column is not None and compared is not None:
+    run_score = covariate_source == "run_score"
+    named = covariate_column is not None or run_score
+    if run_score and compared is not None:
+        if treated_covariate is None or control_covariate is None:
+            note = NOTE_NO_PREDICTION
+        else:
+            constant = float(np.ptp(np.concatenate([treated_covariate, control_covariate]))) == 0.0
+            adjusted = (
+                None
+                if constant  # exactly the same for everyone: no slope, whatever rounding the mean leaves
+                or not varies_within(treated_covariate, control_covariate)  # only the arm means differ
+                else adjusted_difference(treated, treated_covariate, control, control_covariate)
+            )
+            if adjusted is None:
+                note = NOTE_SAME_PREDICTION if constant else NOTE_NO_SPREAD_WITHIN
+    elif covariate_column is not None and compared is not None:
         if treated_covariate is None or control_covariate is None:
             note = (
                 f"No measured customer has a known amount in {covariate_column!r} from before the campaign, "
@@ -113,6 +141,7 @@ def amount_report(
         covariate_column=covariate_column,
         note=note,
         skewed=warnings is not None,
+        run_score=run_score,
         rows_immature=rows_immature,
         results_available_on=results_available_on,
         outcome_window_days=outcome_window_days,
@@ -160,9 +189,10 @@ def amount_report(
             interval(adjusted.difference, adjusted.low, adjusted.high) if adjusted is not None else None
         ),
         variance_reduction=adjusted.variance_reduction if adjusted is not None else None,
-        rows_covariate_missing=rows_covariate_missing if covariate_column is not None else None,
+        rows_covariate_missing=rows_covariate_missing if named else None,
         adjustment_note=note,
         outcome_warnings=warnings,
+        covariate_source=covariate_source,
     )
 
 
@@ -185,6 +215,7 @@ def _summary(
     results_available_on: date | None,
     outcome_window_days: int | None,
     has_control_group: bool,
+    run_score: bool = False,
 ) -> str:
     """One plain paragraph for the campaign page, as `measure_incrementality`'s sentence is for a rate."""
     from engine.uplift.contracts import IncrementalityStatus
@@ -227,7 +258,18 @@ def _summary(
             f"({_signed(compared.low)} to {_signed(compared.high)}; {p_text}) includes zero, so the campaign "
             f"cannot be shown to have changed the amount."
         )
-    if adjusted is not None:
+    if adjusted is not None and run_score:  # Plan K M135: the scoring run's prediction
+        removed_text = (
+            f"this removed {adjusted.variance_reduction:.0%} of the chance variation."
+            if adjusted.variance_reduction >= 0.005
+            else "this time it did not narrow the range."
+        )
+        sentence += (
+            f" Taking account of what the scoring run predicted for each customer before the campaign, the "
+            f"difference is {_signed(adjusted.difference)} per customer (95% CI {_signed(adjusted.low)} to "
+            f"{_signed(adjusted.high)}); {removed_text}"
+        )
+    elif adjusted is not None:
         removed = max(adjusted.variance_reduction, 0.0)
         sentence += (
             f" Taking account of each customer's {covariate_column!r} from before the campaign, the "

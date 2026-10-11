@@ -7,7 +7,8 @@ the real run deletes (`tests/unit/production/test_retention.py` proves the two e
 
 **What goes.** Uploads (the file and everything in its directory), onboarding raw sources (the file
 and its profile, plus the source's row in the client store when one is passed), built datasets (the
-whole directory), and the **row-level** artefacts of finished runs - the files listed under
+whole directory), Data Doctor's memory of a shape's treatment (Plan L M159: with the upload holding its
+recipe, or once it outlives the setting), and the **row-level** artefacts of finished runs - the files listed under
 `retention.row_level_run_artefacts` in `configs/privacy.yaml` (scores, row explanations, copy
 messages). **What stays.** Models, `run.json`, `status.json`, manifests and every aggregate report:
 the Results page of a run a year old still renders, it just no longer offers the scores file.
@@ -243,6 +244,34 @@ def plan_retention(
                     retention_days=days,
                 )
                 for key in _under(keys, f"uploads/{upload_id}/")
+            )
+
+    # -- Data Doctor's memory (Plan L M159, DEC-1595) -----------------------------------------
+    # An entry names a recipe kept in a prepared upload: it goes with that upload (deleted in this plan
+    # or already gone), and in any case once it outlives its use case's setting, dated by its own
+    # `remembered_at`. It holds column names and ids only, so nothing else is kept for it.
+    leaving = {item.owner_id for item in items if item.category is RetentionCategory.UPLOAD}
+    for key, memory in sorted(index.memories.items()):
+        owner = key.rsplit("/", 1)[-1].removesuffix(".json")
+        if memory.remembered_at is None:
+            skipped.append(
+                RetentionSkip(owner_id=owner, category=RetentionCategory.DOCTOR_MEMORY, reason_code="UNDATED")
+            )
+            continue
+        days = by_use_case.get(memory.use_case_id or "", default_days)
+        recipe = memory.recipe_upload_id
+        recipe_gone = recipe is None or recipe not in index.uploads or recipe in leaving
+        if recipe_gone or _due(memory.remembered_at, days, moment, consumed=False):
+            items.append(
+                RetentionItem(
+                    key=key,
+                    category=RetentionCategory.DOCTOR_MEMORY,
+                    action=RetentionAction.DELETE,
+                    owner_id=owner,
+                    use_case_id=memory.use_case_id,
+                    created_at=memory.remembered_at,
+                    retention_days=days,
+                )
             )
 
     # -- built datasets ----------------------------------------------------------------------

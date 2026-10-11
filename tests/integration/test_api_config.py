@@ -523,10 +523,20 @@ def test_openapi_builds_and_documents_every_route(client: TestClient) -> None:
         # Plan L M151: Data Doctor, the place - what the files are and can power, and the hand-off (DEC-1512)
         "/doctor/diagnosis",
         "/doctor/handoff",
+        # Plan L M157: the outcome from events, agreed as a sentence (DEC-1573)
+        "/doctor/outcome",
         # Plan L M154: editing by hand in Guided setup, and the table view (DEC-1541)
         "/uploads/{upload_id}/agent-session/edits",
         "/uploads/{upload_id}/agent-session/rows",
+        # Plan L M159: use the same treatment as a file of the same shape last time (DEC-1594)
+        "/uploads/{upload_id}/agent-session/same-treatment",
+        # Plan L follow-up (DEC-1599): things a training run checked, and the too-good-to-be-true alarm
+        "/runs/{run_id}/checks",
+        # Plan L #16: a copy of next month's file with a renamed column given its old name (DEC-1597)
+        "/uploads/{upload_id}/renamed-copy",
         "/privacy/consent/imports/from-connection",
+        # Plan K M142: the optional second opinion in Guided setup, 404 AGENTIC_DISABLED with Plan K off (DEC-1409)
+        "/uploads/{upload_id}/agent-session/assist",
     }
 
 

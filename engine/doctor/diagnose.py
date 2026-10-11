@@ -17,18 +17,24 @@ never disagree with the screen it hands off to:
 Advising is the slow part (it runs the Run button's checks), so only files that name the outcome are
 advised, and only on their first `ADVISE_ROWS` rows - enough for every check's threshold, few enough to
 answer in seconds. The row counts reported are always the whole file's.
+
+DEC-1596: a `ready` or `check` verdict also carries its file's first look (`engine.doctor.first_look`):
+the rate of "yes" and the rate by the most informative columns, counted by the Ask-your-data `rate_by`
+tool on the same rows, with the advisor's leak findings left out. Only the chosen file's is counted.
 """
 
 from __future__ import annotations
 
 import re
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Final
 
 from engine.config import RunMode
 from engine.doctor.contracts import FileDiagnosis, ReadinessStatus, UseCaseReadiness
+from engine.doctor.first_look import FirstLook, advised_leaks, outcome_look
+from engine.doctor.sufficiency import enough_data, with_alternatives
 from engine.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -150,7 +156,8 @@ def readiness(
     """Each offered use case's verdict over all files, best first."""
     verdicts = [_one_use_case(files, offer, root) for offer in offers]
     order = {offer.config.id: index for index, offer in enumerate(offers)}
-    return tuple(sorted(verdicts, key=lambda v: (_STATUS_ORDER[v.status], order[v.use_case_id])))
+    ranked = tuple(sorted(verdicts, key=lambda v: (_STATUS_ORDER[v.status], order[v.use_case_id])))
+    return with_alternatives(ranked)  # Plan L M158 (DEC-1582): the use cases the same files do power
 
 
 def _one_use_case(files: Sequence[LoadedFile], offer: Offer, root: Path) -> UseCaseReadiness:
@@ -166,9 +173,12 @@ def _one_use_case(files: Sequence[LoadedFile], offer: Offer, root: Path) -> UseC
             summary=f"None of your files has the outcome {config.name} learns from.",
             needs=_needs(config),
         )
-    verdicts = [_advised(loaded, column, config, root) for loaded, column in named]
-    verdicts.sort(key=lambda v: (_STATUS_ORDER[v.status], v.questions, v.suggestions))
-    return verdicts[0].model_copy(update={"stage": offer.stage})
+    advised = [_advised(loaded, column, config, root) for loaded, column in named]
+    advised.sort(key=lambda pair: (_STATUS_ORDER[pair[0].status], pair[0].questions, pair[0].suggestions))
+    verdict, look = advised[0]
+    # DEC-1596: the first look is counted for the chosen file only, so the diagnosis stays bounded.
+    first = look() if look is not None else None
+    return verdict.model_copy(update={"stage": offer.stage, "first_look": first})
 
 
 def _needs(config: UseCaseConfig) -> tuple[str, ...]:
@@ -188,7 +198,10 @@ def _needs(config: UseCaseConfig) -> tuple[str, ...]:
     return tuple(needs)
 
 
-def _advised(loaded: LoadedFile, column: str, config: UseCaseConfig, root: Path) -> UseCaseReadiness:
+def _advised(
+    loaded: LoadedFile, column: str, config: UseCaseConfig, root: Path
+) -> tuple[UseCaseReadiness, Callable[[], FirstLook | None] | None]:
+    """The verdict on one file, and (for `ready` / `check`) how to count its first look (DEC-1596)."""
     from engine.agent.advisor import advise
     from engine.agent.contracts import AgentConfidence, ProposalState, SessionStatus
     from engine.agent.tools import AgentContext
@@ -224,14 +237,17 @@ def _advised(loaded: LoadedFile, column: str, config: UseCaseConfig, root: Path)
             config.id,
             type(exc).__name__,
         )
-        return UseCaseReadiness(
-            use_case_id=config.id,
-            name=config.name,
-            stage="",
-            status="check",
-            upload_id=loaded.upload_id,
-            summary=f"{loaded.file_name} has {column}; open Guided setup to check the rest.",
-            outcome_column=column,
+        return (
+            UseCaseReadiness(
+                use_case_id=config.id,
+                name=config.name,
+                stage="",
+                status="check",
+                upload_id=loaded.upload_id,
+                summary=f"{loaded.file_name} has {column}; open Guided setup to check the rest.",
+                outcome_column=column,
+            ),
+            None,
         )
     # Questions Approve waits on, and suggestions Guided setup marks "Please check" (never ticked for the
     # person); its `sure` suggestions are one "Accept recommended" away and do not count against ready.
@@ -244,7 +260,7 @@ def _advised(loaded: LoadedFile, column: str, config: UseCaseConfig, root: Path)
     if advice.status is SessionStatus.STOPPED:
         reason = advice.stop_reason or "Guided setup cannot use this file as it is."
         small = bool(_TOO_SMALL_WORDS.search(reason))
-        return UseCaseReadiness(
+        stopped = UseCaseReadiness(
             use_case_id=config.id,
             name=config.name,
             stage="",
@@ -252,7 +268,17 @@ def _advised(loaded: LoadedFile, column: str, config: UseCaseConfig, root: Path)
             upload_id=loaded.upload_id,
             summary=f"{loaded.file_name}: {reason}",
             outcome_column=column,
+            # Plan L M158 (DEC-1581): never just a stop - what is short, what to do now, what to collect.
+            next_steps=enough_data(
+                frame,
+                outcome=column,
+                config=config,
+                root=root,
+                file_name=loaded.file_name,
+                file_rows=loaded.profile.row_count,
+            ),
         )
+        return stopped, None
     status: ReadinessStatus = "ready" if questions == 0 and suggestions == 0 else "check"
     if status == "ready":
         summary = f"Ready: {loaded.file_name} has {column} and everything else Guided setup needs."
@@ -263,7 +289,7 @@ def _advised(loaded: LoadedFile, column: str, config: UseCaseConfig, root: Path)
         if suggestions:
             parts.append(f"{suggestions} suggestion{'s' if suggestions != 1 else ''} to review")
         summary = f"Ready after {' and '.join(parts) or 'a quick review'}: {loaded.file_name} has {column}."
-    return UseCaseReadiness(
+    verdict = UseCaseReadiness(
         use_case_id=config.id,
         name=config.name,
         stage="",
@@ -274,3 +300,21 @@ def _advised(loaded: LoadedFile, column: str, config: UseCaseConfig, root: Path)
         questions=questions,
         suggestions=suggestions,
     )
+
+    def look() -> FirstLook | None:
+        try:
+            return outcome_look(
+                ctx,
+                outcome=column,
+                file_name=loaded.file_name,
+                file_rows=loaded.profile.row_count,
+                primary_key=advice.primary_key,
+                leaks=advised_leaks(advice),
+            )
+        except (
+            Exception
+        ) as exc:  # a courtesy: a first look that cannot be counted leaves the verdict as it is
+            _LOG.info("doctor.first_look_skipped upload=%s error=%s", loaded.upload_id, type(exc).__name__)
+            return None
+
+    return verdict, look

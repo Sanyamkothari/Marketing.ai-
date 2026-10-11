@@ -1,0 +1,65 @@
+# The save-desk card as a randomised pilot (Plan K M144, DEC-1411; docs/AGENTIC.md "The save-desk card").
+#
+# THIS IS A TEMPLATE, NOT A RESULT. The card ships only after a pilot like this one measures that staff who
+# had it kept more customers than staff who did not. Nothing here says the card works.
+#
+# status:   example - not enforced; the card is open to every Analyst while the pilot is a draft.
+#           active  - only the staff in `card_access` are served a card; everyone else is refused with
+#                     SAVE_DESK_NOT_IN_PILOT_ARM. Set it only after the randomisation step below has filled
+#                     both lists and the plan has been registered.
+#
+# What is randomised is the STAFF MEMBER (the cluster), never the call or the customer: a staff member either
+# has the card for the whole pilot or never does. Customers are not independent inside one staff member's calls,
+# so the pilot needs many more calls than a customer-level test of the same size: see `planning` and run
+#   from engine.agentic.save_desk import load_pilot, pilot_power
+#   pilot_power(load_pilot().planning, card_share=load_pilot().card_share, target_pp=5)
+#
+# To start a real pilot:
+#   1. copy this file, set status example, and replace the staff count, calls, retention and ICC with the
+#      client's own numbers (icc_source says where the ICC came from; it is an assumption until measured);
+#   2. draw the arms ONCE with assign_card_access(staff_ids, salt=..., card_share=...) and paste the two lists in;
+#   3. register `test_plan` on the campaign (POST /campaigns/{campaign_id}/plan) BEFORE the first call;
+#   4. set status active.
+#
+# What the measurement can claim: see `measurement_note`.
+schema_version: 1
+status: example
+name: Save-desk card pilot (template)
+unit: staff_member
+card_share: 0.5
+salt: replace-this-salt-before-drawing
+outcome_window_days: 30
+
+planning:
+  staff_count: 200
+  calls_per_staff: 30
+  base_retention: 0.60
+  assumed_icc: 0.05
+  icc_source: "ASSUMPTION for the template; replace with the client's own spread between staff"
+  alpha: 0.05
+  power: 0.80
+
+# The body of POST /campaigns/{campaign_id}/plan (engine.measurement.plan.TestPlanInput). `mde_pp` is the
+# clustered figure from pilot_power (5.6 points for the numbers above), rounded up; the plan's own "achieved
+# power" treats customers as independent and is therefore too optimistic for this pilot.
+test_plan:
+  metric: kept as a customer within 30 days of the save call
+  outcome_column: retained_30d
+  positive_label: "1"
+  outcome_window_days: 30
+  analysis_date: 2027-06-30
+  mde_pp: 6.0
+  base_rate: 0.60
+  base_rate_source: "ASSUMPTION for the template; replace with the client's retention after save calls"
+  expectation: "Staff with the card keep more customers than staff without it."
+
+# Written by the randomisation step; empty in a template.
+card_access: []
+no_card: []
+
+measurement_note: >-
+  The product's measurement (measure_campaign, Newcombe interval) compares two groups of customers as if each
+  customer were independent. Here customers handled by one staff member are not independent, so its interval
+  would be too narrow. The product has no clustered standard errors yet, so this pilot needs them added before
+  a result is read, and until then no result of this pilot is claimed. The planning figures above allow for
+  clustering; the measurement does not.

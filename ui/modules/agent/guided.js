@@ -42,11 +42,14 @@ import { takeHandoff } from "../doctor/handoff.js";
 import {
   postAnswer,
   postApply,
+  postAssist,
   postDecisions,
   postEdit,
   postMessage,
   postPreview,
+  postRenamedCopy,
   postRows,
+  postSameTreatment,
   startSession,
 } from "./api.js";
 import { PAGE_ROWS, cellTarget, editRequest, editorHtml, freshEditor } from "./edit.js";
@@ -85,7 +88,11 @@ function fresh() {
     session: null,
     chat: null,
     ticks: {},
-    busy: "", // "" | answer | preview | approve | chat | fill
+    busy: "", // "" | answer | preview | approve | chat | fill | same | rename
+    treatment: null, // Plan L M159: the treatment of a file of the same shape, offered by the API
+    changes: null, // Plan L #16: a column renamed since the saved steps, and new spellings (DEC-1597)
+    renameTicks: {}, // which "Use 'x' as 'y'" boxes the person ticked; none starts ticked
+    renameError: null,
     actionError: null,
     report: null,
     preview: null,
@@ -95,6 +102,8 @@ function fresh() {
     draft: "",
     asking: "",
     chatError: null,
+    assistError: null,
+    assistOff: false,
   };
 }
 
@@ -127,6 +136,8 @@ function adopt(g, response) {
   const before = new Map(((g.session && g.session.proposals) || []).map((p) => [p.proposal_id, p.state]));
   g.session = response.session;
   if (response.chat) g.chat = response.chat;
+  g.treatment = response.treatment || null; // Plan L M159: the treatment of a file of the same shape
+  g.changes = response.changes || null; // Plan L #16 (DEC-1597)
   const now = new Set();
   for (const proposal of g.session.proposals || []) {
     now.add(proposal.proposal_id);
@@ -281,7 +292,92 @@ function checklistHtml(g, closed) {
       cap ? `<p class="ag-cap">${esc(cap)}</p>` : ""
     }${items.map((p) => itemHtml(g, p, closed || g.busy === "approve")).join("")}</section>`;
   }).join("");
-  return `${asked}${groups}`;
+  return `${changesHtml(g, closed)}${treatmentHtml(g, closed)}${asked}${groups}`;
+}
+
+// Plan L #16 (DEC-1597): "Your file has 'bill_amount' where last month had 'amount'. Use it?" Each rename is
+// a box the person ticks (none starts ticked, and between two close columns none is chosen for them); their
+// yes makes a copy of the file with the old names, and the helper starts again on the copy. New spellings
+// are shown only.
+function renameOffers(changes) {
+  if (!changes) return [];
+  return [
+    ...(changes.suggested_renames || []).map((r) => ({ from: r.candidate, to: r.missing, why: r.reason })),
+    ...(changes.unresolved || []).flatMap((u) =>
+      (u.candidates || []).map((name) => ({ from: name, to: u.missing, why: u.reason })),
+    ),
+  ];
+}
+
+function changesHtml(g, closed) {
+  const changes = g.changes;
+  if (!changes) return "";
+  const offers = renameOffers(changes);
+  const off = closed || Boolean(g.busy);
+  const boxes = offers
+    .map(
+      (o, i) =>
+        `<label class="ag-item"><input type="checkbox" data-ag-rename="${i}"${g.renameTicks[i] ? " checked" : ""}${
+          off ? " disabled" : ""
+        }><span><span class="ag-t">${esc(`Use “${o.from}” as “${o.to}”`)}</span><span class="pill warn">Please check</span><span class="ag-r">${esc(
+          o.why,
+        )}</span></span></label>`,
+    )
+    .join("");
+  const ticked = offers.some((_, i) => g.renameTicks[i]);
+  const button = offers.length
+    ? `<div class="btn-row"><button type="button" class="btn secondary sm" data-ag-rename-go${
+        off || !ticked ? " disabled" : ""
+      }>Use the old names</button></div>`
+    : "";
+  const missing = (changes.unresolved || [])
+    .filter((u) => !(u.candidates || []).length)
+    .map((u) => `<li>${esc(u.reason)}</li>`)
+    .join("");
+  const unseen = (changes.unseen_values || [])
+    .map(
+      (u) =>
+        `<li>${esc(u.column)}: ${esc(
+          (u.values || []).length ? u.values.join(", ") : `${fmtInt(u.distinct)} new spellings`,
+        )} (${esc(fmtInt(u.rows))} rows)</li>`,
+    )
+    .join("");
+  return `<section class="ag-group" data-ag-changes><h4>Changed since last time</h4><p class="ag-cap">${esc(
+    changes.sentence,
+  )}</p>${boxes}${button}${g.renameError ? errorBox(g.renameError) : ""}${missing ? `<ul>${missing}</ul>` : ""}${unseen ? `<ul data-ag-unseen>${unseen}</ul>` : ""}</section>`;
+}
+
+// Plan L M159 (DEC-1594): "This looks like last month's export. Use the same treatment?" The steps come
+// back ticked in the checklist below, still to be checked, previewed and approved.
+function treatmentHtml(g, closed) {
+  const offer = g.treatment;
+  if (!offer) return "";
+  const button =
+    offer.can_apply && !closed
+      ? `<div class="btn-row"><button type="button" class="btn secondary sm" data-ag-same="${esc(offer.recipe_id)}"${
+          g.busy ? " disabled" : ""
+        }>Use the same treatment</button></div>`
+      : "";
+  return `<section class="ag-group" data-ag-memory><h4>Seen before</h4><p class="ag-cap">${esc(offer.sentence)}</p>${button}</section>`;
+}
+
+/** A stopped session's non-blocking questions (a lapse-outcome draft): read-only, because no answer changes anything. */
+function stoppedQuestionsHtml(session) {
+  const shown = (session.questions || []).filter((q) => !q.blocking);
+  if (!shown.length) return "";
+  return `<div class="ag-drafts" data-ag-drafts>${shown
+    .map(
+      (q) =>
+        `<div class="ag-q" data-ag-q="${esc(q.question_id)}"><div class="ag-qt">${esc(q.text)}</div><ul class="ag-draftopts">${(
+          q.options || []
+        )
+          .map(
+            (o) =>
+              `<li><span>${esc(o.label)}</span>${o.effect ? `<span class="ag-eff">${esc(o.effect)}</span>` : ""}</li>`,
+          )
+          .join("")}</ul></div>`,
+    )
+    .join("")}</div>`;
 }
 
 function stopHtml(entry, n) {
@@ -290,7 +386,10 @@ function stopHtml(entry, n) {
     n,
     "This data cannot be used as it is",
     false,
-    `<div class="ag-stop" role="status" data-ag-stop><p class="ag-lead">${esc(dash(session.stop_reason))}</p>${
+    `<div class="ag-stop" role="status" data-ag-stop><p class="ag-lead">${esc(dash(session.stop_reason))}</p>${stoppedQuestionsHtml(session)}${changesHtml(
+      entry.state,
+      false,
+    )}${
       chatOff(entry.state)
         ? ""
         : `<form class="ag-typed ag-stop-ask" id="ag-stop-ask"><input type="text" class="ag-typed-input" id="ag-stop-input" aria-label="Tell the helper how to fix it" maxlength="1000" autocomplete="off" placeholder="Tell the helper how you would fix it, for example “drop the duplicate rows”"${
@@ -435,6 +534,16 @@ function actionsHtml(entry) {
   )}</span></div>`;
 }
 
+/** "Second opinion" (M142): the optional AI look at the columns; shown only when an AI service is connected. */
+function assistHtml(g, closed) {
+  if (closed || chatOff(g) || g.assistOff) return "";
+  return `<div class="btn-row ag-assist"><button type="button" class="btn secondary sm" id="ag-assist"${
+    g.busy ? " disabled" : ""
+  }>${esc(g.busy === "assist" ? "Asking…" : "Second opinion")}</button><span class="ag-note">The AI service may reorder the columns the rules found and add questions about columns that may be recorded after the outcome. It ticks nothing.</span></div>${
+    g.assistError ? errorBox(g.assistError) : ""
+  }`;
+}
+
 function mainHtml(entry) {
   const g = entry.state;
   const score = entry.mode === "score";
@@ -457,7 +566,7 @@ function mainHtml(entry) {
     two,
     fixes,
     closed,
-    `<p class="ag-lead">Ticked suggestions are applied when you approve. Untick any you do not want; the ones marked “Please check” need your eye.</p>${checklistHtml(
+    `<p class="ag-lead">Ticked suggestions are applied when you approve. Untick any you do not want; the ones marked “Please check” need your eye.</p>${assistHtml(g, closed)}${checklistHtml(
       g,
       closed,
     )}${score || closed ? "" : editorHtml(g.editor, { disabled: Boolean(g.busy) })}`,
@@ -620,6 +729,30 @@ async function answerQuestion(entry, questionId, optionId) {
   draw(entry);
 }
 
+async function secondOpinion(entry) {
+  const g = entry.state;
+  if (g.busy) return;
+  g.busy = "assist";
+  g.assistError = null;
+  draw(entry);
+  try {
+    await syncDecisions(entry);
+    adopt(g, await postAssist(g.upload.upload_id));
+    g.preview = null;
+    g.report = null;
+  } catch (error) {
+    if (error && error.code === "AI_NOT_CONNECTED") {
+      g.chat = { ...(g.chat || {}), available: false, reason: "AI_NOT_CONNECTED" };
+    } else if (error && error.code === "AGENTIC_DISABLED") {
+      g.assistOff = true; // Plan K is off on this deployment (DEC-1409 (g)): the button goes, the session is as it was
+    } else {
+      g.assistError = error;
+    }
+  }
+  g.busy = "";
+  draw(entry);
+}
+
 async function preview(entry) {
   const g = entry.state;
   g.busy = "preview";
@@ -685,6 +818,49 @@ async function approve(entry) {
   g.session = { ...g.session, status: "applied" };
   announceStatus("Approved: ready to run");
   await fill(entry);
+}
+
+async function useSameTreatment(entry, recipeId) {
+  const g = entry.state;
+  if (g.busy) return;
+  g.busy = "same";
+  g.actionError = null;
+  draw(entry);
+  try {
+    await syncDecisions(entry);
+    adopt(g, await postSameTreatment(g.upload.upload_id, recipeId));
+    g.preview = null;
+    g.report = null;
+    announceStatus("The steps used last time are ticked: check them, then approve");
+  } catch (error) {
+    g.actionError = error;
+  }
+  g.busy = "";
+  draw(entry);
+}
+
+/** Plan L #16 (DEC-1597): the ticked renames as a copy of the file; the helper then starts on the copy. */
+async function useOldNames(entry) {
+  const g = entry.state;
+  const renames = renameOffers(g.changes)
+    .filter((_, i) => g.renameTicks[i])
+    .map((o) => ({ column: o.from, new_name: o.to }));
+  if (!renames.length || g.busy) return;
+  g.busy = "rename";
+  g.renameError = null;
+  draw(entry);
+  let copy;
+  try {
+    copy = await postRenamedCopy(g.upload.upload_id, renames);
+  } catch (error) {
+    g.busy = "";
+    g.renameError = error;
+    draw(entry);
+    return;
+  }
+  Object.assign(entry.state, fresh(), { upload: copy, fileName: g.fileName });
+  announceStatus("A copy with the old names is ready: the helper is checking it");
+  await startHelper(entry);
 }
 
 async function ask(entry) {
@@ -845,6 +1021,17 @@ function bind(entry) {
       await ask(entry);
     }),
   );
+  main.querySelectorAll("[data-ag-rename]").forEach((box) =>
+    box.addEventListener("change", () => {
+      g.renameTicks[box.dataset.agRename] = box.checked;
+      const go = main.querySelector("[data-ag-rename-go]");
+      if (go) go.disabled = Boolean(g.busy) || !Object.values(g.renameTicks).some(Boolean);
+    }),
+  );
+  const renameGo = main.querySelector("[data-ag-rename-go]");
+  if (renameGo) renameGo.addEventListener("click", () => useOldNames(entry));
+  const same = main.querySelector("[data-ag-same]");
+  if (same) same.addEventListener("click", () => useSameTreatment(entry, same.dataset.agSame));
   const stopForm = main.querySelector("#ag-stop-ask");
   if (stopForm) {
     stopForm.addEventListener("submit", async (event) => {
@@ -861,6 +1048,7 @@ function bind(entry) {
     if (element) element.addEventListener("click", fn);
   };
   on(main, "ag-preview", () => preview(entry));
+  on(main, "ag-assist", () => secondOpinion(entry));
   on(main, "ag-approve", () => approve(entry));
   on(main, "ag-fill", () => fill(entry));
   on(main, "ag-restart", () => restart(entry));

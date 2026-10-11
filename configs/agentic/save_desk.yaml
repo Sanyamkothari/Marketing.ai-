@@ -1,0 +1,8 @@
+# The save-desk card (Plan K M144, DEC-1411; docs/AGENTIC.md): POST /agentic/save-desk/card, a read-only
+# lookup for call-centre staff. It exists only while agentic.enabled is true (agentic.yaml).
+#
+# rate_limit_per_minute: cards one signed-in person may ask for in any minute (1 to 600). One customer in front
+# of one agent is a call; a loop over the customer list is a copy of the list, and is refused with 429. In
+# memory, per process; a changed value takes a restart.
+schema_version: 1
+rate_limit_per_minute: 30

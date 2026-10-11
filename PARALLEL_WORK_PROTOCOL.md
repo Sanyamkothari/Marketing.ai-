@@ -106,7 +106,7 @@ Each shared file gets three marked blocks, added by the contracts-first task:
   | DEC-1100…1199 | Plan H — one simple product (M80–M84); same workstream and shared-file blocks as Plan G | claimed 2026-09-28 |
   | DEC-1200…1299 | Plan I — product ideas: uplift budget curve (DEC-1200…1209), drift sentinel (DEC-1210…1219), Data Doctor placeholder codes (DEC-1220…1229), control-group size (DEC-1230…1239), copy per segment (DEC-1240…1249), Ask your data (DEC-1250…1259), hybrid retrieval and its follow-ups (DEC-1260…1269), a trustworthy and manageable AI Onboarding Assistant (DEC-1270…1279), the assistant as a conversation: follow-ups, retries, reranking, confidence, starter questions (DEC-1280…1289) | claimed 2026-09-30 |
   | DEC-1300…1399 | Plan J — product value first (M90–M111) | claimed 2026-10-07 |
-  | DEC-1400…1499 | Plan K — agents that check, not agents that send (M130–M148); proposed in `docs/plans/MARKETING_AI_PLAN_K_PROPOSAL.md`, kept free for it | not claimed (proposal) |
+  | DEC-1400…1499 | Plan K — agents that check, not agents that send (M130–M144; `docs/plans/MARKETING_AI_PLAN_K_PROPOSAL.md`, `docs/AGENTIC.md`); its `PLAN-K (agents that check)` block follows Plan L's in every shared file. M131, M135 and M137 were built earlier under Plan J's range, as DEC-1323, DEC-1324 and DEC-1325 | claimed 2026-10-10 by M130 |
   | DEC-1500…1599 | Plan L — Data Doctor, one agent for messy data (M150–M161, `docs/plans/MARKETING_AI_PLAN_L_DATA_DOCTOR.md`) | claimed 2026-10-10 by M150 |
   | DEC-1600 up | unallocated | — |
 

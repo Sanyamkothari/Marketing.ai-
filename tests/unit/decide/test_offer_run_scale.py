@@ -101,12 +101,13 @@ def _choose(rows: int, seed: int) -> float:
     return elapsed
 
 
-def _best_times(rounds: int = 3) -> tuple[float, float]:
-    """The best of `rounds` runs at each size, the two sizes taking turns.
+def _best_times(rounds: int = 5) -> tuple[float, float]:
+    """The best of `rounds` runs at each size, the two sizes taking turns (five: the machine may run several
+    full suites and builders at once, as during Plan K).
 
     A busy machine slows a run, rarely every run, and taking turns means a burst of load that lasts a while
     slows both sizes, not only the one measured during it, so it cannot fake a growth that is not there.
-    Quadratic work, or a 200k run over the budget, is slow on every run, so the best of three still catches it
+    Quadratic work, or a 200k run over the budget, is slow on every run, so the best of five still catches it
     (as `test_arbitrate_scale.py` does)."""
     small = large = float("inf")
     for _ in range(rounds):

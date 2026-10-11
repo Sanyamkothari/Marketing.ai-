@@ -129,6 +129,7 @@ fills a missing client from its recipe's client (`api.routes.schedules._client_f
 | `datasets/<id>/*` | No. The manifest names the client | `test_every_artefact_of_a_client_lives_under_its_prefix` (xfail) |
 | `runs/<id>/*` | No. `run.json` names the client of a dataset run | the same test |
 | `uploads/<id>/*` | No. The deployment's own | Phase 1 path |
+| `doctor_memory/<use case>/<shape>.json` | No. Per use case, like the uploads it remembers (Plan L M159); column names and ids only | `tests/unit/doctor/test_memory.py` |
 | `models/**`, `runs/<id>/model/**` | No. One registry per deployment | section 4, item 1 |
 | `indexes/<id>/*` | No | section 4, item 4 |
 | `llm_cache/<xx>/<key>.json` | No, and nothing in the served app writes it | `test_the_served_api_keeps_no_completion_cache_to_share_between_clients` (tripwire) |

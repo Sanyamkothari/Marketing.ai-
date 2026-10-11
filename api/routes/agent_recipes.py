@@ -8,6 +8,7 @@ Three jobs, all through the storage the rest of the API uses:
   started from the new upload exactly as Manual setup would.
 * `attach_recipe_to_run` copies a derived upload's recipe into the run directory when `POST /runs`
   creates a run from it, so the model version that run registers carries its recipe with it.
+* `replay_on_dataset` is the same for a built dataset scored by a model with a recipe (Plan L M155).
 * `replay_for_scoring` looks up the recipe of the model version a scoring run will use and, when it
   has one, runs it on the scoring upload before the file is checked against the model's schema. A
   file the recipe cannot prepare comes back as a validation report with a `RECIPE_*` error, which
@@ -20,23 +21,30 @@ This module imports nothing from `api.routes.runs`, which imports it.
 
 from __future__ import annotations
 
-import numbers
 from dataclasses import dataclass
 from typing import Any, Final
 
+from api.routes.agent_renames import with_rename_suggestions  # Plan L #16 (DEC-1597)
 from api.routes.uploads import (
     UPLOAD_FINGERPRINT_FILENAME,
     UPLOAD_PROFILE_FILENAME,
     UPLOAD_RECORD_FILENAME,
     http_error,
+    ingest_http,
     load_upload_profile,
     profile_row_cap,
     source_filename,
 )
 from api.schemas import UploadRecord
-from engine.agent.config import AgentLevel
 from engine.agent.contracts import DATA_RECIPE_FILENAME, RECIPE_RECEIPT_FILENAME, DataRecipe, RecipeReceipt
-from engine.agent.recipe import RecipeError, RecipeRun, run_recipe
+from engine.agent.dataset_recipe import (  # moved to the engine for the scheduled path (Plan L M155)
+    PreparedDataset,
+    consistent_types,
+    prepare_dataset,
+    recipe_levels,
+    run_saved_recipe,
+)
+from engine.agent.recipe import RecipeError
 from engine.agent.reshape import LeakCheck
 from engine.config import PrimaryKey, RunMode, UseCaseConfig
 from engine.contracts import DatasetProfile, ModelVersion, Severity, ValidationCheck, ValidationReport
@@ -59,14 +67,13 @@ __all__ = [
     "recipe_levels",
     "refuse_other_roles",
     "replay_for_scoring",
+    "replay_on_dataset",
     "run_saved_recipe",
     "scoring_source",
     "write_derived_upload",
 ]
 
 _LOGGER = get_logger(__name__)
-_MIXED: Final[frozenset[str]] = frozenset({"mixed", "mixed-integer"})
-"""What `pandas.api.types.infer_dtype` calls a column holding text beside numbers or flags."""
 _MAX_PREPARED_CHAIN: Final[int] = 8
 """How many prepared uploads `scoring_source` follows back to the file a person sent."""
 RECIPE_ROLES_MISMATCH: Final[str] = "RECIPE_ROLES_MISMATCH"
@@ -144,91 +151,6 @@ def refuse_other_roles(
             + ("those" if training else "that ID column")
             + ", or start Guided setup again on the file you sent.",
         )
-
-
-def recipe_levels(recipe: DataRecipe, config: UseCaseConfig) -> tuple[tuple[AgentLevel, ...], float]:
-    """The levels and failure limit a replay of `recipe` runs under: the ones it was approved with.
-
-    A recipe saved before they were recorded has neither, and runs under the use case's current
-    ones, as it always did. Otherwise a use case that later drops a level, or tightens the limit,
-    would refuse every scoring file of a model already trained on data that level prepared.
-    """
-    levels = recipe.levels if recipe.levels is not None else tuple(config.agent.levels)
-    limit = (
-        recipe.max_failure_pct
-        if recipe.max_failure_pct is not None
-        else config.agent.max_conversion_failure_pct
-    )
-    return levels, limit
-
-
-def consistent_types(frame: Any) -> Any:
-    """`frame` with every column that mixes text and other values held as text, so it can be saved.
-
-    A CSV is read in chunks of `ingest.CHUNK_ROWS` rows, each typed on its own: IDs that are numbers
-    for 100,000 rows and then `C-123` come back as one column of ints and strings, which a Parquet
-    file cannot hold. The numbers become text (an integral float without its `.0`); columns that do
-    not mix are untouched.
-
-    This is the text of the value the chunked read produced, not of the cell as written: a chunk
-    that was read as numbers has already lost any leading zeros (`0000123` is `123`), exactly as the
-    same file read without a recipe has. It keeps a prepared file the same as an unprepared read of
-    the file; it does not recover what that read lost.
-    """
-    import pandas as pd
-    from pandas.api.types import infer_dtype
-
-    mixed = [
-        name
-        for name in frame.columns
-        if frame[name].dtype == object and infer_dtype(frame[name], skipna=True) in _MIXED
-    ]
-    if not mixed:
-        return frame
-
-    def as_text(value: Any) -> Any:
-        if value is None or value is pd.NA or isinstance(value, str):
-            return value
-        if isinstance(value, float) and value != value:
-            return value
-        if isinstance(value, bool):
-            return str(value)
-        if isinstance(value, numbers.Integral):
-            return str(int(value))
-        if isinstance(value, numbers.Real):
-            number = float(value)
-            return str(int(number)) if number.is_integer() else repr(number)
-        return str(value)
-
-    out = frame.copy()
-    for name in mixed:
-        out[name] = pd.Series([as_text(v) for v in out[name]], index=out.index, dtype=object)
-    return out
-
-
-def run_saved_recipe(
-    frame: Any,
-    recipe: DataRecipe,
-    config: UseCaseConfig,
-    *,
-    upload_id: str,
-    derived_upload_id: str | None = None,
-    leak_check: LeakCheck | None = None,
-) -> RecipeRun:
-    """Run a saved recipe on `frame` under the levels and limit it was approved with. Raises `RecipeError`."""
-    levels, limit = recipe_levels(recipe, config)
-    return run_recipe(
-        consistent_types(frame),
-        recipe.steps,
-        upload_id=upload_id,
-        primary_key=recipe.primary_key,
-        target=recipe.target,
-        levels=levels,
-        max_failure_pct=limit,
-        snapshot_column=recipe.snapshot_column,
-        derived_upload_id=derived_upload_id,
-        leak_check=leak_check,
-    )
 
 
 def _all_rows(storage: Storage, config: UseCaseConfig, source: UploadRecord) -> Any:
@@ -406,13 +328,17 @@ def scoring_source(
 
 
 def prepare_in_memory(
-    storage: Storage, config: UseCaseConfig, upload: UploadRecord, recipe: DataRecipe | None
+    storage: Storage,
+    config: UseCaseConfig,
+    upload: UploadRecord,
+    recipe: DataRecipe | None,
+    version: ModelVersion | None = None,
 ) -> tuple[Any, int] | ValidationReport:
     """The frame and row count `POST /runs` would check for a scoring `upload`, with nothing written.
 
     `replay_for_scoring` without the derived upload: the same source, the same recipe run on every
     row of it, then capped as `POST /runs` reads its prepared upload. A file the recipe cannot
-    prepare is the same one-error report.
+    prepare is the same one-error report (with `version`, carrying the proposed renames, DEC-1597).
     """
     chosen = scoring_source(storage, upload, recipe)
     if isinstance(chosen, ValidationReport):
@@ -431,7 +357,10 @@ def prepare_in_memory(
             leak_check=_leak_check(source),
         )
     except RecipeError as exc:
-        return recipe_failure_report(exc, upload_id=upload.upload_id, mode=RunMode.SCORE)
+        report = recipe_failure_report(exc, upload_id=upload.upload_id, mode=RunMode.SCORE)
+        if version is None:
+            return report
+        return with_rename_suggestions(report, storage, config, version, source, recipe)
     frame = consistent_types(run.frame)
     return frame.head(cap).reset_index(drop=True), len(frame)
 
@@ -453,5 +382,24 @@ def replay_for_scoring(
     try:
         derived = write_derived_upload(storage, config, chosen.upload, recipe)
     except RecipeError as exc:
-        return recipe_failure_report(exc, upload_id=upload.upload_id, mode=RunMode.SCORE)
+        report = recipe_failure_report(exc, upload_id=upload.upload_id, mode=RunMode.SCORE)
+        # Plan L #16 (DEC-1597): a renamed column comes back with the column that looks like it.
+        return with_rename_suggestions(report, storage, config, version, chosen.upload, recipe)
     return derived.record, derived.profile
+
+
+def replay_on_dataset(
+    storage: Storage, config: UseCaseConfig, dataset_id: str, recipe: DataRecipe
+) -> PreparedDataset | ValidationReport:
+    """The built dataset prepared by the scoring model's recipe, or the 409 report of why it cannot be.
+
+    `replay_for_scoring` for a dataset (Plan L M155, DEC-1553): the recipe runs on every row of the
+    dataset's frame into a file beside it (`engine.agent.dataset_recipe.prepare_dataset`); a recipe that
+    cannot run on it is the same one-error report a scoring file gets.
+    """
+    try:
+        return prepare_dataset(storage, config, dataset_id, recipe)
+    except RecipeError as exc:
+        return recipe_failure_report(exc, upload_id=dataset_id, mode=RunMode.SCORE)
+    except ingest.IngestError as exc:  # the dataset's rows could not be read again: a coded 422, never a 500
+        raise ingest_http(exc.code, exc.message) from exc

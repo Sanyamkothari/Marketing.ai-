@@ -38,12 +38,14 @@ from api.routes.agent_recipes import (
     scoring_source,
     write_derived_upload,
 )
+from api.routes.agent_renames import load_changes, memory_changes, model_changes, save_changes
 from api.routes.ai_service import resolve_slot
 from api.routes.runs import read_frame, requested_by, score_version, validation_conflict
 from api.routes.uploads import http_error, load_upload, load_upload_profile, profile_row_cap, use_case_config
 from api.schemas import ErrorResponse, UploadRecord, ValidationErrorResponse
 from engine.access.roles import Role
 from engine.agent.advisor import recipe_steps, run_overrides
+from engine.agent.assist import assist_session
 from engine.agent.checks import check_plan
 from engine.agent.config import DataAccess
 from engine.agent.contracts import (
@@ -78,13 +80,25 @@ from engine.agent.tools import AgentContext, AgentToolError
 from engine.ai_service import effective_service
 from engine.config import PrimaryKey, RunMode, StrictBase, UseCaseConfig, resolve_config, sole_key
 from engine.contracts import FeatureSchema, ModelVersion, ValidationReport
+from engine.doctor.memory import (
+    TreatmentOffer,
+    offer_for,
+    recall,
+    remember,
+    remembered_recipe,
+    use_same_treatment,
+    used_in,
+)
+from engine.doctor.renames import FileChanges
 from engine.generative.budget import Meter
 from engine.generative.contracts import LlmUsageReport
 from engine.generative.guardrails import Guardrails, load_policy
+from engine.intake.contracts import IntakeReport
 from engine.pii import redact_text
 from engine.stages import ingest
 from engine.storage import Storage, StorageError, upload_key
 from engine.utils.ids import new_upload_id
+from engine.utils.logging import get_logger
 from engine.utils.time import utc_now
 
 __all__ = [
@@ -97,6 +111,7 @@ __all__ = [
 ]
 
 router = APIRouter(tags=["agent"])
+_LOGGER = get_logger(__name__)
 
 register(
     {
@@ -168,7 +183,7 @@ def check_upload(
             refuse_other_roles(recipe, primary_key=primary_key, target=None, training=False)
         # As `POST /runs` does (DEC-1006): the model's recipe prepares the file before it is checked
         # against the model's columns - here in memory, since a dry run writes nothing.
-        prepared = prepare_in_memory(storage, config, upload, recipe)
+        prepared = prepare_in_memory(storage, config, upload, recipe, version)
         if isinstance(prepared, ValidationReport):
             return prepared
         frame, row_count = prepared
@@ -267,6 +282,13 @@ register(
             object_type="upload",
             object_param="upload_id",
         ),
+        ("POST", "/uploads/{upload_id}/agent-session/assist"): RoutePolicy(
+            role=Role.ANALYST,
+            action="agent.assist",
+            purpose="ask the AI service for a second opinion on the columns",
+            object_type="upload",
+            object_param="upload_id",
+        ),
         ("POST", "/uploads/{upload_id}/agent-session/preview"): RoutePolicy(
             role=Role.ANALYST,
             action="agent.preview",
@@ -295,7 +317,14 @@ register(
             purpose="see the rows of the file being set up",
             object_type="upload",
             object_param="upload_id",
-            audit_reads=True,
+        ),
+        # Plan L M159 (DEC-1594): tick the steps that treated a file of the same shape last time.
+        ("POST", "/uploads/{upload_id}/agent-session/same-treatment"): RoutePolicy(
+            role=Role.ANALYST,
+            action="agent.same_treatment",
+            purpose="use the same treatment as last time",
+            object_type="upload",
+            object_param="upload_id",
         ),
     }
 )
@@ -361,6 +390,25 @@ class ChatAvailability(StrictBase):
 class AgentSessionResponse(StrictBase):
     session: AgentSession
     chat: ChatAvailability
+    # Plan L M159 (DEC-1594): a file of a shape treated before is offered that treatment (never applied).
+    treatment: TreatmentOffer | None = Field(
+        default=None,
+        description="The treatment of a file of the same shape, offered until it is used; null when there is none.",
+    )
+    # Plan L #16 (DEC-1597): a column renamed since the saved steps were approved, and new spellings (shown only).
+    changes: FileChanges | None = Field(
+        default=None,
+        description="What changed in this file against the file the saved steps were approved on: renames to "
+        "tick, columns no new one clearly matches, new spellings; null when nothing did.",
+    )
+
+
+class SameTreatmentRequest(StrictBase):
+    """Body of `POST /uploads/{id}/agent-session/same-treatment`: the offer the person accepted."""
+
+    recipe_id: str = Field(
+        min_length=1, max_length=64, description="`treatment.recipe_id` of the offer shown."
+    )
 
 
 class SessionStartRequest(StrictBase):
@@ -485,7 +533,9 @@ def _load_context(
         except RecipeError as exc:
             recipe_error = exc
         else:
-            if any(step.kind is RecipeStepKind.COMBINE_ROWS for step in recipe.steps):
+            if any(
+                step.kind in {RecipeStepKind.COMBINE_ROWS, RecipeStepKind.UNPIVOT} for step in recipe.steps
+            ):
                 # Combined rows are other rows: the profile the helper reads must describe them.
                 profile = ingest.profile_dataset(
                     frame,
@@ -556,7 +606,66 @@ def _response(
             data_access=config.agent.ai_data_access,
             third_party=is_third_party(effective.llm, effective.provider),
         )
-    return AgentSessionResponse(session=session, chat=chat)
+    return AgentSessionResponse(
+        session=session,
+        chat=chat,
+        treatment=_treatment(storage, session),
+        changes=(
+            None
+            if session.status is SessionStatus.APPLIED or session.explore
+            else load_changes(storage, session.upload_id)
+        ),
+    )
+
+
+def _find_changes(storage: Storage, loaded: _Loaded) -> None:
+    """Plan L #16 (DEC-1597): what changed in this file against the one the saved steps were approved on,
+    kept beside the session. A courtesy: it never fails a start."""
+    ctx, upload = loaded.ctx, loaded.upload
+    try:
+        changes = None
+        if ctx.mode is RunMode.SCORE and loaded.version is not None:
+            recipe = model_recipe(storage, loaded.version)
+            chosen = scoring_source(storage, upload, recipe)
+            if not isinstance(chosen, ValidationReport) and not (chosen.ready and recipe is not None):
+                changes = model_changes(storage, ctx.config, loaded.version, chosen.upload, recipe)
+        elif ctx.mode is RunMode.TRAIN:
+            intake = (
+                storage.read_model(upload.intake_key, IntakeReport)
+                if upload.intake_key is not None and storage.exists(upload.intake_key)
+                else None
+            )
+            changes = memory_changes(storage, ctx.config, upload, ctx.profile, intake, ctx.frame)
+        save_changes(storage, upload.upload_id, changes)
+    except Exception as exc:
+        _LOGGER.warning("doctor.renames.find_failed upload=%s error=%s", upload.upload_id, type(exc).__name__)
+
+
+def _treatment(storage: Storage, session: AgentSession, *, unused: bool = True) -> TreatmentOffer | None:
+    """The remembered treatment of a file of this session's shape, or None (Plan L M159)."""
+    if session.status is SessionStatus.APPLIED or session.explore:
+        return None
+    try:
+        upload = load_upload(storage, session.upload_id)
+        profile = load_upload_profile(storage, session.upload_id)
+        intake = (
+            storage.read_model(upload.intake_key, IntakeReport)
+            if upload.intake_key is not None and storage.exists(upload.intake_key)
+            else None
+        )
+    except (HTTPException, StorageError):
+        return None
+    offer = offer_for(
+        storage,
+        use_case_id=session.use_case_id,
+        upload_id=session.upload_id,
+        columns=profile.fingerprint.columns,
+        intake=intake,
+        mode=session.mode,
+    )
+    if offer is not None and unused and used_in(session, offer.recipe_id):
+        return None
+    return offer
 
 
 def _session_error(exc: SessionError) -> HTTPException:
@@ -607,6 +716,7 @@ def _start_agent_session(
         session = start_session(ctx, session_id=session_id)
     # Every later call checks against the same model this one did (the one Run will score with).
     session = session.model_copy(update={"model_version_id": body.model_version_id})
+    _find_changes(storage, loaded)
     return _response(_save(storage, session), ctx.config, storage, request)
 
 
@@ -773,6 +883,57 @@ def message_agent_session(
             }
         )
         session = with_summary(session, ctx)
+        usage_key = upload_key(upload_id, LLM_USAGE_FILENAME)
+        earlier = storage.read_model(usage_key, LlmUsageReport) if storage.exists(usage_key) else None
+        storage.write_model(usage_key, add_usage(earlier, meter.usage()))
+        return _response(_save(storage, session), ctx.config, storage, request)
+
+
+@router.post(
+    "/uploads/{upload_id}/agent-session/assist",
+    response_model=AgentSessionResponse,
+    responses={404: {"model": ErrorResponse}, 409: {"model": ErrorResponse}},
+    summary="Ask the AI service for a second opinion on the columns (optional)",
+)
+def assist_agent_session(
+    upload_id: str, root: ConfigRootDep, storage: StorageDep, request: Request
+) -> AgentSessionResponse:
+    """Two optional second opinions (M142, DEC-1409): the AI service may put the rules' candidate columns in
+    a better order, and may add questions about columns that may be recorded after the outcome, beside the
+    rule-based leak check. It adds no suggestion and ticks nothing; what left is recorded under "What the AI
+    looked at" like a chat turn. No AI service connected is `409 AI_NOT_CONNECTED` and a session exactly as
+    it was: the rules' suggestions and questions never need one. It is part of Plan K: with `agentic.enabled`
+    off (the default) the route answers `404 AGENTIC_DISABLED` and reads nothing (DEC-1409 (g))."""
+    from engine.agentic.config import agentic_enabled
+    from engine.agentic.errors import AgenticError
+
+    try:
+        enabled = agentic_enabled(root)
+    except (
+        AgenticError
+    ):  # an agentic.yaml that does not read leaves Plan K off here, as in Guided setup itself
+        enabled = False
+    if not enabled:
+        raise _refuse(
+            404,
+            "AGENTIC_DISABLED",
+            "Second opinions on the columns are switched off for this deployment (agentic.enabled is false).",
+        )
+    with _session_lock(upload_id):
+        session = _load_session(storage, upload_id)
+        if session.status is SessionStatus.APPLIED:
+            raise _refuse(
+                409, "AGENT_SESSION_APPLIED", "This setup was already approved. Start again to change it."
+            )
+        ctx = _load_context(
+            storage, root, request, upload_id, session.use_case_id, session.model_version_id
+        ).ctx
+        generative = ctx.config.generative
+        ai = resolve_slot(generative.llm, slot="product", storage=storage, settings=get_settings(request))
+        meter = Meter(ai.client, job_id=session.session_id, llm=ai.llm, budget=generative.budget)
+        guardrails = Guardrails(load_policy(root), meter=meter, prompts_root=root)
+        result = assist_session(ctx, session, meter=meter, guardrails=guardrails, config_root=root)
+        session = result.session.model_copy(update={"transcript": cap_sent(result.session.transcript)})
         usage_key = upload_key(upload_id, LLM_USAGE_FILENAME)
         earlier = storage.read_model(usage_key, LlmUsageReport) if storage.exists(usage_key) else None
         storage.write_model(usage_key, add_usage(earlier, meter.usage()))
@@ -1058,6 +1219,8 @@ def _apply_agent_session(
     applied = session.model_copy(
         update={"status": SessionStatus.APPLIED, "applied_upload_id": prepared.upload_id}
     )
+    if ctx.mode is RunMode.TRAIN and recipe is not None and prepared.upload_id != upload_id:
+        _remember(storage, ctx, upload, recipe, prepared.upload_id)
     _save(storage, applied.model_copy(update={"updated_at": utc_now()}))
     set_audit_context(
         request,
@@ -1078,6 +1241,76 @@ def _apply_agent_session(
         summary=applied.summary,
         receipt=receipt,
     )
+
+
+def _remember(
+    storage: Storage, ctx: AgentContext, upload: UploadRecord, recipe: DataRecipe, prepared_id: str
+) -> None:
+    """Plan L M159 (DEC-1592): remember this shape's treatment. Never fails an approval."""
+    try:
+        intake = (
+            storage.read_model(upload.intake_key, IntakeReport)
+            if upload.intake_key is not None and storage.exists(upload.intake_key)
+            else None
+        )
+        remember(
+            storage,
+            use_case_id=ctx.use_case_id,
+            columns=ctx.profile.fingerprint.columns,
+            sheet=intake.sheet if intake is not None else None,
+            intake_enabled=not (intake is not None and intake.turned_off),
+            recipe=recipe,
+            recipe_upload_id=prepared_id,
+            source_upload_id=upload.upload_id,
+        )
+    except Exception as exc:  # the memory is a convenience; the approval it follows has succeeded
+        _LOGGER.warning(
+            "doctor.memory.remember_failed upload=%s error=%s", upload.upload_id, type(exc).__name__
+        )
+
+
+@router.post(
+    "/uploads/{upload_id}/agent-session/same-treatment",
+    response_model=AgentSessionResponse,
+    responses={404: {"model": ErrorResponse}, 409: {"model": ErrorResponse}, 422: {"model": ErrorResponse}},
+    summary="Use the same treatment as last time: tick the remembered steps, still to be checked and approved",
+)
+def same_treatment_agent_session(
+    upload_id: str, body: SameTreatmentRequest, root: ConfigRootDep, storage: StorageDep, request: Request
+) -> AgentSessionResponse:
+    """Plan L M159 (DEC-1594): the offer `treatment` names, taken. Nothing is prepared until Approve."""
+    with _session_lock(upload_id):
+        session = _load_session(storage, upload_id)
+        ctx = _load_context(
+            storage, root, request, upload_id, session.use_case_id, session.model_version_id
+        ).ctx
+        offer = _treatment(storage, session, unused=False)
+        if offer is None or not offer.can_apply:
+            raise _refuse(
+                409, "DOCTOR_MEMORY_NONE", "There is no earlier treatment for a file like this one."
+            )
+        if offer.recipe_id != body.recipe_id:
+            raise _refuse(
+                409,
+                "DOCTOR_MEMORY_CHANGED",
+                "The treatment for files like this one has changed since it was shown. Look at it again.",
+            )
+        memory = recall(storage, session.use_case_id, offer.shape_hash)
+        recipe = remembered_recipe(storage, memory) if memory is not None else None
+        if memory is None or recipe is None:
+            raise _refuse(409, "DOCTOR_MEMORY_NONE", "The earlier treatment is no longer kept.")
+        try:
+            session = use_same_treatment(session, ctx, recipe, memory)
+        except SessionError as exc:
+            raise _session_error(exc) from exc
+        set_audit_context(
+            request,
+            object_id=upload_id,
+            object_type="upload",
+            after_hash=recipe.recipe_hash,
+            details={"use_case_id": ctx.use_case_id, "count": len(recipe.steps)},
+        )
+        return _response(_save(storage, session), ctx.config, storage, request)
 
 
 # ---------------------------------------------------------------------------

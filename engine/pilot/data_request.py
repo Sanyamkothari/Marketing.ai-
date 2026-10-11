@@ -19,6 +19,9 @@ the request cannot ask for less than a build needs, or for a column no feature r
   recommendation adds the longest feature window and the snapshots a year of monthly learning
   needs, and says why.
 * **What not to send.** One line per kind `engine.pii` detects, from `configs/pilot/data_request.yaml`.
+* **Send what you have** (DEC-1598). `formats` keeps only what still matters once Data Doctor reads the
+  file (the same column names every month, one ID across files, a date on every event, what cannot be
+  read at all); `not_needed` says plainly what no longer does (Excel, titles, totals, `-` for empty).
 
 The wording lives in `configs/pilot/data_request.yaml`. `render_markdown` is a pure function of the
 configuration, so `docs/pilot/DATA_REQUEST.md` is committed and drift-checked like `templates/`.
@@ -78,7 +81,7 @@ _KIND: Final[dict[StandardType, str]] = {
     StandardType.NUMERIC: "Number",
     StandardType.CATEGORICAL: "Code or category",
     StandardType.BOOLEAN: "Yes / no",
-    StandardType.DATE: "Date (YYYY-MM-DD)",
+    StandardType.DATE: "Date",
     StandardType.TEXT: "Free text",
 }
 
@@ -112,6 +115,7 @@ class DataRequestWording(_Strict):
     do_not_send: dict[str, str]
     do_not_send_notes: tuple[str, ...] = ()
     formats: tuple[str, ...]
+    not_needed: tuple[str, ...] = ()
     pseudonymisation: tuple[str, ...]
     preflight: tuple[str, ...]
     outcomes: dict[str, str] = {}
@@ -169,6 +173,8 @@ class DataRequest(_Strict):
     formats: tuple[str, ...]
     pseudonymisation: tuple[str, ...]
     preflight: tuple[str, ...]
+    not_needed: tuple[str, ...] = ()
+    """What the client need not fix before sending (Data Doctor reads it, DEC-1598); `formats` is what still matters."""
 
 
 @lru_cache(maxsize=8)
@@ -285,7 +291,7 @@ def _sentence(text: str) -> str:
 
 
 def _optional_kind(name: str) -> str:
-    return "Date (YYYY-MM-DD)" if name.endswith("_date") else "Code or category"
+    return "Date" if name.endswith("_date") else "Code or category"
 
 
 def _event_table(
@@ -309,7 +315,7 @@ def _event_table(
         ),
         RequestedColumn(
             name="event_date",
-            kind="Date (YYYY-MM-DD), or date and time",
+            kind="Date, or date and time",
             need="required",
             meaning="When it happened.",
         ),
@@ -407,6 +413,7 @@ def build_data_request(use_case_ids: tuple[str, ...] | None = None, root: Path |
         formats=wording.formats,
         pseudonymisation=wording.pseudonymisation,
         preflight=wording.preflight,
+        not_needed=wording.not_needed,
     )
 
 
@@ -459,8 +466,8 @@ def render_markdown(request: DataRequest, wording: DataRequestWording) -> str:
         "# Data request",
         "",
         f"This is what we need from you to run the pilot for **{names}**. Your analyst should be able to",
-        "prepare every file from this page alone. If anything is unclear, the pre-flight checker described",
-        "at the end will tell you before anything is sent.",
+        "prepare every file from this page alone. Send the files the way your systems export them: the",
+        "platform reads Excel workbooks, skips titles and totals, and says what it did.",
         "",
         "## What the pilot will do",
         "",
@@ -523,10 +530,17 @@ def render_markdown(request: DataRequest, wording: DataRequestWording) -> str:
         "**Required** columns must be present. **Needed** columns feed a measure the pilot uses. **Useful**",
         "columns help if you have them.",
         "",
-        "## File formats",
+        "## Send what you have",
+        "",
+        "What still matters:",
         "",
         *[f"- {item}" for item in request.formats],
         "",
+        *(
+            ["What you do not need to fix first:", "", *[f"- {item}" for item in request.not_needed], ""]
+            if request.not_needed
+            else []
+        ),
         "## Pseudonymising the customer ID",
         "",
         *[f"- {item}" for item in request.pseudonymisation],
@@ -542,7 +556,7 @@ def render_markdown(request: DataRequest, wording: DataRequestWording) -> str:
         "If one of these reaches the platform anyway it is masked and never learned from, and the data",
         "readiness report will tell you which column it was so the next extract can leave it out.",
         "",
-        "## Before you send: the pre-flight check",
+        "## Before you send: an optional check",
         "",
         *[f"- {item}" for item in request.preflight],
         "",

@@ -791,7 +791,8 @@ class LocalDatasetRegistry:
         """Whether any artefact has been written for this id - any of the six, in any order.
 
         Six `Storage.exists` calls rather than one `list_keys`: `DATASET_ARTEFACTS` is the
-        exhaustive list of what a dataset directory ever holds, so the two answer the same question,
+        exhaustive list of what a build writes (a scoring run may later add a recipe-prepared copy,
+        `prepared_*.parquet`, Plan L M155 - never without the dataset), so the two answer the same question,
         and `LocalStorage.list_keys` answers it by walking the *whole* data directory and filtering
         by prefix - a cost `new_dataset_id` would pay on every single mint, growing with every run,
         upload and model the store has ever held.

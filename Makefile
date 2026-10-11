@@ -268,3 +268,5 @@ test-statistical: ## the nightly statistical suite (Plan J): Monte Carlo coverag
 # ---- END PLAN-J ----
 # ---- PLAN-L (data doctor) — append only below this line ----
 # ---- END PLAN-L ----
+# ---- PLAN-K (agents that check) — append only below this line ----
+# ---- END PLAN-K ----

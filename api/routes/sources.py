@@ -81,7 +81,10 @@ RoleField = Annotated[
 ]
 SheetField = Annotated[
     str | None,
-    Form(description="For an Excel workbook, the sheet to read, as for `POST /uploads` (Plan L M150)."),
+    Form(
+        max_length=255,
+        description="For an Excel workbook, the sheet to read, as for `POST /uploads` (Plan L M150).",
+    ),
 ]
 IntakeField = Annotated[
     bool,

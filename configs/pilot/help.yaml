@@ -458,9 +458,9 @@ codes:
     fix: "Correct the setting the message names, or remove the file to use the defaults (every use case equal, one action per customer, no channel caps). The file configs/decide/arbitration.example.yaml shows every setting."
   # --- Plan J M102: campaigns measured on an amount such as revenue (DEC-1312 (e), (f)) ----------------------
   COVARIATE_NOT_BEFORE_CAMPAIGN:
-    title: "The earlier amount may include the campaign's effect"
-    meaning: "The amount used to adjust the result (for example last quarter's revenue) is dated on or after the day a customer was contacted, or has no date column, so it could already include what the campaign changed. Nothing was measured or stored."
-    fix: "Use an amount measured before each customer was contacted, dated at least one day before the contact, and name its date column."
+    title: "The figure used to adjust may include the campaign's effect"
+    meaning: "The figure used to adjust the result may come from after the campaign started, so it could already include what the campaign changed. Either the earlier amount (for example last quarter's revenue) is dated on or after the day a customer was contacted or has no date column, or the scoring run whose prediction the test plan registered finished after the campaign started or never finished. Nothing was measured or stored."
+    fix: "Use an amount measured before each customer was contacted, dated at least one day before the contact, and name its date column. Register the scoring run's prediction only for a campaign whose scoring run finished before the campaign started."
   OUTCOME_SKEWED:
     title: "A few very large amounts make the range less reliable"
     meaning: "Most customers spent little or nothing and a few spent far more, so with this many customers the range around the result may be too narrow. The numbers are kept and nothing was capped."
@@ -573,6 +573,228 @@ codes:
     title: "This campaign cannot teach a model yet"
     meaning: "To learn who to contact next time, the measured campaign needs a final result rather than an early look. It needs a yes/no outcome and enough customers who responded in both the contacted and the held-back groups. It also needs the file the scoring run read to still be stored. The message says which of these is missing."
     fix: "Supply what the message names and measure the campaign again; the next scheduled learn then tries again."
+  # --- Plan K M132: the agent-safe core - tools, the policy, proposals and the decision ledger (DEC-1401) ---------
+  POLICY_NO_RULES:
+    title: "No rules allow this kind of proposal"
+    meaning: "An agent proposed something the deployment has no rules for (for example, sending a message now). Anything without rules is refused."
+    fix: "Nothing to do. If this kind of proposal should be possible, an Admin adds a rule set for it in configs/agentic/policy.yaml."
+  POLICY_PAYLOAD_INVALID:
+    title: "The proposal is not in the expected form"
+    meaning: "The proposal has a field its kind does not have, or lacks one it needs, so it cannot be checked and is refused."
+    fix: "Have the agent draft it again with the fields the message names."
+  POLICY_HOLDOUT_IMMUTABLE:
+    title: "The proposal would change the control group"
+    meaning: "The proposal would hold back fewer customers than the share in force, hold back no one, contact customers who are held back, or choose who is held back another way than the use case does (a fresh draw for each run instead of the lasting group, or one lasting group for another). No agent can change who is held back."
+    fix: "Keep the share held back, and the way it is chosen, as the use case sets them. Only an Admin changes them, in the use case settings."
+  POLICY_BUDGET_CAP:
+    title: "The proposal is over budget"
+    meaning: "The run's cost estimate is above the cost cap (or cannot be worked out while a cap is set), the offers would cost more than the offer budget, or the plan contacts more customers than the contact budget allows."
+    fix: "Propose fewer contacts or cheaper offers. Raising a budget or confirming an unpriced run is a person's decision, not an agent's."
+  POLICY_CONSENT_CHANNEL:
+    title: "Not everyone the plan would contact may be contacted on this channel"
+    meaning: "The plan would contact more customers on the channel than the scoring run found contactable there. Or the run did not record who may be contacted on this channel, or could not read one of the channel's configured columns, so consent was never checked. Customers who opted out of a channel are already left off its list and do not count against a plan."
+    fix: "Propose no more contacts than the run's contactable customers on that channel, or use a channel the run recorded. Add the missing consent column to the scoring file and score again."
+  POLICY_FREQUENCY_CAP:
+    title: "Too many contacts"
+    meaning: "The plan contacts each customer more often than the contact cap allows, or sends more on a channel than that channel's cap (configs/decide/arbitration.yaml)."
+    fix: "Propose one contact per customer, or fewer contacts on the channel."
+  POLICY_TEST_NOT_REGISTERED:
+    title: "The campaign has no frozen test plan, or another one"
+    meaning: "A campaign plan must rest on the campaign's test plan, fixed in advance. This campaign has none, or the plan the proposal cites is not the one frozen."
+    fix: "Register the campaign's test plan first, then propose again citing it."
+  POLICY_TEST_PLAN_FIXED:
+    title: "This campaign's test plan can no longer be set this way"
+    meaning: "The campaign already has a different frozen test plan, or it was measured before any plan was registered. A new plan proposed now could not be registered, so it is refused instead of being sent to an Approver."
+    fix: "To change a frozen plan, file an amendment with a reason. A campaign already measured cannot get a plan fixed in advance. Plan the next campaign before its results are read."
+  POLICY_ROLE_SEPARATION:
+    title: "Someone else has to approve this"
+    meaning: "The proposal was made for you, so you cannot approve it yourself. Another person with the Approver role must decide."
+    fix: "Ask another Approver to approve or reject it."
+  TOOL_UNKNOWN:
+    title: "There is no such tool"
+    meaning: "An agent asked for a tool the product does not have. Only the listed read and propose tools exist, and none of them sends anything."
+    fix: "Use one of the listed tools."
+  TOOL_INPUT_INVALID:
+    title: "The tool was asked the wrong way"
+    meaning: "The request to the tool has a field it does not accept, a value in the wrong form, an id that is not a plain id, or cites evidence no tool produced."
+    fix: "Ask again with the fields the message names. Cite only evidence ids that a tool returned."
+  TOOL_ROLE_REQUIRED:
+    title: "Your role does not allow this"
+    meaning: "The agent acts for you, and you do not hold the role this needs (for example, only an Analyst can have a proposal drafted). An agent never sees or does more than you could."
+    fix: "Ask an Admin for the role, or ask someone who holds it."
+  TOOL_OUTPUT_TOO_LARGE:
+    title: "The answer would be too large"
+    meaning: "A tool returns totals and counts, never customer rows, and this answer would exceed its size limit (16 KB)."
+    fix: "Ask a narrower question, for example one band or one channel."
+  TOOL_ARTEFACT_UNREADABLE:
+    title: "A stored result could not be read"
+    meaning: "The result the tool needs is stored but cannot be read. It may be a partial write or a file from an older version. The tool does not report it as \"not computed\", because that would be untrue."
+    fix: "Compute it again through the screen or route that writes it (for example, measure the campaign again). If it happens again, tell your administrator and name the file shown."
+  PROPOSAL_NOT_FOUND:
+    title: "There is no such proposal"
+    meaning: "The proposal named does not exist. It may have been made in another workspace."
+    fix: "Open it again from the list of agent proposals."
+  PROPOSAL_NOT_PENDING:
+    title: "This proposal was already decided"
+    meaning: "Only a pending proposal can be approved or rejected. This one was already approved, rejected, refused or has expired."
+    fix: "Nothing to do. If it is still wanted, have the agent draft it again."
+  PROPOSAL_EXPIRED:
+    title: "This proposal expired"
+    meaning: "Nobody decided on it within the allowed days (14 by default), so it can no longer be approved. The facts it rested on may have changed."
+    fix: "Have the agent draft it again, so it is checked against today's facts."
+  PROPOSAL_STALE:
+    title: "The campaign changed since this was proposed"
+    meaning: "The plan proposed is no longer the plan the campaign would get. The campaign's assignment changed, or the plan registered was not the one proposed. So it was not approved."
+    fix: "Have the agent draft the plan again from the campaign as it is now."
+  PROPOSAL_TAMPERED:
+    title: "This proposal was changed after it was drafted"
+    meaning: "The stored proposal does not match what the decision record wrote when it was drafted (what it proposes, who it was for, the evidence it cites, or its dates). It cannot be approved, and nothing was done."
+    fix: "Have the agent draft it again. If nobody changed it on purpose, tell your administrator: proposal files should only be changed by the product."
+  PROPOSAL_NOT_EXECUTABLE:
+    title: "Nothing can carry this proposal out yet"
+    meaning: "The proposal passed the rules, but the product cannot yet carry out proposals of this kind (campaign plans arrive in a later release). It stays pending and on the record."
+    fix: "Nothing to do now. Carry the plan out yourself through the usual screens if it is wanted."
+  LEDGER_CHAIN_BROKEN:
+    title: "The decision record was changed"
+    meaning: "An entry in the decision record was edited, removed or added out of order, or a checkpoint you kept is no longer in it. Each entry is chained to the one before, so any change shows up. The check names the first bad entry."
+    fix: "Tell your administrator at once and keep the checkpoint from your last approval receipt. Restore the record from a backup taken before the bad entry."
+  LEDGER_SIGNATURE_INVALID:
+    title: "A signed decision does not verify"
+    meaning: "An approval, a frozen test plan or an evidence label in the decision record is unsigned, or its signature does not match the signing key."
+    fix: "Check that the verification uses the deployment's own signing key. If it does, tell your administrator: the entry was changed or forged."
+  AGENTIC_DISABLED:
+    title: "Agent proposals are switched off"
+    meaning: "This deployment has agent tools and proposals turned off (agentic.enabled is false), which is the default. Nothing about agents is reachable."
+    fix: "An Admin turns them on in configs/agentic/agentic.yaml if the deployment should use them."
+  CONFIG_INVALID:
+    title: "A settings file cannot be used"
+    meaning: "A settings file is missing, cannot be read, or has a value that is not allowed. Examples are a use case setting or the agent files under configs/agentic: agentic.yaml (Plan K's three switches, including mcp.enabled for the MCP server), policy.yaml (the agent policy) and mcp.yaml (the MCP server's workspace, demo use cases, rate limits and call timeout; min_group_rows is fixed at 10). Unknown settings are refused, not ignored. The message names the file and the setting."
+    fix: "Correct the setting named, or restore the file, then try again. Removing mcp.yaml uses its defaults."
+  RUN_NOT_FOUND:
+    title: "There is no such run"
+    meaning: "The run named does not exist, or it was recorded in another workspace."
+    fix: "Open the run again from the Runs page, or check the run id."
+  # --- Plan K M136: Estimated figures pooled across comparable campaigns (DEC-1402 (e), (f)) -----------------------------
+  POOL_TOO_FEW:
+    title: "Not enough comparable campaigns to estimate"
+    meaning: "An Estimated figure draws a campaign's measured difference towards the average of comparable campaigns: the same use case, outcome and window, channels and offers, group of held-back customers and client, with groups chosen at random. That needs at least four of them with a final result, or more if configs/measurement.yaml sets min_campaigns higher; with three, the method cannot move the figure yet. Until there are enough, the campaign is shown only as measured. Nothing is wrong with the campaign."
+    fix: "Measure more comparable campaigns; the Estimated figure appears once there are enough."
+  POOL_NO_SPREAD:
+    title: "Comparable campaigns differ by no more than chance"
+    meaning: "A warning, not an error. The comparable campaigns' results differ by no more than chance explains, so each Estimated figure is drawn as far towards their average as the method allows ((k-3)/(k-1) of the way for k campaigns). This usually means there is too little data to tell the campaigns apart, not that their effects are equal. The measured figures, and the value proven to date, are unchanged."
+    fix: "Read the measured figures first. The Estimated figures become more telling as comparable campaigns gather more customers."
+  # --- Plan K M138: an early harm alarm, never an early win (DEC-1403 (f), (i)) -------------------------------------------
+  HARM_ALARM:
+    title: "This campaign may be doing harm"
+    meaning: "Before the day the campaign's test plan fixed for the final reading, the customers who were contacted are doing worse than the customers held back. The gap is larger than chance explains, even though the campaign is checked at every reading. This is an alarm, not a result, and nothing has been stopped. The result itself is still read only on the planned day. The alarm is checked only when harm_alarm.enabled is true in configs/measurement.yaml (it is off by default), and only for a campaign whose registered test plan gives a smallest effect worth detecting. A benefit never raises it."
+    fix: "Open the campaign and decide whether to pause it. If you go on, the final result is still read on the planned day."
+  # --- Plan K M133: the verifier over MCP, demo data only (DEC-1404) ------------------------------------------------------
+  MCP_DEMO_ONLY:
+    title: "The MCP server answers about the demo library only"
+    meaning: "Until client data is connected (M141), the MCP server at /mcp answers only about the demo library: the public datasets in library/ (for example Hillstrom) and generated data. It refused because the workspace is not 'demo', the request named another workspace, or the run or campaign asked about is not demo data. A run or upload counts as demo data when it was filed under one of mcp.demo_use_cases or marked as generated, and never when it belongs to an onboarded client. You get the same answer when the id names nothing, so the server never reveals which ids exist."
+    fix: "Ask about a demo run or campaign. To serve client data, wait for M141's per-client scoping; until then keep mcp.enabled off on a deployment that holds client data."
+  MCP_SCOPE_DENIED:
+    title: "This sign-in cannot use that MCP tool"
+    meaning: "Each MCP tool needs a scope, and the scope comes from the signed-in person's role. Every signed-in person holds marketing-ai:read. marketing-ai:propose, which drafts a test plan for a person to approve in the product, needs the Analyst role. No scope approves anything, and an Approver or Admin role adds no MCP scope."
+    fix: "Connect the client with the token of a person who has the role the tool needs, or use a read tool."
+  MCP_RATE_LIMITED:
+    title: "Too many MCP calls from this sign-in"
+    meaning: "Each signed-in session has a budget: mcp.rate_limit.calls_per_minute calls in any 60 seconds (60 by default) and mcp.rate_limit.concurrent_calls running at once (2 by default). This call went over one of them. The answer carries marketing-ai/retry_after_seconds. The limits are counted per API process."
+    fix: "Wait that long and call again, or make fewer calls at once."
+  MCP_TIMEOUT:
+    title: "The MCP tool took too long"
+    meaning: "A long tool (audit_campaign, or get_proof_pack, which draws the Value Proof Pack on request) runs while the client waits, because the MCP version in use has no way to hand back a job to collect later, and it is refused after mcp.call_timeout_seconds (120 seconds by default). Work that has been started cannot be stopped, so it keeps its place in the session's limit of calls at once until it ends."
+    fix: "Ask again later, ask a narrower question, or raise mcp.call_timeout_seconds in configs/agentic/mcp.yaml."
+  MCP_GROUP_TOO_SMALL:
+    title: "The campaign holds a group too small to show"
+    meaning: "No figure about a group of 1 to 9 customers is served over MCP (Plan I's small-group rule). This campaign has such a group in one of three places: its totals (contacted, held back or intended), one offer's group in its stored measurement, or one group in its results per group of customers. The Value Proof Pack prints those figures as text, which cannot be partly hidden, so measure, audit_campaign and get_proof_pack all refuse the campaign."
+    fix: "Nothing to do over MCP. A person with access can read the campaign in the product, where the usual rules apply."
+  MCP_RESULT_WITHHELD:
+    title: "The result held outside text in a field that must be filled"
+    meaning: "Results served over MCP pass a text check that withholds instruction-like text and masks personal data from outside the product. This result had such text in a field that must be filled, so withholding it left a result that is not complete, and the whole result was withheld."
+    fix: "Find the outside text (a column name, an offer's name or a file name) in the product and rename it, then ask again."
+  MCP_NOT_STARTED:
+    title: "The MCP server is not running yet"
+    meaning: "A request reached /mcp before the server had started with the app, or after it had stopped."
+    fix: "Try again in a moment. If it persists, check that the API started cleanly and that configs/agentic/mcp.yaml is valid."
+  MCP_TOOL_FAILED:
+    title: "An MCP tool failed inside the product"
+    meaning: "An unexpected fault happened inside the tool. Nothing was changed. The MCP client gets only this code, never the error's message. The failure is in the API log (tool name and error type) and in the audit log (mcp.tool_call, outcome failed)."
+    fix: "Look up the log line for the call. If the stored file the tool reads is damaged, run again the step that wrote it."
+  AUTH_REQUIRED:
+    title: "Sign in to do this"
+    meaning: "The request carried no valid signed-in session. An expired or signed-out token gets the same answer. For the MCP server at /mcp the answer is 401 with WWW-Authenticate: Bearer."
+    fix: "Sign in again. For the MCP server, get a token with POST /auth/login and send it as 'Authorization: Bearer <token>' on every request."
+  AUTH_NOT_CONFIGURED:
+    title: "Sign-in is switched off on this deployment"
+    meaning: "Some parts of the product never run without sign-in, and the MCP server at /mcp is one of them: it answers 503 while MARKETING_AI_AUTH_MODE=off, even on a laptop, and never acts as the local operator."
+    fix: "Set MARKETING_AI_AUTH_MODE=local (or the deployment's identity provider), create users and connect with a signed-in token."
+  # --- Plan K M144: the save-desk card, as a randomised pilot design (DEC-1411) -------------------------------------------
+  SAVE_DESK_NO_TREAT_LIST:
+    title: "This run's contact list has not been built yet"
+    meaning: "The save-desk card reads the run's contact list (treat list) and never builds it, because building one over a large file would slow the desk."
+    fix: "Open the run's Results page or its treat_list.csv once so the list is built, then ask for the card again."
+  SAVE_DESK_CUSTOMER_NOT_FOUND:
+    title: "That customer is not in this run's contact list"
+    meaning: "No row of this run's contact list has that key. The customer may have been erased, may not have been scored in this run, or the key may be written differently in the run (for example with a different number of leading zeros or another date format)."
+    fix: "Check the key against the run's own customer column, then ask again."
+  SAVE_DESK_KEY_INVALID:
+    title: "The customer key cannot be used for this run"
+    meaning: "The key is empty, longer than 200 characters, or has the wrong number of parts. A run identified by several columns (for example customer and date) takes the parts in the run's order, joined by a vertical bar. The message never repeats the key you typed."
+    fix: "Type the key again with one part for each of the run's key columns, in the run's order."
+  SAVE_DESK_KEY_AMBIGUOUS:
+    title: "More than one row has that key"
+    meaning: "The run's contact list has two or more rows with exactly that key, so no single customer can be shown and the card will not guess."
+    fix: "Ask the data owner to check the customer file for repeated keys and score again."
+  SAVE_DESK_RATE_LIMITED:
+    title: "Too many cards asked for in a minute"
+    meaning: "One signed-in person may ask for a limited number of save-desk cards per minute (configs/agentic/save_desk.yaml, rate_limit_per_minute, 30 by default). The card is for one customer in front of one agent; looking customers up in a loop is how a copy of the customer list is made."
+    fix: "Wait the number of seconds in the message and try again."
+  SAVE_DESK_NOT_IN_PILOT_ARM:
+    title: "You are not in the group given the card in this pilot"
+    meaning: "While a randomised pilot is active (configs/agentic/save_desk_pilot.yaml, status active), only the staff drawn in advance to have the card are served one, so that the comparison with staff working as usual stays fair. The draw is not redone during the pilot."
+    fix: "If you think you should be in the card group, ask the pilot owner."
+  # --- Plan K M139: the campaign planner and the claim checker (DEC-1406 (d), (a)) -------------------------------------
+  CLAIM_DIRECTION:
+    title: "A sentence said more than the numbers show"
+    meaning: "The AI service wrote a comparison or a trend that the measured range does not support (for example, that one group did better when the range of the difference includes zero, or the opposite of what was measured). Every sentence of a drafted plan's summary is checked against the numbers before anyone sees it, so this sentence was dropped. More than one failed sentence replaces the whole summary with the one the product writes by rules."
+    fix: "Nothing to do. Read the plan's figures, which come straight from the product; draft again if you want a new summary."
+  CLAIM_LABEL:
+    title: "A sentence gave a result the wrong kind of evidence"
+    meaning: "The AI service called a figure Causal, Estimated, Descriptive or Not proven when the product's own tool labelled it otherwise (only a randomised comparison is Causal). The sentence was dropped; more than one failed sentence replaces the summary with the one the product writes by rules."
+    fix: "Nothing to do. The label shown beside each figure is the product's own."
+  CLAIM_UNREFERENCED:
+    title: "A sentence pointed at something that is not there"
+    meaning: "The AI service's sentence named a figure, a place in a figure or a proposal that the plan's evidence does not hold, so it could not be checked and was dropped. More than one failed sentence replaces the summary with the one the product writes by rules."
+    fix: "Nothing to do; draft again if you want a new summary."
+  CLAIM_FREE_TEXT:
+    title: "A sentence put a number or a verdict in its own words"
+    meaning: "Every number in a plan's summary is filled in by the product from the evidence. This sentence's own words carried a number (also spelled out, such as 'twice' or 'a third'), a direction ('up', 'more', 'improve'), a cause or a certainty ('because', 'sure'), or failed the product's text checks, so it was dropped."
+    fix: "Nothing to do. The figures in the plan itself are the product's own."
+  CLAIM_MALFORMED:
+    title: "The AI service's summary could not be read"
+    meaning: "The AI service did not answer in the structured form the planner asks for, so none of its sentences could be checked. The plan's summary is the one the product writes by rules from the same evidence, as it is when no AI service is connected."
+    fix: "Nothing to do. If it happens often, check the AI service connection on the Settings page."
+  PLANNER_NO_CANDIDATE:
+    title: "No campaign can be planned yet"
+    meaning: "The planner found nothing it can draft: no finished scoring run of the use case without a campaign yet, no run that recorded how many customers were held back, no channel on which anyone may be contacted, a list judged not safe to roll out, a spend over the budget or one that cannot be checked against it, or a smallest effect given in points for an outcome measured as an amount. The message says which."
+    fix: "Do what the message names (for example score a new list, or set the channel's cost), then draft again."
+  PLANNER_NOTHING_TO_PLAN:
+    title: "This warning does not call for a new campaign"
+    meaning: "The warning card asks for waiting (an early look, a model not yet ready) or for a person's decision (drift, a campaign that did harm), not for a campaign the planner could draft. Nothing was drafted."
+    fix: "Follow the warning's own next step on the Results page."
+  PLANNER_CARD_NOT_FOUND:
+    title: "That warning is no longer on the Results page"
+    meaning: "The planner looks the warning up again on the server before drafting, and it is gone: the situation it described has changed since the page was drawn."
+    fix: "Reload the Results page and draft from a warning that is shown now."
+  PLANNER_NOT_FOUND:
+    title: "There is no such plan"
+    meaning: "No drafted campaign plan has that id, or it was recorded in another workspace."
+    fix: "Open the plan again from its warning card, or draft a new one."
+  PLANNER_GOAL_UNPARSED:
+    title: "The goal in words could not be matched to the form"
+    meaning: "The goal you typed was read by the AI service, but it could not be matched to the form's own choices (a use case, an objective, a channel) or a number in it could not be read, so nothing was drafted."
+    fix: "Fill in the form instead, or type the goal again naming the use case, the channel and any budget plainly."
 
 settings:
   actions.bands[*].min_score:

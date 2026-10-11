@@ -19,6 +19,10 @@ a recorded `ToolResult` a proposal cites, and turns what they found into:
   a stop: "Each customer appears on N rows on average. Combine them into one row per customer?".
   Choosing Combine adds a `combine_rows` step (`engine.agent.reshape`), and the advisor looks at the
   file again as it will be once combined; choosing Stop stops with the Run button's own message.
+* **a question to turn a wide sheet into rows** (Plan L M156) - when the use case allows `reshape`, a
+  training file with one column per month (`2024_01_spend`, `2024_02_spend`, …) gets a blocking question;
+  choosing Turn into rows adds an `unpivot` step and the advisor looks at the rows it makes (where the
+  combine question then comes up). Months without a year are only noted: they cannot be put in date order.
 
 Hiding a column is a recipe `drop_column` step, so scoring drops it the same way (DEC-1006).
 `summarise` turns whatever the user has decided into the four lists read before Approve.
@@ -61,9 +65,11 @@ from engine.agent.recommend import (
     suggest_reason_phrases,
 )
 from engine.agent.reshape import choose_dates, plan_combine
-from engine.agent.tools import AgentContext, AgentToolError, call_tool
+from engine.agent.tools import AgentContext, AgentToolError, call_tool, header_help_on
+from engine.agent.unpivot import find_wide_columns
 from engine.agent.untrusted import MAX_NAME_CHARS, clean_text, display_name, quoted
 from engine.config import (
+    ColumnRole,
     ColumnType,
     ConfigError,
     RunMode,
@@ -161,6 +167,7 @@ class _Builder:
     ctx: AgentContext
     prefix: str = ""
     decided_steps: tuple[RecipeStep, ...] = ()
+    carry: tuple[str, ...] = ()  # Plan L M156: a wide sheet's kept columns, carried as they are by a combine
     results: list[ToolResult] = field(default_factory=list)
     proposals: list[Proposal] = field(default_factory=list)
     questions: list[Question] = field(default_factory=list)
@@ -240,9 +247,11 @@ def _role(
     builder: _Builder,
     path: str,
     column: str,
-    evidence: str,
+    evidence: str | Sequence[str],
     confidence: AgentConfidence,
     reason: str | None = None,
+    *,
+    from_headers: bool = False,
 ) -> Proposal:
     what = "the column that identifies each row" if path == ROLE_PRIMARY_KEY else "the outcome to predict"
     return builder.propose(
@@ -257,9 +266,31 @@ def _role(
         path=path,
         value=column,
         suggested_value=column,
-        evidence_ids=(evidence,),
+        evidence_ids=(evidence,) if isinstance(evidence, str) else tuple(evidence),
         confidence=confidence,
+        from_headers=from_headers,
     )
+
+
+# ---------------------------------------------------------------------------
+# Headers read by the lexicon (M142, DEC-1409)
+# ---------------------------------------------------------------------------
+HEADER_CLEAR_LEAD: Final[float] = 0.15
+"""A header-read pick is proposed on its own when the next candidate scores at least this much lower;
+otherwise the person is asked which one it is."""
+HEADER_MIN_PICK: Final[float] = 0.5
+"""The lowest score (`medium`) a header-read column needs to be proposed as the outcome without a question."""
+
+
+def _header_rank(roles: ToolResult, kind: str) -> list[dict[str, Any]]:
+    """The lexicon's candidates for one role in `find_roles`, best first (the tool already sorted them)."""
+    return [c for c in _rows(roles, "header_candidates") if c.get("kind") == kind]
+
+
+def _reading(candidate: Mapping[str, Any]) -> str:
+    """`reads as customer, mobile, number` for a sentence: the lexicon's own words, never the file's."""
+    words = str(candidate.get("label", "")).removeprefix("reads as ").strip()
+    return f"its name reads as {words}" if words else "its name looks right"
 
 
 def _role_option(builder: _Builder, path: str, column: str, evidence: str) -> QuestionOption:
@@ -290,13 +321,22 @@ def _repeats(builder: _Builder, column: str) -> bool:
 
 
 def _choose_primary_key(
-    builder: _Builder, profile: ToolResult, chosen: str | None, *, reshape: bool = False
+    builder: _Builder,
+    profile: ToolResult,
+    chosen: str | None,
+    *,
+    reshape: bool = False,
+    roles: ToolResult | None = None,
 ) -> tuple[str | None, str | None]:
     """(column, stop reason). Proposes or asks; stops when no column can identify a row.
 
     With `reshape` (the use case allows combining rows and nobody has declined it), an ID-named
     column that repeats is proposed as the key instead of stopping: `advise` then asks whether to
     combine the rows. `reshape` is also set once the rows are combined, for the combined key's reason.
+
+    When several columns could be the key and none is named by the use case's hints, `roles` (the
+    lexicon's reading of the headers, M142) picks the one whose name reads as an ID, best first. It only
+    ever chooses among the columns the profile found unique, and it is proposed as "check", never ticked.
     """
     if chosen is not None:
         repeating = reshape and _repeats(builder, chosen)
@@ -314,6 +354,22 @@ def _choose_primary_key(
     if candidates:
         best = candidates[0]
         sure = best.casefold() in hints or len(candidates) == 1
+        read = None
+        if not sure and roles is not None:
+            ranked = [c for c in _header_rank(roles, "id") if c["column"] in candidates]
+            read = ranked[0] if ranked else None
+        if read is not None and roles is not None:
+            best = str(read["column"])
+            _role(
+                builder,
+                ROLE_PRIMARY_KEY,
+                best,
+                (profile.evidence_id, roles.evidence_id),
+                AgentConfidence.CHECK,
+                f"It is unique and never empty, and {_reading(read)}. Check it.",
+                from_headers=True,
+            )
+            return best, None
         _role(
             builder,
             ROLE_PRIMARY_KEY,
@@ -380,13 +436,50 @@ def _choose_target(
         if c.distinct_count == 2 and c.name != primary_key and not c.pii_kinds
     ]
     definition = builder.ctx.config.target.definition or "the outcome"
+    # M142: among the two-valued columns the rules already found, the ones whose header reads as the
+    # outcome come first. A column is never added here, only the order changes (and a clear lead is proposed).
+    read = (
+        {}
+        if synonyms
+        else {str(c["column"]): c for c in _header_rank(roles, "outcome") if c["column"] in options}
+    )
+    if not synonyms:
+        # A flag whose header reads as consent or an opt-out (`dnd_flag`) says who may be contacted, not what
+        # happened afterwards. When every two-valued column is one of those, none of them is the outcome and
+        # the file has none (so a lapse draft can be offered); beside a real candidate they are still listed.
+        contact_flags = {
+            str(c["column"])
+            for kind in ("consent", "opt_out")
+            for c in _header_rank(roles, kind)
+            if c["confidence"] != "low"
+        }
+        if all(c in contact_flags and c not in read for c in options):
+            options = []
+    options = [*read, *(c for c in options if c not in read)]
     if not options:
         configured = builder.ctx.config.target.column
         return None, (
             f"No column says whether {definition.lower()}. The model learns from past rows where the answer "
             f"is known, so the file needs that column (this use case calls it '{display_name(configured)}'), with two values "
-            "such as 1 and 0."
+            "such as 1 and 0." + _label_draft(builder)
         )
+    lead = next(iter(read.values()), None)
+    others = list(read.values())[1:]
+    if (
+        lead is not None
+        and float(lead["score"]) >= HEADER_MIN_PICK
+        and (not others or float(lead["score"]) - float(others[0]["score"]) >= HEADER_CLEAR_LEAD)
+    ):
+        _role(
+            builder,
+            ROLE_TARGET,
+            str(lead["column"]),
+            roles.evidence_id,
+            AgentConfidence.CHECK,
+            reason=f"It has two values, and {_reading(lead)}, so it may say whether {definition.lower()}. Check it.",
+            from_headers=True,
+        )
+        return str(lead["column"]), None
     if len(options) == 1:
         # A question needs two choices: one candidate is proposed for the person to accept instead.
         _role(
@@ -404,6 +497,83 @@ def _choose_target(
         [roles.evidence_id, profile.evidence_id],
     )
     return None, None
+
+
+def _label_draft(builder: _Builder) -> str:
+    """Drafts of an outcome for a file that has none: a question with example customers, and a sentence.
+
+    Only when the file has a date of a customer's last activity (`draft_outcome_labels`). The question is
+    never blocking and no option changes anything: the outcome has to be recorded after the date the file
+    describes, so the person adds that column and uploads again. The sentence is returned for the stop
+    reason, because a stopped session shows no questions.
+    """
+    if not header_help_on(builder.ctx):
+        return ""  # Plan K off: no draft, and the stop reason is what it was before M142 (DEC-1409 (f))
+    trial = call_tool(builder.ctx, "draft_outcome_labels", None, evidence_id=f"{builder.prefix}e0")
+    found = _rows(trial, "drafts")
+    if not found:
+        return ""  # nothing to draft from: an empty answer is not evidence anything cites, and uses no id
+    drafts = trial.model_copy(update={"evidence_id": f"{builder.prefix}e{next(iter(builder._evidence))}"})
+    builder.results.append(drafts)
+    activity = str(_value(drafts, "activity") or "activity")
+    rows = int(_value(drafts, "rows") or 0)
+
+    def counts(draft: Mapping[str, Any]) -> str:
+        window = int(draft["window_days"]) + int(draft["grace_days"])
+        quiet = int(draft["already_quiet"])
+        return f"{quiet:,} of {rows:,} customers had already gone more than {window} days without one"
+
+    def windows(found_drafts: Sequence[Mapping[str, Any]]) -> str:
+        return "; ".join(
+            f"{int(d['window_days'])} days: {int(d['already_quiet']):,} of {rows:,} already quiet"
+            for d in found_drafts
+        )
+
+    def sentence(draft: Mapping[str, Any]) -> str:
+        return (
+            f"a customer lapses when there is no {activity} in the {int(draft['window_days'])} days after "
+            f"the date the file describes, plus {int(draft['grace_days'])} days' grace"
+        )
+
+    first = found[0]
+    example = next(iter(first.get("examples") or []), None)
+    shown = f" (for example, {example})" if example else ""
+    inside = f"; for example, {example}" if example else ""
+    after = int(first.get("after_reference") or 0)
+    later = (
+        f" {after:,} customers have a last {activity} dated after the date their row describes; they are not counted."
+        if after
+        else ""
+    )
+    builder.ask(
+        "The file has no column that says whether a customer lapsed, but it has the date of each customer's "
+        f"last {activity}. A draft to build the outcome from: {sentence(first)}. In this file, counting from the "
+        f"date each row describes, {windows(found)}{shown}.{later} Which window do you mean?",
+        [
+            *(
+                QuestionOption(
+                    option_id=f"window-{int(d['window_days'])}",
+                    label=f"{int(d['window_days'])} days",
+                    effect=(
+                        "Nothing is changed here. Add a column with this outcome (1 for lapsed, 0 for not), "
+                        f"recorded after the date the file describes ({counts(d)} when the file was taken), "
+                        "then upload again."
+                    ),
+                )
+                for d in found
+            ),
+            QuestionOption(option_id="none", label="None of these", effect="Nothing is changed."),
+        ],
+        [drafts.evidence_id],
+        blocking=False,
+        examples=[str(e) for e in (first.get("examples") or [])[:2]],
+    )
+    return (
+        f" A draft outcome to start from: {sentence(first)}. In this file, counting from the date each row "
+        f"describes, {windows(found)}{inside}.{later} "
+        "Add a column with that outcome, 1 for lapsed and 0 for not, recorded after the date the file "
+        "describes, and upload again."
+    )
 
 
 def _step(kind: RecipeStepKind, column: str, **params: Any) -> RecipeStep:
@@ -719,6 +889,8 @@ def _format_proposals(
 def _ticked(proposal: Proposal, tick_uncertain: bool) -> bool:
     if proposal.step is not None and proposal.step.kind in NEVER_TICKED_STEPS:
         return False
+    if proposal.from_headers:
+        return False  # a column picked from its header is only ever ticked by the person (M142)
     return proposal.confidence is AgentConfidence.SURE or tick_uncertain
 
 
@@ -791,6 +963,9 @@ def _ask_to_combine(
     ctx = builder.ctx
     prepared = _prepared_context(builder, builder.preview_steps(), key, target)
     others = {name for name in protected if name in prepared.frame.columns} - {key, target}
+    # A wide sheet's kept columns hold one value per customer, copied onto each of its rows: carried as they
+    # are, never added up over the periods, and never the date that orders the rows (Plan L M156).
+    others |= {name for name in builder.carry if name in prepared.frame.columns} - {key, target}
     dates = choose_dates(
         prepared.profile, exclude=[key, target, *sorted(others)], snapshot_hint=ctx.config.split.time_column
     )
@@ -856,6 +1031,99 @@ def _ask_to_combine(
         evidence,
     )
     return None
+
+
+def _and(names: Sequence[str]) -> str:
+    """`spend`, `spend and calls`, `spend, calls and visits`."""
+    return names[0] if len(names) == 1 else f"{', '.join(names[:-1])} and {names[-1]}"
+
+
+def _ask_to_unpivot(
+    builder: _Builder, profile: ToolResult, key: str, target: str, protected: set[str]
+) -> set[str]:
+    """Ask whether to turn a wide sheet's period columns into rows (Plan L M156); the columns asked about.
+
+    Read from the column names only (`engine.agent.unpivot.find_wide_columns`). Periods that name no year
+    (`Jan_spend`) cannot be put in date order, so their rows could not be combined back into one per
+    entity: the advisor says so as an assumption and asks nothing.
+    """
+    ctx = builder.ctx
+    columns = [str(c) for c in ctx.frame.columns]
+    group = find_wide_columns(columns, skip=protected)
+    if group is None:
+        return set()
+    entity, word = ctx.config.entity, group.kind
+    plain = _and([display_name(m) for m in group.measures])
+    if not group.dated:
+        named = group.name_pattern.replace("{measure}", group.measures[0]).replace("{period}", "2024_01")
+        builder.assumptions.append(
+            f"Your sheet has one column per {word} for {plain} ('{display_name(group.columns[0])}', …), but the "
+            "column names give no year, so they stay separate columns: as rows they could not be put in date "
+            f"order and combined back into one row per {entity}. Name them with the year (for example "
+            f"'{display_name(named)}') to have them turned into rows."
+        )
+        return set()
+    kept = [c for c in columns if c not in set(group.columns) and c != target]
+    params = group.params(key=key, id_columns=kept, outcome=target, taken=columns)
+    period_column = display_name(str(params["period_column"]))
+    shown = ", ".join(f"'{display_name(c)}'" for c in group.columns[:3])
+    reason = (
+        f"The columns {shown}{', …' if len(group.columns) > 3 else ''} hold {plain} for different {word}s. As "
+        f"rows, one per {entity} per {word} with '{period_column}' saying which {word}, they can be combined back "
+        f"into one row per {entity} with totals, averages and the latest value, instead of each {word} being an "
+        f"unrelated column. '{display_name(target)}' is copied onto every row, never turned into rows."
+    )
+    step = RecipeStep(order=1, kind=RecipeStepKind.UNPIVOT, column=key, params=params, reason=reason)
+    builder.ask(
+        f"Your sheet has one column per {word} for {plain}. Turn them into rows (one row per {entity} per {word})?",
+        [
+            QuestionOption(
+                option_id="unpivot",
+                label="Turn into rows (recommended)",
+                effect=f"One row per {entity} per {word}; the rows can then be combined into one row per {entity}.",
+                proposal=builder.option_proposal(
+                    kind=ProposalKind.RECIPE_STEP,
+                    title=f"Turn the {word} columns of {plain} into rows",
+                    reason=reason,
+                    step=step,
+                    evidence_ids=(profile.evidence_id,),
+                    confidence=AgentConfidence.SURE,
+                ),
+            ),
+            QuestionOption(
+                option_id="keep", label="Keep as columns", effect=f"Each {word} stays a separate column."
+            ),
+        ],
+        [profile.evidence_id],
+    )
+    return set(group.columns)
+
+
+def _unpivoted_context(
+    ctx: AgentContext, step: RecipeStep, primary_key: str | None, target: str | None
+) -> AgentContext:
+    """A context over the rows a wide sheet becomes, so everything is advised on them (Plan L M156)."""
+    run = run_recipe(
+        ctx.frame,
+        [step.model_copy(update={"order": 1})],
+        upload_id=ctx.upload_id,
+        primary_key=primary_key if primary_key is not None else step.column,
+        target=target,
+        levels=ctx.config.agent.levels,
+        max_failure_pct=ctx.config.agent.max_conversion_failure_pct,
+    )
+    profile = ingest.profile_dataset(
+        run.frame,
+        ctx.config,
+        upload_id=ctx.upload_id,
+        file_name=ctx.profile.file_name,
+        file_format=ctx.profile.file_format,
+        file_size_bytes=ctx.profile.file_size_bytes,
+        delimiter=ctx.profile.delimiter,
+        encoding=ctx.profile.encoding,
+        row_count=len(run.frame),
+    )
+    return replace(ctx, frame=run.frame, profile=profile)
 
 
 def _leaks(checks: ToolResult) -> list[dict[str, Any]]:
@@ -956,6 +1224,82 @@ def _unfixed_stop(
     return f"{first['message']} {first.get('suggestion') or ''}".strip()
 
 
+def _mapping_notes(builder: _Builder, roles: ToolResult) -> None:
+    """Questions for an opt-out or last-contact column the headers suggest, when the file lacks the one the
+    use case's suppression rules look for (M142, DEC-1409).
+
+    The Run button's `SUPPRESSION_COLUMN_MISSING` warning says nobody can be held back; this says which
+    column of the file may be the one. It is a question with no change behind either answer: the column the
+    suppression rules read is fixed by the use case (`actions.suppression.*_column`) and is not a per-run
+    setting, so the person renames the column in the file and uploads again. Nothing is ticked.
+    """
+    if not header_help_on(builder.ctx):
+        return  # Plan K off: no header is read, so no mapping question (DEC-1409 (f))
+    suppression = builder.ctx.config.actions.suppression
+    present = {str(c) for c in builder.ctx.frame.columns}
+    template_consent = next(
+        (c.name for c in builder.ctx.config.template.columns if c.role is ColumnRole.CONSENT), None
+    )
+    consent_proposed = any(p.path == "governance.consent_column" for p in builder.proposals)
+    notes = (
+        (
+            "consent",
+            not consent_proposed and builder.ctx.config.governance.consent_column is None,
+            template_consent,
+            "which customers agreed to marketing contact",
+            "customers who have not consented",
+            "1 for customers who agreed and 0 for those who did not",
+        ),
+        (
+            "opt_out",
+            suppression.suppress_opted_out,
+            suppression.opt_out_column,
+            "which customers asked not to be contacted",
+            "opted-out customers",
+            "1 for customers who may be contacted and 0 for those who may not (flip the values first if "
+            "the column uses 1 for 'do not contact')",
+        ),
+        (
+            "last_contact",
+            suppression.suppress_recently_contacted,
+            suppression.recently_contacted_column,
+            "when each customer was last contacted",
+            "recently contacted customers",
+            "the date of the last contact, empty if never",
+        ),
+    )
+    for kind, enabled, configured, says, held, fill in notes:
+        if not enabled or not configured or configured in present:
+            continue
+        read = [
+            c
+            for c in _header_rank(roles, kind)
+            if c["confidence"] != "low" and not (kind == "consent" and c.get("hinted"))
+        ]
+        if not read:
+            continue
+        column = display_name(read[0]["column"])
+        builder.ask(
+            f"'{column}' may say {says}, and {_reading(read[0])}. This use case holds back {held} using a "
+            f"column called '{display_name(configured)}', which this file does not have. Is '{column}' that column?",
+            [
+                QuestionOption(
+                    option_id="yes",
+                    label="Yes, it is",
+                    effect=(
+                        f"Nothing is changed here. In your file, call the column '{display_name(configured)}' "
+                        f"with {fill}, then upload again. Until then {held} are not held back."
+                    ),
+                ),
+                QuestionOption(
+                    option_id="no", label="No, it is something else", effect="Nothing is changed."
+                ),
+            ],
+            [roles.evidence_id],
+            blocking=False,
+        )
+
+
 def _notes_from_checks(builder: _Builder, checks: ToolResult) -> None:
     reasons: dict[str, list[str]] = {}
     for check in _rows(checks, "checks"):
@@ -991,7 +1335,9 @@ def _facts(
         if column.inferred_type in {ColumnType.DATE, ColumnType.DATETIME}
     ]
     time_columns: list[str] = []
-    reserved = {builder.ctx.config.actions.suppression.recently_contacted_column, *exclude}
+    # M142: a date column whose header reads as the last contact is that, not the date the file describes.
+    read_contact = {str(c["column"]) for c in _header_rank(roles, "last_contact") if c["confidence"] != "low"}
+    reserved = {builder.ctx.config.actions.suppression.recently_contacted_column, *exclude, *read_contact}
     for name in ordered:
         column = columns.get(name)
         if (
@@ -1002,11 +1348,15 @@ def _facts(
             and column.distinct_count >= _MIN_TIME_DISTINCT
         ):
             time_columns.append(name)
+    # The date the file describes, as the headers read it, comes first among the date columns found.
+    read_date = [str(c["column"]) for c in _header_rank(roles, "date")]
+    time_columns.sort(key=lambda name: read_date.index(name) if name in read_date else len(read_date))
     rate = _value(outcome, "positive_rate")
     taken = {
         builder.ctx.config.actions.suppression.opt_out_column,
         builder.ctx.config.actions.suppression.recently_contacted_column,
         *exclude,
+        *(str(c["column"]) for kind in ("opt_out", "last_contact") for c in _header_rank(roles, kind)),
     }
     consent = tuple(c for c in _names(roles, "consent") if c not in taken)
     evidence = tuple(r.evidence_id for r in (roles, outcome) if r is not None)
@@ -1078,6 +1428,7 @@ def advise(
     combine: RecipeStep | None = None,
     combine_declined: bool = False,
     decided_steps: Sequence[RecipeStep] = (),
+    unpivot_declined: bool = False,
 ) -> Advice:
     """Look at the file and propose everything; `primary_key` / `target` are the user's answers so far.
 
@@ -1089,15 +1440,40 @@ def advise(
     file. `combine_declined` means the user answered Stop, so a repeating ID stops the session.
     `decided_steps` are the recipe steps the person already accepted (an answered day/month
     question's `parse_date`): the preview runs them, so the combine reads the dates they convert.
+
+    Plan L M156: an accepted `unpivot` among `decided_steps` turns the wide sheet into rows first, and
+    everything - the roles, the fixes, the combine question - is then about those rows. `unpivot_declined`
+    means the person answered Keep as columns, so the sheet is not asked about again.
     """
-    builder = _Builder(ctx, prefix=id_prefix, decided_steps=tuple(decided_steps))
+    unpivot = next((step for step in decided_steps if step.kind is RecipeStepKind.UNPIVOT), None)
+    carry: tuple[str, ...] = ()
+    if unpivot is not None:
+        decided_steps = [step for step in decided_steps if step is not unpivot]
+        try:
+            ctx = _unpivoted_context(ctx, unpivot, primary_key, target)
+        except RecipeError as exc:
+            return Advice(
+                status=SessionStatus.STOPPED,
+                tool_results=(),
+                proposals=(),
+                questions=(),
+                assumptions=(),
+                engine_hidden=(),
+                stop_reason=f"The columns could not be turned into rows: {exc.message}",
+                primary_key=primary_key,
+                target=target,
+            )
+        personal = {column.name for column in ctx.profile.columns if column.pii_kinds}
+        kept: Any = unpivot.params.get("id_columns") or []
+        carry = tuple(str(name) for name in kept if str(name) not in personal)
+    builder = _Builder(ctx, prefix=id_prefix, decided_steps=tuple(decided_steps), carry=carry)
     config = ctx.config
     profile = builder.call("get_profile")
     roles = builder.call("find_roles")
     _note_unknown_hidden_columns(builder)
     reshape = ctx.mode is RunMode.TRAIN and AgentLevel.RESHAPE in config.agent.levels and not combine_declined
     chosen_key = primary_key if primary_key is not None else combine.column if combine is not None else None
-    key, stop = _choose_primary_key(builder, profile, chosen_key, reshape=reshape)
+    key, stop = _choose_primary_key(builder, profile, chosen_key, reshape=reshape, roles=roles)
     to_combine = combine is None and reshape and key is not None and _repeats(builder, key)
     outcome_column: str | None = None
     if ctx.mode is RunMode.TRAIN and stop is None:
@@ -1114,15 +1490,29 @@ def advise(
         )
         if name
     }
+    wide: set[str] = set()
+    if (
+        ctx.mode is RunMode.TRAIN
+        and AgentLevel.RESHAPE in config.agent.levels
+        and unpivot is None
+        and combine is None
+        and not unpivot_declined
+        and not to_combine
+        and stop is None
+        and key is not None
+        and outcome_column is not None
+    ):
+        # Plan L M156: columns about to be turned into rows get no fixes of their own; the answer re-advises.
+        wide = _ask_to_unpivot(builder, profile, key, outcome_column, protected)
     if ctx.mode is RunMode.TRAIN:
         issues = builder.call("find_format_issues")
-        _format_proposals(builder, issues, protected, outcome_column)
-        _range_proposals(builder, protected | ({outcome_column} if outcome_column else set()))
+        _format_proposals(builder, issues, protected | wide, outcome_column)
+        _range_proposals(builder, protected | wide | ({outcome_column} if outcome_column else set()))
     can_check = outcome_column is not None if ctx.mode is RunMode.TRAIN else ctx.schema is not None
     if to_combine and key is not None and outcome_column is not None and stop is None:
         # Nothing else is checked on rows that are about to be combined: the answer re-advises.
         stop = _ask_to_combine(builder, profile, key, outcome_column, protected)
-    elif stop is None and can_check:
+    elif stop is None and can_check and not wide:
         steps = ordered_steps([*builder.preview_steps(), *([combine] if combine is not None else [])])
         waiting = False
         try:
@@ -1148,6 +1538,8 @@ def advise(
                 )
             if stop is None:
                 stop = _unfixed_stop(builder, checks, prepared, key, outcome_column)
+    if stop is None:
+        _mapping_notes(builder, roles)
     status = (
         SessionStatus.STOPPED
         if stop is not None
@@ -1183,6 +1575,8 @@ def _settings(
         config, columns=tuple(str(c) for c in prepared.frame.columns), primary_key=key, target=target
     )
     holdout = holdout_advice(config, facts)  # worked out once; the rules and the notes read the same answer
+    # A consent column found only by reading its header is never ticked for the person (M142).
+    read_consent = {str(c["column"]) for c in _header_rank(roles, "consent") if not c.get("hinted")}
     for rec in recommend_settings(config, facts, schema, config_root=prepared.config_root, holdout=holdout):
         builder.propose(
             kind=ProposalKind.SETTING,
@@ -1193,6 +1587,7 @@ def _settings(
             suggested_value=rec.value,
             evidence_ids=rec.evidence_ids,
             confidence=rec.confidence,
+            from_headers=rec.path == "governance.consent_column" and str(rec.value) in read_consent,
         )
     if (
         facts.positive_rate is not None
@@ -1308,9 +1703,18 @@ def summarise(
         (p.step for p in accepted if p.step is not None and p.step.kind is RecipeStepKind.COMBINE_ROWS),
         None,
     )
-    if ctx.mode is RunMode.TRAIN and combine is not None:
+    unpivot = next(
+        (p.step for p in accepted if p.step is not None and p.step.kind is RecipeStepKind.UNPIVOT), None
+    )
+    if ctx.mode is RunMode.TRAIN and unpivot is not None:
+        period: Any = unpivot.params.get("period_column")
         actions.append(
-            f"Combine the {ctx.profile.row_count:,} rows into one row per {entity} by '{combine.column}', "
+            f"Turn the columns that hold one period each into rows, one per {entity} per '{period}'."
+        )
+    if ctx.mode is RunMode.TRAIN and combine is not None:
+        rows = "those rows" if unpivot is not None else f"the {ctx.profile.row_count:,} rows"
+        actions.append(
+            f"Combine {rows} into one row per {entity} by '{combine.column}', "
             f"using only rows dated on or before each {entity}'s snapshot, and train on those."
         )
     elif ctx.mode is RunMode.TRAIN:

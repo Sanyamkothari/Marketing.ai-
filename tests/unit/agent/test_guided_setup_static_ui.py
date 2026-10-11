@@ -91,11 +91,13 @@ def test_every_session_path_is_a_route_the_agent_router_declares() -> None:
     }
     text = code_of("api.js")
     tails = [match.group(1) or "" for match in SESSION_PATH.finditer(text)]
-    # Plan L M154 (DEC-1541) added "/edits" and "/rows": editing by hand and its table view.
+    # Plan L M154 (DEC-1541) added "/edits" and "/rows": editing by hand and its table view; Plan K M142
+    # (DEC-1409) "/assist", the optional second opinion.
     assert sorted(set(tails)) == [
         "",
         "/answers",
         "/apply",
+        "/assist",
         "/decisions",
         "/edits",
         "/messages",

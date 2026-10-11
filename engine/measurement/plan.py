@@ -5,7 +5,11 @@ stop on a good day, or change the outcome window once the numbers are in, and a 
 meaning 95 %. So the plan is fixed - and its hash written to the audit trail - before the outcomes are
 read: the metric and its column, the outcome kind, an optional covariate (pre-registered now, used by
 M102's adjusted estimate), the holdout and explore shares and the population they come from, the
-outcome window, the analysis date and any secondary dates, and the detectable effect.
+outcome window, the analysis date and any secondary dates, and the detectable effect. Since Plan K M135
+(DEC-1324) the plan may instead register `covariate_source: run_score`: adjust by the scoring run's own
+prediction of each customer's outcome, made before the campaign (`engine.measurement.run_score`), on a yes/no
+outcome or an amount; it is compared at measurement like the column, and left out of the stored plan and its
+hash while unset.
 
 **Frozen.** `freeze_plan` turns what the person decided (`TestPlanInput`) and what the campaign's
 assignment says (`RealisedPopulation`) into a `TestPlan` whose `plan_hash` is the SHA-256 of its
@@ -161,6 +165,17 @@ class TestPlanInput(StrictBase):
         exclude_if=_unset,
         description="The share of that variation the covariate is expected to explain (0 to below 1).",
     )
+    # Plan K M135 (DEC-1324): adjust by the scoring run's own prediction from before the campaign. Left out
+    # of the stored plan and its hash while unset, so every plan registered before keeps its `plan_hash`.
+    covariate_source: Literal["column", "run_score"] | None = Field(
+        default=None,
+        exclude_if=_unset,
+        description=(
+            "Where the adjustment comes from: `column` (covariate_column, an amount from before the campaign) "
+            "or `run_score` (the chance of the outcome the campaign's scoring run predicted for each customer "
+            "before the campaign; covariate_column is then null). Null: covariate_column alone decides."
+        ),
+    )
 
     @model_validator(mode="after")
     def _dates_in_order(self) -> TestPlanInput:
@@ -168,19 +183,31 @@ class TestPlanInput(StrictBase):
             raise ValueError("Each secondary analysis date must be after the analysis date.")
         if len(set(self.secondary_analysis_dates)) != len(self.secondary_analysis_dates):
             raise ValueError("A secondary analysis date is repeated.")
-        amount = (self.mde_value, self.outcome_sd, self.expected_rho2)
+        run_score = self.covariate_source == "run_score"
+        if run_score and self.covariate_column is not None:
+            raise ValueError(
+                "covariate_source run_score adjusts by the scoring run's own prediction, so covariate_column "
+                "must be left empty: name one or the other."
+            )
+        if self.covariate_source == "column" and self.covariate_column is None:
+            raise ValueError("covariate_source column adjusts by a column: name the covariate_column.")
+        # The prediction may also narrow a yes/no outcome's range (M135), so its expected share is allowed there.
+        amount = (self.mde_value, self.outcome_sd, None if run_score else self.expected_rho2)
         if self.outcome_kind == "binary" and any(value is not None for value in amount):
             raise ValueError(
                 "mde_value, outcome_sd and expected_rho2 plan an amount; a yes/no outcome is planned with "
-                "mde_pp and base_rate."
+                "mde_pp and base_rate (and expected_rho2 only with covariate_source run_score)."
             )
         if self.outcome_kind == "continuous" and (self.mde_pp is not None or self.base_rate is not None):
             raise ValueError(
                 "An amount is planned with mde_value and outcome_sd, in its own unit; mde_pp and base_rate "
                 "are for a yes/no outcome."
             )
-        if self.expected_rho2 is not None and self.covariate_column is None:
-            raise ValueError("expected_rho2 is the share a covariate explains: name the covariate_column.")
+        if self.expected_rho2 is not None and self.covariate_column is None and not run_score:
+            raise ValueError(
+                "expected_rho2 is the share a covariate explains: name the covariate_column, or use "
+                "covariate_source run_score."
+            )
         return self
 
 
@@ -271,6 +298,11 @@ class TestPlan(Artefact):
     expected_rho2: float | None = Field(
         default=None, exclude_if=_unset, description="The share of the spread the covariate should explain."
     )
+    covariate_source: Literal["column", "run_score"] | None = Field(
+        default=None,
+        exclude_if=_unset,
+        description="`run_score`: adjusted by the scoring run's prediction from before the campaign (M135).",
+    )
     amends: str | None = Field(default=None, description="`plan_hash` of the version this one replaces.")
     amendment_reason: str | None = Field(default=None, description="Why it was amended.")
     registered_at: AwareDatetime = Field(description="When this version was registered.")
@@ -354,6 +386,7 @@ def freeze_plan(
             decided.base_rate,
             decided.mde_pp / 100.0,
             alpha=decided.alpha,
+            rho2=decided.expected_rho2 or 0.0,  # M135: only a run_score plan carries one on a yes/no outcome
         )
         achieved, note = estimate.power, estimate.reason
     warnings = (PLAN_UNDERPOWERED,) if achieved is not None and achieved < decided.power else ()
@@ -449,6 +482,7 @@ def plan_differences(
     outcome_window_days: int | None,
     covariate_column: str | None,
     outcome_kind: Literal["binary", "continuous"] = "binary",
+    covariate_source: Literal["column", "run_score"] | None = None,
 ) -> tuple[PlanDifference, ...]:
     """Every way this measurement would differ from `plan`; empty when it is measured as planned."""
 
@@ -468,6 +502,11 @@ def plan_differences(
         ("outcome_column", plan.outcome_column, outcome_column),
         ("positive_label", _label(plan.positive_label), _label(positive_label)),
         ("covariate_column", plan.covariate_column, covariate_column),
+        (
+            "covariate_source",
+            _source(plan.covariate_source),
+            _source(covariate_source),
+        ),
     ]
     return tuple(
         PlanDifference(field=name, planned=text(planned), realised=text(now))
@@ -493,6 +532,16 @@ def population_kept(plan: TestPlan, realised: RealisedPopulation) -> bool:
         and realised.n_explore <= plan.n_explore
         and 0 <= removed <= allowance
     )
+
+
+def _source(source: str | None) -> str | None:
+    """Where the adjustment comes from, as compared (M135): `run_score`, or none.
+
+    A column (`covariate_source: column`, or `covariate_column` named alone, as every plan before M135
+    does) is compared by `covariate_column` itself, so a plan that adds or drops a column differs there
+    only, exactly as before; this field differs only when one side uses the scoring run's prediction.
+    """
+    return source if source == "run_score" else None
 
 
 def _label(value: str | None) -> str | None:

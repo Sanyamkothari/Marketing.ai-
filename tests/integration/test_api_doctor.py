@@ -144,3 +144,58 @@ def test_unknown_uploads_and_use_cases_are_404(client: TestClient) -> None:
 
 def test_an_empty_request_is_422(client: TestClient) -> None:
     assert client.post("/doctor/diagnosis", json={"upload_ids": []}).status_code == 422
+
+
+def test_a_diagnosis_reads_a_bounded_share_of_each_file_and_says_so(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every file is held at once, so the rows read are shared out (M161, DEC-1507), and a share says when."""
+    from api.routes import doctor
+
+    monkeypatch.setattr(doctor, "DIAGNOSIS_ROWS", 400)
+    monkeypatch.setattr(doctor, "ADVISE_ROWS", 100)
+    customers = upload(
+        client, "customers.csv", ("customer_id,plan\n" + "".join(f"C{i},a\n" for i in range(150))).encode()
+    )
+    bills = upload(client, "bills.csv", bills_csv())
+    diagnosis = client.post(
+        "/doctor/diagnosis", json={"upload_ids": [customers["upload_id"], bills["upload_id"]]}
+    )
+    assert diagnosis.status_code == 200, diagnosis.text
+    files = {item["upload_id"]: item for item in diagnosis.json()["files"]}
+    assert files[bills["upload_id"]]["rows"] == 600, "the file's own row count, not the rows read"
+    links = diagnosis.json()["links"]
+    assert links and all(link["sampled"] for link in links)
+
+
+def test_a_file_too_small_says_what_is_short_what_to_do_and_what_to_collect(
+    client: TestClient, config_root: Path
+) -> None:
+    """Plan L M158 (DEC-1580 … DEC-1584): a `too_small` verdict through the API carries its next steps."""
+    from engine.config import load_use_case
+
+    config = load_use_case(USE_CASE, config_root)
+    frame = generate(GenerationSpec(use_case_id=USE_CASE, rows=60, variant="clean"))
+    found = int((frame["converted_30d"].astype(str) == "1").sum())
+    tiny = upload(client, "tiny.csv", frame.to_csv(index=False).encode())
+
+    response = client.post("/doctor/diagnosis", json={"upload_ids": [tiny["upload_id"]]})
+    assert response.status_code == 200, response.text
+    ad = {item["use_case_id"]: item for item in response.json()["use_cases"]}[USE_CASE]
+    assert ad["status"] == "too_small", ad["summary"]
+    steps = ad["next_steps"]
+    short = {item["code"]: item for item in steps["shortfalls"]}
+    assert (short["ROWS_TOO_FEW"]["measured"], short["ROWS_TOO_FEW"]["needed"]) == (
+        60,
+        config.validation.min_rows,
+    )
+    assert (short["TARGET_TOO_FEW_POSITIVES"]["measured"], short["TARGET_TOO_FEW_POSITIVES"]["needed"]) == (
+        found,
+        config.validation.min_positive,
+    )
+    (campaign,) = [o for o in steps["options"] if o["kind"] == "collect_with_control_group"]
+    assert campaign["control_group"] + campaign["contacted"] == 60
+    assert any(config.target.label_source in line for line in steps["collect"])
+    assert steps["data_request_use_case"] == USE_CASE
+    request = client.get("/pilot/data-request", params={"use_case": USE_CASE})
+    assert request.status_code == 200, "the data request the screen links to is there"

@@ -136,6 +136,9 @@ export function summaryCardHtml(summary) {
               : "";
           return `<li class="sp-entry sp-card ${esc(card.severity || "info")}" data-card="${esc(card.code)}"${
             card.campaign_id ? ` data-card-campaign="${esc(card.campaign_id)}"` : ""
+          }${
+            // PLAN-K (M139): the card's use case, so "Draft a plan" (ui/modules/agentic) can name the card.
+            card.use_case_id ? ` data-card-use-case="${esc(card.use_case_id)}"` : ""
           }><span class="sp-label">${esc(card.title)}</span>${who ? `<span class="sp-text">${esc(who)}</span>` : ""}<span class="sp-text">${esc(
             card.text,
           )}</span>${facts ? `<ul class="sp-facts">${facts}</ul>` : ""}<span class="sp-text"><em>${esc(card.next_step)}</em>${pack}</span></li>`;

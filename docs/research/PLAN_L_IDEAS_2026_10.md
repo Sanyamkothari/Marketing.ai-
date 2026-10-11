@@ -82,6 +82,26 @@ each idea is a candidate, reviewed by the Plan L integrator after M161 (see the 
 - Partial tension: #7 (only if a draft can never be approved, scored or exported) and #5/#6 (only while labelled
   "describes your file" / "not a model").
 
+## The review after M161 (11 Oct 2026)
+
+Every idea was weighed for value to a person without a data team, effort, and fit with the product's rules.
+
+| # | Idea | Verdict | Where |
+|---|---|---|---|
+| 1 | "Can be built from your files" | Built as M157: the outcome from an event log, agreed as a sentence | DEC-1570 … 1579 |
+| 2 | Cross-file link-up | Built as M155: each log against the customer list, the fix in plain words | DEC-1550 … 1559 |
+| 3 | Data request kit: "send what you have" | **Built** | DEC-1598 |
+| 4 | A Data Doctor that remembers | Partly, as M159 (the same treatment for the same shape); the page itself still forgets on reload | DEC-1590 … 1595 |
+| 5 | "What your file already says" | **Built**, on the diagnosis, no AI | DEC-1596 |
+| 8 | "Things we checked" + the too-good alarm | **Built**: an advisory check and a panel from the run's own reports | DEC-1599 |
+| 16 | Next month's file changed: propose the fix | **Built**: the rename proposed, a renamed copy on the person's yes | DEC-1597 |
+| 6 | Too small to predict, big enough to test | Partly, as M158's "collect with the next campaign" option | DEC-1582 |
+| 10 | Outcome-definition preview | Partly, as M157's counted choices and censoring sentence | DEC-1572, 1574 |
+| 17 | Outcome-day reminders | Next: touches the alerts other plans own (`engine/scheduling/alerts.py`); worth a small change there | — |
+| 11, 12 | Validity-aware prepaid lapse; when to contact | Next, for an India telecom pilot: config-heavy, needs a `recharges` role | — |
+| 9, 18, 19 | Your rule vs the model; monthly brief; Ask your data earlier | Later: medium effort, outside Data Doctor | — |
+| 7, 13, 14, 15 | Draft model; DLT templates; WhatsApp costs; offer editor | Not now: overlap Plan K or need product decisions | — |
+
 ## Sources (web)
 
 - Pecan, Obviously AI and Akkio reviews on G2 (black box; users needed vendor help to clean and merge data).

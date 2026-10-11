@@ -200,3 +200,41 @@ def test_a_workbook_source_is_read_and_deleted_whole(client: TestClient, storage
     deleted = client.delete(f"/clients/{client_id}/sources/{body['source_id']}")
     assert deleted.status_code == 204
     assert storage.list_keys(folder) == ()
+
+
+# ---------------------------------------------------------------------------
+# A failed upload leaves nothing behind (Plan L M161)
+# ---------------------------------------------------------------------------
+def test_a_damaged_workbook_is_a_422_and_leaves_nothing(client: TestClient, data_dir: Path) -> None:
+    from tests.unit.intake.test_intake_run import rewritten, small_table
+
+    data = rewritten(small_table(), lambda xml: xml.replace(b'r="A15"', b'r="A!15"'))
+    response = client.post(
+        "/uploads",
+        files={"file": ("damaged.xlsx", data, XLSX)},
+        data={"use_case": "payment-propensity", "mode": "train"},
+    )
+    assert response.status_code == 422, response.text
+    assert response.json()["detail"]["code"] == "UPLOAD_WORKBOOK_UNREADABLE"
+    assert not list(data_dir.glob("uploads/*/*"))
+
+
+def test_an_unexpected_failure_leaves_no_file_retention_cannot_find(
+    config_root: Path, data_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from engine.stages import ingest
+
+    def broken(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("a bug")
+
+    monkeypatch.setattr(ingest, "profile_dataset", broken)
+    with (
+        TestClient(create_app(config_root=config_root, data_dir=data_dir)) as local,
+        pytest.raises(RuntimeError),
+    ):
+        local.post(
+            "/uploads",
+            files={"file": ("a.csv", b"Report\nid,spend\nC1,1\nC2,2\n", "text/csv")},
+            data={"use_case": "payment-propensity", "mode": "train"},
+        )
+    assert not list(data_dir.glob("uploads/*/*"))

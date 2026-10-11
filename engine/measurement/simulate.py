@@ -51,7 +51,9 @@ different segments answer different offers and some are put off by both); M102 a
 lognormal, and an amount from before the campaign correlated with it, for the adjusted estimate); M104 adds
 effects that differ by group of customers (`segmented_campaign`, and `segment_outcomes` for the outcomes of
 a real scoring run's list), so the Value Proof Pack's backfire check can be shown to flag a planted harmful
-group and leave a neutral one alone; they extend this module.
+group and leave a neutral one alone; Plan K M135 adds `predicted_campaign` (a yes/no outcome whose chance
+depends on each customer's features, with a scoring run's prediction of it made before the campaign, or a
+useless one), for the adjustment by the run's own prediction; they extend this module.
 
 Pure and deterministic: no storage, no network, no clock. `pandas` is imported inside the function so
 `import engine` stays fast.
@@ -69,6 +71,8 @@ if TYPE_CHECKING:
     import pandas as pd
     from numpy.typing import NDArray
 
+    from engine.measurement.run_score import RunPrediction
+
 __all__ = [
     "ARM_COLUMN",
     "AS_OF",
@@ -80,6 +84,7 @@ __all__ = [
     "MULTI_ARM_SEGMENTS",
     "OUTCOME_COLUMN",
     "OUTCOME_WINDOW_DAYS",
+    "PREDICTED_COLUMN",
     "REVENUE_COLUMN",
     "SEGMENT_COLUMN",
     "TREATMENT_DATE_COLUMN",
@@ -87,12 +92,14 @@ __all__ = [
     "SimulatedCampaign",
     "SimulatedMultiArmCampaign",
     "SimulatedMultiArmPopulation",
+    "SimulatedPredictedCampaign",
     "SimulatedRevenueCampaign",
     "SimulatedSegmentedCampaign",
     "SimulatedUpliftPopulation",
     "multi_arm_campaign",
     "multi_arm_population",
     "population",
+    "predicted_campaign",
     "revenue_campaign",
     "segment_outcomes",
     "segmented_campaign",
@@ -801,4 +808,143 @@ def segmented_campaign(
     )
     return SimulatedSegmentedCampaign(
         scores=scores, outcomes=outcomes, base_rate=base_rate, effects=dict(effects)
+    )
+
+
+# ---------------------------------------------------------------------------
+# Plan K M135: a yes/no outcome and the scoring run's prediction of it, made before the campaign
+# ---------------------------------------------------------------------------
+PREDICTED_COLUMN: Final[str] = "predicted_chance"
+"""The scores' column holding the simulated scoring run's prediction (a propensity run's score field)."""
+
+PredictionKind = Literal["informative", "noise"]
+
+_FEATURE_WEIGHTS: Final[tuple[float, float]] = (1.0, 0.6)
+"""How strongly the two simulated features move a customer's chance of the outcome (on the log-odds scale)."""
+
+
+@dataclass(frozen=True)
+class SimulatedPredictedCampaign:
+    """A randomised campaign on a yes/no outcome, with a prediction of each customer's outcome made before it."""
+
+    scores: pd.DataFrame
+    """`customer_id`, `control_group`, `suppressed_reason` (empty), `intended_treatment` (True) and
+    `predicted_chance`, the scoring run's prediction, as a propensity run's scores carry its score field."""
+    outcomes: pd.DataFrame
+    """`customer_id`, `converted` (0/1, every outcome mature on `AS_OF`) and `treatment_date` (ISO date)."""
+    true_effect: float
+    """The mean over these customers of their chance when contacted minus their chance when not: what the
+    interval has to cover."""
+    prediction: PredictionKind
+    predicted_at: datetime
+    """When the simulated scoring run finished: the day before the earliest treatment date."""
+
+    @property
+    def measure_kwargs(self) -> dict[str, Any]:
+        """The arguments of `measure_incrementality` that read these frames, unadjusted."""
+        return {
+            "run_id": "simulated",
+            "primary_key": KEY_COLUMN,
+            "outcome_column": OUTCOME_COLUMN,
+            "treatment_date_column": TREATMENT_DATE_COLUMN,
+            "outcome_window_days": OUTCOME_WINDOW_DAYS,
+            "treatment_time": AS_OF - timedelta(days=OUTCOME_WINDOW_DAYS),
+            "as_of": AS_OF,
+        }
+
+    @property
+    def run_prediction(self) -> RunPrediction:
+        """The prediction as `engine.measurement.run_score.load_run_prediction` reads it from a run."""
+        from engine.measurement.run_score import PREDICTION_COLUMN, RunPrediction
+
+        frame = self.scores[[KEY_COLUMN, PREDICTED_COLUMN]].rename(
+            columns={PREDICTED_COLUMN: PREDICTION_COLUMN}
+        )
+        return RunPrediction(
+            frame=frame, run_id="simulated", column=PREDICTED_COLUMN, predicted_at=self.predicted_at
+        )
+
+    @property
+    def adjusted_kwargs(self) -> dict[str, Any]:
+        """`measure_kwargs` plus the run's prediction: the adjusted measurement (Plan K M135)."""
+        return {**self.measure_kwargs, "run_prediction": self.run_prediction}
+
+
+def predicted_campaign(
+    n: int,
+    base_rate: float,
+    effect: float,
+    *,
+    seed: int,
+    prediction: PredictionKind = "informative",
+    noise_sd: float = 0.5,
+    control_share: float = CONTROL_SHARE,
+) -> SimulatedPredictedCampaign:
+    """`n` customers whose chance of a yes/no outcome depends on two features, and a prediction of it (M135).
+
+    Each customer has features `x1`, `x2` (standard normal) and, without contact, the chance
+    `p0 = expit(logit(base_rate) + 1.0 x1 + 0.6 x2)`; contacted, `p1 = clip(p0 + effect, 0, 1)`. Complete
+    randomisation as :func:`population`: `round(control_share * n)` held back at random, independently of
+    the features. Every outcome is mature on `AS_OF`.
+
+    The scoring run's prediction is fixed before the campaign, from the same features:
+    `prediction="informative"` gives `expit(logit(p0) + noise_sd * e)` (correlated with the outcome, noisy
+    as a real model is); `"noise"` gives a uniform draw unrelated to anything (a useless prediction). The
+    run finished the day before the earliest treatment date. Deterministic for a seed; `ValueError` for a
+    value out of range.
+    """
+    import pandas as pd
+
+    if n < 4:
+        raise ValueError(f"n must be at least 4, not {n}.")
+    if not 0.0 < base_rate < 1.0:
+        raise ValueError(f"base_rate must be between 0 and 1, not {base_rate}.")
+    if not -1.0 < effect < 1.0:
+        raise ValueError(f"effect must be between -1 and 1, not {effect}.")
+    if noise_sd < 0.0:
+        raise ValueError(f"noise_sd cannot be negative, not {noise_sd}.")
+    _check_share("control_share", control_share, below_one=True)
+    n_control = round(control_share * n)
+    if not 2 <= n_control <= n - 2:
+        raise ValueError("control_share leaves fewer than two customers in an arm.")
+    rng = np.random.default_rng(seed)
+    control = np.zeros(n, dtype=bool)
+    control[rng.choice(n, size=n_control, replace=False)] = True
+    x1, x2 = rng.standard_normal(n), rng.standard_normal(n)
+    log_odds = np.log(base_rate / (1.0 - base_rate)) + _FEATURE_WEIGHTS[0] * x1 + _FEATURE_WEIGHTS[1] * x2
+    p0 = 1.0 / (1.0 + np.exp(-log_odds))
+    p1 = np.clip(p0 + effect, 0.0, 1.0)
+    converted = rng.random(n) < np.where(control, p0, p1)
+    if prediction == "informative":
+        predicted = 1.0 / (1.0 + np.exp(-(log_odds + noise_sd * rng.standard_normal(n))))
+    elif prediction == "noise":
+        predicted = rng.random(n)
+    else:  # pragma: no cover - the Literal says which
+        raise ValueError(f"Unknown prediction {prediction!r}.")
+    age_days = rng.integers(OUTCOME_WINDOW_DAYS + 1, OUTCOME_WINDOW_DAYS + _MATURE_SPREAD_DAYS + 1, size=n)
+    keys = np.char.add("P", np.char.zfill(np.arange(n).astype(str), 7))
+    treated_on = np.datetime64(AS_OF.date()) - age_days.astype("timedelta64[D]")
+    scores = pd.DataFrame(
+        {
+            KEY_COLUMN: keys,
+            "control_group": control,
+            "suppressed_reason": np.full(n, "", dtype=object),
+            "intended_treatment": np.ones(n, dtype=bool),
+            PREDICTED_COLUMN: predicted,
+        }
+    )
+    outcomes = pd.DataFrame(
+        {
+            KEY_COLUMN: keys,
+            OUTCOME_COLUMN: converted.astype(np.int64),
+            TREATMENT_DATE_COLUMN: treated_on.astype(str),
+        }
+    )
+    finished = AS_OF - timedelta(days=OUTCOME_WINDOW_DAYS + _MATURE_SPREAD_DAYS + 1)
+    return SimulatedPredictedCampaign(
+        scores=scores,
+        outcomes=outcomes,
+        true_effect=float(np.mean(p1 - p0)),
+        prediction=prediction,
+        predicted_at=finished,
     )

@@ -127,6 +127,9 @@ class RecipeStepKind(StrEnum):
     FILL_MISSING = "fill_missing"
     REMOVE_ROWS = "remove_rows"
     RENAME_COLUMN = "rename_column"
+    # Plan L M156 (DEC-1560): a wide sheet's month columns into rows (level 3, first in the fixed order). Row-wise:
+    # each row becomes one row per listed period, from that row's own cells and the frozen parameters only.
+    UNPIVOT = "unpivot"
 
 
 class ProposalSource(StrEnum):
@@ -202,6 +205,8 @@ class RecipeStep(StrictBase):
             raise ValueError(f"a {self.kind.value} step must name new_column")
         if self.kind is RecipeStepKind.REMOVE_ROWS and self.new_column is not None:
             raise ValueError("a remove_rows step creates no column")
+        if self.kind is RecipeStepKind.UNPIVOT and self.new_column is not None:
+            raise ValueError("an unpivot step names its new columns in params")
         return self
 
 
@@ -370,6 +375,15 @@ class Proposal(StrictBase):
         description=(
             "Who suggested it: `ai` (the chat), `person` (an edit by hand); null for the rules' own suggestions "
             "and for every suggestion saved before Plan L."
+        ),
+    )
+    from_headers: bool = Field(
+        default=False,
+        exclude_if=lambda value: not value,
+        description=(
+            "True when the column was picked by reading the header (abbreviations, romanised Hindi; M142). "
+            "Such a suggestion is always `check` and is never ticked for the person, whatever "
+            "`agent.tick_uncertain` says. Left out of the stored session while false."
         ),
     )
 

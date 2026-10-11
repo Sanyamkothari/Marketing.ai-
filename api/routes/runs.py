@@ -33,7 +33,7 @@ two columns when they were joined on one.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Annotated, Any, Final, Literal
 
@@ -51,11 +51,13 @@ from api.deps import (
     get_settings,
 )
 from api.routes.agent_recipes import (  # Plan G (DEC-1006)
+    RECIPE_ROLES_MISMATCH,
     attach_recipe_to_run,
     load_recipe,
     model_recipe,
     refuse_other_roles,
     replay_for_scoring,
+    replay_on_dataset,
 )
 from api.routes.uploads import (
     UPLOAD_VALIDATION_FILENAME,
@@ -77,6 +79,12 @@ from api.schemas import (
     UploadRecord,
     ValidationErrorResponse,
 )
+from engine.agent.contracts import DataRecipe
+from engine.agent.dataset_recipe import (  # Plan L M155
+    PreparedDataset,
+    attach_dataset_recipe,
+    dataset_key_conflict,
+)
 from engine.aws.run_cost import (  # Plan J M108 (DEC-1318)
     RUN_COST_NEEDS_CONFIRMATION,
     CostWatch,
@@ -93,6 +101,7 @@ from engine.config import (
     RunMode,
     UseCaseConfig,
     get_catalog,
+    key_columns,
     resolve_config,
     sole_key,
 )
@@ -260,9 +269,6 @@ DATASET_USE_CASE_MISMATCH: Final[str] = "DATASET_USE_CASE_MISMATCH"
 DATASET_CLIENT_MISMATCH: Final[str] = "DATASET_CLIENT_MISMATCH"
 UPLIFT_REQUIRES_UPLIFT_ROUTE: Final[str] = "UPLIFT_REQUIRES_UPLIFT_ROUTE"
 """An uplift training run asked of `POST /runs`, which cannot run the uplift checks first (M53)."""
-RECIPE_DATASET_UNSUPPORTED: Final[str] = "RECIPE_DATASET_UNSUPPORTED"
-"""Scoring a built dataset with a model whose training data Guided setup prepared (Plan G review):
-only an upload can be prepared by the model's recipe today, and an unprepared file is scored wrongly."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -403,6 +409,7 @@ def create_run_endpoint(
 
     upload: UploadRecord | None = None
     dataset: _DatasetSource | None = None
+    dataset_prepared: tuple[DataRecipe, PreparedDataset] | None = None  # Plan L M155: prepared by a recipe
     file_format: Literal["csv", "parquet"]
     if body.dataset_id is not None:
         dataset = _dataset_source(storage, body.dataset_id, config=config, client_id=body.client_id)
@@ -453,12 +460,22 @@ def create_run_endpoint(
         version = score_version(registry, config=config, version_id=body.model_version_id)
         recipe = model_recipe(storage, version)
         if upload is None and recipe is not None:
-            raise http_error(
-                409,
-                RECIPE_DATASET_UNSUPPORTED,
-                "This model was trained on data Guided setup prepared, and a built dataset cannot be "
-                "prepared the same way yet. Upload the file to score instead.",
+            # Plan L M155 (DEC-1553): a built dataset is prepared by the model's recipe as a scoring file is,
+            # under the same roles rule; the run still names the dataset, and its job reads the prepared rows.
+            # Before anything is prepared, as for a file: a refused run leaves no prepared dataset behind.
+            conflict = dataset_key_conflict(recipe, key_columns(primary_key))
+            if conflict is not None:
+                raise http_error(409, RECIPE_ROLES_MISMATCH, conflict)
+            prepared = replay_on_dataset(
+                storage, config, _require_dataset(dataset).manifest.dataset_id, recipe
             )
+            if isinstance(prepared, ValidationReport):
+                return validation_conflict(prepared)
+            dataset_prepared = (recipe, prepared)
+            dataset = replace(
+                _require_dataset(dataset), profile=prepared.profile, source_key=prepared.source_key
+            )
+            profile, source_key = prepared.profile, prepared.source_key
         if upload is not None:
             # Before anything is prepared, as the dry run does: a refused run leaves no prepared upload.
             refuse_other_roles(recipe, primary_key=primary_key, target=None, training=False)
@@ -528,6 +545,8 @@ def create_run_endpoint(
     )
     if upload is not None:
         attach_recipe_to_run(storage, upload.upload_id, record.run_id)  # Plan G (DEC-1006)
+    elif dataset_prepared is not None:
+        attach_dataset_recipe(storage, record.run_id, dataset_prepared[0], dataset_prepared[1].receipt)
     if stamped_at_creation(config, scoring=body.mode is RunMode.SCORE):
         # Plan J M100 part B (DEC-1310): the catalogue the use case's action ids were just checked against
         # (this root), stamped before the job starts, so the run is stamped and priced from the same file.

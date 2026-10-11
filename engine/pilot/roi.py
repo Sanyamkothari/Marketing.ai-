@@ -34,6 +34,11 @@ every converter of a yes/no outcome. Outcomes ingested as amounts (`incrementali
 given: the view says so in a plain sentence and prices nothing, rather than "No outcomes have been
 recorded".
 
+**A yes/no outcome adjusted by the scoring run's prediction (Plan K M135, DEC-1324).** A campaign report
+whose test plan registered `covariate_source: run_score` carries the adjusted difference in rates; it is the
+analysis the plan registered, so the extra outcomes are priced from it (times the contacted customers), with
+`adjusted` true and one sentence saying so. Every other yes/no view is unchanged.
+
 The rupee figures multiply that interval by values the *client* enters - what one extra retained or
 won-back customer is worth, what an offer costs when taken, what a contact costs - stored with the
 run (`pilot_roi_inputs.json`) and printed on the report, which says that the value depends on them.
@@ -173,7 +178,8 @@ class RoiView(_Strict):
     control_mean: float | None = Field(default=None, exclude_if=lambda value: value is None)
     """Average amount of the control group."""
     adjusted: bool | None = Field(default=None, exclude_if=lambda value: value is None)
-    """True when the amount was priced from the adjusted (pre-registered covariate) estimate."""
+    """True when the amount, or a yes/no outcome (Plan K M135), was priced from the adjusted (pre-registered)
+    estimate."""
     value_note: str | None = Field(default=None, exclude_if=lambda value: value is None)
     """What the rupee figures of an amount rest on, or why they are missing, in one plain paragraph."""
 
@@ -449,6 +455,8 @@ def compute_roi(
     mature = isinstance(report, IncrementalityReport) and (
         report.status is IncrementalityStatus.MATURE and report.incremental_conversions is not None
     )
+    if isinstance(report, IncrementalityReport) and mature and report.adjusted_interval is not None:
+        return _priced_adjusted_rate(base, report, inputs=chosen, root=root)
     if isinstance(report, IncrementalityReport) and mature:
         incremental = report.incremental_conversions
         assert incremental is not None
@@ -543,6 +551,35 @@ def compute_roi(
     )
 
 
+def _priced_adjusted_rate(
+    base: _Common, report: IncrementalityReport, *, inputs: RoiInputs | None, root: Path | None
+) -> RoiView:
+    """A yes/no report adjusted by the scoring run's prediction (Plan K M135): priced from the adjusted rates."""
+    from engine.measurement.measure import adjusted_by
+
+    estimate = report.adjusted_interval
+    assert estimate is not None  # the caller checked
+    rows = report.treated_rows
+    view = _priced(
+        base,
+        source="incrementality_report",
+        causal=report.causal,
+        outcome_name=report.outcome_column,
+        treated=(rows, report.treated_conversions, report.treated_rate),
+        control=(report.control_rows, report.control_conversions, report.control_rate),
+        incremental=Money(
+            value=estimate.value * rows,
+            low=None if estimate.ci_low is None else estimate.ci_low * rows,
+            high=None if estimate.ci_high is None else estimate.ci_high * rows,
+        ),
+        confidence_level=estimate.confidence_level,
+        inputs=inputs,
+        root=root,
+    )
+    note = f"The extra outcomes are the adjusted difference in rates times the contacted customers. {adjusted_by(report)}"
+    return view.model_copy(update={"adjusted": True, "value_note": note})
+
+
 def _priced_amount(
     base: _Common, report: IncrementalityReport, *, inputs: RoiInputs | None, root: Path | None
 ) -> RoiView:
@@ -601,7 +638,12 @@ def _priced_amount(
         f"one unit you entered (1 when it already is revenue in rupees). The offer cost is counted for every "
         f"contacted customer whose amount is above zero."
     )
-    if adjusted:
+    if adjusted and report.covariate_source == "run_score":  # Plan K M135
+        unit += (
+            " The difference is the adjusted one, which takes account of what the scoring run predicted for "
+            "each customer before the campaign, as the test plan registered."
+        )
+    elif adjusted:
         unit += (
             f" The difference is the adjusted one, which takes account of each customer's "
             f"{report.covariate_column!r} before the campaign, as the test plan registered."

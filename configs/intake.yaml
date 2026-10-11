@@ -65,4 +65,7 @@ sample_rows: 20000
 
 # An .xlsx file is a zip archive. One whose contents would unpack to more than this is refused before it
 # is opened, so a small file cannot unpack into gigabytes.
-max_workbook_uncompressed_mb: 2048
+max_workbook_uncompressed_mb: 1024
+# A workbook keeps every distinct text in one table that is read into memory whole (about ten times its
+# size). A million different customer IDs take about 30 MB.
+max_shared_strings_mb: 64
