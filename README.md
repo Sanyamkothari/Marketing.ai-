@@ -1873,7 +1873,10 @@ it is; only navigation, pages and words change, and everything technical goes be
 switch. Phase 1 (M170–M173) is quick wins: one contact list, one word for each thing, money in ₹ and lakh, a Help
 menu. Phase 2 (M174–M180) is the campaign-centred structure behind `ui.layout`. Phase 3 (M181) proves it is simpler
 with a timed five-person test. Decisions: DEC-1600 … DEC-1699 in [`docs/DECISIONS.md`](docs/DECISIONS.md). The
-glossary: [`docs/ux/GLOSSARY.md`](docs/ux/GLOSSARY.md), generated from `ui/labels.js`.
+glossary: [`docs/ux/GLOSSARY.md`](docs/ux/GLOSSARY.md), generated from `ui/labels.js`. After the plan, M182 (the brand as
+configuration), M183 (the usability session pack) and M184 (safety fixes from the autonomy audit in the research
+report [`docs/research/AUTONOMOUS_MARKETING_AGENT_2026_10.md`](docs/research/AUTONOMOUS_MARKETING_AGENT_2026_10.md))
+were added.
 
 | # | Milestone | Definition of done | Status | Tests that prove it |
 |---|---|---|---|---|
