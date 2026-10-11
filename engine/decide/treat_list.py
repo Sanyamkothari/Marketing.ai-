@@ -94,6 +94,7 @@ __all__ = [
     "offer_policy_intended",
     "policy_intended",
     "table_csv_bytes",
+    "treat_list_awaits_gate",
     "with_control_group",
 ]
 
@@ -300,14 +301,80 @@ class TreatListSummary(Artefact):
         ),
         exclude_if=lambda value: value is None,
     )
+    # Plan K M134 (DEC-1405): what the pre-send compliance gate did. Absent unless `compliance.gate.enabled`.
+    compliance_withheld: dict[str, int] | None = Field(
+        default=None,
+        description=(
+            "Plan K M134: customers the compliance gate took off the list, per reason code (a customer counts "
+            "under every reason that closed one of their planned channels). Absent when the gate is off."
+        ),
+        exclude_if=lambda value: value is None,
+    )
+    compliance_withheld_rows: int | None = Field(
+        default=None,
+        description="Plan K M134: customers the gate allowed on no planned channel, so treat = 0.",
+        exclude_if=lambda value: value is None,
+    )
+    compliance_rerouted_rows: int | None = Field(
+        default=None,
+        description="Plan K M134: customers the gate moved to the next planned channel it allows.",
+        exclude_if=lambda value: value is None,
+    )
+    compliance_rule_version: str | None = Field(
+        default=None,
+        description="Plan K M134: sha256 of the rules the gate applied (compliance_decisions.json `rules`).",
+        exclude_if=lambda value: value is None,
+    )
+    compliance_decisions_sha256: str | None = Field(
+        default=None,
+        description="Plan K M134: sha256 of compliance_decisions.parquet, signed on the decision ledger.",
+        exclude_if=lambda value: value is None,
+    )
+    compliance_evidence_id: str | None = Field(
+        default=None,
+        description="Plan K M134: the evidence id of that signed ledger entry.",
+        exclude_if=lambda value: value is None,
+    )
 
 
 def ensure_treat_list(storage: Storage, run_id: str, *, config_root: Path | None = None) -> TreatListSummary:
-    """The summary of the run's treat list, building the three files first when they are not there."""
+    """The summary of the run's treat list, building the three files first when they are not there.
+
+    Plan K M134: with `compliance.gate.enabled` on, a list stored without the gate's record (built before the
+    switch was turned on) is built again, through the gate, rather than handed off ungated.
+    """
     try:
-        return storage.read_model(run_key(run_id, TREAT_LIST_SUMMARY_FILENAME), TreatListSummary)
+        summary = storage.read_model(run_key(run_id, TREAT_LIST_SUMMARY_FILENAME), TreatListSummary)
     except StorageError:
         return build_treat_list(storage, run_id, config_root=config_root)
+    # PLAN-K (M134, DEC-1405): the pre-send compliance gate.
+    if summary.compliance_rule_version is None and _gate_on(config_root):
+        return build_treat_list(storage, run_id, config_root=config_root)
+    return summary
+
+
+# PLAN-K (M134, DEC-1405): the pre-send compliance gate.
+def treat_list_awaits_gate(storage: Storage, run_id: str, *, config_root: Path | None = None) -> bool:
+    """Plan K M134: True when `compliance.gate.enabled` is on and the run's stored treat list was not decided by
+    the gate (its summary is missing, or has no `compliance_rule_version`): it must be built again before it is
+    served. False whenever the gate is off - then a stored list is served as it is, as before."""
+    if not _gate_on(config_root):
+        return False
+    try:
+        summary = storage.read_model(run_key(run_id, TREAT_LIST_SUMMARY_FILENAME), TreatListSummary)
+    except StorageError:
+        return True
+    return summary.compliance_rule_version is None
+
+
+def _gate_on(config_root: Path | None) -> bool:
+    from engine.compliance.config import gate_enabled
+    from engine.compliance.errors import ComplianceError
+
+    try:
+        return gate_enabled(config_root)
+    except ComplianceError as exc:
+        raise TreatListError(exc.code, exc.message) from exc
 
 
 def offer_policy_intended(storage: Storage, run_id: str) -> pd.Series[Any] | None:
@@ -478,6 +545,7 @@ def build_treat_list(storage: Storage, run_id: str, *, config_root: Path | None 
     explore_offer_counts: dict[str, int] | None = None
     explore_cost: float | None = None
     held_back_value_rows: int | None = None
+    applied: _Applied | None = None
     offer_choice = _read_offer_choice(storage, run_id, primary_key, row_keys)
     if offer_choice is not None:
         applied = _apply_offer_choice(
@@ -503,6 +571,43 @@ def build_treat_list(storage: Storage, run_id: str, *, config_root: Path | None 
         held_back_value_rows = applied.held_back_value_rows
         if net_value.notna().any():
             net_value_note, net_value_unit = None, "rupees"
+
+    # 5c. Plan K M134 (DEC-1405): the pre-send compliance gate, only when `compliance.gate.enabled` is on (off,
+    # the default, reads the switch and the settings file and changes nothing). A customer it does not allow on
+    # their channel goes on the next planned channel it allows, else is not treated; its record is written and
+    # signed first.
+    gated = _compliance_gate(
+        storage,
+        record,
+        config,
+        scores=scores,
+        key_cols=key_cols,
+        is_uplift=is_uplift,
+        treat=treat,
+        channel=channel,
+        applied=applied,
+        offer_choice=offer_choice,
+        stamp=stamp,
+        config_root=config_root,
+    )
+    if gated is not None:
+        withheld_now = treat & ~gated.treat
+        treat, channel = gated.treat, pd.Series(gated.channel, dtype="object")
+        if applied is not None and offer_choice is not None:
+            # An offer the gate withheld was not given: like an offer the choice did not give, it keeps no
+            # offer, value or runner-up, and the per-offer counts and explore cost count what is sent.
+            cleared = pd.Series(withheld_now & offer_choice.covered)
+            offer = offer.mask(cleared, None)
+            net_value = net_value.mask(cleared)
+            runner_up_offer = runner_up_offer.mask(cleared, None)
+            runner_up_value = runner_up_value.mask(cleared)
+            if applied.offered is not None and applied.explored is not None and applied.label is not None:
+                offer_counts, explore_offer_counts, explore_cost = _offer_tallies(
+                    applied.label,
+                    applied.offered & treat,
+                    applied.explored & treat,
+                    offer_choice.explore_cost,
+                )
 
     # 6. Reasons, in business words.
     reasons = _reasons(storage, run_id, scores, row_keys, config_root)
@@ -557,6 +662,8 @@ def build_treat_list(storage: Storage, run_id: str, *, config_root: Path | None 
         explore_note=None if explore_cost is None else _EXPLORE_NOTE,
         held_back_value_rows=held_back_value_rows,
         held_back_value_note=None if held_back_value_rows is None else _HELD_BACK_VALUE_NOTE,
+        # PLAN-K (M134, DEC-1405): the pre-send compliance gate.
+        **({} if gated is None else _gate_fields(gated)),
     )
     storage.write_model(run_key(run_id, TREAT_LIST_SUMMARY_FILENAME), summary)
     _LOGGER.info(
@@ -1034,6 +1141,10 @@ class _OfferChoice(NamedTuple):
     (a file written before it), and no held-back row is given a value."""
     policy_value: np.ndarray | None = None
     """The net value of the offer the policy would have chosen had nobody been held back; NaN for none."""
+    # PLAN-K (M134, DEC-1405): the pre-send compliance gate.
+    action_id: np.ndarray | None = None
+    """Plan K M134: the file's `offer_action_id`, the catalogue action of `arm` (None: no offer, or an offer
+    with no catalogue action); None when the file has no such column."""
 
 
 def _read_offer_choice(
@@ -1092,6 +1203,10 @@ def _read_offer_choice(
             if POLICY_VALUE_COLUMN in table.columns
             else None
         ),
+        # PLAN-K (M134, DEC-1405): the pre-send compliance gate.
+        action_id=(
+            take("offer_action_id", None).astype(object) if "offer_action_id" in table.columns else None
+        ),
     )
 
 
@@ -1108,6 +1223,31 @@ class _Applied(NamedTuple):
     explore_offer_counts: dict[str, int] | None
     explore_cost: float | None
     held_back_value_rows: int | None
+    # PLAN-K (M134, DEC-1405): the pre-send compliance gate.
+    offered: np.ndarray | None = None
+    """Rows given the offer the run chose (the treat = 1 rows `offer_counts` counts)."""
+    explored: np.ndarray | None = None
+    """Explored rows given `explore_arm`'s offer (counted in `explore_offer_counts`)."""
+    label: np.ndarray | None = None
+    """The offer label each row was given (None for none)."""
+
+
+def _offer_tallies(
+    label: np.ndarray, offered: np.ndarray, explored: np.ndarray, explore_cost: np.ndarray
+) -> tuple[dict[str, int], dict[str, int] | None, float | None]:
+    """`offer_counts`, `explore_offer_counts` and `explore_cost` of the rows `offered` and `explored`."""
+    labels, counts = np.unique(label[offered].astype(str), return_counts=True)
+    explore_labels, explore_counts = np.unique(label[explored].astype(str), return_counts=True)
+    any_explored = bool(explored.any())
+    return (
+        {str(name): int(count) for name, count in zip(labels, counts, strict=True)},
+        (
+            {str(name): int(count) for name, count in zip(explore_labels, explore_counts, strict=True)}
+            if any_explored
+            else None
+        ),
+        round(float(explore_cost[explored].sum()), _RUPEE_DECIMALS) if any_explored else None,
+    )
 
 
 def _apply_offer_choice(
@@ -1172,9 +1312,9 @@ def _apply_offer_choice(
     texts = np.array([OFFER_REASON_TEXT.get(str(code)) for code in chosen.reason], dtype=object)
     reason = pd.Series(np.where(told, texts, nothing), dtype="object")
     unreachable = int((told & (chosen.reason == "no_eligible_offer")).sum())
-    labels, counts = np.unique(label[offered].astype(str), return_counts=True)
-    explore_labels, explore_counts = np.unique(label[explored].astype(str), return_counts=True)
-    any_explored = bool(explored.any())
+    offer_counts, explore_offer_counts, explore_cost = _offer_tallies(
+        label, offered, explored, chosen.explore_cost
+    )
     return _Applied(
         treat=np.asarray(treat, dtype=bool),
         offer=offer,
@@ -1184,17 +1324,155 @@ def _apply_offer_choice(
         runner_up_value=runner_value,
         offer_reason=reason,
         uncontactable_rows=unreachable if contactability_written else None,
-        offer_counts={str(name): int(count) for name, count in zip(labels, counts, strict=True)},
-        explore_offer_counts=(
-            {str(name): int(count) for name, count in zip(explore_labels, explore_counts, strict=True)}
-            if any_explored
-            else None
-        ),
-        explore_cost=(
-            round(float(chosen.explore_cost[explored].sum()), _RUPEE_DECIMALS) if any_explored else None
-        ),
+        offer_counts=offer_counts,
+        explore_offer_counts=explore_offer_counts,
+        explore_cost=explore_cost,
         held_back_value_rows=int(would.sum()) if bool(would.any()) else None,
+        offered=offered,
+        explored=explored,
+        label=label,
     )
+
+
+# PLAN-K (M134, DEC-1405): the pre-send compliance gate.
+def _row_actions(
+    scores: pd.DataFrame,
+    config: UseCaseConfig,
+    *,
+    is_uplift: bool,
+    offer_choice: _OfferChoice | None,
+    applied: _Applied | None,
+    arm_actions: np.ndarray | None,
+) -> np.ndarray:
+    """Plan K M134: each row's catalogue action (None for none), as `_resolve_channels` plans its channels.
+
+    A band's `action_id` (propensity) or `uplift.policy.treat_action_id` (uplift); on a run that chose the offer
+    per customer, the action of the offer the row was given, by its arm (`arm_actions`, `_arm_actions`): never by
+    label, which two actions may share. An offer with no catalogue action is None, and the choice planned it on
+    the use case's configured channels, as the gate then does.
+    """
+    n = len(scores.index)
+    actions = np.full(n, None, dtype=object)
+    policy = getattr(getattr(config, "uplift", None), "policy", None)
+    if is_uplift:
+        actions[:] = getattr(policy, "treat_action_id", None)
+    else:
+        bands = scores[BAND_COLUMN].astype(str).to_numpy(dtype=object)
+        for band in config.actions.bands:
+            actions[bands == band.name] = band.action_id
+    if offer_choice is None or applied is None or arm_actions is None:
+        return actions
+    if applied.offered is None or applied.explored is None:
+        return actions
+    covered = offer_choice.covered
+    top = len(arm_actions) - 1
+    given = np.where(
+        applied.offered, offer_choice.arm, np.where(applied.explored, offer_choice.explore_arm, 0)
+    )
+    given = np.where((given >= 0) & (given <= top), given, 0)
+    actions[covered] = np.asarray(arm_actions, dtype=object)[given[covered]]
+    return actions
+
+
+def _arm_actions(storage: Storage, run_id: str, chosen: _OfferChoice) -> np.ndarray:
+    """Plan K M134: each offer position's catalogue action (index 0, no offer, is None), by arm - never by label.
+
+    From the offers of `offer_choice.json` (`arms[].position`, `arms[].action_id`: the action the choice priced
+    and planned the offer's channels from, None for an offer with none), then from the file's own
+    (`offer_arm`, `offer_action_id`) pairs for a position the summary does not name. A position neither names
+    has no known action (None) and is logged: the gate then plans it on the use case's configured channels.
+    Read only when the gate is on.
+    """
+    from engine.decide.offer_run import OFFER_CHOICE_SUMMARY_FILENAME, OfferChoiceSummary
+
+    known: dict[int, str | None] = {}
+    try:
+        summary = storage.read_model(run_key(run_id, OFFER_CHOICE_SUMMARY_FILENAME), OfferChoiceSummary)
+        known = {int(item.position): item.action_id for item in summary.arms}
+    except (StorageError, ValueError):
+        _LOGGER.warning("treat list %s: %s could not be read", run_id, OFFER_CHOICE_SUMMARY_FILENAME)
+    if chosen.action_id is not None:
+        offered = chosen.covered & (chosen.arm > 0)
+        positions, first = np.unique(chosen.arm[offered], return_index=True)
+        named = chosen.action_id[offered][first]
+        for position, action_id in zip(positions, named, strict=True):
+            known.setdefault(int(position), None if pd.isna(action_id) else str(action_id))
+    top = int(max(chosen.arm.max(initial=0), chosen.explore_arm.max(initial=0)))
+    lookup = np.full(top + 1, None, dtype=object)
+    missing = [position for position in range(1, top + 1) if position not in known]
+    for position in range(1, top + 1):
+        lookup[position] = known.get(position)
+    if missing:
+        _LOGGER.warning(
+            "treat list %s: the catalogue action of offer position(s) %s is not known; planned as no action",
+            run_id,
+            missing,
+        )
+    return lookup
+
+
+def _compliance_gate(
+    storage: Storage,
+    record: RunRecord,
+    config: UseCaseConfig,
+    *,
+    scores: pd.DataFrame,
+    key_cols: tuple[str, ...],
+    is_uplift: bool,
+    treat: np.ndarray,
+    channel: pd.Series[Any],
+    applied: _Applied | None,
+    offer_choice: _OfferChoice | None,
+    stamp: CatalogueStamp | None,
+    config_root: Path | None,
+) -> Any:
+    """Plan K M134: `engine.compliance.handoff.gate_treat_list` when the gate is on, else None."""
+    from engine.compliance.config import gate_enabled
+    from engine.compliance.errors import ComplianceError
+
+    try:
+        if not gate_enabled(config_root):
+            return None
+        from engine.compliance.handoff import gate_treat_list
+
+        return gate_treat_list(
+            storage,
+            run_id=record.run_id,
+            use_case_id=record.use_case_id,
+            client_id=record.client_id,
+            key_frame=pd.DataFrame({name: key_text(scores[name]).astype("object") for name in key_cols}),
+            treat=treat,
+            channel=channel.to_numpy(dtype=object),
+            actions=_row_actions(
+                scores,
+                config,
+                is_uplift=is_uplift,
+                offer_choice=offer_choice,
+                applied=applied,
+                arm_actions=(
+                    None if offer_choice is None else _arm_actions(storage, record.run_id, offer_choice)
+                ),
+            ),
+            planned_by_action={} if stamp is None else dict(stamp.planned_channels),
+            configured=tuple(config.actions.suppression.channels),
+            stamp_sha256=None if stamp is None else stamp.catalogue_sha256,
+            config_root=config_root,
+        )
+    except ComplianceError as exc:
+        raise TreatListError(exc.code, exc.message) from exc
+
+
+def _gate_fields(gated: Any) -> dict[str, Any]:
+    """Plan K M134: the treat list summary's compliance fields from the gate's outcome."""
+    summary = gated.summary
+    return {
+        "compliance_withheld": dict(summary.withheld),
+        "compliance_withheld_rows": summary.withheld_rows,
+        "compliance_rerouted_rows": summary.rerouted_rows,
+        "compliance_rule_version": summary.rule_version,
+        "compliance_decisions_sha256": summary.decisions_sha256,
+        "compliance_evidence_id": summary.evidence_id,
+    }
 
 
 def _channel_rows(channel: pd.Series[Any], treat: np.ndarray) -> dict[str, int] | None:

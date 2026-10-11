@@ -9,9 +9,11 @@
 agentic:
   enabled: false
 
-# compliance.gate.enabled: the pre-send compliance gate (M134), one decision record per customer, channel and
-# purpose before a list leaves the product. Off until the integration plan's hand-off exists.
-# Declared by the set-up (M130, DEC-1400 (d)); nothing reads it yet.
+# compliance.gate.enabled: the pre-send compliance gate (M134, DEC-1405), one decision record per customer and
+# planned channel before a treat list leaves the product (consent on the channel, the DLT template, whitelisted
+# links, a WhatsApp opt-in), signed on the decision ledger. Off, every treat list is byte for byte what it was.
+# It does not need agentic.enabled. This is the gate's only switch; its settings (opt-in channels, the longest
+# DLT slot value) are in configs/compliance/compliance.yaml, which refuses an `enabled` of its own.
 compliance:
   gate:
     enabled: false

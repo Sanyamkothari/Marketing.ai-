@@ -3,7 +3,8 @@
 * `configs/agentic/agentic.yaml` - Plan K's three switches, each default **false**: `agentic.enabled` (M132),
   `compliance.gate.enabled` (M134) and `mcp.enabled` (M133); the last two were declared by the set-up (M130,
   DEC-1400 (d)). `mcp.enabled` is read by `api.mcp.config` (M133, whose settings are in `configs/agentic/mcp.yaml`);
-  `compliance.gate.enabled` by nothing yet. With `agentic.enabled` off nothing of Plan K's
+  `compliance.gate.enabled` by `engine.compliance.config.gate_enabled` (M134, DEC-1405 (a), whose settings are in
+  `configs/compliance/compliance.yaml`). With `agentic.enabled` off nothing of Plan K's
   agent-safe core is reachable: `api.main` imports only this module and does not mount the `/agentic`
   routes, the app creates no table and writes no file, and :func:`require_enabled` refuses the in-process
   entry points with `AGENTIC_DISABLED`. (`alembic upgrade head` still adds the empty `agentic_decision_log`
@@ -65,8 +66,9 @@ class ComplianceGateSwitch(_Strict):
     enabled: bool = Field(
         default=False,
         description=(
-            "The pre-send compliance gate (M134). Off until the integration plan's hand-off exists; nothing reads "
-            "it yet (DEC-1400 (d))."
+            "The pre-send compliance gate (M134) on every treat list built, read by "
+            "`engine.compliance.config.gate_enabled`; the gate's settings are in configs/compliance/compliance.yaml "
+            "(DEC-1400 (d), DEC-1405 (a))."
         ),
     )
 

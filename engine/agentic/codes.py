@@ -13,6 +13,8 @@ from typing import Final
 
 __all__ = [
     "AGENTIC_CODES",
+    "COMPLIANCE_CODES",
+    "COMPLIANCE_CONFIG_CODES",
     "MCP_CODES",
     "MEASUREMENT_CODES",
     "PLANNER_CODES",
@@ -54,11 +56,36 @@ AGENTIC_CODES: Final[frozenset[str]] = frozenset(
         # Existing engine codes the agent-safe core also raises, listed so the catalogue explains them:
         # neither was in `known_codes()` before (`engine.decide.treat_list`, `api.routes.pilot` and
         # `engine.config` raise them too, so their entries are written for every caller).
-        "CONFIG_INVALID",  # configs/agentic/agentic.yaml, policy.yaml or mcp.yaml missing or not valid
+        "CONFIG_INVALID",  # configs/agentic/agentic.yaml, policy.yaml, mcp.yaml or compliance.yaml not valid
         "RUN_NOT_FOUND",  # a read tool asked about a run that does not exist
     }
 )
 """M132's codes (DEC-1401), joined into `PLAN_K_CODES` below."""
+
+COMPLIANCE_CODES: Final[frozenset[str]] = frozenset(
+    {
+        # M134 (DEC-1405): the pre-send compliance gate (`engine.compliance`). Each is a reason in
+        # `compliance_decisions.parquet` and a key of the treat list summary's `compliance_withheld`.
+        "COMPLIANCE_CONSENT",  # not contactable on the channel (M131's channel_contactability, consent rules)
+        "COMPLIANCE_WHATSAPP_NO_OPT_IN",  # no WhatsApp grant of its own in the consent ledger
+        "COMPLIANCE_TEMPLATE_MISMATCH",  # the message is not the registered DLT template with its slots filled
+        "COMPLIANCE_URL_NOT_WHITELISTED",  # a link in the message is not on the URL whitelist
+        "COMPLIANCE_NO_CHANNEL",  # a contact with no channel: nothing the gate could clear
+        "COMPLIANCE_CATALOGUE_CHANGED",  # the catalogue is not the one the run ran under: no message is checked
+    }
+)
+"""M134's codes (DEC-1405), joined into `PLAN_K_CODES` below: exactly the gate's reasons
+(`engine.compliance.gate.REASON_ORDER`)."""
+
+COMPLIANCE_CONFIG_CODES: Final[frozenset[str]] = frozenset(
+    {
+        # M134 at integration (DEC-1405 (a)): the gate's one switch is compliance.gate.enabled in
+        # configs/agentic/agentic.yaml; an `enabled` written in configs/compliance/compliance.yaml is refused.
+        "COMPLIANCE_SWITCH_MISPLACED",
+    }
+)
+"""The gate's configuration refusal (not a reason on a row), joined into `PLAN_K_CODES` below."""
+
 
 MCP_CODES: Final[frozenset[str]] = frozenset(
     {
@@ -127,6 +154,13 @@ PLANNER_CODES: Final[frozenset[str]] = frozenset(
 """M139's codes (DEC-1406), joined into `PLAN_K_CODES` below."""
 
 PLAN_K_CODES: Final[frozenset[str]] = (
-    frozenset() | AGENTIC_CODES | MCP_CODES | MEASUREMENT_CODES | PLANNER_CODES | SAVE_DESK_CODES
+    frozenset()
+    | AGENTIC_CODES
+    | COMPLIANCE_CODES
+    | COMPLIANCE_CONFIG_CODES
+    | MCP_CODES
+    | MEASUREMENT_CODES
+    | PLANNER_CODES
+    | SAVE_DESK_CODES
 )
 """Empty at M130; each Plan K milestone adds the codes it raises."""

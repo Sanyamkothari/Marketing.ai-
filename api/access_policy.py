@@ -357,6 +357,7 @@ ROW_LEVEL_ARTEFACTS: Final[frozenset[str]] = frozenset(
         "arbitrated_treat_list.csv",  # Plan J M101 (DEC-1311): cross-use-case arbitrated treat list
         "arbitrated_treat_list.parquet",
         "offer_choice.parquet",  # Plan J M100 part B (DEC-1310): the offer chosen per customer, net value
+        "compliance_decisions.parquet",  # Plan K M134 (DEC-1405): may each contact go, per customer and channel
     }
 )
 """Run files that hold one row per customer (Plan J M91, M92). `configs/privacy.yaml`

@@ -668,7 +668,7 @@ codes:
     fix: "An Admin turns them on in configs/agentic/agentic.yaml if the deployment should use them."
   CONFIG_INVALID:
     title: "A settings file cannot be used"
-    meaning: "A settings file is missing, cannot be read, or has a value that is not allowed. Examples are a use case setting or the agent files under configs/agentic: agentic.yaml (Plan K's three switches, including mcp.enabled for the MCP server), policy.yaml (the agent policy) and mcp.yaml (the MCP server's workspace, demo use cases, rate limits and call timeout; min_group_rows is fixed at 10). Unknown settings are refused, not ignored. The message names the file and the setting."
+    meaning: "A settings file is missing, cannot be read, or has a value that is not allowed. Examples are a use case setting or the agent files under configs/agentic: agentic.yaml (Plan K's three switches, including mcp.enabled for the MCP server), policy.yaml (the agent policy) and mcp.yaml (the MCP server's workspace, demo use cases, rate limits and call timeout; min_group_rows is fixed at 10); and configs/compliance/compliance.yaml (the compliance gate's settings; its switch, compliance.gate.enabled, is in agentic.yaml). Unknown settings are refused, not ignored. The message names the file and the setting."
     fix: "Correct the setting named, or restore the file, then try again. Removing mcp.yaml uses its defaults."
   RUN_NOT_FOUND:
     title: "There is no such run"
@@ -795,6 +795,35 @@ codes:
     title: "The goal in words could not be matched to the form"
     meaning: "The goal you typed was read by the AI service, but it could not be matched to the form's own choices (a use case, an objective, a channel) or a number in it could not be read, so nothing was drafted."
     fix: "Fill in the form instead, or type the goal again naming the use case, the channel and any budget plainly."
+  # --- Plan K M134: the pre-send compliance gate (DEC-1405 (b), (h); the switch, (a)) --------------------------
+  COMPLIANCE_CONSENT:
+    title: "Not contactable on this channel"
+    meaning: "The compliance gate did not send this customer on this channel. The run's own channel_contactability.parquet says they cannot be contacted on it: an opt-out, no valid consent in the ledger, an inquiry consent past its validity, or a legacy consent not registered with the operators. The customer goes on the next planned channel the gate allows, else is not treated."
+    fix: "Fix the consent record, or plan another channel."
+  COMPLIANCE_WHATSAPP_NO_OPT_IN:
+    title: "No opt-in record on this channel"
+    meaning: "The channel is one of compliance.gate.opt_in_channels (WhatsApp by default). Such a channel needs a valid grant on that channel itself in the consent ledger. An all-channel grant is consent to be contacted, not an opt-in to the channel."
+    fix: "Import the customer's WhatsApp opt-in (a consent record with channel: whatsapp), or send on another channel."
+  COMPLIANCE_TEMPLATE_MISMATCH:
+    title: "Message is not the registered DLT template"
+    meaning: "The region requires a DLT template on this channel (for example SMS in India). The action's message_text is not its dlt_template_text with each {#var#}, {#numeric#}, {#alphanumeric#}, {#url#} or {#cbn#} slot filled by a value of that tag; a {#var#} value can be at most dlt_var_max_chars long, 30 by default."
+    fix: "Correct the message or register the new text, then update the catalogue."
+  COMPLIANCE_URL_NOT_WHITELISTED:
+    title: "A link is not on the URL whitelist"
+    meaning: "A link in the action's message_text is not on the client's whitelist (configs/compliance/url_whitelist.yaml, else the region file's url_whitelist block) for this channel. A link is an http(s):// or www. link, or a bare host such as deals-x.in/a, in the text or filling a {#var#} slot."
+    fix: "Add the host or prefix to the whitelist, or change the link. Text written with no space after a full stop (Dr.Smith) reads as a host: add the space."
+  COMPLIANCE_NO_CHANNEL:
+    title: "No planned channel to clear"
+    meaning: "The contact has no planned channel at all: neither the action's catalogue channels nor the use case's configured channels name one, so the gate has nothing to allow it on."
+    fix: "Give the action channels in the catalogue, or configure actions.suppression.channels."
+  COMPLIANCE_CATALOGUE_CHANGED:
+    title: "Catalogue changed since the run"
+    meaning: "configs/decide/catalogue.yaml is not the catalogue this scoring run ran under (catalogue_stamp.json), so no message can be tied to the run. The gate fails closed: every contact with a catalogue action is withheld."
+    fix: "Restore the catalogue the run used, or score again under the new one."
+  COMPLIANCE_SWITCH_MISPLACED:
+    title: "The compliance gate's switch is in the wrong file"
+    meaning: "configs/compliance/compliance.yaml sets compliance.gate.enabled, but that file holds only the gate's settings (the opt-in channels and the longest template value). The gate is turned on or off in configs/agentic/agentic.yaml, with Plan K's other switches. The setting is refused rather than ignored, so nobody believes they turned the gate on or off where it has no effect. No contact list is built until it is fixed."
+    fix: "Remove enabled from configs/compliance/compliance.yaml and set compliance: gate: enabled in configs/agentic/agentic.yaml."
 
 settings:
   actions.bands[*].min_score:

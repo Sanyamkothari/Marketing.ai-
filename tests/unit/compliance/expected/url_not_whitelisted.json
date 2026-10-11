@@ -1,0 +1,4 @@
+[
+  {"customer_id": "U1", "channel": "sms", "purpose": "marketing_communication", "action_id": "offer_ok", "allowed": true, "reasons": [], "ledger_ref": "channel_contactability.parquet#sha256=cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "catalogue_ref": "{catalogue_sha256}#offer_ok", "rule_version": "rules-under-test"},
+  {"customer_id": "U2", "channel": "sms", "purpose": "marketing_communication", "action_id": "offer_bad_link", "allowed": false, "reasons": ["COMPLIANCE_URL_NOT_WHITELISTED"], "ledger_ref": "channel_contactability.parquet#sha256=cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "catalogue_ref": "{catalogue_sha256}#offer_bad_link", "rule_version": "rules-under-test"}
+]

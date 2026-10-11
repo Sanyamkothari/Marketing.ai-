@@ -126,6 +126,9 @@ _RUN_FILE_STORES: Final[dict[str, Store]] = {
     "arbitrated_treat_list.parquet": Store.SCORES,
     # Plan J M100 part B: the offer chosen per row, keyed like `scores.*` by the run's own primary key.
     "offer_choice.parquet": Store.SCORES,
+    # Plan K M134: the compliance gate's decision per customer and planned channel, keyed like `scores.*` by the
+    # run's own primary key (written as text, as the treat list writes it).
+    "compliance_decisions.parquet": Store.SCORES,
 }
 
 _ROW_KEYS: Final[dict[str, tuple[str, ...]]] = {

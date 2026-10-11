@@ -1,0 +1,19 @@
+# Plan K M134 (DEC-1405): the pre-send compliance gate's settings (docs/AGENTIC.md section 9a, design §8.2 and
+# §11).
+#
+# The switch is not here: it is compliance.gate.enabled in configs/agentic/agentic.yaml, Plan K's one place for
+# its switches (DEC-1400 (d), DEC-1405 (a)), and an `enabled` written below is refused
+# (COMPLIANCE_SWITCH_MISPLACED). Off (the default), a treat list is built exactly as before - nothing of
+# engine/compliance runs, nothing new is written. On, every treat list built first decides, per customer it
+# would contact and per planned channel, whether the message may go (consent on the channel from the run's own
+# channel_contactability.parquet, the DLT template, whitelisted links, a WhatsApp opt-in), writes
+# compliance_decisions.parquet, signs its sha256 on the decision ledger, and sends a customer only on a
+# channel the gate allows (the next planned one, else not at all). A treat list stored before the switch was
+# turned on was not decided by the gate: it is built again, through the gate, the next time it is asked for.
+compliance:
+  gate:
+    # Channels sent on only when the consent ledger holds a valid grant on that channel itself (the opt-in
+    # record); an all-channel grant is consent to be contacted, not an opt-in to the channel.
+    opt_in_channels: [whatsapp]
+    # The longest value a {#var#}, {#numeric#} or {#alphanumeric#} slot of a DLT template takes; null: no limit.
+    dlt_var_max_chars: 30

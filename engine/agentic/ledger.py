@@ -130,6 +130,10 @@ BODY_KEYS: Final[frozenset[str]] = frozenset(
         "plan_id",
         "narrative_digest",
         "measure_schedule_id",
+        # Plan K M134 (DEC-1405): the compliance gate's evidence label - the decision file's sha256 and the
+        # sha256 of the rules it applied (`engine.compliance.handoff`).
+        "artefact_sha256",
+        "rule_version",
     }
 )
 """The only keys a body may hold: ids, digests, codes and labels, never a row (see the module docstring)."""
