@@ -5,6 +5,7 @@
 // (`ui/labels.js`); anything technical sits in a `[data-technical]` section, which M180 hides by default.
 
 import { EM_DASH, crumbs, dataTable, emptyState, errorBox, esc, fmtInt, headActions, pageHead } from "../../dom.js";
+import { count, day, figureHtml, isValue, percent, rupees, rupeesExact } from "../../format.js";
 import { term } from "../../labels.js";
 import { PAGE_SIZE, pageOf, search, topReasons } from "./audience.js";
 import { campaignTabHref } from "./links.js";
@@ -26,50 +27,10 @@ const TAB_LABEL = { overview: "Overview", audience: "Audience", results: "Result
 
 export const CAMPAIGNS_CRUMB = Object.freeze({ label: "Campaigns", href: "#/campaigns", place: true });
 
-// --- formatting (local until ui/format.js lands with M172; the integrator swaps these) ------------------------
+// --- formatting: ui/format.js (M172), the one number, money and day format ----------------------------------------
 
-const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-
-/** "11 Oct 2026" for a `YYYY-MM-DD` or an ISO instant, read in UTC so a date never moves a day. */
-export function fmtDay(value) {
-  const day = isoDay(value);
-  if (!day) return EM_DASH;
-  const [year, month, date] = day.split("-");
-  return `${Number(date)} ${MONTHS[Number(month) - 1]} ${year}`;
-}
-
-const inr = (digits) =>
-  new Intl.NumberFormat("en-IN", {
-    style: "currency",
-    currency: "INR",
-    maximumFractionDigits: digits,
-    minimumFractionDigits: 0,
-  });
-
-/** The rupee sign, as `Intl` writes it: no currency sign is typed into a source file (as `ui/cost.js`). */
-const RUPEE = inr(0)
-  .formatToParts(1)
-  .find((part) => part.type === "currency").value;
-
-/** Rupees rounded for display (Plan M §3.3): with lakh and crore; `fmtRupeesExact` is the tooltip's figure. */
-export function fmtRupees(value) {
-  const n = Number(value);
-  if (value === null || value === undefined || !Number.isFinite(n)) return EM_DASH;
-  const sign = n < 0 ? "−" : "";
-  const a = Math.abs(n);
-  if (a >= 1e7) return `${sign}${RUPEE}${(a / 1e7).toFixed(2)} crore`;
-  if (a >= 1e5) return `${sign}${RUPEE}${(a / 1e5).toFixed(2)} lakh`;
-  return `${sign}${inr(0).format(a)}`;
-}
-
-/** The exact figure, to the paisa, in the Indian digit grouping. */
-export const fmtRupeesExact = (value) => inr(2).format(Number(value));
-
-/** "12,862 customers" (one customer). */
-export const fmtCustomers = (n) =>
-  n === null || n === undefined ? EM_DASH : `${fmtInt(n)} ${Number(n) === 1 ? "customer" : "customers"}`;
-
-const fmtShare = (fraction) => `${(Number(fraction) * 100).toFixed(1)}%`;
+/** "12,862 customers" (one customer); the em dash when the count is missing. */
+const customers = (n) => (isValue(n) ? `${count(n)} ${Number(n) === 1 ? "customer" : "customers"}` : EM_DASH);
 
 // --- shared pieces --------------------------------------------------------------------------------------------
 
@@ -110,7 +71,7 @@ function listRow(entry) {
     // A Draft has no results date yet: it is fixed with its test plan.
     const due = status.key === "draft" ? null : resultsDue(campaign, view && view.plan);
     result = due
-      ? `<span class="muted" data-due>Results due ${esc(fmtDay(due))}</span>`
+      ? `<span class="muted" data-due>Results due ${esc(day(due))}</span>`
       : `<span class="muted">${EM_DASH}</span>`;
   }
   const goalText = runElsewhere(campaign) || wholeProgramme(campaign) || !campaign.use_case_id ? EM_DASH : goal;
@@ -184,10 +145,10 @@ function tabsHtml(campaignId, tab) {
 }
 
 /** A tile: label, value and an optional exact figure for the tooltip. */
-const tile = (label, value, { exact = null, attrs = "" } = {}) =>
+const tile = (label, value, { exact = null, attrs = "", html = false } = {}) =>
   `<div class="kpi"${attrs ? ` ${attrs}` : ""}><div class="l">${esc(label)}</div><div class="v"${
     exact ? ` title="${esc(exact)}"` : ""
-  }>${esc(value)}</div></div>`;
+  }>${html ? value : esc(value)}</div></div>`;
 
 /**
  * The net value line's label, as `engine/pilot/proof.py` writes it: "Net value", or, for a Pack whose claim is
@@ -196,7 +157,7 @@ const tile = (label, value, { exact = null, attrs = "" } = {}) =>
 export const NET_VALUE_LABEL = /(^|: )net value$/i;
 
 /**
- * The Proof Pack's net value range in rupees, as its own server text: `{ low, high }` or null. The line is found
+ * The Proof Pack's net value range, as its two server figures: `{ low, high }` (each `{value, text, format}`) or null. The line is found
  * by its label only: no line is ever taken by its position, so a Pack without that line shows no range.
  */
 export function netValueRange(proof) {
@@ -204,16 +165,22 @@ export function netValueRange(proof) {
   const lines = (section && section.lines) || [];
   const line = lines.find((l) => NET_VALUE_LABEL.test(String((l && l.label) || "").trim()));
   if (!line || !line.low || !line.high) return null;
-  return { low: line.low.text, high: line.high.text };
+  return { low: line.low, high: line.high };
 }
 
 function valueTile(model) {
   const range = netValueRange(model.proof);
-  if (range) return tile("Net value, likely range", `${range.low} to ${range.high}`, { attrs: "data-tile-value" });
+  if (range) {
+    // Each end drawn by ui/format.js (rupees in lakh and crore), the server's exact text in its tooltip.
+    return tile("Net value, likely range", `${figureHtml(range.low)} to ${figureHtml(range.high)}`, {
+      attrs: "data-tile-value",
+      html: true,
+    });
+  }
   const summary = model.summary;
   if (summary && summary.net_value_total !== null && summary.net_value_total !== undefined) {
-    return tile("Expected value (predicted)", fmtRupees(summary.net_value_total), {
-      exact: fmtRupeesExact(summary.net_value_total),
+    return tile("Expected value (predicted)", rupees(summary.net_value_total), {
+      exact: rupeesExact(summary.net_value_total),
       attrs: "data-tile-value",
     });
   }
@@ -283,13 +250,13 @@ function refreshHtml(model) {
 function whatWasSent(model) {
   const { campaign, summary } = model;
   const rows = [];
-  rows.push(["Sent on", fmtDay(campaign.treatment_start)]);
+  rows.push(["Sent on", day(campaign.treatment_start)]);
   const offers = Object.entries((summary && summary.offer_counts) || {});
-  for (const [offer, n] of offers) rows.push([`Offer: ${offer}`, fmtCustomers(n)]);
+  for (const [offer, n] of offers) rows.push([`Offer: ${offer}`, customers(n)]);
   const channels = Object.entries((summary && summary.channel_rows) || {});
-  for (const [channel, n] of channels) rows.push([`Channel: ${channel}`, fmtCustomers(n)]);
+  for (const [channel, n] of channels) rows.push([`Channel: ${channel}`, customers(n)]);
   if (summary && summary.treat_rows !== null && summary.treat_rows !== undefined) {
-    rows.push([term("contactList"), fmtCustomers(summary.treat_rows)]);
+    rows.push([term("contactList"), customers(summary.treat_rows)]);
   }
   return `<section class="card" data-what-was-sent><h3>What was sent</h3><div class="cp-kv">${rows
     .map(([k, v]) => `<div class="cp-kv-row"><span class="k">${esc(k)}</span><span class="v">${esc(v)}</span></div>`)
@@ -299,11 +266,11 @@ function whatWasSent(model) {
 function overviewHtml(model) {
   const { campaign, status } = model;
   const c = counts(campaign);
-  const step = nextStep(model, fmtDay);
+  const step = nextStep(model, day);
   const primary = primaryAction(model);
   const tiles = [
-    tile("Contacted", fmtCustomers(c.intended_treated), { attrs: "data-tile-contacted" }),
-    tile(`${term("comparisonGroup")} (not contacted)`, fmtCustomers(c.intended_holdout), {
+    tile("Contacted", customers(c.intended_treated), { attrs: "data-tile-contacted" }),
+    tile(`${term("comparisonGroup")} (not contacted)`, customers(c.intended_holdout), {
       attrs: "data-tile-comparison",
     }),
     valueTile(model),
@@ -343,7 +310,7 @@ export function audienceTableHtml(audience) {
     ? dataTable(cols, rows, { cls: "cp-table cp-audience" })
     : `<p class="cp-pad muted" data-audience-none>No customer on the list has an id containing “${esc(audience.query)}”.</p>`;
   const where = page.total
-    ? `Showing ${fmtInt(page.from)} to ${fmtInt(page.to)} of ${fmtCustomers(page.total)}`
+    ? `Showing ${fmtInt(page.from)} to ${fmtInt(page.to)} of ${customers(page.total)}`
     : "Showing no customers";
   const pager = `<div class="cp-pager" data-pager><button type="button" class="btn secondary sm" data-page="${
     page.page - 1
@@ -362,8 +329,8 @@ function whyHtml(rows) {
     .map(
       (r) =>
         `<li data-reason><span>${esc(r.text)}</span> <span class="muted">for ${esc(fmtInt(r.customers))} of ${esc(
-          fmtCustomers(rows.length),
-        )} (${esc(fmtShare(r.share))})</span></li>`,
+          customers(rows.length),
+        )} (${esc(percent(r.share))})</span></li>`,
     )
     .join("")}</ol></div></section>`;
 }
@@ -395,7 +362,7 @@ function audienceHtml(model) {
   const known = (n) => n !== null && n !== undefined;
   const toContact = known(summary.treat_rows) ? summary.treat_rows : rows.length;
   const onList = known(summary.total_rows) ? summary.total_rows : total;
-  const lead = `${fmtCustomers(toContact)} to contact, out of ${fmtCustomers(onList)} on the list.`;
+  const lead = `${customers(toContact)} to contact, out of ${customers(onList)} on the list.`;
   return `<section class="card" data-audience><h3>${esc(term("contactList"))}</h3><div class="card-body">
       <p data-audience-lead>${esc(lead)}</p>
       <div class="cp-search"><label for="cp-search">Search by customer id</label><input id="cp-search" type="search" autocomplete="off" data-audience-search value="${esc(
@@ -419,7 +386,7 @@ function measuredHtml(model) {
     : "";
   return `<section class="card" data-results-measured><h3>Result</h3><div class="card-body">
       <p class="cp-headline" data-headline>${esc(headline)}</p>${label}
-      <p class="muted">Measured on ${esc(fmtDay(campaign.measured_at))}.</p>
+      <p class="muted">Measured on ${esc(day(campaign.measured_at))}.</p>
       <div class="btn-row"><a class="btn primary" href="${esc(report)}" data-open-report>Open the full report</a></div>
     </div></section>`;
 }
@@ -435,7 +402,7 @@ function uploadHtml(model) {
   const early =
     view && view.report && view.report.early_look
       ? `<p class="cp-note" data-early-look>An early look was read before the results date. It is not a final result: the result is final on ${esc(
-          fmtDay(plan && plan.analysis_date),
+          day(plan && plan.analysis_date),
         )}.</p>`
       : "";
   const inFile = campaign.outcomes
@@ -512,10 +479,10 @@ export function campaignPageHtml(model) {
   const { campaign, goal, tab } = model;
   const name = shortName(campaign, goal);
   const sentence = runElsewhere(campaign)
-    ? `A campaign another tool sent on ${fmtDay(campaign.treatment_start)}, checked here.`
+    ? `A campaign another tool sent on ${day(campaign.treatment_start)}, checked here.`
     : wholeProgramme(campaign)
-      ? `Every customer contacted, against the customers never contacted, from ${fmtDay(campaign.treatment_start)}.`
-      : `${goal}: sent on ${fmtDay(campaign.treatment_start)} to ${fmtCustomers(counts(campaign).intended_treated)}.`;
+      ? `Every customer contacted, against the customers never contacted, from ${day(campaign.treatment_start)}.`
+      : `${goal}: sent on ${day(campaign.treatment_start)} to ${customers(counts(campaign).intended_treated)}.`;
   const sub =
     campaign.name && campaign.name !== name ? `<p class="cp-sub" data-long-name>${esc(campaign.name)}</p>` : "";
   const head = pageHead(

@@ -176,6 +176,8 @@ test("the next step names the date to come back, in the page's own date format",
 
 const pack = (claim, lines) => ({ claim, sections: [{ key: "net_value", status: "measured", lines }] });
 const money = (text) => ({ text });
+// The range is the two server figures (drawn by ui/format.js on the page); the test reads their texts.
+const texts = (range) => range && { low: range.low.text, high: range.high.text };
 
 test("the value range is the Proof Pack's net value line, found by its label, never by its position", () => {
     const before = [
@@ -184,17 +186,17 @@ test("the value range is the Proof Pack's net value line, found by its label, ne
         { label: "Cost of the offers", low: null, high: null },
     ];
     const net = { label: "Net value", low: money("₹3"), high: money("₹4") };
-    assert.deepEqual(netValueRange(pack("proven", [...before, net])), { low: "₹3", high: "₹4" });
+    assert.deepEqual(texts(netValueRange(pack("proven", [...before, net]))), { low: "₹3", high: "₹4" });
     // A Pack whose claim is stated_random words the line conditionally (engine/pilot/proof.py `_conditional`).
     const conditional = { ...net, label: "If the groups were random as you said: net value" };
     const lastWithout = { label: "Cost of one offer taken, as entered", low: null, high: null };
-    assert.deepEqual(netValueRange(pack("stated_random", [...before, conditional, lastWithout])), {
+    assert.deepEqual(texts(netValueRange(pack("stated_random", [...before, conditional, lastWithout]))), {
         low: "₹3",
         high: "₹4",
     });
     // A later line with a range of its own is never shown as the net value.
     const later = { label: "Value per customer contacted", low: money("₹7"), high: money("₹8") };
-    assert.deepEqual(netValueRange(pack("proven", [...before, net, later])), { low: "₹3", high: "₹4" });
+    assert.deepEqual(texts(netValueRange(pack("proven", [...before, net, later]))), { low: "₹3", high: "₹4" });
     // No net value line: no range, rather than another line's.
     assert.equal(netValueRange(pack("proven", [...before, later])), null);
     assert.equal(netValueRange(pack("proven", [])), null);

@@ -394,13 +394,22 @@ test("no engine word is shown on any of its states, with an empty allow-list", a
   }
 });
 
-test("rupees are rounded for display (lakh, crore) and exact in the tooltip's own text", () => {
+test("rupees are rounded for display by ui/format.js (lakh, crore), the server's exact text in the tooltip", async () => {
+  // Plan M final integration: the page's own fmtRupees gave way to ui/format.js `figureHtml` (M172's one format).
   const inr = (value, textValue) => figure(value, textValue, "inr");
-  assert.equal(page.fmtRupees(inr(81033.97, "₹81,034")), "₹81,034", "under a lakh the server's text");
-  assert.equal(page.fmtRupees(inr(100000, "₹1,00,000")), "₹1 lakh");
-  assert.equal(page.fmtRupees(inr(1234567.8, "₹12,34,568")), "₹12.35 lakh");
-  assert.equal(page.fmtRupees(inr(25000000, "₹2,50,00,000")), "₹2.5 crore");
-  assert.equal(page.fmtRupees(figure(984.06, "984.06", "amount")), "984.06", "other units are the server's text");
+  const cases = [
+    [inr(81033.97, "₹81,034"), "₹81,034"],
+    [inr(100000, "₹1,00,000"), "₹1 lakh"],
+    [inr(1234567.8, "₹12,34,568"), "₹12.35 lakh"],
+    [inr(25000000, "₹2,50,00,000"), "₹2.5 crore"],
+    [figure(984.06, "984.06", "number"), "984.06"],
+  ];
+  for (const [total, shown] of cases) {
+    await visit(answer({ ...demo, headline: { ...demo.headline, total } }));
+    const amount = $("[data-value-amount]");
+    assert.ok(amount.textContent.replace(/\s+/g, " ").trim().startsWith(`At least ${shown}`), `${total.text} is shown as ${shown}`);
+    assert.equal(amount.getAttribute("title"), total.text, "the exact figure is the tooltip");
+  }
 });
 
 test("a campaign's short name is at most 40 characters and keeps its meaning", () => {
@@ -411,10 +420,13 @@ test("a campaign's short name is at most 40 characters and keeps its meaning", (
   assert.equal(page.shortName("Hillstrom e-mail (spend) - public dataset, retrospective replay"), "Hillstrom e-mail (spend)");
 });
 
-test("dates are written as people write them", () => {
-  assert.equal(page.fmtDay("2026-11-12"), "12 Nov 2026");
-  assert.equal(page.fmtDay("2026-01-05"), "5 Jan 2026");
-  assert.equal(page.fmtDay("not a date"), "not a date");
+test("dates are written as people write them, in ui/format.js's one day format", () => {
+  const due = (results_date) => page.nextStepText({ status: "live", next_step: "wait", results_date });
+  assert.equal(due("2026-11-12"), "Add its results after 12 Nov 2026");
+  assert.equal(due("2026-01-05"), "Add its results after 5 Jan 2026");
+  assert.equal(due("not a date"), "Add its results when they are due", "an unreadable date is no date");
+  assert.equal(page.fmtDay, undefined, "no local date helper is left");
+  assert.equal(page.fmtRupees, undefined, "no local money helper is left");
 });
 
 test("the page names no layout setting and imports no layout module, so it merges in any order", () => {

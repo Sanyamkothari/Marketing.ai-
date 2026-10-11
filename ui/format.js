@@ -173,6 +173,24 @@ export function signedNumber(value, places = 2) {
 const escapeHtml = (s) =>
   String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
 
+// --- a day (Plan M final integration) --------------------------------------------------------------
+
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+/**
+ * A calendar day in words, "12 Nov 2026", from a `YYYY-MM-DD` or an ISO instant read in UTC (so a results date never
+ * moves a day with the viewer's time zone). Nothing, or a value that is not a date: the em dash. The one day format
+ * of the Phase 2 pages (Overview, Campaigns, the wizard), which each had their own before (DEC-1611).
+ */
+export function day(value) {
+  if (value === null || value === undefined || value === "") return EM_DASH;
+  const text = String(value);
+  const plain = /^(\d{4})-(\d{2})-(\d{2})$/.exec(text);
+  const at = plain ? new Date(Date.UTC(Number(plain[1]), Number(plain[2]) - 1, Number(plain[3]))) : new Date(text);
+  if (Number.isNaN(at.getTime())) return EM_DASH;
+  return `${at.getUTCDate()} ${MONTHS[at.getUTCMonth()]} ${at.getUTCFullYear()}`;
+}
+
 // --- campaign names on lists (M172) ----------------------------------------------------------------
 
 /** The longest short campaign name a list shows (Plan M M172). */

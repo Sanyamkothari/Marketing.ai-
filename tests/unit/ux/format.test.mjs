@@ -113,3 +113,11 @@ test("a per-unit amount below half a paisa keeps the source's own text, never Rs
   assert.equal(f.figureHtml({ value: 0, text: `${R}0`, format: "inr_unit" }), `<span class="fmt">${R}0</span>`);
   assert.equal(f.figureHtml({ value: 0.004, text: `${R}0.0040`, format: "inr" }), `<span class="fmt">${R}0.0040</span>`);
 });
+
+test("a day: '12 Nov 2026' in UTC from a date or an instant, the em dash for nothing (Plan M final integration)", () => {
+  assert.equal(f.day("2026-11-12"), "12 Nov 2026");
+  assert.equal(f.day("2026-01-05"), "5 Jan 2026", "no leading zero");
+  assert.equal(f.day("2026-10-11T23:30:00Z"), "11 Oct 2026", "an instant is read in UTC");
+  assert.equal(f.day("2026-10-11T23:30:00-05:00"), "12 Oct 2026", "an offset is converted to UTC first");
+  for (const v of [null, undefined, "", "not a date"]) assert.equal(f.day(v), "—", String(v));
+});

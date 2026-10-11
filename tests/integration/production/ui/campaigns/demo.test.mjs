@@ -22,6 +22,7 @@ const { w, state, missing } = installDemoPage({ hash: "#/__start" });
 await loadModules();
 const campaigns = await import("../../../../../ui/modules/campaigns/index.js");
 const { NET_VALUE_LABEL } = await import("../../../../../ui/modules/campaigns/views.js");
+const { rupees } = await import("../../../../../ui/format.js");
 
 async function untilStable(ms = 10000) {
     const started = Date.now();
@@ -114,7 +115,13 @@ for (const [name, id] of [
         const net = proof(id)
             .sections.find((s) => s.key === "net_value")
             .lines.find((l) => NET_VALUE_LABEL.test(l.label));
-        assert.equal(text("[data-tile-value] .v"), `${net.low.text} to ${net.high.text}`);
+        // Each end in ui/format.js's one money format (lakh and crore), the server's exact text in its tooltip.
+        assert.equal(text("[data-tile-value] .v"), `${rupees(net.low.value)} to ${rupees(net.high.value)}`);
+        assert.deepEqual(
+            $$("[data-tile-value] .v .fmt").map((s) => s.getAttribute("title")),
+            [net.low, net.high].map((f) => (f.text === rupees(f.value) ? null : f.text)),
+            "no tooltip that repeats the figure",
+        );
         const sent = $$("[data-what-was-sent] .cp-kv-row").map((r) => [...r.children].map((c) => c.textContent));
         assert.deepEqual(sent, [
             ["Sent on", "11 Oct 2026"],

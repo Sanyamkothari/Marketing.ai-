@@ -10,13 +10,14 @@
 //   5. the first-visit checklist (connect or upload data, start the first campaign, add its results): ticked from real
 //      state, hidden once all three are done or the person hid it.
 //
-// The builders are pure (`overviewHtml`, `cardAction`, `shortName`, `fmtRupees`, `nextStepText`): what they draw comes
-// from their arguments, so the jsdom tests call them with recorded or stubbed answers. Words follow Plan M §4.1.
+// The builders are pure (`overviewHtml`, `cardAction`, `shortName`, `nextStepText`): what they draw comes from their
+// arguments, so the jsdom tests call them with recorded or stubbed answers. Words follow Plan M §4.1. Numbers and days
+// are `ui/format.js`'s (M172): the headline is the server's figure drawn by `figureHtml` (rupees in lakh and crore, the
+// exact figure in the tooltip).
 // Anything technical goes in a `class="tech"` section (M180 hides it); this page has none: it shows no engine word.
-//
-// Local helpers named fmt* are the integrator's to replace with `ui/format.js` (M172).
 
 import { crumbs, EM_DASH, emptyState, errorBox, esc, fmtInt, headActions, pageHead } from "../../dom.js";
+import { day, figureHtml } from "../../format.js";
 import { findNeverShown, term } from "../../labels.js";
 
 /** Where the page sends a person; `places` lets the shell name a screen a branch has not merged yet. */
@@ -31,31 +32,9 @@ export const DEFAULT_PLACES = Object.freeze({
 
 const campaignHref = (id) => `#/campaigns/${encodeURIComponent(id)}/overview`;
 
-// --- words and numbers (local until ui/format.js) ---------------------------------------------------------------
+// --- words and numbers (ui/format.js, M172) ---------------------------------------------------------------------
 
 const plural = (n, one, many) => `${fmtInt(n)} ${n === 1 ? one : many}`;
-
-/** A day such as "12 Nov 2026" from an ISO date (`2026-11-12`); the date as given when it cannot be read. */
-export function fmtDay(iso) {
-  const parts = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(iso || ""));
-  if (!parts) return String(iso || EM_DASH);
-  const date = new Date(Date.UTC(Number(parts[1]), Number(parts[2]) - 1, Number(parts[3])));
-  return date.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" });
-}
-
-/**
- * Rupees for a headline, rounded for display: lakh from 1,00,000 and crore from 1,00,00,000. Anything smaller is the
- * server's own text. The exact text is kept for the tooltip by the caller.
- */
-export function fmtRupees(figure) {
-  const value = Number(figure && figure.value);
-  const exact = String((figure && figure.text) || EM_DASH);
-  if (!figure || figure.format !== "inr" || !Number.isFinite(value)) return exact;
-  const places = (n) => n.toLocaleString("en-IN", { maximumFractionDigits: 2, minimumFractionDigits: 0 });
-  if (Math.abs(value) >= 1e7) return `₹${places(value / 1e7)} crore`;
-  if (Math.abs(value) >= 1e5) return `₹${places(value / 1e5)} lakh`;
-  return exact;
-}
 
 /** A campaign's name for a list: the part before a dash or colon, at most 40 characters (M172 generates real short names). */
 export function shortName(name) {
@@ -76,14 +55,15 @@ const STATUS = {
 
 /** The sentence for a campaign's next step, from the server's code and date. */
 export function nextStepText(campaign) {
-  const day = campaign.results_date ? fmtDay(campaign.results_date) : "";
+  const shown = day(campaign.results_date);
+  const due = shown === EM_DASH ? "" : shown;
   // A Draft's next step is the Campaigns page's: how the result will be judged is not fixed yet (DEC-1606 (b)).
   if (campaign.status === "draft") return "Fix how the result will be judged, then download the contact list";
   switch (campaign.next_step) {
     case "read":
       return "See its result";
     case "wait":
-      return day ? `Add its results after ${day}` : "Add its results when they are due";
+      return due ? `Add its results after ${due}` : "Add its results when they are due";
     case "add_results":
       return "Add its results";
     case "measure":
@@ -212,8 +192,8 @@ function valueHtml(overview, places) {
     const counted = headline.campaigns_counted
       ? ` <span class="ov-based">Based on ${esc(plural(headline.campaigns_counted, "measured campaign", "measured campaigns"))}.</span>`
       : "";
-    body = `<p class="ov-amount" data-value-amount title="${esc(headline.total.text)}"><span class="ov-atleast">At least</span> ${esc(
-      fmtRupees(headline.total),
+    body = `<p class="ov-amount" data-value-amount title="${esc(headline.total.text)}"><span class="ov-atleast">At least</span> ${figureHtml(
+      headline.total,
     )}${unit ? ` <span class="ov-unit">${esc(unit)}</span>` : ""}</p><p class="ov-meaning" data-value-meaning>${esc(meaning)}${counted}</p>`;
   }
   return `<section class="card ov-value" data-value aria-labelledby="ov-h-value"><h2 class="ov-h" id="ov-h-value">Value proven to date</h2><div class="ov-value-body">${body}${link}</div></section>`;
