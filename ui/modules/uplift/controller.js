@@ -12,11 +12,13 @@ import {
   getModels,
   getRun,
   getRuns,
+  loadContactList, // Plan M M171 (DEC-1601): one contact list
   postRun,
   postUpload,
   scoresUrl,
 } from "../../api.js";
 import { present } from "../../dom.js";
+
 // The campaign's value view and the demo manifest are the pilot module's endpoints; its calls are
 // reused rather than repeated, so the Campaign results page reads the value view's own words and sign.
 import { getDemo, getRoi } from "../pilot/api.js";
@@ -195,6 +197,7 @@ export function createSetupController(uc, rerender) {
     const run = s.detail && s.detail.run;
     s.evaluation = null;
     s.scoresHref = run && run.mode === "score" ? scoresUrl(run.run_id) : null;
+    s.contactList = run && run.mode === "score" && run.state === "done" ? await loadContactList(run.run_id) : null;
     if (!run || run.state !== "done" || run.mode !== "train") return;
     s.evaluation = await optional(run, "uplift_evaluation.json", () =>
       getUpliftArtefact(run.run_id, "uplift_evaluation.json"),
@@ -509,6 +512,7 @@ export function createOutputController(uc, runId, rerender = () => {}) {
     s.art = art;
     s.summary = summary;
     s.ranking = ranking;
+    s.contactList = s.run.mode === "score" && s.run.state === "done" ? await loadContactList(runId) : null;
     s.scoreRuns = runs.filter((r) => r.mode === "score");
     if (art["policy_recommendation.json"]) await loadCurve();
   }

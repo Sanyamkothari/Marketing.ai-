@@ -323,6 +323,7 @@ class Journey:
     score_output_tiles: dict[str, str] = field(default_factory=dict)
     scores_header: list[str] = field(default_factory=list)
     scores_rows: list[dict[str, str]] = field(default_factory=list)
+    contact_header: list[str] = field(default_factory=list)
     screenshot: Path = Path()
     seconds: dict[str, float] = field(default_factory=dict)
 
@@ -429,8 +430,18 @@ def journey(page: sync_api.Page, server: str, workdir: Path, config_root: Path) 
     page.locator(".flow .block").nth(2).click()
     expect(page.locator(".tab.on")).to_contain_text("Output")
     seen.score_output_tiles = tiles(page)
+    # Plan M M171 (DEC-1601): the page's one download is the contact list (the treat list); the scored list, whose
+    # contract this journey pins, is "All scores (for analysts)" under Technical details.
+    expect(page.locator("a[download].btn.primary")).to_have_count(1)
+    with page.expect_download() as contact_info:
+        page.get_by_role("link", name="Download contact list").click()
+    contact = workdir / "contact_list.csv"
+    contact_info.value.save_as(contact)
+    with contact.open(encoding="utf-8", newline="") as handle:
+        seen.contact_header = list(csv.DictReader(handle).fieldnames or [])
+    page.locator("details.tech[data-tech] > summary").click()
     with page.expect_download() as scores_info:
-        page.get_by_role("link", name="Download contact list (CSV)").click()
+        page.get_by_role("link", name="All scores (for analysts)").click()
     scores = workdir / "scores.csv"
     scores_info.value.save_as(scores)
     with scores.open(encoding="utf-8", newline="") as handle:
@@ -543,6 +554,13 @@ def test_the_output_page_of_the_scoring_run_renders_the_kpi(journey: Journey) ->
     assert journey.score_output_tiles.get("Customers scored") == f"{SCORE_ROWS:,}", journey.score_output_tiles
     control = journey.score_output_tiles.get("Held back to measure results", EM_DASH)
     assert control not in ("", EM_DASH), journey.score_output_tiles
+
+
+def test_the_one_contact_list_the_browser_downloaded_is_the_treat_list(journey: Journey) -> None:
+    """Plan M M171: the page's primary download is the treat list: who, offer, channel, reasons, comparison group."""
+    assert {"treat", "holdout", "explore", "offer", "channel", "reason_1"} <= set(journey.contact_header)
+    assert journey.contact_header != journey.scores_header
+    assert "action" not in journey.contact_header
 
 
 def test_the_downloaded_scores_file_has_the_contract_header(journey: Journey, config_root: Path) -> None:

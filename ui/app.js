@@ -8,6 +8,7 @@ import {
   getIndustries,
   getRun,
   getRuns,
+  loadContactList, // Plan M M171 (DEC-1601): one contact list
   scoresUrl,
   getUseCase,
 } from "./api.js";
@@ -236,11 +237,25 @@ async function showPage(id, kind, runId) {
   const extra = {
     ...(await lineageOf(kind, detail.run)),
     ...(await upliftChartsFor(kind, detail.run)),
+    ...(await contactListFor(kind, detail.run)),
     // A module's section on this page ("Ask your data" on the Data page, `registerPagePanel`).
     panelsHtml: pagePanelsHtml(kind, uc, detail.run),
   };
   paint(renderPage(kind, uc, detail.run, art, scoresUrl(chosen), extra), () => bindPage(kind, app));
   return uc;
+}
+
+/**
+ * A scoring run's Output page offers one contact list (Plan M M171, DEC-1601): the treat list when the run has
+ * one, else the scored list. What the server says about the treat list is read once, here, and handed to the page.
+ */
+async function contactListFor(kind, run) {
+  if (kind !== "output" || !run || run.mode !== "score" || isUplift(run)) return {};
+  try {
+    return { contactList: await loadContactList(run.run_id) };
+  } catch {
+    return {};
+  }
 }
 
 /**

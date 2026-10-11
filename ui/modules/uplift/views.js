@@ -46,6 +46,14 @@ import {
   toggletip,
 } from "../../dom.js";
 import { decileChart, profitChart, qiniChart, segmentChart } from "./charts.js";
+// Plan M M171 (DEC-1601): one contact list - the treat list, or the scored list with a note.
+import {
+  allScoresHtml,
+  contactDownloadLink,
+  contactListDownload,
+  contactListSentence,
+  contactSentenceHtml,
+} from "../../contact_list.js";
 import {
   fmtCi,
   fmtCount,
@@ -729,7 +737,14 @@ function resultsBody(uc, s) {
     ? { label: "Try again", href: routes.setup(uc.id) }
     : train
       ? { label: "Score customers with this model", href: routes.score(uc.id) }
-      : { label: "Download contact list (CSV)", href: s.scoresHref || "#", attrs: "download" };
+      : contactDownloadLink(
+          contactListDownload({
+            treatHref: (s.contactList && s.contactList.treatHref) || "",
+            scoresHref: s.scoresHref || "#",
+            treatError: (s.contactList && s.contactList.error) || null,
+          }),
+          { icon: false },
+        );
   const actions = headActions({
     primary,
     related: done ? { label: "Change settings and train again", href: routes.setup(uc.id) } : null,
@@ -1419,6 +1434,14 @@ export function outputPageHtml(uc, run, art, extra = {}) {
     },
   ]);
   const line = contactLine(policy, segments, train, summary ? summary.control_group_rows : null);
+  // Plan M M171 (DEC-1601): the one contact list and the one sentence on why fewer are contacted than are worth it.
+  const facts = extra.contactList || {};
+  const download = contactListDownload({
+    treatHref: facts.treatHref || "",
+    scoresHref: extra.scoresHref || "#",
+    treatError: facts.error || null,
+  });
+  const sentence = contactListSentence({ scoring: summary, treat: facts.summary || null, policy });
   const scope = policy
     ? policy.computed_on === "test"
       ? "Measured on the hold-out split of the training run."
@@ -1488,7 +1511,9 @@ export function outputPageHtml(uc, run, art, extra = {}) {
   let listCard;
   if (!train) {
     listCard = `<p class="caption ufile">${esc(
-      "The contact list file has every scored customer with their group and action. Treat rows are the list to contact; control-group rows are held out at random so the campaign can be measured; sleeping dogs are never Treat.",
+      download.kind === "scores"
+        ? "The file has every scored customer with their group and action. Treat rows are the list to contact; control-group rows are held out at random so the campaign can be measured; sleeping dogs are never Treat."
+        : "The contact list has every scored customer with their group, offer, channel and reasons. Customers marked to contact are the list; the comparison group is held out at random so the campaign can be measured; sleeping dogs are never contacted.",
     )}</p>`;
   } else {
     const scoreRuns = (extra.scoreRuns || []).filter((r) => r.state === "done");
@@ -1515,6 +1540,7 @@ export function outputPageHtml(uc, run, art, extra = {}) {
   const body = `${notCausalBanner(validation, segments, policy)}
     ${rankingBanner(extra.ranking || null)}
     ${lead}${policy ? tileRow : ""}
+    ${train ? "" : contactSentenceHtml(sentence, download)}
     <div class="row">
       <section class="card"><h3>Four groups of customers</h3>${segmentChart(segments)}${segmentRows}</section>
       <section class="card"><h3>Targeting recommendation</h3>${policyRows}</section>
@@ -1522,12 +1548,14 @@ export function outputPageHtml(uc, run, art, extra = {}) {
     ${offerChoiceCard(art["offer_choice.json"] || null)}
     ${profitCard(extra.profit, policy)}
     ${listCard}
-    ${extra.panelsHtml || ""}
-    <section class="card card-body udetails-card">${runTech(run)}</section>`;
+    <section class="card card-body udetails-card">${runTech(run).replace(
+      /<\/details>$/,
+      `${train ? "" : allScoresHtml(download, extra.scoresHref || "#")}${extra.panelsHtml || ""}</details>`,
+    )}</section>`;
   const actions = train
     ? headActions({ primary: { label: "Score customers with this model", href: routes.score(uc.id) } })
     : headActions({
-        primary: { label: "Download contact list (CSV)", href: extra.scoresHref || "#", attrs: "download" },
+        primary: contactDownloadLink(download, { icon: false }),
         secondary: [{ label: "Measure campaign results", href: routes.campaign(uc.id, run.run_id) }],
       });
   return pageShell(

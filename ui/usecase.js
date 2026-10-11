@@ -28,6 +28,7 @@ import {
   getModels,
   getRun,
   getRuns,
+  loadContactList, // Plan M M171 (DEC-1601): one contact list
   postRun,
   postUpload,
   scoresUrl,
@@ -81,6 +82,14 @@ import {
 } from "./modules/router.js";
 import * as seams from "./modules/router.js";
 import { COST_NEEDS_CONFIRMATION, costConfirmHtml, costLineHtml } from "./cost.js"; // Plan J M108 (DEC-1318)
+
+import {
+  allScoresHtml,
+  contactDownloadLink,
+  contactListDownload,
+  contactListSentence,
+  contactSentenceHtml,
+} from "./contact_list.js";
 
 const AUTOML = "__automl__";
 const FILE = "file";
@@ -1198,7 +1207,17 @@ function outcome(uc, s, run) {
   }
   if (run.state === "done") {
     const kpi = present(s.kpiDisplay) ? ` ${uc.output.kpi.label}: ${s.kpiDisplay}.` : "";
+    // Plan M M171 (DEC-1601): one contact list - the treat list, or the scored list with a note - and the one
+    // sentence on why fewer customers are contacted than are worth contacting.
+    const facts = s.contactList || {};
+    const download = contactListDownload({
+      treatHref: facts.treatHref || "",
+      scoresHref: scoresUrl(run.run_id),
+      treatError: facts.error || null,
+    });
+    const sentence = contactListSentence({ scoring: s.scoring, treat: facts.summary || null });
     return {
+      allScores: allScoresHtml(download, scoresUrl(run.run_id)),
       head: `<span class="ok">✓ Scoring complete</span> <span class="vt">${esc(
         `${present(run.row_count) ? fmtInt(run.row_count) : "All"} rows scored.${kpi}`,
       )}</span>`,
@@ -1210,8 +1229,9 @@ function outcome(uc, s, run) {
               }.`,
             )}</p>`
           : "",
+        contactSentenceHtml(sentence, download),
       ],
-      actions: `<a class="btn primary" href="${esc(scoresUrl(run.run_id))}" download>Download contact list (CSV)</a><a class="btn secondary" href="#/uc/${esc(
+      actions: `${contactDownloadLink(download, { icon: false })}<a class="btn secondary" href="#/uc/${esc(
         uc.id,
       )}/output/${esc(run.run_id)}">See who to contact</a><button type="button" class="btn quiet again" id="f-again">Score another file</button>`,
     };
@@ -1251,7 +1271,7 @@ function resultsHtml(uc, s) {
     ["Model version", run.model_version_id],
     ["Started", run.created_at ? fmtStamp(run.created_at) : null],
     ["Error code", run.error && run.error.code],
-  ]);
+  ]).replace(/<\/details>$/, `${told.allScores || ""}</details>`); // "All scores (for analysts)" (Plan M M171)
   const flow = flowBlocks(uc, s, run);
   // A step that needs a full-width section under the flow (Plan H M83: step 4, "Measure the campaign").
   const panels = run.mode === "score" && run.state === "done" ? runPanelsHtml(uc, run) : "";
@@ -1473,8 +1493,13 @@ export function createController(uc, rerender) {
   /** The Output block's KPI line, read from the run's own scoring summary or left out. */
   async function loadKpi(run) {
     s.kpiDisplay = null;
+    s.scoring = null;
+    s.contactList = null;
     if (!run.artefacts || !run.artefacts["scoring_summary.json"]) return;
     const summary = await getArtefact(run.run_id, "scoring_summary.json");
+    s.scoring = summary || null;
+    // Plan M M171 (DEC-1601): the one contact list - the treat list's summary, asked once for this run.
+    if (run.mode === "score" && run.state === "done") s.contactList = await loadContactList(run.run_id);
     // A count is shown exactly ("1,675"), not as the engine's rounded display ("2K").
     const kpi = summary && summary.kpi;
     s.kpiDisplay = !kpi ? null : Number.isInteger(kpi.value) ? fmtInt(kpi.value) : kpi.display;

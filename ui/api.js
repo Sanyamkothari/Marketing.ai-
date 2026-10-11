@@ -105,6 +105,32 @@ export async function getArtefacts(runId, names) {
 export const scoresUrl = (runId) => url(`/runs/${encodeURIComponent(runId)}/scores.csv`);
 export const treatListUrl = (runId) => url(`/runs/${encodeURIComponent(runId)}/treat_list.csv`);
 
+// Plan M M171 (DEC-1601): what a scoring run's pages ask the server once for the one contact list - the treat
+// list's summary (the route the Output page's own card has always read) and the two file addresses. The answer
+// is shared by every part of a page that needs it (the header's download, the sentence under the tiles, the
+// "Treat list" counts under Technical details), so a page makes one request. A refusal (the list cannot be built
+// for this run) is kept for a few seconds for the same reason and then forgotten, so the next visit asks again.
+const KEEP_REFUSAL_MS = 5000;
+const contactListAnswers = new Map();
+
+/** `{ summary, error, treatHref, scoresHref }` for a scoring run. Never rejects. */
+export function loadContactList(runId) {
+  const known = contactListAnswers.get(runId);
+  if (known && (!known.settled || !known.error || Date.now() - known.settled < KEEP_REFUSAL_MS)) return known.promise;
+  const hrefs = { treatHref: treatListUrl(runId), scoresHref: scoresUrl(runId) };
+  const entry = { settled: 0, error: null, promise: null };
+  entry.promise = getArtefact(runId, "treat_list_summary.json").then(
+    (summary) => ({ summary: summary || null, error: summary ? null : new Error("The contact list is not available."), ...hrefs }),
+    (error) => ({ summary: null, error, ...hrefs }),
+  );
+  contactListAnswers.set(runId, entry);
+  entry.promise.then((answer) => {
+    entry.error = answer.error;
+    entry.settled = Date.now();
+  });
+  return entry.promise;
+}
+
 /**
  * Where a built dataset came from - its sources, mappings and recipe, each card already worded by
  * the engine (Plan A M35). A run that read an uploaded file has no dataset and never asks.

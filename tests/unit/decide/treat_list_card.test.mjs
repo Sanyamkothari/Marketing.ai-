@@ -44,7 +44,7 @@ test("the card shows the summary's own counts, not zeros", () => {
 
 test("it says to include treat = 1 and exclude holdout = 1", () => {
   const plain = text(treatListCardHtml(summary, { treatListHref: "/x/treat_list.csv" }));
-  assert.match(plain, /Include treat = 1, exclude holdout = 1\./);
+  assert.match(plain, /include treat = 1, exclude holdout = 1\./);
 });
 
 test("gross value is labelled not incremental and net value is left out when null", () => {
@@ -65,11 +65,11 @@ test("an unknown holdout count is a dash, never zero, with the server's note", (
   assert.match(plain, /holdout flag is not known/);
 });
 
-test("the download is labelled as the treat list, and the contact list is another file", () => {
+test("the card has no download of its own: the contact list is the page's one download (Plan M M171)", () => {
   const html = treatListCardHtml(summary, { treatListHref: "/runs/r/treat_list.csv" });
-  assert.match(html, /<a [^>]*href="\/runs\/r\/treat_list\.csv"[^>]*>Download treat list \(CSV\)<\/a>/);
-  assert.doesNotMatch(html, /Download contact list/);
-  assert.match(text(html), /The contact list above is the scored list before that choice/);
+  assert.doesNotMatch(html, /<a /, "no link at all");
+  assert.doesNotMatch(html, /Download/);
+  assert.match(text(html), /"All scores \(for analysts\)" is the scored list before that choice/);
 });
 
 test("a failed request shows the server's message instead of nothing", () => {
@@ -77,7 +77,7 @@ test("a failed request shows the server's message instead of nothing", () => {
   const html = treatListCardHtml(null, { treatListHref: "/x/treat_list.csv", error });
   assert.match(html, /data-treat-list-error/);
   assert.match(text(html), /The treat list could not be loaded\. This run did not save the settings/);
-  assert.doesNotMatch(html, /Download treat list/, "no link to a file that cannot be built");
+  assert.doesNotMatch(html, /<a /, "no link to a file that cannot be built");
 });
 
 test("the message is escaped, and a missing summary with no error draws nothing yet", () => {

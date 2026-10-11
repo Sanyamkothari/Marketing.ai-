@@ -229,7 +229,9 @@ test("model page carries the banner when only the Qini curve says it is not caus
 
 test("output page of a scoring run: four segments, recommended contacts, CI, treat-list download", () => {
   const art = { "segments.json": segments, "policy_recommendation.json": policy };
-  const html = views.outputPageHtml(uc, scoreRun, art, { scoresHref: "/runs/r-score/scores.csv" });
+  // Plan M M171 (DEC-1601): the download is the treat list; the scored list is "All scores" under Technical details.
+  const contactList = { treatHref: "/runs/r-score/treat_list.csv", summary: { treat_rows: 150 }, error: null };
+  const html = views.outputPageHtml(uc, scoreRun, art, { scoresHref: "/runs/r-score/scores.csv", contactList });
   assert.equal((html.match(/<div class="useg /g) || []).length, 4);
   assert.match(html, /Sleeping dogs/);
   assert.match(html, /Never treat \(contact makes it worse\)/);
@@ -245,7 +247,9 @@ test("output page of a scoring run: four segments, recommended contacts, CI, tre
   assert.match(text(html), /likely 3 to 16/);
   assert.match(text(html), /10 \(95% CI 3 to 16\)/, "the interval stays under Details");
   // The primary action is the download; the campaign link is the secondary.
-  assert.match(html, /<a class="btn primary" href="\/runs\/r-score\/scores\.csv" download>Download contact list \(CSV\)/);
+  assert.match(html, /<a class="btn primary" href="\/runs\/r-score\/treat_list\.csv" download data-download="contact-list" data-download-kind="contact">Download contact list<\/a>/);
+  assert.equal((html.match(/class="btn primary"[^>]* download/g) || []).length, 1, "one primary download");
+  assert.match(html, /<a class="btn quiet sm" href="\/runs\/r-score\/scores\.csv" download data-download="scores">All scores \(for analysts\)<\/a>/);
   assert.match(html, /<a class="btn secondary" href="#\/campaign\/win-back\/r-score">Measure campaign results/);
   assert.match(html, /The contact budget is reached/);
   // 300 persuadables vs 150 contacted is explained in one line.
@@ -638,7 +642,8 @@ test("a finished scoring run's Campaign results block says when it applies inste
     ],
   );
   assert.equal(blocks[2][2], " waiting");
-  assert.match(html, /<a class="btn primary" href="#" download>Download contact list \(CSV\)<\/a>/);
+  // No treat list answer yet: the scored list is offered under the same label (Plan M M171).
+  assert.match(html, /<a class="btn primary" href="#" download data-download="contact-list" data-download-kind="scores">Download contact list<\/a>/);
   noJunk(html);
 });
 

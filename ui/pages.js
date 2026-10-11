@@ -44,6 +44,13 @@ import {
 } from "./dom.js";
 import { bindPower, powerCardBody } from "./power.js";
 import { indexSchema, readPath } from "./settings.js";
+import {
+  allScoresHtml,
+  contactDownloadLink,
+  contactListDownload,
+  contactListSentence,
+  contactSentenceHtml,
+} from "./contact_list.js"; // Plan M M171 (DEC-1601): one contact list
 
 /**
  * What each page reads, by the run's mode: `data` / `model` / `output` for a training run, the
@@ -262,6 +269,12 @@ details.tech .kv{padding-left:0;padding-right:0}
 details.tech .cm{padding:8px 0}
 details.tech .tbl-wrap{margin:0}
 details.tech .caption{padding:4px 0 8px}
+details.more{padding:12px 20px 8px}
+details.more>summary{cursor:pointer;font-size:13px;font-weight:600;color:var(--ink)}
+details.more .tbl-wrap{margin:8px 0 0}
+.contact-block .contact-sentence{margin:0;font-size:15px;line-height:1.5;color:var(--ink)}
+.contact-block .caption{margin:4px 0 0}
+.all-scores{padding:8px 0}
 @media (max-width:700px){.vchart{gap:4px;padding:16px 12px 8px;min-height:200px;overflow-x:visible}.vcol{min-width:0}.pg-next{justify-content:stretch}.pg-next .btn{width:100%}}
 </style>`;
 
@@ -1145,9 +1158,6 @@ const retrainStarted = () =>
 
 // --- Output ------------------------------------------------------------------------------------
 
-const DOWNLOAD_ICON =
-  '<svg class="ico" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M8 2v8m0 0 3.5-3.5M8 10 4.5 6.5M3 13h10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>';
-
 /** "Settings used for this run", closed, worded from help.yaml; rows that cannot apply are left out. */
 function settingsCard(uc, run, config, byPath, summary, drift) {
   if (!config) return "";
@@ -1268,7 +1278,7 @@ const actionText = (row) =>
 /** The key's first column is the customer; a two-column key's date goes in "Show more columns". */
 const customerOf = (key) => String(key).split("|")[0];
 
-function sampleCard(uc, run, summary) {
+function sampleCard(uc, run, summary, download = null) {
   const sample = (summary && summary.sample_rows) || [];
   const entity = entityOf(uc);
   if (!sample.length) return "";
@@ -1288,14 +1298,18 @@ function sampleCard(uc, run, summary) {
       [
         { label: capital(entity) },
         { label: `${scoreHeading(uc, summary.score_field)}${binary ? " %" : ""}`, num: true },
-        { label: "Band" },
+        { label: "Priority" },
         { label: "Main reason" },
         { label: "Action" },
         { label: `Record key (${keyText(run.primary_key)})`, more: true },
         { label: `Score (${summary.score_field})`, more: true },
       ],
       rows,
-    )}<p class="caption">Every ${esc(entity)} is in the contact list download, with up to three reasons each.</p>`,
+    )}<p class="caption">${
+      download && download.kind === "scores"
+        ? `Every ${esc(entity)} is in the file, with up to three reasons each.`
+        : `Every ${esc(entity)} is in the contact list download, with the offer, the channel and up to three reasons each.`
+    }</p>`,
   );
 }
 
@@ -1414,40 +1428,61 @@ function scoringOutputPage(uc, run, art, byPath, scoresHref, extra = {}) {
 
   const actions = (summary.actions || []).slice().sort((a, b) => b.rows - a.rows);
   const suppressed = summary.suppressed || [];
-  const bandsCard = card(
-    `Bands &amp; actions${sortNote("highest scores first")}`,
+  // Plan M M171 (DEC-1601): the Priority table, with what happens to each customer folded under it.
+  const happens =
+    actions.length || suppressed.length
+      ? `<details class="more" data-what-happens><summary>What happens to each ${esc(entity)}</summary>${
+          actions.length
+            ? `${dataTable(
+                [{ label: "Action" }, { label: capital(plural(entity)), num: true }, { label: "Share", num: true }],
+                actions.map((a) => [esc(ACTION_WORDS[a.action] || a.action), esc(fmtInt(a.rows)), esc(`${fmtNum(a.share_pct, 1)}%`)]),
+              )}<p class="caption">${
+                present(held)
+                  ? `${esc(fmtInt(held))} ${esc(plural(entity))} are held back at random, whatever their priority, as the comparison group, so the campaign's effect can be measured. `
+                  : ""
+              }${suppressed.length ? "" : "Nobody was left out by a contact rule."}</p>`
+            : ""
+        }${
+          suppressed.length
+            ? `<h4>Left out by a contact rule</h4>${dataTable(
+                [{ label: "Why" }, { label: capital(plural(entity)), num: true }],
+                suppressed.map((s) => [esc(humanise(s.reason)), esc(fmtInt(s.rows))]),
+              )}`
+            : ""
+        }</details>`
+      : "";
+  const priorityCard = card(
+    `Priority${sortNote("highest likelihood first")}`,
     `${dataTable(
-      [{ label: "Band" }, { label: "Suggested action" }, { label: capital(plural(entity)), num: true }, { label: "Share", num: true }],
+      [{ label: "Priority" }, { label: "Suggested action" }, { label: capital(plural(entity)), num: true }, { label: "Share", num: true }],
       bands.map((b) => [bandPill(b.name), esc(b.action), esc(fmtInt(b.rows)), esc(`${fmtNum(b.share_pct, 1)}%`)]),
-    )}${
-      actions.length
-        ? `<h4>What happens on the list</h4>${dataTable(
-            [{ label: "Action" }, { label: capital(plural(entity)), num: true }, { label: "Share", num: true }],
-            actions.map((a) => [esc(ACTION_WORDS[a.action] || a.action), esc(fmtInt(a.rows)), esc(`${fmtNum(a.share_pct, 1)}%`)]),
-          )}<p class="caption">${
-            present(held) ? `${esc(fmtInt(held))} ${esc(plural(entity))} are held back at random, whatever their band, so the campaign's effect can be measured. ` : ""
-          }${suppressed.length ? "" : "Nobody was left out by a contact rule."}</p>`
-        : ""
-    }${
-      suppressed.length
-        ? `<h4>Left out by a contact rule</h4>${dataTable(
-            [{ label: "Why" }, { label: capital(plural(entity)), num: true }],
-            suppressed.map((s) => [esc(humanise(s.reason)), esc(fmtInt(s.rows))]),
-          )}`
-        : ""
-    }`,
+    )}${happens}`,
   );
 
+  // The one file and the one sentence (Plan M M171): the treat list, or the scored list with a note.
+  const facts = extra.contactList || {};
+  const download = contactListDownload({ treatHref: facts.treatHref || "", scoresHref, treatError: facts.error || null });
+  const sentence = contactListSentence({ scoring: summary, treat: facts.summary || null });
+  const testSize = `<section class="card" data-power><details class="more" data-test-size><summary>Test size</summary>${powerCardBody(
+    uc,
+    summary,
+  )}</details></section>`;
+
+  // Technical details: the scored list for analysts, what moved, and the modules' own sections (the contact
+  // list's counts, the notes behind a change).
+  const techHtml = `${allScoresHtml(download, scoresHref)}${driftTable(drift)}${extra.panelsHtml || ""}`;
+
   const body = `${outputTiles}
+    ${contactSentenceHtml(sentence, download)}
     ${driftNotice}
-    ${driftTable(drift)}
-    ${bandsCard}
-    ${card("Is the held-back group big enough?", powerCardBody(uc, summary), 'data-power')}
-    ${sampleCard(uc, run, summary)}
-    ${settingsCard(uc, run, config, byPath, summary, drift)}${extra.panelsHtml || ""}`;
+    ${priorityCard}
+    ${sampleCard(uc, run, summary, download)}
+    ${testSize}
+    ${settingsCard(uc, run, config, byPath, summary, drift)}`;
   return shell(uc, "output", run, body, {
-    primary: `<a class="btn primary" href="${esc(scoresHref)}" data-download="scores">${DOWNLOAD_ICON}Download contact list (CSV)</a>`,
+    primary: contactDownloadLink(download, { icon: true }),
     tech: [["Training run", drift && drift.baseline_run_id]],
+    techHtml,
   });
 }
 

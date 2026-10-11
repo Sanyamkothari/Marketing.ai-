@@ -128,10 +128,11 @@ function countsHtml(title, kind, counts, count) {
  * card then says so in the server's words instead of drawing nothing. `summary` null with no error is
  * the moment before the answer arrives.
  *
- * The file this card downloads is the treat list. The Output page's own "Download contact list" is the
- * scored list (`scores.csv`), which still holds the held-back customers and the ones not to contact.
+ * Plan M M171 (DEC-1601): the card has no download of its own. The treat list is the page's one "Download contact
+ * list"; this card sits under Technical details and gives an analyst the counts behind that file in the file's own
+ * column names (`treat`, `holdout`, `explore`). The scored list is "All scores (for analysts)", beside it.
  */
-export function treatListCardHtml(summary, { treatListHref = "", error = null } = {}) {
+export function treatListCardHtml(summary, { error = null } = {}) {
   if (error) {
     const said = error.message ? esc(error.message) : "The server gave no reason.";
     return `<div class="dc"><section class="card dc-card" data-treat-list-card data-treat-list-error>
@@ -150,14 +151,9 @@ export function treatListCardHtml(summary, { treatListHref = "", error = null } 
   const notesHtml = notes.length
     ? `<div class="dc-note" data-treat-list-notes>${notes.map((n) => `<p>${esc(n)}</p>`).join("")}</div>`
     : "";
-  const downloadBtn = treatListHref
-    ? `<div class="dc-actions">
-         <a class="btn secondary" href="${esc(treatListHref)}" download data-download="treat-list">Download treat list (CSV)</a>
-       </div>`
-    : "";
   return `<div class="dc"><section class="card dc-card" data-treat-list-card>
     <h3>Treat list</h3>
-    <p class="dc-text">The file to give your sending tool. Include treat = 1, exclude holdout = 1. The contact list above is the scored list before that choice.</p>
+    <p class="dc-text">The columns of the contact list file: include treat = 1, exclude holdout = 1. "All scores (for analysts)" is the scored list before that choice.</p>
     <div class="dc-kvs">
       ${row("Customers", count(summary.total_rows))}
       ${row("To treat (treat = 1)", count(summary.treat_rows))}
@@ -170,7 +166,6 @@ export function treatListCardHtml(summary, { treatListHref = "", error = null } 
     ${countsHtml("By offer", "offer", summary.offer_counts, count)}
     ${countsHtml("By channel", "channel", summary.channel_rows, count)}
     ${notesHtml}
-    ${downloadBtn}
   </section></div>`;
 }
 
