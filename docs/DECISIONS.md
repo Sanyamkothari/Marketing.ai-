@@ -1730,4 +1730,21 @@ DEC-1500…1509, M151 → DEC-1510…1519, …), so parallel work on two milesto
   `tests/integration/agent/test_api_doctor_memory.py` prove it; the connections import key set gains `treatment`
   and `test_hardening`'s agent-session policy count is 11. `infra/naming.OBJECT_PREFIXES` does not grant
   `doctor_memory/` yet: on AWS the memory is skipped and logged, never failing anything.
+- **DEC-1596 — After M161 (idea #5): what your file already says, a first look with no AI.** *Context:* a marketer
+  without a data team learned nothing from Data Doctor until a model was trained, yet the file already shows how
+  the outcome varies; a description must not be dressed up as a cause or a prediction, must never name a small
+  group, and must never use personal data or a column that holds the answer. *Decision:* (a) Added, defaulted
+  fields on the diagnosis, no new route: `UseCaseReadiness.first_look` for `ready`/`check` verdicts, on the chosen
+  file and the rows the diagnosis read: the base rate of "yes" by the engine's label rule and the rate by up to
+  five columns, each grouped by the Ask-your-data `rate_by` tool itself (under-10 values into "(other)", groups it
+  suppresses counted, never listed), ranked by spread = Σ rows_g/rows × |rate_g − base| (ties to the earlier
+  column), at most 20 columns scored. (b) Never used, each listed with its reason: personal data (`pii_kinds`,
+  `free_text_pii_kinds`, `agent.always_hide_columns`); columns the advisor flags `LEAKAGE_SUSPECTED`, or whose
+  groups alone separate yes from no above `validation.leakage_auc_threshold`; IDs; dates; free text; one-value
+  columns. (c) `FileDiagnosis.first_look` gives a file with no use case's outcome but a non-personal ID and a date
+  column its recency and frequency picture, in fixed periods back from its latest date. (d) Every first look
+  says "Describes your file. Not a cause and not a prediction." *Consequences:* about a second more per ready use
+  case on 200,000 rows (the advisor's run is reused); numeric outcomes get no first look and dates are not
+  bucketed. `engine/doctor/first_look.py`; `tests/unit/doctor/test_first_look.py`,
+  `tests/integration/test_api_doctor_first_look.py` and `tests/integration/test_doctor_ui.py` prove it.
 <!-- ---- END PLAN-L ---- -->

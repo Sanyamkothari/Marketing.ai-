@@ -13,6 +13,7 @@ from typing import Literal
 from pydantic import Field
 
 from engine.config import StrictBase
+from engine.doctor.first_look import FirstLook
 from engine.doctor.outcomes import OutcomeOffer
 from engine.doctor.sufficiency import NextSteps
 
@@ -52,6 +53,15 @@ class FileDiagnosis(StrictBase):
     personal_columns: int = Field(description="Columns holding personal data, hidden from every AI.")
     fixable_columns: int = Field(description="Columns whose format Guided setup would offer to fix.")
     notes: tuple[str, ...] = Field(description="What intake did on the way in (`IntakeReport.notes`).")
+    # DEC-1596: an added, defaulted field - for a file with no use case's outcome, when customers last
+    # appear and how often, counted with no AI. Null otherwise.
+    first_look: FirstLook | None = Field(
+        default=None,
+        description=(
+            "For a file with no use case's outcome but an ID and a date column: recency and frequency, "
+            "counted (`engine.doctor.first_look`). Null otherwise."
+        ),
+    )
 
 
 class UseCaseReadiness(StrictBase):
@@ -87,6 +97,15 @@ class UseCaseReadiness(StrictBase):
         description=(
             "When the use case is not ready: what is short and by how much, what can be done now and what "
             "to collect from whom (`engine.doctor.sufficiency`). Null when it is ready."
+        ),
+    )
+
+    # DEC-1596: an added, defaulted field - what the file already says about the outcome, with no AI.
+    first_look: FirstLook | None = Field(
+        default=None,
+        description=(
+            "For a `ready` or `check` verdict: the file's rate of 'yes' and the rate by its most informative "
+            "columns, counted on the rows read (`engine.doctor.first_look`). Null otherwise."
         ),
     )
 

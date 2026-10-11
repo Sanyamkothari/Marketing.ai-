@@ -6,7 +6,9 @@ two months of one bills report, the second with a renamed column - and agrees to
 
 * **diagnosis** - `POST /doctor/diagnosis` on the five uploads (links, stacks, and RCA's outcome offer);
 * **agreement** - `POST /doctor/outcome` for the offer's default window, its sentence word for word;
-* **uploads** - what the page holds for each file.
+* **uploads** - what the page holds for each file;
+* **first_look** - `POST /doctor/diagnosis` on a customer history with the outcome alone, whose ready use case
+  carries what the file already says (DEC-1596); the logs above carry their recency picture.
 """
 
 from __future__ import annotations
@@ -21,6 +23,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from api.main import create_app
+from tests.fixtures.make_data import GenerationSpec, generate
 from tests.fixtures.node import skip_without_jsdom
 from tests.integration.test_api_doctor_outcome import customers_csv, recharges_csv
 
@@ -33,8 +36,7 @@ TESTS_DIR: Final[Path] = NODE_DIR / "doctor"
 def tickets_csv() -> bytes:
     lines = ["ticket_id,customer_id,opened_on,topic"]
     lines += [
-        f"T{index:05d},c{index % 600:05d},2025-0{1 + index % 6}-1{index % 9},network"
-        for index in range(900)
+        f"T{index:05d},c{index % 600:05d},2025-0{1 + index % 6}-1{index % 9},network" for index in range(900)
     ]
     return ("\n".join(lines) + "\n").encode()
 
@@ -95,6 +97,18 @@ def write_fixtures(root: Path, config_root: Path) -> Path:
             ),
             201,
         )
+        history = generate(GenerationSpec(use_case_id="targeted-advertisement", rows=3000, variant="clean"))
+        answer = _ok(
+            client.post(
+                "/uploads",
+                files={"file": ("history.csv", history.to_csv(index=False).encode(), "text/csv")},
+                data={"use_case": "payment-propensity", "mode": "train"},
+            ),
+            201,
+        )
+        bodies["first_look"] = _ok(
+            client.post("/doctor/diagnosis", json={"upload_ids": [answer["upload_id"]]})
+        )
     for name, body in bodies.items():
         (out / f"{name}.json").write_text(json.dumps(body, indent=1), encoding="utf-8")
     return out
@@ -113,6 +127,11 @@ def test_the_fixtures_are_the_world_the_screen_is_tested_in(tmp_path: Path, conf
     )
     rca = next(item for item in diagnosis["use_cases"] if item["use_case_id"] == "rca")
     assert rca["outcome_offer"] and len(rca["outcome_offer"]["choices"]) > 1
+    recharges = next(file for file in diagnosis["files"] if file["file_name"] == "recharges.csv")
+    assert recharges["first_look"] and recharges["first_look"]["kind"] == "recency"
+    first = json.loads((out / "first_look.json").read_text(encoding="utf-8"))
+    ad = next(item for item in first["use_cases"] if item["use_case_id"] == "targeted-advertisement")
+    assert ad["status"] in {"ready", "check"} and ad["first_look"]["columns"]
 
 
 def test_data_doctor_page_in_jsdom(tmp_path: Path, config_root: Path) -> None:
