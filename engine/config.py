@@ -181,6 +181,7 @@ class Strategy(StrEnum):
     FAST = "fast"
     BALANCED = "balanced"
     EXHAUSTIVE = "exhaustive"
+    FOUNDATION = "foundation"  # Plan K M143 (DEC-1410): opt-in, never a default, not offered on the form
 
 
 class Imbalance(StrEnum):
@@ -408,6 +409,7 @@ CHOICE_LABELS: Final[Mapping[StrEnum, str]] = _ChoiceLabelMap(
         (Strategy.FAST, "Fast"),
         (Strategy.BALANCED, "Balanced"),
         (Strategy.EXHAUSTIVE, "Exhaustive"),
+        (Strategy.FOUNDATION, "Foundation models (opt-in)"),
         (Imbalance.AUTO, "Auto"),
         (Imbalance.CLASS_WEIGHTS, "Class weights"),
         (Imbalance.OVERSAMPLING, "Oversampling (SMOTE)"),
@@ -1723,6 +1725,7 @@ def load_use_case(use_case_id: str, root: Path | None = None) -> UseCaseConfig:
     config = _validate_use_case(document, catalog=get_catalog(root))
     check_dependencies(config)
     _plan_j_validate_action_ids(config, root)  # Plan J M99 (DEC-1309): in place
+    _plan_k_validate_model_licences(config, root)  # Plan K M143 (DEC-1410): in place
     return config
 
 
@@ -2102,6 +2105,8 @@ def resolve_config(
     final = _validate_use_case(document, catalog=catalog)
     check_dependencies(final)
     _plan_j_validate_action_ids(final, root)  # Plan J M99 (DEC-1309): in place
+    _plan_k_validate_model_licences(final, root)  # Plan K M143 (DEC-1410): in place
+    warnings.extend(_plan_k_foundation_warnings(final))  # Plan K M143: says what `foundation` does today
     if final.split.type is SplitType.TIME_BASED and final.split.time_column is None:
         warnings.append("split.type is time_based and no time column is set yet")
     return ResolvedConfig(
@@ -2257,6 +2262,10 @@ _ENUM_FOR_PATH: Final[Mapping[str, type[StrEnum]]] = {
     "evaluation.threshold.mode": ThresholdMode,
     "monitoring.retraining": Retraining,
 }
+
+_OPT_IN_CHOICES: Final[frozenset[StrEnum]] = frozenset({Strategy.FOUNDATION})
+"""Enum members a run may select by override or use-case file but the form and the setup helper never
+offer: unproven options stay out of a non-technical person's list (Plan K M143, DEC-1410)."""
 
 _SUMMARY_TEMPLATES: Final[Mapping[str, str]] = {
     "data_preparation": (
@@ -3007,7 +3016,11 @@ def _choices_for(
     enum_type = _ENUM_FOR_PATH.get(field.path)
     if enum_type is None:
         return None
-    return tuple(FieldChoice(value=member.value, label=CHOICE_LABELS[member]) for member in enum_type)
+    return tuple(
+        FieldChoice(value=member.value, label=CHOICE_LABELS[member])
+        for member in enum_type
+        if member not in _OPT_IN_CHOICES
+    )
 
 
 def advanced_settings_schema(
@@ -3898,6 +3911,22 @@ def _plan_j_validate_action_ids(config: UseCaseConfig, root: Path | None) -> Non
     from engine.decide.catalogue import validate_action_ids  # it imports this module
 
     validate_action_ids(config, root=root)
+
+
+# PLAN-K (M143): move into the PLAN-K block at integration
+def _plan_k_validate_model_licences(config: UseCaseConfig, root: Path | None) -> None:
+    """Plan K M143 (DEC-1410): refuse a strategy or algorithm whose licence bars commercial use."""
+    from engine.model_licences import validate_model_licences  # it imports this module
+
+    validate_model_licences(config, root)
+
+
+# PLAN-K (M143): move into the PLAN-K block at integration
+def _plan_k_foundation_warnings(config: UseCaseConfig) -> tuple[str, ...]:
+    """Plan K M143 (DEC-1410): the plain warning a run that picks `foundation` carries, else nothing."""
+    from engine.model_licences import foundation_warnings  # it imports this module
+
+    return foundation_warnings(config)
 
 
 # ---- END PLAN-J ----

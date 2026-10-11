@@ -1,0 +1,57 @@
+# configs/agentic/model_licences.yaml
+# Plan K M143 (DEC-1410, proposal K8): which model families the product may load for a client.
+#
+# Read by engine/model_licences.py every time a configuration is resolved. A strategy whose AutoGluon
+# preset is blocked, or is not listed here at all, is refused with MODEL_LICENCE_BLOCKED before any
+# model is trained. Default deny: a preset or model key that nobody has reviewed is not allowed.
+#
+# Why: Prior Labs' licences for TabPFN-2.5 and later bar commercial use, including using a model's
+# outputs for business decisions, so the product never loads them without a paid licence (K8: no
+# licence is bought now). AutoGluon 1.6.3's `extreme_quality` preset is built only from commercial-safe
+# models; its `noncommercial` preset is the same plus TabPFN-3.
+#
+# The list is checked against the installed AutoGluon by tests/unit/test_model_licences.py: every
+# allowed preset must load only allowed model keys, so a library upgrade that changes a preset fails
+# the suite instead of changing what a client's model is built from.
+
+schema_version: 1                          # int
+
+# Presets a strategy may map to (configs/engine.yaml catalog.strategy_presets). Aliases are listed
+# because AutoGluon accepts them as the same preset.
+allowed_presets:                           # list[str]
+  - medium_quality                         # strategy fast
+  - good_quality                           # strategy balanced
+  - best_quality                           # strategy exhaustive
+  - extreme_quality                        # strategy foundation (opt-in): NORI, TabICLv2, TabDPT-Turbo + trees + RealMLP
+  - extreme                                # alias of extreme_quality
+  - extreme_v160                           # alias of extreme_quality
+  - eq                                     # alias of extreme_quality
+
+# Presets that load a model whose licence bars commercial use. name -> the reason shown to a person.
+blocked_presets:                           # map[str, str]
+  noncommercial: "loads TabPFN-3, whose licence from Prior Labs bars commercial use"
+  noncommercial_v160: "is an alias of the noncommercial preset, which loads TabPFN-3 (licence bars commercial use)"
+
+# AutoGluon model keys (hyperparameters names) the product may load.
+allowed_model_keys:                        # list[str]
+  - XGB                                    # the tree and linear families the engine has always offered
+  - GBM
+  - CAT
+  - RF
+  - XT
+  - LR
+  - KNN
+  - NN_TORCH
+  - FASTAI
+  - REALMLP                                # Apache-2.0
+  - TABICL                                 # TabICLv2, BSD-3-Clause
+  - TABDPT                                 # commercial-safe per AutoGluon's extreme_quality preset
+  - TABDPT-TURBO                           # commercial-safe per AutoGluon's extreme_quality preset
+  - NORI                                   # Apache-2.0 (regression only in AutoGluon 1.6.3)
+
+# Model keys that bar commercial use. fnmatch patterns (case-insensitive) -> reason. Checked before the
+# allow-list, so the person sees the licence reason rather than "not reviewed".
+blocked_model_keys:                        # map[str, str]
+  "REALTABPFN-V2.[5-9]*": "a TabPFN-2.5 or later model, whose licence from Prior Labs bars commercial use"
+  "REALTABPFN-V[3-9]*": "a TabPFN-3 or later model, whose licence from Prior Labs bars commercial use"
+  "TABPFN-*": "a TabPFN model (TabPFN-2.6, TabPFN-3, TabPFN-3.5 or later), whose licence from Prior Labs bars commercial use"
