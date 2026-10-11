@@ -85,6 +85,8 @@ dependencies = [
   "pyjwt==2.15.1",                      # the SDK's auth helpers (crypto from the cryptography pin above)
   "sse-starlette==3.5.0",
   # ---- END PLAN-K ----
+  # ---- PLAN-M (simple UI) — append only below this line ----
+  # ---- END PLAN-M ----
 ]
 
 [project.optional-dependencies]

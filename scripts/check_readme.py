@@ -665,6 +665,15 @@ MILESTONE_TESTS: Final[Mapping[str, tuple[str, ...]]] = {
         "tests/integration/compliance/test_gate_variant_arms.py",
         "tests/unit/decide/test_variant_arms.py",
     ),
+    # --- Plan M (docs/plans/MARKETING_AI_PLAN_M_SIMPLE_UI.md); each milestone adds its own entry. ---
+    # M170 (DEC-1600), the set-up, the glossary and the visible-text check. test_visible_text_ui.py runs the node
+    # suites (labels.test.mjs, visible_text.test.mjs) when jsdom is installed and checks the recorded answers and the
+    # baseline without it; test_ui.py registers ui/labels.js; test_shared_file_markers.py pins the PLAN-M blocks.
+    "M170": (
+        "tests/integration/test_visible_text_ui.py",
+        "tests/integration/test_ui.py",
+        "tests/unit/test_shared_file_markers.py",
+    ),
 }
 """Milestone id -> the test files (or directories, with a trailing `/`) that prove it is built.
 
