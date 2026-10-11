@@ -10,7 +10,8 @@
 
 import { canAccess, registerModule, registerPagePanel, registerResultsList, setActiveNav } from "../router.js";
 import { errorBox, skeleton } from "../../dom.js";
-import { getIndustries, postUpload, treatListUrl } from "../../api.js";
+import { getIndustries, loadContactList, postUpload } from "../../api.js"; // loadContactList: Plan M M171
+
 import {
   deleteDriftEvent,
   getArbitrationConflicts,
@@ -19,7 +20,6 @@ import {
   getDriftEvents,
   getPlan,
   getPlanPreview,
-  getTreatListSummary,
   postAudit,
   postDriftEvent,
   postMeasure,
@@ -183,11 +183,10 @@ async function loadTreatSummary(runId) {
   if (!st) {
     st = { runId, summary: null, loading: true, error: null };
     treatStates.set(runId, st);
-    try {
-      st.summary = await getTreatListSummary(runId);
-    } catch (err) {
-      st.error = err;
-    }
+    // The page already asked (`app.js`, the uplift controller): this reads that answer, not the server again.
+    const answer = await loadContactList(runId);
+    st.summary = answer.summary;
+    st.error = answer.error;
     st.loading = false;
     repaintTreatPanel(runId);
   }
@@ -199,7 +198,7 @@ function repaintTreatPanel(runId) {
   const el = document.querySelector(`[data-treat-panel="${encodeURIComponent(runId)}"]`);
   const st = treatStates.get(runId);
   if (!el || !st || st.loading) return;
-  el.innerHTML = treatListCardHtml(st.summary, { treatListHref: treatListUrl(runId), error: st.error });
+  el.innerHTML = treatListCardHtml(st.summary, { error: st.error });
 }
 
 function treatListPanelHtml(kind, uc, run) {
@@ -210,7 +209,7 @@ function treatListPanelHtml(kind, uc, run) {
   const st = treatStates.get(runId);
   const inner =
     st && !st.loading
-      ? treatListCardHtml(st.summary, { treatListHref: treatListUrl(runId), error: st.error })
+      ? treatListCardHtml(st.summary, { error: st.error })
       : "";
   // A failure is shown once; the next visit to the page asks the server again.
   if (st && st.error) treatStates.delete(runId);
@@ -327,16 +326,28 @@ function drawAudit(app) {
       if (typeof value === "string") kept[key] = value;
     }
   }
+  // FormData leaves an unticked box out, so its state is read from the box: otherwise an unticked "More of the
+  // outcome is better" would come back ticked by its default, and the audit would be sent the other way round.
+  const ticks = {};
+  for (const box of document.querySelectorAll(
+    "[data-audit-form] input[type=checkbox], [data-programme-form] input[type=checkbox]",
+  )) {
+    ticks[box.name] = box.checked;
+  }
   app.innerHTML = auditPageHtml({ can: canAccess, state: audit });
   for (const [key, value] of Object.entries(kept)) {
     const input = app.querySelector(`[name="${key}"]`);
-    if (!input) continue;
+    if (!input || input.type === "checkbox") continue;
     if (input.type === "radio") {
       const chosen = app.querySelector(`[name="${key}"][value="${value}"]`);
       if (chosen) chosen.checked = true;
     } else {
       input.value = value;
     }
+  }
+  for (const [key, on] of Object.entries(ticks)) {
+    const box = app.querySelector(`input[type=checkbox][name="${key}"]`);
+    if (box) box.checked = on;
   }
   document.title = "Audit a campaign · Marketing AI";
   setActiveNav("results");

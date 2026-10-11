@@ -449,7 +449,7 @@ def test_the_route_says_when_the_run_is_not_finished_and_when_it_trained_a_model
 def test_the_route_serves_the_builders_bytes_and_scores_csv_is_another_file(
     tmp_path: Path, config_root: Path
 ) -> None:
-    """'Download contact list' is `scores.csv`; 'Download treat list' is `treat_list.csv`: different files."""
+    """'Download contact list' is `treat_list.csv`; 'All scores (for analysts)' is `scores.csv`: different files (Plan M M171)."""
     storage = LocalStorage(tmp_path)
     run = write_run(storage, "r_20261001_0c000015", kind="uplift", rows=30, holdout=True)
     with _client(tmp_path, config_root) as client:

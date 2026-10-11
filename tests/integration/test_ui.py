@@ -34,6 +34,7 @@ MODULES: Final[tuple[str, ...]] = (
     "app.js",
     "availability.js",  # what this environment can offer; the AI-service notice (DEC-954)
     "chrome.js",  # the one top bar (v1, docs/ui/FOUNDATION.md)
+    "contact_list.js",  # the one contact list download and its sentence (Plan M M171, DEC-1601)
     "cost.js",  # the cost line beside Run, its confirmation and the Cost page's markup (Plan J M108, DEC-1318)
     "dom.js",
     "labels.js",  # the glossary as data and the never-shown words of the visible-text check (Plan M M170, DEC-1600)

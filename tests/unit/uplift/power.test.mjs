@@ -116,11 +116,11 @@ test("the scoring Output page carries the card, and bindPower answers as the per
     sample_rows: [],
   };
   const html = pages.renderPage("output", page, run, { "scoring_summary.json": full }, "#");
-  assert.match(html, /Is the held-back group big enough\?/);
+  assert.match(html, /<summary>Test size<\/summary>/);
   assert.match(html, /can reliably detect a lift of 3 points/);
   // without a mean score the same page says so with a dash, and invents nothing
   const bare = pages.renderPage("output", page, run, { "scoring_summary.json": { ...full, score_mean: undefined } }, "#");
-  assert.match(bare, /Is the held-back group big enough\?/);
+  assert.match(bare, /<summary>Test size<\/summary>/);
   assert.ok(bare.includes(EM));
   assert.doesNotMatch(bare, /reliably detect a lift of/);
 

@@ -90,8 +90,9 @@ export const ACTION_CONTROLS = [
   // --- every person's feedback, as one download (pilot/screen.js) ---------------------------------
   { selector: 'a[href$="/pilot/feedback/export"]', method: "GET", path: "/pilot/feedback/export" },
   // --- customer-level downloads, Analyst-only with sign-in on (Plan J M91, DEC-1301 (e)) -------------
-  // "Download contact list (CSV)" on the Setup screen (usecase.js), the uplift screens (uplift/views.js)
-  // and the output page (pages.js, its href from app.js); "Download messages (CSV)" on the copy screen
+  // "Download contact list" is the treat list (`treatListUrl`) on the Setup screen (usecase.js), the uplift
+  // screens (uplift/views.js) and the output page (pages.js); "All scores (for analysts)" is `scoresUrl`
+  // (Plan M M171). "Download messages (CSV)" is on the copy screen
   // (generative/copy.js), with or without `?approved_only=true`. Matched by href so every screen that
   // links the file is covered, whichever id or data attribute it gives the link.
   { selector: 'a[href$="/scores.csv"]', method: "GET", path: "/runs/{run_id}/scores.csv" },

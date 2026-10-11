@@ -153,7 +153,7 @@ export function summaryCardHtml(summary) {
         `<li class="sp-entry" data-total="${esc(total.unit)}"><span class="sp-label">${esc(total.label)}</span><ul class="sp-facts">${(
           total.campaigns || []
         )
-          .map(line)
+          .map((c) => line(c))
           .join("")}</ul></li>`,
     )
     .join("");

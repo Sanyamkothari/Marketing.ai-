@@ -99,6 +99,20 @@ const html = (summary) => {
   return box;
 };
 
+test("each campaign of a total ends with its own lower bound, never with its place in the list", () => {
+  const [total] = summary.proven.totals;
+  const [first] = total.campaigns;
+  const second = { ...first, campaign_id: `${first.campaign_id}_2`, campaign_name: { ...first.campaign_name, text: "Second send" } };
+  const third = { ...first, campaign_id: `${first.campaign_id}_3`, campaign_name: { ...first.campaign_name, text: "Third send" } };
+  const two = { ...summary, proven: { ...summary.proven, totals: [{ ...total, campaigns: [first, second, third] }] } };
+  const row = html(two).querySelector(`[data-total="${total.unit}"]`);
+  const lines = [...row.querySelectorAll("[data-line]")];
+  assert.equal(lines.length, 3);
+  for (const [li, item] of lines.map((li, i) => [li, [first, second, third][i]])) {
+    assert.equal(text(li), `${item.campaign_name.text}: ${item.lower_bound.text}`, "no stray index after the figure");
+  }
+});
+
 test("a lower bound listed apart carries the unit the server sent, never a bare number", () => {
   const body = html(full);
   const stated = full.proven.apart.find((item) => item.kind === "stated_random");

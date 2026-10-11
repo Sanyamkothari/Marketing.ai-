@@ -363,5 +363,7 @@ def _install_save_desk(app: FastAPI) -> None:
 
 PHASE_APP_HOOKS.append(_install_save_desk)
 # ---- END PLAN-K ----
+# ---- PLAN-M (simple UI) — append only below this line ----
+# ---- END PLAN-M ----
 
 app: FastAPI = create_app()

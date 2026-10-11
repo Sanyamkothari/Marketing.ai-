@@ -281,21 +281,31 @@ def test_the_actions_the_plan_names_are_all_gated() -> None:
 
 
 def test_the_row_level_download_links_match_their_gates() -> None:
-    """The two download gates match by href, so the URL builders must keep producing what they match.
+    """The download gates match by href, so the URL builders must keep producing what they match.
 
-    "Download contact list (CSV)" is drawn by usecase.js, uplift/views.js and pages.js from
-    `ui/api.js`'s `scoresUrl`; "Download messages (CSV)" by generative/copy.js from `copyMessagesUrl`.
+    "Download contact list" (Plan M M171) is the treat list, drawn by usecase.js, uplift/views.js and pages.js from
+    `ui/api.js`'s `treatListUrl` (through `loadContactList` / `contactListNow`); "All scores (for analysts)" and the
+    contact-list fallback are `scoresUrl`; "Download messages (CSV)" is drawn by generative/copy.js from
+    `copyMessagesUrl`.
     """
     selectors = {(row["method"], row["path"]): row["selector"] for row in control_rows()}
     assert selectors[("GET", "/runs/{run_id}/scores.csv")] == 'a[href$="/scores.csv"]'
+    assert selectors[("GET", "/runs/{run_id}/treat_list.csv")] == 'a[href$="/treat_list.csv"]'
     assert selectors[("GET", "/runs/{run_id}/copy_messages.csv")] == 'a[href*="/copy_messages.csv"]'
+    assert re.search(
+        r"treatListUrl = \(runId\) => url\(`/runs/\$\{[^}]+\}/treat_list\.csv`\)", code_of("api.js")
+    )
+    assert "treatHref: treatListUrl(" in code_of(
+        "api.js"
+    ), "the contact list's treat href is not built by treatListUrl"
     assert re.search(r"scoresUrl = \(runId\) => url\(`/runs/\$\{[^}]+\}/scores\.csv`\)", code_of("api.js"))
     assert re.search(
         r"copyMessagesUrl = \(runId\) => url\(`/runs/\$\{[^}]+\}/copy_messages\.csv`\)",
         code_of("modules/generative/api.js"),
     )
     for screen in ("usecase.js", "app.js", "modules/uplift/controller.js"):
-        assert "scoresUrl(" in code_of(screen), f"{screen} no longer links the contact list through scoresUrl"
+        assert "scoresUrl(" in code_of(screen), f"{screen} no longer links the scored list through scoresUrl"
+        assert "loadContactList(" in code_of(screen), f"{screen} does not read the contact list"
     assert "copyMessagesUrl(" in code_of("modules/generative/copy.js")
 
 

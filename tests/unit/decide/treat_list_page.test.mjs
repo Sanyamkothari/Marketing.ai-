@@ -66,13 +66,21 @@ const scoring = {
   sample_rows: [],
 };
 const primaries = (html) => (html.match(/class="btn primary"/g) || []).length;
-const panel = `<div data-treat-panel="r-score">${treatListCardHtml(summary, { treatListHref: "/runs/r-score/artefacts/treat_list.csv" })}</div>`;
+const panel = `<div data-treat-panel="r-score">${treatListCardHtml(summary)}</div>`;
+// Plan M M171 (DEC-1601): the page's one download is the treat list; the panel is its counts, under Technical details.
+const contactList = { treatHref: "/runs/r-score/treat_list.csv", summary, error: null };
+const underTechnical = (html, marker) => {
+  const at = html.indexOf('<details class="tech"');
+  return at >= 0 && html.indexOf(marker) > at;
+};
 
-test("a propensity run's Output page draws the panel it is given", () => {
-  const html = pages.renderPage("output", uc, base, { "scoring_summary.json": scoring }, "#", { panelsHtml: panel });
+test("a propensity run's Output page draws the panel it is given, under Technical details", () => {
+  const html = pages.renderPage("output", uc, base, { "scoring_summary.json": scoring }, "#", { panelsHtml: panel, contactList });
   assert.match(html, /data-treat-panel="r-score"/);
-  assert.match(html, /Download treat list \(CSV\)/);
-  assert.match(html, /Download contact list \(CSV\)/);
+  assert.ok(underTechnical(html, 'data-treat-panel="r-score"'), "the counts sit under Technical details");
+  assert.doesNotMatch(html, /Download treat list/);
+  assert.match(html, /Download contact list/);
+  assert.match(html, /href="\/runs\/r-score\/treat_list\.csv"/);
   assert.equal(primaries(html), 1, "the contact list stays the page's one primary action");
 });
 
@@ -81,12 +89,14 @@ test("without a panel the propensity Output page is unchanged", () => {
   assert.doesNotMatch(html, /data-treat-panel/);
 });
 
-test("an uplift run's Output page draws the panel it is given", () => {
+test("an uplift run's Output page draws the panel it is given, under Technical details", () => {
   const run = { ...base, problem_type: "uplift", primary_key: ["customer_id", "snapshot_date"] };
-  const html = upliftViews.outputPageHtml(uc, run, {}, { scoresHref: "/runs/r-score/scores.csv", panelsHtml: panel });
+  const html = upliftViews.outputPageHtml(uc, run, {}, { scoresHref: "/runs/r-score/scores.csv", panelsHtml: panel, contactList });
   assert.match(html, /data-treat-panel="r-score"/);
-  assert.match(html, /Download treat list \(CSV\)/);
-  assert.match(html, /Download contact list \(CSV\)/);
+  assert.ok(underTechnical(html, 'data-treat-panel="r-score"'), "the counts sit under Technical details");
+  assert.doesNotMatch(html, /Download treat list/);
+  assert.match(html, /Download contact list/);
+  assert.equal((html.match(/class="btn primary"[^>]* download/g) || []).length, 1);
 });
 
 test("an uplift run's Output page without a panel is unchanged", () => {
@@ -94,3 +104,4 @@ test("an uplift run's Output page without a panel is unchanged", () => {
   const html = upliftViews.outputPageHtml(uc, run, {}, { scoresHref: "/x" });
   assert.doesNotMatch(html, /data-treat-panel/);
 });
+

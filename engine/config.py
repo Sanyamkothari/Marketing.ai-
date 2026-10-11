@@ -3952,3 +3952,5 @@ def _plan_k_foundation_warnings(config: UseCaseConfig) -> tuple[str, ...]:
 
 
 # ---- END PLAN-K ----
+# ---- PLAN-M (simple UI) — append only below this line ----
+# ---- END PLAN-M ----

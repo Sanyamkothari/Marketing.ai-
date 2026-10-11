@@ -46,6 +46,8 @@ import {
   toggletip,
 } from "../../dom.js";
 import { decileChart, profitChart, qiniChart, segmentChart } from "./charts.js";
+// Plan M M171 (DEC-1601): one contact list - the treat list, or the scored list with a note.
+import { allScoresSlotHtml, contactDownloadLink, contactListParts, contactSlotHtml } from "../../contact_list.js";
 import {
   fmtCi,
   fmtCount,
@@ -729,7 +731,10 @@ function resultsBody(uc, s) {
     ? { label: "Try again", href: routes.setup(uc.id) }
     : train
       ? { label: "Score customers with this model", href: routes.score(uc.id) }
-      : { label: "Download contact list (CSV)", href: s.scoresHref || "#", attrs: "download" };
+      : contactDownloadLink(contactListParts({ facts: s.contactList, scoresHref: s.scoresHref || "#" }).download, {
+          icon: false,
+          runId: run.run_id,
+        });
   const actions = headActions({
     primary,
     related: done ? { label: "Change settings and train again", href: routes.setup(uc.id) } : null,
@@ -861,12 +866,16 @@ function pageShell(uc, run, kind, { title, desc = "", actions = "", trail = null
   );
 }
 
-const runTech = (run, extra = []) =>
-  techDetails([
-    [run.mode === "train" ? "Training run" : "Scoring run", run.run_id],
-    ["Model version", run.model_version_id],
-    ...extra,
-  ]);
+const runTech = (run, extra = [], extraHtml = "") =>
+  techDetails(
+    [
+      [run.mode === "train" ? "Training run" : "Scoring run", run.run_id],
+      ["Model version", run.model_version_id],
+      ...extra,
+    ],
+    "Technical details",
+    extraHtml,
+  );
 
 // --- Model -------------------------------------------------------------------------------------
 
@@ -1419,6 +1428,13 @@ export function outputPageHtml(uc, run, art, extra = {}) {
     },
   ]);
   const line = contactLine(policy, segments, train, summary ? summary.control_group_rows : null);
+  // Plan M M171 (DEC-1601): the one contact list and the one sentence on why fewer are contacted than are worth it.
+  const { download, sentence } = contactListParts({
+    facts: extra.contactList || null,
+    scoresHref: extra.scoresHref || "#",
+    scoring: summary,
+    policy: policy || null,
+  });
   const scope = policy
     ? policy.computed_on === "test"
       ? "Measured on the hold-out split of the training run."
@@ -1488,7 +1504,9 @@ export function outputPageHtml(uc, run, art, extra = {}) {
   let listCard;
   if (!train) {
     listCard = `<p class="caption ufile">${esc(
-      "The contact list file has every scored customer with their group and action. Treat rows are the list to contact; control-group rows are held out at random so the campaign can be measured; sleeping dogs are never Treat.",
+      download.kind === "scores"
+        ? "The file has every scored customer with their group and action. Treat rows are the list to contact; control-group rows are held out at random so the campaign can be measured; sleeping dogs are never Treat."
+        : "The contact list has every scored customer with their group, offer, channel and reasons. Customers marked to contact are the list; the comparison group is held out at random so the campaign can be measured; sleeping dogs are never contacted.",
     )}</p>`;
   } else {
     const scoreRuns = (extra.scoreRuns || []).filter((r) => r.state === "done");
@@ -1515,6 +1533,7 @@ export function outputPageHtml(uc, run, art, extra = {}) {
   const body = `${notCausalBanner(validation, segments, policy)}
     ${rankingBanner(extra.ranking || null)}
     ${lead}${policy ? tileRow : ""}
+    ${train ? "" : contactSlotHtml(run.run_id, sentence, download)}
     <div class="row">
       <section class="card"><h3>Four groups of customers</h3>${segmentChart(segments)}${segmentRows}</section>
       <section class="card"><h3>Targeting recommendation</h3>${policyRows}</section>
@@ -1522,12 +1541,15 @@ export function outputPageHtml(uc, run, art, extra = {}) {
     ${offerChoiceCard(art["offer_choice.json"] || null)}
     ${profitCard(extra.profit, policy)}
     ${listCard}
-    ${extra.panelsHtml || ""}
-    <section class="card card-body udetails-card">${runTech(run)}</section>`;
+    <section class="card card-body udetails-card">${runTech(
+      run,
+      [],
+      `${train ? "" : allScoresSlotHtml(run.run_id, download, extra.scoresHref || "#")}${extra.panelsHtml || ""}`,
+    )}</section>`;
   const actions = train
     ? headActions({ primary: { label: "Score customers with this model", href: routes.score(uc.id) } })
     : headActions({
-        primary: { label: "Download contact list (CSV)", href: extra.scoresHref || "#", attrs: "download" },
+        primary: contactDownloadLink(download, { icon: false, runId: run.run_id }),
         secondary: [{ label: "Measure campaign results", href: routes.campaign(uc.id, run.run_id) }],
       });
   return pageShell(
