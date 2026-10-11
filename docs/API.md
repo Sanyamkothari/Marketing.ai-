@@ -430,7 +430,7 @@ A fully merged, validated use case. This is what the whole engine consumes.
 |---|---|---|---|
 | `metric` | Metric ("roc_auc" \| "pr_auc" \| "f1" \| "recall" \| "precision" \| "rmse" \| "mae" \| "auuc") | no |  |
 | `metric_choices` | list[Metric ("roc_auc" \| "pr_auc" \| "f1" \| "recall" \| "precision" \| "rmse" \| "mae" \| "auuc")] | no |  |
-| `strategy` | Strategy ("fast" \| "balanced" \| "exhaustive") | no |  |
+| `strategy` | Strategy ("fast" \| "balanced" \| "exhaustive" \| "foundation") | no |  |
 | `candidate_pool` | list[ModelFamily ("XGBoost" \| "LightGBM" \| "RandomForest" \| "LogisticRegression" \| "CatBoost" \| "NeuralNet")] | no |  |
 | `candidates` | list[ModelFamily ("XGBoost" \| "LightGBM" \| "RandomForest" \| "LogisticRegression" \| "CatBoost" \| "NeuralNet")] | no |  |
 | `ensemble` | boolean | no |  |
@@ -2147,6 +2147,7 @@ Engine constants. The catalog is never merged into a use case and never overrida
 | `catalog.strategy_presets.fast` | str |
 | `catalog.strategy_presets.balanced` | str |
 | `catalog.strategy_presets.exhaustive` | str |
+| `catalog.strategy_presets.foundation` | str; opt-in, never a default (DEC-1410): the commercial-safe tabular foundation model preset |
 | `catalog.metrics` | id -> {label, autogluon_name, problem_types, greater_is_better} |
 | `catalog.metrics.auuc` | Phase 3b (DEC-601): area between the uplift curve and random targeting; computed by engine/uplift/metrics.py, never by AutoGluon |
 | `catalog.problem_types` | id -> {label (prototype PTYPES verbatim), enabled in Phase 1} |

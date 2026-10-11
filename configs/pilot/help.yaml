@@ -841,6 +841,11 @@ codes:
     title: "A run testing message variants is not arbitrated"
     meaning: "This run is testing message variants as measured arms. Arbitration across use cases would drop which message each customer gets, so the run is refused here. Once the copy changes or generative.variant_arms is turned off, the arms are set aside and the run can be arbitrated again."
     fix: "Send and measure that run's treat list on its own campaign, or arbitrate runs without variant arms."
+  # --- Plan K M143: the model licence guard (DEC-1410 (a)) --------------------------------------------------------
+  MODEL_LICENCE_BLOCKED:
+    title: "This model cannot be used for commercial work"
+    meaning: "The model search you picked would load a model whose licence does not allow commercial use, or one nobody has reviewed for it (configs/agentic/model_licences.yaml lists those that are cleared). Nothing was trained."
+    fix: "Choose Fast, Balanced or Exhaustive instead; they use only models cleared for commercial use. If you need the blocked model, ask the person who runs this system to review its licence and add it to the approved list first."
 
 settings:
   actions.bands[*].min_score:

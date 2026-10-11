@@ -17,6 +17,7 @@ __all__ = [
     "COMPLIANCE_CONFIG_CODES",
     "MCP_CODES",
     "MEASUREMENT_CODES",
+    "MODEL_LICENCE_CODES",
     "PLANNER_CODES",
     "PLAN_K_CODES",
     "SAVE_DESK_CODES",
@@ -165,6 +166,16 @@ VARIANT_CODES: Final[frozenset[str]] = frozenset(
 )
 """M140's codes (DEC-1407), joined into `PLAN_K_CODES` below."""
 
+MODEL_LICENCE_CODES: Final[frozenset[str]] = frozenset(
+    {
+        # M143 (DEC-1410): the model licence guard (`engine.agentic.model_licences`), raised while a configuration
+        # resolves. Selecting `foundation` on a root whose engine.yaml lacks its preset is the existing
+        # CATALOG_INCOMPLETE, which already has a catalogue entry.
+        "MODEL_LICENCE_BLOCKED",  # a strategy whose preset, or an algorithm, is not cleared for commercial use
+    }
+)
+"""M143's codes (DEC-1410), joined into `PLAN_K_CODES` below."""
+
 PLAN_K_CODES: Final[frozenset[str]] = (
     frozenset()
     | AGENTIC_CODES
@@ -172,6 +183,7 @@ PLAN_K_CODES: Final[frozenset[str]] = (
     | COMPLIANCE_CONFIG_CODES
     | MCP_CODES
     | MEASUREMENT_CODES
+    | MODEL_LICENCE_CODES
     | PLANNER_CODES
     | SAVE_DESK_CODES
     | VARIANT_CODES
