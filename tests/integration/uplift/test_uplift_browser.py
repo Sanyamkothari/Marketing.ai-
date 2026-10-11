@@ -90,7 +90,11 @@ HEALTH_TIMEOUT_S: Final[float] = 120.0
 RUN_TIMEOUT_S: Final[float] = 600.0
 POLL_MS: Final[int] = 500
 ACTION_TIMEOUT_MS: Final[int] = 30_000
+EXPECT_DEFAULT_MS: Final[int] = 5_000
+"""Playwright's own `expect()` timeout, put back once the journey has run."""
 UPLOAD_TIMEOUT_MS: Final[int] = 120_000
+SETTLE_TIMEOUT_MS: Final[int] = 120_000
+"""How long a page may take to reach its loaded state (not just its heading) on a loaded machine."""
 TIMEZONE: Final[str] = "Asia/Kolkata"
 MOBILE_WIDTH: Final[int] = 390
 
@@ -375,6 +379,28 @@ def wait_for(page: Any, predicate: Callable[[], bool], what: str, log: Path) -> 
         page.wait_for_timeout(POLL_MS)
 
 
+INDEX_SETTLED_JS: Final[str] = """() => {
+  const app = document.querySelector('#app');
+  if (!app || app.querySelector('[data-skeleton], [aria-busy="true"]')) return false;
+  const cells = [...app.querySelectorAll('.uindex [data-uc] [data-ustatus]')];
+  return cells.length > 0 && cells.every((cell) => !/Checking…|Loading…/.test(cell.textContent));
+}"""
+"""The uplift index is done loading: the skeleton (which already shows the real H1, with a hidden
+"Loading…") has been replaced by the list, and every row's status has come back from "Checking…"."""
+
+
+def wait_for_uplift_index(page: Any) -> None:
+    """Wait until the index is fully drawn, not just its heading: the skeleton painted first carries
+    the same H1, and each row reads "Checking…" until its model status arrives on its own."""
+    try:
+        page.wait_for_function(INDEX_SETTLED_JS, timeout=SETTLE_TIMEOUT_MS)
+    except sync_api.TimeoutError:
+        pytest.fail(
+            f"the uplift index never finished loading within {SETTLE_TIMEOUT_MS // 1000}s: "
+            f"{page.locator('#app').inner_text()[:2000]!r}"
+        )
+
+
 def run_id_of(url: str) -> str:
     return url.rstrip("/").rsplit("/", 1)[-1]
 
@@ -404,7 +430,16 @@ class Journey:
 
 
 @pytest.fixture(scope="module")
-def journey(browser: Any, server: Server, workdir: Path, shots: Path) -> Journey:
+def patient_expect() -> Iterator[None]:
+    """`expect()` waits as long as an action does. Its own default (5 s) is shorter than a screen can
+    take to answer a click on a loaded machine; the states it waits for are unchanged."""
+    sync_api.expect.set_options(timeout=ACTION_TIMEOUT_MS)
+    yield
+    sync_api.expect.set_options(timeout=EXPECT_DEFAULT_MS)
+
+
+@pytest.fixture(scope="module")
+def journey(browser: Any, server: Server, workdir: Path, shots: Path, patient_expect: None) -> Journey:
     expect = sync_api.expect
     seen = Journey()
     log = server.log
@@ -432,9 +467,13 @@ def journey(browser: Any, server: Server, workdir: Path, shots: Path) -> Journey
     expect(settings).to_be_visible()
     seen.screens["overview"] = capture(page, console, shots, "01-overview")
     settings.click()
+    # Settings paints at once and again when `/healthz` answers, which redraws "Advanced tools"
+    # closed; the version under About is only in that second paint, so open the disclosure after it.
+    expect(page.locator("[data-settings-about] .mono")).to_be_visible(timeout=SETTLE_TIMEOUT_MS)
     page.locator("[data-settings-advanced] summary").click()
     page.locator("[data-settings-advanced] a", has_text="Uplift workbench").click()
     expect(page.get_by_role("heading", name="Measure what a campaign changes (uplift)")).to_be_visible()
+    wait_for_uplift_index(page)
     seen.screens["index"] = capture(page, console, shots, "02-uplift-index")
     page.get_by_role("link", name=USE_CASE_NAME).click()
     expect(page.locator("#u-file")).to_be_attached()
@@ -658,6 +697,8 @@ def journey(browser: Any, server: Server, workdir: Path, shots: Path) -> Journey
     ):
         phone.goto(base + route, wait_until="domcontentloaded")
         phone.locator(ready).first.wait_for()
+        if name == "index":  # measure the rows' final status text, not "Checking…"
+            wait_for_uplift_index(phone)
         phone.wait_for_timeout(300)
         seen.mobile[name] = phone.evaluate(
             "() => [document.documentElement.scrollWidth, document.documentElement.clientWidth]"
