@@ -478,7 +478,7 @@ test("Data: glance tiles, lineage behind Details, the feature table sorted by mi
   const seen = visible(html);
   assert.match(seen, /Rows 22,000 One per subscriber per date Subscribers 2,000 Details used to predict 2 Missing values 5\.1%/);
   assert.match(seen, /Built from 1 table: customers\.csv ?\./);
-  assert.match(html, /<span data-user>customers\.csv<\/span>/, "the table's name is the person's own (M172)");
+  assert.match(html, /<span data-user-text>customers\.csv<\/span>/, "the table's name is the person's own (M172)");
   assert.match(html, /<details class="tech" data-lineage><summary>Details: data lineage<\/summary><div class="lineage">/);
   assert.match(seen, /Extreme values capped on 2 columns/);
   assert.match(seen, /Usage MB 30 days 46\.9% .* Days since last activity Days since the subscriber last did anything\. 0%/);

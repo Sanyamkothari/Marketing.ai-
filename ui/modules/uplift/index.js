@@ -222,7 +222,7 @@ async function render(app, parts) {
       return;
     }
     if (root === "uplift" && !ucId) {
-      paint(app, loading("list", "Measure what a campaign changes (uplift)"));
+      paint(app, loading("list", "Measure what a campaign changes"));
       await renderIndex(app, mine);
       return;
     }

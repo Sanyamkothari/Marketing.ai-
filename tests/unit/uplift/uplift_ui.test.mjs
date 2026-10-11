@@ -9,6 +9,7 @@ const UI = new URL("../../../ui/modules/uplift/", import.meta.url);
 const views = await import(new URL("views.js", UI));
 const charts = await import(new URL("charts.js", UI));
 const format = await import(new URL("format.js", UI));
+const { findNeverShown } = await import(new URL("../../labels.js", UI));
 
 const EM = "—";
 const uc = {
@@ -553,13 +554,44 @@ test("setup before a file: step 2 is one line, and score mode has its own footer
   const html = views.upliftScreenHtml(uc, empty);
   assert.ok(!html.includes('id="u-pk"'), "no empty dropdowns before a file");
   assert.match(html, /Available once a file is uploaded\./);
-  assert.match(html, /After the run: Model/);
+  // Plan M M172 review: the workbench's own setup in the glossary's words (no "run", "treat list" or "score").
+  assert.match(html, /Once it is built: Model \(how well it finds the customers contact persuades\) → Contact list → Campaign results\./);
   const score = views.upliftScreenHtml(uc, { ...empty, mode: "score" });
-  assert.match(score, /After scoring: download the contact list/);
-  assert.match(html, /After the run: Model \(how well it finds the persuadable\) → Output/);
+  assert.match(score, /Once it is made: download the contact list, send the campaign/);
+  assert.match(html, /aria-pressed="true">Build an effect model<\/button>/);
+  assert.match(score, /aria-pressed="true">Make a contact list<\/button>/);
   assert.ok(!html.includes("Qini curve, AUUC"), "no metric names in the footer");
   assert.ok(!score.includes("Qini curve, AUUC"));
-  assert.ok(!score.includes("how well it finds the persuadable"));
+  assert.ok(!score.includes("how well it finds the customers contact persuades"));
+});
+
+test("the setup's history names models and lists in plain words, the algorithm technical, the file the person's (M172 review)", () => {
+  const runs = [
+    { ...trainRun, state: "done", best_model: "X-learner (LightGBM)", champion: true },
+    { ...scoreRun, state: "done", row_count: 32000, file_name: "evaluation_features.csv" },
+    { ...trainRun, run_id: "r-2", state: "running" },
+  ];
+  const models = [{ version: { model_id: "m1", metric: "auuc", created_at: "2026-09-24T05:54:59Z", model_display_name: "X-learner (LightGBM)" }, is_champion: true }];
+  const html = views.upliftScreenHtml(uc, { view: "setup", mode: "score", upload: null, models, modelVersionId: "m1", runs, acknowledged: [] });
+  assert.match(html, /<h3>Earlier effect models and contact lists/);
+  assert.match(html, /Effect model built <span class="muted" data-technical>· X-learner \(LightGBM\)<\/span>/);
+  assert.match(html, /Contact list of 32,000 customers/);
+  assert.match(html, /Building an effect model · Running…/);
+  assert.match(html, /<span data-user-text>evaluation_features\.csv<\/span>/);
+  assert.match(html, /<span data-user-text>campaign\.csv<\/span>/);
+  assert.match(html, /<option value="m1" selected>Effect model built 24 Sep(t)? 2026 \(approved\)<\/option>/, "no algorithm in the option");
+  assert.match(html, /<div class="flabel">Effect model<\/div>/);
+  // Two models: the options name the minute as well, so two built on one day stay apart.
+  const two = [...models, { version: { model_id: "m2", metric: "auuc", created_at: "2026-09-24T09:10:00Z", model_display_name: "S-learner" }, is_champion: false }];
+  const options = [...views.upliftScreenHtml(uc, { view: "setup", mode: "score", upload: null, models: two, modelVersionId: "m1", runs: [], acknowledged: [] })
+    .matchAll(/<option value="m\d"[^>]*>([^<]*)<\/option>/g)].map((m) => m[1]);
+  assert.equal(options.length, 2);
+  assert.notEqual(options[0], options[1]);
+  assert.ok(options.every((o) => o.startsWith("Effect model built 24 Sep") && !/learner/i.test(o)), options.join(" | "));
+  assert.match(html, /aria-pressed="true">Make a contact list<\/button>/);
+  for (const word of ["Previous uplift runs", "Trained ·", "Scored ", "treat list", "Score new data", "Train uplift model"]) {
+    assert.ok(!html.includes(word), `no "${word}" on the setup screen`);
+  }
 });
 
 test("setup blocks a run until the treatment and outcome are distinct columns", () => {
@@ -567,7 +599,7 @@ test("setup blocks a run until the treatment and outcome are distinct columns", 
   assert.equal(views.setupBlocker({ ...base, upload: null }), "Upload a dataset to continue");
   assert.equal(views.setupBlocker(base), "Choose the column that says who was contacted");
   assert.match(views.setupBlocker({ ...base, treatment: "y" }), /different columns/);
-  assert.equal(views.setupBlocker({ ...base, mode: "score", modelVersionId: "" }), "Train an uplift model first");
+  assert.equal(views.setupBlocker({ ...base, mode: "score", modelVersionId: "" }), "Build an effect model first");
 });
 
 test("only AUUC model versions count as uplift models", () => {
@@ -681,8 +713,11 @@ test("a finished scoring run's Campaign results block says when it applies inste
 test("a finished training run leads with the gain sentence and offers scoring as the primary action", () => {
   const done = { ...trainRun, state: "done", best_model: "X-learner (LightGBM)" };
   const html = views.upliftScreenHtml(uc, { view: "results", detail: { run: done }, runs: [], evaluation });
-  assert.match(text(html), /Uplift model trained Contacting the top 10% the model picks raises the response rate by about 8 points\./);
-  assert.match(html, /<a class="btn primary" href="#\/uplift\/win-back\/score">Score customers with this model<\/a>/);
+  assert.match(text(html), /Effect model built Contacting the top 10% the model picks raises the response rate by about 8 points\./);
+  assert.match(html, /<a class="btn primary" href="#\/uplift\/win-back\/score">Make a contact list with this model<\/a>/);
+  // the file name is the person's own; the algorithm only under Technical details
+  assert.match(html, /<span data-user-text>campaign\.csv<\/span>/);
+  assert.ok(!text(html.slice(0, html.indexOf("Technical details"))).includes("LightGBM"), "no algorithm name above Technical details");
   assert.ok(!text(html).includes("AUUC"), "no metric code on the results screen");
   noJunk(html);
 });
@@ -700,10 +735,14 @@ test("running: plain step names, a warning in --warn, and a two-step cancel", ()
   assert.match(html, /Checking the campaign data/);
   assert.match(html, /<div class="pd w"[^>]*>2 warnings to review<\/div>/);
   assert.match(html, /Learning group about 7,000 · testing group about 3,000 customers/);
-  assert.match(html, /<button type="button" class="btn danger sm" id="u-cancel">Cancel run<\/button>/);
+  assert.match(html, /<button type="button" class="btn danger sm" id="u-cancel">Cancel<\/button>/);
   const confirming = views.upliftScreenHtml(uc, { ...s, confirmCancel: true });
-  assert.match(confirming, /id="u-cancel">Yes, cancel run</);
+  assert.match(confirming, /id="u-cancel">Yes, cancel</);
   assert.match(confirming, /id="u-cancel-keep"/);
+  // Plan M M172 review: the running screen and its cancel step show no never-shown word (ui/labels.js).
+  const visible = (h) => text(h.replace(/ title="[^"]*"/g, ""));
+  assert.deepEqual(findNeverShown(visible(html)), {});
+  assert.deepEqual(findNeverShown(visible(confirming)), {});
 });
 
 test("the stepper: Data · Model · Contact list · Campaign results, a step that does not apply is not a link", () => {

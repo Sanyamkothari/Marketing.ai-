@@ -514,8 +514,13 @@ def test_the_data_page_renders_the_profile_and_the_split(journey: Journey) -> No
 
 def test_the_model_page_renders_the_trained_model(journey: Journey) -> None:
     """Model page: `best_model.json` and `evaluation.json`, as the algorithm and its metric."""
-    algorithm = journey.model_tiles.get("Model", EM_DASH)
-    assert algorithm not in ("", EM_DASH), journey.model_tiles
+    # Plan M M172 (DEC-1602): which algorithm won is hidden from a marketer, so it left the tiles; it is the
+    # "Algorithm" row of the technical details.
+    algorithm = dict(journey.model_rows).get("Algorithm", EM_DASH)
+    assert algorithm not in ("", EM_DASH), journey.model_rows
+    assert (
+        "Model" not in journey.model_tiles and algorithm not in journey.model_tiles.values()
+    ), journey.model_tiles
     assert journey.model_tiles.get("Trained") not in (None, EM_DASH), journey.model_tiles
     headline = journey.model_tiles.get("Ranking quality", EM_DASH)  # ROC-AUC, in plain words (v1)
     assert re.fullmatch(r"[0-9.]+", headline), journey.model_tiles

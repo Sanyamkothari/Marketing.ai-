@@ -7,7 +7,7 @@
        The <summary> of a technical <details> is still read, because it is on screen whether the section
        is open or closed, unless it says only "Technical details" or "Details" (the generic labels);
      - a hidden element: the `hidden` attribute, or an inline display:none / visibility:hidden;
-     - a name the person supplied (M172, DEC-1602): any element with [data-user], which pages write with
+     - a name the person supplied (M172, DEC-1602): any element with [data-user-text], which pages write with
        ui/labels.js `userText(value)` around a file name, a campaign label or a column of their data, and
        nothing else. It is their wording, not ours, so the glossary cannot rename it;
      - <script>, <style>, <template>, <noscript>.

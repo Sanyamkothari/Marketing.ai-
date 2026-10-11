@@ -391,7 +391,7 @@ export function createSetupController(uc, rerender) {
       if (s.submitting) return;
       submit();
     });
-    // Two steps: "Cancel run" asks, "Yes, cancel run" (the same id) cancels.
+    // Two steps: "Cancel" asks, "Yes, cancel" (the same id) cancels.
     on("u-cancel", "click", async () => {
       if (!s.runId) return;
       if (!s.confirmCancel) {

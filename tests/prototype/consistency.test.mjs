@@ -233,24 +233,49 @@ test("the uplift entry point and its words are ui/modules/uplift's (DEC-608)", (
   assert.match(views, /setup: \(ucId\) => `#\/uplift\/\$\{encodeURIComponent\(ucId\)\}`/);
   assert.match(views, /index: \(\) => "#\/uplift"/);
   // the uplift screen's header, mode and button labels, and the index page
-  assert.match(views, /\$\{esc\(\s*uc\.name,\s*\)\} · Uplift<\/h1><p class="desc">Uplift \$\{esc\(UPLIFT_EXPLANATION\)\}\.<\/p>/);
-  for (const words of ["Train uplift model", "Score customers", "Previous uplift runs", "No uplift runs yet.",
-    "Train an uplift model first", "Trained uplift model", "The saved uplift model that will rank the uploaded customers.",
+  // Plan M M172 (DEC-1602) renamed the product's words to the glossary's (ui/labels.js: no "uplift", "train", "score",
+  // "run", "treat list" or "control group" outside technical details). The prototype predates Plan M, as it predates
+  // Plan H's crumb above, and keeps its words: each renamed sentence is pinned on both sides, the prototype's old
+  // words in the prototype and Plan M's words in the product, so neither can drift unnoticed.
+  assert.match(HTML, /· Uplift<\/h1>/);
+  assert.match(views, /\$\{esc\(\s*uc\.name,\s*\)\} · Campaign effect<\/h1><p class="desc">A campaign effect model \$\{esc\(UPLIFT_EXPLANATION\)\}\.<\/p>/);
+  for (const words of [
+    "Which column identifies a customer, which one says whether they were treated, and which one is the outcome.",
+    "It needs a past campaign where the action was given at random."]) {
+    assert.ok(views.includes(words), `views.js no longer says: ${words}`);
+    assert.ok(HTML.includes(words), `the prototype does not say: ${words}`);
+  }
+  // [the prototype's words, the product's words since Plan M M172]
+  for (const [prototype, product] of [
+    ["Train uplift model", "Build an effect model"],
+    ["Score customers", "Make the contact list"],
+    ["Previous uplift runs", "Earlier effect models and contact lists"],
+    ["No uplift runs yet.", "No effect models or contact lists yet."],
+    ["Train an uplift model first", "Build an effect model first"],
+    ["Trained uplift model", '<div class="flabel">Effect model</div>'],
+    ["The saved uplift model that will rank the uploaded customers.", "The saved effect model that will rank the uploaded customers."],
     // "Uplift modelling" is no longer shared: it was the product's breadcrumb for #/uplift, which Plan H
     // moved under Settings as the "Uplift workbench" (docs/UI_AUDIT.md §8.4 item 12). The prototype
     // predates Plan H and keeps its old H1; the product's crumb follows Settings.
-    "No trained uplift model yet", "Uplift pipeline",
-    "Which column identifies a customer, which one says whether they were treated, and which one is the outcome.",
-    "One row per customer of a past campaign: the features, whether they were treated (0/1, assigned at random) and the outcome.",
-    "The customers to score. The trained uplift model ranks them by how much the action changes their outcome.",
-    "It needs a past campaign where the action was given at random.",
-    "Scoring writes the treat list: persuadables within budget are Treat, sleeping dogs never are, and a control group is held out.",
-    "After the run: Model (how well it finds the persuadable) → Output (segments, treat list) → Campaign results.",
-    "No 0/1 column in this file looks like a treatment. Uplift needs one: 1 for customers who got the action, 0 for the randomly held-out control group.",
-    ": it compares customers who were treated with a randomly held-out control group, so you contact the persuadable and leave alone the ones who would convert anyway, would never convert, or react badly.",
-    "Pick a use case to train an uplift model on a campaign with a random control group."]) {
-    assert.ok(views.includes(words), `views.js no longer says: ${words}`);
-    assert.ok(HTML.includes(words), `the prototype does not say: ${words}`);
+    ["No trained uplift model yet", "No effect model yet"],
+    ["Uplift pipeline", '<span class="cap">Steps</span>'],
+    ["One row per customer of a past campaign: the features, whether they were treated (0/1, assigned at random) and the outcome.",
+      "One row per customer of a past campaign: the details about each customer, whether they were contacted (1) or held back at random (0), and the result."],
+    ["The customers to score. The trained uplift model ranks them by how much the action changes their outcome.",
+      "The customers to rank. The effect model ranks them by how much contacting them changes their result."],
+    ["Scoring writes the treat list: persuadables within budget are Treat, sleeping dogs never are, and a control group is held out.",
+      "The contact list picks the customers the campaign persuades, within budget, never the ones it puts off, and keeps a comparison group back."],
+    ["After the run: Model (how well it finds the persuadable) → Output (segments, treat list) → Campaign results.",
+      "Once it is built: Model (how well it finds the customers contact persuades) → Contact list → Campaign results."],
+    ["No 0/1 column in this file looks like a treatment. Uplift needs one: 1 for customers who got the action, 0 for the randomly held-out control group.",
+      "No 0/1 column in this file says who was contacted. An effect model needs one: 1 for customers who got the action, 0 for the comparison group held back at random."],
+    [": it compares customers who were treated with a randomly held-out control group, so you contact the persuadable and leave alone the ones who would convert anyway, would never convert, or react badly.",
+      ": it compares customers who were contacted with a comparison group held back at random, so you contact the persuadable and leave alone the ones who would convert anyway, would never convert, or react badly."],
+    ["Pick a use case to train an uplift model on a campaign with a random control group.",
+      "Pick a goal to build an effect model from a campaign with a random comparison group."]]) {
+    assert.ok(HTML.includes(prototype), `the prototype does not say: ${prototype}`);
+    assert.ok(views.includes(product), `views.js no longer says: ${product}`);
+    assert.ok(!views.includes(prototype) || product.includes(prototype), `views.js still says the pre-Plan M words: ${prototype}`);
   }
 });
 

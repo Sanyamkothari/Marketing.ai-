@@ -83,7 +83,7 @@ import {
 } from "./modules/router.js";
 import * as seams from "./modules/router.js";
 import { COST_NEEDS_CONFIRMATION, costConfirmHtml, costLineHtml } from "./cost.js"; // Plan J M108 (DEC-1318)
-import { plainText, userText } from "./labels.js"; // Plan M M172 (DEC-1602): the marketer's words; names the person supplied
+import { USER_TEXT_ATTRIBUTE, plainText, userText } from "./labels.js"; // Plan M M172 (DEC-1602): the marketer's words; names the person supplied
 
 import {
   allScoresSlotHtml,
@@ -992,7 +992,7 @@ function groupLine(group) {
 
 /**
  * The Running card, shared with the uplift screens (WP5): a title and one plain sentence, the steps
- * with their state, "Cancel run" set apart with a confirm step, and the engine's own wording of each
+ * with their state, "Cancel" set apart with a confirm step, and the engine's own wording of each
  * step behind "Technical details".
  *
  * `groups` are `groupStages(status.stages)`; `placeholder` names the rows to draw before the first
@@ -1040,12 +1040,12 @@ export function runningCard({
 }
 
 /**
- * "Cancel run", and after one click its confirm step: the same id on the confirming button (so a role
+ * "Cancel", and after one click its confirm step: the same id on the confirming button (so a role
  * gate follows it), "Keep running" as `[data-cancel-keep]`. Each screen writes its own id literally.
  */
 export const cancelControls = (button, confirm, confirming) =>
   confirming
-    ? `<span class="cancel-ask">Stop this run?</span>${confirm}<button type="button" class="btn quiet sm" data-cancel-keep>Keep running</button>`
+    ? `<span class="cancel-ask">Stop it now?</span>${confirm}<button type="button" class="btn quiet sm" data-cancel-keep>Keep running</button>`
     : button;
 
 function runningHtml(uc, s) {
@@ -1053,13 +1053,14 @@ function runningHtml(uc, s) {
   const train = s.mode === "train";
   const pct = status && typeof status.progress_pct === "number" ? status.progress_pct : null;
   return `<div class="uc-running">${runningCard({
-    title: train ? "Training your model…" : `Scoring your ${people(uc)}…`,
-    intro: "This usually takes a few minutes. You can leave this page: the run keeps going.",
+    // Plan M M172 review: the running screen in the glossary's words (no "train", "score" or "run").
+    title: train ? "Building your model…" : `Ranking your ${people(uc)}…`,
+    intro: "This usually takes a few minutes. You can leave this page: it keeps going.",
     groups: status ? groupStages(status.stages || []) : [],
     placeholder: uc.running_rows[s.mode] || [],
     cancel: cancelControls(
-      `<button type="button" class="btn danger sm" id="f-cancel">Cancel run</button>`,
-      `<button type="button" class="btn danger confirm sm" id="f-cancel" data-confirm>Yes, cancel run</button>`,
+      `<button type="button" class="btn danger sm" id="f-cancel">Cancel</button>`,
+      `<button type="button" class="btn danger confirm sm" id="f-cancel" data-confirm>Yes, cancel</button>`,
       s.cancelAsk,
     ),
     listId: "prog",
@@ -1135,7 +1136,7 @@ function flowBlocks(uc, s, run) {
     // instead of breaking mid-word ("synthetic_score.cs / v", UI_AUDIT §8.4 item 6).
     const val =
       slug === "data" && run.file_name && value === run.file_name
-        ? `<div class="val fname" data-user title="${esc(value)}">${esc(value)}</div>`
+        ? `<div class="val fname" ${USER_TEXT_ATTRIBUTE} title="${esc(value)}">${esc(value)}</div>`
         : slug === "data"
         ? `<div class="val fname" title="${esc(value)}">${esc(value)}</div>`
         : `<div class="val">${esc(value)}</div>`;

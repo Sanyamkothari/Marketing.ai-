@@ -9,11 +9,12 @@
      - money and numbers use ui/format.js: rupees in lakh and crore, the exact figure in a tooltip, an amount whose
        source names no currency kept without one;
      - campaigns on lists have a short name (goal and month, at most 40 characters) with the recorded label under it;
-     - a name the person supplied (a file name, a campaign label) is marked `data-user`. */
+     - a name the person supplied (a file name, a campaign label) is marked `data-user-text`. */
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { $, $$, settle } from "../harness.mjs";
 import { installDemoPage, loadModules, recorded } from "./replay.mjs";
+import { plainText } from "../../../../../ui/labels.js";
 
 const UC = "hillstrom-email";
 const TRAIN_RISK = "r_20261010_11100001";
@@ -129,7 +130,7 @@ test("Results: every campaign on a list has a short name (goal and month) and it
   const names = $$("[data-campaign-name]");
   assert.ok(names.length >= 4, "the attention card, value lines, campaigns list and packs list name campaigns");
   for (const name of names) {
-    const sub = name.querySelector("[data-user]");
+    const sub = name.querySelector("[data-user-text]");
     const shortText = text(name).slice(0, text(name).length - text(sub).length).trim();
     assert.equal(shortText, SHORT);
     assert.ok(shortText.length <= 40, `${shortText} is at most 40 characters`);
@@ -146,7 +147,7 @@ test("Results: every campaign on a list has a short name (goal and month) and it
 test("a campaign's own page shows both names: the short one as its title, the recorded label under it", async () => {
   await visit(`#/campaigns/${C_CONVERSION}`);
   assert.equal(text($("main h1")), SHORT);
-  assert.match(text($(".dc-label [data-user]")), /^Hillstrom e-mail \(conversion\)/);
+  assert.match(text($(".dc-label [data-user-text]")), /^Hillstrom e-mail \(conversion\)/);
   assert.match(text($("main")), /from this contact list\./);
   assert.ok($(`a[data-campaign-list][href="#/uc/${UC}/run/r_20261010_11100003"]`), "the list it was sent from, by link");
 });
@@ -186,6 +187,35 @@ test("a figure the pack could not measure is the em dash, with the pack's reason
   assert.doesNotMatch(text(box.querySelector(".kpi")), new RegExp(R));
 });
 
+test("the tile of what the campaign changed is the benefit line, wherever the pack puts it (M172 review)", async () => {
+  const { proofTilesHtml } = await import("../../../../../ui/modules/pilot/screen.js");
+  const pack = recorded[`GET /pilot/proof/${C_SPEND}?format=json`].body;
+  const incremental = pack.sections.find((s) => s.key === "incremental");
+  const benefit = incremental.lines.find((l) => /because of the campaign/.test(l.label));
+  assert.ok(benefit && benefit.value && benefit.value.format === "signed_amount", "the recorded pack has its benefit line");
+  const fig = (value, format) => ({ value, text: String(value), format });
+  // A ranged line after it (a best message's margin) and one more signed amount before it: neither is the benefit.
+  const margin = { label: "How far the best message is ahead of it", value: fig(0.04, "points"), low: fig(0.01, "points"), high: fig(0.07, "points") };
+  const lines = [...incremental.lines, margin];
+  const sections = pack.sections.map((s) => (s.key === "incremental" ? { ...s, lines } : s));
+  const box = document.createElement("div");
+  box.innerHTML = proofTilesHtml({ ...pack, sections });
+  const first = box.querySelector(".kpi");
+  assert.equal(text(first.querySelector(".l")), plainText(benefit.label));
+  assert.equal(first.querySelector(".v .fmt").getAttribute("title"), benefit.value.text, "the benefit's own figure");
+  assert.ok(lines.indexOf(benefit) < lines.length - 1, "the benefit is not the section's last ranged line here");
+  // The pack did not measure the benefit (a descriptive claim): the em dash with the pack's reason, never another line.
+  const unmeasured = { label: benefit.label, missing: "The groups were not chosen at random, so no part of this difference can be credited to the campaign." };
+  const descriptive = pack.sections.map((s) =>
+    s.key === "incremental" ? { ...s, lines: incremental.lines.map((l) => (l === benefit ? unmeasured : l)) } : s,
+  );
+  box.innerHTML = proofTilesHtml({ ...pack, sections: descriptive });
+  const dash = box.querySelector("[data-pe-tile-missing]");
+  assert.ok(dash, "an unmeasured benefit is a tile with the em dash");
+  assert.equal(text(dash.querySelector(".l")), plainText(benefit.label));
+  assert.equal(text(dash.querySelector(".v")), "—");
+});
+
 test("Campaigns waiting for results: each list by its short campaign name", async () => {
   await visit("#/monitoring/runs");
   const first = $$("[data-run] td:first-child").map((td) => text(td));
@@ -195,11 +225,11 @@ test("Campaigns waiting for results: each list by its short campaign name", asyn
 
 test("a name the person supplied is marked as theirs; the words around it stay ours", async () => {
   await visit(`#/uc/${UC}/data/${TRAIN_RISK}`);
-  const file = $$("[data-user]").find((el) => text(el) === "training.csv");
-  assert.ok(file, "the uploaded file's name is marked data-user");
+  const file = $$("[data-user-text]").find((el) => text(el) === "training.csv");
+  assert.ok(file, "the uploaded file's name is marked data-user-text");
   assert.match(text(file.parentElement.parentElement), /Uploaded file training\.csv\./);
   await visit(`#/uc/${UC}/run/${SCORE_RISK}`);
-  assert.ok($$("[data-user]").some((el) => text(el) === "training.csv"), "on the history of models and lists too");
+  assert.ok($$("[data-user-text]").some((el) => text(el) === "training.csv"), "on the history of models and lists too");
 });
 
 test("the run's own tiles: counts and shares in the one number format", async () => {

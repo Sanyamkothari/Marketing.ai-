@@ -103,3 +103,13 @@ test("the HTML forms: the exact figure in the title, the reason on a missing val
   assert.equal(f.countHtml(32000), '<span class="fmt">32,000</span>');
   assert.equal(f.numberHtml("<b>", "a\"b"), '<span class="fmt" title="a&quot;b">&lt;b&gt;</span>', "both are escaped");
 });
+
+test("a per-unit amount below half a paisa keeps the source's own text, never Rs 0 (M172 review)", () => {
+  // engine/pilot/proof.py `_unit_inr` keeps the decimals so a tiny cost never prints as zero; the page keeps them too.
+  assert.equal(f.figureHtml({ value: 0.004, text: `${R}0.0040`, format: "inr_unit" }), `<span class="fmt">${R}0.0040</span>`);
+  assert.equal(f.figureHtml({ value: -0.004, text: `-${R}0.0040`, format: "inr_unit" }), `<span class="fmt">−${R}0.0040</span>`);
+  // From half a paisa the one format applies as before, and a real zero is still Rs 0.
+  assert.equal(f.figureHtml({ value: 0.3, text: `${R}0.30`, format: "inr_unit" }), `<span class="fmt">${R}0.30</span>`);
+  assert.equal(f.figureHtml({ value: 0, text: `${R}0`, format: "inr_unit" }), `<span class="fmt">${R}0</span>`);
+  assert.equal(f.figureHtml({ value: 0.004, text: `${R}0.0040`, format: "inr" }), `<span class="fmt">${R}0.0040</span>`);
+});

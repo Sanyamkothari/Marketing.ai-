@@ -70,7 +70,11 @@ test("the total is labelled exactly as the server labelled it, with each campaig
   const row = $(`[data-proven] [data-total="${total.unit}"]`);
   assert.ok(row, "the total of its unit");
   assert.match(total.label, /^at least .*, the sum of each campaign's lower bound$/);
-  assert.ok(text(row).includes(total.label));
+  // Plan M M172 review: the total's own figure in the label is drawn in the one number format, the server's text in
+  // its tooltip; every other word of the label is the server's.
+  assert.ok(total.label.includes(total.total.text), "the server's label carries its total's text");
+  assert.ok(text(row).includes(total.label.replace(total.total.text, shown(total.total))), text(row));
+  assertFigure(row.querySelector(".sp-label"), total.total);
   for (const line of total.campaigns) {
     const li = row.querySelector(`[data-line="${line.campaign_id}"]`);
     assert.ok(li, "each lower bound that was added");
@@ -130,6 +134,29 @@ test("each campaign of a total ends with its own lower bound, never with its pla
   for (const [li, item] of lines.map((li, i) => [li, [first, second, third][i]])) {
     assert.equal(text(li), `${item.campaign_name.text}: ${shown(item.lower_bound)}`, "no stray index after the figure");
   }
+});
+
+test("a rupee total of a lakh or more is drawn in the one number format, exact in its tooltip (M172 review)", () => {
+  // The server's words for a total of Rs 4,18,250 (engine/measurement/summary.py `totals`, engine/pilot/roi.py `format_inr`).
+  const exact = "₹4,18,250 (4.18 lakh)";
+  const figure = { value: 418250, text: exact, format: "inr" };
+  const [first] = summary.proven.totals[0].campaigns;
+  const total = {
+    unit: "rupees",
+    unit_column: null,
+    total: figure,
+    label: `at least ${exact} net of what contacts and offers cost, the sum of each campaign's lower bound`,
+    campaigns: [{ ...first, lower_bound: figure }],
+  };
+  const row = html({ ...summary, proven: { ...summary.proven, totals: [total] } }).querySelector('[data-total="rupees"]');
+  const label = row.querySelector(".sp-label");
+  assert.equal(text(label), "at least ₹4.18 lakh net of what contacts and offers cost, the sum of each campaign's lower bound");
+  assert.equal(label.querySelector(".fmt").getAttribute("title"), exact, "the exact total in the tooltip");
+  assert.equal(text(label.querySelector(".fmt")), text(row.querySelector("[data-line] .fmt")), "the headline reads as its line");
+  // A label that does not carry the figure's text is shown as the server wrote it, never with a number put in.
+  const odd = { ...total, label: "at least a lot, the sum of each campaign's lower bound" };
+  const plain = html({ ...summary, proven: { ...summary.proven, totals: [odd] } }).querySelector('[data-total="rupees"] .sp-label');
+  assert.equal(text(plain), "at least a lot, the sum of each campaign's lower bound");
 });
 
 test("a lower bound listed apart carries the unit the server sent, never a bare number", () => {

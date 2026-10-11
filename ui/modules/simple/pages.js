@@ -176,10 +176,21 @@ export function summaryCardHtml(summary, names = {}) {
     `<li data-line="${esc(item.campaign_id)}">${campaignCell(names, item.campaign_id, text(item.campaign_name))}: ${figureHtml(
       item.lower_bound,
     )}${unit ? ` ${esc(unit)}` : ""}</li>`;
+  // The total's own figure in the label ("at least <total> ...") is drawn by the one number format too, so the
+  // headline reads as the lines under it ("Rs 4.18 lakh", exact in the tooltip). Found by the figure's text, never
+  // by position; a label that does not carry that text is shown as the server wrote it.
+  const totalLabel = (total) => {
+    const label = plainText(total.label || "");
+    const figure = total.total;
+    const at = figure && figure.text ? label.indexOf(String(figure.text)) : -1;
+    return at < 0
+      ? esc(label)
+      : `${esc(label.slice(0, at))}${figureHtml(figure)}${esc(label.slice(at + String(figure.text).length))}`;
+  };
   const sums = totals
     .map(
       (total) =>
-        `<li class="sp-entry" data-total="${esc(total.unit)}"><span class="sp-label">${esc(plainText(total.label))}</span><ul class="sp-facts">${(
+        `<li class="sp-entry" data-total="${esc(total.unit)}"><span class="sp-label">${totalLabel(total)}</span><ul class="sp-facts">${(
           total.campaigns || []
         )
           .map((c) => line(c))

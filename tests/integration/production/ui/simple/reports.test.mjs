@@ -69,3 +69,15 @@ test("the data request kit asks the data team, and lists use cases without an In
   assert.deepEqual(headers("build"), ["Goal", "Set up"]); // Plan M M172: a use case is a goal
   assert.doesNotMatch(text($('[data-pe-card="readiness"]')), /client/i);
 });
+
+test("the value report names the campaign by its short name and says when the list was made (M172 review)", async () => {
+  const { shortCampaignName } = await import("../../../../../ui/format.js");
+  const { goalShortName } = await import("../../../../../ui/labels.js");
+  world.roi = { [scoreRun.run_id]: fixture("roi_measured") };
+  await open(`#/pilot/value/${scoreRun.run_id}`, () => $("main .sub"));
+  const short = shortCampaignName(goalShortName(scoreRun.use_case_id, scoreRun.use_case_name), scoreRun.finished_at || scoreRun.created_at);
+  const sub = text($("main .sub"));
+  assert.ok(sub.startsWith(`${short} · list made `), sub);
+  assert.doesNotMatch(sub, /scored/i);
+  assert.ok(!sub.includes(scoreRun.use_case_name) || short.includes(scoreRun.use_case_name), "not the configured name");
+});

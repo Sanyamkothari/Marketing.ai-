@@ -856,11 +856,13 @@ async function renderValue(app, runId, rerender, demo) {
   const v = view.value;
   const uc = v.use_case_id;
   const run = runs.value ? runs.value.runs.find((r) => r.run_id === runId) : null;
-  const name = campaignTitle(demo, runId) || (run && run.use_case_name) || uc;
+  const when = run ? run.finished_at || run.created_at : null;
+  // Plan M M172 (§4.2): the campaign by its short name (goal and month), as every other list names it; the date is
+  // when the list was made, as Reports' "List made on" column says.
+  const name = campaignTitle(demo, runId) || shortCampaignName(goalShortName(uc, run && run.use_case_name), when);
   const campaignHref = `#/campaign/${encodeURIComponent(uc)}/${encodeURIComponent(runId)}`;
   const measured = v.status === "measured";
-  const when = run ? run.finished_at || run.created_at : null;
-  const sub = [name, present(when) ? `scored ${fmtDate(when)}` : null].filter(Boolean).join(" · ");
+  const sub = [name, present(when) ? `list made ${fmtDate(when)}` : null].filter(Boolean).join(" · ");
   const actions = headActions({
     primary: measured ? { label: "Download PDF", href: roiUrl(runId, "pdf"), attrs: "download" } : null,
     secondary: [{ label: "See campaign results", href: campaignHref }],
@@ -991,8 +993,22 @@ export function proofTilesHtml(view) {
   const missing = (s, label) => (s && s.status !== "measured" ? [{ label, reason: plainText(s.reason || "") }] : []);
   const incremental = section("incremental");
   const net = section("net_value");
+  // What the campaign changed is the section's benefit line, chosen by what it is and never by where it sits (the
+  // pack may add lines after it, such as the best message's margin): a signed count or amount (engine/pilot/proof.py
+  // `_benefit`) whose label says it is the campaign's doing (`_benefit_label`: "... because of ...", "... reduced
+  // by ...", "... prevented by ..."). The per-customer difference and the estimate are signed amounts too, but
+  // their labels say otherwise. No such line, no tile; a benefit line the pack did not measure is the em dash.
+  const isBenefit = (line) =>
+    /\b(because of|reduced by|prevented by)\b/i.test(line.label || "") &&
+    (!line.value || /^signed_(count|amount)$/.test(line.value.format || ""));
+  const benefit = (s) => {
+    const line = s && s.status === "measured" ? (s.lines || []).find(isBenefit) : null;
+    if (!line) return [];
+    if (line.value && line.low && line.high) return [line];
+    return line.missing ? [{ label: plainText(line.label), reason: plainText(line.missing) }] : [];
+  };
   const picks = [
-    ...ranged(incremental).slice(-1),
+    ...benefit(incremental),
     ...missing(incremental, "What the campaign changed"),
     ...ranged(net).filter((line) => line.value.format === "inr"),
     ...missing(net, "Net value"),

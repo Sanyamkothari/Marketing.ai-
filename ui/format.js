@@ -16,6 +16,8 @@
 // No currency sign is typed into this file (tests/integration/test_ui.py looks for one): the rupee is
 // written as its code point. Nothing here touches `window` or `document`, so node imports it as the browser does.
 
+import { USER_TEXT_ATTRIBUTE } from "./labels.js";
+
 export const EM_DASH = "\u2014";
 export const MINUS = "\u2212";
 const RUPEE = "\u20B9";
@@ -216,14 +218,14 @@ export function campaignNames(campaign, goalShort) {
 
 /**
  * The HTML of a campaign's name on a list: the short name, and the recorded label under it as a subtitle. The
- * label is the person's own wording, so it is marked as theirs (`data-user`, see ui/labels.js `userText`).
+ * label is the person's own wording, so it is marked as theirs (`USER_TEXT_ATTRIBUTE`, see ui/labels.js `userText`).
  */
 export function campaignNameHtml(names, { link = "", attrs = "" } = {}) {
   const short = escapeHtml(names.short);
   const title = link ? `<a href="${escapeHtml(link)}"${attrs ? ` ${attrs}` : ""}>${short}</a>` : short;
   const sub =
     names.long && names.long !== names.short
-      ? `<span class="cn-sub" data-user style="display:block;font-size:12px;color:var(--muted)">${escapeHtml(names.long)}</span>`
+      ? `<span class="cn-sub" ${USER_TEXT_ATTRIBUTE} style="display:block;font-size:12px;color:var(--muted)">${escapeHtml(names.long)}</span>`
       : "";
   return `<span class="cn" data-campaign-name>${title}${sub}</span>`;
 }
@@ -243,6 +245,11 @@ export function figureHtml(figure, { reason = "" } = {}) {
   switch (isValue(value) ? figure.format : "") {
     case "inr":
     case "inr_unit":
+      // A non-zero amount below half a paisa would round to Rs 0, a figure the source does not say (a cost of
+      // Rs 0.004 a contact): it keeps the server's own text, which carries its decimals (engine/pilot/proof.py `_unit_inr`).
+      if (exact && Number(value) !== 0 && Math.round(Math.abs(Number(value)) * 100) === 0) {
+        return numberHtml(exact.replace(/^-/, MINUS), "", reason);
+      }
       return numberHtml(rupees(value), exact || rupeesExact(value), reason);
     case "amount":
       return numberHtml(money(value, null), exact || moneyExact(value, null), reason);

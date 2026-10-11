@@ -42,7 +42,7 @@ the baseline is now an empty object, so any of these words outside technical det
 ## Names the person supplied
 
 A file name (`training.csv`), a campaign label someone typed or a column of their data is not our wording,
-so the glossary cannot rename it. The page draws each one inside an element with the `data-user` attribute
+so the glossary cannot rename it. The page draws each one inside an element with the `data-user-text` attribute
 (`userText(value)` in `ui/labels.js`), and the visible-text check leaves that element out. Only the person's
 own string goes inside the mark, never a sentence of ours around it.
 

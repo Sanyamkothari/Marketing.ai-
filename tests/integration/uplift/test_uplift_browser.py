@@ -11,11 +11,11 @@ The journey, in order:
 1. Overview -> Settings › Advanced tools › "Uplift workbench" -> Win-back Campaign -> uplift Setup
    (Plan H M82: the top bar is Home, Connections, Results, Settings).
 2. Upload a randomised campaign (`make_uplift_data`), see the treatment column detected and the
-   Uplift problem type explained, click "Train uplift model", watch Running, reach Results.
+   Uplift problem type explained, click "Build the effect model", watch Running, reach Results.
 3. Model page: the Qini chart with its random line, AUUC with its interval, the decile bars, an
    off-policy estimate. Output page: four segments, "Recommended to contact", expected incremental
    conversions with an interval.
-4. Score a new file through Phase 1's own use-case screen ("Score new data", the uplift model in the
+4. Score a new file through Phase 1's own use-case screen ("Make a contact list", the uplift model in the
    dropdown), open its Output page, then follow the "Campaign results" block the module offers on
    the run's Results (a run action, `runActionsHtml`).
 5. Campaign results: download the treat list, upload outcomes (`make_winback_campaign` +
@@ -437,6 +437,8 @@ def journey(browser: Any, server: Server, workdir: Path, shots: Path) -> Journey
     # Plan M M172: the workbench in the glossary's words ("uplift" is the effect of contacting them).
     page.locator("[data-settings-advanced] a", has_text="Campaign effect workbench").click()
     expect(page.get_by_role("heading", name="Measure what a campaign changes")).to_be_visible()
+    # The loading skeleton has the same heading: wait for the list itself before reading the page.
+    expect(page.locator(".uindex")).to_be_visible()
     seen.screens["index"] = capture(page, console, shots, "02-uplift-index")
     page.get_by_role("link", name=USE_CASE_NAME).click()
     expect(page.locator("#u-file")).to_be_attached()
@@ -455,7 +457,8 @@ def journey(browser: Any, server: Server, workdir: Path, shots: Path) -> Journey
         treatment_options=page.locator("#u-treatment option").all_inner_texts(),
         ptype=page.locator(".ptype").inner_text(),
     )
-    run = page.get_by_role("button", name="Train uplift model").last
+    # Plan M M172: "Train uplift model" in the glossary's words; the mode button says "Build an effect model".
+    run = page.get_by_role("button", name="Build the effect model", exact=True)
     expect(run).to_be_enabled()
     run.click()
     expect(page.locator(".progress")).to_be_visible()
@@ -506,7 +509,9 @@ def journey(browser: Any, server: Server, workdir: Path, shots: Path) -> Journey
 
     # The uplift Setup's own score mode offers the model just trained (DEC-609: candidates too).
     page.goto(f"{server.base_url}/ui/#/uplift/{USE_CASE}", wait_until="domcontentloaded")
-    page.get_by_role("button", name="Score new data").click()
+    page.get_by_role(
+        "button", name="Make a contact list", exact=True
+    ).click()  # Plan M M172: was "Score new data"
     expect(page.locator("#u-model")).to_be_attached()
     seen.screens["uplift_score_setup"] = capture(
         page,
@@ -515,6 +520,8 @@ def journey(browser: Any, server: Server, workdir: Path, shots: Path) -> Journey
         "10-uplift-score-setup",
         # One model: the choice is folded under "Change model", so its option is hidden text.
         models=page.locator("#u-model option").all_text_contents(),
+        # Plan M M172: the algorithm's name is technical, beside the model's plain name, not in the option.
+        algorithm=page.locator(".umodel [data-technical]").inner_text(),
     )
 
     # 4. Score through Phase 1's own use-case screen, with the uplift model from its dropdown.
@@ -612,7 +619,9 @@ def journey(browser: Any, server: Server, workdir: Path, shots: Path) -> Journey
 
     # 6. A targeted campaign: refused, acknowledged, trained, labelled not causal.
     page.goto(f"{server.base_url}/ui/#/uplift/{USE_CASE}", wait_until="domcontentloaded")
-    page.get_by_role("button", name="Train uplift model").first.click()
+    page.get_by_role(
+        "button", name="Build an effect model", exact=True
+    ).click()  # Plan M M172: the train mode
     page.set_input_files("#u-file", str(targeted))
     expect(page.locator("#u-treatment")).to_have_value(TREATMENT, timeout=UPLOAD_TIMEOUT_MS)
     with page.expect_response(lambda r: r.url.endswith("/uplift/runs")) as refused:
@@ -729,7 +738,7 @@ def test_setup_detects_the_treatment_column_and_explains_the_problem_type(journe
     options = filled.extra["treatment_options"]
     assert any(option.startswith(f"{TREATMENT} · ") and "treated" in option for option in options), options
     assert not any(option.startswith(f"{TARGET} ·") for option in options), "an outcome is never a treatment"
-    assert "Uplift" in filled.extra["ptype"]
+    assert "Campaign effect" in filled.extra["ptype"]  # Plan M M172: the problem type in the glossary's words
     assert "predicts who changes behaviour because of your action" in filled.extra["ptype"]
     assert f"{TRAIN_ROWS:,} rows" in filled.text
 
@@ -738,11 +747,11 @@ def test_running_showed_progress_and_results_name_the_model(journey: Journey, se
     assert "Running" in journey.screens["running"].text
     run = server.artefact(journey.train_run, "run.json")
     results = journey.screens["results"].text
-    assert "Uplift model trained" in results
-    assert run["best_model"] in results
+    assert "Effect model built" in results  # Plan M M172: was "Uplift model trained"
+    assert run["best_model"] in results  # in the history row's technical mark, and under Technical details
     # The headline is the finding in words; AUUC is on the Model page, under Technical metrics.
     assert "Contacting the top 10% the model picks" in results, results
-    assert "Score customers with this model" in results
+    assert "Make a contact list with this model" in results
 
 
 def test_the_model_page_draws_the_qini_curve_against_random(journey: Journey, server: Server) -> None:
@@ -768,7 +777,7 @@ def test_the_model_page_shows_auuc_with_its_interval_from_the_artefact(
     evaluation = server.artefact(journey.train_run, "uplift_evaluation.json")
     assert model.rows["Hold-out rows"] == f"{evaluation['rows_evaluated']:,}"
     assert model.rows["Bootstrap resamples"] == str(evaluation["bootstrap_samples"])
-    assert "Measurable uplift" in model.text
+    assert "A measurable effect" in model.text  # Plan M M172: was "Measurable uplift"
 
 
 def test_the_off_policy_estimate_is_the_stored_report(journey: Journey, server: Server) -> None:
@@ -808,12 +817,14 @@ def check_output(screen: Screen, server: Server, run_id: str) -> None:
 
 
 def test_both_score_screens_offer_the_uplift_model(journey: Journey) -> None:
-    for models in (
-        journey.screens["uplift_score_setup"].extra["models"],
-        journey.screens["phase1_score_results"].extra["models"],
-    ):
-        assert len(models) == 1 and "X-learner (LightGBM)" in models[0], models
-    assert journey.screens["uplift_score_setup"].extra["models"][0].startswith("Effect model built ")
+    phase1 = journey.screens["phase1_score_results"].extra["models"]
+    assert len(phase1) == 1 and "X-learner (LightGBM)" in phase1[0], phase1
+    # Plan M M172: the uplift Setup names the model in plain words and shows the algorithm as technical.
+    uplift = journey.screens["uplift_score_setup"]
+    assert len(uplift.extra["models"]) == 1 and uplift.extra["models"][0].startswith(
+        "Effect model built "
+    ), uplift.extra
+    assert "X-learner (LightGBM)" in uplift.extra["algorithm"], uplift.extra
 
 
 def test_phase1_scoring_of_the_uplift_model_came_back(journey: Journey, server: Server) -> None:
@@ -837,7 +848,10 @@ def test_the_score_output_is_the_treat_list_the_browser_downloaded(journey: Jour
 
 
 def test_campaign_results_start_empty(journey: Journey) -> None:
-    assert "No outcomes have been uploaded for this run yet." in journey.screens["campaign_empty"].text
+    # Plan M M172: "this run" in the glossary's words.
+    assert (
+        "No outcomes have been uploaded for this contact list yet." in journey.screens["campaign_empty"].text
+    )
 
 
 def test_an_immature_campaign_says_only_when_results_will_be_available(journey: Journey) -> None:

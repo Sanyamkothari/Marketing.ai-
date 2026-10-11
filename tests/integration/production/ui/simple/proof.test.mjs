@@ -60,7 +60,7 @@ test("a pack's page shows the server's report and the suggestion an Analyst appr
   assert.equal($("main h1").textContent, "Value Proof Pack");
   // Plan M M172: the campaign's short name and what it can claim, then the label recorded with it (the person's words).
   assert.ok($$("main .sub").map(text).join(" ").includes(pack.campaign_name.text));
-  assert.ok($("main .sub [data-user]"), "the recorded label is marked as the person's own");
+  assert.ok($("main .sub [data-user-text]"), "the recorded label is marked as the person's own");
   const [proposal] = pack.proposals;
   assert.ok(text($("[data-pe-proposals]")).includes(proposal.segment.text));
   assert.ok(text($("[data-pe-proposals]")).includes(proposal.worst_case.text));

@@ -47,7 +47,7 @@ test("Results lists the campaigns beside the runs, newest first, each linking to
     world.campaigns.campaigns.map((c) => `Win back lapsed customers \u2014 ${month(c.treatment_start || c.created_at)}`),
   );
   assert.deepEqual(
-    $$("[data-campaigns] [data-campaign-name] [data-user]").map((s) => s.textContent),
+    $$("[data-campaigns] [data-campaign-name] [data-user-text]").map((s) => s.textContent),
     world.campaigns.campaigns.map((c) => c.name),
   );
   assert.deepEqual(

@@ -235,15 +235,16 @@ export function goalName(id, fallback = "") {
 
 /* Names the person supplied are not our wording (M172, DEC-1602). A file name ("training.csv"), a campaign
    label they typed, a column of their data: the glossary cannot rename them and the visible-text check must
-   not count them. Each is drawn inside an element carrying `data-user` (`userText(value)` writes one), which
-   the check leaves out together with its title. Only the person's own string goes inside the mark, never a
-   sentence of ours around it, so the mark cannot hide our own words. */
-export const USER_TEXT_ATTRIBUTE = "data-user";
+   not count them. Each is drawn inside an element carrying `data-user-text` (`userText(value)` writes one),
+   which the check leaves out together with its title. Only the person's own string goes inside the mark, never a
+   sentence of ours around it, so the mark cannot hide our own words. The attribute is used for nothing else:
+   `data-user` already carries a user id on the Users page's forms and buttons, whose words are ours. */
+export const USER_TEXT_ATTRIBUTE = "data-user-text";
 
 const escapeHtml = (s) =>
   String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
 
-/** A name the person supplied, escaped and marked as theirs: `<span data-user>training.csv</span>`. */
+/** A name the person supplied, escaped and marked as theirs: `<span data-user-text>training.csv</span>`. */
 export function userText(value, tag = "span") {
   return `<${tag} ${USER_TEXT_ATTRIBUTE}>${escapeHtml(value)}</${tag}>`;
 }

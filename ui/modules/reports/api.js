@@ -2,12 +2,14 @@
 // screen already makes, and is re-exported so this module has one place that names them.
 //
 //   Value Proof Packs       GET /pilot/proof (+ the pack and its PDF at /pilot/proof/<campaign>)   pilot/api.js
-//   Programme summary       GET /campaigns/summary                                                 api.js (readSummary)
+//   Programme summary       GET /campaigns/summary (+ GET /campaigns for the short names)          api.js (readSummary), simple/api.js
 //   Check a past campaign   POST /uploads, POST /campaigns/audit, POST /campaigns/programme        api.js, decide/api.js
 //   Model reports           GET /models, /runs?mode=score, /datasets, /pilot/demo                  pilot/api.js
 
 export { getIndustries, postUpload } from "../../api.js";
 export { postAudit, postProgramme } from "../decide/api.js";
+// Plan M M172 (DEC-1602): the campaigns' short names, as Results reads them (null when they cannot be read).
+export { getCampaigns } from "../simple/api.js";
 export {
   getDemo,
   listDatasets,

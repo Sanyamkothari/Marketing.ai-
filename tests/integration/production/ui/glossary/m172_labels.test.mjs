@@ -91,8 +91,8 @@ test("plainText: the engine's and the configuration's sentences in a marketer's 
 });
 
 test("userText marks a name the person supplied, escaped, and nothing around it", () => {
-  assert.equal(USER_TEXT_ATTRIBUTE, "data-user");
-  assert.equal(userText("training.csv"), "<span data-user>training.csv</span>");
-  assert.equal(userText('a "run" <b>'), '<span data-user>a &quot;run&quot; &lt;b&gt;</span>');
-  assert.equal(userText("x", "p"), "<p data-user>x</p>");
+  assert.equal(USER_TEXT_ATTRIBUTE, "data-user-text");
+  assert.equal(userText("training.csv"), "<span data-user-text>training.csv</span>");
+  assert.equal(userText('a "run" <b>'), '<span data-user-text>a &quot;run&quot; &lt;b&gt;</span>');
+  assert.equal(userText("x", "p"), "<p data-user-text>x</p>");
 });
