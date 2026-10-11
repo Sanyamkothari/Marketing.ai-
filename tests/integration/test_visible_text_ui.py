@@ -16,6 +16,10 @@ object so the check forbids any regression. A third suite, `words_numbers.test.m
 M172's other changes: the goal names of Plan M section 4.2, Home's "More goals" and stage labels, the one money format
 (`ui/format.js`, exact figures in tooltips), the short campaign names and the mark on names the person supplied.
 
+Plan M M180 (DEC-1610) runs the check in both positions of "Show technical details"; at the final integration
+(DEC-1611) every page the campaigns layout keeps at its own address is also drawn inside M174's sidebar shell and
+checked in both positions there, so with the switch off no never-shown word appears on any page in either layout.
+
 Node and jsdom are a development dependency of that one directory: without them the tests skip with the install command,
 or fail under `REQUIRE_JSDOM=1` as CI sets it (`tests/fixtures/node.py`).
 """
@@ -101,7 +105,9 @@ def test_the_glossary_and_the_visible_text_check_in_jsdom() -> None:
         env={key: value for key, value in os.environ.items() if key != "GLOSSARY_UPDATE_BASELINE"},
         capture_output=True,
         text=True,
-        timeout=300,
+        # Plan M final integration: every page is also drawn in the campaigns layout (about twice the drawing), so the
+        # budget for the whole node run is ten minutes; no assertion depends on it.
+        timeout=600,
         check=False,
     )
     assert result.returncode == 0, result.stdout[-8000:] + result.stderr[-3000:]

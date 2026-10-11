@@ -208,6 +208,24 @@ async function visit(hash) {
   await untilStable();
 }
 
+/* Plan M final integration: the same check in the CAMPAIGNS layout (M174's sidebar shell), where "Show technical
+   details" starts off (M180, technical.js `defaultShowTechnical`). Every page here that the campaigns layout keeps at
+   its own address (`ui/layout.js` targetFor is null; a redirected one is drawn at its target's own entry) is drawn
+   once inside the sidebar shell, right after its classic tests (a goal's setup page remembers its state, so it is
+   drawn from the state the classic pass drew it from), and read twice: with the switch on nothing beyond the baseline
+   (which is empty), and with it off (the layout's default) no never-shown term at all. */
+const layoutModule = await import("../../../../../ui/layout.js");
+const CAMPAIGN_LAYOUT_PAGES = PAGES.filter((page) => !page.after && layoutModule.targetFor(page.hash) === null);
+const CAMPAIGN_LAYOUT_IDS = new Set(CAMPAIGN_LAYOUT_PAGES.map((page) => page.id));
+
+test("the campaigns-layout sweep covers every place of the sidebar and every Phase 2 page", () => {
+  const ids = new Set(CAMPAIGN_LAYOUT_PAGES.map((p) => p.id));
+  for (const id of ["overview", "campaigns-list", "reports-value-proof", "reports-check", "reports-models", "data-sources", "data-check", "settings", "approvals"]) {
+    assert.ok(ids.has(id), `${id} is drawn in the campaigns layout`);
+  }
+  assert.ok(CAMPAIGN_LAYOUT_PAGES.filter((p) => p.id.startsWith("campaign-")).length >= 8, "both campaigns, every tab");
+});
+
 const shown = {};
 const shownOff = {};
 
@@ -274,6 +292,46 @@ for (const page of PAGES) {
     }
     assert.equal(document.documentElement.classList.contains(technical.HIDE_CLASS), false);
   });
+
+  if (CAMPAIGN_LAYOUT_IDS.has(page.id)) {
+    test(`${page.id} in the campaigns layout: no engine word with technical details on, none at all with them off (the layout's default)`, async () => {
+      missing.clear();
+      // Away from the page first, so the redraw the layout change asks for is over before the page is drawn.
+      await visit("#/__between");
+      layoutModule.setUiLayout("campaigns");
+      try {
+        // Drawn with the switch on first, as the classic pass draws it, so the page's guard and its steps (some click
+        // what only the analyst's view shows) work unchanged; then read again with the switch off.
+        await technical.setShowTechnical(true);
+        await settle(2);
+        await untilStable();
+        await visit(page.hash);
+        for (const step of page.steps || []) {
+          await step();
+          await settle(2);
+          await untilStable();
+        }
+        assert.ok($("#pb-bar nav.sh-side"), `${page.id}: the sidebar shell is drawn`);
+        const on = visibleText(document.body);
+        assert.match(on, page.expect, `${page.id} did not draw in the campaigns layout (it showed: ${on.slice(0, 1200)})`);
+        if (page.selector) assert.ok($(page.selector), `${page.id} did not draw: nothing matches ${page.selector}`);
+        const vOn = violations(on, baseline[page.id] || {});
+        if (!mode) assert.ok(vOn.ok, describe(`${page.id} (campaigns layout, technical details on)`, vOn));
+        assert.equal(await technical.setShowTechnical(false), false);
+        await settle(2);
+        const visibleMarks = technicalElements(document.body).filter((el) => !hiddenOnScreen(el));
+        assert.deepEqual(visibleMarks.map((el) => el.outerHTML.slice(0, 120)), [], `${page.id}: a technical section is on screen`);
+        const vOff = violations(visibleText(document.body, { mode: "off" }), baseline[page.id] || {});
+        if (!mode) assert.ok(vOff.ok, describe(`${page.id} (campaigns layout, technical details off)`, vOff));
+        if (BASELINE_EMPTY) assert.deepEqual(vOff.found, {}, `${page.id} shows engine words in the campaigns layout`);
+      } finally {
+        layoutModule.setUiLayout("classic");
+        await technical.setShowTechnical(true);
+        await settle(2);
+        await untilStable();
+      }
+    });
+  }
 }
 
 test("every page in the baseline is a page this test draws", () => {
