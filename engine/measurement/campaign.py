@@ -43,6 +43,8 @@ same database as the audit trail, through `CampaignStore`; a test or a laptop wi
                                 names who entered them)
 `pooled_estimate.json`          Plan K M136: the Estimated figure beside the report
                                 (`engine.measurement.pooling`; aggregate, campaign ids only, no customer id)
+`harm_alarm.json`               Plan K M138: the latest harm check and every alarm under the plan in force
+                                (`engine.measurement.harm`; aggregate, no customer id)
 ==============================  ==========================================================================
 
 `assignment.parquet`, `outcomes.parquet` and `contact.parquet` hold one row per customer: they are

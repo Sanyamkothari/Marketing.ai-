@@ -28,8 +28,10 @@ Key                                     Written by                             D
                                         and `contact` `.parquet`)
 `campaigns/<id>/segment_effects.json`,  `api/routes/campaigns.py`,             aggregate: no customer id,
 `.../suppression_proposals.json`,       `api/routes/pilot.py` (Plan J M104;    kept with the report; the
-`.../pilot_roi_inputs.json`             the value inputs: `engine.pilot.       value inputs name who
-                                        proof.save_campaign_value_inputs`)     entered them
+`.../pilot_roi_inputs.json`,            the value inputs: `engine.pilot.       value inputs name who
+`.../harm_alarm.json`                   proof.save_campaign_value_inputs`;     entered them
+                                        Plan K M138: `engine.measurement.
+                                        harm`)
 `.../pooled_estimate.json`              `engine/measurement/pooling.py` (Plan  aggregate: estimates and
                                         K M136: the Estimated figure)          campaign ids, no customer
                                                                                id; kept with the report

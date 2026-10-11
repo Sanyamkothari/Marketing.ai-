@@ -44,6 +44,8 @@ export const ALERT_KIND_LABEL = {
   treat_list_ready: "A treat list is ready",
   campaign_measured: "A campaign was measured",
   challenger_waiting: "A new model was learned",
+  // Plan K M138 (DEC-1403): a campaign's interim reading crossed the harm line; a warning, nothing stops.
+  harm_alarm: "A campaign may be doing harm",
 };
 
 const kindWords = (kind) => {

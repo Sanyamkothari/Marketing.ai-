@@ -981,6 +981,9 @@ def measure_campaign_results(
         )
     store = get_campaign_store(request)
     campaign = _load(store, campaign_id)
+    harm_settings = _harm_settings(
+        root
+    )  # PLAN-K (M138): a file that cannot be read is a 422 before any write
     try:
         # Plan J M107 (DEC-1317): the engine half, shared with the monthly loop's measure step.
         measured = measure_recorded(
@@ -1000,6 +1003,9 @@ def measure_campaign_results(
         if exc.code in _AUDITED_REFUSALS:
             set_audit_context(request, details={"reason_code": exc.code})
         raise _cycle_http(exc) from exc
+    _check_harm(  # PLAN-K (M138)
+        request, storage, measured.campaign or campaign, measured.report, root, settings=harm_settings
+    )
     if not measured.matured or measured.campaign is None:
         refusal_response = _not_matured(request, measured.report)
         assert refusal_response is not None  # an unmatured report is always refused
@@ -2041,3 +2047,46 @@ def add_campaign_contacts(
         readout.holdout_listed,
     )
     return _view(storage, campaign, root)
+
+
+# ---------------------------------------------------------------------------
+# PLAN-K (M138, DEC-1403): the harm check of an interim reading, on demand
+# ---------------------------------------------------------------------------
+def _harm_settings(root: Any) -> Any:
+    """`harm_alarm` of `configs/measurement.yaml`, read before anything is measured.
+
+    A file that cannot be read raises `engine.config.ConfigError`, which the app answers with its code (HTTP 422).
+    """
+    from engine.measurement.harm import load_harm_alarm_settings
+
+    return load_harm_alarm_settings(root)
+
+
+def _check_harm(
+    request: Request, storage: Storage, campaign: Campaign, report: Any, root: Any, *, settings: Any
+) -> None:
+    """Check an early look, or a reading with outcomes still to come in, for harm (`engine.measurement.harm`).
+
+    Nothing is read or written unless `configs/measurement.yaml` turns the alarm on (`settings`, read before the
+    measurement); a final result is never checked. An alarm that fires for the first time raises one
+    `harm_alarm` alert, as the monthly loop does.
+    """
+    from api.routes.schedules import get_alert_sink
+    from engine.measurement.harm import campaign_client_id, check_campaign_harm, harm_alert
+
+    now = utc_now()
+    outcome = check_campaign_harm(storage, campaign, report, root=root, now=now, settings=settings)
+    if outcome is None or campaign.use_case_id is None:
+        return
+    config = _config(campaign, root)
+    alert = harm_alert(
+        outcome,
+        use_case_id=campaign.use_case_id,
+        use_case_name=config.name if config is not None else None,
+        client_id=campaign_client_id(storage, campaign),
+        schedule_id=None,
+        run_id=campaign.run_ids[0] if campaign.run_ids else None,
+        now=now,
+    )
+    if alert is not None:
+        get_alert_sink(request).raise_alert(alert)

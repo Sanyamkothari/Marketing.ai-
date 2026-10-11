@@ -156,6 +156,7 @@ CardKind = Literal[
     "backfire",
     "uplift_not_better_than_risk",
     "uplift_fading",
+    "harm_alarm",  # PLAN-K (M138, DEC-1403): drawn by `_harm_card`, code `HARM_ALARM`
 ]
 
 
@@ -626,6 +627,7 @@ class _Builder:
             self._exclude(cid, name, PROOF_SYNTHETIC_DATA, None)
             return
         self._cards_of(campaign, name)
+        _harm_card(self, campaign, name)  # PLAN-K (M138): a harm alarm that stands, before the final result
         if view is not None:
             self.view_artefacts.update(view.artefacts)
             self._backfire(campaign, name, view)
@@ -1176,6 +1178,77 @@ def _estimated_lines(
 
 def _effect_format(outcome_kind: object) -> FigureFormat:
     return "signed_amount" if outcome_kind == "continuous" else "points"
+
+
+# --- PLAN-K (M138, DEC-1403): the harm alarm's card --------------------------------------------------------------
+_HARM_WORDS: Final[_Words] = _Words(
+    "This campaign may be doing harm",
+    "Before the day its test plan fixed for the final reading, the customers contacted are doing worse than the "
+    "customers held back, by more than chance explains even though the campaign is checked at every reading. This "
+    "is an alarm, not a result: nothing has been stopped.",
+    "Look at the campaign now and decide whether to pause it. Its result is still read only on the planned day.",
+)
+
+
+def _harm_card(builder: _Builder, campaign: Campaign, name: Figure) -> None:
+    """The `HARM_ALARM` card while `harm_alarm.json` holds an alarm raised under the plan in force, and no final
+    result has been read; its figures are the first alarm's own, with its offer named when the campaign has
+    several. No file: nothing is read. The setting off (`configs/measurement.yaml`): no card, even for a file
+    left from a time it was on, and the file itself is not read.
+    """
+    from engine.measurement.harm import (
+        HARM_ALARM,
+        HARM_ALARM_FILENAME,
+        WHOLE_CAMPAIGN,
+        load_harm_alarm_settings,
+    )
+
+    reader, cid = builder.reader, campaign.campaign_id
+    alarm, plan = f"campaigns/{cid}/{HARM_ALARM_FILENAME}", f"campaigns/{cid}/test_plan.json"
+    report = f"campaigns/{cid}/incrementality_report.json"
+    if not builder.storage.exists(alarm) or not load_harm_alarm_settings(builder.root).enabled:
+        return
+    if reader.get(alarm, "status") != "alarm":
+        return
+    if reader.get(alarm, "test_plan_hash") != reader.get(plan, "plan_hash"):
+        return  # raised under a plan since amended: that evidence was about another test
+    if isinstance(reader.doc(report), dict) and reader.get(report, "early_look") is not True:
+        return  # the final result is read: its verdict says whether the campaign did harm
+    amount = reader.get(alarm, "outcome_kind") == "continuous"
+    offer = (
+        reader.fig(alarm, "alarms.0.arm", "text")
+        if reader.get(alarm, "alarms.0.arm") != WHOLE_CAMPAIGN
+        else None
+    )
+    facts = [
+        ("Offer", offer),
+        (
+            "Difference so far, contacted minus held back",
+            reader.fig(alarm, "alarms.0.difference", "signed_amount" if amount else "points"),
+        ),
+        ("Contacted customers counted so far", reader.fig(alarm, "alarms.0.treated_rows", "count")),
+        ("Held-back customers counted so far", reader.fig(alarm, "alarms.0.control_rows", "count")),
+        ("Strength of the evidence of harm", reader.fig(alarm, "alarms.0.statistic", "times")),
+        ("Strength at which the alarm is raised", reader.fig(alarm, "alarms.0.threshold", "times")),
+        ("Day the final result can be read", reader.fig(alarm, "analysis_date", "date")),
+    ]
+    builder.cards.append(
+        SummaryCard(
+            code=HARM_ALARM,
+            kind="harm_alarm",
+            severity="warning",
+            title=_HARM_WORDS.title,
+            text=_HARM_WORDS.text,
+            next_step=_HARM_WORDS.next_step,
+            campaign_id=cid,
+            campaign_name=name,
+            use_case_id=campaign.use_case_id,
+            facts=tuple(
+                SummaryFact(label=label, value=figure) for label, figure in facts if figure is not None
+            ),
+            read=(alarm, plan),
+        )
+    )
 
 
 _UNPRINTED: Final[frozenset[str]] = frozenset(
