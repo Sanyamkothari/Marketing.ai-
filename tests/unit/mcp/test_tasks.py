@@ -88,7 +88,6 @@ def _verifier(tmp_path: Path, *, timeout: float = 5.0, concurrent: int = 2) -> V
         )
 
     settings = McpSettings(
-        enabled=True,
         call_timeout_seconds=timeout,
         rate_limit=RateLimit(concurrent_calls=concurrent),
         tasks=TaskSettings(tools=("audit_campaign",), poll_interval_ms=100),

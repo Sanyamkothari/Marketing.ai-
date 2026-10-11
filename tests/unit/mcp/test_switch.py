@@ -23,10 +23,10 @@ print("/mcp" in paths, "mcp" in sys.modules, "api.mcp.http" in sys.modules, "api
 
 def _root(config_root: Path, target: Path, *, mcp: bool, agentic: bool = True) -> Path:
     shutil.copytree(config_root, target)
+    # Both switches live in agentic.yaml (DEC-1400 (d)); mcp.yaml keeps the shipped settings.
     (target / "agentic" / "agentic.yaml").write_text(
-        f"agentic:\n  enabled: {str(agentic).lower()}\n", "utf-8"
+        f"agentic:\n  enabled: {str(agentic).lower()}\nmcp:\n  enabled: {str(mcp).lower()}\n", "utf-8"
     )
-    (target / "agentic" / "mcp.yaml").write_text(f"mcp:\n  enabled: {str(mcp).lower()}\n", "utf-8")
     return target
 
 

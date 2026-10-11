@@ -43,6 +43,7 @@ from engine.decide.treat_list import (
 from engine.platform_db import sqlite_engine
 from engine.storage import LocalStorage, run_key
 from engine.utils.time import utc_now
+from tests.unit.compliance.switch import set_gate_switch
 
 RUN = "r_20261011_0c134a01"
 KEY = "customer_id"
@@ -96,9 +97,7 @@ def root(tmp_path: Path, config_root: Path) -> Path:
     target = tmp_path / "configs"
     shutil.copytree(config_root, target)
     (target / "decide" / "catalogue.yaml").write_text(CATALOGUE, encoding="utf-8")
-    (target / "compliance" / "compliance.yaml").write_text(
-        "compliance:\n  gate:\n    enabled: true\n", encoding="utf-8"
-    )
+    set_gate_switch(target, on=True)
     clear_catalogue_cache()
     return target
 

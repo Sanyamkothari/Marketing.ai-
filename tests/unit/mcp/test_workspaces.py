@@ -26,7 +26,7 @@ from engine.storage import LocalStorage
 
 ACME = ClientWorkspace(id="acme", client_id="c_acme_1", members=("u-asha", "u-vera"))
 HOUSE = ClientWorkspace(id="house", unattributed=True, members=("u-ravi",))
-SETTINGS = McpSettings(enabled=True, workspace="clients", workspaces=(ACME, HOUSE))
+SETTINGS = McpSettings(workspace="clients", workspaces=(ACME, HOUSE))
 
 
 def _write(storage: LocalStorage, key: str, body: dict[str, Any]) -> None:
@@ -54,7 +54,7 @@ def test_a_configuration_that_would_not_bind_each_token_to_one_workspace_is_refu
     workspaces: list[ClientWorkspace], message: str
 ) -> None:
     with pytest.raises(ValidationError, match=message):
-        McpSettings(enabled=True, workspace="clients", workspaces=tuple(workspaces))
+        McpSettings(workspace="clients", workspaces=tuple(workspaces))
 
 
 def test_a_bad_file_is_config_invalid(tmp_path: Path) -> None:

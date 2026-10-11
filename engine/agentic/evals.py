@@ -77,7 +77,7 @@ class ProposalRequest(StrictBase):
 class Scenario(StrictBase):
     name: str = Field(pattern=r"^[a-z0-9_]+$")
     description: str
-    request: ToolCallRequest | ProposalRequest
+    request: ToolCallRequest | ProposalRequest | PlannerScenarioRequest
     deployment: str = Field(default="local", description="Which of the world's deployments answers it.")
     principal: str = Field(default="analyst", description="Who asks: one of the world's principals.")
     approve_as: str | None = Field(default=None, description="Then try to approve it as this principal.")
@@ -89,10 +89,26 @@ class Scenario(StrictBase):
     guards: tuple[str, ...] = Field(default=(), description="The policy rules this scenario exists to catch.")
 
 
+class PlannerScenarioRequest(StrictBase):
+    """Run the campaign planner (M139) on this request (`engine.agentic.planner.PlanRequest`)."""
+
+    plan: dict[str, Any]
+    llm: str | None = Field(
+        default=None, description="Which of the test's language models answers; None: no AI service."
+    )
+
+
 class Outcome(StrictBase):
     status: OutcomeStatus
     codes: tuple[str, ...] = ()
     payload_digest: str | None = None
+    # Plan K M139: what the planner's model did, kept out of `key` (wording may vary; decisions may not).
+    claim_failures: tuple[str, ...] = ()
+    llm_calls: int = 0
+    cost_usd: float = 0.0
+    narrative_error: str | None = Field(
+        default=None, description="An AI service or budget error that kept the model from writing (by code)."
+    )
 
     @property
     def key(self) -> str:
@@ -121,11 +137,21 @@ class EvalReport(StrictBase):
     pass_k: float = Field(description="Share of scenarios that passed all k runs.")
     llm_model_id: str | None = Field(description="The model the harness was given; M132 never calls it.")
     llm_calls: int = Field(
-        description="Model calls made: 0 until a scenario has a language-model step (M139)."
+        description="Model calls the planner's scenarios made (M139); 0 for tool and proposal scenarios."
     )
-    cost_usd: float = Field(description="What those calls cost, from the Meter; 0.0 with none.")
+    cost_usd: float = Field(
+        description="What those calls cost, from the Meter; 0.0 with none (a call it cannot price adds 0)."
+    )
+    narrative_errors: dict[str, int] = Field(
+        default_factory=dict,
+        description=(
+            "Narratives the model could not write, by the AI service's or the budget's error code (M139). "
+            "Counted apart from claim failures: a service error is not a wrong claim."
+        ),
+    )
     claim_failures: dict[str, int] = Field(
-        default_factory=dict, description="By claim code (design §4; M139)."
+        default_factory=dict,
+        description="Narrative claim failures over every run, by code (design §4; M139). Tracked, not gated.",
     )
     mutations: dict[str, tuple[str, ...]] = Field(
         default_factory=dict, description="Per policy rule removed, the scenarios that caught it."
@@ -142,6 +168,36 @@ def _never_execute(_proposal: Any) -> str | None:
 
 ContextFactory = Callable[[Scenario], ToolContext]
 Approvers = Callable[[str], Any]
+PlannerFactory = Callable[[Scenario, ToolRegistry], Any]
+"""M139: the `engine.agentic.planner.PlannerDeps` a planner scenario runs with (its cards and its model)."""
+
+
+def _run_planner(
+    scenario: Scenario,
+    request: PlannerScenarioRequest,
+    ctx: ToolContext,
+    registry: ToolRegistry,
+    planner: PlannerFactory | None,
+) -> tuple[Outcome, str | None]:
+    """Run the planner to its interrupt; the outcome is its proposal's, or the code it stopped with."""
+    from engine.agentic.planner import PlannerDeps, PlanRequest, outcome_of, start_plan
+
+    deps = planner(scenario, registry) if planner is not None else PlannerDeps(registry=registry)
+    state = start_plan(PlanRequest.model_validate(request.plan), ctx, deps)
+    status, codes, payload_digest = outcome_of(state)
+    failures = () if state.narrative is None else tuple(f.code for f in state.narrative.failures)
+    outcome = Outcome.model_validate(
+        {
+            "status": status,
+            "codes": codes,
+            "payload_digest": payload_digest,
+            "claim_failures": failures,
+            "llm_calls": state.llm_calls,
+            "cost_usd": state.llm_cost_usd,
+            "narrative_error": state.narrative_error,
+        }
+    )
+    return outcome, state.proposal_id
 
 
 def run_once(
@@ -151,8 +207,10 @@ def run_once(
     *,
     principals: Approvers,
     rules: Mapping[str, Rule] | None = None,
+    planner: PlannerFactory | None = None,
 ) -> Outcome:
-    """One run of `scenario` through the registry or `submit_proposal`, then an approval when asked."""
+    """One run of `scenario` through the registry, `submit_proposal` or the planner (M139), then an
+    approval when asked."""
     from engine.agentic.proposals import submit_proposal
     from engine.approvals import decide_proposal
 
@@ -160,7 +218,9 @@ def run_once(
     request = scenario.request
     proposal_id: str | None = None
     try:
-        if isinstance(request, ToolCallRequest):
+        if isinstance(request, PlannerScenarioRequest):
+            outcome, proposal_id = _run_planner(scenario, request, ctx, registry, planner)
+        elif isinstance(request, ToolCallRequest):
             result = registry.call(request.tool, request.input, ctx)
             if result.kind is ToolKind.READ:
                 return Outcome(status="read", payload_digest=digest(result.output))
@@ -225,16 +285,37 @@ def pass_k(
     k: int = DEFAULT_K,
     llm: LLMClient | None = None,
     rules: Mapping[str, Rule] | None = None,
+    planner: PlannerFactory | None = None,
 ) -> EvalReport:
-    """Run every scenario `k` times; each passes only when all k outcomes agree and match the expectation."""
+    """Run every scenario `k` times; each passes only when all k outcomes agree and match the expectation.
+
+    Plan K M139: a planner scenario's model calls, their cost (the Meter's), its claim failures (by code) and
+    the AI service errors that kept a model from writing are totalled into the report; none is part of an
+    outcome's key, so wording that varies between runs passes, decisions that vary fail.
+    """
     from engine.agentic.tools import default_registry
 
     if k < 1:
         raise ValueError("k must be at least 1.")
     tools = registry if registry is not None else default_registry()
     results: list[ScenarioResult] = []
+    calls = 0
+    cost = 0.0
+    claim_failures: dict[str, int] = {}
+    narrative_errors: dict[str, int] = {}
     for scenario in scenarios:
-        outcomes = [run_once(scenario, make_ctx, tools, principals=principals, rules=rules) for _ in range(k)]
+        outcomes = [
+            run_once(scenario, make_ctx, tools, principals=principals, rules=rules, planner=planner)
+            for _ in range(k)
+        ]
+        for outcome in outcomes:
+            calls += outcome.llm_calls
+            cost += outcome.cost_usd
+            if outcome.narrative_error is not None:
+                code = outcome.narrative_error
+                narrative_errors[code] = narrative_errors.get(code, 0) + 1
+            for code in outcome.claim_failures:
+                claim_failures[code] = claim_failures.get(code, 0) + 1
         passed, failure = _judge(scenario, outcomes)
         results.append(
             ScenarioResult(
@@ -254,8 +335,10 @@ def pass_k(
         failed=len(results) - passed_count,
         pass_k=passed_count / len(results) if results else 0.0,
         llm_model_id=None if llm is None else str(getattr(llm, "model_id", None) or type(llm).__name__),
-        llm_calls=0,
-        cost_usd=0.0,
+        llm_calls=calls,
+        cost_usd=round(cost, 6),
+        claim_failures=dict(sorted(claim_failures.items())),
+        narrative_errors=dict(sorted(narrative_errors.items())),
     )
 
 
@@ -265,12 +348,15 @@ def mutation_test(
     *,
     principals: Approvers,
     registry: ToolRegistry | None = None,
+    planner: PlannerFactory | None = None,
 ) -> dict[str, tuple[str, ...]]:
     """Per policy rule: the scenarios that fail once it is removed. A rule with none is untested."""
     caught: dict[str, tuple[str, ...]] = {}
     for name in RULES:
         mutant = {rule: function for rule, function in RULES.items() if rule != name}
-        report = pass_k(scenarios, make_ctx, principals=principals, registry=registry, k=1, rules=mutant)
+        report = pass_k(
+            scenarios, make_ctx, principals=principals, registry=registry, k=1, rules=mutant, planner=planner
+        )
         caught[name] = tuple(result.name for result in report.scenarios if not result.passed)
     return caught
 

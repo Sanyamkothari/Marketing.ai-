@@ -2003,6 +2003,375 @@ Nothing was renamed or removed. With `agentic.enabled` off the app creates no ta
 **What I did meanwhile.** `value_segment` reads the stored artefact directly; this is documented in
 `docs/AGENTIC.md`.
 
+### 2026-10-11 — plan-k M136 (on main) → Plan J (owners of M107's `engine/scheduling/firing.py` and `engine/measurement/cycle.py`, M105's `engine/measurement/summary.py` and `api/routes/campaigns.py`, M104's `engine/pilot/proof.py`), Phase 4b (owner of `engine/scheduling/`): pooling across comparable campaigns (record of additive edits)
+
+**What changed** (DEC-1402 (f), (g), (i)), each additive and inert while `pooling.enabled` is off (the default):
+
+* `engine/measurement/cycle.py`: `measure_recorded` and `measure_step` gain `config_root: Path | None = None`,
+  forwarded to `measure_recorded`; with pooling on, every comparable campaign's `pooled_estimate.json` is rewritten
+  after the report is stored. `learn_from_campaign` adds `pooled_prior` to `learn_record.json` only when pooling is on
+  and the campaign was pooled.
+* `engine/scheduling/firing.py`: the `ScheduleKind.MEASURE` branch of `ScheduleFirer` now passes
+  `config_root=services.config_root`, as the treat-list and learn branches already did. One line; behaviour is
+  unchanged with the default config.
+* `engine/measurement/summary.py`: `build_summary` gains an optional `store: CampaignStore | None = None` and the
+  summary an `estimated` list, absent when pooling is off. `GET /campaigns/summary` (`api/routes/campaigns.py`) now
+  passes the campaign store; with pooling on the summary may rewrite stale `pooled_estimate.json` files (aggregate
+  only), with it off the store is never read and the summary is byte-identical. `POST /campaigns/{id}/measure` passes
+  the route's config root.
+* `engine/pilot/proof.py` (Plan E's file, M104's Pack): an Estimated line and a count line beside the measured
+  difference, never the benefit line, shown only when `pooled_estimate.json` is current. That check also reads the
+  member campaigns' `incrementality_report.json`, so those keys appear in the Pack's artefacts list only when pooling
+  is on.
+* `configs/measurement.yaml` (new; `pooling` section, shared with M138's `harm_alarm` section).
+
+**What is needed.** Nothing; a branch that builds a `StepOutcome` positionally or adds `measure_step` arguments
+should merge by keyword.
+
+**What I did meanwhile.** `tests/unit/measurement`, `tests/integration/measurement/test_campaign_pooling.py`,
+`test_learn_default_unchanged.py`, `test_campaign_epochs.py` and the Proof Pack tests pass on `main` after the merge.
+
+### 2026-10-11 — plan-k M136 (on main) → Phase 4b (owner of `configs/privacy.yaml` and `engine/privacy/layout.py`): one aggregate campaign file (record of in-place edits)
+
+**What changed** (DEC-1402 (j)): `campaigns/<id>/pooled_estimate.json` (estimates, ranges and campaign ids, no
+customer id) is listed as an aggregate campaign file in `engine/measurement/campaign.py`'s file table, the aggregate
+comment in `configs/privacy.yaml` and the table in `engine/privacy/layout.py`'s docstring (beside Plan L M159's
+`doctor_memory` row). It is not added to `row_level_campaign_artefacts`, so retention and erasure are unchanged.
+
+**What is needed.** Nothing; this is a record.
+
+### 2026-10-11 — plan-k M138 (on main) → Plan J (owners of M107's `engine/measurement/cycle.py` and `engine/scheduling/firing.py`, M105's `engine/measurement/summary.py`, M94's `api/routes/campaigns.py`): the early harm alarm in the measure step, the route and the summary (record of additive edits)
+
+**What changed** (DEC-1403 (f) to (k)), each inert while `harm_alarm.enabled` is off (the default):
+
+* `engine/measurement/cycle.py`: `StepOutcome` gains `harms: tuple[HarmOutcome, ...] = ()`. `measure_step` (whose
+  `config_root` M136 added) reads `configs/measurement.yaml` first and, with the alarm on, pulls and reads every live
+  campaign whose window is still open in memory (`interim_reading`, nothing stored) and checks each early look it
+  measures. `measure_recorded` is unchanged.
+* `engine/scheduling/firing.py`: the firer raises one `harm_alarm` alert per campaign whose alarm first fired, and
+  `_loop_step` maps `ConfigError` to `FiringError(code)` for MEASURE schedules only; other kinds behave as before.
+* `api/routes/campaigns.py`: `POST /campaigns/{id}/measure` loads the settings before measuring (a bad file is 422
+  with its code and nothing is written) and checks an early look or a reading with customers still inside their
+  window.
+* `engine/measurement/summary.py`: the `HARM_ALARM` warning card (`_harm_card`), shown only with the setting on and
+  an alarm under the plan in force, and no final result yet.
+* `docs/DECIDE.md`: section 28 (the builder's §26, renumbered at integration after M131's §26 and M135's §27), and
+  one row in the cards table.
+
+**What is needed.** Nothing; a branch that builds `StepOutcome` positionally or adds `measure_step` arguments should
+merge by keyword.
+
+**What I did meanwhile.** The measurement, pilot, scheduling and alert tests pass on `main` after the merge.
+
+### 2026-10-11 — plan-k M138 (on main) → Phase 4b (owner of `engine/scheduling/alerts.py`, `ui/modules/production/alerts.js`, `configs/privacy.yaml` and `engine/privacy/layout.py`): one alert kind and one aggregate campaign file (record of additive edits)
+
+**What changed** (DEC-1403 (f)): `AlertKind.HARM_ALARM = "harm_alarm"`, severity `warning`, title "A campaign may
+be doing harm", with its label in the production alerts UI (`ALERT_KIND_LABEL`). `campaigns/<id>/harm_alarm.json`
+(counts, differences and the statistic; no customer id) is listed as an aggregate campaign file in
+`engine/measurement/campaign.py`'s file table, `configs/privacy.yaml`'s comment and `engine/privacy/layout.py`'s
+table, beside M136's `pooled_estimate.json`. It is not row-level, so retention and erasure are unchanged.
+
+**What is needed.** Nothing; this is a record.
+
+### 2026-10-11 — plan-k M142 (on main) → Plan G (owner of `engine/agent/`, `api/routes/agent.py`, `ui/modules/agent/`, `docs/AGENTS.md` and `tests/fixtures/agent_bench/`): setup help for new sources inside Guided setup, behind `agentic.enabled` (record of additive edits)
+
+**What changed** (DEC-1409), all of it inert while Plan K's `agentic.enabled` is off (the default), when Guided
+setup's advice, tool results, the chat's tool list and egress payloads are byte-identical to before M142:
+
+* `engine/agent/headers.py`, `label_drafts.py`, `assist.py` (new) and `configs/agent/header_lexicon.yaml` (new): the
+  rules-only header reading, the lapse-label drafts and the optional second opinions.
+* `engine/agent/tools.py`: `find_roles` gains `header_candidates` and extends the consent / opt-out /
+  recently-contacted lists with header-read columns; a new read tool `draft_outcome_labels`; `header_help_on(ctx)`
+  and `tool_available(ctx, name)` gate both on the switch (added at integration). `engine/agent/loop.py`: `_tools`
+  takes the session (optional; none means every tool, as the static checks use it) and lists `draft_outcome_labels`
+  only while the switch is on.
+* `engine/agent/advisor.py`: the header read picks the ID among unique columns, orders and may propose the outcome
+  (check), orders the dates, asks non-blocking mapping questions and offers lapse drafts. `engine/agent/contracts.py`:
+  `Proposal.from_headers` (default false, left out of a stored session while false), beside Plan L M152's `source`.
+  `engine/agent/session.py`: `accept_recommended` never ticks a `from_headers` suggestion.
+  `engine/agent/egress.py`: `RESULT_KEYS` gains the new result keys (`header_candidates`, `after_reference`, ...).
+* `api/routes/agent.py`: `POST /uploads/{upload_id}/agent-session/assist` (Analyst, `agent.assist`), 404
+  `AGENTIC_DISABLED` while the switch is off. `tests/integration/agent/test_hardening.py` now counts 12 session
+  policies (Plan L's 11 and this one); `tests/unit/agent/test_guided_setup_static_ui.py` expects the `/assist` tail.
+* `ui/modules/agent/guided.js`, `api.js`, `styles.js`: a stopped session's non-blocking questions are shown under the
+  stop reason, read-only; a "Second opinion" button (when an AI service is connected) that hides itself on
+  `AGENTIC_DISABLED`. The jsdom UI tests could not be run on this machine (jsdom is not installed); `node --check`
+  passes.
+* `tests/fixtures/agent_bench/`: 27 Hinglish cases and three `other_use_case_*` cases, pinned in `expected.json` and
+  run with the switch on (`run_case`'s `HEADER_HELP_CASES`); the 22 earlier cases run with it off and are unchanged.
+  `tests/unit/agent/helpers.py` gains `with_header_help`, `header_help_root` and `header_help_context`.
+* `docs/AGENTS.md` section 13.
+
+**What is needed.** Nothing; this is a record. A Plan G change to `find_roles`' keys, the advisor's question order or
+the chat's tool list should keep the switch-off path byte-identical (`tests/unit/agent/test_header_switch.py`).
+
+**What I did meanwhile.** `tests/unit/agent`, `tests/integration/agent` and `tests/unit/generative` pass on `main`
+after the merge.
+
+### 2026-10-11 — plan-k M142 (on main) → Phase 3a (owner of `engine/generative/contracts.py` and `configs/prompts/`): a `data_agent_assist` purpose and prompt (announcement)
+
+**What changed** (DEC-1409 (g); the pre-approved additive edit): `GenerativePurpose.DATA_AGENT_ASSIST =
+"data_agent_assist"`, so Guided setup's optional second opinions are metered and reported by purpose like every other
+flow, and `configs/prompts/data_agent_assist.v1.md` (new), named after its purpose as
+`test_the_repository_ships_a_prompt_for_every_purpose_that_needs_one` requires; `tests/unit/generative/test_prompts.py`
+gains its prompt variables. No existing member, prompt or fake branch changed.
+
+**What is needed.** Nothing; this is an announcement.
+
+### 2026-10-11 — plan-k M142 (on main) → Plan G and trunk (owners of `actions.suppression` in `engine/config.py` and the use cases): let a header-read opt-out or last-contact column be applied by a click (request)
+
+**Why.** M142 reads a header such as `dnd_flag` or `last_cntct_dt` as the opt-out or last-contact column, but
+`actions.suppression.opt_out_column` and `recently_contacted_column` are fixed by the use case and are not per-run
+overridable, so Guided setup can only ask ("Is 'dnd_flag' that column?") and tell the person to rename the column and
+upload again. **What is needed.** Make `actions.suppression.opt_out_column` and `actions.suppression.recently_contacted_column`
+overridable per run (with whatever value-direction check the suppression rules need), so the advisor can turn the
+answer into a setting the person ticks. **What Plan K did meanwhile.** The non-blocking question, which changes
+nothing either way (DEC-1409 (e)).
+
+### 2026-10-11 — plan-k M133 (on main) → trunk (owners of `api/main.py`, `pyproject.toml` and `requirements-freeze.txt`): the MCP app hook and the MCP SDK's pins (record of edits in the PLAN-K blocks)
+
+**What changed** (DEC-1404 (a), (i)): `api/main.py`'s PLAN-K block gains `_install_mcp` (a `PHASE_APP_HOOKS` entry
+after M132's `_install_agentic`), which mounts `/mcp` only when `mcp.enabled` is on and otherwise imports only
+`api.mcp.config`. `pyproject.toml`'s PLAN-K block pins `mcp==2.3.0` and the eleven packages it brought that nothing
+pinned before; `requirements-freeze.txt` lists the same versions. Both were moved into the PLAN-K blocks from the
+builder's marked lines at the end of the PLAN-J blocks; no existing pin changed. `/mcp` is not an API route, so the
+OpenAPI path set and `docs/API.md` are unchanged.
+
+**What is needed.** Nothing; this is a record.
+
+### 2026-10-11 — plan-k M133 (on main) → Plan K M130's switch file (`configs/agentic/agentic.yaml`, `engine/agentic/config.py`): `mcp.enabled` is now read (record of an in-place edit)
+
+**What changed** (DEC-1404 (a)): the builder, working before M130 reached its branch, put the MCP switch in its own
+`configs/agentic/mcp.yaml`. At integration the switch was moved to the one M130 declared, `mcp.enabled` in
+`configs/agentic/agentic.yaml`; `api.mcp.config.mcp_enabled` reads it there and then validates `mcp.yaml`, which keeps
+the server's settings only (a stray `enabled` there is refused as an unknown setting). `agentic.yaml`'s comment and
+`McpSwitch`'s description no longer say "nothing reads it yet". `tests/unit/agentic/test_flags.py` is unchanged and
+green; M133's own switch tests write both switches to `agentic.yaml`.
+
+**What is needed.** Nothing; this is a record.
+
+### 2026-10-11 — plan-k M133 (on main) → Plan J (owner of `POST /campaigns/audit` and the randomness check, M103): an assignment column whose name holds a JSON special character fails the audit (request)
+
+**Why.** While planting header canaries for the MCP text gate, M133 found that `POST /campaigns/audit` fails inside
+the randomness check when an assignment column's name holds a JSON special character (`:`, `"`, `[`, ...): LightGBM
+refuses the feature name. **What is needed.** Rename the features before LightGBM sees them (for example `f0..fn`,
+mapped back for display). **What Plan K did meanwhile.** Nothing in Plan J's files; the canaries avoid those characters
+in assignment columns and `docs/AGENTIC.md` §8.6 records the limit.
+
+### 2026-10-11 — plan-k M133 (on main) → Plan E (owner of `configs/pilot/help.yaml`): ten codes and one updated entry (announcement)
+
+**What changed** (DEC-1404 (j)): entries for `MCP_DEMO_ONLY`, `MCP_SCOPE_DENIED`, `MCP_RATE_LIMITED`, `MCP_TIMEOUT`,
+`MCP_GROUP_TOO_SMALL`, `MCP_RESULT_WITHHELD`, `MCP_NOT_STARTED`, `MCP_TOOL_FAILED`, and the existing access codes
+`AUTH_REQUIRED` and `AUTH_NOT_CONFIGURED`, which had none, written generically since the access layer raises them
+too. `CONFIG_INVALID`'s entry now names the three agentic files. `tests/unit/pilot/test_help.py` is green.
+
+**What is needed.** Nothing; this is an announcement.
+
+### 2026-10-11 — plan-k M142, found at M133's integration (on main) → trunk (owner of `tests/integration/test_api_config.py`): one route joins the OpenAPI path set (record of an in-place edit)
+
+**What changed** (DEC-1409 (g)): the path set gains `/uploads/{upload_id}/agent-session/assist`, M142's optional second
+opinion (404 `AGENTIC_DISABLED` while Plan K is off). M142's builder did not run this trunk test and its merge missed
+it; the M133 integration run found it.
+
+**What is needed.** Nothing; this is a record.
+
+### 2026-10-11 — plan-k M144 (on main) → trunk (owner of `api/main.py`) and Plan K M132 (owners of `tests/agentic/test_proposal_routes.py` and the route policies): the save-desk card's route (record of edits)
+
+**What changed** (DEC-1411 (c)): `api/main.py`'s PLAN-K block gains `_install_save_desk`, a `PHASE_APP_HOOKS` entry
+appended after M133's `_install_mcp`, which mounts `POST /agentic/save-desk/card` (`api/routes/agentic_save_desk.py`)
+only when `agentic.enabled` is on; it was moved there from the builder's marked lines at the end of the PLAN-J block.
+With the switch off the path does not exist and the OpenAPI document is unchanged. `tests/agentic/test_proposal_routes.py`'s
+exact `/agentic` route set gains `("POST", "/agentic/save-desk/card")`; a later Plan K milestone adding an
+`/agentic` route extends that set. The card's `RoutePolicy` does not set `audit_reads` (GET-only per
+`tests/unit/production/test_route_policies.py::test_every_policy_is_well_formed`); a POST is audited by the
+middleware anyway. `alembic/versions/0009_agentic_ledger.py` is `main`'s (the branch differed only in comments).
+
+**What is needed.** Nothing; this is a record.
+
+### 2026-10-11 — plan-k M144 (on main) → Plan E (owner of `configs/pilot/help.yaml`): six codes (announcement)
+
+**What changed** (DEC-1411 (j)): entries for `SAVE_DESK_NO_TREAT_LIST`, `SAVE_DESK_CUSTOMER_NOT_FOUND`,
+`SAVE_DESK_KEY_INVALID`, `SAVE_DESK_KEY_AMBIGUOUS`, `SAVE_DESK_RATE_LIMITED` and `SAVE_DESK_NOT_IN_PILOT_ARM`
+(`SAVE_DESK_KEY_INVALID`'s example reworded to pass the jargon check). `tests/unit/pilot/test_help.py` is green.
+
+**What is needed.** Nothing; this is an announcement.
+
+### 2026-10-11 — plan-k M139 (on main) → Plan J and Plan H (owners of `ui/modules/simple/pages.js`): one attribute on each Results warning card (record of an additive edit)
+
+**What changed** (DEC-1406 (q)): each Results warning card gains a `data-card-use-case` attribute, read only by
+`ui/modules/agentic/` to place "Draft a plan" under the card. Nothing else on the page changes, and with
+`agentic.enabled` off the planner module sends no request.
+
+**What is needed.** Nothing; this is a record.
+
+### 2026-10-11 — plan-k M139 (on main) → Phase 3a (owner of `engine/generative/contracts.py` and `configs/prompts/`): two purposes and two prompts (announcement)
+
+**What changed** (DEC-1406 (c), (m); additive): `GenerativePurpose.AGENT_PLANNER` and `AGENT_NARRATIVE`, beside M142's
+`DATA_AGENT_ASSIST`, so the planner's model calls are metered and reported by purpose; `configs/prompts/agent_planner.v1.md`
+and `agent_narrative.v1.md` (new, owned by M139). No existing member or prompt changed.
+
+**What is needed.** Nothing; this is an announcement.
+
+### 2026-10-11 — plan-k M139 (on main) → trunk (owner of `ui/index.html`) and Phase 4b / Plan D (owners of `engine/approvals.py`): the planner's script tag and one shared helper (record of edits)
+
+**What changed:** `ui/index.html`'s PLAN-K block gains the script tag for `ui/modules/agentic/index.js` (moved there
+from the builder's marked line at the end of the PLAN-J block). `engine/approvals.py` now calls
+`engine.agentic.ledger.holdout_commitment(tool_ctx, campaign_id)` (DEC-1406 (o)), the same body it had inline, so the
+approval of a test plan and the planner's EXECUTE write `test_plan.frozen` with one holdout commitment; the model
+decision path is unchanged. Inside Plan K (M132's files, additive): `check_contactable`'s output gains `held_back_rows`
+(left out while unknown), `submit_proposal` an optional `proposal_id` and `new_proposal_id()`, and
+`tests/agentic/test_proposal_routes.py`'s exact `/agentic` route set the three planner routes, beside M144's card.
+
+**What is needed.** Nothing; this is a record.
+
+### 2026-10-11 — plan-k M139 and M138 (on main) → Plan K owners: a new campaign-summary card kind must be planned or explained (announcement)
+
+**What changed** (DEC-1406, DEC-1403): M138 added the `harm_alarm` card kind to the campaigns' summary; M139's planner
+requires every `CardKind` to be either planned (`CARD_OBJECTIVES`) or explained (`NOTHING_TO_PLAN`), so
+`harm_alarm` joined `NOTHING_TO_PLAN` at integration ("A person decides whether to pause it"). A later milestone
+that adds a card kind to `engine/measurement/summary.py` adds it to one of the two in `engine/agentic/planner.py`
+(`tests/unit/agentic/test_planner.py::test_every_card_kind_is_either_planned_or_explained`).
+
+**What is needed.** Nothing; this is an announcement.
+
+### 2026-10-11 — plan-k M134 (on main) → Plan J (owners of M98's `engine/decide/treat_list.py` and M100's `engine/decide/catalogue.py`): the compliance gate inside the treat list build (record of in-place edits)
+
+**What changed** (DEC-1405 (a), (h), (j), (k), (m)): `build_treat_list` gains step 5c, which calls
+`engine.compliance.handoff.gate_treat_list` only when `compliance.gate.enabled` is on, after every treat flag, offer and
+channel is chosen and before anything is written; `TreatListSummary` gains six optional `compliance_*` fields, absent
+with the gate off. `_OfferChoice` gains `action_id` (the file's `offer_action_id`); `_Applied` gains `offered`,
+`explored` and `label`, all with defaults; `_apply_offer_choice` computes its counts with the shared helper
+`_offer_tallies`, and its output is unchanged. `ensure_treat_list` rebuilds a stored list only when the gate is on and
+the summary has no `compliance_rule_version` (`treat_list_awaits_gate`). Catalogue actions gain two optional fields,
+`dlt_template_text` and `message_text`, and a template with an unknown tag is refused when the catalogue loads. With the
+gate off the only change is that a build reads the switch (`configs/agentic/agentic.yaml`) and the gate's settings
+(`configs/compliance/compliance.yaml`); M98's golden is unchanged. The builder's integration markers were in these
+files, which have no PLAN-K block, so the code stays where it is, marked `PLAN-K (M134, DEC-1405)` or by its comment.
+M131's open item above (the consent-basis and region rules read from the process's config root, not the stamped one)
+is not closed by M134: the gate records the run's `consent_basis_rules_sha256` in its rule version but reads the
+region file from its own root.
+
+**What is needed.** Nothing; this is a record.
+
+### 2026-10-11 — plan-k M134 (on main) → trunk / Plan H (owners of `api/routes/runs.py`) and Phase 4b (owner of `api/access_policy.py`, `engine/privacy/layout.py` and `configs/privacy.yaml`): one more row-level run file, and a stored list gated before it is served (announcement and record of in-place edits)
+
+**What changed** (DEC-1405 (i), (m)): `compliance_decisions.parquet` (one row per customer and planned channel) is a
+row-level run artefact (`ROW_LEVEL_ARTEFACTS`, `_RUN_FILE_STORES` as `Store.SCORES`, `retention.row_level_run_artefacts`;
+Analyst); `compliance_decisions.json` (aggregate) is served beside it. `read_artefact` rebuilds `treat_list.csv`,
+`treat_list.parquet` and `treat_list_summary.json` when `treat_list_awaits_gate` says so (gate on, list not decided by
+the gate), and answers 409 with the code when the gate's configuration is refused (`CONFIG_INVALID`,
+`COMPLIANCE_SWITCH_MISPLACED`). With the gate off nothing is served differently.
+
+**What is needed.** Nothing; this is an announcement.
+
+### 2026-10-11 — plan-k M134 (on main) → Plan K M130's switch file (`configs/agentic/agentic.yaml`, `engine/agentic/config.py`) and M132's ledger: `compliance.gate.enabled` is now read; two ledger body keys (record of in-place edits)
+
+**What changed** (DEC-1405 (a), (i)): `compliance.gate.enabled` is read by `engine.compliance.config.gate_enabled`, and
+the file's comment and the model's description say so. It is the gate's only switch: the builder's own `enabled` in
+`configs/compliance/compliance.yaml` was removed at integration, and one written there is refused with
+`COMPLIANCE_SWITCH_MISPLACED`. `engine.agentic.ledger.BODY_KEYS` gains `artefact_sha256` and `rule_version` (the gate's
+evidence label), beside M139's keys. `tests/unit/agentic/test_flags.py` is unchanged and still pins all three off.
+
+**What is needed.** Nothing; this is a record.
+
+### 2026-10-11 — plan-k M134 (on main) → Plan E (owner of `configs/pilot/help.yaml`): seven codes and one updated entry (announcement)
+
+**What changed:** `COMPLIANCE_CONSENT`, `COMPLIANCE_WHATSAPP_NO_OPT_IN`, `COMPLIANCE_TEMPLATE_MISMATCH`,
+`COMPLIANCE_URL_NOT_WHITELISTED`, `COMPLIANCE_NO_CHANNEL`, `COMPLIANCE_CATALOGUE_CHANGED` and
+`COMPLIANCE_SWITCH_MISPLACED` join `PLAN_K_CODES` with entries; `CONFIG_INVALID`'s entry now names
+`configs/compliance/compliance.yaml`.
+
+**What is needed.** Nothing; this is an announcement.
+
+### 2026-10-11 — plan-k M134 (on main) → Plan K M140 (message variants): per-variant copy must reach the gate's message checks (request)
+
+**What is needed.** The gate checks one approved `message_text` per catalogue action. Per-channel or per-variant copy
+has to reach `engine.compliance.handoff.message_checks` keyed by (action, channel) for its DLT and URL checks to apply,
+including the bare-host link rule (`engine.compliance.urls.find_links`).
+
+### 2026-10-11 — plan-k M140 (on main) → Plan J (owners of `engine/decide/`, `engine/measurement/` and `api/routes/decide.py`): message variants as arms in the treat list, the campaign and arbitration (record of additive, opt-in edits)
+
+**What changed** (DEC-1407 (e), (f), (h)–(j)): (1) `engine/decide/treat_list.py` calls
+`variant_treat_list_columns(..., config_root=...)` as step 5d, after M134's gate; it returns None unless the run has
+variant arms in force, so the default list is byte for byte the same, and `TreatListSummary` gains `variant_arm_counts`
+and `variant_note`, absent otherwise. (2) `engine/measurement/cycle.py` `open_campaign` passes `scope_keys` and arm labels
+only for a run with arms in force; `measure_recorded` adds the several-arm arguments only for a yes/no outcome with no
+covariate (a column or M135's `run_score`). (3) `POST /decide/arbitrate` refuses a run whose arms are in force with 409
+`VARIANT_ARMS_NOT_ARBITRATED`; other runs are unaffected. (4) `engine/decide/catalogue.py` `channel_contact_costs` skips
+actions whose `template_ref` starts with `copy:`. `engine/pilot/proof.py` (Plan E / M104) gains the "Message" table
+beside M136's Estimated block.
+
+**What is needed.** Nothing; this is a record.
+
+### 2026-10-11 — plan-k M140 (on main) → Phase 3a (owner of `engine/config.py` `GenerativeConfig` and `api/routes/generative.py`): one in-place field, one route and the arms set aside when the copy changes (record of in-place edits)
+
+**What changed** (DEC-1407 (a), (f)): `GenerativeConfig.variant_arms: bool = False`, left out of a dump while off,
+declared in place (listed in `docs/plans/MARKETING_AI_PLAN_J_LAYER.md` §3.5, and noted in `engine/config.py`'s PLAN-K
+block). `POST /runs/{id}/campaign-copy/templates/{tid}/regenerate` calls `set_aside_variant_arms(only_if_stale=True)`
+after writing the batch, and the campaign-copy job calls `set_aside_variant_arms` after a successful generation
+(failures are logged and do not fail the job); both are no-ops for a run without `variant_arms.*`. New route
+`POST /runs/{run_id}/campaign-copy/variant-arms` (also in `tests/integration/test_api_config.py`'s path set).
+
+**What is needed.** Nothing; this is a record.
+
+### 2026-10-11 — plan-k M140 (on main) → trunk / Plan H (owners of `api/routes/runs.py`) and Phase 4b (owner of `api/access_policy.py`, `engine/privacy/layout.py` and `configs/privacy.yaml`): one more row-level run file (announcement and record of in-place edits)
+
+**What changed** (DEC-1407 (e)): `variant_arms.parquet` (key, the group the copy was written for, the arm) is a row-level
+run artefact (`ROW_LEVEL_ARTEFACTS`, `Store.SCORES`, `retention.row_level_run_artefacts`; Analyst), served with its
+aggregate `variant_arms.json`, beside M134's `compliance_decisions.*`.
+
+**What is needed.** Nothing; this is an announcement.
+
+### 2026-10-11 — plan-k M140 (on main) → Plan E (owner of `configs/pilot/help.yaml`): four codes (announcement)
+
+**What changed:** `VARIANT_TEMPLATE_UNREGISTERED`, `VARIANT_ACTION_MISSING`, `VARIANT_ARMS_NOT_MADE` and
+`VARIANT_ARMS_NOT_ARBITRATED` join `PLAN_K_CODES` with entries.
+
+**What is needed.** Nothing; this is an announcement.
+
+### 2026-10-11 — plan-k M143 (on main) → protocol owner (frozen `engine/stages/train.py`): the `foundation` strategy loads no foundation model (request)
+
+**What is needed** (DEC-1410 (e)): when `model_search.strategy` is `foundation`, `autogluon_fit_kwargs` should pass the
+preset's portfolio (`get_hyperparameter_config("commercial_2026_08_05")`, each key checked by
+`ModelLicences.check_model_key` from `engine/agentic/model_licences.py`) in place of its per-family `hyperparameters`
+dict, and `num_bag_folds`, `num_stack_levels`, `auto_stack` and `dynamic_stacking` should stop overriding the preset for
+this strategy. Evidence: AutoGluon 1.6.3 lets explicit `hyperparameters` override a preset's portfolio; a 600-row fit
+with `presets="extreme_quality"` and `hyperparameters={"XGB": {}, "GBM": {}}` fitted only LightGBM, XGBoost and a
+weighted ensemble, and the slow test's leaderboard holds only the selected families.
+
+**What I did meanwhile.** `FOUNDATION_NOT_LOADED_WARNING` on every resolve that picks `foundation`; the slow test
+(`tests/unit/agentic/test_model_licences.py`) pins the warning and the absence of foundation models, so it fails when
+`train.py` changes, forcing the warning's removal and an update of `docs/LIBRARY.md` section 9.
+
+### 2026-10-11 — plan-k M143 (on main) → library owners (`library/journey.py`, `library/run_engine.py`): the benchmark needs `--override` on `journey` (request)
+
+**What is needed** (DEC-1410 (f)): a repeatable `--override path=value` on the `journey` subcommand reaching
+`run_journey(extra_risk_overrides=...)`, and the Hillstrom risk step's `model_search.candidates` lifted when the strategy
+is `foundation` (it is fixed to `fast` + `[LightGBM]` today). Only after this and the `train.py` request above can
+`foundation` and `balanced` be compared at equal budget; the weights also need Hugging Face access (blocked here) and
+ideally a GPU.
+
+**What I did meanwhile.** `docs/LIBRARY.md` section 9 says the comparison was not run, gives no command, and
+`foundation` is recommended nowhere.
+
+### 2026-10-11 — plan-k M143 (on main) → trunk (owner of `engine/config.py`, `configs/engine.yaml` and `docs/API.md`) and library-datasets (owner of `docs/LIBRARY.md`): the licence guard and one opt-in strategy (record of in-place edits)
+
+**What changed** (DEC-1410 (a)–(c), (g), (h)): in place in `engine/config.py`, outside any block: `Strategy.FOUNDATION`,
+its `CHOICE_LABELS` entry, the one-line opt-in filter in `_choices_for` (it keeps the configuration's current value), the
+opt-in exemption in `Catalog._complete`, and the calls to the licence check in `load_use_case` and `resolve_config` (the
+helpers and `_OPT_IN_CHOICES` are in the PLAN-K block). `configs/engine.yaml` gains
+`strategy_presets.foundation: extreme_quality` (listed in `docs/API.md`); a deployment's own `engine.yaml` without it
+still loads, and selecting `foundation` there is `CATALOG_INCOMPLETE`. `docs/LIBRARY.md` gains section 9 (the
+challenger, not run). New: `configs/agentic/model_licences.yaml`, `engine/agentic/model_licences.py`.
+
+**What is needed.** Nothing; this is a record.
+
+### 2026-10-11 — plan-k M143 (on main) → Plan E (owner of `configs/pilot/help.yaml`): one code (announcement)
+
+**What changed:** `MODEL_LICENCE_BLOCKED` joins `PLAN_K_CODES` with an entry.
+
+**What is needed.** Nothing; this is an announcement.
+
 ### 2026-09-23 — plan-e-pilot (on main) → all branches: every change Plan E made outside its own files and blocks
 
 **What is needed.** Nothing from anybody; this is the announcement §3 asks for. Measured with

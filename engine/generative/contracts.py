@@ -148,6 +148,11 @@ class GenerativePurpose(StrEnum):
     JUDGE_COMPLIANCE = "judge_compliance"
     JUDGE_TOXICITY = "judge_toxicity"
     DATA_AGENT = "data_agent"  # Plan G: one step of a use case's Guided-setup helper (DEC-1017)
+    DATA_AGENT_ASSIST = "data_agent_assist"  # Plan K M142: Guided setup's optional second opinions (DEC-1409)
+    # Plan K M139 (DEC-1406): the campaign planner. AGENT_PLANNER maps a goal typed in words onto
+    # enumerated choices; AGENT_NARRATIVE writes the structured, claim-checked narrative of a draft.
+    AGENT_PLANNER = "agent_planner"
+    AGENT_NARRATIVE = "agent_narrative"
 
 
 class GuardrailOutcome(StrEnum):

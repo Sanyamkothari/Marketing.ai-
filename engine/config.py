@@ -181,6 +181,7 @@ class Strategy(StrEnum):
     FAST = "fast"
     BALANCED = "balanced"
     EXHAUSTIVE = "exhaustive"
+    FOUNDATION = "foundation"  # Plan K M143 (DEC-1410): opt-in, never a default, not offered on the form
 
 
 class Imbalance(StrEnum):
@@ -408,6 +409,7 @@ CHOICE_LABELS: Final[Mapping[StrEnum, str]] = _ChoiceLabelMap(
         (Strategy.FAST, "Fast"),
         (Strategy.BALANCED, "Balanced"),
         (Strategy.EXHAUSTIVE, "Exhaustive"),
+        (Strategy.FOUNDATION, "Foundation models (opt-in)"),
         (Imbalance.AUTO, "Auto"),
         (Imbalance.CLASS_WEIGHTS, "Class weights"),
         (Imbalance.OVERSAMPLING, "Oversampling (SMOTE)"),
@@ -514,7 +516,9 @@ class Catalog(_Base):
     def _complete(self) -> Self:
         for block, members in (
             ("model_families", tuple(ModelFamily)),
-            ("strategy_presets", tuple(Strategy)),
+            # An opt-in strategy may be missing from a deployment's own engine.yaml (DEC-1410 (g)): the
+            # root loads as before, and a run that picks it is refused by `validate_model_licences`.
+            ("strategy_presets", tuple(m for m in Strategy if m not in _OPT_IN_CHOICES)),
             ("metrics", tuple(Metric)),
             ("problem_types", tuple(ProblemType)),
             ("ai_types", tuple(AiType)),
@@ -1127,6 +1131,14 @@ class GenerativeConfig(_Base):
     reference_set: ReferenceSetConfig = ReferenceSetConfig()
     root_cause: RootCauseConfig = RootCauseConfig()
     campaign_copy: CampaignCopyConfig = CampaignCopyConfig()
+    variant_arms: bool = Field(
+        default=False,
+        exclude_if=lambda value: not value,
+        description=(
+            "Plan K M140 (DEC-1407): approved copy variants become randomised, measured arms of the treat list "
+            "(`engine.decide.variant_arms`). Off by default and left out of a dump while off."
+        ),
+    )
 
     @property
     def enabled(self) -> bool:
@@ -1723,6 +1735,7 @@ def load_use_case(use_case_id: str, root: Path | None = None) -> UseCaseConfig:
     config = _validate_use_case(document, catalog=get_catalog(root))
     check_dependencies(config)
     _plan_j_validate_action_ids(config, root)  # Plan J M99 (DEC-1309): in place
+    _plan_k_validate_model_licences(config, root)  # Plan K M143 (DEC-1410): in place
     return config
 
 
@@ -2102,6 +2115,8 @@ def resolve_config(
     final = _validate_use_case(document, catalog=catalog)
     check_dependencies(final)
     _plan_j_validate_action_ids(final, root)  # Plan J M99 (DEC-1309): in place
+    _plan_k_validate_model_licences(final, root)  # Plan K M143 (DEC-1410): in place
+    warnings.extend(_plan_k_foundation_warnings(final))  # Plan K M143: says what `foundation` does today
     if final.split.type is SplitType.TIME_BASED and final.split.time_column is None:
         warnings.append("split.type is time_based and no time column is set yet")
     return ResolvedConfig(
@@ -3007,7 +3022,12 @@ def _choices_for(
     enum_type = _ENUM_FOR_PATH.get(field.path)
     if enum_type is None:
         return None
-    return tuple(FieldChoice(value=member.value, label=CHOICE_LABELS[member]) for member in enum_type)
+    current = _resolve_config_path(config, field.path, "SCHEMA_UNKNOWN_PATH")
+    return tuple(
+        FieldChoice(value=member.value, label=CHOICE_LABELS[member])
+        for member in enum_type
+        if member not in _OPT_IN_CHOICES or member == current  # an opt-in value stays shown once chosen
+    )
 
 
 def advanced_settings_schema(
@@ -3904,4 +3924,31 @@ def _plan_j_validate_action_ids(config: UseCaseConfig, root: Path | None) -> Non
 # ---- PLAN-L (data doctor) — append only below this line ----
 # ---- END PLAN-L ----
 # ---- PLAN-K (agents that check) — append only below this line ----
+# Plan K M140 (DEC-1407): `GenerativeConfig.variant_arms` is the one in-place edit: a model field cannot live in a
+# block, so it is declared on the model, off by default and left out of a dump while off (as M99's in-place fields
+# are). It is listed in the register of in-place declarations (docs/plans/MARKETING_AI_PLAN_J_LAYER.md §3.5).
+#
+# Plan K M143 (DEC-1410): the model licence guard and the opt-in `foundation` strategy. `Strategy.FOUNDATION`, its
+# label, the opt-in filter in `_choices_for`, the exemption in `Catalog._complete` and the two call sites in
+# `load_use_case` and `resolve_config` are in place; the guard itself is `engine/agentic/model_licences.py`.
+_OPT_IN_CHOICES: Final[frozenset[StrEnum]] = frozenset({Strategy.FOUNDATION})
+"""Enum members a run may select by override or use-case file but the form and the setup helper never
+offer (unless the config already holds one): unproven options stay out of a non-technical person's list
+(Plan K M143, DEC-1410). Read only at call time, so it sits in this block, after the models that use it."""
+
+
+def _plan_k_validate_model_licences(config: UseCaseConfig, root: Path | None) -> None:
+    """Plan K M143 (DEC-1410): refuse a strategy or algorithm whose licence bars commercial use."""
+    from engine.agentic.model_licences import validate_model_licences  # it imports this module
+
+    validate_model_licences(config, root)
+
+
+def _plan_k_foundation_warnings(config: UseCaseConfig) -> tuple[str, ...]:
+    """Plan K M143 (DEC-1410): the plain warning a run that picks `foundation` carries, else nothing."""
+    from engine.agentic.model_licences import foundation_warnings  # it imports this module
+
+    return foundation_warnings(config)
+
+
 # ---- END PLAN-K ----

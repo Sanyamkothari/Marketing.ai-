@@ -42,6 +42,7 @@ import { takeHandoff } from "../doctor/handoff.js";
 import {
   postAnswer,
   postApply,
+  postAssist,
   postDecisions,
   postEdit,
   postMessage,
@@ -101,6 +102,8 @@ function fresh() {
     draft: "",
     asking: "",
     chatError: null,
+    assistError: null,
+    assistOff: false,
   };
 }
 
@@ -358,13 +361,32 @@ function treatmentHtml(g, closed) {
   return `<section class="ag-group" data-ag-memory><h4>Seen before</h4><p class="ag-cap">${esc(offer.sentence)}</p>${button}</section>`;
 }
 
+/** A stopped session's non-blocking questions (a lapse-outcome draft): read-only, because no answer changes anything. */
+function stoppedQuestionsHtml(session) {
+  const shown = (session.questions || []).filter((q) => !q.blocking);
+  if (!shown.length) return "";
+  return `<div class="ag-drafts" data-ag-drafts>${shown
+    .map(
+      (q) =>
+        `<div class="ag-q" data-ag-q="${esc(q.question_id)}"><div class="ag-qt">${esc(q.text)}</div><ul class="ag-draftopts">${(
+          q.options || []
+        )
+          .map(
+            (o) =>
+              `<li><span>${esc(o.label)}</span>${o.effect ? `<span class="ag-eff">${esc(o.effect)}</span>` : ""}</li>`,
+          )
+          .join("")}</ul></div>`,
+    )
+    .join("")}</div>`;
+}
+
 function stopHtml(entry, n) {
   const session = entry.state.session;
   return step(
     n,
     "This data cannot be used as it is",
     false,
-    `<div class="ag-stop" role="status" data-ag-stop><p class="ag-lead">${esc(dash(session.stop_reason))}</p>${changesHtml(
+    `<div class="ag-stop" role="status" data-ag-stop><p class="ag-lead">${esc(dash(session.stop_reason))}</p>${stoppedQuestionsHtml(session)}${changesHtml(
       entry.state,
       false,
     )}${
@@ -512,6 +534,16 @@ function actionsHtml(entry) {
   )}</span></div>`;
 }
 
+/** "Second opinion" (M142): the optional AI look at the columns; shown only when an AI service is connected. */
+function assistHtml(g, closed) {
+  if (closed || chatOff(g) || g.assistOff) return "";
+  return `<div class="btn-row ag-assist"><button type="button" class="btn secondary sm" id="ag-assist"${
+    g.busy ? " disabled" : ""
+  }>${esc(g.busy === "assist" ? "Asking…" : "Second opinion")}</button><span class="ag-note">The AI service may reorder the columns the rules found and add questions about columns that may be recorded after the outcome. It ticks nothing.</span></div>${
+    g.assistError ? errorBox(g.assistError) : ""
+  }`;
+}
+
 function mainHtml(entry) {
   const g = entry.state;
   const score = entry.mode === "score";
@@ -534,7 +566,7 @@ function mainHtml(entry) {
     two,
     fixes,
     closed,
-    `<p class="ag-lead">Ticked suggestions are applied when you approve. Untick any you do not want; the ones marked “Please check” need your eye.</p>${checklistHtml(
+    `<p class="ag-lead">Ticked suggestions are applied when you approve. Untick any you do not want; the ones marked “Please check” need your eye.</p>${assistHtml(g, closed)}${checklistHtml(
       g,
       closed,
     )}${score || closed ? "" : editorHtml(g.editor, { disabled: Boolean(g.busy) })}`,
@@ -692,6 +724,30 @@ async function answerQuestion(entry, questionId, optionId) {
     g.report = null;
   } catch (error) {
     g.actionError = error;
+  }
+  g.busy = "";
+  draw(entry);
+}
+
+async function secondOpinion(entry) {
+  const g = entry.state;
+  if (g.busy) return;
+  g.busy = "assist";
+  g.assistError = null;
+  draw(entry);
+  try {
+    await syncDecisions(entry);
+    adopt(g, await postAssist(g.upload.upload_id));
+    g.preview = null;
+    g.report = null;
+  } catch (error) {
+    if (error && error.code === "AI_NOT_CONNECTED") {
+      g.chat = { ...(g.chat || {}), available: false, reason: "AI_NOT_CONNECTED" };
+    } else if (error && error.code === "AGENTIC_DISABLED") {
+      g.assistOff = true; // Plan K is off on this deployment (DEC-1409 (g)): the button goes, the session is as it was
+    } else {
+      g.assistError = error;
+    }
   }
   g.busy = "";
   draw(entry);
@@ -992,6 +1048,7 @@ function bind(entry) {
     if (element) element.addEventListener("click", fn);
   };
   on(main, "ag-preview", () => preview(entry));
+  on(main, "ag-assist", () => secondOpinion(entry));
   on(main, "ag-approve", () => approve(entry));
   on(main, "ag-fill", () => fill(entry));
   on(main, "ag-restart", () => restart(entry));

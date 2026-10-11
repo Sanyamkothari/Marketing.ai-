@@ -28,8 +28,13 @@ Key                                     Written by                             D
                                         and `contact` `.parquet`)
 `campaigns/<id>/segment_effects.json`,  `api/routes/campaigns.py`,             aggregate: no customer id,
 `.../suppression_proposals.json`,       `api/routes/pilot.py` (Plan J M104;    kept with the report; the
-`.../pilot_roi_inputs.json`             the value inputs: `engine.pilot.       value inputs name who
-                                        proof.save_campaign_value_inputs`)     entered them
+`.../pilot_roi_inputs.json`,            the value inputs: `engine.pilot.       value inputs name who
+`.../harm_alarm.json`                   proof.save_campaign_value_inputs`;     entered them
+                                        Plan K M138: `engine.measurement.
+                                        harm`)
+`.../pooled_estimate.json`              `engine/measurement/pooling.py` (Plan  aggregate: estimates and
+                                        K M136: the Estimated figure)          campaign ids, no customer
+                                                                               id; kept with the report
 `doctor_memory/<use case>/<shape>.json` `api/routes/agent.py` on Approve        `remembered_at`; column
                                         (Plan L M159, `engine.doctor.memory`)  names and ids, no rows
 ======================================  =====================================  =========================
@@ -121,10 +126,11 @@ _RUN_FILE_STORES: Final[dict[str, Store]] = {
     "arbitrated_treat_list.parquet": Store.SCORES,
     # Plan J M100 part B: the offer chosen per row, keyed like `scores.*` by the run's own primary key.
     "offer_choice.parquet": Store.SCORES,
-    # PLAN-K (M134): move into the PLAN-K block at integration
     # Plan K M134: the compliance gate's decision per customer and planned channel, keyed like `scores.*` by the
     # run's own primary key (written as text, as the treat list writes it).
     "compliance_decisions.parquet": Store.SCORES,
+    # Plan K M140 (DEC-1407): the message arm drawn per customer, keyed like `scores.*` by the primary key.
+    "variant_arms.parquet": Store.SCORES,
 }
 
 _ROW_KEYS: Final[dict[str, tuple[str, ...]]] = {

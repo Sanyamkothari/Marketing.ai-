@@ -1,13 +1,12 @@
-# The verifier over MCP (Plan K M133, DEC-1404; docs/AGENTIC.md §8).
+# The verifier over MCP (Plan K M133, DEC-1404; docs/AGENTIC.md §8): what the server does once it is on.
 #
-# mcp.enabled: mount the MCP server at /mcp (streamable HTTP, stateless). Off - the default - nothing is
-# mounted, the MCP SDK is never imported and every response is byte-identical to Plan J's. The server is a
-# front to the agent-safe core, so agentic.enabled (agentic.yaml) must be on as well: with it off every tool
-# call is refused with AGENTIC_DISABLED. Sign-in is required (MARKETING_AI_AUTH_MODE=local): with sign-in
-# off the endpoint answers 503 AUTH_NOT_CONFIGURED.
+# The switch is NOT here: it is mcp.enabled in configs/agentic/agentic.yaml, beside agentic.enabled (Plan K's
+# three switches live in that one file, DEC-1400 (d)). Off - the default - nothing is mounted at /mcp, the MCP
+# SDK is never imported, this file is not read and every response is byte-identical to Plan J's. The server is
+# a front to the agent-safe core, so agentic.enabled must be on as well: with it off every tool call is refused
+# with AGENTIC_DISABLED. Sign-in is required (MARKETING_AI_AUTH_MODE=local): with sign-in off the endpoint
+# answers 503 AUTH_NOT_CONFIGURED.
 mcp:
-  enabled: false
-
   # demo (M133): the demo library only; anything else asked about is refused with MCP_DEMO_ONLY.
   # clients (M141, DEC-1408): client data, one workspace per client (`workspaces` below); every sign-in reaches
   # exactly one workspace and anything outside it is refused with MCP_WORKSPACE_DENIED. Any other value is

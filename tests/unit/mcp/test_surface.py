@@ -112,9 +112,7 @@ def _verifier(tmp_path: Path, *, disabled: bool = False, concurrent: int = 2) ->
             clock=lambda: datetime(2026, 10, 10, tzinfo=UTC),
         )
 
-    settings = McpSettings(
-        enabled=True, call_timeout_seconds=0.5, rate_limit=RateLimit(concurrent_calls=concurrent)
-    )
+    settings = McpSettings(call_timeout_seconds=0.5, rate_limit=RateLimit(concurrent_calls=concurrent))
     return Verifier(
         registry=_registry(),
         settings=settings,

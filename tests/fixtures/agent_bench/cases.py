@@ -15,10 +15,12 @@ from typing import Any, Final
 import pandas as pd
 
 from engine.agent.advisor import Advice, advise
+from tests.fixtures.agent_bench.make_hinglish import CASES as HINGLISH_CASES
+from tests.fixtures.agent_bench.make_hinglish import hinglish_frame
 from tests.fixtures.agent_bench.make_messy import messy_frame
 from tests.fixtures.agent_bench.make_multirow import multirow_frame
 from tests.fixtures.make_data import GenerationSpec, generate
-from tests.unit.agent.helpers import context_for
+from tests.unit.agent.helpers import context_for, header_help_context
 
 EXPECTED: Final[Path] = Path(__file__).with_name("expected.json")
 USE_CASE: Final[str] = "targeted-advertisement"
@@ -58,6 +60,22 @@ def _real_ninety_nine() -> pd.DataFrame:
     return frame
 
 
+def _other_flags(column: str, rows: int = 2_000) -> pd.DataFrame:
+    """A file whose only two-valued columns are `column` and `other_flag`: neither is the use case's outcome.
+
+    The column's name shares one word with a long outcome name of the use case (`cash_back_flag` and
+    `won_back`), which must not make it the outcome (M142 review: a word of a name is not the name).
+    """
+    return pd.DataFrame(
+        {
+            "grahak_id": [f"G{i:05d}" for i in range(rows)],
+            column: [(i // 3) % 2 for i in range(rows)],
+            "other_flag": [(i // 5) % 2 for i in range(rows)],
+            "kul_kharch": [round(40 + (i * 37) % 3_960, 2) for i in range(rows)],
+        }
+    )
+
+
 CASES: Final[dict[str, Callable[[], pd.DataFrame]]] = {
     "messy": messy_frame,
     "clean": _variant("clean"),
@@ -87,7 +105,22 @@ CASES: Final[dict[str, Callable[[], pd.DataFrame]]] = {
     "multi_row_no_dates": lambda: multirow_frame(dates=False),
 }
 
+# Plan K M142 (DEC-1409): synthetic Indian-style exports with Hinglish and abbreviated headers. The advice
+# for each is pinned like any other case; `headers` (see `run_case`) pins what the header rules read.
+HINGLISH_PREFIX: Final[str] = "hinglish_"
+for _spec in HINGLISH_CASES:
+    CASES[HINGLISH_PREFIX + _spec.name] = lambda spec=_spec: hinglish_frame(spec)  # type: ignore[misc]
+
+# M142 review: words of the use case's long outcome names (`won_back`, `default_payment_next_month`,
+# `churn_next_60d`) are not outcome anchors one by one; each of these files must be asked, not proposed.
+CASES["other_use_case_cash_back"] = lambda: _other_flags("cash_back_flag")
+CASES["other_use_case_payment_reminder"] = lambda: _other_flags("payment_reminder_sent")
+CASES["other_use_case_next_bill"] = lambda: _other_flags("next_bill_flag")
+
 CASE_USE_CASES: Final[dict[str, str]] = {
+    "other_use_case_cash_back": "win-back-campaign",
+    "other_use_case_payment_reminder": "card-default-propensity",
+    "other_use_case_next_bill": "rca",
     "multi_row": "retail-win-back",
     "multi_row_one_date": "retail-win-back",
     "multi_row_no_dates": "retail-win-back",
@@ -121,8 +154,33 @@ def digest(advice: Advice) -> dict[str, Any]:
     }
 
 
-def run_case(name: str) -> dict[str, Any]:
-    return digest(advise(context_for(CASES[name](), CASE_USE_CASES.get(name, USE_CASE))))
+def header_reading(advice: Advice) -> dict[str, list[str]]:
+    """The columns the header rules listed for each role, best first (from the advice's own evidence)."""
+    roles = next(r for r in advice.tool_results if r.tool == "find_roles")
+    found: dict[str, list[str]] = {}
+    entries = roles.result.get("header_candidates")
+    for entry in entries if isinstance(entries, list) else []:
+        if isinstance(entry, dict):
+            found.setdefault(str(entry["kind"]), []).append(str(entry["column"]))
+    return found
+
+
+HEADER_HELP_CASES: Final[frozenset[str]] = frozenset(
+    name for name in CASES if name.startswith(HINGLISH_PREFIX) or name.startswith("other_use_case_")
+)
+"""M142's cases, run with Plan K's `agentic.enabled` on: its setup help reads headers only then (DEC-1409 (f)).
+Every other case runs with the shipped configuration (the switch off), as it did before M142."""
+
+
+def run_case(name: str, *, header_help: bool | None = None) -> dict[str, Any]:
+    """The digest of one case; `header_help` overrides whether it runs with M142's setup help on."""
+    on = name in HEADER_HELP_CASES if header_help is None else header_help
+    build = header_help_context if on else context_for
+    advice = advise(build(CASES[name](), CASE_USE_CASES.get(name, USE_CASE)))
+    result = digest(advice)
+    if name.startswith(HINGLISH_PREFIX):
+        result["headers"] = header_reading(advice)
+    return result
 
 
 def main() -> None:

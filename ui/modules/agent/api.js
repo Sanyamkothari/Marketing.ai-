@@ -65,6 +65,9 @@ export const postAnswer = (uploadId, questionId, optionId) =>
 /** One chat turn; the reply comes back in the session's transcript. */
 export const postMessage = (uploadId, text) => call(session(uploadId, "/messages"), { method: "POST", body: { text } });
 
+/** The optional second opinion on the columns and on possible leaks (M142): the session, in the same envelope. */
+export const postAssist = (uploadId) => call(session(uploadId, "/assist"), { method: "POST" });
+
 /** The first rows before and after the accepted steps: `{ columns_before, rows_before, columns_after, rows_after, receipt }`. */
 export const postPreview = (uploadId) => call(session(uploadId, "/preview"), { method: "POST" });
 

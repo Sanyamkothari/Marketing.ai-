@@ -53,8 +53,8 @@ retention:
     - arbitrated_treat_list.csv         # Plan J M101: one action per customer across use cases
     - arbitrated_treat_list.parquet     # Plan J M101
     - offer_choice.parquet              # Plan J M100: key, offer chosen, channel, net value, runner-up
-    # PLAN-K (M134): move into the PLAN-K block at integration
     - compliance_decisions.parquet      # Plan K M134: key, channel, allowed, reasons, refs, rule version
+    - variant_arms.parquet              # Plan K M140: key, the group the copy was written for, message arm
   # Plan J M94: a campaign's files that hold one row per customer (`campaigns/<id>/`). Deleted once the
   # campaign is older than its use case's governance.retention_days; its record and report are kept.
   row_level_campaign_artefacts:
@@ -66,6 +66,10 @@ retention:
   # (the groups an Analyst approved leaving out next cycle, with who and when) and pilot_roi_inputs.json (the
   # campaign's own value inputs, with the username that entered them). None holds a customer id; the Value
   # Proof Pack reads only them and the other aggregate files, never a row-level one.
+  # Plan K M136 adds pooled_estimate.json (the campaign's Estimated figure: estimates, ranges and the ids of the
+  # comparable campaigns), also aggregate, holding no customer id, and kept with the report like the files above.
+  # Plan K M138 adds harm_alarm.json (the latest harm check and every alarm under the plan in force: counts,
+  # differences and the statistic, no customer id), also aggregate and kept with the report likewise.
   # Aggregate reports that nevertheless carry a handful of example rows. They are kept, and the
   # listed fields are emptied instead: a list becomes empty, anything else becomes null. A path is
   # dotted; `*` stands for every element of a list.

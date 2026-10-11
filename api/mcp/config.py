@@ -1,8 +1,11 @@
-"""`configs/agentic/mcp.yaml`: the MCP switch and its limits (Plan K M133, DEC-1404 (a)).
+"""The MCP switch and `configs/agentic/mcp.yaml`, the server's settings (Plan K M133, DEC-1404 (a)).
 
-`mcp.enabled` is **off** by default. Off, `api.main` imports this module only - no MCP SDK, no tool, no route -
-and every response is byte-identical to Plan J's. A missing file is the default (off), so a configuration root
-from before M133 behaves as before.
+The switch is `mcp.enabled` in `configs/agentic/agentic.yaml`, one of Plan K's three switches (M130, DEC-1400 (d);
+read through `engine.agentic.config`), and is **off** by default. Off, `api.main` imports this module only - no MCP
+SDK, no tool, no route - and every response is byte-identical to Plan J's. `mcp.yaml` holds what the server does
+once it is on (the workspace, the demo use cases, the rate limits and the call timeout); a missing file is the
+defaults, so a configuration root from before M133 behaves as before. (The builder kept the switch in `mcp.yaml`
+too; at integration it was moved to the one place M130 declared it, so there is a single switch.)
 
 **Client workspaces (Plan K M141, DEC-1408 (a)).** `mcp.workspace: demo` (the default) is M133's server, on the
 demo library only. `mcp.workspace: clients` serves client data, scoped per client by `mcp.workspaces`: each
@@ -94,7 +97,6 @@ class TaskSettings(_Strict):
 
 
 class McpSettings(_Strict):
-    enabled: bool = Field(default=False, description="Mount the MCP server at /mcp.")
     workspace: str = Field(
         default=DEMO_WORKSPACE,
         min_length=1,
@@ -181,5 +183,13 @@ def load_mcp_config(config_root: Path | None = None) -> McpConfig:
 
 
 def mcp_enabled(config_root: Path | None = None) -> bool:
-    """Whether `mcp.enabled` is on under this configuration root."""
-    return load_mcp_config(config_root).mcp.enabled
+    """Whether `mcp.enabled` (`configs/agentic/agentic.yaml`) is on under this configuration root.
+
+    On, `mcp.yaml` is read as well, so an invalid settings file refuses the app at start-up (`CONFIG_INVALID`)
+    instead of at the first call."""
+    from engine.agentic.config import load_agentic_config
+
+    if not load_agentic_config(config_root).mcp.enabled:
+        return False
+    load_mcp_config(config_root)
+    return True

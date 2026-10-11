@@ -42,6 +42,7 @@ import pandas as pd
 import pytest
 import yaml
 
+from engine.agentic.config import AGENTIC_CONFIG_FILE
 from engine.agentic.ledger import EVIDENCE_LABEL, verify_ledger
 from engine.decide.treat_list import (
     TREAT_LIST_CSV,
@@ -66,6 +67,7 @@ from tests.integration.decide.test_channel_consent_real_run import (
     _score,
     world,
 )
+from tests.unit.compliance.switch import set_gate_switch
 
 pytestmark = pytest.mark.integration
 
@@ -89,11 +91,15 @@ actions:
     message_text: "{MESSAGE}"
 """
 WHITELIST = "channels: [sms]\nurls: [shop.example.in]\n"
-GATE_ON = "compliance:\n  gate:\n    enabled: true\n"
-GATE_OFF = "compliance:\n  gate:\n    enabled: false\n"
+GATE_ON = True
+GATE_OFF = False
+SETTINGS = "compliance:\n  gate:\n    opt_in_channels: [whatsapp]\n"
+"""The gate's settings file. Its switch is `compliance.gate.enabled` in `agentic.yaml` (DEC-1405 (a))."""
 
 
-def _root(source: Path, target: Path, *, gate: str | None, catalogue: str = CATALOGUE) -> Path:
+def _root(source: Path, target: Path, *, gate: bool | None, catalogue: str = CATALOGUE) -> Path:
+    """`gate`: the switch on or off, with the settings and whitelist files; None: neither the switch file nor
+    the settings (a configuration root from before Plan K)."""
     shutil.copytree(source, target)
     (target / "decide" / "catalogue.yaml").write_text(catalogue, encoding="utf-8")
     path = target / "use_cases" / "win_back_campaign.yaml"
@@ -102,10 +108,13 @@ def _root(source: Path, target: Path, *, gate: str | None, catalogue: str = CATA
     document.setdefault("uplift", {}).setdefault("policy", {})["treat_action_id"] = "winback_multi"
     path.write_text(yaml.safe_dump(document, sort_keys=False), encoding="utf-8")
     shutil.rmtree(target / "compliance")
-    if gate is not None:
+    if gate is None:
+        (target / AGENTIC_CONFIG_FILE).unlink()
+    else:
         (target / "compliance").mkdir()
-        (target / "compliance" / "compliance.yaml").write_text(gate, encoding="utf-8")
+        (target / "compliance" / "compliance.yaml").write_text(SETTINGS, encoding="utf-8")
         (target / "compliance" / "url_whitelist.yaml").write_text(WHITELIST, encoding="utf-8")
+        set_gate_switch(target, on=gate)
     return target
 
 

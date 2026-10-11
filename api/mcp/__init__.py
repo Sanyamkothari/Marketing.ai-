@@ -7,7 +7,7 @@ suppressed, every result schema-validated and gated for third-party text, and a 
 
 | Module | Does |
 |---|---|
-| `config` | `configs/agentic/mcp.yaml`: the switch (`mcp.enabled`, default off) and the limits. The only module `api.main` imports while the switch is off; it does not import the MCP SDK. |
+| `config` | the switch (`mcp.enabled` in `configs/agentic/agentic.yaml`, default off) and `configs/agentic/mcp.yaml`, the server's settings and limits. The only module `api.main` imports while the switch is off; it does not import the MCP SDK. |
 | `scopes` | `marketing-ai:read` (Viewer) and `marketing-ai:propose` (Analyst), the caller, the scope a tool needs. |
 | `demo` | The guard: only the demo library's runs and campaigns are served (`MCP_DEMO_ONLY`). |
 | `suppress` | Small-group suppression on every grouped output (minimum 10, Plan I's `rate_by` rule). |

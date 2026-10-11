@@ -62,6 +62,9 @@ from engine.agent.formats import (
     parse_dates,
     parse_numbers,
 )
+from engine.agent.headers import ROLES as HEADER_ROLES
+from engine.agent.headers import HeaderCandidate, HeaderLexiconError, rank_roles
+from engine.agent.label_drafts import draft_labels
 from engine.agent.placeholders import (
     MAX_PLACEHOLDER_VALUES,
     find_placeholder_values,
@@ -73,6 +76,7 @@ from engine.config import ConfigError, PrimaryKey, RunMode, UseCaseConfig, resol
 from engine.contracts import DatasetProfile, FeatureSchema
 from engine.pii import marker_for
 from engine.stages import validate
+from engine.utils.logging import get_logger
 from engine.utils.time import utc_now
 
 __all__ = [
@@ -82,7 +86,11 @@ __all__ = [
     "Tool",
     "ToolKind",
     "call_tool",
+    "header_help_on",
+    "tool_available",
 ]
+
+_LOGGER = get_logger(__name__)
 
 MAX_BUCKETS: Final[int] = 12
 """Values `inspect_column` lists as top values, and buckets of the outcome rate."""
@@ -645,16 +653,130 @@ def _find_roles(ctx: AgentContext, _: NoArgs) -> dict[str, Any]:
             "empty": int(series.isna().sum()),
         }
 
-    return {
+    # M142 (DEC-1409): abbreviated and romanised-Hindi headers, read by `engine.agent.headers`. The use case's
+    # own hints come first in each list; a header-read column is added after them when the rules rate it
+    # `medium` or better, and the whole short list per role is in `header_candidates`. Only with Plan K's
+    # `agentic.enabled` on (`header_help_on`): off, nothing is read and the result is what it was before M142.
+    reading = header_help_on(ctx)
+    ranked: dict[str, tuple[HeaderCandidate, ...]] = dict.fromkeys(HEADER_ROLES, ())
+    if reading:
+        try:
+            ranked = rank_roles(
+                ctx.profile.columns,
+                rows=ctx.profile.row_count,
+                extra_anchors={"outcome": [w for w in (configured, *hints.target_synonyms) if w]},
+                root=ctx.config_root,
+            )
+        except HeaderLexiconError as exc:
+            # A lexicon an operator broke must not take Guided setup down: it works from the use case's hints.
+            _LOGGER.warning("header lexicon not used: %s", exc)
+
+    by_hints = {
+        "consent": [n for n in names if _name_matches(n, hints.consent)],
+        "opt_out": [n for n in names if _name_matches(n, hints.opt_out)],
+        "last_contact": [n for n in names if _name_matches(n, hints.recently_contacted)],
+    }
+
+    def hinted(role: str) -> list[str]:
+        found = by_hints[role]
+        read = [c.column for c in ranked[role] if c.confidence != HEADER_LOW]
+        return [*found, *(c for c in read if c not in found)]
+
+    found: dict[str, Any] = {
         "configured_target": configured,
         "target_exact": [outcome(n) for n in exact],
         "target_case_insensitive": [outcome(n) for n in folded],
         "target_by_synonym": [outcome(n) for n in synonyms],
         "primary_key_candidates": list(ctx.profile.primary_key_candidates),
         "time_column_candidates": list(ctx.profile.time_column_candidates),
-        "consent": [n for n in names if _name_matches(n, hints.consent)],
-        "opt_out": [n for n in names if _name_matches(n, hints.opt_out)],
-        "recently_contacted": [n for n in names if _name_matches(n, hints.recently_contacted)],
+        "consent": hinted("consent"),
+        "opt_out": hinted("opt_out"),
+        "recently_contacted": hinted("last_contact"),
+    }
+    if reading:
+        found["header_candidates"] = [
+            {
+                "kind": role,
+                "column": candidate.column,
+                "score": candidate.score,
+                "confidence": candidate.confidence,
+                "label": "reads as " + ", ".join(candidate.reads_as),
+                "hinted": candidate.column in by_hints.get(role, ()),
+            }
+            for role in HEADER_ROLES
+            for candidate in ranked[role]
+        ]
+    return found
+
+
+def header_help_on(ctx: AgentContext) -> bool:
+    """Whether M142's setup help for new sources is on: Plan K's `agentic.enabled` under the session's root.
+
+    Off (the default), Guided setup reads no header with the lexicon, drafts no lapse outcome and asks no mapping
+    question, `find_roles` has no `header_candidates` key and `draft_outcome_labels` is not a tool, so the advice,
+    the tool results and what is sent to an AI service are byte-identical to before M142 (DEC-1409 (f)). An
+    `agentic.yaml` that cannot be read leaves the help off and is logged: it never takes Guided setup down.
+    """
+    from engine.agentic.config import agentic_enabled
+    from engine.agentic.errors import AgenticError
+
+    try:
+        return agentic_enabled(ctx.config_root)
+    except AgenticError as exc:
+        _LOGGER.warning("setup help for new sources left off: %s", exc)
+        return False
+
+
+PLAN_K_TOOLS: Final[frozenset[str]] = frozenset({"draft_outcome_labels"})
+"""Tools that exist only while `header_help_on` (M142): off, each is an unknown tool, and the chat is not told of it."""
+
+
+def tool_available(ctx: AgentContext, name: str) -> bool:
+    """Whether `name` is a tool of this session: every tool, except M142's while Plan K is off."""
+    return name in TOOLS and (name not in PLAN_K_TOOLS or header_help_on(ctx))
+
+
+HEADER_LOW: Final[str] = "low"
+"""A header-read candidate rated this is shown in `header_candidates` only; the role lists skip it."""
+
+
+def _draft_outcome_labels(ctx: AgentContext, _: NoArgs) -> dict[str, Any]:
+    """Drafts of an outcome ("lapsed: no <activity> in N days, plus a grace period"), with example customers.
+
+    A file with no column for the outcome but a date of the customer's last activity can still be used if
+    the person says what the outcome is. The counts describe the past (customers that had already gone
+    quiet when the file was taken); the outcome itself has to be recorded after the date the file describes.
+    Nothing is changed and nothing is ticked: this is the evidence behind a question (M93, DEC-1303 (d)).
+    """
+    try:
+        drafts = draft_labels(ctx.frame, ctx.profile.columns, root=ctx.config_root)
+    except HeaderLexiconError as exc:
+        _LOGGER.warning("header lexicon not used: %s", exc)
+        drafts = None
+    if drafts is None:
+        return {
+            "drafts": [],
+            "message": "The file has no date of a customer's last activity (a recharge, an order, a visit) to draft an outcome from.",
+        }
+    return {
+        "column": drafts.activity_column,
+        "activity": drafts.activity,
+        "reference_column": drafts.reference_column,
+        "reference_date": drafts.reference_date,
+        "rows": drafts.customers,
+        "label": f"A customer lapses when there is no {drafts.activity} in the window after the date the file describes.",
+        "drafts": [
+            {
+                "window_days": d.window_days,
+                "grace_days": d.grace_days,
+                "already_quiet": d.already_quiet,
+                "still_active": d.still_active,
+                "no_date": d.no_date,
+                "after_reference": d.after_reference,
+                "examples": [*d.quiet_examples, *d.active_examples],
+            }
+            for d in drafts.drafts
+        ],
     }
 
 
@@ -1670,6 +1792,13 @@ TOOLS: Final[Mapping[str, Tool]] = {
             _find_roles,
         ),
         Tool(
+            "draft_outcome_labels",
+            "When the file has no outcome column: drafts of a lapse outcome (no recharge or order in 30, 60 or 90 days, plus a grace period) with example customers.",
+            ToolKind.READ,
+            NoArgs,
+            _draft_outcome_labels,
+        ),
+        Tool(
             "describe_repeats",
             "How many rows each value of an ID column has: whether the file holds several rows per customer.",
             ToolKind.READ,
@@ -1772,7 +1901,7 @@ def call_tool(
 ) -> ToolResult:
     """Validate, run and record one tool call. Raises `AgentToolError` on refusal."""
     tool = TOOLS.get(name)
-    if tool is None:
+    if tool is None or (name in PLAN_K_TOOLS and not header_help_on(ctx)):
         raise AgentToolError("AGENT_TOOL_UNKNOWN", f"There is no tool called {name!r}.")
     try:
         parsed = tool.args_model.model_validate(dict(args or {}))

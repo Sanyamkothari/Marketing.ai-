@@ -668,12 +668,184 @@ codes:
     fix: "An Admin turns them on in configs/agentic/agentic.yaml if the deployment should use them."
   CONFIG_INVALID:
     title: "A settings file cannot be used"
-    meaning: "A settings file is missing, cannot be read, or has a value that is not allowed. Examples are a use case setting or the agent policy files under configs/agentic. The message names the file and the setting."
-    fix: "Correct the setting named, or restore the file, then try again."
+    meaning: "A settings file is missing, cannot be read, or has a value that is not allowed. Examples are a use case setting or the agent files under configs/agentic: agentic.yaml (Plan K's three switches, including mcp.enabled for the MCP server), policy.yaml (the agent policy) and mcp.yaml (the MCP server's workspace, demo use cases, rate limits and call timeout; min_group_rows is fixed at 10); and configs/compliance/compliance.yaml (the compliance gate's settings; its switch, compliance.gate.enabled, is in agentic.yaml). Unknown settings are refused, not ignored. The message names the file and the setting."
+    fix: "Correct the setting named, or restore the file, then try again. Removing mcp.yaml uses its defaults."
   RUN_NOT_FOUND:
     title: "There is no such run"
     meaning: "The run named does not exist, or it was recorded in another workspace."
     fix: "Open the run again from the Runs page, or check the run id."
+  # --- Plan K M136: Estimated figures pooled across comparable campaigns (DEC-1402 (e), (f)) -----------------------------
+  POOL_TOO_FEW:
+    title: "Not enough comparable campaigns to estimate"
+    meaning: "An Estimated figure draws a campaign's measured difference towards the average of comparable campaigns: the same use case, outcome and window, channels and offers, group of held-back customers and client, with groups chosen at random. That needs at least four of them with a final result, or more if configs/measurement.yaml sets min_campaigns higher; with three, the method cannot move the figure yet. Until there are enough, the campaign is shown only as measured. Nothing is wrong with the campaign."
+    fix: "Measure more comparable campaigns; the Estimated figure appears once there are enough."
+  POOL_NO_SPREAD:
+    title: "Comparable campaigns differ by no more than chance"
+    meaning: "A warning, not an error. The comparable campaigns' results differ by no more than chance explains, so each Estimated figure is drawn as far towards their average as the method allows ((k-3)/(k-1) of the way for k campaigns). This usually means there is too little data to tell the campaigns apart, not that their effects are equal. The measured figures, and the value proven to date, are unchanged."
+    fix: "Read the measured figures first. The Estimated figures become more telling as comparable campaigns gather more customers."
+  # --- Plan K M138: an early harm alarm, never an early win (DEC-1403 (f), (i)) -------------------------------------------
+  HARM_ALARM:
+    title: "This campaign may be doing harm"
+    meaning: "Before the day the campaign's test plan fixed for the final reading, the customers who were contacted are doing worse than the customers held back. The gap is larger than chance explains, even though the campaign is checked at every reading. This is an alarm, not a result, and nothing has been stopped. The result itself is still read only on the planned day. The alarm is checked only when harm_alarm.enabled is true in configs/measurement.yaml (it is off by default), and only for a campaign whose registered test plan gives a smallest effect worth detecting. A benefit never raises it."
+    fix: "Open the campaign and decide whether to pause it. If you go on, the final result is still read on the planned day."
+  # --- Plan K M133: the verifier over MCP, demo data only (DEC-1404) ------------------------------------------------------
+  MCP_DEMO_ONLY:
+    title: "The MCP server answers about the demo library only"
+    meaning: "Until client data is connected (M141), the MCP server at /mcp answers only about the demo library: the public datasets in library/ (for example Hillstrom) and generated data. It refused because the workspace is not 'demo', the request named another workspace, or the run or campaign asked about is not demo data. A run or upload counts as demo data when it was filed under one of mcp.demo_use_cases or marked as generated, and never when it belongs to an onboarded client. You get the same answer when the id names nothing, so the server never reveals which ids exist."
+    fix: "Ask about a demo run or campaign. To serve client data, wait for M141's per-client scoping; until then keep mcp.enabled off on a deployment that holds client data."
+  MCP_SCOPE_DENIED:
+    title: "This sign-in cannot use that MCP tool"
+    meaning: "Each MCP tool needs a scope, and the scope comes from the signed-in person's role. Every signed-in person holds marketing-ai:read. marketing-ai:propose, which drafts a test plan for a person to approve in the product, needs the Analyst role. No scope approves anything, and an Approver or Admin role adds no MCP scope."
+    fix: "Connect the client with the token of a person who has the role the tool needs, or use a read tool."
+  MCP_RATE_LIMITED:
+    title: "Too many MCP calls from this sign-in"
+    meaning: "Each signed-in session has a budget: mcp.rate_limit.calls_per_minute calls in any 60 seconds (60 by default) and mcp.rate_limit.concurrent_calls running at once (2 by default). This call went over one of them. The answer carries marketing-ai/retry_after_seconds. The limits are counted per API process."
+    fix: "Wait that long and call again, or make fewer calls at once."
+  MCP_TIMEOUT:
+    title: "The MCP tool took too long"
+    meaning: "A long tool (audit_campaign, or get_proof_pack, which draws the Value Proof Pack on request) runs while the client waits, because the MCP version in use has no way to hand back a job to collect later, and it is refused after mcp.call_timeout_seconds (120 seconds by default). Work that has been started cannot be stopped, so it keeps its place in the session's limit of calls at once until it ends."
+    fix: "Ask again later, ask a narrower question, or raise mcp.call_timeout_seconds in configs/agentic/mcp.yaml."
+  MCP_GROUP_TOO_SMALL:
+    title: "The campaign holds a group too small to show"
+    meaning: "No figure about a group of 1 to 9 customers is served over MCP (Plan I's small-group rule). This campaign has such a group in one of three places: its totals (contacted, held back or intended), one offer's group in its stored measurement, or one group in its results per group of customers. The Value Proof Pack prints those figures as text, which cannot be partly hidden, so measure, audit_campaign and get_proof_pack all refuse the campaign."
+    fix: "Nothing to do over MCP. A person with access can read the campaign in the product, where the usual rules apply."
+  MCP_RESULT_WITHHELD:
+    title: "The result held outside text in a field that must be filled"
+    meaning: "Results served over MCP pass a text check that withholds instruction-like text and masks personal data from outside the product. This result had such text in a field that must be filled, so withholding it left a result that is not complete, and the whole result was withheld."
+    fix: "Find the outside text (a column name, an offer's name or a file name) in the product and rename it, then ask again."
+  MCP_NOT_STARTED:
+    title: "The MCP server is not running yet"
+    meaning: "A request reached /mcp before the server had started with the app, or after it had stopped."
+    fix: "Try again in a moment. If it persists, check that the API started cleanly and that configs/agentic/mcp.yaml is valid."
+  MCP_TOOL_FAILED:
+    title: "An MCP tool failed inside the product"
+    meaning: "An unexpected fault happened inside the tool. Nothing was changed. The MCP client gets only this code, never the error's message. The failure is in the API log (tool name and error type) and in the audit log (mcp.tool_call, outcome failed)."
+    fix: "Look up the log line for the call. If the stored file the tool reads is damaged, run again the step that wrote it."
+  AUTH_REQUIRED:
+    title: "Sign in to do this"
+    meaning: "The request carried no valid signed-in session. An expired or signed-out token gets the same answer. For the MCP server at /mcp the answer is 401 with WWW-Authenticate: Bearer."
+    fix: "Sign in again. For the MCP server, get a token with POST /auth/login and send it as 'Authorization: Bearer <token>' on every request."
+  AUTH_NOT_CONFIGURED:
+    title: "Sign-in is switched off on this deployment"
+    meaning: "Some parts of the product never run without sign-in, and the MCP server at /mcp is one of them: it answers 503 while MARKETING_AI_AUTH_MODE=off, even on a laptop, and never acts as the local operator."
+    fix: "Set MARKETING_AI_AUTH_MODE=local (or the deployment's identity provider), create users and connect with a signed-in token."
+  # --- Plan K M144: the save-desk card, as a randomised pilot design (DEC-1411) -------------------------------------------
+  SAVE_DESK_NO_TREAT_LIST:
+    title: "This run's contact list has not been built yet"
+    meaning: "The save-desk card reads the run's contact list (treat list) and never builds it, because building one over a large file would slow the desk."
+    fix: "Open the run's Results page or its treat_list.csv once so the list is built, then ask for the card again."
+  SAVE_DESK_CUSTOMER_NOT_FOUND:
+    title: "That customer is not in this run's contact list"
+    meaning: "No row of this run's contact list has that key. The customer may have been erased, may not have been scored in this run, or the key may be written differently in the run (for example with a different number of leading zeros or another date format)."
+    fix: "Check the key against the run's own customer column, then ask again."
+  SAVE_DESK_KEY_INVALID:
+    title: "The customer key cannot be used for this run"
+    meaning: "The key is empty, longer than 200 characters, or has the wrong number of parts. A run identified by several columns (for example customer and date) takes the parts in the run's order, joined by a vertical bar. The message never repeats the key you typed."
+    fix: "Type the key again with one part for each of the run's key columns, in the run's order."
+  SAVE_DESK_KEY_AMBIGUOUS:
+    title: "More than one row has that key"
+    meaning: "The run's contact list has two or more rows with exactly that key, so no single customer can be shown and the card will not guess."
+    fix: "Ask the data owner to check the customer file for repeated keys and score again."
+  SAVE_DESK_RATE_LIMITED:
+    title: "Too many cards asked for in a minute"
+    meaning: "One signed-in person may ask for a limited number of save-desk cards per minute (configs/agentic/save_desk.yaml, rate_limit_per_minute, 30 by default). The card is for one customer in front of one agent; looking customers up in a loop is how a copy of the customer list is made."
+    fix: "Wait the number of seconds in the message and try again."
+  SAVE_DESK_NOT_IN_PILOT_ARM:
+    title: "You are not in the group given the card in this pilot"
+    meaning: "While a randomised pilot is active (configs/agentic/save_desk_pilot.yaml, status active), only the staff drawn in advance to have the card are served one, so that the comparison with staff working as usual stays fair. The draw is not redone during the pilot."
+    fix: "If you think you should be in the card group, ask the pilot owner."
+  # --- Plan K M139: the campaign planner and the claim checker (DEC-1406 (d), (a)) -------------------------------------
+  CLAIM_DIRECTION:
+    title: "A sentence said more than the numbers show"
+    meaning: "The AI service wrote a comparison or a trend that the measured range does not support (for example, that one group did better when the range of the difference includes zero, or the opposite of what was measured). Every sentence of a drafted plan's summary is checked against the numbers before anyone sees it, so this sentence was dropped. More than one failed sentence replaces the whole summary with the one the product writes by rules."
+    fix: "Nothing to do. Read the plan's figures, which come straight from the product; draft again if you want a new summary."
+  CLAIM_LABEL:
+    title: "A sentence gave a result the wrong kind of evidence"
+    meaning: "The AI service called a figure Causal, Estimated, Descriptive or Not proven when the product's own tool labelled it otherwise (only a randomised comparison is Causal). The sentence was dropped; more than one failed sentence replaces the summary with the one the product writes by rules."
+    fix: "Nothing to do. The label shown beside each figure is the product's own."
+  CLAIM_UNREFERENCED:
+    title: "A sentence pointed at something that is not there"
+    meaning: "The AI service's sentence named a figure, a place in a figure or a proposal that the plan's evidence does not hold, so it could not be checked and was dropped. More than one failed sentence replaces the summary with the one the product writes by rules."
+    fix: "Nothing to do; draft again if you want a new summary."
+  CLAIM_FREE_TEXT:
+    title: "A sentence put a number or a verdict in its own words"
+    meaning: "Every number in a plan's summary is filled in by the product from the evidence. This sentence's own words carried a number (also spelled out, such as 'twice' or 'a third'), a direction ('up', 'more', 'improve'), a cause or a certainty ('because', 'sure'), or failed the product's text checks, so it was dropped."
+    fix: "Nothing to do. The figures in the plan itself are the product's own."
+  CLAIM_MALFORMED:
+    title: "The AI service's summary could not be read"
+    meaning: "The AI service did not answer in the structured form the planner asks for, so none of its sentences could be checked. The plan's summary is the one the product writes by rules from the same evidence, as it is when no AI service is connected."
+    fix: "Nothing to do. If it happens often, check the AI service connection on the Settings page."
+  PLANNER_NO_CANDIDATE:
+    title: "No campaign can be planned yet"
+    meaning: "The planner found nothing it can draft: no finished scoring run of the use case without a campaign yet, no run that recorded how many customers were held back, no channel on which anyone may be contacted, a list judged not safe to roll out, a spend over the budget or one that cannot be checked against it, or a smallest effect given in points for an outcome measured as an amount. The message says which."
+    fix: "Do what the message names (for example score a new list, or set the channel's cost), then draft again."
+  PLANNER_NOTHING_TO_PLAN:
+    title: "This warning does not call for a new campaign"
+    meaning: "The warning card asks for waiting (an early look, a model not yet ready) or for a person's decision (drift, a campaign that did harm), not for a campaign the planner could draft. Nothing was drafted."
+    fix: "Follow the warning's own next step on the Results page."
+  PLANNER_CARD_NOT_FOUND:
+    title: "That warning is no longer on the Results page"
+    meaning: "The planner looks the warning up again on the server before drafting, and it is gone: the situation it described has changed since the page was drawn."
+    fix: "Reload the Results page and draft from a warning that is shown now."
+  PLANNER_NOT_FOUND:
+    title: "There is no such plan"
+    meaning: "No drafted campaign plan has that id, or it was recorded in another workspace."
+    fix: "Open the plan again from its warning card, or draft a new one."
+  PLANNER_GOAL_UNPARSED:
+    title: "The goal in words could not be matched to the form"
+    meaning: "The goal you typed was read by the AI service, but it could not be matched to the form's own choices (a use case, an objective, a channel) or a number in it could not be read, so nothing was drafted."
+    fix: "Fill in the form instead, or type the goal again naming the use case, the channel and any budget plainly."
+  # --- Plan K M134: the pre-send compliance gate (DEC-1405 (b), (h); the switch, (a)) --------------------------
+  COMPLIANCE_CONSENT:
+    title: "Not contactable on this channel"
+    meaning: "The compliance gate did not send this customer on this channel. The run's own channel_contactability.parquet says they cannot be contacted on it: an opt-out, no valid consent in the ledger, an inquiry consent past its validity, or a legacy consent not registered with the operators. The customer goes on the next planned channel the gate allows, else is not treated."
+    fix: "Fix the consent record, or plan another channel."
+  COMPLIANCE_WHATSAPP_NO_OPT_IN:
+    title: "No opt-in record on this channel"
+    meaning: "The channel is one of compliance.gate.opt_in_channels (WhatsApp by default). Such a channel needs a valid grant on that channel itself in the consent ledger. An all-channel grant is consent to be contacted, not an opt-in to the channel."
+    fix: "Import the customer's WhatsApp opt-in (a consent record with channel: whatsapp), or send on another channel."
+  COMPLIANCE_TEMPLATE_MISMATCH:
+    title: "Message is not the registered DLT template"
+    meaning: "The region requires a DLT template on this channel (for example SMS in India). The action's message_text is not its dlt_template_text with each {#var#}, {#numeric#}, {#alphanumeric#}, {#url#} or {#cbn#} slot filled by a value of that tag; a {#var#} value can be at most dlt_var_max_chars long, 30 by default."
+    fix: "Correct the message or register the new text, then update the catalogue."
+  COMPLIANCE_URL_NOT_WHITELISTED:
+    title: "A link is not on the URL whitelist"
+    meaning: "A link in the action's message_text is not on the client's whitelist (configs/compliance/url_whitelist.yaml, else the region file's url_whitelist block) for this channel. A link is an http(s):// or www. link, or a bare host such as deals-x.in/a, in the text or filling a {#var#} slot."
+    fix: "Add the host or prefix to the whitelist, or change the link. Text written with no space after a full stop (Dr.Smith) reads as a host: add the space."
+  COMPLIANCE_NO_CHANNEL:
+    title: "No planned channel to clear"
+    meaning: "The contact has no planned channel at all: neither the action's catalogue channels nor the use case's configured channels name one, so the gate has nothing to allow it on."
+    fix: "Give the action channels in the catalogue, or configure actions.suppression.channels."
+  COMPLIANCE_CATALOGUE_CHANGED:
+    title: "Catalogue changed since the run"
+    meaning: "configs/decide/catalogue.yaml is not the catalogue this scoring run ran under (catalogue_stamp.json), so no message can be tied to the run. The gate fails closed: every contact with a catalogue action is withheld."
+    fix: "Restore the catalogue the run used, or score again under the new one."
+  COMPLIANCE_SWITCH_MISPLACED:
+    title: "The compliance gate's switch is in the wrong file"
+    meaning: "configs/compliance/compliance.yaml sets compliance.gate.enabled, but that file holds only the gate's settings (the opt-in channels and the longest template value). The gate is turned on or off in configs/agentic/agentic.yaml, with Plan K's other switches. The setting is refused rather than ignored, so nobody believes they turned the gate on or off where it has no effect. No contact list is built until it is fixed."
+    fix: "Remove enabled from configs/compliance/compliance.yaml and set compliance: gate: enabled in configs/agentic/agentic.yaml."
+  # --- Plan K M140: message variants as measured arms (DEC-1407 (c), (g), (j)) ----------------------------------
+  VARIANT_TEMPLATE_UNREGISTERED:
+    title: "An SMS variant's words are not registered"
+    meaning: "A message variant can be tested on SMS only once its exact words are registered as a template. The variant has no action on sms in configs/decide/catalogue.yaml whose template_ref is the reference the message names (copy: followed by 16 characters) with a registered dlt_template_id (not empty, and not a placeholder such as <your DLT template id>)."
+    fix: "Add an action on sms to configs/decide/catalogue.yaml, set its template_ref to the reference the message names and its dlt_template_id to the registered template id, then draw the variant arms again."
+  VARIANT_ACTION_MISSING:
+    title: "A variant is not in the action catalogue"
+    meaning: "Every variant tested as an arm has to be entered in the action catalogue before it is sent, and this one is not."
+    fix: "Add an action on the variant's channel to configs/decide/catalogue.yaml, with template_ref set to the reference the message names. Then draw the variant arms again."
+  VARIANT_ARMS_NOT_MADE:
+    title: "No message variants were turned into arms"
+    meaning: "Variant arms were not drawn, and the treat list stays as it was; no arm file is kept. The message gives the reason: the use case does not set generative.variant_arms to true; the run is not a finished scoring run with campaign copy; it chose among several offers; fewer than two variants are approved for every group and channel the copy was written for; or the treat list cannot say which template a variant customer gets, because the copy covers several channels and the list names no channel for that customer."
+    fix: "Fix the cause the message names and draw the arms again."
+  VARIANT_ARMS_NOT_ARBITRATED:
+    title: "A run testing message variants is not arbitrated"
+    meaning: "This run is testing message variants as measured arms. Arbitration across use cases would drop which message each customer gets, so the run is refused here. Once the copy changes or generative.variant_arms is turned off, the arms are set aside and the run can be arbitrated again."
+    fix: "Send and measure that run's treat list on its own campaign, or arbitrate runs without variant arms."
+  # --- Plan K M143: the model licence guard (DEC-1410 (a)) --------------------------------------------------------
+  MODEL_LICENCE_BLOCKED:
+    title: "This model cannot be used for commercial work"
+    meaning: "The model search you picked would load a model whose licence does not allow commercial use, or one nobody has reviewed for it (configs/agentic/model_licences.yaml lists those that are cleared). Nothing was trained."
+    fix: "Choose Fast, Balanced or Exhaustive instead; they use only models cleared for commercial use. If you need the blocked model, ask the person who runs this system to review its licence and add it to the approved list first."
 
 settings:
   actions.bands[*].min_score:

@@ -48,10 +48,13 @@ POWER_BODY: Final[dict[str, Any]] = {
 def mcp_config_root(source: Path, target: Path, **mcp: Any) -> Path:
     """`configs/` with the agent-safe core and the MCP server switched on (and any `mcp:` setting given)."""
     shutil.copytree(source, target)
-    (target / "agentic" / "agentic.yaml").write_text("agentic:\n  enabled: true\n", encoding="utf-8")
+    # Both switches live in agentic.yaml (DEC-1400 (d)); mcp.yaml holds the server's settings.
+    (target / "agentic" / "agentic.yaml").write_text(
+        "agentic:\n  enabled: true\nmcp:\n  enabled: true\n", encoding="utf-8"
+    )
     path = target / "agentic" / "mcp.yaml"
     document = yaml.safe_load(path.read_text(encoding="utf-8"))
-    document["mcp"].update({"enabled": True, **mcp})
+    document["mcp"].update(mcp)
     path.write_text(yaml.safe_dump(document, sort_keys=False), encoding="utf-8")
     return target
 

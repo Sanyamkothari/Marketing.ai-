@@ -31,6 +31,22 @@ def upload_frame(client: TestClient, frame: Any, *, name: str = "outcomes.csv") 
 
 
 @pytest.fixture(scope="session")
+def planner_world(agentic_world: World, measured: str, tmp_path_factory: pytest.TempPathFactory) -> Any:
+    """Plan K M139: a copy of the world with the measured campaign and one more scoring run (no campaign)."""
+    from tests.agentic.scenarios.planner_world import planner_world as make
+
+    return make(agentic_world, measured, tmp_path_factory.mktemp("planner-world") / "data")
+
+
+@pytest.fixture
+def fresh_planner_world(agentic_world: World, measured: str, tmp_path: Path) -> Any:
+    """Plan K M139: a planner world of the test's own, for a test that approves (and so opens a campaign)."""
+    from tests.agentic.scenarios.planner_world import planner_world as make
+
+    return make(agentic_world, measured, tmp_path / "data")
+
+
+@pytest.fixture(scope="session")
 def measured(agentic_world: World) -> str:
     """A campaign of the world's run, every outcome in at once (a 0-day window), measured through the route."""
     world = agentic_world

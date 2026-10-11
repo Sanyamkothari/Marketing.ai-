@@ -335,8 +335,9 @@ PHASE_APP_HOOKS.append(_install_agentic)
 
 
 # Plan K M133 (DEC-1404): the verifier over MCP at /mcp, mounted only when `mcp.enabled` is on
-# (configs/agentic/mcp.yaml). Off - the default - only api.mcp.config (the switch reader) is imported: no
-# MCP SDK, no route, so every response is byte-identical to Plan J's.
+# (configs/agentic/agentic.yaml, the switch DEC-1400 (d) declared; its settings are in configs/agentic/mcp.yaml).
+# Off - the default - only api.mcp.config (the switch reader) is imported: no MCP SDK, no route, so every response
+# is byte-identical to Plan J's.
 def _install_mcp(app: FastAPI) -> None:
     from api.mcp.config import mcp_enabled
 
@@ -347,6 +348,20 @@ def _install_mcp(app: FastAPI) -> None:
 
 
 PHASE_APP_HOOKS.append(_install_mcp)
+
+
+# Plan K M144 (DEC-1411): POST /agentic/save-desk/card, the call-centre card (Analyst, audited, rate-limited),
+# mounted only when `agentic.enabled` is on, beside M132's routes. Off - the default - nothing is imported.
+def _install_save_desk(app: FastAPI) -> None:
+    from engine.agentic.config import agentic_enabled
+
+    if agentic_enabled(app.state.config_root):
+        from api.routes.agentic_save_desk import router as save_desk_router
+
+        app.include_router(save_desk_router)
+
+
+PHASE_APP_HOOKS.append(_install_save_desk)
 # ---- END PLAN-K ----
 
 app: FastAPI = create_app()

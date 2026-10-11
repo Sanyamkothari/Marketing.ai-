@@ -28,7 +28,7 @@ from engine.generative.budget import Meter
 from engine.generative.guardrails import Guardrails, load_policy
 from engine.llm import FakeLLMClient, FakeLLMMode, _helper_sections
 from engine.utils.time import utc_now
-from tests.unit.agent.helpers import context_for
+from tests.unit.agent.helpers import context_for, header_help_root
 
 EMAIL = "jane.roe@example.test"
 PHONE = "+91 98765 43210"
@@ -152,8 +152,14 @@ def canary_context(
     rows: int = 1_500,
     frame: pd.DataFrame | None = None,
 ) -> AgentContext:
-    """A context whose agent config has the given data-access mode and hidden columns, and room for a long chat."""
-    ctx = context_for(canary_frame(rows) if frame is None else frame, target="converted_30d")
+    """A context whose agent config has the given data-access mode and hidden columns, and room for a long chat.
+
+    It runs under a copy of the shipped configuration with Plan K's `agentic.enabled` on (`header_help_root`), so the
+    canary also reaches what M142 adds only then: the `header_candidates` key and the `draft_outcome_labels` tool
+    (DEC-1409 (f)). With the switch off those are absent and the rest is what the canary always covered."""
+    ctx = context_for(
+        canary_frame(rows) if frame is None else frame, target="converted_30d", config_root=header_help_root()
+    )
     agent = ctx.config.agent.model_copy(
         update={
             "ai_data_access": DataAccess(mode),

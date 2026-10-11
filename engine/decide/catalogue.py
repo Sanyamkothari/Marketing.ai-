@@ -119,7 +119,6 @@ class ActionItem(_Model):
         ),
     )
 
-    # PLAN-K (M134): move into the PLAN-K block at integration
     # Plan K M134 (DEC-1405): the registered DLT template's text and the approved message, read only by the
     # pre-send compliance gate (`engine.compliance`), only when `compliance.gate.enabled` is on. Unset - the
     # default - neither is serialised anywhere, and nothing else reads them.
@@ -225,9 +224,17 @@ class ActionCatalogue(_Model):
         return self.actions_by_id.get(action_id)
 
     def channel_contact_costs(self) -> dict[str, float]:
-        """Contact cost per channel: the first action (in file order) that lists the channel decides."""
+        """Contact cost per channel: the first action (in file order) that lists the channel decides.
+
+        An action that registers a copy variant (`template_ref` starting `copy:`, Plan K M140, DEC-1407) is
+        a wording of another action, not a channel's price, so it never decides a channel's cost.
+        """
+        from engine.decide.variant_arms import is_variant_template_ref
+
         costs: dict[str, float] = {}
         for action in self.actions:
+            if is_variant_template_ref(action.template_ref):
+                continue
             for channel in action.channels:
                 costs.setdefault(channel, action.contact_cost)
         return costs

@@ -22,10 +22,9 @@ actions:
     contact_cost: 0.0                       # rupees per contact - replace with the client's figure
     dlt_template_id: "<your DLT template id>"   # placeholder: refused until replaced
     message_category: promotional           # promotional | service | transactional
-    # PLAN-K (M134): move into the PLAN-K block at integration
-    # Plan K M134: read only when configs/compliance/compliance.yaml turns the pre-send gate on. The template as
-    # registered on the DLT portal (slots {#var#}, {#numeric#}, {#alphanumeric#}, {#url#}, {#cbn#}) and the
-    # approved message as sent; the gate checks the one against the other, and the message's links against
+    # Plan K M134: read only when compliance.gate.enabled (configs/agentic/agentic.yaml) turns the pre-send gate
+    # on. The template as registered on the DLT portal (slots {#var#}, {#numeric#}, {#alphanumeric#}, {#url#},
+    # {#cbn#}) and the approved message as sent; the gate checks the one against the other, and the message's links against
     # configs/compliance/url_whitelist.yaml. Leave both out and the gate records that they were not checked.
     # dlt_template_text: "Dear customer, get Rs {#numeric#} off. Shop at {#url#}"
     # message_text: "Dear customer, get Rs 200 off. Shop at https://shop.example.in/offers"

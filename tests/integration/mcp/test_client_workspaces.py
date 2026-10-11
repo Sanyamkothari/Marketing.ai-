@@ -457,10 +457,11 @@ def test_the_injection_canary_stays_green_on_client_data(world: ClientWorld) -> 
 def test_with_mcp_off_a_client_configuration_mounts_nothing(world: ClientWorld, tmp_path: Path) -> None:
     root = mcp_config_root(world.config_root, tmp_path / "configs")
     write_workspaces(root, world)
-    path = root / "agentic" / "mcp.yaml"
-    document = yaml.safe_load(path.read_text(encoding="utf-8"))
-    document["mcp"]["enabled"] = False
-    path.write_text(yaml.safe_dump(document, sort_keys=False), encoding="utf-8")
+    # The switch is mcp.enabled in agentic.yaml (DEC-1400 (d)); mcp.yaml keeps its client workspaces.
+    (root / "agentic" / "agentic.yaml").write_text(
+        "agentic:\n  enabled: true\nmcp:\n  enabled: false\n", encoding="utf-8"
+    )
+    assert yaml.safe_load((root / "agentic" / "mcp.yaml").read_text(encoding="utf-8"))["mcp"]["workspaces"]
     app = signed_in_app(root, world.data_dir)
     with TestClient(app) as client:
         response = client.post(

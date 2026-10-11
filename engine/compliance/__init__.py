@@ -16,7 +16,8 @@ rules) and adds the checks that are per message, not per customer:
 `engine.compliance.handoff` runs it for a treat list, writes `compliance_decisions.parquet` (a row-level
 artefact) and its summary, and puts the file's sha256 on the decision ledger as a signed evidence label.
 
-Off by default (`configs/compliance/compliance.yaml` `compliance.gate.enabled: false`): nothing here is
+Off by default (`compliance.gate.enabled: false` in `configs/agentic/agentic.yaml`, the gate's one switch; its
+settings are in `configs/compliance/compliance.yaml`): nothing here but the switch reader is
 imported by a treat list build and every treat list is byte for byte what it was. Modules import pandas,
 pyarrow and SQL drivers inside functions only, so `import engine` stays fast.
 """

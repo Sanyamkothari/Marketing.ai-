@@ -31,7 +31,7 @@ read tools on a campaign get the same answer, so none of them serves what anothe
 use case, and the library's derived files (the assignment and outcomes files `library.audit` builds) carry no
 recorded hash. Anyone allowed to upload could therefore file client data under a demo use case. The
 deployment's `mcp.workspace: demo` declares the whole deployment a demo one; a deployment that holds client
-data keeps `mcp.enabled` off until M141 scopes the server per client.
+data serves it with `mcp.workspace: clients` instead (M141, scoped per client: `api.mcp.workspace`).
 """
 
 from __future__ import annotations

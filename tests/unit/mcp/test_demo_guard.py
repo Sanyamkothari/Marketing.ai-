@@ -18,7 +18,7 @@ from engine.agentic.errors import AgenticError
 from engine.agentic.tools import default_registry
 from engine.storage import LocalStorage
 
-SETTINGS = McpSettings(enabled=True, demo_use_cases=("hillstrom-email",))
+SETTINGS = McpSettings(demo_use_cases=("hillstrom-email",))
 
 
 def _write(storage: LocalStorage, key: str, body: dict[str, Any]) -> None:
@@ -56,7 +56,7 @@ def test_only_the_demo_workspace_is_served() -> None:
     check_workspace(SETTINGS, {"marketing-ai/workspace": "demo"})
     for settings, meta in (
         (SETTINGS, {"marketing-ai/workspace": "acme"}),
-        (McpSettings(enabled=True, workspace="acme"), None),
+        (McpSettings(workspace="acme"), None),
     ):
         with pytest.raises(AgenticError) as caught:
             check_workspace(settings, meta)

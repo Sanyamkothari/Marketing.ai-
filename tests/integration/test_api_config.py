@@ -360,6 +360,8 @@ def test_openapi_builds_and_documents_every_route(client: TestClient) -> None:
         "/runs/{run_id}/campaign-copy/templates/{template_id}/approve",
         "/runs/{run_id}/campaign-copy/templates/{template_id}/regenerate",
         "/runs/{run_id}/copy_messages.csv",
+        # Plan K M140 (DEC-1407): approved message variants as randomised, measured arms
+        "/runs/{run_id}/campaign-copy/variant-arms",
         # Phase 3a: which AWS identity Bedrock is called as - chosen by name, never a key
         "/connection/aws",
         "/connection/aws/test",
@@ -533,6 +535,8 @@ def test_openapi_builds_and_documents_every_route(client: TestClient) -> None:
         # Plan L #16: a copy of next month's file with a renamed column given its old name (DEC-1597)
         "/uploads/{upload_id}/renamed-copy",
         "/privacy/consent/imports/from-connection",
+        # Plan K M142: the optional second opinion in Guided setup, 404 AGENTIC_DISABLED with Plan K off (DEC-1409)
+        "/uploads/{upload_id}/agent-session/assist",
     }
 
 

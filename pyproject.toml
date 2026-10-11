@@ -64,7 +64,12 @@ dependencies = [
   "pymysql==1.2.3",                     # the MySQL / MariaDB connector; pure Python
   # ---- END PLAN-G ----
   # ---- PLAN-J (product) — append only below this line ----
-  # PLAN-K (M133): move into the PLAN-K block at integration
+  # ---- END PLAN-J ----
+  # ---- PLAN-L (data doctor) — append only below this line ----
+  "openpyxl==3.1.5",                    # reads Excel workbooks (.xlsx, .xlsm) at intake; read-only streaming mode (DEC-1500)
+  "defusedxml==0.7.1",                  # openpyxl parses every workbook's XML through it when installed: no entities, no DTDs (DEC-1507)
+  # ---- END PLAN-L ----
+  # ---- PLAN-K (agents that check) — append only below this line ----
   # Plan K M133 (DEC-1404): the official MCP Python SDK for the verifier at /mcp (imported only when
   # mcp.enabled is on), and the packages it brought that nothing pinned before, at the versions uv resolved.
   "mcp==2.3.0",                         # the MCP server: streamable HTTP, stateless (2026-07-28)
@@ -79,12 +84,6 @@ dependencies = [
   "opentelemetry-api==1.45.1",          # the SDK's tracing hooks; a no-op without an exporter
   "pyjwt==2.15.1",                      # the SDK's auth helpers (crypto from the cryptography pin above)
   "sse-starlette==3.5.0",
-  # ---- END PLAN-J ----
-  # ---- PLAN-L (data doctor) — append only below this line ----
-  "openpyxl==3.1.5",                    # reads Excel workbooks (.xlsx, .xlsm) at intake; read-only streaming mode (DEC-1500)
-  "defusedxml==0.7.1",                  # openpyxl parses every workbook's XML through it when installed: no entities, no DTDs (DEC-1507)
-  # ---- END PLAN-L ----
-  # ---- PLAN-K (agents that check) — append only below this line ----
   # ---- END PLAN-K ----
 ]
 

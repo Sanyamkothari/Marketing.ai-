@@ -7,7 +7,8 @@ a scheduled job failed (`scheduled_job_failed`), and a due slot passed with noth
 (`schedule_missed`). Plan J M107 (DEC-1317) adds three of severity `info`, raised by the monthly loop's
 steps when they produce something a person acts on: a treat list ready to download (`treat_list_ready`),
 a campaign measured (`campaign_measured`), and a model learned from the last campaign waiting for an
-Approver (`challenger_waiting`).
+Approver (`challenger_waiting`). Plan K M138 (DEC-1403) adds one `warning`: a campaign's interim reading crossed
+the harm line of `engine.measurement.harm` (`harm_alarm`), raised once, when the alarm first fires.
 
 **An alert is written for a person reading an email (DEC-770).** `message` is business language -
 "The scheduled scoring for <use case> did not finish" - and it carries identifiers (the schedule, the
@@ -82,6 +83,8 @@ class AlertKind(StrEnum):
     TREAT_LIST_READY = "treat_list_ready"
     CAMPAIGN_MEASURED = "campaign_measured"
     CHALLENGER_WAITING = "challenger_waiting"
+    # Plan K M138 (DEC-1403): a campaign's interim reading crossed the harm line (`engine.measurement.harm`).
+    HARM_ALARM = "harm_alarm"
 
 
 Severity = Literal["info", "warning", "critical"]
@@ -94,10 +97,12 @@ SEVERITY_FOR: Final[dict[AlertKind, Severity]] = {
     AlertKind.TREAT_LIST_READY: "info",
     AlertKind.CAMPAIGN_MEASURED: "info",
     AlertKind.CHALLENGER_WAITING: "info",
+    AlertKind.HARM_ALARM: "warning",
 }
 """A failed job is critical - something the client expected did not happen; drift, a performance drop and
 missed runs are warnings - something to look at, and the product kept working; the monthly loop's steps
-(Plan J M107) are information - something was produced for a person to act on."""
+(Plan J M107) are information - something was produced for a person to act on. A harm alarm (Plan K M138) is a
+warning: a campaign may be hurting customers, and a person decides whether to pause it; nothing stops on its own."""
 
 _TITLES: Final[dict[AlertKind, str]] = {
     AlertKind.DRIFT_ABOVE_THRESHOLD: "Data drift above threshold",
@@ -107,6 +112,7 @@ _TITLES: Final[dict[AlertKind, str]] = {
     AlertKind.TREAT_LIST_READY: "Treat list ready",
     AlertKind.CAMPAIGN_MEASURED: "Campaign measured",
     AlertKind.CHALLENGER_WAITING: "New model waiting for approval",
+    AlertKind.HARM_ALARM: "A campaign may be doing harm",
 }
 
 

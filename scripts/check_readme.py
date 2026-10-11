@@ -569,6 +569,84 @@ MILESTONE_TESTS: Final[Mapping[str, tuple[str, ...]]] = {
         "tests/agentic/test_read_tools.py",
         "tests/unit/measurement/test_campaign_migration.py",
     ),
+    # M136 (DEC-1402), pooling across comparable campaigns. The nightly coverage test
+    # (tests/statistical/test_pooling_coverage.py, DEC-1300 (e)) is left out, as for M137. test_cycle_schedules.py is
+    # M107's file and gained the test that the measure firing hands the config root to pooling.
+    "M136": (
+        "tests/unit/measurement/test_pooling.py",
+        "tests/unit/measurement/test_pooling_summary.py",
+        "tests/unit/measurement/test_cycle_schedules.py",
+        "tests/integration/measurement/test_campaign_pooling.py",
+    ),
+    # M138 (DEC-1403), the early harm alarm. The nightly A/A and power test (tests/statistical/test_harm_alarm.py,
+    # DEC-1300 (e)) is left out, as for M137.
+    "M138": (
+        "tests/unit/measurement/test_harm_alarm.py",
+        "tests/integration/measurement/test_harm_alarm_loop.py",
+    ),
+    # M142 (DEC-1409), setup help for new sources. test_advisor.py is Plan G's benchmark test and pins M142's cases
+    # in expected.json; test_header_switch.py pins the agentic.enabled gate added at integration.
+    "M142": (
+        "tests/unit/agent/test_headers.py",
+        "tests/unit/agent/test_header_advice.py",
+        "tests/unit/agent/test_header_benchmark.py",
+        "tests/unit/agent/test_header_switch.py",
+        "tests/unit/agent/test_assist.py",
+        "tests/unit/agent/test_advisor.py",
+        "tests/integration/agent/test_assist_api.py",
+    ),
+    # M133 (DEC-1404), the verifier over MCP on demo data.
+    "M133": (
+        "tests/unit/mcp/",
+        "tests/integration/mcp/test_scripted_client.py",
+        "tests/integration/mcp/test_threats.py",
+        "tests/integration/mcp/test_small_groups.py",
+        "tests/integration/mcp/test_injection_canaries.py",
+    ),
+    # M144 (DEC-1411), the save-desk card as a randomised pilot design. test_proposal_routes.py is M132's exact
+    # /agentic route set, which gained the card's route.
+    "M144": (
+        "tests/unit/agentic/test_save_desk.py",
+        "tests/unit/agentic/test_save_desk_pilot.py",
+        "tests/agentic/test_save_desk.py",
+        "tests/agentic/test_proposal_routes.py",
+    ),
+    # M139 (DEC-1406), the campaign planner and the claim verifier. test_planner_hillstrom.py is a `slow` journey and
+    # is left out, as the fast suite leaves it out; test_proposal_routes.py is M132's exact route set, which gained
+    # the planner's routes.
+    "M139": (
+        "tests/unit/agentic/test_claims.py",
+        "tests/unit/agentic/test_planner.py",
+        "tests/agentic/test_planner_routes.py",
+        "tests/agentic/test_planner_select.py",
+        "tests/agentic/test_planner_ui.py",
+        "tests/agentic/scenarios/test_planner_scenarios.py",
+        "tests/agentic/test_proposal_routes.py",
+    ),
+    # M134 (DEC-1405), the pre-send compliance gate. test_gate_scale.py's two 1M tests are `slow` (the fast suite
+    # runs its 100k test); test_treat_list_golden.py is Plan J M98's golden, unchanged, which proves the gate off
+    # leaves every treat list byte-identical.
+    "M134": (
+        "tests/unit/compliance/test_compliance_config.py",
+        "tests/unit/compliance/test_dlt.py",
+        "tests/unit/compliance/test_urls.py",
+        "tests/unit/compliance/test_gate_rules.py",
+        "tests/unit/compliance/test_gate_offer_arms.py",
+        "tests/unit/compliance/test_gate_scale.py",
+        "tests/integration/compliance/test_gate_real_run.py",
+        "tests/integration/compliance/test_gate_offer_choice_run.py",
+        "tests/integration/decide/test_treat_list_golden.py",
+    ),
+    # M140 (DEC-1407), message variants as measured arms. The nightly test (tests/statistical/test_variant_arms.py,
+    # DEC-1300 (e)) is left out, as for M137; test_api_config.py is trunk's OpenAPI path set, which gained the route.
+    "M140": (
+        "tests/unit/decide/test_variant_arms.py",
+        "tests/integration/decide/test_variant_arms_journey.py",
+        "tests/integration/test_api_config.py",
+    ),
+    # M143 (DEC-1410), the model licence guard and the opt-in foundation strategy (moved from tests/unit/ at
+    # integration). Its CPU-fit test is `slow` and runs only under -m slow.
+    "M143": ("tests/unit/agentic/test_model_licences.py",),
 }
 """Milestone id -> the test files (or directories, with a trailing `/`) that prove it is built.
 

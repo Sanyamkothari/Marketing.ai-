@@ -26,6 +26,7 @@ import pyarrow as pa
 import pytest
 
 from engine.compliance.gate import GateRules, MessageVerdict, decide
+from tests.unit.compliance.switch import set_gate_switch
 
 ROWS = 1_000_000
 SMALL_ROWS = 100_000
@@ -145,9 +146,7 @@ def _hand_off_world(tmp_path: Path, config_root: Path) -> tuple[Path, Path]:
     root = tmp_path / "configs"
     shutil.copytree(config_root, root)
     (root / "decide" / "catalogue.yaml").write_text(CATALOGUE, encoding="utf-8")
-    (root / "compliance" / "compliance.yaml").write_text(
-        "compliance:\n  gate:\n    enabled: true\n", encoding="utf-8"
-    )
+    set_gate_switch(root, on=True)
     data_dir = tmp_path / "data"
     data_dir.mkdir()
     purpose = load_privacy_config(root).purpose_for(USE_CASE)

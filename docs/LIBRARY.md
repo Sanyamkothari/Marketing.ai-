@@ -386,3 +386,43 @@ together against the one group sent nothing, from the measurement's own pooled c
 headline reads **+212 extra conversions, every offer together (150 to 270)**, the men's +145 and the women's +67, and
 its value and net value rest on that sum while it still charges all 42,694 e-mails. The range counts the shared group
 once; the offers' own ranges are not added.
+
+## 9. Plan K M143: the tabular foundation model challenger (DEC-1410) - not run, and why
+
+**Result: no gain shown, because the comparison could not be run here. `foundation` stays opt-in and is
+recommended nowhere.** No number below comes from a library run; there is none. What was checked instead, in
+the installed AutoGluon 1.6.3:
+
+| Question | What the installed package says |
+|---|---|
+| What does the `extreme_quality` preset load? | The portfolio `commercial_2026_08_05`: Nori (30M), TabICLv2, TabDPT-Turbo, two LightGBM configurations, CatBoost and RealMLP. Every one is on `configs/agentic/model_licences.yaml`. TabPFN is not in it; the `noncommercial` preset adds TabPFN-3 and is refused. |
+| Which of them run on our problem? | Nori is regression-only (`_supported_problem_types = ["regression"]`), so a yes/no problem never uses it. The second LightGBM, CatBoost and RealMLP carry `ag.min_rows = 50000` and are skipped below that. TabICLv2 and TabDPT-Turbo are the foundation models left for a yes/no problem. |
+| Do they need a GPU? | Not to start. Nori and TabDPT declare `minimum_num_gpus = 0.5`, but with `num_gpus=0` a TabDPT fit still starts on CPU with AutoGluon's warning that it is "typically an order of magnitude slower than on GPU (measured 12-63x end to end)". This machine has no GPU. |
+| What do they need installed? | `tabicl`, `tabdpt` and `synthefy-nori` (AutoGluon's `tabicl`, `tabdpt` and `nori` extras), and PyTorch. Not installed in this environment, and not added to `pyproject.toml`. On 2026-10-11 pip's resolver chose `tabicl==2.1.1`, `tabdpt==1.2.0`, `synthefy-nori==0.14.0`, `torch==2.13.0` (plus about 40 packages, including NVIDIA's CUDA libraries) for them. |
+| Where do the model weights come from? | Hugging Face. The three wheels are 0.25 MB, 0.02 MB and 0.33 MB, so they carry no weights. This environment's network policy answers `403` to `huggingface.co`, so no foundation model can be loaded here. |
+
+So the library comparison on Hillstrom (and a second dataset) is **not run: the weights cannot be downloaded
+here, and the machine has no GPU**. It also cannot be run through `library/run_engine.py` as it stands: the
+`journey` subcommand has no `--override`, and its risk step is fixed in `library/journey.py` to `fast` with
+`LightGBM` only (the Hillstrom `JourneySpec.risk_overrides`), so it can neither pick `foundation` nor compare against
+`balanced`. Running it needs two changes outside this milestone's lane, both entered as cross-branch requests: a
+`--override path=value` option on `journey` that reaches `run_journey(extra_risk_overrides=...)` with the risk
+step's `model_search.candidates` lifted, and the `train.py` fix below. Until both exist, no command is given, nothing
+is recorded in `library/hillstrom-email/run_report.md`, and `foundation` is not recommended.
+
+**A second finding that must be fixed before the benchmark means anything.** The engine's train stage
+(`engine/stages/train.py`, `autogluon_fit_kwargs`) passes its own `hyperparameters`, one entry per selected
+algorithm, and AutoGluon takes explicit arguments over a preset's. Measured on this machine (600 rows,
+`presets="extreme_quality"`, `hyperparameters={"XGB": {}, "GBM": {}}`): AutoGluon fitted `LightGBM`, `XGBoost` and a
+weighted ensemble, and no foundation model. So today `model_search.strategy: foundation` selects the
+`extreme_quality` preset's other settings but **loads none of its foundation models**; a run that picks it says so in
+its warnings. The fix is a change to a frozen file, so it was not made here: it is the cross-branch request `plan-k (M143) -> protocol
+owner` (entered in [`docs/CROSS_BRANCH_REQUESTS.md`](CROSS_BRANCH_REQUESTS.md), 2026-10-11). It asks `autogluon_fit_kwargs`,
+for this strategy, to pass the preset's portfolio (each key checked by `ModelLicences.check_model_key`) in place of the
+per-family dict.
+
+**The licence guard does run, now.** `configs/agentic/model_licences.yaml` lists the presets and model keys the
+product may load. Resolving a configuration refuses, with `MODEL_LICENCE_BLOCKED`, a strategy whose preset is
+blocked (AutoGluon's `noncommercial`, TabPFN-2.5 and later) or has not been reviewed. `tests/unit/agentic/test_model_licences.py`
+reads every allowed preset through the installed AutoGluon and fails if any loads a model off the list, which is
+what a library upgrade would trip.

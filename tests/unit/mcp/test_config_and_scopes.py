@@ -28,9 +28,22 @@ def test_the_shipped_switch_is_off_and_a_missing_file_is_off(config_root: Path, 
     assert mcp_enabled(tmp_path) is False
 
 
+def test_the_switch_is_agentic_yamls_and_mcp_yaml_holds_no_switch(tmp_path: Path) -> None:
+    """Plan K's three switches live in agentic.yaml (DEC-1400 (d)); mcp.yaml is the server's settings only."""
+    (tmp_path / "agentic").mkdir()
+    (tmp_path / "agentic" / "agentic.yaml").write_text("mcp:\n  enabled: true\n", encoding="utf-8")
+    assert mcp_enabled(tmp_path) is True, "on in agentic.yaml, with mcp.yaml absent (its defaults)"
+    (tmp_path / "agentic" / "agentic.yaml").write_text("mcp:\n  enabled: false\n", encoding="utf-8")
+    (tmp_path / "agentic" / "mcp.yaml").write_text("mcp:\n  enabled: true\n", encoding="utf-8")
+    assert mcp_enabled(tmp_path) is False, "a switch in mcp.yaml turns nothing on"
+    with pytest.raises(AgenticError) as caught:
+        load_mcp_config(tmp_path)
+    assert caught.value.code == "CONFIG_INVALID", "and is refused as an unknown setting"
+
+
 def test_a_bad_file_is_refused_with_a_code(tmp_path: Path) -> None:
     (tmp_path / "agentic").mkdir()
-    for text in ("mcp:\n  enabled: true\n  min_group_rows: 5\n", "mcp:\n  surprise: 1\n", "mcp: [\n"):
+    for text in ("mcp:\n  min_group_rows: 5\n", "mcp:\n  surprise: 1\n", "mcp: [\n"):
         (tmp_path / "agentic" / "mcp.yaml").write_text(text, encoding="utf-8")
         with pytest.raises(AgenticError) as caught:
             load_mcp_config(tmp_path)

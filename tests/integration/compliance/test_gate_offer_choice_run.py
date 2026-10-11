@@ -41,13 +41,15 @@ from tests.integration.decide.test_offer_choice_run import (
     score_twice,
 )
 from tests.integration.uplift.test_uplift_api import App
+from tests.unit.compliance.switch import set_gate_switch
 
 pytestmark = pytest.mark.integration
 
 LABEL: Final[str] = "Discount"
 ACTION_CHANNEL: Final[dict[str, str]] = {"offer_a_sms": "sms", "offer_b_email": "email"}
-GATE_ON: Final[str] = "compliance:\n  gate:\n    enabled: true\n"
-EMAIL_OPT_IN: Final[str] = "compliance:\n  gate:\n    enabled: true\n    opt_in_channels: [email]\n"
+GATE_ON: Final[str] = "compliance:\n  gate:\n    opt_in_channels: [whatsapp]\n"
+EMAIL_OPT_IN: Final[str] = "compliance:\n  gate:\n    opt_in_channels: [email]\n"
+"""The gate's settings; its switch, `compliance.gate.enabled`, is turned on in `agentic.yaml` (DEC-1405 (a))."""
 
 
 @pytest.fixture(scope="module")
@@ -83,6 +85,7 @@ class World:
 def _gate_root(root: Path, target: Path, document: str) -> Path:
     shutil.copytree(root, target)
     (target / "compliance" / "compliance.yaml").write_text(document, encoding="utf-8")
+    set_gate_switch(target, on=True)
     return target
 
 

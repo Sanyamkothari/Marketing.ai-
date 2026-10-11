@@ -141,6 +141,7 @@ Contract schema version: 1.
 | POST | `/runs/{run_id}/campaign-copy` | Start campaign-copy generation over a finished scoring run | GenerativeJobStartedResponse |
 | POST | `/runs/{run_id}/campaign-copy/templates/{template_id}/approve` | Record that a person approved one campaign-copy template | CopyTemplate |
 | POST | `/runs/{run_id}/campaign-copy/templates/{template_id}/regenerate` | Re-run generation for one campaign-copy template in place | CopyTemplate |
+| POST | `/runs/{run_id}/campaign-copy/variant-arms` | Test the approved message variants as randomised, measured arms of the run's treat list | VariantArms |
 | GET | `/runs/{run_id}/campaign-results` | The stored campaign results of a scoring run | IncrementalityReport |
 | POST | `/runs/{run_id}/campaign-results` | Measure a scoring run's campaign from an uploaded outcomes file | IncrementalityReport |
 | POST | `/runs/{run_id}/cancel` | Ask a pending or running run to stop | RunCancelResponse |
@@ -179,6 +180,7 @@ Contract schema version: 1.
 | POST | `/uploads/{upload_id}/agent-session` | Start (or restart) Guided setup for an upload: the helper's suggestions and questions | AgentSessionResponse |
 | POST | `/uploads/{upload_id}/agent-session/answers` | Answer one of the helper's questions | AgentSessionResponse |
 | POST | `/uploads/{upload_id}/agent-session/apply` | Approve: prepare the data with the accepted steps and return what Run needs | ApplyResponse |
+| POST | `/uploads/{upload_id}/agent-session/assist` | Ask the AI service for a second opinion on the columns (optional) | AgentSessionResponse |
 | POST | `/uploads/{upload_id}/agent-session/decisions` | Accept or reject the helper's suggestions | AgentSessionResponse |
 | POST | `/uploads/{upload_id}/agent-session/edits` | Add an edit made by hand: a step like every other, ticked, undone by unticking | AgentSessionResponse |
 | POST | `/uploads/{upload_id}/agent-session/messages` | Ask the helper something; its reply is checked before it is kept | AgentSessionResponse |
@@ -428,7 +430,7 @@ A fully merged, validated use case. This is what the whole engine consumes.
 |---|---|---|---|
 | `metric` | Metric ("roc_auc" \| "pr_auc" \| "f1" \| "recall" \| "precision" \| "rmse" \| "mae" \| "auuc") | no |  |
 | `metric_choices` | list[Metric ("roc_auc" \| "pr_auc" \| "f1" \| "recall" \| "precision" \| "rmse" \| "mae" \| "auuc")] | no |  |
-| `strategy` | Strategy ("fast" \| "balanced" \| "exhaustive") | no |  |
+| `strategy` | Strategy ("fast" \| "balanced" \| "exhaustive" \| "foundation") | no |  |
 | `candidate_pool` | list[ModelFamily ("XGBoost" \| "LightGBM" \| "RandomForest" \| "LogisticRegression" \| "CatBoost" \| "NeuralNet")] | no |  |
 | `candidates` | list[ModelFamily ("XGBoost" \| "LightGBM" \| "RandomForest" \| "LogisticRegression" \| "CatBoost" \| "NeuralNet")] | no |  |
 | `ensemble` | boolean | no |  |
@@ -490,6 +492,7 @@ A fully merged, validated use case. This is what the whole engine consumes.
 | `reference_set` | ReferenceSetConfig | no | The Q&A file an index is graded against.  Named for what it is rather than `evaluation`, which already means the model's evaluation on `UseCaseConfig`; one word cannot carry both without a reader having to ask which (DEC-200). |
 | `root_cause` | RootCauseConfig | no |  |
 | `campaign_copy` | CampaignCopyConfig | no | Spelled in full because a pydantic field called `copy` shadows `BaseModel.copy` (DEC-201). |
+| `variant_arms` | boolean | no | Plan K M140 (DEC-1407): approved copy variants become randomised, measured arms of the treat list (`engine.decide.variant_arms`). Off by default and left out of a dump while off. |
 
 #### OutputConfig
 
@@ -2144,6 +2147,7 @@ Engine constants. The catalog is never merged into a use case and never overrida
 | `catalog.strategy_presets.fast` | str |
 | `catalog.strategy_presets.balanced` | str |
 | `catalog.strategy_presets.exhaustive` | str |
+| `catalog.strategy_presets.foundation` | str; opt-in, never a default (DEC-1410): the commercial-safe tabular foundation model preset |
 | `catalog.metrics` | id -> {label, autogluon_name, problem_types, greater_is_better} |
 | `catalog.metrics.auuc` | Phase 3b (DEC-601): area between the uplift curve and random targeting; computed by engine/uplift/metrics.py, never by AutoGluon |
 | `catalog.problem_types` | id -> {label (prototype PTYPES verbatim), enabled in Phase 1} |
