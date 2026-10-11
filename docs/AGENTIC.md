@@ -191,6 +191,91 @@ with an offer budget, a cost cap, arbitration caps and a persistent holdout on a
   to guard it - must then fail. With every rule removed a kind is still refused (default deny).
 * The report is `EvalReport`, written by `write_report` as canonical JSON (`reports/agentic_eval.json` by default).
 
+## 7a. The save-desk card (`engine/agentic/save_desk.py`, `api/routes/agentic_save_desk.py`; M144)
+
+**What it is.** A read-only lookup for call-centre staff. Before a retention call, an Analyst asks for the
+customer's card and gets: the top reasons in business words, the recommended offer and channel, the net value in
+rupees, and a "likely to stay anyway, do not discount" flag. Each line carries its evidence label
+(`Estimated` for the model's recommendation, `Descriptive` for "kept back on purpose" and "do not contact") and the
+stored file it was read from. **No line is `Causal`**: the card is the model's recommendation, and the only proof
+that it helps is the pilot below. The card says so in its `caution`.
+
+**Where each line comes from (compute once).** Nothing is computed, trained or written. A finished scoring run's
+`treat_list.parquet` (M98) holds the reasons (M98's template phrases), `treat`, `offer`, `channel`,
+`contactable_channels`, `net_value` and `expected_gross_value` (M97), `segment` (the uplift segments),
+`control_group`, `holdout` and `suppression_reason`. The list's own net-value range is `policy_recommendation.json`
+(`net_value_low`, `net_value_high`). The card is those values and fixed sentences.
+
+* **Net value.** `customer_net_value` is the customer's own predicted net value (incremental). The *range* is the
+  whole list's, never the customer's: the product does not compute a per-customer interval and the card does not
+  invent one. A propensity run has `gross_value` instead, marked not incremental. A figure the run did not compute
+  is `null` with a sentence saying why.
+* **Likely to stay anyway.** True when the run's segment is `sure_thing` (the uplift model expects the customer to
+  convert without an offer). False for the other segments. `null` on a run that ranks by chance to respond (it has
+  bands, not segments): the card says it cannot tell, it never says "no".
+* **Kept back.** A customer in the run's control group, in M92's persistent holdout (I4), or under a suppression
+  rule gets **no offer**, whatever segment they are in.
+* **Rules only.** Every sentence is a fixed template (no digit of its own, no jargon, both tested) or M98's phrase.
+  The optional paraphrase through M139's claims renderer is **not built**: M139 was developed in parallel and was
+  not available. The card says `text_source: "rules"`. Adding it later means a new, claim-checked field; nothing
+  here calls a model (a test imports the module in a fresh process and checks no model client is loaded).
+
+**The route.** `POST /agentic/save-desk/card`, body `{"run_id", "customer_key"}`; mounted only when
+`agentic.enabled` is on (off: the path does not exist, the OpenAPI document is unchanged).
+
+* The customer key is in the body, never in a URL (DEC-746), and is not echoed in the answer or in any refusal.
+  A run keyed by several columns takes the parts in the run's order joined by `|`. `00104` finds `104`, as the
+  consent ledger does.
+* **Analyst**, because that role may already download the same rows (`ROW_LEVEL_DOWNLOAD`). A narrower `agent_desk`
+  role was not added: roles are the closed `Role` enum and a new member would change every access table and "for
+  every role" test. A Viewer gets `403 ROLE_REQUIRED`, audited.
+* **Audited.** One audit event per call, whatever it answers: actor, run, and `principal_hash`, a salted hash of the
+  key (`privacy_salt`), so "who looked at this customer" is answered by recomputing the hash. No key and no value is
+  in the trail or in a log line.
+* **Rate limited.** `configs/agentic/save_desk.yaml`, `rate_limit_per_minute` (default 30) per signed-in person in a
+  sliding minute, in memory per process; past it `429 SAVE_DESK_RATE_LIMITED` with `Retry-After`.
+* **A customer picked at random to learn from** (M92's explore slice, which can draw a customer the model expects to
+  stay anyway) is still made the offer: the card carries an `explored` line, and "likely to stay anyway" stays on
+  the card as the model's view without the instruction "Do not discount", because following that would undo the
+  random draw that off-policy evaluation depends on.
+* **It builds nothing.** If the run's treat list has not been built (the Results page or `treat_list.csv` builds it
+  on first open), the answer is `409 SAVE_DESK_NO_TREAT_LIST`. A lookup must not start a build over a million rows.
+* Refusals: `404 SAVE_DESK_CUSTOMER_NOT_FOUND`, `422 SAVE_DESK_KEY_INVALID` (empty, over 200 characters, or the wrong number of key parts; the
+  message never holds the key),
+  `409 SAVE_DESK_KEY_AMBIGUOUS` (two rows with that key), `403 SAVE_DESK_NOT_IN_PILOT_ARM`, and the existing
+  `RUN_NOT_FOUND`, `RUN_NOT_SCORED`, `TOOL_ARTEFACT_UNREADABLE`.
+
+**The pilot (a design, not a result).** The card ships only after a randomised pilot shows staff with the card keep
+more customers. `configs/agentic/save_desk_pilot.yaml` is the registered template; copy it and fill it in.
+
+1. **Randomise the staff member, not the call.** The cluster is the staff member: each either has the card for the
+   whole pilot or never does. `assign_card_access(staff_ids, salt=..., card_share=...)` splits them exactly (not a
+   coin flip each, which can give 5 against 12), independently of the order of the list, reproducibly from the salt.
+   Draw once, paste the two lists into the file, never redraw.
+2. **Outcome.** Retained within the window (`outcome_window_days`), as `retained_30d` in the outcomes file. The
+   customers of staff with the card are the "treated" group of the campaign, the customers of staff without it the
+   comparison group.
+3. **Register the plan first.** `test_plan` is the body of `POST /campaigns/{campaign_id}/plan`
+   (`TestPlanInput`); a test registers the shipped example through that route. Its `mde_pp` is the clustered figure.
+4. **Power with clusters.** `pilot_power(planning, card_share, target_pp)` hands the planner
+   (`engine.measurement.planner.mde_two_proportions`, `n_for_mde`) the *effective* number of customers,
+   `n / DEFF` with `DEFF = 1 + (calls per staff - 1) x ICC`. For 200 staff with 30 calls each, a 60% base
+   retention and an assumed ICC of 0.05, the design effect is 2.45 and the smallest change the pilot reliably sees is
+   5.6 points; the same customers, wrongly treated as independent, would have seen 3.6. Seeing 5 points needs 121
+   staff in each arm (with an uneven split `pilot_power` gives the card arm's and the no-card arm's staff separately). **The ICC is an assumption** (`icc_source` says where it came from); it is not measured here.
+   The number of staff, not of calls, is what limits a cluster pilot.
+5. **Active means enforced.** With `status: active` only staff in `card_access` are served a card (everyone else
+   gets `SAVE_DESK_NOT_IN_PILOT_ARM`); `status: example` is not enforced.
+
+**What the existing measurement can and cannot claim.** `measure_campaign` compares two groups of customers with a
+Newcombe interval, as if each customer were independent. There is no cluster-robust standard error anywhere in the
+engine (no design effect, no cluster column, no staff-level analysis). Customers handled by one staff member are
+not independent, so that interval would be too narrow and a result read from it would be too confident. **The
+pilot therefore needs clustered standard errors added to the measurement before a result is read, and until then
+no result of this pilot is claimed.** The planning figures above allow for clustering; the measurement does not.
+The card is shipped as a pilot tool, off by default behind `agentic.enabled`, and "ships only on a measured result"
+is still open.
+
 ## 8. The verifier over MCP (`api/mcp/`, `configs/agentic/mcp.yaml`; M133, DEC-1404)
 
 ### 8.1 In plain words
@@ -327,7 +412,7 @@ each one that is done. M131, M135 and M137 were built ahead of the rest of Plan 
 | M141 The verifier on client data | pending | | |
 | M142 Setup help for integration sources | done | DEC-1409 | `docs/AGENTS.md` §13; behind `agentic.enabled` |
 | M143 Tabular foundation model challenger | pending | | |
-| M144 Save-desk card, as a randomised pilot | pending | | |
+| M144 Save-desk card, as a randomised pilot | done (a pilot design; no result claimed) | DEC-1411 | this document's §7a; behind `agentic.enabled` |
 
 ## 10. The switches (`configs/agentic/agentic.yaml`)
 

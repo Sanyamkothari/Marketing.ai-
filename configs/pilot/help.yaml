@@ -729,6 +729,31 @@ codes:
     title: "Sign-in is switched off on this deployment"
     meaning: "Some parts of the product never run without sign-in, and the MCP server at /mcp is one of them: it answers 503 while MARKETING_AI_AUTH_MODE=off, even on a laptop, and never acts as the local operator."
     fix: "Set MARKETING_AI_AUTH_MODE=local (or the deployment's identity provider), create users and connect with a signed-in token."
+  # --- Plan K M144: the save-desk card, as a randomised pilot design (DEC-1411) -------------------------------------------
+  SAVE_DESK_NO_TREAT_LIST:
+    title: "This run's contact list has not been built yet"
+    meaning: "The save-desk card reads the run's contact list (treat list) and never builds it, because building one over a large file would slow the desk."
+    fix: "Open the run's Results page or its treat_list.csv once so the list is built, then ask for the card again."
+  SAVE_DESK_CUSTOMER_NOT_FOUND:
+    title: "That customer is not in this run's contact list"
+    meaning: "No row of this run's contact list has that key. The customer may have been erased, may not have been scored in this run, or the key may be written differently in the run (for example with a different number of leading zeros or another date format)."
+    fix: "Check the key against the run's own customer column, then ask again."
+  SAVE_DESK_KEY_INVALID:
+    title: "The customer key cannot be used for this run"
+    meaning: "The key is empty, longer than 200 characters, or has the wrong number of parts. A run identified by several columns (for example customer and date) takes the parts in the run's order, joined by a vertical bar. The message never repeats the key you typed."
+    fix: "Type the key again with one part for each of the run's key columns, in the run's order."
+  SAVE_DESK_KEY_AMBIGUOUS:
+    title: "More than one row has that key"
+    meaning: "The run's contact list has two or more rows with exactly that key, so no single customer can be shown and the card will not guess."
+    fix: "Ask the data owner to check the customer file for repeated keys and score again."
+  SAVE_DESK_RATE_LIMITED:
+    title: "Too many cards asked for in a minute"
+    meaning: "One signed-in person may ask for a limited number of save-desk cards per minute (configs/agentic/save_desk.yaml, rate_limit_per_minute, 30 by default). The card is for one customer in front of one agent; looking customers up in a loop is how a copy of the customer list is made."
+    fix: "Wait the number of seconds in the message and try again."
+  SAVE_DESK_NOT_IN_PILOT_ARM:
+    title: "You are not in the group given the card in this pilot"
+    meaning: "While a randomised pilot is active (configs/agentic/save_desk_pilot.yaml, status active), only the staff drawn in advance to have the card are served one, so that the comparison with staff working as usual stays fair. The draw is not redone during the pilot."
+    fix: "If you think you should be in the card group, ask the pilot owner."
 
 settings:
   actions.bands[*].min_score:
