@@ -691,8 +691,8 @@ codes:
   # --- Plan K M133: the verifier over MCP, demo data only (DEC-1404) ------------------------------------------------------
   MCP_DEMO_ONLY:
     title: "The MCP server answers about the demo library only"
-    meaning: "Until client data is connected (M141), the MCP server at /mcp answers only about the demo library: the public datasets in library/ (for example Hillstrom) and generated data. It refused because the workspace is not 'demo', the request named another workspace, or the run or campaign asked about is not demo data. A run or upload counts as demo data when it was filed under one of mcp.demo_use_cases or marked as generated, and never when it belongs to an onboarded client. You get the same answer when the id names nothing, so the server never reveals which ids exist."
-    fix: "Ask about a demo run or campaign. To serve client data, wait for M141's per-client scoping; until then keep mcp.enabled off on a deployment that holds client data."
+    meaning: "With mcp.workspace set to demo (the default), the MCP server at /mcp answers only about the demo library: the public datasets in library/ (for example Hillstrom) and generated data. It refused because the workspace is not 'demo', the request named another workspace, or the run or campaign asked about is not demo data. A run or upload counts as demo data when it was filed under one of mcp.demo_use_cases or marked as generated, and never when it belongs to an onboarded client. You get the same answer when the id names nothing, so the server never reveals which ids exist."
+    fix: "Ask about a demo run or campaign. To serve client data, set mcp.workspace to clients and list the client workspaces under mcp.workspaces in configs/agentic/mcp.yaml (docs/AGENTIC.md section 8.7), so that each signed-in person reaches one client's data only."
   MCP_SCOPE_DENIED:
     title: "This sign-in cannot use that MCP tool"
     meaning: "Each MCP tool needs a scope, and the scope comes from the signed-in person's role. Every signed-in person holds marketing-ai:read. marketing-ai:propose, which drafts a test plan for a person to approve in the product, needs the Analyst role. No scope approves anything, and an Approver or Admin role adds no MCP scope."
@@ -703,7 +703,7 @@ codes:
     fix: "Wait that long and call again, or make fewer calls at once."
   MCP_TIMEOUT:
     title: "The MCP tool took too long"
-    meaning: "A long tool (audit_campaign, or get_proof_pack, which draws the Value Proof Pack on request) runs while the client waits, because the MCP version in use has no way to hand back a job to collect later, and it is refused after mcp.call_timeout_seconds (120 seconds by default). Work that has been started cannot be stopped, so it keeps its place in the session's limit of calls at once until it ends."
+    meaning: "A long tool (audit_campaign, or get_proof_pack, which draws the Value Proof Pack on request) took longer than mcp.call_timeout_seconds (120 seconds by default). A client that supports MCP tasks gets a task to collect later, and the task fails after that time; any other client waits for the answer and is refused after it. Work that has been started cannot be stopped, so it keeps its place in the session's limit of calls at once until it ends."
     fix: "Ask again later, ask a narrower question, or raise mcp.call_timeout_seconds in configs/agentic/mcp.yaml."
   MCP_GROUP_TOO_SMALL:
     title: "The campaign holds a group too small to show"
@@ -846,6 +846,23 @@ codes:
     title: "This model cannot be used for commercial work"
     meaning: "The model search you picked would load a model whose licence does not allow commercial use, or one nobody has reviewed for it (configs/agentic/model_licences.yaml lists those that are cleared). Nothing was trained."
     fix: "Choose Fast, Balanced or Exhaustive instead; they use only models cleared for commercial use. If you need the blocked model, ask the person who runs this system to review its licence and add it to the approved list first."
+  # --- Plan K M141: the verifier on client data (DEC-1408) ----------------------------------------------------------
+  MCP_WORKSPACE_DENIED:
+    title: "That is outside your workspace"
+    meaning: "On an MCP server for client data (mcp.workspace: clients in configs/agentic/mcp.yaml), each signed-in person belongs to exactly one client workspace, so every token they hold reaches that workspace's data and nothing else. The request was refused for one of these reasons: the person signed in belongs to no workspace; the run or campaign asked about belongs to another client; the id names nothing; or the request named another workspace. The answer is the same for 'not yours' and 'not there', and it never repeats the id, so the server reveals nothing about which ids exist."
+    fix: "Ask about your own client's runs and campaigns. If you should have access, ask an administrator to add your user id (GET /admin/users) to the members list of the right workspace under mcp.workspaces in configs/agentic/mcp.yaml. A person can be a member of one workspace only."
+  RECEIPT_MISMATCH:
+    title: "A receipt you kept is no longer in the ledger"
+    meaning: "Every MCP answer and every approval receipt names the ledger entry it was recorded under: the chain, the entry number, the entry's fingerprint and the fingerprint of the secret that decides who is held back. 'python -m engine.agentic.ledger verify --against receipts.json' looked up each receipt you kept and found at least one that the workspace's chain no longer holds as it was. The history was rewritten after the receipt was handed out. This is found even when whoever rewrote it recomputed every fingerprint and signature, which is why the plain check can still pass."
+    fix: "Treat the ledger as tampered with. Keep your receipts file and the output (it names the first receipt that does not match), and raise it with the deployment's owner. Do not rely on decisions recorded after that point until the history has been explained."
+  MCP_TASK_NOT_FOUND:
+    title: "No such task for this session"
+    meaning: "tasks/get, tasks/result or tasks/cancel named a task that this session did not start, that does not exist, or that has passed its keep time (mcp.tasks.ttl_seconds, an hour by default). A task answers only the session that started it. Another session, even the same person's, is told there is no such task, so task ids reveal nothing."
+    fix: "Ask with the same sign-in that started the task, before its keep time runs out. If it has expired, call the tool again to get a fresh task."
+  MCP_TASK_CANCELLED:
+    title: "The task was cancelled"
+    meaning: "The long tool call running as a task (for example audit_campaign or get_proof_pack) was cancelled with tasks/cancel, so its result was thrown away when the work ended. The same code is also returned when a cancel arrives after the task had already finished; in that case the task keeps its result and its status."
+    fix: "Call the tool again if you still need the answer."
 
 settings:
   actions.bands[*].min_score:

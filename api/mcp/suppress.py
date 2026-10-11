@@ -88,6 +88,22 @@ RULES: Final[dict[str, tuple[Rule, ...]]] = {
     "measure": _REPORT,
     "audit_campaign": (Whole(("audit",), ("assignment_rows",)), *_REPORT),
     "evaluate_policy": (Whole(("ope",), ("rows",)), Whole(("risk_comparison",), ("rows",))),
+    # M141: the gate's counts are one group as a whole (a small number withheld or moved, or a few decision rows
+    # with no consent evidence, is a small group), and the reasons add up as a channel's do. Every field of
+    # `GateCounts` is listed (`tests/unit/mcp/test_suppress.py` pins it).
+    "check_before_contact": (
+        Whole(
+            ("counts",),
+            (
+                "customers",
+                "sent_rows",
+                "withheld_rows",
+                "rerouted_rows",
+                "decision_rows_without_consent_evidence",
+            ),
+        ),
+        CountMap(("withheld",)),
+    ),
 }
 """The grouped outputs of the exposed tools. A tool absent here returns no group (`plan_test` computes from the
 counts its caller sends; `get_proof_pack`'s figures are guarded by the campaign's arm sizes in

@@ -26,6 +26,17 @@ in under a new key. Erasure therefore never has to touch the ledger, and never b
 **Verification.** ``python -m engine.agentic.ledger verify`` walks the chain in `seq` order, in batches (linear
 in the entries), recomputes every hash and checks every signature. On the first bad entry it prints the code
 (`LEDGER_CHAIN_BROKEN` or `LEDGER_SIGNATURE_INVALID`) and the entry's `seq` and exits 1.
+
+**One chain per client workspace (Plan K M141, DEC-1408 (c); design §13 q3).** The deployment's own chain is
+`agentic_decision_log`, as M132 wrote it. Each client workspace the MCP server serves (`configs/agentic/mcp.yaml`
+`mcp.workspaces`) has a chain of its own in `agentic_workspace_log`, keyed by `(workspace, seq)`: its own `seq`
+from 1, its own genesis, and the workspace id inside every hashed entry (``{..., "chain": <workspace>}``), so an
+entry cannot be moved from one client's chain to another's. A client's receipts are checkpoints of the chain that
+holds only that client's entries, so they stay meaningful when one deployment serves several clients, and one
+client's verifier never reads another's ids. ``verify --workspace <id>`` walks one workspace's chain;
+``verify --against <receipts.json>`` also checks that every receipt the client kept is still in it
+(`engine.agentic.receipts`): a history rewritten after a receipt was handed out fails with `RECEIPT_MISMATCH`
+even when the rewriter recomputed every hash and signature.
 """
 
 from __future__ import annotations
@@ -56,10 +67,12 @@ if TYPE_CHECKING:
 
 __all__ = [
     "BODY_KEYS",
+    "CHAIN_PATTERN",
     "DECISION_LOG_TABLE",
     "GENESIS_HASH",
     "SIGNED_KINDS",
     "SIGNING_KEY_FILE",
+    "WORKSPACE_LOG_TABLE",
     "DecisionLedger",
     "DecisionLogEntry",
     "FakeSigner",
@@ -67,6 +80,8 @@ __all__ = [
     "LedgerEntry",
     "Signer",
     "VerifyReport",
+    "WorkspaceLogEntry",
+    "chains_drafting",
     "compute_entry_hash",
     "holdout_commitment",
     "main",
@@ -76,6 +91,10 @@ __all__ = [
 ]
 
 DECISION_LOG_TABLE: Final[str] = "agentic_decision_log"
+WORKSPACE_LOG_TABLE: Final[str] = "agentic_workspace_log"
+"""Plan K M141 (DEC-1408 (c)): one chain per client workspace, keyed by `(workspace, seq)`."""
+CHAIN_PATTERN: Final[str] = r"^[a-z0-9][a-z0-9_-]{0,47}$"
+"""A workspace id, as a chain is named: lower-case letters, digits, `_` and `-`."""
 GENESIS_HASH: Final[str] = "0" * 64
 SIGNING_KEY_FILE: Final[str] = "agentic/ledger_signing_key.pem"
 """Where the development Ed25519 key lives, under the data folder (0600)."""
@@ -173,6 +192,27 @@ class DecisionLogEntry(SQLModel, table=True):
     created_at: datetime = SQLField(sa_column=Column("created_at", DateTime(timezone=True), nullable=False))
 
 
+class WorkspaceLogEntry(SQLModel, table=True):
+    """One entry of a client workspace's chain (Plan K M141). Alembic's `0010_agentic_workspace_log` creates the
+    table on Postgres. The same columns as `DecisionLogEntry`, with `workspace` beside `seq` in the key: each
+    workspace's `seq` counts from 1, and its genesis entry points at 64 zeros."""
+
+    __tablename__ = WORKSPACE_LOG_TABLE
+
+    workspace: str = SQLField(primary_key=True)
+    seq: int = SQLField(primary_key=True)
+    prev_hash: str
+    entry_hash: str = SQLField(index=True, unique=True)
+    kind: str = SQLField(index=True)
+    actor: str
+    body: str
+    proposal_id: str | None = SQLField(default=None, index=True)
+    evidence_id: str | None = SQLField(default=None, index=True)
+    signature: str | None = None
+    key_id: str | None = None
+    created_at: datetime = SQLField(sa_column=Column("created_at", DateTime(timezone=True), nullable=False))
+
+
 class LedgerEntry(StrictBase):
     """An entry as the API and the tools show it."""
 
@@ -189,6 +229,11 @@ class LedgerEntry(StrictBase):
     signature: str | None = Field(description="Base64 signature over entry_hash, for the signed kinds.")
     key_id: str | None = Field(description="Which key signed it.")
     created_at: AwareDatetime
+    chain: str | None = Field(
+        default=None,
+        description="The client workspace whose chain holds it (Plan K M141); null on the deployment's chain.",
+        exclude_if=lambda value: value is None,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -325,10 +370,26 @@ def _stamp(moment: datetime) -> str:
 
 
 def compute_entry_hash(
-    *, seq: int, prev_hash: str, kind: str, actor: str, created_at: datetime, body: Mapping[str, Any]
+    *,
+    seq: int,
+    prev_hash: str,
+    kind: str,
+    actor: str,
+    created_at: datetime,
+    body: Mapping[str, Any],
+    chain: str | None = None,
 ) -> str:
-    """The `entry_hash` of an entry with these fields (see the module docstring)."""
-    content = {"seq": seq, "kind": kind, "actor": actor, "created_at": _stamp(created_at), "body": body}
+    """The `entry_hash` of an entry with these fields (see the module docstring). An entry of a workspace's chain
+    hashes its workspace id too (`chain`); the deployment's chain hashes exactly what M132 hashed."""
+    content: dict[str, Any] = {
+        "seq": seq,
+        "kind": kind,
+        "actor": actor,
+        "created_at": _stamp(created_at),
+        "body": body,
+    }
+    if chain is not None:
+        content["chain"] = chain
     return sha256_hex(prev_hash.encode("ascii") + canonical_bytes(content))
 
 
@@ -356,25 +417,49 @@ def _view(row: Any) -> LedgerEntry:
         signature=row.signature,
         key_id=row.key_id,
         created_at=_instant(row.created_at),
+        chain=getattr(row, "workspace", None),
     )
 
 
+def _chain_name(chain: str | None) -> str | None:
+    if chain is not None and not re.fullmatch(CHAIN_PATTERN, chain):
+        raise ValueError(f"A ledger chain is named by a workspace id ({CHAIN_PATTERN}), not {chain!r}.")
+    return chain
+
+
 class DecisionLedger:
-    """The append-only ledger on one database. `append` is the only write."""
+    """The append-only ledger on one database. `append` is the only write.
+
+    `chain` names a client workspace's chain (Plan K M141, `agentic_workspace_log`); None, the default, is the
+    deployment's own chain (`agentic_decision_log`), exactly as M132 kept it.
+    """
 
     _LOCK: Final = threading.Lock()
 
-    def __init__(self, engine: Engine, *, signer: Signer | None, policy_version: str) -> None:
+    def __init__(
+        self, engine: Engine, *, signer: Signer | None, policy_version: str, chain: str | None = None
+    ) -> None:
         from engine.platform_db import create_tables
 
         self._engine = engine
         self._signer = signer
         self._policy_version = policy_version
-        create_tables(engine, (DECISION_LOG_TABLE,))
+        self._chain = _chain_name(chain)
+        create_tables(engine, (DECISION_LOG_TABLE if chain is None else WORKSPACE_LOG_TABLE,))
 
     @property
     def policy_version(self) -> str:
         return self._policy_version
+
+    @property
+    def chain(self) -> str | None:
+        """The workspace whose chain this is; None for the deployment's chain."""
+        return self._chain
+
+    @property
+    def engine(self) -> Engine:
+        """The database the chain lives in (a receipt check and the verifier read it)."""
+        return self._engine
 
     def append(
         self, kind: str, actor: str, body: Mapping[str, Any], *, at: datetime | None = None
@@ -402,17 +487,26 @@ class DecisionLedger:
         created = _instant(at or utc_now())
         text = canonical_json(full)
         parsed = json.loads(text)
-        table = _TABLE()
+        table = _table(self._chain)
+        chain_values = {} if self._chain is None else {"workspace": self._chain}
         for _attempt in range(5):
             try:
                 with self._LOCK, self._engine.begin() as connection:
                     head = connection.execute(
-                        select(table.c.seq, table.c.entry_hash).order_by(table.c.seq.desc()).limit(1)
+                        _on_chain(select(table.c.seq, table.c.entry_hash), table, self._chain)
+                        .order_by(table.c.seq.desc())
+                        .limit(1)
                     ).first()
                     seq = 1 if head is None else int(head.seq) + 1
                     prev = GENESIS_HASH if head is None else str(head.entry_hash)
                     entry_hash = compute_entry_hash(
-                        seq=seq, prev_hash=prev, kind=kind, actor=actor, created_at=created, body=parsed
+                        seq=seq,
+                        prev_hash=prev,
+                        kind=kind,
+                        actor=actor,
+                        created_at=created,
+                        body=parsed,
+                        chain=self._chain,
                     )
                     signature = key_id = None
                     if kind in SIGNED_KINDS and self._signer is not None:
@@ -420,6 +514,7 @@ class DecisionLedger:
                         key_id = self._signer.key_id
                     connection.execute(
                         table.insert().values(
+                            **chain_values,
                             seq=seq,
                             prev_hash=prev,
                             entry_hash=entry_hash,
@@ -445,25 +540,31 @@ class DecisionLedger:
                 signature=signature,
                 key_id=key_id,
                 created_at=created,
+                chain=self._chain,
             )
         raise AgenticError("LEDGER_CHAIN_BROKEN", "The ledger could not be appended to.", status=503)
 
-    @staticmethod
-    def _head_row(session: Any) -> DecisionLogEntry | None:
-        from sqlmodel import col, select
-
-        result: DecisionLogEntry | None = session.exec(
-            select(DecisionLogEntry).order_by(col(DecisionLogEntry.seq).desc()).limit(1)
-        ).first()
-        return result
-
     def head(self) -> LedgerEntry | None:
         """The newest entry, or None for an empty ledger. Its `entry_hash` is the client's checkpoint."""
-        from sqlmodel import Session
+        from sqlalchemy import select
 
-        with Session(self._engine) as session:
-            row = self._head_row(session)
-            return None if row is None else _view(row)
+        table = _table(self._chain)
+        with self._engine.connect() as connection:
+            row = connection.execute(
+                _on_chain(select(table), table, self._chain).order_by(table.c.seq.desc()).limit(1)
+            ).first()
+        return None if row is None else _view(row)
+
+    def find(self, entry_hash: str) -> LedgerEntry | None:
+        """The entry of this chain whose `entry_hash` is `entry_hash` (an indexed lookup), or None."""
+        from sqlalchemy import select
+
+        table = _table(self._chain)
+        with self._engine.connect() as connection:
+            row = connection.execute(
+                _on_chain(select(table), table, self._chain).where(table.c.entry_hash == entry_hash)
+            ).first()
+        return None if row is None else _view(row)
 
     def has_evidence(self, evidence_id: str) -> bool:
         """Whether a tool handed out `evidence_id` (an `evidence.label` entry names it)."""
@@ -477,15 +578,15 @@ class DecisionLedger:
         shaped = {item for item in wanted if _EVIDENCE_ID.fullmatch(item)}
         if not shaped:
             return frozenset(wanted)
-        table = _TABLE()
+        table = _table(self._chain)
         # Only the evidence_id index is used (the kind is checked here, not in SQL, so no planner can prefer
-        # the kind index, under which every evidence label would be read).
+        # the kind index, under which every evidence label would be read). On a workspace's chain only its own
+        # evidence counts: an id another client's agent was handed is not this client's evidence.
+        statement = select(table.c.evidence_id, table.c.kind).where(table.c.evidence_id.in_(sorted(shaped)))
         with self._engine.connect() as connection:
             found = {
                 str(row.evidence_id)
-                for row in connection.execute(
-                    select(table.c.evidence_id, table.c.kind).where(table.c.evidence_id.in_(sorted(shaped)))
-                )
+                for row in connection.execute(_on_chain(statement, table, self._chain))
                 if row.kind == EVIDENCE_LABEL
             }
         return frozenset(wanted - found)
@@ -494,16 +595,18 @@ class DecisionLedger:
         """Every entry naming `proposal_id`, oldest first (an indexed lookup)."""
         from sqlalchemy import select
 
-        table = _TABLE()
+        table = _table(self._chain)
         with self._engine.connect() as connection:
             rows = connection.execute(
-                select(table).where(table.c.proposal_id == proposal_id).order_by(table.c.seq)
+                _on_chain(select(table), table, self._chain)
+                .where(table.c.proposal_id == proposal_id)
+                .order_by(table.c.seq)
             ).all()
         return tuple(_view(row) for row in rows)
 
     def entries(self, *, kind: str | None = None, after_seq: int = 0) -> Iterator[LedgerEntry]:
         """Every entry after `after_seq`, oldest first (of one kind when given), read in batches."""
-        for rows in _batches(self._engine, after_seq=after_seq, kind=kind):
+        for rows in _batches(self._engine, after_seq=after_seq, kind=kind, chain=self._chain):
             yield from (_view(row) for row in rows)
 
 
@@ -511,14 +614,26 @@ def _TABLE() -> Any:  # noqa: N802 - the table object, named like the constant i
     return DecisionLogEntry.__table__  # type: ignore[attr-defined]
 
 
-def _batches(engine: Engine, *, after_seq: int = 0, kind: str | None = None) -> Iterator[list[Any]]:
+def _table(chain: str | None) -> Any:
+    """The table a chain lives in: the deployment's (`chain` None) or the workspaces' one."""
+    return _TABLE() if chain is None else WorkspaceLogEntry.__table__  # type: ignore[attr-defined]
+
+
+def _on_chain(statement: Any, table: Any, chain: str | None) -> Any:
+    """`statement` narrowed to one workspace's chain (unchanged on the deployment's chain)."""
+    return statement if chain is None else statement.where(table.c.workspace == chain)
+
+
+def _batches(
+    engine: Engine, *, after_seq: int = 0, kind: str | None = None, chain: str | None = None
+) -> Iterator[list[Any]]:
     """Every row after `after_seq` in `seq` order, `_BATCH` at a time, as plain Core rows (no ORM objects)."""
     from sqlalchemy import select
 
-    table = _TABLE()
+    table = _table(chain)
     last = after_seq
     while True:
-        statement = select(table).where(table.c.seq > last)
+        statement = _on_chain(select(table), table, chain).where(table.c.seq > last)
         if kind is not None:
             statement = statement.where(table.c.kind == kind)
         statement = statement.order_by(table.c.seq).limit(_BATCH)
@@ -528,6 +643,38 @@ def _batches(engine: Engine, *, after_seq: int = 0, kind: str | None = None) -> 
             return
         yield rows
         last = int(rows[-1].seq)
+
+
+def chains_drafting(engine: Engine, proposal_id: str) -> tuple[str | None, ...]:
+    """The chains holding a `proposal.drafted` entry for `proposal_id`: None for the deployment's chain, else the
+    workspace id (Plan K M141). The ledger, not the stored proposal file, says where a proposal was drafted, so a
+    decision is taken on that chain whatever the file says. Read only: a table not yet created holds nothing, and
+    none is created here."""
+    from sqlalchemy import inspect, select
+
+    found: list[str | None] = []
+    names = set(inspect(engine).get_table_names())
+    if DECISION_LOG_TABLE in names:
+        table = _table(None)
+        with engine.connect() as connection:
+            row = connection.execute(
+                select(table.c.seq)
+                .where(table.c.proposal_id == proposal_id, table.c.kind == PROPOSAL_DRAFTED)
+                .limit(1)
+            ).first()
+        if row is not None:
+            found.append(None)
+    if WORKSPACE_LOG_TABLE in names:
+        table = WorkspaceLogEntry.__table__  # type: ignore[attr-defined]
+        with engine.connect() as connection:
+            rows = connection.execute(
+                select(table.c.workspace)
+                .where(table.c.proposal_id == proposal_id, table.c.kind == PROPOSAL_DRAFTED)
+                .distinct()
+                .order_by(table.c.workspace)
+            ).all()
+        found.extend(str(row.workspace) for row in rows)
+    return tuple(found)
 
 
 # ---------------------------------------------------------------------------
@@ -572,9 +719,11 @@ def _stored_hash(row: Any) -> str:
     def text(value: str) -> str:
         return json.dumps(value, ensure_ascii=False)
 
+    chain = getattr(row, "workspace", None)
+    chained = "" if chain is None else f'"chain":{text(chain)},'
     content = (
-        f'{{"actor":{text(row.actor)},"body":{row.body},"created_at":{text(_stamp(row.created_at))},'
-        f'"kind":{text(row.kind)},"seq":{int(row.seq)}}}'
+        f'{{"actor":{text(row.actor)},"body":{row.body},{chained}'
+        f'"created_at":{text(_stamp(row.created_at))},"kind":{text(row.kind)},"seq":{int(row.seq)}}}'
     )
     return sha256_hex(row.prev_hash.encode("ascii") + content.encode("utf-8"))
 
@@ -641,22 +790,28 @@ def verify_entries(
 
 
 def verify_ledger(
-    engine: Engine, verifier: Signer | None, *, from_checkpoint: str | None = None
+    engine: Engine,
+    verifier: Signer | None,
+    *,
+    from_checkpoint: str | None = None,
+    chain: str | None = None,
 ) -> VerifyReport:
     """:func:`verify_entries` over the database's ledger, read in batches of 10,000.
 
     `from_checkpoint` is an `entry_hash` the caller already verified (a receipt's `ledger_checkpoint`, or the
     `head` of an earlier report): only the entries after it are walked, and the first of them must point at
     it. A checkpoint that is not in the ledger is `LEDGER_CHAIN_BROKEN`: the ledger was rewritten under it.
+    `chain` walks one client workspace's chain (Plan K M141); None walks the deployment's.
     """
+    _chain_name(chain)
     start: tuple[int, str] | None = None
     if from_checkpoint is not None:
         from sqlalchemy import select
 
-        table = _TABLE()
+        table = _table(chain)
         with engine.connect() as connection:
             found = connection.execute(
-                select(table.c.seq).where(table.c.entry_hash == from_checkpoint)
+                _on_chain(select(table.c.seq), table, chain).where(table.c.entry_hash == from_checkpoint)
             ).first()
         if found is None:
             return VerifyReport(
@@ -670,7 +825,7 @@ def verify_ledger(
         start = (int(found.seq), from_checkpoint)
 
     def rows() -> Iterator[Any]:
-        for batch in _batches(engine, after_seq=0 if start is None else start[0]):
+        for batch in _batches(engine, after_seq=0 if start is None else start[0], chain=chain):
             yield from batch
 
     report = verify_entries(rows(), verifier, start=start)
@@ -703,6 +858,22 @@ def _parser() -> argparse.ArgumentParser:
         default=None,
         help="The signing key (default: <data dir>/" + SIGNING_KEY_FILE + ").",
     )
+    verify.add_argument(
+        "--workspace",
+        default=None,
+        metavar="WORKSPACE",
+        help="Walk this client workspace's chain (Plan K M141) instead of the deployment's.",
+    )
+    verify.add_argument(
+        "--against",
+        type=Path,
+        default=None,
+        metavar="RECEIPTS_JSON",
+        help=(
+            'Receipts the client kept (a JSON list, or {"receipts": [...]}): each must still be in the chain, '
+            "else RECEIPT_MISMATCH. A receipt names its chain (ledger_chain); --workspace defaults to it."
+        ),
+    )
     return parser
 
 
@@ -719,14 +890,46 @@ def main(argv: Sequence[str] | None = None) -> int:
     verifier: Signer | None = FileKeySigner(key_path, create=False) if key_path.is_file() else None
     from engine.platform_db import create_tables
 
-    create_tables(engine, (DECISION_LOG_TABLE,))
-    report = verify_ledger(engine, verifier, from_checkpoint=args.from_checkpoint)
-    if report.ok:
-        print(f"ok: {report.entries} entries, head {report.head or '-'}")
+    receipts = None
+    chain: str | None = args.workspace
+    if args.against is not None:
+        from engine.agentic.receipts import ReceiptError, chain_of, load_receipts
+
+        try:
+            receipts = load_receipts(args.against)
+            chain = chain if chain is not None else chain_of(receipts)
+        except ReceiptError as exc:
+            print(f"{exc.code}: {exc}", file=sys.stderr)
+            return 1
+    try:
+        _chain_name(chain)
+    except ValueError as exc:
+        print(f"LEDGER_CHAIN_BROKEN: {exc}", file=sys.stderr)
+        return 1
+    create_tables(engine, (DECISION_LOG_TABLE if chain is None else WORKSPACE_LOG_TABLE,))
+    report = verify_ledger(engine, verifier, from_checkpoint=args.from_checkpoint, chain=chain)
+    if not report.ok:
+        where = "" if report.bad_seq is None else f"entry seq={report.bad_seq}: "
+        print(f"{report.code}: {where}{report.reason}", file=sys.stderr)
+        return 1
+    named = "" if chain is None else f" of workspace {chain}"
+    if receipts is not None:
+        from engine.agentic.receipts import check_receipts
+
+        # The ledger class of this module: run as `python -m`, it is `__main__`, and importing it again would
+        # declare its tables twice.
+        checked = check_receipts(
+            DecisionLedger(engine, signer=None, policy_version="", chain=chain), receipts
+        )
+        if not checked.ok:
+            print(f"{checked.code}: receipt {checked.bad_receipt}: {checked.reason}", file=sys.stderr)
+            return 1
+        print(
+            f"ok: {report.entries} entries{named}, head {report.head or '-'}; {checked.receipts} receipts match"
+        )
         return 0
-    where = "" if report.bad_seq is None else f"entry seq={report.bad_seq}: "
-    print(f"{report.code}: {where}{report.reason}", file=sys.stderr)
-    return 1
+    print(f"ok: {report.entries} entries{named}, head {report.head or '-'}")
+    return 0
 
 
 if __name__ == "__main__":  # pragma: no cover - exercised through `main` and a subprocess test

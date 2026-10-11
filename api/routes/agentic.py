@@ -7,7 +7,7 @@ exist and the API is byte-identical to Plan J's (the `PLAN-K` hook in `api/main.
 |---|---|---|
 | `GET /agentic/proposals` | Viewer | Every proposal, newest first; `status` narrows the list. |
 | `GET /agentic/proposals/{proposal_id}` | Viewer | One proposal: its payload, the evidence it cites and the policy's decisions. |
-| `POST /agentic/proposals/{proposal_id}/approve` | Approver, audited | Re-checks the policy with the facts as they are now, then executes it through the route function the product already has (a test plan: `api.routes.campaigns.register_plan`). Answers the receipt with the ledger checkpoint. |
+| `POST /agentic/proposals/{proposal_id}/approve` | Approver, audited | Re-checks the policy with the facts as they are now, then executes it through the route function the product already has (a test plan: `api.routes.campaigns.register_plan`). Answers the receipt with the ledger checkpoint, its seq and chain, and the holdout salt's fingerprint (M141). |
 | `POST /agentic/proposals/{proposal_id}/reject` | Approver, audited | Rejects it. |
 | `POST /agentic/plans` | Analyst, audited | M139: the campaign planner from a warning card, the goal form or a goal in words (`engine.agentic.planner`); runs to the interrupt and answers the plan with its proposal, or the code it stopped with. Words need an AI service (`409 AI_NOT_CONNECTED`); a card and the form do not. |
 | `GET /agentic/plans/{plan_id}` | Viewer | M139: where a plan stands: its frame, the evidence, the candidates, the policy's decisions, the proposal, the narrative and, once approved, what was carried out. |
@@ -128,7 +128,12 @@ def _http(exc: AgenticError) -> HTTPException:
 
 
 def _context(
-    request: Request, storage: Storage, root: Any, settings: Settings, principal: Principal
+    request: Request,
+    storage: Storage,
+    root: Any,
+    settings: Settings,
+    principal: Principal,
+    workspace: str | None = None,
 ) -> ToolContext:
     from api.routes.campaigns import get_campaign_store
 
@@ -142,6 +147,7 @@ def _context(
             signer=signer_for_data_dir(data_dir),
             settings=settings,
             campaigns=get_campaign_store(request),
+            workspace=workspace,
         )
     except AgenticError as exc:
         raise _http(exc) from exc
@@ -204,6 +210,36 @@ def read_proposal(proposal_id: str, storage: StorageDep) -> Proposal:
     return proposal.model_copy(update={"status": proposal.status_at(utc_now())})
 
 
+def _decision_chain(proposal_id: str, request: Request, storage: Storage, root: Any) -> str | None:
+    """The chain a proposal is decided on (Plan K M141, DEC-1408 (c)): None, the deployment's, or a workspace's.
+
+    The ledger says where it was drafted (`chains_drafting`), not the stored file, which is ordinary storage and
+    can be edited: a proposal drafted on exactly one chain is decided there, and a file naming another workspace
+    (or a name no chain can have) is refused on that chain as PROPOSAL_TAMPERED (`ledger_mismatch` compares the
+    workspace). With no draft anywhere, the file's workspace is used only when it is a well-formed id of a
+    configured workspace; otherwise the deployment's chain records the refusal, so one client's ids never land on
+    another's chain and a malformed name never reaches the ledger."""
+    import re
+
+    from api.mcp.config import load_mcp_config
+    from engine.agentic.ledger import CHAIN_PATTERN, chains_drafting
+
+    holders = chains_drafting(get_platform_engine(request), proposal_id)
+    if len(holders) == 1:
+        return holders[0]
+    try:
+        stored = ProposalStore(storage).get(proposal_id).workspace
+    except AgenticError:
+        return None  # decide_proposal answers PROPOSAL_NOT_FOUND itself
+    if stored is None or not re.fullmatch(CHAIN_PATTERN, stored):
+        return None
+    try:
+        configured = {workspace.id for workspace in load_mcp_config(root).mcp.workspaces}
+    except AgenticError:
+        return None
+    return stored if stored in configured else None
+
+
 def _decide(
     decision: str,
     proposal_id: str,
@@ -214,7 +250,9 @@ def _decide(
     settings: Settings,
     principal: Principal,
 ) -> ProposalReceipt:
-    ctx = _context(request, storage, root, settings, principal)
+    ctx = _context(
+        request, storage, root, settings, principal, _decision_chain(proposal_id, request, storage, root)
+    )
     try:
         receipt = decide_proposal(
             proposal_id,

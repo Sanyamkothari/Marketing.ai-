@@ -484,6 +484,19 @@ class ProposalReceipt(_Model):
     ledger_checkpoint: str = Field(
         description="entry_hash of the ledger head after the decision. Keep it: a rewritten ledger no longer matches."
     )
+    # Plan K M141 (DEC-1408 (d)): the rest of a client-held checkpoint (`engine.agentic.receipts`). Added, defaulted
+    # fields: `python -m engine.agentic.ledger verify --against` reads a kept receipt back.
+    ledger_seq: int | None = Field(default=None, description="The decision's seq on its chain.")
+    ledger_chain: str | None = Field(
+        default=None,
+        description="The client workspace whose chain holds the decision; absent on the deployment's chain.",
+        exclude_if=lambda value: value is None,
+    )
+    holdout_salt_fingerprint: str | None = Field(
+        default=None,
+        description="The holdout salt's fingerprint the platform records: who is held out, committed.",
+    )
+    holdout_salt_note: str | None = Field(default=None, description="Why there is no fingerprint, when null.")
 
 
 def decide_proposal(
@@ -583,6 +596,9 @@ def decide_proposal(
                 }
             )
         )
+        from engine.agentic.receipts import receipt_for
+
+        kept = receipt_for(head, ledger.engine)
         return ProposalReceipt(
             proposal_id=proposal.proposal_id,
             decision=decision,
@@ -591,6 +607,10 @@ def decide_proposal(
             payload_digest=proposal.payload_digest,
             result_ref=result_ref,
             ledger_checkpoint=head.entry_hash,
+            ledger_seq=kept.ledger_seq,
+            ledger_chain=kept.ledger_chain,
+            holdout_salt_fingerprint=kept.holdout_salt_fingerprint,
+            holdout_salt_note=kept.holdout_salt_note,
         )
 
     if decision == "rejected":

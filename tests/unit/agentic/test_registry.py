@@ -216,6 +216,7 @@ def test_a_call_its_route_would_audit_writes_one_audit_event(tmp_path: Path, con
     assert {tool.name for tool in ALL_TOOLS if audited(tool)} == {
         "check_contactable",
         "value_segment",
+        "check_before_contact",  # Plan K M141: mirrors the artefact download, which audits reads
         "draft_test_plan",
     }
 

@@ -156,3 +156,41 @@ def test_the_walk_finds_the_grouped_outputs_it_guards() -> None:
     assert _grouped(tools["value_segment"].output_model, ()) == [(("bands",), "list")]
     assert (("channels", "*", "reasons"), "map") in _grouped(tools["check_contactable"].output_model, ())
     assert (("report", "arms", "*", "segments"), "list") in _grouped(tools["audit_campaign"].output_model, ())
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# M141 (DEC-1408): check_before_contact's counts are scalars, one group as a whole.
+def _gate(**counts: int) -> dict[str, Any]:
+    base = {
+        "customers": 500,
+        "sent_rows": 480,
+        "withheld_rows": 20,
+        "rerouted_rows": 30,
+        "decision_rows_without_consent_evidence": 0,
+    }
+    return {
+        "run_id": "r",
+        "checked": True,
+        "counts": {**base, **counts},
+        "withheld": {"COMPLIANCE_CONSENT": 12, "COMPLIANCE_NO_CHANNEL": 10},
+    }
+
+
+def test_every_small_count_of_the_gate_withholds_the_counts() -> None:
+    out, withheld = suppress("check_before_contact", _gate(decision_rows_without_consent_evidence=3))
+    assert out["counts"] is None and withheld["counts"] == 1, "3 decision rows with no consent evidence"
+    out, withheld = suppress("check_before_contact", _gate(withheld_rows=3, sent_rows=497))
+    assert out["counts"] is None and withheld["counts"] == 1, "3 customers withheld"
+    out, withheld = suppress("check_before_contact", _gate(rerouted_rows=9))
+    assert out["counts"] is None and withheld["counts"] == 1
+    out, withheld = suppress("check_before_contact", _gate())
+    assert out["counts"] == _gate()["counts"] and withheld == {}, "0 and 10 or more are served"
+
+
+def test_every_count_of_the_gate_is_under_its_rule() -> None:
+    """The coverage walk above sees lists and maps; a scalar count of the gate's is pinned here, field by field."""
+    from engine.agentic.tools import GateCounts
+
+    (rule,) = [rule for rule in RULES["check_before_contact"] if isinstance(rule, Whole)]
+    assert rule.path == ("counts",)
+    assert set(rule.counts) == set(GateCounts.model_fields), "every count the gate reports is suppressed"

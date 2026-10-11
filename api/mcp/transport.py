@@ -44,6 +44,8 @@ class InProcessTransport:
 
     verifier: Verifier
     caller: McpCaller
+    extensions: tuple[Any, ...] = ()
+    """Client extensions (M141: `api.mcp.task_client.TasksExtension`)."""
 
     @asynccontextmanager
     async def _connect(self) -> AsyncIterator[Client]:
@@ -52,7 +54,7 @@ class InProcessTransport:
 
         caller = self.caller
         server = build_server(self.verifier, lambda _ctx: caller)
-        async with Client(server) as client:
+        async with Client(server, extensions=list(self.extensions) or None) as client:
             yield client
 
     def connect(self) -> AbstractAsyncContextManager[Client]:
@@ -74,6 +76,8 @@ class AsgiTransport:
     mode: str = "auto"
     """`auto` (2026-07-28 when the server offers it) or `legacy` (the 2025 initialize handshake)."""
     base_url: str = "http://testserver"
+    extensions: tuple[Any, ...] = ()
+    """Client extensions (M141: `api.mcp.task_client.TasksExtension`, so long tools run as tasks)."""
 
     @asynccontextmanager
     async def _connect(self) -> AsyncIterator[Client]:
@@ -92,7 +96,10 @@ class AsgiTransport:
             async with http:
                 transport = streamable_http_client(f"{self.base_url}{MCP_PATH}", http_client=http)
                 info = Implementation(name=self.client_name, version="1")
-                async with Client(transport, client_info=info, mode=self.mode) as client:
+                extensions = list(self.extensions) or None
+                async with Client(
+                    transport, client_info=info, mode=self.mode, extensions=extensions
+                ) as client:
                     yield client
 
     def connect(self) -> AbstractAsyncContextManager[Client]:

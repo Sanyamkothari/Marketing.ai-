@@ -148,6 +148,19 @@ def _policy(out: Mapping[str, Any]) -> list[str]:
     ]
 
 
+def _before_contact(out: Mapping[str, Any]) -> list[str]:
+    if not out.get("checked"):
+        return ["The compliance gate did not decide this run's current list; the structured result says why."]
+    counts = out.get("counts")
+    if not isinstance(counts, Mapping):
+        return ["The gate's counts describe a group of fewer than 10 customers and are not shown."]
+    return [
+        f"Of {_int(counts.get('customers'))} customers the list would contact, {_int(counts.get('sent_rows'))} are "
+        f"sent, {_int(counts.get('withheld_rows'))} withheld and {_int(counts.get('rerouted_rows'))} moved to "
+        f"another channel; {len(out.get('withheld') or {})} reasons shown.",
+    ]
+
+
 def _draft(out: Mapping[str, Any]) -> list[str]:
     if out.get("status") == "pending":
         return ["Proposal drafted and pending: nothing changes until an Approver approves it in the product."]
@@ -162,6 +175,7 @@ _SPECIFIC: Final[dict[str, Callable[[Mapping[str, Any]], list[str]]]] = {
     "audit_campaign": _audit,
     "get_proof_pack": _proof,
     "evaluate_policy": _policy,
+    "check_before_contact": _before_contact,
     "draft_test_plan": _draft,
 }
 
