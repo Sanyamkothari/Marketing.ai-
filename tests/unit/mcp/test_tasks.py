@@ -216,3 +216,29 @@ def test_a_record_past_its_ttl_is_gone(tmp_path: Path) -> None:
     assert store.get(record.task_id, token_key="k", now=now + timedelta(seconds=61)) is None
     assert not _records(tmp_path), "an expired record is deleted when it is read"
     assert store.get("../../etc/passwd", token_key="k", now=now) is None, "a task id is never a path"
+
+
+def test_an_unread_record_past_its_ttl_is_swept_by_the_next_task(tmp_path: Path) -> None:
+    """A task its client never polls again does not stay in the store with its figures."""
+    store = TaskStore(LocalStorage(tmp_path))
+    now = datetime(2026, 10, 11, tzinfo=UTC)
+
+    def create(token: str, at: datetime, ttl: int = 60) -> str:
+        return store.create(
+            token_key=token, workspace="acme", tool="audit_campaign", now=at, timeout_seconds=5, ttl_seconds=ttl,
+            poll_interval_ms=500,
+        ).task_id  # fmt: skip
+
+    forgotten = create("k", now)
+    store.finish(
+        forgotten, {"content": [], "structuredContent": {"figure": 1}}, now=now + timedelta(seconds=1)
+    )
+    kept = create("other", now, ttl=3_600)
+    assert len(_records(tmp_path)) == 2
+    fresh = create("other", now + timedelta(seconds=61))
+    assert forgotten not in str(_records(tmp_path)), "another session's new task swept the expired record"
+    assert (
+        store.get(kept, token_key="other", now=now + timedelta(seconds=61)) is not None
+    ), "one in its ttl stays"
+    assert store.get(fresh, token_key="other", now=now + timedelta(seconds=61)) is not None
+    assert store.sweep(now + timedelta(seconds=61)) == 0

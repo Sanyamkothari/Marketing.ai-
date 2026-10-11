@@ -81,6 +81,7 @@ __all__ = [
     "Signer",
     "VerifyReport",
     "WorkspaceLogEntry",
+    "chains_drafting",
     "compute_entry_hash",
     "holdout_commitment",
     "main",
@@ -642,6 +643,38 @@ def _batches(
             return
         yield rows
         last = int(rows[-1].seq)
+
+
+def chains_drafting(engine: Engine, proposal_id: str) -> tuple[str | None, ...]:
+    """The chains holding a `proposal.drafted` entry for `proposal_id`: None for the deployment's chain, else the
+    workspace id (Plan K M141). The ledger, not the stored proposal file, says where a proposal was drafted, so a
+    decision is taken on that chain whatever the file says. Read only: a table not yet created holds nothing, and
+    none is created here."""
+    from sqlalchemy import inspect, select
+
+    found: list[str | None] = []
+    names = set(inspect(engine).get_table_names())
+    if DECISION_LOG_TABLE in names:
+        table = _table(None)
+        with engine.connect() as connection:
+            row = connection.execute(
+                select(table.c.seq)
+                .where(table.c.proposal_id == proposal_id, table.c.kind == PROPOSAL_DRAFTED)
+                .limit(1)
+            ).first()
+        if row is not None:
+            found.append(None)
+    if WORKSPACE_LOG_TABLE in names:
+        table = WorkspaceLogEntry.__table__  # type: ignore[attr-defined]
+        with engine.connect() as connection:
+            rows = connection.execute(
+                select(table.c.workspace)
+                .where(table.c.proposal_id == proposal_id, table.c.kind == PROPOSAL_DRAFTED)
+                .distinct()
+                .order_by(table.c.workspace)
+            ).all()
+        found.extend(str(row.workspace) for row in rows)
+    return tuple(found)
 
 
 # ---------------------------------------------------------------------------

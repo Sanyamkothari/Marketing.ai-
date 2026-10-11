@@ -62,7 +62,7 @@ def test_the_gates_counts_for_the_planned_list_exactly_and_no_row(gated: Gated, 
         "sent_rows": stored["customers"] - stored["withheld_rows"],
         "withheld_rows": stored["withheld_rows"],
         "rerouted_rows": stored["rerouted_rows"],
-        "rows_without_consent_evidence": stored["rows_without_consent_evidence"],
+        "decision_rows_without_consent_evidence": stored["rows_without_consent_evidence"],
     }
     assert out["counts"]["sent_rows"] == on.summary.treat_rows, "what the list sends is what the list says"
     assert out["withheld"] == stored["withheld"] == on.summary.compliance_withheld
@@ -79,13 +79,15 @@ def test_the_gates_counts_for_the_planned_list_exactly_and_no_row(gated: Gated, 
 
     # Over MCP a count of 1 to 9 is a small group: withheld, with the reasons that add up with it.
     served, withheld = suppress("check_before_contact", out)
-    small = [value for value in stored["withheld"].values() if 0 < value < 10]
-    if 0 < stored["withheld_rows"] < 10:
-        assert served["counts"] is None and served["withheld"] == {} and withheld
-    elif small:
-        assert set(served["withheld"]) < set(stored["withheld"]) and withheld
+    # Every count - customers or decision rows - is checked; tests/unit/mcp/test_suppress.py pins each case.
+    small_count = any(0 < value < 10 for value in out["counts"].values())
+    small_reason = any(0 < value < 10 for value in stored["withheld"].values())
+    assert (served["counts"] is None) == small_count
+    if small_reason:
+        assert set(served["withheld"]) < set(stored["withheld"])
     else:
-        assert served == out and withheld == {}
+        assert served["withheld"] == out["withheld"]
+    assert bool(withheld) == (small_count or small_reason)
 
 
 def test_a_list_built_with_the_gate_off_or_not_built_is_not_checked(gated: Gated) -> None:

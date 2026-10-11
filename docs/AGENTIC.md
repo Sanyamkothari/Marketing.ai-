@@ -449,11 +449,11 @@ exactly as on the demo server (§8.4).
 person, and a Viewer's token reads aggregates and cannot propose.
 
 **`check_before_contact`** (read, Viewer; M141): before a planned list is sent, what the pre-send compliance gate
-(§9a) did to it - customers the list would contact, sent, withheld and moved to another channel, withheld per
-reason code, the rule version, the decision file's sha256 and the gate's own signed ledger entry - read from
+(§9a) did to it - customers the list would contact, sent, withheld and moved to another channel, the decision rows
+(one per customer and planned channel) with no consent evidence, withheld per reason code, the rule version, the decision file's sha256 and the gate's own signed ledger entry - read from
 `compliance_decisions.json`, never from the row-level file. A list built with the gate off, a run with no list
 yet, or a record that is not the one the current list was built with is answered `checked: false` with the
-reason. The plan named it `check_before_send`; it is `check_before_contact` because no tool name may carry a verb
+reason. Over MCP the counts are one group: any of them from 1 to 9 withholds them all (§8.4). The plan named it `check_before_send`; it is `check_before_contact` because no tool name may carry a verb
 of action (`send`, `approve`, ...: M133's surface test), so no client's model can read it as one that sends.
 
 **Receipts and one chain per workspace** (`engine/agentic/ledger.py`, `engine/agentic/receipts.py`). Each
@@ -467,7 +467,9 @@ own genesis, its workspace id inside every hash. Every MCP answer carries `_meta
 
 - the evidence label entry the answer was recorded under, and the holdout salt's fingerprint the platform records
 (null, with a note, when no persistent holdout has used a salt). A proposal drafted over MCP is decided in the
-product on the same chain, and the approval receipt (`POST /agentic/proposals/{id}/approve`) carries the same
+product on the same chain - the one the ledger says drafted it, not the one the stored proposal file names: a file
+edited to name another workspace, or a name no chain can have, is refused as `PROPOSAL_TAMPERED` on the chain that
+holds the draft - and the approval receipt (`POST /agentic/proposals/{id}/approve`) carries the same
 fields. The client keeps them; at any time:
 
 ```bash

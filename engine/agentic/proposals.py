@@ -201,7 +201,8 @@ def ledger_mismatch(proposal: Proposal, entries: Sequence[Any]) -> tuple[str | N
     `entries` are the ledger's entries naming the proposal, oldest first (`DecisionLedger.proposal_entries`).
     The stored file is ordinary artefact storage, so before anyone acts on it the file must match its
     `proposal.drafted` entry: the payload must hash to `payload_digest`, and the digest, kind, proposer,
-    agent, evidence, creation time and expiry must be the ones recorded when it was drafted; and no later
+    agent, evidence, creation time and expiry (and, since M141, the workspace whose chain holds the draft) must be
+    the ones recorded when it was drafted; and no later
     entry may have decided it already. Returns ``(None, None)`` when it matches, else ``(reason, status)``
     where `status` is the decided status the ledger records, or None while the ledger says it is undecided.
     """
@@ -233,6 +234,11 @@ def ledger_mismatch(proposal: Proposal, entries: Sequence[Any]) -> tuple[str | N
     if "expires_at" in body:
         recorded["expires_at"] = body["expires_at"]
         stored["expires_at"] = proposal.expires_at.isoformat()
+    if drafted.chain is not None or proposal.workspace is not None:
+        # Plan K M141: the workspace the file names must be the chain it was drafted on (a file edited to name
+        # another client's workspace is refused on the chain that holds the draft, never decided elsewhere).
+        recorded["workspace"] = drafted.chain
+        stored["workspace"] = proposal.workspace
     if "narrative_digest" in body or proposal.narrative is not None:
         # Plan K M139: the wording shown under a proposal is checked like its payload.
         recorded["narrative_digest"] = body.get("narrative_digest")

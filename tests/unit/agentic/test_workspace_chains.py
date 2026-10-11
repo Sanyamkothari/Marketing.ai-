@@ -228,3 +228,24 @@ def test_a_receipts_file_that_does_not_read_is_refused(
     path.write_text(json.dumps(mixed), encoding="utf-8")
     assert main(["verify", "--data-dir", str(tmp_path), "--against", str(path)]) == 1
     assert "RECEIPT_MISMATCH" in capsys.readouterr().err
+
+
+def test_the_ledger_names_the_chain_a_proposal_was_drafted_on(engine: Engine, signer: FileKeySigner) -> None:
+    """The approval route decides a proposal on the chain the ledger says drafted it, not the one its stored file
+    names (`api.routes.agentic._decision_chain`); nothing is created by asking."""
+    from sqlalchemy import inspect
+
+    from engine.agentic.ledger import PROPOSAL_DRAFTED, chains_drafting
+
+    assert chains_drafting(engine, "prop_00000000000000aa") == ()
+    assert inspect(engine).get_table_names() == [], "a read creates no table"
+    drafted = {"proposal_id": "prop_00000000000000aa", "proposal_kind": "test_plan", "status": "pending"}
+    DecisionLedger(engine, signer=signer, policy_version=POLICY, chain="acme").append(
+        PROPOSAL_DRAFTED, "agent:mcp:acme", drafted, at=T0
+    )
+    DecisionLedger(engine, signer=signer, policy_version=POLICY).append(
+        PROPOSAL_DRAFTED, "u_a", {**drafted, "proposal_id": "prop_00000000000000bb"}, at=T0
+    )
+    assert chains_drafting(engine, "prop_00000000000000aa") == ("acme",)
+    assert chains_drafting(engine, "prop_00000000000000bb") == (None,)
+    assert chains_drafting(engine, "prop_00000000000000cc") == ()

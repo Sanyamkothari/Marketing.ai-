@@ -606,7 +606,9 @@ EVALUATE_POLICY: Final[AgentTool[RunInput, EvaluatePolicyOut]] = AgentTool(
 # check_before_contact (Plan K M141, DEC-1408 (f))
 # ---------------------------------------------------------------------------
 class GateCounts(StrictBase):
-    """What the pre-send compliance gate did to a run's planned list, in customers (never rows of a file)."""
+    """What the pre-send compliance gate did to a run's planned list: counts of customers, and one count of the
+    gate's decision rows (one per customer and planned channel), named as such. Never a row of a file. Over MCP the
+    counts are one group as a whole: any of them from 1 to 9 withholds them all (`api.mcp.suppress`)."""
 
     customers: int = Field(description="Customers the list would have contacted before the gate.")
     sent_rows: int = Field(description="Of those, customers the list sends (on a channel the gate allowed).")
@@ -614,8 +616,11 @@ class GateCounts(StrictBase):
         description="Customers the gate took off the list: no planned channel allowed."
     )
     rerouted_rows: int = Field(description="Customers sent on another planned channel than the list chose.")
-    rows_without_consent_evidence: int = Field(
-        description="Decision rows the run's contactability file did not cover (their consent reference is null)."
+    decision_rows_without_consent_evidence: int = Field(
+        description=(
+            "Decision rows (one per customer and planned channel, not customers) the run's contactability file "
+            "did not cover: their consent reference is null."
+        )
     )
 
 
@@ -685,7 +690,7 @@ def _check_before_contact(given: RunInput, ctx: ToolContext) -> CheckBeforeConta
             sent_rows=summary.customers - summary.withheld_rows,
             withheld_rows=summary.withheld_rows,
             rerouted_rows=summary.rerouted_rows,
-            rows_without_consent_evidence=summary.rows_without_consent_evidence,
+            decision_rows_without_consent_evidence=summary.rows_without_consent_evidence,
         ),
         withheld=dict(summary.withheld),
         rule_version=summary.rule_version,

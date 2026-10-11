@@ -210,6 +210,36 @@ def read_proposal(proposal_id: str, storage: StorageDep) -> Proposal:
     return proposal.model_copy(update={"status": proposal.status_at(utc_now())})
 
 
+def _decision_chain(proposal_id: str, request: Request, storage: Storage, root: Any) -> str | None:
+    """The chain a proposal is decided on (Plan K M141, DEC-1408 (c)): None, the deployment's, or a workspace's.
+
+    The ledger says where it was drafted (`chains_drafting`), not the stored file, which is ordinary storage and
+    can be edited: a proposal drafted on exactly one chain is decided there, and a file naming another workspace
+    (or a name no chain can have) is refused on that chain as PROPOSAL_TAMPERED (`ledger_mismatch` compares the
+    workspace). With no draft anywhere, the file's workspace is used only when it is a well-formed id of a
+    configured workspace; otherwise the deployment's chain records the refusal, so one client's ids never land on
+    another's chain and a malformed name never reaches the ledger."""
+    import re
+
+    from api.mcp.config import load_mcp_config
+    from engine.agentic.ledger import CHAIN_PATTERN, chains_drafting
+
+    holders = chains_drafting(get_platform_engine(request), proposal_id)
+    if len(holders) == 1:
+        return holders[0]
+    try:
+        stored = ProposalStore(storage).get(proposal_id).workspace
+    except AgenticError:
+        return None  # decide_proposal answers PROPOSAL_NOT_FOUND itself
+    if stored is None or not re.fullmatch(CHAIN_PATTERN, stored):
+        return None
+    try:
+        configured = {workspace.id for workspace in load_mcp_config(root).mcp.workspaces}
+    except AgenticError:
+        return None
+    return stored if stored in configured else None
+
+
 def _decide(
     decision: str,
     proposal_id: str,
@@ -220,14 +250,9 @@ def _decide(
     settings: Settings,
     principal: Principal,
 ) -> ProposalReceipt:
-    # Plan K M141 (DEC-1408 (c)): a proposal an MCP client drafted in its workspace is decided on that
-    # workspace's chain. The stored file names the chain; a file edited to name another one finds no draft there
-    # and is refused as PROPOSAL_TAMPERED (`ledger_mismatch`), never decided on the wrong chain.
-    try:
-        workspace = ProposalStore(storage).get(proposal_id).workspace
-    except AgenticError:
-        workspace = None  # decide_proposal answers PROPOSAL_NOT_FOUND itself
-    ctx = _context(request, storage, root, settings, principal, workspace)
+    ctx = _context(
+        request, storage, root, settings, principal, _decision_chain(proposal_id, request, storage, root)
+    )
     try:
         receipt = decide_proposal(
             proposal_id,

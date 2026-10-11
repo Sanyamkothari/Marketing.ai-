@@ -19,7 +19,9 @@ server side is here, over the SDK's own seams (an extension `resultType` and thr
 **Where a task lives.** Its record is a small JSON document in the artefact store (`agentic/mcp/tasks/<id>.json`),
 so any API process behind the load balancer answers `tasks/get` for it, as the stateless transport needs. It holds
 the task's status and, once finished, the served result: already suppressed and gated, aggregates only, never a
-row. A record is kept `mcp.tasks.ttl_seconds` (an hour by default) and is then gone. The work runs on a worker
+row. A record is kept `mcp.tasks.ttl_seconds` (an hour by default) after it was made, and is then gone: a read
+past that deletes it, and every new task first sweeps the store of the records past theirs, so a task its client
+never polls again does not stay behind with its figures. The work runs on a worker
 thread of the API process that accepted the call; if that process stops, the task fails at its deadline
 (`MCP_TIMEOUT`) instead of staying `working` for ever.
 
@@ -165,8 +167,31 @@ class TaskStore:
             ttl_ms=ttl_seconds * 1000,
             poll_interval_ms=poll_interval_ms,
         )
+        self.sweep(now)
         self._storage.write_model(self._key(record.task_id), record)
         return record
+
+    def sweep(self, now: datetime) -> int:
+        """Delete every record past its ttl (whoever started it); the number deleted. Never fails a call: a
+        record that will not read or delete is left for the next sweep."""
+        from engine.storage import StorageError
+
+        try:
+            keys = self._storage.list_keys(TASKS_PREFIX)
+        except (StorageError, OSError):
+            return 0
+        swept = 0
+        for key in keys:
+            name = key.rsplit("/", 1)[-1]
+            if not name.endswith(".json"):
+                continue
+            record = self._read(name.removesuffix(".json"))
+            if record is None or now < record.created_at + timedelta(milliseconds=record.ttl_ms):
+                continue
+            with contextlib.suppress(Exception):
+                self._storage.delete(key)
+                swept += 1
+        return swept
 
     def _read(self, task_id: str) -> TaskRecord | None:
         from engine.storage import StorageError

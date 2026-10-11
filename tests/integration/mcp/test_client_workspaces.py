@@ -22,12 +22,14 @@ workspace chain and no task: these tests fail there.
 
 from __future__ import annotations
 
+import dataclasses
+import hashlib
 import json
 import shutil
 import subprocess
 import sys
 from collections.abc import Iterator
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -49,8 +51,17 @@ from engine.agentic.ledger import (
     signer_for_data_dir,
     verify_ledger,
 )
+from engine.agentic.proposals import ProposalStore
+from engine.holdout.salt import HoldoutLedger
 from engine.platform_db import PLATFORM_DB_FILENAME, sqlite_engine
-from tests.integration.mcp.client_world import CANARY_NAME, ClientWorld, build_world, write_workspaces
+from engine.storage import LocalStorage
+from tests.integration.mcp.client_world import (
+    CANARY_NAME,
+    ClientWorld,
+    _campaign,
+    build_world,
+    write_workspaces,
+)
 from tests.integration.mcp.conftest import POWER_BODY, mcp_config_root, signed_in_app
 
 pytestmark = pytest.mark.integration
@@ -425,6 +436,88 @@ def test_receipts_verify_and_a_rewritten_history_fails_against_them(
     assert plain.returncode == 0, "the rewrite recomputed every hash and signature: plain verify passes"
     caught = _verify(copy, "--against", str(receipts))
     assert caught.returncode == 1 and "RECEIPT_MISMATCH: receipt 0" in caught.stderr, caught.stderr
+
+
+def _copy(world: ClientWorld, tmp_path: Path, name: str) -> tuple[ClientWorld, str]:
+    """The world on a copy of its data folder, with a new campaign of acme's for a test plan to be drafted for
+    (each campaign takes one registered plan, so a test that approves one leaves the shared world alone)."""
+    copy = dataclasses.replace(world, data_dir=tmp_path / "data")
+    shutil.copytree(world.data_dir, copy.data_dir)
+    with TestClient(copy.app(), headers=copy.headers("acme_analyst")) as client:
+        campaign_id = _campaign(client, copy.acme_score_run, name)
+    return copy, campaign_id
+
+
+def test_a_recorded_holdout_salt_fingerprint_is_on_every_receipt(world: ClientWorld, tmp_path: Path) -> None:
+    """The receipts carry the fingerprint the platform records (DEC-1408 (d)), not only the no-salt note."""
+    mine, campaign_id = _copy(world, tmp_path, "Salted")
+    fingerprint = hashlib.sha256(b"a persistent holdout's salt").hexdigest()
+    HoldoutLedger(sqlite_engine(mine.data_dir / PLATFORM_DB_FILENAME)).put_fingerprint(
+        fingerprint, at=datetime(2026, 10, 11, tzinfo=UTC)
+    )
+    draft: dict[str, Any] = {"campaign_id": campaign_id, "plan": _plan(world.target)}
+    read, drafted = anyio.run(
+        _session,
+        mine,
+        "acme_analyst",
+        [("measure", {"campaign_id": world.acme_campaign}), ("draft_test_plan", draft)],
+    )["results"]
+    assert drafted.is_error is False and drafted.structured_content["status"] == "pending", drafted.content
+    with TestClient(mine.app()) as client:
+        approved = client.post(
+            f"/agentic/proposals/{drafted.structured_content['proposal_id']}/approve",
+            json={"reason": "plan agreed with Acme"},
+            headers=mine.headers("acme_approver"),
+        )
+    assert approved.status_code == 200, approved.text
+    kept = [read.meta["marketing-ai/receipt"], drafted.meta["marketing-ai/receipt"], approved.json()]
+    for receipt in kept:
+        assert receipt["ledger_chain"] == "acme"
+        assert (receipt["holdout_salt_fingerprint"], receipt["holdout_salt_note"]) == (fingerprint, None)
+    receipts = tmp_path / "receipts.json"
+    receipts.write_text(json.dumps(kept), encoding="utf-8")
+    checked = _verify(mine.data_dir, "--against", str(receipts))
+    assert checked.returncode == 0 and "3 receipts match" in checked.stdout, checked.stderr
+
+
+def test_a_proposal_file_edited_to_name_another_chain_is_refused_on_its_own(
+    world: ClientWorld, tmp_path: Path
+) -> None:
+    """The stored proposal file is ordinary storage. Edited to name a chain no workspace can have, or another
+    client's workspace, its approval is refused as PROPOSAL_TAMPERED on the chain that holds its draft (acme's) -
+    never a 500, and never an entry with acme's ids on house's chain."""
+    mine, campaign_id = _copy(world, tmp_path, "Tampered")
+    draft: dict[str, Any] = {"campaign_id": campaign_id, "plan": _plan(world.target)}
+    results = anyio.run(
+        _session, mine, "acme_analyst", [("draft_test_plan", draft), ("draft_test_plan", draft)]
+    )["results"]
+    ids = [result.structured_content["proposal_id"] for result in results]
+    assert [result.structured_content["status"] for result in results] == ["pending", "pending"]
+    store = ProposalStore(LocalStorage(mine.data_dir))
+    for proposal_id, edited in zip(ids, ("Bad Name", "house"), strict=True):
+        stored = store.get(proposal_id)
+        assert stored.workspace == "acme"
+        store.save(stored.model_copy(update={"workspace": edited}))
+    acme, house = _ledger(mine, "acme"), _ledger(mine, "house")
+    house_before = sum(1 for _ in house.entries())
+    with TestClient(mine.app(), raise_server_exceptions=False) as client:
+        for proposal_id in ids:
+            response = client.post(
+                f"/agentic/proposals/{proposal_id}/approve",
+                json={"reason": "looks fine"},
+                headers=mine.headers("acme_approver"),
+            )
+            assert response.status_code == 409, response.text
+            assert response.json()["detail"]["code"] == "PROPOSAL_TAMPERED"
+            assert [entry.kind for entry in acme.proposal_entries(proposal_id)] == [
+                "proposal.drafted",
+                "proposal.refused",
+            ], "the refusal is on the chain that holds the draft"
+            assert not house.proposal_entries(proposal_id) and not _ledger(mine, None).proposal_entries(
+                proposal_id
+            )
+            assert store.get(proposal_id).status == "refused"
+    assert sum(1 for _ in house.entries()) == house_before, "nothing of acme's on house's chain"
 
 
 def test_the_injection_canary_stays_green_on_client_data(world: ClientWorld) -> None:
