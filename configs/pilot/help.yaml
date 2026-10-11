@@ -783,6 +783,11 @@ codes:
     title: "No campaign can be planned yet"
     meaning: "The planner found nothing it can draft: no finished scoring run of the use case without a campaign yet, no run that recorded how many customers were held back, no channel on which anyone may be contacted, a list judged not safe to roll out, a spend over the budget or one that cannot be checked against it, or a smallest effect given in points for an outcome measured as an amount. The message says which."
     fix: "Do what the message names (for example score a new list, or set the channel's cost), then draft again."
+  # --- Plan M M184: an approved plan's contact list keeps its limits (DEC-1614 (a)) ---------------------------------
+  CAMPAIGN_LIST_NOT_AS_APPROVED:
+    title: "The contact list is not the one that was approved"
+    meaning: "An approved campaign plan names one channel and a number of customers. The list made for it would contact someone on another channel, or more customers than were approved. Or it would have to leave some customers out but has no score to choose them by: a list ranked by a propensity model does not keep that model's score. Nothing was opened or sent, and the plan is still waiting for a decision."
+    fix: "Draft the plan again. If the message says the list was ranked by a propensity model, score this cycle's file again; the planner then plans the new list."
   PLANNER_NOTHING_TO_PLAN:
     title: "This warning does not call for a new campaign"
     meaning: "The warning card asks for waiting (an early look, a model not yet ready) or for a person's decision (drift, a campaign that did harm), not for a campaign the planner could draft. Nothing was drafted."
@@ -867,6 +872,11 @@ codes:
     title: "The task was cancelled"
     meaning: "The long tool call running as a task (for example audit_campaign or get_proof_pack) was cancelled with tasks/cancel, so its result was thrown away when the work ended. The same code is also returned when a cancel arrives after the task had already finished; in that case the task keeps its result and its status."
     fix: "Call the tool again if you still need the answer."
+  # --- Plan M M184: strict compliance checking (DEC-1614 (c)) -----------------------------------------------------
+  COMPLIANCE_MESSAGE_NOT_CHECKED:
+    title: "The message could not be checked, so it is not sent"
+    meaning: "Strict checking is on, and this customer's message could not be checked. The action may have no message text or approved template, there may be no action catalogue, or there may be no list of allowed links. With strict checking off, such a message is let through and marked as not checked."
+    fix: "Add the message text or the approved template to the action in the catalogue, or add the list of allowed links, then build the list again."
   # --- Plan K M145: message variants pass the compliance gate (DEC-1412 (b)) ---------------------------------------
   COMPLIANCE_VARIANT_NO_COPY:
     title: "No approved words for this message variant on this channel"

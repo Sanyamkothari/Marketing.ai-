@@ -787,6 +787,18 @@ MILESTONE_TESTS: Final[Mapping[str, tuple[str, ...]]] = {
         "tests/integration/production/test_model_not_approved.py",
         "tests/unit/test_getting_started_doc.py",
     ),
+    # M184 (DEC-1614), safety fixes from the autonomy audit: an approved plan's list keeps its limits, unattended
+    # steps use only approved models, the strict compliance gate, copy approval's separation of duties, identity.
+    "M184": (
+        "tests/agentic/test_planner_safety.py",
+        "tests/unit/decide/test_campaign_scope.py",
+        "tests/unit/production/test_firing_model_approval.py",
+        "tests/unit/compliance/test_gate_strict.py",
+        "tests/integration/test_api_generative_copy_separation.py",
+        "tests/integration/test_api_generative_copy_identity.py",
+        "tests/integration/production/test_approvals_identity.py",
+        "tests/unit/agentic/test_verified_identity.py",
+    ),
 }
 """Milestone id -> the test files (or directories, with a trailing `/`) that prove it is built.
 

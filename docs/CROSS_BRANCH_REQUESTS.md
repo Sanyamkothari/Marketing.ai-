@@ -2763,6 +2763,34 @@ page now gets the server's refusal and shows it like any other error. `ui/module
 waiting model (no campaign: list served; a campaign's: list and plan refused, `scores.csv` served; approved: both
 served), a refused one, a demoted former champion, approval not required and a model the registry does not know.
 
+### 2026-10-11 — plan-m M184 (on main) → Plan J (owner of `engine/decide/`), trunk (owner of `api/routes/runs.py`), Phase 4b (owner of `engine/scheduling/`), Phase 3a (owner of `engine/generative/` and `api/routes/generative.py`) and Plan K (owners of `engine/compliance/` and `engine/agentic/`): safety fixes from the autonomy audit in other owners' files (record of in-place edits and announcement)
+
+**What changed** (DEC-1614). Plan J: `engine/decide/treat_list.py` and the new `engine/decide/campaign_scope.py`.
+When a run has `campaign_scope.json` (written only by the planner's EXECUTE), `build_treat_list` limits the list to
+the approved channel and number of contacts, ranked by `net_value` or uplift (uplift runs) or `actions.score_field`
+(propensity runs), and raises `TreatListError` `CAMPAIGN_LIST_NOT_AS_APPROVED` when a cut is needed and there is no
+ranking column; `ensure_treat_list` rebuilds a stored list not built under the run's limits. A run without the file
+is byte-identical, and the new `TreatListSummary` `campaign_scope_*` fields are excluded when unset. Trunk:
+`api.routes.runs.unapproved_list_model` now calls `engine.model_approval.model_not_approved(version,
+unattended=False)`, the same rule as before (pending, or archived with no `promoted_at`), and `MODEL_NOT_APPROVED`
+is `engine.model_approval.MODEL_NOT_APPROVED`, re-exported under the same name. Phase 4b: a SCORE firing that names
+`parameters.model_version_id` fails with `MODEL_NOT_APPROVED` when the use case requires approval and the version is
+a candidate, pending or turned down; firings that name no version are unchanged. Phase 3a: copy approval enforces
+`SEPARATION_OF_DUTIES` with sign-in on (new optional `copy_batch.json` `requested_by` and the template's
+`regenerated_by`, excluded when unset) and, with `agentic.enabled` on, writes a signed `copy_template.approved`
+ledger entry; `docs/GENERATIVE.md` §15 says so. Plan K: `compliance.gate.strict` (default false) adds
+`COMPLIANCE_MESSAGE_NOT_CHECKED` to `COMPLIANCE_CODES`; `CAMPAIGN_LIST_NOT_AS_APPROVED` joins `PLANNER_CODES`;
+ledger decisions made with sign-in off carry `identity_verified: false`, and `agentic.require_sign_in` (default
+false) gates EXECUTE through `engine.agentic.config.require_verified_identity`. Both new codes are explained in
+`configs/pilot/help.yaml`.
+
+**What is needed.** A new step that uses a model with nobody choosing it calls
+`engine.model_approval.unapproved_model_message` (or `model_not_approved(..., unattended=True)`), never a rule of its
+own; a new unattended step that acts on an approval calls `require_verified_identity`. A change to how a treat list
+is ranked keeps `campaign_scope`'s rule: never cut by key order.
+
+**What I did meanwhile.** Nothing was blocked.
+
 ### 2026-09-23 — plan-e-pilot (on main) → all branches: every change Plan E made outside its own files and blocks
 
 **What is needed.** Nothing from anybody; this is the announcement §3 asks for. Measured with
