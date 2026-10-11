@@ -16,7 +16,9 @@ compliance:
   gate:
     enabled: false
 
-# mcp.enabled: the verifier over MCP (M133) - other companies' agents calling the read and propose tools.
-# Declared by the set-up (M130, DEC-1400 (d)); nothing reads it yet.
+# mcp.enabled: the verifier over MCP (M133, DEC-1404) - other companies' agents calling the read and propose tools
+# at /mcp. Off, nothing is mounted and the MCP SDK is not imported. It needs agentic.enabled on as well (with it
+# off every tool call is AGENTIC_DISABLED). What the server does once on - the workspace, the demo use cases, the
+# rate limits and the call timeout - is in configs/agentic/mcp.yaml.
 mcp:
   enabled: false

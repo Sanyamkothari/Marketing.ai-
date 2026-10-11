@@ -668,8 +668,8 @@ codes:
     fix: "An Admin turns them on in configs/agentic/agentic.yaml if the deployment should use them."
   CONFIG_INVALID:
     title: "A settings file cannot be used"
-    meaning: "A settings file is missing, cannot be read, or has a value that is not allowed. Examples are a use case setting or the agent policy files under configs/agentic. The message names the file and the setting."
-    fix: "Correct the setting named, or restore the file, then try again."
+    meaning: "A settings file is missing, cannot be read, or has a value that is not allowed. Examples are a use case setting or the agent files under configs/agentic: agentic.yaml (Plan K's three switches, including mcp.enabled for the MCP server), policy.yaml (the agent policy) and mcp.yaml (the MCP server's workspace, demo use cases, rate limits and call timeout; min_group_rows is fixed at 10). Unknown settings are refused, not ignored. The message names the file and the setting."
+    fix: "Correct the setting named, or restore the file, then try again. Removing mcp.yaml uses its defaults."
   RUN_NOT_FOUND:
     title: "There is no such run"
     meaning: "The run named does not exist, or it was recorded in another workspace."
@@ -688,6 +688,47 @@ codes:
     title: "This campaign may be doing harm"
     meaning: "Before the day the campaign's test plan fixed for the final reading, the customers who were contacted are doing worse than the customers held back. The gap is larger than chance explains, even though the campaign is checked at every reading. This is an alarm, not a result, and nothing has been stopped. The result itself is still read only on the planned day. The alarm is checked only when harm_alarm.enabled is true in configs/measurement.yaml (it is off by default), and only for a campaign whose registered test plan gives a smallest effect worth detecting. A benefit never raises it."
     fix: "Open the campaign and decide whether to pause it. If you go on, the final result is still read on the planned day."
+  # --- Plan K M133: the verifier over MCP, demo data only (DEC-1404) ------------------------------------------------------
+  MCP_DEMO_ONLY:
+    title: "The MCP server answers about the demo library only"
+    meaning: "Until client data is connected (M141), the MCP server at /mcp answers only about the demo library: the public datasets in library/ (for example Hillstrom) and generated data. It refused because the workspace is not 'demo', the request named another workspace, or the run or campaign asked about is not demo data. A run or upload counts as demo data when it was filed under one of mcp.demo_use_cases or marked as generated, and never when it belongs to an onboarded client. You get the same answer when the id names nothing, so the server never reveals which ids exist."
+    fix: "Ask about a demo run or campaign. To serve client data, wait for M141's per-client scoping; until then keep mcp.enabled off on a deployment that holds client data."
+  MCP_SCOPE_DENIED:
+    title: "This sign-in cannot use that MCP tool"
+    meaning: "Each MCP tool needs a scope, and the scope comes from the signed-in person's role. Every signed-in person holds marketing-ai:read. marketing-ai:propose, which drafts a test plan for a person to approve in the product, needs the Analyst role. No scope approves anything, and an Approver or Admin role adds no MCP scope."
+    fix: "Connect the client with the token of a person who has the role the tool needs, or use a read tool."
+  MCP_RATE_LIMITED:
+    title: "Too many MCP calls from this sign-in"
+    meaning: "Each signed-in session has a budget: mcp.rate_limit.calls_per_minute calls in any 60 seconds (60 by default) and mcp.rate_limit.concurrent_calls running at once (2 by default). This call went over one of them. The answer carries marketing-ai/retry_after_seconds. The limits are counted per API process."
+    fix: "Wait that long and call again, or make fewer calls at once."
+  MCP_TIMEOUT:
+    title: "The MCP tool took too long"
+    meaning: "A long tool (audit_campaign, or get_proof_pack, which draws the Value Proof Pack on request) runs while the client waits, because the MCP version in use has no way to hand back a job to collect later, and it is refused after mcp.call_timeout_seconds (120 seconds by default). Work that has been started cannot be stopped, so it keeps its place in the session's limit of calls at once until it ends."
+    fix: "Ask again later, ask a narrower question, or raise mcp.call_timeout_seconds in configs/agentic/mcp.yaml."
+  MCP_GROUP_TOO_SMALL:
+    title: "The campaign holds a group too small to show"
+    meaning: "No figure about a group of 1 to 9 customers is served over MCP (Plan I's small-group rule). This campaign has such a group in one of three places: its totals (contacted, held back or intended), one offer's group in its stored measurement, or one group in its results per group of customers. The Value Proof Pack prints those figures as text, which cannot be partly hidden, so measure, audit_campaign and get_proof_pack all refuse the campaign."
+    fix: "Nothing to do over MCP. A person with access can read the campaign in the product, where the usual rules apply."
+  MCP_RESULT_WITHHELD:
+    title: "The result held outside text in a field that must be filled"
+    meaning: "Results served over MCP pass a text check that withholds instruction-like text and masks personal data from outside the product. This result had such text in a field that must be filled, so withholding it left a result that is not complete, and the whole result was withheld."
+    fix: "Find the outside text (a column name, an offer's name or a file name) in the product and rename it, then ask again."
+  MCP_NOT_STARTED:
+    title: "The MCP server is not running yet"
+    meaning: "A request reached /mcp before the server had started with the app, or after it had stopped."
+    fix: "Try again in a moment. If it persists, check that the API started cleanly and that configs/agentic/mcp.yaml is valid."
+  MCP_TOOL_FAILED:
+    title: "An MCP tool failed inside the product"
+    meaning: "An unexpected fault happened inside the tool. Nothing was changed. The MCP client gets only this code, never the error's message. The failure is in the API log (tool name and error type) and in the audit log (mcp.tool_call, outcome failed)."
+    fix: "Look up the log line for the call. If the stored file the tool reads is damaged, run again the step that wrote it."
+  AUTH_REQUIRED:
+    title: "Sign in to do this"
+    meaning: "The request carried no valid signed-in session. An expired or signed-out token gets the same answer. For the MCP server at /mcp the answer is 401 with WWW-Authenticate: Bearer."
+    fix: "Sign in again. For the MCP server, get a token with POST /auth/login and send it as 'Authorization: Bearer <token>' on every request."
+  AUTH_NOT_CONFIGURED:
+    title: "Sign-in is switched off on this deployment"
+    meaning: "Some parts of the product never run without sign-in, and the MCP server at /mcp is one of them: it answers 503 while MARKETING_AI_AUTH_MODE=off, even on a laptop, and never acts as the local operator."
+    fix: "Set MARKETING_AI_AUTH_MODE=local (or the deployment's identity provider), create users and connect with a signed-in token."
 
 settings:
   actions.bands[*].min_score:

@@ -1,8 +1,9 @@
 """Plan K's two configuration files: the switch and the policy (design §2.1, §11).
 
 * `configs/agentic/agentic.yaml` - Plan K's three switches, each default **false**: `agentic.enabled` (M132),
-  `compliance.gate.enabled` (M134) and `mcp.enabled` (M133); the last two are declared by the set-up (M130,
-  DEC-1400 (d)) and read by nothing yet. With `agentic.enabled` off nothing of Plan K's
+  `compliance.gate.enabled` (M134) and `mcp.enabled` (M133); the last two were declared by the set-up (M130,
+  DEC-1400 (d)). `mcp.enabled` is read by `api.mcp.config` (M133, whose settings are in `configs/agentic/mcp.yaml`);
+  `compliance.gate.enabled` by nothing yet. With `agentic.enabled` off nothing of Plan K's
   agent-safe core is reachable: `api.main` imports only this module and does not mount the `/agentic`
   routes, the app creates no table and writes no file, and :func:`require_enabled` refuses the in-process
   entry points with `AGENTIC_DISABLED`. (`alembic upgrade head` still adds the empty `agentic_decision_log`
@@ -77,7 +78,10 @@ class ComplianceSwitch(_Strict):
 class McpSwitch(_Strict):
     enabled: bool = Field(
         default=False,
-        description="The verifier over MCP (M133): other agents' tool calls. Nothing reads it yet (DEC-1400 (d)).",
+        description=(
+            "The verifier over MCP (M133): other agents' tool calls at /mcp, read by `api.mcp.config.mcp_enabled`; "
+            "the server's settings are in configs/agentic/mcp.yaml (DEC-1400 (d), DEC-1404 (a))."
+        ),
     )
 
 
