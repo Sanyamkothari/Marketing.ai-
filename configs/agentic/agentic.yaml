@@ -8,6 +8,10 @@
 # this switch says: a migration runs on every deployment.)
 agentic:
   enabled: false
+  # agentic.require_sign_in (Plan M M184, DEC-1614 (e); default false, so it is not written here): when true, an
+  # approved campaign plan is carried out only for a signed-in Approver. With sign-in off every request is the local
+  # operator, who holds every role, so separation of duties cannot hold; such an approval is then refused with
+  # AUTH_NOT_CONFIGURED. Off, it is carried out as before and marked identity_verified: false on the ledger.
 
 # compliance.gate.enabled: the pre-send compliance gate (M134, DEC-1405), one decision record per customer and
 # planned channel before a treat list leaves the product (consent on the channel, the DLT template, whitelisted

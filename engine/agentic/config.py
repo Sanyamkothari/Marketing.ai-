@@ -19,13 +19,16 @@ Both are read from the configuration root (`engine.config.config_root`), like ev
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Annotated, Final, Literal
+from typing import TYPE_CHECKING, Annotated, Final, Literal
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from engine.agentic.canonical import sha256_hex
 from engine.agentic.errors import AgenticError
+
+if TYPE_CHECKING:
+    from engine.access.roles import Principal
 
 __all__ = [
     "AGENTIC_CONFIG_FILE",
@@ -38,6 +41,7 @@ __all__ = [
     "load_policy",
     "policy_version",
     "require_enabled",
+    "require_verified_identity",
 ]
 
 AGENTIC_CONFIG_FILE: Final[str] = "agentic/agentic.yaml"
@@ -60,6 +64,15 @@ class _Strict(BaseModel):
 
 class AgenticSwitch(_Strict):
     enabled: bool = Field(default=False, description="The agent-safe core: tools, proposals, ledger, routes.")
+    # Plan M M184 (DEC-1614 (e)): off by default, because a laptop with sign-in off approves campaign plans today.
+    require_sign_in: bool = Field(
+        default=False,
+        description=(
+            "Carry out an approved campaign plan only for a signed-in person (`require_verified_identity`). "
+            "With sign-in off every request is the local operator, who holds every role, so separation of duties "
+            "cannot hold; on, such an approval is refused with AUTH_NOT_CONFIGURED instead of being executed."
+        ),
+    )
 
 
 class ComplianceGateSwitch(_Strict):
@@ -178,6 +191,29 @@ def require_enabled(config_root: Path | None = None) -> None:
             "Agent proposals are switched off for this deployment (agentic.enabled is false).",
             status=404,
         )
+
+
+def require_verified_identity(principal: Principal, config_root: Path | None = None) -> None:
+    """Plan M M184 (DEC-1614 (e)): refuse with `AUTH_NOT_CONFIGURED` (503) a step that acts on an approval
+    when `agentic.require_sign_in` is on and the approver is not a signed-in person.
+
+    With sign-in off (`MARKETING_AI_AUTH_MODE=off`) every request is the local operator, holding every role at
+    once, so whoever "approved" cannot be told from whoever proposed. The campaign planner's EXECUTE calls this
+    first; any later step that acts without a person at that moment must call it too. Off (the default) it
+    returns without reading anything else, so a laptop with sign-in off works as before - and its approvals are
+    marked `identity_verified: false` on the decision ledger.
+    """
+    if principal.kind == "user":
+        return
+    if not load_agentic_config(config_root).agentic.require_sign_in:
+        return
+    raise AgenticError(
+        "AUTH_NOT_CONFIGURED",
+        "This deployment requires a signed-in Approver to carry out an approved campaign plan "
+        "(agentic.require_sign_in is on), and sign-in is off, so nothing was carried out. Turn sign-in on "
+        "(MARKETING_AI_AUTH_MODE=local) and approve it again as a signed-in Approver.",
+        status=503,
+    )
 
 
 def policy_version(config_root: Path | None = None) -> str:

@@ -78,6 +78,8 @@ COMPLIANCE_CODES: Final[frozenset[str]] = frozenset(
         # M145 (DEC-1412): a customer of a message variant arm, checked on that variant's own words.
         "COMPLIANCE_VARIANT_NO_COPY",  # the customer's variant has no approved words on the channel
         "COMPLIANCE_VARIANT_UNREGISTERED",  # the variant's words have no registered template to check them on
+        # Plan M M184 (DEC-1614 (c)): with compliance.gate.strict on, words the gate could not check are withheld.
+        "COMPLIANCE_MESSAGE_NOT_CHECKED",
     }
 )
 """M134's codes (DEC-1405) and M145's (DEC-1412), joined into `PLAN_K_CODES` below: exactly the gate's reasons

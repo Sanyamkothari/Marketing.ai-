@@ -79,6 +79,7 @@ __all__ = [
     "decide_proposal",
     "decisions_for",
     "head_to_head",
+    "identity_part",
     "pending_approvals",
     "record_decision",
     "separation_refusal",
@@ -211,6 +212,13 @@ def trainer_of(storage: Storage, version: ModelVersion) -> str | None:
     except (StorageError, ValueError, OSError):
         return None
     return record.requested_by
+
+
+def identity_part(principal: Principal) -> dict[str, bool]:
+    """Plan M M184 (DEC-1614 (e)): `{"identity_verified": False}` for a decision by anyone but a signed-in person
+    (the local operator with sign-in off), to add to its ledger or audit record; `{}` for a signed-in person, whose
+    record is unchanged."""
+    return {} if principal.kind == "user" else {"identity_verified": False}
 
 
 def separation_refusal(principal: Principal, trainer: str | None) -> str | None:
@@ -583,6 +591,9 @@ def decide_proposal(
             "status": status,
             "decided_by": principal.user_id,
             "proposed_by": proposal.proposed_by,
+            # Plan M M184 (DEC-1614 (e)): with sign-in off the decider is the local operator, holding every role,
+            # so who decided is not known; the entry says so. A signed-in decision's body is unchanged.
+            **identity_part(principal),
         }
         head = ledger.append(kind, principal.user_id, {**body, **extra}, at=now)
         store.save(

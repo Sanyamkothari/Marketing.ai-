@@ -16,7 +16,9 @@ exist and the API is byte-identical to Plan J's (the `PLAN-K` hook in `api/main.
 There is no route that approves on an agent's behalf: an agent drafts through the tool registry
 (`engine.agentic.registry`) or the planner, and only a signed-in person approves here. An approved campaign
 plan the planner drafted is carried out through the product's own functions (M139): the treat list
-(`ensure_treat_list`), the campaign (`open_campaign`, the engine half of `POST /campaigns`, its treatment starting
+(`build_treat_list`, limited to the approved channel and number of contacts - Plan M M184, DEC-1614 (a);
+`409 CAMPAIGN_LIST_NOT_AS_APPROVED` otherwise, and `409 MODEL_VERSION_NOT_APPROVED` for a run whose model was never
+approved while approval is required), the campaign (`open_campaign`, the engine half of `POST /campaigns`, its treatment starting
 at the approval) and its test plan (`api.routes.campaigns.register_plan`). The planner's language-model calls are
 metered under the use case's own `generative.llm` and `generative.budget` (`get_planner_deps`). Refusals answer with the policy's code:
 `403 POLICY_ROLE_SEPARATION` for the person it was proposed for, `409 POLICY_*` when a rule refuses it now,
@@ -40,7 +42,9 @@ from engine.access.roles import Principal, Role
 from engine.agentic.errors import AgenticError
 from engine.agentic.ledger import signer_for_data_dir
 from engine.agentic.planner import (
+    BuiltList,
     ExecuteActions,
+    ListLimits,
     PlannerDeps,
     PlannerState,
     PlanRequest,
@@ -464,7 +468,8 @@ def _execute_campaign_plan(proposal: Proposal, request: Request, storage: Storag
     from api.routes.runs import requested_by
     from engine.config import load_use_case
     from engine.contracts import RunRecord
-    from engine.decide.treat_list import TreatListError, ensure_treat_list
+    from engine.decide.campaign_scope import CampaignScope, write_campaign_scope
+    from engine.decide.treat_list import TreatListError, build_treat_list
     from engine.measurement.cycle import CycleError, open_campaign
     from engine.runs import RUN_FILENAME
     from engine.storage import run_key
@@ -472,11 +477,40 @@ def _execute_campaign_plan(proposal: Proposal, request: Request, storage: Storag
     root = ctx.config_root
     store = get_campaign_store(request)
 
-    def build(run_id: str) -> int:
+    def build(run_id: str, limits: ListLimits) -> BuiltList:
+        # Plan M M184 (DEC-1614 (a)): the approved limits are written first, then the list is built under them
+        # (always built again: a list stored before the approval contacts the whole run).
+        write_campaign_scope(
+            storage,
+            CampaignScope(
+                run_id=run_id,
+                channel=limits.channel,
+                max_contacts=limits.max_contacts,
+                proposal_id=limits.proposal_id,
+                set_at=ctx.clock(),
+            ),
+        )
         try:
-            return ensure_treat_list(storage, run_id, config_root=root).total_rows
+            summary = build_treat_list(storage, run_id, config_root=root)
         except TreatListError as exc:
             raise AgenticError(exc.code, exc.message, status=409) from exc
+        return BuiltList(
+            total_rows=summary.total_rows,
+            treat_rows=summary.treat_rows,
+            channel_rows=dict(summary.channel_rows or {}),
+        )
+
+    def check_model(run_id: str) -> None:
+        # Plan M M184 (DEC-1614 (b)): the run's model must be an approved one while approval is required.
+        from api.deps import get_registry
+        from engine.model_approval import MODEL_VERSION_NOT_APPROVED, unapproved_model_message
+
+        record = storage.read_model(run_key(run_id, RUN_FILENAME), RunRecord)
+        if not load_use_case(record.use_case_id, root).governance.approval_required:
+            return
+        refusal = unapproved_model_message(get_registry(request), record.model_version_id)
+        if refusal is not None:
+            raise AgenticError(MODEL_VERSION_NOT_APPROVED, refusal, status=409)
 
     def open_(run_id: str, window: int) -> str:
         record = storage.read_model(run_key(run_id, RUN_FILENAME), RunRecord)
@@ -529,6 +563,10 @@ def _execute_campaign_plan(proposal: Proposal, request: Request, storage: Storag
         proposal,
         ctx,
         ExecuteActions(
-            build_treat_list=build, open_campaign=open_, register_plan=register, measure_schedule=schedule
+            build_treat_list=build,
+            open_campaign=open_,
+            register_plan=register,
+            measure_schedule=schedule,
+            check_model=check_model,
         ),
     )

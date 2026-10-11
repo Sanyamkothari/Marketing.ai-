@@ -25,6 +25,11 @@ actions stage, DEC-1311 (al)): true for a customer the run kept back as its cont
 and the column is absent from a treat list written before it existed; a value that was not configured is null, not zero; a reason
 the customer has no more of is null, not an empty string. Parquet holds the flags as booleans; the CSV
 writes `1` and `0` (empty for null).
+
+**An approved campaign's limits (Plan M M184, DEC-1614 (a)).** When the campaign planner carried out an approved
+plan for the run, `campaign_scope.json` names its one channel and its number of contacts, and every build keeps to
+them (`engine.decide.campaign_scope`): other channels and anyone beyond the number, from the highest score down,
+are not contacted; held-back rows keep their flags. A run without the file is built exactly as before.
 """
 
 from __future__ import annotations
@@ -44,6 +49,14 @@ from pydantic import Field
 
 from engine.config import ResolvedConfig, RunMode, UseCaseConfig
 from engine.contracts import Artefact, RunRecord, RunState
+from engine.decide.campaign_scope import (
+    OTHER_CHANNEL,
+    OVER_LIMIT,
+    CampaignScope,
+    apply_campaign_scope,
+    read_campaign_scope,
+    scope_note,
+)
 from engine.decide.catalogue import CATALOGUE_STAMP_FILENAME, CatalogueStamp, catalogue_sha256
 from engine.decide.contactability import (
     ALL_CHANNEL_CONSENT_COLUMN,
@@ -375,6 +388,37 @@ class TreatListSummary(Artefact):
         ),
         exclude_if=lambda value: value is None,
     )
+    # Plan M M184 (DEC-1614 (a)): the limits an approved campaign plan set on the list (`campaign_scope.json`).
+    campaign_scope_channel: str | None = Field(
+        default=None,
+        description=(
+            "Plan M M184: the only channel the approved campaign plan sends on; every other treated customer was "
+            "taken off the list. Absent unless the planner carried out an approved plan for this run."
+        ),
+        exclude_if=lambda value: value is None,
+    )
+    campaign_scope_max_contacts: int | None = Field(
+        default=None,
+        description=(
+            "Plan M M184: the most customers the approved plan contacts (its planned_contacts); those beyond it, "
+            "from the highest score down, were taken off the list. Absent when it set no number."
+        ),
+        exclude_if=lambda value: value is None,
+    )
+    campaign_scope_proposal_id: str | None = Field(
+        default=None,
+        description="Plan M M184: the approved proposal that set the limits. Absent otherwise.",
+        exclude_if=lambda value: value is None,
+    )
+    campaign_scope_withheld: dict[str, int] | None = Field(
+        default=None,
+        description=(
+            "Plan M M184: customers the limits took off the list: `other_channel` (they would have been contacted "
+            "on another channel) and `over_limit` (beyond the approved number). Held-back customers are never "
+            "counted here: their flags are untouched. Absent unless the limits were applied."
+        ),
+        exclude_if=lambda value: value is None,
+    )
 
 
 def ensure_treat_list(storage: Storage, run_id: str, *, config_root: Path | None = None) -> TreatListSummary:
@@ -390,7 +434,31 @@ def ensure_treat_list(storage: Storage, run_id: str, *, config_root: Path | None
     # PLAN-K (M134, DEC-1405): the pre-send compliance gate.
     if _gate_missed(summary) and _gate_on(config_root):
         return build_treat_list(storage, run_id, config_root=config_root)
+    # PLAN-M (M184, DEC-1614 (a)): a stored list not built under the run's approved campaign limits is built again.
+    if _scope_missed(storage, run_id, summary):
+        return build_treat_list(storage, run_id, config_root=config_root)
     return summary
+
+
+def _read_scope(storage: Storage, run_id: str) -> CampaignScope | None:
+    """Plan M M184: the run's approved campaign limits, or None. Unreadable limits stop the build (fail closed)."""
+    try:
+        return read_campaign_scope(storage, run_id)
+    except ValueError as exc:
+        raise TreatListError("CAMPAIGN_LIST_NOT_AS_APPROVED", str(exc)) from exc
+
+
+def _scope_missed(storage: Storage, run_id: str, summary: TreatListSummary) -> bool:
+    """Plan M M184: True when the run has approved campaign limits the stored list was not built under."""
+    scope = _read_scope(storage, run_id)
+    if scope is None:
+        return False
+    built = (
+        summary.campaign_scope_channel,
+        summary.campaign_scope_max_contacts,
+        summary.campaign_scope_proposal_id,
+    )
+    return built != (scope.channel, scope.max_contacts, scope.proposal_id)
 
 
 # PLAN-K (M134, DEC-1405): the pre-send compliance gate.
@@ -661,6 +729,44 @@ def build_treat_list(storage: Storage, run_id: str, *, config_root: Path | None 
                     offer_choice.explore_cost,
                 )
 
+    # 5c'. Plan M M184 (DEC-1614 (a)): an approved campaign plan's limits (`campaign_scope.json`, written only by
+    # the planner's EXECUTE): its one channel and its number of contacts. After the gate (it only takes customers
+    # off, so every customer left was cleared by the gate on the channel they are sent on) and before the arms.
+    # A run without the file - every run not carried out by the planner - is unchanged.
+    scope = _read_scope(storage, run_id)
+    scope_withheld: dict[str, int] | None = None
+    if scope is not None:
+        cut = apply_campaign_scope(
+            scope,
+            treat=treat,
+            channel=channel,
+            priority=(
+                scores[config.actions.score_field]
+                if config.actions.score_field in scores.columns
+                else pd.Series(np.full(n_rows, np.nan))
+            ),
+            keys=row_keys,
+        )
+        dropped = cut.other_channel | cut.over_limit
+        treat, channel = cut.treat, pd.Series(cut.channel, dtype="object")
+        notes = scope_note(scope)
+        offer = offer.mask(pd.Series(dropped), None)
+        offer_reason = offer_reason.mask(pd.Series(cut.other_channel), notes[OTHER_CHANNEL])
+        offer_reason = offer_reason.mask(pd.Series(cut.over_limit), notes[OVER_LIMIT])
+        if applied is not None and offer_choice is not None:
+            cleared = pd.Series(dropped & offer_choice.covered)
+            net_value = net_value.mask(cleared)
+            runner_up_offer = runner_up_offer.mask(cleared, None)
+            runner_up_value = runner_up_value.mask(cleared)
+            if applied.offered is not None and applied.explored is not None and applied.label is not None:
+                offer_counts, explore_offer_counts, explore_cost = _offer_tallies(
+                    applied.label,
+                    applied.offered & treat,
+                    applied.explored & treat,
+                    offer_choice.explore_cost,
+                )
+        scope_withheld = cut.withheld()
+
     # 5d. Plan K M140 (DEC-1407): each treated customer's message arm, on a run that drew variant arms only
     # (after the M134 gate, so the arms read the treat flags and channels the gate left: a customer the gate
     # withheld shows no arm, and one it moved is shown their arm's template on the channel they are sent on).
@@ -740,6 +846,11 @@ def build_treat_list(storage: Storage, run_id: str, *, config_root: Path | None 
         # PLAN-K (M145, DEC-1412): the arms' customers the gate withheld, per arm.
         variant_arm_withheld=None if gated is None else gated.summary.withheld_by_arm,
         variant_arm_words_withheld=None if gated is None else gated.summary.withheld_for_words_by_arm,
+        # PLAN-M (M184, DEC-1614 (a)): an approved campaign plan's limits, when it set any.
+        campaign_scope_channel=None if scope is None else scope.channel,
+        campaign_scope_max_contacts=None if scope is None else scope.max_contacts,
+        campaign_scope_proposal_id=None if scope is None else scope.proposal_id,
+        campaign_scope_withheld=scope_withheld,
     )
     storage.write_model(run_key(run_id, TREAT_LIST_SUMMARY_FILENAME), summary)
     _LOGGER.info(

@@ -1557,6 +1557,7 @@ def create_campaign_copy(
     storage: StorageDep,
     jobs: JobsDep,
     current: SettingsDep,
+    principal: PrincipalDep,
 ) -> GenerativeJobStartedResponse:
     run = load_run(storage, run_id)
     config = use_case_config(run.use_case_id, root)
@@ -1583,7 +1584,13 @@ def create_campaign_copy(
     jobs.submit(
         job_id,
         _campaign_copy_job(
-            storage, use_case=config, ai=ai, run_id=run_id, started_at=started, config_root=root
+            storage,
+            use_case=config,
+            ai=ai,
+            run_id=run_id,
+            started_at=started,
+            config_root=root,
+            requested_by=_signed_in_id(principal),
         ),
     )
     return GenerativeJobStartedResponse(run_id=run_id, job_id=job_id)
@@ -1607,6 +1614,7 @@ def _campaign_copy_job(
     run_id: str,
     started_at: datetime,
     config_root: Path | None,
+    requested_by: str | None = None,
 ) -> JobFn:
     status_key = run_key(run_id, COPY_STATUS_FILENAME)
     meter, guardrails = _client_meter_guardrails(use_case, ai=ai, job_id=run_id, config_root=config_root)
@@ -1631,6 +1639,7 @@ def _campaign_copy_job(
                 meter=meter,
                 guardrails=guardrails,
                 config_root=config_root,
+                requested_by=requested_by,
             )
             stages = (_stage("generate", RunState.DONE, seconds=time.monotonic() - began),)
         except Exception as exc:  # a job is never left running (DEC-1267)
@@ -1699,6 +1708,69 @@ def _approver_name(principal: Principal, typed: str) -> str:
     return principal.username if principal.kind == "user" else typed
 
 
+def _signed_in_id(principal: Principal) -> str | None:
+    """Plan M M184: the signed-in user's id, recorded as who asked for copy; None with sign-in off (the local
+    operator is everyone at once, so recording it would separate nobody)."""
+    return principal.user_id if principal.kind == "user" else None
+
+
+COPY_SEPARATION_MESSAGE: Final[str] = (
+    "You asked for these words to be written, so another person has to approve them."
+)
+"""Plan M M184 (DEC-1614 (d)): the refusal when the person who asked for a template's words approves it."""
+
+
+def _copy_author(batch: CopyBatch, template: CopyTemplate) -> str | None:
+    """Who asked for the template's current words: whoever regenerated it, else whoever asked for the batch."""
+    return template.regenerated_by or batch.requested_by
+
+
+def _record_copy_approval(
+    request: Request,
+    root: Path,
+    principal: Principal,
+    batch: CopyBatch,
+    template: CopyTemplate,
+    run_id: str,
+) -> None:
+    """Plan M M184 (DEC-1614 (d)): a signed `copy_template.approved` entry on the decision ledger, written only
+    while `agentic.enabled` is on (as proposals are), before the approval is stored: no approval without its
+    record. It holds the template id and the sha256 of its words, never the words; with sign-in off it says the
+    approver's identity was not verified."""
+    from api.access import get_platform_engine, platform_data_dir
+    from api.deps import get_settings
+    from engine.agentic.canonical import digest
+    from engine.agentic.config import agentic_enabled, policy_version
+    from engine.agentic.errors import AgenticError
+    from engine.agentic.ledger import COPY_TEMPLATE_APPROVED, DecisionLedger, signer_for_data_dir
+    from engine.approvals import identity_part
+
+    try:
+        if not agentic_enabled(root):
+            return
+        data_dir = platform_data_dir(request) or get_settings(request).data_dir
+        ledger = DecisionLedger(
+            get_platform_engine(request),
+            signer=signer_for_data_dir(data_dir),
+            policy_version=policy_version(root),
+        )
+        ledger.append(
+            COPY_TEMPLATE_APPROVED,
+            principal.user_id,
+            {
+                "run_id": run_id,
+                "template_id": template.template_id,
+                "template_sha256": digest({"subject": template.subject, "text": template.text}),
+                "status": "approved",
+                "decided_by": principal.user_id,
+                "proposed_by": _copy_author(batch, template),
+                **identity_part(principal),
+            },
+        )
+    except AgenticError as exc:
+        raise http_error(exc.status, exc.code, exc.message) from exc
+
+
 @router.post(
     "/runs/{run_id}/campaign-copy/templates/{template_id}/approve",
     response_model=CopyTemplate,
@@ -1711,9 +1783,16 @@ def approve_copy_template(
     body: CopyTemplateApproveRequest,
     storage: StorageDep,
     principal: PrincipalDep,
+    request: Request,
+    root: ConfigRootDep,
 ) -> CopyTemplate:
     """Approve one template. With sign-in on, `approved_by` is the signed-in user's username and
-    `body.approved_by` is ignored (M91); with sign-in off it is the name the caller typed, as before."""
+    `body.approved_by` is ignored (M91); with sign-in off it is the name the caller typed, as before.
+
+    Plan M M184 (DEC-1614 (d)): with sign-in on, whoever asked for the template's words (the batch, or this
+    template's regeneration) may not approve it - `403 SEPARATION_OF_DUTIES`, the rule model approval has
+    (DEC-862). With `agentic.enabled` on, each approval is signed on the decision ledger before it is stored.
+    """
     load_run(storage, run_id)
     batch = _load_copy_batch(storage, run_id)
     target = _find_template(batch, template_id)
@@ -1723,6 +1802,13 @@ def approve_copy_template(
             "COPY_TEMPLATE_NOT_PENDING",
             f"Template {template_id!r} is {target.status.value}, not pending review.",
         )
+    author = _copy_author(batch, target)
+    if principal.kind == "user" and author is not None and author == principal.user_id:
+        set_audit_context(request, details={"reason_code": "SEPARATION_OF_DUTIES"})
+        raise http_error(403, "SEPARATION_OF_DUTIES", COPY_SEPARATION_MESSAGE)
+    _record_copy_approval(request, root, principal, batch, target, run_id)
+    if principal.kind != "user":
+        set_audit_context(request, details={"identity_verified": False})
     updated = approve_template(batch, template_id, approved_by=_approver_name(principal, body.approved_by))
     storage.write_model(run_key(run_id, COPY_BATCH_FILENAME), updated)
     return _find_template(updated, template_id)
@@ -1735,7 +1821,12 @@ def approve_copy_template(
     summary="Re-run generation for one campaign-copy template in place",
 )
 def regenerate_copy_template(
-    run_id: str, template_id: str, root: ConfigRootDep, storage: StorageDep, current: SettingsDep
+    run_id: str,
+    template_id: str,
+    root: ConfigRootDep,
+    storage: StorageDep,
+    current: SettingsDep,
+    principal: PrincipalDep,
 ) -> CopyTemplate:
     run = load_run(storage, run_id)
     config = use_case_config(run.use_case_id, root)
@@ -1756,6 +1847,10 @@ def regenerate_copy_template(
         )
     except GenerativeError as exc:
         raise generative_http(exc) from exc
+    # Plan M M184 (DEC-1614 (d)): whoever asked for these words may not approve them (sign-in on only).
+    author = _signed_in_id(principal)
+    if author is not None:
+        replacement = replacement.model_copy(update={"regenerated_by": author})
     updated_templates = tuple(
         replacement if template.template_id == template_id else template for template in batch.templates
     )

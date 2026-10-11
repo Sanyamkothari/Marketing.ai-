@@ -1307,8 +1307,12 @@ def generate_campaign_copy(
     guardrails: Guardrails,
     config_root: Path | None = None,
     now: datetime | None = None,
+    requested_by: str | None = None,
 ) -> CampaignCopyResult:
     """Write templates and messages over `run_id`'s finished scores, and return what was written.
+
+    `requested_by` (Plan M M184) is the signed-in user who asked for the copy, recorded on the batch so they
+    cannot approve its templates; None (sign-in off, or a caller that is not a person) records nobody.
 
     Writes `copy_batch.json` and `copy_messages.csv` into the run's own directory and returns both as
     `CampaignCopyResult`, mirroring `engine.generative.index.build_index`: the artefact a caller
@@ -1443,6 +1447,7 @@ def generate_campaign_copy(
             if segment_by is CopySegmentBy.BAND
             else tuple(unit.segment for unit in plan.units if unit.segment is not None)
         ),
+        requested_by=requested_by,
     )
     storage.write_model(run_key(run_id, COPY_BATCH_FILENAME), batch)
     _write_messages_csv(storage, run_id, sorted_messages)

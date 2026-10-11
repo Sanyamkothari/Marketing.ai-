@@ -35,10 +35,14 @@ without a campaign, no channel, nothing within the budget or safe to roll out), 
 `AI_NOT_CONNECTED`.
 
 **Execution** (:func:`execute_plan`) runs only from an approval, through the product's own functions, which the
-caller passes in (the `/agentic` route passes `engine.decide.treat_list.ensure_treat_list`,
-`engine.measurement.cycle.open_campaign` - the engine half of `POST /campaigns` - and
-`api.routes.campaigns.register_plan`). It is idempotent: each thing it makes is written to the state before the
-next, so an approval retried after a failure does not open a second campaign. The campaign's treatment starts at
+caller passes in (the `/agentic` route passes `engine.decide.treat_list.build_treat_list` under the approved
+limits, `engine.measurement.cycle.open_campaign` - the engine half of `POST /campaigns` - and
+`api.routes.campaigns.register_plan`). Plan M M184 (DEC-1614 (a)): what is executed is what the policy checked -
+the treat list contacts only the approved channel and at most `planned_contacts` (`engine.decide.campaign_scope`),
+or EXECUTE refuses with `CAMPAIGN_LIST_NOT_AS_APPROVED` before anything is opened; with
+`agentic.require_sign_in` on, only a signed-in Approver's approval is carried out (DEC-1614 (e)), and a run whose
+model was never approved is refused while approval is required (DEC-1614 (b)). It is idempotent: each thing it
+makes is written to the state before the next, so an approval retried after a failure does not open a second campaign. The campaign's treatment starts at
 the approval (nobody is contacted before it), so the drafted analysis date - the later of the run's finish and
 the draft, plus the outcome window - must still be at least a window after the approval, or the approval is
 refused with `PROPOSAL_STALE` (draft again). No measure schedule is created: one needs a saved connection and a
@@ -86,6 +90,7 @@ from engine.measurement.plan import TestPlanInput
 if TYPE_CHECKING:
     from engine.agentic.proposals import Proposal
     from engine.agentic.registry import ToolRegistry
+    from engine.config import UseCaseConfig
     from engine.contracts import RunRecord
     from engine.generative.budget import Meter
     from engine.measurement.summary import SummaryCard
@@ -96,10 +101,12 @@ __all__ = [
     "OBJECTIVES",
     "PLANNER_CODES",
     "PLANS_PREFIX",
+    "BuiltList",
     "CardRef",
     "ExecuteActions",
     "Frame",
     "GoalForm",
+    "ListLimits",
     "PlanRequest",
     "PlannerDeps",
     "PlannerState",
@@ -293,6 +300,10 @@ class Tried(StrictBase):
 
 class Execution(StrictBase):
     treat_list_rows: int | None = None
+    contacts: int | None = Field(
+        default=None,
+        description="Plan M M184: customers the treat list contacts, all on the approved channel; null before.",
+    )
     campaign_id: str | None = None
     plan_hash: str | None = None
     measure_schedule_id: str | None = None
@@ -721,11 +732,14 @@ def _runs(ctx: ToolContext) -> list[RunRecord]:
     return records
 
 
-def _plan_run(ctx: ToolContext, use_case_id: str) -> tuple[RunRecord | None, RunRecord | None]:
+def _plan_run(
+    ctx: ToolContext, use_case_id: str, approved: Callable[[str | None], bool] | None = None
+) -> tuple[RunRecord | None, RunRecord | None]:
     """The newest finished scoring run of the use case with no campaign yet, and the run that trained its model.
 
     A list goes out once: a run that already has a campaign is not planned again (the monthly loop's rule,
-    `engine.measurement.cycle.treat_list_step`).
+    `engine.measurement.cycle.treat_list_step`). Plan M M184 (DEC-1614 (b)): `approved`, when given, says whether
+    a run's model may be used (`_approval_check`); a run whose model may not is skipped.
     """
     from engine.config import RunMode
     from engine.contracts import RunState
@@ -737,6 +751,8 @@ def _plan_run(ctx: ToolContext, use_case_id: str) -> tuple[RunRecord | None, Run
         if record.use_case_id != use_case_id or record.finished_at is None:
             continue
         if ctx.campaigns is not None and ctx.campaigns.list(run_id=record.run_id, limit=1):
+            continue
+        if approved is not None and not approved(record.model_version_id):
             continue
         trained = next(
             (
@@ -750,6 +766,18 @@ def _plan_run(ctx: ToolContext, use_case_id: str) -> tuple[RunRecord | None, Run
         )
         return record, trained
     return None, None
+
+
+def _approval_check(config: UseCaseConfig, deps: PlannerDeps) -> Callable[[str | None], bool] | None:
+    """Plan M M184 (DEC-1614 (b)): with `governance.approval_required` on, whether a run's model was approved
+    (`engine.model_approval`); None - nothing skipped - when approval is not required or the caller passed no
+    model registry (the `/agentic` route always passes one, and EXECUTE checks again with it)."""
+    from engine.model_approval import unapproved_model_message
+
+    registry = deps.model_registry
+    if registry is None or not config.governance.approval_required:
+        return None
+    return lambda model_version_id: unapproved_model_message(registry, model_version_id) is None
 
 
 def _size(state: PlannerState, ctx: ToolContext, deps: PlannerDeps) -> PlannerState:
@@ -775,8 +803,16 @@ def _size(state: PlannerState, ctx: ToolContext, deps: PlannerDeps) -> PlannerSt
             PLANNER_NO_CANDIDATE,
             f"{config.name} sets no outcome window, so the day a result can be read cannot be planned.",
         )
-    run, trained = _plan_run(ctx, frame.use_case_id)
+    approved = _approval_check(config, deps)
+    run, trained = _plan_run(ctx, frame.use_case_id, approved)
     if run is None or run.finished_at is None:
+        if approved is not None and _plan_run(ctx, frame.use_case_id)[0] is not None:
+            raise _stop(
+                PLANNER_NO_CANDIDATE,
+                f"Every finished scoring run of {config.name} without a campaign was scored with a model that "
+                "was never approved, and approval is required. Approve the model on the Approvals page, or "
+                "score this cycle's file with the model in use; the planner then plans its list.",
+            )
         raise _stop(
             PLANNER_NO_CANDIDATE,
             f"Every finished scoring run of {config.name} already has its campaign. Score this cycle's file "
@@ -1290,11 +1326,32 @@ def _draft(state: PlannerState, ctx: ToolContext, deps: PlannerDeps) -> PlannerS
 # EXECUTE (only from an approval)
 # ---------------------------------------------------------------------------
 @dataclass(frozen=True)
+class ListLimits:
+    """Plan M M184 (DEC-1614 (a)): what the approved plan was checked on - its one channel and its number of
+    contacts - which the run's treat list must keep to (`engine.decide.campaign_scope`)."""
+
+    channel: str
+    max_contacts: int | None
+    proposal_id: str
+
+
+@dataclass(frozen=True)
+class BuiltList:
+    """What the run's treat list holds once built within the limits: rows, contacts, and contacts per channel."""
+
+    total_rows: int
+    treat_rows: int
+    channel_rows: Mapping[str, int]
+
+
+@dataclass(frozen=True)
 class ExecuteActions:
     """The product's own functions an approved plan is carried out with (passed in by the caller)."""
 
-    build_treat_list: Callable[[str], int]
-    """The run's treat list (`ensure_treat_list`); returns its rows."""
+    build_treat_list: Callable[[str, ListLimits], BuiltList]
+    """The run's treat list within the approved limits: the limits written (`campaign_scope.json`), then the
+    list built under them (`build_treat_list`). Plan M M184: EXECUTE checks what it returns against the limits
+    and refuses with `CAMPAIGN_LIST_NOT_AS_APPROVED` when the list contacts anyone else."""
     open_campaign: Callable[[str, int], str]
     """The run's campaign with this outcome window (`open_campaign`, as `POST /campaigns`), its treatment
     starting now (at the approval); returns its id."""
@@ -1303,6 +1360,10 @@ class ExecuteActions:
     measure_schedule: Callable[[str], str | None] = lambda _use_case: None
     """An enabled `measure` schedule of the use case, if there is one (none is created: it needs a saved
     connection and a table a person chooses)."""
+    check_model: Callable[[str], None] | None = None
+    """Plan M M184 (DEC-1614 (b)): raises `MODEL_VERSION_NOT_APPROVED` when the run's model was never approved
+    and its use case requires approval (`engine.model_approval`); None checks nothing (a caller with no model
+    registry - the `/agentic` route always passes one)."""
 
 
 def find_plan_for_proposal(ctx: ToolContext, proposal_id: str) -> PlannerState | None:
@@ -1321,8 +1382,11 @@ def find_plan_for_proposal(ctx: ToolContext, proposal_id: str) -> PlannerState |
 
 def execute_plan(proposal: Proposal, ctx: ToolContext, actions: ExecuteActions) -> str:
     """Carry out an approved campaign plan; returns the frozen plan hash (the approval's `result_ref`)."""
+    from engine.agentic.config import require_verified_identity
     from engine.agentic.ledger import CAMPAIGN_PLAN_EXECUTED, TEST_PLAN_FROZEN, holdout_commitment
 
+    # Plan M M184 (DEC-1614 (e)): with agentic.require_sign_in on, only a signed-in Approver's approval is acted on.
+    require_verified_identity(ctx.principal, ctx.config_root)
     found = find_plan_for_proposal(ctx, proposal.proposal_id)
     if found is None:
         raise AgenticError(
@@ -1359,9 +1423,20 @@ def execute_plan(proposal: Proposal, ctx: ToolContext, actions: ExecuteActions) 
                     f"({payload.test_plan.analysis_date.isoformat()}). Draft the plan again so the date fits.",
                     status=409,
                 )
+        if done.campaign_id is None and actions.check_model is not None:
+            actions.check_model(payload.run_id)
         state = _save(ctx, state, "EXECUTE")
         if done.treat_list_rows is None:
-            done = done.model_copy(update={"treat_list_rows": actions.build_treat_list(payload.run_id)})
+            # Plan M M184 (DEC-1614 (a)): what is executed is what the policy checked - the approved channel and
+            # at most the planned number of contacts - or nothing is.
+            limits = ListLimits(
+                channel=payload.channel,
+                max_contacts=payload.planned_contacts,
+                proposal_id=proposal.proposal_id,
+            )
+            built = actions.build_treat_list(payload.run_id, limits)
+            _require_within(built, limits)
+            done = done.model_copy(update={"treat_list_rows": built.total_rows, "contacts": built.treat_rows})
             state = _save(ctx, state.model_copy(update={"execution": done}), "EXECUTE")
         if done.campaign_id is None:
             window = int(payload.test_plan.outcome_window_days or 0)
@@ -1418,6 +1493,33 @@ def execute_plan(proposal: Proposal, ctx: ToolContext, actions: ExecuteActions) 
         _save(ctx, state, "DONE")
         assert done.plan_hash is not None
         return done.plan_hash
+
+
+def _require_within(built: BuiltList, limits: ListLimits) -> None:
+    """Plan M M184: refuse a treat list that contacts anyone on another channel, anyone with no channel, or more
+    customers than were approved. Nothing has been opened yet when this refuses; the proposal stays pending.
+    """
+    elsewhere = sorted(
+        name for name, rows in built.channel_rows.items() if name != limits.channel and rows > 0
+    )
+    on_channel = int(built.channel_rows.get(limits.channel, 0))
+    over = limits.max_contacts is not None and built.treat_rows > limits.max_contacts
+    if not elsewhere and on_channel == built.treat_rows and not over:
+        return
+    found = f"{built.treat_rows:,} contacts, {on_channel:,} of them on {limits.channel}"
+    if elsewhere:
+        found += " and others on " + ", ".join(elsewhere)
+    allowed = (
+        f"on {limits.channel} only"
+        if limits.max_contacts is None
+        else f"at most {limits.max_contacts:,}, on {limits.channel} only"
+    )
+    raise AgenticError(
+        "CAMPAIGN_LIST_NOT_AS_APPROVED",
+        f"The contact list built for this plan holds {found}; the approval covers {allowed}. Nothing was opened "
+        "or sent, and the proposal stays pending. Draft the plan again.",
+        status=409,
+    )
 
 
 def outcome_of(state: PlannerState) -> tuple[str, tuple[str, ...], str | None]:

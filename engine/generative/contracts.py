@@ -810,6 +810,14 @@ class CopyTemplate(Artefact):
         exclude_if=_absent,
         description="Segment the template was written for; absent when it was written per band.",
     )
+    regenerated_by: str | None = Field(
+        default=None,
+        exclude_if=_absent,
+        description=(
+            "Plan M M184: the signed-in user id of whoever asked for this template's words to be written again; "
+            "they may not approve it (SEPARATION_OF_DUTIES). Absent when it was never regenerated with sign-in on."
+        ),
+    )
 
 
 class CopyAudience(Artefact):
@@ -887,6 +895,15 @@ class CopyBatch(Artefact):
         description="uplift_segment only: true when the scores file's intended_treatment column limited "
         "copy to the persuadables inside the contact budget, false when it had no such column and every "
         "persuadable was written to; absent otherwise.",
+    )
+    requested_by: str | None = Field(
+        default=None,
+        exclude_if=_absent,
+        description=(
+            "Plan M M184: the signed-in user id of whoever asked for this copy to be written; they may not approve "
+            "its templates (SEPARATION_OF_DUTIES), as a model's trainer may not approve it. Absent when the copy "
+            "was asked for with sign-in off, where every request is the local operator."
+        ),
     )
 
 

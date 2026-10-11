@@ -76,6 +76,9 @@ DETAIL_KEYS: Final[frozenset[str]] = frozenset(
         # Plan J M94 (DEC-1304 (g), reviewed): the hash of a registered test plan, so the trail proves
         # which plan was fixed before a campaign's outcomes were read. A hash, never the plan.
         "plan_hash",
+        # Plan M M184 (DEC-1614 (e)): false on a decision made with sign-in off (the local operator holds every
+        # role, so who decided is not known); absent otherwise.
+        "identity_verified",
     }
 )
 """The only keys `AuditEvent.details` accepts. A new key is a reviewed change to this set, never a

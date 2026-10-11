@@ -4,6 +4,11 @@ Before the fix `POST .../templates/{id}/approve` stored whatever `body.approved_
 sign-in on a person could approve copy in somebody else's name. The route now reads the principal
 the way the model-approval route does (`kind == "user"`); with sign-in off the typed name is kept.
 `approved_only` is opt-in: without it the download is byte-for-byte what it always was.
+
+Plan M M184 (DEC-1614 (d)): with sign-in on, whoever asked for the copy may not approve it (SEPARATION_OF_DUTIES),
+so the signed-in tests below ask for the copy as one person (an Analyst) and approve it as another; before M184
+one person did both, which is exactly what the separation rule now refuses
+(`tests/integration/test_api_generative_copy_separation.py`).
 """
 
 from __future__ import annotations
@@ -83,20 +88,24 @@ def _messages(client: TestClient, run_id: str, headers: dict[str, str], **params
 
 
 @pytest.fixture
-def signed_in(tmp_path: Path, config_root: Path) -> Iterator[tuple[TestClient, str, dict[str, str]]]:
-    """An app with sign-in on, a finished copy run, and the headers of a user who is Analyst and Approver."""
+def signed_in(
+    tmp_path: Path, config_root: Path
+) -> Iterator[tuple[TestClient, str, dict[str, str], dict[str, str]]]:
+    """An app with sign-in on, a finished copy run, the headers of a user who is Analyst and Approver, and those
+    of the Analyst who asks for the copy (M184: the person who asked for copy may not approve it)."""
     app = local_app(tmp_path, allow_fake_ai=True)
     run_id = _write_copy_run(tmp_path, config_root)
     user_id = make_user(app, "priya.nair", [Role.ANALYST, Role.APPROVER])
+    author_id = make_user(app, "arjun.mehta", [Role.ANALYST])
     with TestClient(app) as client:
-        yield client, run_id, bearer(app, user_id)
+        yield client, run_id, bearer(app, user_id), bearer(app, author_id)
 
 
 def test_with_sign_in_on_the_approval_records_the_principal_whatever_the_body_says(
-    signed_in: tuple[TestClient, str, dict[str, str]],
+    signed_in: tuple[TestClient, str, dict[str, str], dict[str, str]],
 ) -> None:
-    client, run_id, headers = signed_in
-    batch = _generate_copy(client, run_id, headers)
+    client, run_id, headers, author = signed_in
+    batch = _generate_copy(client, run_id, author)
     target = _pending(batch)[0]
 
     response = client.post(
@@ -121,10 +130,10 @@ def test_with_sign_in_off_the_typed_name_is_still_recorded(tmp_path: Path, confi
 
 
 def test_approved_only_keeps_exactly_the_rows_of_approved_templates(
-    signed_in: tuple[TestClient, str, dict[str, str]],
+    signed_in: tuple[TestClient, str, dict[str, str], dict[str, str]],
 ) -> None:
-    client, run_id, headers = signed_in
-    batch = _generate_copy(client, run_id, headers)
+    client, run_id, headers, author = signed_in
+    batch = _generate_copy(client, run_id, author)
     pending = _pending(batch)
     assert len(pending) >= 2, "the fixture must give one template to approve and one to leave"
     approved = pending[0]["template_id"]
@@ -143,10 +152,10 @@ def test_approved_only_keeps_exactly_the_rows_of_approved_templates(
 
 
 def test_approved_only_before_any_approval_returns_the_header_and_no_rows(
-    signed_in: tuple[TestClient, str, dict[str, str]],
+    signed_in: tuple[TestClient, str, dict[str, str], dict[str, str]],
 ) -> None:
-    client, run_id, headers = signed_in
-    _generate_copy(client, run_id, headers)
+    client, run_id, headers, author = signed_in
+    _generate_copy(client, run_id, author)
     everything = _messages(client, run_id, headers)
     only = _messages(client, run_id, headers, approved_only="true")
     assert len(only) == 0
@@ -154,9 +163,9 @@ def test_approved_only_before_any_approval_returns_the_header_and_no_rows(
 
 
 def test_approved_only_before_any_copy_is_still_404(
-    signed_in: tuple[TestClient, str, dict[str, str]],
+    signed_in: tuple[TestClient, str, dict[str, str], dict[str, str]],
 ) -> None:
-    client, run_id, headers = signed_in
+    client, run_id, headers, _author = signed_in
     response = client.get(
         f"/runs/{run_id}/copy_messages.csv", params={"approved_only": "true"}, headers=headers
     )
@@ -165,10 +174,10 @@ def test_approved_only_before_any_copy_is_still_404(
 
 
 def test_approved_only_rows_say_approved_and_leave_out_refused_renderings(
-    signed_in: tuple[TestClient, str, dict[str, str]],
+    signed_in: tuple[TestClient, str, dict[str, str], dict[str, str]],
 ) -> None:
-    client, run_id, headers = signed_in
-    batch = _generate_copy(client, run_id, headers)
+    client, run_id, headers, author = signed_in
+    batch = _generate_copy(client, run_id, author)
     approved = _pending(batch)[0]["template_id"]
     client.post(_approve_url(run_id, approved), json={"approved_by": "x"}, headers=headers)
 

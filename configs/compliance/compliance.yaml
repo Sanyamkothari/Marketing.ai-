@@ -17,3 +17,8 @@ compliance:
     opt_in_channels: [whatsapp]
     # The longest value a {#var#}, {#numeric#} or {#alphanumeric#} slot of a DLT template takes; null: no limit.
     dlt_var_max_chars: 30
+    # Plan M M184 (DEC-1614 (c)): what the gate does with a message it could not check. false (the default, as
+    # before): the contact is allowed and compliance_decisions.json lists the check as not run. true: the contact
+    # is withheld (COMPLIANCE_MESSAGE_NOT_CHECKED) when there is no catalogue or no catalogue action for it, the
+    # action has no message_text, a DLT channel's action has no dlt_template_text, or no URL whitelist is set.
+    strict: false

@@ -100,7 +100,13 @@ def test_entries_chain_from_genesis_and_carry_the_policy_version(
 
 
 def test_the_signed_kinds_are_approvals_test_plans_and_evidence_labels() -> None:
-    assert {"proposal.approved", "test_plan.frozen", "evidence.label"} == SIGNED_KINDS
+    # Plan M M184 (DEC-1614 (d)): a copy template's approval is an approval too, so it is signed as well.
+    assert {
+        "proposal.approved",
+        "test_plan.frozen",
+        "evidence.label",
+        "copy_template.approved",
+    } == SIGNED_KINDS
 
 
 def test_a_signed_kind_without_a_signer_is_refused(engine: Engine) -> None:
