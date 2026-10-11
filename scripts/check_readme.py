@@ -611,6 +611,18 @@ MILESTONE_TESTS: Final[Mapping[str, tuple[str, ...]]] = {
         "tests/agentic/test_save_desk.py",
         "tests/agentic/test_proposal_routes.py",
     ),
+    # M139 (DEC-1406), the campaign planner and the claim verifier. test_planner_hillstrom.py is a `slow` journey and
+    # is left out, as the fast suite leaves it out; test_proposal_routes.py is M132's exact route set, which gained
+    # the planner's routes.
+    "M139": (
+        "tests/unit/agentic/test_claims.py",
+        "tests/unit/agentic/test_planner.py",
+        "tests/agentic/test_planner_routes.py",
+        "tests/agentic/test_planner_select.py",
+        "tests/agentic/test_planner_ui.py",
+        "tests/agentic/scenarios/test_planner_scenarios.py",
+        "tests/agentic/test_proposal_routes.py",
+    ),
 }
 """Milestone id -> the test files (or directories, with a trailing `/`) that prove it is built.
 

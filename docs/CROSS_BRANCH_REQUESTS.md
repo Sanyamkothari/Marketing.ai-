@@ -2196,6 +2196,44 @@ middleware anyway. `alembic/versions/0009_agentic_ledger.py` is `main`'s (the br
 
 **What is needed.** Nothing; this is an announcement.
 
+### 2026-10-11 — plan-k M139 (on main) → Plan J and Plan H (owners of `ui/modules/simple/pages.js`): one attribute on each Results warning card (record of an additive edit)
+
+**What changed** (DEC-1406 (q)): each Results warning card gains a `data-card-use-case` attribute, read only by
+`ui/modules/agentic/` to place "Draft a plan" under the card. Nothing else on the page changes, and with
+`agentic.enabled` off the planner module sends no request.
+
+**What is needed.** Nothing; this is a record.
+
+### 2026-10-11 — plan-k M139 (on main) → Phase 3a (owner of `engine/generative/contracts.py` and `configs/prompts/`): two purposes and two prompts (announcement)
+
+**What changed** (DEC-1406 (c), (m); additive): `GenerativePurpose.AGENT_PLANNER` and `AGENT_NARRATIVE`, beside M142's
+`DATA_AGENT_ASSIST`, so the planner's model calls are metered and reported by purpose; `configs/prompts/agent_planner.v1.md`
+and `agent_narrative.v1.md` (new, owned by M139). No existing member or prompt changed.
+
+**What is needed.** Nothing; this is an announcement.
+
+### 2026-10-11 — plan-k M139 (on main) → trunk (owner of `ui/index.html`) and Phase 4b / Plan D (owners of `engine/approvals.py`): the planner's script tag and one shared helper (record of edits)
+
+**What changed:** `ui/index.html`'s PLAN-K block gains the script tag for `ui/modules/agentic/index.js` (moved there
+from the builder's marked line at the end of the PLAN-J block). `engine/approvals.py` now calls
+`engine.agentic.ledger.holdout_commitment(tool_ctx, campaign_id)` (DEC-1406 (o)), the same body it had inline, so the
+approval of a test plan and the planner's EXECUTE write `test_plan.frozen` with one holdout commitment; the model
+decision path is unchanged. Inside Plan K (M132's files, additive): `check_contactable`'s output gains `held_back_rows`
+(left out while unknown), `submit_proposal` an optional `proposal_id` and `new_proposal_id()`, and
+`tests/agentic/test_proposal_routes.py`'s exact `/agentic` route set the three planner routes, beside M144's card.
+
+**What is needed.** Nothing; this is a record.
+
+### 2026-10-11 — plan-k M139 and M138 (on main) → Plan K owners: a new campaign-summary card kind must be planned or explained (announcement)
+
+**What changed** (DEC-1406, DEC-1403): M138 added the `harm_alarm` card kind to the campaigns' summary; M139's planner
+requires every `CardKind` to be either planned (`CARD_OBJECTIVES`) or explained (`NOTHING_TO_PLAN`), so
+`harm_alarm` joined `NOTHING_TO_PLAN` at integration ("A person decides whether to pause it"). A later milestone
+that adds a card kind to `engine/measurement/summary.py` adds it to one of the two in `engine/agentic/planner.py`
+(`tests/unit/agentic/test_planner.py::test_every_card_kind_is_either_planned_or_explained`).
+
+**What is needed.** Nothing; this is an announcement.
+
 ### 2026-09-23 — plan-e-pilot (on main) → all branches: every change Plan E made outside its own files and blocks
 
 **What is needed.** Nothing from anybody; this is the announcement §3 asks for. Measured with
