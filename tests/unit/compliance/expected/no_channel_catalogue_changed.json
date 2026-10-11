@@ -1,0 +1,4 @@
+[
+  {"customer_id": "N1", "channel": null, "purpose": "marketing_communication", "action_id": null, "allowed": false, "reasons": ["COMPLIANCE_NO_CHANNEL"], "ledger_ref": null, "catalogue_ref": null, "rule_version": "rules-under-test"},
+  {"customer_id": "N2", "channel": "sms", "purpose": "marketing_communication", "action_id": "offer_ok", "allowed": false, "reasons": ["COMPLIANCE_CATALOGUE_CHANGED"], "ledger_ref": "channel_contactability.parquet#sha256=cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "catalogue_ref": null, "rule_version": "rules-under-test"}
+]

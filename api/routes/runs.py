@@ -138,6 +138,7 @@ from engine.decide.treat_list import (  # Plan J M98 (DEC-1308)
     TreatListError,
     build_treat_list,
     ensure_treat_list,
+    treat_list_awaits_gate,  # PLAN-K (M134)
 )
 from engine.generative.budget import load_prices  # Plan J M108 (DEC-1318)
 from engine.generative.contracts import GENERATIVE_ARTEFACTS, GENERATIVE_TABULAR_SCHEMAS
@@ -683,12 +684,19 @@ def read_artefact(run_id: str, name: str, storage: StorageDep, request: Request)
     # The offer chosen per customer of a run of several offers (Plan J M100 part B, DEC-1310): row-level
     # (Analyst, `ROW_LEVEL_ARTEFACTS`); its summary, `offer_choice.json`, is in `UPLIFT_ARTEFACTS`.
     known = known or name == OFFER_CHOICE_FILENAME
+    # PLAN-K (M134): move into the PLAN-K block at integration
+    # Plan K M134 (DEC-1405): the compliance gate's record of a treat list - one row per customer and planned
+    # channel (Analyst, `ROW_LEVEL_ARTEFACTS`) - and its summary (counts, the rules, the signed ledger entry).
+    known = known or name in ("compliance_decisions.parquet", "compliance_decisions.json")
     if not ARTEFACT_NAME.fullmatch(name) or not known:
         raise http_error(404, "ARTEFACT_UNKNOWN", f"There is no artefact called {name!r}.")
     require_row_level_role(request, name)
     load_run(storage, run_id)
-    if name in (TREAT_LIST_CSV, TREAT_LIST_PARQUET, TREAT_LIST_SUMMARY_FILENAME) and not storage.exists(
-        run_key(run_id, name)
+    # PLAN-K (M134): move into the PLAN-K block at integration
+    # Plan K M134 (DEC-1405): with the compliance gate on, a list stored before it was turned on is built again.
+    if name in (TREAT_LIST_CSV, TREAT_LIST_PARQUET, TREAT_LIST_SUMMARY_FILENAME) and (
+        not storage.exists(run_key(run_id, name))
+        or _treat_list_awaits_gate(storage, run_id, get_config_root(request))
     ):
         # Built on first request, from the run's own artefacts; a file already there is served as it is.
         # A row-level file retention removed is rebuilt from the scores, or refused in plain words once
@@ -749,6 +757,15 @@ def cancel_run_endpoint(run_id: str, storage: StorageDep, jobs: JobsDep) -> RunC
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+# PLAN-K (M134): move into the PLAN-K block at integration
+def _treat_list_awaits_gate(storage: Storage, run_id: str, config_root: Path | None) -> bool:
+    """Plan K M134: `treat_list_awaits_gate`, its configuration error answered in plain words (409)."""
+    try:
+        return treat_list_awaits_gate(storage, run_id, config_root=config_root)
+    except TreatListError as exc:
+        raise http_error(409, exc.code, exc.message) from exc
+
+
 def _require_upload_id(upload_id: str | None) -> str:
     """Narrow the id `RunRequest` has already made non-null; only a wiring slip reaches it."""
     if upload_id is None:  # pragma: no cover - RunRequest refuses this shape before the route sees it

@@ -1,0 +1,14 @@
+# configs/compliance/url_whitelist.example.yaml - AN EXAMPLE, NEVER READ (Plan K M134, DEC-1405).
+#
+# The compliance gate reads only `configs/compliance/url_whitelist.yaml` (else a `url_whitelist` block of the
+# catalogue's region file); with neither, links are not checked and compliance_decisions.json says so
+# (`rules.url_whitelist: null`). Copy this file to `url_whitelist.yaml` and replace every entry with the
+# links the client has whitelisted with its operators. The hosts below are illustrations, not anyone's.
+#
+# Every link in an action's `message_text` on a listed channel must match an entry, or the contact is not
+# allowed on that channel (COMPLIANCE_URL_NOT_WHITELISTED).
+channels: [sms]                       # the channels whose messages must use listed links; omit for every channel
+urls:
+  - shop.example.in                   # a host: any link to exactly this host
+  - "*.example.in"                    # any sub-domain of example.in (not example.in itself)
+  - https://example.in/offers/        # a prefix: same scheme and host, path starting with /offers/

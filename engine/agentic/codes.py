@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from typing import Final
 
-__all__ = ["AGENTIC_CODES", "MCP_CODES", "PLAN_K_CODES"]
+__all__ = ["AGENTIC_CODES", "COMPLIANCE_CODES", "MCP_CODES", "PLAN_K_CODES"]
 
 AGENTIC_CODES: Final[frozenset[str]] = frozenset(
     {
@@ -72,5 +72,19 @@ MCP_CODES: Final[frozenset[str]] = frozenset(
 )
 """M133's codes (DEC-1404), joined into `PLAN_K_CODES` below."""
 
-PLAN_K_CODES: Final[frozenset[str]] = frozenset() | AGENTIC_CODES | MCP_CODES
+COMPLIANCE_CODES: Final[frozenset[str]] = frozenset(
+    {
+        # M134 (DEC-1405): the pre-send compliance gate (`engine.compliance`). Each is a reason in
+        # `compliance_decisions.parquet` and a key of the treat list summary's `compliance_withheld`.
+        "COMPLIANCE_CONSENT",  # not contactable on the channel (M131's channel_contactability, consent rules)
+        "COMPLIANCE_WHATSAPP_NO_OPT_IN",  # no WhatsApp grant of its own in the consent ledger
+        "COMPLIANCE_TEMPLATE_MISMATCH",  # the message is not the registered DLT template with its slots filled
+        "COMPLIANCE_URL_NOT_WHITELISTED",  # a link in the message is not on the URL whitelist
+        "COMPLIANCE_NO_CHANNEL",  # a contact with no channel: nothing the gate could clear
+        "COMPLIANCE_CATALOGUE_CHANGED",  # the catalogue is not the one the run ran under: no message is checked
+    }
+)
+"""M134's codes (DEC-1405), joined into `PLAN_K_CODES` below."""
+
+PLAN_K_CODES: Final[frozenset[str]] = frozenset() | AGENTIC_CODES | MCP_CODES | COMPLIANCE_CODES
 """Empty at M130; each Plan K milestone adds the codes it raises."""

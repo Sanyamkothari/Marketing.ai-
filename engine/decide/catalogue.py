@@ -119,6 +119,41 @@ class ActionItem(_Model):
         ),
     )
 
+    # PLAN-K (M134): move into the PLAN-K block at integration
+    # Plan K M134 (DEC-1405): the registered DLT template's text and the approved message, read only by the
+    # pre-send compliance gate (`engine.compliance`), only when `compliance.gate.enabled` is on. Unset - the
+    # default - neither is serialised anywhere, and nothing else reads them.
+    dlt_template_text: str | None = Field(
+        default=None,
+        description=(
+            "The DLT template as registered, with its variable slots tagged {#var#}, {#numeric#}, "
+            "{#alphanumeric#}, {#url#} or {#cbn#}; null = the template is not checked."
+        ),
+    )
+    message_text: str | None = Field(
+        default=None,
+        description=(
+            "The approved message this action sends, with every variable filled; the compliance gate checks "
+            "it against dlt_template_text and its links against the URL whitelist. Null = not checked."
+        ),
+    )
+
+    @field_validator("dlt_template_text")
+    @classmethod
+    def _known_dlt_tags(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        from engine.compliance.dlt import (  # pure string code; no engine import
+            DltTemplateError,
+            parse_template,
+        )
+
+        try:
+            parse_template(value)
+        except DltTemplateError as exc:
+            raise ValueError(str(exc)) from exc
+        return value
+
     @model_validator(mode="before")
     @classmethod
     def _coerce_aliases(cls, data: Any) -> Any:
