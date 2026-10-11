@@ -19,6 +19,8 @@ data is the public Hillstrom e-mail experiment; no customer's data is in the fil
 from __future__ import annotations
 
 import contextlib
+import csv
+import io
 import json
 import sys
 from pathlib import Path
@@ -79,7 +81,33 @@ PAGES: Final[list[tuple[str, tuple[str, ...]]]] = [
     ("#/cost", ()),
     ("#/approvals", ()),
     ("#/pilot/kit", ()),
+    # Plan M M176 (DEC-1606): the Campaigns list and each tab of both campaigns' pages, and the older places that
+    # add results for the run whose list became both campaigns (each draws "... from the campaign page").
+    (f"#/campaign/{USE_CASE}/{SCORE_UPLIFT}", ()),
+    (f"#/monitoring/runs/{SCORE_UPLIFT}", ()),
+    ("#/campaigns", ()),
+    *[
+        (f"#/campaigns/{campaign}/{tab}", ())
+        for campaign in (CAMPAIGN_CONVERSION, CAMPAIGN_SPEND)
+        for tab in ("overview", "audience", "results", "technical")
+    ],
 ]
+
+
+CONTACT_LIST_ROWS: Final[int] = 300
+"""Rows of a contact list (`treat_list.csv`) kept in the recording: enough for the Audience tab's pages and search
+(M176). The whole Hillstrom list is 5 MB; the tab's counts come from `treat_list_summary.json`, recorded whole."""
+
+
+def cap_contact_list(text: str, rows: int = CONTACT_LIST_ROWS) -> str:
+    """The header and the first `rows` records of a CSV, written back as the API writes it (minimal quoting, LF)."""
+    out = io.StringIO()
+    writer = csv.writer(out, lineterminator="\n")
+    for index, record in enumerate(csv.reader(io.StringIO(text, newline=""))):
+        if index > rows:
+            break
+        writer.writerow(record)
+    return out.getvalue()
 
 
 def key_of(method: str, url: str) -> str:
@@ -111,6 +139,8 @@ def main(base: str) -> None:
                     body: Any = response.json() if "json" in content_type else response.text()
                 except Exception:  # a body the browser has already dropped
                     return
+                if path.endswith("/treat_list.csv") and isinstance(body, str):
+                    body = cap_contact_list(body)
                 recorded[key_of("GET", response.url)] = {
                     "status": response.status,
                     "content_type": content_type.split(";")[0],

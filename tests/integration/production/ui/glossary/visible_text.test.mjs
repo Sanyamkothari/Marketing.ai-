@@ -102,6 +102,17 @@ export const PAGES = [
   // Plan M, M179 (DEC-1609): the Data page. New pages carry no allow-list: they must not show a never-shown word.
   { id: "data-sources", hash: "#/data", expect: /Where your customer data comes from/, selector: "[data-dt-source='file']" },
   { id: "data-check", hash: "#/data/check", expect: /Data Doctor looks at your files/ },
+  // Plan M M176 (DEC-1606): the Campaigns list and every tab of both campaigns' pages, with empty allow-lists.
+  { id: "campaigns-list", hash: "#/campaigns", expect: /Every campaign: where it stands/, selector: "[data-campaigns-list]" },
+  ...[
+    ["conversion", C_CONVERSION],
+    ["spend", C_SPEND],
+  ].flatMap(([name, id]) => [
+    { id: `campaign-${name}-overview`, hash: `#/campaigns/${id}/overview`, expect: /Where it stands/, selector: "[data-overview]" },
+    { id: `campaign-${name}-audience`, hash: `#/campaigns/${id}/audience`, expect: /to contact, out of/, selector: "[data-audience-search]" },
+    { id: `campaign-${name}-results`, hash: `#/campaigns/${id}/results`, expect: /Open the full report/, selector: "[data-results-measured]" },
+    { id: `campaign-${name}-technical`, hash: `#/campaigns/${id}/technical`, expect: /Choose the best e-mail/, selector: "[data-technical-tab]" },
+  ]),
   // Plan M M174 (DEC-1604): the campaigns layout's shell - sidebar, bell, Help - around a page with an empty allow-list.
   // `after` puts the classic layout back, so every other page here is drawn as before.
   {
