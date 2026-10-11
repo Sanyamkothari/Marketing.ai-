@@ -179,6 +179,7 @@ Contract schema version: 1.
 | POST | `/uploads/{upload_id}/agent-session` | Start (or restart) Guided setup for an upload: the helper's suggestions and questions | AgentSessionResponse |
 | POST | `/uploads/{upload_id}/agent-session/answers` | Answer one of the helper's questions | AgentSessionResponse |
 | POST | `/uploads/{upload_id}/agent-session/apply` | Approve: prepare the data with the accepted steps and return what Run needs | ApplyResponse |
+| POST | `/uploads/{upload_id}/agent-session/assist` | Ask the AI service for a second opinion on the columns (optional) | AgentSessionResponse |
 | POST | `/uploads/{upload_id}/agent-session/decisions` | Accept or reject the helper's suggestions | AgentSessionResponse |
 | POST | `/uploads/{upload_id}/agent-session/edits` | Add an edit made by hand: a step like every other, ticked, undone by unticking | AgentSessionResponse |
 | POST | `/uploads/{upload_id}/agent-session/messages` | Ask the helper something; its reply is checked before it is kept | AgentSessionResponse |

@@ -1,0 +1,137 @@
+# configs/agent/header_lexicon.yaml
+# What an abbreviated or romanised-Hindi ("Hinglish") column header means (Plan K M142, DEC-1409).
+#
+# Read by engine/agent/headers.py. Guided setup uses it to suggest which column is the ID, the
+# outcome, the date, the consent flag, the opt-out flag and the last-contact date when the file's
+# headers are not the ones the use case expects (`cust_mob_no`, `last_rchg_dt`, `pehla_order`,
+# `grahak_id`, `avg_mthly_spnd`). The result is only ever a suggestion marked "check": a person
+# ticks it, and nothing here reads a cell value.
+#
+# HOW A COLUMN IS SCORED (the same rule is documented in docs/AGENTS.md):
+#   1. The header is split into words (`_`, `-`, spaces, camelCase, letter/digit boundaries) and run-on
+#      names such as `custmobno` are cut into known words. Each word, and each run of words listed
+#      below with spaces (`opt in`), becomes a *meaning* (`mob` -> mobile, `pehla` -> first).
+#   2. For one role: the name score starts at the strongest `anchors` weight found, adds the
+#      `boosters` found (not the anchor itself; at most +0.4 in all), subtracts the `blockers` found
+#      (again not the anchor itself),
+#      and is cut to 0..1.
+#      A header with no anchor scores 0 and is never listed.
+#   3. The values give a check from the file's profile: 1 when they look like the role (an ID is
+#      unique and never empty, an outcome, consent or opt-out flag has two values, a date reads as
+#      dates), less otherwise. The final score is `name x (0.4 + 0.6 x values)`, so values can
+#      lower a suggestion by up to 60% but never create one.
+#   4. Scores under `min_listed` are not listed. The top three per role are kept, best first,
+#      ties in file order. 0.75 and over is "high", 0.5 and over "medium", else "low". Even "high"
+#      is shown as "please check": the lexicon reads names, not the business.
+#
+# To teach it a new word, add it to a meaning's list (lower case, one spelling per entry; a word
+# may be listed under one meaning only) and run `python -m tests.fixtures.agent_bench.cases`.
+
+schema_version: 1
+
+min_listed: 0.25
+high: 0.75
+medium: 0.5
+
+# --- meanings: every spelling a header may use for the same word ---------------------------------
+meanings:
+  # who
+  customer: [customer, customers, cust, custmr, cstmr, client, clnt, grahak, grahek, graahak, gahak, subscriber, subscribers, subs, user, usr, member, mbr, consumer, retailer, outlet, learner, "ग्राहक"]
+  account: [account, accounts, acct, acc, khata, khaata]
+  policy: [policy, plcy, pol]
+  id: [id, ids, identifier, uid, cid, "आईडी"]
+  number: [number, num, nbr, "no", sankhya, kramank, "क्रमांक"]
+  code: [code, cd, kod]
+  mobile: [mobile, mob, mbl, msisdn, phone, ph, fone, cell, "contact no", "contact number", "मोबाइल"]
+  email: [email, mail, emailid]
+  name: [name, naam, "नाम"]
+  # outcomes
+  purchase: [purchase, purchased, purch, prchs, booked, booking, buy, buyer, bought, kharida, kharidi, khareeda, kharid, khareed, kharidna, "खरीदा"]
+  convert: [convert, converted, conv, cnvrt, cnv, conversion, conversions]
+  respond: [respond, responded, response, resp, rspns, jawab]
+  churn: [churn, churned, chrn, attr, attrition, lapse, lapsed, lapsing, disconnect, disconnected, dropout, chhod, chhoda, chhodna]
+  default: [default, defaulted, dflt, dflted, npa]
+  renew: [renew, renewed, renewal, rnwl, renewl]
+  repeat: [repeat, reorder, repurchase]
+  redeem: [redeem, redeemed, redemption, rdm]
+  recharge: [recharge, recharged, rchg, rchrg, rc, topup, "top up", tpup]
+  target: [target, tgt, label, lbl, outcome]
+  flag: [flag, flg, flgs, ind, indicator, yn]
+  # consent and contact
+  consent: [consent, consented, sahmati, anumati, permission, perm, ijazat, izazat, "सहमति"]
+  optin: [optin, "opt in", "opted in", optedin]
+  optout: [optout, "opt out", "opted out", optedout, unsub, unsubscribe, unsubscribed, dnd, dnc, "do not disturb", "do not call", "do not contact", "do not email", "do not sms", "dont contact", donotcontact, suppress, suppressed, suppression]
+  marketing: [marketing, mkt, mktg, mkting, promo, promotional, promotions, vigyapan]
+  contact: [contact, contacted, cntct, cntctd, sampark, reach, reached, outreach, communication, communicated, comm, comms, call, sms, whatsapp]
+  # when
+  date: [date, dt, dte, tareekh, tarikh, dinank, ts, tstamp, timestamp, datetime, "तारीख"]
+  snapshot: [snapshot, snpsht, snpshot, snap, asof, "as of", "as on", ason, "as at", cutoff, "cut off"]
+  report: [report, reporting, rpt, rptg, extract, extrct, ref, reference, period, prd]
+  last: [last, lst, latest, recent, recently, pichhla, pichla, pichhli, pichhle, antim, aakhri, akhri, previous, prev]
+  first: [first, fst, initial, pehla, pehle, pahla, pahli, pehli]
+  lifecycle: [signup, joined, join, joining, doj, activation, activated, onboarding, onboard, registered, reg, start, open, opened, opening, dob, birth, birthday, tenure, vintage, age]
+  deadline: [expiry, expire, expires, expiring, exp, due, maturity, validity, valid, end]
+  days: [days, day, dy, dys, din, d]
+  month: [month, months, mth, mths, mah, mahina, mahine, maah, monthly, mthly, masik, wk, week, weekly, year, yearly, annual]
+  # activity (a column about what the customer did, never a role of its own)
+  order: [order, orders, ord, ordr, aadesh]
+  transaction: [transaction, transactions, txn, txns, trans, trxn, lenden]
+  visit: [visit, visits, visited, vst, login, logins, session, sessions]
+  bill: [bill, billing, invoice, invoices, statement]
+  payment: [payment, pay, paid, pymt, bhugtan, emi]
+  # measures
+  spend: [spend, spnd, spent, spending, kharch, kharcha, kharche, kharchh, expense, expenses, arpu, "खर्च"]
+  amount: [amount, amt, rashi, raashi, value, val, mulya, balance, bal, limit, lmt, premium, prem, sum]
+  count: [count, cnt, counts, freq, frequency, "no of", "num of", "number of", "nbr of", "n"]
+  total: [total, tot, ttl, kul, overall, lifetime]
+  avg: [avg, average, ausat, mean, median]
+  pct: [pct, percent, percentage, prcnt, ratio, rate, util, utilisation, utilization]
+  # where and what else (never the customer)
+  geo: [city, shehar, sheher, town, region, circle, zone, state, rajya, district, jila, pin, pincode, "pin code", branch, store, stores, area]
+  campaign: [campaign, camp, offer, offers, scheme, channel, chnl, source, src]
+  plan: [plan, tier, segment, product, item, sku, agent, category, cat, type, status]
+
+# --- roles: what each one needs in the header -----------------------------------------------------
+roles:
+  id:
+    anchors: {id: 0.7, account: 0.5, policy: 0.5, mobile: 0.45, customer: 0.4}
+    boosters: {customer: 0.3, number: 0.15, code: 0.1}
+    blockers: {order: 0.5, transaction: 0.5, bill: 0.5, payment: 0.4, campaign: 0.5, plan: 0.4, geo: 0.4, lifecycle: 0.4, name: 0.4, date: 0.6, count: 0.5, total: 0.5, avg: 0.5, pct: 0.5, flag: 0.5, consent: 0.5, optin: 0.5, optout: 0.5, email: 0.3}
+  outcome:
+    anchors: {target: 0.8, convert: 0.7, purchase: 0.7, churn: 0.7, respond: 0.7, default: 0.6, renew: 0.6, redeem: 0.7, repeat: 0.6, recharge: 0.35}
+    boosters: {flag: 0.1, days: 0.1, month: 0.05}
+    blockers: {date: 0.6, last: 0.4, first: 0.4, amount: 0.5, spend: 0.5, count: 0.4, total: 0.4, avg: 0.5, pct: 0.4, number: 0.3, id: 0.4, lifecycle: 0.3, deadline: 0.3, consent: 0.6, optin: 0.6, optout: 0.6, contact: 0.5}
+  date:
+    anchors: {date: 0.6, snapshot: 0.7}
+    boosters: {report: 0.15}
+    blockers: {last: 0.4, first: 0.4, contact: 0.4, lifecycle: 0.4, deadline: 0.5, recharge: 0.3, order: 0.3, purchase: 0.3, transaction: 0.3, visit: 0.3, bill: 0.3, payment: 0.3, optout: 0.5}
+  consent:
+    anchors: {consent: 0.8, optin: 0.8}
+    boosters: {marketing: 0.1}
+    blockers: {optout: 0.8, last: 0.3, date: 0.4, contact: 0.2}
+  opt_out:
+    anchors: {optout: 0.8}
+    boosters: {flag: 0.1, marketing: 0.05}
+    blockers: {consent: 0.5, optin: 0.5, last: 0.3, date: 0.3}
+  last_contact:
+    anchors: {contact: 0.55, email: 0.5}
+    boosters: {last: 0.3, date: 0.15}
+    blockers: {optout: 0.8, mobile: 0.5, number: 0.3, email: 0.5, name: 0.5, first: 0.4, consent: 0.5, optin: 0.5, count: 0.4}
+
+# --- value checks: which kind of values each role should hold ------------------------------------
+# `unique`: every value different and none empty; `two_values`: exactly two distinct values;
+# `dates`: the profile reads the column as dates.
+value_checks:
+  id: unique
+  outcome: two_values
+  date: dates
+  consent: two_values
+  opt_out: two_values
+  last_contact: dates
+
+# --- outcome-label drafts (M93's lapse label with a grace period) --------------------------------
+label_drafts:
+  activity: [recharge, order, purchase, transaction, visit, bill, payment]   # what a customer lapses from
+  windows_days: [30, 60, 90]
+  grace_days: 7
+  examples: 2

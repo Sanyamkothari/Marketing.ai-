@@ -83,7 +83,7 @@ from engine.agent.explore import EXPLORE_NOTE
 from engine.agent.grounding import evidence_numbers, grounded_numbers, ungrounded_numbers
 from engine.agent.recommend import setting_allowed, settings_fields
 from engine.agent.session import roles_of
-from engine.agent.tools import TOOLS, AgentContext, AgentToolError, ToolKind, call_tool
+from engine.agent.tools import TOOLS, AgentContext, AgentToolError, ToolKind, call_tool, tool_available
 from engine.agent.untrusted import display_name, for_prompt, resolve_column
 from engine.config import ConfigError, advanced_settings_schema, resolve_config
 from engine.generative.contracts import GenerativePurpose
@@ -284,11 +284,14 @@ def _settings(ctx: AgentContext, session: AgentSession) -> tuple[list[dict[str, 
     return listed, fields
 
 
-def _tools() -> list[dict[str, str]]:
-    """Each read tool with its whole argument schema: properties *and* which are required."""
+def _tools(ctx: AgentContext | None = None) -> list[dict[str, str]]:
+    """Each read tool of this session with its whole argument schema: properties *and* which are required.
+
+    M142's tools are listed only while Plan K's switch is on for `ctx` (`tool_available`), so with it off the
+    prompt is what it was before them. Without a session (`ctx` None, the static checks) every read tool."""
     tools: list[dict[str, str]] = []
     for tool in TOOLS.values():
-        if tool.kind is not ToolKind.READ:
+        if tool.kind is not ToolKind.READ or (ctx is not None and not tool_available(ctx, tool.name)):
             continue
         schema = tool.args_model.model_json_schema()
         args = {"properties": schema.get("properties", {}), "required": schema.get("required", [])}
@@ -438,7 +441,7 @@ def chat_turn(
             "goal": agent.goal_for(ctx.config.target.definition),
             "entity": ctx.config.entity,
             "knowledge": knowledge,
-            "tools": _tools(),
+            "tools": _tools(ctx),
             "settings": shown_settings,
             "state": state,
             "column_choices": column_choices,
@@ -519,7 +522,7 @@ def chat_turn(
                 _record(gate, names, feedback, items, result, STEP_TEXT_KEYS)
                 continue
             tool = TOOLS.get(name)
-            if tool is None or tool.kind is not ToolKind.READ:
+            if tool is None or tool.kind is not ToolKind.READ or not tool_available(ctx, name):
                 raise AgentToolError("AGENT_TOOL_UNKNOWN", f"There is no tool called {name[:40]!r}.")
             if name == "find_values":
                 _limit_searches(ctx, session, results, args)
