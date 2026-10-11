@@ -684,6 +684,19 @@ MILESTONE_TESTS: Final[Mapping[str, tuple[str, ...]]] = {
         "tests/integration/decide/test_treat_list_review.py",
         "tests/integration/production/test_production_ui.py",
     ),
+    # M173 (DEC-1603), Help and loose ends. test_ui_sweep.py is the Playwright route sweep (zero console errors), the
+    # click crawler and the Help menu by keyboard; test_simple_ui.py runs help.test.mjs and settings.test.mjs (the
+    # menu, the tour, the orphans, #/industry, readiness by goal); test_production_ops_ui_js.py runs monitoring.test.mjs
+    # (the value-view shortcut); test_production_ui_js.py runs topbar.test.mjs and crumbs.test.mjs; test_uplift_ui.py
+    # runs uplift_ui_wiring.test.mjs (the OPE read and the propensity-ranked budget curve).
+    "M173": (
+        "tests/integration/test_ui_sweep.py",
+        "tests/integration/simple/test_simple_ui.py",
+        "tests/integration/production/test_production_ops_ui_js.py",
+        "tests/integration/production/test_production_ui_js.py",
+        "tests/unit/uplift/test_uplift_ui.py",
+        "tests/integration/test_ui_journey.py",
+    ),
 }
 """Milestone id -> the test files (or directories, with a trailing `/`) that prove it is built.
 

@@ -2558,6 +2558,56 @@ reworded (the contact list is `treatListUrl`, "All scores (for analysts)" is `sc
 
 **What I did meanwhile.** Nothing was blocked.
 
+### 2026-10-11 — plan-m M173 (on main) → Plan E (owner of `engine/pilot/roi.py` and the value view `GET /pilot/roi/{run_id}`): two additive fields would make "was this run measured" exact (request)
+
+**What is needed.** Optional and additive: fields on `RoiView` such as `outcomes_recorded: bool` (an
+`outcome_report.json` exists for the run) and `own_campaign_results: bool` (the run's own campaign-results file
+exists). Today the value view answers `status: "not_measured"`, `source: null` both when nothing was recorded and when
+outcomes were recorded with no matched comparison-group rows (`control_group_fraction` 0, or an outcomes file of
+contacted customers only), so the UI cannot use it alone to skip a request (DEC-1603 (e)).
+
+**What I did meanwhile.** `ui/modules/production/api.js` `getMeasurementState`/`outcomesImpossible` skip a request
+only when ingestion would be refused (the outcome window is ahead by the local and the UTC calendar, or unknown:
+`OUTCOME_WINDOW_UNKNOWN`), and otherwise ask for the outcome report as before. Two disclosed residual edges: a use case
+whose label horizon was removed after outcomes were ingested reads as "unknown", and the Campaign results tab and
+outcomes page of a run that a Plan J campaign measured may still log one 404 for the run's own campaign-results file
+(the route sweep opens those pages for the unmeasured run). With the fields both go away, and the "window unknown" rule
+can be dropped.
+
+### 2026-10-11 — plan-m M173 (on main) → trunk / Plan H (owners of `ui/chrome.js`, `ui/overview.js`, `ui/dom.js` and `docs/UI_AUDIT.md`) and Plan E (owner of `ui/modules/pilot/`): the Help menu, `#/industry/<id>` goes Home (record of in-place edits)
+
+**What changed** (DEC-1603 (a) to (c), (i)). `ui/chrome.js` draws the `help` slot as a Help (?) menu top right,
+beside the user menu (DEC-1123 had hidden it; the Minfy logo keeps its place), with keyboard navigation for every bar
+menu (arrows, Home, End, Escape) and focus kept across a redraw; `registerNavSlot` accepts an additive `order` that
+sorts a slot's entries (stable for equal or absent orders). `ui/modules/pilot/index.js` registers "Take the tour"
+(order 10) and "Send feedback" (30), and `ui/modules/pilot/tour.js` exports `startTour` and `TOUR_TIMING`; the tour
+runs outside demo mode, the first-visit offer stays demo-only. `ui/overview.js` `industryHref()` always returns `#/`,
+`journeyFor` returns the owner's label only for the default journey (otherwise Home), `otherGoalsHtml` lists other
+industries' goals on Home, and at integration it shows a goal whose configured name is an engine word under a display
+name in business words (`OTHER_GOAL_NAMES`, by id: "card-default-propensity" → "Find card accounts likely to miss a
+payment"). `ui/app.js` redirects `#/industry/<id>` to `#/`. `ui/dom.js`'s crumb comment and `docs/UI_AUDIT.md`'s route
+table and Back/crumb rows were corrected (the old home-industry screenshot section is a historical snapshot, unchanged).
+
+**What is needed.** Link `#/` instead of `#/industry/<id>`. Put new Help entries in the `help` slot with an `order`
+(the menu's order today: tour 10, glossary 20, feedback 30, what's new 40). Plan M M172 owns goal display names: fold
+`OTHER_GOAL_NAMES` into its table.
+
+**What I did meanwhile.** Nothing was blocked; old `#/industry/<id>` links still resolve, by redirect.
+
+### 2026-10-11 — plan-m M173 (on main) → Phase 4b (owner of `ui/modules/production/`) and all UI workstreams: ask whether a run was measured before asking for its files (announcement)
+
+**What changed** (DEC-1603 (e), (f)). `ui/modules/production/api.js` exports `getMeasurementState` (which also returns
+`availableOn`) and `outcomesImpossible`; `ui/modules/production/outcomes.js` uses them on the Campaigns list and a
+run's outcomes page, and asks for `incrementality_input.json` only after an outcome report was found. The uplift
+controllers no longer read `ope_report.json` with the Model page, and ask for no budget curve on a list ranked by the
+propensity model.
+
+**What is needed.** A branch that needs "was this run measured" should use these rather than probing
+`/runs/{id}/outcomes`, so the browser console stays free of expected 404s; `tests/integration/test_ui_sweep.py`
+fails a new route that logs a console error.
+
+**What I did meanwhile.** Nothing was blocked.
+
 ### 2026-09-23 — plan-e-pilot (on main) → all branches: every change Plan E made outside its own files and blocks
 
 **What is needed.** Nothing from anybody; this is the announcement §3 asks for. Measured with
