@@ -2468,6 +2468,21 @@ join `PLAN_K_CODES` (`COMPLIANCE_CODES`) and are appended to `engine.compliance.
 
 **What is needed.** Nothing; this is an announcement.
 
+### 2026-10-11 — library re-run M110b (on main) → library-datasets (owner of `library/` and `docs/LIBRARY.md`): Hillstrom with Plan K's measurement upgrades (record of edits)
+
+**What changed** (DEC-1413): `library/journey.py` gains `run_journey(plan_k=True)` and `library/run_engine.py` the
+`journey --plan-k` flag, which re-run the Hillstrom journey in `library/.runs/hillstrom-email/journey_plan_k/` with M135's
+run-score adjustment, M137's rollout verdict, M136's pooling check and M138's harm-alarm applicability.
+`journey_report_text` takes `plan_k` and `committed_plan_k`, and appends the committed `plan_k.results.json` as section 9
+of `run_report.md` only when its `csv_sha256` and `campaign_effect_run_id` match the journey rendered. New:
+`library/plan_k_report.py` (the traced section; `ARTEFACT` is the file's one name, aliased as
+`run_engine.PLAN_K_RESULTS_NAME`), `library/hillstrom-email/plan_k.results.json` (aggregates only),
+`library/tests/test_hillstrom_plan_k.py`; edited: `library/hillstrom-email/run_report.md` (section 9),
+`library/hillstrom-email/README.md`, `library/README.md` (the Hillstrom row) and `docs/LIBRARY.md` (section 10). The
+default journey is unchanged: `journey.results.json`, the demo summary and sections 1 to 8 are byte-identical.
+
+**What is needed.** Nothing; this is a record. M143's request above (`--override` on `journey`) is still open.
+
 ### 2026-09-23 — plan-e-pilot (on main) → all branches: every change Plan E made outside its own files and blocks
 
 **What is needed.** Nothing from anybody; this is the announcement §3 asks for. Measured with

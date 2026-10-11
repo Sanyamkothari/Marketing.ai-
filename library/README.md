@@ -18,7 +18,7 @@ This file is the map of the directory.
 | [`health-insurance-cross-sell/`](health-insurance-cross-sell/) | Insurance | `insurance-cross-sell` | yes |
 | [`uci-credit-default/`](uci-credit-default/) | Banking | `card-default-propensity` | yes |
 | [`criteo-uplift/`](criteo-uplift/) | Ad-tech | `criteo-uplift` — **planned** (configured for Phase 3b uplift; data unreachable here) | **no**, and the report says why |
-| [`hillstrom-email/`](hillstrom-email/) | E-commerce | `hillstrom-email` — the whole Plan J journey (M110) | yes — through `run_engine.py journey`; uplift does not beat risk there, and the report says so |
+| [`hillstrom-email/`](hillstrom-email/) | E-commerce | `hillstrom-email` — the whole Plan J journey (M110); Plan K measurement upgrades (`run_engine journey --plan-k`): run-score adjustment, rollout verdict, pooling check, harm-alarm applicability; committed as `plan_k.results.json` and section 9 of `run_report.md`; opt-in, the default journey is unchanged (DEC-1413) | yes — through `run_engine.py journey`; uplift does not beat risk there, and the report says so |
 
 Each directory holds the same six files: `README.md` (source, licence, rows, columns, what the
 target means, known quirks), `LICENSE.txt`, `fetch.py`, `mapping.yaml`, `run_report.md` and
