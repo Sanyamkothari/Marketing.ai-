@@ -144,6 +144,7 @@ Contract schema version: 1.
 | GET | `/runs/{run_id}/campaign-results` | The stored campaign results of a scoring run | IncrementalityReport |
 | POST | `/runs/{run_id}/campaign-results` | Measure a scoring run's campaign from an uploaded outcomes file | IncrementalityReport |
 | POST | `/runs/{run_id}/cancel` | Ask a pending or running run to stop | RunCancelResponse |
+| GET | `/runs/{run_id}/checks` | What a training run checked, and whether its result is too good to be true | RunChecks |
 | GET | `/runs/{run_id}/copy_messages.csv` | The rendered campaign-copy messages of a run, one row per scored entity | - |
 | GET | `/runs/{run_id}/drift-events` | Events noted against a scoring run's change report | DriftEventsView |
 | POST | `/runs/{run_id}/drift-events` | Note an event that may explain a change in the customers | DriftEventsView |

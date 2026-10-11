@@ -1747,4 +1747,36 @@ DEC-1500…1509, M151 → DEC-1510…1519, …), so parallel work on two milesto
   case on 200,000 rows (the advisor's run is reused); numeric outcomes get no first look and dates are not
   bucketed. `engine/doctor/first_look.py`; `tests/unit/doctor/test_first_look.py`,
   `tests/integration/test_api_doctor_first_look.py` and `tests/integration/test_doctor_ui.py` prove it.
+- **DEC-1598 — After M161 (idea #3): the data request asks only for what Data Doctor cannot read past.** *Context:*
+  `configs/pilot/data_request.yaml` (Plan E M59) asked for UTF-8 CSV with one header row, ISO dates, numbers without
+  separators or currency signs, Y/N flags and a pre-flight on a laptop; since M150-M159 the upload reads workbooks,
+  titles, two header rows, totals, `-`/`unknown` as empty, the usual delimiters and cp1252, asks about an ambiguous
+  day/month order and maps yes/no spellings, so asking clients to fix those costs them time. *Decision:* `formats`
+  keeps only what still matters: the same column names every month (`RECIPE_COLUMN_MISSING`); one customer ID
+  across files (a build tidies zeros, spaces and case; a prefix is named and counted, not applied); a date on every
+  event row; the year in month-per-column names; one file or sheet per table; amounts as plain numbers where
+  possible; and what cannot be read (`.xls`, `.xlsb`, password-protected workbooks, scanned PDFs, photos). A new
+  `not_needed` list (default empty) is rendered under "Send what you have" ("Excel is fine", "Titles and totals
+  are fine", ...). The pre-flight becomes optional and says it reads CSV and Parquet only. *Consequences:*
+  `GET /pilot/data-request` gains `not_needed` (additive); `docs/pilot/DATA_REQUEST.md` is regenerated; a test ties
+  every "no longer matters" claim to `configs/intake.yaml` and `engine/intake/excel.py`; one heading expectation
+  changed; `docs/pilot/PLAYBOOK.md` still treats the pre-flight as step 1, left to Plan E's owner.
+- **DEC-1599 — After M161 (idea #8): a result too good to be true is a warning that names the column, beside a list of
+  what the run checked.** *Context:* a test-set ROC AUC near 1 on marketing data usually means a column gives the
+  answer away, and nothing looked at the trained model's own result; a training run already writes
+  `validation.json`, `split.json`, `baseline.json`, `fairness.json`, `evaluation.json` and
+  `feature_importance.json`, but no screen gathered them. *Decision:* (a) `RESULT_SUSPICIOUSLY_GOOD` in
+  `engine/model_gates.py`, advisory in that module's `{code, passed, message}` shape: `passed=False` when the main
+  measure is above the use case's line in `configs/model_checks.yaml` (default ROC AUC 0.97; per-use-case
+  overrides; only higher-is-better measures between 0 and 1), else the ROC AUC is judged, else nothing. The
+  sentence names the rank-1 column of `feature_importance.json` and asks whether it is known only after the
+  outcome. `approval_checks` gives it to a non-uplift model whose evaluation can be read; it never blocks.
+  (b) `engine/run_checks.things_checked` and `GET /runs/{run_id}/checks` (Viewer) list, from the run's own reports
+  only, the alarm, the pre-training checks, the leak-column check ("not run" when off), the test set, the
+  yardstick and the fairness check; a missing report leaves its line out, so no check is claimed that did not
+  run. (c) A Plan L UI module adds the list at the end of a training run's Model page (`pages.js` only draws
+  module panels there, as on the Data and Output pages). *Consequences:* a propensity model on the Approver's
+  screen shows one check, so the phase-2 journey's expectation changed from `[]` to
+  `["RESULT_SUSPICIOUSLY_GOOD"]`; the OpenAPI path list gains one route; the dataset build's own checks are not
+  listed yet, and the code has no help-catalogue entry yet.
 <!-- ---- END PLAN-L ---- -->

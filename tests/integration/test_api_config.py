@@ -528,6 +528,8 @@ def test_openapi_builds_and_documents_every_route(client: TestClient) -> None:
         "/uploads/{upload_id}/agent-session/rows",
         # Plan L M159: use the same treatment as a file of the same shape last time (DEC-1594)
         "/uploads/{upload_id}/agent-session/same-treatment",
+        # Plan L follow-up (DEC-1599): things a training run checked, and the too-good-to-be-true alarm
+        "/runs/{run_id}/checks",
         "/privacy/consent/imports/from-connection",
     }
 
