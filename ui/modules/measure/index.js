@@ -20,6 +20,7 @@
 import { API_BASE, ApiError, postUpload } from "../../api.js";
 import { announceStatus, errorBox, esc, fmtInt, fmtPct, present } from "../../dom.js";
 import { registerRunAction, registerRunPanel } from "../router.js";
+import { runResultsLineHtml } from "../campaigns/links.js";
 import { campaignStep, measureApplies } from "./rule.js";
 import { injectMeasureStyles } from "./styles.js";
 
@@ -261,7 +262,8 @@ function panelHtml(st) {
   if (!st.view && st.loading) body = `<p class="muted" role="status">Loading…</p>`;
   else if (!st.view) body = errorBox(st.error, { title: "This step could not be loaded." });
   else body = st.view.report ? resultHtml(st) : askHtml(st);
-  return `${open}><h3 id="measure-h">Measure the campaign</h3>${body}</section>`;
+  // Plan M M176 (DEC-1606): the one place Plan M keeps for adding results, when this list is a campaign.
+  return `${open}><h3 id="measure-h">Measure the campaign</h3>${body}${runResultsLineHtml(st.run.run_id)}</section>`;
 }
 
 // --- events (delegated once) -----------------------------------------------------------------------

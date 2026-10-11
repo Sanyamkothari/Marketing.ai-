@@ -60,6 +60,7 @@ import {
   fmtVal,
   signed,
 } from "./format.js";
+import { runResultsLineHtml } from "../campaigns/links.js"; // Plan M M176 (DEC-1606)
 
 /** The one-line explanation plan B §8 gives the problem type, shown wherever it is chosen. */
 export const UPLIFT_EXPLANATION = "predicts who changes behaviour because of your action";
@@ -1830,7 +1831,10 @@ export function campaignPageHtml(uc, run, c) {
         related: { label: "Who was contacted", href: isUpliftRun(run) ? routes.output(uc.id, run.run_id) : routes.phase1Output(uc.id, run.run_id) },
       })
     : "";
-  const body = `${c.loadError ? errorBox(c.loadError, { retry: true }) : ""}${reportSection(report, c.roi, run)}${outcomesForm(c, {
+  // Plan M M176 (DEC-1606): the campaign page's Results tab is the one place Plan M keeps for adding results.
+  const body = `${c.loadError ? errorBox(c.loadError, { retry: true }) : ""}${reportSection(report, c.roi, run)}${runResultsLineHtml(
+    run.run_id,
+  )}${outcomesForm(c, {
     again: !!report,
   })}`;
   return pageShell(

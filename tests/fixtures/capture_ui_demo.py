@@ -77,6 +77,13 @@ PAGES: Final[list[tuple[str, tuple[str, ...]]]] = [
     ("#/cost", ()),
     ("#/approvals", ()),
     ("#/pilot/kit", ()),
+    # Plan M M176 (DEC-1606): the Campaigns list and each tab of both campaigns' pages.
+    ("#/campaigns", ()),
+    *[
+        (f"#/campaigns/{campaign}/{tab}", ())
+        for campaign in (CAMPAIGN_CONVERSION, CAMPAIGN_SPEND)
+        for tab in ("overview", "audience", "results", "technical")
+    ],
 ]
 
 

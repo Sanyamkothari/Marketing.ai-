@@ -8,6 +8,7 @@
 import { crumbs, dataTable, EM_DASH, esc, fmtDate, fmtInt, fmtMoney, pageHead, RESULTS_CRUMB, sortNote } from "../../dom.js";
 import { auditCardHtml, contactsCardHtml, programmeCardHtml } from "./audit.js";
 import { planCardHtml } from "./plan.js";
+import { campaignResultsLineHtml } from "../campaigns/links.js";
 
 /** A campaign's own page. */
 export const campaignHref = (campaign) => `#/campaigns/${encodeURIComponent(campaign.campaign_id)}`;
@@ -59,7 +60,10 @@ function resultCard(view, { canMeasure, busy, error }) {
     const detail = verdict ? `<p class="dc-text">${esc(verdict.detail)}</p>` : "";
     body = `${headline}${detail}<p class="dc-text" data-result-summary>${esc(report.summary)}</p>`;
   }
-  return `<section class="card dc-card" data-campaign-result><h3>Result</h3>${body}${problem}${measure}</section>`;
+  // Plan M M176 (DEC-1606): the campaign page's Results tab is where results are added; this card keeps its own.
+  return `<section class="card dc-card" data-campaign-result><h3>Result</h3>${body}${problem}${measure}${campaignResultsLineHtml(
+    campaign.campaign_id,
+  )}</section>`;
 }
 
 /**

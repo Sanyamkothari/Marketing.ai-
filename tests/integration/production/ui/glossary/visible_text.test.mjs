@@ -92,6 +92,17 @@ export const PAGES = [
   { id: "cost", hash: "#/cost", expect: /Estimates at AWS/ },
   { id: "approvals", hash: "#/approvals", expect: /Models waiting for your approval/ },
   { id: "data-request-kit", hash: "#/pilot/kit", expect: /Ask your data team/ },
+  // Plan M M176 (DEC-1606): the Campaigns list and every tab of both campaigns' pages, with empty allow-lists.
+  { id: "campaigns-list", hash: "#/campaigns", expect: /Every campaign: where it stands/, selector: "[data-campaigns-list]" },
+  ...[
+    ["conversion", C_CONVERSION],
+    ["spend", C_SPEND],
+  ].flatMap(([name, id]) => [
+    { id: `campaign-${name}-overview`, hash: `#/campaigns/${id}/overview`, expect: /Where it stands/, selector: "[data-overview]" },
+    { id: `campaign-${name}-audience`, hash: `#/campaigns/${id}/audience`, expect: /to contact, out of/, selector: "[data-audience-search]" },
+    { id: `campaign-${name}-results`, hash: `#/campaigns/${id}/results`, expect: /Open the full report/, selector: "[data-results-measured]" },
+    { id: `campaign-${name}-technical`, hash: `#/campaigns/${id}/technical`, expect: /Choose the best e-mail/, selector: "[data-technical-tab]" },
+  ]),
 ];
 
 /** Requests a page may make that the recording does not hold (none today). Anything else fails the page. */

@@ -30,6 +30,7 @@ import { driftEventsCardHtml } from "./drift_events.js";
 import { AUDIT_ROUTE, auditBody, auditPageHtml, fileOf, programmeBody } from "./audit.js";
 import { planBody, previewHtml, previewReadoutHtml } from "./plan.js";
 import { campaignPageHtml, campaignsListHtml, conflictsCardHtml, injectStyles, treatListCardHtml } from "./views.js";
+import { campaignsRoute } from "../campaigns/index.js";
 
 export { conflictsCardHtml, treatListCardHtml };
 export const ROUTES = ["campaigns"];
@@ -80,6 +81,9 @@ function setPreview(preview) {
 }
 
 async function renderCampaign(app, parts) {
+  // Plan M M176 (DEC-1606): the Campaigns list, the wizard and the tabbed campaign page answer first. A bare
+  // campaign id in the classic layout, and `#/campaigns/<id>/plan`, are this page, drawn exactly as before.
+  if (await campaignsRoute(app, parts)) return;
   injectStyles();
   const id = decodeURIComponent(parts[1] || "");
   if (!id) {
