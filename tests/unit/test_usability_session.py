@@ -8,7 +8,9 @@ sets, the demo mode it removes, a fresh copy per participant, a refusal to reuse
 from __future__ import annotations
 
 import os
+import shlex
 import socket
+import subprocess
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -107,7 +109,7 @@ def test_the_ids_the_kit_uses_are_accepted(good: str, tmp_path: Path) -> None:
 def test_a_bad_participant_id_on_the_command_line_is_reported_and_nothing_is_made(root: Path) -> None:
     code, said, seeder, runner = run(root, "--participant", "../x")
     assert code == 1 and "not a participant id" in said[0] and not seeder.calls and not runner.calls
-    assert not (root / "participants").exists()
+    assert not root.exists()
 
 
 def test_the_port_must_be_a_user_port(root: Path) -> None:
@@ -162,6 +164,38 @@ def test_prepare_only_makes_the_copy_and_does_not_start_a_server(root: Path) -> 
     assert code == 0 and not runner.calls
     assert (root / "participants" / "P1" / "store" / "campaign.json").is_file()
     assert "uvicorn" in "\n".join(said)
+
+
+def test_the_printed_server_command_is_shell_safe_and_drops_demo_mode(tmp_path: Path) -> None:
+    spaced = tmp_path / "my session"
+    code, said, _, _ = run(spaced, "--participant", "P1", "--prepare-only")
+    assert code == 0
+    line = next(line for line in said if line.startswith("Server"))
+    words = shlex.split(line.removeprefix("Server").strip())
+    store = spaced.resolve() / "participants" / "P1" / "store"
+    assert words[:3] == ["env", "-u", "MARKETING_AI_DEMO_MODE"]
+    assert f"MARKETING_AI_DATA_DIR={store}" in words and "MARKETING_AI_UI_LAYOUT=campaigns" in words
+    assert words[-5:-2] == ["-m", "uvicorn", "api.main:app"]
+
+
+def test_the_real_entry_point_runs(tmp_path: Path) -> None:
+    env = {k: v for k, v in os.environ.items() if k != "MARKETING_AI_DATA_DIR"}
+    base = [sys.executable, "-m", "scripts.usability_session"]
+    helped = subprocess.run(
+        [*base, "--help"], cwd=session.REPO_ROOT, env=env, capture_output=True, text=True, check=False
+    )
+    assert helped.returncode == 0 and "--reset" in helped.stdout
+    root = tmp_path / "r"
+    done = subprocess.run(
+        [*base, "--root", str(root), "--participant", "P1", "--reset"],
+        cwd=session.REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert done.returncode == 0 and "nothing to remove" in done.stdout
+    assert (root / session.MARKER).is_file()
 
 
 def test_the_process_environment_is_not_changed(root: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -226,6 +260,54 @@ def test_a_seed_failure_is_reported_and_leaves_no_participant_copy(root: Path) -
     )
     assert code == 1 and "could not be seeded: no file" in said[-1]
     assert not (root / "participants" / "P1").exists()
+
+
+class HalfSeeder(FakeSeeder):
+    """Writes the store, then fails: what a seed that dies after the journey leaves behind."""
+
+    def __init__(self, error: BaseException) -> None:
+        super().__init__()
+        self.error = error
+
+    def __call__(self, **kwargs: Any) -> Any:
+        super().__call__(**kwargs)
+        raise self.error
+
+
+@pytest.mark.parametrize(
+    "error",
+    [seed_validated.SeedError("did not leave a verified Value Proof Pack"), FileNotFoundError("autogluon")],
+)
+def test_a_seed_that_fails_after_writing_the_store_is_not_reused_by_the_next_run(
+    root: Path, error: Exception
+) -> None:
+    half = HalfSeeder(error)
+    code, said, _, runner = run(root, "--participant", "P1", seeder=half)
+    assert code == 1 and "could not be seeded" in said[-1] and len(half.calls) == 1 and not runner.calls
+    assert not (root / "master").exists() and not (root / "participants" / "P1").exists()
+    good = FakeSeeder(sample=True)
+    code, said, _, _ = run(root, "--participant", "P1", "--prepare-only", seeder=good)
+    assert code == 0 and len(good.calls) == 1  # seeded again, not copied from the half store
+    assert any(line.startswith("SAMPLE:") for line in said)
+
+
+def test_an_interrupted_seed_leaves_a_master_without_its_note_and_the_next_run_seeds_again(
+    root: Path,
+) -> None:
+    half = HalfSeeder(KeyboardInterrupt())
+    with pytest.raises(KeyboardInterrupt):
+        run(root, "--participant", "P1", seeder=half)
+    assert (root / "master").is_dir() and not (root / "master" / session.MASTER_NOTE).exists()
+    good = FakeSeeder()
+    code, _, _, _ = run(root, "--participant", "P1", "--prepare-only", seeder=good)
+    assert code == 0 and len(good.calls) == 1
+
+
+def test_a_master_with_no_note_is_announced_as_unverified(tmp_path: Path) -> None:
+    paths = session.participant_paths(tmp_path, "P1")
+    assert any(line.startswith("UNVERIFIED:") for line in session.describe("P1", paths, 8000, {}))
+    ok = {"is_validated": True, "is_sample": False}
+    assert not any(line.startswith("UNVERIFIED:") for line in session.describe("P1", paths, 8000, ok))
 
 
 def test_an_existing_copy_is_refused_until_reset_or_resumed(root: Path) -> None:
@@ -303,13 +385,24 @@ def test_the_root_may_not_hold_the_data_directory_the_environment_names(tmp_path
         session.prepare_root(tmp_path, environ={"MARKETING_AI_DATA_DIR": str(real)})
     with pytest.raises(SessionError, match="data directory"):
         session.prepare_root(real, environ={"MARKETING_AI_DATA_DIR": str(real)})
+    with pytest.raises(SessionError, match="data directory"):  # a root inside the data directory
+        session.prepare_root(real / "usability", environ={"MARKETING_AI_DATA_DIR": str(real)})
     assert (real / "runs").is_dir() and not (tmp_path / session.MARKER).exists()
+    assert not (real / "usability").exists() and not (real / session.MARKER).exists()
 
 
 def test_the_checkout_and_its_data_folder_are_not_roots() -> None:
-    for unsafe in (session.REPO_ROOT, session.REPO_ROOT / "data", session.REPO_ROOT.parent, Path("/")):
+    unsafe_roots = (
+        session.REPO_ROOT,
+        session.REPO_ROOT / "data",
+        session.REPO_ROOT / "data" / "usability",
+        session.REPO_ROOT.parent,
+        Path("/"),
+    )
+    for unsafe in unsafe_roots:
         with pytest.raises(SessionError):
             session.prepare_root(unsafe, environ={})
+    assert not (session.REPO_ROOT / "data" / "usability").exists()
 
 
 def test_reset_refuses_a_root_this_command_did_not_make(tmp_path: Path) -> None:

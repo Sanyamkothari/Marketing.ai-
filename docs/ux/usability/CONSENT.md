@@ -45,7 +45,7 @@ customers' personal data into it. If something of that kind appears in a recordi
 
 | Information | Who can see it | How long we keep it |
 |---|---|---|
-| Name and contact details | `[the person arranging the sessions]` only | Until the thank-you is given and then `[__ days]`, then deleted |
+| Name and contact details | `[the person arranging the sessions]` only | Kept only to arrange the session and the thank-you (part of taking part): until the thank-you is given and then `[__ days]`, then deleted |
 | Booking-question answers (people who are not booked) | `[the person arranging the sessions]` only | Deleted when the five participants have been chosen |
 | Observer's notes (no names) | `[the product team and the people deciding on the layout]` | `[__ months/years]`, as a record of why the layout was changed |
 | Recording (screen, and voice if agreed) | `[the facilitator and the observer]` only; it is not shared outside `[organisation]` and not published | Deleted once the observer's notes have been checked, within `[__ days]` of the session |
@@ -97,11 +97,6 @@ each aloud on the recording once the recording has started and the person has ag
 
 *I understand that if I do not tick the recording boxes, the session goes ahead with the observer's notes only.*
 
-**3. Contact (optional)**
-
-- [ ] I agree that you may keep my name and contact details until the thank-you is given and `[__ days]` after, to arrange
-      the session and the thank-you.
-
 | | |
 |---|---|
 | Participant name | |
@@ -119,5 +114,7 @@ results (see the kit's section 10: the notes hold no names).
 - If the person declines the recording, do not record. The observer writes notes, and the click counts and timings are taken
   by hand. Note on the observer's sheet that the session was not recorded.
 - If the person withdraws on the day, stop, delete anything recorded, and do not count the session. Give the thank-you.
+- If the person declined the screen or the voice recording, leave out or change the sentence in the kit's section 6
+  opening that says "We will record the screen and your voice", so that it matches what they agreed to.
 - Put the participant id on the form and on the results sheet; keep the name on the form only.
 - After the notes are checked, delete the recording on the day you promised, and record that you did.

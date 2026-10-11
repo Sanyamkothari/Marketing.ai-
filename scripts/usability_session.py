@@ -20,8 +20,8 @@ participant, served in the `campaigns` layout and without demo mode. This comman
    server and prints the command to run.
 
 **It never touches your real data.** Everything goes under `--root`. A folder that already holds anything is
-refused unless this command made it (it leaves a marker file), and a root that holds the data directory the
-environment names is refused. `--reset` removes only the folder `DIR/participants/<id>`.
+refused unless this command made it (it leaves a marker file), and a root that holds, or lies inside, the data
+directory the environment names (or the checkout's `data/`) is refused. `--reset` removes only the folder `DIR/participants/<id>`.
 
 If the master was made from the committed sample (no full file), the command says so every time: the numbers on
 screen are then not the validated ones and the results must say so (USABILITY_TEST.md section 3.1).
@@ -33,6 +33,7 @@ import argparse
 import json
 import os
 import re
+import shlex
 import shutil
 import socket
 import subprocess
@@ -121,6 +122,14 @@ def server_command(port: int, *, python: str | None = None) -> list[str]:
     return [python or sys.executable, "-m", "uvicorn", "api.main:app", "--port", str(port)]
 
 
+def server_line(store: Path, port: int) -> str:
+    """The shell command that serves `store`: quoted for a shell, and without demo mode even if the shell exports it."""
+    return "env -u {demo} {rest}".format(
+        demo=ENV_DEMO_MODE,
+        rest=shlex.join([f"{ENV_LAYOUT}={LAYOUT}", f"{ENV_DATA_DIR}={store}", *server_command(port)]),
+    )
+
+
 def url(port: int) -> str:
     return f"http://localhost:{port}/ui"
 
@@ -131,10 +140,10 @@ def prepare_root(root: Path, *, environ: Mapping[str, str] | None = None) -> Pat
     root = root.expanduser().resolve()
     named = environ.get(ENV_DATA_DIR)
     for real in filter(None, [Path(named).expanduser().resolve() if named else None, REPO_ROOT / "data"]):
-        if real == root or root in real.parents:
+        if real == root or root in real.parents or real in root.parents:
             raise SessionError(
-                f"{root} holds {real}, a data directory this checkout or your environment uses; "
-                "pick a new folder for --root"
+                f"{root} holds or lies inside {real}, a data directory this checkout or your environment uses; "
+                "pick a new folder outside it for --root"
             )
     if root == REPO_ROOT or root in REPO_ROOT.parents or root == Path(root.anchor):
         raise SessionError(f"{root} is not a safe --root; pick a new folder for the session files")
@@ -182,6 +191,14 @@ def _read_master_note(master: Path) -> dict[str, object]:
     return loaded if isinstance(loaded, dict) else {}
 
 
+def _remove_master(master: Path) -> None:
+    """Remove a (half-built) master. It lies under the marked root, which `prepare_root` has already checked."""
+    if master.is_symlink():
+        master.unlink()
+    else:
+        shutil.rmtree(master, ignore_errors=True)
+
+
 def ensure_master(
     paths: SessionPaths,
     *,
@@ -192,7 +209,12 @@ def ensure_master(
     seeder: Callable[..., object] | None = None,
 ) -> dict[str, object]:
     """Seed the master store once with the kit's command (`scripts.seed_validated`); later runs reuse it."""
-    have = paths.master_store.is_dir() and any(paths.master_store.iterdir())
+    # The note is written last, so a master without it is a seed that failed or was interrupted: never reuse it.
+    have = (
+        (paths.master / MASTER_NOTE).is_file()
+        and paths.master_store.is_dir()
+        and any(paths.master_store.iterdir())
+    )
     if have and not reseed:
         return _read_master_note(paths.master)
     from scripts import seed_validated
@@ -201,10 +223,16 @@ def ensure_master(
     echo(
         f"seeding the master store in {paths.master} with {seed_validated.COMMAND} (about three minutes) ..."
     )
+    _remove_master(paths.master)
     try:
         result = seed(data_dir=paths.master, csv=csv, fetch=fetch, force=True, echo=echo)
-    except seed_validated.SeedError as error:
-        raise SessionError(f"the demo store could not be seeded: {error}") from error
+    except Exception as error:  # any failure leaves a half-built master that must not be reused
+        _remove_master(paths.master)
+        if isinstance(error, seed_validated.SeedError):
+            raise SessionError(f"the demo store could not be seeded: {error}") from error
+        raise SessionError(
+            f"the demo store could not be seeded ({type(error).__name__}: {error}); nothing was kept, run again"
+        ) from error
     facts: dict[str, object] = {
         "source_kind": getattr(result, "source_kind", "unknown"),
         "is_validated": bool(getattr(result, "is_validated", False)),
@@ -232,7 +260,7 @@ def describe(participant: str, paths: SessionPaths, port: int, master: Mapping[s
         f"Participant   {participant}",
         f"URL           {url(port)}",
         f"Store         {paths.store}",
-        f"Server        {ENV_LAYOUT}={LAYOUT} {ENV_DATA_DIR}={paths.store} {' '.join(server_command(port))}",
+        f"Server        {server_line(paths.store, port)}",
         "",
         "Before the participant arrives (USABILITY_TEST.md section 3.3): open the URL in a fresh browser profile, check",
         "that the sidebar shows five places and that there is no 'Sample data' notice, fill in the answer key from this",
@@ -245,10 +273,11 @@ def describe(participant: str, paths: SessionPaths, port: int, master: Mapping[s
             "validated results; say so in the results sheet. For the validated numbers run library/hillstrom-email/fetch.py",
             f"and then {COMMAND} --root <same folder> --participant <id> --reseed.",
         ]
-    elif master and not master.get("is_validated", True):
+    elif not master or not master.get("is_validated", True):
         lines += [
             "",
-            "UNVERIFIED: the file this store was made from is not the validated one; do not quote its numbers.",
+            "UNVERIFIED: this store has no record that it was made from the validated file; do not quote its numbers.",
+            f"Run {COMMAND} --root <same folder> --participant <id> --reseed to make it again.",
         ]
     return lines
 
@@ -298,6 +327,7 @@ def main(
         echo("not started: --reset cannot be combined with --resume or --reseed; reset, then run again")
         return 2
     try:
+        participant_paths(args.root, args.participant)  # refuse a bad id before anything is made
         root = prepare_root(args.root, environ=environ)
         paths = participant_paths(root, args.participant)
         if args.reset:

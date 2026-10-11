@@ -22,7 +22,7 @@ address, so that people can ask a question first.
 >
 > What it involves:
 >
-> - **About 45 minutes**, once, on a video call or in person at `[place]`. Most sessions take 30 to 40 minutes.
+> - **About 45 minutes**, once, on a video call or in person at `[place]`. We expect most sessions to take 30 to 40 minutes, so please keep 45 free.
 > - You are given two short tasks on cards and use the tool the way you would at work. We are testing the tool, not you:
 >   nothing you do can be wrong, and where something is hard to find, that tells us what to fix.
 > - We will not show you anything beforehand and we cannot give hints during the tasks, so you will be on your own with the
@@ -80,12 +80,13 @@ because they came, not because of how they did.
 ## 4. Scheduling
 
 - **Length:** plan 45 minutes per person (a three-minute opening, two tasks of at most 10 and 5 minutes, and a short
-  closing, as in the kit's facilitator script). Most sessions take 30 to 40 minutes. Leave 15 minutes after each session
+  closing, as in the kit's facilitator script). We expect most sessions to take 30 to 40 minutes, but nothing has been measured yet. Leave 15 minutes after each session
   for the observer's notes (kit section 10) before the next person.
 - **Remote or in person:** either. For a remote session the participant needs a computer, a stable connection and a screen
-  at least 1440 pixels wide; the facilitator serves the demo and shares access to it, or the participant works on the
-  facilitator's computer by screen sharing. In person, use one computer for the participant, a second person or window for
-  the observer, and a timer (kit section 3).
+  at least 1440 pixels wide. The participant works on the facilitator's computer through the call's screen sharing with
+  remote control: the session command serves the demo on the facilitator's computer only, so it cannot be opened from
+  another computer. In person, use one computer for the participant, a second person or window for the observer, and a
+  timer (kit section 3).
 - **One person per slot,** with one practice session (a colleague, not counted) before the first participant.
 - **Send** with the invitation: the time, how to join or where to go, the length, who they will meet, and
   [`CONSENT.md`](CONSENT.md) to read in advance. They give their agreement at the start of the session, before anything is
