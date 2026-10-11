@@ -117,6 +117,10 @@ def world(config_root: Path, tmp_path_factory: pytest.TempPathFactory) -> Iterat
                 "overrides": OVERRIDES,
             },
         )
+        # Plan M final integration (DEC-1611 (p)): a list made with a model still waiting for an Approver is not
+        # sent and its test plan is not registered (409 MODEL_NOT_APPROVED), so the journey approves the new model
+        # before it scores, as a person does.
+        _ok(client.post(f"/models/{trained.model_version_id}/approve", json={"approved_by": "journey"}))
         score = generate(GenerationSpec(USE_CASE, rows=SCORE_ROWS, variant=SCORING, seed=1352))
         scored = _run(
             client,

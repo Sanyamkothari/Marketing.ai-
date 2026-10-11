@@ -108,7 +108,7 @@ from pydantic import AwareDatetime, Field, ValidationError, model_validator
 from api.access import get_platform_engine, set_audit_context
 from api.access_policy import RoutePolicy, register
 from api.deps import ConfigRootDep, RegistryDep, SettingsDep, StorageDep
-from api.routes.runs import load_run, requested_by
+from api.routes.runs import load_run, refuse_unapproved_list, requested_by
 from api.routes.uplift import _finished_scoring_run, _read_all
 from api.routes.uploads import http_error, load_upload, use_case_config
 from api.schemas import ErrorBody, ErrorResponse
@@ -1223,7 +1223,12 @@ def read_plan(campaign_id: str, request: Request, storage: StorageDep) -> TestPl
     summary="Register a campaign's test plan before its outcomes are read",
 )
 def register_plan(
-    campaign_id: str, body: TestPlanInput, request: Request, response: Response, storage: StorageDep
+    campaign_id: str,
+    body: TestPlanInput,
+    request: Request,
+    response: Response,
+    storage: StorageDep,
+    registry: RegistryDep,
 ) -> TestPlan:
     store = get_campaign_store(request)
     campaign = _load(store, campaign_id)
@@ -1246,6 +1251,10 @@ def register_plan(
             TEST_PLAN_INVALID,
             "This campaign has already been measured, so a plan registered now would not be fixed in advance.",
         )
+    # Plan M final integration (DEC-1611 (p)): a list made with a model that waits for approval, or was turned
+    # down, is not fixed for sending: `409 MODEL_NOT_APPROVED` (Plan J's own page gets this refusal too).
+    for run_id in campaign.run_ids:
+        refuse_unapproved_list(request, storage, registry, run_id)
     plan = freeze_plan(
         decided,
         _realised(storage, campaign_id),

@@ -33,7 +33,7 @@ from pydantic import Field
 
 from api.access import PrincipalDep, get_platform_engine, platform_data_dir, set_audit_context
 from api.access_policy import RoutePolicy, register
-from api.deps import ConfigRootDep, SettingsDep, StorageDep
+from api.deps import ConfigRootDep, SettingsDep, StorageDep, get_registry
 from api.routes.uploads import http_error
 from api.schemas import ErrorResponse
 from engine.access.roles import Principal, Role
@@ -169,7 +169,9 @@ def _executor(request: Request, storage: Storage, ctx: ToolContext) -> Any:
 
         payload = TestPlanPayload.model_validate(proposal.payload)
         try:
-            plan = register_plan(payload.campaign_id, payload.plan, request, Response(), storage)
+            plan = register_plan(
+                payload.campaign_id, payload.plan, request, Response(), storage, get_registry(request)
+            )
         except HTTPException as exc:
             raw: Any = exc.detail
             detail: dict[str, Any] = raw if isinstance(raw, dict) else {}
@@ -501,7 +503,7 @@ def _execute_campaign_plan(proposal: Proposal, request: Request, storage: Storag
 
     def register(campaign_id: str, plan: Any) -> str:
         try:
-            frozen = register_plan(campaign_id, plan, request, Response(), storage)
+            frozen = register_plan(campaign_id, plan, request, Response(), storage, get_registry(request))
         except HTTPException as exc:
             raw: Any = exc.detail
             detail: dict[str, Any] = raw if isinstance(raw, dict) else {}

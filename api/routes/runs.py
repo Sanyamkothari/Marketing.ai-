@@ -48,6 +48,7 @@ from api.deps import (
     SettingsDep,
     StorageDep,
     get_config_root,
+    get_registry,
     get_settings,
 )
 from api.routes.agent_recipes import (  # Plan G (DEC-1006)
@@ -110,6 +111,7 @@ from engine.contracts import (
     TABULAR_SCHEMAS,
     DatasetProfile,
     FeatureSchema,
+    ModelStatus,
     ModelVersion,
     RunRecord,
     RunState,
@@ -150,7 +152,7 @@ from engine.keys import normalise_key, split_config_for_key
 from engine.onboarding.specs import DatasetManifest
 from engine.pilot.demo import is_demo_client
 from engine.pipeline import STATUS_FILENAME, Pipeline
-from engine.registry import ModelRegistry
+from engine.registry import ModelRegistry, RegistryError
 from engine.runs import (
     CREATED_ARTEFACTS,
     PROFILE_FILENAME,
@@ -189,7 +191,9 @@ router: APIRouter = APIRouter(tags=["runs"])
 _LOGGER = get_logger(__name__)
 
 __all__ = [
+    "CONTACT_LIST_FILES",
     "CREATED_ARTEFACTS",
+    "MODEL_NOT_APPROVED",
     "PROFILE_FILENAME",
     "RUN_CONFIG_FILENAME",
     "RUN_FILENAME",
@@ -202,7 +206,10 @@ __all__ = [
     "cancel_run",
     "create_run",
     "job_spec_for",
+    "model_not_approved_message",
+    "refuse_unapproved_list",
     "router",
+    "unapproved_list_model",
     "update_run",
     "update_stage",
     "write_job_spec",
@@ -695,6 +702,8 @@ def read_artefact(run_id: str, name: str, storage: StorageDep, request: Request)
         raise http_error(404, "ARTEFACT_UNKNOWN", f"There is no artefact called {name!r}.")
     require_row_level_role(request, name)
     load_run(storage, run_id)
+    if name in CONTACT_LIST_FILES:  # Plan M final integration (DEC-1611 (p)): no list of an unapproved model
+        refuse_unapproved_list(request, storage, get_registry(request), run_id)
     # Plan K M134 (DEC-1405): with the compliance gate on, a list stored before it was turned on is built again.
     if name in (TREAT_LIST_CSV, TREAT_LIST_PARQUET, TREAT_LIST_SUMMARY_FILENAME) and (
         not storage.exists(run_key(run_id, name))
@@ -906,6 +915,74 @@ def require_row_level_role(request: Request, name: str) -> None:
     if required is not None and not principal.has(required):
         set_audit_context(request, details={"reason_code": "ROW_LEVEL_DOWNLOAD_REFUSED"})
         raise http_error(403, "ROLE_REQUIRED", refusal_message(ROW_LEVEL_DOWNLOAD))
+
+
+# ---------------------------------------------------------------------------
+# Plan M final integration (DEC-1611 (p)): a contact list made with a model that is not approved is held
+# ---------------------------------------------------------------------------
+MODEL_NOT_APPROVED: Final[str] = "MODEL_NOT_APPROVED"
+
+CONTACT_LIST_FILES: Final[frozenset[str]] = frozenset(
+    {TREAT_LIST_CSV, TREAT_LIST_PARQUET, ARBITRATED_TREAT_LIST_CSV, ARBITRATED_TREAT_LIST_PARQUET}
+)
+"""The files a sending tool is given (the contact list, and the cross-goal arbitrated one). Held while the model they
+were made with waits for approval or was turned down. `scores.csv` and the other analyst files are NOT held: a model
+named explicitly may be scored at any status, to try a candidate before approving it (DEC-050)."""
+
+
+def unapproved_list_model(storage: Storage, registry: ModelRegistry, run_id: str) -> ModelVersion | None:
+    """The model version a scoring run's list was made with, when that list may not be sent; else None.
+
+    Held only when the run's own settings (`run_config.json`) require approval and the version is waiting for it
+    (`pending_approval`) or was turned down (`archived` without ever having been the champion: a rejected
+    challenger; a demoted former champion keeps its `promoted_at` and stays sendable). A training run, a run with
+    no model, a candidate the champion rule kept back, the champion, approval switched off, or a run or version
+    that cannot be read: not held here (each is answered as before by the route itself).
+    """
+    try:
+        record = storage.read_model(run_key(run_id, RUN_FILENAME), RunRecord)
+        resolved = storage.read_model(run_key(run_id, RUN_CONFIG_FILENAME), ResolvedConfig)
+    except StorageError:
+        return None
+    if record.mode is not RunMode.SCORE or not record.model_version_id:
+        return None
+    if not resolved.config.governance.approval_required:
+        return None
+    try:
+        version = registry.get(record.model_version_id)
+    except RegistryError:
+        return None
+    if version.status is ModelStatus.PENDING_APPROVAL:
+        return version
+    if version.status is ModelStatus.ARCHIVED and version.promoted_at is None:
+        return version
+    return None
+
+
+def model_not_approved_message(version: ModelVersion) -> str:
+    """The refusal's sentence, by where the model stands."""
+    if version.status is ModelStatus.PENDING_APPROVAL:
+        return (
+            "This contact list was made with a new model that is still waiting for an Approver, so it cannot be "
+            "downloaded, and its campaign's test plan cannot be registered, until the model is approved."
+        )
+    return (
+        "This contact list was made with a model an Approver turned down, so it cannot be downloaded or have its "
+        "campaign's test plan registered. Make the list again with the approved model."
+    )
+
+
+def refuse_unapproved_list(request: Request, storage: Storage, registry: ModelRegistry, run_id: str) -> None:
+    """`409 MODEL_NOT_APPROVED` when `unapproved_list_model` holds the run's list; the audit records why."""
+    version = unapproved_list_model(storage, registry, run_id)
+    if version is None:
+        return
+    from api.access import set_audit_context  # api.access imports this package (see require_row_level_role)
+
+    set_audit_context(
+        request, details={"reason_code": MODEL_NOT_APPROVED, "model_id": version.model_id, "run_id": run_id}
+    )
+    raise http_error(409, MODEL_NOT_APPROVED, model_not_approved_message(version))
 
 
 def load_run(storage: Storage, run_id: str) -> RunRecord:

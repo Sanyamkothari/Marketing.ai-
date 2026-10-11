@@ -95,6 +95,10 @@ PLAN_J_CODES: Final[frozenset[str]] = (
             "ARBITRATION_USE_CASE_REPEATED",  # 422: two runs of one use case
             "ARBITRATION_NOT_FOUND",  # 404: no arbitration yet, or no participating run keeps the list
             "ARBITRATION_CONFIG_INVALID",  # 422: decide/arbitration.yaml exists and cannot be read
+            # Plan M final integration (DEC-1611 (p)): a contact list (treat list, arbitrated list) made with a
+            # model that waits for approval or was turned down is not served, and its campaign's test plan is not
+            # registered (`api.routes.runs.refuse_unapproved_list`, 409). A route code, joined here like M101's.
+            "MODEL_NOT_APPROVED",
         }
     )
     | MEASUREMENT_CHECK_CODES  # M93 (DEC-1303 (h)): LABEL_RATE_UNSTABLE, TREATMENT_HISTORY_NOT_RANDOM

@@ -24,9 +24,9 @@ from fastapi import APIRouter, Request, Response
 from pydantic import Field
 
 from api.access_policy import RoutePolicy, register
-from api.deps import ConfigRootDep, StorageDep
+from api.deps import ConfigRootDep, RegistryDep, StorageDep
 from api.routes.campaigns import default_outcome_window, get_campaign_store
-from api.routes.runs import load_run, requested_by
+from api.routes.runs import load_run, refuse_unapproved_list, requested_by
 from api.routes.uplift import _finished_scoring_run
 from api.routes.uploads import http_error, use_case_config
 from api.schemas import ErrorResponse
@@ -56,6 +56,7 @@ from engine.decide.treat_list import (
 )
 from engine.decide.variant_arms import VARIANT_ARMS_NOT_ARBITRATED, variant_arms_in_force
 from engine.measurement.campaign import Campaign, create_arbitrated_campaign
+from engine.registry import ModelRegistry
 from engine.runs import RUN_CONFIG_FILENAME, RUN_FILENAME
 from engine.stages.actions import CONTROL_GROUP_COLUMN
 from engine.storage import Storage, StorageError, run_key
@@ -409,7 +410,7 @@ def get_arbitration_conflicts(storage: StorageDep) -> dict[str, Any]:
         }
 
 
-def _arbitrated_file(storage: Storage, name: str) -> bytes:
+def _arbitrated_file(request: Request, storage: Storage, registry: ModelRegistry, name: str) -> bytes:
     """The arbitrated list as the latest arbitration's first run still keeps it (each run has its own copy).
 
     No customer-level copy is kept at the store root: the copies sit in the runs, where retention and
@@ -419,6 +420,9 @@ def _arbitrated_file(storage: Storage, name: str) -> bytes:
         summary = storage.read_model(f"decide/{ARBITRATION_SUMMARY_FILENAME}", ArbitrationSummary)
     except StorageError as exc:
         raise http_error(404, "ARBITRATION_NOT_FOUND", "No arbitration has been performed yet.") from exc
+    # Plan M final integration (DEC-1611 (p)): one list made with an unapproved model holds the whole arbitrated list.
+    for run_id in summary.run_ids:
+        refuse_unapproved_list(request, storage, registry, run_id)
     for run_id in summary.run_ids:
         try:
             return storage.read_bytes(run_key(run_id, name))
@@ -435,9 +439,11 @@ def _arbitrated_file(storage: Storage, name: str) -> bytes:
     "/decide/arbitrated-treat-list.csv",
     summary="Download arbitrated treat list CSV",
 )
-def download_arbitrated_treat_list_csv(storage: StorageDep) -> Response:
+def download_arbitrated_treat_list_csv(
+    request: Request, storage: StorageDep, registry: RegistryDep
+) -> Response:
     return Response(
-        content=_arbitrated_file(storage, ARBITRATED_TREAT_LIST_CSV),
+        content=_arbitrated_file(request, storage, registry, ARBITRATED_TREAT_LIST_CSV),
         media_type="text/csv",
         headers={"Content-Disposition": f'attachment; filename="{ARBITRATED_TREAT_LIST_CSV}"'},
     )
@@ -447,9 +453,11 @@ def download_arbitrated_treat_list_csv(storage: StorageDep) -> Response:
     "/decide/arbitrated-treat-list.parquet",
     summary="Download arbitrated treat list Parquet",
 )
-def download_arbitrated_treat_list_parquet(storage: StorageDep) -> Response:
+def download_arbitrated_treat_list_parquet(
+    request: Request, storage: StorageDep, registry: RegistryDep
+) -> Response:
     return Response(
-        content=_arbitrated_file(storage, ARBITRATED_TREAT_LIST_PARQUET),
+        content=_arbitrated_file(request, storage, registry, ARBITRATED_TREAT_LIST_PARQUET),
         media_type="application/octet-stream",
         headers={"Content-Disposition": f'attachment; filename="{ARBITRATED_TREAT_LIST_PARQUET}"'},
     )
