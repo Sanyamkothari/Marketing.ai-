@@ -2735,10 +2735,33 @@ rows (`cap_contact_list`), records `#/campaign/hillstrom-email/r_20261010_111000
 top bar says "Sample data: not loaded"); a test forbids it in the kit. A page added to `scripts/ui_screenshots.py`
 `PAGES` with a run or campaign id uses the `{run}` / `{campaign}` tokens so `--base` can skip it. Anyone changing the
 wizard's or the Overview's controls (`data-new-campaign`, `data-cw-*`, `#ag-approve`), the sidebar's Reports and
-Campaigns links or the Reports claim attributes updates the pins in `tests/integration/test_usability_journeys.py` and
-the kit's section 12 in the same commit (DEC-1611).
+Campaigns links or the Reports claim attributes updates the pins in `tests/integration/test_usability_journeys.py`
+(Task 1: 4 clicks, first or later campaign; Task 2: 1 and 3) and the kit's section 12 in the same commit (DEC-1611).
 
 **What I did meanwhile.** Nothing was blocked.
+
+### 2026-10-11 — plan-m M181 part C and the final integration (on main) → trunk (owner of `api/routes/runs.py`), Plan J (owners of `api/routes/campaigns.py`, `api/routes/decide.py` and `ui/modules/decide/`) and Plan K (owner of `api/routes/agentic.py`): a campaign's contact list made with an unapproved model is refused by the server (record of in-place edits; closes part C's request to Plan J)
+
+**What changed** (DEC-1611 (p)). `api/routes/runs.py` gains `refuse_unapproved_list` (with `unapproved_list_model`,
+`CONTACT_LIST_FILES`, `MODEL_NOT_APPROVED`): when a scoring run's `run_config.json` requires approval and its model is
+`pending_approval`, or `archived` without ever having been the champion (a rejected challenger), the contact list
+of a run a campaign record names (`GET /runs/{id}/treat_list.csv`, the generic artefact route's `treat_list.*` and
+`arbitrated_treat_list.*`, and `/decide/arbitrated-treat-list.*` when an arbitrated run is held; a run no campaign
+names is served as before, plan.md section 11) and a new test plan
+(`POST /campaigns/{id}/plan`, which now takes the registry; `api/routes/agentic.py`'s two direct calls pass
+`get_registry(request)`) answer `409 MODEL_NOT_APPROVED` (in `PLAN_J_CODES`, explained in `configs/pilot/help.yaml`).
+`scores.csv`, the other analyst row files and `treat_list_summary.json` are unchanged (DEC-050). M181 part C's
+request to Plan J (hold the plan form and the download on `#/campaigns/<id>/plan` for such a list) is withdrawn: that
+page now gets the server's refusal and shows it like any other error. `ui/modules/campaigns/wizard_rules.js` exports
+`listModelState`, `listHeld` and `NO_CHAMPION_AT_DECISION` (additive; `modelState` is unchanged).
+
+**What is needed.** A new route that serves a contact list, or registers a plan for one, calls
+`refuse_unapproved_list` for its runs. Plan J's page may still choose to hold the form before the click (with
+`listModelState`), so a person does not meet the refusal; that is a presentation choice, not a gap.
+
+**What I did meanwhile.** Nothing was blocked. `tests/integration/production/test_model_not_approved.py` covers a
+waiting model (no campaign: list served; a campaign's: list and plan refused, `scores.csv` served; approved: both
+served), a refused one, a demoted former champion, approval not required and a model the registry does not know.
 
 ### 2026-09-23 — plan-e-pilot (on main) → all branches: every change Plan E made outside its own files and blocks
 

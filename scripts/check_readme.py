@@ -736,6 +736,14 @@ MILESTONE_TESTS: Final[Mapping[str, tuple[str, ...]]] = {
         "tests/integration/test_campaigns_page_ui.py",
         "tests/integration/test_visible_text_ui.py",
     ),
+    # M177 (DEC-1607), the New campaign wizard (as M181 part C changed it). test_campaign_wizard_ui.py runs the
+    # wizard's node suites (one case per step against the real API's bodies, its visible text);
+    # test_campaign_wizard_journey.py is the Playwright journey with its decisions pinned.
+    "M177": (
+        "tests/integration/test_campaign_wizard_ui.py",
+        "tests/integration/test_campaign_wizard_journey.py",
+        "tests/integration/test_visible_text_ui.py",
+    ),
     # M178 (DEC-1608), Reports. test_reports_ui.py runs reports/tabs.test.mjs and reports/audit_equal.test.mjs and
     # checks the audit result through the new form against the old form's on the real API; test_visible_text_ui.py
     # draws the four tabs with empty allow-lists; test_ui_sweep.py opens them with a clean console and reaches
@@ -764,6 +772,20 @@ MILESTONE_TESTS: Final[Mapping[str, tuple[str, ...]]] = {
         "tests/integration/test_visible_text_ui.py",
         "tests/integration/test_technical_switch_browser.py",
         "tests/unit/decide/test_contact_list_js.py",
+    ),
+    # M181 (DEC-1611), usability evidence, parts A to C (the switch-over waits for the five-person test).
+    # test_usability_kit_docs.py pins the kit; the accessibility, keyboard and screenshot checks are part A;
+    # test_usability_journeys.py pins both tasks' clicks and asserts the target of 5 (part C); test_model_not_approved.py
+    # is the server's hold on a list made with an unapproved model; test_getting_started_doc.py the guide.
+    "M181": (
+        "tests/unit/test_usability_kit_docs.py",
+        "tests/integration/test_accessibility_ui.py",
+        "tests/integration/test_keyboard_path_ui.py",
+        "tests/integration/test_ui_screenshots.py",
+        "tests/integration/test_usability_journeys.py",
+        "tests/integration/test_campaign_wizard_journey.py",
+        "tests/integration/production/test_model_not_approved.py",
+        "tests/unit/test_getting_started_doc.py",
     ),
 }
 """Milestone id -> the test files (or directories, with a trailing `/`) that prove it is built.
