@@ -830,6 +830,22 @@ class PreferencesUpdateRequest(StrictBase):
     show_technical: StrictBool = Field(description='"Show technical details": true or false.')
 
 
+class BrandView(StrictBase):
+    """The deployment's brand (Plan M M182, DEC-1612): what the UI draws as the product's name, logo and colour."""
+
+    name: str = Field(
+        default="Marketing AI", description="The product's name in the top bar and the tab's title."
+    )
+    logo_url: str = Field(
+        default="",
+        description="Where the logo image is (https://, or a path this site serves such as /ui/acme-logo.svg); empty, or an image that fails to load, is the built-in logo.",
+    )
+    logo_alt: str = Field(
+        default="Minfy", description="What the logo is called, for people who cannot see it."
+    )
+    color: str = Field(default="#1E57BD", description="The accent colour, #RRGGBB.")
+
+
 class MeResponse(StrictBase):
     """`GET /auth/me`: who the caller is and what they may do, so the UI can hide and explain actions."""
 
@@ -845,6 +861,11 @@ class MeResponse(StrictBase):
     ui_layout: Literal["classic", "campaigns"] = Field(
         default="classic",
         description="Which shell the UI draws: `classic` (today's top bar) or `campaigns` (the five-place sidebar).",
+    )
+    # Plan M M182 (DEC-1612): added field only. The deployment's brand settings, on the same call, with sign-in on or off.
+    brand: BrandView = Field(
+        default_factory=BrandView,
+        description="The deployment's name, logo and accent colour; today's product with nothing set.",
     )
 
 

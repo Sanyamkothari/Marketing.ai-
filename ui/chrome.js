@@ -49,6 +49,13 @@ import { LOGO, MODULES_EVENT, esc, headerToolHtml } from "./dom.js";
 import { isCampaignLayout } from "./layout.js";
 import { injectShellStyles, shellBarHtml } from "./shell.js";
 // </M174>
+// <M182>
+// Plan M M182 (DEC-1612): the wordmark's name and the logo come from the deployment's brand (`brand.js`, a leaf
+// module that imports nothing from the bar); by default they are today's text and logo, character for character.
+// The lines between the M182 marks and the `brand*` calls in the bar's markup are the whole of M182 in this file:
+// tests/integration/test_brand_ui.py puts today's literals back and removes the marks to draw the bar as it was.
+import { BRAND_EVENT, brandLogoAlt, brandLogoHtml, brandNameHtml } from "./brand.js";
+// </M182>
 
 const slots = new Map();
 let access = null;
@@ -316,9 +323,9 @@ export function topBarHtml() {
   const nav = items ? `<nav class="topnav tb-c" aria-label="Main"><ul>${items}</ul></nav>` : "";
   const context = signedOut ? "" : headerToolHtml();
   const utils = `${signedOut ? "" : slotHtml("demo")}${signedOut ? "" : helpMenuHtml()}${slotHtml("user")}`;
-  return `<div class="tb-row"><a class="wordmark" href="#/">Marketing AI</a>${nav}<div class="tb-context">${context}</div>${
+  return `<div class="tb-row"><a class="wordmark" href="#/">${brandNameHtml()}</a>${nav}<div class="tb-context">${context}</div>${
     utils ? `<div class="tb-utils tb-c">${utils}</div>` : ""
-  }<a class="tb-logo" href="#/" aria-label="Minfy, home">${LOGO}</a><button type="button" class="btn secondary sm tb-menu-btn" data-tb-menu aria-expanded="${ui.panel}" aria-controls="pb-bar">Menu</button></div>`;
+  }<a class="tb-logo" href="#/" aria-label="${esc(brandLogoAlt())}, home">${brandLogoHtml(LOGO)}</a><button type="button" class="btn secondary sm tb-menu-btn" data-tb-menu aria-expanded="${ui.panel}" aria-controls="pb-bar">Menu</button></div>`;
 }
 
 // <M174>
@@ -671,6 +678,9 @@ export function mountChrome(doc = document) {
       refreshChrome();
     });
     win.addEventListener(MODULES_EVENT, refreshChrome);
+    // <M182>
+    win.addEventListener(BRAND_EVENT, refreshChrome);
+    // </M182>
   }
   lastHtml = "";
   paintChrome();
