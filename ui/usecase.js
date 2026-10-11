@@ -827,7 +827,7 @@ function setupForm(uc, s) {
       ];
 
   const advanced = train
-    ? `<details class="adv-wrap" id="f-adv"${s.advOpen ? " open" : ""}><summary>Advanced settings<span class="n">Optional · the recommended settings suit most data</span></summary>${problemTypeHtml(
+    ? `<details class="adv-wrap" id="f-adv" data-technical${s.advOpen ? " open" : ""}><summary>Advanced settings<span class="n">Optional · the recommended settings suit most data</span></summary>${problemTypeHtml(
         uc,
         s,
       )}${stagesHtml(uc.advanced_settings || { stages: [] }, s.values, columnsFor(uc, s))}</details>`
