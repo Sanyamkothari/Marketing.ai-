@@ -4,8 +4,8 @@
 # Data request
 
 This is what we need from you to run the pilot for **Win-back Campaign**. Your analyst should be able to
-prepare every file from this page alone. If anything is unclear, the pre-flight checker described
-at the end will tell you before anything is sent.
+prepare every file from this page alone. Send the files the way your systems export them: the
+platform reads Excel workbooks, skips titles and totals, and says what it did.
 
 ## What the pilot will do
 
@@ -49,11 +49,11 @@ One row per customer: who they are and what they have, as of the extract date. T
 | Column | Kind | Need | What it is |
 |---|---|---|---|
 | `customer_id` | Code or category | Required | The pseudonymised customer ID - the same code for the same customer in every file. |
-| `signup_date` | Date (YYYY-MM-DD) | Needed | When the customer joined. |
+| `signup_date` | Date | Needed | When the customer joined. |
 | `churn_reason` | Code or category | Needed | Why the customer left, in your own reason codes; blank while they are active. |
 | `preferred_channel` | Code or category | Needed | How the customer prefers to be contacted: SMS, e-mail or call. |
 | `marketing_opt_in` | Yes / no | Needed | Whether the customer agreed to marketing contact (Y or N). A do-not-disturb flag is fine too; tell us which one it is. |
-| `last_contacted_at` | Date (YYYY-MM-DD) | Needed | Date of the last marketing contact, so nobody is contacted too often. |
+| `last_contacted_at` | Date | Needed | Date of the last marketing contact, so nobody is contacted too often. |
 | `plan_type` | Code or category | Useful | The plan or product the customer is on (for example a monthly or a yearly plan, or prepaid or postpaid). |
 | `region` | Code or category | Useful | Where the customer is, in your own geography (for example zone, state or city). |
 | `segment` | Code or category | Useful | Your own customer segment, if you have one. |
@@ -65,7 +65,7 @@ One row per campaign contact: sent, opened, clicked or converted, and whether th
 | Column | Kind | Need | What it is |
 |---|---|---|---|
 | `customer_id` | Code or category | Required | The pseudonymised customer ID, as in the customer file. |
-| `event_date` | Date (YYYY-MM-DD), or date and time | Required | When it happened. |
+| `event_date` | Date, or date and time | Required | When it happened. |
 | `campaign_id` | Code or category | Needed | Which campaign the contact belongs to. |
 | `event_type` | Code or category | Needed | What happened, in your own codes (for example sent, opened, converted, or recharge, call, login). |
 | `treatment` | Yes / no | Needed | Whether the customer was in the contacted group (Y) or the held-back group (N) of that campaign. |
@@ -77,7 +77,7 @@ One row each time the customer did something: a recharge, a call, a login, an ap
 | Column | Kind | Need | What it is |
 |---|---|---|---|
 | `customer_id` | Code or category | Required | The pseudonymised customer ID, as in the customer file. |
-| `event_date` | Date (YYYY-MM-DD), or date and time | Required | When it happened. |
+| `event_date` | Date, or date and time | Required | When it happened. |
 | `event_type` | Code or category | Useful | What happened, in your own codes (for example sent, opened, converted, or recharge, call, login). |
 
 ### Bills (`bills.csv`)
@@ -87,10 +87,10 @@ One row per invoice. Template: [`bills_template.csv`](templates/bills_template.c
 | Column | Kind | Need | What it is |
 |---|---|---|---|
 | `customer_id` | Code or category | Required | The pseudonymised customer ID, as in the customer file. |
-| `event_date` | Date (YYYY-MM-DD), or date and time | Required | When it happened. |
+| `event_date` | Date, or date and time | Required | When it happened. |
 | `amount` | Number | Needed | What the invoice is for. |
-| `due_date` | Date (YYYY-MM-DD) | Useful | When the invoice must be paid. |
-| `paid_date` | Date (YYYY-MM-DD) | Useful | When it was actually paid; blank when it never was. |
+| `due_date` | Date | Useful | When the invoice must be paid. |
+| `paid_date` | Date | Useful | When it was actually paid; blank when it never was. |
 | `status` | Code or category | Useful | Your own invoice status (for example paid or overdue). |
 
 ### Complaints (`complaints.csv`)
@@ -100,22 +100,36 @@ One row per complaint or support ticket. Template: [`complaints_template.csv`](t
 | Column | Kind | Need | What it is |
 |---|---|---|---|
 | `customer_id` | Code or category | Required | The pseudonymised customer ID, as in the customer file. |
-| `event_date` | Date (YYYY-MM-DD), or date and time | Required | When it happened. |
+| `event_date` | Date, or date and time | Required | When it happened. |
 | `category` | Code or category | Useful | What the complaint was about. |
-| `resolved_time` | Date (YYYY-MM-DD) | Useful | When the complaint was closed; blank while it is still open. |
+| `resolved_time` | Date | Useful | When the complaint was closed; blank while it is still open. |
 | `severity` | Code or category | Useful | How serious the client judged it. |
 | `text` | Free text | Useful | The complaint in the customer's own words. Optional: remove phone numbers and e-mail addresses typed into it. |
 
 **Required** columns must be present. **Needed** columns feed a measure the pilot uses. **Useful**
 columns help if you have them.
 
-## File formats
+## Send what you have
 
-- CSV (comma-separated, UTF-8, with one header row) or Parquet. One file per table.
-- Dates as YYYY-MM-DD (for example 2026-08-31). Date and time as YYYY-MM-DD HH:MM:SS.
-- Numbers without thousands separators or currency symbols (1499.00, not ₹1,499).
-- Yes/no columns as Y and N, or 1 and 0 - the same way in every file.
-- Keep the column names the same from one extract to the next.
+What still matters:
+
+- Keep the column names the same from one month's export to the next. A renamed column has to be matched again by hand before next month's file can be scored.
+- Give each customer one ID that is the same customer in every file, written the same way where you can. Leading zeros, spaces and upper or lower case can be tidied when the files are joined. For other differences, such as CUST-00123 in one file and 123 in another, the platform names the tidy-up and counts how many rows it would match, but the export is the place to fix them. It cannot match people by name or address.
+- Put a date on every row of a dated table (each bill, payment, order or recharge). The platform learns from what happened before and after each date, so a row without one cannot be used.
+- If you keep one column per month (2024_01_spend, 2024_02_spend), put the year in the column names. A column called Jan_spend cannot be put in date order.
+- One file, or one sheet, per table.
+- Amounts as plain numbers where you can (1499.00 rather than Rs. 1,499). Guided setup offers to tidy amounts written with a currency sign or commas in a single file, but tables that are joined together are read as they are.
+- Old Excel files (.xls, .xlsb) and password-protected workbooks cannot be read: save them as .xlsx or CSV first. Scanned PDFs and photos of tables cannot be read at all.
+
+What you do not need to fix first:
+
+- Excel is fine. Send .xlsx or .xlsm workbooks as they are, or CSV or Parquet. In a workbook with several sheets the platform reads the sheet that holds the table and tells you which other sheets it saw.
+- Titles and totals are fine. A title, a date line or blank rows above the column names, two rows of column names, or a Grand Total or Sub-total row at the end: the platform reads past them and says what it did.
+- Empty cells written as -, unknown, not known or #DIV/0! in a column of numbers or dates are fine: they are read as empty.
+- A CSV saved by Excel, with commas, semicolons or tabs between the values, is fine.
+- Dates in the style your system writes them. When a date such as 03/04/2026 could be read day first or month first, the platform asks you which one you meant.
+- Yes or no in any of the usual spellings (Y and N, Yes and No, True and False, 1 and 0).
+- Your own column names. The platform matches them to ours, and you confirm the match.
 
 ## Pseudonymising the customer ID
 
@@ -143,8 +157,8 @@ Never include these, in any column:
 If one of these reaches the platform anyway it is masked and never learned from, and the data
 readiness report will tell you which column it was so the next extract can leave it out.
 
-## Before you send: the pre-flight check
+## Before you send: an optional check
 
-- Before sending, run the pre-flight checker on the folder of files: python -m scripts.preflight <folder> --use-case <the use case agreed with Minfy> (from the unzipped pilot kit). Without --use-case it checks the files against this request.
-- It reads the files on your laptop only. Nothing is uploaded; it writes one page, preflight_report.html, next to the files.
-- It lists row counts, date ranges, how well the tables link up, columns that look like personal details, and format problems. Fix anything marked as a problem and run it again.
+- Optional. You can simply send what you have: when the files are uploaded the platform reads them, says what it read and what it left out, and lists anything to fix.
+- If you would rather check the files on your own computer before they leave your systems, run the pre-flight checker on the folder of files: python -m scripts.preflight <folder> --use-case <the use case agreed with Minfy> (from the unzipped pilot kit). Without --use-case it checks the files against this request. It reads CSV and Parquet files only, not Excel workbooks.
+- It reads the files on your laptop only. Nothing is uploaded; it writes one page, preflight_report.html, next to the files. It lists row counts, date ranges, how well the tables link up, columns that look like personal details, and format problems.
