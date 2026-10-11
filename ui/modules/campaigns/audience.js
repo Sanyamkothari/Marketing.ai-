@@ -6,6 +6,8 @@
 // The contact list is the rows the file marks to contact (`treat` is 1): the same customers, in the same order, a
 // sending tool would contact. Nothing is ranked, re-scored or worked out again here. Every function is pure.
 
+import { userText } from "../../labels.js";
+
 export const PAGE_SIZE = 25;
 
 /** RFC 4180 CSV text to an array of rows (arrays of strings): quoted fields, doubled quotes, CRLF or LF. */
@@ -388,8 +390,13 @@ export const columnWords = (name) =>
     .replace(/[_]+/g, " ")
     .trim();
 
+const escapeHtml = (s) =>
+  String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+
 /**
- * What a reason is about, so customers with the same reason count together whatever their own value: `{ id, text }`.
+ * What a reason is about, so customers with the same reason count together whatever their own value: `{ id, text, html }`.
+ * `html` is `text` for the page, with the column's name and its value marked as the person's own words
+ * (`ui/labels.js` userText, M172): their data's names, not our wording.
  * The model's own short texts are put in words ("history ↓ (142.44)" -> "Their history lowers their priority";
  * "zip_code = Urban" -> "Their zip code is Urban"); a sentence from the reasons dictionary keeps its words, with the
  * customer's own number left out.
@@ -401,14 +408,25 @@ export function reasonTopic(reason) {
   if (arrow) {
     const what = columnWords(arrow[1]);
     const up = arrow[2] === "↑";
-    return { id: `${arrow[1]}|${arrow[2]}`, text: `Their ${what} ${up ? "raises" : "lowers"} their priority` };
+    const verb = up ? "raises" : "lowers";
+    return {
+      id: `${arrow[1]}|${arrow[2]}`,
+      text: `Their ${what} ${verb} their priority`,
+      html: `Their ${userText(what)} ${verb} their priority`,
+    };
   }
   const equals = MODEL_EQUALS.exec(text);
   if (equals && !/\s{2,}/.test(equals[1]) && equals[1].split(/\s+/).length <= 3) {
-    return { id: `${equals[1]}=${equals[2]}`, text: `Their ${columnWords(equals[1])} is ${equals[2].trim()}` };
+    const column = columnWords(equals[1]);
+    const value = equals[2].trim();
+    return {
+      id: `${equals[1]}=${equals[2]}`,
+      text: `Their ${column} is ${value}`,
+      html: `Their ${userText(column)} is ${userText(value)}`,
+    };
   }
   const general = text.replace(NUMBER, "…");
-  return { id: general, text: general };
+  return { id: general, text: general, html: escapeHtml(general) };
 }
 
 /**
@@ -420,7 +438,7 @@ export function topReasons(rows, limit = 3) {
   for (const row of rows) {
     const topic = reasonTopic(row.reason);
     if (!topic) continue;
-    const seen = counts.get(topic.id) || { text: topic.text, customers: 0 };
+    const seen = counts.get(topic.id) || { text: topic.text, html: topic.html, customers: 0 };
     seen.customers += 1;
     counts.set(topic.id, seen);
   }

@@ -75,6 +75,7 @@ test("the list: both campaigns, each with a short name, its goal, a status chip,
         assert.ok(link.textContent.length <= 40, link.textContent);
         assert.equal(link.textContent, "Best e-mail for each customer — Oct 2026");
         assert.equal(tr.querySelector(".cp-sub").textContent, campaign.name, "the long recorded name is the subtitle");
+        assert.ok(tr.querySelector(".cp-sub").hasAttribute("data-user-text"), "the recorded label is the person's own (M172)");
         assert.equal(cells[1].textContent, "Choose the best e-mail for each customer");
         assert.equal(tr.querySelector("[data-status]").getAttribute("data-status"), "measured");
         assert.equal(cells[3].textContent, "12,862");
@@ -95,6 +96,7 @@ for (const [name, id] of [
             "Choose the best e-mail for each customer: sent on 11 Oct 2026 to 12,862 customers.",
         );
         assert.equal(text("[data-long-name]"), view(id).campaign.name);
+        assert.ok($("[data-long-name]").hasAttribute("data-user-text"), "the recorded label is the person's own (M172)");
         assert.deepEqual(
             $$(".tabs a").map((a) => a.getAttribute("data-tab")),
             ["overview", "audience", "results", "technical"],

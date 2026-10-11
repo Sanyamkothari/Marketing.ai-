@@ -401,11 +401,18 @@ test("search by customer id, then 25 rows at a time", () => {
 });
 
 test("why these customers: the three most common strongest reasons, counted by what they are about", () => {
+    // `html` marks the column's name and its value as the person's words (M172 userText; Plan M final integration).
     assert.deepEqual(reasonTopic("history ↓ (142.44)"), {
         id: "history|↓",
         text: "Their history lowers their priority",
+        html: "Their <span data-user-text>history</span> lowers their priority",
     });
-    assert.deepEqual(reasonTopic("zip_code = Urban"), { id: "zip_code=Urban", text: "Their zip code is Urban" });
+    assert.deepEqual(reasonTopic("zip_code = Urban"), {
+        id: "zip_code=Urban",
+        text: "Their zip code is Urban",
+        html: "Their <span data-user-text>zip code</span> is <span data-user-text>Urban</span>",
+    });
+    assert.equal(reasonTopic("Spend <b> & more lifts it").html, "Spend &lt;b&gt; &amp; more lifts it", "a sentence is escaped");
     assert.equal(
         reasonTopic("Monthly spend of 1,200 pushes the score up").text,
         "Monthly spend of … pushes the score up",

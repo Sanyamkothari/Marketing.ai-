@@ -38,6 +38,7 @@ test("value proof: a short name, the server's one line, what it can claim in wor
   const row = proofRows().find((tr) => tr.querySelector(`[data-proof-campaign="${conversion.campaign_id}"]`));
   assert.equal(text(row.querySelector(".rp-name")), "Hillstrom e-mail (conversion)", "the description after the dash is dropped");
   assert.equal(row.querySelector(".rp-name").getAttribute("title"), conversion.name, "the full name stays one hover away");
+  assert.ok(row.querySelector(".rp-name").hasAttribute("data-user-text"), "the campaign's recorded name is the person's own (M172)");
   assert.equal(text(row.querySelector('td[data-label="What it shows"]')), conversion.headline, "the server's sentence, unchanged");
   assert.match(conversion.headline, /₹/, "the recorded sentence carries rupees");
   assert.equal(text(row.querySelector("[data-claim]")), "Proven");

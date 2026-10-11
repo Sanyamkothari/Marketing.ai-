@@ -166,6 +166,11 @@ test("a name that carries markup is shown as text", async () => {
   assert.equal(w.__pwned, undefined);
   assert.ok(text(row(ids.pg).querySelector(".dt-name")).includes("<img src=x"), "the name is on the page, as text");
   assert.ok(text(row(ids.direct).querySelector(".dt-name")).includes("<b onmouseover"), "so is the file name");
+  // Plan M final integration: a source's name and a file's name are the person's words (M172 data-user-text).
+  for (const id of [ids.pg, ids.direct]) {
+    assert.ok(row(id).querySelector(".dt-name > [data-user-text]"), `${id}: the name is marked as the person's own`);
+    assert.equal(row(id).querySelector(".dt-name > [data-user-text]").children.length, 0, "and stays text");
+  }
 });
 
 test("a connection keeps Test, Edit and Delete; a file has no action of its own", async () => {

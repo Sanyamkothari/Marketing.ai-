@@ -14,13 +14,17 @@
 // the whole document for those, and one form must not be handled by both.
 
 import { esc, fmtInt } from "../../dom.js";
+import { USER_TEXT_ATTRIBUTE, userText } from "../../labels.js";
 
 const NOT_SET = "";
 
 const options = (columns, { blank = null, selected = NOT_SET } = {}) =>
   [
     blank === null ? "" : `<option value=""${selected === NOT_SET ? " selected" : ""}>${esc(blank)}</option>`,
-    ...(columns || []).map((c) => `<option value="${esc(c)}"${c === selected ? " selected" : ""}>${esc(c)}</option>`),
+    // A column of the person's file: their name for it, marked as theirs (M172 userText).
+    ...(columns || []).map(
+      (c) => `<option value="${esc(c)}" ${USER_TEXT_ATTRIBUTE}${c === selected ? " selected" : ""}>${esc(c)}</option>`,
+    ),
   ].join("");
 
 const select = (name, label, columns, opts = {}) =>
@@ -29,7 +33,7 @@ const select = (name, label, columns, opts = {}) =>
 const field = (name, label, attrs = "") => `<label>${esc(label)}<input name="${esc(name)}" ${attrs}></label>`;
 
 function filePicker(kind, label, hint, file) {
-  const got = file ? `<span class="rp-note" data-file-name="${esc(kind)}">${esc(file.fileName)} · ${esc(fmtInt(file.rows))} rows</span>` : "";
+  const got = file ? `<span class="rp-note" data-file-name="${esc(kind)}">${userText(file.fileName)} · ${esc(fmtInt(file.rows))} rows</span>` : "";
   return `<div class="rp-file"><label>${esc(label)}<input type="file" accept=".csv,.xlsx,.xlsm,.parquet" data-rp-file="${esc(kind)}"></label>${got}<p class="rp-note">${esc(hint)}</p></div>`;
 }
 

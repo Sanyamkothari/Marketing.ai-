@@ -20,6 +20,7 @@ import { announceStatus, emptyState, errorBox, esc, fmtInt, fmtSize, fmtStamp, h
 import { deleteConnection, getConnections, getKinds, testConnection } from "../connections/api.js";
 import { statusBadge, stepsHtml } from "../connections/page.js";
 import { injectConnectionStyles } from "../connections/styles.js";
+import { userText } from "../../labels.js";
 import { getUploads } from "./api.js";
 import { injectDataStyles } from "./styles.js";
 
@@ -83,14 +84,15 @@ function whenText(connection) {
   return "No file imported yet";
 }
 
-/** How an uploaded file came to be: its second line and the word before its date. */
+/** How an uploaded file came to be: its second line (HTML: a source's name is the person's, `userText`) and the word
+    before its date. */
 function fileOrigin(u) {
   const from = u.from_connection_id ? connectionName(u.from_connection_id) : null;
   switch (u.made_by) {
     case "import":
-      return { kind: from ? `Imported from ${from}` : "Imported from a saved source", verb: "Imported" };
+      return { kind: from ? `Imported from ${userText(from)}` : "Imported from a saved source", verb: "Imported" };
     case "pull":
-      return { kind: from ? `Pulled from ${from}` : "Pulled from a saved source", verb: "Pulled" };
+      return { kind: from ? `Pulled from ${userText(from)}` : "Pulled from a saved source", verb: "Pulled" };
     case "renamed_copy":
       return { kind: "Copy with renamed columns. The file you sent is unchanged.", verb: "Made" };
     case "recipe":
@@ -124,9 +126,7 @@ function tabs(tab) {
 
 /** The question that replaces a connection's actions while Delete asks "Are you sure?" (drawn full width below the row). */
 function deleteQuestion(c) {
-  return `<div class="cn-confirm" role="group" aria-label="Delete ${esc(c.name)}?"><span>${esc(
-    `Delete ${c.name}? Files already imported stay.`,
-  )}</span><button type="button" class="btn danger confirm sm" data-dt-delete-yes="${esc(
+  return `<div class="cn-confirm" role="group" aria-label="Delete ${esc(c.name)}?"><span>Delete ${userText(c.name)}? Files already imported stay.</span><button type="button" class="btn danger confirm sm" data-dt-delete-yes="${esc(
     c.connection_id,
   )}">Delete</button><button type="button" class="btn quiet sm" data-dt-delete-no>Keep it</button></div>`;
 }
@@ -154,7 +154,7 @@ function connectionRow(c) {
     state.reports[c.connection_id],
   )}`;
   return `<li class="dt-row" data-dt-source="connection" data-dt-id="${esc(c.connection_id)}">
-    <div><h3 class="dt-name">${esc(c.name)}<span class="dt-sub">${esc(c.kind_label)}</span></h3></div>
+    <div><h3 class="dt-name">${userText(c.name)}<span class="dt-sub">${esc(c.kind_label)}</span></h3></div>
     <div class="dt-cell" data-dt-health>${statusBadge(c)}${addon}${unreadable}</div>
     <div class="dt-cell" data-dt-when>${esc(when)}</div>
     <div class="dt-actions">${confirming ? "" : connectionActions(c)}</div>${detail ? `<div class="dt-wide">${detail}</div>` : ""}
@@ -165,7 +165,7 @@ function fileRow(u) {
   const { kind, verb } = fileOrigin(u);
   const sample = u.synthetic ? " · Sample data" : "";
   return `<li class="dt-row" data-dt-source="file" data-dt-id="${esc(u.upload_id)}">
-    <div><h3 class="dt-name">${esc(u.file_name)}<span class="dt-sub">${esc(`${kind}${sample}`)}</span></h3></div>
+    <div><h3 class="dt-name">${userText(u.file_name)}<span class="dt-sub">${kind}${esc(sample)}</span></h3></div>
     <div class="dt-cell" data-dt-health><span class="pill ok cn-badge" data-dt-status="read">Read correctly</span><span class="dt-sub">${esc(
       `${plural(u.row_count, "row", "rows")} · ${plural(u.column_count, "column", "columns")} · ${fmtSize(u.file_size_bytes)}`,
     )}</span></div>

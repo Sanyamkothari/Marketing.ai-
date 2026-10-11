@@ -3,7 +3,7 @@
 // and the short name, and draws the table. Pure: nothing here reads the document or calls the API.
 
 import { EM_DASH, dataTable, emptyState, esc, headActions, sortNote } from "../../dom.js";
-import { term } from "../../labels.js";
+import { term, USER_TEXT_ATTRIBUTE } from "../../labels.js";
 import { proofUrl } from "./api.js";
 
 /** The server's label for what a pack's numbers can claim, as the one word a marketer reads and why. */
@@ -65,7 +65,7 @@ export function valueProofHtml(list) {
     const name = shortName(entry.name);
     const title = name !== String(entry.name || "").trim() ? ` title="${esc(entry.name)}"` : "";
     return [
-      `<span class="rp-name"${title} data-proof-campaign="${esc(entry.campaign_id)}">${esc(name)}</span>`,
+      `<span class="rp-name"${title} data-proof-campaign="${esc(entry.campaign_id)}" ${USER_TEXT_ATTRIBUTE}>${esc(name)}</span>`,
       isReady ? esc(entry.headline || EM_DASH) : esc(entry.message || EM_DASH),
       isReady ? claimHtml(entry) : EM_DASH,
       isReady

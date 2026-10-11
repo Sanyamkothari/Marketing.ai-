@@ -6,7 +6,7 @@
 
 import { EM_DASH, crumbs, dataTable, emptyState, errorBox, esc, fmtInt, headActions, pageHead } from "../../dom.js";
 import { count, day, figureHtml, isValue, percent, rupees, rupeesExact } from "../../format.js";
-import { term } from "../../labels.js";
+import { term, USER_TEXT_ATTRIBUTE, userText } from "../../labels.js";
 import { PAGE_SIZE, pageOf, search, topReasons } from "./audience.js";
 import { campaignTabHref } from "./links.js";
 import {
@@ -34,6 +34,16 @@ const customers = (n) => (isValue(n) ? `${count(n)} ${Number(n) === 1 ? "custome
 
 // --- shared pieces --------------------------------------------------------------------------------------------
 
+/**
+ * A campaign's short name as HTML. Ours (a goal and a month) is our wording; a campaign with no goal of ours (sent by
+ * another tool, a programme readout) is named by its own recorded label, the person's words, so it is marked as
+ * theirs (`ui/labels.js` USER_TEXT_ATTRIBUTE, M172).
+ */
+function nameHtml(campaign, name) {
+  const theirs = runElsewhere(campaign) || wholeProgramme(campaign) || !campaign.use_case_id;
+  return theirs ? `<span ${USER_TEXT_ATTRIBUTE}>${esc(name)}</span>` : esc(name);
+}
+
 /** The status chip; `data-status` carries the rule's key for tests and styles. */
 export const statusChip = (status) =>
   `<span class="chip cp-status cp-${esc(status.tone)}" data-status="${esc(status.key)}">${esc(status.label)}</span>`;
@@ -60,8 +70,9 @@ function listRow(entry) {
   const name = shortName(campaign, goal);
   const link = `<a class="cp-name" href="${esc(campaignTabHref(campaign.campaign_id))}" data-campaign-link="${esc(
     campaign.campaign_id,
-  )}">${esc(name)}</a>${tagsHtml(campaign)}`;
-  const subtitle = campaign.name && campaign.name !== name ? `<div class="cp-sub">${esc(campaign.name)}</div>` : "";
+  )}">${nameHtml(campaign, name)}</a>${tagsHtml(campaign)}`;
+  const subtitle =
+    campaign.name && campaign.name !== name ? `<div class="cp-sub" ${USER_TEXT_ATTRIBUTE}>${esc(campaign.name)}</div>` : "";
   let result;
   if (status.key === "measured") {
     const headline =
@@ -252,14 +263,15 @@ function whatWasSent(model) {
   const rows = [];
   rows.push(["Sent on", day(campaign.treatment_start)]);
   const offers = Object.entries((summary && summary.offer_counts) || {});
-  for (const [offer, n] of offers) rows.push([`Offer: ${offer}`, customers(n)]);
+  // Offer and channel names are the person's own (their configuration and data): marked as theirs (M172).
+  for (const [offer, n] of offers) rows.push([`Offer: ${userText(offer)}`, customers(n), true]);
   const channels = Object.entries((summary && summary.channel_rows) || {});
-  for (const [channel, n] of channels) rows.push([`Channel: ${channel}`, customers(n)]);
+  for (const [channel, n] of channels) rows.push([`Channel: ${userText(channel)}`, customers(n), true]);
   if (summary && summary.treat_rows !== null && summary.treat_rows !== undefined) {
     rows.push([term("contactList"), customers(summary.treat_rows)]);
   }
   return `<section class="card" data-what-was-sent><h3>What was sent</h3><div class="cp-kv">${rows
-    .map(([k, v]) => `<div class="cp-kv-row"><span class="k">${esc(k)}</span><span class="v">${esc(v)}</span></div>`)
+    .map(([k, v, html]) => `<div class="cp-kv-row"><span class="k">${html ? k : esc(k)}</span><span class="v">${esc(v)}</span></div>`)
     .join("")}</div></section>`;
 }
 
@@ -300,10 +312,11 @@ export function audienceTableHtml(audience) {
     { label: "Top reason" },
   ];
   const rows = page.rows.map((r) => [
-    `<span class="mono">${esc(r.key)}</span>`,
+    // The customer's id and the offer and channel names are the person's data (M172 userText); the priority is ours.
+    `<span class="mono" ${USER_TEXT_ATTRIBUTE}>${esc(r.key)}</span>`,
     esc(r.priority || EM_DASH),
-    esc(r.offer || EM_DASH),
-    esc(r.channel || EM_DASH),
+    r.offer ? userText(r.offer) : EM_DASH,
+    r.channel ? userText(r.channel) : EM_DASH,
     esc(r.reason || EM_DASH),
   ]);
   const table = rows.length
@@ -328,7 +341,7 @@ function whyHtml(rows) {
   return `<section class="card" data-why><h3>Why these customers?</h3><div class="card-body"><p class="muted">The strongest reason behind each customer on the list, counted across the list.</p><ol class="cp-why">${top
     .map(
       (r) =>
-        `<li data-reason><span>${esc(r.text)}</span> <span class="muted">for ${esc(fmtInt(r.customers))} of ${esc(
+        `<li data-reason><span>${r.html}</span> <span class="muted">for ${esc(fmtInt(r.customers))} of ${esc(
           customers(rows.length),
         )} (${esc(percent(r.share))})</span></li>`,
     )
@@ -484,9 +497,13 @@ export function campaignPageHtml(model) {
       ? `Every customer contacted, against the customers never contacted, from ${day(campaign.treatment_start)}.`
       : `${goal}: sent on ${day(campaign.treatment_start)} to ${customers(counts(campaign).intended_treated)}.`;
   const sub =
-    campaign.name && campaign.name !== name ? `<p class="cp-sub" data-long-name>${esc(campaign.name)}</p>` : "";
+    campaign.name && campaign.name !== name
+      ? `<p class="cp-sub" data-long-name ${USER_TEXT_ATTRIBUTE}>${esc(campaign.name)}</p>`
+      : "";
   const head = pageHead(
-    `${crumbs([CAMPAIGNS_CRUMB, { label: name }])}<h1 class="h1">${esc(name)}</h1><p class="desc">${esc(sentence)}</p>${sub}`,
+    `${crumbs([CAMPAIGNS_CRUMB, { label: name }])}<h1 class="h1">${nameHtml(campaign, name)}</h1><p class="desc">${esc(
+      sentence,
+    )}</p>${sub}`,
   );
   const body = (TAB_BODY[tab] || overviewHtml)(model);
   return `<main class="screen cp" data-module="campaigns" data-campaign-view="${esc(campaign.campaign_id)}" data-tab-shown="${esc(

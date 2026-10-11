@@ -239,6 +239,7 @@ test("a busy day: five cards with one action each, five live rows, and how many 
   assert.deepEqual(cells[4].slice(1, 3), ["Draft", "Fix how the result will be judged, then download the contact list"]);
   for (const r of rows) assert.ok(r.querySelector(".ov-row-name").textContent.length <= 40, "a short name");
   assert.equal(rows[0].querySelector(".ov-row-name").getAttribute("title"), busy().campaigns[0].name, "the long name is the tooltip");
+  for (const r of rows) assert.ok(r.querySelector(".ov-row-name > [data-user-text]"), "the recorded name is the person's own (M172)");
   assert.match($("[data-more-campaigns]").textContent, /2 more live campaigns/);
   assert.equal($("[data-more-campaigns] a").getAttribute("href"), "#/campaigns");
   assert.match($("[data-value-amount]").textContent, /At least\s+₹12\.35 lakh/, "rupees rounded for display");

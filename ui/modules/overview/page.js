@@ -13,12 +13,12 @@
 // The builders are pure (`overviewHtml`, `cardAction`, `shortName`, `nextStepText`): what they draw comes from their
 // arguments, so the jsdom tests call them with recorded or stubbed answers. Words follow Plan M §4.1. Numbers and days
 // are `ui/format.js`'s (M172): the headline is the server's figure drawn by `figureHtml` (rupees in lakh and crore, the
-// exact figure in the tooltip).
+// exact figure in the tooltip). A campaign's recorded name is the person's own text, marked `data-user-text` (M172).
 // Anything technical goes in a `class="tech"` section (M180 hides it); this page has none: it shows no engine word.
 
 import { crumbs, EM_DASH, emptyState, errorBox, esc, fmtInt, headActions, pageHead } from "../../dom.js";
 import { day, figureHtml } from "../../format.js";
-import { findNeverShown, term } from "../../labels.js";
+import { findNeverShown, term, USER_TEXT_ATTRIBUTE } from "../../labels.js";
 
 /** Where the page sends a person; `places` lets the shell name a screen a branch has not merged yet. */
 export const DEFAULT_PLACES = Object.freeze({
@@ -127,7 +127,7 @@ function cardHtml(card, places) {
   return `<li class="ov-card ${esc(card.severity || "info")}" data-card="${esc(card.code)}"${
     card.campaign_id ? ` data-card-campaign="${esc(card.campaign_id)}"` : ""
   }><div class="ov-card-body"><p class="ov-card-title">${esc(plainWords(card.title))}</p>${
-    who ? `<p class="ov-card-who" title="${esc(full)}">${esc(who)}</p>` : ""
+    who ? `<p class="ov-card-who" title="${esc(full)}" ${USER_TEXT_ATTRIBUTE}>${esc(who)}</p>` : ""
   }${text ? `<p class="ov-card-text">${esc(text)}</p>` : ""}${next ? `<p class="ov-card-next">${esc(next)}</p>` : ""}</div><a class="btn secondary sm" href="${esc(
     action.href,
   )}" data-card-action>${esc(action.label)}</a></li>`;
@@ -221,7 +221,7 @@ function liveHtml(overview, places) {
         const [label, tone] = STATUS[campaign.status] || [String(campaign.status), "neutral"];
         return `<li class="ov-row" data-live-row="${esc(campaign.campaign_id)}"><a class="ov-row-name" href="${esc(
           campaignHref(campaign.campaign_id),
-        )}" title="${esc(campaign.name)}">${esc(shortName(campaign.name))}</a><span class="pill ${esc(tone)}">${esc(
+        )}" title="${esc(campaign.name)}"><span ${USER_TEXT_ATTRIBUTE}>${esc(shortName(campaign.name))}</span></a><span class="pill ${esc(tone)}">${esc(
           label,
         )}</span><span class="ov-row-next">${esc(nextStepText(campaign))}</span></li>`;
       })
