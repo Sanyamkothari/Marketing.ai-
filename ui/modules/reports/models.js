@@ -5,6 +5,7 @@
 // first tab; every link here is the one the hub offered (the report pages themselves are unchanged).
 
 import { dataTable, emptyState, esc, fmtDate, fmtInt, present, sortNote } from "../../dom.js";
+import { goalName } from "../../labels.js";
 import { getDemo, getIndustries, listDatasets, listModels, listScoringRuns, readinessUrl, resultsUrl, roiUrl } from "./api.js";
 
 const cell = (text) => (present(text) ? esc(text) : "—");
@@ -22,13 +23,13 @@ async function settle(promise) {
   }
 }
 
-/** Use case names by id, from `GET /industries`. */
+/** Goal names by id: the one table (`ui/labels.js` goalName, Plan M §4.2), else the name `GET /industries` gives. */
 function namesOf(industries) {
   const names = new Map();
   for (const industry of (industries && industries.industries) || []) {
     for (const stage of industry.stages || []) for (const u of stage.use_cases || []) names.set(u.id, u.name);
   }
-  return (id) => names.get(id) || id;
+  return (id) => goalName(id, names.get(id));
 }
 
 function campaignTitle(demo, runId) {
@@ -80,7 +81,7 @@ function valuePart(runs, name, demo) {
   return dataTable(
     [{ label: "Campaign" }, { label: "Scored on" }, { label: "Report", num: true }],
     scored.map((r) => [
-      `<span class="rp-name">${esc(campaignTitle(demo, r.run_id) || r.use_case_name || name(r.use_case_id))}</span>`,
+      `<span class="rp-name">${esc(campaignTitle(demo, r.run_id) || goalName(r.use_case_id, r.use_case_name || name(r.use_case_id)))}</span>`,
       esc(fmtDate(r.finished_at || r.created_at)),
       reportActions(`#/pilot/value/${encodeURIComponent(r.run_id)}`, "Value in rupees", roiUrl(r.run_id, "pdf")),
     ]),

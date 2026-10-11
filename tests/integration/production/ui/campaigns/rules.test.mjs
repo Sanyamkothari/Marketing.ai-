@@ -18,6 +18,7 @@ import {
     clip,
     evidenceOf,
     goalName,
+    GOAL_NAMES,
     monthOf,
     nextStep,
     resultsDue,
@@ -42,6 +43,7 @@ import {
     campaignsListHtml,
     netValueRange,
 } from "../../../../../ui/modules/campaigns/views.js";
+import { GOAL_NAMES as LABEL_GOAL_NAMES } from "../../../../../ui/labels.js";
 
 const base = {
     campaign_id: "c_20261001_aaaaaaaa",
@@ -118,11 +120,15 @@ test("the results date is the plan's analysis date, else the end of the outcome 
 });
 
 test("a short name is the goal and the month, at most 40 characters; the long name is kept as the subtitle", () => {
-    assert.equal(shortName(base), "Win back lapsed customers · Oct 2026");
+    // Plan M final integration: M172's one rule (ui/format.js shortCampaignName, ui/labels.js goalShortName), the
+    // same name the Results page and the Overview give a campaign.
+    assert.equal(shortName(base), "Win back lapsed customers — Oct 2026");
     const hill = { ...base, use_case_id: "hillstrom-email" };
     const name = shortName(hill);
     assert.ok(name.length <= 40, name);
-    assert.match(name, /^Choose the best e-mail for… · Oct 2026$/);
+    assert.equal(name, "Best e-mail for each customer — Oct 2026", "the goal's short form keeps it whole");
+    assert.equal(shortName({ ...base, use_case_id: "retail-win-back" }, "Retail Win-back"), "Retail Win-back — Oct 2026");
+    assert.equal(GOAL_NAMES, LABEL_GOAL_NAMES, "one table of goal names: ui/labels.js");
     assert.equal(monthOf("2026-01-31T23:30:00Z"), "Jan 2026");
     assert.equal(goalName("retail-win-back", "Retail Win-back"), "Retail Win-back");
     assert.equal(goalName(null), "Campaign");

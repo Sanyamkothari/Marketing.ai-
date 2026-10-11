@@ -24,7 +24,8 @@
 //
 // Every function is pure: no request, no DOM, so node tests can call it directly.
 
-import { term } from "../../labels.js";
+import { monthYear, shortCampaignName, SHORT_NAME_MAX } from "../../format.js";
+import { GOAL_NAMES, goalShortName, term } from "../../labels.js";
 
 /** The four chips, in the order a campaign moves through them. `tone` picks the chip's colour. */
 export const STATUS = Object.freeze({
@@ -84,37 +85,20 @@ export const wholeProgramme = (campaign) => !!campaign && campaign.kind === "pro
 // --- names ------------------------------------------------------------------------------------------------
 
 /**
- * Goal names in business words (Plan M §4.2), by goal id. Display only: ids, configuration and the API keep
- * their own names. ui/labels.js gains these in M172; the integrator then reads them from there.
+ * Goal names in business words (Plan M §4.2), by goal id: ONE table, `ui/labels.js` GOAL_NAMES (M172), re-exported
+ * here for this folder's callers. Display only: ids, configuration and the API keep their own names.
  */
-export const GOAL_NAMES = Object.freeze({
-  "targeted-advertisement": "Find customers likely to buy",
-  "win-back-campaign": "Win back lapsed customers",
-  "telco-churn": "Keep customers likely to leave",
-  churn: "Keep customers likely to leave",
-  "payment-propensity": "Get customers to pay on time",
-  rca: "Understand why customers leave",
-  "hillstrom-email": "Choose the best e-mail for each customer",
-  "ai-onboarding-assistant": "Answer customer questions (AI assistant)",
-});
+export { GOAL_NAMES };
 
-/** A goal's name: the §4.2 name, else the name the API gave (`fallback`), else a plain "Campaign". */
+/** A goal's name: the §4.2 name (`ui/labels.js` goalName), else the name the API gave (`fallback`), else "Campaign". */
 export function goalName(useCaseId, fallback = null) {
-  if (useCaseId && GOAL_NAMES[useCaseId]) return GOAL_NAMES[useCaseId];
-  return fallback || "Campaign";
+  return (useCaseId && GOAL_NAMES[useCaseId]) || fallback || "Campaign";
 }
 
-const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+/** "Oct 2026": the month a campaign went out, in UTC; "" when unknown (`ui/format.js` monthYear). */
+export const monthOf = (iso) => monthYear(iso);
 
-/** "Oct 2026": the month a campaign went out, in UTC; "" when unknown. */
-export function monthOf(iso) {
-  const day = isoDay(iso);
-  if (!day) return "";
-  const [year, month] = day.split("-");
-  return `${MONTHS[Number(month) - 1]} ${year}`;
-}
-
-export const SHORT_NAME_MAX = 40;
+export { SHORT_NAME_MAX };
 
 /** Cut `text` to at most `max` characters at a word boundary, ending in "…" when it was cut. */
 export function clip(text, max) {
@@ -127,20 +111,20 @@ export function clip(text, max) {
 }
 
 /**
- * The name a list shows (Plan M M172 rule, used here first): the goal and the month it went out, at most 40
- * characters. A campaign run elsewhere, or a programme readout, has no goal of ours: its own recorded name is
- * shortened instead. The long recorded name is the subtitle (`campaign.name`).
+ * The name a list shows: M172's one rule (`ui/format.js` shortCampaignName), the goal's short name
+ * (`ui/labels.js` goalShortName) and the month it went out, at most 40 characters ("Win back lapsed customers —
+ * Oct 2026"). `goal` is the API's name for a goal §4.2 does not name. A campaign run elsewhere, or a programme
+ * readout, has no goal of ours: its own recorded name is shortened instead. The long recorded name is the subtitle
+ * (`campaign.name`).
  */
 export function shortName(campaign, goal = null) {
   if (!campaign) return "";
-  const month = monthOf(campaign.treatment_start);
   if (runElsewhere(campaign) || wholeProgramme(campaign) || !campaign.use_case_id) {
     return clip(campaign.name || "Campaign", SHORT_NAME_MAX);
   }
-  const head = goal || goalName(campaign.use_case_id);
-  if (!month) return clip(head, SHORT_NAME_MAX);
-  const tail = ` · ${month}`;
-  return `${clip(head, SHORT_NAME_MAX - tail.length)}${tail}`;
+  const id = campaign.use_case_id;
+  const head = GOAL_NAMES[id] ? goalShortName(id) : goal || goalName(id);
+  return shortCampaignName(head, campaign.treatment_start);
 }
 
 // --- the next step -----------------------------------------------------------------------------------------

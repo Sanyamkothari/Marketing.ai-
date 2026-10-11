@@ -73,7 +73,7 @@ test("the list: both campaigns, each with a short name, its goal, a status chip,
         const link = tr.querySelector("a[data-campaign-link]");
         assert.equal(link.getAttribute("href"), `#/campaigns/${campaign.campaign_id}/overview`);
         assert.ok(link.textContent.length <= 40, link.textContent);
-        assert.equal(link.textContent, "Choose the best e-mail for… · Oct 2026");
+        assert.equal(link.textContent, "Best e-mail for each customer — Oct 2026");
         assert.equal(tr.querySelector(".cp-sub").textContent, campaign.name, "the long recorded name is the subtitle");
         assert.equal(cells[1].textContent, "Choose the best e-mail for each customer");
         assert.equal(tr.querySelector("[data-status]").getAttribute("data-status"), "measured");
@@ -89,7 +89,7 @@ for (const [name, id] of [
     test(`${name}: Overview shows where it stands, the next step, three tiles, what was sent and one primary button`, async () => {
         await visit(`#/campaigns/${id}/overview`);
         assert.equal($$("#app h1").length, 1);
-        assert.equal(text("#app h1"), "Choose the best e-mail for… · Oct 2026");
+        assert.equal(text("#app h1"), "Best e-mail for each customer — Oct 2026");
         assert.equal(
             text("#app .desc"),
             "Choose the best e-mail for each customer: sent on 11 Oct 2026 to 12,862 customers.",

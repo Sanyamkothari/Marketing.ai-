@@ -138,17 +138,17 @@ test("the list shows each campaign's state with the one rule", async () => {
     assert.deepEqual(byName["Win-back, July list"].slice(1), ["Draft", "—"]);
     // No plan, and every customer's outcome window closed on 30 Jul 2026: waiting for results, not a Draft.
     assert.deepEqual(byName["Win-back, March list"], [
-        "Win back lapsed customers · May 2026",
+        "Win back lapsed customers — May 2026",
         "Waiting for results",
         "Results due 30 Jul 2026",
     ]);
     assert.deepEqual(byName["Win-back, August list"], [
-        "Win back lapsed customers · May 2026",
+        "Win back lapsed customers — May 2026",
         "Live",
         "Results due 15 Jan 2027",
     ]);
     assert.deepEqual(byName["Win-back, May list"], [
-        "Win back lapsed customers · May 2026",
+        "Win back lapsed customers — May 2026",
         "Waiting for results",
         "Results due 15 Sep 2026",
     ]);
