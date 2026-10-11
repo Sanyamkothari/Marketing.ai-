@@ -214,6 +214,48 @@ def test_the_models_own_words_carry_no_number_no_direction_and_pass_the_guardrai
     assert sentence is None and failure[0] == CLAIM_FREE_TEXT, template
 
 
+@pytest.mark.parametrize(
+    "template",
+    [
+        # spelled-out numbers and multipliers (M139 review: digits alone are not every number)
+        "Expect ten times more sales.",
+        "Sales will be twice what they were.",
+        "About a quarter more people will buy.",
+        "Sales will grow by a third.",
+        "A tenfold return is expected.",
+        "Seventeen customers in a lakh will buy.",
+        # a direction or an outcome stated in the model's own words
+        "Sales go up.",
+        "This will improve sales.",
+        "Sales will surge.",
+        "Fewer customers will leave.",
+        "Revenue is boosted by the offer.",
+        # a certainty around a checked recommendation
+        "{proposal} is recommended and is a sure win.",
+    ],
+)
+def test_number_words_directions_and_certainties_in_the_models_words_are_free_text(template: str) -> None:
+    claim = {"type": "recommendation", "proposal_id": PROPOSAL} if "{proposal}" in template else None
+    sentence, failure, _ = one({"template": template, "claim": claim})
+    assert sentence is None and failure is not None and failure[0] == CLAIM_FREE_TEXT, template
+
+
+@pytest.mark.parametrize(
+    "template",
+    [
+        "Approve {proposal} to {action}.",
+        "If you agree, approve {proposal}; it will {action}.",
+        "The next step: approve {proposal} so the product can {action}.",
+        "Approving proposal {proposal} will {action}.",
+    ],
+)
+def test_plain_connective_words_around_a_checked_claim_still_pass(template: str) -> None:
+    sentence, failure, _ = one(
+        {"template": template, "claim": {"type": "recommendation", "proposal_id": PROPOSAL}}
+    )
+    assert failure is None and sentence is not None, template
+
+
 def test_a_slot_the_claim_does_not_fill_or_a_format_trick_is_unreferenced() -> None:
     assert (
         one({**comparison("gt"), "template": "{arm_a} {cmp} {arm_b} {proposal}."})[1][0] == CLAIM_UNREFERENCED

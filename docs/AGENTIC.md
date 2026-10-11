@@ -141,6 +141,7 @@ never gets a second path to anything.
 | `POST /agentic/proposals/{proposal_id}/reject` | Approver, audited | `{reason?}`. 200 with the receipt. |
 | `POST /agentic/plans` | Analyst, audited | M139 (§8): `{card}`, `{goal}` or `{goal_text}`. 201 with the plan and its proposal; a plan that stops answers its code (404 `PLANNER_CARD_NOT_FOUND`, 409 `PLANNER_NOTHING_TO_PLAN`, `PLANNER_NO_CANDIDATE`, `AI_NOT_CONNECTED`, 422 `PLANNER_GOAL_UNPARSED`) and is kept. |
 | `GET /agentic/plans/{plan_id}` | Viewer | M139: the plan's state (`agentic_runs/<id>/state.json`) and its proposal. 404 `PLANNER_NOT_FOUND`. |
+| `POST /agentic/plans/{plan_id}/resume` | Analyst, audited | M139: a plan a crash left part-way continues from the last step it wrote; a plan at its interrupt, done or stopped is answered as it is. 404 `PLANNER_NOT_FOUND`; a stop answers its code as a draft does. |
 
 No route approves for an agent; the routes exist only while `agentic.enabled` is on. M139 carries out an
 approved campaign plan the planner drafted (§8); M132's campaign plans drafted any other way stay
@@ -195,26 +196,29 @@ with an offer budget, a cost cap, arbitration caps and a persistent holdout on a
 * The report is `EvalReport`, written by `write_report` as canonical JSON (`reports/agentic_eval.json` by default).
 * **M139** adds planner scenarios (`PlannerScenarioRequest`; `tests/agentic/scenarios/planner_scenarios.py`): every
   M105 card type, goals through the form and in words, a planted instruction, and models that word their claims
-  differently on every call, write a wrong direction, a number or an unreferenced claim. Their expected payload
-  digests are computed from the stored artefacts independently of the planner. Model calls and claim failures
-  (by code) are totalled in the report and are not part of an outcome's key: wording may vary, decisions may not.
+  differently on every call, write a wrong direction (against an interval that excludes zero: `CLAIM_DIRECTION`),
+  a number or an unreferenced claim. Their expected payload digests are computed from the stored artefacts
+  independently of the planner. Model calls, their cost, claim failures (by code) and AI service errors are
+  totalled in the report and are not part of an outcome's key: wording may vary, decisions may not.
 
 ## 8. The campaign planner and the claim verifier (`engine/agentic/planner.py`, `claims.py`; M139)
 
 A warning card on Results ("Draft a plan", `ui/modules/agentic/`; no new top-bar item) or a goal becomes one
 drafted campaign plan for a person to approve. A **state machine with one interrupt** (design §6), each
 transition written to `agentic_runs/<plan_id>/state.json` under a lock per plan, so a crash resumes from the last
-step written (`resume_plan`):
+step written (`resume_plan`, `POST /agentic/plans/{plan_id}/resume`). DRAFT is idempotent: the proposal id is
+written to the state (`reserved_proposal_id`) before the proposal is drafted, and a resumed DRAFT reuses the stored
+proposal, so a crash inside it never leaves two pending proposals for one plan:
 
 | Step | What happens | Model |
 |---|---|---|
 | FRAME | A card is found by the server among `GET /campaigns/summary`'s cards (the client names it; its content is not taken from the client). `no_control`, `underpowered`, `contamination`, `uplift_not_better_than_risk`, `uplift_fading` frame the next cycle (`restore_holdout`, `larger_test`, `protect_holdout`, `rank_by_risk`, `confirm_effect`); `early_look`, `drift`, `challenger_ready`, `backfire` plan nothing and say why (`PLANNER_NOTHING_TO_PLAN`). The form takes enumerated values and numbers the person types. | Words only: the model picks each field from the values offered (use cases, objectives, channels, and the amounts code read from the words); anything else is `PLANNER_GOAL_UNPARSED`. Words without an AI service: `AI_NOT_CONNECTED`. |
-| SIZE | The newest finished scoring run of the use case with no campaign yet (a list goes out once); `check_contactable`; the use case's measured campaigns (`measure`; the base rate is the newest final one's held-back rate); `plan_test` at the holdout in force; the test plan: the use case's outcome window, the analysis date (run finished + window), the smallest effect the test can see, rounded up to a tenth of a point. | - |
+| SIZE | The newest finished scoring run of the use case with no campaign yet (a list goes out once); `check_contactable` (its eligible rows and, from `scoring_summary.json`, its held-back rows); the use case's measured campaigns, newest first by when each was opened (`measure`); the outcome kind of the newest one - an amount (M102, `continuous`) is planned as an amount, with its smallest effect and spread left for the campaign page (points given for an amount: `PLANNER_NO_CANDIDATE`); for a rate, the base rate is the held-back rate of the card's own campaign when it has one, else the newest; `plan_test` on everyone the campaign compares (eligible plus held back, as the product's preview sizes it) at the holdout in force; the test plan: the use case's outcome window, the analysis date (the later of the run's finish and the draft, plus the window), the smallest effect the test can see, rounded up to a tenth of a point. | - |
 | CANDIDATES | One per configured channel: contactable rows, at most the run's own treat count, offer spend from `cost_per_contact` (null when unset); `value_segment`; `evaluate_policy` on the model's training run for M137's verdict. A candidate is excluded with a reason: another channel than the goal's, nobody contactable, an uplift list whose verdict is `not_safe`, or a budget the spend exceeds or cannot be checked against. | - |
 | SELECT | Rules only: `safe` first, then the most contactable, then the use case's channel order; the first candidate every policy rule allows; when none is, the first, so the refusal is drafted and on the ledger. Nothing left: `PLANNER_NO_CANDIDATE`. | - |
 | CHECK, DRAFT | The M132 policy's decisions; `Proposal(kind=campaign_plan)` citing every tool result, with the test plan to register on approval (`test.registered` allows a new campaign carrying its test plan, DEC-1406 (b)). The narrative is stored beside the payload and its digest on the ledger entry; the payload digest never includes prose. | The narrative, as structured claims. |
 | INTERRUPT | A person approves at `POST /agentic/proposals/{id}/approve` (the policy checked again). | - |
-| EXECUTE | Through the product's own functions, each result written to the state before the next, so a retried approval opens no second campaign: the treat list (`ensure_treat_list`), the campaign (`open_campaign`, the engine half of `POST /campaigns`), the test plan (`register_plan`, signed `test_plan.frozen`), and the use case's enabled `measure` schedule when there is one (none is created: it needs a saved connection a person chooses); `campaign_plan.executed` on the ledger. | - |
+| EXECUTE | Through the product's own functions, each result written to the state before the next, so a retried approval opens no second campaign: the treat list (`ensure_treat_list`), the campaign (`open_campaign`, the engine half of `POST /campaigns`, its treatment starting at the approval), the test plan (`register_plan`, signed `test_plan.frozen`, its holdout commitment from the one `engine.agentic.ledger.holdout_commitment`), and the use case's enabled `measure` schedule when there is one; `campaign_plan.executed` on the ledger. An approval later than the drafted analysis date minus the window is `PROPOSAL_STALE` (draft again), so a frozen plan never reads its result before the window closes. **Agreed deviation from the spec's "schedule measure":** no measure schedule is created - one needs a saved connection and a table a person chooses, which an approval does not carry - so the hand-off names the enabled schedule or says when and how to measure. | - |
 
 **Claims, not prose** (design §4, `engine/agentic/claims.py`). The model returns
 `{"sentences": [{"template", "claim"}]}`; each claim references evidence by `ev_<id>:<path>`. The verifier checks
@@ -222,12 +226,20 @@ step written (`resume_plan`):
 "is not distinguishable from"; the opposite direction fails), `label` (equal to the tool's), `trend` (three or more
 points, one direction, endpoints apart) and `recommendation` (a proposal the policy allowed). The renderer fills
 every slot - arm names, labels, comparison words and every number - from the evidence. The model's own words may
-carry no digit, no direction or cause word, and must pass the deterministic guardrails. Codes: `CLAIM_DIRECTION`,
+carry no digit, no spelled-out number or multiplier (`ten`, `twice`, `times`, `a third`, `tenfold`, `lakh`), no
+direction or outcome word (`up`, `more`, `grow`, `improve`, `surge`), no cause or certainty (`because`, `sure`,
+`win`), and must pass the deterministic guardrails. Codes: `CLAIM_DIRECTION`,
 `CLAIM_LABEL`, `CLAIM_UNREFERENCED`, `CLAIM_FREE_TEXT`, `CLAIM_MALFORMED`. One failed sentence is dropped; more
 than one, or an answer that is not the JSON asked for, is replaced by the rules-only summary, which code writes
 from the same evidence and which is also what is shown without an AI service. LLM calls go through the `Meter`
 with `GenerativePurpose.AGENT_PLANNER` and `AGENT_NARRATIVE` (`configs/prompts/agent_planner.v1.md`,
-`agent_narrative.v1.md`).
+`agent_narrative.v1.md`): the narrative under the use case's own `generative.llm` and `generative.budget`, as every
+metered route; goal words, before any use case is known, under the deployment's configured AI and the default
+budget. An AI service or budget error writes the rules-only summary and is recorded as `narrative_error`, not as a
+claim failure; the eval report counts it apart (`narrative_errors`) and totals the Meter's spend (`cost_usd`).
+
+**On the page.** "Draft a plan" is drawn only when `/auth/me` (read once at boot) lists `POST /agentic/plans`,
+which it does only while `agentic.enabled` is on: with the switch off the module sends no request.
 
 ## 9. Milestones
 

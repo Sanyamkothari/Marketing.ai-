@@ -161,6 +161,16 @@ def test_a_hillstrom_warning_card_becomes_an_approved_plan_carried_out(tmp_path:
         assert payload["test_plan"]["outcome_window_days"] == 14
         assert proposal["narrative"]["source"] == "rules"
         assert _ok(client.get("/campaigns", params={"run_id": second["run_id"]}))["campaigns"] == []
+        # The test is sized on everyone the campaign will compare - the eligible rows and the held-back half -
+        # not on the eligible rows alone (which would take the holdout off twice).
+        evidence = drafted["plan"]["evidence"]
+        contact = evidence["check_contactable"]["output"]
+        (point,) = evidence["plan_test"]["output"]["points"]
+        scored = _ok(client.get(f"/runs/{second['run_id']}/artefacts/scoring_summary.json"))
+        assert contact["held_back_rows"] == scored["control_group_rows"] > 0
+        assert point["n_treat"] + point["n_control"] == contact["eligible_rows"] + contact["held_back_rows"]
+        suppressed = sum(int(item["rows"]) for item in scored["suppressed"])
+        assert drafted["plan"]["size"]["population_rows"] == scored["rows_scored"] - suppressed
 
         receipt = _ok(
             client.post(f"/agentic/proposals/{proposal['proposal_id']}/approve", json={"reason": "Yes."})

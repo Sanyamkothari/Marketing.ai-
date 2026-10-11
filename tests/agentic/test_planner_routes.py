@@ -13,20 +13,27 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
+from fastapi import Request
 from fastapi.testclient import TestClient
 from pydantic import SecretStr
 
 from api.access_policy import all_policies
+from api.deps import ConfigRootDep, SettingsDep, StorageDep
 from api.main import create_app
+from api.routes.agentic import get_planner_deps
 from engine.access.roles import Role
 from engine.agentic.ledger import DecisionLedger, signer_for_data_dir, verify_ledger
-from engine.agentic.planner import PlannerState, load_plan
+from engine.agentic.planner import PlannerDeps, PlannerState, load_plan
 from engine.agentic.policy import CampaignPlanPayload
+from engine.agentic.tools import default_registry
+from engine.config import BudgetConfig, LlmConfig
 from engine.decide.treat_list import TREAT_LIST_SUMMARY_FILENAME
+from engine.generative.budget import Meter
 from engine.measurement.plan import TestPlan
 from engine.platform_db import PLATFORM_DB_FILENAME, sqlite_engine
 from engine.settings import Settings
 from engine.storage import run_key
+from engine.utils.time import utc_now
 from tests.agentic.scenarios.planner_scenarios import expected_digest
 from tests.agentic.scenarios.planner_world import HonestModel, PlannerWorld
 
@@ -49,10 +56,15 @@ def test_the_planner_routes_exist_with_their_policies(planner_world: PlannerWorl
 
     with planner_world.world.client() as client:
         routes = {(route.method, route.path) for route in live_routes(client.app)}  # type: ignore[arg-type]
-    assert {("POST", "/agentic/plans"), ("GET", "/agentic/plans/{plan_id}")} <= routes
+    assert {
+        ("POST", "/agentic/plans"),
+        ("GET", "/agentic/plans/{plan_id}"),
+        ("POST", "/agentic/plans/{plan_id}/resume"),
+    } <= routes
     policies = all_policies()
     assert policies[("POST", "/agentic/plans")].role is Role.ANALYST
     assert policies[("GET", "/agentic/plans/{plan_id}")].role is Role.VIEWER
+    assert policies[("POST", "/agentic/plans/{plan_id}/resume")].role is Role.ANALYST
     assert not any("approve" in path and "plans" in path for _, path in routes), "no route approves a plan"
 
 
@@ -68,7 +80,13 @@ def test_a_card_becomes_a_plan_that_an_approval_carries_out(fresh_planner_world:
         body = response.json()
         plan, proposal = body["plan"], body["proposal"]
         assert plan["step"] == "INTERRUPT" and proposal["status"] == "pending"
-        assert proposal["payload_digest"] == expected_digest(pw, objective="larger_test")
+        assert proposal["payload_digest"] == expected_digest(pw, objective="larger_test", now=utc_now())
+        # The test is sized on everyone the campaign compares (the eligible rows and the held-back group),
+        # as the product's own preview sizes it - not on the eligible rows, which would take the holdout twice.
+        contact = plan["evidence"]["check_contactable"]["output"]
+        (point,) = plan["evidence"]["plan_test"]["output"]["points"]
+        assert contact["held_back_rows"] > 0
+        assert point["n_treat"] + point["n_control"] == contact["eligible_rows"] + contact["held_back_rows"]
         assert set(proposal["evidence_ids"]) == {item["evidence_id"] for item in plan["evidence"].values()}
         assert proposal["narrative"]["sentences"], "a narrative is shown under the plan"
         # Nothing is made by a draft: no treat list, no campaign for the run.
@@ -154,16 +172,28 @@ def test_words_need_an_ai_service_and_a_card_does_not(planner_world: PlannerWorl
         assert narrative["source"] == "rules" and narrative["failures"] == []
 
 
+def _with_model(model: Any) -> Any:
+    """`get_planner_deps` with `model` as the Product AI (FastAPI's dependency override: no hook in the API)."""
+
+    def deps() -> PlannerDeps:
+        meter = Meter(model, job_id="t", llm=LlmConfig(), budget=BudgetConfig(cache=False))
+        return PlannerDeps(registry=default_registry(), meter=meter)
+
+    return deps
+
+
 def test_words_read_by_the_model_give_the_forms_plan(planner_world: PlannerWorld) -> None:
     pw = planner_world
     app = create_app(config_root=pw.world.config_root, data_dir=pw.world.data_dir)
-    app.state.agentic_llm_client = HonestModel()
+    app.dependency_overrides[get_planner_deps] = _with_model(HonestModel())
     with TestClient(app) as client:
         words = client.post(
             "/agentic/plans", json={"goal_text": "Win back the customers who lapsed, by sms."}
         )
         assert words.status_code == 201, words.text
-        assert words.json()["proposal"]["payload_digest"] == expected_digest(pw, objective="next_cycle")
+        assert words.json()["proposal"]["payload_digest"] == expected_digest(
+            pw, objective="next_cycle", now=utc_now()
+        )
         assert words.json()["plan"]["frame"]["source"] == "words"
 
 
@@ -233,3 +263,133 @@ def test_with_the_switch_off_there_is_no_planner_route(planner_world: PlannerWor
     (root / "agentic" / "agentic.yaml").write_text("agentic:\n  enabled: false\n", encoding="utf-8")
     with TestClient(create_app(config_root=root, data_dir=planner_world.world.data_dir)) as client:
         assert client.post("/agentic/plans", json=_card(planner_world)).status_code == 404
+
+
+def _plan_ids(pw: PlannerWorld) -> set[str]:
+    from engine.agentic.planner import PLANS_PREFIX
+
+    return {key.split("/")[1] for key in pw.world.storage.list_keys(PLANS_PREFIX)}
+
+
+def test_a_plan_a_crash_left_part_way_resumes_through_its_route(
+    fresh_planner_world: PlannerWorld, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Each step is written as it completes; a worker stopped mid-plan leaves the plan at its last step, and
+    `POST /agentic/plans/{id}/resume` carries it on to the interrupt (design §6: a crash resumes)."""
+    import engine.agentic.planner as planner
+
+    pw = fresh_planner_world
+    real = planner._candidates
+
+    def crash(*_args: Any, **_kwargs: Any) -> Any:
+        raise RuntimeError("the worker was stopped")
+
+    before = _plan_ids(pw)
+    monkeypatch.setattr(planner, "_candidates", crash)
+    with TestClient(
+        create_app(config_root=pw.world.config_root, data_dir=pw.world.data_dir),
+        raise_server_exceptions=False,
+    ) as client:
+        assert client.post("/agentic/plans", json=_card(pw)).status_code == 500
+        (plan_id,) = _plan_ids(pw) - before
+        assert client.get(f"/agentic/plans/{plan_id}").json()["plan"]["step"] == "SIZE"
+        monkeypatch.setattr(planner, "_candidates", real)
+        resumed = client.post(f"/agentic/plans/{plan_id}/resume")
+        assert resumed.status_code == 200, resumed.text
+        body = resumed.json()
+        assert body["plan"]["step"] == "INTERRUPT" and body["proposal"]["status"] == "pending"
+        assert body["proposal"]["payload_digest"] == expected_digest(
+            pw, objective="larger_test", now=utc_now()
+        )
+        again = client.post(f"/agentic/plans/{plan_id}/resume").json()
+        assert again["plan"] == body["plan"], "a plan at its interrupt is answered as it is"
+        assert client.post("/agentic/plans/plan_0000000000000000/resume").status_code == 404
+
+
+def test_a_crash_inside_draft_resumes_to_the_same_proposal(
+    fresh_planner_world: PlannerWorld, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A crash after the proposal was drafted but before the plan recorded it: the resumed DRAFT reuses that
+    proposal (its id was written first), so there is one pending proposal and approving it carries it out."""
+    import engine.agentic.proposals as proposals
+    from engine.agentic.proposals import ProposalStore
+
+    pw = fresh_planner_world
+    real = proposals.submit_proposal
+
+    def drafted_then_crash(*args: Any, **kwargs: Any) -> Any:
+        real(*args, **kwargs)
+        raise RuntimeError("the worker was stopped after drafting")
+
+    before = _plan_ids(pw)
+    monkeypatch.setattr(proposals, "submit_proposal", drafted_then_crash)
+    with TestClient(
+        create_app(config_root=pw.world.config_root, data_dir=pw.world.data_dir),
+        raise_server_exceptions=False,
+    ) as client:
+        form = {"goal": {"use_case_id": "win-back-campaign", "channel": "sms"}}
+        assert client.post("/agentic/plans", json=form).status_code == 500
+        (plan_id,) = _plan_ids(pw) - before
+        halted = client.get(f"/agentic/plans/{plan_id}").json()["plan"]
+        assert halted["step"] == "CHECK" and halted["proposal_id"] is None and halted["reserved_proposal_id"]
+        monkeypatch.setattr(proposals, "submit_proposal", real)
+        body = client.post(f"/agentic/plans/{plan_id}/resume").json()
+        proposal_id = body["proposal"]["proposal_id"]
+        assert proposal_id == halted["reserved_proposal_id"] and body["plan"]["step"] == "INTERRUPT"
+        mine = [
+            p for p in ProposalStore(pw.world.storage).list(status="pending") if p.proposal_id == proposal_id
+        ]
+        drafts = [e for e in _entries(pw, proposal_id) if e.kind == "proposal.drafted"]
+        assert len(mine) == 1 and len(drafts) == 1, "one proposal, drafted once"
+        receipt = client.post(f"/agentic/proposals/{proposal_id}/approve", json={})
+        assert receipt.status_code == 200, receipt.text
+        assert len(client.get("/campaigns", params={"run_id": pw.run_id}).json()["campaigns"]) == 1
+
+
+def test_the_planner_meters_under_the_use_cases_own_ai_and_budget(
+    planner_world: PlannerWorld, tmp_path: Any
+) -> None:
+    """The narrative is metered as every metered route meters (the use case's `generative.llm` and `budget`):
+    a use case allowing one call per run gets a Meter that refuses the second, and a deployment whose AI comes
+    from its use-case configuration (here the test model, `allow_fake_ai`) is not refused as not connected."""
+    import shutil
+
+    import yaml
+
+    from engine.generative.contracts import GenerativePurpose
+    from engine.generative.errors import GenerativeError
+    from engine.generative.prompts import load_prompt, render
+
+    pw = planner_world
+    root = tmp_path / "configs"
+    shutil.copytree(pw.world.config_root, root)
+    path = root / "use_cases" / "win_back_campaign.yaml"
+    document = yaml.safe_load(path.read_text(encoding="utf-8"))
+    document["generative"]["budget"] = {"max_calls_per_run": 1, "cache": False}
+    path.write_text(yaml.safe_dump(document, sort_keys=False), encoding="utf-8")
+    settings = Settings(connections_key=SecretStr("F" * 40), allow_fake_ai=True)
+    app = create_app(config_root=root, data_dir=pw.world.data_dir, settings=settings)
+    seen: list[PlannerDeps] = []
+
+    def capture(
+        request: Request, storage: StorageDep, root: ConfigRootDep, settings: SettingsDep
+    ) -> PlannerDeps:
+        deps = get_planner_deps(request, storage, root, settings)
+        seen.append(deps)
+        return deps
+
+    app.dependency_overrides[get_planner_deps] = capture
+    with TestClient(app) as client:
+        card = client.post("/agentic/plans", json=_card(pw))
+        assert card.status_code == 201, card.text
+        plan = card.json()["plan"]
+        assert plan["llm_calls"] == 1 and plan["narrative_error"] is None, "the use case's model wrote"
+        words = client.post("/agentic/plans", json={"goal_text": "Win back lapsed customers by sms."})
+        assert words.json()["detail"]["code"] != "AI_NOT_CONNECTED", words.text
+    meter = seen[0].meter_for("win-back-campaign") if seen[0].meter_for else None
+    assert meter is not None and meter.remaining_calls() == 1
+    prompt = render(load_prompt("agent_narrative", root), {"evidence": "{}", "state": "{}"})
+    meter.complete(prompt, GenerativePurpose.AGENT_NARRATIVE)
+    with pytest.raises(GenerativeError) as refused:
+        meter.complete(prompt, GenerativePurpose.AGENT_NARRATIVE)
+    assert refused.value.code == "BUDGET_EXCEEDED"

@@ -31,8 +31,10 @@ leaves out the slot stating the claim (`{cmp}`, `{label}`, `{direction}`, `{prop
 
 **The renderer fills every slot from the evidence** - arm names, labels, the comparison words, and every
 number - so the model cannot type a number into a sentence. **The model's own words** (the template with its
-slots removed) go through Plan G's number check (any digit fails; `engine.agent.grounding.numbers_in`), a short
-list of claim words that would state a direction or a cause outside a claim, and the deterministic guardrails
+slots removed) go through Plan G's number check (any digit fails; `engine.agent.grounding.numbers_in`), a list of
+claim words that would state something outside a claim - a direction or an outcome verb (`up`, `more`, `grow`,
+`improve`, `surge`), a cause or a certainty (`because`, `sure`, `win`), a spelled-out number or a multiplier
+(`ten`, `twice`, `times`, `a third`, `tenfold`, `lakh`) - and the deterministic guardrails
 (`engine.generative.guardrails`: personal data, banned phrases, links, length): `CLAIM_FREE_TEXT`. A JSON
 answer that does not parse, or a sentence that is not shaped as above, is `CLAIM_MALFORMED`.
 
@@ -265,56 +267,230 @@ _DIRECTION_WORDS: Final[dict[str, str]] = {"up": "has risen", "down": "has falle
 
 _CLAIM_WORDS: Final[frozenset[str]] = frozenset(
     {
+        # comparison and direction
         "better",
         "worse",
         "best",
         "worst",
         "beat",
         "beats",
+        "beaten",
         "outperform",
         "outperforms",
         "outperformed",
         "higher",
+        "highest",
         "lower",
-        "increase",
-        "increased",
-        "increases",
-        "decrease",
-        "decreased",
-        "decreases",
+        "lowest",
+        "greater",
+        "smaller",
+        "bigger",
+        "larger",
+        "above",
+        "below",
+        "exceed",
+        "exceeds",
+        "exceeded",
+        "ahead",
+        "behind",
+        "more",
+        "most",
+        "less",
+        "least",
+        "fewer",
+        "up",
+        "down",
         "rise",
+        "rises",
+        "rising",
         "rose",
         "risen",
         "fall",
+        "falls",
+        "falling",
         "fell",
         "fallen",
+        "grow",
+        "grows",
+        "growing",
+        "grew",
+        "grown",
+        "growth",
+        "gain",
+        "gains",
+        "gained",
+        "jump",
+        "jumps",
+        "jumped",
+        "climb",
+        "climbs",
+        "climbed",
+        "drop",
+        "drops",
+        "dropped",
+        "dip",
+        "dips",
+        "dipped",
+        "soar",
+        "soars",
+        "soared",
+        "plunge",
+        "plunged",
+        "slump",
+        "slumped",
+        "lift",
+        "lifts",
+        "lifted",
+        "uplift",
+        # cause, certainty and outcome
         "cause",
         "caused",
         "causes",
         "causal",
+        "because",
         "proven",
         "proves",
         "proved",
+        "prove",
         "significant",
         "significantly",
         "guaranteed",
         "guarantee",
-        "winner",
+        "guarantees",
+        "sure",
+        "surely",
+        "certain",
+        "certainly",
+        "definitely",
+        "always",
+        "never",
+        "win",
         "wins",
+        "winning",
         "won",
-        "lift",
-        "uplift",
+        "winner",
+        "lose",
+        "loses",
+        "losing",
+        "lost",
+        "loser",
+        # amounts and multipliers
         "double",
         "doubled",
+        "doubles",
         "triple",
         "tripled",
+        "triples",
+        "quadruple",
         "half",
+        "halves",
         "halved",
+        "twice",
+        "thrice",
+        "times",
+        "quarter",
+        "quarters",
+        "third",
+        "thirds",
+        "fifth",
+        "fifths",
         "percent",
+        "percentage",
+        "pct",
+        "dozen",
+        "dozens",
+        "hundred",
+        "hundreds",
+        "thousand",
+        "thousands",
+        "lakh",
+        "lakhs",
+        "lac",
+        "lacs",
+        "crore",
+        "crores",
+        "million",
+        "millions",
+        "billion",
+        "billions",
+        "zero",
+        "one",
+        "two",
+        "three",
+        "four",
+        "five",
+        "six",
+        "seven",
+        "eight",
+        "nine",
+        "ten",
+        "eleven",
+        "twelve",
+        "thirteen",
+        "fourteen",
+        "fifteen",
+        "sixteen",
+        "seventeen",
+        "eighteen",
+        "nineteen",
+        "twenty",
+        "thirty",
+        "forty",
+        "fifty",
+        "sixty",
+        "seventy",
+        "eighty",
+        "ninety",
+        "single",
+        "none",
+        "all",
+        "every",
+        "everyone",
     }
 )
-"""Words that state a direction, a cause or an amount: in the model's own words they would be a claim no
-verifier checked, so they are allowed only inside a slot the renderer fills."""
+"""Words that state a direction, a cause, a certainty or an amount (a spelled-out number, a multiplier or a
+share): in the model's own words they would be a claim no verifier checked, so they are allowed only inside a
+slot the renderer fills."""
+
+_CLAIM_STEMS: Final[tuple[str, ...]] = (
+    "improv",
+    "boost",
+    "surg",
+    "increas",
+    "decreas",
+    "declin",
+    "reduc",
+    "worsen",
+    "skyrocket",
+    "spike",
+    "spiki",
+    "outperform",
+    "outsell",
+    "doubl",
+    "tripl",
+    "quadrupl",
+    "multipl",
+    "maximi",
+    "minimi",
+    "succe",
+    "fail",
+    "guarant",
+    "signific",
+)
+"""Stems of the outcome verbs (improve, improves, improved, improving, boosts, surging ...)."""
+
+_TENS: Final[frozenset[str]] = frozenset(
+    {"twenty", "thirty", "forty", "fourty", "fifty", "sixty", "seventy", "eighty", "ninety"}
+)
+
+
+def _claim_word(word: str) -> bool:
+    """`word` (lower case) states a direction, a cause or an amount: listed, an outcome verb's stem, a
+    multiplier (`tenfold`), a teen or a compound of the tens (`seventeen`, `twentyfive`)."""
+    if word in _CLAIM_WORDS or word.startswith(_CLAIM_STEMS):
+        return True
+    return word.endswith(("fold", "teen")) or word.startswith(tuple(_TENS))
+
 
 _WORD: Final[re.Pattern[str]] = re.compile(r"[A-Za-z]+")
 
@@ -359,7 +535,7 @@ def _free_text_problem(free: str, guardrails: Any) -> str | None:
     if ungrounded_numbers(free, frozenset()):
         return "the sentence's own words carry a number nothing grounds"
     words = {word.lower() for word in _WORD.findall(free)}
-    stated = sorted(words & _CLAIM_WORDS)
+    stated = sorted(word for word in words if _claim_word(word))
     if stated:
         return "the sentence's own words state a direction or a cause outside a checked claim"
     if guardrails is not None and free.strip():

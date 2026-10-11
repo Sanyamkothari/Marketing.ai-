@@ -240,7 +240,9 @@ class AdversarialModel(_Model):
     model_id: str = "fake-adversarial"
 
     def sentences(self, evidence: dict[str, Any], call: int) -> list[dict[str, Any]]:
-        comparison = evidence["comparisons"][0]
+        # The opposite of a comparison whose interval excludes zero (the equal-budget comparison reads "left is
+        # above right"), so the verifier must fail it with CLAIM_DIRECTION, not soften it.
+        comparison = next(c for c in evidence["comparisons"] if c["reads"] != "not distinguishable")
         return [
             {
                 "template": "{arm_a} {cmp} {arm_b} on {metric}.",

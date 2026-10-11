@@ -155,6 +155,14 @@ class ContactabilityOut(StrictBase):
     eligible_rows: int | None = Field(default=None, description="Rows neither suppressed nor held back.")
     ledger_purpose: str | None = None
     channels: tuple[ChannelReasons, ...] = ()
+    # Plan K M139: the held-back group (`scoring_summary.json`'s `control_group_rows`), so a test is sized on
+    # everyone the campaign compares - the eligible rows plus the held-back ones - as the product's own
+    # preview sizes it (`realised.population_rows`). Left out while unknown, so earlier outputs are unchanged.
+    held_back_rows: int | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+        description="Rows held back as the control group (drawn from the unsuppressed rows); null when unknown.",
+    )
 
 
 def _check_contactable(given: RunInput, ctx: ToolContext) -> ContactabilityOut:
@@ -186,6 +194,8 @@ def _check_contactable(given: RunInput, ctx: ToolContext) -> ContactabilityOut:
         )
         for source in summary.get("by_channel", ())
     )
+    scoring = _stored_json(ctx, run_key(given.run_id, "scoring_summary.json"))
+    held_back = None if scoring is None else scoring.get("control_group_rows")
     return ContactabilityOut(
         run_id=given.run_id,
         recorded=True,
@@ -195,6 +205,7 @@ def _check_contactable(given: RunInput, ctx: ToolContext) -> ContactabilityOut:
         eligible_rows=summary.get("eligible_rows"),
         ledger_purpose=summary.get("ledger_purpose"),
         channels=channels,
+        held_back_rows=None if held_back is None else int(held_back),
     )
 
 

@@ -5,7 +5,9 @@ A **state machine with one interrupt**, not a free tool-use loop:
 ```
 TRIGGER (an M105 warning card | a goal: a form, or words parsed by the language model)
   → FRAME       rules map the trigger to {use case, objective, channel, budget}
-  → SIZE        the newest scoring run with no campaign yet; plan_test (power at the holdout in force)
+  → SIZE        the newest scoring run with no campaign yet; plan_test on everyone it compares (the eligible
+                rows and the held-back ones, as the product's preview), at the holdout in force; the outcome
+                kind (a yes/no rate or an amount) of the use case's newest measured campaign
   → CANDIDATES  check_contactable / value_segment / evaluate_policy: one candidate per channel
   → SELECT      rules: prefer M137's `safe`, never `not_safe`; the first candidate the policy allows
   → CHECK       the M132 policy's decisions on the one selected
@@ -25,7 +27,9 @@ model that words things differently from one run to the next leaves every digest
 
 **Persisted per transition** at `agentic_runs/<plan_id>/state.json` (aggregates only: ids, counts, the tool
 results' outputs), under a lock per plan, as Plan G keeps a session; a crash between two steps resumes from the
-last one written (:func:`resume_plan`). A plan that cannot go on stops with a code: `PLANNER_NOTHING_TO_PLAN`
+last one written (:func:`resume_plan`, `POST /agentic/plans/{plan_id}/resume`). DRAFT is idempotent: the proposal
+id is written to the state before the proposal is drafted, and a resumed DRAFT reuses the stored proposal, so a
+crash inside it never leaves two pending proposals for one plan. A plan that cannot go on stops with a code: `PLANNER_NOTHING_TO_PLAN`
 (the card asks for waiting or a person's decision, not a campaign), `PLANNER_NO_CANDIDATE` (no scoring run
 without a campaign, no channel, nothing within the budget or safe to roll out), `PLANNER_GOAL_UNPARSED`,
 `AI_NOT_CONNECTED`.
@@ -34,7 +38,11 @@ without a campaign, no channel, nothing within the budget or safe to roll out), 
 caller passes in (the `/agentic` route passes `engine.decide.treat_list.ensure_treat_list`,
 `engine.measurement.cycle.open_campaign` - the engine half of `POST /campaigns` - and
 `api.routes.campaigns.register_plan`). It is idempotent: each thing it makes is written to the state before the
-next, so an approval retried after a failure does not open a second campaign.
+next, so an approval retried after a failure does not open a second campaign. The campaign's treatment starts at
+the approval (nobody is contacted before it), so the drafted analysis date - the later of the run's finish and
+the draft, plus the outcome window - must still be at least a window after the approval, or the approval is
+refused with `PROPOSAL_STALE` (draft again). No measure schedule is created: one needs a saved connection and a
+table a person chooses, so an enabled one is named when it exists and otherwise the hand-off says when to measure.
 """
 
 from __future__ import annotations
@@ -239,7 +247,15 @@ class Evidence(StrictBase):
 class Size(StrictBase):
     run_id: str
     training_run_id: str | None
-    eligible_rows: int
+    eligible_rows: int = Field(description="Rows neither suppressed nor held back (who may be contacted).")
+    held_back_rows: int = Field(default=0, description="Rows held back as the control group.")
+    population_rows: int = Field(
+        default=0, description="Everyone the campaign compares: the eligible rows plus the held-back ones."
+    )
+    outcome_kind: Literal["binary", "continuous"] = Field(
+        default="binary",
+        description="A yes/no outcome (a rate) or an amount, as the newest measured campaign measured it.",
+    )
     holdout_fraction: float
     holdout_scope: Literal["run", "use_case", "universal"]
     outcome_column: str
@@ -250,7 +266,9 @@ class Size(StrictBase):
     mde_pp: float | None
     detectable_mde_pp: float | None
     baseline_campaign_id: str | None
-    measured_campaigns: tuple[str, ...] = Field(description="Measured campaigns read, newest first.")
+    measured_campaigns: tuple[str, ...] = Field(
+        description="Measured campaigns read, newest first (by when they were opened)."
+    )
 
 
 class Candidate(StrictBase):
@@ -305,11 +323,22 @@ class PlannerState(StrictBase):
     tried: tuple[Tried, ...] = ()
     selected: Candidate | None = None
     checks: tuple[Decision, ...] = ()
+    reserved_proposal_id: str | None = Field(
+        default=None,
+        description="The id DRAFT drafts its proposal under, written before drafting so a resume reuses it.",
+    )
     proposal_id: str | None = None
     proposal_status: str | None = None
     payload_digest: str | None = None
     narrative: Narrative | None = None
+    narrative_error: str | None = Field(
+        default=None,
+        description="Why the model wrote no narrative (an AI service or budget error's code); the rules wrote it.",
+    )
     llm_calls: int = 0
+    llm_cost_usd: float = Field(
+        default=0.0, description="What the model calls cost, from the Meter; a call it cannot price adds 0."
+    )
     execution: Execution | None = None
     stopped: Stop | None = None
     history: tuple[Transition, ...] = ()
@@ -371,9 +400,18 @@ class PlannerDeps:
     cards: Callable[[], Sequence[SummaryCard]] | None = None
     """The Results page's warning cards (`engine.measurement.summary.build_summary`); None reads them."""
     meter: Meter | None = None
-    """The Product AI through the Meter; None means no AI service is connected."""
+    """The Product AI through the Meter, for goal words (the use case is not known yet); None means no AI
+    service is connected, and words are refused."""
     model_registry: Any = None
     """The model registry for the challenger card; None draws no challenger card."""
+    meter_for: Callable[[str], Meter | None] | None = None
+    """The Product AI metered under one use case's `generative.llm` and `generative.budget`, for the narrative
+    once FRAME knows the use case; None uses `meter`. Returning None writes the rules-only narrative."""
+
+    def narrative_meter(self, use_case_id: str | None) -> Meter | None:
+        if self.meter_for is not None and use_case_id is not None:
+            return self.meter_for(use_case_id)
+        return self.meter
 
 
 def _stop(code: str, message: str, status: int = 409) -> AgenticError:
@@ -511,8 +549,18 @@ def _frame(state: PlannerState, ctx: ToolContext, deps: PlannerDeps) -> PlannerS
             source="form",
         )
     else:
-        frame, calls = _frame_from_words(str(request.goal_text), ctx, deps)
-        state = state.model_copy(update={"llm_calls": state.llm_calls + calls})
+        meter = deps.meter
+        before = (0, 0.0) if meter is None else (meter.calls, _spent(meter))
+        try:
+            frame = _frame_from_words(str(request.goal_text), ctx, deps)
+        finally:
+            if meter is not None:
+                state = state.model_copy(
+                    update={
+                        "llm_calls": state.llm_calls + meter.calls - before[0],
+                        "llm_cost_usd": round(state.llm_cost_usd + _spent(meter) - before[1], 6),
+                    }
+                )
     return state.model_copy(update={"frame": frame})
 
 
@@ -572,7 +620,13 @@ def _summary_cards(ctx: ToolContext, deps: PlannerDeps) -> Sequence[SummaryCard]
     return summary.cards
 
 
-def _frame_from_words(text: str, ctx: ToolContext, deps: PlannerDeps) -> tuple[Frame, int]:
+def _spent(meter: Meter) -> float:
+    """Dollars the Meter has spent so far; 0 for what it cannot price (an unpriced or fake model)."""
+    cost = meter.cost_so_far
+    return 0.0 if cost is None else float(cost)
+
+
+def _frame_from_words(text: str, ctx: ToolContext, deps: PlannerDeps) -> Frame:
     """AGENT_PLANNER: the model picks each field from enumerated values; anything else is refused."""
     from engine.agent.untrusted import clean_text
     from engine.generative.contracts import GenerativePurpose
@@ -626,14 +680,13 @@ def _frame_from_words(text: str, ctx: ToolContext, deps: PlannerDeps) -> tuple[F
         isinstance(budget, bool) or not isinstance(budget, int | float) or float(budget) not in amounts
     ):
         raise unparsed
-    frame = Frame(
+    return Frame(
         use_case_id=use_case,
         objective=objective,
         channel=channel,
         budget_inr=None if budget is None else float(budget),
         source="words",
     )
-    return frame, 1
 
 
 # ---------------------------------------------------------------------------
@@ -732,37 +785,75 @@ def _size(state: PlannerState, ctx: ToolContext, deps: PlannerDeps) -> PlannerSt
             "The scoring run did not record who may be contacted on each channel (its use case sets no "
             "actions.suppression.channels), or nobody on it may be contacted.",
         )
+    held_back_value = contact.output.get("held_back_rows")
+    if held_back_value is None:
+        raise _stop(
+            PLANNER_NO_CANDIDATE,
+            "The scoring run recorded no count of its held-back group, so the test cannot be sized on the "
+            "people it will compare. Score the file again.",
+        )
+    held_back = int(held_back_value)
+    # The test compares everyone the campaign holds back or contacts, as the product's own preview sizes it
+    # (`realised.population_rows`): plan_test splits this population by the holdout share itself.
+    population = eligible + held_back
     holdout = _holdout_facts(config, ctx)
-    # Measured campaigns of the use case, newest first: the base rate and the narrative's cycles.
+    # Measured campaigns of the use case, newest first: the outcome kind, the base rate and the narrative.
     state, measured = _measured_campaigns(state, ctx, deps, frame)
+    reports = {campaign_id: state.evidence[name].output.get("report") or {} for name, campaign_id in measured}
+    kind: Literal["binary", "continuous"] = "binary"
+    if measured:
+        newest = reports[measured[0][1]]
+        kind = "continuous" if newest.get("outcome_kind") == "continuous" else "binary"
     base_rate: float | None = None
     base_source: str | None = None
     baseline: str | None = None
-    for name, campaign_id in measured:
-        report = state.evidence[name].output.get("report") or {}
-        if report.get("control_rate") is not None:
-            base_rate = float(report["control_rate"])
-            base_source = f"the held-back group of campaign {campaign_id}"
-            baseline = campaign_id
-            break
-    share = min(0.5, holdout.in_force)
-    state, power = _call(
-        state,
-        ctx,
-        deps,
-        "plan_test",
-        "plan_test",
-        {"eligible": eligible, "base_rate": base_rate, "holdout_shares": [share], "direction": "up"},
-    )
-    point = (power.output.get("points") or [{}])[0]
-    detectable = point.get("mde_pp")
-    detectable_pp = None if detectable is None else _round_up(float(detectable))
-    mde = frame.mde_pp if frame.mde_pp is not None else detectable_pp
-    start = run.finished_at
+    detectable_pp: float | None = None
+    if kind == "binary":
+        # The card's own campaign's held-back rate when it has one, else the newest measured campaign's.
+        order = [campaign_id for _, campaign_id in measured]
+        if frame.card_campaign_id in order:
+            order.remove(str(frame.card_campaign_id))
+            order.insert(0, str(frame.card_campaign_id))
+        for campaign_id in order:
+            report = reports[campaign_id]
+            if report.get("outcome_kind", "binary") == "binary" and report.get("control_rate") is not None:
+                base_rate = float(report["control_rate"])
+                base_source = f"the held-back group of campaign {campaign_id}"
+                baseline = campaign_id
+                break
+        share = min(0.5, holdout.in_force)
+        state, power = _call(
+            state,
+            ctx,
+            deps,
+            "plan_test",
+            "plan_test",
+            {"eligible": population, "base_rate": base_rate, "holdout_shares": [share], "direction": "up"},
+        )
+        point = (power.output.get("points") or [{}])[0]
+        detectable = point.get("mde_pp")
+        detectable_pp = None if detectable is None else _round_up(float(detectable))
+        mde = frame.mde_pp if frame.mde_pp is not None else detectable_pp
+    else:
+        if frame.mde_pp is not None:
+            raise _stop(
+                PLANNER_NO_CANDIDATE,
+                f"{config.name}'s campaigns are measured as an amount, so the smallest effect is given in its "
+                "own unit, not in percentage points. Register the plan on the campaign page "
+                "(POST /campaigns/{id}/plan) with mde_value and outcome_sd.",
+                422,
+            )
+        mde = None
+    # The window counts from the later of the run's finish and now: a list drafted late still has its whole
+    # window after the draft (and the approval re-checks it against its own time).
+    start = max(run.finished_at, ctx.clock())
     size = Size(
         run_id=run.run_id,
         training_run_id=None if trained is None else trained.run_id,
         eligible_rows=eligible,
+        held_back_rows=held_back,
+        population_rows=population,
+        outcome_kind=kind,
         holdout_fraction=holdout.in_force,
         holdout_scope=holdout.scope,
         outcome_column=target_of(config),
@@ -788,13 +879,16 @@ def _round_up(value: float) -> float:
 def _measured_campaigns(
     state: PlannerState, ctx: ToolContext, deps: PlannerDeps, frame: Frame
 ) -> tuple[PlannerState, list[tuple[str, str]]]:
-    """`measure` on the use case's campaigns (the card's own first), keeping the final measured ones."""
+    """`measure` on the use case's campaigns, newest first (by when each was opened), keeping the final measured
+    ones. The order is time's alone: the narrative's "last measured campaign" and its series rest on it; the
+    card's own campaign is preferred only for the base rate (in SIZE)."""
     if ctx.campaigns is None:
         return state, []
-    ordered = [c.campaign_id for c in ctx.campaigns.list(use_case_id=frame.use_case_id, limit=None)]
-    if frame.card_campaign_id is not None and frame.card_campaign_id in ordered:
-        ordered.remove(frame.card_campaign_id)
-        ordered.insert(0, frame.card_campaign_id)
+    campaigns = ctx.campaigns.list(use_case_id=frame.use_case_id, limit=None)
+    ordered = [
+        c.campaign_id
+        for c in sorted(campaigns, key=lambda item: (item.created_at, item.campaign_id), reverse=True)
+    ]
     found: list[tuple[str, str]] = []
     for campaign_id in ordered:
         if len(found) >= MAX_CYCLES:
@@ -889,6 +983,9 @@ def _payload(state: PlannerState, candidate: Candidate) -> CampaignPlanPayload:
     plan = TestPlanInput(
         metric=f"{size.outcome_column} within {size.outcome_window_days} days",
         outcome_column=size.outcome_column,
+        # An amount is planned as an amount (never a yes/no plan for revenue): its smallest effect and spread
+        # are given in its own unit on the campaign page, so they are left open here.
+        outcome_kind=size.outcome_kind,
         outcome_window_days=size.outcome_window_days,
         analysis_date=size.analysis_date,
         mde_pp=size.mde_pp,
@@ -992,6 +1089,12 @@ def evidence_index(state: PlannerState, proposals: Mapping[str, str]) -> Evidenc
             )
         labels[f"{newest.evidence_id}:label"] = newest.label
         subjects[f"{newest.evidence_id}:label"] = "the last measured campaign's result"
+        card = state.frame.card_campaign_id if state.frame is not None else None
+        if card is not None and f"measure:{card}" in measured[1:]:  # an older campaign the warning is about
+            about = state.evidence[f"measure:{card}"]
+            labels[f"{about.evidence_id}:label"] = about.label
+            subjects[f"{about.evidence_id}:label"] = "the result of the campaign the warning is about"
+        # Oldest first, in the order the campaigns were opened (`measured` is newest first).
         points = [
             _interval((state.evidence[name].output.get("report") or {}).get("absolute_lift"))
             for name in reversed(measured)
@@ -1043,15 +1146,26 @@ def _direction_of(interval: Interval) -> str:
     return "gt" if interval.low > 0 else ("lt" if interval.high < 0 else "eq")
 
 
+@dataclass
+class _Spoken:
+    """What AGENT_NARRATIVE gave: the model's answer (None: no model, or it failed), and its cost."""
+
+    raw: str | None = None
+    error: str | None = None
+    calls: int = 0
+    cost_usd: float = 0.0
+
+
 def _model_narrative(
-    state: PlannerState, index: EvidenceIndex, ctx: ToolContext, deps: PlannerDeps
-) -> str | None:
-    """AGENT_NARRATIVE: the model's structured narrative, or None when there is no model or it failed."""
+    state: PlannerState, index: EvidenceIndex, ctx: ToolContext, meter: Meter | None
+) -> _Spoken:
+    """AGENT_NARRATIVE: the model's structured narrative. No model: nothing; an AI service or budget error is
+    recorded as such (`error`), not as a malformed claim, and the rules-only summary is written."""
     from engine.generative.contracts import GenerativePurpose
     from engine.generative.prompts import load_prompt, render
 
-    if deps.meter is None:
-        return None
+    if meter is None:
+        return _Spoken()
     evidence = {
         "arms": index.arms,
         "comparisons": [
@@ -1081,33 +1195,67 @@ def _model_narrative(
         load_prompt("agent_narrative", ctx.config_root),
         {"evidence": json.dumps(evidence, sort_keys=True), "state": json.dumps(draft, sort_keys=True)},
     )
+    calls, spent = meter.calls, _spent(meter)
+    spoken = _Spoken()
     try:
-        return deps.meter.complete(rendered, GenerativePurpose.AGENT_NARRATIVE).text
-    except Exception:  # an LLM or budget error: the rules-only summary is written instead
-        return ""
+        spoken.raw = meter.complete(rendered, GenerativePurpose.AGENT_NARRATIVE).text
+    except Exception as exc:  # an LLM or budget error: the rules-only summary is written instead
+        spoken.error = str(getattr(exc, "code", None) or type(exc).__name__)[:64]
+    spoken.calls = meter.calls - calls
+    spoken.cost_usd = max(0.0, _spent(meter) - spent)
+    return spoken
+
+
+def _stored_draft(ctx: ToolContext, proposal_id: str) -> Proposal | None:
+    """The proposal a DRAFT interrupted after drafting it left in the store, or None."""
+    from engine.agentic.proposals import ProposalStore
+
+    try:
+        return ProposalStore(ctx.storage).get(proposal_id)
+    except AgenticError:
+        return None
 
 
 def _draft(state: PlannerState, ctx: ToolContext, deps: PlannerDeps) -> PlannerState:
-    from engine.agentic.proposals import submit_proposal
+    from engine.agentic.proposals import new_proposal_id, submit_proposal
 
     selected = state.selected
     assert selected is not None
+    reserved = state.reserved_proposal_id
+    if reserved is not None:
+        stored = _stored_draft(ctx, reserved)
+        if stored is not None:  # a crash after the proposal was drafted: the same proposal, not a second
+            narrative = None if stored.narrative is None else Narrative.model_validate(stored.narrative)
+            return state.model_copy(
+                update={
+                    "proposal_id": stored.proposal_id,
+                    "proposal_status": stored.status,
+                    "payload_digest": stored.payload_digest,
+                    "narrative": narrative,
+                }
+            )
+        if ctx.ledger is not None and ctx.ledger.proposal_entries(reserved):
+            reserved = None  # recorded on the ledger but never stored: a fresh id, so no id has two drafts
+    if reserved is None:
+        # Written down before drafting, so a resumed DRAFT finds the proposal this one makes.
+        reserved = new_proposal_id()
+        state = state.model_copy(update={"reserved_proposal_id": reserved})
+        ctx.storage.write_model(state_key(state.plan_id), state)
     payload = _payload(state, selected).model_dump(mode="json")
-    holder: dict[str, Any] = {"calls": 0}
+    holder: dict[str, Any] = {}
+    meter = deps.narrative_meter(None if state.frame is None else state.frame.use_case_id)
 
     def narrate(proposal_id: str, status: str) -> dict[str, Any]:
         action = f"open a campaign for this list on {selected.channel} and register its test plan"
         index = evidence_index(state, {proposal_id: action} if status == "pending" else {})
-        raw = _model_narrative(state, index, ctx, deps)
-        if deps.meter is not None:
-            holder["calls"] = 1
+        spoken = _model_narrative(state, index, ctx, meter)
         narrative = verify_narrative(
-            raw if raw is not None else None,
+            spoken.raw,
             index,
             rules=rules_narrative(index),
             guardrails=guardrails_for(ctx.config_root),
         )
-        holder["narrative"] = narrative
+        holder["spoken"], holder["narrative"] = spoken, narrative
         return narrative.model_dump(mode="json")
 
     proposal = submit_proposal(
@@ -1117,14 +1265,18 @@ def _draft(state: PlannerState, ctx: ToolContext, deps: PlannerDeps) -> PlannerS
         evidence_ids=state.evidence_ids,
         narrate=narrate,
         ledger_refs={"plan_id": state.plan_id},
+        proposal_id=reserved,
     )
+    spoken = holder.get("spoken") or _Spoken()
     return state.model_copy(
         update={
             "proposal_id": proposal.proposal_id,
             "proposal_status": proposal.status,
             "payload_digest": proposal.payload_digest,
             "narrative": holder.get("narrative"),
-            "llm_calls": state.llm_calls + int(holder["calls"]),
+            "narrative_error": spoken.error,
+            "llm_calls": state.llm_calls + spoken.calls,
+            "llm_cost_usd": round(state.llm_cost_usd + spoken.cost_usd, 6),
         }
     )
 
@@ -1139,7 +1291,8 @@ class ExecuteActions:
     build_treat_list: Callable[[str], int]
     """The run's treat list (`ensure_treat_list`); returns its rows."""
     open_campaign: Callable[[str, int], str]
-    """The run's campaign with this outcome window (`open_campaign`, as `POST /campaigns`); returns its id."""
+    """The run's campaign with this outcome window (`open_campaign`, as `POST /campaigns`), its treatment
+    starting now (at the approval); returns its id."""
     register_plan: Callable[[str, TestPlanInput], str]
     """The campaign's test plan (`POST /campaigns/{id}/plan`'s function); returns the plan hash."""
     measure_schedule: Callable[[str], str | None] = lambda _use_case: None
@@ -1163,7 +1316,7 @@ def find_plan_for_proposal(ctx: ToolContext, proposal_id: str) -> PlannerState |
 
 def execute_plan(proposal: Proposal, ctx: ToolContext, actions: ExecuteActions) -> str:
     """Carry out an approved campaign plan; returns the frozen plan hash (the approval's `result_ref`)."""
-    from engine.agentic.ledger import CAMPAIGN_PLAN_EXECUTED, TEST_PLAN_FROZEN
+    from engine.agentic.ledger import CAMPAIGN_PLAN_EXECUTED, TEST_PLAN_FROZEN, holdout_commitment
 
     found = find_plan_for_proposal(ctx, proposal.proposal_id)
     if found is None:
@@ -1190,6 +1343,17 @@ def execute_plan(proposal: Proposal, ctx: ToolContext, actions: ExecuteActions) 
                     "plan for the next run.",
                     status=409,
                 )
+        if done.campaign_id is None:
+            window = int(payload.test_plan.outcome_window_days or 0)
+            earliest = (ctx.clock() + timedelta(days=window)).date()
+            if payload.test_plan.analysis_date < earliest:
+                raise AgenticError(
+                    "PROPOSAL_STALE",
+                    f"The campaign would start now, so its {window}-day outcome window closes on "
+                    f"{earliest.isoformat()}, after the analysis date this plan fixed "
+                    f"({payload.test_plan.analysis_date.isoformat()}). Draft the plan again so the date fits.",
+                    status=409,
+                )
         state = _save(ctx, state, "EXECUTE")
         if done.treat_list_rows is None:
             done = done.model_copy(update={"treat_list_rows": actions.build_treat_list(payload.run_id)})
@@ -1213,7 +1377,7 @@ def execute_plan(proposal: Proposal, ctx: ToolContext, actions: ExecuteActions) 
                         "campaign_id": campaign_id,
                         "plan_hash": plan_hash,
                         "plan_id": state.plan_id,
-                        **_holdout_commitment(ctx, campaign_id),
+                        **holdout_commitment(ctx, campaign_id),
                     },
                 )
             done = done.model_copy(update={"plan_hash": plan_hash})
@@ -1249,24 +1413,6 @@ def execute_plan(proposal: Proposal, ctx: ToolContext, actions: ExecuteActions) 
         _save(ctx, state, "DONE")
         assert done.plan_hash is not None
         return done.plan_hash
-
-
-def _holdout_commitment(ctx: ToolContext, campaign_id: str) -> dict[str, Any]:
-    """The frozen plan's holdout commitment, as M132's `test_plan.frozen` records it: scope, epoch, salt id."""
-    campaign = None if ctx.campaigns is None else ctx.campaigns.get(campaign_id)
-    if campaign is None:
-        return {}
-    body: dict[str, Any] = {
-        "plan_version": campaign.test_plan_version,
-        "holdout_scope": campaign.holdout_scope,
-        "holdout_epoch": campaign.holdout_epoch,
-    }
-    if campaign.holdout_scope != "run" and ctx.platform_engine is not None:
-        from engine.holdout.salt import HoldoutLedger, salt_id
-
-        fingerprint = HoldoutLedger(ctx.platform_engine).fingerprint()
-        body["holdout_salt_id"] = None if fingerprint is None else salt_id(fingerprint)
-    return body
 
 
 def outcome_of(state: PlannerState) -> tuple[str, tuple[str, ...], str | None]:

@@ -12,6 +12,16 @@ const esc = (value) =>
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
 
+/**
+ * Whether the deployment offers the planner, from the `/auth/me` answer the page already has: the planner's
+ * routes are declared (and so listed among the permissions) only while `agentic.enabled` is on. No answer, or
+ * no such route listed: not offered, and nothing is asked of the server.
+ */
+export function plannerOffered(me) {
+  const permissions = me && Array.isArray(me.permissions) ? me.permissions : [];
+  return permissions.some((p) => p && p.method === "POST" && p.path === "/agentic/plans");
+}
+
 /** The card codes a campaign can answer (the server says the others plan nothing, and why). */
 export const PLANNABLE = Object.freeze([
   "CAMPAIGN_NO_CONTROL",

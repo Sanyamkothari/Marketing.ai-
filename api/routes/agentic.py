@@ -11,12 +11,14 @@ exist and the API is byte-identical to Plan J's (the `PLAN-K` hook in `api/main.
 | `POST /agentic/proposals/{proposal_id}/reject` | Approver, audited | Rejects it. |
 | `POST /agentic/plans` | Analyst, audited | M139: the campaign planner from a warning card, the goal form or a goal in words (`engine.agentic.planner`); runs to the interrupt and answers the plan with its proposal, or the code it stopped with. Words need an AI service (`409 AI_NOT_CONNECTED`); a card and the form do not. |
 | `GET /agentic/plans/{plan_id}` | Viewer | M139: where a plan stands: its frame, the evidence, the candidates, the policy's decisions, the proposal, the narrative and, once approved, what was carried out. |
+| `POST /agentic/plans/{plan_id}/resume` | Analyst, audited | M139: a plan a crash left part-way continues from the last step it wrote (a plan at its interrupt or end is answered as it is); a draft interrupted after its proposal was made reuses that proposal. |
 
 There is no route that approves on an agent's behalf: an agent drafts through the tool registry
 (`engine.agentic.registry`) or the planner, and only a signed-in person approves here. An approved campaign
 plan the planner drafted is carried out through the product's own functions (M139): the treat list
-(`ensure_treat_list`), the campaign (`open_campaign`, the engine half of `POST /campaigns`) and its test plan
-(`api.routes.campaigns.register_plan`). Refusals answer with the policy's code:
+(`ensure_treat_list`), the campaign (`open_campaign`, the engine half of `POST /campaigns`, its treatment starting
+at the approval) and its test plan (`api.routes.campaigns.register_plan`). The planner's language-model calls are
+metered under the use case's own `generative.llm` and `generative.budget` (`get_planner_deps`). Refusals answer with the policy's code:
 `403 POLICY_ROLE_SEPARATION` for the person it was proposed for, `409 POLICY_*` when a rule refuses it now,
 `409 PROPOSAL_TAMPERED` when the stored proposal is not the one the ledger recorded at draft time,
 `409 PROPOSAL_STALE`, `PROPOSAL_EXPIRED` or `PROPOSAL_NOT_PENDING`, `404 PROPOSAL_NOT_FOUND`.
@@ -26,7 +28,7 @@ from __future__ import annotations
 
 from typing import Annotated, Any, Final
 
-from fastapi import APIRouter, HTTPException, Query, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import Field
 
 from api.access import PrincipalDep, get_platform_engine, platform_data_dir, set_audit_context
@@ -44,6 +46,7 @@ from engine.agentic.planner import (
     PlanRequest,
     execute_plan,
     load_plan,
+    resume_plan,
     start_plan,
 )
 from engine.agentic.policy import TestPlanPayload
@@ -56,7 +59,7 @@ from engine.settings import Settings
 from engine.storage import Storage
 from engine.utils.time import utc_now
 
-__all__ = ["POLICIES", "ProposalDecisionRequest", "router"]
+__all__ = ["POLICIES", "ProposalDecisionRequest", "get_planner_deps", "router"]
 
 router: APIRouter = APIRouter(tags=["agentic"])
 
@@ -89,6 +92,13 @@ POLICIES: Final[dict[tuple[str, str], RoutePolicy]] = {
         role=Role.VIEWER,
         action="agentic.plan_read",
         purpose="see a drafted campaign plan",
+        object_type="plan",
+        object_param="plan_id",
+    ),
+    ("POST", "/agentic/plans/{plan_id}/resume"): RoutePolicy(
+        role=Role.ANALYST,
+        action="agentic.plan_resume",
+        purpose="continue a campaign plan a failure left part-way",
         object_type="plan",
         object_param="plan_id",
     ),
@@ -266,38 +276,58 @@ class PlanView(StrictBase):
     proposal: Proposal | None = None
 
 
-def _planner_deps(request: Request, storage: Storage, settings: Settings) -> PlannerDeps:
-    """The registry, the model registry for the challenger card, and - when an AI service answers - the
-    Product AI through a Meter (`AGENT_PLANNER`, `AGENT_NARRATIVE`). No AI service: no meter, and the planner
-    refuses words with `AI_NOT_CONNECTED` and writes the rules-only narrative."""
-    from api.deps import get_registry
-    from engine.agentic.tools import default_registry
+def _meter(storage: Storage, settings: Settings, llm: Any, budget: Any, job_id: str) -> Any:
+    """The Product AI through a Meter with `llm` and `budget`, or None when no AI service answers."""
     from engine.ai_service import AiNotConnectedError, resolve_client
     from engine.aws_connection import profile_in_force
-    from engine.config import BudgetConfig, LlmConfig
     from engine.generative.budget import Meter
 
-    client: Any = getattr(request.app.state, "agentic_llm_client", None)  # an in-process test's fake
-    llm = LlmConfig()
-    if client is None:
+    try:
+        resolved = resolve_client(
+            llm, slot="product", storage=storage, settings=settings, profile=profile_in_force()
+        )
+    except AiNotConnectedError:
+        return None
+    return Meter(resolved.client, job_id=job_id, llm=resolved.llm, budget=budget)
+
+
+def get_planner_deps(
+    request: Request, storage: StorageDep, root: ConfigRootDep, settings: SettingsDep
+) -> PlannerDeps:
+    """The planner's dependencies: the registry, the model registry for the challenger card, and the Product AI.
+
+    The language model is metered as every other metered route meters it (`api.routes.agent`,
+    `api.routes.generative`): under the use case's own `generative.llm` and `generative.budget`. The
+    narrative is written once FRAME knows the use case (`PlannerDeps.meter_for`). Goal words come before any
+    use case is known, so they are read with the deployment's configured AI (the first use case whose file
+    names Bedrock, as the AI service screen reads it; else the defaults) and the default budget, for that
+    one call. No AI service: no meter, so words are refused with `AI_NOT_CONNECTED` and the narrative is the
+    rules-only summary. Tests replace this whole dependency (`app.dependency_overrides`)."""
+    from api.deps import get_registry
+    from engine.agentic.tools import default_registry
+    from engine.ai_service import yaml_bedrock
+    from engine.config import BudgetConfig, ConfigError, LlmConfig, load_use_case
+
+    job_id = f"agentic_plan_{utc_now():%Y%m%d%H%M%S}"
+
+    def meter_for(use_case_id: str) -> Any:
         try:
-            resolved = resolve_client(
-                llm, slot="product", storage=storage, settings=settings, profile=profile_in_force()
-            )
-        except AiNotConnectedError:
-            resolved = None
-        if resolved is not None:
-            client, llm = resolved.client, resolved.llm
-    meter = (
-        None
-        if client is None
-        else Meter(client, job_id=f"agentic_plan_{utc_now():%Y%m%d%H%M%S}", llm=llm, budget=BudgetConfig())
-    )
+            generative = load_use_case(use_case_id, root).generative
+        except ConfigError:
+            return None
+        return _meter(storage, settings, generative.llm, generative.budget, job_id)
+
+    words = _meter(storage, settings, yaml_bedrock(root) or LlmConfig(), BudgetConfig(), job_id)
     try:
         model_registry: Any = get_registry(request)
     except Exception:  # no model registry on this deployment: no challenger card can be drawn
         model_registry = None
-    return PlannerDeps(registry=default_registry(), meter=meter, model_registry=model_registry)
+    return PlannerDeps(
+        registry=default_registry(), meter=words, model_registry=model_registry, meter_for=meter_for
+    )
+
+
+PlannerDepsDep = Annotated[PlannerDeps, Depends(get_planner_deps)]
 
 
 def _plan_view(storage: Storage, state: PlannerState) -> PlanView:
@@ -322,12 +352,13 @@ def draft_plan(
     root: ConfigRootDep,
     settings: SettingsDep,
     principal: PrincipalDep,
+    deps: PlannerDepsDep,
 ) -> PlanView:
     """Run the planner to its interrupt. A plan that stops answers its code (`PLANNER_*`, `AI_NOT_CONNECTED`)
     and is kept, so `GET /agentic/plans/{id}` shows how far it went."""
     ctx = _context(request, storage, root, settings, principal)
     try:
-        state = start_plan(body, ctx, _planner_deps(request, storage, settings))
+        state = start_plan(body, ctx, deps)
     except AgenticError as exc:
         set_audit_context(request, details={"reason_code": exc.code})
         raise _http(exc) from exc
@@ -354,6 +385,36 @@ def read_plan(plan_id: str, storage: StorageDep, root: ConfigRootDep, principal:
         )
     except AgenticError as exc:
         raise _http(exc) from exc
+    return _plan_view(storage, state)
+
+
+@router.post(
+    "/agentic/plans/{plan_id}/resume",
+    response_model=PlanView,
+    responses=_ERRORS,
+    summary="Continue a campaign plan a failure left part-way",
+)
+def resume_a_plan(
+    plan_id: str,
+    request: Request,
+    storage: StorageDep,
+    root: ConfigRootDep,
+    settings: SettingsDep,
+    principal: PrincipalDep,
+    deps: PlannerDepsDep,
+) -> PlanView:
+    """The plan continued from the last step it wrote (each step is written as it completes). A plan waiting
+    for a person, done or stopped is answered as it is; a stop on resuming answers its code, like a draft."""
+    ctx = _context(request, storage, root, settings, principal)
+    try:
+        state = resume_plan(plan_id, ctx, deps)
+    except AgenticError as exc:
+        set_audit_context(request, details={"reason_code": exc.code})
+        raise _http(exc) from exc
+    set_audit_context(request, object_id=state.plan_id)
+    if state.stopped is not None:
+        set_audit_context(request, object_id=state.plan_id, details={"reason_code": state.stopped.code})
+        raise http_error(state.stopped.status, state.stopped.code, state.stopped.message)
     return _plan_view(storage, state)
 
 
@@ -388,7 +449,8 @@ def _execute_campaign_plan(proposal: Proposal, request: Request, storage: Storag
                 record,
                 load_use_case(record.use_case_id, root),
                 finished_at=record.finished_at,
-                treatment_start=None,
+                # Nobody is contacted before the approval: the measured window starts now.
+                treatment_start=max(record.finished_at, ctx.clock()),
                 bands=None,
                 outcome_window_days=window,
                 name=None,

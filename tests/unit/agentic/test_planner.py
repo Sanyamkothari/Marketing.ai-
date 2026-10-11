@@ -4,7 +4,7 @@ campaign-plan shape it drafts and the one policy rule it changes (`test.register
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, get_args
+from typing import Any, ClassVar, get_args
 
 import pytest
 from pydantic import ValidationError
@@ -129,3 +129,108 @@ def test_a_new_campaign_with_no_test_plan_or_a_cited_hash_is_refused(config_root
     for payload in (_new_campaign(test_plan=None), _new_campaign(test_plan_hash="c" * 64)):
         decision = _decide(payload, config_root)["test.registered"]
         assert not decision.allowed and decision.code == "POLICY_TEST_NOT_REGISTERED", payload
+
+
+# --- measured campaigns are read in time order (M139 review) ---------------------------------------------
+def _lift(value: float) -> dict[str, Any]:
+    return {"value": value, "ci_low": value - 0.004, "ci_high": value + 0.004, "confidence_level": 0.95}
+
+
+class _Campaigns:
+    """Three measured campaigns, listed with the oldest (the one the warning is about) first."""
+
+    def __init__(self) -> None:
+        from datetime import UTC, datetime
+        from types import SimpleNamespace
+
+        opened = {"c_1": 1, "c_2": 2, "c_3": 3}
+        self.rows = {
+            cid: SimpleNamespace(
+                campaign_id=cid, status="measured", created_at=datetime(2026, day, 1, tzinfo=UTC)
+            )
+            for cid, day in opened.items()
+        }
+
+    def list(self, **_kwargs: Any) -> list[Any]:
+        return [self.rows["c_1"], self.rows["c_3"], self.rows["c_2"]]
+
+    def get(self, campaign_id: str) -> Any:
+        return self.rows.get(campaign_id)
+
+
+class _Measures:
+    effects: ClassVar[dict[str, float]] = {"c_1": 0.01, "c_2": 0.03, "c_3": 0.05}
+
+    def call(self, _tool: str, given: Any, _ctx: Any) -> Any:
+        from types import SimpleNamespace
+
+        cid = given["campaign_id"]
+        report = {"outcome_column": "reactivated_90d", "absolute_lift": _lift(self.effects[cid])}
+        return SimpleNamespace(
+            evidence_id=f"ev_{cid[-1] * 16}",
+            label="Causal",
+            output={"campaign_id": cid, "measured": True, "report": report},
+        )
+
+
+def _state_with_card_on_the_oldest() -> Any:
+    from datetime import UTC, date, datetime
+    from types import SimpleNamespace
+
+    from engine.agentic.planner import Frame, GoalForm, PlannerDeps, PlannerState, Size, _measured_campaigns
+
+    now = datetime(2026, 10, 10, tzinfo=UTC)
+    frame = Frame(
+        use_case_id="win-back-campaign", objective="protect_holdout", source="card", card_campaign_id="c_1"
+    )
+    state = PlannerState(
+        plan_id="plan_0000000000000001",
+        created_at=now,
+        updated_at=now,
+        created_by="u_asha",
+        actor="u_asha",
+        request=PlanRequest(goal=GoalForm(use_case_id="win-back-campaign")),
+        step="FRAME",
+        frame=frame,
+    )
+    ctx = SimpleNamespace(campaigns=_Campaigns())
+    state, measured = _measured_campaigns(state, ctx, PlannerDeps(registry=_Measures()), frame)  # type: ignore[arg-type]
+    size = Size(
+        run_id="r_1",
+        training_run_id=None,
+        eligible_rows=100,
+        holdout_fraction=0.1,
+        holdout_scope="run",
+        outcome_column="reactivated_90d",
+        outcome_window_days=90,
+        analysis_date=date(2027, 1, 8),
+        base_rate=None,
+        base_rate_source=None,
+        mde_pp=None,
+        detectable_mde_pp=None,
+        baseline_campaign_id=None,
+        measured_campaigns=tuple(cid for _, cid in measured),
+    )
+    return state.model_copy(update={"size": size})
+
+
+def test_measured_campaigns_stay_newest_first_when_the_card_is_on_an_older_one() -> None:
+    state = _state_with_card_on_the_oldest()
+    assert state.size.measured_campaigns == ("c_3", "c_2", "c_1")
+
+
+def test_the_narrative_names_the_newest_result_and_a_trend_in_time_order() -> None:
+    from engine.agentic.claims import rules_narrative, verify_narrative
+    from engine.agentic.planner import evidence_index
+
+    index = evidence_index(_state_with_card_on_the_oldest(), {})
+    (comparison,) = index.comparisons
+    assert comparison.left.startswith("ev_3333333333333333") and comparison.difference.estimate == 0.05
+    assert index.label_subjects["ev_3333333333333333:label"] == "the last measured campaign's result"
+    assert (
+        index.label_subjects["ev_1111111111111111:label"] == "the result of the campaign the warning is about"
+    )
+    (series,) = index.series.values()
+    assert [round(p.estimate, 3) for p in series.points] == [0.01, 0.03, 0.05], "oldest first"
+    text = verify_narrative(None, index, rules=rules_narrative(index)).text
+    assert "has risen" in text and "+5.0 percentage points" in text

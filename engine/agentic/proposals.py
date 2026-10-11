@@ -65,6 +65,7 @@ __all__ = [
     "draft_test_plan",
     "dry_test_plan",
     "ledger_mismatch",
+    "new_proposal_id",
     "proposal_key",
     "submit_proposal",
 ]
@@ -236,6 +237,14 @@ def ledger_mismatch(proposal: Proposal, entries: Sequence[Any]) -> tuple[str | N
     return None, None
 
 
+_PROPOSAL_ID: Final[re.Pattern[str]] = re.compile(r"prop_[0-9a-f]{16}")
+
+
+def new_proposal_id() -> str:
+    """A fresh proposal id (`prop_` and sixteen hex digits)."""
+    return f"prop_{secrets.token_hex(8)}"
+
+
 def submit_proposal(
     kind: str,
     payload: Mapping[str, Any],
@@ -245,6 +254,7 @@ def submit_proposal(
     proposed_by: str | None = None,
     narrate: Callable[[str, ProposalStatus], Mapping[str, Any] | None] | None = None,
     ledger_refs: Mapping[str, str] | None = None,
+    proposal_id: str | None = None,
 ) -> Proposal:
     """Draft a proposal: run the policy, record it on the ledger, store it. Never executes anything.
 
@@ -252,7 +262,9 @@ def submit_proposal(
     written once the policy has decided, so a recommendation can name the proposal and only an allowed one.
     It is kept beside the payload, never in it (the payload digest excludes prose), and its digest goes on
     the ledger entry, so the stored wording is checked like the payload. `ledger_refs` adds ids such as the
-    planner's `plan_id` to the ledger entry.
+    planner's `plan_id` to the ledger entry. `proposal_id` is an id the caller made with
+    :func:`new_proposal_id` and wrote down first (the planner, so a draft resumed after a crash reuses it
+    instead of drafting a second proposal); None makes one here.
     """
     from engine.agentic.config import load_policy, policy_version
     from engine.agentic.ledger import PROPOSAL_DRAFTED, PROPOSAL_REFUSED
@@ -290,7 +302,10 @@ def submit_proposal(
     decisions = evaluate(subject, build_context(subject, tool_ctx, policy), rules=rules)
     status: ProposalStatus = "pending" if allowed(decisions) else "refused"
     now = tool_ctx.clock()
-    proposal_id = f"prop_{secrets.token_hex(8)}"
+    if proposal_id is None:
+        proposal_id = new_proposal_id()
+    elif not _PROPOSAL_ID.fullmatch(proposal_id):
+        raise AgenticError("TOOL_INPUT_INVALID", "A proposal id is prop_ and sixteen hex digits.", status=422)
     narrative = None if narrate is None else narrate(proposal_id, status)
     narrative_json: dict[str, Any] | None = None if narrative is None else jsonable(dict(narrative))
     proposal = Proposal(

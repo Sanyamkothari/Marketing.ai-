@@ -1,13 +1,16 @@
 // Plan K M139 (DEC-1406): "Draft a plan" under the Results page's warning cards - no new top-bar item (Plan H).
 //
-// The button appears only where the server offers the planner: the `/agentic` routes answer (they are not
-// mounted while `agentic.enabled` is off) and `canAccess("POST", "/agentic/plans")` holds (an Analyst). Clicking it asks the server to draft (`POST /agentic/plans`); the drafted plan is drawn
+// The button appears only where the server offers the planner: `/auth/me` (read once at boot by the production
+// module) lists `POST /agentic/plans` - the route is declared only while `agentic.enabled` is on, so with the
+// switch off this module sends no request at all - and `canAccess("POST", "/agentic/plans")` holds (an Analyst).
+// Clicking it asks the server to draft (`POST /agentic/plans`); the drafted plan is drawn
 // under the card by `view.js` from the server's answer. Approving goes through the same route an Approver
 // uses anywhere (`POST /agentic/proposals/{id}/approve`); nothing is sent from here.
 
 import { API_BASE } from "../../api.js";
+import { ensureMe } from "../production/session.js";
 import { canAccess } from "../router.js";
-import { cardRequest, draftButtonHtml, planHtml, refusalHtml } from "./view.js";
+import { cardRequest, draftButtonHtml, plannerOffered, planHtml, refusalHtml } from "./view.js";
 
 async function call(path, body) {
   let response;
@@ -31,21 +34,19 @@ async function call(path, body) {
   return { ok: false, code: detail.code || `HTTP_${response.status}`, message: detail.message || "The planner could not draft a plan." };
 }
 
-// Whether this deployment offers the planner at all: the `/agentic` routes exist only while `agentic.enabled` is
-// on, so one read of the proposals list answers it (a 404 means off; nothing is drawn).
-let offered = null;
-async function plannerOffered() {
-  if (offered === null) {
-    offered = fetch(`${API_BASE}/agentic/proposals?status=pending`)
-      .then((response) => response.ok)
-      .catch(() => false);
+// Whether this deployment offers the planner at all, from the `/auth/me` answer already in hand (`ensureMe`
+// reuses the boot call): no extra request, and none to a route that is not mounted.
+async function offeredHere() {
+  try {
+    return plannerOffered(await ensureMe());
+  } catch {
+    return false;
   }
-  return offered;
 }
 
 async function decorate(root) {
   if (!canAccess("POST", "/agentic/plans") || !root.querySelector("[data-attention] [data-card]")) return;
-  if (!(await plannerOffered())) return;
+  if (!(await offeredHere())) return;
   for (const entry of root.querySelectorAll("[data-attention] [data-card]")) {
     if (entry.querySelector("[data-draft-plan]")) continue;
     const card = {

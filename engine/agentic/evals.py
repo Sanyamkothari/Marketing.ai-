@@ -105,6 +105,10 @@ class Outcome(StrictBase):
     # Plan K M139: what the planner's model did, kept out of `key` (wording may vary; decisions may not).
     claim_failures: tuple[str, ...] = ()
     llm_calls: int = 0
+    cost_usd: float = 0.0
+    narrative_error: str | None = Field(
+        default=None, description="An AI service or budget error that kept the model from writing (by code)."
+    )
 
     @property
     def key(self) -> str:
@@ -135,7 +139,16 @@ class EvalReport(StrictBase):
     llm_calls: int = Field(
         description="Model calls the planner's scenarios made (M139); 0 for tool and proposal scenarios."
     )
-    cost_usd: float = Field(description="What those calls cost, from the Meter; 0.0 with none.")
+    cost_usd: float = Field(
+        description="What those calls cost, from the Meter; 0.0 with none (a call it cannot price adds 0)."
+    )
+    narrative_errors: dict[str, int] = Field(
+        default_factory=dict,
+        description=(
+            "Narratives the model could not write, by the AI service's or the budget's error code (M139). "
+            "Counted apart from claim failures: a service error is not a wrong claim."
+        ),
+    )
     claim_failures: dict[str, int] = Field(
         default_factory=dict,
         description="Narrative claim failures over every run, by code (design §4; M139). Tracked, not gated.",
@@ -180,6 +193,8 @@ def _run_planner(
             "payload_digest": payload_digest,
             "claim_failures": failures,
             "llm_calls": state.llm_calls,
+            "cost_usd": state.llm_cost_usd,
+            "narrative_error": state.narrative_error,
         }
     )
     return outcome, state.proposal_id
@@ -274,9 +289,9 @@ def pass_k(
 ) -> EvalReport:
     """Run every scenario `k` times; each passes only when all k outcomes agree and match the expectation.
 
-    Plan K M139: a planner scenario's model calls and claim failures (by code) are totalled into the report;
-    they are not part of an outcome's key, so wording that varies between runs passes, decisions that vary
-    fail.
+    Plan K M139: a planner scenario's model calls, their cost (the Meter's), its claim failures (by code) and
+    the AI service errors that kept a model from writing are totalled into the report; none is part of an
+    outcome's key, so wording that varies between runs passes, decisions that vary fail.
     """
     from engine.agentic.tools import default_registry
 
@@ -285,7 +300,9 @@ def pass_k(
     tools = registry if registry is not None else default_registry()
     results: list[ScenarioResult] = []
     calls = 0
+    cost = 0.0
     claim_failures: dict[str, int] = {}
+    narrative_errors: dict[str, int] = {}
     for scenario in scenarios:
         outcomes = [
             run_once(scenario, make_ctx, tools, principals=principals, rules=rules, planner=planner)
@@ -293,6 +310,10 @@ def pass_k(
         ]
         for outcome in outcomes:
             calls += outcome.llm_calls
+            cost += outcome.cost_usd
+            if outcome.narrative_error is not None:
+                code = outcome.narrative_error
+                narrative_errors[code] = narrative_errors.get(code, 0) + 1
             for code in outcome.claim_failures:
                 claim_failures[code] = claim_failures.get(code, 0) + 1
         passed, failure = _judge(scenario, outcomes)
@@ -315,8 +336,9 @@ def pass_k(
         pass_k=passed_count / len(results) if results else 0.0,
         llm_model_id=None if llm is None else str(getattr(llm, "model_id", None) or type(llm).__name__),
         llm_calls=calls,
-        cost_usd=0.0,
+        cost_usd=round(cost, 6),
         claim_failures=dict(sorted(claim_failures.items())),
+        narrative_errors=dict(sorted(narrative_errors.items())),
     )
 
 

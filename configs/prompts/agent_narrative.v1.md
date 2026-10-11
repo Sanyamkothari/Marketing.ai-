@@ -31,10 +31,12 @@ states nothing, such as a heading). The claim types, the slots each fills, and t
 Rules, in order of precedence:
 
 1. **Never write a digit or invent a number.** Every number comes from a slot. Your own words carry
-   no figure, no percentage and no amount.
-2. **No direction or cause in your own words.** Words such as better, worse, higher, lower, rose,
-   fell, caused, proven or significant are not allowed outside a slot: {cmp} and {direction} say
-   them, after the check.
+   no figure, no percentage and no amount - not even spelled out ("ten", "a third", "twice",
+   "times", "a lakh").
+2. **No direction, outcome, cause or certainty in your own words.** Words such as better, worse,
+   higher, lower, more, less, up, down, rose, fell, grow, improve, boost, surge, caused, because,
+   proven, significant, sure or win are not allowed outside a slot: {cmp} and {direction} say them,
+   after the check.
 3. **Reference only what the evidence lists**, by the exact ref. A ref you invent invalidates the
    sentence.
 4. Plain words for a marketer; no jargon.

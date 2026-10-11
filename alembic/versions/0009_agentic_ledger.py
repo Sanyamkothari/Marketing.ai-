@@ -1,7 +1,7 @@
 """Plan K M132: `agentic_decision_log`, the hash-chained decision ledger.
 
 Revision ID: 0009
-Revises: 0007 (becomes 0008 when Plan K M131's `0008_consent_basis` is merged before it)
+Revises: 0008 (Plan K M131's `0008_consent_basis`)
 Created: 2026-10-10
 
 WHY a table (DEC-1401): every agent proposal, every refusal, every approval and every evidence label is one
@@ -25,7 +25,6 @@ from alembic import op
 from sqlmodel.sql.sqltypes import AutoString
 
 revision: str = "0009"
-# PLAN-K (M132): chained after M131's 0008_consent_basis (one linear history); set at the M139 merge.
 down_revision: str | None = "0008"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None

@@ -8,6 +8,7 @@ the planner reads is the world's own.
 
 from __future__ import annotations
 
+from datetime import UTC
 from typing import Any
 
 import pytest
@@ -97,3 +98,79 @@ def test_a_plan_that_crashed_between_steps_resumes_from_the_last_one_written(
     assert (
         resume_plan(plan_id, ctx, PlannerDeps(registry=default_registry())) == resumed
     ), "nothing runs twice"
+
+
+def test_an_amount_outcome_is_planned_as_an_amount_never_as_a_rate(fresh_planner_world: PlannerWorld) -> None:
+    """The use case's newest measured campaign measured an amount (M102): the drafted test plan is an amount's
+    (`outcome_kind: continuous`, no rate or points), so the next cycle is not measured as yes/no; a smallest
+    effect given in points for an amount is refused with a plain reason."""
+    from engine.measurement.campaign import REPORT_FILENAME, campaign_key
+    from engine.uplift.contracts import IncrementalityReport
+
+    pw = fresh_planner_world
+    storage = pw.world.storage
+    key = campaign_key(pw.measured_campaign, REPORT_FILENAME)
+    report = storage.read_model(key, IncrementalityReport)
+    storage.write_model(
+        key,
+        report.model_copy(
+            update={
+                "outcome_kind": "continuous",
+                "treated_rate": None,
+                "control_rate": None,
+                "absolute_lift": None,
+                "incremental_conversions": None,
+                "treated_mean": 1200.0,
+                "control_mean": 1000.0,
+                "mean_difference": 200.0,
+                "mean_difference_ci": report.absolute_lift,
+            }
+        ),
+    )
+    state = _plan(pw, default_registry())
+    assert state.step == "INTERRUPT", state.stopped
+    assert (
+        state.size is not None
+        and state.size.outcome_kind == "continuous"
+        and "plan_test" not in state.evidence
+    )
+    proposal = ProposalStore(storage).get(state.proposal_id)
+    plan = CampaignPlanPayload.model_validate(proposal.payload).test_plan
+    assert plan is not None and plan.outcome_kind == "continuous"
+    assert plan.mde_pp is None and plan.base_rate is None and plan.base_rate_source is None
+    in_points = start_plan(
+        PlanRequest.model_validate(
+            {"goal": {"use_case_id": "win-back-campaign", "channel": "sms", "mde_pp": 2.0}}
+        ),
+        pw.world.context(),
+        PlannerDeps(registry=default_registry()),
+    )
+    assert in_points.stopped is not None and in_points.stopped.code == "PLANNER_NO_CANDIDATE"
+    assert "amount" in in_points.stopped.message
+
+
+def test_an_approval_too_late_for_the_drafted_analysis_date_is_stale(planner_world: PlannerWorld) -> None:
+    """The campaign starts at the approval: a draft whose analysis date would close the outcome window early
+    is refused with PROPOSAL_STALE before anything is built."""
+    import dataclasses
+    from datetime import datetime, time, timedelta
+
+    from engine.agentic.errors import AgenticError
+    from engine.agentic.planner import ExecuteActions, execute_plan
+
+    pw = planner_world
+    state = _plan(pw, default_registry())
+    proposal = ProposalStore(pw.world.storage).get(state.proposal_id)
+    plan = CampaignPlanPayload.model_validate(proposal.payload).test_plan
+    assert plan is not None and plan.outcome_window_days is not None
+    late = datetime.combine(plan.analysis_date, time(12), UTC) - timedelta(days=plan.outcome_window_days - 1)
+    made: list[str] = []
+
+    def never(*args: Any) -> Any:
+        made.append(str(args))
+        raise AssertionError("nothing is built for a stale plan")
+
+    actions = ExecuteActions(build_treat_list=never, open_campaign=never, register_plan=never)
+    with pytest.raises(AgenticError) as refused:
+        execute_plan(proposal, dataclasses.replace(pw.world.context(), clock=lambda: late), actions)
+    assert refused.value.code == "PROPOSAL_STALE" and made == []

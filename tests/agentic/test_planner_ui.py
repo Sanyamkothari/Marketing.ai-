@@ -34,6 +34,12 @@ const out = {
   underpowered: view.draftButtonHtml({ code: "PLAN_UNDERPOWERED", campaign_id: "c_1" }),
   drift: view.draftButtonHtml({ code: "DRIFT_DRIFTED", use_case_id: "win-back-campaign" }),
   request: view.cardRequest("PLAN_UNDERPOWERED", "c_1", null),
+  offered: view.plannerOffered({ permissions: [{ method: "POST", path: "/agentic/plans", allowed: true }] }),
+  offeredToAViewer: view.plannerOffered({
+    permissions: [{ method: "POST", path: "/agentic/plans", allowed: false }],
+  }),
+  switchedOff: view.plannerOffered({ permissions: [{ method: "GET", path: "/campaigns", allowed: true }] }),
+  noAnswer: view.plannerOffered(null),
 };
 process.stdout.write(JSON.stringify(out));
 """
@@ -78,3 +84,14 @@ def test_the_drafted_plan_is_drawn_from_the_servers_answer_only(
         assert number in served, f"{number} is not in the server's answer"
     assert "Draft a plan" in shown["underpowered"] and shown["drift"] == ""
     assert shown["request"] == {"card": {"code": "PLAN_UNDERPOWERED", "campaign_id": "c_1"}}
+
+
+def test_the_planner_is_offered_from_auth_me_and_probes_no_route(tmp_path: Path) -> None:
+    """Whether the deployment offers the planner comes from `/auth/me`'s permission list, which names the
+    planner's route only while `agentic.enabled` is on: with it off the module sends no request at all (no probe
+    of an unmounted route, no 404 in the console or the access log)."""
+    shown = _render({"plan": {}, "proposal": None}, tmp_path)
+    assert shown["offered"] is True and shown["offeredToAViewer"] is True
+    assert shown["switchedOff"] is False and shown["noAnswer"] is False
+    source = (VIEW.parent / "index.js").read_text(encoding="utf-8")
+    assert "/agentic/proposals?status" not in source and "ensureMe" in source

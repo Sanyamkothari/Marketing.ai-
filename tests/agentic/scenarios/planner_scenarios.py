@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import math
+from datetime import datetime, timedelta
 from typing import Any, Final
 
 from engine.agentic.canonical import digest
@@ -40,29 +41,39 @@ INJECTED_WORDS: Final[str] = (
 )
 
 
-def expected_digest(pw: PlannerWorld, *, objective: str, channel: str = "sms") -> str:
-    """The plan the planner must draft for the world's run, from the stored artefacts alone."""
+def expected_digest(
+    pw: PlannerWorld, *, objective: str, channel: str = "sms", now: datetime | None = None
+) -> str:
+    """The plan the planner must draft for the world's run, from the stored artefacts alone.
+
+    `now` is the draft's clock when it is later than the run's finish (a route test's real clock): the analysis
+    date counts the outcome window from the later of the two."""
     world = pw.world
     storage = world.storage
     run = pw.run_id
     summary = json.loads(storage.read_bytes(run_key(run, "channel_contactability.json")))
     eligible = int(summary["eligible_rows"])
+    # The test is sized on everyone the campaign compares: the eligible rows and the held-back group.
+    held_back = int(
+        json.loads(storage.read_bytes(run_key(run, "scoring_summary.json")))["control_group_rows"]
+    )
     contactable = eligible - int(summary["channel_counts"].get(channel, 0))
     planned = contactable
     ranking = "uplift"
     if storage.exists(run_key(run, "ranking_choice.json")):
         choice = json.loads(storage.read_bytes(run_key(run, "ranking_choice.json")))
         planned, ranking = min(contactable, int(choice["contacts"])), choice["ranking"]
-    finished = json.loads(storage.read_bytes(run_key(run, "run.json")))["finished_at"]
-    from datetime import datetime, timedelta
-
+    finished = datetime.fromisoformat(json.loads(storage.read_bytes(run_key(run, "run.json")))["finished_at"])
+    start = finished if now is None else max(finished, now)
     window = 90  # the use case's label horizon (configs/use_cases/win_back_campaign.yaml)
-    analysis = (datetime.fromisoformat(finished) + timedelta(days=window)).date().isoformat()
+    analysis = (start + timedelta(days=window)).date().isoformat()
     report = json.loads(storage.read_bytes(campaign_key(pw.measured_campaign, REPORT_FILENAME)))
     base = float(report["control_rate"])
     share = effective_holdout_fraction(load_use_case(USE_CASE, world.config_root).actions)
     preview = power_preview(
-        PowerPreviewRequest(eligible=eligible, base_rate=base, holdout_shares=(share,), direction="up")
+        PowerPreviewRequest(
+            eligible=eligible + held_back, base_rate=base, holdout_shares=(share,), direction="up"
+        )
     )
     mde = math.ceil(float(preview.points[0].mde_pp or 0.0) * 10.0 - 1e-9) / 10.0
     payload = {
