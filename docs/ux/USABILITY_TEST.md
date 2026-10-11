@@ -302,14 +302,66 @@ before the sessions: a defect that is on the list is a defect a participant usin
 
 ## 12. Click-count journeys
 
-An automated journey fixes the shortest path, so the click target in Plan M §0 cannot drift.
+Automated journeys fix the shortest path of each task, so the click counts cannot drift. They run in Chromium against
+the real app in the `campaigns` layout, on the validated Hillstrom demo store seeded from the committed sample (the store
+section 3 has you serve), and start at the Overview. Run them with
+`PLAYWRIGHT_BROWSERS_PATH=/opt/pw-browsers pytest tests/integration/test_usability_journeys.py -rx`
+(the seed takes about two minutes; `USABILITY_STORE=<the data folder seed_validated printed>` reuses a store you have
+already seeded). Each count below is what the screens take today; a change that adds a click fails the test, and one that
+removes a click updates the pin and this table.
 
-- **Task 1** (Overview to a saved contact list, at most 5 decisions): pinned by
-  `tests/integration/test_campaign_wizard_journey.py`, added with M177 (DEC-1607). Paste its list of clicks into the
-  observer's sheet (section 7.4). If that file is not in the repository yet, M177 has not been merged and the New campaign
-  wizard is not ready to test.
-- **Task 2** (Overview to the proven value of a measured campaign): no automated journey yet. It is written once the
-  Overview and Campaigns pages (M175, M176) are merged, as part B of this milestone. Until then the observer's reference path
-  is the one in section 7.4, found by hand.
+**How clicks are counted.** Every mouse click from the Overview to the end of the task counts. Choosing a file on the
+computer is not counted as a click (Plan M section 0 says "file already prepared") but is written beside the clicks as a
+file choice, so it is not forgotten. Moving by typing an address does not exist: the journey is opened once, at the
+Overview.
 
-Neither journey replaces a person: it proves the route exists and is short, not that a person finds it.
+### Task 1: Overview to a saved contact list
+
+Pinned by `tests/integration/test_usability_journeys.py` (`test_task_1_*`), which reuses the wizard's behaviour tested in
+`tests/integration/test_campaign_wizard_journey.py`, added with M177 (DEC-1607). If that file is not in the repository
+yet, M177 has not been merged and the New campaign wizard is not ready to test.
+
+| # | Click | Where |
+|---|---|---|
+| 1 | + New campaign | Overview |
+| 2 | The goal ("Choose the best e-mail for each customer") | New campaign, step 1 |
+| | *(choose the prepared customer file: one file choice, not a click)* | step 2, Customers |
+| 3 | Approve | step 2, Guided setup |
+| 4 | Continue | step 3, Audience (once the list is built) |
+| 5 | Approve | step 4, Review (this fixes the test plan) |
+| 6 | Download contact list | step 5, Send |
+
+- **Pinned: 6 clicks and 1 file choice, from the Overview** (later campaign: the goal already has an approved model, as
+  the demo store does for this goal). A goal's first campaign learns first and the new model is approved too:
+  **7 clicks** (`test_campaign_wizard_journey.py` pins its five decisions after the goal and the file; the two before
+  them are added).
+- Inside the wizard, M177's own measure (decisions after the goal and the file are chosen) is **4**, within 5.
+- The file downloaded is checked to be the contact list the API serves for the campaign's run, byte for byte, and the test
+  plan is checked to be registered before the download is offered.
+- **Plan M section 0 target: at most 5 clicks. Not met from the Overview: 6.** The test of the target
+  (`test_task_1_meets_plan_ms_target_of_five_clicks`) is marked `xfail(strict=True)`, so it fails loudly on the day the
+  count drops to 5 and the marker has to come off. The gap is recorded for the default-layout decision (section 8). The
+  smallest change that closes it is one fewer click on the way (for example, Audience and Review on one screen, so
+  Continue goes), which is a design decision for the product owner, not something this kit does.
+
+Paste the six rows into the observer's sheet (section 7.4) for the comparison with what the participant actually clicked.
+
+### Task 2: Overview to a campaign's proven value
+
+Pinned by `tests/integration/test_usability_journeys.py` (`test_task_2_*`). The task has two honest answers: the figure
+and how sure the product is. The Overview's own "Value proven to date" tile shows the total of all measured campaigns with
+no click at all; it is not one campaign's figure, so it is not counted as the answer (a test checks it is the API's total).
+
+| Path | Clicks | What is on the screen at the end |
+|---|---|---|
+| Overview, **Reports** in the sidebar | **1** | Each campaign's Value Proof Pack row: what it earned (the pack's headline) and what it can claim ("Proven") |
+| Overview, **Campaigns** in the sidebar, the campaign, its **Results** tab | **3** | The campaign's result sentence, the evidence label in words ("Proven") and the link to the full report |
+
+- **Pinned: 1 click by Reports, 3 by the campaign page.** The observer's reference path (section 7.4) is the first; a
+  participant who looks for the campaign itself takes the second, and neither is an error.
+- The amounts on screen are checked to equal the API's own: the Reports rows against `GET /pilot/proof`, the Results tab
+  against `GET /pilot/proof/{campaign}`. On the committed sample the figures are not the validated ones (the answer key in
+  section 7.3 says which file the store was made from).
+- Plan M section 0 sets no click target for this task; the pin is the shortest path found.
+
+Neither journey replaces a person: it proves the route exists and how long it is, not that a person finds it.
