@@ -64,7 +64,6 @@ test("the table says what Plan M §3 says (spec M174)", () => {
     "#/industry/banking": "#/overview",
     "#/results": "#/campaigns",
     "#/connections": "#/data",
-    "#/doctor": "#/data/doctor",
     "#/pilot": "#/reports",
     "#/audit": "#/reports/check",
     "#/campaigns/c_20261011_c9276210": "#/campaigns/c_20261011_c9276210/overview",
@@ -99,6 +98,10 @@ test("the table says what Plan M §3 says (spec M174)", () => {
     "#/campaigns/c_1/results": "campaigns",
     "#/overview": "overview",
     "#/data/doctor": "data",
+    "#/data/check": "data",
+    // Data Doctor keeps its page: M179's Data page has Sources and 'Check my data', which links to it
+    "#/doctor": "data",
+    "#/doctor/x": "data",
     "#/reports/check": "reports",
     "#/signin": null,
     "#/help": null,
@@ -149,7 +152,6 @@ test("in the campaigns layout an old address goes to its new home, once that pag
   }
   const cases = [
     ["#/connections", "#/data"],
-    ["#/doctor", "#/data/doctor"],
     ["#/pilot", "#/reports"],
     ["#/audit", "#/reports/check"],
     ["#/industry/banking", "#/overview"],
@@ -163,7 +165,7 @@ test("in the campaigns layout an old address goes to its new home, once that pag
     assert.equal(w.history.length, before + 1, `${from}: the redirect replaced the entry (Back skips the old address)`);
   }
   // kept addresses stay where they are
-  for (const hash of ["#/connections/new/postgres", "#/approvals", "#/pilot/kit", "#/uc/hillstrom-email", "#/monitoring/alerts", "#/settings"]) {
+  for (const hash of ["#/doctor", "#/connections/new/postgres", "#/approvals", "#/pilot/kit", "#/uc/hillstrom-email", "#/monitoring/alerts", "#/settings"]) {
     await visit(state, hash);
     assert.equal(w.location.hash, hash, `${hash} is kept`);
   }
@@ -220,12 +222,12 @@ test("Results waits for the Campaigns list: with only Plan J's campaign page, #/
 });
 
 test("a page that sends the browser straight back, while it is being drawn, is not bounced between", async () => {
-  // The Data page (this test's, or M179's after the merge) is made to send #/data/doctor straight back to #/doctor.
+  // The Data page (this test's, or M179's after the merge) is made to send #/data straight back to #/connections.
   const data = router.resolveRoute(["data"]);
   const real = data.render;
   data.render = (app, parts) => {
-    if (parts[1] === "doctor") {
-      window.location.hash = "#/doctor";
+    if (parts.length === 1) {
+      window.location.hash = "#/connections";
       return undefined;
     }
     return real(app, parts);
@@ -235,25 +237,25 @@ test("a page that sends the browser straight back, while it is being drawn, is n
     const seen = [];
     const listener = () => seen.push(w.location.hash);
     w.addEventListener("hashchange", listener);
-    await visit(state, "#/doctor");
+    await visit(state, "#/connections");
     await settle(10);
     await untilStable(state);
     w.removeEventListener("hashchange", listener);
-    assert.equal(w.location.hash, "#/doctor", "the old page is drawn");
+    assert.equal(w.location.hash, "#/connections", "the old page is drawn");
     assert.ok(seen.length <= 3, `one round trip at most, saw ${seen.join(" ")}`);
-    assert.ok(document.querySelector('#app [data-module="doctor"], #app .screen'), "Data Doctor's own page is drawn");
+    assert.ok(document.querySelector("#app .screen"), "Connections' own page is drawn");
     // drawn again on the same address (a module registering, a sign-in) it still does not bounce
     w.dispatchEvent(new w.Event("marketing-ai:modules-changed"));
     await settle(6);
     await untilStable(state);
-    assert.equal(w.location.hash, "#/doctor");
+    assert.equal(w.location.hash, "#/connections");
   } finally {
     data.render = real;
   }
   // once the page draws, the same old address is redirected again
   await visit(state, "#/settings");
-  await visit(state, "#/doctor");
-  assert.equal(w.location.hash, "#/data/doctor");
+  await visit(state, "#/connections");
+  assert.equal(w.location.hash, "#/data");
 });
 
 test("a redirect is decided by the table alone: the unit rules", () => {

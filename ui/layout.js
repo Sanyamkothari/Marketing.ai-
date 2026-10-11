@@ -77,8 +77,8 @@ export const ROUTES = Object.freeze([
   { from: "connections", to: "#/data", home: "data", why: "connections are the Data page's sources" },
   { from: "connections/ai/*", to: null, home: "settings", why: "the AI service stays under Settings" },
   { from: "connections/*", to: null, home: "data", why: "a connection's own forms keep their route" },
-  { from: "doctor", to: "#/data/doctor", home: "data", why: "Data Doctor is 'Check my data' on the Data page" },
-  { from: "doctor/*", to: null, home: "data", why: "Data Doctor's own steps keep their route" },
+  // The Data page (M179) has Sources and 'Check my data' (#/data/check), which links to Data Doctor's own page.
+  { from: "doctor/*", to: null, home: "data", why: "Data Doctor keeps its own page; the Data page's 'Check my data' links it" },
   // Reports (M178)
   { from: "reports/*", to: null, home: "reports", why: "the Reports page (M178)" },
   { from: "pilot", to: "#/reports", home: "reports", why: "the old Reports hub is the Reports page" },
