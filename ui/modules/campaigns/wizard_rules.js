@@ -5,6 +5,9 @@
 // share, change, date and amount below is read from an API answer, and a function that cannot find its
 // figure returns null so the screen says why instead of guessing.
 
+import { count, day as formatDay, decimal, money, percent, rupees } from "../../format.js";
+import { goalName as labelGoalName, MORE_GOALS } from "../../labels.js";
+
 /** The five steps, in order. The URL carries the step: `#/campaigns/new/<step>/...`. */
 export const STEPS = [
   { id: "goal", label: "Goal" },
@@ -47,23 +50,25 @@ export function parseRoute(parts) {
 // --- Step 1: goals ------------------------------------------------------------------------------------
 
 /**
- * Plan M §4.2: the goal names a marketer sees (display only; ids, configs and APIs keep theirs), in the
- * order the plan lists them. `more: true` folds a goal under "More goals": the operational goals, which do
- * not contact customers (M6). A use case not listed here keeps its catalogue name. M172 owns the names
- * for every other page; this table is the wizard's copy until `ui/labels.js` carries them.
+ * Plan M §4.2: the goals the wizard offers by name, in the order the plan lists them. The NAMES are
+ * `ui/labels.js` GOAL_NAMES (M172, one table for every page; display only: ids, configs and APIs keep theirs);
+ * this list only orders the cards and says which goals are offered from another industry. `more: true` folds a
+ * goal under "More goals": `ui/labels.js` MORE_GOALS, the operational goals, which contact no customer (M6),
+ * keeping their catalogue names.
  */
-export const GOAL_NAMES = [
-  { id: "targeted-advertisement", name: "Find customers likely to buy" },
-  { id: "win-back-campaign", name: "Win back lapsed customers" },
-  { id: "telco-churn", name: "Keep customers likely to leave" },
-  { id: "churn", name: "Keep customers likely to leave" },
-  { id: "payment-propensity", name: "Get customers to pay on time" },
-  { id: "rca", name: "Understand why customers leave" },
-  { id: "hillstrom-email", name: "Choose the best e-mail for each customer" },
-  { id: "ai-onboarding-assistant", name: "Answer customer questions (AI assistant)" },
-  { id: "order-fulfillment", name: "Order Fulfillment", more: true },
-  { id: "fault-prediction", name: "Fault Prediction", more: true },
+const GOAL_ORDER = [
+  "targeted-advertisement",
+  "win-back-campaign",
+  "telco-churn",
+  "payment-propensity",
+  "rca",
+  "hillstrom-email",
+  "ai-onboarding-assistant",
+  ...MORE_GOALS,
 ];
+export const GOAL_NAMES = Object.freeze(
+  GOAL_ORDER.map((id) => Object.freeze({ id, name: labelGoalName(id, ""), more: MORE_GOALS.includes(id) })),
+);
 
 /**
  * The goal cards, from `GET /industries`: `{ goals, more }`, each item `{ id, name, stage }`.
@@ -85,7 +90,7 @@ export function goalCards(industries) {
     const entry = named.get(uc.id);
     seen.set(uc.id, {
       id: uc.id,
-      name: entry ? entry.name : uc.name,
+      name: labelGoalName(uc.id, uc.name),
       stage: stage.name || "",
       more: Boolean(entry && entry.more),
       order: entry ? entry.index : GOAL_NAMES.length + seen.size,
@@ -101,10 +106,9 @@ export function goalCards(industries) {
   return { goals: all.filter((g) => !g.more).map(strip), more: all.filter((g) => g.more).map(strip) };
 }
 
-/** The display name of a goal, by §4.2, else the use case's own name. */
+/** The display name of a goal: `ui/labels.js` goalName (§4.2), else the use case's own name. */
 export function goalName(uc) {
-  const entry = GOAL_NAMES.find((g) => g.id === (uc && uc.id));
-  return entry ? entry.name : (uc && uc.name) || "";
+  return labelGoalName(uc && uc.id, (uc && uc.name) || "");
 }
 
 /**
@@ -163,15 +167,6 @@ export function ownPoint(preview) {
   return index === null || index === undefined ? null : preview.points[index] || null;
 }
 
-/** "2,560" with separators. */
-export const fmtCount = (n) => Number(n).toLocaleString("en-US", { maximumFractionDigits: 0 });
-
-/** A share as a percentage with at most one decimal and no trailing ".0": "10%", "49.8%". */
-export const fmtShare = (fraction) => `${(Math.round(Number(fraction) * 1000) / 10).toLocaleString("en-US", { maximumFractionDigits: 1 })}%`;
-
-/** Percentage points with one decimal: "0.6". */
-export const fmtPoints = (pp) => Number(pp).toLocaleString("en-US", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
-
 /**
  * The customers this list holds back for comparison: the realised count and share the planner's answer
  * carries (`n_holdout`, `holdout_fraction` - the stratified assignment the list was made with), never the
@@ -191,14 +186,14 @@ export function testSizeLines(preview) {
   if (!preview) return null;
   const held = heldBack(preview);
   const group = held
-    ? `${fmtCount(held.count)} customers (${fmtShare(held.share)}) are not contacted. They are the comparison group, so the result can be measured.`
+    ? `${count(held.count)} customers (${percent(held.share)}) are not contacted. They are the comparison group, so the result can be measured.`
     : null;
   const point = ownPoint(preview);
   if (!point) {
     return { group, size: preview.reason || null, ok: false };
   }
   if (typeof point.mde_pp === "number") {
-    return { group, size: `Enough to see a ${fmtPoints(point.mde_pp)}-point change.`, ok: true };
+    return { group, size: `Enough to see a ${decimal(point.mde_pp, 1)}-point change.`, ok: true };
   }
   return { group, size: point.reason || preview.reason || null, ok: false };
 }
@@ -216,12 +211,10 @@ export function resultsDate(campaign) {
   return new Date(start + days * 86400000).toISOString().slice(0, 10);
 }
 
-/** "12 Nov 2026" for an ISO date. */
-export function fmtDay(iso) {
-  if (!iso) return "";
-  const date = new Date(`${String(iso).slice(0, 10)}T00:00:00Z`);
-  if (Number.isNaN(date.getTime())) return String(iso);
-  return date.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" });
+/** "12 Nov 2026" for an ISO date (`ui/format.js` day); "" when there is none, so a sentence can leave it out. */
+export function dayOf(iso) {
+  const shown = formatDay(iso);
+  return shown === "\u2014" ? "" : shown;
 }
 
 /**
@@ -248,10 +241,6 @@ export function planBody({ campaign, preview, uc, outcomeColumn }) {
   }
   return body;
 }
-
-/** Rupees, whole (dom.js's `fmtMoney`; ui/format.js replaces it with lakh and crore when it lands). */
-export const fmtRupees = (n) =>
-  new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 0 }).format(Number(n));
 
 /**
  * The expected value of the contact list, from `treat_list_summary.json`: the net value the list adds
@@ -287,14 +276,14 @@ export function expectedValue(summary, policy = null) {
 
 /** The expected value as a tile shows it: the range, else the one figure. */
 export const valueFigure = (value) =>
-  value.low !== null && value.high !== null ? `${fmtRupees(value.low)} to ${fmtRupees(value.high)}` : fmtRupees(value.amount);
+  value.low !== null && value.high !== null ? `${rupees(value.low)} to ${rupees(value.high)}` : rupees(value.amount);
 
 /** The expected value as Review's line says it, with the range or with the plain note that there is none. */
 export function valueSentence(value) {
   if (value.low !== null && value.high !== null) {
-    return `Estimated between ${fmtRupees(value.low)} and ${fmtRupees(value.high)} ${value.text.replace(/ \(estimated\)$/, "")}.`;
+    return `Estimated between ${rupees(value.low)} and ${rupees(value.high)} ${value.text.replace(/ \(estimated\)$/, "")}.`;
   }
-  return `${fmtRupees(value.amount)} ${value.text}. A range cannot be given for this list.`;
+  return `${rupees(value.amount)} ${value.text}. A range cannot be given for this list.`;
 }
 
 /**
@@ -306,12 +295,10 @@ export function costLine(estimate) {
   if (!estimate) return null;
   // `inr` is `{ amount, inr_per_usd, source, as_of }` once an Admin saved an exchange rate (engine/aws/run_cost.py).
   if (estimate.inr && typeof estimate.inr.amount === "number") {
-    return { text: `About ${fmtRupees(estimate.inr.amount)} to prepare this list, at list price.`, known: true };
+    return { text: `About ${rupees(estimate.inr.amount)} to prepare this list, at list price.`, known: true };
   }
   if (typeof estimate.estimated_usd === "number") {
-    const usd = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 2 }).format(
-      estimate.estimated_usd,
-    );
+    const usd = money(estimate.estimated_usd, "USD");
     return { text: `About ${usd} to prepare this list, at list price.`, known: true };
   }
   if (estimate.backend === "local") return { text: "No cloud charge: this deployment works on its own machine.", known: true };

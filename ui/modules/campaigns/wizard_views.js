@@ -5,7 +5,8 @@
 // and at most one primary button on each step. Words follow the glossary (`ui/labels.js`, Plan M §4.1): goal,
 // contact list, comparison group, priority; anything technical sits in a `details.tech` section.
 
-import { term } from "../../labels.js";
+import { term, userText } from "../../labels.js";
+import { count } from "../../format.js";
 import { crumbs, errorBox, esc, pageHead, techDetails } from "../../dom.js";
 import {
   SHARED_STEPS,
@@ -13,8 +14,7 @@ import {
   complianceResult,
   costLine,
   expectedValue,
-  fmtCount,
-  fmtDay,
+  dayOf,
   goalName,
   heldBack,
   stepHref,
@@ -208,7 +208,8 @@ export function stoppedHtml({ ucId, detail, reason }) {
 const countRows = (counts) =>
   Object.entries(counts || {})
     .sort((a, b) => b[1] - a[1])
-    .map(([label, n]) => `<tr><td>${esc(label)}</td><td class="num">${esc(fmtCount(n))}</td></tr>`)
+    // An offer's or a channel's name is the person's own (their configuration): marked as theirs (M172 userText).
+    .map(([label, n]) => `<tr><td>${userText(label)}</td><td class="num">${esc(count(n))}</td></tr>`)
     .join("");
 
 /**
@@ -218,13 +219,13 @@ const countRows = (counts) =>
  */
 export function audienceCardHtml({ scoring, list }) {
   const contacted = list && typeof list.treat_rows === "number" ? list.treat_rows : null;
-  const lead = contacted === null ? "" : p(`${fmtCount(contacted)} customers are on the ${term("contactList").toLowerCase()}.`, "data-cw-contacted");
+  const lead = contacted === null ? "" : p(`${count(contacted)} customers are on the ${term("contactList").toLowerCase()}.`, "data-cw-contacted");
   const bands = (scoring && scoring.bands) || [];
   const priority = bands.length
     ? `<table class="tbl cw-tbl" data-cw-priority><thead><tr><th>${esc(term("priority"))}</th><th class="num">Customers</th><th>What happens</th></tr></thead><tbody>${bands
         .map(
           (b) =>
-            `<tr><td>${esc(b.name)}</td><td class="num">${esc(fmtCount(b.rows))}</td><td>${esc(b.action || "")}</td></tr>`,
+            `<tr><td>${esc(b.name)}</td><td class="num">${esc(count(b.rows))}</td><td>${esc(b.action || "")}</td></tr>`,
         )
         .join("")}</tbody></table>`
     : "";
@@ -378,10 +379,10 @@ export function reviewHtml({
   const held = heldBack(preview);
   const value = expectedValue(list, policy);
   const tiles = [
-    list && typeof list.treat_rows === "number" ? tile("Contacted", fmtCount(list.treat_rows), "data-cw-tile=contacted") : "",
-    held ? tile(term("comparisonGroup"), fmtCount(held.count), "data-cw-tile=comparison") : "",
+    list && typeof list.treat_rows === "number" ? tile("Contacted", count(list.treat_rows), "data-cw-tile=contacted") : "",
+    held ? tile(term("comparisonGroup"), count(held.count), "data-cw-tile=comparison") : "",
     value ? tile("Expected value", valueFigure(value), "data-cw-tile=value") : "",
-    resultsOn ? tile("Results from", fmtDay(resultsOn), "data-cw-tile=results") : "",
+    resultsOn ? tile("Results from", dayOf(resultsOn), "data-cw-tile=results") : "",
   ].join("");
   const costText = costLine(cost);
   const checked = complianceResult(compliance);
@@ -391,13 +392,13 @@ export function reviewHtml({
     [
       "Checked before sending",
       checked
-        ? `${fmtCount(checked.allowed)} of ${fmtCount(checked.checked)} customers may be contacted; ${fmtCount(checked.withheld)} were taken off the list${
-            checked.rerouted ? ` and ${fmtCount(checked.rerouted)} moved to another channel` : ""
+        ? `${count(checked.allowed)} of ${count(checked.checked)} customers may be contacted; ${count(checked.withheld)} were taken off the list${
+            checked.rerouted ? ` and ${count(checked.rerouted)} moved to another channel` : ""
           }.`
         : "",
       "data-cw-review-compliance",
     ],
-    ["Results", resultsOn ? `Add the results after ${fmtDay(resultsOn)}.` : "", "data-cw-review-results"],
+    ["Results", resultsOn ? `Add the results after ${dayOf(resultsOn)}.` : "", "data-cw-review-results"],
   ]
     .filter(([, text]) => text)
     .map(([label, text, attrs]) => `<div class="cw-kv" ${attrs}><dt>${esc(label)}</dt><dd>${esc(text)}</dd></div>`)
@@ -433,7 +434,7 @@ const STATUS = { live: { chip: "Live", title: "Your campaign is live" }, measure
  */
 export function sendHtml({ campaign, plan, downloadHref, resultsOn, downloaded = false, held = null }) {
   const status = STATUS[campaign.status] || { chip: String(campaign.status || ""), title: "Your campaign" };
-  const when = resultsOn ? ` Add its results after ${fmtDay(resultsOn)}: the campaign's page will ask for them.` : "";
+  const when = resultsOn ? ` Add its results after ${dayOf(resultsOn)}: the campaign's page will ask for them.` : "";
   const tech = techDetails([
     ["Campaign", campaign.campaign_id],
     ["List", (campaign.run_ids || [])[0]],

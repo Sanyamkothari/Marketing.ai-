@@ -121,3 +121,12 @@ test("a day: '12 Nov 2026' in UTC from a date or an instant, the em dash for not
   assert.equal(f.day("2026-10-11T23:30:00-05:00"), "12 Oct 2026", "an offset is converted to UTC first");
   for (const v of [null, undefined, "", "not a date"]) assert.equal(f.day(v), "—", String(v));
 });
+
+test("a decimal: exactly the places asked for, grouped, the em dash for nothing (Plan M final integration)", () => {
+  assert.equal(f.decimal(0.6), "0.6");
+  assert.equal(f.decimal(2), "2.0");
+  assert.equal(f.decimal(1234.56, 1), "1,234.6");
+  assert.equal(f.decimal(-0.04, 1), "0.0", "a value that rounds to zero takes no sign");
+  assert.equal(f.decimal(-1.25, 1), `${M}1.3`);
+  assert.equal(f.decimal(null), "—");
+});

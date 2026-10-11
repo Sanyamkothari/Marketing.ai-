@@ -162,6 +162,14 @@ export function percentExact(fraction) {
   return `${sign(pct, false)}${trimmed(Math.abs(pct), 4)}%`;
 }
 
+/** A plain number with exactly `places` decimals, grouped: 0.6 -> "0.6", 2 -> "2.0" (a size in percentage points). */
+export function decimal(value, places = 1) {
+  if (!isValue(value)) return EM_DASH;
+  const n = Number(value);
+  const text = Math.abs(n).toLocaleString(NUMBER_LOCALE, { minimumFractionDigits: places, maximumFractionDigits: places });
+  return `${sign(Number(Math.abs(n).toFixed(places)) === 0 ? 0 : n, false)}${text}`;
+}
+
 /** A plain number with a sign and at most `places` decimals: 0.75 -> "+0.75", -3 -> "−3". */
 export function signedNumber(value, places = 2) {
   if (!isValue(value)) return EM_DASH;

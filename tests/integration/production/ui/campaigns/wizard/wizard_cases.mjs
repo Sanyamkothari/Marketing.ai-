@@ -123,7 +123,8 @@ const { w } = installPage(delayed, { hash: "#/__start" });
 const router = await import("../../../../../../ui/modules/router.js");
 const wizard = await import("../../../../../../ui/modules/campaigns/wizard.js");
 const rules = await import("../../../../../../ui/modules/campaigns/wizard_rules.js");
-const rupees = (n) => rules.fmtRupees(n);
+// The wizard's money is ui/format.js's (M172; Plan M final integration): lakh and crore, the paise below Rs 100.
+const { rupees } = await import("../../../../../../ui/format.js");
 const esc = (t) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 await import("../../../../../../ui/app.js");
 await import("../../../../../../ui/modules/decide/index.js");
