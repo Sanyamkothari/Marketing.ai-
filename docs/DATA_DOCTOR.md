@@ -76,6 +76,39 @@ The verdict is Guided setup's own advisor, run on each file that has the use cas
 place never promises more than Guided setup then does. **Start** copies the file into the chosen use case, read
 the same way (the same sheet, intake on or off); nothing is trained until you approve and run.
 
+### What your file already says (DEC-1596)
+
+Before any model, and with no AI, Data Doctor shows what your file already says. Every such box is labelled
+**"Describes your file. Not a cause and not a prediction."**
+
+- **Under a use case that is Ready (or Ready after a quick check)**: how many of the file's rows are "yes"
+  (by the same rule training uses), and the rate of "yes" by up to five columns: a text column by its most
+  common values, a number column in five ranges of about equal rows. Example: *By plan_tier, the rate goes
+  from 5.0% (basic) to 30.1% (premium).*
+- **Under a file with no outcome but a customer ID and a date** (a log of recharges, say): how many customers
+  last appear in the 30 days up to the file's latest date, 31 to 90 days before, and so on, and how many rows
+  each customer has.
+
+The rules:
+
+- **No group of fewer than 10 rows is ever named.** Such values are counted together as "(other)"; when even
+  that is under 10, the next smallest value joins it, so a small group's figure cannot be worked out from the
+  others. These are the rules of Ask your data's rate tool, which does the counting.
+- **Which columns.** Each column gets a score: how far, on average over the rows, a row's group rate is from
+  the file's rate (each group weighted by its rows). The five with the highest score are shown; ties go to the
+  column that comes first in the file. At most 20 columns are scored, in file order, to keep the diagnosis
+  quick; the box says how many were not.
+- **Never used**: personal-data columns and columns your settings hide from the AI
+  (`agent.always_hide_columns`); columns that may hold the answer (the ones Guided setup's checks flag, and any
+  column whose groups alone tell "yes" from "no" almost perfectly); ID columns; date columns; free text;
+  columns with one value. The box lists what it left out.
+- Counted on the rows the diagnosis read (it says so when that is fewer than the file has).
+
+For developers: `engine/doctor/first_look.py` (`outcome_look`, `recency_look`, `attach_recency`, the
+`FirstLook` contract), the fields `UseCaseReadiness.first_look` and `FileDiagnosis.first_look` of
+`POST /doctor/diagnosis`; tests in `tests/unit/doctor/test_first_look.py`,
+`tests/integration/test_api_doctor_first_look.py` and `tests/integration/test_doctor_ui.py`.
+
 ## 3. More fixes, and who suggested each (M152, M153, M156)
 
 Guided setup's checklist can now hold these fixes, each a step our code runs on a copy and replays on next

@@ -12,6 +12,10 @@ Plan L M157 (DEC-1573): the diagnosis also offers, for a use case whose outcome 
 outcome an event file can define, as a sentence with its choices measured on the files
 (`engine.doctor.outcomes`); `POST /doctor/outcome` records the person's explicit choice of one sentence
 and returns its `LabelSpec` for the onboarding builder. Analyst too: it writes the agreement.
+
+DEC-1596: the diagnosis also says what each file already says, with no AI (`engine.doctor.first_look`):
+per ready use case the rate by the most informative columns, and per file with no outcome a recency
+picture. No new route: both are counted on the rows the diagnosis already read.
 """
 
 from __future__ import annotations
@@ -45,6 +49,7 @@ from engine.config import (
 )
 from engine.doctor.contracts import Diagnosis, DiagnosisRequest, HandoffRequest
 from engine.doctor.diagnose import ADVISE_ROWS, LoadedFile, Offer, diagnose_file, readiness
+from engine.doctor.first_look import attach_recency
 from engine.doctor.joins import how_files_fit
 from engine.doctor.outcomes import (
     OutcomeAgreement,
@@ -153,6 +158,13 @@ def diagnose(body: DiagnosisRequest, storage: StorageDep, root: ConfigRootDep) -
     files = [_load(storage, upload_id, cap) for upload_id in wanted]
     roles = get_roles(root)
     diagnosed = tuple(diagnose_file(loaded, any_config, roles) for loaded in files)
+    # DEC-1596: a file with no use case's outcome gets its recency picture (the outcome's is per use case).
+    diagnosed = attach_recency(
+        diagnosed,
+        [loaded.frame for loaded in files],
+        [loaded.profile for loaded in files],
+        [offer.config for offer in available],
+    )
     # Plan L M157 (DEC-1573): a `missing` use case gets the outcome an event file can define, if any.
     verdicts = attach_outcome_offers(
         readiness(files, available, root),
