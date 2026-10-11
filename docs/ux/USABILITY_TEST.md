@@ -11,7 +11,7 @@ form to fill in is [`usability_results_TEMPLATE.md`](usability_results_TEMPLATE.
 
 Contents: 1 What is tested · 2 Who takes part · 3 Set-up · 4 Roles and order · 5 The two task cards · 6 Facilitator
 script · 7 Observer's sheet · 8 Success rules · 9 After each task and at the end · 10 Recording the results · 11 The
-automated checks that go with it · 12 Click-count journeys
+automated checks that go with it · 12 Click-count journeys · 13 Session pack
 
 ---
 
@@ -373,3 +373,13 @@ no click at all; it is not one campaign's figure, so it is not counted as the an
 - Plan M section 0 sets no click target for this task; the pin is the shortest path found.
 
 Neither journey replaces a person: it proves the route exists and how long it is, not that a person finds it.
+
+## 13. Session pack
+
+Three files that go with the kit (Plan M M183, DEC-1613). They add to sections 2 and 3 and change nothing in them.
+
+| File | Use it to |
+|---|---|
+| [`usability/RECRUITMENT.md`](usability/RECRUITMENT.md) | Invite people (e-mail and LinkedIn text), screen them against section 2 (including "has not seen Marketing AI"), and arrange the 45-minute slots |
+| [`usability/CONSENT.md`](usability/CONSENT.md) | Give each participant the information and consent form, with recording as a separate choice. Have your legal adviser review it before use |
+| [`scripts/usability_session.py`](../../scripts/usability_session.py) | Do section 3.2 in one command per participant: `python -m scripts.usability_session --root <folder> --participant P1 --port 8000` seeds the demo store once, gives P1 a fresh copy, serves it in the `campaigns` layout without demo mode and prints the URL and the participant id. `--reset` wipes that participant's copy afterwards; everything lives under `--root`, never in your own data folders |
