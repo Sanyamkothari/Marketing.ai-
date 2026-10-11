@@ -12,11 +12,15 @@ import {
   getModels,
   getRun,
   getRuns,
+  contactListNow, // Plan M M171 (DEC-1601): one contact list
+  loadContactList,
   postRun,
   postUpload,
   scoresUrl,
 } from "../../api.js";
 import { present } from "../../dom.js";
+import { repaintContactList } from "../../contact_list.js";
+
 // The campaign's value view and the demo manifest are the pilot module's endpoints; its calls are
 // reused rather than repeated, so the Campaign results page reads the value view's own words and sign.
 import { getDemo, getRoi } from "../pilot/api.js";
@@ -195,6 +199,17 @@ export function createSetupController(uc, rerender) {
     const run = s.detail && s.detail.run;
     s.evaluation = null;
     s.scoresHref = run && run.mode === "score" ? scoresUrl(run.run_id) : null;
+    s.contactList = null;
+    if (run && run.mode === "score" && run.state === "done") {
+      // Drawn at once with the treat list assumed; the server's answer is drawn in when it arrives (never waited for).
+      const runId = run.run_id;
+      s.contactList = contactListNow(runId);
+      loadContactList(runId).then((facts) => {
+        if (s.runId !== runId) return;
+        s.contactList = facts;
+        repaintContactList(document, { runId, facts, scoresHref: s.scoresHref || "#" });
+      });
+    }
     if (!run || run.state !== "done" || run.mode !== "train") return;
     s.evaluation = await optional(run, "uplift_evaluation.json", () =>
       getUpliftArtefact(run.run_id, "uplift_evaluation.json"),
@@ -509,6 +524,22 @@ export function createOutputController(uc, runId, rerender = () => {}) {
     s.art = art;
     s.summary = summary;
     s.ranking = ranking;
+    s.contactList = null;
+    if (s.run.mode === "score" && s.run.state === "done") {
+      // Drawn at once with the treat list assumed; the answer is drawn in when it arrives (never waited for).
+      s.contactList = contactListNow(runId);
+      loadContactList(runId).then((facts) => {
+        if (s.run.run_id !== runId) return;
+        s.contactList = facts;
+        repaintContactList(document, {
+          runId,
+          facts,
+          scoring: s.summary,
+          policy: (s.art && s.art["policy_recommendation.json"]) || null,
+          scoresHref: scoresUrl(runId),
+        });
+      });
+    }
     s.scoreRuns = runs.filter((r) => r.mode === "score");
     if (art["policy_recommendation.json"]) await loadCurve();
   }

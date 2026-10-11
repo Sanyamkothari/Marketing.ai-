@@ -451,8 +451,12 @@ def journey(
     # 6. The scored file, downloaded from the Output page.
     page.locator(".flow .block").nth(2).click()
     expect(page.locator(".tab.on")).to_contain_text("Output")
+    # Plan M M171 (DEC-1601): the page's one download is the contact list (the treat list); the scored list this
+    # journey reads is "All scores (for analysts)" under Technical details.
+    expect(page.locator("a[download].btn.primary")).to_have_count(1)
+    page.locator("details.tech[data-tech] > summary").click()
     with page.expect_download() as scores_info:
-        page.get_by_role("link", name="Download contact list (CSV)").click()
+        page.get_by_role("link", name="All scores (for analysts)").click()
     scores = workdir / "scores.csv"
     scores_info.value.save_as(scores)
     with scores.open(encoding="utf-8", newline="") as handle:

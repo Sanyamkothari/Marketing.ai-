@@ -8,6 +8,8 @@ import {
   getIndustries,
   getRun,
   getRuns,
+  contactListNow, // Plan M M171 (DEC-1601): one contact list
+  loadContactList,
   scoresUrl,
   getUseCase,
 } from "./api.js";
@@ -26,6 +28,7 @@ import {
 import { mountChrome } from "./chrome.js";
 import { bindOverview, journeyFor, overviewHtml } from "./overview.js";
 import { bindPage, isUplift, pageArtefacts, renderPage } from "./pages.js";
+import { repaintContactList } from "./contact_list.js"; // Plan M M171
 import { createController, useCaseHtml } from "./usecase.js";
 import { MODULES_CHANGED, pagePanelsHtml, resolveRoute } from "./modules/router.js";
 import { aiNoticeHtml, needsAiNotice } from "./availability.js";
@@ -236,11 +239,37 @@ async function showPage(id, kind, runId) {
   const extra = {
     ...(await lineageOf(kind, detail.run)),
     ...(await upliftChartsFor(kind, detail.run)),
+    ...contactListFor(kind, detail.run),
     // A module's section on this page ("Ask your data" on the Data page, `registerPagePanel`).
     panelsHtml: pagePanelsHtml(kind, uc, detail.run),
   };
   paint(renderPage(kind, uc, detail.run, art, scoresUrl(chosen), extra), () => bindPage(kind, app));
+  fillContactList(kind, detail.run, art);
   return uc;
+}
+
+/**
+ * A scoring run's Output page offers one contact list (Plan M M171, DEC-1601): the treat list when the run has
+ * one, else the scored list. The page draws at once with the treat list assumed; the server's answer about it is
+ * read once (the first read builds the list, which can take a while on a large run) and drawn into the page when
+ * it arrives.
+ */
+function contactListFor(kind, run) {
+  if (kind !== "output" || !run || run.mode !== "score" || isUplift(run)) return {};
+  return { contactList: contactListNow(run.run_id) };
+}
+
+/** After an Output page is drawn: ask about the treat list and draw the answer into the page's slots. */
+function fillContactList(kind, run, art) {
+  if (kind !== "output" || !run || run.mode !== "score" || isUplift(run)) return;
+  loadContactList(run.run_id).then((facts) =>
+    repaintContactList(document, {
+      runId: run.run_id,
+      facts,
+      scoring: (art && art["scoring_summary.json"]) || null,
+      scoresHref: scoresUrl(run.run_id),
+    }),
+  );
 }
 
 /**

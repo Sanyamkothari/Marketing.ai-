@@ -318,7 +318,7 @@ const scoring = {
   rows_scored: 2000,
   score_field: "churn_prob",
   control_group_rows: 200,
-  kpi: { label: "Subscribers at risk", formula: 'count_where_band_in(["High","Medium"])', display: "855" },
+  kpi: { label: "Subscribers at risk", formula: 'count_where_band_in(["High","Medium"])', display: "855", value: 855 },
   bands: [
     { name: "High", action: "Retention call", rows: 851, share_pct: 42.5 },
     { name: "Medium", action: "Upgrade offer", rows: 4, share_pct: 0.2 },
@@ -345,16 +345,21 @@ test("scoring Output: the contact list is the one primary action, and nothing as
     "scoring_summary.json": scoring,
     "drift.json": { baseline_run_id: "r-p1t", status: "drifted", max_psi: 13.8 },
   };
-  const html = pages.renderPage("output", telco, p1Score, art, "/runs/r-p1s/scores.csv");
+  // Plan M M171 (DEC-1601): the one contact list is the treat list; the scored list moves under Technical details.
+  const contactList = { treatHref: "/runs/r-p1s/treat_list.csv", scoresHref: "/runs/r-p1s/scores.csv", summary: { treat_rows: 700 }, error: null };
+  const html = pages.renderPage("output", telco, p1Score, art, "/runs/r-p1s/scores.csv", { contactList });
   const seen = visible(html);
   assert.equal(primaries(html), 1);
-  assert.match(html, /<a class="btn primary" href="\/runs\/r-p1s\/scores\.csv"[^>]*>.*Download contact list \(CSV\)<\/a>/);
+  assert.match(html, /<a class="btn primary" href="\/runs\/r-p1s\/treat_list\.csv"[^>]*>.*Download contact list<\/a>/);
+  assert.match(html, /<details class="tech" data-tech>.*<a class="btn quiet sm" href="\/runs\/r-p1s\/scores\.csv" download data-download="scores">All scores \(for analysts\)<\/a>/s);
   assert.match(seen, /Subscribers at risk 855 High 851 \+ Medium 4/);
   assert.match(seen, /Customers scored 2,000/);
   assert.match(seen, /Held back to measure results 200 \(10%\)/);
   assert.match(seen, /The new customers look very different/);
-  assert.match(seen, /Subscriber Churn likelihood % Band Main reason Action/);
+  assert.match(seen, /Subscriber Churn likelihood % Priority Main reason Action/);
   assert.match(seen, /1000003 100% High Days since last activity is 240 \(raises it\) Retention call/);
+  // The sentence under the tiles is computed from the run's own summaries: 855 are worth contacting, 700 will be.
+  assert.match(seen, /855 customers are worth contacting; 700 will be contacted\. Why the difference: 200 customers in the whole list are held back at random as the comparison group/);
   assert.match(seen, /Held back \(control group\)/);
   for (const gone of ["decile", "Lift", ".json", "has not produced", "Available after training."]) {
     assert.ok(!seen.includes(gone), `the scoring Output shows ${gone}`);

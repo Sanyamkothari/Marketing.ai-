@@ -269,7 +269,7 @@ class Console:
         url, failure = request.url, str(request.failure)
         if "fonts.googleapis.com" in url or "fonts.gstatic.com" in url:
             return  # refused on purpose by `new_context`
-        if url.endswith("/scores.csv") and "ERR_ABORTED" in failure:
+        if url.endswith(("/scores.csv", "/treat_list.csv")) and "ERR_ABORTED" in failure:
             return  # the treat-list link became a download, which aborts the navigation by design
         self.problems.append(f"request failed: {url} ({failure})")
 
@@ -558,11 +558,11 @@ def journey(browser: Any, server: Server, workdir: Path, shots: Path) -> Journey
         segments=segment_rows(page),
     )
     with page.expect_download() as download_info:
-        page.get_by_role("link", name="Download contact list (CSV)").click()
+        page.get_by_role("link", name="Download contact list").click()  # the treat list (Plan M M171)
     treat_list = workdir / "treat_list.csv"
     download_info.value.save_as(treat_list)
     seen.treat_list = pd.read_csv(treat_list, dtype={PRIMARY_KEY: str})
-    treated = set(seen.treat_list.loc[seen.treat_list["action"] == "Treat", PRIMARY_KEY])
+    treated = set(seen.treat_list.loc[seen.treat_list["treat"] == 1, PRIMARY_KEY])
     outcomes = outcomes_for(campaign, treated_keys=treated, seed=5)
     outcomes["treatment_date"] = campaign.frame["treatment_date"].to_numpy()
     outcomes_csv = workdir / "outcomes.csv"
@@ -824,7 +824,7 @@ def test_the_score_output_is_the_treat_list_the_browser_downloaded(journey: Jour
     treat_list = journey.treat_list
     assert treat_list is not None and len(treat_list.index) == CAMPAIGN_ROWS
     policy = server.artefact(journey.score_run, "policy_recommendation.json")
-    treat = treat_list[treat_list["action"] == "Treat"]
+    treat = treat_list[treat_list["treat"] == 1]
     assert len(treat.index) == policy["contacts_recommended"]
     assert set(treat["segment"]) == {"persuadable"}, "sleeping dogs are never Treat"
 

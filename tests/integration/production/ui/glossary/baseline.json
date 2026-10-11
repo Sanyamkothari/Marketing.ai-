@@ -39,19 +39,12 @@
   "contact-list-uplift-scoring": {
     "uplift": 14,
     "propensity": 5,
-    "run": 5,
-    "holdout": 2,
-    "holdout = 1": 2,
+    "run": 3,
     "scoring run": 2,
-    "treat = 1": 2,
-    "treat list": 2,
     "auuc": 1,
-    "control group": 1,
     "ensemble": 1,
-    "explore = 1": 1,
     "lightgbm": 1,
-    "score": 1,
-    "scored list": 1
+    "score": 1
   },
   "contact-list-uplift-training": {
     "uplift": 11,
@@ -121,18 +114,9 @@
     "training": 1
   },
   "output-scoring": {
-    "control group": 8,
-    "run": 6,
-    "band": 4,
-    "holdout": 2,
-    "holdout = 1": 2,
-    "score": 2,
-    "treat = 1": 2,
-    "treat list": 2,
-    "explore = 1": 1,
-    "propensity": 1,
-    "scored list": 1,
-    "uplift": 1
+    "control group": 7,
+    "run": 1,
+    "score": 1
   },
   "output-training": {
     "score": 5,

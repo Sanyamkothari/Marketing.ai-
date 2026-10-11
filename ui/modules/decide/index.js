@@ -10,7 +10,8 @@
 
 import { canAccess, registerModule, registerPagePanel, registerResultsList, setActiveNav } from "../router.js";
 import { errorBox, skeleton } from "../../dom.js";
-import { getIndustries, postUpload, treatListUrl } from "../../api.js";
+import { getIndustries, loadContactList, postUpload } from "../../api.js"; // loadContactList: Plan M M171
+
 import {
   deleteDriftEvent,
   getArbitrationConflicts,
@@ -19,7 +20,6 @@ import {
   getDriftEvents,
   getPlan,
   getPlanPreview,
-  getTreatListSummary,
   postAudit,
   postDriftEvent,
   postMeasure,
@@ -183,11 +183,10 @@ async function loadTreatSummary(runId) {
   if (!st) {
     st = { runId, summary: null, loading: true, error: null };
     treatStates.set(runId, st);
-    try {
-      st.summary = await getTreatListSummary(runId);
-    } catch (err) {
-      st.error = err;
-    }
+    // The page already asked (`app.js`, the uplift controller): this reads that answer, not the server again.
+    const answer = await loadContactList(runId);
+    st.summary = answer.summary;
+    st.error = answer.error;
     st.loading = false;
     repaintTreatPanel(runId);
   }
@@ -199,7 +198,7 @@ function repaintTreatPanel(runId) {
   const el = document.querySelector(`[data-treat-panel="${encodeURIComponent(runId)}"]`);
   const st = treatStates.get(runId);
   if (!el || !st || st.loading) return;
-  el.innerHTML = treatListCardHtml(st.summary, { treatListHref: treatListUrl(runId), error: st.error });
+  el.innerHTML = treatListCardHtml(st.summary, { error: st.error });
 }
 
 function treatListPanelHtml(kind, uc, run) {
@@ -210,7 +209,7 @@ function treatListPanelHtml(kind, uc, run) {
   const st = treatStates.get(runId);
   const inner =
     st && !st.loading
-      ? treatListCardHtml(st.summary, { treatListHref: treatListUrl(runId), error: st.error })
+      ? treatListCardHtml(st.summary, { error: st.error })
       : "";
   // A failure is shown once; the next visit to the page asks the server again.
   if (st && st.error) treatStates.delete(runId);
