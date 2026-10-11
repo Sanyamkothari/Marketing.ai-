@@ -2175,6 +2175,27 @@ it; the M133 integration run found it.
 
 **What is needed.** Nothing; this is a record.
 
+### 2026-10-11 — plan-k M144 (on main) → trunk (owner of `api/main.py`) and Plan K M132 (owners of `tests/agentic/test_proposal_routes.py` and the route policies): the save-desk card's route (record of edits)
+
+**What changed** (DEC-1411 (c)): `api/main.py`'s PLAN-K block gains `_install_save_desk`, a `PHASE_APP_HOOKS` entry
+appended after M133's `_install_mcp`, which mounts `POST /agentic/save-desk/card` (`api/routes/agentic_save_desk.py`)
+only when `agentic.enabled` is on; it was moved there from the builder's marked lines at the end of the PLAN-J block.
+With the switch off the path does not exist and the OpenAPI document is unchanged. `tests/agentic/test_proposal_routes.py`'s
+exact `/agentic` route set gains `("POST", "/agentic/save-desk/card")`; a later Plan K milestone adding an
+`/agentic` route extends that set. The card's `RoutePolicy` does not set `audit_reads` (GET-only per
+`tests/unit/production/test_route_policies.py::test_every_policy_is_well_formed`); a POST is audited by the
+middleware anyway. `alembic/versions/0009_agentic_ledger.py` is `main`'s (the branch differed only in comments).
+
+**What is needed.** Nothing; this is a record.
+
+### 2026-10-11 — plan-k M144 (on main) → Plan E (owner of `configs/pilot/help.yaml`): six codes (announcement)
+
+**What changed** (DEC-1411 (j)): entries for `SAVE_DESK_NO_TREAT_LIST`, `SAVE_DESK_CUSTOMER_NOT_FOUND`,
+`SAVE_DESK_KEY_INVALID`, `SAVE_DESK_KEY_AMBIGUOUS`, `SAVE_DESK_RATE_LIMITED` and `SAVE_DESK_NOT_IN_PILOT_ARM`
+(`SAVE_DESK_KEY_INVALID`'s example reworded to pass the jargon check). `tests/unit/pilot/test_help.py` is green.
+
+**What is needed.** Nothing; this is an announcement.
+
 ### 2026-09-23 — plan-e-pilot (on main) → all branches: every change Plan E made outside its own files and blocks
 
 **What is needed.** Nothing from anybody; this is the announcement §3 asks for. Measured with

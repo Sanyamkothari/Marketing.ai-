@@ -603,6 +603,14 @@ MILESTONE_TESTS: Final[Mapping[str, tuple[str, ...]]] = {
         "tests/integration/mcp/test_small_groups.py",
         "tests/integration/mcp/test_injection_canaries.py",
     ),
+    # M144 (DEC-1411), the save-desk card as a randomised pilot design. test_proposal_routes.py is M132's exact
+    # /agentic route set, which gained the card's route.
+    "M144": (
+        "tests/unit/agentic/test_save_desk.py",
+        "tests/unit/agentic/test_save_desk_pilot.py",
+        "tests/agentic/test_save_desk.py",
+        "tests/agentic/test_proposal_routes.py",
+    ),
 }
 """Milestone id -> the test files (or directories, with a trailing `/`) that prove it is built.
 
