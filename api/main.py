@@ -311,6 +311,10 @@ PHASE_ROUTERS.append(drift_events_router)
 from api.routes.doctor import router as doctor_router  # noqa: E402
 
 PHASE_ROUTERS.append(doctor_router)
+# Plan L follow-up (DEC-1599): GET /runs/{run_id}/checks (Viewer) - things we checked, and the too-good alarm.
+from api.routes.run_checks import router as run_checks_router  # noqa: E402
+
+PHASE_ROUTERS.append(run_checks_router)
 # ---- END PLAN-L ----
 
 app: FastAPI = create_app()

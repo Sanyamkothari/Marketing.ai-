@@ -268,7 +268,37 @@ field `treatment` of `POST /uploads` and of every Guided-setup session answer,
 `POST /uploads/{id}/agent-session/same-treatment`, the store `doctor_memory` in `engine/privacy/layout.py`,
 tests in `tests/unit/doctor/test_memory.py` and `tests/integration/agent/test_api_doctor_memory.py`.
 
-## 9. What Data Doctor will not do
+## 9. The data request: send what you have (DEC-1598)
+
+The pilot's data request (`GET /pilot/data-request`, `docs/pilot/DATA_REQUEST.md`, worded in
+[`configs/pilot/data_request.yaml`](../configs/pilot/data_request.yaml)) no longer asks for UTF-8 CSV, one date
+format or a pre-flight run on a laptop. Its **Send what you have** section keeps only what Data Doctor cannot
+repair (the same column names every month, one customer ID across files, a date on every event row, the year in
+a month-per-column name, amounts as plain numbers when tables are joined) and says what cannot be read at all
+(`.xls`, `.xlsb`, password-protected workbooks, scanned PDFs). A second list says plainly what no longer
+matters: Excel, titles and totals, `-` or `unknown` for empty, any delimiter, any date style, any yes/no
+spelling. The pre-flight check is optional, and says it reads CSV and Parquet only.
+`tests/unit/pilot/test_data_request.py` ties each "no longer matters" line to `configs/intake.yaml` and the
+workbook reader.
+
+## 10. Things we checked, and a result too good to be true (DEC-1599)
+
+A training run's Model page ends with **Things we checked**, drawn from the run's own reports
+(`GET /runs/{run_id}/checks`, `engine/run_checks.py`): the file before training (`validation.json`), a
+column that gives the answer away (`LEAKAGE_SUSPECTED`, or "not run" when the run's settings switched it
+off or the outcome is not yes-or-no), the test set kept apart (`split.json`), the simple yardstick
+(`baseline.json`) and the groups compared (`fairness.json`, or "not run" with its reason). A report the
+run did not write leaves its line out: no check is claimed that did not run.
+
+First comes the alarm. When the model's main measure on the test set is above its line - by default an
+ROC AUC above 0.97, per use case in [`configs/model_checks.yaml`](../configs/model_checks.yaml) - the warning
+`RESULT_SUSPICIOUSLY_GOOD` names the column the model leans on most (rank 1 of `feature_importance.json`)
+and asks whether it is known only after the outcome. It blocks nothing: the same check is shown, as
+advice, beside the decision on the Approver's screen (`engine.model_gates.approval_checks`). Not here
+yet: the dataset build's own checks (the future-data probe, `LABEL_RATE_UNSTABLE`) stay on the Readiness
+report.
+
+## 11. What Data Doctor will not do
 
 - **Match people across files with no shared key.** It can tidy keys (leading zeros, prefixes) and say how many
   match; it does not guess that "R. Sharma, Pune" is "Rahul Sharma".

@@ -826,7 +826,7 @@ function evaluationCard(evaluation, baseline) {
   );
 }
 
-function modelPage(uc, run, art, byPath) {
+function modelPage(uc, run, art, byPath, extra = {}) {
   if (isScoring(run)) return scoringModelPage(uc, run, art);
   const best = art["best_model.json"];
   const evaluation = art["evaluation.json"];
@@ -962,7 +962,7 @@ function modelPage(uc, run, art, byPath) {
       ${evaluation ? evaluationCard(evaluation, baseline) : ""}
     </div>
     ${detailsCard}
-    ${fairnessCard}`;
+    ${fairnessCard}${extra.panelsHtml || ""}`;
   return shell(uc, "model", run, body, {
     tech: [["Model search", board && board.best_model_name]],
     techHtml: technical,
@@ -1704,8 +1704,8 @@ export function problemTypeLabel(uc, value) {
 
 /**
  * `extra` carries what is not a run artefact: the Data page's `lineage` (or `lineageError`) and a
- * module's `panelsHtml` (the Data page and a propensity scoring Output page draw it; an uplift run's
- * Output page is the uplift module's own and draws it there).
+ * module's `panelsHtml` (the Data page, a training run's Model page and a propensity scoring Output page
+ * draw it; an uplift run's Output page is the uplift module's own and draws it there).
  */
 export function renderPage(kind, uc, run, art, scoresHref, extra = {}) {
   const byPath = indexSchema(uc.advanced_settings || { stages: [] });
@@ -1713,6 +1713,6 @@ export function renderPage(kind, uc, run, art, scoresHref, extra = {}) {
     return kind === "data" ? upliftDataPage(uc, run, art, byPath, extra) : upliftRedirect(uc, kind, run);
   }
   if (kind === "data") return dataPage(uc, run, art, byPath, extra);
-  if (kind === "model") return modelPage(uc, run, art, byPath);
+  if (kind === "model") return modelPage(uc, run, art, byPath, extra);
   return outputPage(uc, run, art, byPath, scoresHref, extra);
 }

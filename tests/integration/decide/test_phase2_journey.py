@@ -717,7 +717,10 @@ def test_the_approvals_screen_shows_the_advisory_checks_of_the_campaign_effect_m
         assert check["passed"] is not None, check  # the evidence was switched on: measured, never made up
         assert check["message"].strip()
     assert waiting[BINARY]["can_decide"] is True
-    assert waiting[RISK]["checks"] == [], "a risk model has no campaign-effect checks"
+    # A risk model has no campaign-effect checks; since DEC-1599 it carries the one too-good-to-be-true alarm.
+    assert [check["code"] for check in waiting[RISK]["checks"]] == [
+        "RESULT_SUSPICIOUSLY_GOOD"
+    ], "a risk model has no campaign-effect checks"
     # M96's equal-budget comparison was written by the training run and is served read-only to a Viewer.
     served = journey.secured.viewer.get(f"/runs/{journey.train[BINARY].run_id}/risk-comparison")
     assert served.status_code == 200, served.text

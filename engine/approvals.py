@@ -182,6 +182,7 @@ class ApprovalItem(_Model):
     )
     # Plan J M96 (additive): advisory checks beside the champion decision, from `engine.model_gates`.
     # Empty for a model that is not an uplift model; they never approve, reject or block anything.
+    # Plan L follow-up (DEC-1599): such a model now carries RESULT_SUSPICIOUSLY_GOOD when it was evaluated.
     checks: tuple[ApprovalCheck, ...] = Field(
         default=(),
         description="Advisory checks ({code, passed, message}); passed is null when not measured.",
