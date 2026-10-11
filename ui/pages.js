@@ -344,6 +344,8 @@ function shell(uc, kind, run, body, { primary = null, secondary = [], tech = [],
           TAB_LABEL[next],
         )} ›</a></div>`
       : "";
+  // Plan M M180 (DEC-1610): techDetails' <details> now carries attributes (data-technical-details), so its opening
+  // tag is matched with them; otherwise the inner disclosure stayed, unclosed, and swallowed `techHtml`.
   const list = techDetails(
     [
       ["Run", run.run_id],
@@ -356,7 +358,7 @@ function shell(uc, kind, run, body, { primary = null, secondary = [], tech = [],
       ...tech,
     ],
     "Technical details",
-  ).replace(/^<details class="tech"><summary>[^<]*<\/summary>/, "").replace(/<\/details>$/, "");
+  ).replace(/^<details class="tech"[^>]*><summary>[^<]*<\/summary>/, "").replace(/<\/details>$/, "");
   const details = list || techHtml
     ? `<details class="tech" data-tech><summary>Technical details</summary>${list}${techHtml}</details>`
     : "";

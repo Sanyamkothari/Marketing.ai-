@@ -43,6 +43,7 @@ MODULES: Final[tuple[str, ...]] = (
     "pages.js",
     "power.js",  # the control-group size card on a scoring run's Output page (DEC-1234)
     "settings.js",
+    "technical.js",  # "Show technical details": the switch, its class and CSS rule (Plan M M180, DEC-1610)
     "usecase.js",
 )
 """Every module `index.html` reaches, directly or through an import."""

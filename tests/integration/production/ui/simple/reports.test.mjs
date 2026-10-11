@@ -60,6 +60,24 @@ test("with an approved model, its results report is offered", async () => {
   world.models = null;
 });
 
+test('Plan M M180: the model results list, and a latest-report button that opens one, are marked technical; campaign value is not', async () => {
+  world.models = fixture("models_champion");
+  world.roi = { [scoreRun.run_id]: fixture("roi_not_measured") };
+  try {
+    await open("#/pilot", () => hubReady() && $("main .btn.primary"));
+    assert.ok($('[data-pe-card="results"]').hasAttribute("data-technical"), "the model results list (algorithm names) is technical");
+    assert.equal($('[data-pe-card="value"]').hasAttribute("data-technical"), false, "campaign value is for marketers");
+    assert.equal($('[data-pe-card="proof"]').hasAttribute("data-technical"), false);
+    assert.ok($("main .btn.primary").closest("[data-technical]"), "the button opens a model results report: technical");
+    world.models = null;
+    world.roi = { [scoreRun.run_id]: fixture("roi_measured") };
+    await open("#/pilot", () => hubReady() && $("main .btn.primary"));
+    assert.equal($("main .btn.primary").closest("[data-technical]"), null, "a campaign value report's button stays");
+  } finally {
+    world.models = null;
+  }
+});
+
 test("the data request kit asks the data team, and lists use cases without an Industry column", async () => {
   await open("#/pilot/kit", () => $('[data-pe-card="build"] tbody tr') && $('[data-pe-card="kit"] .pe-body'));
   const page = text($("main"));

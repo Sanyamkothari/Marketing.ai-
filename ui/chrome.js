@@ -34,6 +34,11 @@
 // Until a module fills "user", an older strip mounted before `#app` (Phase 4b's `#pb-bar` user bar,
 // Plan E's `#pe-bar`) is adopted into the bar's second row, so nothing it offered is lost.
 
+// <M180>
+// Plan M M180 (DEC-1610): "Show technical details" in the profile menu. `technical.js` imports two leaf modules
+// (`api.js`, `dom.js`), never the router or this file, so the graph stays acyclic (DEC-790).
+import { technicalSwitchHtml } from "./technical.js";
+// </M180>
 import { LOGO, MODULES_EVENT, esc, headerToolHtml } from "./dom.js";
 
 const slots = new Map();
@@ -338,6 +343,9 @@ function paintChrome() {
     const row = bar.querySelector(".tb-row");
     const holder = bar.ownerDocument.createElement("div");
     holder.innerHTML = html;
+    // <M180>
+    addTechnicalSwitch(holder);
+    // </M180>
     const focus = focusInRow(row);
     if (row) row.replaceWith(holder.firstElementChild);
     else bar.insertBefore(holder.firstElementChild, bar.firstChild);
@@ -357,6 +365,23 @@ function paintChrome() {
   }
 }
 
+// <M180>
+/**
+ * Plan M M180 (DEC-1610): the "Show technical details" switch in the profile menu (the user slot's `#tn-user`, drawn
+ * by `production/userbar.js` for a signed-in person, in either layout), above "Sign out". A real checkbox with its
+ * label; `technical.js` hears its change. With sign-in off there is no profile menu: the switch is on Settings.
+ */
+function addTechnicalSwitch(root) {
+  const pop = root.querySelector("#tn-user");
+  if (!pop || pop.querySelector("[data-tech-switch]")) return;
+  const item = root.ownerDocument.createElement("div");
+  item.className = "um-tech";
+  item.innerHTML = technicalSwitchHtml();
+  const sep = pop.querySelector(".msep");
+  pop.insertBefore(item, sep || null);
+}
+
+// </M180>
 // --- behaviour: menus, the mobile panel, toggletips, copy buttons, the skip link -------------------
 
 function closeMenus(focusTrigger = false) {
@@ -447,8 +472,13 @@ function onClick(event) {
   if (!target.closest(".toggletip")) closeToggletips(doc);
 }
 
-/** The entries of an open menu, in order: its links and buttons that are not disabled. */
-const popEntries = (pop) => [...pop.querySelectorAll("a[href], button")].filter((el) => !el.disabled && !el.hidden);
+// <M180>
+// Plan M M180 (DEC-1610): the profile menu's "Show technical details" switch is a menu entry too, so the arrow
+// keys (M173) reach it and a repaint keeps focus on it.
+const MENU_ENTRY = "a[href], button, input[data-tech-switch]";
+// </M180>
+/** The entries of an open menu, in order: its links, buttons and switches that are not disabled. */
+const popEntries = (pop) => [...pop.querySelectorAll(MENU_ENTRY)].filter((el) => !el.disabled && !el.hidden);
 
 /**
  * Arrow keys in a menu (Plan M M173): from its button, Down opens it and lands on the first entry;
@@ -474,7 +504,7 @@ function menuNavigation(event) {
   if (!pop.contains(target)) return false;
   const entries = popEntries(pop);
   if (!entries.length) return false;
-  const at = entries.indexOf(target.closest("a[href], button"));
+  const at = entries.indexOf(target.closest(MENU_ENTRY));
   let next;
   if (event.key === "ArrowDown") next = (at + 1) % entries.length;
   else if (event.key === "ArrowUp") next = (at - 1 + entries.length) % entries.length;

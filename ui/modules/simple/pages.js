@@ -37,6 +37,7 @@ import {
   present,
   sortNote,
 } from "../../dom.js";
+import { technicalSwitchHtml } from "../../technical.js"; // Plan M M180 (DEC-1610)
 import { RUNS_SHOWN } from "./api.js";
 import { campaignNameHtml, campaignNames, figureHtml } from "../../format.js"; // Plan M M172 (DEC-1602)
 import { goalName, goalShortName, plainText, term, userText } from "../../labels.js";
@@ -414,8 +415,20 @@ export function settingsHtml({ can = () => true, status = null, version = null }
     <section class="card sp-group" data-settings-advanced><details class="adv"><summary>Advanced tools</summary><ul class="sp-list">${advanced.join(
       "",
     )}</ul></details></section>
+    ${viewHtml()}
     <section class="card sp-group" data-settings-about><h3>About</h3><div class="sp-about">${about}</div></section>
   </div></main>`;
+}
+
+/** Plan M M180 (DEC-1610): the person's own "Show technical details" switch, remembered for them. */
+export const TECHNICAL_HINT =
+  "Shows the Data, Model and Output pages, the model reports and the settings analysts use. It changes what you see, not what you are allowed to do.";
+
+function viewHtml() {
+  return `<section class="card sp-group" data-settings-view><h3>What you see</h3><div class="sp-view">${technicalSwitchHtml({
+    hint: TECHNICAL_HINT,
+    id: "sp-tech-switch",
+  })}</div></section>`;
 }
 
 // --- styles: tokens only, so both themes apply -----------------------------------------------------
@@ -439,6 +452,7 @@ const CSS = `
 .sp .sp-card.warning{border-left:3px solid var(--bad,#b3261e)}
 .sp .sp-about{padding:12px 20px;font-size:13px;color:var(--ink2);line-height:1.5}
 .sp .sp-about p{margin:0 0 4px}
+.sp .sp-view{padding:12px 20px}
 .sp .sp-runs a{color:var(--brand-blue);font-weight:600}
 .sp .sp-runs a:hover{text-decoration:underline}
 .sp .sp-runs a.sp-open{font-weight:500;white-space:nowrap}

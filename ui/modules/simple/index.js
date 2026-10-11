@@ -100,7 +100,8 @@ const finished = (run) => Boolean(run) && run.state === "done";
 registerResultLink({
   name: "model-health",
   applies: (uc, run) => finished(run) && canAccess("GET", "/schedules"),
-  link: () => ({ label: "Model health", href: "#/monitoring/alerts" }),
+  // Plan M M180 (DEC-1610): a model's drift and health alerts are for analysts: hidden with "Show technical details" off.
+  link: () => ({ label: "Model health", href: "#/monitoring/alerts", technical: true }),
 });
 
 registerResultLink({
@@ -115,7 +116,8 @@ registerResultLink({
   link: (uc, run) =>
     run.mode === "score"
       ? { label: "Campaign value report", href: `#/pilot/value/${encodeURIComponent(run.run_id)}` }
-      : { label: "Results report", href: `#/pilot/view/results/${encodeURIComponent(uc.id)}` },
+      : // Plan M M180 (DEC-1610): the model results report is technical; the campaign value report is not.
+        { label: "Results report", href: `#/pilot/view/results/${encodeURIComponent(uc.id)}`, technical: true },
 });
 
 injectStyles();

@@ -245,6 +245,8 @@ const resultLinkList = [];
 /**
  * Register a link under a run's results: `{ name, applies(uc, run), link(uc, run) }`, where `link`
  * returns `{ label, href }`. `name` must be unique; links are drawn in registration order.
+ * Plan M M180 (DEC-1610): `link` may also return `technical: true` for a link to a technical page (a model
+ * report, model health); it is then marked `data-technical`, so "Show technical details" off hides it.
  */
 export function registerResultLink(entry) {
   const { name, applies, link } = entry || {};
@@ -267,7 +269,12 @@ export function resultLinksHtml(uc, run) {
       }
     })
     .filter((l) => l && l.label && l.href)
-    .map((l) => `<a class="uc-link" href="${escHtml(l.href)}">${escHtml(l.label)}<span aria-hidden="true"> ›</span></a>`);
+    .map(
+      (l) =>
+        `<a class="uc-link" href="${escHtml(l.href)}"${l.technical ? " data-technical" : ""}>${escHtml(
+          l.label,
+        )}<span aria-hidden="true"> ›</span></a>`,
+    );
   return links.length ? `<nav class="uc-links" aria-label="More for this goal">${links.join("")}</nav>` : "";
 }
 
