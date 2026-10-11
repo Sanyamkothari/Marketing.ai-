@@ -178,6 +178,8 @@ SETTINGS_FIELDS: Final[tuple[str, ...]] = (
     "allow_fake_ai",
     # Plan J M92 (DEC-1302): one added field, a secret (the persistent holdout's salt).
     "holdout_salt",
+    # Plan M M174 (DEC-1604): one added field, presentation only (which shell the UI draws).
+    "ui_layout",
 )
 """Every field of `engine.settings.Settings`, in `engine.settings.ENV_VARS` order.
 

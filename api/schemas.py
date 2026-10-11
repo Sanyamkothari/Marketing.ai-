@@ -820,6 +820,12 @@ class MeResponse(StrictBase):
     principal: PrincipalView
     auth_mode: str = Field(description="`off` (everyone is the local operator) or `local`.")
     permissions: tuple[PermissionView, ...] = Field(description="One entry per declared route, sorted.")
+    # Plan M M174 (DEC-1604): added field only. The deployment's `ui_layout` setting, delivered on the call
+    # the UI already makes at start-up, so the browser knows which shell to draw without a second request.
+    ui_layout: Literal["classic", "campaigns"] = Field(
+        default="classic",
+        description="Which shell the UI draws: `classic` (today's top bar) or `campaigns` (the five-place sidebar).",
+    )
 
 
 class LoginRequest(_SecretBase):
