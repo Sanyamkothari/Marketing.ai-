@@ -60,6 +60,9 @@ export async function installWholePage({ hash = "#/", world }) {
     return null;
   };
   const page = installPage(server, { hash });
+  // A form is read in the page's own DOM, so its FormData is the page's - from the first draw on, as in a browser: a
+  // module registering while the page loads redraws a form, and that redraw reads what was typed into it.
+  globalThis.FormData = page.w.FormData;
   for (const script of pageScripts()) await import(`../../../../../ui/${script}`);
   return page;
 }
