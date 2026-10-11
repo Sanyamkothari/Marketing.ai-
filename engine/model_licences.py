@@ -58,7 +58,9 @@ FOUNDATION_NOT_LOADED_WARNING: Final[str] = (
 `hyperparameters` (which AutoGluon prefers over a preset's portfolio). It is true of the installed engine,
 measured by a fit with `presets=extreme_quality` and `hyperparameters={"XGB": {}, "GBM": {}}`, which
 trained exactly those two models and a weighted ensemble. Remove it when the train stage hands the
-preset's own portfolio to AutoGluon for this strategy (docs/CROSS_BRANCH_REQUESTS.md)."""
+preset's own portfolio to AutoGluon for this strategy. That is a change to the frozen
+`engine/stages/train.py`, raised as the cross-branch request `plan-k (M143) -> protocol owner` (entered in
+docs/CROSS_BRANCH_REQUESTS.md at integration, with the M143 result's cross_branch notes)."""
 
 
 class ModelLicences(StrictBase):
@@ -158,7 +160,14 @@ def validate_model_licences(config: UseCaseConfig, root: Path | None = None) -> 
     licences = load_model_licences(root)
     strategy = config.model_search.strategy
     catalog = config.catalog
-    licences.check_preset(catalog.strategy_presets[strategy], strategy=strategy.value)
+    preset = catalog.strategy_presets.get(strategy)
+    if preset is None:  # an opt-in strategy this root's engine.yaml does not map (see Catalog._complete)
+        raise ConfigError(
+            "CATALOG_INCOMPLETE",
+            f"catalog.strategy_presets is missing an entry for {strategy.value!r}.",
+            path="catalog.strategy_presets",
+        )
+    licences.check_preset(preset, strategy=strategy.value)
     for key in catalog.autogluon_hyperparameter_keys(config.model_search.candidates):
         licences.check_model_key(key, path="model_search.candidates")
 

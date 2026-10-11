@@ -9,7 +9,8 @@ What these pin:
   allow-list, so a library upgrade that slips a blocked model into a preset fails here;
 * `foundation` resolves to `extreme_quality`, and nothing else about configuration resolution
   changes: the four shipped-by-default values for every use case hash to what they were before M143;
-* a small real fit with the `foundation` strategy runs on CPU (`slow`).
+* a small real fit with the `foundation` strategy runs on CPU and, today, loads no foundation model (`slow`);
+  the test pins the warning that says so, and fails when the train stage starts loading them.
 """
 
 from __future__ import annotations
@@ -43,6 +44,7 @@ from engine.config import (
 )
 from engine.jobs import CancelToken
 from engine.model_licences import (
+    FOUNDATION_NOT_LOADED_WARNING,
     LICENCES_RELATIVE_PATH,
     load_model_licences,
     portfolio_model_keys,
@@ -247,6 +249,49 @@ def test_the_form_does_not_offer_the_unproven_strategy() -> None:
     assert offered == ["fast", "balanced", "exhaustive"]
 
 
+def _root_with_use_case_strategy(tmp_path: Path, strategy: str) -> Path:
+    """A copy of `configs/` whose `win-back-campaign` file selects `strategy`."""
+    root = tmp_path / "configs"
+    shutil.copytree(DEFAULT_CONFIG_ROOT, root)
+    path = root / "use_cases" / "win_back_campaign.yaml"
+    text = path.read_text(encoding="utf-8")
+    assert "\nmodel_search:\n" in text
+    path.write_text(
+        text.replace("\nmodel_search:\n", f"\nmodel_search:\n  strategy: {strategy}\n", 1), encoding="utf-8"
+    )
+    return root
+
+
+def test_a_use_case_that_selects_foundation_still_shows_it_on_the_form(tmp_path: Path) -> None:
+    root = _root_with_use_case_strategy(tmp_path, "foundation")
+    config = load_use_case("win-back-campaign", root)
+    assert config.model_search.strategy is Strategy.FOUNDATION
+    schema = advanced_settings_schema(config)
+    fields = {field.path: field for stage in schema.stages for field in stage.fields}
+    field = fields["model_search.strategy"]
+    assert field.value == "foundation"
+    labels = {choice.value: choice.label for choice in field.choices or ()}
+    assert labels["foundation"] == "Foundation models (opt-in)"
+    assert list(labels) == ["fast", "balanced", "exhaustive", "foundation"]
+
+
+def test_a_root_whose_engine_yaml_lacks_the_foundation_line_still_loads(tmp_path: Path) -> None:
+    root = tmp_path / "configs"
+    shutil.copytree(DEFAULT_CONFIG_ROOT, root)
+    engine_yaml = root / "engine.yaml"
+    kept = [
+        line
+        for line in engine_yaml.read_text(encoding="utf-8").splitlines(keepends=True)
+        if not line.strip().startswith("foundation:")
+    ]
+    engine_yaml.write_text("".join(kept), encoding="utf-8")
+    assert Strategy.FOUNDATION not in get_catalog(root).strategy_presets
+    resolve_config("telco-churn", root=root)  # an upgrade does not break a root that never selects it
+    with pytest.raises(ConfigError) as refused:
+        resolve_config("telco-churn", {"model_search.strategy": "foundation"}, root=root)
+    assert refused.value.code == "CATALOG_INCOMPLETE"
+
+
 # The sha256 of each shipped use case's resolved model_search section, its warnings, its sources under
 # model_search and the three original strategy presets, computed on the code before M143 existed
 # (`resolve_config(use_case)`, canonical JSON with sorted keys). A change to a use case file's
@@ -312,7 +357,7 @@ def _frame(rows: int, start: int, seed: int) -> pd.DataFrame:
 
 
 @pytest.mark.slow
-def test_a_small_fit_with_the_foundation_strategy_runs_on_cpu(tmp_path: Path) -> None:
+def test_a_run_with_the_foundation_strategy_fits_on_cpu_without_its_foundation_models(tmp_path: Path) -> None:
     recipe = Recipe(
         use_case_id="unit-test",
         problem_type=ProblemType.BINARY_CLASSIFICATION,
@@ -347,3 +392,13 @@ def test_a_small_fit_with_the_foundation_strategy_runs_on_cpu(tmp_path: Path) ->
     assert leaderboard.presets == "extreme_quality"
     assert leaderboard.entries, "the search finished without a single model"
     assert 0.5 < result.best.validation_score <= 1.0
+    # Measured: the train stage's own `hyperparameters` override the preset's portfolio, so no foundation
+    # model is fitted and the resolve says so. When this assertion fails the train stage has started loading
+    # them: delete FOUNDATION_NOT_LOADED_WARNING and its docs/LIBRARY.md paragraph, then fix this test.
+    assert not [
+        entry.model_name
+        for entry in leaderboard.entries
+        if entry.model_name.upper().startswith(("TABICL", "TABDPT", "NORI"))
+    ]
+    resolved = resolve_config("telco-churn", {"model_search.strategy": "foundation"})
+    assert FOUNDATION_NOT_LOADED_WARNING in resolved.warnings

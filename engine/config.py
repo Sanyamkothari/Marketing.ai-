@@ -516,7 +516,9 @@ class Catalog(_Base):
     def _complete(self) -> Self:
         for block, members in (
             ("model_families", tuple(ModelFamily)),
-            ("strategy_presets", tuple(Strategy)),
+            # An opt-in strategy may be missing from a deployment's own engine.yaml (DEC-1410 (g)): the
+            # root loads as before, and a run that picks it is refused by `validate_model_licences`.
+            ("strategy_presets", tuple(m for m in Strategy if m not in _OPT_IN_CHOICES)),
             ("metrics", tuple(Metric)),
             ("problem_types", tuple(ProblemType)),
             ("ai_types", tuple(AiType)),
@@ -2263,10 +2265,6 @@ _ENUM_FOR_PATH: Final[Mapping[str, type[StrEnum]]] = {
     "monitoring.retraining": Retraining,
 }
 
-_OPT_IN_CHOICES: Final[frozenset[StrEnum]] = frozenset({Strategy.FOUNDATION})
-"""Enum members a run may select by override or use-case file but the form and the setup helper never
-offer: unproven options stay out of a non-technical person's list (Plan K M143, DEC-1410)."""
-
 _SUMMARY_TEMPLATES: Final[Mapping[str, str]] = {
     "data_preparation": (
         "Missing: {prepare.missing_values} · outliers: {prepare.outliers}"
@@ -3016,10 +3014,11 @@ def _choices_for(
     enum_type = _ENUM_FOR_PATH.get(field.path)
     if enum_type is None:
         return None
+    current = _resolve_config_path(config, field.path, "SCHEMA_UNKNOWN_PATH")
     return tuple(
         FieldChoice(value=member.value, label=CHOICE_LABELS[member])
         for member in enum_type
-        if member not in _OPT_IN_CHOICES
+        if member not in _OPT_IN_CHOICES or member == current  # an opt-in value stays shown once chosen
     )
 
 
@@ -3911,6 +3910,13 @@ def _plan_j_validate_action_ids(config: UseCaseConfig, root: Path | None) -> Non
     from engine.decide.catalogue import validate_action_ids  # it imports this module
 
     validate_action_ids(config, root=root)
+
+
+# PLAN-K (M143): move into the PLAN-K block at integration
+_OPT_IN_CHOICES: Final[frozenset[StrEnum]] = frozenset({Strategy.FOUNDATION})
+"""Enum members a run may select by override or use-case file but the form and the setup helper never
+offer (unless the config already holds one): unproven options stay out of a non-technical person's list
+(Plan K M143, DEC-1410). Read only at call time, so it sits in this block."""
 
 
 # PLAN-K (M143): move into the PLAN-K block at integration

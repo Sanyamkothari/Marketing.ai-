@@ -402,11 +402,13 @@ the installed AutoGluon 1.6.3:
 | Where do the model weights come from? | Hugging Face. The three wheels are 0.25 MB, 0.02 MB and 0.33 MB, so they carry no weights. This environment's network policy answers `403` to `huggingface.co`, so no foundation model can be loaded here. |
 
 So the library comparison on Hillstrom (and a second dataset) is **not run: the weights cannot be downloaded
-here, and the machine has no GPU**. Run it where both exist, with
-`python -m library.run_engine journey --dataset hillstrom-email` on the default and again with
-`model_search.strategy=foundation`, then record the AUC and the net value at equal budget in
-`library/hillstrom-email/run_report.md` through `library/run_engine.py` only. Until that report says `foundation`
-gains rupees, it is not recommended.
+here, and the machine has no GPU**. It also cannot be run through `library/run_engine.py` as it stands: the
+`journey` subcommand has no `--override`, and its risk step is fixed in `library/journey.py` to `fast` with
+`LightGBM` only (the Hillstrom `JourneySpec.risk_overrides`), so it can neither pick `foundation` nor compare against
+`balanced`. Running it needs two changes outside this milestone's lane, both entered as cross-branch requests: a
+`--override path=value` option on `journey` that reaches `run_journey(extra_risk_overrides=...)` with the risk
+step's `model_search.candidates` lifted, and the `train.py` fix below. Until both exist, no command is given, nothing
+is recorded in `library/hillstrom-email/run_report.md`, and `foundation` is not recommended.
 
 **A second finding that must be fixed before the benchmark means anything.** The engine's train stage
 (`engine/stages/train.py`, `autogluon_fit_kwargs`) passes its own `hyperparameters`, one entry per selected
@@ -414,7 +416,10 @@ algorithm, and AutoGluon takes explicit arguments over a preset's. Measured on t
 `presets="extreme_quality"`, `hyperparameters={"XGB": {}, "GBM": {}}`): AutoGluon fitted `LightGBM`, `XGBoost` and a
 weighted ensemble, and no foundation model. So today `model_search.strategy: foundation` selects the
 `extreme_quality` preset's other settings but **loads none of its foundation models**; a run that picks it says so in
-its warnings. The fix is a change to a frozen file (see `docs/CROSS_BRANCH_REQUESTS.md`), so it was not made here.
+its warnings. The fix is a change to a frozen file, so it was not made here: it is the cross-branch request `plan-k (M143) -> protocol
+owner` (entered in [`docs/CROSS_BRANCH_REQUESTS.md`](CROSS_BRANCH_REQUESTS.md) at integration). It asks `autogluon_fit_kwargs`,
+for this strategy, to pass the preset's portfolio (each key checked by `ModelLicences.check_model_key`) in place of the
+per-family dict.
 
 **The licence guard does run, now.** `configs/agentic/model_licences.yaml` lists the presets and model keys the
 product may load. Resolving a configuration refuses, with `MODEL_LICENCE_BLOCKED`, a strategy whose preset is
