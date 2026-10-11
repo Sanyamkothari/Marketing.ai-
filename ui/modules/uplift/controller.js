@@ -43,6 +43,10 @@ import {
 
 const POLL_MS = 2000;
 
+/** The API's own sentence for `409 PROFIT_CURVE_UNAVAILABLE` on a list ranked by the propensity model (Plan J M96). */
+const PROFIT_CURVE_BY_RISK =
+  "This contact list is ranked by the approved propensity model because the uplift model does not beat risk ranking, so it has no uplift budget curve.";
+
 const isUplift = (run) => run && run.problem_type === "uplift";
 
 /** Artefacts written on request after a run finished (`POST .../uplift/ope`), so never in its record. */
@@ -408,18 +412,40 @@ export function createModelController(runId, rerender) {
   const s = {
     run: null,
     art: null,
-    ope: { report: null, topSharePct: String(DEFAULT_TOP_SHARE_PCT), submitting: false, error: null },
+    // `checked`: the saved report was asked for; `open`: the card is open, whether or not there is one.
+    ope: { report: null, topSharePct: String(DEFAULT_TOP_SHARE_PCT), submitting: false, error: null, checked: false, open: false },
   };
 
   async function load() {
     const detail = await getRun(runId);
     s.run = detail.run;
-    const art = await artefactsOf(runId, s.run, MODEL_ARTEFACTS);
+    // Plan M M173: `ope_report.json` is written only when someone asks for an estimate, and nothing on the
+    // run says whether anyone has, so it is not asked for with the page (a 404 the browser logs as an error
+    // on every visit). It is read when the person opens the card (`bind`) - and it is there, opened, when
+    // they have estimated before.
+    const art = await artefactsOf(
+      runId,
+      s.run,
+      MODEL_ARTEFACTS.filter((name) => name !== "ope_report.json"),
+    );
     s.art = art;
-    s.ope.report = art["ope_report.json"];
   }
 
   function bind(root) {
+    const card = root.querySelector("details.uwhatif");
+    if (card) {
+      card.addEventListener("toggle", async () => {
+        s.ope.open = card.open;
+        if (!card.open || s.ope.checked) return;
+        s.ope.checked = true;
+        try {
+          s.ope.report = await getUpliftArtefact(runId, "ope_report.json");
+        } catch (error) {
+          if (!(error instanceof ApiError)) throw error;
+        }
+        if (s.ope.report) rerender();
+      });
+    }
     const form = root.querySelector("#u-ope");
     if (!form) return;
     form.addEventListener("submit", async (event) => {
@@ -510,7 +536,15 @@ export function createOutputController(uc, runId, rerender = () => {}) {
     s.summary = summary;
     s.ranking = ranking;
     s.scoreRuns = runs.filter((r) => r.mode === "score");
-    if (art["policy_recommendation.json"]) await loadCurve();
+    if (art["policy_recommendation.json"]) {
+      if (ranking && ranking.ranking === "propensity_model") {
+        // Plan M M173: the list was ranked by the propensity model, so the API refuses a budget curve of the
+        // uplift ranking (409). The ranking record already says so: show the same refusal without asking.
+        s.profit.error = new ApiError(409, "PROFIT_CURVE_UNAVAILABLE", PROFIT_CURVE_BY_RISK, null);
+      } else {
+        await loadCurve();
+      }
+    }
   }
 
   function bind(root) {
@@ -585,14 +619,24 @@ export function createCampaignController(uc, runId, rerender) {
    * the "customers gained" figure, so the verdict here uses the value view's words and sign. Without
    * it (the endpoint absent, or nothing measured) the page states the difference in rates only.
    */
-  async function loadRoi() {
+  async function loadRoi(known) {
     s.roi = null;
     if (!s.report || s.report.status === "immature") return;
     try {
-      const roi = await getRoi(runId);
+      const roi = known === undefined ? await getRoi(runId) : known;
       s.roi = roi && roi.status === "measured" ? roi : null;
     } catch (error) {
       if (!(error instanceof ApiError)) throw error;
+    }
+  }
+
+  /** The value view as the API answered it; `null` when it has none or could not be read (then the report is asked for). */
+  async function valueView() {
+    try {
+      return await getRoi(runId);
+    } catch (error) {
+      if (!(error instanceof ApiError)) throw error;
+      return null;
     }
   }
 
@@ -613,12 +657,21 @@ export function createCampaignController(uc, runId, rerender) {
     s.run = detail.run;
     const title = loadTitle();
     if (s.run.mode === "score") {
-      try {
-        s.report = await getCampaignResults(runId);
-      } catch (error) {
-        s.loadError = error;
+      // Plan M M173: ask the value view first. It says `not_measured` when the run has no campaign results
+      // (and none of its campaigns has a final one), so the empty state is drawn without a request that
+      // can only answer 404 - which the browser logs as an error however the page handles it.
+      const view = await valueView();
+      if (view && view.status === "not_measured") {
+        s.report = null;
+        s.roi = null;
+      } else {
+        try {
+          s.report = await getCampaignResults(runId);
+        } catch (error) {
+          s.loadError = error;
+        }
+        await loadRoi(view);
       }
-      await loadRoi();
     }
     await title;
   }

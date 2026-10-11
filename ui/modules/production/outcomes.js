@@ -52,6 +52,7 @@ import {
 import {
   getConsentReport,
   getIncrementalityInput,
+  getMeasurementState,
   getOutcomes,
   getScoringRuns,
   hasCampaignResults,
@@ -106,6 +107,14 @@ export const campaignHref = (useCaseId, runId) =>
  * measured on the Campaign results page (`hasCampaignResults`: 200 yes, 404 no).
  */
 async function measuredOf(runId) {
+  // Plan M M173: the value view first, so a run nothing was recorded for (the usual case) costs no 404s.
+  const known = await getMeasurementState(runId);
+  if (known && known.status === "not_measured" && known.source === null) return { outcomes: false, campaign: false };
+  if (known && known.source === "outcome_ingestion") return { outcomes: true, campaign: null };
+  // Measured through one of the run's campaigns (Plan J): the campaign's report is the measurement, so the
+  // run is measured; its own `campaign-results` file is not what the answer rests on, and asking for it
+  // would only add a 404 for every run that has a campaign.
+  if (known && known.source === "incrementality_report" && known.campaign) return { outcomes: null, campaign: true };
   const [outcomes, campaign] = await Promise.all([
     getOutcomes(runId).then(Boolean, () => null),
     hasCampaignResults(runId).catch(() => null),
@@ -154,10 +163,17 @@ export async function loadRunOutcomes(runId) {
     return;
   }
   try {
+    // Plan M M173: ask only for what can exist, so a run with nothing recorded draws its empty page without
+    // a string of 404s. The value view says whether anything was recorded; the run's own record lists the
+    // files it wrote, and `consent_report.json` is written only by a run the consent ledger gated.
+    const known = await getMeasurementState(runId);
+    const nothingYet = Boolean(known) && known.status === "not_measured" && known.source === null;
+    const listed = state.run && state.run.artefacts;
+    const gated = !listed || typeof listed !== "object" || Object.prototype.hasOwnProperty.call(listed, "consent_report.json");
     const [report, incrementality, consent] = await Promise.all([
-      getOutcomes(runId),
-      getIncrementalityInput(runId),
-      getConsentReport(runId),
+      nothingYet ? null : getOutcomes(runId),
+      nothingYet ? null : getIncrementalityInput(runId),
+      gated ? getConsentReport(runId) : null,
     ]);
     Object.assign(state, { report, incrementality, consent, partsError: null });
   } catch (error) {

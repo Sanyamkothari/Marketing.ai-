@@ -24,7 +24,8 @@
 //   "models"   extra model tools (`<a>` elements); drawn on the Settings page, not in the bar
 //   "admin"    the admin entries (Users, Audit log, ...); drawn on the Settings page, not in the bar
 //   "demo"     the sample-data chip, right side
-//   "help"     the Help menu's entries; not drawn in the bar (the Minfy logo is in its place, top right)
+//   "help"     the Help (?) menu's entries, drawn top right beside the user menu (Plan M M173); each slot
+//              may carry an `order` number (default 0) that sorts its entries, lowest first
 //   "user"     the user menu (or "Sign in", or the sign-in-off chip), far right
 //   "badge:approvals"  a count shown on Results ("" for none)
 // The context slot is the registered header tool, `headerToolHtml()` (Plan H: it draws nothing, as
@@ -220,7 +221,9 @@ function sessionState() {
 }
 
 function slotHtml(name) {
-  return (slots.get(name) || [])
+  // Stable sort: slots with no `order` (or equal ones) keep their registration order.
+  return [...(slots.get(name) || [])]
+    .sort((a, b) => (Number(a.order) || 0) - (Number(b.order) || 0))
     .map((slot) => {
       try {
         return slot.html() || "";
@@ -263,6 +266,21 @@ function menuItem(item, on) {
   }>${esc(item.label)}${count}${chev}</button><div class="menu-pop" id="${menuId}"${open ? "" : " hidden"}>${entries}${extra}</div></li>`;
 }
 
+/**
+ * The Help (?) menu (Plan M M173): the `help` slot's entries under one button, top right. Drawn only
+ * when some module has put an entry in the slot. The button is a plain `button` with
+ * `aria-expanded`; Enter or Space opens it, Arrow keys move through the entries, Escape closes it and
+ * puts focus back on the button.
+ */
+function helpMenuHtml() {
+  const entries = slotHtml("help");
+  if (!entries) return "";
+  const open = ui.menu === "tn-help";
+  return `<div class="menu tb-help"><button type="button" class="tb-help-btn" data-menu="tn-help" aria-expanded="${open}" aria-controls="tn-help" aria-haspopup="true" aria-label="Help" title="Help"><span aria-hidden="true">?</span></button><div class="menu-pop right" id="tn-help"${
+    open ? "" : " hidden"
+  }>${entries}</div></div>`;
+}
+
 /** The bar's markup for the current route, slots and access (exported for tests). */
 export function topBarHtml() {
   const state = sessionState();
@@ -280,10 +298,35 @@ export function topBarHtml() {
       }).join("");
   const nav = items ? `<nav class="topnav tb-c" aria-label="Main"><ul>${items}</ul></nav>` : "";
   const context = signedOut ? "" : headerToolHtml();
-  const utils = `${signedOut ? "" : slotHtml("demo")}${slotHtml("user")}`;
+  const utils = `${signedOut ? "" : slotHtml("demo")}${signedOut ? "" : helpMenuHtml()}${slotHtml("user")}`;
   return `<div class="tb-row"><a class="wordmark" href="#/">Marketing AI</a>${nav}<div class="tb-context">${context}</div>${
     utils ? `<div class="tb-utils tb-c">${utils}</div>` : ""
   }<a class="tb-logo" href="#/" aria-label="Minfy, home">${LOGO}</a><button type="button" class="btn secondary sm tb-menu-btn" data-tb-menu aria-expanded="${ui.panel}" aria-controls="pb-bar">Menu</button></div>`;
+}
+
+/**
+ * Where keyboard focus is inside the bar's row, as something that survives the row being drawn again:
+ * a menu's button (`{ menu }`), or the n-th entry of a menu (`{ menu, index }`). A late registration
+ * redraws the bar while someone is arrowing through the Help menu; they must not lose their place.
+ */
+function focusInRow(row) {
+  const doc = row && row.ownerDocument;
+  const active = doc && doc.activeElement;
+  if (!active || !row.contains(active)) return null;
+  const trigger = active.closest("[data-menu]");
+  if (trigger) return { menu: trigger.getAttribute("data-menu") };
+  const pop = active.closest(".menu-pop");
+  if (!pop) return null;
+  return { menu: pop.id, index: popEntries(pop).indexOf(active) };
+}
+
+function restoreFocus(row, focus) {
+  if (!row || !focus) return;
+  const target =
+    focus.index === undefined
+      ? row.querySelector(`[data-menu="${focus.menu}"]`)
+      : popEntries(row.querySelector(`#${focus.menu}`) || document.createElement("div"))[focus.index];
+  if (target) target.focus();
 }
 
 function paintChrome() {
@@ -295,8 +338,10 @@ function paintChrome() {
     const row = bar.querySelector(".tb-row");
     const holder = bar.ownerDocument.createElement("div");
     holder.innerHTML = html;
+    const focus = focusInRow(row);
     if (row) row.replaceWith(holder.firstElementChild);
     else bar.insertBefore(holder.firstElementChild, bar.firstChild);
+    restoreFocus(bar.querySelector(".tb-row"), focus);
   }
   bar.classList.toggle("open", ui.panel);
   for (const [, list] of slots) {
@@ -402,8 +447,49 @@ function onClick(event) {
   if (!target.closest(".toggletip")) closeToggletips(doc);
 }
 
+/** The entries of an open menu, in order: its links and buttons that are not disabled. */
+const popEntries = (pop) => [...pop.querySelectorAll("a[href], button")].filter((el) => !el.disabled && !el.hidden);
+
+/**
+ * Arrow keys in a menu (Plan M M173): from its button, Down opens it and lands on the first entry;
+ * inside it, Down and Up move (wrapping), Home and End jump. Returns whether the key was used.
+ */
+function menuNavigation(event) {
+  const target = event.target;
+  if (!bar || !target || typeof target.closest !== "function") return false;
+  if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return false;
+  const menu = target.closest(".menu");
+  if (!menu || !bar.contains(menu)) return false;
+  const pop = menu.querySelector(".menu-pop");
+  if (!pop) return false;
+  const trigger = target.closest("[data-menu]");
+  if (trigger && menu.contains(trigger)) {
+    if (event.key === "ArrowUp" || event.key === "End") return false;
+    if (pop.hidden) trigger.click();
+    const first = popEntries(pop)[0];
+    if (first) first.focus();
+    event.preventDefault();
+    return true;
+  }
+  if (!pop.contains(target)) return false;
+  const entries = popEntries(pop);
+  if (!entries.length) return false;
+  const at = entries.indexOf(target.closest("a[href], button"));
+  let next;
+  if (event.key === "ArrowDown") next = (at + 1) % entries.length;
+  else if (event.key === "ArrowUp") next = (at - 1 + entries.length) % entries.length;
+  else if (event.key === "Home") next = 0;
+  else next = entries.length - 1;
+  entries[next].focus();
+  event.preventDefault();
+  return true;
+}
+
 function onKey(event) {
-  if (event.key !== "Escape") return;
+  if (event.key !== "Escape") {
+    menuNavigation(event);
+    return;
+  }
   const doc = event.currentTarget;
   if (ui.menu) {
     closeMenus(true);
@@ -425,6 +511,23 @@ function onKey(event) {
     }
     lastHtml = "";
   }
+}
+
+/** The Help button's look. Injected once, tokens only, so both themes apply. */
+const BAR_CSS = `
+.tb-help-btn{display:inline-grid;place-items:center;width:32px;height:32px;padding:0;border:1px solid var(--line2);border-radius:50%;background:var(--surface);color:var(--ink2);font:inherit;font-size:14px;font-weight:600;cursor:pointer}
+.tb-help-btn:hover,.tb-help-btn[aria-expanded="true"]{background:var(--soft);color:var(--ink)}
+.tb-help .menu-pop{min-width:200px}
+.tb-help .menu-pop a:focus-visible,.tb-help .menu-pop button:focus-visible,.tb-help-btn:focus-visible{outline:2px solid var(--brand-blue);outline-offset:-2px}
+@media (max-width:700px){.topbar.open .tb-help{width:100%}.topbar.open .tb-help-btn{width:100%;border-radius:8px;justify-content:flex-start;padding:0 12px}}
+`;
+
+function injectBarStyles(doc) {
+  if (!doc.head || doc.getElementById("tb-bar-styles")) return;
+  const style = doc.createElement("style");
+  style.id = "tb-bar-styles";
+  style.textContent = BAR_CSS;
+  doc.head.appendChild(style);
 }
 
 /** Legacy strips drawn before `#app` by modules that predate this bar. */
@@ -468,6 +571,12 @@ export function mountChrome(doc = document) {
   }
   doc.addEventListener("click", onClick);
   doc.addEventListener("keydown", onKey);
+  // Tabbing out of an open menu closes it, so a menu never stays open behind the page.
+  doc.addEventListener("focusin", (event) => {
+    const target = event.target;
+    if (ui.menu && target && typeof target.closest === "function" && !target.closest(".menu")) closeMenus();
+  });
+  injectBarStyles(doc);
   const win = doc.defaultView;
   if (win) {
     lastHash = currentHash();

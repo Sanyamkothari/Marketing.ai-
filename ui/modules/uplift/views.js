@@ -907,7 +907,7 @@ function opeResult(report) {
 function opeCard(o) {
   const report = o && o.report;
   const share = o && present(o.topSharePct) && o.topSharePct !== "" ? o.topSharePct : String(DEFAULT_TOP_SHARE_PCT);
-  const open = report || (o && (o.submitting || o.error));
+  const open = report || (o && (o.submitting || o.error || o.open));
   return `<section class="card"><details class="adv ufold uwhatif"${open ? " open" : ""}><summary>What if we contacted only the top customers?</summary>
     <form id="u-ope" class="uform" novalidate><p class="seg-help">Estimate the response rate if you contact only the customers the model ranks highest. Estimated on test customers the model never saw.</p><div class="frow"><div class="field xs"><label class="sub" for="u-ope-share">Top share (%)</label><div class="control"><input type="number" id="u-ope-share" min="1" max="100" step="1" value="${esc(
       share,

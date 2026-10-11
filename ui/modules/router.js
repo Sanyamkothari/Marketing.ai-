@@ -344,16 +344,17 @@ export function pagePanelsHtml(kind, uc, run) {
 
 /**
  * Fill a top-bar slot: `name` is "models", "admin", "demo", "help", "user" or "badge:approvals"
- * (see `chrome.js`); `slot` is `{ html(), bind?(bar) }`. Several registrations under one name are
- * drawn in registration order. The bar redraws on every route change and `MODULES_CHANGED`; call
- * `refreshTopBar()` when only the slot's own state changed.
+ * (see `chrome.js`); `slot` is `{ html(), bind?(bar), order? }`. Several registrations under one name are
+ * drawn in registration order, or by `order` (a number, lowest first) when they carry one - the Help
+ * menu uses it to keep its entries in the order Plan M gives them (M173). The bar redraws on every
+ * route change and `MODULES_CHANGED`; call `refreshTopBar()` when only the slot's own state changed.
  */
 export function registerNavSlot(name, slot) {
-  const { html, bind } = slot || {};
+  const { html, bind, order } = slot || {};
   if (!name || typeof html !== "function" || (bind !== undefined && typeof bind !== "function")) {
-    throw new Error("registerNavSlot needs (name, { html(), bind?(bar) })");
+    throw new Error("registerNavSlot needs (name, { html(), bind?(bar), order? })");
   }
-  addNavSlot(name, { html, bind });
+  addNavSlot(name, { html, bind, order });
 }
 
 /**

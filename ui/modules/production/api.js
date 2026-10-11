@@ -328,6 +328,26 @@ export async function hasCampaignResults(runId) {
   }
 }
 
+/**
+ * What the value view (`GET /pilot/roi/{run_id}`) says was measured for a scoring run, as
+ * `{ status, source, campaign }` (`campaign`: the id of the campaign whose report it read, or `null`), or
+ * `null` when it cannot be read. `status` "not_measured" with a `source` of `null` means no outcomes were
+ * recorded and no campaign results exist; `source` "outcome_ingestion" means outcomes were added here.
+ * Asking this first lets a screen draw "nothing yet" without the 404s that `getOutcomes`,
+ * `hasCampaignResults` and `getIncrementalityInput` would answer (Plan M M173): the browser logs every
+ * one of them as an error, however the page handles it.
+ */
+export async function getMeasurementState(runId) {
+  try {
+    const view = await request(`/pilot/roi/${encodeURIComponent(runId)}`);
+    return view && typeof view === "object"
+      ? { status: view.status, source: view.source, campaign: view.campaign_id || null }
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 /** `IncrementalityInput`, or null when the run held out no control group (or has no outcomes yet). */
 export const getIncrementalityInput = (runId) =>
   orNull(request(`/runs/${encodeURIComponent(runId)}/incrementality-input`), ["INCREMENTALITY_INPUT_NOT_FOUND"]);

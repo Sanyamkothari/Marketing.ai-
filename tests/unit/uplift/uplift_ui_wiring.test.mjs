@@ -395,3 +395,157 @@ test("the output page without a recommendation never asks for a budget curve", a
   assert.ok(!calls.some(([, path]) => path.includes("profit-curve")));
   assert.ok(!/What if the budget changed\?/.test(app.innerHTML));
 });
+
+// --- Plan M M173 (DEC-1603): no request for what is known not to exist -------------------------------------
+//
+// The browser logs every 404 and 409 as a console error, however the page handles it, so a page that asks
+// for a file it can tell is not there is noisy for ever. Each page below asks the thing that already knows.
+
+const calledPaths = () => calls.map(([, path]) => path);
+
+test("the campaign page asks the value view first, and draws 'no results yet' without asking for results that cannot exist", async () => {
+  reply("/runs/r_none", 200, {
+    run: { run_id: "r_none", mode: "score", state: "done", created_at: "2026-09-01T00:00:00Z", file_name: "f.csv" },
+    status: { stages: [] },
+  });
+  reply("/pilot/roi/r_none", 200, { run_id: "r_none", status: "not_measured", source: null, campaign_id: null, causal: false });
+  calls.length = 0;
+  const app = fakeApp();
+  const parts = ["campaign", "win-back", "r_none"];
+  window.location.hash = `#/${parts.join("/")}`;
+  await router.resolveRoute(parts).render(app, parts);
+  assert.ok(calledPaths().includes("/pilot/roi/r_none"), "the value view was asked");
+  assert.ok(!calledPaths().includes("/runs/r_none/campaign-results"), "no request that could only answer 404");
+  assert.match(app.innerHTML, /No campaign results yet/);
+  assert.ok(!/undefined|NaN/.test(app.innerHTML));
+});
+
+test("the campaign page still asks for the report when the value view says something was measured, or cannot say", async () => {
+  const run = (id) => ({
+    run: { run_id: id, mode: "score", state: "done", created_at: "2026-09-01T00:00:00Z", file_name: "f.csv" },
+    status: { stages: [] },
+  });
+  reply("/runs/r_meas", 200, run("r_meas"));
+  reply("/pilot/roi/r_meas", 200, { run_id: "r_meas", status: "not_mature", source: "incrementality_report", campaign_id: null });
+  reply("/runs/r_unknown", 200, run("r_unknown")); // no /pilot/roi/r_unknown: the API answers 404, so the value view is not known
+  for (const id of ["r_meas", "r_unknown"]) {
+    calls.length = 0;
+    const parts = ["campaign", "win-back", id];
+    window.location.hash = `#/${parts.join("/")}`;
+    await router.resolveRoute(parts).render(fakeApp(), parts);
+    assert.ok(calledPaths().includes(`/runs/${id}/campaign-results`), `${id}: the report is asked for`);
+  }
+});
+
+test("a contact list ranked by the propensity model shows the API's refusal of a budget curve without asking for one", async () => {
+  reply("/runs/r_risk", 200, {
+    run: {
+      run_id: "r_risk",
+      mode: "score",
+      state: "done",
+      created_at: "2026-09-01T00:00:00Z",
+      file_name: "f.csv",
+      artefacts: { "policy_recommendation.json": "k", "ranking_choice.json": "k", "scoring_summary.json": "k" },
+    },
+    status: { stages: [] },
+  });
+  reply("/runs/r_risk/uplift/policy_recommendation.json", 200, {
+    run_id: "r_risk",
+    computed_on: "scored",
+    rows: 10,
+    eligible_persuadables: 4,
+    contacts_recommended: 4,
+    stop_reason: "all_persuadables",
+    budget_contacts: null,
+    predicted_incremental_conversions: 1.2,
+    expected_incremental_conversions: null,
+    cost_per_contact: null,
+    value_per_conversion: null,
+    expected_cost: null,
+    expected_value: null,
+    expected_net_value: null,
+    causal: true,
+  });
+  reply("/runs/r_risk/artefacts/ranking_choice.json", 200, {
+    run_id: "r_risk",
+    ranking: "propensity_model",
+    code: "UPLIFT_NOT_BETTER_THAN_RISK",
+    beats_risk: false,
+    contacts: 4,
+    reason: "This model does not beat risk ranking.",
+  });
+  reply("/runs/r_risk/artefacts/scoring_summary.json", 200, { run_id: "r_risk" });
+  calls.length = 0;
+  const app = fakeApp();
+  const parts = ["uplift", "win-back", "output", "r_risk"];
+  window.location.hash = `#/${parts.join("/")}`;
+  await router.resolveRoute(parts).render(app, parts);
+  assert.ok(!calledPaths().some((p) => p.includes("profit-curve")), "no budget-curve request that can only answer 409");
+  assert.match(app.innerHTML, /What if the budget changed\?/);
+  assert.match(
+    app.innerHTML,
+    /ranked by the approved propensity model because the uplift model does not beat risk ranking, so it has no uplift budget curve\./,
+  );
+});
+
+test("the model page makes no request for a saved estimate; opening the card reads it, once", async () => {
+  const controller = await import(new URL("modules/uplift/controller.js", UI));
+  reply("/runs/r_ope", 200, {
+    run: {
+      run_id: "r_ope",
+      mode: "train",
+      state: "done",
+      created_at: "2026-09-01T00:00:00Z",
+      file_name: "f.csv",
+      problem_type: "uplift",
+      artefacts: { "run.json": "k" },
+    },
+    status: { stages: [] },
+  });
+  reply("/runs/r_ope/uplift/ope_report.json", 200, { run_id: "r_ope", policy_description: "top 10%", rows: 100, estimates: [] });
+  calls.length = 0;
+  let renders = 0;
+  const model = controller.createModelController("r_ope", () => (renders += 1));
+  await model.load();
+  assert.ok(!calledPaths().some((p) => p.endsWith("ope_report.json")), "not asked for with the page");
+  assert.equal(model.state.ope.report, null);
+  // The card opens: that is when the saved estimate is read.
+  const listeners = {};
+  const card = { open: true, addEventListener: (event, fn) => (listeners[event] = fn) };
+  model.bind({ querySelector: (sel) => (sel === "details.uwhatif" ? card : null) });
+  await listeners.toggle();
+  assert.ok(calledPaths().includes("/runs/r_ope/uplift/ope_report.json"));
+  assert.equal(model.state.ope.report.policy_description, "top 10%");
+  assert.equal(model.state.ope.open, true);
+  assert.equal(renders, 1, "repainted with the saved estimate");
+  const asked = calledPaths().filter((p) => p.endsWith("ope_report.json")).length;
+  await listeners.toggle(); // closing and opening again does not ask again
+  assert.equal(calledPaths().filter((p) => p.endsWith("ope_report.json")).length, asked);
+});
+
+test("opening the estimate card when nothing was estimated leaves it open and empty, with no error", async () => {
+  const controller = await import(new URL("modules/uplift/controller.js", UI));
+  const { modelPageHtml } = await import(new URL("modules/uplift/views.js", UI));
+  reply("/runs/r_noope", 200, {
+    run: {
+      run_id: "r_noope",
+      mode: "train",
+      state: "done",
+      created_at: "2026-09-01T00:00:00Z",
+      file_name: "f.csv",
+      problem_type: "uplift",
+      artefacts: { "run.json": "k" },
+    },
+    status: { stages: [] },
+  });
+  const model = controller.createModelController("r_noope", () => {});
+  await model.load();
+  const listeners = {};
+  const card = { open: true, addEventListener: (event, fn) => (listeners[event] = fn) };
+  model.bind({ querySelector: (sel) => (sel === "details.uwhatif" ? card : null) });
+  await listeners.toggle();
+  assert.equal(model.state.ope.report, null);
+  assert.equal(model.state.ope.error, null, "no estimate yet is not an error");
+  const html = modelPageHtml({ id: "win-back", name: "Win-back" }, model.state.run, model.state.art, model.state.ope);
+  assert.match(html, /<details class="adv ufold uwhatif" open>/, "the card stays open once opened");
+});

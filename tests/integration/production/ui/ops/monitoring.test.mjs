@@ -16,6 +16,10 @@ const tokens = {
 let measured = false;
 let campaignMeasured = false; // measured on the run's Campaign results page (ui/modules/uplift)
 let noSchedules = false;
+// Plan M M173: what the value view (`GET /pilot/roi/{run}`) says; `null` is a 404, as before, so the screens ask
+// for outcomes and campaign results the old way.
+let roi = null;
+let runBody = fixture("run");
 const firings = fixture("firings_drift").firings;
 
 const { w, calls, forms } = installOps({
@@ -50,7 +54,8 @@ const { w, calls, forms } = installOps({
     ],
     ["POST", "/monitoring/alerts/{id}/acknowledge", () => ok(fixture("alert_acknowledged"))],
     ["GET", "/runs", () => ok(fixture("runs"))],
-    ["GET", "/runs/{id}", () => ok(fixture("run"))],
+    ["GET", "/runs/{id}", () => ok(runBody)],
+    ["GET", "/pilot/roi/{id}", () => (roi ? ok(roi) : refused(404, { detail: { code: "RUN_NOT_FOUND", message: "No such run." } }))],
     [
       "GET",
       "/runs/{id}/outcomes",
@@ -343,4 +348,97 @@ test("with nothing scheduled: one primary (the open form's Create schedule), no 
   assert.ok(sync.classList.contains("quiet") && !sync.classList.contains("primary"));
   assert.equal(/More actions/.test(text()), false);
   noSchedules = false;
+});
+
+// --- Plan M M173 (DEC-1603): ask only for what can exist --------------------------------------------------------
+//
+// The browser logs every 404 as a console error however the page handles it. The value view says whether anything
+// was recorded for a run, and the run's own record lists the files its flow wrote, so a run nothing was recorded
+// for draws its empty page without a string of requests that can only answer 404.
+
+const reads = (re) => calls.filter((c) => c.method === "GET" && re.test(c.path));
+const NOTHING = { run_id: ids.run_id, status: "not_measured", source: null, campaign_id: null };
+
+test("the Campaigns list asks neither for outcomes nor for campaign results of a run the value view says nothing was recorded for", async () => {
+  roi = NOTHING;
+  w.location.hash = "#/monitoring/alerts";
+  await until(() => heading() === "Alerts", 3000, "another screen");
+  calls.length = 0;
+  w.location.hash = "#/monitoring/runs";
+  const row = () => $(`tr[data-run="${ids.run_id}"]`);
+  await until(() => row() && row().querySelector("[data-status]"), 3000, "the run and its results");
+  assert.equal(row().querySelector("[data-status]").dataset.status, "not_added");
+  assert.equal(row().querySelector(`a[href="#/monitoring/runs/${ids.run_id}"]`).textContent, "Add outcomes");
+  assert.ok(reads(new RegExp(`/pilot/roi/${ids.run_id}$`)).length > 0, "the value view was asked");
+  assert.equal(reads(/\/runs\/[^/]+\/(outcomes|campaign-results)$/).length, 0, "no request that could only answer 404");
+  roi = null;
+});
+
+test("a run whose outcomes were added here reads Measured and View results without asking for either file", async () => {
+  roi = { run_id: ids.run_id, status: "measured", source: "outcome_ingestion", campaign_id: null };
+  w.location.hash = "#/monitoring/alerts";
+  await until(() => heading() === "Alerts", 3000, "another screen");
+  calls.length = 0;
+  w.location.hash = "#/monitoring/runs";
+  const row = () => $(`tr[data-run="${ids.run_id}"]`);
+  await until(() => row() && row().querySelector("[data-status]"), 3000, "the run and its results");
+  assert.equal(row().querySelector("[data-status]").dataset.status, "measured");
+  assert.equal(row().querySelector(`a[href="#/monitoring/runs/${ids.run_id}"]`).textContent, "View results");
+  assert.equal(reads(/\/runs\/[^/]+\/(outcomes|campaign-results)$/).length, 0);
+  roi = null;
+});
+
+test("a run measured through one of its campaigns reads Measured without asking for the run's own files", async () => {
+  roi = { run_id: ids.run_id, status: "measured", source: "incrementality_report", campaign_id: "c_20261011_abcdef01" };
+  w.location.hash = "#/monitoring/alerts";
+  await until(() => heading() === "Alerts", 3000, "another screen");
+  calls.length = 0;
+  w.location.hash = "#/monitoring/runs";
+  const row = () => $(`tr[data-run="${ids.run_id}"]`);
+  await until(() => row() && row().querySelector("[data-status]"), 3000, "the run and its results");
+  assert.equal(row().querySelector("[data-status]").dataset.status, "measured", "the campaign measured it");
+  assert.equal(reads(/\/runs\/[^/]+\/(outcomes|campaign-results)$/).length, 0);
+  roi = null;
+});
+
+test("a run the value view cannot speak for is asked about the old way", async () => {
+  roi = null; // 404: the value view is not known
+  w.location.hash = "#/monitoring/alerts";
+  await until(() => heading() === "Alerts", 3000, "another screen");
+  calls.length = 0;
+  w.location.hash = "#/monitoring/runs";
+  await until(() => $(`tr[data-run="${ids.run_id}"] [data-status]`), 3000, "the run and its results");
+  assert.ok(reads(new RegExp(`/runs/${ids.run_id}/outcomes$`)).length > 0);
+  assert.ok(reads(new RegExp(`/runs/${ids.run_id}/campaign-results$`)).length > 0);
+});
+
+test("one run with nothing recorded: the empty page, and no request for outcomes, the control-group input or a consent report it cannot have", async () => {
+  roi = NOTHING;
+  const record = fixture("run").run;
+  assert.ok(!("consent_report.json" in (record.artefacts || {})), "this run was not gated by a consent ledger");
+  w.location.hash = "#/monitoring/alerts";
+  await until(() => heading() === "Alerts", 3000, "another screen");
+  calls.length = 0;
+  w.location.hash = `#/monitoring/runs/${ids.run_id}`;
+  await until(() => $("#pb-outcomes"), 3000, "the upload form");
+  assert.match(text(), /No outcomes have been added for this run yet\./);
+  assert.equal($$(".apierr").length, 0);
+  assert.equal(reads(/\/runs\/[^/]+\/(outcomes|incrementality-input)$/).length, 0);
+  assert.equal(reads(/\/privacy\/runs\//).length, 0, "no consent report: the run's own record lists none");
+  roi = null;
+});
+
+test("a run whose record lists a consent report asks for it; one the value view says has outcomes asks for them", async () => {
+  roi = { run_id: ids.run_id, status: "measured", source: "outcome_ingestion", campaign_id: null };
+  const record = fixture("run");
+  runBody = { ...record, run: { ...record.run, artefacts: { ...(record.run.artefacts || {}), "consent_report.json": "k" } } };
+  w.location.hash = "#/monitoring/alerts";
+  await until(() => heading() === "Alerts", 3000, "another screen");
+  calls.length = 0;
+  w.location.hash = `#/monitoring/runs/${ids.run_id}`;
+  await until(() => reads(/\/privacy\/runs\/[^/]+\/consent-report$/).length > 0, 3000, "the consent report to be asked for");
+  await settle(8);
+  assert.ok(reads(new RegExp(`/runs/${ids.run_id}/outcomes$`)).length > 0, "outcomes exist: they are asked for");
+  runBody = record;
+  roi = null;
 });

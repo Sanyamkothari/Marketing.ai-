@@ -5,14 +5,24 @@
 // It registers two screens - Results (`#/results`) and Settings (`#/settings`), drawn by `pages.js` -
 // and the links under a run's results (`registerResultLink`): Model health, the Schedule and the
 // report, which used to be top-level menu items. The top bar's four places are `ui/chrome.js`'s.
+// Plan M M173 adds the Help pages (`#/help/glossary`, `#/help/whats-new`, drawn by `help.js`) and their
+// two entries in the Help (?) menu.
 
 import { accessStatus } from "../../chrome.js";
 import { skeleton } from "../../dom.js";
-import { announceModulesChanged, canAccess, registerModule, registerResultLink, resultsListsHtml } from "../router.js";
+import {
+  announceModulesChanged,
+  canAccess,
+  registerModule,
+  registerNavSlot,
+  registerResultLink,
+  resultsListsHtml,
+} from "../router.js";
 import { engineVersion, getAllRuns, getProofs, getSummary, waitingForApproval } from "./api.js";
+import { glossaryEntry, glossaryHtml, loadWhatsNew, whatsNewEntry, whatsNewHtml } from "./help.js";
 import { injectStyles, resultsHtml, settingsHtml } from "./pages.js";
 
-export const ROUTES = ["results", "settings"];
+export const ROUTES = ["results", "settings", "help"];
 
 const hashParts = () => window.location.hash.replace(/^#\/?/, "").split("/").filter(Boolean);
 
@@ -55,15 +65,32 @@ async function renderSettings(app, parts) {
   paint(draw(await engineVersion()));
 }
 
+/** `#/help/glossary` (also bare `#/help`) and `#/help/whats-new`: the Help menu's two pages (M173). */
+async function renderHelp(app, parts) {
+  const paint = painter(app, parts);
+  if (parts[1] === "whats-new") {
+    paint(whatsNewHtml(await loadWhatsNew()));
+    document.title = "What's new · Marketing AI";
+    return;
+  }
+  paint(glossaryHtml());
+  document.title = "Glossary · Marketing AI";
+}
+
 registerModule({
   name: "simple",
   routes: ROUTES,
   render: async (app, parts) => {
     injectStyles();
     if (parts[0] === "settings") await renderSettings(app, parts);
+    else if (parts[0] === "help") await renderHelp(app, parts);
     else await renderResults(app, parts);
   },
 });
+
+// The Help (?) menu's Glossary and What's new, between the tour and feedback that `modules/pilot` adds.
+registerNavSlot("help", { html: glossaryEntry, order: 20 });
+registerNavSlot("help", { html: whatsNewEntry, order: 40 });
 
 // --- under a run's results: the screens that used to be menu items ---------------------------------
 

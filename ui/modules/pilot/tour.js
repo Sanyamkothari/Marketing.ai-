@@ -20,7 +20,60 @@ const SEEN_KEY = "marketing-ai:pilot-tour-seen";
 /** Where the top bar's active item is drawn: the outline's last resort for any step. */
 const ACTIVE_NAV = "#pb-bar .topnav .tn-item.on";
 
+/**
+ * The tour outside the sample data (Plan M M173): the real pages, in the order a new person meets
+ * them. Every step is `optional`: when none of its elements is on the page (a role that may not open
+ * it, a page that has not drawn) the tour moves on after a moment instead of pointing at nothing.
+ */
+export function generalSteps() {
+  return [
+    {
+      title: "Home",
+      text: "Your goals, laid out by customer stage. The bar at the top takes you anywhere: Home, Connections, Results and Settings.",
+      hash: "#/",
+      targets: [".timeline-wrap", ".uc-list"],
+      optional: true,
+    },
+    {
+      title: "Connections",
+      text: "Where your customer data and the AI services come from. Connect a source once and every goal can use it.",
+      hash: "#/connections",
+      targets: ["main.screen .card", "main.screen"],
+      optional: true,
+    },
+    {
+      title: "Results",
+      text: "Every list you have made and every campaign you have measured, newest first. Open one to see who to contact and what it was worth.",
+      hash: "#/results",
+      targets: ["[data-module='simple'] .card", "[data-module='simple']"],
+      optional: true,
+    },
+    {
+      title: "Reports",
+      text: "Model results and each campaign's value in rupees, ready to share as a page or a PDF.",
+      hash: "#/pilot",
+      targets: ["[data-pe-reports]"],
+      optional: true,
+    },
+    {
+      title: "Settings",
+      text: "Things you set up once: privacy, schedules, costs and the advanced tools.",
+      hash: "#/settings",
+      targets: ["[data-settings-main]", "[data-settings-advanced]"],
+      optional: true,
+    },
+    {
+      title: "Help",
+      text: "The question mark is always here. Take this tour again, read the glossary, send feedback or see what is new.",
+      hash: null,
+      targets: ["#pb-bar .tb-help-btn"],
+      optional: true,
+    },
+  ];
+}
+
 export function tourSteps(demo) {
+  if (!tourAvailable(demo)) return generalSteps();
   const m = demo && demo.manifest;
   const uc = m ? encodeURIComponent(m.use_case_id) : null;
   return [
@@ -95,10 +148,12 @@ function markSeen() {
 
 let card = null;
 let offer = null;
-let current = { steps: [], index: 0 };
+let current = { steps: [], index: 0, dir: 1 };
 let outlined = null;
 let finder = null;
 let returnFocus = null;
+let returnToHelp = false;
+const HELP_BUTTON = "#pb-bar .tb-help-btn";
 
 const narrow = () => typeof window.matchMedia === "function" && window.matchMedia("(max-width: 700px)").matches;
 
@@ -117,7 +172,9 @@ function unoutline() {
 function outline(step) {
   if (outlined && outlined.isConnected) return;
   unoutline();
-  const found = [...step.targets, ACTIVE_NAV]
+  // A sample-data step falls back to the bar's marked place; an optional one points at its own
+  // elements or at nothing, so that `watchTarget` can move on when they are not there.
+  const found = (step.optional ? step.targets : [...step.targets, ACTIVE_NAV])
     .map((selector) => document.querySelector(selector))
     .find(visible);
   if (!found || !card) return;
@@ -137,8 +194,29 @@ function outline(step) {
 /** Screens paint after their data arrives, and repaint: keep looking while the step is shown. */
 function watchTarget(step) {
   clearInterval(finder);
-  finder = setInterval(() => outline(step), 300);
+  let waited = 0;
+  finder = setInterval(() => {
+    outline(step);
+    waited += TOUR_TIMING.findEveryMs;
+    // An optional step whose elements never appeared (a role that may not open the page, a page that
+    // is not there) is skipped, in the direction the person was going.
+    if (step.optional && !outlined && waited >= TOUR_TIMING.skipAfterMs) move(current.dir);
+  }, TOUR_TIMING.findEveryMs);
   outline(step);
+}
+
+/** How often a step looks for its elements, and how long it waits for them before an optional one is skipped. */
+export const TOUR_TIMING = { findEveryMs: 300, skipAfterMs: 3000 };
+
+/** Go `dir` steps from the current one: past the end finishes, before the start stays on the first. */
+function move(dir) {
+  const { steps, index } = current;
+  const next = index + dir;
+  if (next >= steps.length) {
+    close();
+    return;
+  }
+  show(steps, Math.max(next, 0), dir);
 }
 
 function close() {
@@ -148,17 +226,21 @@ function close() {
   if (card) card.remove();
   card = null;
   markSeen();
-  if (returnFocus && returnFocus.isConnected) returnFocus.focus();
+  // The top bar is drawn again on every route the tour visits, so the button it started from is a new
+  // element by now: find the Help button again rather than lose the person's place.
+  const back = returnFocus && returnFocus.isConnected ? returnFocus : returnToHelp ? document.querySelector(HELP_BUTTON) : null;
+  if (back) back.focus();
   returnFocus = null;
+  returnToHelp = false;
 }
 
 function onKey(event) {
   if (event.key === "Escape" && card && !event.peInternal) close();
 }
 
-function show(steps, index) {
+function show(steps, index, dir = 1) {
   const step = steps[index];
-  current = { steps, index };
+  current = { steps, index, dir };
   if (!card) {
     card = document.createElement("section");
     card.id = "pe-tour";
@@ -176,7 +258,7 @@ function show(steps, index) {
         close();
         return;
       }
-      show(current.steps, action === "back" ? at - 1 : at + 1);
+      move(action === "back" ? -1 : 1);
     });
   }
   const last = index === steps.length - 1;
@@ -204,11 +286,17 @@ function closeOffer(remember) {
   if (remember) markSeen();
 }
 
-/** Start at step 1 (from the Help menu, or the offer). Starting is the person's choice: it navigates. */
+/**
+ * Start at step 1 (from the Help menu, or the offer). Starting is the person's choice: it navigates.
+ * With the sample data seeded it is the sample-data tour; anywhere else (Plan M M173) it walks the
+ * real pages, skipping a step whose elements are not there.
+ */
 export function startTour(demo) {
-  if (!tourAvailable(demo)) return;
   closeOffer(false);
-  if (!card) returnFocus = document.activeElement;
+  if (!card) {
+    returnFocus = document.activeElement;
+    returnToHelp = Boolean(returnFocus && returnFocus.matches && returnFocus.matches(HELP_BUTTON));
+  }
   show(tourSteps(demo), 0);
 }
 

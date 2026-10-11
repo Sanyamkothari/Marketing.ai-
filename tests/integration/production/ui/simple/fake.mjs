@@ -30,6 +30,11 @@ export async function installWholePage({ hash = "#/", world }) {
   const server = (request) => {
     const { method, path: p, query } = request;
     const ok = (body) => ({ status: 200, body });
+    // `world.extra(request)`: a test's own answers, asked first (Plan M M173); `undefined` falls through.
+    if (typeof world.extra === "function") {
+      const answer = world.extra(request);
+      if (answer) return answer;
+    }
     if (method === "GET" && p === "/industries") return ok(fixture("industries"));
     if (method === "GET" && p.startsWith("/use-cases/")) return ok(fixture("use_case"));
     if (method === "GET" && p === "/models") return ok(world.models || fixture("models"));

@@ -32,9 +32,12 @@ export function chooseIndustry(payload, wanted) {
   );
 }
 
-/** The route of an industry's overview; the default one keeps the bare `#/` it always had. */
-export const industryHref = (payload, id) =>
-  id === payload.default_industry ? "#/" : `#/industry/${encodeURIComponent(id)}`;
+/**
+ * Where an industry's journey is opened. Plan M M173: there is one Home for every business, and
+ * `#/industry/<id>` is no longer a page (it goes Home), so every journey opens at the bare `#/`. The
+ * goals of the other industries are listed on Home itself (`otherGoalsHtml`).
+ */
+export const industryHref = () => "#/";
 
 /**
  * Where a use case's screens lead back to, as `{ href, label }`: the journey of the industry file
@@ -217,6 +220,31 @@ function cardHtml(u, sample) {
   )}</span>${tags ? `<span class="uc-tags">${tags}</span>` : ""}</span><span class="chev" aria-hidden="true">›</span></a>`;
 }
 
+/**
+ * The goals that belong to another industry's journey, which Home no longer opens as a page of its own
+ * (Plan M M173): one closed section under the timeline, a link per available goal that Home does not
+ * already show, grouped by the industry that lists it. Nothing a person could open before is lost.
+ */
+export function otherGoalsHtml(payload, current) {
+  const shown = new Set(cardsOf(current).map((u) => u.id));
+  const groups = [];
+  for (const industry of payload.industries || []) {
+    if (industry.id === current.id) continue;
+    const goals = cardsOf(industry).filter((u) => isAvailable(u) && !shown.has(u.id));
+    for (const u of goals) shown.add(u.id);
+    if (goals.length) groups.push({ name: industry.name, goals });
+  }
+  if (!groups.length) return "";
+  return `<details class="adv ov-other" data-other-goals><summary>Goals for other kinds of business</summary>${groups
+    .map(
+      (g) =>
+        `<h3>${esc(g.name)}</h3><ul class="ov-other-list">${g.goals
+          .map((u) => `<li><a href="#/uc/${esc(u.id)}">${esc(u.name)}</a></li>`)
+          .join("")}</ul>`,
+    )
+    .join("")}</details>`;
+}
+
 export function overviewHtml(payload, wanted = null) {
   injectStyles();
   const industry = chooseIndustry(payload, wanted);
@@ -252,6 +280,7 @@ export function overviewHtml(payload, wanted = null) {
     ${forYouHtml()}${empty}
     <div class="ov-tools">${coloursTip(industry)}</div>
     <div class="timeline-wrap"><div class="timeline">${columns}</div></div>
+    ${otherGoalsHtml(payload, industry)}
   </main>`;
 }
 
@@ -267,6 +296,10 @@ const CSS = `
 .ov .foryou a{color:var(--brand-blue);font-weight:500}
 .ov .foryou a:hover{text-decoration:underline}
 .ov .ov-line{margin:0 0 16px;font-size:13px;color:var(--muted)}
+.ov .ov-other{margin-top:24px}
+.ov .ov-other h3{margin:12px 0 4px;font-size:13px;color:var(--ink2)}
+.ov .ov-other-list{margin:0;padding:0 0 0 18px;font-size:13px}
+.ov .ov-other-list a{color:var(--brand-blue)}
 .ov .ov-tools{display:flex;justify-content:flex-end}
 .ov .ov-keys{display:flex;flex-direction:column;gap:8px}
 .ov .ov-key{display:flex;align-items:center;gap:8px;color:var(--ink)}

@@ -554,10 +554,39 @@ async function renderReport(app, kind, id) {
   );
   document.title = `${noun} · Marketing AI`;
   const { main, live } = screen;
+  const industriesAsked = settle(getIndustries());
+  if (readiness) {
+    // A readiness report belongs to one dataset build. A link by goal (a use case id, which is what a
+    // person types or an older link carries) is followed to that goal's newest build; a goal nothing has
+    // been built for gets its own sentence, not "no longer exists" and a pair of failed requests.
+    const [builds, known] = await Promise.all([settle(listDatasets()), industriesAsked]);
+    if (!live()) return;
+    const built = builds.value ? builds.value.datasets || [] : null;
+    const other = built && !built.some((d) => d.dataset_id === id);
+    const newest = other
+      ? built
+          .filter((d) => d.use_case === id)
+          .sort((a, b) => String(b.built_at || "").localeCompare(String(a.built_at || "")))[0]
+      : null;
+    if (newest) {
+      window.location.replace(`#/pilot/view/readiness/${encodeURIComponent(newest.dataset_id)}`);
+      return;
+    }
+    const goal = other ? useCaseIndex(known).byId.get(id) : null;
+    if (goal) {
+      main.innerHTML = `${head([place, parent, { label: noun }], noun, null)}${noticeCard({
+        title: `No data check for ${goal.name} yet`,
+        text: "A data check is made when your tables are built into a dataset, and nothing has been built for this goal yet.",
+        action: { label: "Back to Build data", href: "#/pilot/kit" },
+      })}`;
+      screen.commit();
+      return;
+    }
+  }
   const [doc, page, industries, models] = await Promise.all([
     settle(getReportDoc(readiness ? readinessUrl(id, "json") : resultsUrl(id, "json"))),
     settle(getReportHtml(readiness ? readinessUrl(id, "html") : resultsUrl(id, "html"))),
-    settle(getIndustries()),
+    industriesAsked,
     readiness ? Promise.resolve({ value: null, error: null }) : settle(listModels()),
   ]);
   if (!live()) return;
