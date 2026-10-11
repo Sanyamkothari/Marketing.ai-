@@ -569,6 +569,15 @@ MILESTONE_TESTS: Final[Mapping[str, tuple[str, ...]]] = {
         "tests/agentic/test_read_tools.py",
         "tests/unit/measurement/test_campaign_migration.py",
     ),
+    # M136 (DEC-1402), pooling across comparable campaigns. The nightly coverage test
+    # (tests/statistical/test_pooling_coverage.py, DEC-1300 (e)) is left out, as for M137. test_cycle_schedules.py is
+    # M107's file and gained the test that the measure firing hands the config root to pooling.
+    "M136": (
+        "tests/unit/measurement/test_pooling.py",
+        "tests/unit/measurement/test_pooling_summary.py",
+        "tests/unit/measurement/test_cycle_schedules.py",
+        "tests/integration/measurement/test_campaign_pooling.py",
+    ),
 }
 """Milestone id -> the test files (or directories, with a trailing `/`) that prove it is built.
 

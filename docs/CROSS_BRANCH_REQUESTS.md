@@ -2003,6 +2003,43 @@ Nothing was renamed or removed. With `agentic.enabled` off the app creates no ta
 **What I did meanwhile.** `value_segment` reads the stored artefact directly; this is documented in
 `docs/AGENTIC.md`.
 
+### 2026-10-11 — plan-k M136 (on main) → Plan J (owners of M107's `engine/scheduling/firing.py` and `engine/measurement/cycle.py`, M105's `engine/measurement/summary.py` and `api/routes/campaigns.py`, M104's `engine/pilot/proof.py`), Phase 4b (owner of `engine/scheduling/`): pooling across comparable campaigns (record of additive edits)
+
+**What changed** (DEC-1402 (f), (g), (i)), each additive and inert while `pooling.enabled` is off (the default):
+
+* `engine/measurement/cycle.py`: `measure_recorded` and `measure_step` gain `config_root: Path | None = None`,
+  forwarded to `measure_recorded`; with pooling on, every comparable campaign's `pooled_estimate.json` is rewritten
+  after the report is stored. `learn_from_campaign` adds `pooled_prior` to `learn_record.json` only when pooling is on
+  and the campaign was pooled.
+* `engine/scheduling/firing.py`: the `ScheduleKind.MEASURE` branch of `ScheduleFirer` now passes
+  `config_root=services.config_root`, as the treat-list and learn branches already did. One line; behaviour is
+  unchanged with the default config.
+* `engine/measurement/summary.py`: `build_summary` gains an optional `store: CampaignStore | None = None` and the
+  summary an `estimated` list, absent when pooling is off. `GET /campaigns/summary` (`api/routes/campaigns.py`) now
+  passes the campaign store; with pooling on the summary may rewrite stale `pooled_estimate.json` files (aggregate
+  only), with it off the store is never read and the summary is byte-identical. `POST /campaigns/{id}/measure` passes
+  the route's config root.
+* `engine/pilot/proof.py` (Plan E's file, M104's Pack): an Estimated line and a count line beside the measured
+  difference, never the benefit line, shown only when `pooled_estimate.json` is current. That check also reads the
+  member campaigns' `incrementality_report.json`, so those keys appear in the Pack's artefacts list only when pooling
+  is on.
+* `configs/measurement.yaml` (new; `pooling` section, shared with M138's `harm_alarm` section).
+
+**What is needed.** Nothing; a branch that builds a `StepOutcome` positionally or adds `measure_step` arguments
+should merge by keyword.
+
+**What I did meanwhile.** `tests/unit/measurement`, `tests/integration/measurement/test_campaign_pooling.py`,
+`test_learn_default_unchanged.py`, `test_campaign_epochs.py` and the Proof Pack tests pass on `main` after the merge.
+
+### 2026-10-11 — plan-k M136 (on main) → Phase 4b (owner of `configs/privacy.yaml` and `engine/privacy/layout.py`): one aggregate campaign file (record of in-place edits)
+
+**What changed** (DEC-1402 (j)): `campaigns/<id>/pooled_estimate.json` (estimates, ranges and campaign ids, no
+customer id) is listed as an aggregate campaign file in `engine/measurement/campaign.py`'s file table, the aggregate
+comment in `configs/privacy.yaml` and the table in `engine/privacy/layout.py`'s docstring (beside Plan L M159's
+`doctor_memory` row). It is not added to `row_level_campaign_artefacts`, so retention and erasure are unchanged.
+
+**What is needed.** Nothing; this is a record.
+
 ### 2026-09-23 — plan-e-pilot (on main) → all branches: every change Plan E made outside its own files and blocks
 
 **What is needed.** Nothing from anybody; this is the announcement §3 asks for. Measured with

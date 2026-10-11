@@ -160,7 +160,8 @@ _LOGGER = get_logger(__name__)
 # Codes (DEC-1402): each joins Plan K's code list with a plain-language help entry at integration.
 # ---------------------------------------------------------------------------
 POOL_TOO_FEW: Final[str] = "POOL_TOO_FEW"
-"""Fewer than three comparable campaigns have a final result: nothing is pooled, and the reason is shown."""
+"""Fewer than four comparable campaigns (or `pooling.min_campaigns`, if higher) have a final result: nothing is
+pooled, and the reason is shown."""
 POOL_NO_SPREAD: Final[str] = "POOL_NO_SPREAD"
 """A warning, never blocking: the comparable campaigns differ by no more than noise, so each is drawn as far towards
 their average as the method allows; that usually means too little data, not equal effects."""

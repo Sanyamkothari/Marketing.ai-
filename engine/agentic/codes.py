@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from typing import Final
 
-__all__ = ["AGENTIC_CODES", "PLAN_K_CODES"]
+__all__ = ["AGENTIC_CODES", "MEASUREMENT_CODES", "PLAN_K_CODES"]
 
 AGENTIC_CODES: Final[frozenset[str]] = frozenset(
     {
@@ -53,5 +53,14 @@ AGENTIC_CODES: Final[frozenset[str]] = frozenset(
 )
 """M132's codes (DEC-1401), joined into `PLAN_K_CODES` below."""
 
-PLAN_K_CODES: Final[frozenset[str]] = frozenset() | AGENTIC_CODES
+MEASUREMENT_CODES: Final[frozenset[str]] = frozenset(
+    {
+        # M136 (DEC-1402): pooling across comparable campaigns (`engine.measurement.pooling.POOLING_CODES`).
+        "POOL_TOO_FEW",  # fewer than four (or pooling.min_campaigns) comparable campaigns: nothing is pooled
+        "POOL_NO_SPREAD",  # a warning: the comparable campaigns differ by no more than chance
+    }
+)
+"""The measurement milestones' codes (M136, M138), joined into `PLAN_K_CODES` below."""
+
+PLAN_K_CODES: Final[frozenset[str]] = frozenset() | AGENTIC_CODES | MEASUREMENT_CODES
 """Empty at M130; each Plan K milestone adds the codes it raises."""

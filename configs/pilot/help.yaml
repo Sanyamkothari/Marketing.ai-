@@ -674,6 +674,15 @@ codes:
     title: "There is no such run"
     meaning: "The run named does not exist, or it was recorded in another workspace."
     fix: "Open the run again from the Runs page, or check the run id."
+  # --- Plan K M136: Estimated figures pooled across comparable campaigns (DEC-1402 (e), (f)) -----------------------------
+  POOL_TOO_FEW:
+    title: "Not enough comparable campaigns to estimate"
+    meaning: "An Estimated figure draws a campaign's measured difference towards the average of comparable campaigns: the same use case, outcome and window, channels and offers, group of held-back customers and client, with groups chosen at random. That needs at least four of them with a final result, or more if configs/measurement.yaml sets min_campaigns higher; with three, the method cannot move the figure yet. Until there are enough, the campaign is shown only as measured. Nothing is wrong with the campaign."
+    fix: "Measure more comparable campaigns; the Estimated figure appears once there are enough."
+  POOL_NO_SPREAD:
+    title: "Comparable campaigns differ by no more than chance"
+    meaning: "A warning, not an error. The comparable campaigns' results differ by no more than chance explains, so each Estimated figure is drawn as far towards their average as the method allows ((k-3)/(k-1) of the way for k campaigns). This usually means there is too little data to tell the campaigns apart, not that their effects are equal. The measured figures, and the value proven to date, are unchanged."
+    fix: "Read the measured figures first. The Estimated figures become more telling as comparable campaigns gather more customers."
 
 settings:
   actions.bands[*].min_score:
