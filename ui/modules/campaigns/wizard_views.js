@@ -176,13 +176,13 @@ export function progressHtml({ learning, share = null }) {
  * that role is not held here: their list is built straight away and they approve the new model on the Review
  * screen, in the same click as the plan (M181 part C, DEC-1611; `reviewHtml`).
  */
-export function waitingHtml() {
+export function waitingHtml({ own = false } = {}) {
+  const who = own
+    ? "Marketing AI has learned from your customers. You started this learning, so another person with the Approver role must approve what it learned before the contact list is built. The campaign waits until then and carries on here."
+    : "Marketing AI has learned from your customers. Before it builds the contact list, someone with the Approver role must approve what it learned. The campaign waits until then and carries on here.";
   return noticeHtml({
     title: "Waiting for an approval",
-    text: [
-      "Marketing AI has learned from your customers. Before it builds the contact list, someone with the Approver role must approve what it learned. The campaign waits until then and carries on here.",
-      "An Approver finds it under Waiting for approval. Come back to this page once it is approved.",
-    ],
+    text: [who, "An Approver finds it under Waiting for approval. Come back to this page once it is approved."],
     action: { label: "Open Waiting for approval", href: "#/approvals" },
     attrs: 'data-cw-waiting="wait"',
   });
@@ -278,10 +278,33 @@ export const APPROVE_BOTH_LABEL = "Approve the new model and this plan, then dow
  *   - refused: the list cannot be sent; start again.
  * Returns `{ lead, buttons, note }`.
  */
+/** The Review and Send screens' words for a list whose model's approval could not be checked. */
+export const MODEL_UNKNOWN_TEXT =
+  "Whether the model behind this list is approved could not be checked, so nothing can be approved or downloaded yet. This page tries again by itself.";
+
+/** ... and for a list built with a new model that can no longer be approved. */
+export const MODEL_SUPERSEDED_TEXT =
+  "Another model came into use while the new model behind this list waited for an approval, so it can no longer be approved and this list cannot be sent. Start again: the list is then built with the model in use now.";
+
 function decisionParts({ campaign, model, canApprove, busy }) {
   const restart = stepHref("customers", campaign.use_case_id);
   const again = `<a class="btn quiet" href="${esc(restart)}" data-cw-again>Start again with another file</a>`;
   const state = (model && model.state) || "approved";
+  if (state === "unknown") {
+    // The registry did not answer: whether the model is approved is not known, so nothing is offered (fail closed).
+    return {
+      lead: `<div class="cw-problem" data-cw-model-unknown>${p(MODEL_UNKNOWN_TEXT)}${model.error ? errorBox(model.error, { retry: true }) : ""}</div>`,
+      buttons: again,
+      note: "",
+    };
+  }
+  if (state === "superseded") {
+    return {
+      lead: p(MODEL_SUPERSEDED_TEXT, "data-cw-model-superseded"),
+      buttons: `<a class="btn primary" href="${esc(restart)}" data-cw-restart>Start again</a>`,
+      note: "",
+    };
+  }
   if (state === "refused") {
     return {
       lead: p(
@@ -333,7 +356,9 @@ function decisionParts({ campaign, model, canApprove, busy }) {
  * (when the list has one: its range when the engine gives one, `expectedValue`), the results date. Lines: the
  * expected value, the cost, the compliance result (when the switch is on), the results date. `policy` is the
  * list's run's `policy_recommendation.json` (or null). `canApprove` is whether this person may register the
- * test plan; `model` is `{ state, canApprove, own }` for the model behind the list. `busy` is the button's
+ * test plan; `model` is `{ state, canApprove, own, error }` for the model behind the list (`state` from
+ * `listModelState`: approved, pending, refused, superseded, or unknown when the registry did not answer, which offers
+ * nothing). `busy` is the button's
  * label while its calls are on their way, else "".
  */
 export function reviewHtml({
@@ -406,7 +431,7 @@ const STATUS = { live: { chip: "Live", title: "Your campaign is live" }, measure
  * link to the same file. Otherwise (a refresh, a person who comes back later) the download is the primary
  * button, as it always was: nothing claims a download this page did not start.
  */
-export function sendHtml({ campaign, plan, downloadHref, resultsOn, downloaded = false }) {
+export function sendHtml({ campaign, plan, downloadHref, resultsOn, downloaded = false, held = null }) {
   const status = STATUS[campaign.status] || { chip: String(campaign.status || ""), title: "Your campaign" };
   const when = resultsOn ? ` Add its results after ${fmtDay(resultsOn)}: the campaign's page will ask for them.` : "";
   const tech = techDetails([
@@ -417,6 +442,9 @@ export function sendHtml({ campaign, plan, downloadHref, resultsOn, downloaded =
   const listWord = esc(term("contactList").toLowerCase());
   const open = (kind) =>
     `<a class="btn ${kind}" href="#/campaigns/${encodeURIComponent(campaign.campaign_id)}" data-cw-open>Open the campaign</a>`;
+  // `held` (M181 part C review): the list's model is not approved, or that could not be checked. A plan registered
+  // elsewhere does not make it sendable: no download is offered until the model is approved.
+  if (held) return heldSendHtml({ campaign, status, held, open });
   const lead = downloaded
     ? `Your ${listWord} is downloading. Send it from your e-mail or messaging tool.`
     : `Download the ${listWord} and send it from your e-mail or messaging tool.`;
@@ -428,4 +456,28 @@ export function sendHtml({ campaign, plan, downloadHref, resultsOn, downloaded =
     `<p class="cw-p" data-cw-live>${status.chip ? `<span class="chip" data-cw-status>${esc(status.chip)}</span> ` : ""}${lead}${esc(when)}</p>${actions(buttons)}`,
     "data-cw-send",
   )}${tech ? `<div class="cw-tech">${tech}</div>` : ""}`;
+}
+
+/** Send for a list whose model is not approved (`held`: pending, refused, superseded or unknown): no download. */
+function heldSendHtml({ campaign, status, held, open }) {
+  const words = {
+    pending:
+      "The contact list was built with a new model that still waits for an Approver's approval, so it cannot be downloaded yet. This page carries on once it is approved.",
+    refused: "An Approver turned down the new model this list was built with, so this list cannot be sent.",
+    superseded: MODEL_SUPERSEDED_TEXT,
+    unknown: MODEL_UNKNOWN_TEXT,
+  };
+  const primary =
+    held === "pending"
+      ? `<a class="btn primary" href="#/approvals" data-cw-approvals>Open Waiting for approval</a>`
+      : held === "unknown"
+        ? ""
+        : `<a class="btn primary" href="${esc(stepHref("customers", campaign.use_case_id))}" data-cw-restart>Start again</a>`;
+  return card(
+    status.title,
+    `<div class="cw-problem" data-cw-send-held="${esc(held)}">${p(words[held] || MODEL_UNKNOWN_TEXT)}</div>${actions(
+      `${primary}${open(primary ? "quiet" : "secondary")}`,
+    )}`,
+    "data-cw-send",
+  );
 }

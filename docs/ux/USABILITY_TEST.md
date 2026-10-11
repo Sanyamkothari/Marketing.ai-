@@ -340,8 +340,11 @@ from the file and the new model is approved too. That is the walk the test makes
 - Inside the wizard, M177's own measure (decisions after the goal and the file are chosen) is **2** for a first campaign,
   within 5.
 - The last click does, in order and each only after the one before it worked: approve the new model (first campaign
-  only, and only for a person with the Approver role; anyone else waits on step 2 with the way to Waiting for approval,
-  as before), register the test plan, then download the contact list. The test checks, through the API, that no plan
+  only, and only for a person with the Approver role who did not start the learning; anyone else, and with sign-in on
+  the Approver who started it, waits on step 2 with the way to Waiting for approval, and nothing is built for them),
+  register the test plan, then download the contact list. Until that model is approved, no screen offers its list's
+  download or plan (Review, Send and the campaign's own page), and when whether it is approved cannot be checked,
+  none does either. The test checks, through the API, that no plan
   exists before that click and that the plan is registered and frozen (one version, its hash equal to the campaign's,
   nothing measured yet) at the moment the page starts the download: the page records its own calls in order and reads
   the server then, before the browser asks for the file (`tests/fixtures/last_click.py`). The file downloaded is checked to be the contact list the API serves for the campaign's run,

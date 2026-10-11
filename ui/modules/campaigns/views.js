@@ -198,10 +198,41 @@ function valueTile(model) {
   return "";
 }
 
-/** The Overview's one primary button, by status. */
+/**
+ * A contact list whose model is not approved (M181 part C review, DEC-1611; `listHold` is `pending`, `refused`,
+ * `superseded` or `unknown`): what the page says instead of offering the download or the plan.
+ */
+export const LIST_HOLD = Object.freeze({
+  pending:
+    "This contact list was made with a new model that an Approver has not approved yet, so it cannot be downloaded or planned. An Approver finds it under Waiting for approval.",
+  refused: "An Approver turned down the new model this contact list was made with, so it cannot be downloaded. Start a new campaign for this goal.",
+  superseded:
+    "Another model came into use before the new model this contact list was made with was approved, so it cannot be downloaded. Start a new campaign for this goal.",
+  unknown: "Whether the model behind this contact list is approved could not be checked, so it cannot be downloaded right now. Try again in a moment.",
+});
+
+/** The one primary action for a held list: Waiting for approval, a new campaign, or none while it is unknown. */
+function holdAction(model) {
+  const hold = model.listHold;
+  if (hold === "pending") return { label: "Open Waiting for approval", href: "#/approvals", attrs: 'data-primary="approvals"' };
+  if (hold === "refused" || hold === "superseded") {
+    return {
+      label: "Start a new campaign",
+      href: `#/campaigns/new/customers/${encodeURIComponent(model.campaign.use_case_id)}`,
+      attrs: 'data-primary="restart"',
+    };
+  }
+  return null;
+}
+
+/** A held list's state while the campaign is not measured yet (a measured one keeps its report), else null. */
+const heldNow = (model) => (model.listHold && model.status.key !== "measured" ? model.listHold : null);
+
+/** The Overview's one primary button, by status. A campaign whose list is held offers no plan, download or results. */
 export function primaryAction(model) {
   const { campaign, status, contactListHref } = model;
   const id = campaign.campaign_id;
+  if (heldNow(model)) return holdAction(model);
   switch (status.key) {
     case "draft":
       return {
@@ -278,7 +309,8 @@ function whatWasSent(model) {
 function overviewHtml(model) {
   const { campaign, status } = model;
   const c = counts(campaign);
-  const step = nextStep(model, day);
+  const held = heldNow(model);
+  const step = held ? LIST_HOLD[held] : nextStep(model, day);
   const primary = primaryAction(model);
   const tiles = [
     tile("Contacted", customers(c.intended_treated), { attrs: "data-tile-contacted" }),
@@ -289,7 +321,7 @@ function overviewHtml(model) {
   ].join("");
   return `<section class="card" data-overview><h3>Where it stands</h3><div class="card-body cp-stand">
       <p class="cp-state">${statusChip(status)}${tagsHtml(campaign)}</p>
-      <p class="cp-step" data-next-step>${esc(step)}</p>
+      <p class="cp-step" data-next-step${held ? ` data-list-held="${esc(held)}"` : ""}>${esc(step)}</p>
       <div class="btn-row">${actionLink(primary, "primary")}${refreshHtml(model)}</div>
     </div></section>
     <div class="kpis cp-kpis">${tiles}</div>
@@ -356,7 +388,9 @@ function audienceHtml(model) {
       text: "This campaign was not sent from a list made here, so there is no contact list to show.",
     })}</section>`;
   }
-  const download = `<a class="btn primary" href="${esc(contactListHref)}" download data-download="contact-list">Download contact list</a>`;
+  const download = model.listHold
+    ? `<p class="cp-warn" data-list-held="${esc(model.listHold)}">${esc(LIST_HOLD[model.listHold] || LIST_HOLD.unknown)}</p>`
+    : `<a class="btn primary" href="${esc(contactListHref)}" download data-download="contact-list">Download contact list</a>`;
   if (!audience || audience.loading) {
     return `<section class="card" data-audience><h3>${esc(term("contactList"))}</h3><div class="card-body"><p class="muted" role="status">Loading the contact list…</p><div class="btn-row">${download}</div></div></section>`;
   }
@@ -486,7 +520,8 @@ const TAB_BODY = { overview: overviewHtml, audience: audienceHtml, results: resu
 /**
  * One campaign's page. `model` holds `campaign`, `view` (`GET /campaigns/{id}`), `plan`, `status`, `goal`, `tab`,
  * and what each tab needs: `summary` (the contact list's counts), `proof` (the Value Proof Pack as data), `run`,
- * `audience`, `results` and `refresh` (screen state), `contactListHref`, `canAdd`, `canRefresh`.
+ * `audience`, `results` and `refresh` (screen state), `contactListHref`, `listHold` (the list's model is not
+ * approved: no download, `LIST_HOLD`), `canAdd`, `canRefresh`.
  */
 export function campaignPageHtml(model) {
   const { campaign, goal, tab } = model;

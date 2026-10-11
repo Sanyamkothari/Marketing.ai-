@@ -26,6 +26,7 @@ import {
   stoppedHtml,
   waitingHtml,
 } from "../../../../../../ui/modules/campaigns/wizard_views.js";
+import { LIST_HOLD } from "../../../../../../ui/modules/campaigns/views.js";
 
 const UC = "hillstrom-email";
 const CAMPAIGN = "c_20261011_c9276210";
@@ -126,6 +127,7 @@ test("the states no recording reaches carry no engine word either", () => {
     learning: progressHtml({ learning: true, share: 0.4 }),
     list: progressHtml({ learning: false, share: null }),
     "waiting-other": waitingHtml(),
+    "waiting-own": waitingHtml({ own: true }),
     stopped: stoppedHtml({ ucId: UC, detail: { run: { run_id: "r_x", error: { message: "Training failed: run out of memory" } } }, reason: "The work stopped before the list was ready." }),
     refused: noticeHtml({ title: "The contact list could not be started", text: ["Choose the file of customers once more; it is checked against what Marketing AI learned."] }),
   };
@@ -147,13 +149,28 @@ test("the states no recording reaches carry no engine word either", () => {
     "review-new-model-held": ["review", review({ state: "pending", canApprove: false, own: false })],
     "review-new-model-own": ["review", review({ state: "pending", canApprove: true, own: true })],
     "review-model-refused": ["review", review({ state: "refused", canApprove: true, own: false })],
+    // M181 part C review: the registry did not answer (fails closed), and a new model that can no longer be approved.
+    "review-model-unknown": [
+      "review",
+      review({ state: "unknown", canApprove: true, own: false, error: { code: "STORE_BUSY", message: "The registry is busy." } }),
+    ],
+    "review-model-superseded": ["review", review({ state: "superseded", canApprove: true, own: false })],
     "review-no-role": ["review", review({ state: "pending", canApprove: true, own: false }, { canApprove: false })],
     "send-downloaded": ["send", sendHtml({ campaign, plan: null, downloadHref: "/runs/r_x/treat_list.csv", resultsOn: null, downloaded: true })],
   };
+  for (const held of ["pending", "refused", "superseded", "unknown"]) {
+    steps[`send-held-${held}`] = ["send", sendHtml({ campaign, plan: null, downloadHref: "/runs/r_x/treat_list.csv", resultsOn: null, held })];
+  }
   for (const [id, [step, body]] of Object.entries(steps)) {
     holder.innerHTML = pageHtml(step, body);
     const v = violations(visibleText(holder), {});
     assert.ok(v.ok, describe(id, v));
+  }
+  // The campaign's own page says the same of a held list (M176's views, `LIST_HOLD`), in the same words.
+  for (const [held, words] of Object.entries(LIST_HOLD)) {
+    holder.innerHTML = `<p>${words}</p>`;
+    const v = violations(visibleText(holder), {});
+    assert.ok(v.ok, describe(`campaign-page-held-${held}`, v));
   }
 });
 

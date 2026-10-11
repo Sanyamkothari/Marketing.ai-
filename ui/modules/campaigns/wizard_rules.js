@@ -358,8 +358,9 @@ export const SHARED_STEPS = Object.freeze({ review: Object.freeze(["audience", "
  *     built with it, and the Approver approves it in the same click as the plan;
  *   - `refused`: archived without ever being approved or promoted, which is what turning a waiting model down
  *     does (`POST /models/{model_id}/reject`); its list cannot be sent.
- * Anything else (a version the registry does not answer for, a candidate scored by name on the classic pages)
- * is `approved`, as before this change: nothing is held on a guess.
+ * Anything else (a version missing from a registry answer that did arrive, a candidate scored by name on the
+ * classic pages) is `approved`, as before this change. Whether the registry answered at all is not this
+ * function's question: `listModelState` says `unknown` when it did not, and nothing is offered then.
  */
 export function modelState(version) {
   if (!version) return "approved";
@@ -367,3 +368,32 @@ export function modelState(version) {
   if (version.status === "archived" && !version.approved_at && !version.promoted_at) return "refused";
   return "approved";
 }
+
+/** What the registry records for a decision taken when the goal had no current model (`engine/contracts.py`). */
+export const NO_CHAMPION_AT_DECISION = "__none__";
+
+/**
+ * Where the model behind a list stands, from the registry's answer for the goal (`GET /models?use_case=`) and the
+ * id the list's run names (M181 part C review, DEC-1611). It fails closed:
+ *   - `unknown`: the registry's answer is missing (the call failed): nothing may be approved or downloaded on
+ *     the strength of a guess, so the screens hold the list and ask again;
+ *   - `superseded`: a model still waiting whose comparison was made against a current model that is no longer
+ *     the current one (another was approved or promoted meanwhile). The server refuses to approve it
+ *     (`CHAMPION_CHANGED`, DEC-047), so its list can never be sent: the person starts again;
+ *   - otherwise `modelState` of the version: `approved`, `pending` or `refused`.
+ */
+export function listModelState(models, modelId) {
+  if (!models || !Array.isArray(models.versions)) return "unknown";
+  const version = versionById(models, modelId);
+  const state = modelState(version);
+  if (state !== "pending") return state;
+  const measured = version.measured_against_champion_id;
+  // A row registered before the field existed says nothing about its comparison: the server approves it unchecked.
+  if (measured === null || measured === undefined) return "pending";
+  const expected = measured === NO_CHAMPION_AT_DECISION ? null : measured;
+  const current = currentModel(models);
+  return (current ? current.model_id : null) === expected ? "pending" : "superseded";
+}
+
+/** Whether a list may be downloaded or planned: only once its model is approved (`listModelState`). */
+export const listHeld = (state) => state !== "approved";

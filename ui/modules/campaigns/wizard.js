@@ -20,7 +20,11 @@
 // built with it straight away, and the Review screen's one button says it approves the new model too: it
 // calls the approvals page's own route (`POST /models/{id}/approve`) first, then the plan, then the download,
 // each only once the one before it worked. Anyone else is held on step 2, as before, with the way to the
-// approvals page; nothing is built for them before an Approver has approved.
+// approvals page, and so is the Approver who started the learning while sign-in is on (the server refuses the
+// trainer's own approval, separation of duties); nothing is built for them before another Approver has approved.
+// A list built with a model that is not approved (yet) is held wherever it could be sent from: Review, Send and
+// the campaign's own page (`listModelState`) offer no plan and no download until it is. They fail closed: when
+// the registry cannot be read, nothing is offered and the page asks again.
 //
 // The step a URL asks for is checked against the server: a campaign with a test plan opens on Send, one
 // without on its Draft screen (Review). The only thing kept in the browser is the file chosen for a first campaign,
@@ -58,7 +62,8 @@ import {
   expectedValue,
   goalCards,
   isWizardRoute,
-  modelState,
+  listHeld,
+  listModelState,
   parseRoute,
   planBody,
   progressOf,
@@ -345,19 +350,38 @@ async function onRun(token, uc, models, detail) {
 }
 
 /**
+ * Whether the signed-in person started this learning: the server then refuses their own approval of what it
+ * learned (separation of duties, DEC-862: only between signed-in people, from the run's `requested_by`).
+ * `GET /auth/me` failing is not a guess either way: it reaches the error screen, with "Try again".
+ */
+async function startedByMe(detail) {
+  const me = await getMe();
+  const principal = me && me.principal;
+  const by = detail && detail.run && detail.run.requested_by;
+  return Boolean(principal && principal.kind === "user" && by && by === principal.user_id);
+}
+
+/**
  * The model learned: use it when it is the current one. A new model waiting for an approval is used straight
- * away by a person with the Approver role, who approves it on the Review screen together with the plan (M181
- * part C); anyone else waits here, as before, until an Approver has approved it.
+ * away by a person with the Approver role who did not start the learning: they approve it on the Review screen
+ * together with the plan (M181 part C). Anyone else waits here, as before, until another Approver has approved
+ * it, and nothing is built for them. A new model that can no longer be approved (another one became current
+ * while it waited, `superseded`) is passed over for the current one, as a version that was never promoted is.
  */
 async function afterLearning(token, uc, models, detail) {
   const version = versionById(models, detail.run.model_version_id);
   const status = version && version.status;
   const current = currentModel(models);
-  const waiting = status === "pending_approval";
-  if (waiting && !canAccess("POST", "/models/{model_id}/approve")) {
-    show(token, "customers", () => waitingHtml());
-    later(token, WAIT_POLL_MS); // an Approver elsewhere may approve it
-    return;
+  const waiting = listModelState(models, detail.run.model_version_id) === "pending";
+  if (waiting) {
+    const mayApprove = canAccess("POST", "/models/{model_id}/approve");
+    const own = mayApprove && (await startedByMe(detail));
+    if (!ours(token)) return;
+    if (!mayApprove || own) {
+      show(token, "customers", () => waitingHtml({ own }));
+      later(token, WAIT_POLL_MS); // an Approver elsewhere may approve it
+      return;
+    }
   }
   const model = status === "champion" || waiting ? version : current;
   if (!model) {
@@ -445,6 +469,11 @@ async function campaignStepScreen(token, route) {
   const runId = (campaign.run_ids || [])[0];
   if (step === "send") {
     const plan = view.plan;
+    // A plan can be registered elsewhere (Plan J's page) for a list whose model is not approved: Send then holds
+    // the download too. A run or a registry that cannot be read holds it (`unknown`), and the page asks again.
+    const [sent, registry] = await Promise.all([getRun(runId).catch(() => null), registryOf(campaign.use_case_id)]);
+    if (!ours(token)) return;
+    const held = sent && sent.run ? listModelState(registry.models, sent.run.model_version_id) : "unknown";
     show(token, "send", () =>
       sendHtml({
         campaign,
@@ -452,15 +481,17 @@ async function campaignStepScreen(token, route) {
         downloadHref: treatListUrl(runId),
         resultsOn: (plan && plan.analysis_date) || resultsDate(campaign),
         downloaded: ui.justDownloaded === `#/${ui.parts.join("/")}`,
+        held: listHeld(held) ? held : null,
       }),
     );
+    if (held === "unknown" || held === "pending") later(token, WAIT_POLL_MS);
     return;
   }
-  const [detail, scoring, list, models] = await Promise.all([
+  const [detail, scoring, list, registry] = await Promise.all([
     getRun(runId),
     getScoringSummary(runId),
     getTreatListSummary(runId),
-    getModels(campaign.use_case_id).catch(() => null),
+    registryOf(campaign.use_case_id),
   ]);
   const preview = await getPlanPreview(campaign.campaign_id, baseRateOf(detail.run, scoring)).catch(() => null);
   const [cost, compliance, policy] = await Promise.all([
@@ -472,12 +503,14 @@ async function campaignStepScreen(token, route) {
       : Promise.resolve(null),
   ]);
   // The model the list was built with, and whether this person may approve it while it waits (M181 part C).
-  const version = versionById(models, detail.run.model_version_id);
+  // A registry that did not answer is `unknown`, never `approved`: nothing is offered on a guess.
+  const version = versionById(registry.models, detail.run.model_version_id);
   const model = {
-    state: modelState(version),
+    state: listModelState(registry.models, detail.run.model_version_id),
     canApprove: canAccess("POST", "/models/{model_id}/approve"),
     own: ui.review.own,
     version,
+    error: registry.error,
   };
   const context = { campaign, detail, preview, model, runId };
   show(
@@ -503,8 +536,20 @@ async function campaignStepScreen(token, route) {
       if (button) button.addEventListener("click", () => approve(context));
     },
   );
-  // Held for an Approver elsewhere: the screen carries on by itself once the new model is approved.
-  if (model.state === "pending" && (!model.canApprove || model.own)) later(token, WAIT_POLL_MS);
+  // Held for an Approver elsewhere: the screen carries on by itself once the new model is approved. A registry
+  // that did not answer is asked again the same way.
+  if ((model.state === "pending" && (!model.canApprove || model.own)) || model.state === "unknown") {
+    later(token, WAIT_POLL_MS);
+  }
+}
+
+/** The goal's registry (`GET /models?use_case=`) as `{ models, error }`: a failed call is kept, not swallowed. */
+async function registryOf(ucId) {
+  try {
+    return { models: await getModels(ucId), error: null };
+  } catch (error) {
+    return { models: null, error };
+  }
 }
 
 /**
@@ -566,16 +611,18 @@ async function approveModel(version) {
  */
 async function approve({ campaign, detail, preview, model, runId }) {
   if (ui.review.busy) return;
+  // Only a list whose model is approved, or waiting for this person's approval, has the button at all.
+  if (!model || (model.state !== "approved" && model.state !== "pending")) return;
   const here = window.location.hash;
   const stay = () => window.location.hash === here;
-  let approvedNow = false;
+  let triedModel = false;
   try {
-    if (model && model.state === "pending") {
+    if (model.state === "pending") {
       ui.review = { busy: "Approving the new model…", error: null, own: false };
       draw();
       try {
+        triedModel = true;
         await approveModel(model.version);
-        approvedNow = true;
       } catch (error) {
         if (error instanceof ApiError && error.code === "SEPARATION_OF_DUTIES") {
           ui.review = { busy: "", error: null, own: true };
@@ -598,9 +645,11 @@ async function approve({ campaign, detail, preview, model, runId }) {
   } catch (error) {
     ui.review = { busy: "", error, own: false };
     if (!stay()) return;
-    // The new model was approved before the refusal: the screen is drawn again from the server, so trying
-    // again only fixes the plan.
-    if (approvedNow) renderWizard(ui.app, hashParts());
+    // Once the new model's approval was tried, the screen is drawn again from the server, whatever the answer:
+    // approved before the refusal (trying again only fixes the plan), or approved, turned down or passed over
+    // elsewhere meanwhile (the button then matches where the model stands, instead of posting the same approval
+    // again). The error stays on screen: the route is the same.
+    if (triedModel) renderWizard(ui.app, hashParts());
     else draw();
   }
 }

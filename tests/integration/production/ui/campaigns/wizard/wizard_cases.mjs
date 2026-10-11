@@ -51,6 +51,8 @@ const world = {
   list, // the list's summary (treat_list_summary.json); a case may answer another
   preview, // the planner's preview; a case may answer another
   policy: null, // the list's policy_recommendation.json, when a case has one (else 404, as a non-uplift run)
+  modelsAnswer: null, // an answer for GET /models other than `models` (a failure), when a case needs one
+  me: null, // GET /auth/me other than the recorded one (sign-in on), when a case needs one
 };
 
 const ok = (body, status = 200) => ({ status, body });
@@ -59,12 +61,12 @@ const notFound = { status: 404, body: { detail: { code: "NOT_FOUND", message: "N
 const server = (request) => {
   const { method, path: p, query, body } = request;
   if (method !== "GET") world.posted.push({ method, path: p, body });
-  if (method === "GET" && p === "/auth/me") return ok(fx("me"));
+  if (method === "GET" && p === "/auth/me") return ok(world.me || fx("me"));
   if (method === "GET" && p === "/industries") return ok(fx("industries"));
   if (method === "GET" && p === `/use-cases/${UC}`) return ok(fx("use_case"));
   if (method === "GET" && p === "/use-cases/order-fulfillment") return ok(fx("use_case_ops"));
   if (method === "GET" && p === `/use-cases/${UC}/cost-estimate`) return ok(fx("cost_score"));
-  if (method === "GET" && p === "/models") return ok(world.models);
+  if (method === "GET" && p === "/models") return world.modelsAnswer || ok(world.models);
   if (method === "POST" && p === "/runs") {
     if (world.runAnswer) {
       const answer = world.runAnswer;
@@ -80,10 +82,13 @@ const server = (request) => {
     if (kind === "artefacts" && name === "scoring_summary.json") return ok(scoring);
     if (kind === "artefacts" && name === "treat_list_summary.json") return ok(world.list);
     if (kind === "uplift" && name === "policy_recommendation.json") return world.policy ? ok(world.policy) : notFound;
+    // The served contact list, for the campaign's own page (its Audience tab reads it): two customers.
+    if (kind === "treat_list.csv") return ok(`${world.runs[id].run.primary_key || "customer_id"},treat\n1,1\n2,1\n`);
     return notFound;
   }
   if (method === "POST" && p.startsWith("/models/") && p.endsWith("/approve")) {
-    if (world.approveAnswer) return world.approveAnswer;
+    // A case's answer; a function answers and may change the registry as the server would have meanwhile.
+    if (world.approveAnswer) return typeof world.approveAnswer === "function" ? world.approveAnswer(request) : world.approveAnswer;
     const id = p.split("/")[2];
     world.models = { versions: [version(id, "champion", "r_train")] };
     return ok(world.models.versions[0]);
@@ -658,6 +663,246 @@ test("Review: a list built with a model an Approver turned down cannot be sent; 
   } finally {
     world.models = fx("models_empty");
   }
+});
+
+// --- M181 part C review: the approval hold fails closed, and follows the model wherever its list can be sent ----
+
+const reviewHash = `#/campaigns/new/review/${CID}`;
+const registryDown = { status: 503, body: { detail: { code: "STORE_BUSY", message: "The registry is busy." } } };
+/** A version waiting for an approval whose decision was measured against `against` (the registry's own field). */
+const waitingAgainst = (modelId, against, runId = "r_train") => {
+  const row = version(modelId, "pending_approval", runId);
+  return { ...row, version: { ...row.version, measured_against_champion_id: against, approved_at: null, promoted_at: null } };
+};
+
+test("Review, first campaign: when the registry cannot be read nothing is approved, planned or downloaded, for anyone (fails closed)", async () => {
+  const LIST_MODEL = scoreRun.run.model_version_id;
+  for (const approver of [false, true]) {
+    world.view = fx("campaign_draft");
+    world.models = { versions: [version(LIST_MODEL, "pending_approval", "r_train")] };
+    world.modelsAnswer = registryDown;
+    if (!approver) denied.add("POST /models/{model_id}/approve");
+    downloads.length = 0;
+    const before = world.posted.length;
+    try {
+      await open(reviewHash);
+      await until(() => $("[data-cw-model-unknown]"), 3000, "the notice");
+      assert.equal($("[data-cw-approve]"), null, "no Approve on a guess");
+      assert.equal(primaries().length, 0);
+      assert.match(text(), /Whether the model behind this list is approved could not be checked/);
+      assert.ok($("[data-cw-model-unknown] .apierr"), "the registry's error is shown, with Try again");
+      assert.deepEqual(postedSince(before), [], "no approval, no plan");
+      assert.equal(downloads.length, 0, "no download");
+    } finally {
+      world.modelsAnswer = null;
+      denied.clear();
+    }
+  }
+  // Once the registry answers, the screen says where the model stands (an Approver: the one button).
+  await open(reviewHash);
+  await until(() => $("[data-cw-approve=model-and-plan]"), 3000, "the Approver's button once the registry answers");
+  world.models = fx("models_empty");
+});
+
+test("Review, first campaign: the model approved elsewhere meanwhile - the refused approval redraws from the server and the next click only plans", async () => {
+  const LIST_MODEL = scoreRun.run.model_version_id;
+  world.view = fx("campaign_draft");
+  world.models = { versions: [version(LIST_MODEL, "pending_approval", "r_train")] };
+  // Another Approver approved it from the bell after this screen was drawn: the server now refuses this approval.
+  world.approveAnswer = () => {
+    world.models = { versions: [version(LIST_MODEL, "champion", "r_train")] };
+    return {
+      status: 409,
+      body: { detail: { code: "INVALID_TRANSITION", message: "Only a model waiting for approval can be approved." } },
+    };
+  };
+  downloads.length = 0;
+  try {
+    await open(reviewHash);
+    await until(() => $("[data-cw-approve=model-and-plan]"), 3000, "the review");
+    const first = world.posted.length;
+    $("[data-cw-approve]").click();
+    await until(
+      () => $("[data-cw-approve=plan]") && /Only a model waiting for approval can be approved\./.test($("[data-cw-review]").textContent),
+      3000,
+      "the plain button, with the error",
+    );
+    assert.equal(downloads.length, 0, "nothing downloaded on the refused click");
+    assert.deepEqual(postedSince(first), [`/models/${LIST_MODEL}/approve`], "no plan on the refused click");
+    world.approveAnswer = null;
+    const before = world.posted.length;
+    $("[data-cw-approve]").click();
+    await until(() => w.location.hash === `#/campaigns/new/send/${CID}`, 3000, "Send");
+    assert.deepEqual(postedSince(before), [planPath], "the plan only: the approval is not posted again");
+    assert.equal(downloads.length, 1, "one download");
+  } finally {
+    world.approveAnswer = null;
+    world.models = fx("models_empty");
+  }
+});
+
+test("Review, first campaign: another model became current while it waited - the screen offers to start again, not the same approval", async () => {
+  const LIST_MODEL = scoreRun.run.model_version_id;
+  world.view = fx("campaign_draft");
+  world.models = { versions: [waitingAgainst(LIST_MODEL, rules.NO_CHAMPION_AT_DECISION)] };
+  world.approveAnswer = () => {
+    world.models = { versions: [waitingAgainst(LIST_MODEL, rules.NO_CHAMPION_AT_DECISION), version("m_other", "champion", "r_other")] };
+    return { status: 409, body: { detail: { code: "CHAMPION_CHANGED", message: "Another model became current meanwhile." } } };
+  };
+  downloads.length = 0;
+  try {
+    await open(reviewHash);
+    await until(() => $("[data-cw-approve=model-and-plan]"), 3000, "the review");
+    const before = world.posted.length;
+    $("[data-cw-approve]").click();
+    await until(() => $("[data-cw-model-superseded]"), 3000, "the superseded notice");
+    assert.match($("[data-cw-review]").textContent, /Another model became current meanwhile\./, "the server's refusal stays on screen");
+    assert.equal($("[data-cw-approve]"), null, "the same approval is not offered again");
+    assert.equal(primaries().length, 1);
+    assert.equal($("#app .btn.primary").getAttribute("data-cw-restart"), "");
+    assert.equal($("#app .btn.primary").getAttribute("href"), `#/campaigns/new/customers/${UC}`);
+    assert.deepEqual(postedSince(before), [`/models/${LIST_MODEL}/approve`], "no plan");
+    assert.equal(downloads.length, 0);
+    // Drawn afresh (a refresh, or a person coming back), it says the same without anyone clicking.
+    world.approveAnswer = null;
+    await open(reviewHash);
+    await until(() => $("[data-cw-model-superseded]"), 3000, "superseded on a fresh visit");
+    assert.equal($("[data-cw-approve]"), null);
+  } finally {
+    world.approveAnswer = null;
+    world.models = fx("models_empty");
+  }
+});
+
+test("Customers: with sign-in on, the Approver who started the learning is held on step 2 and nothing is built; another Approver goes on", async () => {
+  const recorded = fx("me");
+  const as = (userId, username) => ({ ...recorded, principal: { ...(recorded.principal || {}), kind: "user", user_id: userId, username } });
+  world.models = { versions: [version("m_wb_3", "pending_approval", "r_train3")] };
+  world.runs.r_train3 = runAs("r_train3", "train", "done", { model_version_id: "m_wb_3", requested_by: "u_trainer" });
+  world.me = as("u_trainer", "trainer");
+  try {
+    guided.host = null;
+    await open(`#/campaigns/new/customers/${UC}`);
+    await until(() => guided.host, 3000, "Guided setup mounted");
+    const input = $("#ag-file");
+    Object.defineProperty(input, "files", { value: [new w.File(["customer_id\n1\n"], "customers.csv", { type: "text/csv" })] });
+    input.dispatchEvent(new w.Event("change", { bubbles: true }));
+    const before = world.posted.length;
+    await open(`#/campaigns/new/customers/${UC}/r_train3`);
+    await until(() => $("[data-cw-waiting=wait]"), 3000, "the waiting notice");
+    assert.match(text(), /You started this learning, so another person with the Approver role must approve what it learned/);
+    assert.equal($("[data-cw-waiting=wait] a.btn.primary").getAttribute("href"), "#/approvals");
+    assert.deepEqual(postedSince(before), [], "no upload, no list, no campaign record: no Draft from an unapproved model");
+    // Another Approver (signed in as someone else) carries on: the list is built, to be approved on Review.
+    world.me = as("u_other", "other");
+    world.nextRun = ["r_list3"];
+    world.runs.r_list3 = runAs("r_list3", "score", "running");
+    await open(`#/campaigns/new/customers/${UC}/r_train3`);
+    await until(() => w.location.hash === `#/campaigns/new/customers/${UC}/r_list3`, 3000, "the list being built");
+    assert.equal(lastPost("/runs").body.model_version_id, "m_wb_3");
+  } finally {
+    world.me = null;
+    world.models = fx("models_empty");
+  }
+});
+
+test("Send: a plan registered elsewhere for a list whose model still waits does not make it downloadable", async () => {
+  const LIST_MODEL = scoreRun.run.model_version_id;
+  world.view = fx("campaign_planned");
+  downloads.length = 0;
+  try {
+    world.models = { versions: [version(LIST_MODEL, "pending_approval", "r_train")] };
+    await open(`#/campaigns/new/send/${CID}`);
+    await until(() => $("[data-cw-send-held=pending]"), 3000, "Send held");
+    assert.equal($("[data-cw-download]"), null, "no download link");
+    assert.equal($("#app .btn.primary").getAttribute("href"), "#/approvals");
+    assert.equal(primaries().length, 1);
+    // The registry cannot be read: held too.
+    world.modelsAnswer = registryDown;
+    await open(`#/campaigns/new/send/${CID}`);
+    await until(() => $("[data-cw-send-held=unknown]"), 3000, "Send held while unknown");
+    assert.equal($("[data-cw-download]"), null);
+    world.modelsAnswer = null;
+    // Approved: the download, as before.
+    world.models = { versions: [version(LIST_MODEL, "champion", "r_train")] };
+    await open(`#/campaigns/new/send/${CID}`);
+    await until(() => $("[data-cw-download]"), 3000, "the download once approved");
+    assert.equal(downloads.length, 0, "Send itself starts nothing");
+  } finally {
+    world.modelsAnswer = null;
+    world.models = fx("models_empty");
+  }
+});
+
+test("the campaign's own page: a Draft whose list's model still waits offers no download and no 'Plan the test'", async () => {
+  const LIST_MODEL = scoreRun.run.model_version_id;
+  // A Draft as the campaign page counts it: no plan, and its results date still ahead (the recorded one is past).
+  const draft = fx("campaign_draft");
+  world.view = { ...draft, campaign: { ...draft.campaign, treatment_start: "2099-01-01T00:00:00Z" } };
+  assert.equal(world.view.campaign.kind, "scored", "a list made here");
+  try {
+    world.models = { versions: [version(LIST_MODEL, "pending_approval", "r_train")] };
+    await open(`#/campaigns/${CID}/overview`);
+    await until(() => $("[data-list-held=pending]"), 3000, "the overview's hold");
+    assert.equal($("[data-primary=plan]"), null, "no 'Plan the test'");
+    assert.equal($("[data-download]"), null, "no download");
+    assert.equal($("[data-primary=approvals]").getAttribute("href"), "#/approvals");
+    assert.equal(primaries().length, 1);
+    await open(`#/campaigns/${CID}/audience`);
+    await until(() => $("[data-audience] [data-list-held=pending]"), 3000, "the audience tab's hold");
+    assert.equal($("[data-download]"), null, "no download on the Audience tab");
+    // Turned down: no download either, and a new campaign is the way on.
+    world.models = { versions: [waitingAgainst(LIST_MODEL, null)] };
+    world.models.versions[0].version.status = "archived";
+    await open(`#/campaigns/${CID}/overview`);
+    await until(() => $("[data-list-held=refused]"), 3000, "refused");
+    assert.equal($("[data-download]"), null);
+    assert.equal($("[data-primary=restart]").getAttribute("href"), `#/campaigns/new/customers/${UC}`);
+    // The registry cannot be read: the download is held (fails closed).
+    world.modelsAnswer = registryDown;
+    await open(`#/campaigns/${CID}/audience`);
+    await until(() => $("[data-audience] [data-list-held=unknown]"), 3000, "unknown");
+    assert.equal($("[data-download]"), null);
+    world.modelsAnswer = null;
+    // Approved: 'Plan the test' and the download, as before.
+    world.models = { versions: [version(LIST_MODEL, "champion", "r_train")] };
+    await open(`#/campaigns/${CID}/overview`);
+    await until(() => $("[data-primary=plan]"), 3000, "'Plan the test' once approved");
+    assert.equal($("[data-list-held]"), null);
+    await open(`#/campaigns/${CID}/audience`);
+    await until(() => $("[data-download=contact-list]"), 3000, "the download once approved");
+  } finally {
+    world.modelsAnswer = null;
+    world.models = fx("models_empty");
+  }
+});
+
+test("the model behind a list, read from the registry's answer: unknown when it did not answer, superseded when another became current", () => {
+  const M = "m_list";
+  const answer = (...rows) => ({ versions: rows });
+  assert.equal(rules.listModelState(null, M), "unknown", "no answer: unknown, never approved");
+  assert.equal(rules.listModelState(undefined, M), "unknown");
+  assert.equal(rules.listModelState({}, M), "unknown", "an answer without versions is not a registry answer");
+  assert.equal(rules.listModelState(answer(), M), "approved", "a version the registry does not know, as before");
+  assert.equal(rules.listModelState(answer(version(M, "champion", "r")), M), "approved");
+  assert.equal(rules.listModelState(answer(version(M, "pending_approval", "r")), M), "pending", "no comparison recorded");
+  assert.equal(rules.listModelState(answer(waitingAgainst(M, rules.NO_CHAMPION_AT_DECISION)), M), "pending", "still no current model");
+  assert.equal(
+    rules.listModelState(answer(waitingAgainst(M, rules.NO_CHAMPION_AT_DECISION), version("m_new", "champion", "r2")), M),
+    "superseded",
+    "a current model appeared meanwhile",
+  );
+  assert.equal(rules.listModelState(answer(waitingAgainst(M, "m_old"), version("m_old", "champion", "r0")), M), "pending");
+  assert.equal(
+    rules.listModelState(answer(waitingAgainst(M, "m_old"), version("m_new", "champion", "r2")), M),
+    "superseded",
+    "another model replaced the one it was compared with",
+  );
+  const refused = waitingAgainst(M, null);
+  refused.version.status = "archived";
+  assert.equal(rules.listModelState(answer(refused), M), "refused");
+  assert.equal(rules.listHeld("approved"), false);
+  for (const state of ["pending", "refused", "superseded", "unknown"]) assert.equal(rules.listHeld(state), true, state);
 });
 
 test("the model behind a list, as the Review screen reads it", () => {

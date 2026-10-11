@@ -20,6 +20,12 @@
 // then `POST /campaigns/{id}/outcomes`, then `POST /campaigns/{id}/measure`. "Refresh the list" is Phase 1's
 // `POST /runs` in score mode on the same customers, with the current approved model.
 //
+// A LIST WHOSE MODEL IS NOT APPROVED (M181 part C review, DEC-1611). The wizard builds an Approver's first list
+// with a new model that still waits for an approval, which they approve on its Review screen. Until it is
+// approved, this page offers neither the download nor "Plan the test" for that list: it reads the goal's registry
+// (`GET /models?use_case=`) and the wizard's own rule (`listModelState`). It fails closed: when the registry or
+// the list's run cannot be read, the download is held too and the page says so.
+//
 // Every event is delegated from `document`, so a repaint needs no re-binding.
 
 import { COST_NEEDS_CONFIRMATION } from "../../cost.js";
@@ -40,7 +46,9 @@ import {
   readContactList,
   treatListUrl,
 } from "./api.js";
+import { getModels } from "../../api.js";
 import { resetRunResultsLines } from "./links.js";
+import { listHeld, listModelState } from "./wizard_rules.js";
 import { outcomesPayload, refreshRequest } from "./requests.js";
 import { campaignStatus, goalName, GOAL_NAMES, shortName } from "./status.js";
 import {
@@ -186,13 +194,13 @@ async function renderNew(app, parts) {
 
 // --- the campaign page ---------------------------------------------------------------------------------------
 
-const page = { id: null, view: null, run: null, summary: null, proof: null };
+const page = { id: null, view: null, run: null, summary: null, proof: null, models: undefined };
 const results = { busy: null, error: null, notice: null };
 const refresh = { asking: false, busy: false, error: null, costMessage: null, started: null, startedHref: null };
 const audiences = new Map(); // run id -> { loading, error, list, query, page }
 
 function resetPage(id) {
-  Object.assign(page, { id, view: null, run: null, summary: null, proof: null });
+  Object.assign(page, { id, view: null, run: null, summary: null, proof: null, models: undefined });
   Object.assign(results, { busy: null, error: null, notice: null });
   Object.assign(refresh, {
     asking: false,
@@ -216,7 +224,7 @@ async function loadPage(id) {
   const view = await getCampaign(id);
   const campaign = view.campaign;
   const runId = runIdOf(campaign);
-  const [run, summary, proof] = await Promise.all([
+  const [run, summary, proof, models] = await Promise.all([
     runId
       ? getRun(runId).then(
           (b) => (b && b.run) || null,
@@ -225,9 +233,22 @@ async function loadPage(id) {
       : null,
     hasContactList(campaign) ? loadContactList(runId).then((answer) => answer.summary) : null,
     campaign.status === "measured" ? getProof(id).catch(() => null) : null,
+    // The registry, for a list made here: whether the model it was built with is approved (null: not answered).
+    hasContactList(campaign) ? getModels(campaign.use_case_id).catch(() => null) : undefined,
   ]);
   if (page.id !== id) return;
-  Object.assign(page, { view, run, summary, proof });
+  Object.assign(page, { view, run, summary, proof, models });
+}
+
+/**
+ * Where the model behind this campaign's contact list stands, when that holds the list back: `pending`,
+ * `refused`, `superseded` or `unknown` (the registry or the list's run could not be read); null when the list may
+ * be downloaded (its model is approved) or the campaign has no list made here.
+ */
+function listHoldOf(campaign, run, models) {
+  if (!hasContactList(campaign)) return null;
+  const state = run && run.model_version_id ? listModelState(models, run.model_version_id) : "unknown";
+  return listHeld(state) ? state : null;
 }
 
 /** What the page builders read (`views.js` `campaignPageHtml`). */
@@ -251,6 +272,7 @@ function model(tab) {
     results,
     refresh,
     contactListHref: hasContactList(campaign) ? treatListUrl(runId) : null,
+    listHold: listHoldOf(campaign, run, page.models),
     canAdd:
       canAccess("POST", "/uploads") &&
       canAccess("POST", "/campaigns/{campaign_id}/outcomes") &&
