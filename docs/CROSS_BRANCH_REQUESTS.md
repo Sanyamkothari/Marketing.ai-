@@ -2128,6 +2128,53 @@ overridable per run (with whatever value-direction check the suppression rules n
 answer into a setting the person ticks. **What Plan K did meanwhile.** The non-blocking question, which changes
 nothing either way (DEC-1409 (e)).
 
+### 2026-10-11 — plan-k M133 (on main) → trunk (owners of `api/main.py`, `pyproject.toml` and `requirements-freeze.txt`): the MCP app hook and the MCP SDK's pins (record of edits in the PLAN-K blocks)
+
+**What changed** (DEC-1404 (a), (i)): `api/main.py`'s PLAN-K block gains `_install_mcp` (a `PHASE_APP_HOOKS` entry
+after M132's `_install_agentic`), which mounts `/mcp` only when `mcp.enabled` is on and otherwise imports only
+`api.mcp.config`. `pyproject.toml`'s PLAN-K block pins `mcp==2.3.0` and the eleven packages it brought that nothing
+pinned before; `requirements-freeze.txt` lists the same versions. Both were moved into the PLAN-K blocks from the
+builder's marked lines at the end of the PLAN-J blocks; no existing pin changed. `/mcp` is not an API route, so the
+OpenAPI path set and `docs/API.md` are unchanged.
+
+**What is needed.** Nothing; this is a record.
+
+### 2026-10-11 — plan-k M133 (on main) → Plan K M130's switch file (`configs/agentic/agentic.yaml`, `engine/agentic/config.py`): `mcp.enabled` is now read (record of an in-place edit)
+
+**What changed** (DEC-1404 (a)): the builder, working before M130 reached its branch, put the MCP switch in its own
+`configs/agentic/mcp.yaml`. At integration the switch was moved to the one M130 declared, `mcp.enabled` in
+`configs/agentic/agentic.yaml`; `api.mcp.config.mcp_enabled` reads it there and then validates `mcp.yaml`, which keeps
+the server's settings only (a stray `enabled` there is refused as an unknown setting). `agentic.yaml`'s comment and
+`McpSwitch`'s description no longer say "nothing reads it yet". `tests/unit/agentic/test_flags.py` is unchanged and
+green; M133's own switch tests write both switches to `agentic.yaml`.
+
+**What is needed.** Nothing; this is a record.
+
+### 2026-10-11 — plan-k M133 (on main) → Plan J (owner of `POST /campaigns/audit` and the randomness check, M103): an assignment column whose name holds a JSON special character fails the audit (request)
+
+**Why.** While planting header canaries for the MCP text gate, M133 found that `POST /campaigns/audit` fails inside
+the randomness check when an assignment column's name holds a JSON special character (`:`, `"`, `[`, ...): LightGBM
+refuses the feature name. **What is needed.** Rename the features before LightGBM sees them (for example `f0..fn`,
+mapped back for display). **What Plan K did meanwhile.** Nothing in Plan J's files; the canaries avoid those characters
+in assignment columns and `docs/AGENTIC.md` §8.6 records the limit.
+
+### 2026-10-11 — plan-k M133 (on main) → Plan E (owner of `configs/pilot/help.yaml`): ten codes and one updated entry (announcement)
+
+**What changed** (DEC-1404 (j)): entries for `MCP_DEMO_ONLY`, `MCP_SCOPE_DENIED`, `MCP_RATE_LIMITED`, `MCP_TIMEOUT`,
+`MCP_GROUP_TOO_SMALL`, `MCP_RESULT_WITHHELD`, `MCP_NOT_STARTED`, `MCP_TOOL_FAILED`, and the existing access codes
+`AUTH_REQUIRED` and `AUTH_NOT_CONFIGURED`, which had none, written generically since the access layer raises them
+too. `CONFIG_INVALID`'s entry now names the three agentic files. `tests/unit/pilot/test_help.py` is green.
+
+**What is needed.** Nothing; this is an announcement.
+
+### 2026-10-11 — plan-k M142, found at M133's integration (on main) → trunk (owner of `tests/integration/test_api_config.py`): one route joins the OpenAPI path set (record of an in-place edit)
+
+**What changed** (DEC-1409 (g)): the path set gains `/uploads/{upload_id}/agent-session/assist`, M142's optional second
+opinion (404 `AGENTIC_DISABLED` while Plan K is off). M142's builder did not run this trunk test and its merge missed
+it; the M133 integration run found it.
+
+**What is needed.** Nothing; this is a record.
+
 ### 2026-09-23 — plan-e-pilot (on main) → all branches: every change Plan E made outside its own files and blocks
 
 **What is needed.** Nothing from anybody; this is the announcement §3 asks for. Measured with

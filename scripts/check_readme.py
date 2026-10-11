@@ -595,6 +595,14 @@ MILESTONE_TESTS: Final[Mapping[str, tuple[str, ...]]] = {
         "tests/unit/agent/test_advisor.py",
         "tests/integration/agent/test_assist_api.py",
     ),
+    # M133 (DEC-1404), the verifier over MCP on demo data.
+    "M133": (
+        "tests/unit/mcp/",
+        "tests/integration/mcp/test_scripted_client.py",
+        "tests/integration/mcp/test_threats.py",
+        "tests/integration/mcp/test_small_groups.py",
+        "tests/integration/mcp/test_injection_canaries.py",
+    ),
 }
 """Milestone id -> the test files (or directories, with a trailing `/`) that prove it is built.
 
