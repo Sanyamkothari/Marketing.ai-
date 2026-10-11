@@ -55,15 +55,9 @@ export const ROUTES = Object.freeze([
   { from: "industry/*", to: "#/overview", home: "overview", why: "the industry chooser is off; its pages were Home" },
   { from: "overview/*", to: null, home: "overview", why: "the Overview itself (M175)" },
   // Campaigns (M176, M177)
-  {
-    from: "results/*",
-    to: "#/campaigns",
-    home: "campaigns",
-    why: "Results' runs and campaigns are the Campaigns list",
-    // Plan J's `decide` module claims `campaigns` for one campaign's page and sends the bare `#/campaigns` back to
-    // `#/results`, so it is not the list: this redirect waits for the module that is (M176).
-    notBy: "decide",
-  },
+  // Plan J's `decide` module still claims `campaigns`, and since M176 its render asks M176's campaignsRoute() first,
+  // which draws the Campaigns list at the bare `#/campaigns`: the list exists, so Results redirects (no `notBy`).
+  { from: "results/*", to: "#/campaigns", home: "campaigns", why: "Results' runs and campaigns are the Campaigns list" },
   { from: "campaigns", to: null, home: "campaigns", why: "the Campaigns list (M176)" },
   { from: "campaigns/new/*", to: null, home: "campaigns", why: "the New campaign wizard (M177)" },
   { from: "campaigns/:id", to: "#/campaigns/:id/overview", home: "campaigns", why: "a campaign opens on its Overview tab" },

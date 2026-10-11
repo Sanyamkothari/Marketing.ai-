@@ -4,7 +4,7 @@
    five places. The table is checked against what the page really registers (every module's routes, read from the
    router after the whole page has loaded) plus the Phase 2 routes of the contract, so a route added later without
    a home fails here. The redirects are then followed on the whole page: only in the campaigns layout, only to a
-   page this build has (Results waits for the Campaigns list, not Plan J's campaign page), replacing the history
+   page this build has (Results goes to M176's Campaigns list, which Plan J's module now draws first), replacing the history
    entry, never bouncing between a page that sends the browser straight back and its old address, and redirecting a
    person who goes back to an old address from its new page (the Overview's '#/' links) again. */
 import { test } from "node:test";
@@ -199,8 +199,7 @@ test("from the Overview, the old Home address redirects again (the wordmark, a '
   assert.equal(w.location.hash, "#/overview");
 });
 
-test("Results waits for the Campaigns list: with only Plan J's campaign page, #/results stays put", async () => {
-  const owner = router.resolveRoute(["campaigns"]);
+test("Results goes to the Campaigns list (M176), with one history entry and no round trip", async () => {
   await visit(state, "#/settings");
   const seen = [];
   const listener = () => seen.push(w.location.hash);
@@ -210,15 +209,11 @@ test("Results waits for the Campaigns list: with only Plan J's campaign page, #/
   await settle(6);
   await untilStable(state);
   w.removeEventListener("hashchange", listener);
-  if (owner && owner.name === "decide") {
-    // Plan J's module claims `campaigns` but sends a bare #/campaigns back to #/results: not the list (row notBy)
-    assert.equal(w.location.hash, "#/results", "no redirect to a page that would send it back");
-    assert.deepEqual(seen, ["#/results"], "one address, no round trip");
-    assert.equal(w.history.length, before + 1, "one history entry: Back goes to where the person was");
-  } else {
-    assert.equal(w.location.hash, "#/campaigns", "the Campaigns list (M176) owns the address: Results goes there");
-    assert.equal(w.history.length, before + 1);
-  }
+  // Plan J's module still claims `campaigns`, but its render now asks M176's campaignsRoute() first: the list
+  assert.equal(w.location.hash, "#/campaigns", "the Campaigns list owns the address: Results goes there");
+  assert.ok(document.querySelector("[data-campaigns-list]"), "the Campaigns list is drawn, not sent back to #/results");
+  assert.ok(!seen.slice(1).includes("#/results"), `no round trip back to Results, saw ${seen.join(" ")}`);
+  assert.equal(w.history.length, before + 1, "the redirect replaced the entry");
 });
 
 test("a page that sends the browser straight back, while it is being drawn, is not bounced between", async () => {
@@ -281,12 +276,14 @@ test("a redirect is decided by the table alone: the unit rules", () => {
   assert.equal(layout.layoutRedirect("#/connections"), null, "bounced");
   layout.layoutDrawn("#/connections");
   assert.equal(layout.layoutRedirect("#/connections"), null, "drawn again on the same address: still not bounced");
-  // a row's notBy module does not count as the target's page
+  // since M176, Plan J's `decide` module draws the Campaigns list through campaignsRoute(): no row waits on `notBy`
+  assert.deepEqual(layout.ROUTES.filter((row) => row.notBy).map((row) => row.from), [], "no row is held back by a module");
   assert.equal(layout.layoutRedirect("#/settings"), null);
-  assert.equal(layout.layoutRedirect("#/results", { claimed: () => ({ name: "decide" }) }), null, "Plan J's stub");
-  assert.equal(layout.layoutRedirect("#/results", { claimed: () => ({ name: "campaigns" }) }), "#/campaigns", "M176's list");
+  assert.equal(layout.layoutRedirect("#/results", { claimed: () => ({ name: "decide" }) }), "#/campaigns", "M176's list, via decide");
   assert.equal(layout.layoutRedirect("#/settings"), null);
-  assert.equal(layout.layoutRedirect("#/connections", { claimed: () => ({ name: "decide" }) }), "#/data", "only its own row");
+  assert.equal(layout.layoutRedirect("#/results", { claimed: () => ({ name: "campaigns" }) }), "#/campaigns", "or its own module");
+  assert.equal(layout.layoutRedirect("#/settings"), null);
+  assert.equal(layout.layoutRedirect("#/connections", { claimed: () => ({ name: "decide" }) }), "#/data");
   assert.equal(layout.layoutRedirect("#/nothing-registers-this"), null, "an unknown address is left to app.js");
   assert.equal(layout.homeFor("#/nothing-registers-this"), null);
   layout.setUiLayout("anything else");
