@@ -9,9 +9,14 @@ exist and the API is byte-identical to Plan J's (the `PLAN-K` hook in `api/main.
 | `GET /agentic/proposals/{proposal_id}` | Viewer | One proposal: its payload, the evidence it cites and the policy's decisions. |
 | `POST /agentic/proposals/{proposal_id}/approve` | Approver, audited | Re-checks the policy with the facts as they are now, then executes it through the route function the product already has (a test plan: `api.routes.campaigns.register_plan`). Answers the receipt with the ledger checkpoint. |
 | `POST /agentic/proposals/{proposal_id}/reject` | Approver, audited | Rejects it. |
+| `POST /agentic/plans` | Analyst, audited | M139: the campaign planner from a warning card, the goal form or a goal in words (`engine.agentic.planner`); runs to the interrupt and answers the plan with its proposal, or the code it stopped with. Words need an AI service (`409 AI_NOT_CONNECTED`); a card and the form do not. |
+| `GET /agentic/plans/{plan_id}` | Viewer | M139: where a plan stands: its frame, the evidence, the candidates, the policy's decisions, the proposal, the narrative and, once approved, what was carried out. |
 
-There is no route that drafts or approves on an agent's behalf: an agent drafts through the tool registry
-(`engine.agentic.registry`), and only a signed-in person approves here. Refusals answer with the policy's code:
+There is no route that approves on an agent's behalf: an agent drafts through the tool registry
+(`engine.agentic.registry`) or the planner, and only a signed-in person approves here. An approved campaign
+plan the planner drafted is carried out through the product's own functions (M139): the treat list
+(`ensure_treat_list`), the campaign (`open_campaign`, the engine half of `POST /campaigns`) and its test plan
+(`api.routes.campaigns.register_plan`). Refusals answer with the policy's code:
 `403 POLICY_ROLE_SEPARATION` for the person it was proposed for, `409 POLICY_*` when a rule refuses it now,
 `409 PROPOSAL_TAMPERED` when the stored proposal is not the one the ledger recorded at draft time,
 `409 PROPOSAL_STALE`, `PROPOSAL_EXPIRED` or `PROPOSAL_NOT_PENDING`, `404 PROPOSAL_NOT_FOUND`.
@@ -32,6 +37,15 @@ from api.schemas import ErrorResponse
 from engine.access.roles import Principal, Role
 from engine.agentic.errors import AgenticError
 from engine.agentic.ledger import signer_for_data_dir
+from engine.agentic.planner import (
+    ExecuteActions,
+    PlannerDeps,
+    PlannerState,
+    PlanRequest,
+    execute_plan,
+    load_plan,
+    start_plan,
+)
 from engine.agentic.policy import TestPlanPayload
 from engine.agentic.proposals import Proposal, ProposalStatus, ProposalStore, ProposalSummary
 from engine.agentic.registry import ToolContext
@@ -65,6 +79,18 @@ POLICIES: Final[dict[tuple[str, str], RoutePolicy]] = {
     ),
     ("POST", "/agentic/proposals/{proposal_id}/reject"): _on_proposal(
         Role.APPROVER, "agentic.proposal_reject", "reject an agent proposal"
+    ),
+    # Plan K M139 (DEC-1406): the campaign planner. Drafting is the Analyst's, as drafting any proposal is
+    # (`engine.agentic.proposals.PROPOSER_ROLE`); reading a plan is a Viewer's (aggregates and ids only).
+    ("POST", "/agentic/plans"): RoutePolicy(
+        role=Role.ANALYST, action="agentic.plan_draft", purpose="have the planner draft a campaign plan"
+    ),
+    ("GET", "/agentic/plans/{plan_id}"): RoutePolicy(
+        role=Role.VIEWER,
+        action="agentic.plan_read",
+        purpose="see a drafted campaign plan",
+        object_type="plan",
+        object_param="plan_id",
     ),
 }
 """This router's rows of the access table: reading is a Viewer's (a proposal holds no customer row), deciding
@@ -111,10 +137,12 @@ def _context(
         raise _http(exc) from exc
 
 
-def _executor(request: Request, storage: Storage) -> Any:
+def _executor(request: Request, storage: Storage, ctx: ToolContext) -> Any:
     """Execute an approved proposal through the function the product's own route calls."""
 
     def execute(proposal: Proposal) -> str | None:
+        if proposal.kind == "campaign_plan":  # Plan K M139: a plan the planner drafted
+            return _execute_campaign_plan(proposal, request, storage, ctx)
         if proposal.kind != "test_plan":
             raise AgenticError(
                 "PROPOSAL_NOT_EXECUTABLE",
@@ -184,7 +212,7 @@ def _decide(
             principal=principal,
             reason=body.reason,
             tool_ctx=ctx,
-            execute=_executor(request, storage),
+            execute=_executor(request, storage, ctx),
         )
     except AgenticError as exc:
         set_audit_context(request, details={"reason_code": exc.code})
@@ -226,3 +254,179 @@ def reject_proposal(
     principal: PrincipalDep,
 ) -> ProposalReceipt:
     return _decide("reject", proposal_id, body, request, storage, root, settings, principal)
+
+
+# ---------------------------------------------------------------------------
+# Plan K M139 (DEC-1406): the campaign planner
+# ---------------------------------------------------------------------------
+class PlanView(StrictBase):
+    """`POST /agentic/plans` and `GET /agentic/plans/{plan_id}`: the plan, and its proposal once drafted."""
+
+    plan: PlannerState
+    proposal: Proposal | None = None
+
+
+def _planner_deps(request: Request, storage: Storage, settings: Settings) -> PlannerDeps:
+    """The registry, the model registry for the challenger card, and - when an AI service answers - the
+    Product AI through a Meter (`AGENT_PLANNER`, `AGENT_NARRATIVE`). No AI service: no meter, and the planner
+    refuses words with `AI_NOT_CONNECTED` and writes the rules-only narrative."""
+    from api.deps import get_registry
+    from engine.agentic.tools import default_registry
+    from engine.ai_service import AiNotConnectedError, resolve_client
+    from engine.aws_connection import profile_in_force
+    from engine.config import BudgetConfig, LlmConfig
+    from engine.generative.budget import Meter
+
+    client: Any = getattr(request.app.state, "agentic_llm_client", None)  # an in-process test's fake
+    llm = LlmConfig()
+    if client is None:
+        try:
+            resolved = resolve_client(
+                llm, slot="product", storage=storage, settings=settings, profile=profile_in_force()
+            )
+        except AiNotConnectedError:
+            resolved = None
+        if resolved is not None:
+            client, llm = resolved.client, resolved.llm
+    meter = (
+        None
+        if client is None
+        else Meter(client, job_id=f"agentic_plan_{utc_now():%Y%m%d%H%M%S}", llm=llm, budget=BudgetConfig())
+    )
+    try:
+        model_registry: Any = get_registry(request)
+    except Exception:  # no model registry on this deployment: no challenger card can be drawn
+        model_registry = None
+    return PlannerDeps(registry=default_registry(), meter=meter, model_registry=model_registry)
+
+
+def _plan_view(storage: Storage, state: PlannerState) -> PlanView:
+    proposal = None
+    if state.proposal_id is not None:
+        found = ProposalStore(storage).get(state.proposal_id)
+        proposal = found.model_copy(update={"status": found.status_at(utc_now())})
+    return PlanView(plan=state, proposal=proposal)
+
+
+@router.post(
+    "/agentic/plans",
+    response_model=PlanView,
+    status_code=201,
+    responses=_ERRORS,
+    summary="Have the planner draft a campaign plan from a warning card or a goal",
+)
+def draft_plan(
+    body: PlanRequest,
+    request: Request,
+    storage: StorageDep,
+    root: ConfigRootDep,
+    settings: SettingsDep,
+    principal: PrincipalDep,
+) -> PlanView:
+    """Run the planner to its interrupt. A plan that stops answers its code (`PLANNER_*`, `AI_NOT_CONNECTED`)
+    and is kept, so `GET /agentic/plans/{id}` shows how far it went."""
+    ctx = _context(request, storage, root, settings, principal)
+    try:
+        state = start_plan(body, ctx, _planner_deps(request, storage, settings))
+    except AgenticError as exc:
+        set_audit_context(request, details={"reason_code": exc.code})
+        raise _http(exc) from exc
+    if state.stopped is not None:
+        set_audit_context(request, object_id=state.plan_id, details={"reason_code": state.stopped.code})
+        raise http_error(state.stopped.status, state.stopped.code, state.stopped.message)
+    set_audit_context(request, object_id=state.plan_id)
+    return _plan_view(storage, state)
+
+
+@router.get(
+    "/agentic/plans/{plan_id}",
+    response_model=PlanView,
+    responses=_ERRORS,
+    summary="Where a drafted campaign plan stands",
+)
+def read_plan(plan_id: str, storage: StorageDep, root: ConfigRootDep, principal: PrincipalDep) -> PlanView:
+    from engine.agentic.config import require_enabled
+
+    try:
+        require_enabled(root)
+        state = load_plan(
+            ToolContext(storage=storage, principal=principal, config_root=root, clock=utc_now), plan_id
+        )
+    except AgenticError as exc:
+        raise _http(exc) from exc
+    return _plan_view(storage, state)
+
+
+def _execute_campaign_plan(proposal: Proposal, request: Request, storage: Storage, ctx: ToolContext) -> str:
+    """An approved campaign plan, through the product's own functions (`engine.agentic.planner.execute_plan`)."""
+    from api.routes.campaigns import get_campaign_store, register_plan
+    from api.routes.runs import requested_by
+    from engine.config import load_use_case
+    from engine.contracts import RunRecord
+    from engine.decide.treat_list import TreatListError, ensure_treat_list
+    from engine.measurement.cycle import CycleError, open_campaign
+    from engine.runs import RUN_FILENAME
+    from engine.storage import run_key
+
+    root = ctx.config_root
+    store = get_campaign_store(request)
+
+    def build(run_id: str) -> int:
+        try:
+            return ensure_treat_list(storage, run_id, config_root=root).total_rows
+        except TreatListError as exc:
+            raise AgenticError(exc.code, exc.message, status=409) from exc
+
+    def open_(run_id: str, window: int) -> str:
+        record = storage.read_model(run_key(run_id, RUN_FILENAME), RunRecord)
+        if record.finished_at is None:
+            raise AgenticError("RUN_NOT_SCORED", "The scoring run has not finished.", status=409)
+        try:
+            campaign = open_campaign(
+                storage,
+                store,
+                record,
+                load_use_case(record.use_case_id, root),
+                finished_at=record.finished_at,
+                treatment_start=None,
+                bands=None,
+                outcome_window_days=window,
+                name=None,
+                created_by=requested_by(request) or ctx.principal.user_id,
+                now=utc_now(),
+            )
+        except CycleError as exc:
+            raise AgenticError(exc.code, exc.message, status=exc.status) from exc
+        return campaign.campaign_id
+
+    def register(campaign_id: str, plan: Any) -> str:
+        try:
+            frozen = register_plan(campaign_id, plan, request, Response(), storage)
+        except HTTPException as exc:
+            raw: Any = exc.detail
+            detail: dict[str, Any] = raw if isinstance(raw, dict) else {}
+            raise AgenticError(
+                str(detail.get("code", "TEST_PLAN_INVALID")),
+                str(detail.get("message", "The test plan could not be registered.")),
+                status=exc.status_code,
+            ) from exc
+        return frozen.plan_hash
+
+    def schedule(use_case_id: str) -> str | None:
+        from api.routes.schedules import get_schedule_store
+        from engine.scheduling.schedules import ScheduleKind
+
+        try:
+            found = get_schedule_store(request).list(use_case_id=use_case_id, kind=ScheduleKind.MEASURE)
+        except Exception:  # no scheduler on this deployment: nothing measures on its own
+            return None
+        enabled = sorted(item.schedule_id for item in found if item.enabled)
+        return enabled[0] if enabled else None
+
+    return execute_plan(
+        proposal,
+        ctx,
+        ExecuteActions(
+            build_treat_list=build, open_campaign=open_, register_plan=register, measure_schedule=schedule
+        ),
+    )

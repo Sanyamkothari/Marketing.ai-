@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import re
 import secrets
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, Final, Literal
 
@@ -224,6 +224,10 @@ def ledger_mismatch(proposal: Proposal, entries: Sequence[Any]) -> tuple[str | N
     if "expires_at" in body:
         recorded["expires_at"] = body["expires_at"]
         stored["expires_at"] = proposal.expires_at.isoformat()
+    if "narrative_digest" in body or proposal.narrative is not None:
+        # Plan K M139: the wording shown under a proposal is checked like its payload.
+        recorded["narrative_digest"] = body.get("narrative_digest")
+        stored["narrative_digest"] = None if proposal.narrative is None else digest(proposal.narrative)
     changed = sorted(name for name in recorded if recorded[name] != stored[name])
     if changed:
         return f"its {', '.join(changed)} differ from what the ledger recorded when it was drafted", None
@@ -239,8 +243,17 @@ def submit_proposal(
     tool_ctx: ToolContext,
     evidence_ids: Sequence[str] = (),
     proposed_by: str | None = None,
+    narrate: Callable[[str, ProposalStatus], Mapping[str, Any] | None] | None = None,
+    ledger_refs: Mapping[str, str] | None = None,
 ) -> Proposal:
-    """Draft a proposal: run the policy, record it on the ledger, store it. Never executes anything."""
+    """Draft a proposal: run the policy, record it on the ledger, store it. Never executes anything.
+
+    Plan K M139: `narrate(proposal_id, status)` - the planner's claim-checked wording (`engine.agentic.claims`),
+    written once the policy has decided, so a recommendation can name the proposal and only an allowed one.
+    It is kept beside the payload, never in it (the payload digest excludes prose), and its digest goes on
+    the ledger entry, so the stored wording is checked like the payload. `ledger_refs` adds ids such as the
+    planner's `plan_id` to the ledger entry.
+    """
     from engine.agentic.config import load_policy, policy_version
     from engine.agentic.ledger import PROPOSAL_DRAFTED, PROPOSAL_REFUSED
 
@@ -277,8 +290,12 @@ def submit_proposal(
     decisions = evaluate(subject, build_context(subject, tool_ctx, policy), rules=rules)
     status: ProposalStatus = "pending" if allowed(decisions) else "refused"
     now = tool_ctx.clock()
+    proposal_id = f"prop_{secrets.token_hex(8)}"
+    narrative = None if narrate is None else narrate(proposal_id, status)
+    narrative_json: dict[str, Any] | None = None if narrative is None else jsonable(dict(narrative))
     proposal = Proposal(
-        proposal_id=f"prop_{secrets.token_hex(8)}",
+        proposal_id=proposal_id,
+        narrative=narrative_json,
         kind=kind,
         payload=canonical_payload,
         evidence_ids=tuple(sorted(set(evidence_ids))),
@@ -305,6 +322,9 @@ def submit_proposal(
             "proposed_by": who,
             "expires_at": proposal.expires_at.isoformat(),
             **_ledger_refs(canonical_payload),
+            # Plan K M139: the narrative's digest and the planner's ids, only when there are any.
+            **({} if narrative_json is None else {"narrative_digest": digest(narrative_json)}),
+            **{key: value for key, value in (ledger_refs or {}).items() if key in ("plan_id",)},
         },
         at=now,
     )

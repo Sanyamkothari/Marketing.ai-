@@ -61,6 +61,9 @@ def test_the_routes_exist_with_their_policies(agentic_world: World) -> None:
         ("GET", "/agentic/proposals/{proposal_id}"),
         ("POST", "/agentic/proposals/{proposal_id}/approve"),
         ("POST", "/agentic/proposals/{proposal_id}/reject"),
+        # Plan K M139: the campaign planner (tests/agentic/test_planner_routes.py checks their policies).
+        ("POST", "/agentic/plans"),
+        ("GET", "/agentic/plans/{plan_id}"),
     }
     policies = all_policies()
     assert policies[("POST", "/agentic/proposals/{proposal_id}/approve")].role is Role.APPROVER

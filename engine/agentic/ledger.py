@@ -89,6 +89,8 @@ APPROVAL_REFUSED: Final[str] = "approval.refused"
 EXECUTION_FAILED: Final[str] = "proposal.execution_failed"
 TEST_PLAN_FROZEN: Final[str] = "test_plan.frozen"
 EVIDENCE_LABEL: Final[str] = "evidence.label"
+CAMPAIGN_PLAN_EXECUTED: Final[str] = "campaign_plan.executed"
+"""Plan K M139: an approved campaign plan carried out (treat list, campaign, frozen test plan)."""
 
 SIGNED_KINDS: Final[frozenset[str]] = frozenset({PROPOSAL_APPROVED, TEST_PLAN_FROZEN, EVIDENCE_LABEL})
 """Approvals, test plans and evidence labels are signed (design §3.2)."""
@@ -122,6 +124,11 @@ BODY_KEYS: Final[frozenset[str]] = frozenset(
         "holdout_epoch",
         "holdout_salt_id",
         "result_ref",
+        # Plan K M139 (DEC-1406): the planner's run, the narrative's digest, and what executing a
+        # campaign plan made.
+        "plan_id",
+        "narrative_digest",
+        "measure_schedule_id",
     }
 )
 """The only keys a body may hold: ids, digests, codes and labels, never a row (see the module docstring)."""

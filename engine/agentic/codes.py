@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from typing import Final
 
-__all__ = ["AGENTIC_CODES", "PLAN_K_CODES"]
+__all__ = ["AGENTIC_CODES", "PLANNER_CODES", "PLAN_K_CODES"]
 
 AGENTIC_CODES: Final[frozenset[str]] = frozenset(
     {
@@ -53,5 +53,24 @@ AGENTIC_CODES: Final[frozenset[str]] = frozenset(
 )
 """M132's codes (DEC-1401), joined into `PLAN_K_CODES` below."""
 
-PLAN_K_CODES: Final[frozenset[str]] = frozenset() | AGENTIC_CODES
+PLANNER_CODES: Final[frozenset[str]] = frozenset(
+    {
+        # M139 (DEC-1406): the claim verifier (`engine.agentic.claims`). A sentence that fails is dropped;
+        # more than one failure replaces the narrative with the rules-only summary.
+        "CLAIM_DIRECTION",  # a comparison or trend the evidence's interval does not support
+        "CLAIM_LABEL",  # a label other than the one the tool returned ("Causal" only where it is)
+        "CLAIM_UNREFERENCED",  # evidence, a slot or a proposal the claim names is not there
+        "CLAIM_FREE_TEXT",  # the model's own words carry a number, a direction or fail a guardrail
+        "CLAIM_MALFORMED",  # the model's answer is not the structured narrative asked for
+        # M139: the campaign planner (`engine.agentic.planner`, `POST /agentic/plans`).
+        "PLANNER_NO_CANDIDATE",  # no run without a campaign, no channel, nothing safe or within budget
+        "PLANNER_NOTHING_TO_PLAN",  # the card asks for waiting or a person's decision, not a campaign
+        "PLANNER_CARD_NOT_FOUND",  # the warning is no longer on the Results page
+        "PLANNER_NOT_FOUND",  # no plan with that id
+        "PLANNER_GOAL_UNPARSED",  # the goal in words could not be matched to the form's values
+    }
+)
+"""M139's codes (DEC-1406), joined into `PLAN_K_CODES` below."""
+
+PLAN_K_CODES: Final[frozenset[str]] = frozenset() | AGENTIC_CODES | PLANNER_CODES
 """Empty at M130; each Plan K milestone adds the codes it raises."""
