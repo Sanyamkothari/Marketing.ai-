@@ -16,6 +16,11 @@
       "text": "Pages no longer ask for results that cannot exist yet, such as the results of a campaign that has not finished. An empty page now says what to do next."
     },
     {
+      "when": "11 October 2026",
+      "title": "A layout built around campaigns",
+      "text": "Your administrator can turn on a sidebar with Overview, Campaigns, Data, Reports and Settings, and a New campaign screen that takes you from a goal to a contact list in five steps."
+    },
+    {
       "when": "October 2026",
       "title": "Value Proof Packs",
       "text": "Each measured campaign has a one-page proof of what it was worth in rupees, with the range and the groups it did not help. It is under Reports."
