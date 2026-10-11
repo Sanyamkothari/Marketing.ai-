@@ -55,16 +55,21 @@ _TIMESTAMP = re.compile(r"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[
 _DURATIONS = re.compile(
     r'"(duration_s|seconds|elapsed_s|estimated_refit_seconds|refit_seconds)": [0-9.eE+-]+'
 )
-_SPOKEN_DURATION = re.compile(r"about [0-9.,]+ (seconds?|minutes?|hours?)")
+_SPOKEN_DURATION = re.compile(r"about [0-9.,]+ (?:seconds?|minutes?|hours?)")
+SPOKEN_DURATION_MASK: Final[str] = "about <n> seconds"
+"""Every spoken duration, whatever its unit, masks to this one spelling (the one the golden holds)."""
 
 
 def normalise(text: str) -> str:
     """The artefact with wall-clock timestamps and durations masked; nothing else is touched.
 
-    M96's fold-refit estimate is measured from this run's own fit time, so it is a duration too.
+    M96's fold-refit estimate is measured from this run's own fit time, so it is a duration too. Its
+    spoken form's unit is part of that measurement: `engine.measurement.compare._duration` says
+    "about 4 seconds" under 90 seconds and "about 2 minutes" from 90 on, so a fit slowed by a loaded
+    machine changes the unit as well as the number. The whole phrase, unit included, is masked.
     """
     masked = _TIMESTAMP.sub("<time>", text)
-    masked = _SPOKEN_DURATION.sub(r"about <n> \1", masked)
+    masked = _SPOKEN_DURATION.sub(SPOKEN_DURATION_MASK, masked)
     return _DURATIONS.sub(r'"\1": <seconds>', masked)
 
 
