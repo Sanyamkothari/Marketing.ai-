@@ -54,7 +54,13 @@ from engine.decide.contactability import (
 )
 from engine.decide.reasons import extract_and_map_reasons_from_parquet, load_reasons_dictionary
 from engine.decide.value import EXPECTED_GROSS_VALUE_FILENAME, ExpectedGrossValue, expected_gross_values
-from engine.decide.variant_arms import VARIANT_ARM_COLUMN, VARIANT_TEMPLATE_COLUMN, variant_treat_list_columns
+from engine.decide.variant_arms import (
+    VARIANT_ARM_COLUMN,
+    VARIANT_TEMPLATE_COLUMN,
+    VariantRows,
+    variant_rows,
+    variant_treat_list_columns,
+)
 from engine.holdout.assign import (
     EXPLORE_COLUMN,
     HOLDOUT_ASSIGNMENT_FILENAME,
@@ -349,6 +355,15 @@ class TreatListSummary(Artefact):
         description="Plan K M140: what the control template arm sends, when the run drew variant arms.",
         exclude_if=lambda value: value is None,
     )
+    variant_arm_withheld: dict[str, int] | None = Field(
+        default=None,
+        description=(
+            "Plan K M145: per message arm, the customers drawn into it whom the compliance gate took off the list "
+            "(the arm's words, or the customer's consent, allowed no planned channel); `variant_arm_counts` counts "
+            "those sent. Absent unless the gate is on and the run's arms are in force."
+        ),
+        exclude_if=lambda value: value is None,
+    )
 
 
 def ensure_treat_list(storage: Storage, run_id: str, *, config_root: Path | None = None) -> TreatListSummary:
@@ -362,7 +377,7 @@ def ensure_treat_list(storage: Storage, run_id: str, *, config_root: Path | None
     except StorageError:
         return build_treat_list(storage, run_id, config_root=config_root)
     # PLAN-K (M134, DEC-1405): the pre-send compliance gate.
-    if summary.compliance_rule_version is None and _gate_on(config_root):
+    if _gate_missed(summary) and _gate_on(config_root):
         return build_treat_list(storage, run_id, config_root=config_root)
     return summary
 
@@ -378,7 +393,16 @@ def treat_list_awaits_gate(storage: Storage, run_id: str, *, config_root: Path |
         summary = storage.read_model(run_key(run_id, TREAT_LIST_SUMMARY_FILENAME), TreatListSummary)
     except StorageError:
         return True
-    return summary.compliance_rule_version is None
+    return _gate_missed(summary)
+
+
+def _gate_missed(summary: TreatListSummary) -> bool:
+    """The stored list was not decided by the gate as it now decides: not at all (no `compliance_rule_version`),
+    or (Plan K M145, DEC-1412) with message arms on it but without their words checked (no
+    `variant_arm_withheld`: built before the gate checked each variant's words)."""
+    if summary.compliance_rule_version is None:
+        return True
+    return summary.variant_arm_counts is not None and summary.variant_arm_withheld is None
 
 
 def _gate_on(config_root: Path | None) -> bool:
@@ -589,7 +613,9 @@ def build_treat_list(storage: Storage, run_id: str, *, config_root: Path | None 
     # 5c. Plan K M134 (DEC-1405): the pre-send compliance gate, only when `compliance.gate.enabled` is on (off,
     # the default, reads the switch and the settings file and changes nothing). A customer it does not allow on
     # their channel goes on the next planned channel it allows, else is not treated; its record is written and
-    # signed first.
+    # signed first. Plan K M145 (DEC-1412): the run's message arms in force (M140) are read first, once, so the
+    # gate checks each customer of a variant arm on the words that arm sends them; None for every other run.
+    arm_rows = variant_rows(storage, run_id, primary_key, row_keys, config_root=config_root)
     gated = _compliance_gate(
         storage,
         record,
@@ -603,6 +629,7 @@ def build_treat_list(storage: Storage, run_id: str, *, config_root: Path | None 
         offer_choice=offer_choice,
         stamp=stamp,
         config_root=config_root,
+        variants=arm_rows,
     )
     if gated is not None:
         withheld_now = treat & ~gated.treat
@@ -624,9 +651,21 @@ def build_treat_list(storage: Storage, run_id: str, *, config_root: Path | None 
                 )
 
     # 5d. Plan K M140 (DEC-1407): each treated customer's message arm, on a run that drew variant arms only
-    # (after the M134 gate, so the arms read the treat flags and channels the gate left).
-    variants = variant_treat_list_columns(
-        storage, run_id, primary_key, row_keys, treat=treat, channel=channel, config_root=config_root
+    # (after the M134 gate, so the arms read the treat flags and channels the gate left: a customer the gate
+    # withheld shows no arm, and one it moved is shown their arm's template on the channel they are sent on).
+    variants = (
+        None
+        if arm_rows is None
+        else variant_treat_list_columns(
+            storage,
+            run_id,
+            primary_key,
+            row_keys,
+            treat=treat,
+            channel=channel,
+            config_root=config_root,
+            rows=arm_rows,
+        )
     )
 
     # 6. Reasons, in business words.
@@ -687,6 +726,8 @@ def build_treat_list(storage: Storage, run_id: str, *, config_root: Path | None 
         **({} if gated is None else _gate_fields(gated)),
         variant_arm_counts=None if variants is None else variants.counts,
         variant_note=None if variants is None else variants.note,
+        # PLAN-K (M145, DEC-1412): the arms' customers the gate withheld, per arm.
+        variant_arm_withheld=None if gated is None else gated.summary.withheld_by_arm,
     )
     storage.write_model(run_key(run_id, TREAT_LIST_SUMMARY_FILENAME), summary)
     _LOGGER.info(
@@ -1448,8 +1489,13 @@ def _compliance_gate(
     offer_choice: _OfferChoice | None,
     stamp: CatalogueStamp | None,
     config_root: Path | None,
+    variants: VariantRows | None = None,
 ) -> Any:
-    """Plan K M134: `engine.compliance.handoff.gate_treat_list` when the gate is on, else None."""
+    """Plan K M134: `engine.compliance.handoff.gate_treat_list` when the gate is on, else None.
+
+    Plan K M145 (DEC-1412): `variants`, the run's message arms in force, is handed on so each customer of a
+    variant arm is checked on that variant's own words (`engine.compliance.variants`).
+    """
     from engine.compliance.config import gate_enabled
     from engine.compliance.errors import ComplianceError
 
@@ -1457,6 +1503,7 @@ def _compliance_gate(
         if not gate_enabled(config_root):
             return None
         from engine.compliance.handoff import gate_treat_list
+        from engine.compliance.variants import variant_messages
 
         return gate_treat_list(
             storage,
@@ -1480,6 +1527,7 @@ def _compliance_gate(
             configured=tuple(config.actions.suppression.channels),
             stamp_sha256=None if stamp is None else stamp.catalogue_sha256,
             config_root=config_root,
+            variants=None if variants is None else variant_messages(variants),
         )
     except ComplianceError as exc:
         raise TreatListError(exc.code, exc.message) from exc

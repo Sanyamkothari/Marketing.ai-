@@ -74,9 +74,12 @@ COMPLIANCE_CODES: Final[frozenset[str]] = frozenset(
         "COMPLIANCE_URL_NOT_WHITELISTED",  # a link in the message is not on the URL whitelist
         "COMPLIANCE_NO_CHANNEL",  # a contact with no channel: nothing the gate could clear
         "COMPLIANCE_CATALOGUE_CHANGED",  # the catalogue is not the one the run ran under: no message is checked
+        # M145 (DEC-1412): a customer of a message variant arm, checked on that variant's own words.
+        "COMPLIANCE_VARIANT_NO_COPY",  # the customer's variant has no approved words on the channel
+        "COMPLIANCE_VARIANT_UNREGISTERED",  # the variant's words have no registered template to check them on
     }
 )
-"""M134's codes (DEC-1405), joined into `PLAN_K_CODES` below: exactly the gate's reasons
+"""M134's codes (DEC-1405) and M145's (DEC-1412), joined into `PLAN_K_CODES` below: exactly the gate's reasons
 (`engine.compliance.gate.REASON_ORDER`)."""
 
 COMPLIANCE_CONFIG_CODES: Final[frozenset[str]] = frozenset(

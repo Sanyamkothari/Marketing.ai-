@@ -1409,5 +1409,31 @@ campaign is measured as a whole, as it was before the arms, and no `variant_comp
 `VARIANT_ARMS_NOT_ARBITRATED`): the arbitrated list keeps a fixed set of columns and its campaigns carry no
 arms, so which message each customer gets would be lost. Measure the variant test on its own campaign.
 
+**With the compliance gate (Plan K M145, DEC-1412).** With `compliance.gate.enabled` on (`docs/AGENTIC.md`
+§9a), the gate checks the words each customer will actually receive. The treat list reads the arms in force
+first (`variant_rows`, once), then the gate decides, then the arm columns are added from what the gate left
+(steps 5c and 5d of `build_treat_list`). A customer of the control template is checked on their band's
+action's `message_text`, as before; a customer of a variant arm on that variant's approved words for their group
+and channel (from `copy_batch.json`), against **the variant's own** catalogue action: the DLT matcher against its
+`dlt_template_text`, every link of its subject and text against the URL whitelist. A variant with no template text
+(or no real template id) on a channel whose region rule requires one is not sent there
+(`COMPLIANCE_VARIANT_UNREGISTERED`), and a channel the copy was not written for is closed to the variant's
+customers (`COMPLIANCE_VARIANT_NO_COPY`): they move to the next planned channel the gate allows, with that
+channel's words of the same variant, or are withheld - never sent another message instead of their arm. The
+catalogue the messages are tied to is the one the arms were drawn under (`variant_arms.json`
+`catalogue_sha256`); a catalogue changed after the arms were drawn withholds everyone with a catalogue action
+(`COMPLIANCE_CATALOGUE_CHANGED`). On the treat list a withheld customer has `treat = 0` and no arm or template;
+`variant_arm_counts` counts the customers sent their arm and the new `variant_arm_withheld` the customers of each
+arm the gate took off the list. `compliance_decisions.parquet` gains `variant_arm`, and a variant row names its
+variant's own action.
+
+**Measuring with the gate: intention to treat.** The campaign keeps every customer in the arm they were drawn
+into, sent or withheld, exactly as a customer M134's gate withheld stays in the campaign's treated group. The
+no-message group is never gated, so dropping the withheld from an arm (most of them withheld for their own
+consent) would compare that arm with customers it no longer resembles. Each arm's effect is therefore the effect
+of choosing that message for a customer, including the share the gate stopped: an arm whose words the gate
+stopped everywhere measures about no effect, which is true of a message that cannot be sent as written. Read
+`variant_arm_withheld` beside the comparison; fix the words, register them and draw the arms again.
+
 **Not built.** Simulated personas (screening drafts only, later). A variant's catalogue action never sets a
 channel's contact cost (`channel_contact_costs` skips `copy:` references).

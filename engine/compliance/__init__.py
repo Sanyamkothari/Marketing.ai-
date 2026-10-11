@@ -15,6 +15,8 @@ rules) and adds the checks that are per message, not per customer:
 `engine.compliance.gate.decide` builds the records (vectorised, linear in the contacts) and
 `engine.compliance.handoff` runs it for a treat list, writes `compliance_decisions.parquet` (a row-level
 artefact) and its summary, and puts the file's sha256 on the decision ledger as a signed evidence label.
+When a run's message arms are in force (M140), `engine.compliance.variants` has the gate check each customer of a
+variant arm on that variant's own words and registered template (Plan K M145, DEC-1412).
 
 Off by default (`compliance.gate.enabled: false` in `configs/agentic/agentic.yaml`, the gate's one switch; its
 settings are in `configs/compliance/compliance.yaml`): nothing here but the switch reader is

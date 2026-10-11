@@ -69,6 +69,12 @@ is cut to the same groups (`engine.measurement.cycle.open_campaign`), and measur
 without a pre-campaign covariate. A campaign with message arms measured on an amount, or adjusted by a
 covariate, is measured as a whole campaign, as it was before the arms, and no comparison is written.
 
+**Checked before they are sent (Plan K M145, DEC-1412).** With the pre-send compliance gate on, the treat list
+reads the arms in force once (:func:`variant_rows`) before the gate, which checks each customer of a variant arm on
+that variant's own words and registered action (`engine.compliance.variants`); the arm columns are then added from
+the treat flags and channels the gate left, so a withheld customer shows no arm. A campaign still keeps every drawn
+customer in their arm (intention to treat).
+
 **Not arbitrated.** Arbitration across use cases keeps a fixed set of columns and opens campaigns without
 arms, so a run whose arms are in force is refused there (`VARIANT_ARMS_NOT_ARBITRATED`), rather than
 silently losing which message each customer gets.
@@ -123,6 +129,7 @@ __all__ = [
     "VariantArmsError",
     "VariantComparison",
     "VariantPair",
+    "VariantRows",
     "build_variant_arms",
     "compare_variant_arms",
     "draw_arms",
@@ -133,6 +140,7 @@ __all__ = [
     "variant_campaign_scope",
     "variant_level",
     "variant_measure_arguments",
+    "variant_rows",
     "variant_template_ref",
     "variant_treat_list_columns",
 ]
@@ -729,13 +737,25 @@ def variant_arms_in_force(
 
 def _matches_copy(storage: Storage, run_id: str, arms: VariantArms) -> bool:
     """The run's copy is the batch the arms were drawn from, each arm template approved and its words registered."""
-    from engine.generative.contracts import COPY_BATCH_FILENAME, CopyBatch, CopyStatus
+    return _copy_in_force(storage, run_id, arms) is not None
+
+
+def _copy_in_force(storage: Storage, run_id: str, arms: VariantArms) -> CopyBatch | None:
+    """The run's `copy_batch.json` when it is the batch the arms were drawn from, every arm template still
+    approved with its words the registered ones; None otherwise."""
+    from engine.generative.contracts import COPY_BATCH_FILENAME, CopyBatch
     from engine.storage import StorageError, run_key
 
     try:
         batch = storage.read_model(run_key(run_id, COPY_BATCH_FILENAME), CopyBatch)
     except StorageError:
-        return False
+        return None
+    return batch if _batch_matches(batch, arms) else None
+
+
+def _batch_matches(batch: CopyBatch, arms: VariantArms) -> bool:
+    from engine.generative.contracts import CopyStatus
+
     if batch.batch_id != arms.batch_id or batch.created_at != arms.batch_created_at:
         return False
     by_id = {template.template_id: template for template in batch.templates}
@@ -828,6 +848,61 @@ class TreatListVariants:
         self.note = note
 
 
+class VariantRows:
+    """A run's message arms in force, read once for a treat list (Plan K M145, DEC-1412): the arms, the copy batch
+    they were drawn from, and per treat-list row the arm drawn and the group, None outside the arms."""
+
+    def __init__(self, arms: VariantArms, batch: CopyBatch, arm: Any, unit: Any) -> None:
+        self.arms = arms
+        self.batch = batch
+        self.arm = arm
+        self.unit = unit
+
+
+def variant_rows(
+    storage: Storage,
+    run_id: str,
+    primary_key: PrimaryKey,
+    row_keys: pd.Series[Any],
+    *,
+    config_root: Path | None = None,
+) -> VariantRows | None:
+    """Each treat-list row's arm and group, joined on every key column; None unless the arms are in force.
+
+    Read before the compliance gate (`engine.decide.treat_list`, step 5c), so the gate checks each customer on the
+    words their arm sends (`engine.compliance.variants`), and then given to :func:`variant_treat_list_columns`
+    (step 5d): the arms, the copy and `variant_arms.parquet` are read once. The rule for "in force" is
+    :func:`variant_arms_in_force`'s, with the copy batch it checked kept.
+    """
+    import numpy as np
+    import pandas as pd
+
+    from engine.config import ConfigError, load_use_case
+
+    arms = variant_arms_of(storage, run_id)
+    if arms is None:
+        return None
+    try:
+        use_case = load_use_case(arms.use_case_id, config_root)
+    except ConfigError:
+        return None
+    if not use_case.generative.variant_arms:
+        return None
+    batch = _copy_in_force(storage, run_id, arms)
+    if batch is None:
+        return None
+    table = _arm_table(storage, run_id, primary_key)
+    if table is None:
+        return None
+    index = pd.Index(row_keys.to_numpy())
+    arm = table[VARIANT_ARM_COLUMN].reindex(index).astype("object").to_numpy()
+    unit = table[COPY_UNIT_COLUMN].reindex(index).astype("object").to_numpy()
+    empty = np.full(len(index), None, dtype=object)
+    return VariantRows(
+        arms, batch, np.where(pd.notna(arm), arm, empty), np.where(pd.notna(unit), unit, empty)
+    )
+
+
 def variant_treat_list_columns(
     storage: Storage,
     run_id: str,
@@ -837,6 +912,7 @@ def variant_treat_list_columns(
     treat: Any,
     channel: pd.Series[Any],
     config_root: Path | None = None,
+    rows: VariantRows | None = None,
 ) -> TreatListVariants | None:
     """`variant_arm` and `variant_template` per treat-list row, joined on every key column; None without arms.
 
@@ -844,21 +920,21 @@ def variant_treat_list_columns(
     without arms, byte for byte. A customer is shown their arm only when the list treats them (`treat = 1`);
     the template is the approved one their arm sends to their group on their channel (the copy's only channel
     when the list names none), empty for the control template and for a channel the copy was not written for
-    (:func:`build_variant_arms` refuses arms that would leave a variant customer without one).
+    (:func:`build_variant_arms` refuses arms that would leave a variant customer without one). `rows` is
+    :func:`variant_rows` already read for this list (Plan K M145); read here when not given.
     """
     import numpy as np
     import pandas as pd
 
-    arms = variant_arms_in_force(storage, run_id, config_root=config_root)
-    if arms is None:
+    if rows is None:
+        rows = variant_rows(storage, run_id, primary_key, row_keys, config_root=config_root)
+    if rows is None:
         return None
-    table = _arm_table(storage, run_id, primary_key)
-    if table is None:
-        return None
+    arms = rows.arms
     index = pd.Index(row_keys.to_numpy())
     treated = np.asarray(treat, dtype=bool)
-    arm = table[VARIANT_ARM_COLUMN].reindex(index).astype("object").to_numpy()
-    unit = table[COPY_UNIT_COLUMN].reindex(index).astype("object").to_numpy()
+    arm = rows.arm
+    unit = rows.unit
     arm = np.where(treated & pd.notna(arm), arm, np.full(len(index), None, dtype=object))
     lookup: dict[tuple[Any, Any, Any], str] = {
         (item.arm, item.unit, item.channel): item.template_id for item in arms.templates
