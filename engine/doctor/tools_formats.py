@@ -118,6 +118,8 @@ class FormatToolSpec:
     input_model: type[BaseModel]
     output_model: type[BaseModel]
     run: Callable[[Any, FormatToolContext], BaseModel]
+    step_kinds: tuple[str, ...] = ()
+    """The step kinds its result proposes, pending (M233: the registry decides them by the tool's rule set)."""
 
 
 # ---------------------------------------------------------------------------
@@ -351,6 +353,7 @@ FORMAT_TOOLS: Final[tuple[FormatToolSpec, ...]] = (
         input_model=FindExcelSerialDatesInput,
         output_model=FindExcelSerialDatesOutput,
         run=_run_find_excel_serial_dates,
+        step_kinds=("parse_date",),
     ),
 )
 

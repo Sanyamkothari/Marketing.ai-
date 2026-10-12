@@ -1308,3 +1308,65 @@ deterministic rules by a reviewed change. Nothing changes a rule by itself.
   between leaves the answer in the case but not remembered for the client (it is asked again next time).
 - The idempotent look-up reads the entries of one kind (`data.decision` or `data.prescription.approved`) - few,
   one per person's approval - not the whole chain.
+
+## 17a. The remaining wrappers and `explain` (Plan O M236, DEC-1806)
+
+*Behind `data_doctor.unified` (off by default): the tools are in Data Doctor's registry (§14), for the rules and
+the screen; nothing here is offered to the chat's model.*
+
+### 17.1 The tools
+
+`engine/doctor/tools_wrappers.py` registers fourteen wrappers and one new tool. Each wrapper's output is the
+wrapped function's (`tests/unit/doctor/test_tools_wrappers.py` compares them on fixtures):
+
+| # | Tool | Kind | What it returns |
+|---|---|---|---|
+| 3 | `propose_intake` | PROPOSE | the upload's `intake.json` decisions (header row, sheet, rows left out), kept as one item |
+| 6 | `preview_connection` | READ | a saved connection's masked preview (`Connector.preview`); a cell the connector masked part of is shown as its markers alone. It and `propose_import` take a slot of the connection routes' own gate (`engine.connections.limits.CALLS`, four calls at once); a full gate is `429 CONNECTION_BUSY` |
+| 7 | `propose_import` | PROPOSE | an import from a saved connection, proposed; only the preview is read |
+| 8 | `check_refresh` | READ | `latest_recipe_inputs`: the tables a recipe's next build reads, which are newer, which are bound to a connection |
+| 9 | `preflight` | READ | `run_preflight` on the case's files, each named by the words of its name that name a table |
+| 31 | `second_opinion` | PROPOSE (AI) | `assist_session`'s rerank and leak questions, pending; needs the AI service (`ctx.meter`) and `agentic.enabled` on, as its route does (DEC-1409 (g)); an approved session is `409 AGENT_SESSION_APPLIED`; the saved transcript is capped (`cap_sent`); the caller records `meter.usage()` |
+| 39 | `explain` | READ (AI) | the case's evidence in checked sentences (§17.2) |
+| 41 | `propose_role` | PROPOSE | `detect_roles`, with the diagnosis's rule (`KIND_MIN_CONFIDENCE`) |
+| 42 | `propose_key` | PROPOSE | the rules advisor's ID column (`advise`), or why none can be |
+| 43 | `propose_mapping` | PROPOSE | `suggested_mapping_spec` for one file and role |
+| 65 | `find_personal_data` | READ | `detect_pii` and `free_text_pii` per column |
+| 66 | `check_leaks` | READ | one verdict over `LEAKAGE_SUSPECTED`, the first look's `may_hold_answer`, a built dataset's report and the builder's check; the AI reviewer is `second_opinion`'s |
+| 68 | `check_uplift_data` | READ | `run_uplift_checks`'s report |
+| 73 | `read_run_checks` | READ | `things_checked` (`RESULT_SUSPICIOUSLY_GOOD` first) |
+| 76 | `request_approval` | ASK | for an earlier proposal: whether it is APPROVE-class (M233's rule), the exact sentence and its SHA-256, the role, separation of duties, Plan K's expiry; records nothing |
+
+Every PROPOSE wrapper's output carries `source`, `ticked`, `confidence` and `state: pending`; M233's policy reads
+them (`policy._read_pending`) under its rule sets `data.propose_role`, `data.propose_key`, `data.propose_mapping`,
+`data.propose_intake`, `data.propose_import` and `data.second_opinion` (`data.never_ticked`; a rules item starts
+ticked only when `sure`, an AI item never). `propose_role`, `propose_mapping` and `propose_import` are always
+`check`. M237's `build_dataset` now reads each file's role from `propose_role` through the registry
+(`tools_wrappers.ProposedRoles`, M237's `RoleProposer`).
+
+New context fields (`DataToolContext`, all optional): `connections`, `client_store`, `meter`, `guardrails`,
+`evidence` (the case's earlier `DataToolResult`s, recorded by the server) and `narrator`. M240's
+`read_workbook_sheets` and `find_excel_serial_dates` have catalogue rows #82 and #83 and are registered;
+`find_excel_serial_dates` declares `step_kinds = (parse_date,)`, so its steps are decided by
+`data.excel_serial_dates` (§16.4).
+
+### 17.2 `explain`
+
+`engine/doctor/explain.py` is Plan K's claims verifier (`engine/agentic/claims.py`) with four data claim types:
+`count`, `share`, `rate_by_group` (a group's rate in a `rate_by` result, by position or by `rank`
+highest/lowest) and `changed` ("changed N of M"). The facts are read from the results named by evidence id
+(`data_evidence_index`), each given a ref `f1`, `f2`, ... The AI service (`data_explain` prompt, purpose
+`data_explain`) is sent only the refs, claim types and the key a tool gave each fact - never a number, a cell or
+a column name. The verifier refuses a claim whose ref is not a fact of that type (`CLAIM_UNREFERENCED`), a rank
+the evidence does not show or a tie (`CLAIM_DIRECTION`), and the model's own words carrying a number or a
+direction (`CLAIM_FREE_TEXT`); the renderer fills every number and group. One failed sentence is dropped; more
+than one, or an answer that does not parse, is replaced by the rules' narrative (`data_rules_narrative`), which
+is also the explanation with no AI service.
+
+### 17.3 Not done here
+
+- The design's wrappers #1 `read_file`, #2 `list_sheets`, #30 `read_headers` and #50 `propose_renamed_copy` are in
+  no milestone's list yet.
+- `request_approval` asks; storing the request and deciding it are M246's (with `ApprovalFacts`, §16.6).
+- The tools serve the rules and the screen. Offering them to the AI (the visit, M235/M246) also means adding their
+  output field names to `engine.agent.egress.RESULT_KEYS`.

@@ -1277,7 +1277,25 @@ def _read_normalise_key(kind: str, output: Mapping[str, Any]) -> list[DataPropos
     return [DataProposal(kind=kind, source="rules", steps=steps)] if steps else []
 
 
+def _read_pending(kind: str, output: Mapping[str, Any]) -> list[DataProposal]:
+    """M236's wrappers (DEC-1806): one pending item, no step - who proposed it, ticked or not, how sure."""
+    return [
+        DataProposal(
+            kind=kind,
+            source=_source(output),
+            ticked=bool(output["ticked"]),
+            confidence="sure" if output["confidence"] == "sure" else "check",
+        )
+    ]
+
+
 OUTPUT_READERS: Final[Mapping[str, _Reader]] = {
+    "data.propose_role": _read_pending,
+    "data.propose_key": _read_pending,
+    "data.propose_mapping": _read_pending,
+    "data.propose_intake": _read_pending,
+    "data.propose_import": _read_pending,
+    "data.second_opinion": _read_pending,
     "data.synonym_clusters": _read_synonyms,
     "data.impossible_values": _read_impossible,
     "data.detect_units": _read_units,
