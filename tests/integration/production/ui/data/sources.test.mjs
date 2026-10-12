@@ -95,11 +95,14 @@ test("connections and uploaded files are one list, each with its health and date
 
   const ok = row(ids.s3);
   assert.equal(text(ok.querySelector(".dt-name")), "Exports" + "Amazon S3");
-  assert.match(text(ok.querySelector("[data-dt-health]")), /^Connected · tested /);
+  // M188 (DEC-1618): the chip says the status in a word; when it was tested is the line under it, in the same order.
+  assert.equal(text(ok.querySelector("[data-dt-health] .badge")), "Connected");
+  assert.match(text(ok.querySelector("[data-dt-health-detail]")), /^Tested \d{2} \w{3} \d{4}/);
   assert.match(text(ok.querySelector("[data-dt-when]")), /^Last import \d{2} \w{3} \d{4}/, "the import from it dates its last refresh");
 
   const failed = row(ids.pg);
-  assert.match(text(failed.querySelector("[data-dt-health]")), /^Failed: /);
+  assert.equal(text(failed.querySelector("[data-dt-health] .badge")), "Failed");
+  assert.ok(text(failed.querySelector("[data-dt-health-detail]")).length > 3, "the server's reason, on the line under the chip");
   assert.equal(text(failed.querySelector("[data-dt-when]")), "No file imported yet", "it claims only what the list shows");
 
   const direct = row(ids.direct);

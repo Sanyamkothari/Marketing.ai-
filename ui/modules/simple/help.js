@@ -13,7 +13,8 @@
 //
 // Both builders are pure (`glossaryHtml`, `whatsNewHtml`): what they draw comes from their arguments.
 
-import { crumbs, dataTable, emptyState, esc, pageHead } from "../../dom.js";
+import { emptyState, pageHeader } from "../../components.js"; // Plan M M188 (DEC-1618): the look of Help
+import { announceStatus, crumbs, dataTable, esc } from "../../dom.js";
 
 /** Plan M §4.1, one entry per concept: what a marketer sees, what it means, and the engine's names. */
 export const GLOSSARY = Object.freeze([
@@ -85,11 +86,19 @@ export const GLOSSARY = Object.freeze([
   },
 ]);
 
-const page = (inner, body) => `<main class="screen sp" data-module="simple" data-help>${pageHead(inner)}${body}</main>`;
+const page = (head, body) => `<main class="screen sp st" data-module="simple" data-help>${head}${body}</main>`;
+
+/** The magnifier of the search box (a line icon on the look's 24px grid; it is decoration, the box has its own label). */
+const SEARCH_ICON =
+  '<svg class="ds-ico" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" focusable="false" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>';
 
 /** The Glossary page. `entries` are `{ shown, means, technical[] }`. */
 export function glossaryHtml(entries = GLOSSARY) {
-  const head = `${crumbs([{ label: "Glossary" }])}<h1 class="h1">Glossary</h1><p class="desc">The words this product uses, and what each one means.</p>`;
+  const head = pageHeader({
+    title: "Glossary",
+    subtitle: "The words this product uses, and what each one means.",
+    crumbs: crumbs([{ label: "Glossary" }]),
+  });
   const words = dataTable(
     [{ label: "Word" }, { label: "What it means" }],
     entries.map((e) => [`<strong>${esc(e.shown)}</strong>`, esc(e.means)]),
@@ -99,21 +108,64 @@ export function glossaryHtml(entries = GLOSSARY) {
     [{ label: "Word" }, { label: "Technical names" }],
     entries.map((e) => [esc(e.shown), esc((e.technical || []).join(", "))]),
   );
+  const search = `<label class="gl-search">${SEARCH_ICON}<span class="sr">Search the glossary</span><input type="search" data-glossary-filter placeholder="Search the glossary" autocomplete="off"></label>`;
   return page(
     head,
-    `<section class="card" data-glossary>${words}</section>
-    <section class="card sp-group"><details class="tech" data-technical><summary>Technical names</summary>${technical}</details></section>`,
+    `<section class="card" data-glossary>${search}${words}<p class="gl-none" data-glossary-none hidden>No word matches your search.</p></section>
+    <section class="card sp-group" data-technical><details class="tech" data-technical><summary>Technical names</summary>${technical}</details></section>`,
   );
+}
+
+/**
+ * Show only the glossary's rows whose word or meaning holds what was typed (case does not matter; the engine's names are not
+ * searched, they are not shown); an empty search shows
+ * them all. Says how many are left to screen readers. Nothing is removed: the rows are only hidden, so the page still holds them.
+ */
+export function filterGlossary(root, query) {
+  const needle = String(query || "").trim().toLowerCase();
+  const rows = [...root.querySelectorAll("tbody tr")];
+  let shown = 0;
+  for (const row of rows) {
+    const match = !needle || row.textContent.toLowerCase().includes(needle);
+    row.hidden = !match;
+    if (match) shown += 1;
+  }
+  const none = root.querySelector("[data-glossary-none]");
+  if (none) none.hidden = shown > 0;
+  return shown;
+}
+
+/** How long after the last key the number of words left is said to screen readers. */
+export const ANNOUNCE_AFTER_MS = 300;
+let announceTimer = null;
+
+// One delegated listener, as the other pages of this module do: the Help page is drawn by innerHTML, so nothing is bound to it.
+if (typeof document !== "undefined" && typeof document.addEventListener === "function") {
+  document.addEventListener("input", (event) => {
+    const input = event.target;
+    if (!input || typeof input.matches !== "function" || !input.matches("[data-glossary-filter]")) return;
+    const root = input.closest("[data-glossary]");
+    if (!root) return;
+    const shown = filterGlossary(root, input.value);
+    // Said once the person pauses, not on every key: a screen reader would otherwise read a count per letter.
+    clearTimeout(announceTimer);
+    announceTimer = setTimeout(() => announceStatus(shown === 1 ? "1 word" : `${shown} words`), ANNOUNCE_AFTER_MS);
+  });
 }
 
 /** What's new. `entries` are `{ when, title, text }`, newest first; none gives one calm sentence. */
 export function whatsNewHtml(entries) {
-  const head = `${crumbs([{ label: "What's new" }])}<h1 class="h1">What's new</h1><p class="desc">The latest changes to Marketing AI, newest first.</p>`;
+  const head = pageHeader({
+    title: "What's new",
+    subtitle: "The latest changes to Marketing AI, newest first.",
+    crumbs: crumbs([{ label: "What's new" }]),
+  });
   const list = Array.isArray(entries) ? entries : [];
   if (!list.length) {
     return page(
       head,
       `<section class="card">${emptyState({
+        icon: "inbox",
         title: "Nothing to show yet",
         text: "Changes to Marketing AI are listed here as they are made.",
         action: { label: "Go to Home", href: "#/", kind: "secondary" },
@@ -123,12 +175,12 @@ export function whatsNewHtml(entries) {
   const items = list
     .map(
       (e) =>
-        `<li class="sp-entry" data-news><span class="sp-when">${esc(e.when || "")}</span><strong>${esc(e.title || "")}</strong><span class="sp-text">${esc(
+        `<li class="sp-entry st-entry" data-news><span class="sp-when">${esc(e.when || "")}</span><strong>${esc(e.title || "")}</strong><span class="sp-text">${esc(
           e.text || "",
         )}</span></li>`,
     )
     .join("");
-  return page(head, `<section class="card sp-group"><ul class="sp-list" data-whats-new>${items}</ul></section>`);
+  return page(head, `<section class="card sp-group"><ul class="sp-list st-news" data-whats-new>${items}</ul></section>`);
 }
 
 /** The entries of `whats-new.json`, or `[]` when it cannot be read. */

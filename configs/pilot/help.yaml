@@ -360,7 +360,7 @@ codes:
     fix: "Correct the item the message names. A plan must be registered, and amended, before the final result is read. For a whole-programme readout, send it again without the plan and the earlier amount; the plain difference is given."
   MODEL_NOT_APPROVED:
     title: "This list waits for a model's approval"
-    meaning: "This campaign's contact list was made with a new model that an Approver has not approved yet, or has turned down. Until it is approved, the list cannot be downloaded or sent, and the campaign's test plan cannot be fixed."
+    meaning: "This campaign's contact list was made with a new model that an Approver has not approved yet, or has turned down. For a list that combines several goals' lists, this is true of at least one of them, and the message names which. Until it is approved, the list cannot be downloaded or sent, and the campaign's test plan cannot be fixed."
     fix: "Ask an Approver to approve the new model under Waiting for approval, then try again. If it was turned down, make the list again with the model in use."
   PLAN_UNDERPOWERED:
     title: "The test may be too small to see the effect you expect"

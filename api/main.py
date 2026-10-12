@@ -368,6 +368,11 @@ PHASE_APP_HOOKS.append(_install_save_desk)
 from api.routes.overview import router as overview_router  # noqa: E402
 
 PHASE_ROUTERS.append(overview_router)
+# Plan M M185 (DEC-1615): the bundled Inter fonts are served as font/woff2. Python 3.11's own MIME table has
+# no .woff2, and the slim image has no /etc/mime.types, so StaticFiles would answer application/octet-stream.
+import mimetypes  # noqa: E402
+
+mimetypes.add_type("font/woff2", ".woff2")
 # ---- END PLAN-M ----
 # ---- PLAN-O (Data Doctor) — append only below this line ----
 

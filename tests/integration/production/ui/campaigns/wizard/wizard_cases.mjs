@@ -198,6 +198,38 @@ test("Goal: business names (Plan M §4.2), the stage as a label, operational goa
   assert.equal(w.location.hash, `#/campaigns/new/customers/${UC}`);
 });
 
+test("M187: the chosen goal is drawn chosen on coming back, and forgotten on a fresh visit or once a campaign exists", async () => {
+  const chosen = () => $$("[data-cw-goal].is-selected").map((e) => e.getAttribute("data-cw-goal"));
+  const toGoal = async () => {
+    w.location.hash = "#/campaigns/new";
+    await settle(8);
+    await until(() => $("[data-cw-goal-card]"), 3000, "the goal cards");
+  };
+  await open("#/campaigns/new");
+  await until(() => $("[data-cw-goal-card]"), 3000, "the goal cards");
+  assert.deepEqual(chosen(), [], "nothing is chosen on a first visit");
+  $(`[data-cw-goal="${UC}"]`).click();
+  await settle(4);
+  assert.equal(w.location.hash, `#/campaigns/new/customers/${UC}`);
+  // Back to step 1 inside the wizard: the card the person chose is still drawn chosen.
+  await toGoal();
+  assert.deepEqual(chosen(), [UC]);
+  // Leaving the wizard and opening New campaign again is a fresh visit.
+  w.location.hash = "#/campaigns";
+  await settle(8);
+  await toGoal();
+  assert.deepEqual(chosen(), [], "a fresh visit starts with no goal chosen");
+  // Chosen, then on to the campaign made from it (Review or Send): a New campaign from there starts clean too.
+  $(`[data-cw-goal="${UC}"]`).click();
+  await settle(4);
+  world.view = fx("campaign_draft");
+  w.location.hash = `#/campaigns/new/review/${CID}`;
+  await settle(8);
+  await until(() => $("[data-cw-review]"), 3000, "the review");
+  await toGoal();
+  assert.deepEqual(chosen(), [], "once a campaign exists the choice is spent");
+});
+
 test("a goal that contacts nobody opens its own classic page instead", async () => {
   await open("#/campaigns/new/customers/order-fulfillment");
   await until(() => w.location.hash === "#/uc/order-fulfillment", 3000, "the classic page");
@@ -382,7 +414,7 @@ test("Audience: who is contacted by priority, the comparison group and the test 
   await until(() => $("[data-cw-audience]") && $("[data-cw-review]"), 3000, "the audience and the review");
   // The five named steps stay in the indicator; Audience and Review are both on screen, Review is the current one.
   assert.deepEqual(
-    $$("[data-cw-stepper]").map((li) => [li.getAttribute("data-cw-stepper"), li.querySelector(".cw-sl").textContent]),
+    $$("[data-cw-stepper]").map((li) => [li.getAttribute("data-cw-stepper"), li.querySelector(".st-label").firstChild.textContent.trim()]),
     [
       ["goal", "Goal"],
       ["customers", "Customers"],
@@ -392,14 +424,20 @@ test("Audience: who is contacted by priority, the comparison group and the test 
     ],
   );
   assert.deepEqual(
-    $$("[data-cw-stepper]").map((li) => li.className.replace("cw-step ", "")),
-    ["done", "done", "now", "now", "todo"],
+    // M187: the design system's stepper (done, current, upcoming); both steps on screen are drawn current.
+    $$("[data-cw-stepper]").map((li) => li.className.replace("st-step ", "")),
+    ["done", "done", "current", "current", "upcoming"],
   );
   assert.equal($("[data-cw-stepper=review]").getAttribute("aria-current"), "step");
   assert.equal($$("[aria-current=step]").length, 1);
   assert.equal($("[data-cw-next]"), null, "no Continue: Audience and Review share the screen");
   assert.equal($("[data-cw-contacted]").textContent, `${list.treat_rows.toLocaleString("en-US")} customers are on the contact list.`);
-  const rows = $$("[data-cw-priority] tbody tr").map((tr) => [...tr.querySelectorAll("td")].map((td) => td.textContent));
+  // M187: what happens to a priority is a second line under its name, not a column of prose.
+  const rows = $$("[data-cw-priority] tbody tr").map((tr) => [
+    tr.querySelector(".cw-pri-name").textContent,
+    tr.querySelector("td.num").textContent,
+    tr.querySelector(".cw-pri-action").textContent,
+  ]);
   assert.deepEqual(
     rows,
     scoring.bands.map((b) => [b.name, b.rows.toLocaleString("en-US"), b.action]),
@@ -444,7 +482,7 @@ test("Audience and Review: the comparison group is the one this list holds back,
       $("[data-cw-group]").textContent,
       new RegExp(`^${(point.n_control + 3).toLocaleString("en-US")} customers \\(12\\.3%\\) are not contacted`),
     );
-    assert.equal($("[data-cw-tile=comparison] .v").textContent, (point.n_control + 3).toLocaleString("en-US"));
+    assert.equal($("[data-cw-tile=comparison] .stat-value").textContent, (point.n_control + 3).toLocaleString("en-US"));
   } finally {
     world.preview = preview;
   }
@@ -457,12 +495,12 @@ test("Review: the expected value is the range the list's recommendation gives, e
   try {
     await open(`#/campaigns/new/review/${CID}`);
     await until(() => $("[data-cw-review-value]"), 3000, "the expected value");
-    assert.equal($("[data-cw-tile=value] .v").textContent, `${rupees(5314.5)} to ${rupees(306932.49)}`);
+    assert.equal($("[data-cw-tile=value] .stat-value").textContent, `${rupees(5314.5)} to ${rupees(306932.49)}`);
     assert.match($("[data-cw-review-value]").textContent, new RegExp(`between ${esc(rupees(5314.5))} and ${esc(rupees(306932.49))}`));
     world.policy = { computed_on: "scored", net_value_low: null, net_value_high: null };
     await open(`#/campaigns/new/review/${CID}`);
     await until(() => $("[data-cw-review-value]"), 3000, "the expected value");
-    assert.equal($("[data-cw-tile=value] .v").textContent, rupees(2518304.28));
+    assert.equal($("[data-cw-tile=value] .stat-value").textContent, rupees(2518304.28));
     assert.match($("[data-cw-review-value]").textContent, /A range cannot be given for this list\./);
   } finally {
     world.list = list;
@@ -487,8 +525,8 @@ test("Review: the figures, then 'Approve and download' registers the plan, and o
   downloads.length = 0;
   await open(`#/campaigns/new/review/${CID}`);
   await until(() => $("[data-cw-review]"), 3000, "the review");
-  assert.equal($("[data-cw-tile=contacted] .v").textContent, list.treat_rows.toLocaleString("en-US"));
-  assert.equal($("[data-cw-tile=comparison] .v").textContent, preview.n_holdout.toLocaleString("en-US"));
+  assert.equal($("[data-cw-tile=contacted] .stat-value").textContent, list.treat_rows.toLocaleString("en-US"));
+  assert.equal($("[data-cw-tile=comparison] .stat-value").textContent, preview.n_holdout.toLocaleString("en-US"));
   assert.ok($("[data-cw-review-cost]"), "the cost line");
   assert.equal($("[data-cw-review-compliance]"), null, "the compliance switch is off: no compliance line");
   assert.equal(primaries().length, 1);

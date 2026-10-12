@@ -1,14 +1,19 @@
 // The Overview page (Plan M M175, DEC-1605; `#/overview`): the first thing a marketer sees.
 //
-// Four parts and a checklist, in this order, all from `GET /overview` (one call, built from the sources the Results
-// page and the campaign list already read; nothing is computed here):
-//   1. "Needs your attention": up to five cards, each with ONE action;
-//   2. "Value proven to date": one headline, a floor, with one sentence of what it means and "How this is counted";
-//   3. "Live campaigns": up to five rows (short name, status, next step), each a link to its campaign;
+// Four parts and a checklist, all from `GET /overview` (one call, built from the sources the Results page and the
+// campaign list already read; nothing is computed here):
+//   1. "Needs your attention": up to five attention items, each with ONE action;
+//   2. "Value proven to date": one headline, a floor, drawn as the page's hero figure, with one sentence of what it
+//      means and "How this is counted";
+//   3. "Live campaigns": up to five compact rows (short name, next step, status chip), each a link to its campaign;
 //   4. the one primary button, "+ New campaign" (in the page header, where every page keeps its one primary button;
 //      DEC-1605 records this as the one place the plan's order is not followed to the letter);
 //   5. the first-visit checklist (connect or upload data, start the first campaign, add its results): ticked from real
-//      state, hidden once all three are done or the person hid it.
+//      state, hidden once all three are done or the person hid it. While it shows it leads the page, as a progress list.
+//
+// The look (Plan M M186, DEC-1616) is ui/theme.css's and ui/components.js's: attention items (`attentionItem`), status
+// chips (`statusChip`, the one mapping), empty states with an icon (`emptyState`), buttons (`button`) and the value
+// range's track (`.vrange`). The page adds only its own grid and the hero, in one sheet (`STYLE_ID`, scoped to `.ovp`).
 //
 // The builders are pure (`overviewHtml`, `cardAction`, `shortName`, `nextStepText`): what they draw comes from their
 // arguments, so the jsdom tests call them with recorded or stubbed answers. Words follow Plan M §4.1. Numbers and days
@@ -16,7 +21,8 @@
 // exact figure in the tooltip). A campaign's recorded name is the person's own text, marked `data-user-text` (M172).
 // Anything technical goes in a `class="tech"` section (M180 hides it); this page has none: it shows no engine word.
 
-import { crumbs, EM_DASH, emptyState, errorBox, esc, fmtInt, headActions, pageHead } from "../../dom.js";
+import { attentionItem, button, emptyState, icon, statusChip } from "../../components.js";
+import { EM_DASH, errorBox, esc, fmtInt, headActions, pageHead } from "../../dom.js";
 import { day, figureHtml } from "../../format.js";
 import { findNeverShown, term, USER_TEXT_ATTRIBUTE } from "../../labels.js";
 
@@ -43,15 +49,6 @@ export function shortName(name) {
   const first = full.split(/\s[-–—]\s|:\s/)[0].trim() || full;
   return first.length > 40 ? `${first.slice(0, 39).trimEnd()}…` : first;
 }
-
-// The four chips of the one status rule (Plan M DEC-1606 (b)), worded as the Campaigns pages word them
-// (ui/modules/campaigns/status.js STATUS). Only campaigns not yet measured are listed here.
-const STATUS = {
-  draft: ["Draft", "neutral"],
-  live: ["Live", "ok"],
-  waiting_for_results: ["Waiting for results", "warn"],
-  measured: ["Measured", "ok"],
-};
 
 /** The sentence for a campaign's next step, from the server's code and date. */
 export function nextStepText(campaign) {
@@ -118,19 +115,35 @@ export function cardAction(card, places = DEFAULT_PLACES) {
   return { label: "See all results", href: places.results };
 }
 
+/** A card's section head: its title (an H2) and, on the right, what belongs beside it. */
+const sectionHead = (id, title, aside = "") =>
+  `<div class="ovp-head"><h2 class="ov-h" id="${esc(id)}">${esc(title)}</h2>${aside}</div>`;
+
+/** The server's two severities, as the look's tones: a warning stays a warning, anything else is information. */
+const toneOf = (severity) => (severity === "warning" ? "warning" : "info");
+
 function cardHtml(card, places) {
   const action = cardAction(card, places);
-  const who = card.campaign_name && card.campaign_name.text ? shortName(card.campaign_name.text) : "";
   const full = card.campaign_name && card.campaign_name.text ? card.campaign_name.text : "";
-  const text = showable(card.text);
-  const next = showable(card.next_step);
-  return `<li class="ov-card ${esc(card.severity || "info")}" data-card="${esc(card.code)}"${
-    card.campaign_id ? ` data-card-campaign="${esc(card.campaign_id)}"` : ""
-  }><div class="ov-card-body"><p class="ov-card-title">${esc(plainWords(card.title))}</p>${
-    who ? `<p class="ov-card-who" title="${esc(full)}" ${USER_TEXT_ATTRIBUTE}>${esc(who)}</p>` : ""
-  }${text ? `<p class="ov-card-text">${esc(text)}</p>` : ""}${next ? `<p class="ov-card-next">${esc(next)}</p>` : ""}</div><a class="btn secondary sm" href="${esc(
-    action.href,
-  )}" data-card-action>${esc(action.label)}</a></li>`;
+  const who = full ? shortName(full) : "";
+  // One line: the card's sentence, and its "what to do" sentence when that one is in plain words too.
+  const line = [showable(card.text), showable(card.next_step)].filter(Boolean).join(" ");
+  const attrs = [
+    `role="listitem"`,
+    `data-card="${esc(card.code)}"`,
+    card.campaign_id ? `data-card-campaign="${esc(card.campaign_id)}"` : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+  return attentionItem({
+    tone: toneOf(card.severity),
+    title: plainWords(card.title),
+    text: line,
+    meta: who,
+    metaAttrs: who ? `${USER_TEXT_ATTRIBUTE} title="${esc(full)}"` : "",
+    action: { label: action.label, href: action.href, size: "sm", attrs: "data-card-action" },
+    attrs,
+  });
 }
 
 function attentionHtml(overview, places) {
@@ -140,12 +153,13 @@ function attentionHtml(overview, places) {
     body = `<p class="ov-note" data-unchecked>Some figures could not be checked against their records, so this list is not shown. Your campaigns below are unaffected.</p>`;
   } else if (!cards.length) {
     body = emptyState({
+      icon: "checkCircle",
       title: "Nothing needs your attention",
       text: "When a campaign needs a decision, it appears here with the one thing to do.",
     });
   } else {
     const more = Math.max(0, (overview.cards_total || cards.length) - cards.length);
-    body = `<ul class="ov-cards">${cards.map((card) => cardHtml(card, places)).join("")}</ul>${
+    body = `<div class="ov-cards" role="list">${cards.map((card) => cardHtml(card, places)).join("")}</div>${
       more
         ? `<p class="ov-more" data-more-cards>${esc(plural(more, "more item needs", "more items need"))} your attention. <a href="${esc(
             places.results,
@@ -153,7 +167,10 @@ function attentionHtml(overview, places) {
         : ""
     }`;
   }
-  return `<section class="card ov-attention" data-attention aria-labelledby="ov-h-attention"><h2 class="ov-h" id="ov-h-attention">Needs your attention</h2>${body}</section>`;
+  return `<section class="card ov-attention" data-attention aria-labelledby="ov-h-attention">${sectionHead(
+    "ov-h-attention",
+    "Needs your attention",
+  )}${body}</section>`;
 }
 
 // --- 2. value proven to date ---------------------------------------------------------------------------------------
@@ -168,19 +185,35 @@ export function unitText(headline) {
   return words || UNIT_FALLBACK[String(headline.unit).split(":")[0]] || "";
 }
 
+/**
+ * The hero: "At least" over the figure at 48px. It has no value range bar (M186, DEC-1616 (c)): the headline is a
+ * floor, the sum of each measured campaign's lower bound (`engine/measurement/overview.py`), and `GET /overview` sends
+ * no upper end, so a bar would invent a scale. The ranges are drawn where the server gives both ends: the Campaigns
+ * list and the campaign page (the Value Proof Pack's net value line).
+ */
 function valueHtml(overview, places) {
   const headline = overview.headline;
-  const link = `<a class="ov-link" href="${esc(places.reports)}" data-how-counted>How this is counted</a>`;
+  const link = `<a class="ov-link" href="${esc(places.reports)}" data-how-counted>How this is counted${icon("arrowRight", { size: 14 })}</a>`;
   let body;
   if (!overview.summary_checked) {
-    body = `<p class="ov-note">This figure is not shown because it could not be checked against its records.</p>`;
+    body = `<div class="ov-value-body"><p class="ov-note ovp-inline">This figure is not shown because it could not be checked against its records.</p></div>`;
   } else if (!headline) {
     // No total can mean two things: nothing has results yet, or every campaign with results is set apart or not final.
+    // No number either way: not a zero, and not a dash standing in for one.
     const hasResults = Boolean(overview.checklist && overview.checklist.results);
-    const why = hasResults
-      ? "None of your measured campaigns is counted as proven yet. How this is counted explains why."
-      : "Nothing is proven yet. Once a campaign's results are added, the least it earned appears here.";
-    body = `<p class="ov-amount" data-value-empty>${EM_DASH}</p><p class="ov-meaning" data-value-meaning>${esc(why)}</p>`;
+    body = hasResults
+      ? emptyState({
+          icon: "report",
+          title: "None of your measured campaigns is counted as proven yet",
+          text: "How this is counted explains why.",
+          attrs: "data-value-empty",
+        })
+      : emptyState({
+          icon: "report",
+          title: "Nothing is proven yet",
+          text: "Once a campaign's results are added, the least it earned appears here.",
+          attrs: "data-value-empty",
+        });
   } else {
     const rupees = headline.unit === "rupees";
     const fallback = rupees
@@ -192,11 +225,17 @@ function valueHtml(overview, places) {
     const counted = headline.campaigns_counted
       ? ` <span class="ov-based">Based on ${esc(plural(headline.campaigns_counted, "measured campaign", "measured campaigns"))}.</span>`
       : "";
-    body = `<p class="ov-amount" data-value-amount title="${esc(headline.total.text)}"><span class="ov-atleast">At least</span> ${figureHtml(
+    body = `<div class="ov-value-body"><p class="ov-amount" data-value-amount title="${esc(headline.total.text)}"><span class="ov-atleast">At least</span> <span class="ovp-figure"><span class="hero-figure">${figureHtml(
       headline.total,
-    )}${unit ? ` <span class="ov-unit">${esc(unit)}</span>` : ""}</p><p class="ov-meaning" data-value-meaning>${esc(meaning)}${counted}</p>`;
+    )}</span>${unit ? ` <span class="ov-unit">${esc(unit)}</span>` : ""}</span></p><p class="ov-meaning" data-value-meaning>${esc(
+      meaning,
+    )}${counted}</p></div>`;
   }
-  return `<section class="card ov-value" data-value aria-labelledby="ov-h-value"><h2 class="ov-h" id="ov-h-value">Value proven to date</h2><div class="ov-value-body">${body}${link}</div></section>`;
+  return `<section class="card ov-value" data-value aria-labelledby="ov-h-value">${sectionHead(
+    "ov-h-value",
+    "Value proven to date",
+    link,
+  )}${body}</section>`;
 }
 
 // --- 3. live campaigns -------------------------------------------------------------------------------------------
@@ -205,26 +244,29 @@ function liveHtml(overview, places) {
   const rows = overview.campaigns || [];
   let body;
   if (!rows.length) {
-    body = overview.checklist && overview.checklist.campaign
-      ? emptyState({
-          title: "No campaign is live right now",
-          text: "Campaigns that are measured are on the Campaigns page.",
-          action: { label: "See all campaigns", href: places.campaigns, kind: "secondary" },
-        })
-      : emptyState({
-          title: "You have no campaigns yet",
-          text: "Choose + New campaign to plan your first one.",
-        });
+    body =
+      overview.checklist && overview.checklist.campaign
+        ? emptyState({
+            icon: "campaign",
+            title: "No campaign is live right now",
+            text: "Campaigns that are measured are on the Campaigns page.",
+            action: { label: "See all campaigns", href: places.campaigns, kind: "secondary", size: "sm" },
+          })
+        : emptyState({
+            icon: "campaign",
+            title: "You have no campaigns yet",
+            text: "Choose + New campaign to plan your first one.",
+          });
   } else {
     const items = rows
-      .map((campaign) => {
-        const [label, tone] = STATUS[campaign.status] || [String(campaign.status), "neutral"];
-        return `<li class="ov-row" data-live-row="${esc(campaign.campaign_id)}"><a class="ov-row-name" href="${esc(
-          campaignHref(campaign.campaign_id),
-        )}" title="${esc(campaign.name)}"><span ${USER_TEXT_ATTRIBUTE}>${esc(shortName(campaign.name))}</span></a><span class="pill ${esc(tone)}">${esc(
-          label,
-        )}</span><span class="ov-row-next">${esc(nextStepText(campaign))}</span></li>`;
-      })
+      .map(
+        (campaign) =>
+          `<li class="ovp-row" data-live-row="${esc(campaign.campaign_id)}"><div class="ovp-row-main"><a class="ov-row-name" href="${esc(
+            campaignHref(campaign.campaign_id),
+          )}" title="${esc(campaign.name)}"><span ${USER_TEXT_ATTRIBUTE}>${esc(shortName(campaign.name))}</span></a><span class="ov-row-next">${esc(
+            nextStepText(campaign),
+          )}</span></div>${statusChip("campaign", campaign.status)}</li>`,
+      )
       .join("");
     const more = Math.max(0, (overview.campaigns_total || rows.length) - rows.length);
     body = `<ul class="ov-rows">${items}</ul>${
@@ -233,7 +275,7 @@ function liveHtml(overview, places) {
         : ""
     }`;
   }
-  return `<section class="card ov-live" data-live aria-labelledby="ov-h-live"><h2 class="ov-h" id="ov-h-live">Live campaigns</h2>${body}</section>`;
+  return `<section class="card ov-live" data-live aria-labelledby="ov-h-live">${sectionHead("ov-h-live", "Live campaigns")}${body}</section>`;
 }
 
 // --- 5. the first-visit checklist ------------------------------------------------------------------------------
@@ -252,19 +294,27 @@ export function checklistItems(checklist, places = DEFAULT_PLACES) {
 export const showChecklist = (checklist, hidden) => !hidden && checklistItems(checklist).some((item) => !item.done);
 
 function checklistHtml(overview, places) {
-  const items = checklistItems(overview.checklist, places)
-    .map(
-      (item) =>
-        `<li class="ov-check${item.done ? " done" : ""}" data-check="${esc(item.id)}" data-done="${item.done}"><span class="ov-tick" aria-hidden="true">${
-          item.done ? "✓" : "○"
-        }</span>${
-          item.done
-            ? `<span class="ov-check-label">${esc(item.label)}</span><span class="sr">Done</span>`
-            : `<a class="ov-check-label" href="${esc(item.href)}">${esc(item.label)}</a><span class="sr">To do</span>`
-        }</li>`,
-    )
+  const all = checklistItems(overview.checklist, places);
+  const done = all.filter((item) => item.done).length;
+  const next = all.findIndex((item) => !item.done);
+  const items = all
+    .map((item, n) => {
+      const state = item.done ? " done" : n === next ? " is-next" : "";
+      const tick = item.done ? icon("check", { size: 14 }) : String(n + 1);
+      return `<li class="ov-check${state}" data-check="${esc(item.id)}" data-done="${item.done}"><span class="ov-tick" aria-hidden="true">${tick}</span>${
+        item.done
+          ? `<span class="ov-check-label">${esc(item.label)}</span><span class="sr">Done</span>`
+          : `<a class="ov-check-label" href="${esc(item.href)}">${esc(item.label)}</a><span class="sr">To do</span>`
+      }</li>`;
+    })
     .join("");
-  return `<section class="card ov-checklist" data-checklist aria-labelledby="ov-h-check"><div class="ov-check-head"><h2 class="ov-h" id="ov-h-check">Getting started</h2><button type="button" class="btn quiet sm" data-checklist-hide>Hide this list</button></div><ol class="ov-checks">${items}</ol></section>`;
+  const hide = button({ label: "Hide this list", kind: "tertiary", size: "sm", attrs: "data-checklist-hide" });
+  const share = Math.round((done / all.length) * 100);
+  return `<section class="card ov-checklist" data-checklist aria-labelledby="ov-h-check">${sectionHead(
+    "ov-h-check",
+    "Getting started",
+    `<span class="ovp-check-aside"><span class="ovp-check-count" data-check-count>${done} of ${all.length} done</span>${hide}</span>`,
+  )}<div class="ovp-progress" aria-hidden="true"><span style="width:${share}%"></span></div><ol class="ov-checks">${items}</ol></section>`;
 }
 
 // --- the page ---------------------------------------------------------------------------------------------------------
@@ -274,8 +324,9 @@ function checklistHtml(overview, places) {
  * `checklistHidden` whether the person hid the first-visit checklist.
  */
 export function overviewHtml({ overview = null, error = null, places = DEFAULT_PLACES, checklistHidden = false } = {}) {
+  // A top-level place: no breadcrumb (visual_common §3). The one primary action sits right of the title.
   const head = pageHead(
-    `${crumbs([{ label: "Overview" }])}<h1 class="h1">Overview</h1><p class="desc">What needs your attention, what your campaigns have earned, and what to do next.</p>${headActions(
+    `<h1 class="h1">Overview</h1><p class="desc">What needs your attention, what your campaigns have earned, and what to do next.</p>${headActions(
       { primary: { label: "+ New campaign", href: places.newCampaign, attrs: "data-new-campaign" } },
     )}`,
   );
@@ -285,59 +336,90 @@ export function overviewHtml({ overview = null, error = null, places = DEFAULT_P
   } else if (!overview) {
     body = `<p class="loading" role="status">Loading…</p>`;
   } else {
-    body = `<div class="ov-grid">${attentionHtml(overview, places)}${valueHtml(overview, places)}${liveHtml(overview, places)}${
-      showChecklist(overview.checklist, checklistHidden) ? checklistHtml(overview, places) : ""
-    }</div>`;
+    // The checklist leads while it shows (a first visit's guide); attention, value and live keep the plan's order.
+    const check = showChecklist(overview.checklist, checklistHidden) ? checklistHtml(overview, places) : "";
+    body = `<div class="ov-grid ovp-grid${check ? " has-check" : ""}">${check}${attentionHtml(overview, places)}${valueHtml(
+      overview,
+      places,
+    )}${liveHtml(overview, places)}</div>`;
   }
-  return `<main class="screen ov" data-module="overview">${head}${body}</main>`;
+  return `<main class="screen ovp" data-module="overview">${head}${body}</main>`;
 }
 
-// --- styles: tokens only, so both themes apply ---------------------------------------------------------------------
+// --- styles: the page's grid and hero; everything else is ui/theme.css ----------------------------------------------
+// Scoped to `.ovp` so Home's `.ov` rules never reach this page. Text colours are tokens on the card's white or the soft
+// panel, which the contrast test checks.
 
 const CSS = `
-.ov .ov-grid{display:grid;gap:16px;grid-template-columns:minmax(0,3fr) minmax(0,2fr);grid-template-areas:"attention value" "attention live" "check check";grid-template-rows:auto 1fr auto;align-items:start}
-.ov .ov-attention{grid-area:attention}.ov .ov-value{grid-area:value}.ov .ov-live{grid-area:live}.ov .ov-checklist{grid-area:check}
-@media (max-width:900px){.ov .ov-grid{grid-template-columns:minmax(0,1fr);grid-template-areas:"attention" "value" "live" "check"}}
-.ov .ov-h{margin:0;padding:14px 20px;font-size:15px;font-weight:600;border-bottom:1px solid var(--line)}
-.ov .ov-cards,.ov .ov-rows,.ov .ov-checks{list-style:none;margin:0;padding:0}
-.ov .ov-card{display:flex;gap:16px;align-items:flex-start;justify-content:space-between;padding:12px 20px;border-top:1px solid var(--line);border-left:3px solid transparent}
-.ov .ov-card:first-child{border-top:0}
-.ov .ov-card.warning{border-left-color:var(--bad,#b3261e)}
-.ov .ov-card-body{min-width:0}
-.ov .ov-card-body p{margin:0}
-.ov .ov-card-title{font-size:14px;font-weight:600;color:var(--ink)}
-.ov .ov-card-who{font-size:12px;color:var(--muted);margin-top:2px}
-.ov .ov-card-text{font-size:13px;color:var(--ink2);line-height:1.45;margin-top:4px}
-.ov .ov-card-next{font-size:13px;font-style:italic;color:var(--ink2);margin-top:4px}
-.ov .ov-card .btn{flex:none}
-.ov .ov-more,.ov .ov-note{margin:0;padding:10px 20px;border-top:1px solid var(--line);font-size:13px;color:var(--muted)}
-.ov .ov-more a,.ov .ov-link,.ov .ov-row-name,.ov .ov-check-label[href]{color:var(--brand-blue);font-weight:600;text-decoration:none}
-.ov .ov-more a:hover,.ov .ov-link:hover,.ov .ov-row-name:hover,.ov .ov-check-label[href]:hover{text-decoration:underline}
-.ov .ov-value-body{padding:14px 20px 16px;display:flex;flex-direction:column;gap:6px}
-.ov .ov-amount{margin:0;font-size:30px;font-weight:600;line-height:1.15;font-feature-settings:"tnum";color:var(--ink)}
-.ov .ov-atleast,.ov .ov-unit{font-size:13px;font-weight:500;color:var(--muted)}
-.ov .ov-atleast{margin-right:4px}
-.ov .ov-meaning{margin:0;font-size:13px;color:var(--ink2);line-height:1.45}
-.ov .ov-based{color:var(--muted)}
-.ov .ov-link{font-size:13px}
-.ov .ov-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:2px 12px;align-items:center;padding:10px 20px;border-top:1px solid var(--line)}
-.ov .ov-row:first-child{border-top:0}
-.ov .ov-row-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.ov .ov-row-next{grid-column:1 / -1;font-size:13px;color:var(--ink2)}
-.ov .ov-check-head{display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--line);padding-right:12px}
-.ov .ov-check-head .ov-h{border-bottom:0}
-.ov .ov-checks{display:flex;flex-wrap:wrap;gap:8px 32px;padding:12px 20px}
-.ov .ov-check{display:flex;gap:8px;align-items:center;font-size:14px}
-.ov .ov-tick{width:20px;height:20px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:13px;color:var(--muted);border:1px solid var(--line2)}
-.ov .ov-check.done .ov-tick{background:var(--ok-t);color:var(--ok);border-color:var(--ok)}
-.ov .ov-check.done .ov-check-label{color:var(--muted)}
-.ov .empty-state{padding:20px}
+.ovp .ovp-grid{display:grid;gap:20px;grid-template-columns:minmax(0,1fr) minmax(0,1fr);grid-template-areas:"attention attention" "value live";align-items:stretch}
+.ovp .ovp-grid.has-check{grid-template-areas:"check check" "attention attention" "value live"}
+.ovp .ov-attention{grid-area:attention}.ovp .ov-value{grid-area:value;align-self:start}.ovp .ov-live{grid-area:live}.ovp .ov-checklist{grid-area:check}
+.ovp .card{overflow:hidden}
+.ovp .ovp-head{display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:56px;padding:12px 20px;border-bottom:1px solid var(--line)}
+.ovp .ov-h{margin:0;font-size:var(--fs-card,15px);line-height:var(--lh-card,22px);font-weight:600;letter-spacing:-.005em;color:var(--ink)}
+.ovp .ov-cards,.ovp .ov-rows,.ovp .ov-checks{list-style:none;margin:0;padding:0}
+.ovp .ov-cards>.attn+.attn{border-top:1px solid var(--line)}
+.ovp .ov-cards .attn-text{max-width:80ch}
+.ovp .ov-more,.ovp .ov-note{margin:0;padding:12px 20px;border-top:1px solid var(--line);font-size:13px;line-height:20px;color:var(--muted)}
+.ovp .ov-note.ovp-inline{padding:0;border:0}
+.ovp .ov-more a{color:var(--brand-blue);font-weight:600;text-decoration:none}
+.ovp .ov-more a:hover,.ovp .ov-link:hover{text-decoration:underline;text-underline-offset:3px}
+.ovp .ov-value-body{display:flex;flex-direction:column;align-items:flex-start;gap:12px;padding:20px}
+.ovp .ov-amount{margin:0;display:flex;flex-direction:column;gap:2px;color:var(--ink)}
+.ovp .ov-atleast{font-size:13px;line-height:20px;font-weight:500;color:var(--muted)}
+.ovp .ovp-figure{display:flex;align-items:baseline;flex-wrap:wrap;gap:4px 10px}
+.ovp .hero-figure{font-size:48px;line-height:56px;font-weight:600;letter-spacing:-.03em;font-variant-numeric:proportional-nums;color:var(--ink)}
+.ovp .ov-unit{font-size:15px;line-height:22px;font-weight:500;color:var(--ink2)}
+.ovp .ov-meaning{margin:0;font-size:13px;line-height:20px;color:var(--ink2);max-width:52ch}
+.ovp .ov-based{color:var(--muted)}
+.ovp .ov-link{display:inline-flex;align-items:center;gap:6px;min-height:24px;font-size:13px;font-weight:600;color:var(--brand-blue);text-decoration:none}
+.ovp .ovp-row{display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:56px;padding:10px 20px;border-top:1px solid var(--line);transition:background-color var(--dur,140ms) var(--ease,ease)}
+.ovp .ovp-row:first-child{border-top:0}
+.ovp .ovp-row:hover{background:var(--soft)}
+.ovp .ovp-row-main{display:flex;flex-direction:column;min-width:0}
+.ovp .ov-row-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600;color:var(--ink);text-decoration:none}
+.ovp .ov-row-name:hover{color:var(--brand-blue);text-decoration:underline;text-underline-offset:3px}
+.ovp .ov-row-next{font-size:13px;line-height:20px;color:var(--muted)}
+.ovp .ovp-row .badge{flex:none}
+.ovp .ovp-check-aside{display:flex;align-items:center;gap:16px}
+.ovp .ovp-check-count{font-size:13px;color:var(--muted);font-variant-numeric:tabular-nums}
+.ovp .ovp-progress{height:4px;background:var(--neutral-t)}
+.ovp .ovp-progress>span{display:block;height:100%;background:var(--brand-blue);border-radius:0 2px 2px 0}
+.ovp .ov-checks{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;padding:16px 20px}
+.ovp .ov-check{display:flex;align-items:center;gap:12px;min-height:52px;padding:8px 14px;border-radius:var(--r,8px);background:var(--soft);font-size:14px}
+.ovp .ov-tick{flex:none;display:inline-grid;place-items:center;width:28px;height:28px;border-radius:50%;border:2px solid var(--line2);background:var(--surface);color:var(--ink2);font-size:13px;font-weight:600;font-variant-numeric:tabular-nums}
+.ovp .ov-check.is-next .ov-tick{border-color:var(--brand-blue);color:var(--brand-blue);box-shadow:0 0 0 3px var(--brand-100)}
+.ovp .ov-check.done .ov-tick{border-color:var(--brand-blue);background:var(--brand-blue);color:#FFFFFF}
+.ovp .ov-check-label{font-weight:600;color:var(--ink)}
+.ovp a.ov-check-label{text-decoration:none}
+.ovp a.ov-check-label:hover{color:var(--brand-blue);text-decoration:underline;text-underline-offset:3px}
+.ovp .ov-check.done .ov-check-label{font-weight:500;color:var(--ink2)}
+@media (max-width:700px),(pointer:coarse){
+  .ovp .btn.sm,.ovp .btn.tertiary{min-height:40px}
+  .ovp .btn.sm:not(.tertiary){height:40px}
+  .ovp .ov-link,.ovp .ov-more a,.ovp a.ov-check-label{display:inline-flex;align-items:center;min-height:40px}
+}
+@media (max-width:900px){
+  .ovp .ovp-grid,.ovp .ovp-grid.has-check{grid-template-columns:minmax(0,1fr);grid-template-areas:none;gap:16px}
+  .ovp .ovp-grid>*{grid-area:auto}
+}
+@media (max-width:700px){
+  .ovp .ov-checks{grid-template-columns:minmax(0,1fr);gap:8px;padding:12px 16px 16px}
+  .ovp .ovp-head,.ovp .ov-value-body,.ovp .ov-more,.ovp .ov-note{padding-left:16px;padding-right:16px}
+  .ovp .ovp-row{padding:10px 16px}
+  .ovp .ov-cards>.attn{padding-left:16px;padding-right:16px}
+}
 `;
 
+// Its own id: the classic Home (ui/overview.js) injects a sheet called "ov-styles" (scoped to `.ov`) too, and when app.js
+// drew Home before this module registered, the Overview page used to find that id and skip its own rules (M185 review).
+// M186 also scopes these rules to `.ovp`, so none of Home's `.ov` rules reaches this page either.
+export const STYLE_ID = "ov-page-styles";
+
 export function injectStyles(doc = document) {
-  if (!doc || !doc.head || doc.getElementById("ov-styles")) return;
+  if (!doc || !doc.head || doc.getElementById(STYLE_ID)) return;
   const style = doc.createElement("style");
-  style.id = "ov-styles";
+  style.id = STYLE_ID;
   style.textContent = CSS;
   doc.head.appendChild(style);
 }
