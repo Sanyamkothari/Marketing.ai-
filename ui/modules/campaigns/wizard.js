@@ -108,6 +108,7 @@ const ui = {
   justDownloaded: null, // the Send address "Approve and download" went to after starting the download
   advancing: new Set(), // run ids already being taken to their next step
   listOf: new Map(), // learning run id -> the list run started from it, for a person who left and came back
+  chosenGoal: null, // the goal card last chosen: drawn chosen when the person comes back to step 1 (M187)
 };
 
 /** Whether work started under `token` is still the page's: no newer draw, and the same route on screen. */
@@ -210,7 +211,7 @@ async function goalStep(token) {
   }
   const industries = await getIndustries();
   const cards = goalCards(industries);
-  show(token, "goal", () => goalHtml({ ...cards, canStart: true }));
+  show(token, "goal", () => goalHtml({ ...cards, canStart: true, selected: ui.chosenGoal }));
 }
 
 // --- 2 Customers -------------------------------------------------------------------------------------------
@@ -661,7 +662,12 @@ document.addEventListener("click", (event) => {
   if (!target || typeof target.closest !== "function") return;
   const goal = target.closest("[data-cw-goal]");
   if (goal) {
-    go(stepHref("customers", goal.getAttribute("data-cw-goal")));
+    // The card shows it was chosen (M187) while the next step opens, and again if the person comes back.
+    const chosen = goal.getAttribute("data-cw-goal");
+    for (const other of document.querySelectorAll("[data-cw-goal].is-selected")) other.classList.remove("is-selected");
+    goal.classList.add("is-selected");
+    ui.chosenGoal = chosen;
+    go(stepHref("customers", chosen));
     return;
   }
   if (target.closest("[data-cw-confirm-cost]") && ui.lastStart) {
