@@ -372,6 +372,17 @@ def _one_value_per_setting(proposals: Sequence[Proposal], decided_now: set[str])
     )
 
 
+def _never_ticked(ctx: AgentContext) -> frozenset[RecipeStepKind]:
+    """`NEVER_TICKED_STEPS`, and - behind `data_doctor.unified` - the data policy's list too (Plan O M233)."""
+    from engine.doctor import registry as doctor_registry
+
+    if not doctor_registry.unified_on(ctx.config):
+        return NEVER_TICKED_STEPS  # the switch off: nothing of the policy is read
+    from engine.doctor.policy import never_ticked_steps
+
+    return never_ticked_steps(ctx.config, ctx.config_root)
+
+
 def accept_recommended(
     session: AgentSession, ctx: AgentContext, *, clock: Callable[[], datetime] = utc_now
 ) -> AgentSession:
@@ -381,6 +392,7 @@ def accept_recommended(
     them to decide, so this never rejects their choice on their behalf (DEC-1010).
     """
     tick_uncertain = ctx.config.agent.tick_uncertain
+    never = _never_ticked(ctx)
     # A value the person has accepted for a setting is theirs: the helper's default never replaces it.
     settled = {
         p.path
@@ -392,8 +404,8 @@ def accept_recommended(
         if p.state is ProposalState.PENDING and (p.confidence.value == "sure" or tick_uncertain):
             if p.kind is ProposalKind.SETTING and p.path in settled:
                 continue  # left pending, for the person to decide
-            if p.step is not None and p.step.kind in NEVER_TICKED_STEPS:
-                continue  # only the person decides these (DEC-1224)
+            if p.step is not None and p.step.kind in never:
+                continue  # only the person decides these (DEC-1224; Plan O M233 reads the policy's too)
             if p.from_headers:
                 continue  # a column read from its header is only ever ticked by the person (M142)
             # Two pending suggestions for one setting: the later one, never a conflict.

@@ -41,6 +41,7 @@ from pydantic import BaseModel
 
 from api.access_policy import RoutePolicy
 from engine.access.roles import Role
+from engine.agent.contracts import RecipeStepKind
 from engine.doctor.catalogue import row
 from engine.doctor.registry import (
     BY_EXPOSURE,
@@ -261,6 +262,10 @@ class _Adapter:
                     else None
                 ),
                 wraps=wraps or f"{spec.run.__module__}.{spec.name}",
+                step_kinds=tuple(
+                    RecipeStepKind(k)
+                    for k in (getattr(spec, "step_kinds", ()) or getattr(spec, "proposes", ()))
+                ),
             )
         )
         self.registered.append(spec.name)

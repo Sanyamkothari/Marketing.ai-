@@ -779,6 +779,12 @@ def _propose(
             "AGENT_SETTING_NOT_ALLOWED",
             f"{path[:80]} = {value!r:.80} is not a setting the helper may suggest.",
         )
+    gate = _policy_gate(ctx, None, "data.setting", settings=fields)
+    if gate is not None:
+        # Plan O M233 (DEC-1803): the setting allow-list, read from the data policy as well (same code).
+        from engine.doctor.policy import SETTING, SettingChange
+
+        gate(SETTING, setting=SettingChange(path=path, value=value))
     try:
         resolve_config(ctx.use_case_id, {path: value}, root=ctx.config_root)
     except ConfigError as exc:
@@ -814,6 +820,28 @@ def _propose(
 STEP_TEXT_KEYS: Final[frozenset[str]] = frozenset({"kind", "column"})
 
 
+def _policy_gate(
+    ctx: AgentContext, session: AgentSession | None, kind: str, *, settings: dict[str, Any] | None = None
+) -> Callable[..., None] | None:
+    """Plan O M233 (DEC-1803): the data policy's check of `kind` for an AI suggestion, behind `data_doctor.unified`.
+
+    None with the switch off (nothing is read). With it on, each of this module's own checks is followed by the
+    same rule read from `configs/agentic/policy.yaml`, raising the same code; a kind with no rule set is refused.
+    """
+    from engine.doctor.policy import agent_gate
+
+    key, target = roles_of(session) if session is not None else (None, None)
+    return agent_gate(
+        ctx,
+        kind,
+        source="ai",
+        primary_key=key,
+        target=target,
+        raise_as=AgentToolError,
+        settings=settings,
+    )
+
+
 def _looked_at(result: ToolResult, column: str) -> bool:
     """True when a look-tool result is about `column` (named in its arguments)."""
     args = result.args
@@ -845,6 +873,7 @@ def _propose_step(
     """
     from engine.agent.advisor import ordered_steps, recipe_steps
     from engine.agent.recipe import EXCEL_SERIAL_PARAMS, RecipeError, check_recipe, run_recipe
+    from engine.doctor import policy as data_policy
 
     try:
         kind = RecipeStepKind(str(args.get("kind", "")))
@@ -856,12 +885,19 @@ def _propose_step(
             f"{str(args.get('kind'))[:40]!r} is not a fix the chat may suggest. Allowed: "
             + ", ".join(sorted(k.value for k in CHAT_STEP_KINDS)),
         )
+    # Plan O M233 (DEC-1803): behind `data_doctor.unified`, each check below is followed by the same rule of the
+    # data policy (`configs/agentic/policy.yaml`, `data.recipe_step`), with the same code; None when it is off.
+    gate = _policy_gate(ctx, session, "data.recipe_step")
+    if gate is not None:
+        gate(data_policy.STEP_KIND, steps=(data_policy.StepFacts(kind, str(args.get("column", ""))),))
     column = ctx.resolve(str(args.get("column", "")))
     personal = {c.name for c in ctx.profile.columns if c.pii_kinds} | set(
         ctx.config.agent.always_hide_columns
     )
     if column in personal and kind is not RecipeStepKind.DROP_COLUMN:
         raise AgentToolError("AGENT_STEP_NOT_ALLOWED", "A column holding personal data can only be hidden.")
+    if gate is not None:
+        gate(data_policy.PERSONAL, steps=(data_policy.StepFacts(kind, column),))
     cited = (
         [str(e) for e in args.get("evidence_ids", []) if isinstance(e, str)]
         if isinstance(args.get("evidence_ids"), list)
@@ -876,14 +912,24 @@ def _propose_step(
             "AGENT_STEP_UNGROUNDED",
             f"Look at '{display_name(column)}' with a tool first, and cite that result in evidence_ids.",
         )
+    if gate is not None:
+        gate(data_policy.GROUNDED, steps=(data_policy.StepFacts(kind, column),), looked_at=bool(looks))
     raw_params = args.get("params")
     params: dict[str, Any] = dict(raw_params) if isinstance(raw_params, dict) else {}
     gated = sorted(EXCEL_SERIAL_PARAMS & params.keys())
     if gated:
         # Plan O M240: Excel day numbers are the Data Doctor's own fix (found by `find_excel_serial_dates`);
-        # the chat has no such parameter until M233's policy rule allows it, so it is refused as unknown.
+        # the chat has no such parameter: M233's `data.recipe_step` rule set does not allow it either (DEC-1803).
         raise AgentToolError("RECIPE_STEP_INVALID", f"Step 1 ({kind.value}): unknown parameter {gated[0]!r}")
     new_column = args.get("new_column")
+    if gate is not None:
+        facts = data_policy.StepFacts(
+            kind,
+            column,
+            params,
+            str(new_column) if isinstance(new_column, str) and new_column.strip() else None,
+        )
+        gate(data_policy.STEP_PARAMS, data_policy.SPELLINGS, steps=(facts,), looked_at=True)
     try:
         step = RecipeStep(
             order=1,
@@ -909,6 +955,13 @@ def _propose_step(
             target=target,
             levels=agent.levels,
         )
+        if gate is not None:
+            gate(
+                data_policy.PROTECTED,
+                data_policy.LEVEL,
+                steps=(data_policy.StepFacts.of(step),),
+                looked_at=True,
+            )
         trial = run_recipe(
             ctx.frame.head(STEP_SAMPLE_ROWS),
             [step],
@@ -926,6 +979,20 @@ def _propose_step(
             "AGENT_STEP_NO_EFFECT",
             f"That fix changes nothing in the first {min(STEP_SAMPLE_ROWS, len(ctx.frame))} rows of "
             f"'{display_name(column)}'. Look again, or reply instead.",
+        )
+    if gate is not None:
+        # Tried on the first rows (the trial above), held to decision O10, never ticked: the approval's
+        # "new patterns, with permission" for an AI's fix.
+        effect = data_policy.effect_of(
+            step, ctx.frame.head(STEP_SAMPLE_ROWS), changed=receipt.changed, failed=receipt.failed
+        )
+        gate(
+            data_policy.TRIED,
+            data_policy.CHANGE_SHARE,
+            data_policy.NEVER_TICKED,
+            steps=(data_policy.StepFacts.of(step),),
+            looked_at=True,
+            effect=effect,
         )
     reason = str(args.get("reason") or CHAT_REASON).strip()[:MAX_REASON_CHARS] or CHAT_REASON
     if checker.failure(reason, target="helper suggestion", max_chars=MAX_REASON_CHARS) is not None:
