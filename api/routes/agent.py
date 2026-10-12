@@ -56,6 +56,7 @@ from engine.agent.contracts import (
     ChatMessage,
     ChatRole,
     DataRecipe,
+    ProposalSource,
     ProposalState,
     RecipeReceipt,
     RecipeStepKind,
@@ -1140,6 +1141,18 @@ def preview_agent_session(
         except RecipeError as exc:
             raise _refuse(409, exc.code, exc.message) from exc
         after, receipt = run.frame, run.receipt
+    if _doctor_on(ctx.config):
+        # Plan O M246 (DEC-1816): with Data Doctor on, Approve checks that this preview was shown.
+        from engine.doctor.plan_g_approval import record_preview
+
+        record_preview(
+            storage,
+            upload_id,
+            recipe_hash=recipe.recipe_hash if recipe is not None else None,
+            receipt=receipt,
+            actor=requested_by(request),
+            at=utc_now(),
+        )
     columns_before = tuple(str(c) for c in before.columns)
     columns_after = tuple(str(c) for c in after.columns)
     return PreviewResponse(
@@ -1170,7 +1183,11 @@ def apply_agent_session(
 
 
 def _apply_agent_session(
-    upload_id: str, root: Path, storage: Storage, request: Request
+    upload_id: str,
+    root: Path,
+    storage: Storage,
+    request: Request,
+    approved_sentence: str | None = None,
 ) -> ApplyResponse | JSONResponse:
     session = _load_session(storage, upload_id)
     loaded = _load_context(storage, root, request, upload_id, session.use_case_id, session.model_version_id)
@@ -1189,6 +1206,11 @@ def _apply_agent_session(
         )
     key, target = roles_of(session)
     recipe = _accepted_recipe(session, upload, requested_by(request), ctx.config)
+    approval = None
+    if ctx.mode is RunMode.TRAIN and _doctor_on(ctx.config):
+        # Plan O M246 (DEC-1816): M233's approval-time facts - the preview shown, the reshape guards, the exact
+        # sentence and the role - before anything is written.
+        approval = _approval_gate(storage, session, upload, ctx.config, request, recipe, approved_sentence)
     prepared, receipt = upload, None
     if ctx.mode is RunMode.SCORE and loaded.version is not None:
         # The model's recipe prepares a scoring file; the session proposes no steps of its own. Run
@@ -1228,6 +1250,8 @@ def _apply_agent_session(
     )
     if ctx.mode is RunMode.TRAIN and recipe is not None and prepared.upload_id != upload_id:
         _remember(storage, ctx, upload, recipe, prepared.upload_id)
+    if approval is not None:
+        _record_approval(storage, root, request, session, upload, recipe, approval)
     _save(storage, applied.model_copy(update={"updated_at": utc_now()}))
     set_audit_context(
         request,
@@ -1248,6 +1272,108 @@ def _apply_agent_session(
         summary=applied.summary,
         receipt=receipt,
     )
+
+
+def _doctor_on(config: UseCaseConfig) -> bool:
+    """Plan O M246: `data_doctor.unified` (read lazily: with it off nothing of Data Doctor is imported here)."""
+    from engine.doctor.policy import data_policy_on
+
+    return data_policy_on(config)
+
+
+def _approver(request: Request) -> Any:
+    from engine.access.roles import LOCAL_OPERATOR, Principal
+
+    principal = getattr(request.state, "principal", None)
+    return principal if isinstance(principal, Principal) else LOCAL_OPERATOR
+
+
+def _approval_gate(
+    storage: Storage,
+    session: AgentSession,
+    upload: UploadRecord,
+    config: UseCaseConfig,
+    request: Request,
+    recipe: DataRecipe | None,
+    sentence: str | None,
+) -> Any:
+    """Plan O M246 (DEC-1816): Guided setup's Approve with Data Doctor on holds M233's approval-time rules
+    (`engine.doctor.plan_g_approval`); a refusal records nothing. Returns what was approved."""
+    from engine.doctor.plan_g_approval import approval_of, approval_refusal, read_preview
+
+    required = bool(config.governance.approval_required)
+    approval = approval_of(
+        session,
+        file_name=upload.file_name,
+        preview=read_preview(storage, upload.upload_id),
+        recipe_hash=recipe.recipe_hash if recipe is not None else None,
+        training=True,
+        approval_required=required,
+    )
+    found = approval_refusal(
+        approval, approver=_approver(request), sentence_read=sentence, approval_required=required
+    )
+    if found is not None:
+        code = found.code or "POLICY_NO_RULES"
+        reason = str(found.detail.get("reason", "Not allowed."))
+        if code == "APPROVAL_SENTENCE_CHANGED":
+            reason = f"{reason} It now reads: “{approval.sentence}”"
+        raise _refuse(403 if code in {"TOOL_ROLE_REQUIRED", "POLICY_ROLE_SEPARATION"} else 409, code, reason)
+    return approval
+
+
+def _record_approval(
+    storage: Storage,
+    root: Path,
+    request: Request,
+    session: AgentSession,
+    upload: UploadRecord,
+    recipe: DataRecipe | None,
+    approval: Any,
+) -> None:
+    """Plan O M246 (DEC-1816): the approval's record - Plan K's ledger (`data.prescription.approved`) when
+    `agentic.enabled` is on, written before the session is saved - and the approved AI patterns counted for the
+    product team ([REQ] 11). Recording a pattern never fails an approval; the ledger does (no approval without
+    its record)."""
+    from engine.agentic.canonical import digest
+    from engine.agentic.errors import AgenticError
+    from engine.doctor.patterns import record_approved
+    from engine.doctor.protocol import DATA_PRESCRIPTION_APPROVED, decision_body
+
+    approver = _approver(request)
+    accepted = [p for p in session.proposals if p.state is ProposalState.ACCEPTED]
+    body = decision_body(
+        case_id=None,
+        upload_id=upload.upload_id,
+        item_digests=[digest(p.model_dump(mode="json", exclude={"decided_by"})) for p in accepted],
+        text=approval.sentence,
+        decided_by=approver.user_id,
+        kind="guided_setup",
+        recipe_hash=recipe.recipe_hash if recipe is not None else None,
+        identity_verified=False if approver.kind != "user" else None,
+    )
+    try:
+        from engine.agentic.config import agentic_enabled
+
+        if agentic_enabled(root):
+            from api.access import get_platform_engine, platform_data_dir
+            from engine.agentic.config import policy_version
+            from engine.agentic.ledger import signer_for_data_dir
+            from engine.doctor.protocol import ledger_port
+
+            data_dir = platform_data_dir(request) or get_settings(request).data_dir
+            ledger_port(get_platform_engine(request), signer_for_data_dir(data_dir), policy_version(root))(
+                DATA_PRESCRIPTION_APPROVED, approver.user_id, body
+            )
+    except AgenticError as exc:
+        raise _refuse(exc.status, exc.code, exc.message) from exc
+    ai_steps = [
+        (p.step.kind.value, dict(p.step.params))
+        for p in accepted
+        if p.source is ProposalSource.AI and p.step is not None
+    ]
+    if ai_steps:
+        record_approved(storage, ai_steps, place=upload.upload_id, client_id="default", at=utc_now())
 
 
 def _remember(

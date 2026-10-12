@@ -115,6 +115,12 @@ COPY_TEMPLATE_APPROVED: Final[str] = "copy_template.approved"
 """Plan M M184 (DEC-1614 (d)): a person approved one campaign-copy template (`api.routes.generative`); written only
 while `agentic.enabled` is on. Its body holds the template's id and the sha256 of its words, never the words."""
 
+DATA_PRESCRIPTION_APPROVED: Final[str] = "data.prescription.approved"
+"""Plan O M246 (DEC-1816): a person approved Data Doctor's prepared data (a case's approval, or Guided setup's
+Approve with Data Doctor on); written only while `agentic.enabled` is on. Ids and digests, never a value."""
+DATA_DECISION: Final[str] = "data.decision"
+"""Plan O M246 (DEC-1816): a person's own yes to one APPROVE-class item of a case (the design §6.6)."""
+
 SIGNED_KINDS: Final[frozenset[str]] = frozenset(
     {PROPOSAL_APPROVED, TEST_PLAN_FROZEN, EVIDENCE_LABEL, COPY_TEMPLATE_APPROVED}
 )
@@ -164,6 +170,12 @@ BODY_KEYS: Final[frozenset[str]] = frozenset(
         "template_id",
         "template_sha256",
         "identity_verified",
+        # Plan O M246 (DEC-1816): Data Doctor's decisions - the case, the file, the prescription and recipe hashes
+        # (`payload_digest` above holds the digest of the items approved and the sentence read).
+        "case_id",
+        "upload_id",
+        "prescription_hash",
+        "recipe_hash",
     }
 )
 """The only keys a body may hold: ids, digests, codes and labels, never a row (see the module docstring)."""

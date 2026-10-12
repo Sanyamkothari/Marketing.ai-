@@ -394,7 +394,6 @@ PHASE_APP_HOOKS.append(_install_cases)
 # ---- END PLAN-O ----
 
 
-
 # Plan O M235 (DEC-1805): the visit's routes (/cases/{id}/visit, goal, answers, decisions, approval, chat and
 # /goal-briefs/{goal_id}), mounted only when `data_doctor.unified` is on, like M231's. Off: nothing is imported.
 def _install_case_visit(app: FastAPI) -> None:  # PLAN-O (M235): move into the PLAN-O block at integration
@@ -407,5 +406,20 @@ def _install_case_visit(app: FastAPI) -> None:  # PLAN-O (M235): move into the P
 
 
 PHASE_APP_HOOKS.append(_install_case_visit)  # PLAN-O (M235): move into the PLAN-O block at integration
+
+
+# Plan O M246 (DEC-1816): the protocol's routes outside a case (Guided setup's Approve with the sentence read,
+# standing answers per client, candidate rules), mounted only when `data_doctor.unified` is on. Off: nothing is
+# imported and docs/API.md is unchanged.
+def _install_data_protocol(app: FastAPI) -> None:  # PLAN-O (M246): move into the PLAN-O block at integration
+    from engine.doctor import case as doctor_case
+
+    if doctor_case.data_doctor_unified(app.state.config_root):
+        from api.routes.data_protocol import router as data_protocol_router
+
+        app.include_router(data_protocol_router)
+
+
+PHASE_APP_HOOKS.append(_install_data_protocol)  # PLAN-O (M246): move into the PLAN-O block at integration
 
 app: FastAPI = create_app()

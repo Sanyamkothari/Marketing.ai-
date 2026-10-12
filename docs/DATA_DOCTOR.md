@@ -693,3 +693,38 @@ Each transition is one write of `case.json`; items and questions of a goal carry
 `VISIT_NOT_WAITING` (409), `VISIT_UNKNOWN_CHOICE` (422), `USE_CASE_NOT_FOUND` for a goal that is not a use case.
 Tests: `tests/unit/doctor/test_goal_brief.py`, `tests/unit/doctor/test_visit.py`,
 `tests/integration/test_api_case_visit.py`.
+
+## 20. Asking, approving and saying "I'm not sure" (Plan O M246, DEC-1816)
+
+*Behind the switch `data_doctor.unified` (off by default). With it off, nothing below exists.*
+
+- **One clear question at a time, only when it matters.** Data Doctor asks only when the choices give really
+  different data - more than 1 row in 200 changes, or the share of yes outcomes moves by more than half a point.
+  Below that it decides, **tells you what it assumed** ("I took 'Day first': the choices differ on only 12 of 3,000
+  rows") and lets you change it. Each question says why it is asked and what each answer changes, and always has
+  **"I don't know"**, which picks the safe choice (leave as it is, hide, stop) - never a guess. At most 10 questions
+  per file.
+- **Your answers are remembered for this client.** Next month's file is treated the same way, ticked for you and
+  marked "Using your answer from 12 Oct". Settings lists every remembered answer with **Revoke**; a revoked answer
+  is asked again. Answers about what changes meaning are never remembered: they are asked again.
+- **An explicit yes for what changes meaning.** Consent, keeping personal data, the outcome, leaving rows out,
+  currency conversion and loosening a safeguard each need their own yes, from someone with the right role (an
+  Approver for consent, personal data and safeguards). You approve the exact sentence shown; if it changed since
+  you read it, nothing is recorded and you see the new one. When your goal asks for two people, the person who chose
+  it cannot also approve it.
+- **Doubts said plainly**: *I am not sure because* ... *Here is what I would do* ... *Here is what changes if not*
+  ... - and every number in a doubt was measured, never made up.
+- **Asking for more data or a different file**: "Ask your billing team for the date of each customer's last order;
+  Win back needs it", with the columns the file should have.
+- **Who decided what** is kept with every answer, tick and approval; with the decision ledger on, approvals are
+  also written to it.
+- **New patterns only with your permission.** What the AI suggests is never ticked for you. When people approve
+  the same AI suggestion again and again, our product team is told, so it can become a built-in rule.
+
+### For developers
+
+`engine/doctor/protocol.py` (the rules), `standing.py` (remembered answers), `plan_g_approval.py` (Guided setup's
+Approve with the switch on), `patterns.py` (candidate rules), the visit's `confirm`, `revoke_standing` and the
+`detectors` and `ledger` ports; routes in `api/routes/case_visit.py` and `api/routes/data_protocol.py`.
+`docs/AGENTS.md` §18. Tests: `tests/unit/doctor/test_protocol.py`, `test_protocol_visit.py`,
+`test_plan_g_approval.py`, `tests/integration/test_api_data_protocol.py`.
