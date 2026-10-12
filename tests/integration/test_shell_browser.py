@@ -284,3 +284,134 @@ def test_campaigns_folds_behind_menu_at_390(browser: Any, campaigns_server: str,
     assert page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth")
     assert problems == []
     page.context.close()
+
+
+# --- Plan M M185 (DEC-1615): the look, in the real style sheet --------------------------------------------------------
+
+BRAND_BLUE: Final[str] = "rgb(30, 87, 189)"
+CAMPAIGN_PAGE: Final[str] = "#/campaigns/c_20261011_c9276210"
+INTER_LOADED: Final[str] = (
+    "document.fonts.ready.then(() => [...document.fonts].some("
+    "(f) => f.family.replace(/\"/g, '') === 'Inter Variable' && f.status === 'loaded'))"
+)
+
+
+def _box(page: Any, selector: str) -> dict[str, float]:
+    box = page.locator(selector).first.bounding_box()
+    assert box is not None, f"{selector} is not drawn"
+    return dict(box)
+
+
+def _style(page: Any, selector: str, prop: str) -> str:
+    return str(page.locator(selector).first.evaluate(f"el => getComputedStyle(el).{prop}"))
+
+
+def test_the_look_on_a_wide_screen(
+    browser: Any, campaigns_server: str, classic_server: str, shots: Path
+) -> None:
+    """Inter is shipped and used; no page card; the product mark tops the sidebar, Minfy sits at its foot; brand blue
+    primary buttons, active place and selected tab; the page's one primary action on the right of its title.
+    """
+    problems: list[str] = []
+    page = _page(browser, campaigns_server, width=1440, height=900, problems=problems)
+    _open(page, campaigns_server, "#/campaigns")
+    page.wait_for_selector("#app .head-actions .btn.primary")
+    assert page.evaluate(INTER_LOADED) is True, "Inter Variable loaded from ui/fonts/inter"
+    assert _style(page, "body", "fontFamily").startswith('"Inter Variable"')
+    # no page card: the page sits on the canvas, at most 1200 px wide
+    assert _style(page, "#app .screen", "backgroundColor") == "rgba(0, 0, 0, 0)"
+    assert _style(page, "#app .screen", "borderTopWidth") == "0px"
+    assert _box(page, "#app .screen")["width"] <= 1200
+    assert _style(page, "body", "backgroundColor") == "rgb(245, 246, 248)"
+    # the shell: the name and mark at the top of the sidebar, "by Minfy" at its foot, the top bar 56 px
+    word = _box(page, "#pb-bar a.wordmark")
+    assert word["x"] == 0 and word["y"] == 0 and word["width"] == 216 and word["height"] == 56
+    logo = _box(page, "#pb-bar a.tb-logo")
+    assert logo["x"] == 0 and logo["y"] + logo["height"] == 900, "Minfy at the sidebar's foot"
+    assert (
+        page.locator("#pb-bar a.tb-logo").evaluate("el => getComputedStyle(el, '::before').content") == '"by"'
+    )
+    side = _box(page, "#pb-bar .sh-side")
+    assert side["y"] == 0 and side["height"] == 900, "the sidebar runs the full height"
+    assert _box(page, "#pb-bar .sh-row")["height"] == 56
+    # brand colour: the active place (with its bar), the primary button
+    assert _style(page, "#pb-bar a.sh-item[aria-current='page']", "color") == BRAND_BLUE
+    bar = page.locator("#pb-bar a.sh-item[aria-current='page']").evaluate(
+        "el => getComputedStyle(el, '::before').backgroundColor"
+    )
+    assert bar == BRAND_BLUE, "a 3 px brand bar marks the place"
+    primary = "#app .head-actions .btn.primary"
+    assert _style(page, primary, "backgroundColor") == BRAND_BLUE
+    assert _style(page, primary, "color") == "rgb(255, 255, 255)"
+    assert _box(page, primary)["height"] == 40
+    # the header: the one primary action on the right of the title, on the same band
+    title, action = _box(page, "#app .h1"), _box(page, primary)
+    assert action["x"] > title["x"] + title["width"], "the primary action is to the right of the title"
+    assert action["y"] < title["y"] + title["height"] + 40
+    page.screenshot(path=str(shots / "m185_campaigns_1440.png"))
+    # underline tabs: the selected tab is brand text over a 2 px brand line, not a filled pill
+    _open(page, campaigns_server, CAMPAIGN_PAGE)
+    page.wait_for_selector("#app .tabs .tab.on")
+    on = "#app .tabs .tab.on"
+    assert _style(page, on, "color") == BRAND_BLUE
+    assert _style(page, on, "borderBottomColor") == BRAND_BLUE
+    assert _style(page, on, "borderBottomWidth") == "2px"
+    assert _style(page, on, "backgroundColor") == "rgba(0, 0, 0, 0)"
+    # a status chip carries an icon and its word, in the status colours (Measured = good)
+    chip = "#app .chip.cp-status[data-status='measured']"
+    assert _style(page, chip, "color") == "rgb(21, 128, 61)"
+    assert page.locator(chip).evaluate("el => getComputedStyle(el, '::before').width") == "12px"
+    assert page.locator(chip).inner_text().strip() == "Measured"
+    page.screenshot(path=str(shots / "m185_campaign_1440.png"))
+    page.context.close()
+    # the classic layout shares the font, the tokens and the components; its markup is not reworked
+    classic = _page(browser, classic_server, width=1440, height=900, problems=problems)
+    _open(classic, classic_server, "#/settings")
+    classic.wait_for_selector("#pb-bar .topnav")
+    assert classic.evaluate(INTER_LOADED) is True
+    assert _style(classic, "#app .screen", "backgroundColor") == "rgba(0, 0, 0, 0)"
+    assert _style(classic, "#pb-bar .tn-item.on", "color") == BRAND_BLUE
+    assert classic.locator("#pb-bar .sh-side").count() == 0
+    classic.screenshot(path=str(shots / "m185_classic_1440.png"))
+    classic.context.close()
+    assert problems == []
+
+
+def test_the_look_on_a_phone(browser: Any, campaigns_server: str, shots: Path) -> None:
+    """At 390 px: no sideways scroll on any main page, the header's action below its text, Minfy only in the drawer."""
+    problems: list[str] = []
+    page = _page(browser, campaigns_server, width=390, height=844, problems=problems)
+    for hash_ in (
+        "#/overview",
+        "#/campaigns",
+        CAMPAIGN_PAGE,
+        "#/campaigns/new",
+        "#/data",
+        "#/reports",
+        "#/settings",
+    ):
+        _open(page, campaigns_server, hash_)
+        page.wait_for_selector("#app h1")
+        assert page.evaluate(
+            "document.documentElement.scrollWidth <= document.documentElement.clientWidth"
+        ), f"{hash_} scrolls sideways at 390 px"
+        assert _box(page, "#pb-bar .sh-row")["height"] <= 60, hash_
+    _open(page, campaigns_server, "#/campaigns")
+    page.wait_for_selector("#app .head-actions .btn.primary")
+    desc, action = _box(page, "#app .head .desc"), _box(page, "#app .head-actions .btn.primary")
+    assert action["y"] >= desc["y"] + desc["height"], "the primary action sits below the text on a phone"
+    assert action["x"] <= desc["x"] + 1, "and starts at the text's left edge"
+    assert page.locator(
+        "#pb-bar a.tb-logo"
+    ).is_hidden(), "the folded bar is the name, Menu, the bell and Help"
+    page.locator("#pb-bar .sh-menu-btn").click()
+    assert page.locator("#pb-bar .sh-side").is_visible()
+    logo = _box(page, "#pb-bar a.tb-logo")
+    assert logo["y"] + logo["height"] == 844, "the open drawer ends with Minfy"
+    drawer = _box(page, "#pb-bar .sh-side")
+    assert drawer["x"] == 0 and drawer["width"] <= 390
+    page.screenshot(path=str(shots / "m185_campaigns_390_drawer.png"))
+    page.keyboard.press("Escape")
+    assert page.locator("#pb-bar .sh-side").is_hidden()
+    assert problems == []
+    page.context.close()
