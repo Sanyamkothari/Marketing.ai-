@@ -7,8 +7,10 @@
    - both connected, neither connected, the second using the first's service, a key the server can no longer read;
    - a person who may read but not save it ("Ask an admin to connect it"), and one who may not read it;
    - a failed load: the error with "Try again", which loads again;
-   - the route is the simple module's (`resolveRoute`), Settings' row links here, and the key form opened from here
-     puts Settings › AI service in its breadcrumb (from Connections it keeps Connections). */
+   - the route is the simple module's (`resolveRoute`) and Settings' row links here;
+   - the key form a card opens: in the campaigns layout it is headed with the card's plain name and sentence, its
+     breadcrumb is always Settings › AI service (a reload or a bookmark too), and no engineering name ("Product AI",
+     "Deliverable AI") is shown outside technical details; in the classic layout it keeps its names and Connections. */
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { $, $$, settle, until } from "../harness.mjs";
@@ -107,7 +109,6 @@ test("neither connected: two cards in plain words, 'Not connected', and a Connec
     const go = card(name).querySelector(`[data-ai-svc-go="${name}"]`);
     assert.equal(go.getAttribute("href"), `#/connections/ai/${name}`, "one click to the key form");
     assert.equal(text(go), "Connect");
-    assert.equal(go.getAttribute("data-ai-from-settings"), name);
   }
   assert.equal($$("main .btn.primary").length, 1, "the page's one primary button: the first service to connect");
   assert.ok(card("product").querySelector(".btn.primary"));
@@ -199,23 +200,58 @@ test("a failed load is the error with Try again, which loads again", async () =>
   assert.equal(text(card("product").querySelector("[data-ai-svc-status]")), "Connected · OpenAI");
 });
 
-test("the key form opened from here goes back to Settings › AI service; opened from Connections, to Connections", async () => {
+const inCampaigns = (on) => {
+  if (on) w.document.documentElement.setAttribute("data-ui-layout", "campaigns");
+  else w.document.documentElement.removeAttribute("data-ui-layout");
+};
+const trailNow = () => $$("main .crumbs a, main .crumbs .cur").map(text);
+const ENGINE_NAMES = /Product AI|Deliverable AI|deliverables?\b|\bslot\b/i;
+
+test("campaigns layout: the key form a card opens has the card's plain name, and Settings › AI service as its way back", async () => {
+  setSlots(slot(), slot());
+  inCampaigns(true);
+  try {
+    for (const meta of AI_SLOTS) {
+      await go("#/settings/ai");
+      await until(() => card(meta.slot), 3000, "the cards");
+      const href = card(meta.slot).querySelector("[data-ai-svc-go]").getAttribute("href");
+      await go("#/settings/__away");
+      await go(href); // as a reload or a bookmark would: nothing remembered from the click
+      await until(() => $(`[data-ai-slot='${meta.slot}'] .crumbs`), 3000, `the ${meta.slot} key form`);
+      assert.equal(text($("main h1")), meta.title, "headed as the card the person clicked");
+      assert.equal(text($("main [data-ai-blurb]")), meta.text, "with the card's sentence");
+      assert.deepEqual(trailNow(), ["Settings", "AI service", meta.title]);
+      assert.equal($("main .crumbs a[href='#/settings/ai']").textContent, "AI service");
+      assert.equal($("main .crumbs a[href='#/connections']"), null, "not Connections, which redirects to the Data page here");
+      const tech = $("main [data-ai-tech-name]");
+      assert.ok(tech && tech.hasAttribute("data-technical"), "the old name only as a technical line");
+      assert.equal(text(tech), `Technical name: ${meta.tech}`);
+      const words = visibleText($("main"));
+      assert.ok(words.length > 100, "the form is drawn");
+      assert.doesNotMatch(words, ENGINE_NAMES, `no engineering name outside technical details on the ${meta.slot} form`);
+      assert.equal(document.title, `${meta.title} · Marketing AI`);
+    }
+    // The second service while it uses the first one's: the notice and the badge use the plain name too.
+    setSlots(connected("OpenAI"), connected("OpenAI", { source: "inherited", inherits_product: true }));
+    await go("#/settings/__away");
+    await go("#/connections/ai/deliverable");
+    await until(() => $("[data-ai-inherited]"), 3000, "the inherited notice");
+    assert.equal(text($("[data-ai-inherited] h3")), "Uses the AI that helps your team unless you set its own");
+    assert.match(text($("[data-ai-status]")), /^Uses the AI that helps your team · OpenAI/);
+    assert.doesNotMatch(visibleText($("main")), ENGINE_NAMES);
+  } finally {
+    inCampaigns(false);
+  }
+});
+
+test("classic layout: the key form keeps its names and the Connections breadcrumb", async () => {
   setSlots(slot(), slot());
   await go("#/settings/__away");
-  await go("#/settings/ai");
-  await until(() => card("deliverable"), 3000, "the cards");
-  const button = card("deliverable").querySelector("[data-ai-svc-go]");
-  button.click(); // jsdom does not follow a link: the click is remembered, then the address changes as the browser would
-  await go(button.getAttribute("href"));
-  await until(() => $("[data-ai-slot='deliverable'] .crumbs"), 3000, "the key form");
-  const trail = $$("main .crumbs a, main .crumbs .cur").map(text);
-  assert.deepEqual(trail, ["Settings", "AI service", "Deliverable AI"]);
-  assert.equal($("main .crumbs a[href='#/settings/ai']") !== null, true, "the back link is Settings › AI service");
-  // The same form reached any other way keeps the Connections breadcrumb.
-  await go("#/connections");
   await go("#/connections/ai/deliverable");
-  await until(() => $("[data-ai-slot='deliverable'] .crumbs"), 3000, "the key form again");
-  assert.deepEqual($$("main .crumbs a").map(text), ["Connections"]);
+  await until(() => $("[data-ai-slot='deliverable'] .crumbs"), 3000, "the key form");
+  assert.equal(text($("main h1")), "Deliverable AI");
+  assert.deepEqual(trailNow(), ["Connections", "Deliverable AI"]);
+  assert.equal($("main [data-ai-tech-name]"), null);
 });
 
 test("every slot the API has is drawn, in the order of the plain names", () => {

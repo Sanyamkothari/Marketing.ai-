@@ -16,9 +16,9 @@
 // engineering names ("Product AI", the slot ids) appear only behind "Show technical details" (`data-technical`).
 //
 // The page is drawn only for a person who may read the AI service (`GET /ai-service`); the Connect / Change buttons
-// only for one who may save it (`PUT /ai-service/{slot}`), and anyone else reads "Ask an admin to connect it". Each
-// button carries `data-ai-from-settings`, so the key form it opens puts Settings › AI service in its breadcrumb
-// (`ui/availability.js` `openedFromAiSettings`). The builder (`aiServiceHtml`) is pure, for the jsdom tests.
+// only for one who may save it (`PUT /ai-service/{slot}`), and anyone else reads "Ask an admin to connect it". In the
+// campaigns layout the key form a button opens uses these same names (`AI_SLOTS`) and puts Settings › AI service in its
+// breadcrumb (`modules/connections/ai.js`). The builder (`aiServiceHtml`) is pure, for the jsdom tests.
 
 import { SETTINGS_CRUMB, crumbs, errorBox, esc, noticeCard } from "../../dom.js";
 import { button, icon, pageHeader, statusChip } from "../../components.js";
@@ -87,7 +87,7 @@ function slotCard(meta, d, { canPut, primary }) {
         href: keyFormHref(meta.slot),
         kind: primary ? "primary" : "secondary",
         icon: "arrowRight",
-        attrs: `data-ai-svc-go="${esc(meta.slot)}" data-ai-from-settings="${esc(meta.slot)}" aria-label="${esc(
+        attrs: `data-ai-svc-go="${esc(meta.slot)}" aria-label="${esc(
           `${verb}: ${meta.title}`,
         )}"`,
       })

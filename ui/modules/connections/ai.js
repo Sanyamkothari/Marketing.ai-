@@ -36,7 +36,9 @@ import {
   pageHead,
   skeleton,
 } from "../../dom.js";
-import { AI_SETTINGS_HREF, forgetAiServiceStatus, openedFromAiSettings } from "../../availability.js";
+import { AI_SETTINGS_HREF, campaignLayoutNow, forgetAiServiceStatus } from "../../availability.js";
+// Plan M M192 (DEC-1622): the plain names Settings › AI service shows, used for this form in the campaigns layout.
+import { AI_SLOTS } from "../simple/ai_service.js";
 import { deleteAiService, getAiService, listAiModels, putAiService, testAiService } from "./api.js";
 import { injectConnectionStyles } from "./styles.js";
 
@@ -63,6 +65,20 @@ export const SLOTS = Object.freeze({
 
 export const slotHref = (slot) => `#/connections/ai/${slot}`;
 
+/**
+ * Plan M M192 (DEC-1622): what the form calls a slot. In the campaigns layout the plain name and sentence of
+ * Settings › AI service (`AI_SLOTS`), so the form the person opened matches the card they clicked, and the engineering
+ * name only as a technical line (`tech`); in the classic layout the names it always had.
+ */
+export function slotWords(id) {
+  const meta = AI_SLOTS.find((m) => m.slot === id);
+  if (campaignLayoutNow() && meta) return { title: meta.title, blurb: meta.text, tech: meta.tech, plain: true };
+  return { title: SLOTS[id].title, blurb: SLOTS[id].blurb, tech: "", plain: false };
+}
+
+/** "the Product AI" in the classic layout; "the AI that helps your team" in the campaigns layout. */
+const productName = () => (campaignLayoutNow() ? "the AI that helps your team" : "the Product AI");
+
 // --- what the Connections page shows -------------------------------------------------------------
 
 /** A slot's badge: Not connected / Connected · service · model / Failed: reason (an inherited one says so). */
@@ -76,7 +92,7 @@ export function aiStatusBadge(ai) {
   if (test && test.ok === false) {
     return `<span class="pill bad cn-badge" data-cn-status="failed">${esc(`Failed: ${test.message || "see the test"}`)}</span>`;
   }
-  const via = ai.source === "inherited" ? "Uses the Product AI" : "Connected";
+  const via = ai.source === "inherited" ? `Uses ${productName()}` : "Connected";
   const words = [via, ai.provider_label || ai.provider, ai.model].filter(Boolean).join(" · ");
   return `<span class="pill ok cn-badge" data-cn-status="connected">${esc(words)}</span>`;
 }
@@ -330,18 +346,19 @@ const errorsHtml = () =>
 const canTest = () => Boolean(s.provider) && (s.dirty || Boolean(s.data && s.data.connected));
 
 /**
- * The way back: Settings › AI service when the form was opened from that page (Plan M M192, DEC-1622), else
- * Connections, as before.
+ * The way back (Plan M M192, DEC-1622): in the campaigns layout always Settings › AI service, where the AI service
+ * lives there (Connections redirects to the Data page); in the classic layout Connections, as before.
  */
-const backCrumbs = (slotId) =>
-  openedFromAiSettings(slotId) ? [SETTINGS_CRUMB, { label: "AI service", href: AI_SETTINGS_HREF }] : [CONNECTIONS_CRUMB];
+const backCrumbs = () =>
+  campaignLayoutNow() ? [SETTINGS_CRUMB, { label: "AI service", href: AI_SETTINGS_HREF }] : [CONNECTIONS_CRUMB];
 
 function headHtml() {
-  const slot = SLOTS[s.slot];
+  const slot = slotWords(s.slot);
+  const tech = slot.tech ? `<p class="sub" data-technical data-ai-tech-name>${esc(`Technical name: ${slot.tech}`)}</p>` : "";
   return pageHead(
-    `${crumbs([...backCrumbs(s.slot), { label: slot.title }])}<h1 class="h1">${esc(slot.title)}</h1><p class="desc" data-ai-blurb>${esc(
+    `${crumbs([...backCrumbs(), { label: slot.title }])}<h1 class="h1">${esc(slot.title)}</h1><p class="desc" data-ai-blurb>${esc(
       slot.blurb,
-    )}</p><p class="sub">It does not train or score your models.</p>`,
+    )}</p><p class="sub">It does not build your models or make your contact lists.</p>${tech}`,
   );
 }
 
@@ -349,8 +366,8 @@ function headHtml() {
 function inheritedHtml(head, status, out) {
   const d = s.data;
   const what = [d.provider_label || d.provider, d.model].filter(Boolean).join(" · ");
-  return `<main class="screen cn ai" data-ai-slot="${esc(s.slot)}">${head}${status}<section class="card notice-card" role="status" data-ai-inherited><h3>Uses the Product AI unless you set its own</h3><p>${esc(
-    what ? `Right now it uses ${what}.` : "Right now it uses the service connected as the Product AI.",
+  return `<main class="screen cn ai" data-ai-slot="${esc(s.slot)}">${head}${status}<section class="card notice-card" role="status" data-ai-inherited><h3>${esc(`Uses ${productName()} unless you set its own`)}</h3><p>${esc(
+    what ? `Right now it uses ${what}.` : `Right now it uses the service connected as ${productName()}.`,
   )}</p><div class="notice-actions"><button type="button" class="btn secondary" id="ai-use-own">Use its own</button><button type="button" class="btn quiet" id="ai-test">Test</button></div></section>${
     d.third_party ? thirdPartyHtml(d.provider_label || "the AI service") : ""
   }${out}</main>`;
@@ -371,7 +388,9 @@ function mainHtml() {
   if (s.slot === "deliverable" && inherited()) return inheritedHtml(head, status, out);
   const own =
     s.slot === "deliverable" && s.data.source !== "saved"
-      ? `<p class="ai-note" data-ai-own>${esc("Connect the service the customer's deliverables use.")}</p>`
+      ? `<p class="ai-note" data-ai-own>${esc(
+          campaignLayoutNow() ? "Connect the service that writes for your customers." : "Connect the service the customer's deliverables use.",
+        )}</p>`
       : "";
   return `<main class="screen cn ai" data-ai-slot="${esc(s.slot)}">${head}${status}${sourceNoteHtml()}${own}
     <form class="cn-form ai-form" id="ai-form" novalidate>
@@ -791,7 +810,7 @@ export async function renderAiService(app, slot) {
     return;
   }
   s.slot = slot;
-  app.innerHTML = skeleton("form", { title: SLOTS[slot].title });
+  app.innerHTML = skeleton("form", { title: slotWords(slot).title });
   s.loadError = null;
   s.saving = false;
   s.testing = false;
@@ -807,5 +826,5 @@ export async function renderAiService(app, slot) {
   if (token !== view.token) return; // the person moved on
   resetForm();
   paintAll();
-  document.title = `${SLOTS[slot].title} · Marketing AI`;
+  document.title = `${slotWords(slot).title} · Marketing AI`;
 }

@@ -223,36 +223,5 @@ function aiNoticeCardCampaigns(uc) {
   });
 }
 
-// Where a key form was opened from. Settings › AI service marks its buttons `data-ai-from-settings="<slot>"`; a click on
-// one remembers the slot, and the key form (`modules/connections/ai.js`) asks `openedFromAiSettings(slot)` for its
-// breadcrumb: Settings › AI service › ... instead of Connections › .... Any other address forgets it, so the form
-// reached from Connections, a bookmark or a reload keeps the Connections breadcrumb.
-let aiFrom = null;
-let aiFromWired = false;
-
-/** Listen once, on `doc`, for the clicks and the address changes above. */
-export function trackAiSettingsOrigin(doc = typeof document === "undefined" ? null : document) {
-  if (aiFromWired || !doc || typeof doc.addEventListener !== "function") return;
-  aiFromWired = true;
-  doc.addEventListener(
-    "click",
-    (event) => {
-      const target = event.target;
-      const link = target && typeof target.closest === "function" ? target.closest("[data-ai-from-settings]") : null;
-      if (link) aiFrom = link.getAttribute("data-ai-from-settings");
-    },
-    true,
-  );
-  const view = doc.defaultView;
-  if (view && typeof view.addEventListener === "function") {
-    view.addEventListener("hashchange", () => {
-      if (aiFrom && view.location.hash.replace(/\/+$/, "") !== `#/connections/ai/${aiFrom}`) aiFrom = null;
-    });
-  }
-}
-
-/** Whether the key form for `slot` was opened from Settings › AI service (and the address has not moved since). */
-export function openedFromAiSettings(slot) {
-  if (!aiFrom || aiFrom !== slot || typeof window === "undefined") return false;
-  return window.location.hash.replace(/\/+$/, "") === `#/connections/ai/${slot}`;
-}
+// The key forms (`modules/connections/ai.js`) put Settings › AI service in their breadcrumb whenever the layout is the
+// campaigns one (`campaignLayoutNow()`): that is where the AI service lives there, on a reload or a bookmark too.

@@ -121,6 +121,10 @@ export const PAGES = [
   { id: "settings", hash: "#/settings", expect: /AI service/ },
   // Plan M M192 (DEC-1622): Settings › AI service, a new page with an EMPTY allow-list (no never-shown word).
   { id: "settings-ai-service", hash: "#/settings/ai", expect: /AI that helps your team[\s\S]*AI that writes for your customers/, selector: "[data-ai-svc-card='deliverable']" },
+  // M192 review: the two key forms its Connect buttons open, with EMPTY allow-lists. In the campaigns layout they are
+  // headed with the page's plain names ("AI that helps your team", "AI that writes for your customers").
+  { id: "ai-key-form-team", hash: "#/connections/ai/product", expect: /Which AI service\?/, selector: "#ai-form" },
+  { id: "ai-key-form-customers", hash: "#/connections/ai/deliverable", expect: /Which AI service\?/, selector: "#ai-form" },
   { id: "connections", hash: "#/connections", expect: /The places your data lives/ },
   { id: "data-doctor", hash: "#/doctor", expect: /Data Doctor|Bring your data/ },
   { id: "uplift-workbench", hash: "#/uplift", expect: /Measure what a campaign changes/ },

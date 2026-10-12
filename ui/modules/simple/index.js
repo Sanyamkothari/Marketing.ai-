@@ -11,7 +11,6 @@
 // plain words, each with a direct button to its key form.
 
 import { accessStatus } from "../../chrome.js";
-import { trackAiSettingsOrigin } from "../../availability.js";
 import { skeleton } from "../../dom.js";
 import {
   announceModulesChanged,
@@ -152,6 +151,5 @@ registerResultLink({
 });
 
 injectStyles();
-trackAiSettingsOrigin(); // Plan M M192: a key form opened from Settings › AI service says so in its breadcrumb
 // A deep link to one of these pages was resolved by `app.js` before this module existed: draw it now.
 if (ROUTES.includes(hashParts()[0])) announceModulesChanged();
