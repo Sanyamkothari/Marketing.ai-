@@ -102,8 +102,22 @@ PLAN_O_CODES: Final[frozenset[str]] = frozenset(
         "CURRENCY_RATE_INVALID",
         "CURRENCY_RATE_UNAPPROVED",
         "CURRENCY_UNSTATED",
+        # M239 (DEC-1809): the outcome tools (`engine.doctor.outcome_definition.OUTCOME_CODES`; the exact-text refusal
+        # is APPROVAL_SENTENCE_CHANGED above, the approval's role refusals are Plan K's).
+        "OUTCOME_CANNOT_MEASURE",
+        "OUTCOME_NOT_APPROVED",
+        "OUTCOME_TOO_MANY_VALUES",
+        "OUTCOME_UNDECIDED",
+        "OUTCOME_VALUE_NOT_MAPPED",
+        # M244 (DEC-1814): time settings (`engine.doctor.time_settings.TIME_CODES`).
+        "TIME_BUDGET_NOT_USED",
+        "TIME_COLUMN_UNREADABLE",
+        # M243 (DEC-1813): the prescription (`engine.doctor.prescription.PRESCRIPTION_CODES`; a replay also stops with
+        # CURRENCY_FOREIGN, CURRENCY_MIXED and the OUTCOME_* codes above, or a step's own RECIPE_* or BUILD_* code).
+        "PRESCRIPTION_DRIFT",
+        "PRESCRIPTION_NOT_FOUND",
     }
 )
-"""Every code Plan O raises, grouped by milestone. M232 (the registry) reuses Plan K's TOOL_* codes, and M241 (locale)
-and M248 (the evals; its EVAL_* codes are for developers only) raise none. Each code here has its entry in
-`configs/pilot/help.yaml`."""
+"""Every code Plan O raises, grouped by milestone. M232 (the registry) reuses Plan K's TOOL_* codes, and M241 (locale),
+M247 (the screen) and M248 (the evals; its EVAL_* codes are for developers only) raise none. Each code here has its
+entry in `configs/pilot/help.yaml`."""

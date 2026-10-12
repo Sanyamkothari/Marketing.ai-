@@ -116,3 +116,12 @@ def test_a_malformed_switch_in_yaml_is_a_config_error(tmp_path: Path, config_roo
 def test_plan_o_codes_are_in_the_catalogue_check() -> None:
     """Every code Plan O raises must have a plain-language entry (tests/unit/pilot/test_help.py)."""
     assert known_codes() >= PLAN_O_CODES
+
+
+def test_the_wave_two_batch_b_codes_are_plan_o_codes() -> None:
+    """Plan O wave 2 integration (batch B): M239's, M244's and M243's codes are registered, so each has help."""
+    from engine.doctor.outcome_definition import OUTCOME_CODES
+    from engine.doctor.prescription import PRESCRIPTION_CODES
+    from engine.doctor.time_settings import TIME_CODES
+
+    assert OUTCOME_CODES | TIME_CODES | PRESCRIPTION_CODES <= PLAN_O_CODES
