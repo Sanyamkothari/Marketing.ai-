@@ -94,6 +94,7 @@ __all__ = [
     "fingerprint_columns",
     "infer_column_type",
     "ingest_detail",
+    "key_like_columns",
     "leading_zero_columns",
     "primary_key_candidates",
     "profile_column",
@@ -253,6 +254,8 @@ class ReadResult:
     truncated: bool
     fingerprint: DatasetFingerprint | None = None
     """Covers every row of the file, including rows above the cap; `None` on a bounded preview read."""
+    text_columns: tuple[str, ...] = ()
+    """The columns read as text because of `keep_leading_zeros` or `text_columns` (Plan O M240); empty by default."""
     all_rows: pd.DataFrame | None = None
     """Every row of the file, when the caller asked for them with `keep_all_rows`; else `None`.
 
@@ -371,6 +374,21 @@ _LEADING_ZERO_RE: Final[re.Pattern[str]] = re.compile(r"^0[0-9]+$")
 """A digit string that starts with a zero and is longer than one character: `0000123`, `007`, never `0` or `0.5`."""
 
 
+_KEY_LIKE_RE: Final[re.Pattern[str]] = re.compile(
+    r"(?i:(?:^|[^A-Za-z0-9])(?:id|code|account|phone|mobile|zip|postcode))$|[a-z](?:Id|Code)$"
+)
+"""A column named like a key: `id`, `customer_id`, `Customer ID`, `customerId`, `promo_code`, `phone`, `zip`.
+
+The name ends in the word, so `paid` and `valid` are not keys. `pin` is left to M241's India-ID detection."""
+
+
+def key_like_columns(head_text: str, delimiter: str) -> tuple[str, ...]:
+    """The columns of `head_text` whose name says they hold an ID, a code, an account, a phone or a postcode."""
+    reader = csv.reader(io.StringIO(head_text), delimiter=delimiter, skipinitialspace=True)
+    header = next(reader, None) or []
+    return tuple(name for name in header if name and _KEY_LIKE_RE.search(name.strip()))
+
+
 def leading_zero_columns(head_text: str, delimiter: str) -> tuple[str, ...]:
     """The columns of `head_text` that hold a digit string with a leading zero, in header order.
 
@@ -401,7 +419,9 @@ def _text_dtypes(
     header = [name for name in (next(reader, None) or []) if name]
     wanted = set(text_columns)
     if keep_leading_zeros:
+        # A zero can first show up past the head that was sniffed, so a column named like a key is text too.
         wanted.update(leading_zero_columns(head_text, delimiter))
+        wanted.update(key_like_columns(head_text, delimiter))
     return {name: str for name in header if name in wanted or name.strip() in wanted}
 
 
@@ -438,8 +458,11 @@ def read_upload(
     are off by default, so a read without them is exactly what it always was. A CSV is read in chunks, each
     typed on its own, so an ID such as `0000123` is the number 123 by the time it is a cell. With
     `text_columns` the named columns are read as text; with `keep_leading_zeros` every column whose first
-    64 KB holds a digit string with a leading zero (`0000123`, `007`) is read as text too. Other columns
-    are typed as before. A Parquet file is typed already and ignores both.
+    64 KB holds a digit string with a leading zero (`0000123`, `007`), and every column named like a key
+    (`customer_id`, `promo_code`, `phone`, `zip`; a zero may first appear after those 64 KB), is read as
+    text too. Other columns are typed as before. `ReadResult.text_columns` names the columns read as text,
+    so a caller can record how the file was read and replay it the same way. A Parquet file is typed
+    already and ignores both.
     """
     resolved = file_format if file_format is not None else file_format_for(key)
     if storage.size_bytes(key) == 0:
@@ -592,6 +615,7 @@ def _read_csv_once(
         row_count_estimated=bounded,
         truncated=row_count > len(frame),
         fingerprint=None if bounded else digest.finish(frame, n_rows=row_count),
+        text_columns=tuple(text_dtypes or ()),
         all_rows=_all_rows(frame, every) if keep_all_rows else None,
     )
 

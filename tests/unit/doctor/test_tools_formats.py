@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gzip
 import io
 import json
 import zipfile
@@ -38,12 +39,22 @@ class FakeContext:
         self.storage = storage
         self._files = files
         self._frames = frames
+        self.added: list[tuple[str, str, str]] = []
 
     def received_file(self, file_id: str) -> tuple[str, str]:
         return self._files[file_id]
 
     def derived_key(self, file_id: str, name: str) -> str:
         return f"cases/c1/{file_id}/{name}"
+
+    def readable_key(self, file_id: str) -> str:
+        """The CSV made from the file when there is one, else the file as it arrived."""
+        derived = self.derived_key(file_id, "source.csv")
+        return derived if self.storage.exists(derived) else self._files[file_id][0]
+
+    def add_file(self, parent_file_id: str, csv_key: str, label: str) -> str:
+        self.added.append((parent_file_id, csv_key, label))
+        return f"{parent_file_id}-s{len(self.added)}"
 
     def frame(self, file_id: str) -> pd.DataFrame:
         return self._frames[file_id]  # type: ignore[no-any-return]
@@ -60,7 +71,7 @@ def spec(name: str) -> FormatToolSpec:
 
 def call(name: str, given: dict[str, Any], ctx: FakeContext) -> dict[str, Any]:
     tool = spec(name)
-    out = tool.run(tool.input_model.model_validate(given), ctx)  # type: ignore[arg-type]
+    out = tool.run(tool.input_model.model_validate(given), ctx)
     assert isinstance(out, tool.output_model)
     return tool.output_model.model_validate(out.model_dump()).model_dump(mode="json")
 
@@ -157,8 +168,15 @@ def test_read_workbook_sheets_writes_one_file_per_table_sheet(storage: LocalStor
     ]
     assert out["left_out"] == [{"sheet": "Cover", "reason": "no_table"}]
     assert storage.exists("cases/c1/f3/sheet-1.csv") and storage.exists("cases/c1/f3/sheet-2.csv")
+    # Acceptance: the customer sheet and the bills sheet become two files in one case.
+    assert ctx.added == [
+        ("f3", "cases/c1/f3/sheet-1.csv", "crm - Customers"),
+        ("f3", "cases/c1/f3/sheet-2.csv", "crm - Bills"),
+    ]
+    assert [f["file_id"] for f in out["files"]] == ["f3-s1", "f3-s2"]
     refused = call("read_workbook_sheets", {"file_id": "f3", "sheets": ["Orders"]}, ctx)
     assert refused["status"] == "refused" and refused["code"] == "UPLOAD_SHEET_NOT_FOUND"
+    assert len(ctx.added) == 2  # a refused split adds nothing to the case
 
 
 def test_check_parser_loss_returns_the_probe_result_with_lines_only(storage: LocalStorage) -> None:
@@ -167,13 +185,39 @@ def test_check_parser_loss_returns_the_probe_result_with_lines_only(storage: Loc
     storage.write_bytes("in/f4.csv", ("id,plan,spend\n" + "\n".join(rows) + "\n").encode())
     ctx = FakeContext(storage, {"f4": ("in/f4.csv", "customers.csv")}, {})
     out = call("check_parser_loss", {"file_id": "f4"}, ctx)
-    assert (out["verdict"], out["code"], out["lines"], out["rows_dropped"]) == (
+    report = out["report"]
+    assert out["status"] == "checked"
+    assert (report["verdict"], report["code"], report["lines"], report["rows_dropped"]) == (
         "not_ready",
         "X_PARSER_ROW_LOSS",
         [6],
         1,
     )
     assert SECRET not in json.dumps(out) and "C5" not in json.dumps(out)
+
+
+def test_check_parser_loss_checks_the_csv_inside_a_gz_not_the_bytes_as_they_arrived(
+    storage: LocalStorage,
+) -> None:
+    rows = [f"C{i},Gold,{i}" for i in range(1, 9)]
+    rows[1] = "C2,Gold,2,EXTRA"
+    rows[3] = "C4,Gold,4,EXTRA"
+    storage.write_bytes("in/f7.csv.gz", gzip.compress(("id,plan,spend\n" + "\n".join(rows) + "\n").encode()))
+    ctx = FakeContext(storage, {"f7": ("in/f7.csv.gz", "customers.csv.gz")}, {})
+    read = call("read_other_format", {"file_id": "f7"}, ctx)
+    assert read["status"] == "read" and read["rows"] is None  # copied out as it is, nothing counted it
+    out = call("check_parser_loss", {"file_id": "f7"}, ctx)
+    assert out["status"] == "checked"
+    assert (out["report"]["code"], out["report"]["lines"]) == ("X_PARSER_ROW_LOSS", [3, 5])
+
+
+def test_check_parser_loss_on_a_file_the_engine_cannot_read_is_a_refused_result(
+    storage: LocalStorage,
+) -> None:
+    storage.write_bytes("in/f8.json", b"[]")
+    ctx = FakeContext(storage, {"f8": ("in/f8.json", "customers.json")}, {})
+    out = call("check_parser_loss", {"file_id": "f8"}, ctx)
+    assert out["status"] == "refused" and out["code"] == "UPLOAD_UNSUPPORTED_FORMAT" and out["report"] is None
 
 
 def test_find_excel_serial_dates_names_columns_and_the_step_parameters(storage: LocalStorage) -> None:

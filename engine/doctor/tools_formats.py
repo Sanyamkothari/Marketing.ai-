@@ -12,10 +12,19 @@ wires to M232. Nothing here imports the registry.
 | `find_excel_serial_dates` | READ | rules | session-only | `engine.agent.formats.find_excel_serial_dates` |
 
 No tool takes a storage key: a call names a file by its id in the case, and the context turns the id into a
-key inside the case's own client scope, so a tool cannot read another client's file. No tool returns a cell
-or a row: the results are counts, column names, line numbers, file names, dates and plain sentences from our
-own rules. A refusal (a zip with two tables, a JSON file that is not a table) is a normal result with
-`status: "refused"` and the reason, not an exception, so the agent can tell the person what to do.
+key inside the case's own client scope, so a tool cannot read another client's file. No tool returns a row:
+the results are counts, column names, line numbers, file names and plain sentences from our own rules. The one
+exception is `find_excel_serial_dates`, whose notes carry the date range read from a column's cells (it is
+`session-only`, like every tool that can show something from the file). A refusal (a zip with two tables, a
+JSON file that is not a table, a file that cannot be read) is a normal result with `status: "refused"` and the
+reason, not an exception, so the agent can tell the person what to do.
+
+Two things the integrator's context must provide (the case is M231's, not on this branch):
+
+* `readable_key(file_id)`: the CSV or Parquet the engine actually reads for the file (the `source.csv` made
+  from a `.gz`, `.zip` or JSON file, or the CSV intake rewrote), not the bytes as they arrived;
+* `add_file(parent_file_id, csv_key, label)`: puts a file made from another into the case and returns its
+  id, so a workbook's customer sheet and bills sheet become two files of one case.
 """
 
 from __future__ import annotations
@@ -41,6 +50,7 @@ if TYPE_CHECKING:
 __all__ = [
     "FORMAT_TOOLS",
     "CheckParserLossInput",
+    "CheckParserLossOutput",
     "FindExcelSerialDatesInput",
     "FindExcelSerialDatesOutput",
     "FormatToolContext",
@@ -72,6 +82,14 @@ class FormatToolContext(Protocol):
 
     def derived_key(self, file_id: str, name: str) -> str:
         """Where a file made from `file_id` is stored, e.g. `name="source.csv"` or `"sheet-2.csv"`."""
+        ...
+
+    def readable_key(self, file_id: str) -> str:
+        """Storage key of the CSV or Parquet the engine reads for `file_id` (never a .gz, .zip or JSON file)."""
+        ...
+
+    def add_file(self, parent_file_id: str, csv_key: str, label: str) -> str:
+        """Add the CSV at `csv_key`, made from `parent_file_id`, to the case as a file of its own; its id."""
         ...
 
     def frame(self, file_id: str) -> pd.DataFrame:
@@ -158,6 +176,7 @@ class SheetOut(_Model):
     label: str
     rows: int = Field(ge=0)
     file_position: int = Field(ge=1, description="Position of the sheet in the workbook, from 1.")
+    file_id: str = Field(description="The sheet's id as a file of the case.")
 
 
 class LeftOutOut(_Model):
@@ -194,10 +213,17 @@ def _run_read_workbook_sheets(
         )
     except IngestError as exc:
         return ReadWorkbookSheetsOutput(status="refused", code=exc.code, message=exc.message)
+    # Each sheet becomes a file of the case, in workbook order, only after the whole split succeeded.
     return ReadWorkbookSheetsOutput(
         status="read",
         files=tuple(
-            SheetOut(sheet=f.sheet, label=f.label, rows=f.rows, file_position=positions[f.sheet])
+            SheetOut(
+                sheet=f.sheet,
+                label=f.label,
+                rows=f.rows,
+                file_position=positions[f.sheet],
+                file_id=ctx.add_file(given.file_id, f.csv_key, f.label),
+            )
             for f in split.files
         ),
         left_out=tuple(LeftOutOut(sheet=item.sheet, reason=item.reason) for item in split.left_out),
@@ -211,12 +237,21 @@ class CheckParserLossInput(_Model):
     file_id: str = Field(min_length=1, max_length=128, description="The file's id in the case.")
 
 
-def _run_check_parser_loss(given: CheckParserLossInput, ctx: FormatToolContext) -> ParserLossReport:
-    key, _name = ctx.received_file(given.file_id)
+class CheckParserLossOutput(_Model):
+    status: Literal["checked", "refused"]
+    code: str | None = Field(default=None, description="Why the file could not be read, when refused.")
+    message: str = Field(default="", description="The refusal in plain words when refused; empty otherwise.")
+    report: ParserLossReport | None = Field(default=None, description="The check's result when checked.")
+
+
+def _run_check_parser_loss(given: CheckParserLossInput, ctx: FormatToolContext) -> CheckParserLossOutput:
+    # The CSV the engine reads, not the bytes as they arrived: a .csv.gz or .zip holds its table inside.
     try:
-        return check_parser_loss(ctx.storage, key)
+        return CheckParserLossOutput(
+            status="checked", report=check_parser_loss(ctx.storage, ctx.readable_key(given.file_id))
+        )
     except IngestError as exc:
-        raise ValueError(exc.message) from exc
+        return CheckParserLossOutput(status="refused", code=exc.code, message=exc.message)
 
 
 # ---------------------------------------------------------------------------
@@ -293,12 +328,13 @@ FORMAT_TOOLS: Final[tuple[FormatToolSpec, ...]] = (
         exposure="aggregate",
         role="viewer",
         description=(
-            "Compares the records of a CSV with the rows the reader kept, and names the lines it dropped "
-            "(X_PARSER_ROW_LOSS)."
+            "Compares the records of the CSV the engine reads with the rows the reader kept, and names the "
+            "lines it dropped (X_PARSER_ROW_LOSS) or the columns every row was shifted by "
+            "(X_PARSER_COLUMNS_SHIFTED)."
         ),
         wraps="engine.doctor.parser_loss.check_parser_loss",
         input_model=CheckParserLossInput,
-        output_model=ParserLossReport,
+        output_model=CheckParserLossOutput,
         run=_run_check_parser_loss,
     ),
     FormatToolSpec(

@@ -8,7 +8,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from engine.doctor.parser_loss import MAX_LINES_NAMED, PARSER_LOSS_CODE, check_parser_loss
+from engine.doctor.parser_loss import MAX_LINES_NAMED, PARSER_LOSS_CODE, SHIFTED_CODE, check_parser_loss
 from engine.stages.ingest import read_upload
 from engine.storage import LocalStorage
 
@@ -147,7 +147,8 @@ def test_a_parquet_file_has_no_lines_to_lose(storage: LocalStorage) -> None:
 def test_the_dropped_count_and_the_lines_match_what_was_injected(storage: LocalStorage, seed: int) -> None:
     rng = random.Random(seed)
     total = rng.randint(30, 200)
-    bad = sorted(rng.sample(range(total), rng.randint(0, 12)))
+    # Position 0 is left out: a too-wide FIRST data line is the shifted-columns case (tested below).
+    bad = sorted(rng.sample(range(1, total), rng.randint(0, 12)))
     rows = [f"C{i},Gold,{i},EXTRA" if i in bad else f"C{i},Gold,{i}" for i in range(total)]
     storage.write_bytes("u/f.csv", lines_file(rows))
     report = check_parser_loss(storage, "u/f.csv")
@@ -155,3 +156,59 @@ def test_the_dropped_count_and_the_lines_match_what_was_injected(storage: LocalS
     assert report.lines == tuple(position + 2 for position in bad)[:MAX_LINES_NAMED]
     assert (report.verdict == "ready") == (not bad)
     assert read_upload(storage, "u/f.csv").row_count == total - len(bad)
+
+
+# ---------------------------------------------------------------------------
+# Review fixes: a preview is not a count; a too-wide first line shifts every row
+# ---------------------------------------------------------------------------
+def test_a_bounded_preview_read_is_ignored_because_its_row_count_is_an_estimate(
+    storage: LocalStorage,
+) -> None:
+    long_head = [f"C{i},{'x' * 400},{i}" for i in range(1, 501)]
+    short_tail = [f"C{i},Gold,{i}" for i in range(501, 20_001)]
+    storage.write_bytes("u/f.csv", lines_file([*long_head, *short_tail]))
+    preview = read_upload(storage, "u/f.csv", max_rows=10)
+    assert preview.row_count_estimated and preview.row_count != 20_000  # the estimate is far off
+    report = check_parser_loss(storage, "u/f.csv", read=preview)
+    assert report.verdict == "ready" and report.rows_dropped == 0
+    assert (report.records, report.rows_read) == (20_000, 20_000)
+
+
+def test_a_preview_cannot_hide_a_real_loss_either(storage: LocalStorage) -> None:
+    rows = with_bad({5: "C6,Gold,6,EXTRA"})
+    storage.write_bytes("u/f.csv", lines_file(rows))
+    preview = read_upload(storage, "u/f.csv", max_rows=3)
+    report = check_parser_loss(storage, "u/f.csv", read=preview)
+    assert report.code == PARSER_LOSS_CODE and report.lines == (7,) and report.rows_dropped == 1
+
+
+def test_a_first_line_with_one_extra_value_shifts_every_row_and_is_not_a_dropped_row(
+    storage: LocalStorage,
+) -> None:
+    storage.write_bytes("u/f.csv", b"a,b,c\n1,2,3,4\n5,6,7\n8,9,10\n")
+    read = read_upload(storage, "u/f.csv")
+    assert read.frame["a"].tolist() == [2, 6, 9] and read.row_count == 3  # the whole file moved left
+    report = check_parser_loss(storage, "u/f.csv")
+    assert report.verdict == "not_ready" and report.code == SHIFTED_CODE == "X_PARSER_COLUMNS_SHIFTED"
+    assert (report.records, report.rows_read, report.rows_dropped) == (3, 3, 0)
+    assert (report.shifted_by, report.shifted_line, report.lines) == (1, 2, ())
+    assert "Line 2 has 1 more value than the 3 columns" in report.message
+    assert "every row was read 1 column to the left" in report.message and "left out" not in report.message
+
+
+def test_a_shift_of_two_names_two_columns_and_later_wider_lines_are_the_dropped_ones(
+    storage: LocalStorage,
+) -> None:
+    storage.write_bytes("u/f.csv", b"a,b,c\n1,2,3,4,5\n5,6,7\n8,9,10,11\n12,13,14,15,16,17\n")
+    read = read_upload(storage, "u/f.csv")
+    report = check_parser_loss(storage, "u/f.csv")
+    assert report.code == SHIFTED_CODE and report.shifted_by == 2
+    assert (report.records, report.rows_read) == (4, read.row_count)
+    assert report.lines == (5,) and report.rows_dropped == 1  # only the line wider than the first one
+    assert "2 columns to the left" in report.message and "line 5" in report.message
+
+
+def test_a_too_wide_line_after_a_normal_first_line_is_still_a_dropped_row(storage: LocalStorage) -> None:
+    storage.write_bytes("u/f.csv", b"a,b,c\n1,2,3\n5,6,7,8\n")
+    report = check_parser_loss(storage, "u/f.csv")
+    assert report.code == PARSER_LOSS_CODE and report.shifted_by == 0 and report.lines == (3,)

@@ -63,6 +63,7 @@ from engine.onboarding.transforms import TransformError, derive
 from engine.utils.time import utc_now
 
 __all__ = [
+    "EXCEL_SERIAL_PARAMS",
     "STEP_PHASE",
     "RecipeError",
     "RecipeRun",
@@ -377,6 +378,12 @@ def _check_unpivot(
                 order=step.order,
             )
     return list(spec.output_columns(with_outcome=spec.outcome in available))
+
+
+EXCEL_SERIAL_PARAMS: Final[frozenset[str]] = frozenset({"excel_serial", "date_1904"})
+"""`parse_date` parameters of Plan O M240 (DEC-1810 (d)). A recipe and the person's own edits accept them, but
+the live chat's `propose_step` refuses them until the Data Doctor switch is on and M233's default-deny policy
+rule for them exists (`engine.agent.loop`): a model must not gain a new proposable behaviour on the default path."""
 
 
 def _check_params(step: RecipeStep) -> None:

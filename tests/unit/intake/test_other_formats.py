@@ -337,3 +337,71 @@ def test_something_that_is_not_a_zip_is_unreadable(storage: LocalStorage) -> Non
     with pytest.raises(IngestError) as caught:
         read_other_format(storage, received_key="u/x.zip", csv_key="u/source.csv", file_name="x.zip")
     assert caught.value.code == "UPLOAD_UNREADABLE"
+
+
+# ---------------------------------------------------------------------------
+# Review fixes: nothing in a record is lost; a readme is not a table; the report tells the truth
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize(
+    "document",
+    [
+        [{"a": {"b": 1}, "a.b": 2}],
+        [{"a.b": 2, "a": {"b": 1}}],
+        [{"id": 1}, {"x": {"y": {"z": 1}}, "x.y": {"z": 2}}],
+    ],
+)
+def test_two_fields_that_flatten_to_one_column_are_refused_not_merged(
+    storage: LocalStorage, document: list[dict[str, object]]
+) -> None:
+    storage.write_bytes("u/c.json", json.dumps(document).encode())
+    with pytest.raises(IngestError) as caught:
+        read_other_format(storage, received_key="u/c.json", csv_key="u/source.csv", file_name="c.json")
+    assert caught.value.code == "UPLOAD_JSON_NOT_A_TABLE"
+    assert (
+        "become the same column" in caught.value.message
+        and "One of them would be lost" in caught.value.message
+    )
+    assert not storage.exists("u/source.csv")
+
+
+def test_two_json_lines_fields_that_flatten_to_one_column_are_refused(storage: LocalStorage) -> None:
+    storage.write_bytes("u/c.jsonl", b'{"a": {"b": 1}, "a.b": 2}\n')
+    with pytest.raises(IngestError) as caught:
+        read_other_format(storage, received_key="u/c.jsonl", csv_key="u/source.csv", file_name="c.jsonl")
+    assert caught.value.code == "UPLOAD_JSON_NOT_A_TABLE"
+    assert not storage.exists("u/source.csv")
+
+
+def test_a_readme_next_to_the_table_in_a_zip_is_not_a_second_table(storage: LocalStorage) -> None:
+    data = zipped({"customers.csv": CSV, "README.txt": b"Exported on Monday. Questions? Ask finance."})
+    frame, result = convert(storage, "export.zip", data)
+    assert frame["id"].tolist() == ["0007", "0008"]
+    assert result.inner_name == "customers.csv"  # type: ignore[attr-defined]
+
+
+def test_a_zip_with_only_text_files_still_counts_them_as_tables(storage: LocalStorage) -> None:
+    storage.write_bytes("u/two.zip", zipped({"a.txt": CSV, "b.txt": CSV}))
+    with pytest.raises(IngestError, match="holds 2 tables"):
+        read_other_format(storage, received_key="u/two.zip", csv_key="u/source.csv", file_name="two.zip")
+    storage.write_bytes("u/one.zip", zipped({"a.txt": CSV}))
+    frame, _ = convert(storage, "one.zip", zipped({"a.txt": CSV}))
+    assert frame["id"].tolist() == ["0007", "0008"]
+
+
+@pytest.mark.parametrize(
+    ("name", "data", "source_format", "container"),
+    [
+        ("c.json", json.dumps(RECORDS).encode(), "json", "none"),
+        ("c.jsonl", b'{"a": 1}\n{"a": 2}\n', "jsonl", "none"),
+        ("c.csv.gz", gzip.compress(CSV), "csv", "gz"),
+        ("c.json.gz", gzip.compress(json.dumps(RECORDS).encode()), "json", "gz"),
+        ("c.zip", zipped({"c.csv": CSV}), "csv", "zip"),
+        ("c.zip", zipped({"c.jsonl": b'{"a": 1}\n'}), "jsonl", "zip"),
+    ],
+)
+def test_the_report_names_the_kind_of_table_and_the_container_it_arrived_in(
+    storage: LocalStorage, name: str, data: bytes, source_format: str, container: str
+) -> None:
+    _, result = convert(storage, name, data)
+    assert result.report.source_format == source_format  # type: ignore[attr-defined]
+    assert result.report.container == container  # type: ignore[attr-defined]

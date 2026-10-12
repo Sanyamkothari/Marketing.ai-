@@ -183,3 +183,41 @@ def test_a_workbook_text_id_keeps_its_zeros_through_intake(storage: LocalStorage
     )
     frame = read_upload(storage, result.source_key, keep_leading_zeros=True).frame
     assert frame["customer_id"].tolist() == ["0000123", "0000124"]
+
+
+# ---------------------------------------------------------------------------
+# Review fix: a zero that first shows up past the sniffed head
+# ---------------------------------------------------------------------------
+def test_a_key_named_column_is_text_even_when_the_first_zero_comes_after_the_sniffed_head(
+    storage: LocalStorage,
+) -> None:
+    rows = [f"{index},{index}" for index in range(1, 20_000)] + ["00123,5"]
+    storage.write_bytes("u/f.csv", ("code,n\n" + "\n".join(rows) + "\n").encode())
+    assert (
+        read_upload(storage, "u/f.csv").frame["code"].iloc[-1] == 123
+    )  # the default read: the zeros are gone
+    result = read_upload(storage, "u/f.csv", keep_leading_zeros=True)
+    assert result.frame["code"].iloc[-1] == "00123" and result.frame["n"].dtype.kind == "i"
+    assert result.text_columns == ("code",)
+
+
+@pytest.mark.parametrize(
+    ("name", "is_key"),
+    [
+        ("id", True),
+        ("customer_id", True),
+        ("Customer ID", True),
+        ("customerId", True),
+        ("promo_code", True),
+        ("phone", True),
+        ("zip", True),
+        ("paid", False),
+        ("valid", False),
+        ("spend", False),
+        ("pin", False),
+    ],
+)
+def test_which_column_names_say_they_hold_a_key(name: str, is_key: bool) -> None:
+    from engine.stages.ingest import key_like_columns
+
+    assert (key_like_columns(f"{name},x\n1,2\n", ",") == (name,)) is is_key

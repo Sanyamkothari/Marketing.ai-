@@ -161,10 +161,23 @@ def _flatten(record: dict[str, Any], prefix: str = "", depth: int = 0) -> dict[s
     for key, value in record.items():
         name = f"{prefix}{key}"
         if isinstance(value, dict) and value and depth < MAX_FLATTEN_DEPTH:
-            out.update(_flatten(value, f"{name}.", depth + 1))
+            inner = _flatten(value, f"{name}.", depth + 1)
+            for column, cell in inner.items():
+                _put(out, column, cell)
         else:
-            out[name] = _cell(value)
+            _put(out, name, _cell(value))
     return out
+
+
+def _put(out: dict[str, str], column: str, cell: str) -> None:
+    """Add one cell; two fields that flatten to one column name are refused, never silently merged."""
+    if column in out:
+        raise _refuse(
+            "UPLOAD_JSON_NOT_A_TABLE",
+            f'Two fields in this file become the same column, "{column}" (for example a field "a.b" and a '
+            'field "b" inside "a"). One of them would be lost. Rename one of them and upload the file again.',
+        )
+    out[column] = cell
 
 
 def _json_loads(text: str) -> Any:
@@ -414,11 +427,16 @@ def _usable_members(archive: zipfile.ZipFile) -> list[zipfile.ZipInfo]:
 
 
 def _table_members(members: list[zipfile.ZipInfo]) -> list[zipfile.ZipInfo]:
-    return [
-        info
-        for info in members
-        if PurePosixPath(info.filename.lower()).suffix in _TABLE_SUFFIXES | _UNREADABLE_TABLE_SUFFIXES
+    """The members that are tables. A `.txt` file is one only when nothing else in the zip is: next to a
+    `customers.csv`, a `README.txt` is a note, not a second table."""
+
+    def suffix(info: zipfile.ZipInfo) -> str:
+        return PurePosixPath(info.filename.lower()).suffix
+
+    tables = [
+        info for info in members if suffix(info) in (_TABLE_SUFFIXES - {".txt"}) | _UNREADABLE_TABLE_SUFFIXES
     ]
+    return tables or [info for info in members if suffix(info) == ".txt"]
 
 
 def _quoted_names(infos: list[zipfile.ZipInfo], limit: int = 4) -> str:
@@ -480,14 +498,15 @@ def read_other_format(
 def _report(
     received_key: str,
     *,
-    container: str,
+    container: Literal["none", "gz", "zip"],
     inner_format: InnerFormat,
     inner_name: str | None,
     rows: int | None,
     columns: tuple[str, ...],
 ) -> IntakeReport:
     base = IntakeReport(
-        source_format="csv",
+        source_format=inner_format,
+        container=container,
         applied=True,
         original_key=received_key,
         delimiter="," if inner_format != "csv" else None,
