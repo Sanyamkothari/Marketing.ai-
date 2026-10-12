@@ -83,7 +83,7 @@ def _merged_params(kind: RecipeStepKind, old: Mapping[str, Any], new: Mapping[st
     return {"key_column": new.get("key_column", old.get("key_column")), "cells": list(by_key.values())}
 
 
-def _policy_gate(ctx: AgentContext, session: AgentSession) -> Callable[..., None] | None:
+def _policy_gate(ctx: AgentContext, session: AgentSession) -> Callable[..., Any] | None:
     """Plan O M233: the data policy's `data.person_edit` rules for this edit, behind `data_doctor.unified`."""
     from engine.doctor.policy import agent_gate
 

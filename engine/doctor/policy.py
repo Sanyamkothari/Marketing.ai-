@@ -85,6 +85,7 @@ __all__ = [
     "rule_mutants",
     "rule_set_mutants",
     "tool_policy_context",
+    "warnings_of",
 ]
 
 # ---------------------------------------------------------------------------
@@ -1010,8 +1011,15 @@ def agent_policy_context(
     )
 
 
-Gate = Callable[..., None]
-"""`gate(*rule_names, **proposal_fields)`: raises the caller's own error when the named rules refuse."""
+Gate = Callable[..., tuple[Decision, ...]]
+"""`gate(*rule_names, **proposal_fields)`: raises the caller's own error when the named rules refuse; otherwise
+returns the warnings the named rules allowed it with (decision O10's `AI_STEP_CHANGES_MANY`, Plan O M246)."""
+
+
+def warnings_of(decisions: Iterable[Decision]) -> tuple[Decision, ...]:
+    """Plan O M246 (DEC-1816): the allowed decisions that carry a `warning` (O10's `AI_STEP_CHANGES_MANY` above
+    30% of a column), so the caller shows it with the proposal instead of dropping it."""
+    return tuple(d for d in decisions if d.allowed and d.detail.get("warning"))
 
 
 def agent_gate(
@@ -1034,11 +1042,12 @@ def agent_gate(
         return None
     policy_ctx = agent_policy_context(ctx, primary_key=primary_key, target=target, settings=settings)
 
-    def gate(*names: str, **facts: Any) -> None:
+    def gate(*names: str, **facts: Any) -> tuple[Decision, ...]:
         subject = DataProposal(kind=kind, source=source, **facts)
         found = refusal(subject, policy_ctx, *names)
         if found is not None:
             raise raise_as(found.code or "POLICY_NO_RULES", str(found.detail.get("reason", "Not allowed.")))
+        return warnings_of(evaluate(subject, policy_ctx, names=names))
 
     return gate
 

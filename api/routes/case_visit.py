@@ -11,21 +11,31 @@ off - the default - none of these paths exists and docs/API.md is unchanged.
 | `POST /cases/{case_id}/decisions` | Analyst | Ticks or unticks a suggestion of the active section. |
 | `POST /cases/{case_id}/approval` | Analyst | Approves what the preview showed; recorded with the user id and the sentence shown. |
 | `POST /cases/{case_id}/chat` | Analyst | Writes to Data Doctor; with no AI service the reply says so and nothing else changes. |
+| `POST /cases/{case_id}/confirmations` | Analyst | Plan O M246: the own yes of one APPROVE-class item, with the exact sentence read (the item's role is checked). |
+| `POST /cases/{case_id}/standing-answers/{answer_id}/revoke` | Analyst | Plan O M246: revokes a standing answer; its question is asked again. |
 | `GET /goal-briefs/{goal_id}` | Viewer | What a goal needs (the goal brief), from configuration. |
 
 Every change names the case `version` it was made against (`409 CASE_VERSION_CONFLICT` when it moved) and may carry
 an `op_id`: a retried request whose first attempt was written changes nothing. Refusals: `404 CASE_NOT_FOUND`,
 `404 USE_CASE_NOT_FOUND` (a goal that is not a use case), `409 VISIT_NOT_WAITING` (nothing waits for that now),
 `422 VISIT_UNKNOWN_CHOICE` (no such question, option or suggestion in the active section).
+
+Plan O M246 (DEC-1816): `POST .../approval` may carry the `sentence` the person read (`409
+APPROVAL_SENTENCE_CHANGED` when it is no longer the one shown: nothing is recorded) and is refused while an
+accepted APPROVE-class item lacks its own yes (`409 APPROVAL_CONFIRMATION_MISSING`). A confirmation is refused
+with `403 TOOL_ROLE_REQUIRED` (the item's role), `403 POLICY_ROLE_SEPARATION` (separation of duties) or `409
+APPROVAL_SENTENCE_CHANGED`. With `agentic.enabled` on, approvals and confirmations are also written to Plan K's
+ledger (`data.prescription.approved`, `data.decision`).
 """
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Annotated, Any, Final
 
 from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import Path as Path_
 from pydantic import Field
 
 from api.access import PrincipalDep, set_audit_context
@@ -39,10 +49,11 @@ from engine.doctor import visit as doctor_visit
 from engine.doctor.case import CLIENT_ID_PATTERN, DEFAULT_CLIENT_ID, Case, CaseError
 from engine.doctor.diagnose import LoadedFile
 from engine.doctor.goal_brief import GOAL_ID_PATTERN, BriefMode, GoalBrief, load_goal_brief
+from engine.doctor.protocol import LedgerPort
 from engine.doctor.visit import ConversePort, VisitDeps
 from engine.storage import Storage
 
-__all__ = ["POLICIES", "router"]
+__all__ = ["POLICIES", "ledger_for", "router"]
 
 router: APIRouter = APIRouter(tags=["cases"])
 
@@ -62,6 +73,13 @@ POLICIES: Final[dict[tuple[str, str], RoutePolicy]] = {
     ),
     ("POST", "/cases/{case_id}/approval"): _policy("cases.approve", "approve Data Doctor's changes"),
     ("POST", "/cases/{case_id}/chat"): _policy("cases.chat", "write to Data Doctor"),
+    # Plan O M246 (DEC-1816): the protocol's actions on a case. The item's own role is checked by the protocol.
+    ("POST", "/cases/{case_id}/confirmations"): _policy(
+        "cases.confirm", "give the own yes to one of Data Doctor's changes"
+    ),
+    ("POST", "/cases/{case_id}/standing-answers/{answer_id}/revoke"): _policy(
+        "cases.revoke_standing", "revoke a remembered answer"
+    ),
     ("GET", "/goal-briefs/{goal_id}"): RoutePolicy(
         role=Role.VIEWER, action="doctor.goal_brief_read", purpose="see what a goal needs"
     ),
@@ -118,7 +136,18 @@ class DecisionRequest(_Change):
 
 
 class ApprovalRequest(_Change):
-    pass
+    sentence: str | None = Field(
+        default=None,
+        max_length=4_000,
+        description="Plan O M246: the sentence the person read, word for word; a changed one records nothing.",
+    )
+
+
+class ConfirmationRequest(_Change):
+    """Plan O M246: the own yes of one APPROVE-class item."""
+
+    item_id: str = Field(min_length=1, max_length=128)
+    sentence: str = Field(min_length=1, max_length=4_000, description="The item's sentence, word for word.")
 
 
 class ChatRequest(_Change):
@@ -126,8 +155,39 @@ class ChatRequest(_Change):
 
 
 def _error(exc: CaseError) -> Exception:
-    status = {"CASE_NOT_FOUND": 404, "VISIT_UNKNOWN_CHOICE": 422}.get(exc.code, 409)
+    status = {
+        "CASE_NOT_FOUND": 404,
+        "VISIT_UNKNOWN_CHOICE": 422,
+        "STANDING_ANSWER_NOT_FOUND": 404,  # Plan O M246
+        "TOOL_ROLE_REQUIRED": 403,
+        "POLICY_ROLE_SEPARATION": 403,
+    }.get(exc.code, 409)
     return http_error(status, exc.code, exc.message)
+
+
+def ledger_for(request: Request, root: Path) -> LedgerPort | None:
+    """Plan O M246 (DEC-1816): Plan K's ledger as the protocol's port while `agentic.enabled` is on, built on its
+    first entry; None with it off (the case timeline then holds the record alone)."""
+    from engine.agentic.config import agentic_enabled
+
+    if not agentic_enabled(root):
+        return None
+    built: list[LedgerPort] = []
+
+    def record(kind: str, actor: str, body: Mapping[str, Any]) -> str:
+        if not built:
+            from api.access import get_platform_engine, platform_data_dir
+            from engine.agentic.config import policy_version
+            from engine.agentic.ledger import signer_for_data_dir
+            from engine.doctor.protocol import ledger_port
+
+            data_dir = platform_data_dir(request) or get_settings(request).data_dir
+            built.append(
+                ledger_port(get_platform_engine(request), signer_for_data_dir(data_dir), policy_version(root))
+            )
+        return built[0](kind, actor, body)
+
+    return record
 
 
 def _goal_error(exc: ConfigError) -> Exception:
@@ -221,6 +281,7 @@ def _deps(storage: Storage, root: Path, request: Request, principal: Principal |
             if principal is None
             else doctor_visit.lazy_converse(lambda: _converse(storage, root, request, principal, offers))
         ),
+        ledger=ledger_for(request, root),
     )
 
 
@@ -343,6 +404,69 @@ def approve_changes(
         case = doctor_visit.approve(
             body.client_id,
             case_id,
+            _deps(storage, root, request, principal),
+            expected_version=body.version,
+            actor=principal.user_id,
+            op_id=body.op_id,
+            sentence=body.sentence,
+        )
+    except CaseError as exc:
+        raise _error(exc) from exc
+    return _done(request, case)
+
+
+@router.post(
+    "/cases/{case_id}/confirmations",
+    response_model=Case,
+    responses=_ERRORS,
+    summary="Give the own yes to one change that needs it",
+)
+def confirm_item(
+    case_id: str,
+    body: ConfirmationRequest,
+    request: Request,
+    storage: StorageDep,
+    root: ConfigRootDep,
+    principal: PrincipalDep,
+) -> Case:
+    """Plan O M246 (DEC-1816): an APPROVE-class item's own yes, by someone with its role, with its exact sentence."""
+    try:
+        case = doctor_visit.confirm(
+            body.client_id,
+            case_id,
+            body.item_id,
+            _deps(storage, root, request, principal),
+            principal=principal,
+            sentence=body.sentence,
+            expected_version=body.version,
+            op_id=body.op_id,
+        )
+    except CaseError as exc:
+        raise _error(exc) from exc
+    return _done(request, case)
+
+
+@router.post(
+    "/cases/{case_id}/standing-answers/{answer_id}/revoke",
+    response_model=Case,
+    responses=_ERRORS,
+    summary="Revoke a remembered answer",
+)
+def revoke_standing_answer(
+    case_id: str,
+    answer_id: Annotated[str, Path_(pattern=r"^sa_[a-f0-9]{24}$")],
+    body: _Change,
+    request: Request,
+    storage: StorageDep,
+    root: ConfigRootDep,
+    principal: PrincipalDep,
+) -> Case:
+    """Plan O M246 (DEC-1816): the answer stops standing for the client and its question is asked again here."""
+    try:
+        case = doctor_visit.revoke_standing(
+            body.client_id,
+            case_id,
+            answer_id,
             _deps(storage, root, request, principal),
             expected_version=body.version,
             actor=principal.user_id,

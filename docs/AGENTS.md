@@ -1128,10 +1128,12 @@ never apply fails that test, so it cannot be listed for show.
 
 ### 16.6 Not wired yet
 
-- The approval-time half (`ApprovalFacts`: exact sentence, role, separation, M238's reshape guards) is evaluated by
-  the policy but Plan G's Approve route does not call it yet: the session does not record whether a preview was
-  shown or which sentence was read. M246 (the protocol) wires it.
-- O10's warning (`AI_STEP_CHANGES_MANY`) is returned in the decision's detail; showing it is M246/M247's.
+- ~~The approval-time half is not called by Plan G's Approve.~~ Wired by M246 (DEC-1816, §19.5): the preview
+  records what it showed, Approve builds the reshape items and checks the sentence read, the role and - from who
+  ticked, answered or added each step (`record_proposers`) - separation of duties.
+- ~~O10's warning is only in the decision's detail.~~ M246: `agent_gate`'s check returns the warnings it allowed
+  (`policy.warnings_of`); the chat's step result carries `warnings: ["AI_STEP_CHANGES_MANY"]`, Approve lists it
+  and a case's AI item keeps it in its payload. Showing it on screen is M247's.
 - The wave-1 tools are registered at integration (`engine/doctor/tools_wave_one.py` on `integrate-plan-o-1`). Its
   adapter must pass each READ spec's step kinds to `DataTool.step_kinds` (M238 `DataToolSpec.step_kinds`; M240's
   `find_excel_serial_dates` when the catalogue gives it a row) so the registry decides their steps too; PROPOSE
@@ -1234,3 +1236,137 @@ is also the explanation with no AI service.
 - `request_approval` asks; storing the request and deciding it are M246's (with `ApprovalFacts`, §16.6).
 - The tools serve the rules and the screen. Offering them to the AI (the visit, M235/M246) also means adding their
   output field names to `engine.agent.egress.RESULT_KEYS`.
+
+## 19. The ask / approve / doubt protocol (Plan O M246, DEC-1816)
+
+*Behind `data_doctor.unified` (off by default). With it off nothing here runs and every route below is unmounted.*
+
+### 19.1 In plain words
+
+Data Doctor asks **one clear question at a time**, and only when the choice matters; **remembers the answer for
+the client** and applies it next time, visibly and revocably; asks for an **explicit yes with the exact sentence**
+for what changes meaning, from someone with the right role and - when the use case asks for it - someone other
+than the person who proposed it; says **when it is unsure**, in three parts, with only numbers its tools measured;
+and **asks for more data or a different file** when no choice makes the data usable. One module holds the rules
+(`engine/doctor/protocol.py`, pure functions); the visit and Guided setup's Approve call it.
+
+### 19.2 Questions (`settle`, the design §6.5)
+
+| The values... | Then |
+|---|---|
+| prove the answer (`Ask.proven`) | **AUTO**: the item is ticked (`sure`) and shown; the person may untick it |
+| leave options that differ on at most 0.5% of the rows (`rows_disagree`, or the spread of `rows_changed`) and move the yes share by at most 0.5 points | **an assumption**: the recommended (or safe) option is ticked, the question is kept *answered by the rules* (`assumed: true`, `answered_by: agent:data-doctor`) and the item says so in `assumption`; answering the question changes it |
+| otherwise | **one question**, with `why`, each option's measured `rows_changed` / `label_rate`, and an **"I don't know"** option that maps to the safe choice (`safe: true`), never a guess |
+
+An option left unmeasured counts as material (deny-safe). A meaning-bearing question (`meaning_bearing`) recommends
+nothing, and its assumption is the safe choice. **The budget** (§6.3): at most `ceil(2.5 x ambiguities)` questions a
+file, capped at 10 (`question_budget`); past it, a non-blocking question with a safe choice becomes a stated
+assumption of that choice; a blocking one is still asked. Assumptions and standing answers are not counted in
+`counters.questions_per_file`. Each answer's timeline event says whether it changed the data (`changes_data`).
+
+**Detectors** plug into the visit's TREAT as `VisitDeps.detectors` (`DetectorPort`: `(case, files, brief) ->
+Detected(asks, doubts, requests, evidence)`); M245 fills them in. The rules' own questions are unchanged.
+
+### 19.3 Standing answers (`engine/doctor/standing.py`, the design §7.2, O12)
+
+- An answer to a question whose code is in `STANDING_CODES` (the §7.1 detectors and the §3.5 time settings) is
+  written to `cases/<client>/standing_answers.json`: detector, column fingerprint (code, normalised column, goal),
+  value signature (the question's `value_signature`, else its option labels), the option's label, who, when.
+  Never "I don't know", never an APPROVE-class effect (`may_stand`), never another client's.
+  The answer also keeps its **meaning** (`meaning_of`: the chosen option's change - kind and payload - without
+  the ids of the file, case or evidence it was made on). It is written only once the case holds the answer (a
+  `_Step.after` effect), so a refused or conflicting answer is never remembered.
+- TREAT applies a live answer to the same detector, fingerprint and signature as a **pre-ticked item** titled
+  "Using your answer from 12 Oct: ...", answers the question with `standing_answer_id`, records a
+  `StandingAnswerUse` in the case and a `standing_answer.applied` event, and counts the use once per case - but only
+  when the option with the same label still has the same meaning. When the same button now makes another change
+  (another spelling, unit factor or format), the question is asked again, its `why` says the earlier answer was not
+  used, and a `standing_answer.unfit` event names the answer.
+- `revoke_standing` (case) or `POST /clients/{client}/standing-answers/{id}/revoke` (Settings) revokes it: the
+  question is asked again, in the case at once and in every later case. In a case the revocation is made inside
+  the case's write, after its version check (`_Step.within`), so a refused revoke changes nothing for the client.
+
+### 19.4 APPROVE-class items (`APPROVE_CLASS_ITEMS`, the design §6.6)
+
+| Item kind (a recipe step by its step kind) | Role |
+|---|---|
+| `acknowledgement` (keep an error-severity finding) | Analyst; Approver when `governance.approval_required` |
+| `consent_column`, `map_consent`, `suppression`, `pii_keep`, `threshold` | Approver |
+| `define_outcome`, `map_outcome_values`, `outcome_definition`, `convert_currency`, `split_file`, `remove_rows` | Analyst |
+| `join_files`, `stack_files`, `build_dataset`, `keep_latest_per_id` - leaving out more than 2% of rows (unknown counts as more) | Analyst |
+
+`visit.confirm` gives one item its own yes: the check is M233's `data.approve_class` rule (`confirmation_refusal`),
+so the codes are its - `TOOL_ROLE_REQUIRED` (403), `APPROVAL_SENTENCE_CHANGED` (409, with the new sentence; nothing is
+recorded), `POLICY_ROLE_SEPARATION` (403: with `governance.approval_required` on, no one who proposed or answered it
+can be the one who confirms - the person who answered the question the item came from (`<question_id>:<option>`)
+and the person who ticked it last (`item.decided_by`); the local operator with sign-in off is exempt, as
+everywhere).
+The yes is a `CaseApproval` with `approve_class: true`, the role, `payload_digest` (`approval_digest`: the item's
+payload digest and the sentence) and its receipt. A yes covers the item **as it reads now**: a changed payload or
+sentence needs a new one. `visit.approve` is refused while an accepted APPROVE-class item of the active section
+has none (`APPROVAL_CONFIRMATION_MISSING`); a `sentence` sent with it must be `approval_sentence(case)` word for word.
+
+### 19.5 Guided setup's Approve (M233's cross-branch request (2); `engine/doctor/plan_g_approval.py`)
+
+With the switch on, `POST /uploads/{id}/agent-session/preview` records what it showed
+(`uploads/<id>/agent/preview_shown.json`: the accepted steps' `recipe_hash` and the receipt) and a training Approve
+checks, before writing anything: each accepted reshape step as M238's `ReshapeItem` (offered unticked, its question
+answered, `full` future-data check, its preview receipt shown for these very steps) under `data.reshape_guard`
+(`RESHAPE_GUARD_MISSING`); and - when a step is APPROVE-class (`remove_rows`; `keep_latest_per_id` leaving out more
+than 2% of the preview's rows) - the role and the exact sentence (`GET .../approval` shows it; `POST .../approve`
+sends it back; `POST .../apply` with none is `APPROVAL_SENTENCE_CHANGED`). **Separation of duties**: the decide,
+answer and edit routes record who ticked, answered or added each suggestion (`record_proposers`,
+`uploads/<id>/agent/proposed_by.json`, user ids only; nothing with sign-in off); with `governance.approval_required`
+on, an APPROVE-class step is refused to any of them (`POLICY_ROLE_SEPARATION`), and a step a person ticked that no
+record names (the switch turned on mid-session) is refused the same way until it is ticked again. Accepted AI steps
+carrying O10's warning are listed. With `agentic.enabled` on the approval is a signed `data.prescription.approved`
+ledger entry (upload id, recipe hash, the digest of the accepted proposals and the sentence), written right after
+the checks pass and **before** anything keeps the approval's effects (the client's memory of the recipe, the
+session as applied); a ledger that cannot be written refuses the approval and nothing is kept.
+
+### 19.6 Doubts and requests for more data (§6.7, §6.8)
+
+`express_doubt` builds a `CaseDoubt` (because / would do / if not) and refuses it with `DOUBT_UNGROUNDED` when a
+part is empty or a number is in none of the cited results (`engine.agent.grounding`; column names are not numbers).
+The visit checks a detector's doubts again against the evidence it returned: an ungrounded one stops TREAT
+(`visit.stopped.code = DOUBT_UNGROUNDED`) and nothing is written. `request_data` turns a `DataRequest` (more data, or
+a different file: what, from whom, why, the columns and "one row per customer") into one non-blocking question
+(`DATA_REQUESTED` / `DIFFERENT_FILE_REQUESTED`) answered "I will add it" or "I cannot get it" (safe). The goal rules
+ask for the outcome column this way when no file has it.
+
+### 19.7 The record (§6.6, O9)
+
+Every decision carries the user id. `decision_body` is the record: `case_id`, `upload_id`, `payload_digest`,
+`prescription_hash`, `recipe_hash`, `status`, `decided_by`, `proposed_by` (comma-separated when several),
+`proposal_kind`, `approval_id`, `case_version` (and `identity_verified: false` with sign-in off) - ids and digests
+only. With `agentic.enabled` on, `VisitDeps.ledger` (`api.routes.case_visit.ledger_for`) appends it to Plan K's
+ledger **inside the case's write** (`_Step.within`: under the case lock, after the version check, before the
+commit), as `data.decision` (an item's own yes) or `data.prescription.approved` (the approval); both are in
+`SIGNED_KINDS`, so each entry is signed like every other approval. `ledger.BODY_KEYS` gained `case_id`, `upload_id`,
+`prescription_hash`, `recipe_hash`, `approval_id`, `case_version`. A write that loses the version check writes no
+entry; a write that fails after the entry (or a process that dies) is retried, and `ledger_port` is idempotent - an
+entry of the same kind, actor and body is returned, not written again - so the retry finds the first entry. The
+receipt (`CaseApproval.receipt_id`) is `ledger:<entry_hash>`, else `timeline:<approval id>`. With the ledger off the
+timeline event (`approval`, `approval.confirmed`) holds the same body (without `case_id`, the timeline's own).
+
+### 19.8 New patterns, with permission, then rules ([REQ] 11)
+
+An AI fix is pending, `check`, never ticked (M233). When one is approved - in a case or at Guided setup's Approve -
+its pattern (step kind and parameters, column left out, spellings case-folded and sorted) is counted once per place
+in `doctor_patterns/approved.json` (`engine/doctor/patterns.py`). Approved at least 3 times in at least 2 places, it
+is a **candidate rule** (`GET /data-doctor/candidate-rules`, Admin) for the product team to promote into the
+deterministic rules by a reviewed change. Nothing changes a rule by itself.
+
+### 19.9 Limits
+
+- The four ASK tools of the catalogue (#70 `request_data`, #74 `ask_question`, #75 `express_doubt`, #76
+  `request_approval`) are these functions; they are not registered as model-callable tools yet (the egress canary
+  and the AI's wording of questions and doubts are M247/M248's).
+- A doubt is non-blocking; an APPROVE-class doubt travels with its item's sentence when the detector writes it there.
+- The plan's `AI_STEP_CHANGE_TOO_LARGE` is `AI_STEP_CHANGES_TOO_MANY`, the code M238 shipped (DEC-1808 (g)).
+- An approval whose ledger entry was written but whose case write then failed leaves that entry in the chain until
+  the approval is retried (the retry reuses it); one never retried stays as a signed record of an approval the case
+  does not hold. A standing answer's memory (`_Step.after`) is written after the case: a process that dies in
+  between leaves the answer in the case but not remembered for the client (it is asked again next time).
+- The idempotent look-up reads the entries of one kind (`data.decision` or `data.prescription.approved`) - few,
+  one per person's approval - not the whole chain.

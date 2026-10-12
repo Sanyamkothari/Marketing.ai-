@@ -822,7 +822,7 @@ STEP_TEXT_KEYS: Final[frozenset[str]] = frozenset({"kind", "column"})
 
 def _policy_gate(
     ctx: AgentContext, session: AgentSession | None, kind: str, *, settings: dict[str, Any] | None = None
-) -> Callable[..., None] | None:
+) -> Callable[..., tuple[Any, ...]] | None:
     """Plan O M233 (DEC-1803): the data policy's check of `kind` for an AI suggestion, behind `data_doctor.unified`.
 
     None with the switch off (nothing is read). With it on, each of this module's own checks is followed by the
@@ -986,7 +986,8 @@ def _propose_step(
         effect = data_policy.effect_of(
             step, ctx.frame.head(STEP_SAMPLE_ROWS), changed=receipt.changed, failed=receipt.failed
         )
-        gate(
+        # Plan O M246 (DEC-1816): O10's warning (above 30% of the column) travels with the suggestion.
+        warned = gate(
             data_policy.TRIED,
             data_policy.CHANGE_SHARE,
             data_policy.NEVER_TICKED,
@@ -994,6 +995,8 @@ def _propose_step(
             looked_at=True,
             effect=effect,
         )
+    else:
+        warned = ()
     reason = str(args.get("reason") or CHAT_REASON).strip()[:MAX_REASON_CHARS] or CHAT_REASON
     if checker.failure(reason, target="helper suggestion", max_chars=MAX_REASON_CHARS) is not None:
         reason = CHAT_REASON
@@ -1013,6 +1016,7 @@ def _propose_step(
             "rows": receipt.rows,
             "changed": receipt.changed,
             "failed": receipt.failed,
+            **({"warnings": [str(w.detail["warning"]) for w in warned]} if warned else {}),
         },
         created_at=clock(),
     )
