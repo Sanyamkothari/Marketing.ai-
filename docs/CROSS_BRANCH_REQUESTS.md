@@ -4396,3 +4396,60 @@ while the switch is off.
   `data.decision` and `data.prescription.approved` are signed kinds.
 - **Still open from wave 1:** the infra (`cases/` S3 prefixes and conditional put) and UI retention-label requests
   above; keep `data_doctor.unified` off on AWS until they are done.
+
+### 2026-10-12 — Plan O wave 2 integration, batch B (`integrate-plan-o-3`) → M245 (detectors) (request)
+
+M239, M244, M243 and M247 are merged (DEC-1809, DEC-1814, DEC-1813, DEC-1817). For M245:
+
+1. **Drift into questions (from M243).** `engine.doctor.prescription_replay.replay_prescription` and `check_files` are
+   ready for the FOLLOW_UP to INTAKE turn. Each stop or warning is a `DriftFinding` with one `Question`
+   (`question_id` `drift-<detector>-<slot>-<column>`). Turn them into case questions and standing answers. A file
+   added to a case (`visit.add_files`) is already bound to the case's latest stored prescription.
+2. **Your detectors join M244's.** `api/routes/case_visit.py` `_deps` passes
+   `detectors=(time_settings_detector(...),)`; add M245's detectors to that tuple rather than replacing it.
+3. **Per-file answers (from M244).** An effect payload may list keys under `per_file` (`standing.PER_FILE_KEY`);
+   `standing.meaning_of` leaves them out, so a standing answer whose payload carries a per-file value (a cut-off, a
+   column of this month's file) applies next month instead of asking again. Use it for drift answers that name
+   this file's values.
+4. **Outcome drift (from M243 and M239).** Training now stops on `OUTCOME_VALUE_NOT_MAPPED` and
+   `OUTCOME_CANNOT_MEASURE` when next month's outcome column holds a value the approved map does not place; the
+   question to ask is M239's (what the new value means), answered by a new `map_outcome_values` approval.
+
+### 2026-10-12 — Plan O wave 2 integration, batch B → M249 (switch-over), and the owners named (request)
+
+Before `data_doctor.unified` is turned on:
+
+1. **The visit writes what the prescription reads (from M243; owners of M235's visit and M237/M239/M242's
+   adapters).** Today the visit writes roles, settings and steps. Write the approved items' payloads too: `step`
+   (with `stage: post_build` after a build), `build_record` + `dataset_id`, `definition` (+ `approval`) and
+   `approved_rate`. Until then a case's prescription has no build, outcome or rate, and M244's "Leave it out" is
+   applied only once the prepared copy is replayed (VERIFY reads the stored upload, so `X_LABEL_MATURITY` still
+   fails there).
+2. **The hand-off runs the prepared copy (from M247).** `engine/doctor/screen.py` `ScreenStart` starts the run on
+   the case's raw upload with its ID and outcome columns. Once the visit's approval writes M243's prepared upload,
+   point `ScreenStart.upload_id` at it so the approved fixes are applied in the run.
+3. **What the screen does not show yet (built before M243 and M244).** `runs/<id>/prescription_check.json` (the
+   warnings, each with its question); a 409 `PRESCRIPTION_DRIFT` / `CURRENCY_*` from `POST /runs` (message =
+   summary + question, path = column); `OUTCOME_VALUE_NOT_MAPPED` and `OUTCOME_CANNOT_MEASURE` with the outcome
+   question; M244's Quick / Balanced / Thorough choice, each "about N min" (the case now carries the
+   `training_budget` setting item); M239's blocking question `outcome-exclude-date-column` (options `date-1..N`,
+   answered with `exclude_date_columns {upload_id: column}`). Show sentences verbatim.
+4. **Old Guided-setup sessions (from M247).** The screen replaces Guided setup only through `mountGuided`; the
+   `guided_<upload>` adapter cases are not listed by `GET /data-doctor/cases`.
+5. **Builder mappings (from M239; owners of `POST /clients/{id}/mappings`).** When an approved event outcome with
+   exclusions is built, map each exclusion file's `exclude_date_columns[i]` to `event_time`, not its first date
+   column.
+6. **Retention and infra (from M243).** A new binding key `cases/<client>/prescribed_specs/<spec_id>.json` (client,
+   case and hash only) lives beside the client's cases; client erasure removes it with `cases/<client>/`. It joins
+   the still-open `cases/` S3 prefix request above.
+7. **A product decision (from M243).** With the switch on, an unbound training upload follows the prescription its
+   use case's champion run carries, so any upload for that use case gets the prescription's checks and stops on
+   drift, not only case-bound files. Confirm, or limit it to case-bound files.
+8. **The gate run.** `python -m scripts.plan_o_benchmark --train` (k=5, all parts); regenerate
+   `reports/plan_o_benchmark.{md,json}`. The cassette (`tests/fixtures/doctor_eval/cassettes/ai_path.json`) is
+   still from the scripted reference model (re-recorded by M244); re-record from a real model when one is
+   available.
+
+Closed by this batch: M247's report that `test_eval_harness.py::test_every_registered_tool_passes_pass5_and_the_injection_canary`
+failed for `preflight` and `check_uplift_data` (the `checked_at` time stamp; fix-eval-determinism adds it to the
+harness's `VOLATILE_KEYS`). Batch A's request to M239 is done (DEC-1809 (c), (i)).

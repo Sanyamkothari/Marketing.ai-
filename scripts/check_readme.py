@@ -973,6 +973,31 @@ MILESTONE_TESTS: Final[Mapping[str, tuple[str, ...]]] = {
         "tests/unit/doctor/test_evals.py",
         "tests/unit/doctor/test_eval_harness.py",
     ),
+    # M239 (DEC-1809), the outcome tools: the definition, its exact-sentence approval, the rule sets.
+    "M239": (
+        "tests/unit/doctor/test_outcome_tools.py",
+        "tests/unit/doctor/test_policy.py",
+        "tests/unit/doctor/test_policy_runtime.py",
+    ),
+    # M244 (DEC-1814), time settings: the budget and its promise, the data time settings, the switch-on goldens.
+    "M244": (
+        "tests/unit/doctor/test_time_settings.py",
+        "tests/unit/doctor/test_time_settings_visit.py",
+        "tests/unit/agent/test_header_switch_unified.py",
+    ),
+    # M243 (DEC-1813), the prescription: one hash, replayed at training and scoring, stops on drift.
+    "M243": (
+        "tests/unit/doctor/test_prescription.py",
+        "tests/integration/test_prescription_runs.py",
+    ),
+    # M247 (DEC-1817), the Data Doctor screen: the server's view, its route, the jsdom screen and the journey.
+    "M247": (
+        "tests/unit/doctor/test_screen.py",
+        "tests/unit/doctor/test_goal_names.py",
+        "tests/integration/test_api_case_screen.py",
+        "tests/integration/test_data_doctor_ui.py",
+        "tests/integration/test_data_doctor_journey.py",
+    ),
 }
 """Milestone id -> the test files (or directories, with a trailing `/`) that prove it is built.
 
