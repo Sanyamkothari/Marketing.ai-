@@ -16,12 +16,17 @@ Roles (`RoutePolicy`, checked on every call):
   being set up does (`POST /uploads/{id}/agent-session/rows`) and as the Doctor's diagnosis does;
 * `what_can_this_power` (aggregate verdicts) and `data_request` (no data at all) need only a **Viewer**;
 * every PROPOSE tool needs an **Analyst**: a Viewer may call READ tools only.
+
+Budgets (the design §5.2): a `session-only` result is at most 5,500 characters of JSON, an `aggregate` one 16 KB.
+The wrappers that list things cut each list from its end to fit and say how many there were (`*_total`).
+`data_request` holds no client data and keeps 16 KB; the three suggestions that run Plan G's handlers are bounded
+by Plan G (`max_output_bytes=None`), so the registry never refuses what Plan G accepts.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Annotated, Any, Final, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, RootModel
 
@@ -29,18 +34,22 @@ from api.access_policy import RoutePolicy
 from engine.access.roles import Role
 from engine.agent.contracts import Proposal, ProposalSource, RecipeStepKind
 from engine.agent.tools import TOOLS, AgentToolError, NoArgs, Tool, ToolKind, tool_available
-from engine.config import StrictBase
+from engine.config import ConfigError, StrictBase
 from engine.doctor.contracts import FileDiagnosis, FileLink, FileStack, UseCaseReadiness
+from engine.doctor.diagnose import ADVISE_ROWS
 from engine.doctor.first_look import FirstLook
 from engine.doctor.memory import TreatmentOffer
 from engine.doctor.registry import (
     AGGREGATE_BUDGET,
+    BY_EXPOSURE,
+    ROW_LEVEL_BUDGET,
     DataTool,
     DataToolContext,
     DataToolError,
     DataToolKind,
     DataToolRegistry,
     Exposure,
+    output_size,
 )
 from engine.doctor.sufficiency import NextSteps
 from engine.onboarding.specs import KeyCandidate, RoleCandidate, TimeCandidate
@@ -52,6 +61,9 @@ if TYPE_CHECKING:
 __all__ = [
     "ADVICE_MAX_PROPOSALS",
     "ADVICE_MAX_QUESTIONS",
+    "DATA_REQUEST_MAX_USE_CASES",
+    "DIAGNOSIS_FILES",
+    "DIAGNOSIS_ROWS",
     "LOOK_NUMBERS",
     "AdviceDigest",
     "LookOutput",
@@ -83,7 +95,18 @@ LOOK_NUMBERS: Final[dict[str, int]] = {
 
 ADVICE_MAX_PROPOSALS: Final[int] = 60
 ADVICE_MAX_QUESTIONS: Final[int] = 20
-"""`advise` lists at most this many suggestions and questions; the totals say how many there were."""
+"""`advise` lists at most this many suggestions and questions, fewer when they do not fit its budget; the totals
+say how many there were."""
+DIAGNOSIS_FILES: Final[int] = 20
+"""`diagnose_files` reads at most this many files, as `POST /doctor/diagnosis` does (`DiagnosisRequest`)."""
+DIAGNOSIS_ROWS: Final[int] = 4_000_000
+"""Rows one `diagnose_files` call reads across its files, as the Doctor route does (`api.routes.doctor`
+`DIAGNOSIS_ROWS`, M161 DEC-1507): an even share each, never fewer than `ADVISE_ROWS`, never more than the
+use case's `profile_row_cap`. A test keeps the two equal."""
+DATA_REQUEST_MAX_USE_CASES: Final[int] = 4
+"""`data_request` names at most this many use cases: the four whose requests are longest fit its budget (a test
+checks it). The route serves any number; the tool asks for a narrower request."""
+_USE_CASE_ID: Final[str] = r"^[a-z0-9][a-z0-9-]{0,63}$"
 
 # ---------------------------------------------------------------------------
 # Route policies
@@ -172,7 +195,13 @@ def _look_tool(tool: Tool) -> DataTool[Any, LookOutput]:
 # ---------------------------------------------------------------------------
 # D/E. The chat's PROPOSE actions and the person's edit
 # ---------------------------------------------------------------------------
-class ProposeSettingArgs(_Args):
+class _ChatArgs(BaseModel):
+    """The chat's suggestion arguments are the model's own: nothing is stripped or changed (Plan G decides)."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, str_strip_whitespace=False)
+
+
+class ProposeSettingArgs(_ChatArgs):
     """`propose_setting`'s arguments, read leniently as Plan G's chat reads them (its own checks decide)."""
 
     path: JsonValue = Field(default=None, description="The setting's dotted path, from the listed settings.")
@@ -180,7 +209,7 @@ class ProposeSettingArgs(_Args):
     reason: JsonValue = Field(default=None, description="Why, in one plain sentence.")
 
 
-class ProposeStepArgs(_Args):
+class ProposeStepArgs(_ChatArgs):
     """`propose_step`'s arguments, read leniently as Plan G's chat reads them (its own checks decide)."""
 
     kind: JsonValue = Field(default=None, description="One step kind the chat may suggest.")
@@ -201,7 +230,12 @@ PROPOSE_ARG_FIELDS: Final[dict[str, frozenset[str]]] = {
 
 
 class ProposeOutput(StrictBase):
-    """A PROPOSE tool's answer: the pending (or, for a person's edit, accepted) item, and what it measured."""
+    """A PROPOSE tool's answer: the pending (or, for a person's edit, accepted) item, and what it measured.
+
+    Its strings are recorded as the handler made them (nothing stripped), so the evidence is the suggestion's.
+    """
+
+    model_config = ConfigDict(**{**StrictBase.model_config, "str_strip_whitespace": False})
 
     args: dict[str, JsonValue] = Field(default_factory=dict)
     result: dict[str, JsonValue] = Field(default_factory=dict)
@@ -228,13 +262,19 @@ class EditArgs(_Args):
 
 
 def _edit_by_hand(parsed: EditArgs, ctx: DataToolContext) -> ProposeOutput:
-    """The person's edit as an accepted step (`engine.agent.edits.add_edit`); the caller stores the session."""
+    """The person's edit as an accepted step (`engine.agent.edits.add_edit`).
+
+    The edited session goes to `ctx.save_session`, which the caller stores under its lock and version check (as
+    the edits route does); the tool is not available without one, so an edit is never made and dropped.
+    """
     from engine.agent.edits import add_edit
     from engine.agent.session import SessionError
 
-    session = ctx.session
-    if session is None:  # unreachable through the registry: `needs` makes the tool unavailable
-        raise DataToolError("TOOL_UNKNOWN", "edit_by_hand needs a session.", status=404)
+    session, save = ctx.session, ctx.save_session
+    if session is None or save is None:  # unreachable through the registry: `needs` makes it unavailable
+        raise DataToolError(
+            "TOOL_UNKNOWN", "edit_by_hand needs a session and somewhere to save it.", status=404
+        )
     try:
         edited = add_edit(
             session,
@@ -259,6 +299,7 @@ def _edit_by_hand(parsed: EditArgs, ctx: DataToolContext) -> ProposeOutput:
     if not made:  # add_edit always adds or merges one; anything else is a bug, not the person's problem
         raise AgentToolError("AGENT_TOOL_ARGS_INVALID", "The edit made no step.")
     proposal = made[-1]
+    save(edited)
     return ProposeOutput(args={"kind": parsed.kind.value, "column": column}, result={}, proposal=proposal)
 
 
@@ -277,8 +318,8 @@ class DiagnoseArgs(_Args):
     upload_ids: tuple[str, ...] | None = Field(
         default=None,
         min_length=1,
-        max_length=20,
-        description="Up to 20 of the case's files; every file of the case when omitted.",
+        max_length=DIAGNOSIS_FILES,
+        description="Up to 20 of the case's files; every file of the case (at most 20) when omitted.",
     )
 
 
@@ -293,11 +334,11 @@ class OutcomeArgs(_Args):
 
 
 class DataRequestArgs(_Args):
-    use_case_ids: tuple[str, ...] | None = Field(
+    use_case_ids: tuple[Annotated[str, Field(pattern=_USE_CASE_ID)], ...] | None = Field(
         default=None,
         min_length=1,
-        max_length=20,
-        description="The use cases to ask data for; the file's own use case when omitted.",
+        max_length=DATA_REQUEST_MAX_USE_CASES,
+        description="Up to 4 configured use cases to ask data for; the file's own use case when omitted.",
     )
 
 
@@ -352,27 +393,87 @@ def _file_or_files(ctx: DataToolContext) -> bool:
     return ctx.agent is not None or bool(ctx.files)
 
 
+M = TypeVar("M", bound=BaseModel)
+
+
+def _fitted(
+    model: M,
+    fields: tuple[str, ...],
+    whole: Callable[[M], BaseModel] | None = None,
+    budget: int = ROW_LEVEL_BUDGET,
+) -> M:
+    """`model` with items dropped from the end of each of `fields`, in order, until the result fits `budget`.
+
+    As Plan G's look tools do (DEC-1054): a list that does not fit loses items from its end, and the output's
+    `*_total` fields say how many there were. `whole` builds what is measured when `model` sits inside the output
+    (`first_look`). Each list is cut by halving, so a long list costs a few measurements, not one per item. When
+    nothing is left to cut and it still does not fit, the registry refuses it (`TOOL_OUTPUT_TOO_LARGE`).
+    """
+
+    def size(candidate: M) -> int:
+        shown = whole(candidate) if whole is not None else candidate
+        return output_size(Exposure.SESSION_ONLY, shown.model_dump(mode="json"))
+
+    for field in fields:
+        if size(model) <= budget:
+            return model
+        items = tuple(getattr(model, field))
+        low, high = 0, len(items)
+        while low < high:  # the most items that fit, between `low` (fits or none) and `high`
+            middle = (low + high + 1) // 2
+            if size(model.model_copy(update={field: items[:middle]})) <= budget:
+                low = middle
+            else:
+                high = middle - 1
+        model = model.model_copy(update={field: items[:low]})
+    return model
+
+
 class DiagnosedFiles(StrictBase):
-    files: tuple[FileDiagnosis, ...] = Field(description="One diagnosis per file, in the order asked.")
+    files: tuple[FileDiagnosis, ...] = Field(
+        description="One diagnosis per file, in the order asked; the last ones are left out when they do not fit."
+    )
+    files_total: int = Field(description="Files diagnosed; more than `files` lists when some did not fit.")
 
 
 def _diagnose_files(parsed: DiagnoseArgs, ctx: DataToolContext) -> DiagnosedFiles:
+    """The Doctor route's diagnosis of each file, with its caps: at most 20 files, and an even share of
+    `DIAGNOSIS_ROWS` rows each (never fewer than `ADVISE_ROWS`, never more than the use case's row cap)."""
+    from dataclasses import replace
+
     from engine.doctor.diagnose import diagnose_file
+    from engine.stages.ingest import profile_row_cap
 
     if parsed.upload_ids is None:
         files = list(ctx.files) or [_loaded(ctx, None)]
     else:
         files = [_loaded(ctx, upload_id) for upload_id in dict.fromkeys(parsed.upload_ids)]
+    if len(files) > DIAGNOSIS_FILES:
+        raise DataToolError(
+            "TOOL_INPUT_INVALID",
+            f"The case has {len(files)} files; name at most {DIAGNOSIS_FILES} of them in upload_ids.",
+            status=422,
+        )
     config, roles = _config(ctx), _roles(ctx)
-    return DiagnosedFiles(files=tuple(diagnose_file(loaded, config, roles) for loaded in files))
+    cap = min(profile_row_cap(config), max(ADVISE_ROWS, DIAGNOSIS_ROWS // len(files)))
+    capped = [
+        loaded if len(loaded.frame) <= cap else replace(loaded, frame=loaded.frame.head(cap))
+        for loaded in files
+    ]
+    diagnosed = tuple(diagnose_file(loaded, config, roles) for loaded in capped)
+    return _fitted(DiagnosedFiles(files=diagnosed, files_total=len(diagnosed)), ("files",))
 
 
 class FileRoles(StrictBase):
     upload_id: str
     roles: tuple[RoleCandidate, ...] = Field(
-        description="Each role the file could play, most likely first, with reasons."
+        description="Each role the file could play, most likely first, with reasons; the least likely are left "
+        "out when they do not fit."
     )
-    keys: tuple[KeyCandidate, ...] = Field(description="Columns that could be its ID, best first.")
+    roles_total: int = Field(description="Roles found; more than `roles` lists when some did not fit.")
+    keys: tuple[KeyCandidate, ...] = Field(
+        description="Columns that could be its ID, best first (at most 5)."
+    )
 
 
 def _find_file_role(parsed: FileArgs, ctx: DataToolContext) -> FileRoles:
@@ -388,11 +489,13 @@ def _find_file_role(parsed: FileArgs, ctx: DataToolContext) -> FileRoles:
         row_count=loaded.profile.row_count,
         roles=_roles(ctx),
     )
-    return FileRoles(
+    found = FileRoles(
         upload_id=loaded.upload_id,
         roles=tuple(source.role_candidates),
+        roles_total=len(source.role_candidates),
         keys=tuple(source.key_candidates[:5]),
     )
+    return _fitted(found, ("roles", "keys"))
 
 
 class TimeColumns(StrictBase):
@@ -400,6 +503,7 @@ class TimeColumns(StrictBase):
     columns: tuple[TimeCandidate, ...] = Field(
         description="Columns that could be the date of each row: parse rate, range, whether day and month are ambiguous."
     )
+    columns_total: int = Field(description="Columns found; more than `columns` lists when some did not fit.")
 
 
 def _find_time_columns(parsed: FileArgs, ctx: DataToolContext) -> TimeColumns:
@@ -415,7 +519,12 @@ def _find_time_columns(parsed: FileArgs, ctx: DataToolContext) -> TimeColumns:
         row_count=loaded.profile.row_count,
         roles=_roles(ctx),
     )
-    return TimeColumns(upload_id=loaded.upload_id, columns=tuple(source.time_candidates))
+    found = TimeColumns(
+        upload_id=loaded.upload_id,
+        columns=tuple(source.time_candidates),
+        columns_total=len(source.time_candidates),
+    )
+    return _fitted(found, ("columns",))
 
 
 class ProposalLine(StrictBase):
@@ -452,7 +561,7 @@ def _advise(parsed: AdviseArgs, ctx: DataToolContext) -> AdviceDigest:
     from engine.agent.advisor import advise
 
     advice = advise(ctx.require_agent(), primary_key=parsed.primary_key, target=parsed.target)
-    return AdviceDigest(
+    digest = AdviceDigest(
         status=advice.status.value,
         stop_reason=advice.stop_reason,
         primary_key=advice.primary_key,
@@ -481,11 +590,17 @@ def _advise(parsed: AdviseArgs, ctx: DataToolContext) -> AdviceDigest:
         questions_total=len(advice.questions),
         hidden=advice.engine_hidden,
     )
+    return _fitted(digest, ("proposals", "questions"))
 
 
 class FirstLookOutput(StrictBase):
     look: FirstLook | None = Field(
-        description="The rate of 'yes' and the rate by the most informative columns; null when not yes/no."
+        description="The rate of 'yes' and the rate by the most informative columns; null when not yes/no. "
+        "The columns left out, then the last columns, are cut when they do not fit."
+    )
+    columns_total: int = Field(default=0, description="Columns measured; more than `look.columns` when cut.")
+    left_out_total: int = Field(
+        default=0, description="Columns left out; more than `look.left_out` when cut."
     )
 
 
@@ -500,14 +615,20 @@ def _first_look(parsed: OutcomeArgs, ctx: DataToolContext) -> FirstLookOutput:
         file_rows=agent.profile.row_count,
         primary_key=agent.resolve(parsed.primary_key) if parsed.primary_key else None,
     )
-    return FirstLookOutput(look=look)
+    if look is None:
+        return FirstLookOutput(look=None)
+    totals = {"columns_total": len(look.columns), "left_out_total": len(look.left_out)}
+    shown = _fitted(look, ("left_out", "columns"), whole=lambda cut: FirstLookOutput(look=cut, **totals))
+    return FirstLookOutput(look=shown, **totals)
 
 
 class FilesFit(StrictBase):
     links: tuple[FileLink, ...] = Field(
         description="How each event file's customer IDs meet the customer list's."
     )
+    links_total: int = Field(description="Links found; more than `links` lists when some did not fit.")
     stacks: tuple[FileStack, ...] = Field(description="Files that are the same report for different periods.")
+    stacks_total: int = Field(description="Stacks found; more than `stacks` lists when some did not fit.")
 
 
 def _how_files_fit(_parsed: NoArgs, ctx: DataToolContext) -> FilesFit:
@@ -519,7 +640,13 @@ def _how_files_fit(_parsed: NoArgs, ctx: DataToolContext) -> FilesFit:
     config, roles = _config(ctx), _roles(ctx)
     diagnosed = tuple(diagnose_file(loaded, config, roles) for loaded in files)
     fitted = how_files_fit(Diagnosis(files=diagnosed, use_cases=()), files, roles)
-    return FilesFit(links=fitted.links, stacks=fitted.stacks)
+    found = FilesFit(
+        links=fitted.links,
+        links_total=len(fitted.links),
+        stacks=fitted.stacks,
+        stacks_total=len(fitted.stacks),
+    )
+    return _fitted(found, ("stacks", "links"))
 
 
 class PowerVerdicts(StrictBase):
@@ -551,10 +678,25 @@ def _enough_data(parsed: OutcomeArgs, ctx: DataToolContext) -> NextSteps:
 
 
 def _data_request(parsed: DataRequestArgs, ctx: DataToolContext) -> DataRequest:
+    """The data request kit, for configured use cases only: as `GET /pilot/data-request` checks them
+    (`api.routes.pilot._use_cases`), an id that is not configured is refused, here with no server path."""
+    from engine.config import list_use_case_ids
     from engine.pilot.data_request import build_data_request
 
     ids = parsed.use_case_ids or ((ctx.agent.use_case_id,) if ctx.agent is not None else None)
-    return build_data_request(ids, ctx.root())
+    if ids is not None:
+        known = set(list_use_case_ids(ctx.root()))
+        unknown = [use_case for use_case in dict.fromkeys(ids) if use_case not in known]
+        if unknown:
+            raise DataToolError(
+                "TOOL_INPUT_INVALID", f"Unknown use case: {', '.join(unknown)[:200]}.", status=422
+            )
+    try:
+        return build_data_request(ids, ctx.root())
+    except ConfigError as exc:  # a use case that does not load: say which, never where it lives
+        raise DataToolError(
+            "TOOL_INPUT_INVALID", "A use case named here could not be read.", status=422
+        ) from exc
 
 
 class RecalledTreatment(StrictBase):
@@ -606,6 +748,7 @@ def register_all(registry: DataToolRegistry) -> None:
             run=_chat_propose("propose_setting"),
             callers=_RULES_AND_AI,
             needs=("agent", "turn"),
+            max_output_bytes=None,  # Plan G's handler bounds the suggestion (the listed settings)
             mirrors=("POST", "/uploads/{upload_id}/agent-session/messages"),
             policy_kind="data.setting",
             wraps="engine/agent/loop.py _propose",
@@ -625,6 +768,7 @@ def register_all(registry: DataToolRegistry) -> None:
             run=_chat_propose("propose_step"),
             callers=_RULES_AND_AI,
             needs=("agent", "turn"),
+            max_output_bytes=None,  # Plan G's `check_recipe` bounds it (MAX_MAPPINGS = 500 spellings, ...)
             mirrors=("POST", "/uploads/{upload_id}/agent-session/messages"),
             policy_kind="data.recipe_step",
             wraps="engine/agent/loop.py _propose_step",
@@ -642,7 +786,8 @@ def register_all(registry: DataToolRegistry) -> None:
             exposure=Exposure.SESSION_ONLY,
             run=_edit_by_hand,
             callers=frozenset({"person"}),
-            needs=("agent", "session"),
+            needs=("agent", "session", "save_session"),
+            max_output_bytes=None,  # `add_edit`'s own checks bound it, as the edits route has no other cap
             mirrors=("POST", "/uploads/{upload_id}/agent-session/edits"),
             policy_kind="data.person_edit",
             wraps="engine/agent/edits.py add_edit",
@@ -736,6 +881,8 @@ def register_all(registry: DataToolRegistry) -> None:
             {
                 "wraps": "engine/pilot/data_request.py:344 build_data_request",
                 "route_policy": _DATA_REQUEST_POLICY,
+                # Built from configuration alone, it holds no client data: not a row-level result.
+                "max_output_bytes": AGGREGATE_BUDGET,
             },
         ),
         (
@@ -778,7 +925,7 @@ def register_all(registry: DataToolRegistry) -> None:
                 callers=_RULES_AND_SCREEN,
                 needs=needs,
                 available=extra.get("available", lambda _ctx: True),
-                max_output_bytes=AGGREGATE_BUDGET,
+                max_output_bytes=extra.get("max_output_bytes", BY_EXPOSURE),
                 wraps=extra["wraps"],
             )
         )

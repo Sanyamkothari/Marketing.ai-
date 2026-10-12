@@ -11,6 +11,7 @@ tests switch it on where it is read (`engine.doctor.registry.unified_on`).
 
 from __future__ import annotations
 
+import copy
 import json
 from collections.abc import Iterator
 from typing import Any
@@ -18,6 +19,7 @@ from typing import Any
 import pytest
 
 from engine.access.roles import Principal, Role
+from engine.agent import loop as loop_module
 from engine.agent.contracts import AgentSession
 from engine.agent.loop import TurnResult, chat_turn
 from engine.agent.session import start_session
@@ -130,6 +132,32 @@ def _proposals(columns: list[str]) -> list[dict[str, Any]]:
                     "args": {"path": "split.test_fraction", "value": 0.2, "reason": "More."},
                 },
                 {"action": "edit_by_hand", "args": {"kind": "drop_column", "column": column}},
+                # Padded strings reach Plan G's handlers as the model sent them (review fix): a padded
+                # setting path is refused, a separator of one space and padded keys are kept.
+                {
+                    "action": "propose_setting",
+                    "args": {"path": " split.test_fraction ", "value": 0.2, "reason": " More. "},
+                },
+                {
+                    "action": "propose_step",
+                    "args": {
+                        "kind": "map_values",
+                        "column": column,
+                        "params": {"mapping": {" North ": "N", "North": " N "}},
+                        "evidence_ids": [f"c{turn}-e1"],
+                        "reason": " x ",
+                    },
+                },
+                {
+                    "action": "propose_step",
+                    "args": {
+                        "kind": "split_column",
+                        "column": column,
+                        "params": {"separator": " "},
+                        "new_column": "part",
+                        "evidence_ids": [f"c{turn}-e1"],
+                    },
+                },
             ]
         )
     return steps
@@ -156,6 +184,134 @@ def test_a_whole_chat_is_byte_identical_through_the_registry(
     assert on_prompts == off_prompts, "the model is sent exactly what it was sent before"
     assert on_session == off_session, "the session stores exactly what it stored before"
     assert any(p["source"] == "ai" for p in on_session["proposals"]), "a chat suggestion went through"
+
+
+# ---------------------------------------------------------------------------
+# A suggestion reaches Plan G's handler exactly as the model sent it (review fixes)
+# ---------------------------------------------------------------------------
+REGION = "region_contact"
+"""A column the canary does not mark as personal: 'North', 'South' and two planted values, 150 rows each."""
+LOOK = {"action": "value_counts", "args": {"column": REGION}}
+
+
+def _step(kind: str, params: dict[str, Any], **more: Any) -> dict[str, Any]:
+    args = {"kind": kind, "column": REGION, "params": params, "evidence_ids": ["c1-e1"], **more}
+    return {"action": "propose_step", "args": args}
+
+
+PADDED: dict[str, dict[str, Any]] = {
+    "padded setting path": {
+        "action": "propose_setting",
+        "args": {"path": " split.test_fraction ", "value": 0.2, "reason": " More. "},
+    },
+    "padded missing-value tokens": _step("set_missing_text", {"values": [" ", "North "]}, reason=" x "),
+    "padded mapping key": _step("map_values", {"mapping": {" North ": "N"}}),
+    "padded mapping value": _step("map_values", {"mapping": {"North": " N "}}),
+    "one-space separator": _step("split_column", {"separator": " "}, new_column="region_part"),
+    "padded column": {
+        "action": "propose_step",
+        "args": {"kind": "normalise_text", "column": f" {REGION} ", "evidence_ids": ["c1-e1"]},
+    },
+    "padded kind": _step(" map_values ", {"mapping": {"North": "N"}}),
+    "400 spellings": _step(
+        "map_values", {"mapping": {"North": "N", **{f"spelling {i:03d} " * 3: f"s{i}" for i in range(400)}}}
+    ),
+}
+"""Suggestions whose strings have spaces around them, and one as large as Plan G accepts (MAX_MAPPINGS=500)."""
+
+
+def _plain(models: Any) -> Any:
+    """Models as stored, without the times the clock wrote."""
+    return _scrubbed_value(json.loads(json.dumps([m.model_dump(mode="json") for m in models])))
+
+
+def _scrubbed_value(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            k: _scrubbed_value(v)
+            for k, v in value.items()
+            if k not in {"created_at", "updated_at", "started_at"}
+        }
+    if isinstance(value, list):
+        return [_scrubbed_value(v) for v in value]
+    return value
+
+
+def _suggested(step: dict[str, Any]) -> dict[str, Any]:
+    """One turn: a look at the column, then `step`; what Plan G's handler received and what the turn made."""
+    seen.clear()
+    turn = _turn(ANALYST, [LOOK, step])
+    assert turn.reply.turn is not None
+    return {
+        "handler_args": copy.deepcopy(seen),
+        "error_codes": turn.reply.turn.error_codes,
+        "results": _plain(turn.tool_results),
+        "proposals": _plain(turn.proposals),
+    }
+
+
+seen: list[dict[str, Any]] = []
+
+
+@pytest.fixture
+def spied(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Record the arguments Plan G's two chat handlers receive, switch on or off."""
+    real_setting, real_step = loop_module._propose, loop_module._propose_step
+
+    def setting(ctx: Any, args: dict[str, Any], *rest: Any) -> Any:
+        seen.append(copy.deepcopy(args))
+        return real_setting(ctx, args, *rest)
+
+    def step(ctx: Any, session: Any, args: dict[str, Any], *rest: Any) -> Any:
+        seen.append(copy.deepcopy(args))
+        return real_step(ctx, session, args, *rest)
+
+    monkeypatch.setattr(loop_module, "_propose", setting)
+    monkeypatch.setattr(loop_module, "_propose_step", step)
+
+
+@pytest.mark.parametrize("case", sorted(PADDED))
+def test_a_suggestion_reaches_plan_g_exactly_as_the_model_sent_it(
+    case: str, spied: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    off = _suggested(PADDED[case])
+    monkeypatch.setattr(registry_module, "unified_on", lambda _config: True)
+    on = _suggested(PADDED[case])
+    assert off["handler_args"], "Plan G's handler ran"
+    assert on == off
+
+
+def test_the_padded_cases_really_differ_from_their_stripped_forms(spied: None) -> None:
+    """Without the spaces, Plan G decides otherwise: so the test above would see a stripped argument."""
+    padded = _suggested(PADDED["padded setting path"])
+    stripped = _suggested(
+        {
+            "action": "propose_setting",
+            "args": {"path": "split.test_fraction", "value": 0.2, "reason": "More."},
+        }
+    )
+    assert padded["error_codes"] == ("AGENT_SETTING_NOT_ALLOWED",) and padded["proposals"] == []
+    assert stripped["error_codes"] == () and len(stripped["proposals"]) == 1
+    large = _suggested(PADDED["400 spellings"])
+    assert large["error_codes"] == () and len(large["proposals"]) == 1, "Plan G accepts 401 spellings"
+
+
+def test_a_refused_suggestion_leaves_nothing_behind(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The turn's registry binding keeps nothing from one call to the next, refused or not."""
+    made: list[Any] = []
+    real = loop_module._RegistryTurn.propose
+
+    def propose(self: Any, name: str, args: dict[str, Any]) -> Any:
+        try:
+            return real(self, name, args)
+        finally:
+            made.append(list(self.made))
+
+    monkeypatch.setattr(registry_module, "unified_on", lambda _config: True)
+    monkeypatch.setattr(loop_module._RegistryTurn, "propose", propose)
+    turn = _turn(ANALYST, [LOOK, PADDED["400 spellings"], PADDED["padded setting path"]])
+    assert turn.reply.turn is not None and len(turn.proposals) == 1
+    assert made == [[], []]
 
 
 def _turn(principal: Principal, steps: list[dict[str, Any]]) -> TurnResult:

@@ -181,6 +181,7 @@ def _case(ctx: AgentContext, root: Path) -> DataToolContext:
         storage=storage,
         files=files,
         session=start_session(ctx, session_id="canary"),
+        save_session=lambda _session: None,
         config_root=ctx.config_root,
     )
 

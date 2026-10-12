@@ -626,13 +626,25 @@ class _RegistryTurn:
         return result
 
     def propose(self, name: str, args: dict[str, Any]) -> tuple[ToolResult, Proposal]:
-        """As the model: through the registry (role, input), which calls back into `ChatTurn.propose`."""
+        """As the model: through the registry (role, input), which calls back into `ChatTurn.propose`.
+
+        The registry decides who may suggest and records the suggestion; Plan G's handler gets `args` exactly
+        as the model sent them (`_Bound` keeps them), never the registry's validated copy. Once the handler has
+        made a suggestion, the registry's record of it cannot change or drop it. `made` is emptied whatever
+        happens, so nothing from one call is left for the next.
+        """
         from engine.doctor.tools import PROPOSE_ARG_FIELDS
 
         given = {key: value for key, value in args.items() if key in PROPOSE_ARG_FIELDS[name]}
-        bound = dataclasses.replace(self.context, turn=_Bound(self))
-        self.registry.call(name, given, bound)
-        return self.made.pop()
+        bound = dataclasses.replace(self.context, turn=_Bound(self, args))
+        try:
+            self.registry.call(name, given, bound)
+        except (AgentToolError, ValueError):
+            if not self.made:
+                raise  # refused before or by the handler: the role, the input, or Plan G's own checks
+        finally:
+            made, self.made = self.made[-1:], []
+        return made[0]
 
     def handle(self, name: str, args: dict[str, Any]) -> tuple[ToolResult, Proposal]:
         evidence_id = f"{self.prefix}e{len(self.results) + 1}"
@@ -656,12 +668,15 @@ class _RegistryTurn:
 
 @dataclass(frozen=True)
 class _Bound:
-    """The registry's `ChatTurn`: its `propose` runs the turn's own handler."""
+    """The registry's `ChatTurn`: its `propose` runs the turn's own handler on the model's own arguments."""
 
     turn: _RegistryTurn
+    sent: dict[str, Any]
+    """The arguments as the model sent them: what Plan G's handler reads, so nothing is stripped or reshaped."""
 
     def propose(self, name: str, args: dict[str, Any]) -> tuple[ToolResult, Proposal]:
-        return self.turn.handle(name, args)
+        del args  # the registry's validated copy; the handler reads what the model sent
+        return self.turn.handle(name, self.sent)
 
 
 def _registry_turn(

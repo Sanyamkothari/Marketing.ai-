@@ -56,7 +56,7 @@ from pydantic import AwareDatetime, BaseModel, Field, ValidationError
 
 from engine.access.roles import ROLE_DESCRIPTIONS, Principal, Role
 from engine.agent.tools import AgentContext, AgentToolError, call_tool
-from engine.agentic.canonical import canonical_bytes, digest, sha256_hex
+from engine.agentic.canonical import canonical_bytes, canonical_json, digest, sha256_hex
 from engine.agentic.registry import DEFAULT_OUTPUT_BUDGET
 from engine.config import StrictBase
 from engine.utils.time import utc_now
@@ -72,6 +72,7 @@ if TYPE_CHECKING:
 
 __all__ = [
     "AGGREGATE_BUDGET",
+    "BY_EXPOSURE",
     "CALLERS",
     "EXECUTOR_NAMES",
     "FORBIDDEN_PREFIXES",
@@ -89,14 +90,19 @@ __all__ = [
     "data_evidence_id",
     "data_registry",
     "evidence_id_of",
+    "output_size",
     "unified_on",
 ]
 
 ROW_LEVEL_BUDGET: Final[int] = 5_500
-"""Characters of JSON a row-level (`session-only`) tool may return through `call` (Plan G's look-tool cap,
-`engine.agent.tools.MAX_LOOK_RESULT_CHARS`)."""
+"""Characters of canonical JSON a row-level (`session-only`) tool may return through `call`: the design §5.2,
+Plan G's look-tool cap (`engine.agent.tools.MAX_LOOK_RESULT_CHARS`). The default budget of every `session-only`
+tool (`DataTool.budget`)."""
 AGGREGATE_BUDGET: Final[int] = DEFAULT_OUTPUT_BUDGET
-"""Bytes of canonical JSON an aggregate tool may return (Plan K's 16 KB)."""
+"""Bytes of canonical JSON an `aggregate` tool may return (Plan K's 16 KB): the default budget of every
+`aggregate` tool."""
+BY_EXPOSURE: Final = "by-exposure"
+"""`DataTool.max_output_bytes`'s default: the budget follows the tool's exposure (see `DataTool.budget`)."""
 MCP_LISTED: Final[bool] = False
 """Decision O7: Plan O lists no Data Doctor tool on MCP. Even when a later plan sets this, only `aggregate`
 tools are ever listed (:meth:`DataToolRegistry.mcp_surface`)."""
@@ -171,7 +177,9 @@ class ChatTurn(Protocol):
 
     `propose_setting` and `propose_step` need the turn's own state (the evidence gathered this turn, the
     grounding checker, the session's settings). The loop binds them here (`engine.agent.loop`) and calls the
-    tools through the registry like any other; outside a turn the two tools are not available.
+    tools through the registry like any other; outside a turn the two tools are not available. The loop's
+    binding hands Plan G's handler the arguments exactly as the model sent them, not the registry's validated
+    copy (`args`), so a suggestion is what Plan G alone would make of them.
     """
 
     def propose(self, name: str, args: dict[str, Any]) -> tuple[ToolResult, Proposal]: ...
@@ -204,6 +212,10 @@ class DataToolContext:
     """The use cases a verdict is given for; empty means the use case of `agent` alone."""
     roles: RoleCatalogue | None = None
     session: AgentSession | None = None
+    save_session: Callable[[AgentSession], None] | None = None
+    """Where a tool that changes the session (`edit_by_hand`) hands the new one: the caller stores it, under its
+    own lock and version check (the edits route's `_session_lock` and `_save`). A tool that needs it is not
+    available without it, so an edit can never be made and lost."""
     turn: ChatTurn | None = None
     config_root: Path | None = None
     clock: Callable[[], datetime] = utc_now
@@ -222,7 +234,7 @@ class DataToolContext:
         return self.agent.config_root if self.agent is not None else None
 
 
-Need = Literal["agent", "files", "storage", "session", "turn"]
+Need = Literal["agent", "files", "storage", "session", "save_session", "turn"]
 
 In = TypeVar("In", bound=BaseModel)
 Out = TypeVar("Out", bound=BaseModel)
@@ -253,13 +265,25 @@ class DataTool(Generic[In, Out]):
     """Beyond `needs`: whether the tool exists in this context (Plan G's M142 tools exist only with Plan K on)."""
     mirrors: tuple[str, str] | None = None
     """`(method, path)` of the HTTP route serving the same data, when there is one."""
-    max_output_bytes: int = AGGREGATE_BUDGET
+    max_output_bytes: int | Literal["by-exposure"] | None = BY_EXPOSURE
+    """The most a result may be through `call` (`TOOL_OUTPUT_TOO_LARGE` beyond it). By default it follows the
+    exposure: `ROW_LEVEL_BUDGET` characters for `session-only`, `AGGREGATE_BUDGET` bytes for `aggregate`. A tool
+    may name its own number when it holds no client data (`data_request`). `None` is for a PROPOSE tool that
+    runs a Plan G handler which bounds its own suggestion (`check_recipe`'s 500 spellings, the settings list):
+    the registry adds no cap of its own, so the suggestion is what Plan G would make."""
     session_tool: bool = False
     """True for Plan G's look tools: `session_call` runs them as Plan G's `call_tool` does, byte for byte."""
     policy_kind: str | None = None
     """For PROPOSE: the policy rule set that decides it (M233 reads it; default deny when it has no rules)."""
     wraps: str = ""
     """The engine function it wraps, as file:line (the design §5.5)."""
+
+    @property
+    def budget(self) -> int | None:
+        """The result's cap through `call`: characters for `session-only`, bytes for `aggregate`; None: none."""
+        if self.max_output_bytes == BY_EXPOSURE:
+            return ROW_LEVEL_BUDGET if self.exposure is Exposure.SESSION_ONLY else AGGREGATE_BUDGET
+        return self.max_output_bytes
 
 
 class DataToolResult(StrictBase):
@@ -281,6 +305,13 @@ def data_evidence_id(tool: str, given: Mapping[str, Any], output: Mapping[str, A
     spelled as a letter `a`-`p`: the same 64 bits, and never a run of digits the egress gate would mask.
     """
     return "ev_" + sha256_hex(canonical_bytes([tool, given, output]))[:16].translate(_LETTERS)
+
+
+def output_size(exposure: Exposure, output: Any) -> int:
+    """How big `output` is against its budget: characters of canonical JSON for a `session-only` result (the
+    design §5.2's "5,500 characters", as Plan G counts), UTF-8 bytes of it for an `aggregate` one (Plan K)."""
+    text = canonical_json(output)
+    return len(text) if exposure is Exposure.SESSION_ONLY else len(text.encode("utf-8"))
 
 
 def evidence_id_of(result: ToolResult) -> str:
@@ -331,6 +362,13 @@ class DataToolRegistry:
             raise ValueError(f"Only READ tools run as Plan G session tools: {name!r}.")
         if not 1 <= tool.number <= 81:
             raise ValueError(f"Tool {name!r} has no row in the catalogue (number {tool.number}).")
+        budget = tool.max_output_bytes
+        if budget is None and tool.kind is not DataToolKind.PROPOSE:
+            raise ValueError(
+                f"Tool {name!r} needs an output budget; only a Plan G suggestion bounds its own."
+            )
+        if isinstance(budget, int) and budget <= 0:
+            raise ValueError(f"Tool {name!r} has an output budget of {budget}.")
         self._tools[name] = tool
 
     def get(self, name: str) -> DataTool[Any, Any]:
@@ -387,8 +425,8 @@ class DataToolRegistry:
 
         In order: the tool exists for this caller here (`TOOL_UNKNOWN`), the principal holds its role
         (`TOOL_ROLE_REQUIRED`), the input validates and has no unknown field (`TOOL_INPUT_INVALID`), the output
-        validates and fits the tool's budget (`TOOL_OUTPUT_TOO_LARGE`). A refusal inside the tool propagates as
-        it is (a Plan G `AgentToolError` keeps its code).
+        validates and fits the tool's budget (`TOOL_OUTPUT_TOO_LARGE`; `DataTool.budget`, measured by
+        `output_size`). A refusal inside the tool propagates as it is (a Plan G `AgentToolError` keeps its code).
         """
         tool = self.find(name, ctx)
         if tool is None:
@@ -404,14 +442,17 @@ class DataToolRegistry:
             raise DataToolError("TOOL_INPUT_INVALID", f"{name}: {problems}"[:400], status=422) from exc
         produced = tool.run(parsed, ctx)
         output = tool.output_model.model_validate(produced.model_dump()).model_dump(mode="json")
-        size = len(canonical_bytes(output))
-        if size > tool.max_output_bytes:
-            raise DataToolError(
-                "TOOL_OUTPUT_TOO_LARGE",
-                f"{name} would return {size:,} bytes, more than its {tool.max_output_bytes:,}-byte budget; "
-                "ask a narrower question.",
-                status=413,
-            )
+        budget = tool.budget
+        if budget is not None:
+            size = output_size(tool.exposure, output)
+            if size > budget:
+                unit = "characters" if tool.exposure is Exposure.SESSION_ONLY else "bytes"
+                raise DataToolError(
+                    "TOOL_OUTPUT_TOO_LARGE",
+                    f"{name} would return {size:,} {unit} of JSON, more than its {budget:,}; "
+                    "ask a narrower question.",
+                    status=413,
+                )
         given_json = parsed.model_dump(mode="json", exclude_none=True)
         result = DataToolResult(
             evidence_id=data_evidence_id(name, given_json, output),
@@ -466,6 +507,8 @@ def _met(tool: DataTool[Any, Any], ctx: DataToolContext) -> bool:
         if need == "storage" and ctx.storage is None:
             return False
         if need == "session" and ctx.session is None:
+            return False
+        if need == "save_session" and ctx.save_session is None:
             return False
         if need == "turn" and ctx.turn is None:
             return False

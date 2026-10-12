@@ -956,17 +956,31 @@ says it applies, replays, sends or deletes something. The list is checked agains
 - **Content-hash evidence ids.** `registry.call` gives each result `"ev_"` + 16 letters `a`-`p`: Plan K's
   `sha256(canonical([tool, input, output]))`, 64 bits, spelled in letters so the egress gate's last check never
   mistakes an id for a number. The same question on the same data gives the same id in every run and process.
-- **Budgets.** 16 KB of canonical JSON per result through `call`; Plan G's look tools keep their own 5,500-character
-  caps.
+- **Budgets** (the design §5.2). A result through `call` may be at most **5,500 characters** of canonical JSON for a
+  `session-only` (row-level) tool and **16 KB** for an `aggregate` one; beyond it the call is refused
+  (`TOOL_OUTPUT_TOO_LARGE`, "ask a narrower question"). Plan G's look tools already keep under 5,500. The wrappers
+  that list things cut the end of each list to fit, as the look tools do, and say how many there were
+  (`files_total`, `roles_total`, `columns_total`, `links_total`, `proposals_total`, ...). Two exceptions, each
+  named in its registration: `data_request` is built from configuration alone and holds no client data, so it keeps
+  16 KB (and names at most four use cases, which fit); and the three suggestions that run Plan G's own handlers
+  (`propose_setting`, `propose_step`, `edit_by_hand`) get no registry cap, because Plan G already bounds them (the
+  listed settings, `check_recipe`'s 500 spellings) and a second cap would refuse what Plan G accepts.
+- **The Doctor's caps.** `diagnose_files` reads at most 20 files and an even share of 4,000,000 rows, as
+  `POST /doctor/diagnosis` does; `data_request` takes configured use case ids only (`TOOL_INPUT_INVALID` otherwise).
+- **An edit is saved.** `edit_by_hand` hands the edited session to the caller's `save_session`, which stores it
+  under the caller's lock and version check; without one the tool is not available.
 
 ### 14.4 Behind the switch
 
 With `data_doctor.unified` on (M230; default off), Plan G's rules advisor and chat call every tool through the
 registry: a look tool through `session_call`, which returns Plan G's own `ToolResult` byte for byte with the session's
-id (`c1-e1`, `e3`), and a chat suggestion through `call`, with the turn's own handlers bound to it. The chat's route
-passes who is asking, so the role is checked on each call. Plan G's 22 and the 27 Hinglish golden digests and whole
-chat sessions (prompts and stored sessions) are byte-identical with the switch on and off
-(`tests/unit/doctor/test_registry_runtime.py`). With the switch off the registry is not reached.
+id (`c1-e1`, `e3`), and a chat suggestion through `call`, with the turn's own handlers bound to it. The registry
+checks the role and records the suggestion; Plan G's handler reads the arguments exactly as the model sent them
+(nothing stripped: a padded setting path is still refused, a separator of one space is still one space), and once
+it has made a suggestion the registry's record cannot change or drop it. The chat's route passes who is asking, so
+the role is checked on each call. Plan G's 22 and the 27 Hinglish golden digests and whole
+chat sessions (prompts and stored sessions) are byte-identical with the switch on and off, including suggestions with
+padded strings and one of 401 spellings (`tests/unit/doctor/test_registry_runtime.py`). With the switch off the registry is not reached.
 
 The session ids stay because the screen, Ask your data's charts and every stored session cite them; the content-hash
 id is what the registry's own callers - the visit, the readiness report, the evals - cite.

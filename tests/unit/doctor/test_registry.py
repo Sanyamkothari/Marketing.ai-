@@ -9,6 +9,7 @@ gate never mistakes it for a number; and the MCP surface lists no session-only t
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import random
 import re
@@ -31,10 +32,13 @@ from engine.agent.egress import assert_clean
 from engine.agent.session import start_session
 from engine.agent.tools import TOOLS, AgentContext, ToolKind, call_tool
 from engine.doctor import registry as registry_module
+from engine.doctor import tools as tools_module
 from engine.doctor.catalogue import CATALOGUE, row
 from engine.doctor.diagnose import LoadedFile, Offer, diagnose_file, readiness
 from engine.doctor.registry import (
+    AGGREGATE_BUDGET,
     EXECUTOR_NAMES,
+    ROW_LEVEL_BUDGET,
     DataTool,
     DataToolContext,
     DataToolError,
@@ -254,6 +258,8 @@ def _tool(**changes: Any) -> DataTool[Any, Any]:
         ({"kind": DataToolKind.ASK}, "a Viewer may call READ tools only"),
         ({"callers": frozenset({"mcp"})}, "callers"),
         ({"number": 99}, "catalogue"),
+        ({"max_output_bytes": None}, "needs an output budget"),
+        ({"max_output_bytes": 0}, "output budget of 0"),
         (
             {
                 "kind": DataToolKind.PROPOSE,
@@ -290,6 +296,7 @@ def _full_context(
         caller=caller,  # type: ignore[arg-type]
         files=(_loaded(agent),),
         session=session,
+        save_session=lambda _session: None,
         turn=_Turn(),
         **more,
     )
@@ -381,6 +388,137 @@ def test_a_result_over_its_budget_is_refused() -> None:
     with pytest.raises(DataToolError) as refused:
         registry.call("impossible_values", {}, DataToolContext())
     assert refused.value.code == "TOOL_OUTPUT_TOO_LARGE" and refused.value.status == 413
+
+
+PLAN_G_SUGGESTIONS = {"propose_setting", "propose_step", "edit_by_hand"}
+"""PROPOSE tools that run Plan G's own handler, which bounds the suggestion (`check_recipe`, the settings list)."""
+NO_CLIENT_DATA = {"data_request"}
+"""Session-only by the catalogue, but built from configuration alone: not a row-level result."""
+
+
+def test_every_tool_gets_the_budget_of_its_exposure() -> None:
+    """The design §5.2: 5,500 characters for row-level (`session-only`) tools, 16 KB for aggregates."""
+    for tool in data_registry().list():
+        if tool.name in PLAN_G_SUGGESTIONS:
+            assert tool.budget is None, tool.name
+        elif tool.name in NO_CLIENT_DATA:
+            assert tool.budget == AGGREGATE_BUDGET, tool.name
+        elif tool.exposure is Exposure.SESSION_ONLY:
+            assert tool.budget == ROW_LEVEL_BUDGET == 5_500, tool.name
+        else:
+            assert tool.budget == AGGREGATE_BUDGET == 16_384, tool.name
+    assert {t.name for t in data_registry().list() if t.budget is None} == PLAN_G_SUGGESTIONS
+
+
+def test_a_row_level_result_is_measured_in_characters_of_json() -> None:
+    """5,000 two-byte characters fit a row-level tool's 5,500 (10,000 bytes); 5,600 characters do not."""
+    for text, fits in (("é" * 5_000, True), ("x" * 5_600, False)):
+        registry = DataToolRegistry()
+        registry.register(_tool(run=lambda _g, _c, text=text: LookOutput({"rows": [text]})))
+        if fits:
+            assert registry.call("impossible_values", {}, DataToolContext()).output == {"rows": [text]}
+            continue
+        with pytest.raises(DataToolError) as refused:
+            registry.call("impossible_values", {}, DataToolContext())
+        assert refused.value.code == "TOOL_OUTPUT_TOO_LARGE" and "5,500" in refused.value.message
+
+
+def _many_files(agent: AgentContext, count: int) -> tuple[LoadedFile, ...]:
+    loaded = _loaded(agent)
+    return tuple(
+        LoadedFile(upload_id=f"u-{i:02d}", file_name=f"f{i}.csv", frame=loaded.frame, profile=loaded.profile)
+        for i in range(count)
+    )
+
+
+def test_diagnose_files_lists_what_fits_and_says_how_many_there_were(agent: AgentContext) -> None:
+    ctx = DataToolContext(agent=agent, files=_many_files(agent, 20))
+    result = data_registry().call("diagnose_files", {}, ctx)
+    assert result.output["files_total"] == 20
+    shown = result.output["files"]
+    assert 0 < len(shown) < 20, "twenty diagnoses do not fit 5,500 characters"
+    assert [f["upload_id"] for f in shown] == [f"u-{i:02d}" for i in range(len(shown))], "cut from the end"
+    assert len(json.dumps(result.output, separators=(",", ":"), ensure_ascii=False)) <= ROW_LEVEL_BUDGET
+
+
+def test_diagnose_files_keeps_the_doctor_routes_caps(
+    agent: AgentContext, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from api.routes import doctor as doctor_route
+    from engine.doctor import diagnose as diagnose_module
+    from engine.doctor.contracts import DiagnosisRequest
+
+    assert tools_module.DIAGNOSIS_ROWS == doctor_route.DIAGNOSIS_ROWS
+    limit = DiagnosisRequest.model_fields["upload_ids"].metadata
+    assert any(getattr(m, "max_length", None) == tools_module.DIAGNOSIS_FILES == 20 for m in limit)
+    # More than 20 files: refused, whether named or not.
+    ctx = DataToolContext(agent=agent, files=_many_files(agent, 21))
+    with pytest.raises(DataToolError) as refused:
+        data_registry().call("diagnose_files", {}, ctx)
+    assert refused.value.code == "TOOL_INPUT_INVALID"
+    with pytest.raises(DataToolError) as named:
+        data_registry().call("diagnose_files", {"upload_ids": [f"u-{i:02d}" for i in range(21)]}, ctx)
+    assert named.value.code == "TOOL_INPUT_INVALID"
+    # An even share of the rows each, never fewer than ADVISE_ROWS.
+    read: list[int] = []
+    real = diagnose_module.diagnose_file
+
+    def counted(loaded: LoadedFile, *args: Any) -> Any:
+        read.append(len(loaded.frame))
+        return real(loaded, *args)
+
+    monkeypatch.setattr(diagnose_module, "diagnose_file", counted)
+    monkeypatch.setattr(tools_module, "DIAGNOSIS_ROWS", 1_000)
+    monkeypatch.setattr(tools_module, "ADVISE_ROWS", 300)
+    data_registry().call("diagnose_files", {}, DataToolContext(agent=agent, files=_many_files(agent, 2)))
+    assert read == [500, 500] and len(agent.frame) == 1_200
+    read.clear()
+    data_registry().call("diagnose_files", {}, DataToolContext(agent=agent, files=_many_files(agent, 5)))
+    assert read == [300] * 5
+
+
+def test_data_request_takes_configured_use_cases_only(agent: AgentContext) -> None:
+    ctx = DataToolContext(agent=agent, principal=VIEWER, caller="person")
+    for ids in (["no-such-thing"], ["../../etc/passwd"], ["Targeted-Advertisement"], ["a"] * 5):
+        with pytest.raises(DataToolError) as refused:
+            data_registry().call("data_request", {"use_case_ids": ids}, ctx)
+        assert refused.value.code == "TOOL_INPUT_INVALID", ids
+        assert "/" not in refused.value.message.replace("../../etc/passwd", ""), "no server path is shown"
+        assert "configs" not in refused.value.message
+    made = data_registry().call("data_request", {"use_case_ids": ["targeted-advertisement"]}, ctx)
+    assert made.output
+
+
+def test_the_longest_data_requests_fit_its_budget() -> None:
+    """The four use cases whose requests are longest, asked together, fit `data_request`'s 16 KB."""
+    from engine.config import list_use_case_ids
+    from engine.pilot.data_request import build_data_request
+
+    def size(ids: tuple[str, ...]) -> int:
+        return len(json.dumps(build_data_request(ids).model_dump(mode="json")).encode())
+
+    longest = sorted(list_use_case_ids(), key=lambda u: size((u,)), reverse=True)
+    widest = tuple(longest[: tools_module.DATA_REQUEST_MAX_USE_CASES])
+    ctx = DataToolContext(principal=VIEWER, caller="person")
+    assert data_registry().call("data_request", {"use_case_ids": list(widest)}, ctx).output
+
+
+def test_an_edit_made_through_the_registry_is_saved(agent: AgentContext) -> None:
+    saved: list[Any] = []
+    ctx = dataclasses.replace(_full_context(agent, ANALYST), save_session=saved.append)
+    column = next(
+        str(c) for c in agent.frame.columns if agent.frame[c].dtype == object and c != "customer_id"
+    )
+    result = data_registry().call("edit_by_hand", {"kind": "drop_column", "column": column}, ctx)
+    assert len(saved) == 1
+    stored = [p.proposal_id for p in saved[0].proposals]
+    assert result.output["proposal"]["proposal_id"] in stored
+    assert ctx.session is not None and result.output["proposal"]["proposal_id"] not in [
+        p.proposal_id for p in ctx.session.proposals
+    ], "the edit is in the saved session, not the one the call was given"
+    # Without somewhere to save it, the tool is not there: an edit is never made and dropped.
+    unsaved = dataclasses.replace(ctx, save_session=None)
+    assert data_registry().find("edit_by_hand", unsaved) is None
 
 
 # ---------------------------------------------------------------------------
