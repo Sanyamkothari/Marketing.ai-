@@ -104,5 +104,7 @@ def test_the_pipeline_scales_on_a_smaller_pair_too() -> None:
     """The same check at 50,000 and 200,000 rows, quick enough for `make test`."""
     audit_seconds(10_000)
     small = min(audit_seconds(50_000), audit_seconds(50_000))
-    large = audit_seconds(200_000)
+    # Best of two on both sides: a single slow 200k run on a busy 2-core runner read 6.2 and 6.5
+    # (linear is ~4, quadratic ~16), so the ratio compared one noisy run against a best-of-two.
+    large = min(audit_seconds(200_000), audit_seconds(200_000))
     assert large / small < LINEAR_RATIO_BOUND, f"{large / small:.1f} times for four times the rows"
