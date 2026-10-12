@@ -269,6 +269,12 @@ def test_every_timestamp_column_really_is_timestamptz(
         ("model_decision", "decided_at"): "timestamp with time zone",
         # Plan D, 0005_plan_d (DEC-883)
         ("platform_setting", "updated_at"): "timestamp with time zone",
+        # Plan J, 0006_campaigns (M94)
+        ("campaign", "created_at"): "timestamp with time zone",
+        ("campaign", "updated_at"): "timestamp with time zone",
+        # Plan K, 0009_agentic_ledger (M132) and 0010_agentic_workspace_log (M141)
+        ("agentic_decision_log", "created_at"): "timestamp with time zone",
+        ("agentic_workspace_log", "created_at"): "timestamp with time zone",
     }
 
 
