@@ -37,6 +37,9 @@ Key                                     Written by                             D
                                                                                id; kept with the report
 `doctor_memory/<use case>/<shape>.json` `api/routes/agent.py` on Approve        `remembered_at`; column
                                         (Plan L M159, `engine.doctor.memory`)  names and ids, no rows
+`cases/<client>/<case>/case.json`,      `api/routes/cases.py` (Plan O M231,    `case.json` updated_at;
+`.../timeline.jsonl`,                   `engine.doctor.case`), only while      uploads by `files[]`;
+`.../evidence/<id>.json`, ...           `data_doctor.unified` is on            corrections by their key
 ======================================  =====================================  =========================
 
 Root-level files (`registry.db`, `clients.db`, `platform.db` and their journals) are databases, not
@@ -64,6 +67,7 @@ __all__ = [
     "TERMINAL_STATES",
     "VERSION_PURGE_PREFIXES",
     "CampaignInfo",
+    "CaseInfo",
     "DatasetInfo",
     "MemoryInfo",
     "RunInfo",
@@ -105,6 +109,9 @@ class Store(StrEnum):
     """Plan J M94: a campaign's assignment and outcomes (one row per customer), and its reports."""
     DOCTOR_MEMORY = "doctor_memory"
     """Plan L M159: which treatment a file of each shape had. Column names and ids, never a row."""
+    CASES = "cases"
+    """Plan O M231: Data Doctor's cases. Uploads by id, decisions with user ids, the processing log; a person
+    correction (`correct_cells`) or a standing answer may hold a customer's id."""
     OTHER = "other"
 
 
@@ -162,6 +169,8 @@ def store_of(key: str) -> Store:
         return Store.CAMPAIGNS
     if head == "doctor_memory":
         return Store.DOCTOR_MEMORY
+    if head == "cases":
+        return Store.CASES
     return Store.OTHER
 
 
@@ -269,6 +278,26 @@ class MemoryInfo:
 
 
 @dataclass(frozen=True)
+class CaseInfo:
+    """What a `cases/<client>/<case>/case.json` says (Plan O M231), read leniently."""
+
+    key: str
+    """The `case.json` key; the case's other files are under the same directory."""
+    case_id: str
+    client_id: str
+    created_at: datetime | None
+    updated_at: datetime | None
+    upload_ids: tuple[str, ...]
+    evidence_uploads: tuple[tuple[str, str], ...]
+    """`(evidence_id, upload_id)` for every evidence file that read an upload."""
+
+    @property
+    def directory(self) -> str:
+        """`cases/<client>/<case>/`."""
+        return self.key.rsplit("/", 1)[0] + "/"
+
+
+@dataclass(frozen=True)
 class DatasetInfo:
     """What `dataset_manifest.json` says about one built dataset."""
 
@@ -290,6 +319,7 @@ class StoreIndex:
         self.datasets: dict[str, DatasetInfo] = {}
         self.campaigns: dict[str, CampaignInfo] = {}
         self.memories: dict[str, MemoryInfo] = {}
+        self.cases: dict[str, CaseInfo] = {}
         for key in self._keys:
             parts = key.split("/")
             if len(parts) == 3 and parts[0] == "runs" and parts[2] == "run.json":
@@ -302,6 +332,8 @@ class StoreIndex:
                 self._add_campaign(storage, key, parts[1])
             elif len(parts) == 3 and parts[0] == "doctor_memory" and parts[2].endswith(".json"):
                 self._add_memory(storage, key)
+            elif len(parts) == 4 and parts[0] == "cases" and parts[3] == "case.json":
+                self._add_case(storage, key, parts[1], parts[2])
 
     @property
     def keys(self) -> tuple[str, ...]:
@@ -373,6 +405,30 @@ class StoreIndex:
             remembered_at=parse_time(doc.get("remembered_at")),
             recipe_upload_id=_str_or_none(doc.get("recipe_upload_id")),
             source_upload_id=_str_or_none(doc.get("source_upload_id")),
+        )
+
+    def _add_case(self, storage: Storage, key: str, client_id: str, case_id: str) -> None:
+        doc = read_json(storage, key) or {}
+        files = doc.get("files")
+        evidence = doc.get("evidence")
+        self.cases[key] = CaseInfo(
+            key=key,
+            case_id=case_id,
+            client_id=client_id,
+            created_at=parse_time(doc.get("created_at")),
+            updated_at=parse_time(doc.get("updated_at")) or parse_time(doc.get("created_at")),
+            upload_ids=tuple(
+                str(entry["upload_id"])
+                for entry in (files if isinstance(files, list) else ())
+                if isinstance(entry, dict) and isinstance(entry.get("upload_id"), str)
+            ),
+            evidence_uploads=tuple(
+                (str(entry["evidence_id"]), str(entry["upload_id"]))
+                for entry in (evidence if isinstance(evidence, list) else ())
+                if isinstance(entry, dict)
+                and isinstance(entry.get("evidence_id"), str)
+                and isinstance(entry.get("upload_id"), str)
+            ),
         )
 
     def runs_reading_upload(self, upload_id: str) -> tuple[RunInfo, ...]:
