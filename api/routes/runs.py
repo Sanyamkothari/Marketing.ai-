@@ -33,12 +33,14 @@ two columns when they were joined on one.
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Annotated, Any, Final, Literal
 
 from fastapi import APIRouter, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse
+from pydantic import ValidationError
 
 from api.access_policy import ROW_LEVEL_ARTEFACTS, ROW_LEVEL_DOWNLOAD, refusal_message  # Plan J M91
 from api.deps import (
@@ -122,6 +124,7 @@ from engine.decide.arbitrate import (  # Plan J M101 (DEC-1311)
     ARBITRATED_TREAT_LIST_CSV,
     ARBITRATED_TREAT_LIST_PARQUET,
     ARBITRATION_SUMMARY_FILENAME,
+    ArbitrationSummary,
 )
 from engine.decide.catalogue import (
     CATALOGUE_STAMP_FILENAME,  # Plan J M99 (DEC-1309)
@@ -193,6 +196,7 @@ router: APIRouter = APIRouter(tags=["runs"])
 _LOGGER = get_logger(__name__)
 
 __all__ = [
+    "ARBITRATED_LIST_FILES",
     "CONTACT_LIST_FILES",
     "CREATED_ARTEFACTS",
     "MODEL_NOT_APPROVED",
@@ -201,6 +205,7 @@ __all__ = [
     "RUN_FILENAME",
     "RUN_MANIFEST_FILENAME",
     "VALIDATION_FILENAME",
+    "arbitration_source_runs",
     "build_job_fn",
     "build_m2_job",
     "build_score_job",
@@ -211,6 +216,7 @@ __all__ = [
     "job_spec_for",
     "model_not_approved_message",
     "refuse_unapproved_list",
+    "refuse_unapproved_sources",
     "router",
     "unapproved_list_model",
     "update_run",
@@ -706,7 +712,9 @@ def read_artefact(run_id: str, name: str, storage: StorageDep, request: Request)
     require_row_level_role(request, name)
     load_run(storage, run_id)
     if name in CONTACT_LIST_FILES:  # Plan M final integration (DEC-1611 (p)): no list of an unapproved model
-        refuse_unapproved_list(request, storage, get_registry(request), run_id)
+        # DEC-1620 (M190): an arbitrated list is checked against every run it was built from.
+        sources = arbitration_source_runs(storage, run_id) if name in ARBITRATED_LIST_FILES else (run_id,)
+        refuse_unapproved_sources(request, storage, get_registry(request), sources)
     # Plan K M134 (DEC-1405): with the compliance gate on, a list stored before it was turned on is built again.
     if name in (TREAT_LIST_CSV, TREAT_LIST_PARQUET, TREAT_LIST_SUMMARY_FILENAME) and (
         not storage.exists(run_key(run_id, name))
@@ -934,16 +942,16 @@ CONTACT_LIST_FILES: Final[frozenset[str]] = frozenset(
 record names, while the model they were made with waits for approval or was turned down. `scores.csv` and the other analyst files are NOT held: a model
 named explicitly may be scored at any status, to try a candidate before approving it (DEC-050)."""
 
+ARBITRATED_LIST_FILES: Final[frozenset[str]] = frozenset(
+    {ARBITRATED_TREAT_LIST_CSV, ARBITRATED_TREAT_LIST_PARQUET}
+)
+"""The cross-goal list (Plan J M101), built from several goals' scoring runs: held when any of them is (DEC-1620)."""
 
-def unapproved_list_model(storage: Storage, registry: ModelRegistry, run_id: str) -> ModelVersion | None:
-    """The model version a scoring run's list was made with, when that list may not be sent; else None.
 
-    Held only when the run's own settings (`run_config.json`) require approval and the version is waiting for it
-    (`pending_approval`) or was turned down (`archived` without ever having been the champion: a rejected
-    challenger; a demoted former champion keeps its `promoted_at` and stays sendable). A training run, a run with
-    no model, a candidate the champion rule kept back, the champion, approval switched off, or a run or version
-    that cannot be read: not held here (each is answered as before by the route itself).
-    """
+def _unapproved_list_source(
+    storage: Storage, registry: ModelRegistry, run_id: str
+) -> tuple[RunRecord, ModelVersion] | None:
+    """`unapproved_list_model`, with the run's record (its goal names the run in a refusal)."""
     try:
         record = storage.read_model(run_key(run_id, RUN_FILENAME), RunRecord)
         resolved = storage.read_model(run_key(run_id, RUN_CONFIG_FILENAME), ResolvedConfig)
@@ -958,7 +966,34 @@ def unapproved_list_model(storage: Storage, registry: ModelRegistry, run_id: str
     except RegistryError:
         return None
     # Plan M M184 (DEC-1614 (b)): the one rule (`engine.model_approval`); a candidate a person named is served.
-    return version if model_not_approved(version, unattended=False) else None
+    return (record, version) if model_not_approved(version, unattended=False) else None
+
+
+def unapproved_list_model(storage: Storage, registry: ModelRegistry, run_id: str) -> ModelVersion | None:
+    """The model version a scoring run's list was made with, when that list may not be sent; else None.
+
+    Held only when the run's own settings (`run_config.json`) require approval and the version is waiting for it
+    (`pending_approval`) or was turned down (`archived` without ever having been the champion: a rejected
+    challenger; a demoted former champion keeps its `promoted_at` and stays sendable). A training run, a run with
+    no model, a candidate the champion rule kept back, the champion, approval switched off, or a run or version
+    that cannot be read: not held here (each is answered as before by the route itself).
+    """
+    held = _unapproved_list_source(storage, registry, run_id)
+    return None if held is None else held[1]
+
+
+def arbitration_source_runs(storage: Storage, run_id: str) -> tuple[str, ...]:
+    """The scoring runs the arbitrated list kept in `run_id` was built from, `run_id` first (DEC-1620).
+
+    Read from the `arbitration_summary.json` that `POST /decide/arbitrate` writes into every run it arbitrated next
+    to that run's copy of the list (its `run_ids`), so the copy and the runs it names are always the same
+    arbitration's. Just `run_id` when the run keeps no readable summary (it was never arbitrated).
+    """
+    try:
+        summary = storage.read_model(run_key(run_id, ARBITRATION_SUMMARY_FILENAME), ArbitrationSummary)
+    except (StorageError, ValidationError):
+        return (run_id,)
+    return tuple(dict.fromkeys((run_id, *summary.run_ids)))
 
 
 def model_not_approved_message(version: ModelVersion) -> str:
@@ -974,6 +1009,26 @@ def model_not_approved_message(version: ModelVersion) -> str:
     )
 
 
+def _sources_not_approved_message(held: Sequence[tuple[str, RunRecord, ModelVersion]]) -> str:
+    """The refusal's sentence for a list built from several runs: which run and goal holds it (DEC-1620)."""
+    clauses = [
+        f"the list of {record.use_case_name or record.use_case_id} (run {run_id}) was made with a model "
+        + (
+            "that is still waiting for an Approver"
+            if version.status is ModelStatus.PENDING_APPROVAL
+            else "an Approver turned down"
+        )
+        for run_id, record, version in held
+    ]
+    return (
+        "This contact list combines several goals' lists, and "
+        + "; and ".join(clauses)
+        + ". It cannot be downloaded, and its campaign's test plan cannot be registered, until every model it draws "
+        "on is approved, or that goal's list is made again with the approved model and the goals are arbitrated "
+        "again."
+    )
+
+
 def campaign_names_run(request: Request, run_id: str) -> bool:
     """Whether a campaign record names `run_id` as the list it sent (`GET /campaigns?run_id=`'s own query)."""
     from api.routes.campaigns import get_campaign_store  # api.routes.campaigns imports this module
@@ -981,25 +1036,46 @@ def campaign_names_run(request: Request, run_id: str) -> bool:
     return bool(get_campaign_store(request).list(run_id=run_id, limit=1))
 
 
-def refuse_unapproved_list(
-    request: Request, storage: Storage, registry: ModelRegistry, run_id: str, *, for_campaign: bool = False
+def refuse_unapproved_sources(
+    request: Request,
+    storage: Storage,
+    registry: ModelRegistry,
+    run_ids: Sequence[str],
+    *,
+    for_campaign: bool = False,
 ) -> None:
-    """`409 MODEL_NOT_APPROVED` when `unapproved_list_model` holds the run's list; the audit records why.
+    """`409 MODEL_NOT_APPROVED` when a list built from `run_ids` is held by ANY of them; the audit records why.
 
-    `for_campaign` is true where a campaign is already in hand (registering its plan). Otherwise the hold applies
-    only to a run a campaign record names: plan.md section 11's Phase 1 journey (train, score the second upload with
-    the model it just made, download the list, no approval in between) records no campaign and is unchanged; a
-    campaign's list waits for the approval wherever it is asked for.
+    Each run is judged by `unapproved_list_model` (its own settings and model). `for_campaign` is true where a
+    campaign is already in hand (registering its plan). Otherwise the hold applies only to a list a campaign record
+    names, through any of its runs: plan.md section 11's Phase 1 journey (train, score the second upload with the
+    model it just made, download the list, no approval in between) records no campaign and is unchanged; a
+    campaign's list waits for the approval wherever it is asked for. A list from several runs (an arbitrated one,
+    DEC-1620) names in the refusal every run and goal that holds it; a list from one run keeps DEC-1611's sentence.
     """
-    version = unapproved_list_model(storage, registry, run_id)
-    if version is None or not (for_campaign or campaign_names_run(request, run_id)):
+    runs = tuple(dict.fromkeys(run_ids))
+    held: list[tuple[str, RunRecord, ModelVersion]] = []
+    for rid in runs:
+        found = _unapproved_list_source(storage, registry, rid)
+        if found is not None:
+            held.append((rid, found[0], found[1]))
+    if not held or not (for_campaign or any(campaign_names_run(request, rid) for rid in runs)):
         return
     from api.access import set_audit_context  # api.access imports this package (see require_row_level_role)
 
+    held_run, _record, version = held[0]
     set_audit_context(
-        request, details={"reason_code": MODEL_NOT_APPROVED, "model_id": version.model_id, "run_id": run_id}
+        request, details={"reason_code": MODEL_NOT_APPROVED, "model_id": version.model_id, "run_id": held_run}
     )
-    raise http_error(409, MODEL_NOT_APPROVED, model_not_approved_message(version))
+    message = model_not_approved_message(version) if len(runs) == 1 else _sources_not_approved_message(held)
+    raise http_error(409, MODEL_NOT_APPROVED, message)
+
+
+def refuse_unapproved_list(
+    request: Request, storage: Storage, registry: ModelRegistry, run_id: str, *, for_campaign: bool = False
+) -> None:
+    """`refuse_unapproved_sources` for one run's own list (DEC-1611 (p))."""
+    refuse_unapproved_sources(request, storage, registry, (run_id,), for_campaign=for_campaign)
 
 
 def load_run(storage: Storage, run_id: str) -> RunRecord:
