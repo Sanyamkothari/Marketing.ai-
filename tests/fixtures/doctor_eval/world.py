@@ -355,6 +355,22 @@ CALLS: Final[dict[str, Calls | None]] = {
         }
         for column in columns
     ],
+    # Plan O M239 (DEC-1809): the outcome tools, with the canary's arguments, on every column and on the bills file.
+    "define_outcome": _fixed(
+        {"kind": "event_presence"},
+        {"kind": "event_presence", "event_upload_id": EVENTS, "date_column": "bill_date", "days": 30},
+        {"kind": "event_absence", "event_upload_id": EVENTS, "days": 60, "grace_days": 7},
+        {
+            "kind": "value_threshold",
+            "event_upload_id": EVENTS,
+            "days": 30,
+            "column": "amount",
+            "operator": ">",
+            "threshold": 500,
+        },
+    ),
+    "map_outcome_values": lambda columns: [{"column": column} for column in columns],
+    "check_target_type": _each("column"),
 }
 """Per registered tool, the calls it is evaluated with (None: a chat suggestion, evaluated by chat sessions)."""
 

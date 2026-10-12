@@ -1398,3 +1398,53 @@ runs exactly as before.
 
 Neither kind is in `CHAT_STEP_KINDS` or `PERSON_STEP_KINDS`: the chat never suggests a conversion, and a rate reaches
 a recipe only through `propose_conversion` and an Analyst's exact-sentence approval (`approve_conversion`).
+
+## 21. The outcome tools (Plan O M239, DEC-1809)
+
+*Behind `data_doctor.unified` (off by default): the tools are in Data Doctor's registry (§14), for the rules and
+the screen; nothing here is offered to the chat's model.*
+
+### 21.1 The contract
+
+`engine/doctor/outcome_definition.py` holds `OutcomeDefinition` (the plan's §5 contract): `kind` (`column_values`,
+`event_presence`, `event_absence`, `value_threshold`), `name` (the dataset's outcome column), `column`, `map`
+(each value -> `yes`, `no` or `exclude`), the event file, its ID and date columns and role, `days`, `grace_days`,
+`operator` and `threshold`, `exclude` (the values left out, or the roles whose events in the window leave a
+customer out), `exclude_upload_ids` and `exclude_date_columns` (those files and the date each is read on),
+`censoring` (`leave_out`), and the key rules the IDs meet by. It holds the meaning only; its
+`definition_hash` is what an approval names. Counts and the sentence belong to the proposal.
+
+### 21.2 The tools
+
+| # | Tool | Kind | What it returns |
+|---|---|---|---|
+| 45 | `define_outcome` | PROPOSE (APPROVE) | an event definition (`propose_event_outcome`), its `LabelSpec` (`label_spec_of`), counts from `build_labels` on month-end snapshots (M157's measuring, with exclusion tables registered), the exact sentence (naming every date it reads, and every row that counts for nothing: a date that cannot be read, a threshold value that is not a number); the window, a second event file, a second date column, or a second date column of a file that leaves customers out (`exclude_date_columns`), when not given, are a blocking question with no definition |
+| 46 | `map_outcome_values` | PROPOSE (APPROVE) | each value of the outcome column with its rows and meaning: the person's answers (`map`), else the rules' (`positive_label`, `validate.POSITIVE_TOKENS`, `NO_WORDS`); every other value a blocking question; a `column_values` definition only when every value has a meaning and there is a yes and a no; at most 20 values (`OUTCOME_TOO_MANY_VALUES`); never the ID or a personal-data column |
+| 47 | `check_target_type` | READ | for a regression use case, the readiness probe `X_REGRESSION_TARGET_NUMERIC` itself; for yes/no, `TARGET_NOT_BINARY` (`next_tool: map_outcome_values`, or `switch_to: regression` for many numbers) or `TARGET_CONSTANT` |
+
+Both PROPOSE outputs are `source` (`rules`, or `person` when the screen sent the answers), `ticked: false`,
+`confidence: check`, `state: pending`; `policy._read_outcome` reads them (nothing to decide while no definition is
+proposed). Rule sets `data.define_outcome` and `data.map_outcome_values`: `data.never_ticked` and
+`data.approve_class` with `approve: always` (Analyst).
+
+### 21.3 Approving and building
+
+- `check_outcome_approval` / `record_outcome_approval`: the approval (`OutcomeApproval`: hash, sentence, user id,
+  time) must name this definition and be the approver's own (`OUTCOME_NOT_APPROVED`); then M233's
+  `data.approve_class` decides at approval (`TOOL_ROLE_REQUIRED`, `APPROVAL_SENTENCE_CHANGED`,
+  `POLICY_ROLE_SEPARATION`). A refusal writes nothing; an approval is recorded as an APPROVE-class `CaseApproval`
+  with the exact text and one `approval` timeline event (ids and the hash).
+- `apply_outcome_values` is the `column_values` outcome builder: an executor, never a tool. It needs an approval of
+  the definition's hash (not the sentence: next month's counts differ), writes 1/0 in place, removes and counts
+  rows left out or empty, and stops with `OUTCOME_VALUE_NOT_MAPPED` on a value the map does not place.
+- An event definition is built by the dataset builder: `label_spec_of(definition)` is the `label_spec` M237's
+  `build_dataset` takes.
+- Recipe steps still never touch the outcome (`check_recipe`, `data.protected_columns`); `map_outcome_values` writes
+  no step.
+
+### 21.4 Not done here
+
+- The AI drafting the sentence (the design's "AI drafts the sentence") and proposing a map: the rules write every
+  sentence, so it works with no AI service; the AI reaches the tools through the visit (M235/M246).
+- Replaying the definition at training and scoring is M243's prescription; storing questions and answers is
+  M246's.

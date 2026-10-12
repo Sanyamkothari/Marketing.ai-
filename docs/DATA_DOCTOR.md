@@ -847,3 +847,38 @@ a folder of real files with no change.
 `scripts/plan_o_benchmark.py` (the runs), `tests/fixtures/doctor_eval/` (the eval world and its per-tool calls, the
 AI cases, the reference model, the extended cases, the held-out generator). A registered tool without eval calls
 fails `test_every_registered_tool_has_eval_calls`.
+
+## 24. Saying what the outcome is (Plan O M239, DEC-1809)
+
+*Behind the switch `data_doctor.unified` (off by default) and not on a screen yet.*
+
+The outcome is what the model learns, so Data Doctor never picks it on its own and never changes it with a fix.
+It writes it down instead, in a sentence you approve word for word:
+
+- **From a column with more than two values.** A status column holding `Active`, `Churned` and `Suspended` cannot
+  train a yes/no model. Data Doctor suggests what the values it recognises mean (`Churned` is yes, `Active` is no)
+  and asks about every value it does not (`Suspended`: yes, no, leave those rows out, or "I don't know"). Once every
+  value has a meaning you see, for example, *"The model learns 'status' from its values: 'Churned' means yes (579
+  rows), 'Active' means no (1,261 rows); the 160 rows with 'Suspended' are left out of training and testing."*
+- **From an event file.** "A customer is yes when there is an order within 30 days after the snapshot", "when
+  there is no recharge for 60 days", or "when a bill in the next 30 days was paid more than 7 days late". You may
+  add days' grace and name a file whose events leave a customer out (a port-out, a move to another plan). Month-ends
+  whose window is not over yet are left out, and the sentence says how many. The sentence names the date each file
+  is read on, and says how many rows count for nothing because their date cannot be read or the amount a threshold
+  tests is not a number; if that number changes, so does the sentence, and you approve it again. Every count is made by the same
+  builder that builds the table, and customer IDs written differently in two files (`CUST-00123` and `123`) are
+  matched the way Data Doctor matches them elsewhere - never on a near match.
+
+When something that changes the meaning is not settled - which file, which date, which window, what a value
+means - Data Doctor asks, and offers no sentence until you answer. Nothing is ticked for you. If the file or the
+definition changes after you read the sentence, your approval is not recorded and the new sentence is shown
+instead. Next month's file is read with the same meaning; a value your approved outcome never mentioned stops the
+build and is asked, never guessed.
+
+It also checks the outcome's type: an amount to predict must be numbers (a text amount is "not ready"), and a
+yes/no outcome must have two values.
+
+### For developers
+
+`engine/doctor/outcome_definition.py` and `engine/doctor/tools_outcomes.py` (`docs/AGENTS.md` §21); the rule sets
+are `data.define_outcome` and `data.map_outcome_values` in `configs/agentic/policy.yaml`.
