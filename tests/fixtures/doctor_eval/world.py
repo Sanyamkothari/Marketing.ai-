@@ -320,6 +320,41 @@ CALLS: Final[dict[str, Calls | None]] = {
     "indian_booleans": _fixed({}),
     "detect_india_ids": _fixed({}),
     "check_readiness": _fixed({}, {"mode": "train"}),
+    # Plan O wave 2 integration. M240's two tools (catalogued as #82 and #83 by M236) and M236's wrappers and
+    # `explain` (DEC-1806), with the canary's arguments. The world holds no saved connection, client store, AI
+    # meter or earlier evidence, so preview_connection, propose_import, check_refresh, second_opinion, explain,
+    # read_run_checks and request_approval are evaluated on their refusals until it does (a refusal's code is
+    # digested like any decision; docs/CROSS_BRANCH_REQUESTS.md).
+    "read_workbook_sheets": _fixed({"file_id": CUSTOMERS}),
+    "find_excel_serial_dates": _fixed({"file_id": CUSTOMERS}),
+    "propose_intake": _fixed({}, {"upload_id": CUSTOMERS}),
+    "preview_connection": _fixed({"connection_id": "conn-eval-none", "table": "customers"}),
+    "propose_import": _fixed({"connection_id": "conn-eval-none", "path": "exports/customers.csv"}),
+    "check_refresh": _fixed({"spec_id": "spec-eval-none"}),
+    "preflight": _fixed({}),
+    "second_opinion": _fixed({}),
+    "explain": _fixed({"evidence_ids": ["ev_aaaaaaaaaaaaaaaa"]}),
+    "propose_role": _fixed({}, {"upload_id": CUSTOMERS}, {"upload_id": EVENTS}),
+    "propose_key": _fixed({}, {"target": "converted_30d"}),
+    "propose_mapping": _fixed({}, {"upload_id": EVENTS}),
+    "find_personal_data": _fixed({}),
+    "check_leaks": _fixed({"outcome": "converted_30d", "primary_key": "customer_id"}),
+    "check_uplift_data": _fixed({"primary_key": "customer_id", "target": "converted_30d"}),
+    "read_run_checks": _fixed({"run_id": "run-eval-none"}),
+    "request_approval": _fixed({"evidence_id": "ev_aaaaaaaaaaaaaaaa"}),
+    # M242's conversion (#64) at a person's dated rate, on every column of the customer file (one that holds no
+    # money is refused in the output).
+    "convert_currency": lambda columns: [
+        {
+            "column": column,
+            "from_currency": "USD",
+            "to_currency": "INR",
+            "rate": 83.1,
+            "rate_date": "2026-10-01",
+            "source": "RBI reference rate, 1 Oct 2026",
+        }
+        for column in columns
+    ],
 }
 """Per registered tool, the calls it is evaluated with (None: a chat suggestion, evaluated by chat sessions)."""
 

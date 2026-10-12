@@ -182,6 +182,14 @@ data:
       proposes: plan
       rules: [data.approve_class]
       approve: always
+    # M242 (DEC-1812 (d), (e), (k)), at the wave-2 integration: a conversion at the rate, date and source a person
+    # gave (the tool is the person's only; the product never fetches a rate) is always APPROVE-class: an Analyst
+    # approves the exact sentence. Its steps (convert_currency, then parse_number with `unit`) are checked by
+    # check_recipe, which never lets a step touch the ID or the outcome.
+    data.convert_currency:
+      proposes: plan
+      rules: [data.approve_class]
+      approve: always
     # M238: the steps its look tools propose (pending, `check`: never offered ticked); an AI's merge of spellings
     # is held to O10.
     data.synonym_clusters:

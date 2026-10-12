@@ -81,7 +81,7 @@ def test_every_catalogue_tool_is_listed_and_an_unregistered_one_is_not_built_yet
     assert statuses["stack_files"].built and statuses["check_readiness"].built
     for name, milestone in (
         ("define_outcome", "M239"),
-        ("convert_currency", "M242"),
+        ("estimate_training_time", "M244"),
         ("drift_check", "M245"),
     ):
         assert not statuses[name].built and statuses[name].built_by == milestone
@@ -531,7 +531,7 @@ def test_the_report_puts_harm_first_lists_tools_not_built_and_says_what_was_not_
         tools=tools,
         files=(
             BenchFile(
-                name="x04", group="extended", use_case="targeted-advertisement", needs=("convert_currency",)
+                name="x06", group="extended", use_case="targeted-advertisement", needs=("define_outcome",)
             ),
         ),
         notes=("Parts run: tools.",),
@@ -539,7 +539,7 @@ def test_the_report_puts_harm_first_lists_tools_not_built_and_says_what_was_not_
     text = render_markdown(report)
     assert text.index("## Harm metrics") < text.index("## Tools")
     assert "### Not built yet" in text and "| 45 | define_outcome | propose | M239 |" in text
-    assert "waits for convert_currency (not built yet)" in text
+    assert "waits for define_outcome (not built yet)" in text
     assert "The 20 held-out Indian files" in text and "**Not run in this report**" in text
     assert "not measured: no held-out file was run" in text
     assert "not measured: no benchmark file was run" in text

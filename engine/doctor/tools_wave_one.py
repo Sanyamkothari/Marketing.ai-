@@ -61,9 +61,10 @@ if TYPE_CHECKING:
     from engine.doctor.locale import LocaleProfile
     from engine.doctor.readiness import CheckReadinessArgs, ReadinessInputs
 
-__all__ = ["RULES_AND_SCREEN", "UNCATALOGUED", "WAVE_ONE_TOOLS", "register_wave_one"]
+__all__ = ["PERSON_ONLY", "RULES_AND_SCREEN", "UNCATALOGUED", "WAVE_ONE_TOOLS", "register_wave_one"]
 
 RULES_AND_SCREEN: Final[frozenset[str]] = frozenset({"rules", "person"})
+PERSON_ONLY: Final[frozenset[str]] = frozenset({"person"})
 
 UNCATALOGUED: Final[frozenset[str]] = frozenset()
 """Wave-1 tools with no row in the design's catalogue: none since M236 gave M240's two tools rows #82 and #83."""
@@ -141,7 +142,10 @@ class _FilesView:
         return frame
 
     def file_name(self, upload_id: str) -> str:
-        return str(self._loaded(upload_id).file_name)
+        """The file's name, or its upload id when the name is blank: a sentence never names an empty file
+        (as `engine.doctor.build_driver.plan_build` does since fix-build-sentence)."""
+        name = str(self._loaded(upload_id).file_name or "").strip()
+        return name or upload_id
 
     @cached_property
     def _diagnosis(self) -> Diagnosis:
@@ -226,6 +230,8 @@ class _Adapter:
     view: Callable[[DataToolContext], Any]
     needs: tuple[Need, ...]
     registered: list[str] = field(default_factory=list)
+    uncatalogued: frozenset[str] = UNCATALOGUED
+    """Specs with no catalogue row yet: skipped, never stood in for (wave 2 passes its own)."""
 
     def __call__(self, spec: Any) -> None:
         self.register(spec)
@@ -234,7 +240,7 @@ class _Adapter:
         self.register(spec)
 
     def register(self, spec: Any) -> None:
-        if spec.name in UNCATALOGUED:
+        if spec.name in self.uncatalogued:
             return
         entry = row(spec.name)
         if entry is None or entry.kind is None:
@@ -263,7 +269,8 @@ class _Adapter:
                 route_policy=RoutePolicy(role=role, action=f"doctor.{spec.name}", purpose=purpose),
                 exposure=exposure,
                 run=_coded(spec.run, self.view),
-                callers=RULES_AND_SCREEN,
+                # A person-only spec (M242's `convert_currency`: the rate is the person's words) is the screen's.
+                callers=PERSON_ONLY if getattr(spec, "person_only", False) else RULES_AND_SCREEN,
                 needs=self.needs,
                 max_output_bytes=BY_EXPOSURE,
                 policy_kind=(

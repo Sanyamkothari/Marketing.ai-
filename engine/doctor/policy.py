@@ -1207,6 +1207,14 @@ def _read_split(kind: str, output: Mapping[str, Any]) -> list[DataProposal]:
     ]
 
 
+def _read_convert(kind: str, output: Mapping[str, Any]) -> list[DataProposal]:
+    """M242's `convert_currency` (wave-2 integration): nothing proposed when it refused (`refused`, a coded
+    `CURRENCY_RATE_INVALID` and the like); otherwise one APPROVE-class item with the exact sentence."""
+    if output.get("refused") is not None or not output["steps"]:
+        return []
+    return [DataProposal(kind=kind, source="rules", sentence=_sentence(output, "sentence"))]
+
+
 def _read_join(kind: str, output: Mapping[str, Any]) -> list[DataProposal]:
     """The file that loses the largest share of its rows decides (M237: over 2% of any file is APPROVE-class)."""
     receipt = output.get("receipt")
@@ -1308,6 +1316,7 @@ OUTPUT_READERS: Final[Mapping[str, _Reader]] = {
     "data.stack_files": _read_stack,
     "data.build_dataset": _read_build,
     "data.normalise_key": _read_normalise_key,
+    "data.convert_currency": _read_convert,
 }
 """How each wave-1 kind's output reads as proposals: the steps with who proposed them, whether they would be
 offered ticked and how sure the rules are, the question a reshape is offered through, rows before and after, and
