@@ -109,6 +109,7 @@ const ui = {
   justDownloaded: null, // the Send address "Approve and download" went to after starting the download
   advancing: new Set(), // run ids already being taken to their next step
   listOf: new Map(), // learning run id -> the list run started from it, for a person who left and came back
+  chosenGoal: null, // the goal card last chosen: drawn chosen when the person comes back to step 1 (M187)
 };
 
 /** Whether work started under `token` is still the page's: no newer draw, and the same route on screen. */
@@ -164,6 +165,7 @@ window.addEventListener("hashchange", () => {
   clearTimeout(ui.timer);
   ui.seq += 1;
   ui.justDownloaded = null;
+  ui.chosenGoal = null; // a fresh visit starts with no goal chosen (M187 review)
   // Coming back is a fresh visit: the screen's own state (a refusal, "downloading") is not carried over.
   ui.parts = null;
 });
@@ -211,7 +213,7 @@ async function goalStep(token) {
   }
   const industries = await getIndustries();
   const cards = goalCards(industries);
-  show(token, "goal", () => goalHtml({ ...cards, canStart: true }));
+  show(token, "goal", () => goalHtml({ ...cards, canStart: true, selected: ui.chosenGoal }));
 }
 
 // --- 2 Customers -------------------------------------------------------------------------------------------
@@ -456,6 +458,8 @@ async function toCampaign(token, uc, detail) {
 // --- 3 Audience and 4 Review (one screen), 5 Send ------------------------------------------------------------
 
 async function campaignStepScreen(token, route) {
+  // A campaign exists now: the goal chosen for it is spent, so a New campaign started from here starts clean.
+  ui.chosenGoal = null;
   const view = await getCampaign(route.campaignId);
   if (!ours(token)) return;
   // A campaign whose results were added is past the wizard: its own page shows them.
@@ -664,7 +668,12 @@ document.addEventListener("click", (event) => {
   if (!target || typeof target.closest !== "function") return;
   const goal = target.closest("[data-cw-goal]");
   if (goal) {
-    go(stepHref("customers", goal.getAttribute("data-cw-goal")));
+    // The card shows it was chosen (M187) while the next step opens, and again if the person comes back.
+    const chosen = goal.getAttribute("data-cw-goal");
+    for (const other of document.querySelectorAll("[data-cw-goal].is-selected")) other.classList.remove("is-selected");
+    goal.classList.add("is-selected");
+    ui.chosenGoal = chosen;
+    go(stepHref("customers", chosen));
     return;
   }
   if (target.closest("[data-cw-confirm-cost]") && ui.lastStart) {
