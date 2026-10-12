@@ -580,9 +580,25 @@ summary:focus-visible,
 .stepper .st-step.done .st-label {
   color: var(--ink2);
 }
+/* a done step's link back has a real box (display: contents would leave it unfocusable and ringless) */
 .stepper .st-step a {
-  display: contents;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--s2);
+  min-width: 0;
+  max-width: 100%;
   color: inherit;
+  text-decoration: none;
+  border-radius: var(--r);
+}
+.stepper .st-step a:hover .st-label {
+  color: var(--brand-blue);
+  text-decoration: underline;
+}
+.stepper .st-step a:focus-visible {
+  outline: 2px solid var(--brand-blue);
+  outline-offset: 2px;
 }
 .stepper-phone {
   display: none;
@@ -621,6 +637,8 @@ summary:focus-visible,
 .tag {
   display: inline-flex;
   align-items: center;
+  /* a chip keeps its own size in any parent, a flex column (a .card) included: never a full-width band */
+  width: fit-content;
   gap: 6px;
   min-height: 24px;
   padding: 0 10px;
@@ -709,9 +727,12 @@ summary:focus-visible,
   color: var(--ink);
   font-variant-numeric: proportional-nums;
   font-feature-settings: normal;
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
 }
+/* the unit wraps as a whole word onto its own line in a narrow tile ("12,862" / "customers"), never mid-word */
 .stat .stat-unit {
+  display: inline-block;
+  white-space: nowrap;
   margin-left: 6px;
   font-size: var(--fs-body);
   font-weight: 500;
@@ -749,9 +770,12 @@ summary:focus-visible,
   gap: var(--s2) var(--s3);
   min-width: 0;
 }
+/* the track shrinks with its container (a two-column tile row or a stacked row card on a phone); 160 px at most */
 .vrange .vr-track {
   position: relative;
-  flex: 0 0 160px;
+  flex: 1 1 120px;
+  min-width: 64px;
+  max-width: 160px;
   height: 16px;
 }
 .vrange .vr-track::before {
@@ -818,21 +842,19 @@ td {
 thead + tbody > tr:first-child > td {
   border-top: 0;
 }
-.tbl tbody tr,
-.ds-table tbody tr {
+.tbl tbody tr {
   transition: background-color var(--dur) var(--ease);
 }
-.tbl tbody tr:hover,
-.ds-table tbody tr:hover {
+.tbl tbody tr:hover {
   background: var(--soft);
 }
 td.num,
-th.num,
-.ds-table .num {
+th.num {
   text-align: right;
   font-variant-numeric: tabular-nums;
 }
-.ds-table td .td-sub {
+/* a cell's explanation, on a second line under its value: <span class="td-sub"> (works inside dataTable's .tbl) */
+td .td-sub {
   display: block;
   margin-top: 2px;
   font-size: var(--fs-caption);
@@ -1328,10 +1350,7 @@ input[type="radio"] {
     font-size: 14px;
     gap: var(--s2);
   }
-  .topbar.sh-on .sh-icon {
-    width: 36px;
-    height: 36px;
-  }
+  /* the bell and Help stay 40 x 40 on a phone, where touch matters (visual_common section 7) */
   .topbar.sh-on .sh-menu-btn {
     padding: 0 10px;
   }
@@ -1354,12 +1373,23 @@ input[type="radio"] {
 
 /* ---- 8 status bridges: markup drawn before M185 shows the status mapping (icon + word + tone) -------------- */
 /* The Campaigns list and page's status chip (ui/modules/campaigns/status.js STATUS tones), until M187 draws
-   components.js statusChip. Measured = good, Live = info (brand), Waiting for results = warning, Draft = neutral. */
-.chip.cp-status {
+   components.js statusChip. Measured = good, Live = info (brand), Waiting for results = warning, Draft = neutral.
+   Reports' evidence label (value_proof.js: <span data-claim="proven|estimated|not-proven"> around a pill or chip) and
+   the health chips of Data and Connections (.cn-badge with data-dt-status / data-cn-status), until
+   M187/M188 draw components.js statusChip('evidence' | 'health', ...): the same tones and icons as statusOf. */
+.chip.cp-status,
+[data-claim] > .pill,
+[data-claim] > .chip,
+.cn-badge[data-dt-status],
+.cn-badge[data-cn-status] {
   border: 0;
   font-weight: 600;
 }
-.chip.cp-status::before {
+.chip.cp-status::before,
+[data-claim] > .pill::before,
+[data-claim] > .chip::before,
+.cn-badge[data-dt-status]::before,
+.cn-badge[data-cn-status]::before {
   content: "";
   flex: none;
   width: 12px;
@@ -1387,6 +1417,57 @@ input[type="radio"] {
   background: var(--neutral-t);
   color: var(--neutral);
   --ds-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.25' stroke-dasharray='3 3'%3E%3Ccircle cx='12' cy='12' r='8'/%3E%3C/svg%3E");
+}
+[data-claim="proven"] > .pill,
+[data-claim="proven"] > .chip {
+  background: var(--good-t);
+  color: var(--good);
+  --ds-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.25' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='9'/%3E%3Cpath d='m8.5 12 2.5 2.5 4.5-5'/%3E%3C/svg%3E");
+}
+[data-claim="estimated"] > .pill,
+[data-claim="estimated"] > .chip {
+  background: var(--brand-50);
+  color: var(--brand-blue);
+  --ds-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.25' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M5 9c2-2 4-2 7 0s5 2 7 0'/%3E%3Cpath d='M5 15c2-2 4-2 7 0s5 2 7 0'/%3E%3C/svg%3E");
+}
+[data-claim="not-proven"] > .pill,
+[data-claim="not-proven"] > .chip {
+  background: var(--neutral-t);
+  color: var(--neutral);
+  --ds-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.25' stroke-dasharray='3 3'%3E%3Ccircle cx='12' cy='12' r='8'/%3E%3C/svg%3E");
+}
+.cn-badge[data-dt-status="read"],
+.cn-badge[data-cn-status="connected"] {
+  background: var(--good-t);
+  color: var(--good);
+  --ds-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.25' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20 6 9 17l-5-5'/%3E%3C/svg%3E");
+}
+.cn-badge[data-cn-status="not_tested"] {
+  background: var(--warning-t);
+  color: var(--warning);
+  --ds-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.25' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='9'/%3E%3Cpath d='M12 7v5l3 2'/%3E%3C/svg%3E");
+}
+.cn-badge[data-cn-status="key_unreadable"],
+.cn-badge[data-cn-status="not_connected"] {
+  background: var(--warning-t);
+  color: var(--warning);
+  --ds-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.25' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z'/%3E%3Cpath d='M12 9v4'/%3E%3Cpath d='M12 17h.01'/%3E%3C/svg%3E");
+}
+.cn-badge[data-cn-status="failed"] {
+  background: var(--critical-t);
+  color: var(--critical);
+  --ds-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.25' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='9'/%3E%3Cpath d='m15 9-6 6'/%3E%3Cpath d='m9 9 6 6'/%3E%3C/svg%3E");
+}
+.cn-badge[data-cn-status="needs_addon"],
+.cn-badge[data-cn-status="not_set_up"] {
+  background: var(--neutral-t);
+  color: var(--neutral);
+  --ds-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.25' stroke-dasharray='3 3'%3E%3Ccircle cx='12' cy='12' r='8'/%3E%3C/svg%3E");
+}
+.cn-badge[data-cn-status="unknown"] {
+  background: var(--neutral-t);
+  color: var(--neutral);
+  --ds-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.25' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='9'/%3E%3Cpath d='M12 16v-4'/%3E%3Cpath d='M12 8h.01'/%3E%3C/svg%3E");
 }
 
 /* ---- 9 motion: short, and none when a person asks for less ------------------------------------------------- */

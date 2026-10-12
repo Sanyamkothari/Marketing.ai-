@@ -87,6 +87,7 @@ import {
   waitingHtml,
 } from "./wizard_views.js";
 import { injectWizardStyles } from "./wizard_styles.js";
+import { runProgress } from "../../run_progress.js"; // Plan M M189 (DEC-1619)
 
 /** How often a list being prepared is asked about, and a model waiting for an approval. */
 export const POLL_MS = 2000;
@@ -331,7 +332,9 @@ async function onRun(token, uc, models, detail) {
   const state = runState(detail);
   const learning = run.mode === "train";
   if (state === "pending" || state === "running") {
-    show(token, "customers", () => progressHtml({ learning, share: progressOf(detail) }));
+    // Plan M M189 (DEC-1619): the time-weighted estimate and the time left when the status carries them.
+    const progress = runProgress(detail.status);
+    show(token, "customers", () => progressHtml({ learning, share: progressOf(detail), progress }));
     later(token, POLL_MS);
     return;
   }

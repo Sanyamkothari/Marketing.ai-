@@ -51,15 +51,22 @@ Rules:
 - Cards are white with 12 px corners and a 1 px `--line` border. This is the only card style. A card inside a card
   loses its border.
 - The page header has the title and a one-line subtitle on the left, and the page's one primary button on the right.
-  On a phone the button goes below the text. Breadcrumbs appear only on pages below a top-level place. They do not
-  appear on Overview, Campaigns, Data, Reports or Settings.
+  On a phone the button goes below the text.
+- Breadcrumbs: the rule is that they appear only on pages below a top-level place, never on Overview, Campaigns, Data,
+  Reports or Settings. `pageHeader` takes `crumbs` and draws nothing without them. This is the target the page
+  milestones (M186 to M188) apply: as built in M185, the older page modules still draw a single-level crumb on
+  Overview ("Home › Overview") and Campaigns.
 - The shell (campaigns layout):
   - The sidebar runs the full height of the screen. The product's name and mark are at its top, then the five places,
     each with a 24 px line icon.
   - The active place has a brand tint, brand text and a 3 px brand bar on its left.
   - "by Minfy" sits small at the sidebar's foot.
-  - The top bar is 56 px tall and white with a hairline. It holds the bell, Help and the profile on the right.
-  - On a phone the sidebar is a drawer behind **Menu**, and Minfy appears at the drawer's foot.
+  - A deployment's own logo (M182, `MARKETING_AI_BRAND_LOGO_URL`) takes the same place at the sidebar's foot, without
+    the "by"; on a phone it appears inside the drawer, at its foot.
+  - The top bar is 56 px tall and white with a hairline. It holds the bell and Help on the right, each a 40 x 40 target
+    on every screen size. There is no profile menu yet.
+  - On a phone the sidebar is a drawer behind **Menu**, and Minfy (or the deployment's logo) appears at the drawer's
+    foot.
 
 ## Components (`ui/components.js`)
 
@@ -69,18 +76,19 @@ Rules:
 | `button({label, href or id, kind, size, icon, disabled, busy})` | `primary` (brand fill), `secondary` (white, hairline), `tertiary` (brand text), `danger`; 40 px, or 32 px with `size: "sm"` | every action | colour a button by hand, or use primary twice on a page |
 | `statusChip(kind, value, {word})` | a 24 px pill with a 12 px icon and the word, in the status colours | a campaign's status, what a result can claim, a source's health | show a status as colour alone |
 | `tagChip(label)` | a quiet grey outline | labels that are not a status ("Win-back") | use a status colour for a label |
-| `statTile({label, value, unit, caption, range})`, `kpiRow(tiles)` | label (13 px muted), value (28 px, proportional figures), caption; a row of 2 to 4 | the few numbers that matter on a page | put more than four in a row, or a sentence in the value |
-| `valueRange({low, high, estimate, text})` | a small interval bar: track, the range in brand, a dot at the estimate, a tick at zero when the range is near it, with the words beside it | every "likely X to Y" | drop the words: they are what a screen reader reads |
+| `statTile({label, value, unit, caption, range})`, `kpiRow(tiles)` | label (13 px muted), value (28 px, proportional figures), caption; a row of 2 to 4 (two to a row on a phone, where a unit that does not fit wraps whole to its own line) | the few numbers that matter on a page | put more than four in a row, or a sentence in the value |
+| `valueRange({low, high, estimate, text})` | a small interval bar (160 px at most, shrinking to 64 px in a narrow tile or cell): track, the range in brand, a dot at the estimate, a tick at zero when the range is near it, with the words beside it | every "likely X to Y" | drop the words: they are what a screen reader reads |
 | `emptyState({icon, title, text, action})` | a 40 px line icon, one sentence, one action | every list or card that can be empty | leave a list blank, or offer two actions |
 | `tabs({label, items, current})` | underline tabs with role=tablist and role=tab, `aria-selected`, a roving tabindex; Left, Right, Home and End move (`wireTabs`, installed by the bar) | the campaign page, Reports, Data | draw tabs as pills or buttons |
-| `stepper({steps, current})` | numbered circles joined by a line: done is a brand circle with a check, current is a brand ring, upcoming is grey; labels below; on a phone, "Step 2 of 5 · Customers" | the New campaign wizard | use it for navigation between pages |
+| `stepper({steps, current})` | numbered circles joined by a line: done is a brand circle with a check, current is a brand ring, upcoming is grey; labels below; on a phone, "Step 2 of 5 · Customers". A done step given as `{label, href}` is a link back, reachable by Tab with the focus ring | the New campaign wizard | use it for navigation between pages |
 | `attentionItem({tone, title, text, meta, action})` | a coloured icon that names its tone, a title, one line, the action on the right (below on a phone) | "Needs your attention" and alerts | squeeze the text beside its button on a phone |
 | `statusOf(kind, value)` | `{key, tone, icon, word}` | anything that needs the mapping without the chip | invent another mapping |
 
-Tables use the existing `dataTable` (`ui/dom.js`). Headers are 12 px, weight 600, muted, in sentence case. Rows are at
-least 52 px tall and tinted on hover. Number columns (`.num`) are right-aligned in tabular figures. A long explanation
-does not belong in a cell: show the number (and a value range) and put the explanation on a second line or on the
-detail page. On a phone the table becomes stacked row cards.
+Tables use the existing `dataTable` (`ui/dom.js`, class `.tbl`). Headers are 12 px, weight 600, muted, in sentence
+case. Rows are at least 52 px tall and tinted on hover. Number cells and their headers take class `num`
+(`<td class="num">`): right-aligned, tabular figures. A long explanation does not belong in a cell: show the number (and
+a value range) and put the explanation on a second line, `<span class="td-sub">…</span>` inside the cell (12 px, muted,
+its own line), or on the detail page. On a phone the table becomes stacked row cards.
 
 Forms use 40 px controls (`.input`) with 8 px corners, a hairline and a brand focus ring. The label goes above
 (`.form-label`) and help text below (`.form-help`).
@@ -104,14 +112,22 @@ Forms use 40 px controls (`.input`) with 8 px corners, a hairline and a brand fo
 
 An unknown value is neutral and shows its own text. `{word}` replaces the word with the server's own sentence, for
 example "Failed: the file is empty", and keeps the tone and the icon. Until the page milestones draw `statusChip`, the
-campaigns module's existing status chip (`.chip.cp-status`) is given the same tones and icons by the theme.
+theme gives the chips the older modules draw the same tones and icons (`theme.css` section 8):
+
+- the campaign status chip (`.chip.cp-status`) on Campaigns and the campaign page;
+- the evidence label on Reports (a pill or chip inside `[data-claim="proven|estimated|not-proven"]`);
+- the health chips on Data and the Connections page (`.cn-badge` with `data-dt-status` or `data-cn-status`).
+
+M187 and M188 replace these with `statusChip("evidence" | "health", …)` and then the bridges can go.
+
+Chips keep their own width in any parent (`width: fit-content`): a chip in a card is never a full-width band.
 
 ## Accessibility
 
 - Contrast is AA everywhere. `--muted` is #667085, one step darker than before, so captions on the canvas still
   reach 4.5:1.
 - Focus is visible everywhere: a 2 px brand ring, offset 2 px.
-- Touch targets are at least 40 px.
+- Touch targets are at least 40 px, the bar's bell and Help on a phone included.
 - Status never relies on colour alone.
 - Motion is off when the person asks for reduced motion.
 

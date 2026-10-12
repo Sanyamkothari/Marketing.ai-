@@ -25,6 +25,7 @@ import {
   stepper,
   tagChip,
 } from "../../components.js";
+import { progressMeterHtml, progressNoteHtml } from "../../run_progress.js"; // Plan M M189 (DEC-1619)
 import {
   SHARED_STEPS,
   STEPS,
@@ -258,13 +259,17 @@ export function customersHtml({ uc, first, canStart = true, hasGuided = true, pr
   );
 }
 
-/** Step 2 while the list is being prepared: one sentence and how far it has got. */
-export function progressHtml({ learning, share = null }) {
-  const pct = share === null ? null : Math.round(share * 100);
-  const meter =
-    pct === null
-      ? ""
-      : `<div class="run-meter cw-meter" role="progressbar" aria-label="Progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct}"><div class="run-meter-fill" style="width:${pct}%"></div></div>`;
+/**
+ * Step 2 while the list is being prepared: one sentence and how far it has got. `progress` is
+ * `runProgress(status)` (Plan M M189, DEC-1619): when the status carries the time-weighted estimate the bar
+ * shows it, with the time left or "Finishing up…"; otherwise `share` (the stages done, 0 to 1) as before.
+ */
+export function progressHtml({ learning, share = null, progress = null }) {
+  const reading =
+    progress && progress.estimated
+      ? progress
+      : { pct: share === null ? null : Math.round(share * 100), estimated: false, finishing: false, eta: "" };
+  const meter = `${progressMeterHtml(reading, "cw-meter")}${progressNoteHtml(reading)}`;
   const text = learning
     ? "Marketing AI is learning from your customers' history, then it builds the contact list. This takes a few minutes. You can leave this page and come back: the campaign carries on."
     : "Marketing AI is building the contact list from your customers. This usually takes under a minute.";
