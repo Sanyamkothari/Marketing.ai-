@@ -39,6 +39,8 @@ __all__ = [
     "AGENT_SESSION_FILENAME",
     "DATA_RECIPE_FILENAME",
     "RECIPE_RECEIPT_FILENAME",
+    "ROWS_PER_ID_STEP_KINDS",
+    "ROW_RESHAPE_STEP_KINDS",
     "AgentConfidence",
     "AgentSession",
     "AgentSummary",
@@ -130,6 +132,12 @@ class RecipeStepKind(StrEnum):
     # Plan L M156 (DEC-1560): a wide sheet's month columns into rows (level 3, first in the fixed order). Row-wise:
     # each row becomes one row per listed period, from that row's own cells and the frozen parameters only.
     UNPIVOT = "unpivot"
+    # Plan O M238 (DEC-1808): one row per ID by keeping each ID's latest row on or before its snapshot (reshape
+    # level, entity-wise like `combine_rows`: an ID's kept row depends only on its own rows and the parameters).
+    KEEP_LATEST_PER_ID = "keep_latest_per_id"
+    # Plan O M237 (DEC-1807): one customer ID written one way (prefix, leading zeros, case, spaces, +91 phone)
+    # so two files meet. Row-wise and stateless: a cell's output depends on that cell and the frozen rule only.
+    NORMALISE_KEY = "normalise_key"
 
 
 class ProposalSource(StrEnum):
@@ -138,6 +146,19 @@ class ProposalSource(StrEnum):
     RULES = "rules"
     AI = "ai"
     PERSON = "person"
+
+
+ROW_RESHAPE_STEP_KINDS: Final[frozenset[RecipeStepKind]] = frozenset(
+    {RecipeStepKind.COMBINE_ROWS, RecipeStepKind.UNPIVOT, RecipeStepKind.KEEP_LATEST_PER_ID}
+)
+"""Steps that change what a row is (Plan O M238): the reshape level. Every seam that must know the rows
+changed - the helper's profile, the preview's sample, a re-advice keeping a step on the ID - reads this set."""
+
+ROWS_PER_ID_STEP_KINDS: Final[frozenset[RecipeStepKind]] = frozenset(
+    {RecipeStepKind.COMBINE_ROWS, RecipeStepKind.KEEP_LATEST_PER_ID}
+)
+"""Entity-wise steps that make the rows one per ID (their `column` is the ID): a sample of the file for them
+takes whole IDs, never part of an ID's rows."""
 
 
 class SessionStatus(StrEnum):
@@ -207,6 +228,10 @@ class RecipeStep(StrictBase):
             raise ValueError("a remove_rows step creates no column")
         if self.kind is RecipeStepKind.UNPIVOT and self.new_column is not None:
             raise ValueError("an unpivot step names its new columns in params")
+        if self.kind is RecipeStepKind.KEEP_LATEST_PER_ID and self.new_column is not None:
+            raise ValueError("a keep_latest_per_id step creates no column")
+        if self.kind is RecipeStepKind.NORMALISE_KEY and self.new_column is not None:
+            raise ValueError("a normalise_key step rewrites the IDs of its own column")
         return self
 
 
@@ -262,6 +287,14 @@ class DataRecipe(Artefact):
             "replay uses it. Null on a recipe saved before it was recorded: the current limit applies."
         ),
     )
+    text_columns: tuple[str, ...] = Field(
+        default=(),
+        description=(
+            "Columns of the source file the recipe was approved on that were read as text, so a leading zero "
+            "(`0000123`) survives. Every replay of a CSV reads them as text too (Plan O M240); empty on a "
+            "recipe that recorded none, which reads the file as it always did."
+        ),
+    )
     created_at: AwareDatetime = Field(description="When it was approved.")
 
     @model_validator(mode="after")
@@ -289,6 +322,7 @@ class DataRecipe(Artefact):
             self.snapshot_column,
             self.levels,
             self.max_failure_pct,
+            self.text_columns,
         ) == (
             other.recipe_hash,
             other.primary_key,
@@ -296,6 +330,7 @@ class DataRecipe(Artefact):
             other.snapshot_column,
             other.levels,
             other.max_failure_pct,
+            other.text_columns,
         )
 
 
@@ -323,6 +358,14 @@ class StepReceipt(StrictBase):
         description=(
             "`drop_column` only: true when the file did not have the column, so there was nothing to "
             "hide - a column hidden at setup need not be in a later scoring file."
+        ),
+    )
+    note: str | None = Field(
+        default=None,
+        description=(
+            "`keep_latest_per_id` only (Plan O M238): why rows were left out, as counts in plain words - "
+            "identical copies, rows dated after the snapshot, IDs with no row on or before it, and IDs "
+            "settled by file order; null for every other step."
         ),
     )
 

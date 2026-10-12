@@ -52,7 +52,13 @@ class MissingWordsColumn(StrictBase):
 class IntakeReport(Artefact):
     """`uploads/<id>/intake.json` (and a source's): how the file was read, and what was changed on the way."""
 
-    source_format: Literal["csv", "xlsx", "parquet"] = Field(description="The file as it arrived.")
+    source_format: Literal["csv", "xlsx", "parquet", "json", "jsonl"] = Field(
+        description="The kind of table the file holds (the file inside a `.gz` or `.zip`, when it is one)."
+    )
+    container: Literal["none", "gz", "zip"] | None = Field(
+        default=None,
+        description="`gz` or `zip` when the table arrived inside an archive (Plan O M240); null otherwise.",
+    )
     applied: bool = Field(
         description="True when the file was rewritten; the original is then kept under `original_key`."
     )

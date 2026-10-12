@@ -35,6 +35,7 @@ import warnings
 from collections import Counter
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
+from decimal import Decimal, InvalidOperation
 from enum import StrEnum
 from typing import Any, Final
 
@@ -49,15 +50,19 @@ __all__ = [
     "BOOLEAN_FALSE",
     "BOOLEAN_TRUE",
     "CURRENCY_TOKENS",
+    "INDIAN_SCALE_WORDS",
     "FormatIssue",
     "FormatIssueKind",
     "ParseOutcome",
     "date_order",
+    "decimal_evidence",
+    "find_excel_serial_dates",
     "find_format_issues",
     "map_booleans",
     "masked_cut",
     "normalise_texts",
     "parse_dates",
+    "parse_excel_serial_dates",
     "parse_numbers",
 ]
 
@@ -73,6 +78,25 @@ CURRENCY_TOKENS: Final[tuple[str, ...]] = ("INR", "Rs.", "Rs", "₹", "USD", "US
 BOOLEAN_TRUE: Final[frozenset[str]] = frozenset({"true", "t", "yes", "y", "1"})
 BOOLEAN_FALSE: Final[frozenset[str]] = frozenset({"false", "f", "no", "n", "0"})
 """The same tokens as `engine.stages.ingest.BOOL_TRUE_TOKENS` / `BOOL_FALSE_TOKENS`, compared casefolded."""
+
+INDIAN_SCALE_WORDS: Final[dict[str, int]] = {
+    "k": 10**3,
+    "m": 10**6,
+    "l": 10**5,
+    "lac": 10**5,
+    "lacs": 10**5,
+    "lakh": 10**5,
+    "lakhs": 10**5,
+    "cr": 10**7,
+    "crore": 10**7,
+    "crores": 10**7,
+}
+"""Plan O M241 (the design §8.1): the number words `parse_number` reads when its `indian_scale_words` parameter
+is on, compared casefolded - `₹2.5 L` is 250000, `1.2 Cr` 12000000, `12K` 12000. A trailing `/-` (`Rs 3,50,000/-`)
+is read too. Off (the default, and every recipe saved before M241), none of them is a number, as before."""
+
+_SCALED_RE: Final[re.Pattern[str]] = re.compile(r"^(?P<number>.*?\d\.?)(?P<word>[A-Za-z]+)\.?$")
+"""A number followed by one word (spaces already removed): `2.5L`, `1.2Cr`, `12K`, `5lakhs`."""
 
 _CURRENCY_RE: Final[re.Pattern[str]] = re.compile(
     "|".join(re.escape(token) for token in CURRENCY_TOKENS), flags=re.IGNORECASE
@@ -118,6 +142,9 @@ class FormatIssueKind(StrEnum):
     BOOLEAN_AS_TEXT = "boolean_as_text"
     CATEGORY_VARIANTS = "category_variants"
     UNTRIMMED_TEXT = "untrimmed_text"
+    EXCEL_SERIAL_DATES = "excel_serial_dates"
+    """Plan O M240 (DEC-1810 (d)): dates stored as Excel's day numbers (`44927`). Reported by
+    `find_excel_serial_dates` only, never by `find_format_issues`, so that tool's output is unchanged."""
 
 
 @dataclass(frozen=True)
@@ -294,7 +321,30 @@ def _plain_number(core: str, decimal: str) -> str | None:
     return core.replace(",", "") if _GROUPED_RE["."].match(core) else None
 
 
-def _number_one(text: str, decimal: str, percent_to_fraction: bool) -> float | None:
+def _scaled(raw: str, decimal: str) -> float | None:
+    """`raw` (no sign, symbol or spaces) read with a number word or a trailing `/-` (M241); None when it is not
+    such a number. Multiplied exactly (`Decimal`), so `1.2 Cr` is 12000000 and not 11999999.999999998."""
+    if raw.endswith("/-"):
+        raw = raw[:-2]
+    match = _SCALED_RE.match(raw)
+    scale = 1
+    if match is not None:
+        word = INDIAN_SCALE_WORDS.get(match.group("word").casefold())
+        if word is None:
+            return None
+        raw, scale = match.group("number"), word
+    plain = _plain_number(raw, decimal)
+    if plain is None:
+        return None
+    try:
+        return float(Decimal(plain) * scale)
+    except InvalidOperation:  # pragma: no cover - `_plain_number` only returns what `float()` reads
+        return None
+
+
+def _number_one(
+    text: str, decimal: str, percent_to_fraction: bool, scale_words: bool = False
+) -> float | None:
     raw = text.strip()
     if not raw:
         return None
@@ -311,6 +361,9 @@ def _number_one(text: str, decimal: str, percent_to_fraction: bool) -> float | N
         raw = raw[1:].strip()
     raw = raw.replace(" ", "").replace(" ", "").replace("'", "")
     plain = _plain_number(raw, decimal)
+    if plain is None and scale_words and not percent:
+        scaled = _scaled(raw, decimal)
+        return None if scaled is None else (-scaled if negative else scaled)
     if plain is None:
         return None
     number = float(plain)
@@ -320,12 +373,18 @@ def _number_one(text: str, decimal: str, percent_to_fraction: bool) -> float | N
 
 
 def parse_numbers(
-    series: pd.Series[Any], *, decimal: str = ".", percent_to_fraction: bool = True
+    series: pd.Series[Any],
+    *,
+    decimal: str = ".",
+    percent_to_fraction: bool = True,
+    indian_scale_words: bool = False,
 ) -> ParseOutcome:
     """Text to float: currency symbols, thousands separators, `%` and `(negative)` handled.
 
     `decimal` is `"."` (1,200.50) or `","` (1.200,50). Numbers already numeric pass through, and so
     does a real number inside a text column: it is read by its value, not by its text.
+    `indian_scale_words` (Plan O M241) also reads the words of `INDIAN_SCALE_WORDS` and a trailing `/-`;
+    a value that reads without them reads exactly as it does with the parameter off.
     """
     if decimal not in {".", ","}:
         raise ValueError("decimal must be '.' or ','")
@@ -334,7 +393,9 @@ def parse_numbers(
     positions, cells = _present(series)
     numeric = _numeric_cells(series, positions)
     text = cells[~numeric]
-    numbers = _per_value(text, lambda value: _number_one(value, decimal, percent_to_fraction))
+    numbers = _per_value(
+        text, lambda value: _number_one(value, decimal, percent_to_fraction, indian_scale_words)
+    )
     parsed = np.array([np.nan if number is None else number for number in numbers], dtype="float64")
     failed = np.array([number is None for number in numbers], dtype=bool)
     values = np.full(len(series), np.nan, dtype="float64")
@@ -378,6 +439,17 @@ def _decimal_style(cells: pd.Series[Any]) -> str | None:
     if votes["."] != votes[","]:
         return "." if votes["."] > votes[","] else ","
     return "." if not votes["."] and not votes["?"] else None
+
+
+def decimal_evidence(cells: pd.Series[Any]) -> tuple[int, int]:
+    """How many distinct values prove a decimal point and how many a decimal comma (Plan O M241's locale profile).
+
+    The votes `_decimal_style` counts: a value counts only when it reads one way and not the other.
+    """
+    votes = Counter(
+        _per_value(pd.Series(list(dict.fromkeys(cells.astype(str))), dtype=object), _decimal_vote)
+    )
+    return votes["."], votes[","]
 
 
 def _number_issue(name: str, present: pd.Series[Any]) -> FormatIssue | None:
@@ -509,6 +581,146 @@ def parse_dates(series: pd.Series[Any], *, dayfirst: bool) -> ParseOutcome:
     return ParseOutcome(
         values=out, changed=int(ok.sum()), failed=len(failures), failed_examples=_masked(failures)
     )
+
+
+# ---------------------------------------------------------------------------
+# Excel serial dates (Plan O M240, DEC-1810 (d))
+# ---------------------------------------------------------------------------
+_EXCEL_EPOCH_1900: Final[np.datetime64] = np.datetime64("1899-12-30", "ms")
+_EXCEL_EPOCH_1904: Final[np.datetime64] = np.datetime64("1904-01-01", "ms")
+EXCEL_FIRST_SERIAL_1900: Final[int] = 61
+"""1 March 1900. Excel counts a 29 February 1900 that never existed, so earlier day numbers are one off."""
+EXCEL_LAST_SERIAL: Final[int] = 2_958_465
+"""31 December 9999, the last date Excel holds."""
+_NS_LAST_SERIAL_1900: Final[float] = 109_205.0
+"""Day number of 11 April 2262 in the 1900 system: the last day `datetime64[ns]` can hold."""
+_NS_LAST_SERIAL_1904: Final[float] = _NS_LAST_SERIAL_1900 - 1462.0
+EXCEL_PLAUSIBLE_SERIALS: Final[tuple[int, int]] = (7_306, 73_415)
+"""1 January 1920 to 31 December 2100: where a customer file's dates are. A detector reads a column of
+numbers as dates only inside it (and only when its name says date), so an amount is never one."""
+EXCEL_MIN_CELLS: Final[int] = 5
+EXCEL_MIN_SHARE: Final[float] = 0.95
+
+_DATE_WORDS: Final[frozenset[str]] = frozenset(
+    {
+        "date", "dt", "datetime", "timestamp", "day", "dob", "birthday", "birth", "expiry", "expires",
+        "expiration", "joined", "created", "updated", "signup", "renewal", "anniversary", "dated",
+    }
+)  # fmt: skip
+_DATE_SUFFIX_WORDS: Final[frozenset[str]] = frozenset({"on", "at"})
+_NOT_DATE_WORDS: Final[frozenset[str]] = frozenset(
+    {"candidate", "mandate", "validate", "consolidate", "update", "updates", "invalidate"}
+)
+_NAME_TOKEN_RE: Final[re.Pattern[str]] = re.compile(r"[A-Z]?[a-z]+|[A-Z]+(?![a-z])|\d+")
+
+
+def _name_words(name: str) -> list[str]:
+    """`LastLoginDate` / `last_login_date` / `signup-dt` as lower-case words."""
+    return [token.lower() for token in _NAME_TOKEN_RE.findall(str(name))]
+
+
+def looks_like_date_name(name: str) -> bool:
+    """Whether a column's name says it holds dates: a word such as `date`, `created` or `dob`, or a closing `_on` / `_at`."""
+    words = _name_words(name)
+    if not words:
+        return False
+    if words[-1] in _DATE_SUFFIX_WORDS and len(words) > 1:
+        return True
+    for word in words:
+        if word in _NOT_DATE_WORDS:
+            continue
+        if word in _DATE_WORDS or (len(word) > 4 and (word.endswith("date") or word.startswith("date"))):
+            return True
+    return False
+
+
+def _serials(cells: pd.Series[Any]) -> pd.Series[Any]:
+    """The cells as floats; text that is not a plain finite number is NaN."""
+    numbers = pd.to_numeric(cells, errors="coerce")
+    return numbers.where(np.isfinite(numbers))
+
+
+def parse_excel_serial_dates(series: pd.Series[Any], *, date_1904: bool = False) -> ParseOutcome:
+    """Excel's day numbers to dates, one value at a time: `44927` is 2023-01-01, `44927.5` is noon that day.
+
+    The result is stateless (DEC-1004): a value's date depends on it and on the calendar alone. A day number
+    below 61 (before 1 March 1900, where Excel's own calendar is wrong), one past the dates a table can hold,
+    a negative one, and anything that is not a plain number fail and are counted. The time of day is rounded
+    to the millisecond. `date_1904` reads the Mac workbook calendar, which starts on 1 January 1904.
+    """
+    if pd.api.types.is_datetime64_any_dtype(series):
+        return ParseOutcome(values=series, changed=0, failed=0, failed_examples=())
+    cells = _text_cells(series)
+    distinct = pd.Series(list(dict.fromkeys(cells.tolist())), dtype=object)
+    numbers = _serials(distinct).to_numpy(dtype=float)
+    low = 0.0 if date_1904 else float(EXCEL_FIRST_SERIAL_1900)
+    high = min(float(EXCEL_LAST_SERIAL), _NS_LAST_SERIAL_1904 if date_1904 else _NS_LAST_SERIAL_1900)
+    valid = np.isfinite(numbers) & (numbers >= low) & (numbers <= high)
+    epoch = _EXCEL_EPOCH_1904 if date_1904 else _EXCEL_EPOCH_1900
+    millis = np.zeros(len(numbers), dtype="int64")
+    millis[valid] = np.round(numbers[valid] * 86_400_000.0).astype("int64")
+    stamps = (epoch + millis.astype("timedelta64[ms]")).astype("datetime64[ns]")
+    stamps[~valid] = np.datetime64("NaT")
+    lookup = pd.Series(stamps, index=pd.Index(distinct, dtype=object))
+    spread = lookup.reindex(pd.Index(cells.tolist(), dtype=object))
+    parsed = pd.Series(spread.array, index=cells.index)
+    out = pd.Series(pd.NaT, index=series.index, dtype="datetime64[ns]")
+    ok = parsed.notna()
+    out.loc[parsed.index[ok]] = parsed[ok]
+    failures = cells[~ok].tolist()
+    return ParseOutcome(
+        values=out, changed=int(ok.sum()), failed=len(failures), failed_examples=_masked(failures)
+    )
+
+
+def find_excel_serial_dates(frame: pd.DataFrame) -> list[FormatIssue]:
+    """The columns that hold dates as Excel's day numbers, measured on the whole column.
+
+    A column is reported when its name says date (`looks_like_date_name`), at least `EXCEL_MIN_CELLS` cells
+    are filled, and at least 95% of them are numbers between 1 January 1920 and 31 December 2100. Both must
+    hold: a column of day numbers with no date in its name, or an amount named `date_fee`, is left alone. The
+    fix is a `parse_date` step with `excel_serial` true; the workbook's calendar (1900 or 1904) cannot be told
+    from the numbers, so the note says what to check.
+    """
+    issues: list[FormatIssue] = []
+    for name in frame.columns:
+        column = frame[name]
+        if pd.api.types.is_bool_dtype(column) or pd.api.types.is_datetime64_any_dtype(column):
+            continue
+        if not looks_like_date_name(str(name)):
+            continue
+        cells = _text_cells(column)
+        if len(cells) < EXCEL_MIN_CELLS:
+            continue
+        numbers = _serials(cells)
+        low, high = EXCEL_PLAUSIBLE_SERIALS
+        inside = numbers.between(low, high)
+        if inside.sum() / len(cells) < EXCEL_MIN_SHARE:
+            continue
+        parsed = parse_excel_serial_dates(cells)
+        shown = cells[inside]
+        examples = _distinct_examples(shown) if len(shown) else ()
+        dates = parsed.values.dropna()
+        notes = [
+            f"{int(inside.sum())} of {len(cells)} values are whole day numbers as Excel stores dates",
+            f"read this way they run from {dates.min().date()} to {dates.max().date()}",
+            "if they come out four years early, the workbook used the 1904 calendar",
+        ]
+        issues.append(
+            FormatIssue(
+                column=str(name),
+                kind=FormatIssueKind.EXCEL_SERIAL_DATES,
+                non_empty=len(cells),
+                convertible=len(cells) - parsed.failed,
+                failed=parsed.failed,
+                examples=examples,
+                failed_examples=parsed.failed_examples,
+                params={"excel_serial": True, "date_1904": False},
+                notes=tuple(notes),
+                example_cells=examples,
+            )
+        )
+    return issues
 
 
 def _date_issue(name: str, cells: pd.Series[Any]) -> FormatIssue | None:

@@ -23,7 +23,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import Field, JsonValue
 
-from api.access import set_audit_context
+from api.access import current_principal, set_audit_context
 from api.access_policy import RoutePolicy, register
 from api.deps import ConfigRootDep, StorageDep, get_registry, get_settings
 from api.routes.agent_recipes import (
@@ -49,6 +49,8 @@ from engine.agent.assist import assist_session
 from engine.agent.checks import check_plan
 from engine.agent.config import DataAccess
 from engine.agent.contracts import (
+    ROW_RESHAPE_STEP_KINDS,
+    ROWS_PER_ID_STEP_KINDS,
     AgentSession,
     AgentSummary,
     ChatMessage,
@@ -533,10 +535,8 @@ def _load_context(
         except RecipeError as exc:
             recipe_error = exc
         else:
-            if any(
-                step.kind in {RecipeStepKind.COMBINE_ROWS, RecipeStepKind.UNPIVOT} for step in recipe.steps
-            ):
-                # Combined rows are other rows: the profile the helper reads must describe them.
+            if any(step.kind in ROW_RESHAPE_STEP_KINDS for step in recipe.steps):
+                # Reshaped rows are other rows: the profile the helper reads must describe them.
                 profile = ingest.profile_dataset(
                     frame,
                     config,
@@ -872,7 +872,15 @@ def message_agent_session(
         meter = Meter(ai.client, job_id=session.session_id, llm=ai.llm, budget=generative.budget)
         guardrails = Guardrails(load_policy(root), meter=meter, prompts_root=root)
         text = redact_text(body.text)[0]
-        turn = chat_turn(ctx, session, text, meter=meter, guardrails=guardrails, config_root=root)
+        turn = chat_turn(
+            ctx,
+            session,
+            text,
+            meter=meter,
+            guardrails=guardrails,
+            config_root=root,
+            principal=current_principal(request),  # Plan O M232: role per tool call, behind the switch
+        )
         asked = ChatMessage(role=ChatRole.USER, text=text, created_at=utc_now())
         session = session.model_copy(
             update={
@@ -1091,12 +1099,11 @@ def _values(series: Any) -> list[Any]:
 
 
 def _preview_sample(frame: Any, recipe: DataRecipe | None) -> Any:
-    """The rows a preview runs on: the first `PREVIEW_SAMPLE_ROWS` rows, or - when the recipe combines
-    rows per entity - every row of the first `PREVIEW_SAMPLE_ROWS` entities, so no entity is combined
-    from part of its rows."""
-    combine = next(
-        (s for s in (recipe.steps if recipe else ()) if s.kind is RecipeStepKind.COMBINE_ROWS), None
-    )
+    """The rows a preview runs on: the first `PREVIEW_SAMPLE_ROWS` rows, or - when the recipe makes the
+    rows one per entity (combines them, or keeps each one's latest) - every row of the first
+    `PREVIEW_SAMPLE_ROWS` entities, so no entity is combined from, or its latest row chosen among, part
+    of its rows."""
+    combine = next((s for s in (recipe.steps if recipe else ()) if s.kind in ROWS_PER_ID_STEP_KINDS), None)
     if combine is None or combine.column not in frame.columns:
         return frame.head(PREVIEW_SAMPLE_ROWS)
     keys = frame[combine.column].dropna().drop_duplicates().head(PREVIEW_SAMPLE_ROWS)
@@ -1461,7 +1468,15 @@ def ask_message(
         meter = Meter(ai.client, job_id=session.session_id, llm=ai.llm, budget=generative.budget)
         guardrails = Guardrails(load_policy(root), meter=meter, prompts_root=root)
         text = redact_text(body.text)[0]
-        turn = chat_turn(ctx, session, text, meter=meter, guardrails=guardrails, config_root=root)
+        turn = chat_turn(
+            ctx,
+            session,
+            text,
+            meter=meter,
+            guardrails=guardrails,
+            config_root=root,
+            principal=current_principal(request),  # Plan O M232: role per tool call, behind the switch
+        )
         asked = ChatMessage(role=ChatRole.USER, text=text, created_at=utc_now())
         session = session.model_copy(
             update={
