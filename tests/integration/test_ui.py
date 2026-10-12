@@ -35,6 +35,7 @@ MODULES: Final[tuple[str, ...]] = (
     "availability.js",  # what this environment can offer; the AI-service notice (DEC-954)
     "brand.js",  # the deployment's name, logo and accent colour, from GET /auth/me (Plan M M182, DEC-1612)
     "chrome.js",  # the one top bar (v1, docs/ui/FOUNDATION.md)
+    "components.js",  # the look's components: buttons, chips, tiles, tabs, stepper (Plan M M185, DEC-1615)
     "contact_list.js",  # the one contact list download and its sentence (Plan M M171, DEC-1601)
     "cost.js",  # the cost line beside Run, its confirmation and the Cost page's markup (Plan J M108, DEC-1318)
     "dom.js",

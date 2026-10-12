@@ -10,6 +10,11 @@
       with a reason, where it is, and the fix; the test fails on a failing pair that is not listed, and on a listed
       pair that now passes (so the list can only shrink).
 
+   M185 (DEC-1615): the tokens are the ones the browser ends up with - ui/index.html's, then ui/theme.css's, which the
+   page loads after every <style> - and theme.css's own rules are checked like every other style source. Since M185
+   the primary button is the brand colour (--btn is --brand-blue, not --ink), pages sit on the canvas (--bg) instead
+   of a white card, and the status tones have names of their own; the palette below names those pairs too.
+
    Environment: A11Y_DUMP_CONTRAST=<file> writes every failing pair as JSON, to author contrast_known.json. */
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -20,7 +25,8 @@ const KNOWN = new URL("./contrast_known.json", import.meta.url);
 const known = JSON.parse(fs.readFileSync(KNOWN, "utf8"));
 const sources = styleSources();
 const indexHtml = sources.find((s) => s.file === "ui/index.html");
-const tok = tokens(indexHtml.text);
+const themeCss = sources.find((s) => s.file === "ui/theme.css");
+const tok = tokens(indexHtml.text, themeCss.text);
 
 /** The pairs a person reads most. [name, foreground token, background token, what it is] */
 const PALETTE = [
@@ -41,16 +47,32 @@ const PALETTE = [
   ["ok text", "--ok", "--surface", "success text on a card"],
   ["warning text", "--warn", "--surface", "warning text on a card"],
   ["error text", "--bad", "--surface", "error text on a card"],
+  // M185: the look's own pairs
+  ["muted text on the page", "--muted", "--bg", "a page's subtitle and captions, straight on the canvas"],
+  ["secondary text on the page", "--ink2", "--bg", "notes straight on the canvas"],
+  ["link on the page", "--brand-blue", "--bg", "a link straight on the canvas"],
+  ["selected place", "--brand-blue", "--brand-50", "the sidebar's active place, a selected menu entry, an info chip"],
+  ["good chip", "--good", "--good-t", "Measured, Proven, Read correctly"],
+  ["warning chip", "--warning", "--warning-t", "Waiting for results, Not tested yet"],
+  ["critical chip", "--critical", "--critical-t", "Failed"],
+  ["neutral chip", "--neutral", "--neutral-t", "Draft, Not yet proven, quiet tags"],
 ];
 
 const hex = (name) => colourOf(`var(${name})`, tok);
 
-test("the tokens are read from index.html", () => {
+test("the tokens are read from index.html, then theme.css (M185), as the browser reads them", () => {
   for (const name of ["--ink", "--surface", "--bg", "--soft", "--muted", "--btn", "--btn-ink", "--brand-blue", "--ok", "--ok-t"]) {
     assert.match(hex(name) || "", /^#[0-9a-f]{6}$/i, `${name} did not resolve to a colour`);
   }
-  assert.equal(hex("--btn"), hex("--ink"), "the v1 alias --btn is --ink");
-  assert.equal(tok["--btn-ink"], tok["--surface"]);
+  for (const name of ["--brand-50", "--good", "--good-t", "--warning", "--critical", "--neutral", "--neutral-t"]) {
+    assert.match(hex(name) || "", /^#[0-9a-f]{6}$/i, `${name} (theme.css) did not resolve to a colour`);
+  }
+  // M185 (DEC-1615): the primary button is the brand colour, not black; v1 made --btn an alias of --ink
+  assert.equal(hex("--btn"), hex("--brand-blue"), "the alias --btn is --brand-blue since M185");
+  assert.equal(hex("--btn-ink"), hex("--surface"));
+  // a later file's token replaces an earlier one's: theme.css darkens --muted for the canvas
+  assert.equal(tokens(indexHtml.text)["--muted"], "#6B7280");
+  assert.equal(tok["--muted"], "#667085");
 });
 
 test("the contrast formula is the WCAG one", () => {
@@ -102,10 +124,15 @@ test("every palette pair that names two tokens is used by a rule", () => {
       const b = colourOf(props["background-color"] || props.background, tok);
       return c === hex(fg) && b === hex(bg);
     });
-  const unused = PALETTE.filter(([, fg, bg]) => ["--ok", "--warn", "--bad", "--p", "--g", "--h"].includes(fg) && bg.endsWith("-t") && !used(fg, bg)).map(([n]) => n);
+  const unused = PALETTE.filter(
+    ([, fg, bg]) =>
+      ["--ok", "--warn", "--bad", "--p", "--g", "--h", "--good", "--warning", "--critical", "--neutral"].includes(fg) &&
+      bg.endsWith("-t") &&
+      !used(fg, bg),
+  ).map(([n]) => n);
   // A tag colour reaches its tint through custom properties on a local rule (`.t-P{--c:...}`), which this reader does
   // not follow, so only the status badges must be found.
-  assert.deepEqual(unused.filter((n) => /ok|warning|bad/.test(n)), [], "a status badge pair in this list is not used by any rule");
+  assert.deepEqual(unused.filter((n) => /ok|warning|bad|chip/.test(n)), [], "a status badge pair in this list is not used by any rule");
 });
 
 const keyOf = (p) => `${p.selector} :: ${p.fgText} on ${p.bgText}`;

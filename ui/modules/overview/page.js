@@ -334,10 +334,14 @@ const CSS = `
 .ov .empty-state{padding:20px}
 `;
 
+// Its own id: the classic Home (ui/overview.js) injects a sheet called "ov-styles" too, and when app.js drew Home before
+// this module registered, the Overview page used to find that id and skip its own rules (M185 review).
+export const STYLE_ID = "ov-page-styles";
+
 export function injectStyles(doc = document) {
-  if (!doc || !doc.head || doc.getElementById("ov-styles")) return;
+  if (!doc || !doc.head || doc.getElementById(STYLE_ID)) return;
   const style = doc.createElement("style");
-  style.id = "ov-styles";
+  style.id = STYLE_ID;
   style.textContent = CSS;
   doc.head.appendChild(style);
 }

@@ -17,7 +17,12 @@ answered by the bodies this module writes from the real app:
 The classic check is differential, so it holds on whatever main M174 is merged onto: this module copies `ui/` and
 the node tests into a scratch tree, removes M174 from that copy (every line between the `// <M174>` and
 `// </M174>` marks of `ui/app.js` and `ui/chrome.js`; the marks must pair up, and nothing of M174 may be left
-after), draws every page there as the reference, and then compares the real tree with it. Node and jsdom are a
+after), draws every page there as the reference, and then compares the real tree with it.
+
+Plan M M185 (DEC-1615) restyles both layouts through one style sheet, `ui/theme.css`, and gives the bar the tabs' arrow
+keys from `ui/components.js` (its `// <M185>` marks in `ui/chrome.js`). The reference copy has M185 taken out too: the
+marked lines removed and the theme's one `<link>` line dropped from `ui/index.html`. So the check still proves that the
+classic layout's MARKUP is byte for byte what it was before M174: the look changes, the markup does not. Node and jsdom are a
 development dependency of that one directory: without them the jsdom tests skip with the install command, or fail
 under `REQUIRE_JSDOM=1` as CI sets it (`tests/fixtures/node.py`).
 """
@@ -49,6 +54,10 @@ UI_DEMO: Final[Path] = ROOT / "tests" / "fixtures" / "ui_demo"
 MARKED: Final[tuple[str, ...]] = ("app.js", "chrome.js")
 BEGIN: Final[str] = "// <M174>"
 END: Final[str] = "// </M174>"
+# M185's marks, and its one line in ui/index.html: the reference tree drops them as well (the look, not the markup).
+M185_BEGIN: Final[str] = "// <M185>"
+M185_END: Final[str] = "// </M185>"
+THEME_LINK: Final[str] = '<link rel="stylesheet" href="./theme.css">'
 # What may not survive the removal: any use of the two files M174 adds.
 M174_NAMES: Final[tuple[str, ...]] = (
     "layout.js",
@@ -103,22 +112,38 @@ def test_the_fixtures_carry_the_layout(tmp_path: Path) -> None:
     assert approve and approve[0]["allowed"], "the bell's count needs an Approver who may approve"
 
 
-def without_m174(text: str) -> str:
+def without_m174(text: str, begin: str = BEGIN, end: str = END) -> str:
     """`text` with every line from a `// <M174>` mark to its `// </M174>` mark, both included, removed."""
     kept: list[str] = []
     inside = False
     for number, line in enumerate(text.splitlines(keepends=True), start=1):
         mark = line.strip()
-        if mark == BEGIN:
-            assert not inside, f"line {number}: {BEGIN} inside another"
+        if mark == begin:
+            assert not inside, f"line {number}: {begin} inside another"
             inside = True
-        elif mark == END:
-            assert inside, f"line {number}: {END} without {BEGIN}"
+        elif mark == end:
+            assert inside, f"line {number}: {end} without {begin}"
             inside = False
         elif not inside:
             kept.append(line)
-    assert not inside, f"{BEGIN} never closed"
+    assert not inside, f"{begin} never closed"
     return "".join(kept)
+
+
+def without_m185(name: str, text: str) -> str:
+    """`text` without M185: its marked lines in a .js file, its one link line in ui/index.html."""
+    if name == "index.html":
+        assert text.count(THEME_LINK) <= 1
+        return "".join(line for line in text.splitlines(keepends=True) if line.strip() != THEME_LINK)
+    return without_m174(text, M185_BEGIN, M185_END)
+
+
+def test_removing_m185_leaves_the_markup_files_as_they_were() -> None:
+    """Runs without node: M185's marks pair up, and without them nothing reaches components.js or theme.css."""
+    for name in (*MARKED, "index.html"):
+        stripped = without_m185(name, (ROOT / "ui" / name).read_text(encoding="utf-8"))
+        assert "components.js" not in stripped and "wireTabs" not in stripped, name
+        assert THEME_LINK not in stripped, name
 
 
 def test_removing_m174_leaves_nothing_of_it() -> None:
@@ -140,7 +165,9 @@ def build_reference_tree(tmp_path: Path) -> Path:
     shutil.copytree(ROOT / "ui", ref / "ui")
     for name in MARKED:
         source = (ROOT / "ui" / name).read_text(encoding="utf-8")
-        (ref / "ui" / name).write_text(without_m174(source), encoding="utf-8")
+        (ref / "ui" / name).write_text(without_m174(without_m185(name, source)), encoding="utf-8")
+    page = (ROOT / "ui" / "index.html").read_text(encoding="utf-8")
+    (ref / "ui" / "index.html").write_text(without_m185("index.html", page), encoding="utf-8")
     node_dir = ref / NODE_DIR.relative_to(ROOT)
     shutil.copytree(NODE_DIR, node_dir, ignore=shutil.ignore_patterns("node_modules"))
     (node_dir / "node_modules").symlink_to(NODE_DIR / "node_modules", target_is_directory=True)
