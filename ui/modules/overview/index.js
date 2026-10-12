@@ -14,7 +14,7 @@
 import { skeleton } from "../../dom.js";
 import { announceModulesChanged, phaseModules, registerModule } from "../router.js";
 import { getOverview } from "./api.js";
-import { DEFAULT_PLACES, injectStyles, overviewHtml } from "./page.js";
+import { DEFAULT_PLACES, overviewHtml } from "./page.js";
 
 export const ROUTES = ["overview"];
 
@@ -94,10 +94,7 @@ async function renderOverview(app) {
 registerModule({
   name: "overview",
   routes: ROUTES,
-  render: async (app) => {
-    injectStyles();
-    await renderOverview(app);
-  },
+  render: renderOverview,
 });
 
 // A deep link to this page was resolved by `app.js` before this module existed: draw it now.

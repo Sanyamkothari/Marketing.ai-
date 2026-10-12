@@ -351,16 +351,18 @@ def test_the_look_on_a_wide_screen(
     page.screenshot(path=str(shots / "m185_campaigns_1440.png"))
     # underline tabs: the selected tab is brand text over a 2 px brand line, not a filled pill
     _open(page, campaigns_server, CAMPAIGN_PAGE)
-    page.wait_for_selector("#app .tabs .tab.on")
-    on = "#app .tabs .tab.on"
+    # M186 (DEC-1616): the campaign page draws components.js `tabs()` (role=tab, aria-selected); it drew `.tabs .tab.on`
+    on = "#app [data-ds-tabs] [role='tab'][aria-selected='true']"
+    page.wait_for_selector(on)
     assert _style(page, on, "color") == BRAND_BLUE
     assert _style(page, on, "borderBottomColor") == BRAND_BLUE
     assert _style(page, on, "borderBottomWidth") == "2px"
     assert _style(page, on, "backgroundColor") == "rgba(0, 0, 0, 0)"
     # a status chip carries an icon and its word, in the status colours (Measured = good)
-    chip = "#app .chip.cp-status[data-status='measured']"
+    # M186: the chip is components.js `statusChip` (an inline 12 px icon); it was the `.chip.cp-status` bridge
+    chip = "#app .head .badge[data-status='measured']"
     assert _style(page, chip, "color") == "rgb(21, 128, 61)"
-    assert page.locator(chip).evaluate("el => getComputedStyle(el, '::before').width") == "12px"
+    assert page.locator(chip).evaluate("el => el.querySelector('svg').getBoundingClientRect().width") == 12
     assert page.locator(chip).inner_text().strip() == "Measured"
     page.screenshot(path=str(shots / "m185_campaign_1440.png"))
     page.context.close()

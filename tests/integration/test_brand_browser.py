@@ -267,9 +267,24 @@ def test_the_campaigns_shell_draws_the_brand(browser: Any, campaigns_server: str
     assert page.evaluate(f"({style})(\"{active}\", 'backgroundColor')") == probe, "the tint follows the brand"
     assert page.evaluate(f"({style})(\"{active}\", 'backgroundColor', '::before')") == GREEN
     page.locator("#app a[href^='#/campaigns/c_']").first.click()
-    page.wait_for_selector("#app .tabs .tab.on")
-    assert page.evaluate(f"({style})('#app .tabs .tab.on', 'borderBottomColor')") == GREEN
-    assert page.evaluate(f"({style})('#app .tabs .tab.on', 'color')") == GREEN
+    # M186 (DEC-1616): the campaign page's tabs are components.js `tabs()`; the selected one carries aria-selected
+    tab = "#app [data-ds-tabs] [aria-selected=true]"
+    page.wait_for_selector(tab)
+    assert page.evaluate(f"({style})('{tab}', 'borderBottomColor')") == GREEN
+    assert page.evaluate(f"({style})('{tab}', 'color')") == GREEN
+    # M186: the new brand-drawn things follow the deployment's colour too - the value range's dot (the net value)
+    # and its bar (a tint of the brand colour, not of Minfy's blue)
+    page.wait_for_selector("#app [data-tile-value] .vr-dot")
+    assert page.evaluate(f"({style})('#app [data-tile-value] .vr-dot', 'backgroundColor')") == GREEN
+    tint = page.evaluate("""() => {
+          const el = document.createElement('div');
+          el.style.background = 'color-mix(in srgb, #0B5D3B 24%, white)';
+          document.body.appendChild(el);
+          const c = getComputedStyle(el).backgroundColor;
+          el.remove();
+          return c;
+        }""")
+    assert page.evaluate(f"({style})('#app [data-tile-value] .vr-bar', 'backgroundColor')") == tint
     page.screenshot(path=str(shots / "campaigns_1440_brand.png"))
     # at 390 px the folded bar still fits one row with the brand's name
     page.set_viewport_size({"width": 390, "height": 844})

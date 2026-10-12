@@ -29,7 +29,8 @@
 // Every event is delegated from `document`, so a repaint needs no re-binding.
 
 import { COST_NEEDS_CONFIRMATION } from "../../cost.js";
-import { skeleton } from "../../dom.js";
+import { esc, skeleton } from "../../dom.js";
+import { USER_TEXT_ATTRIBUTE } from "../../labels.js";
 import { canAccess, setActiveNav } from "../router.js";
 import {
   getCampaign,
@@ -37,7 +38,6 @@ import {
   loadContactList,
   getIndustries,
   getProof,
-  getProofs,
   getRun,
   postMeasure,
   postOutcomes,
@@ -128,22 +128,24 @@ async function apiGoalNames(campaigns) {
   }
 }
 
-/** The list's rows: each campaign with its page's answer (status and result date), its Proof Pack line and goal. */
+/**
+ * The list's rows: each campaign with its page's answer (status and result date), its Value Proof Pack once measured
+ * (the net value and its range: M186 draws the figures, not the Pack's sentence) and its goal. The Packs are read six
+ * at a time, like the pages, and only for measured campaigns; one that cannot be read leaves its row with the verdict.
+ */
 export async function loadListEntries() {
   const campaigns = ((await getCampaigns()) || {}).campaigns || [];
-  const measured = campaigns.some((c) => c.status === "measured");
   const [views, proofs, names] = await Promise.all([
     mapLimit(campaigns, 6, (c) => getCampaign(c.campaign_id).catch(() => null)),
-    measured ? getProofs().catch(() => null) : null,
+    mapLimit(campaigns, 6, (c) => (c.status === "measured" ? getProof(c.campaign_id).catch(() => null) : null)),
     apiGoalNames(campaigns),
   ]);
-  const proofById = new Map(((proofs && proofs.proofs) || []).map((p) => [p.campaign_id, p]));
   return campaigns.map((campaign, i) => {
     const view = views[i];
     return {
       campaign,
       view,
-      proof: proofById.get(campaign.campaign_id) || null,
+      proof: proofs[i] || null,
       goal: goalName(campaign.use_case_id, names[campaign.use_case_id]),
       status: campaignStatus({ campaign, plan: view && view.plan, report: view && view.report }),
     };
@@ -502,4 +504,48 @@ if (typeof document !== "undefined") {
     audience.page = 1;
     repaintAudienceTable(); // the table only: the box keeps its focus and caret
   });
+
+  // The results drop zone (M186, DEC-1616 (f)): the file input's label. Choosing a file names it in the zone; a file
+  // dropped on the zone is handed to the same input, so "Add results" sends exactly what a chosen file sends.
+  document.addEventListener("change", (event) => {
+    const input = closest(event, "[data-results-file-input]");
+    if (input) showChosenFile(input);
+  });
+  for (const type of ["dragenter", "dragover"]) {
+    document.addEventListener(type, (event) => {
+      const zone = closest(event, "[data-results-drop]");
+      if (!zone) return;
+      event.preventDefault();
+      zone.classList.add("is-over");
+    });
+  }
+  document.addEventListener("dragleave", (event) => {
+    const zone = closest(event, "[data-results-drop]");
+    if (zone && !zone.contains(event.relatedTarget)) zone.classList.remove("is-over");
+  });
+  document.addEventListener("drop", (event) => {
+    const zone = closest(event, "[data-results-drop]");
+    if (!zone) return;
+    event.preventDefault();
+    zone.classList.remove("is-over");
+    const input = zone.querySelector("[data-results-file-input]");
+    const files = event.dataTransfer && event.dataTransfer.files;
+    if (!input || !files || !files.length) return;
+    try {
+      input.files = files;
+    } catch {
+      return; // a browser that will not hand dropped files to an input: the file button still works
+    }
+    showChosenFile(input);
+  });
+}
+
+/** Name the chosen file in the drop zone (the person's own file name, marked as theirs). */
+function showChosenFile(input) {
+  const zone = input.closest("[data-results-drop]");
+  const line = zone && zone.querySelector("[data-results-chosen]");
+  const file = input.files && input.files[0];
+  if (!line) return;
+  line.hidden = !file;
+  line.innerHTML = file ? `Chosen: <span ${USER_TEXT_ATTRIBUTE}>${esc(file.name)}</span>` : "";
 }

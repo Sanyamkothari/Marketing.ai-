@@ -235,6 +235,11 @@ test("attentionItem: the tone is named for a screen reader, the action sits apar
   assert.ok(item.querySelector(".attn-action > a.btn.secondary"), "its own column, so a phone can put it below");
   assert.equal(draw(C.attentionItem({ tone: "nonsense", title: "x" })).dataset.tone, "neutral");
   assert.equal(draw(C.attentionItem({ title: EVIL, text: EVIL, meta: EVIL })).querySelector("img"), null);
+  // M186 (DEC-1616): the meta line takes the caller's attributes: a campaign's recorded name is the person's own text.
+  const named = draw(C.attentionItem({ title: "t", meta: "Win back", metaAttrs: 'data-user-text title="Win back - March"' }));
+  assert.ok(named.querySelector(".attn-meta").hasAttribute("data-user-text"));
+  assert.equal(named.querySelector(".attn-meta").getAttribute("title"), "Win back - March");
+  assert.equal(draw(C.attentionItem({ title: "t", meta: "m" })).querySelector(".attn-meta").attributes.length, 1, "none by default");
 });
 
 test("tabs: role=tablist, role=tab, aria-selected and a roving tabindex", () => {

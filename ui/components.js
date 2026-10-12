@@ -261,17 +261,29 @@ const TONE_ICON = Object.freeze({ good: "checkCircle", warning: "alert", critica
 /**
  * One thing that needs attention: the tone's icon (with the tone named for screen readers), a title, one line of
  * text, an optional small line under it (`meta`, e.g. the campaign it belongs to), and one action - on the right on
- * a wide screen, under the text on a phone.
+ * a wide screen, under the text on a phone. `metaAttrs` is attribute markup the caller wrote for the meta line
+ * (M186, DEC-1616: a campaign's recorded name is the person's own text, `data-user-text`, with the full name as
+ * its tooltip).
  */
-export function attentionItem({ tone = "warning", title, text = "", meta = "", action = null, attrs = "" } = {}) {
+export function attentionItem({
+  tone = "warning",
+  title,
+  text = "",
+  meta = "",
+  metaAttrs = "",
+  action = null,
+  attrs = "",
+} = {}) {
   const t = TONES.includes(tone) ? tone : "neutral";
   const named = { good: "Done", warning: "Warning", critical: "Problem", info: "Information", neutral: "Note" }[t];
   return `<div class="attn tone-${t}" data-tone="${t}"${attrs ? ` ${attrs}` : ""}><span class="attn-icon">${icon(TONE_ICON[t], {
     size: 18,
     label: named,
   })}</span><div class="attn-body"><p class="attn-title">${esc(title)}</p>${text ? `<p class="attn-text">${esc(text)}</p>` : ""}${
-    meta ? `<p class="attn-meta">${esc(meta)}</p>` : ""
-  }</div>${action ? `<div class="attn-action">${actionHtml(action, "secondary")}</div>` : ""}</div>`;
+    meta ? `<p class="attn-meta"${metaAttrs ? ` ${metaAttrs}` : ""}>${esc(meta)}</p>` : ""
+  }</div>${
+    action ? `<div class="attn-action">${actionHtml(action, "secondary")}</div>` : ""
+  }</div>`;
 }
 
 // --- tabs -------------------------------------------------------------------------------------------------------

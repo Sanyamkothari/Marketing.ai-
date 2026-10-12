@@ -74,7 +74,7 @@ Rules:
 | `emptyState({icon, title, text, action})` | a 40 px line icon, one sentence, one action | every list or card that can be empty | leave a list blank, or offer two actions |
 | `tabs({label, items, current})` | underline tabs with role=tablist and role=tab, `aria-selected`, a roving tabindex; Left, Right, Home and End move (`wireTabs`, installed by the bar) | the campaign page, Reports, Data | draw tabs as pills or buttons |
 | `stepper({steps, current})` | numbered circles joined by a line: done is a brand circle with a check, current is a brand ring, upcoming is grey; labels below; on a phone, "Step 2 of 5 · Customers" | the New campaign wizard | use it for navigation between pages |
-| `attentionItem({tone, title, text, meta, action})` | a coloured icon that names its tone, a title, one line, the action on the right (below on a phone) | "Needs your attention" and alerts | squeeze the text beside its button on a phone |
+| `attentionItem({tone, title, text, meta, metaAttrs, action})` | a coloured icon that names its tone, a title, one line, the action on the right (below on a phone); `metaAttrs` marks the small line (M186: a campaign name is `data-user-text`) | "Needs your attention" and alerts | squeeze the text beside its button on a phone |
 | `statusOf(kind, value)` | `{key, tone, icon, word}` | anything that needs the mapping without the chip | invent another mapping |
 
 Tables use the existing `dataTable` (`ui/dom.js`). Headers are 12 px, weight 600, muted, in sentence case. Rows are at
@@ -104,7 +104,13 @@ Forms use 40 px controls (`.input`) with 8 px corners, a hairline and a brand fo
 
 An unknown value is neutral and shows its own text. `{word}` replaces the word with the server's own sentence, for
 example "Failed: the file is empty", and keeps the tone and the icon. Until the page milestones draw `statusChip`, the
-campaigns module's existing status chip (`.chip.cp-status`) is given the same tones and icons by the theme.
+campaigns module's existing status chip (`.chip.cp-status`) is given the same tones and icons by the theme. Since M186
+(DEC-1616) the Overview, the Campaigns list and the campaign page draw `statusChip` themselves, and no page draws
+`.chip.cp-status` any more.
+
+A value range is drawn only where the server sends both ends of a figure (the Value Proof Pack's net value and its
+"Extra ... because of the campaign" line). The Overview's "Value proven to date" is a floor, the sum of each measured
+campaign's lower bound, with no upper end in `GET /overview`: it is a hero figure with no bar (M186).
 
 ## Accessibility
 

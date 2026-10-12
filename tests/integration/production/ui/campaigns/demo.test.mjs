@@ -79,7 +79,21 @@ test("the list: both campaigns, each with a short name, its goal, a status chip,
         assert.equal(cells[1].textContent, "Choose the best e-mail for each customer");
         assert.equal(tr.querySelector("[data-status]").getAttribute("data-status"), "measured");
         assert.equal(cells[3].textContent, "12,862");
-        assert.equal(tr.querySelector("[data-result]").textContent, proof(campaign.campaign_id).headline);
+        // M186 (DEC-1616): the result is the net value and its likely range (a bar and its words), not the Pack's
+        // sentence, which stays on the Results tab: the figures are the Pack's own net value line.
+        const net = proof(campaign.campaign_id)
+            .sections.find((s) => s.key === "net_value")
+            .lines.find((l) => NET_VALUE_LABEL.test(l.label));
+        const result = tr.querySelector("[data-result]");
+        assert.equal(result.querySelector(".cp-result-value .num").textContent, rupees(net.value.value));
+        assert.equal(result.querySelector(".cp-result-value .num").getAttribute("title"), net.value.text);
+        assert.equal(
+            result.querySelector("[data-value-range] .vr-text").textContent,
+            `Likely ${rupees(net.low.value)} to ${rupees(net.high.value)}`,
+        );
+        assert.equal(result.querySelector(".vr-track").getAttribute("aria-hidden"), "true", "the words are what is read");
+        assert.ok(tr.querySelector("td:nth-child(2) .tag"), "the goal is a quiet tag");
+        assert.equal(tr.querySelector("[data-status]").dataset.tone, "good", "Measured is good, with its icon and word");
     });
 });
 
@@ -98,32 +112,38 @@ for (const [name, id] of [
         assert.equal(text("[data-long-name]"), view(id).campaign.name);
         assert.ok($("[data-long-name]").hasAttribute("data-user-text"), "the recorded label is the person's own (M172)");
         assert.deepEqual(
-            $$(".tabs a").map((a) => a.getAttribute("data-tab")),
+            // M186: the underline tabs of components.js (role=tablist; they were `.tabs a`)
+            $$("[data-ds-tabs] a").map((a) => a.getAttribute("data-tab")),
             ["overview", "audience", "results", "technical"],
         );
         assert.ok(
-            $('.tabs a[data-tab="technical"]').hasAttribute("data-technical"),
+            $('[data-ds-tabs] a[data-tab="technical"]').hasAttribute("data-technical"),
             "the Technical tab is marked for M180",
         );
-        assert.equal(text("[data-overview] [data-status]"), "Measured");
+        assert.equal($('[data-ds-tabs] [aria-selected="true"]').getAttribute("data-tab"), "overview");
+        // M186: the status chip sits in the header beside the name (it was in "Where it stands")
+        assert.equal(text("#app .head [data-status]"), "Measured");
         assert.equal(text("[data-next-step]"), "Measured on 11 Oct 2026. The full report is ready.");
         assert.equal(primaries().length, 1);
         assert.equal(primaries()[0].textContent, "Open the full report");
         assert.equal(primaries()[0].getAttribute("href"), `#/pilot/proof/${id}`);
         assert.ok($("[data-refresh-ask]"), "Refresh the list is a secondary action");
-        assert.equal(text("[data-tile-contacted] .v"), "12,862 customers");
-        assert.equal(text("[data-tile-comparison] .l"), "Comparison group (not contacted)");
-        assert.equal(text("[data-tile-comparison] .v"), "12,737 customers");
+        // M186: stat tiles (components.js statTile): the number as the value, what it counts in the caption
+        assert.equal(text("[data-tile-contacted] .stat-value"), "12,862");
+        assert.equal(text("[data-tile-contacted] .stat-caption"), "Customers sent the campaign.");
+        assert.equal(text("[data-tile-comparison] .stat-label"), "Comparison group");
+        assert.equal(text("[data-tile-comparison] .stat-value"), "12,737");
+        assert.equal(text("[data-tile-comparison] .stat-caption"), "Customers held back, not contacted, to compare against.");
         const net = proof(id)
             .sections.find((s) => s.key === "net_value")
             .lines.find((l) => NET_VALUE_LABEL.test(l.label));
-        // Each end in ui/format.js's one money format (lakh and crore), the server's exact text in its tooltip.
-        assert.equal(text("[data-tile-value] .v"), `${rupees(net.low.value)} to ${rupees(net.high.value)}`);
-        assert.deepEqual(
-            $$("[data-tile-value] .v .fmt").map((s) => s.getAttribute("title")),
-            [net.low, net.high].map((f) => (f.text === rupees(f.value) ? null : f.text)),
-            "no tooltip that repeats the figure",
-        );
+        // M186: the net value is the tile's value, its likely range a bar with the words beside it; each figure in
+        // ui/format.js's one money format (lakh and crore), the server's exact net value in the tile's tooltip.
+        assert.equal(text("[data-tile-value] .stat-label"), "Net value");
+        assert.equal(text("[data-tile-value] .stat-value"), rupees(net.value.value));
+        assert.equal($("[data-tile-value]").getAttribute("title"), net.value.text);
+        assert.equal(text("[data-tile-value] .vr-text"), `Likely ${rupees(net.low.value)} to ${rupees(net.high.value)}`);
+        assert.ok($("[data-tile-value] .vr-bar") && $("[data-tile-value] .vr-dot"), "the range is drawn");
         const sent = $$("[data-what-was-sent] .cp-kv-row").map((r) => [...r.children].map((c) => c.textContent));
         assert.deepEqual(sent, [
             ["Sent on", "11 Oct 2026"],
@@ -178,7 +198,8 @@ for (const [name, id] of [
     test(`${name}: Results shows the Proof Pack's headline, the evidence in words and the full report one click away`, async () => {
         await visit(`#/campaigns/${id}/results`);
         assert.equal(text("[data-headline]"), proof(id).headline);
-        assert.equal(text("[data-evidence] .chip"), "Proven");
+        assert.equal(text("[data-evidence] [data-status]"), "Proven"); // M186: the evidence status chip (was `.chip`)
+        assert.equal($("[data-evidence] [data-status]").dataset.tone, "good");
         assert.ok(!/Causal/.test(text("[data-results-measured]")), "the technical label is not shown");
         assert.equal(primaries().length, 1);
         assert.equal(primaries()[0].getAttribute("href"), `#/pilot/proof/${id}`);
