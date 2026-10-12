@@ -56,6 +56,11 @@ import { injectShellStyles, shellBarHtml } from "./shell.js";
 // tests/integration/test_brand_ui.py puts today's literals back and removes the marks to draw the bar as it was.
 import { BRAND_EVENT, brandLogoAlt, brandLogoHtml, brandNameHtml } from "./brand.js";
 // </M182>
+// <M185>
+// Plan M M185 (DEC-1615): the components of the look (`components.js`, a leaf as far as this file is concerned). The bar
+// gives the page the arrow keys of `tabs()` once, so every page that draws tabs has them; it draws no markup of its own.
+import { wireTabs } from "./components.js";
+// </M185>
 
 const slots = new Map();
 let access = null;
@@ -666,6 +671,9 @@ export function mountChrome(doc = document) {
     if (ui.menu && target && typeof target.closest === "function" && !target.closest(".menu")) closeMenus();
   });
   injectBarStyles(doc);
+  // <M185>
+  wireTabs(doc);
+  // </M185>
   const win = doc.defaultView;
   if (win) {
     lastHash = currentHash();
