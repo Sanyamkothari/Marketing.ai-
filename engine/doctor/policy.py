@@ -1297,6 +1297,22 @@ def _read_pending(kind: str, output: Mapping[str, Any]) -> list[DataProposal]:
     ]
 
 
+def _read_outcome(kind: str, output: Mapping[str, Any]) -> list[DataProposal]:
+    """M239 (DEC-1809): an outcome definition, with the exact sentence it is approved with; nothing to decide while
+    a meaning-bearing question is open (no definition is proposed then)."""
+    if output["definition"] is None:
+        return []
+    return [
+        DataProposal(
+            kind=kind,
+            source=_source(output),
+            ticked=bool(output["ticked"]),
+            confidence="sure" if output["confidence"] == "sure" else "check",
+            sentence=_sentence(output, "sentence"),
+        )
+    ]
+
+
 OUTPUT_READERS: Final[Mapping[str, _Reader]] = {
     "data.propose_role": _read_pending,
     "data.propose_key": _read_pending,
@@ -1317,6 +1333,8 @@ OUTPUT_READERS: Final[Mapping[str, _Reader]] = {
     "data.build_dataset": _read_build,
     "data.normalise_key": _read_normalise_key,
     "data.convert_currency": _read_convert,
+    "data.define_outcome": _read_outcome,
+    "data.map_outcome_values": _read_outcome,
 }
 """How each wave-1 kind's output reads as proposals: the steps with who proposed them, whether they would be
 offered ticked and how sure the rules are, the question a reshape is offered through, rows before and after, and

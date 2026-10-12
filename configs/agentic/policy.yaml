@@ -294,3 +294,15 @@ data:
     data.second_opinion:
       proposes: plan
       rules: [data.never_ticked]
+    # M239 (DEC-1809): the outcome definition decides what the model learns. APPROVE-class, always: its own yes,
+    # with the exact sentence (counts included), by an Analyst; never offered ticked (the tools offer it `check`).
+    data.define_outcome:
+      proposes: plan
+      rules: [data.never_ticked, data.approve_class]
+      tick_only_sure: true
+      approve: always
+    data.map_outcome_values:
+      proposes: plan
+      rules: [data.never_ticked, data.approve_class]
+      tick_only_sure: true
+      approve: always

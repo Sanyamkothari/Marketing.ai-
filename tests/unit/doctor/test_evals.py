@@ -80,7 +80,7 @@ def test_every_catalogue_tool_is_listed_and_an_unregistered_one_is_not_built_yet
     assert set(statuses) == {row.name for row in CATALOGUE if row.kind is not None}
     assert statuses["stack_files"].built and statuses["check_readiness"].built
     for name, milestone in (
-        ("define_outcome", "M239"),
+        ("map_consent", "M239"),  # define_outcome stood here until M239 (DEC-1809) built it
         ("estimate_training_time", "M244"),
         ("drift_check", "M245"),
     ):
@@ -512,7 +512,7 @@ def _status(name: str) -> Any:
 def test_the_kill_criterion_per_tool() -> None:
     passed = PassK(tool="t", k=5, runs=5, identical=True, acceptable_runs=5, harmful_runs=0, proposals=1)
     failed = passed.model_copy(update={"identical": False})
-    assert kill_verdict(ToolEval(status=_status("define_outcome"))) == "not built yet (M239)"
+    assert kill_verdict(ToolEval(status=_status("map_consent"))) == "not built yet (M239)"
     assert kill_verdict(ToolEval(status=_status("stack_files"), pass_k=passed)) == "keep"
     step = ToolEval(status=_status("propose_step"), pass_k=None, ai_pass_k=failed)
     assert kill_verdict(step).startswith("pass^5 below 100%: switch its AI path off")
@@ -531,15 +531,15 @@ def test_the_report_puts_harm_first_lists_tools_not_built_and_says_what_was_not_
         tools=tools,
         files=(
             BenchFile(
-                name="x06", group="extended", use_case="targeted-advertisement", needs=("define_outcome",)
+                name="x06", group="extended", use_case="targeted-advertisement", needs=("map_consent",)
             ),
         ),
         notes=("Parts run: tools.",),
     )
     text = render_markdown(report)
     assert text.index("## Harm metrics") < text.index("## Tools")
-    assert "### Not built yet" in text and "| 45 | define_outcome | propose | M239 |" in text
-    assert "waits for define_outcome (not built yet)" in text
+    assert "### Not built yet" in text and "| 67 | map_consent | propose | M239 |" in text
+    assert "waits for map_consent (not built yet)" in text
     assert "The 20 held-out Indian files" in text and "**Not run in this report**" in text
     assert "not measured: no held-out file was run" in text
     assert "not measured: no benchmark file was run" in text
