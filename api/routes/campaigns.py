@@ -108,7 +108,7 @@ from pydantic import AwareDatetime, Field, ValidationError, model_validator
 from api.access import get_platform_engine, set_audit_context
 from api.access_policy import RoutePolicy, register
 from api.deps import ConfigRootDep, RegistryDep, SettingsDep, StorageDep
-from api.routes.runs import load_run, refuse_unapproved_list, requested_by
+from api.routes.runs import arbitration_source_runs, load_run, refuse_unapproved_sources, requested_by
 from api.routes.uplift import _finished_scoring_run, _read_all
 from api.routes.uploads import http_error, load_upload, use_case_config
 from api.schemas import ErrorBody, ErrorResponse
@@ -657,6 +657,21 @@ def get_campaign_store(request: Request) -> CampaignStore:
     fresh = SqlCampaignStore(get_platform_engine(request))
     request.app.state.campaign_store = fresh
     return fresh
+
+
+def _list_source_runs(storage: Storage, campaign: Campaign) -> tuple[str, ...]:
+    """The scoring runs the campaign's contact list was built from (DEC-1620, M190).
+
+    Its own run(s); for a campaign made from an arbitrated cycle (`arbitration_id`), whose record names only its own
+    use case's run, also every run that cycle arbitrated, from the `arbitration_summary.json` kept in that run next
+    to its copy of the arbitrated list (`api.routes.runs.arbitration_source_runs`). A run arbitrated again since
+    keeps the later cycle's summary and list, so the runs checked are those of the list the run now holds.
+    """
+    if campaign.arbitration_id is None:
+        return campaign.run_ids
+    return tuple(
+        dict.fromkeys(rid for run_id in campaign.run_ids for rid in arbitration_source_runs(storage, run_id))
+    )
 
 
 def _load(store: CampaignStore, campaign_id: str) -> Campaign:
@@ -1253,8 +1268,10 @@ def register_plan(
         )
     # Plan M final integration (DEC-1611 (p)): a list made with a model that waits for approval, or was turned
     # down, is not fixed for sending: `409 MODEL_NOT_APPROVED` (Plan J's own page gets this refusal too).
-    for run_id in campaign.run_ids:
-        refuse_unapproved_list(request, storage, registry, run_id, for_campaign=True)
+    # DEC-1620 (M190): a campaign of an arbitrated cycle sent a list built from every run that cycle arbitrated.
+    refuse_unapproved_sources(
+        request, storage, registry, _list_source_runs(storage, campaign), for_campaign=True
+    )
     plan = freeze_plan(
         decided,
         _realised(storage, campaign_id),

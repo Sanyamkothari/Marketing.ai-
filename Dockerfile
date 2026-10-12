@@ -125,5 +125,6 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 COPY . /app/
 USER 10001
 # The same selection as `make test`: pytest keeps only the last -m, so the paid markers have to be
-# spelled out here as well rather than inherited (DEC-358).
-CMD ["pytest", "-m", "not slow and not bedrock and not aws", "-q"]
+# spelled out here as well rather than inherited (DEC-358). No `-q` here: pyproject's addopts has one
+# already, and a second one drops the final "N passed" summary line from the log.
+CMD ["pytest", "-m", "not slow and not bedrock and not aws"]

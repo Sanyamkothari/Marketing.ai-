@@ -360,7 +360,7 @@ codes:
     fix: "Correct the item the message names. A plan must be registered, and amended, before the final result is read. For a whole-programme readout, send it again without the plan and the earlier amount; the plain difference is given."
   MODEL_NOT_APPROVED:
     title: "This list waits for a model's approval"
-    meaning: "This campaign's contact list was made with a new model that an Approver has not approved yet, or has turned down. Until it is approved, the list cannot be downloaded or sent, and the campaign's test plan cannot be fixed."
+    meaning: "This campaign's contact list was made with a new model that an Approver has not approved yet, or has turned down. For a list that combines several goals' lists, this is true of at least one of them, and the message names which. Until it is approved, the list cannot be downloaded or sent, and the campaign's test plan cannot be fixed."
     fix: "Ask an Approver to approve the new model under Waiting for approval, then try again. If it was turned down, make the list again with the model in use."
   PLAN_UNDERPOWERED:
     title: "The test may be too small to see the effect you expect"
@@ -886,6 +886,211 @@ codes:
     title: "Variant's words have no registered template to check against"
     meaning: "A message variant's words cannot be checked on this channel, so they are not sent (fail closed). Either no catalogue action registers those exact words on the channel (its template_ref names them), or the channel's region rule requires a DLT template (for example SMS in India) and the variant's action has no dlt_template_text, or no real dlt_template_id. A campaign does not compare a variant whose customers were withheld for this."
     fix: "Add the variant's catalogue action for this channel with its registered DLT template id and template text, then draw the variant arms again."
+  # --- Plan O M231: Data Doctor cases (DEC-1801) -------------------------------------------------------------------
+  CASE_NOT_FOUND:
+    title: "No such case"
+    meaning: "There is no Data Doctor case with this id for this client. A case that belongs to another client is never shown here, and the answer does not say whether it exists."
+    fix: "Check the link, or check that you picked the right client."
+  CASE_VERSION_CONFLICT:
+    title: "Someone else changed this case"
+    meaning: "The case changed after you opened it, or someone else is changing it right now. Nothing you sent was saved."
+    fix: "Reload the case to see what changed, then make your change again."
+  CASE_READ_ONLY:
+    title: "This earlier work can only be read"
+    meaning: "This is an earlier Guided setup result shown as a case so you can read it. It cannot be changed here."
+    fix: "Open a new case and add the same file to keep working on it."
+  CASE_UNREADABLE:
+    title: "This case cannot be read"
+    meaning: "The case is stored in a form this version cannot read, or an earlier Guided setup cannot be shown as a case. Nothing was changed, and a privacy job never saves a case in this state (it refuses instead)."
+    fix: "Open an earlier Guided setup from the Guided setup screen. For a Data Doctor case, ask an administrator to look at the case's file under cases/<client>/<case>/case.json."
+  # --- Plan O M234: the readiness report's probes (DEC-1804) -------------------------------------------------------
+  X_TIME_ALL_PARSE:
+    title: "Some rows have no date the run can read"
+    meaning: "The date check allows a few empty or unreadable dates, but the step that puts older rows in one part and newer rows in another needs a date in every row, so the run would stop there."
+    fix: "Fill in or correct the missing dates, or remove those rows, then check again."
+  X_TIME_CUTS_FEASIBLE:
+    title: "Too many rows share one date where the parts are divided"
+    meaning: "Rows with the same date are never divided between the older and newer parts. When one date holds too many rows, a part is left empty and the run stops."
+    fix: "Use a finer date column (a day rather than a month), add more dates, or divide the rows at random."
+  X_GROUPS_ENOUGH:
+    title: "Too few groups to keep each group together"
+    meaning: "When rows are kept together by group, each of the three parts needs at least one whole group. With too few groups the run stops."
+    fix: "Choose a column with more groups, add data from more groups, or divide the rows at random."
+  X_CONSENT_VOCAB:
+    title: "Consent values are not a plain yes or no"
+    meaning: "Only yes, y, true, t and 1 count as consent. Other words, such as Granted or Opted In, are read as no, so those customers would be left out of training and never contacted, without a message."
+    fix: "Say which values mean yes (map them to true or false), then check again."
+  X_POST_FILTER_THRESHOLDS:
+    title: "Too few rows remain after the rows the run removes"
+    meaning: "The size limits are checked on the file as uploaded, but the run first removes rows without consent, rows with no known outcome and exact repeats. What is left is below the limit."
+    fix: "Collect more history, or more rows with consent and a known outcome. The limits are not lowered for you."
+  X_SPLIT_CLASSES:
+    title: "A part of the data would hold only one kind of outcome"
+    meaning: "The run divides the rows into a part to learn from and two parts to check on. A part with only one kind of outcome (only buyers, or no buyers) cannot be learned from or checked on."
+    fix: "Add rows with the rarer outcome or more dates, or change how the rows are divided."
+  X_LABEL_MATURITY:
+    title: "The newest outcomes are probably not known yet"
+    meaning: "The newest rows show far fewer positive outcomes than the older ones, usually because their outcome window has not ended. Checking the model on them would make it look worse than it is, or measure nothing."
+    fix: "Leave out the newest dates whose outcome window has not ended, or wait until it has."
+  X_REGRESSION_TARGET_NUMERIC:
+    title: "The amount to predict is not a number"
+    meaning: "A model of an amount needs a number in every outcome cell. Text such as high or low cannot be learned from, and the run would stop at training."
+    fix: "Turn the outcome column into numbers (remove currency signs and words), or choose a yes or no outcome instead."
+  X_PARSER_ROW_LOSS:
+    title: "Some lines of the file are dropped when it is read"
+    meaning: "A line with more values than there are column names (often a comma inside a value without quotes, or a quote that is never closed) is skipped by the reader without a message, so those customers silently go missing. The check names the lines, counted from 1 with the column names as line 1."
+    fix: "Fix or remove the lines named, or save the export again with values in quotes, then upload it again."
+  X_PK_UNIQUE_FULL:
+    title: "An ID repeats further down the file"
+    meaning: "Very large files are checked on their first two million rows. This check reads every row's ID and finds repeats the first check could not see."
+    fix: "Combine the rows so each customer appears once, or export one row per customer."
+  X_TREATMENT_TOKENS:
+    title: "The contacted-or-not column is not a plain 1 or 0"
+    meaning: "Comparing contacted customers with a control group needs every row to say 1 (contacted) or 0 (not), or one of the named offers. Words such as yes or treated, and empty cells, stop the comparison."
+    fix: "Map the column to 1 and 0 (or to the named offers), and say what an empty cell means."
+  X_CHANNEL_COLUMNS_PRESENT:
+    title: "A consent column for one channel is missing"
+    meaning: "The use case names a consent column for each channel. When one is missing at scoring it is skipped with only a log line, so nobody would be held back on that channel."
+    fix: "Add the consent column for each channel to the export."
+  X_VALUE_COLUMN_MISSING_SHARE:
+    title: "The value column is empty too often"
+    meaning: "Money figures need a value for each customer. When more than a tenth of the values are empty, no money figure is shown."
+    fix: "Fill in the value column for more customers. Empty values are never filled in for you."
+  X_ALLOWED_FIELDS_FILLED:
+    title: "A field the messages use is empty for some customers"
+    meaning: "A message that uses a field, such as a first name, cannot be written for a customer without it, and the whole batch of messages would stop."
+    fix: "Fill in the field, or take it out of the fields the messages may use."
+  X_COMPLAINT_COLUMN_PRESENT:
+    title: "The complaint text column is missing"
+    meaning: "The root-cause summary reads customers' complaint text. Without the column it stops; with an empty column it has nothing to read."
+    fix: "Add the complaint text column to the export, with its text."
+  # --- Plan O M237: several files (DEC-1807) -------------------------------------------------------------------------
+  JOIN_KEY_REPEATS:
+    title: "A customer is on two different rows of a per-customer file"
+    meaning: "A file joined onto the customer list must have one row per customer. In this file some customers appear on more than one row with different values, so Data Doctor cannot tell which row to use."
+    fix: "Stack the files, or keep only the latest row for each customer, then join again."
+  JOIN_COLUMN_MISSING:
+    title: "A file is missing a column the join reads"
+    meaning: "The join reads a column that this file does not have (or the file itself was not given). Next month's export may have renamed or dropped it."
+    fix: "Upload a file with that column, or review the join again."
+  JOIN_COLUMN_CLASH:
+    title: "Two files would add a column with the same name"
+    meaning: "The joined table already has a column with this name, and adding a second one would overwrite it. Data Doctor renames clashing columns when it suggests a join."
+    fix: "Review the join again to get a fresh suggestion."
+  JOIN_DROPS_ROWS:
+    title: "Joining leaves out more than 2% of a file's rows"
+    meaning: "Joining this file to the customer list leaves out more than 2% of its rows: they have no customer ID, their customer is not on the list, or their ID matches two customers on the list. The count is in the sentence you approve."
+    fix: "Check that those rows can be left out, or fix the IDs, before you say yes."
+  JOIN_DEFINES_OUTCOME:
+    title: "A list of customers becomes what the model learns"
+    meaning: "This join turns a list of customer IDs, such as the customers who left, into a yes/no column: yes when the customer is on the list. That column is what the model learns to predict."
+    fix: "Read the exact sentence shown and approve it yourself only if it says what you mean."
+  JOIN_KEYS_DO_NOT_MEET:
+    title: "A file's customer IDs do not match the customer list"
+    meaning: "Fewer than 80% of this file's customer IDs are on the customer list, even after removing prefixes, leading zeros, spaces and upper or lower case. Data Doctor never joins on IDs that only look alike, so the file is left out."
+    fix: "Check that both files use the same customer numbers."
+  STACK_CONFLICTS_UNDECIDED:
+    title: "Two exports give the same customer and date different values"
+    meaning: "Some customer-and-date pairs appear in two exports with different values, for example a bill corrected after it was first exported."
+    fix: "Say which export to keep, the later or the earlier, and the files will be stacked."
+  STACK_COLUMN_MISSING:
+    title: "An export is missing the customer or date column"
+    meaning: "One of the files being stacked does not have the customer column or the date column the stack reads, so its rows cannot be compared with the others."
+    fix: "Upload that export with the column, or stack the files again."
+  STACK_DROPS_ROWS:
+    title: "Stacking removes more than 2% of the rows"
+    meaning: "The exports repeat each other's rows, for example the last week of each month exported twice. Each repeated row is counted once, so more than 2% of the rows are removed. The receipt lists how many and which dates."
+    fix: "Approve if the exports do overlap; otherwise check which files were given."
+  STACK_TOO_FEW_FILES:
+    title: "The stack was not given one table per file"
+    meaning: "A saved stack names its files in order, and each needs its table."
+    fix: "Give every file the stack names, or ask Data Doctor to suggest the stack again."
+  BUILD_PLAN_NOT_APPROVED:
+    title: "The build plan was not the one approved"
+    meaning: "Data Doctor builds only the exact plan you approved. This plan has changed since then (a file, a rule or a setting), so nothing was built."
+    fix: "Review the plan and approve it again."
+  BUILD_PLAN_INCOMPLETE:
+    title: "The build plan is not complete yet"
+    meaning: "The plan still has an open question, or a part it needs is missing: no customer list with an ID column, or the outcome is read from a log that was left out."
+    fix: "Answer the question or add the missing file, then review the plan again."
+  BUILD_REWRITES_IDS:
+    title: "Some files write the customer IDs differently from the list"
+    meaning: "Some files write the customer IDs differently from the customer list (a prefix, zeros, case, spaces or a phone format). Their IDs are matched by the rule shown and written as the list writes them. The customer list keeps its own IDs."
+    fix: "Check the rule shown, then approve the build if it matches your IDs."
+  BUILD_DEFINES_OUTCOME:
+    title: "The build includes the outcome you agreed"
+    meaning: "The built table carries the outcome you agreed to, unchanged. It decides what the model learns, so approving the build includes it."
+    fix: "Approve the build only if the outcome sentence still says what you mean."
+  BUILD_FILE_LEFT_OUT:
+    title: "A file is left out of the build"
+    meaning: "Data Doctor could not place this file in the build. It may be a second customer list (join it first), have no column naming the customer or no date, or need the IDs tidied differently from the other files. The reason is given next to the file."
+    fix: "Follow the reason given next to the file, then plan the build again."
+  BUILD_STEP_FAILED:
+    title: "A step of the build could not run"
+    meaning: "Tidying the IDs, or one of the calls that set up the build, was refused. The message names the file and the reason, for example too many phone numbers that could not be read."
+    fix: "Fix the file and try again."
+  BUILD_REPLAY_FILES:
+    title: "A file is missing for the approved build"
+    meaning: "A replay of an approved Data Doctor build needs a file for every source the plan built."
+    fix: "Give next month's file for each one named, then run it again."
+  APPROVAL_SENTENCE_CHANGED:
+    title: "The sentence approved is not the one shown now"
+    meaning: "An approval holds the exact sentence the person read. The sentence sent with this approval differs from the one the plan shows now, so nothing was recorded or done."
+    fix: "Read the sentence shown now and approve it again."
+  # --- Plan O M238: row and value tools (DEC-1808) -----------------------------------------------------------------
+  AI_STEP_CHANGES_MANY:
+    title: "This AI suggestion changes many values"
+    meaning: "The AI suggested a change that would alter more than 30% of a column's values. It is still offered, unticked."
+    fix: "Check the before and after carefully before you tick it."
+  AI_STEP_CHANGES_TOO_MANY:
+    title: "This AI suggestion would change too much"
+    meaning: "The AI suggested a change that would alter more than 60% of a column's values, so it is not offered."
+    fix: "If you want it, add the same change as your own edit."
+  IMPOSSIBLE_VALUE:
+    title: "Values that cannot be true"
+    meaning: "Some values cannot be right for what the column holds. Examples: an age over 120 or below 0, a negative amount, tenure or count, a percentage over 100, a date in 2099 or later, a date before 1900, or a date that has not happened yet."
+    fix: "Tick the offer to empty them if they are wrong. For a date in the future Data Doctor only tells you, and you decide."
+  UNIT_MISMATCH:
+    title: "Values in different units"
+    meaning: "One column mixes units, such as GB with MB, or lakh with crore and plain numbers. It may also hold a group of values about 1,000, 100,000 or 10,000,000 times smaller or larger than the rest. Nothing is converted until you agree, and a number whose comma may group thousands, such as '1,500 MB', is never converted."
+    fix: "Say which unit the column is in."
+  RESHAPE_GUARD_MISSING:
+    title: "A change to the rows is missing a check"
+    meaning: "A step that changes what one row means (combining rows, months into rows, or keeping each customer's latest row) can be approved only after you answer its question. It must not have been ticked for you, it must show its preview of rows in and rows out, and the future-data check must be set to run."
+    fix: "Answer the question and check the preview, then approve again."
+  SPLIT_RULE_INVALID:
+    title: "This split rule cannot be used"
+    meaning: "A file can be split into a part to learn from and a part to score only by a column the file has. That column cannot be the ID or the outcome."
+    fix: "Choose another column, a cut date written YYYY-MM-DD, or a list of values."
+  SPLIT_PART_EMPTY:
+    title: "The split leaves one part empty"
+    meaning: "The rule puts every row in one part, so there would be nothing to learn from, or nothing to score."
+    fix: "Change the cut date or the values."
+  SPLIT_VALUES_UNREADABLE:
+    title: "Dates the split cannot read"
+    meaning: "Too many rows have a date the split cannot read, or a date that reads differently day first and month first, with nothing in the file to say which."
+    fix: "Export the column with the year first (2024-03-25), or say whether dates are written day first."
+  SPLIT_LATER_DATES_IN_TRAINING:
+    title: "Rows to learn from hold later dates"
+    meaning: "Some rows in the part to learn from have another date after the cut, so they were written after it. They are shown with counts for each column."
+    fix: "Decide whether to keep them, or to leave that column out."
+  SYNONYM_MERGE_INVALID:
+    title: "This merge of spellings cannot be used"
+    meaning: "A suggested merge named a spelling the column does not have, put a spelling in two groups, or named a group without the spelling to keep. Nothing is merged."
+    fix: "List two or more spellings from the column in each group, and keep one of them."
+  DOCTOR_COLUMN_PROTECTED:
+    title: "The ID and the outcome are never changed"
+    meaning: "This tool was asked to look at or change the ID column or the outcome column. No step ever changes those two."
+    fix: "Choose another column."
+  DOCTOR_COLUMN_UNKNOWN:
+    title: "No such column"
+    meaning: "The file has no column with that name, or it has no ID column to keep one row per customer."
+    fix: "Check the column name, or say which column is the ID."
+  # --- Plan O M240: input formats and parser safety (DEC-1810) -----------------------------------------------------
+  X_PARSER_COLUMNS_SHIFTED:
+    title: "Every row was read one or more columns to the left"
+    meaning: "The first data line has more values than the header has column names, so the reader took the extra leading values as a row label and threw them away. No row is lost, but the first column(s) are gone and each value sits under the wrong name. A stray comma or a missing column name is the usual cause."
+    fix: "Open the file, look at the line the check names, fix it and upload the file again."
 
 settings:
   actions.bands[*].min_score:

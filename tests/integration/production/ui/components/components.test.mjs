@@ -47,6 +47,9 @@ test("statusOf: the one mapping, by kind, in every spelling a page meets", () =>
   assert.deepEqual([health("read").tone, health("read").word], ["good", "Read correctly"]);
   assert.equal(health("not_tested").tone, "warning");
   assert.equal(health("failed").tone, "critical");
+  // a connection without its add-on is neutral with the draft (dashed) icon and its own word, not "unknown"
+  assert.deepEqual(health("needs_addon"), { key: "needs_addon", tone: "neutral", icon: "draft", word: "Needs the add-on" });
+  assert.equal(health("Needs addon").key, "needs_addon");
   // every entry has a tone from the five, an icon that exists, and a word
   for (const [kind, table] of Object.entries(C.STATUS_MAP)) {
     for (const [key, s] of Object.entries(table)) {

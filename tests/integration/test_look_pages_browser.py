@@ -35,7 +35,11 @@ sync_api = pytest.importorskip(
 CHROMIUM: Final[Path] = Path(os.environ.get("PLAYWRIGHT_BROWSERS_PATH", "/opt/pw-browsers")) / "chromium"
 GREEN: Final[str] = "#0b5d3b"
 GREEN_RGB: Final[str] = "rgb(11, 93, 59)"
-SETTLE_MS: Final[int] = 1500
+DRAWN_TIMEOUT_MS: Final[int] = 20_000
+SETTLE_MS: Final[int] = 200  # after the content is there: a frame or two for layout, not the wait itself
+DRAWN_JS: Final[str] = (
+    "() => ((document.querySelector('#app') || document.body).innerText || '').trim().length > 40"
+)
 PAGES: Final[tuple[tuple[str, str], ...]] = (
     ("reports", "#/reports"),
     ("reports-programme", "#/reports/programme"),
@@ -76,6 +80,9 @@ def _open(
         context.add_init_script("try{localStorage.setItem('marketing-ai.show-technical','on')}catch(e){}")
     page = context.new_page()
     page.goto(f"{base}/ui/{fragment}", wait_until="load")
+    # Wait for the page to have drawn real content, not for a fixed time: the hash route renders
+    # after the data call returns, and a slow machine used to be read while still nearly empty.
+    page.wait_for_function(DRAWN_JS, timeout=DRAWN_TIMEOUT_MS)
     page.wait_for_timeout(SETTLE_MS)
     return page
 

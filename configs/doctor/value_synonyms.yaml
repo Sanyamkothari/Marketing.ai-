@@ -1,0 +1,31 @@
+# Plan O M238 (DEC-1808 (d)): spellings that mean the same value, for the `synonym_clusters` rule.
+#
+# Each group lists spellings of one value; the first is the canonical spelling a merge proposes when that
+# spelling is in the column (otherwise the column's most common spelling of the group is used). Spellings are
+# compared with case, spaces and punctuation ignored, so "Pre-paid", "pre paid" and "PREPAID" need no entry.
+#
+# This file is the deterministic rule set. A merge the AI proposes and people approve again and again is
+# promoted here by a reviewed change (Plan O, "new patterns, with permission, then rules"), so the AI is no
+# longer needed for it. Every proposal made from it is pending and never ticked; nothing is merged unasked.
+groups:
+  # Indian city renames (the old and the new name of one city)
+  - [Mumbai, Bombay]
+  - [Chennai, Madras]
+  - [Kolkata, Calcutta]
+  - [Bengaluru, Bangalore]
+  - [Gurugram, Gurgaon]
+  - [Pune, Poona]
+  - [Thiruvananthapuram, Trivandrum]
+  - [Vadodara, Baroda]
+  - [Prayagraj, Allahabad]
+  - [Puducherry, Pondicherry]
+  # Yes and no, in Hindi and Hinglish (a yes/no column that is not two-valued yet)
+  # ("na" is left out on purpose: it is usually "not available", not "no")
+  - ["Yes", "haan", "han", "haa", "ji haan", "हाँ", "हां"]  # quoted: YAML reads a bare Yes as true
+  - ["No", "nahi", "nahin", "nai", "ji nahi", "नहीं"]
+  # Common plan and status abbreviations
+  # ("PP" is not listed: it could be prepaid or postpaid; the initials rule merges it only when one fits)
+  - [Prepaid, Pre-paid, Pre paid]
+  - [Postpaid, Post-paid, Post paid]
+  - [Female, F, Fem]
+  - [Male, M]

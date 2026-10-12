@@ -198,6 +198,8 @@ def replay_identity(recipe: DataRecipe, config: UseCaseConfig) -> str:
         "levels": sorted(str(level) for level in levels),
         "max_failure_pct": limit,
     }
+    if recipe.text_columns:  # absent when empty, so a recipe that recorded none keeps its identity
+        payload["text_columns"] = list(recipe.text_columns)
     digest = hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
     return digest[:16]
 

@@ -114,3 +114,14 @@ def test_the_prompt_teaches_the_action(started: tuple[Any, Any]) -> None:
     chat_turn(ctx, session, "hello", meter=meter, guardrails=_guardrails())
     system = meter.rendered[0].system
     assert "propose_step" in system and "map_values" in system and "never a mean or median" in system
+
+
+@pytest.mark.parametrize("params", [{"excel_serial": True}, {"excel_serial": True, "date_1904": True}])
+def test_the_excel_day_number_parameters_are_not_the_chats_to_propose(
+    started: tuple[Any, Any], params: dict[str, Any]
+) -> None:
+    """Plan O M240: `excel_serial` is accepted by a recipe, but a model cannot reach it through the chat."""
+    look = json.dumps({"action": "value_counts", "args": {"column": "signup_date"}})
+    attempt = step("parse_date", column="signup_date", **params)
+    result = turn(started, look, attempt, attempt)
+    assert result.proposals == () and result.blocked_by == "RECIPE_STEP_INVALID"

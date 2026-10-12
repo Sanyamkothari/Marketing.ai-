@@ -15,6 +15,11 @@ it for every client, Plan J's own page and the raw routes included:
   an approved model, the champion, a demoted former champion and a run whose settings do not require approval are
   served as before.
 
+DEC-1620 (M190): an arbitrated list (Plan J M101) is built from several goals' scoring runs, and a campaign record
+names only its own first run, so the hold checks every run the list was built from (the arbitration summary's
+`run_ids`): the arbitrated campaign's plan and the arbitrated list are refused when any of those runs' models waits
+for approval or was turned down, and the refusal names that run and its goal.
+
 The scoring runs are written straight into the store by the treat-list fixture (`tests/fixtures/decide/treat_runs.py`),
 whose `run.json` names the model `m_win-back-campaign_1`; the test registers that version at the status it needs.
 """
@@ -29,9 +34,12 @@ from fastapi.testclient import TestClient
 
 from api.main import create_app
 from engine.config import Metric
-from engine.contracts import ModelStatus, ModelVersion
+from engine.contracts import ModelStatus, ModelVersion, RunRecord
+from engine.decide.arbitrate import ARBITRATED_TREAT_LIST_CSV, ARBITRATED_TREAT_LIST_PARQUET
 from engine.decide.treat_list import TREAT_LIST_CSV, TREAT_LIST_SUMMARY_FILENAME, ensure_treat_list
+from engine.measurement.campaign import InMemoryCampaignStore
 from engine.registry import REGISTRY_FILENAME, LocalModelRegistry
+from engine.runs import RUN_FILENAME
 from engine.storage import LocalStorage, run_key
 from engine.utils.time import utc_now
 from tests.fixtures.decide.treat_runs import USE_CASE, write_run
@@ -43,11 +51,11 @@ MODEL = f"m_{USE_CASE}_1"
 LATER = f"m_{USE_CASE}_2"
 
 
-def _version(model_id: str, version: int) -> ModelVersion:
+def _version(model_id: str, version: int, use_case_id: str = USE_CASE) -> ModelVersion:
     run_id = f"r_20261011_9b00000{version}"
     return ModelVersion(
         model_id=model_id,
-        use_case_id=USE_CASE,
+        use_case_id=use_case_id,
         version=version,
         run_id=run_id,
         created_at=utc_now(),
@@ -168,3 +176,148 @@ def test_a_model_the_registry_does_not_know_changes_nothing(tmp_path: Path, conf
     campaign_id = world.campaign()
     assert world.treat_list().status_code == 200
     assert world.plan(campaign_id).status_code == 201
+
+
+# ---------------------------------------------------------------------------
+# DEC-1620 (M190): an arbitrated list is held when ANY run it was built from used a model that is not approved
+# ---------------------------------------------------------------------------
+OTHER_RUN = "r_20261011_9a000002"
+OTHER_GOAL = "cross-sell-goal"
+OTHER_MODEL = f"m_{OTHER_GOAL}_1"
+
+
+class ArbitratedWorld:
+    """Two goals' scoring runs arbitrated into one list (Plan J M101, `POST /decide/arbitrate`).
+
+    The first run (the win-back goal, its model approved) gets the cycle's campaign. The second (another goal, scored
+    with `OTHER_MODEL`, registered waiting for approval) wins customers of its own but holds nobody back, so no
+    campaign names it: a campaign record names only its own first run, so before DEC-1620 nothing checked the second
+    run's model.
+    """
+
+    def __init__(
+        self, tmp_path: Path, config_root: Path, *, other_overrides: dict[str, Any] | None = None
+    ) -> None:
+        self.data_dir = tmp_path / "data"
+        self.data_dir.mkdir()
+        self.storage = LocalStorage(self.data_dir)
+        self.run = write_run(self.storage, RUN, kind="propensity", rows=400)
+        overrides = {"actions.control_group_fraction": 0.0} | (other_overrides or {})
+        write_run(self.storage, OTHER_RUN, kind="uplift", rows=400, value=True, config_overrides=overrides)
+        record = self.storage.read_model(run_key(OTHER_RUN, RUN_FILENAME), RunRecord)
+        self.storage.write_model(
+            run_key(OTHER_RUN, RUN_FILENAME),
+            record.model_copy(
+                update={
+                    "use_case_id": OTHER_GOAL,
+                    "use_case_name": "Cross-sell",
+                    "model_version_id": OTHER_MODEL,
+                }
+            ),
+        )
+        for run_id in (RUN, OTHER_RUN):
+            ensure_treat_list(self.storage, run_id)
+        self.registry = LocalModelRegistry(self.data_dir / REGISTRY_FILENAME)
+        self.registry.register(_version(MODEL, 1))
+        self.registry.approve(MODEL, by="approver")
+        self.registry.register(_version(OTHER_MODEL, 2, OTHER_GOAL))
+        self.app = create_app(config_root=config_root, data_dir=self.data_dir)
+        self.client = TestClient(self.app)
+
+    def arbitrate(self) -> str:
+        """Arbitrate the two runs; the campaign the cycle made (the first run's: the second holds nobody back)."""
+        response = self.client.post("/decide/arbitrate", json={"run_ids": [RUN, OTHER_RUN]})
+        assert response.status_code == 200, response.text
+        made = {c["run_id"]: c for c in response.json()["campaigns"]}
+        assert made[OTHER_RUN]["outcome"] == "skipped", made
+        assert (
+            response.json()["summary"]["winning_by_use_case"][OTHER_GOAL] > 0
+        ), "the second run is in the list"
+        return str(made[RUN]["campaign_id"])
+
+    def plan(self, campaign_id: str) -> Any:
+        body = {
+            "metric": "came back within 90 days",
+            "outcome_column": self.run.config.target.column,
+            "analysis_date": "2027-03-01",
+        }
+        return self.client.post(f"/campaigns/{campaign_id}/plan", json=body)
+
+    def arbitrated_lists(self) -> list[Any]:
+        """Every route the arbitrated list is downloaded from."""
+        return [
+            self.client.get("/decide/arbitrated-treat-list.csv"),
+            self.client.get("/decide/arbitrated-treat-list.parquet"),
+            self.client.get(f"/runs/{RUN}/artefacts/{ARBITRATED_TREAT_LIST_CSV}"),
+            self.client.get(f"/runs/{RUN}/artefacts/{ARBITRATED_TREAT_LIST_PARQUET}"),
+            self.client.get(f"/runs/{OTHER_RUN}/artefacts/{ARBITRATED_TREAT_LIST_CSV}"),
+        ]
+
+
+def test_an_arbitrated_campaign_whose_second_run_used_a_waiting_model_is_held(
+    tmp_path: Path, config_root: Path
+) -> None:
+    world = ArbitratedWorld(tmp_path, config_root)
+    campaign_id = world.arbitrate()
+
+    refused = world.plan(campaign_id)
+    _refused(refused)
+    message = refused.json()["detail"]["message"]
+    assert OTHER_RUN in message and "Cross-sell" in message and "waiting for an Approver" in message, message
+    for response in world.arbitrated_lists():
+        _refused(response)
+        assert OTHER_RUN in response.json()["detail"]["message"]
+    # Unchanged: each run's own list (the first run's model is approved; no campaign names the second run, plan.md
+    # section 11), the second run's scores (DEC-050) and the arbitration's counts.
+    assert world.client.get(f"/runs/{RUN}/treat_list.csv").status_code == 200
+    assert world.client.get(f"/runs/{OTHER_RUN}/treat_list.csv").status_code == 200
+    assert world.client.get(f"/runs/{OTHER_RUN}/scores.csv").status_code == 200
+    assert world.client.get("/decide/arbitrate").status_code == 200
+
+    # Every model approved: the same list and the same campaign's plan go through.
+    world.registry.approve(OTHER_MODEL, by="approver")
+    for response in world.arbitrated_lists():
+        assert response.status_code == 200, response.text
+    assert world.plan(campaign_id).status_code == 201
+
+
+def test_an_arbitrated_campaign_whose_second_run_used_a_turned_down_model_is_held(
+    tmp_path: Path, config_root: Path
+) -> None:
+    world = ArbitratedWorld(tmp_path, config_root)
+    world.registry.archive(OTHER_MODEL, expected_status=ModelStatus.PENDING_APPROVAL)
+    campaign_id = world.arbitrate()
+    _refused(world.plan(campaign_id))
+    for response in world.arbitrated_lists():
+        _refused(response)
+        assert "turned down" in response.json()["detail"]["message"]
+
+
+def test_an_arbitrated_campaign_is_served_when_every_model_is_approved(
+    tmp_path: Path, config_root: Path
+) -> None:
+    world = ArbitratedWorld(tmp_path, config_root)
+    world.registry.approve(OTHER_MODEL, by="approver")
+    campaign_id = world.arbitrate()
+    for response in world.arbitrated_lists():
+        assert response.status_code == 200, response.text
+    assert world.plan(campaign_id).status_code == 201
+
+
+def test_an_arbitrated_campaign_is_served_when_the_waiting_models_run_does_not_require_approval(
+    tmp_path: Path, config_root: Path
+) -> None:
+    world = ArbitratedWorld(tmp_path, config_root, other_overrides={"governance.approval_required": False})
+    campaign_id = world.arbitrate()
+    for response in world.arbitrated_lists():
+        assert response.status_code == 200, response.text
+    assert world.plan(campaign_id).status_code == 201
+
+
+def test_an_arbitrated_list_no_campaign_names_is_served(tmp_path: Path, config_root: Path) -> None:
+    """An arbitration whose runs no campaign record names is not a campaign's list (plan.md section 11): served."""
+    world = ArbitratedWorld(tmp_path, config_root)
+    world.arbitrate()
+    world.app.state.campaign_store = InMemoryCampaignStore()  # no campaign recorded
+    for response in world.arbitrated_lists():
+        assert response.status_code == 200, response.text

@@ -811,6 +811,42 @@ MILESTONE_TESTS: Final[Mapping[str, tuple[str, ...]]] = {
         "tests/integration/production/test_approvals_identity.py",
         "tests/unit/agentic/test_verified_identity.py",
     ),
+    # M185 (DEC-1615), the look's foundation: ui/theme.css, the Inter font and ui/components.js. test_components_ui.py
+    # checks the sheet, the font and the bridges and runs components.test.mjs; test_accessibility_ui.py runs
+    # contrast.test.mjs over theme.css's tokens; test_shell_ui.py's classic differential strips M185's marks;
+    # test_shell_browser.py and test_brand_browser.py are the look in Chromium (both layouts, a custom brand colour).
+    "M185": (
+        "tests/integration/test_components_ui.py",
+        "tests/integration/test_accessibility_ui.py",
+        "tests/integration/test_shell_ui.py",
+        "tests/integration/test_shell_browser.py",
+        "tests/integration/test_brand_browser.py",
+        "tests/integration/test_ui.py",
+    ),
+    # M186 (DEC-1616), the look of the Overview, the Campaigns list and the campaign page. test_campaigns_page_ui.py
+    # runs campaigns/look.test.mjs; test_overview_ui.py runs overview.test.mjs; test_campaigns_look_browser.py is
+    # Chromium at 1440 and 390 px.
+    "M186": (
+        "tests/integration/test_campaigns_look_browser.py",
+        "tests/integration/test_campaigns_page_ui.py",
+        "tests/integration/test_overview_ui.py",
+        "tests/integration/test_components_ui.py",
+    ),
+    # M187 (DEC-1617), the look of the New campaign wizard. test_campaign_wizard_look.py runs wizard_look.test.mjs
+    # and checks the wizard in Chromium (1440, 390 and 320 px, a touch screen); test_campaign_wizard_ui.py runs the
+    # wizard's cases (the chosen goal is forgotten on leaving).
+    "M187": (
+        "tests/integration/test_campaign_wizard_look.py",
+        "tests/integration/test_campaign_wizard_ui.py",
+    ),
+    # M188 (DEC-1618), the look of Reports, Data, Settings and Help. test_reports_ui.py, test_data_ui.py and
+    # test_simple_ui.py run reports/, data/ and simple/look.test.mjs; test_look_pages_browser.py is slow (Chromium).
+    "M188": (
+        "tests/integration/test_look_pages_browser.py",
+        "tests/integration/test_reports_ui.py",
+        "tests/integration/data_page/test_data_ui.py",
+        "tests/integration/simple/test_simple_ui.py",
+    ),
     "M189": (
         "tests/unit/test_run_progress.py",
         "tests/unit/test_run_progress_pipeline.py",
@@ -818,6 +854,8 @@ MILESTONE_TESTS: Final[Mapping[str, tuple[str, ...]]] = {
         "tests/integration/test_run_progress_ui.py",
         "tests/integration/test_ui.py",
     ),
+    # M190 (DEC-1620), the MODEL_NOT_APPROVED hold covers every run an arbitrated list was built from.
+    "M190": ("tests/integration/production/test_model_not_approved.py",),
     # --- Plan O (docs/plans/MARKETING_AI_PLAN_O_DATA_DOCTOR.md); each milestone adds its own entry. ---
     # M230 (DEC-1800), the set-up: the PLAN-O blocks, PLAN_O_CODES in the catalogue check, the switch
     # `data_doctor.unified` (off, validated, round-trips, left out of run_config.json while off).
@@ -825,6 +863,68 @@ MILESTONE_TESTS: Final[Mapping[str, tuple[str, ...]]] = {
         "tests/unit/test_shared_file_markers.py",
         "tests/unit/pilot/test_help.py",
         "tests/unit/doctor/test_plan_o_setup.py",
+    ),
+    # Plan O wave 1 (merged together; each behind `data_doctor.unified`, off).
+    # M231 (DEC-1801), the case: contracts, the version lock, per-client scope, retention, erasure, /cases.
+    "M231": (
+        "tests/unit/doctor/test_case.py",
+        "tests/unit/production/test_case_privacy.py",
+        "tests/integration/test_api_cases.py",
+    ),
+    # M232 (DEC-1802), one tool registry: kinds, roles per call, evidence ids, budgets, the canary, parity; and
+    # the wave's tools registered by their catalogue rows (DEC-1802 (t)).
+    "M232": (
+        "tests/unit/doctor/test_registry.py",
+        "tests/unit/doctor/test_registry_runtime.py",
+        "tests/unit/doctor/test_registry_canary.py",
+        "tests/unit/doctor/test_plan_o_wave_one.py",
+    ),
+    # M234 (DEC-1804), the readiness report: the nine gaps, the invariant, agreement with POST /runs.
+    "M234": (
+        "tests/unit/doctor/test_readiness_gaps.py",
+        "tests/unit/doctor/test_readiness_invariant.py",
+        "tests/unit/doctor/test_readiness_report.py",
+        "tests/integration/test_readiness_agrees_with_runs.py",
+        "tests/integration/test_readiness_benchmark.py",
+    ),
+    # M237 (DEC-1807), several files: normalise_key, join_files, stack_files, build_dataset and its replay.
+    "M237": (
+        "tests/unit/agent/test_key_steps.py",
+        "tests/unit/doctor/test_join_files.py",
+        "tests/unit/doctor/test_stack_files.py",
+        "tests/unit/doctor/test_build_driver.py",
+        "tests/unit/doctor/test_tools_files.py",
+        "tests/unit/doctor/test_outcomes_key_rules.py",
+        "tests/integration/test_m237_several_files.py",
+    ),
+    # M238 (DEC-1808), row and value tools: keep_latest_per_id, impossible values, synonyms, units, split_file.
+    "M238": (
+        "tests/unit/doctor/test_keep_latest.py",
+        "tests/unit/doctor/test_tools_rows.py",
+        "tests/unit/doctor/test_split_file.py",
+        "tests/unit/doctor/test_detect_units.py",
+        "tests/unit/doctor/test_synonym_clusters.py",
+        "tests/unit/doctor/test_impossible_values.py",
+        "tests/unit/doctor/test_change_share_and_reshape_guard.py",
+    ),
+    # M240 (DEC-1810), input formats and parser safety: other formats, parser loss, leading zeros, sheets.
+    "M240": (
+        "tests/unit/doctor/test_parser_loss.py",
+        "tests/unit/doctor/test_tools_formats.py",
+        "tests/unit/intake/test_other_formats.py",
+        "tests/unit/intake/test_leading_zeros.py",
+        "tests/unit/intake/test_split_workbook.py",
+        "tests/unit/agent/test_excel_serial_dates.py",
+        "tests/unit/agent/test_text_columns_replay.py",
+    ),
+    # M241 (DEC-1811), the locale profile and Indian formats, and Hinglish headers behind the switch.
+    "M241": (
+        "tests/unit/doctor/test_india_ids.py",
+        "tests/unit/doctor/test_indian_values.py",
+        "tests/unit/doctor/test_locale.py",
+        "tests/unit/doctor/test_tools_locale.py",
+        "tests/unit/agent/test_egress_india_ids.py",
+        "tests/unit/agent/test_header_switch_unified.py",
     ),
 }
 """Milestone id -> the test files (or directories, with a trailing `/`) that prove it is built.

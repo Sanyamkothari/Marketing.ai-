@@ -359,6 +359,14 @@ summary:focus-visible,
   min-height: 24px;
   padding: 0 var(--s1);
 }
+/* a touch screen: a small button is still a 40 px target (M186-M188 reviews; pages may keep their own rules) */
+@media (pointer: coarse) {
+  .btn.sm,
+  .btn.tertiary.sm,
+  .btn.quiet.sm {
+    min-height: 40px;
+  }
+}
 .btn[disabled],
 .btn[aria-disabled="true"],
 .run[disabled] {
@@ -795,6 +803,10 @@ summary:focus-visible,
   min-width: 8px;
   border-radius: 4px;
   background: var(--brand-200);
+}
+/* with no estimate dot the bar is the only mark, so it takes the full brand colour (M187 review) */
+.vrange:not(:has(.vr-dot)) .vr-bar {
+  background: var(--brand-blue);
 }
 .vrange .vr-dot {
   position: absolute;
@@ -1372,23 +1384,14 @@ input[type="radio"] {
 }
 
 /* ---- 8 status bridges: markup drawn before M185 shows the status mapping (icon + word + tone) -------------- */
-/* The Campaigns list and page's status chip (ui/modules/campaigns/status.js STATUS tones), until M187 draws
-   components.js statusChip. Measured = good, Live = info (brand), Waiting for results = warning, Draft = neutral.
-   Reports' evidence label (value_proof.js: <span data-claim="proven|estimated|not-proven"> around a pill or chip) and
-   the health chips of Data and Connections (.cn-badge with data-dt-status / data-cn-status), until
-   M187/M188 draw components.js statusChip('evidence' | 'health', ...): the same tones and icons as statusOf. */
-.chip.cp-status,
-[data-claim] > .pill,
-[data-claim] > .chip,
-.cn-badge[data-dt-status],
+/* The health chips of Connections (.cn-badge with data-cn-status), until that page draws components.js
+   statusChip('health', ...): the same tones and icons as statusOf. The bridges for the campaign status chip
+   (.chip.cp-status), Reports' evidence label ([data-claim] > .pill / .chip) and Data's health chip
+   (.cn-badge[data-dt-status]) were removed at the look's integration: M186 and M188 draw statusChip there. */
 .cn-badge[data-cn-status] {
   border: 0;
   font-weight: 600;
 }
-.chip.cp-status::before,
-[data-claim] > .pill::before,
-[data-claim] > .chip::before,
-.cn-badge[data-dt-status]::before,
 .cn-badge[data-cn-status]::before {
   content: "";
   flex: none;
@@ -1398,45 +1401,6 @@ input[type="radio"] {
   -webkit-mask: var(--ds-icon) center / 12px no-repeat;
   mask: var(--ds-icon) center / 12px no-repeat;
 }
-.chip.cp-status.cp-ok {
-  background: var(--good-t);
-  color: var(--good);
-  --ds-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20 6 9 17l-5-5'/%3E%3C/svg%3E");
-}
-.chip.cp-status.cp-live {
-  background: var(--brand-50);
-  color: var(--brand-blue);
-  --ds-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Ccircle cx='12' cy='12' r='6' fill='black'/%3E%3C/svg%3E");
-}
-.chip.cp-status.cp-warn {
-  background: var(--warning-t);
-  color: var(--warning);
-  --ds-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.25' stroke-linecap='round'%3E%3Ccircle cx='12' cy='12' r='9'/%3E%3Cpath d='M12 7v5l3 2'/%3E%3C/svg%3E");
-}
-.chip.cp-status.cp-neutral {
-  background: var(--neutral-t);
-  color: var(--neutral);
-  --ds-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.25' stroke-dasharray='3 3'%3E%3Ccircle cx='12' cy='12' r='8'/%3E%3C/svg%3E");
-}
-[data-claim="proven"] > .pill,
-[data-claim="proven"] > .chip {
-  background: var(--good-t);
-  color: var(--good);
-  --ds-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.25' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='9'/%3E%3Cpath d='m8.5 12 2.5 2.5 4.5-5'/%3E%3C/svg%3E");
-}
-[data-claim="estimated"] > .pill,
-[data-claim="estimated"] > .chip {
-  background: var(--brand-50);
-  color: var(--brand-blue);
-  --ds-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.25' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M5 9c2-2 4-2 7 0s5 2 7 0'/%3E%3Cpath d='M5 15c2-2 4-2 7 0s5 2 7 0'/%3E%3C/svg%3E");
-}
-[data-claim="not-proven"] > .pill,
-[data-claim="not-proven"] > .chip {
-  background: var(--neutral-t);
-  color: var(--neutral);
-  --ds-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.25' stroke-dasharray='3 3'%3E%3Ccircle cx='12' cy='12' r='8'/%3E%3C/svg%3E");
-}
-.cn-badge[data-dt-status="read"],
 .cn-badge[data-cn-status="connected"] {
   background: var(--good-t);
   color: var(--good);

@@ -375,6 +375,23 @@ import mimetypes  # noqa: E402
 mimetypes.add_type("font/woff2", ".woff2")
 # ---- END PLAN-M ----
 # ---- PLAN-O (Data Doctor) — append only below this line ----
+
+
+# Plan O M231 (DEC-1801): the /cases routes, mounted only when `data_doctor.unified` is on (configs/engine.yaml
+# defaults, M230). Off - the default - only the switch reader is imported: no route is mounted and docs/API.md
+# is unchanged; the OpenAPI schema gains the additive retention enum values case_data, case_log and
+# forget_upload, RetentionItem.upload_id and RetentionResult.forgotten.
+def _install_cases(app: FastAPI) -> None:
+    from engine.doctor import case as doctor_case
+
+    if doctor_case.data_doctor_unified(app.state.config_root):
+        from api.routes.cases import router as cases_router
+
+        app.include_router(cases_router)
+
+
+PHASE_APP_HOOKS.append(_install_cases)
 # ---- END PLAN-O ----
+
 
 app: FastAPI = create_app()
