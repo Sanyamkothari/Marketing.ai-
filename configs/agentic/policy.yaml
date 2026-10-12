@@ -306,3 +306,14 @@ data:
       rules: [data.never_ticked, data.approve_class]
       tick_only_sure: true
       approve: always
+    # M244 (DEC-1814): time settings. The budget is a setting, not APPROVE-class: three plain choices, Balanced
+    # offered ticked only when the rules are sure (past runs here close in size). The data time settings carry no
+    # step; the outcome window and lapse stay the outcome definition's (APPROVE-class, `data.define_outcome`).
+    data.propose_training_budget:
+      proposes: plan
+      rules: [data.never_ticked]
+      tick_only_sure: true
+    data.propose_time_settings:
+      proposes: plan
+      rules: [data.never_ticked]
+      tick_only_sure: true

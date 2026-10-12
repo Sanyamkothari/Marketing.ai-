@@ -371,6 +371,13 @@ CALLS: Final[dict[str, Calls | None]] = {
     ),
     "map_outcome_values": lambda columns: [{"column": column} for column in columns],
     "check_target_type": _each("column"),
+    # Plan O M244 (DEC-1814): the time-settings tools, with every column named as the date each row describes
+    # (a column that is not a date is refused, and the refusal must be clean too) and as the outcome.
+    "estimate_training_time": _fixed({}, {"minutes": 5}, {"minutes": 240}),
+    "propose_training_budget": _fixed({}),
+    "propose_time_settings": lambda columns: [{}, {"window_days": 30}]
+    + [{"as_of_column": column} for column in columns]
+    + [{"outcome_column": column} for column in columns],
 }
 """Per registered tool, the calls it is evaluated with (None: a chat suggestion, evaluated by chat sessions)."""
 

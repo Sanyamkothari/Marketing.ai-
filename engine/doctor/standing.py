@@ -41,6 +41,7 @@ from engine.doctor.case import CASE_PREFIX, CLIENT_ID_PATTERN, CaseQuestion, pay
 from engine.storage import Storage, StorageError
 
 __all__ = [
+    "PER_FILE_KEY",
     "STANDING_CODES",
     "STANDING_FILENAME",
     "StandingAnswer",
@@ -115,9 +116,23 @@ _FILE_IDS: Final[frozenset[str]] = frozenset(
 """Keys naming the file, case or evidence a change was made on: not part of what the change means."""
 
 
+PER_FILE_KEY: Final[str] = "per_file"
+"""An effect payload may name, under this key, its own keys whose values are worked out again on each file (Plan O
+M244: the cut-off date of "leave the newest month out", and the recipe step carrying it). They are not part of what
+the choice means, so next month's file - a later cut-off - applies the same answer instead of asking again."""
+
+
 def _without_ids(value: object) -> object:
     if isinstance(value, Mapping):
-        return {str(k): _without_ids(v) for k, v in value.items() if str(k) not in _FILE_IDS}
+        own = value.get(PER_FILE_KEY)
+        recomputed = {str(k) for k in own} if isinstance(own, list | tuple) else set()
+        if recomputed:
+            recomputed.add(PER_FILE_KEY)
+        return {
+            str(k): _without_ids(v)
+            for k, v in value.items()
+            if str(k) not in _FILE_IDS and str(k) not in recomputed
+        }
     if isinstance(value, list | tuple):
         return [_without_ids(v) for v in value]
     return value

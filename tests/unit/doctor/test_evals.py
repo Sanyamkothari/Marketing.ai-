@@ -82,9 +82,8 @@ def test_every_catalogue_tool_is_listed_and_an_unregistered_one_is_not_built_yet
     # Plan O M239 (DEC-1809) built `define_outcome`; `map_consent` (#67) stands in as the M239 row not built yet.
     assert statuses["define_outcome"].built
     for name, milestone in (
-        ("map_consent", "M239"),
-        ("estimate_training_time", "M244"),
-        ("drift_check", "M245"),
+        ("map_consent", "M239"),  # define_outcome stood here until M239 (DEC-1809) built it
+        ("drift_check", "M245"),  # estimate_training_time stood here until M244 (DEC-1814) built it
     ):
         assert not statuses[name].built and statuses[name].built_by == milestone
     assert {s.name for s in statuses.values() if s.built} == set(data_registry().names()) - {"chat_turn"}
@@ -514,7 +513,7 @@ def _status(name: str) -> Any:
 def test_the_kill_criterion_per_tool() -> None:
     passed = PassK(tool="t", k=5, runs=5, identical=True, acceptable_runs=5, harmful_runs=0, proposals=1)
     failed = passed.model_copy(update={"identical": False})
-    assert kill_verdict(ToolEval(status=_status("estimate_training_time"))) == "not built yet (M244)"
+    assert kill_verdict(ToolEval(status=_status("map_consent"))) == "not built yet (M239)"
     assert kill_verdict(ToolEval(status=_status("stack_files"), pass_k=passed)) == "keep"
     step = ToolEval(status=_status("propose_step"), pass_k=None, ai_pass_k=failed)
     assert kill_verdict(step).startswith("pass^5 below 100%: switch its AI path off")
@@ -533,18 +532,15 @@ def test_the_report_puts_harm_first_lists_tools_not_built_and_says_what_was_not_
         tools=tools,
         files=(
             BenchFile(
-                name="x06",
-                group="extended",
-                use_case="targeted-advertisement",
-                needs=("estimate_training_time",),
+                name="x06", group="extended", use_case="targeted-advertisement", needs=("map_consent",)
             ),
         ),
         notes=("Parts run: tools.",),
     )
     text = render_markdown(report)
     assert text.index("## Harm metrics") < text.index("## Tools")
-    assert "### Not built yet" in text and "| 79 | estimate_training_time | read | M244 |" in text
-    assert "waits for estimate_training_time (not built yet)" in text
+    assert "### Not built yet" in text and "| 67 | map_consent | propose | M239 |" in text
+    assert "waits for map_consent (not built yet)" in text
     assert "The 20 held-out Indian files" in text and "**Not run in this report**" in text
     assert "not measured: no held-out file was run" in text
     assert "not measured: no benchmark file was run" in text

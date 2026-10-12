@@ -36,7 +36,7 @@ import itertools
 import re
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
-from typing import Any, Final
+from typing import TYPE_CHECKING, Any, Final
 
 import pandas as pd
 
@@ -80,6 +80,9 @@ from engine.config import (
 )
 from engine.stages import ingest
 from engine.utils.logging import get_logger
+
+if TYPE_CHECKING:
+    from engine.doctor.time_settings import TrainingBudget
 
 __all__ = [
     "NEVER_TICKED_STEPS",
@@ -1614,7 +1617,10 @@ def _settings(
     holdout = holdout_advice(config, facts)  # worked out once; the rules and the notes read the same answer
     # A consent column found only by reading its header is never ticked for the person (M142).
     read_consent = {str(c["column"]) for c in _header_rank(roles, "consent") if not c.get("hinted")}
-    for rec in recommend_settings(config, facts, schema, config_root=prepared.config_root, holdout=holdout):
+    budget = _training_budget(prepared, facts)
+    for rec in recommend_settings(
+        config, facts, schema, config_root=prepared.config_root, holdout=holdout, training_budget=budget
+    ):
         builder.propose(
             kind=ProposalKind.SETTING,
             title=rec.title,
@@ -1636,6 +1642,47 @@ def _settings(
         )
     builder.assumptions.extend(holdout_notes(holdout))
     _reason_wording(builder, prepared, key, target, exclude)
+
+
+def _training_budget(ctx: AgentContext, facts: DataFacts) -> TrainingBudget | None:
+    """Plan O M244 (DEC-1814), behind `data_doctor.unified`, with the deployment's store: the three training-time
+    choices worked out on this deployment's past runs, and kept beside the file as the offer, so the setting the
+    advisor suggests and the promise the run is held to come from one computation. None without a store (the
+    library's runs are then the prior, `recommend._budget_rules`) or for a learner that takes no time limit.
+    """
+    if not ctx.config.data_doctor.unified or ctx.run_history is None:
+        return None
+    from engine.doctor.time_settings import (
+        TimeOffer,
+        TimeSettingsError,
+        propose_budget,
+        save_offer,
+        source_kind_of,
+        time_inputs,
+    )
+    from engine.storage import StorageError
+
+    columns = max(1, len(facts.columns))
+    try:
+        budget = propose_budget(time_inputs(ctx.run_history, ctx.config, rows=facts.rows, columns=columns))
+    except TimeSettingsError:
+        return None  # this goal's learner takes no time limit
+    try:
+        save_offer(
+            ctx.run_history,
+            TimeOffer(
+                use_case_id=ctx.config.id,
+                source_kind=source_kind_of(ctx.run_history, ctx.upload_id),
+                source_id=ctx.upload_id,
+                offered_at=ctx.clock(),
+                rows=facts.rows,
+                columns=columns,
+                budget=budget,
+            ),
+        )
+    except StorageError:  # the run then keeps an estimate from the same history (`promised_tracker`)
+        _LOGGER.warning("advisor: the training-time offer for upload %s could not be kept", ctx.upload_id)
+    return budget
 
 
 _REASON_WORDING_SHOWN: Final[int] = 3
