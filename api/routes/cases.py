@@ -1,6 +1,6 @@
 """Data Doctor's cases (Plan O M231, DEC-1801): one persistent object per piece of data work.
 
-Mounted only when `data_doctor.unified` is on (the `PLAN-O (M231)` hook in `api/main.py`): with it off -
+Mounted only when `data_doctor.unified` is on (the `_install_cases` hook in `api/main.py`'s PLAN-O block): with it off -
 the default - none of these paths exists and docs/API.md is unchanged. (The OpenAPI schema still gains the
 additive retention values `case_data`, `case_log`, `forget_upload`, `RetentionItem.upload_id` and
 `RetentionResult.forgotten`, which `engine.privacy` defines whatever the switch.)
