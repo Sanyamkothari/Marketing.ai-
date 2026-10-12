@@ -179,6 +179,23 @@ SPECS: dict[str, Calls | None] = {
     "check_uplift_data": _fixed({"primary_key": "customer_id", "target": "converted_30d"}),
     "read_run_checks": lambda _columns: [{"run_id": _IDS["run"]}],
     "request_approval": lambda _columns: [{"evidence_id": evidence} for evidence in _IDS["evidence"]],
+    # Plan O M239 (DEC-1809): the outcome tools, on every column and on the case's event files.
+    "define_outcome": _fixed(
+        {"kind": "event_presence"},
+        {"kind": "event_presence", "event_upload_id": EVENTS, "date_column": "bill_date", "days": 30},
+        {"kind": "event_absence", "event_upload_id": EVENTS, "days": 60, "grace_days": 7},
+        {
+            "kind": "value_threshold",
+            "event_upload_id": EVENTS,
+            "days": 30,
+            "column": "amount",
+            "operator": ">",
+            "threshold": 500,
+        },
+    ),
+    "map_outcome_values": lambda columns: [{"column": column} for column in columns]
+    + [{"column": "region_contact", "map": {"North": "yes", "South": "no"}}],
+    "check_target_type": _each("column"),
 }
 
 _IDS: dict[str, Any] = {}
