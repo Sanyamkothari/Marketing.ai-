@@ -1053,3 +1053,89 @@ All four are `session-only` and rules only; `engine/doctor/tools_locale.py` decl
 - `M` is read as a million when the parameter is on; in a column whose header names a unit (`data_usage`, `_mb`)
   the proposal is `check`. Mixed spellings in one value (`1 Cr 20 L`) are not read.
 - Old-format voter IDs (state codes with slashes) are not recognised; only today's three letters and seven digits.
+
+## 16. A policy for every proposal kind (Plan O M233, DEC-1803)
+
+### 16.1 In plain words
+
+Every PROPOSE kind of Data Doctor has a **default-deny rule set** in `configs/agentic/policy.yaml` (section
+`data:`), applied by `engine/doctor/policy.py`. It is Plan K's policy shape (`engine/agentic/policy.py`) for data:
+rules are pure functions of `(DataProposal, DataPolicyContext)` returning Plan K's `Decision`; the context is
+computed by the server (the session's ID and outcome, the profile's personal columns, the use case's levels with
+decision O3's reshape, the listed settings, the approval facts), never taken from what a model wrote. Plan K's own
+rules, rule sets and `KNOWN_RULES` are unchanged; its `PolicyConfig` only gained the `data` field (plain data).
+
+### 16.2 The rules
+
+| Rule | Refuses (code) |
+|---|---|
+| `data.step_kind` | a step kind the set does not list (`AGENT_STEP_NOT_ALLOWED`, or the set's `not_allowed_code`, `AGENT_EDIT_NOT_ALLOWED` for a person's edit) |
+| `data.step_params` | a parameter the set does not allow for that kind, or a required value missing (`RECIPE_STEP_INVALID`) |
+| `data.spellings` | a yes/no step without both sides or with one spelling on both (`RECIPE_STEP_INVALID`, `check_recipe`'s code and words today); `na`, or - from the rules - a spelling outside the English, Hinglish and Devanagari lexicons (`POLICY_BOOLEAN_SPELLING`) |
+| `data.protected_columns` | a step on the ID or the outcome, a new column named as either or computed from the outcome, a row-changing step that chooses rows by the outcome (`RECIPE_STEP_INVALID`) |
+| `data.personal_data` | any step but hiding on a personal-data column (the set's `not_allowed_code`) |
+| `data.level` | a step above the set's levels or the use case's (`RECIPE_STEP_INVALID`) |
+| `data.grounded` | an AI step citing no look at its column (`AGENT_STEP_UNGROUNDED`) |
+| `data.tried` | an AI step not tried on the first `trial_rows` rows (`POLICY_STEP_NOT_TRIED`) |
+| `data.never_ticked` | a proposal offered ticked when it is the AI's, of a `never_ticked_steps` kind, or not `sure` where the set has `tick_only_sure` (`POLICY_NEVER_TICKED`); a person's own edit is ticked by them |
+| `data.change_share` | decision O10 on an AI step: above `refuse_pct` (60) `AI_STEP_CHANGES_TOO_MANY`; above `warn_pct` (30) allowed with `warning: AI_STEP_CHANGES_MANY`. Re-typing kinds (`parse_number`, `parse_date`, `map_boolean`, `convert_units`) count the values they could not read; a step that rewrites none of its column's values (`rename_column`, `drop_column`, a step writing `new_column`, such as `split_column`) counts none (`policy.effect_of`, `keeps_its_values`) |
+| `data.setting` | a setting in `settings_never_suggested`, not listed, advisory, or out of its choices or range (`AGENT_SETTING_NOT_ALLOWED`) |
+| `data.approve_class` | APPROVE-class items (`approve: always`, or `above_drop_share` > `approve_drop_share_pct`, 2%): offered without their sentence (`POLICY_PAYLOAD_INVALID`); at approval, an approver without the set's role (`TOOL_ROLE_REQUIRED`), a sentence that changed (`APPROVAL_SENTENCE_CHANGED`), or the proposer approving while `governance.approval_required` is on (`POLICY_ROLE_SEPARATION`) |
+| `data.reshape_guard` | decision O3: a row-changing step not offered through its question; at approval, M238's `reshape_guard_failures` on each item (`RESHAPE_GUARD_MISSING`) |
+
+Default deny: a kind with no rule set, or a policy file that cannot be read, `POLICY_NO_RULES`; a proposal not
+shaped as its set's `proposes` (`steps`, `setting`, `plan`), `POLICY_PAYLOAD_INVALID`; a set none of whose rules
+applies, `POLICY_NO_RULES`.
+
+### 16.3 The rule sets shipped
+
+`data.setting` (`propose_setting`), `data.recipe_step` (`propose_step`, the chat: `loop.CHAT_STEP_KINDS`, no Excel
+day numbers), `data.person_edit` (`edit_by_hand`: `edits.PERSON_STEP_KINDS`), `data.normalise_key`,
+`data.join_files`, `data.stack_files`, `data.build_dataset` (M237), `data.keep_latest_per_id`, `data.split_file`,
+`data.synonym_clusters`, `data.impossible_values`, `data.detect_units` (M238), `data.excel_serial_dates` (M240's
+`find_excel_serial_dates`), `data.parse_indian_numbers`, `data.indian_booleans` (M241). A tool's kind is
+`policy_kind_for(name)`: `data.<tool>` unless `POLICY_KINDS` names another. The catalogue's other PROPOSE tools
+(`define_outcome`, `convert_currency`, `map_consent`, ...) have no rule set yet, so they are refused until their
+milestone adds one.
+
+### 16.4 Where it is asked (behind `data_doctor.unified`)
+
+- **The registry** (`DataToolRegistry.call`): a tool that proposes - a PROPOSE tool, or a READ tool that returns
+  pending steps (`DataTool.step_kinds`: M238's `synonym_clusters`, `impossible_values`, `detect_units`, M240's
+  `find_excel_serial_dates`) - is refused after the role check and before it runs when its kind
+  (`DataTool.proposal_kind`) has no rule set (`POLICY_NO_RULES`, 403). After it runs, before its result is
+  recorded, `policy.check_tool_output` reads every proposal in its output (`OUTPUT_READERS`: the steps with their
+  source, ticked state and confidence, an AI step's measured effect, the reshape's question, rows in and out, the
+  APPROVE-class sentence) and raises the first refusal with its code (403). An output the policy cannot read is
+  `POLICY_PAYLOAD_INVALID`. The chat's and the person's kinds (`HANDLER_CHECKED`) are decided in their handlers.
+  Facts for a call: `policy.tool_policy_context` (for the several-file kinds of M237, `FILES_KINDS`, no single
+  file's ID is protected, since `normalise_key` writes the key by design). M241's `sure` proposals are read as
+  offered ticked (`tick_only_sure` allows them); M238's look tools are `tick_only_sure` too, and their steps are
+  always `check`, so they are never offered ticked.
+- **The chat** (`loop._propose_step`, `loop._propose`) and **the person's edits** (`edits.add_edit`): after each of
+  their own checks, the same rule of the policy, raising the same code (`policy.agent_gate`). The hard-coded checks
+  stay as the second check, so on a fixture set every refusal today is still a refusal with the same code
+  (`tests/unit/doctor/test_policy_runtime.py`). After the 1,000-row trial the chat also asks `data.tried`,
+  `data.change_share` and `data.never_ticked`.
+- **Ticking**: `advisor._ticked`, the preview and `session.accept_recommended` read `NEVER_TICKED_STEPS` plus the
+  policy's `never_ticked_steps` (`policy.never_ticked_steps`); the policy can only add kinds.
+- With the switch off none of this is read (`test_with_the_switch_off_the_policy_is_never_read`).
+
+### 16.5 Adding a PROPOSE kind
+
+Add its rule set to `configs/agentic/policy.yaml`, name it in the tool's `policy_kind`, and extend
+`tests/unit/doctor/policy_cases.py` if a new rule is needed. The mutation tests (after Plan K's
+`engine/agentic/evals.py` `mutation_test`) kill every mutant: each rule removed from `DATA_RULES`, and each rule left
+out of each rule set that names it, changes some fixture's decision (`test_policy_mutation.py`). A rule a set can
+never apply fails that test, so it cannot be listed for show.
+
+### 16.6 Not wired yet
+
+- The approval-time half (`ApprovalFacts`: exact sentence, role, separation, M238's reshape guards) is evaluated by
+  the policy but Plan G's Approve route does not call it yet: the session does not record whether a preview was
+  shown or which sentence was read. M246 (the protocol) wires it.
+- O10's warning (`AI_STEP_CHANGES_MANY`) is returned in the decision's detail; showing it is M246/M247's.
+- The wave-1 tools are registered at integration (`engine/doctor/tools_wave_one.py` on `integrate-plan-o-1`). Its
+  adapter must pass each READ spec's step kinds to `DataTool.step_kinds` (M238 `DataToolSpec.step_kinds`; M240's
+  `find_excel_serial_dates` when the catalogue gives it a row) so the registry decides their steps too; PROPOSE
+  tools need nothing more than their `policy_kind`.

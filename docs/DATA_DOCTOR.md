@@ -665,3 +665,34 @@ a folder of real files with no change.
 `scripts/plan_o_benchmark.py` (the runs), `tests/fixtures/doctor_eval/` (the eval world and its per-tool calls, the
 AI cases, the reference model, the extended cases, the held-out generator). A registered tool without eval calls
 fails `test_every_registered_tool_has_eval_calls`.
+
+## 19. A rule for everything Data Doctor suggests (Plan O M233, DEC-1803)
+
+**Status: built, behind `data_doctor.unified` (off by default).** With the switch off nothing here is read and
+everything works as the sections above describe.
+
+Every kind of suggestion Data Doctor can make - a data fix, a setting, your own edit, joining or stacking files,
+keeping each customer's latest row, cutting one file in two, reading lakh and crore or `haan`/`nahi` - has its own
+written **rule set**. A kind of suggestion with no rule set is never made at all. The rule sets say:
+
+- **which fixes** each kind may suggest (the chat may tidy, read and merge values; correcting a cell or leaving
+  rows out stays yours);
+- **never the ID or the outcome**, and a column holding personal data can only be hidden;
+- **how far** a fix may go for this goal (tidy, add a column, or change the rows);
+- **what is never ticked for you**: placeholder codes, ranges, keeping the latest row per customer, and anything
+  the AI suggests;
+- **which settings** may be suggested (never a safeguard, a threshold, or a setting nothing reads yet);
+- **what needs your explicit yes**: joins and stacks that leave out more than 2% of the rows, cutting one file
+  into two. You approve the exact sentence; if it has changed since you read it, nothing is recorded and you see
+  the new one.
+
+**A new pattern, only with your permission.** When the AI sees spellings no rule knows (say `ho`/`nako` in a
+yes/no column), it may suggest reading them - but only with a fix from the fixed list, after looking at that
+column, tried on the first 1,000 rows, never ticked for you, and never if it would change more than 60% of the
+column (above 30% you are warned). `NA` is never read as yes or no: it may mean "not available", so it is asked.
+Excel day numbers (`45123`) are read by Data Doctor's own rules, never suggested by the chat.
+
+### For developers
+
+The rule sets are the `data:` section of `configs/agentic/policy.yaml`; `engine/doctor/policy.py` reads and
+applies them (`docs/AGENTS.md` §16).

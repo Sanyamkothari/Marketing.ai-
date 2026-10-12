@@ -221,7 +221,10 @@ class _Builder:
 
         A step the person accepted replaces a ticked one of the same kind on the same column.
         """
-        ticked = recipe_steps(p for p in self.proposals if _ticked(p, self.ctx.config.agent.tick_uncertain))
+        never = _never_ticked(self.ctx)
+        ticked = recipe_steps(
+            p for p in self.proposals if _ticked(p, self.ctx.config.agent.tick_uncertain, never)
+        )
         decided = {(step.kind, step.column) for step in self.decided_steps}
         return ordered_steps(
             [*(step for step in ticked if (step.kind, step.column) not in decided), *self.decided_steps]
@@ -905,12 +908,25 @@ def _format_proposals(
             )
 
 
-def _ticked(proposal: Proposal, tick_uncertain: bool) -> bool:
-    if proposal.step is not None and proposal.step.kind in NEVER_TICKED_STEPS:
+def _ticked(
+    proposal: Proposal, tick_uncertain: bool, never: frozenset[RecipeStepKind] = NEVER_TICKED_STEPS
+) -> bool:
+    if proposal.step is not None and proposal.step.kind in never:
         return False
     if proposal.from_headers:
         return False  # a column picked from its header is only ever ticked by the person (M142)
     return proposal.confidence is AgentConfidence.SURE or tick_uncertain
+
+
+def _never_ticked(ctx: AgentContext) -> frozenset[RecipeStepKind]:
+    """`NEVER_TICKED_STEPS`, and - behind `data_doctor.unified` - the data policy's list too (Plan O M233)."""
+    from engine.doctor import registry as doctor_registry
+
+    if not doctor_registry.unified_on(ctx.config):
+        return NEVER_TICKED_STEPS  # the switch off: nothing of the policy is read
+    from engine.doctor.policy import never_ticked_steps
+
+    return never_ticked_steps(ctx.config, ctx.config_root)
 
 
 def ordered_steps(steps: Iterable[RecipeStep]) -> tuple[RecipeStep, ...]:
@@ -1226,10 +1242,11 @@ def _unfixed_stop(
     if not _open_errors(checks, asked):
         return None
     tick_uncertain = builder.ctx.config.agent.tick_uncertain
+    never = _never_ticked(builder.ctx)
     overrides = {
         str(p.path): p.value
         for p in builder.proposals
-        if p.kind is ProposalKind.SETTING and _ticked(p, tick_uncertain)
+        if p.kind is ProposalKind.SETTING and _ticked(p, tick_uncertain, never)
     }
     # The suggestions resolve together by construction; should they not, the first check stands.
     with contextlib.suppress(AgentToolError):
