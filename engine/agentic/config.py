@@ -19,7 +19,7 @@ Both are read from the configuration root (`engine.config.config_root`), like ev
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated, Final, Literal
+from typing import TYPE_CHECKING, Annotated, Any, Final, Literal
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
@@ -139,6 +139,13 @@ class PolicyConfig(_Strict):
     budget: BudgetThresholds = Field(default_factory=BudgetThresholds)
     consent: ConsentThresholds = Field(default_factory=ConsentThresholds)
     proposals: ProposalSettings = Field(default_factory=ProposalSettings)
+    # Plan O M233 (DEC-1803): Data Doctor's rule sets, one per PROPOSE kind. Read and checked by
+    # `engine.doctor.policy.load_data_policy` (only behind `data_doctor.unified`); kept as plain data here so Plan K's
+    # policy neither imports nor changes with them. A file without the section reads exactly as before.
+    data: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Data Doctor's rule sets (Plan O M233); validated by engine.doctor.policy.DataPolicyConfig.",
+    )
 
     @field_validator("rule_sets")
     @classmethod
