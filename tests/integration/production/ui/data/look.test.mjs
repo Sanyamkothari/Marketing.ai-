@@ -72,13 +72,16 @@ test("every source row has a type icon that screen readers skip, and a health ch
     assert.ok(type && type.querySelector("svg")?.getAttribute("aria-hidden") === "true", `${r.dataset.dtId}: a type icon, hidden from screen readers`);
     assert.equal(type.dataset.dtType, r.dataset.dtSource, "a file shows the file icon, a connection the connection one");
     assert.ok(!type.contains(r.querySelector(".dt-name")) && text(type) === "", "the icon says no words: the row's own words say the type");
-    const chip = r.querySelector("[data-dt-health] .badge");
-    assert.ok(chip, `${r.dataset.dtId}: a status chip`);
+    const chip = r.querySelector("[data-dt-health] .badge[data-status]");
+    assert.ok(chip, `${r.dataset.dtId}: statusChip("health", …), a .badge[data-status]`);
     assert.equal(chip.querySelector("svg").getAttribute("aria-hidden"), "true");
     assert.ok(text(chip).length > 3, "and a word");
   }
   const file = row(ids.direct);
   assert.equal(file.querySelector(".badge").dataset.tone, "good");
+  assert.equal(file.querySelector(".badge").dataset.status, "read");
+  assert.equal(row(ids.pg).querySelector(".badge").dataset.status, "failed");
+  assert.equal(row(ids.s3).querySelector(".badge").dataset.status, "connected");
   assert.equal(text(file.querySelector(".badge")), "Read correctly");
   const failed = row(ids.pg);
   assert.equal(failed.querySelector(".badge").dataset.tone, "critical", "a failed connection is critical");

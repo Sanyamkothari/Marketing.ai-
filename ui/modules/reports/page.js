@@ -85,7 +85,7 @@ const CSS = `
 .rp .rp-effect{display:block;color:var(--ink2)}
 .rp .rp-net{display:flex;margin-top:var(--s2)}
 .rp .rp-net .vr-text{color:var(--ink)}
-.rp .rp-why{display:block;margin-top:var(--s2);font-size:var(--fs-caption);line-height:var(--lh-caption);color:var(--muted);max-width:32ch}
+.rp .rp-why{margin-top:var(--s2);max-width:32ch}
 .rp .rp-na{color:var(--muted)}
 .rp .rp-acts{display:inline-flex;gap:var(--s2);align-items:center;justify-content:flex-end}
 .rp .rp-table td{vertical-align:top}

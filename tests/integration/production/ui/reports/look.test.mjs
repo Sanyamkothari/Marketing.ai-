@@ -62,11 +62,17 @@ test("the evidence label is a status chip: an icon that screen readers skip, and
   };
   await open(w, "#/reports/value-proof", () => proofRows().length === 3);
   const chip = (id) => $(`[data-proof-campaign="${id}"]`).closest("tr").querySelector("[data-claim] .badge");
-  const seen = { c_a: ["info", "Estimated"], c_b: ["neutral", "Not yet proven"], c_d: ["good", "Proven"] };
-  for (const [id, [tone, word]] of Object.entries(seen)) {
+  const seen = {
+    c_a: ["info", "Estimated", "estimated"],
+    c_b: ["neutral", "Not yet proven", "not_yet_proven"],
+    c_d: ["good", "Proven", "proven"],
+  };
+  for (const [id, [tone, word, status]] of Object.entries(seen)) {
     const el = chip(id);
-    assert.ok(el, `${id}: a chip`);
+    assert.ok(el && el.matches(".badge[data-status]"), `${id}: statusChip("evidence", …), a .badge[data-status]`);
+    assert.equal(el.dataset.status, status, `${id}: the evidence key of the mapping`);
     assert.equal(el.dataset.tone, tone, `${id}: the tone of the mapping`);
+    assert.ok(el.closest("td").querySelector(".td-sub"), `${id}: the one-line reason is the cell's td-sub line`);
     assert.equal(text(el), word);
     const icon = el.querySelector("svg");
     assert.ok(icon && icon.getAttribute("aria-hidden") === "true", `${id}: an icon, hidden from screen readers: the word carries the meaning`);

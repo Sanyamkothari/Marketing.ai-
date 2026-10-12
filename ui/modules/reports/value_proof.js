@@ -47,7 +47,7 @@ export const packHref = (campaignId) => `#/pilot/proof/${encodeURIComponent(camp
 /** The evidence label as a status chip (icon and word, never colour alone) with its one-line reason under it. */
 const claimHtml = (entry) => {
   const claim = claimOf(entry.claim_label);
-  return `<span data-claim="${esc(claim.key)}">${statusChip("evidence", claim.key)}</span><span class="rp-why">${esc(claim.why)}</span>`;
+  return `<span data-claim="${esc(claim.key)}">${statusChip("evidence", claim.key)}</span><span class="td-sub rp-why">${esc(claim.why)}</span>`;
 };
 
 const SIGN = /^[-−]$/;
