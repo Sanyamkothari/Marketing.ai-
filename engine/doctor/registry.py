@@ -432,6 +432,8 @@ class DataToolRegistry:
         if tool is None:
             raise DataToolError("TOOL_UNKNOWN", f"There is no tool called {name[:40]!r} here.", status=404)
         self.check_role(tool, ctx)
+        if tool.kind is DataToolKind.PROPOSE:
+            _require_rule_set(tool, ctx)
         try:
             parsed = tool.input_model.model_validate(dict(given))
         except ValidationError as exc:
@@ -496,6 +498,25 @@ class DataToolRegistry:
             raise DataToolError("AGENT_TOOL_UNKNOWN", f"There is no tool called {name!r}.", status=404)
         self.check_role(tool, ctx)
         return call_tool(ctx.require_agent(), name, given, evidence_id=evidence_id)
+
+
+def _require_rule_set(tool: DataTool[Any, Any], ctx: DataToolContext) -> None:
+    """Plan O M233 (DEC-1803): default deny. A PROPOSE tool whose kind has no rule set in the data policy
+    (`configs/agentic/policy.yaml`, `data.rule_sets`) is refused before it runs (`POLICY_NO_RULES`), as is every
+    PROPOSE tool when the policy cannot be read. The rules themselves are applied where the facts they read are
+    known: in the tool's handler (the chat's `loop._propose_step`, the person's `edits.add_edit`)."""
+    from engine.agentic.errors import AgenticError
+    from engine.doctor.policy import load_data_policy
+
+    kind = tool.policy_kind or ""
+    try:
+        rule_sets = load_data_policy(ctx.root()).rule_sets
+    except AgenticError:
+        rule_sets = {}
+    if kind not in rule_sets:
+        raise DataToolError(
+            "POLICY_NO_RULES", f"No policy rules are set for a {kind or tool.name} proposal.", status=403
+        )
 
 
 def _met(tool: DataTool[Any, Any], ctx: DataToolContext) -> bool:

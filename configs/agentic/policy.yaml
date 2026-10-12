@@ -37,3 +37,220 @@ consent:
 proposals:
   # A pending proposal no Approver decided within this many days expires and cannot be approved.
   expire_after_days: 14
+
+# Plan O M233 (DEC-1803): Data Doctor's rule sets, one per PROPOSE kind (engine/doctor/policy.py; the design
+# §5.4, §6.2, §6.6). Default deny, as above: a kind with no rule set is refused (POLICY_NO_RULES), and a rule set
+# allows a proposal only when every rule that applies allows it. Read only behind `data_doctor.unified` (off by
+# default); Plan G's own checks stay in the code as a second check. Rule names: data.step_kind,
+# data.step_params, data.spellings, data.protected_columns, data.personal_data, data.level, data.grounded,
+# data.tried, data.never_ticked, data.change_share, data.setting, data.approve_class, data.reshape_guard.
+data:
+  # Only the person ticks these, whoever proposed them (advisor.NEVER_TICKED_STEPS; M238 adds keep_latest_per_id).
+  never_ticked_steps: [set_missing, valid_range, keep_latest_per_id]
+  # Settings no suggestion may change: hiding a column is a step (loop.NEVER_SUGGESTED_BY_CHAT), safeguards and
+  # thresholds are the person's (recommend.NEVER_RECOMMENDED), and settings no stage reads (config.ADVISORY_PATHS).
+  settings_never_suggested:
+    - prepare.exclude_columns
+    - validation.min_positive
+    - validation.min_rows
+    - validation.leakage_check
+    - validation.acknowledged
+    - governance.approval_required
+    - features.auto_feature_engineering
+    - features.categorical_encoding
+    - features.numeric_scaling
+    - features.text_columns
+    - features.selection
+    - features.max_features
+    - monitoring.retraining
+  # Decision O10: an AI step changing more than 30% of a column carries a warning, more than 60% is refused (the
+  # person may make it as their own edit). Re-typing steps count the values they could not read.
+  change_share:
+    warn_pct: 30
+    refuse_pct: 60
+    retyping_kinds: [parse_number, parse_date, map_boolean]
+  # Design §6.6: a join, stack or de-duplication dropping more than this share of rows needs the person's yes.
+  approve_drop_share_pct: 2.0
+  # An AI's fix is tried on the file's first rows before it is shown (loop.STEP_SAMPLE_ROWS).
+  trial_rows: 1000
+  # M241: `na` may mean no, or "not available"; it is asked, never mapped to yes or no.
+  boolean_spellings:
+    never: [na]
+  rule_sets:
+    # The chat's setting suggestion (M232 `propose_setting`; loop._propose).
+    data.setting:
+      proposes: setting
+      rules: [data.setting]
+    # The chat's data fix (M232 `propose_step`; loop._propose_step): the chat's kinds (loop.CHAT_STEP_KINDS),
+    # grounded in a look, tried on 1,000 rows, never ticked; Excel day numbers stay the rules' fix (M240).
+    data.recipe_step:
+      proposes: steps
+      rules:
+        - data.step_kind
+        - data.personal_data
+        - data.grounded
+        - data.step_params
+        - data.spellings
+        - data.protected_columns
+        - data.level
+        - data.tried
+        - data.change_share
+        - data.never_ticked
+      step_kinds:
+        - parse_number
+        - parse_date
+        - map_boolean
+        - normalise_text
+        - set_missing
+        - map_values
+        - set_missing_text
+        - convert_units
+        - split_column
+        - valid_range
+        - fill_missing
+        - rename_column
+        - drop_column
+      params:
+        parse_date: {allowed: [dayfirst]}
+        parse_number:
+          allowed: [decimal, percent_to_fraction, indian_scale_words]
+          one_of: {decimal: [".", ","]}
+      levels: [clean, derive]
+      change_share: true
+    # The person's own edit (M232 `edit_by_hand`; edits.add_edit): their kinds (edits.PERSON_STEP_KINDS).
+    data.person_edit:
+      proposes: steps
+      rules: [data.step_kind, data.personal_data, data.protected_columns, data.level]
+      step_kinds:
+        - correct_cells
+        - map_values
+        - set_missing_text
+        - convert_units
+        - split_column
+        - valid_range
+        - fill_missing
+        - remove_rows
+        - rename_column
+        - drop_column
+      levels: [clean, derive]
+      not_allowed_code: AGENT_EDIT_NOT_ALLOWED
+    # M237: one way of writing a key so two files meet; on a key column, never on the outcome.
+    data.normalise_key:
+      proposes: steps
+      rules: [data.step_kind, data.step_params, data.protected_columns, data.never_ticked]
+      step_kinds: [normalise_key]
+      params:
+        normalise_key: {allowed: [prefix, zeros, case, spaces, phone]}
+      tick_only_sure: true
+    # M237: joins and stacks are APPROVE-class when they drop more than 2% of the rows.
+    data.join_files:
+      proposes: plan
+      rules: [data.approve_class]
+      approve: above_drop_share
+    data.stack_files:
+      proposes: plan
+      rules: [data.approve_class]
+      approve: above_drop_share
+    data.build_dataset:
+      proposes: plan
+      rules: [data.step_kind, data.step_params, data.protected_columns, data.approve_class]
+      step_kinds: [normalise_key]
+      params:
+        normalise_key: {allowed: [prefix, zeros, case, spaces, phone]}
+      approve: above_drop_share
+    # M238: one row per ID (reshape level, decision O3): through its question, never ticked, the guards at
+    # Approve; APPROVE-class when it leaves out more than 2% of the rows.
+    data.keep_latest_per_id:
+      proposes: steps
+      rules:
+        - data.step_kind
+        - data.step_params
+        - data.protected_columns
+        - data.level
+        - data.never_ticked
+        - data.reshape_guard
+        - data.approve_class
+      step_kinds: [keep_latest_per_id]
+      params:
+        keep_latest_per_id:
+          allowed: [time_column, snapshot_column, dayfirst, ties]
+          one_of: {ties: [refuse, first_in_file, last_in_file]}
+      approve: above_drop_share
+    # M238: which customers are learnt from is the person's choice (design §6.6).
+    data.split_file:
+      proposes: plan
+      rules: [data.approve_class]
+      approve: always
+    # M238: the steps its look tools propose; an AI's merge of spellings is held to O10.
+    data.synonym_clusters:
+      proposes: steps
+      rules:
+        - data.step_kind
+        - data.step_params
+        - data.protected_columns
+        - data.personal_data
+        - data.grounded
+        - data.tried
+        - data.change_share
+        - data.never_ticked
+      step_kinds: [map_values]
+      params:
+        map_values: {allowed: [mapping]}
+      change_share: true
+    data.impossible_values:
+      proposes: steps
+      rules: [data.step_kind, data.step_params, data.protected_columns, data.personal_data, data.never_ticked]
+      step_kinds: [valid_range, set_missing_text]
+      params:
+        valid_range: {allowed: [minimum, maximum]}
+        set_missing_text: {allowed: [values]}
+    data.detect_units:
+      proposes: steps
+      rules: [data.step_kind, data.step_params, data.protected_columns, data.personal_data, data.never_ticked]
+      step_kinds: [convert_units]
+      params:
+        convert_units: {allowed: [units, bare]}
+    # M240: Excel day numbers are the rules' own fix (`find_excel_serial_dates`), never the chat's.
+    data.excel_serial_dates:
+      proposes: steps
+      rules: [data.step_kind, data.step_params, data.protected_columns, data.personal_data, data.never_ticked]
+      step_kinds: [parse_date]
+      params:
+        parse_date:
+          allowed: [excel_serial, date_1904]
+          equals: {excel_serial: true}
+      tick_only_sure: true
+    # M241: lakh, crore, K, M and `/-`, with `indian_scale_words: true`; pre-ticked only when the rules are sure.
+    data.parse_indian_numbers:
+      proposes: steps
+      rules:
+        - data.step_kind
+        - data.step_params
+        - data.protected_columns
+        - data.personal_data
+        - data.never_ticked
+        - data.change_share
+      step_kinds: [parse_number]
+      params:
+        parse_number:
+          allowed: [decimal, percent_to_fraction, indian_scale_words]
+          equals: {indian_scale_words: true}
+          one_of: {decimal: [".", ","]}
+      tick_only_sure: true
+      change_share: true
+    # M241: Hindi and Hinglish yes/no, both sides seen, from the lexicons, never `na`.
+    data.indian_booleans:
+      proposes: steps
+      rules:
+        - data.step_kind
+        - data.step_params
+        - data.spellings
+        - data.protected_columns
+        - data.personal_data
+        - data.never_ticked
+        - data.change_share
+      step_kinds: [map_boolean]
+      params:
+        map_boolean: {allowed: [true_values, false_values]}
+      tick_only_sure: true
+      change_share: true
