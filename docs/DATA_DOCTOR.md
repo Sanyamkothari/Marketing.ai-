@@ -756,3 +756,36 @@ also what you see when no AI service is connected.
 `engine/doctor/tools_wrappers.py`, `engine/doctor/explain.py` (`docs/AGENTS.md` §17); the rule sets are in
 `configs/agentic/policy.yaml` (`data.propose_role`, ...); the prompt is `configs/prompts/data_explain.v1.md`.
 M240's `read_workbook_sheets` and `find_excel_serial_dates` are catalogue rows #82 and #83 and are registered.
+
+## 22. One Data Doctor screen, in the three places you work (Plan O M247, DEC-1817)
+
+*Behind the switch `data_doctor.unified` (off by default). With it off, the Data page, the wizard's Customers step
+and a goal's setup are exactly as before.*
+
+Data Doctor is one screen, and it is where you already are. It opens on one piece of work (a *check*) in three
+places, and it is the same check in all three:
+
+- **Data › Check my data.** Choose a file. Data Doctor reads it, asks only what it cannot tell, and says what the
+  data can be used for. "Choose this goal" takes you straight into the "New campaign" wizard on the same check.
+- **The wizard's Customers step.** The check for that goal, inside the step. What you answered on the Data page
+  stands: nothing is asked twice. When the data is approved and ready, the list starts, as before.
+- **A goal's setup.** The same check, where Guided setup used to be.
+
+On the screen: the verdict and the one thing to do next; each question with why it is asked, what each answer
+changes and "I don't know" (the safe choice, never a guess); changes that need their own yes, with the exact
+sentence you agree to ("I agree to this sentence"), why, and who must agree; "Data Doctor is not sure" in three
+parts; requests for more data with the list to send your data team; what our checks found, ticked as decided, and
+what the AI suggested, never ticked for you; the answers remembered from before, each with its date and Revoke;
+Approve, with the sentence it records, word for word; the chat with "What the AI looked at"; and what happened so
+far, with the receipt of each approval. With no AI service connected, the chat says so and opens Settings › AI
+service; everything else works. Technical names (codes, ids, steps) are only under "Technical details".
+
+### For developers
+
+`ui/modules/datadoctor/` (`screen.js` the component, `view.js` its markup, `switch.js` the switch read from
+`GET /auth/me` `data_doctor`), mounted by `ui/modules/data/page.js` and, through Guided setup's own mount
+(`ui/modules/agent/guided.js` `mountGuided`), by the wizard and a goal's setup. The server side is
+`engine/doctor/screen.py` (the verdict, the approval sentence, APPROVE-class items, standing answers with dates,
+the hand-off) and `api/routes/case_screen.py` (`GET /cases/{case_id}/screen`, `GET /data-doctor/cases`).
+Tests: `tests/unit/doctor/test_screen.py`, `tests/integration/test_api_case_screen.py`,
+`tests/integration/test_data_doctor_ui.py` (jsdom), `tests/integration/test_data_doctor_journey.py` (Playwright).

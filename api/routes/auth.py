@@ -283,7 +283,16 @@ def me(request: Request, principal: PrincipalDep, settings: SettingsDep) -> MeRe
             logo_alt=settings.brand_logo_alt,
             color=settings.brand_color,
         ),
+        data_doctor=_data_doctor_on(request),  # PLAN-O (M247): the one Data Doctor screen is on here
     )
+
+
+def _data_doctor_on(request: Request) -> bool | None:
+    """Plan O M247 (DEC-1817): True while `data_doctor.unified` is on, so the UI draws the one Data Doctor screen
+    in its three places; None (left out of the answer, which is then byte-identical) while it is off."""
+    from engine.doctor.case import data_doctor_unified
+
+    return True if data_doctor_unified(getattr(request.app.state, "config_root", None)) else None
 
 
 # ---------------------------------------------------------------------------

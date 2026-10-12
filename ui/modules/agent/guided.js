@@ -57,6 +57,10 @@ import {
 import { PAGE_ROWS, cellTarget, editRequest, editorHtml, freshEditor } from "./edit.js";
 import { sentHtml, statusHtml } from "./sent.js";
 import { injectAgentStyles } from "./styles.js";
+// Plan O M247 (DEC-1817): with `data_doctor.unified` on, the one Data Doctor screen opens where Guided setup mounts
+// (the wizard's Customers step and a goal's Setup tab). Off: nothing below runs and Guided setup is unchanged.
+import { dataDoctorOnNow, onDataDoctor } from "../datadoctor/switch.js";
+import { mountDataDoctor } from "../datadoctor/screen.js";
 
 const entries = new Map();
 
@@ -1077,6 +1081,8 @@ function bind(entry) {
  * approved(fill), manual() }`.
  */
 export function mountGuided(slots, host) {
+  if (dataDoctorOnNow()) return mountDoctorInstead(slots, host);
+  lastMounts.set(`${host.uc.id}|${host.mode}`, { slots, host });
   injectAgentStyles();
   const key = `${host.uc.id}|${host.mode}`;
   let entry = entries.get(key);
@@ -1095,3 +1101,29 @@ export function mountGuided(slots, host) {
   if (slots.aside) slots.aside.replaceChildren(entry.aside);
   if (handed) startHelper(entry);
 }
+
+// --- Plan O M247 (DEC-1817): the one Data Doctor screen in Guided setup's place ------------------------------------
+
+/** Where Guided setup was last mounted, per use case and mode: if the switch turns out to be on after it was drawn
+ * (`/auth/me` answered late), the Data Doctor screen takes those places. */
+const lastMounts = new Map();
+
+/** The wizard's Customers step (inside its card `data-cw-customers`) or a goal's Setup tab. */
+const placeOf = (slots) =>
+  slots.main && typeof slots.main.closest === "function" && slots.main.closest("[data-cw-customers]") ? "wizard" : "setup";
+
+function mountDoctorInstead(slots, host) {
+  return mountDataDoctor(slots, {
+    place: placeOf(slots),
+    uc: host.uc,
+    mode: host.mode,
+    approved: host.mayRun === false ? null : host.approved,
+  });
+}
+
+onDataDoctor(() => {
+  for (const [key, { slots, host }] of lastMounts) {
+    lastMounts.delete(key);
+    if (slots.main && slots.main.isConnected) mountDoctorInstead(slots, host);
+  }
+});

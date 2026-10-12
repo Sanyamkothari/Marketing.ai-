@@ -867,6 +867,13 @@ class MeResponse(StrictBase):
         default_factory=BrandView,
         description="The deployment's name, logo and accent colour; today's product with nothing set.",
     )
+    # PLAN-O (M247, DEC-1817): added field only, left out of the answer while unset, so with `data_doctor.unified`
+    # off `GET /auth/me` answers byte for byte as before. Move beside the PLAN-O block's notes at integration.
+    data_doctor: bool | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+        description="True when the one Data Doctor screen is on here (`data_doctor.unified`); absent otherwise.",
+    )
 
 
 class LoginRequest(_SecretBase):
