@@ -44,6 +44,7 @@ from engine.agent.advisor import (
     summarise,
 )
 from engine.agent.contracts import (
+    ROW_RESHAPE_STEP_KINDS,
     AgentSession,
     DecidedBy,
     Proposal,
@@ -404,12 +405,16 @@ def accept_recommended(
 
 
 def _touches_role(proposal: Proposal, roles: set[str]) -> bool:
-    """A recipe step on the ID or the outcome column, which `check_recipe` refuses."""
+    """A recipe step on the ID or the outcome column, which `check_recipe` refuses.
+
+    A reshape step (`ROW_RESHAPE_STEP_KINDS`: combine, unpivot, keep the latest row per ID) names the ID as its
+    column by design, and a derived column only reads it, so neither touches a role.
+    """
     step = proposal.step
     return (
         step is not None
         and step.column in roles
-        and step.kind not in {RecipeStepKind.COMBINE_ROWS, RecipeStepKind.DERIVE, RecipeStepKind.UNPIVOT}
+        and step.kind not in ROW_RESHAPE_STEP_KINDS | {RecipeStepKind.DERIVE}
     )
 
 
