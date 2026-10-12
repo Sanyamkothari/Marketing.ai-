@@ -8,6 +8,8 @@
 //   keeps its paise (Rs 0.40 a contact matters); from Rs 100 it is whole rupees.
 // - An amount whose source names another currency keeps it (`money(v, "USD")`), and an amount whose source names
 //   none (the Hillstrom "spend" column) stays a plain number: a currency is never invented.
+// - An amount with no currency given is in the workspace currency (Plan O M242, `setWorkspaceCurrency`): INR unless
+//   the page is told otherwise, so an INR workspace's screens are exactly what they were.
 // - Percentages have one decimal (39.0%); counts are whole with separators (32,000), in the number locale the
 //   engine writes its own sentences in (`ui/dom.js` NUMBER_LOCALE), so a tile and a sentence beside it agree.
 // - A signed value has a real minus sign (−) or a plus sign (+), so a gain and a loss line up.
@@ -115,12 +117,48 @@ function foreign(abs, currency, places) {
   }
 }
 
+// --- the workspace currency (Plan O M242, DEC-1812) ------------------------------------------------------------
+
+/** The currencies a report names in words; any other code is shown as its code. INR is "rupees", as everywhere. */
+const CURRENCY_WORDS = {
+  INR: "rupees",
+  USD: "US dollars",
+  EUR: "euros",
+  GBP: "British pounds",
+  AED: "UAE dirhams",
+  SGD: "Singapore dollars",
+  AUD: "Australian dollars",
+  CAD: "Canadian dollars",
+};
+
+let workspaceCurrency = "INR";
+
+/**
+ * The currency an amount with no stated currency is in: the workspace's (`data_doctor.workspace_currency`, or the
+ * client's confirmed one). INR until the page is told otherwise, so with INR every figure is exactly what it was.
+ * Anything but a three-letter code leaves it at INR. Returns the currency now in force.
+ */
+export function setWorkspaceCurrency(code) {
+  workspaceCurrency = /^[A-Z]{3}$/.test(String(code ?? "")) ? String(code) : "INR";
+  return workspaceCurrency;
+}
+
+/** The workspace currency now in force ("INR" unless `setWorkspaceCurrency` said otherwise). */
+export function getWorkspaceCurrency() {
+  return workspaceCurrency;
+}
+
+/** A currency in words, for a label: "rupees", "US dollars"; an unlisted code is itself. */
+export function currencyName(code) {
+  return CURRENCY_WORDS[code] ?? String(code ?? "");
+}
+
 /**
  * An amount of money in the unit its source names. "INR" (the default) is `rupees`; another ISO code keeps
  * that currency, whole from 100 up ("$3,578"); `null` (the source names no currency) is a plain grouped
  * number ("3,578"), never rupees.
  */
-export function money(value, currency = "INR", { signed = false } = {}) {
+export function money(value, currency = workspaceCurrency, { signed = false } = {}) {
   if (!isValue(value)) return EM_DASH;
   if (currency === "INR") return rupees(value, { signed });
   const n = Number(value);
@@ -131,7 +169,7 @@ export function money(value, currency = "INR", { signed = false } = {}) {
 }
 
 /** The exact figure behind `money`, for its tooltip. */
-export function moneyExact(value, currency = "INR", { signed = false } = {}) {
+export function moneyExact(value, currency = workspaceCurrency, { signed = false } = {}) {
   if (!isValue(value)) return EM_DASH;
   if (currency === "INR") return rupeesExact(value, { signed });
   const n = Number(value);
@@ -281,6 +319,12 @@ export function figureHtml(figure, { reason = "" } = {}) {
       return numberHtml(money(value, null), exact || moneyExact(value, null), reason);
     case "signed_amount":
       return numberHtml(money(value, null, { signed: true }), exact || moneyExact(value, null, { signed: true }), reason);
+    case "money": {
+      // Plan O M242: an amount whose source names its currency (`figure.currency`, "USD"); none named, a plain
+      // number - a currency is never invented.
+      const unit = /^[A-Z]{3}$/.test(String(figure.currency ?? "")) ? String(figure.currency) : null;
+      return numberHtml(money(value, unit), moneyExact(value, unit), reason);
+    }
     case "count":
       return numberHtml(count(value), exact, reason);
     case "signed_count":
@@ -306,7 +350,7 @@ export function numberHtml(text, exact, reason = "") {
 }
 
 /** `money` as HTML, exact in the tooltip; `reason` explains a missing amount. */
-export const moneyHtml = (value, { currency = "INR", signed = false, reason = "" } = {}) =>
+export const moneyHtml = (value, { currency = workspaceCurrency, signed = false, reason = "" } = {}) =>
   numberHtml(money(value, currency, { signed }), moneyExact(value, currency, { signed }), reason);
 
 /** `percent` as HTML, exact in the tooltip. */

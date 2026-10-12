@@ -367,6 +367,37 @@ How a client writes numbers, dates and yes/no is asked **once** per client and t
 note saying so; a file that disagrees is asked about, never silently changed. Nothing is converted between
 currencies here.
 
+## 10b. Currency (Plan O M242)
+
+Money keeps its currency. Each workspace has a currency (`data_doctor.workspace_currency`, rupees unless set; a
+client's confirmed currency wins for that client), and every money column of a file is read for its own: the signs
+and codes in its values (`₹`, `Rs`, `$`, `USD`, `€`, `£`) and the words in its name (`amount_usd`, `Price (INR)`).
+
+- **The same currency as the workspace:** nothing to ask. The column is read with its currency recorded.
+- **Another currency** (`CURRENCY_FOREIGN`, a question): "This file's `bill_amount` is in US dollars, and this
+  workspace reports in Indian rupees. Report in US dollars, or convert to Indian rupees at a rate you give?"
+  Reporting in dollars converts nothing: the reports show dollar amounts, labelled as dollars. Converting needs a
+  rate **you** give, with its date and where it comes from ("RBI reference rate, 10 Oct 2026"). An Analyst approves
+  the exact sentence shown; who approved it and when are recorded, and every report that uses the rate shows it,
+  its date, its source and the approver. **The product never looks a rate up.**
+- **Two currencies in one column** (`CURRENCY_MIXED`, a stop): nothing is built from the column until you say which
+  rows are in which currency - a column that says so (`country`, `currency`), or the sign on every amount. The other
+  currency's rows are then converted at a rate you give. Amounts in different currencies are never added together.
+- **Money that names no currency** (`CURRENCY_UNSTATED`, a question): asked once for the client, never assumed.
+
+A recipe records the currency: `parse_number` with `unit` stops (`CURRENCY_MIXED`) if next month's file has an
+amount in another currency, and `convert_currency` keeps the rate, its date and source frozen, so replay converts
+exactly as approved. With `data_doctor.unified` off, nothing here runs and every report is as it was; an INR
+workspace with nothing converted prints exactly as before.
+
+### For developers
+
+`engine/doctor/currency.py` (`check_currency`, `report_in`, `propose_conversion`, `approve_conversion`,
+`answer_mixed`, `money_basis`, `report_money`, `format_money`, `add_amounts`), `engine/agent/currency_steps.py`
+(the step runners), `engine/doctor/tools_currency.py` (the registry entries for M232). A run's money basis is
+`runs/<run_id>/money_basis.json`; `GET /pilot/roi/{run_id}` and `GET /pilot/proof/{campaign_id}` print it when it
+exists. `ui/format.js` `setWorkspaceCurrency(code)` makes `money(value)` use the workspace currency (INR by default).
+
 ## 11. What Data Doctor will not do
 
 - **Match people across files with no shared key.** It can tidy keys (leading zeros, prefixes) and say how many

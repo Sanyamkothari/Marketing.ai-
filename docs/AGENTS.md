@@ -979,3 +979,23 @@ All four are `session-only` and rules only; `engine/doctor/tools_locale.py` decl
 - `M` is read as a million when the parameter is on; in a column whose header names a unit (`data_usage`, `_mb`)
   the proposal is `check`. Mixed spellings in one value (`1 Cr 20 L`) are not read.
 - Old-format voter IDs (state codes with slashes) are not recognised; only today's three letters and seven digits.
+
+## 15. Currency in recipes (Plan O M242, DEC-1812)
+
+Two recipe additions keep a money column's currency, both row-wise and stateless, both written only by the Data
+Doctor flow (`data_doctor.unified`; `engine/doctor/currency.py`), so a recipe saved before M242 orders, hashes and
+runs exactly as before.
+
+- **`parse_number` with `unit`** (a currency code: `INR`, `USD`): the numbers read exactly as without it; a value that
+  names another currency (`$15` in a rupee column, or `$12 (₹1,000)`) stops the run with `CURRENCY_MIXED` instead of
+  being read into the same column of numbers. Without `unit`, `parse_number` still strips every sign, as before.
+- **`convert_currency`** (`engine/agent/currency_steps.py`; phase 1, before the `parse_number` that reads the rest):
+  `{from, to, rate, rate_date, source}` frozen - one `from` is `rate` of `to`, at the person's dated rate from the
+  person's source; the product never looks a rate up. `rows` says which rows are in `from`: `all` (the default; a
+  row naming another currency stops), `marked` (only the values showing the `from` sign or code), or
+  `{"column": ..., "values": [...]}` (the rows whose cell in that column is one of those spellings). Each product is
+  exact (`Decimal`). `check_recipe` refuses a column converted to two currencies, from one currency twice, read in a
+  `unit` other than the one it was converted to, or converted by sign after it was already turned into numbers.
+
+Neither kind is in `CHAT_STEP_KINDS` or `PERSON_STEP_KINDS`: the chat never suggests a conversion, and a rate reaches
+a recipe only through `propose_conversion` and an Analyst's exact-sentence approval (`approve_conversion`).

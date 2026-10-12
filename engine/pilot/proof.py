@@ -83,6 +83,7 @@ from engine.pilot.document import (
 from engine.pilot.roi import ROI_INPUTS_FILENAME, RoiInputs, format_inr
 
 if TYPE_CHECKING:
+    from engine.doctor.currency import ReportMoney
     from engine.storage import Storage
 
 __all__ = [
@@ -2507,8 +2508,15 @@ def _tone(view: ProofView) -> Literal["info", "warning", "error", "success"]:
     return "success" if float(line.low.value) > 0 else "warning"
 
 
-def proof_document(view: ProofView, *, client_name: str = "") -> ReportDocument:
-    """The pack as a report document: the same blocks for the HTML page and the PDF."""
+def proof_document(
+    view: ProofView, *, client_name: str = "", money: ReportMoney | None = None
+) -> ReportDocument:
+    """The pack as a report document: the same blocks for the HTML page and the PDF.
+
+    `money` (Plan O M242, `engine.doctor.currency.report_money`): the currency lines of the campaign's run - each
+    money column's unit and every rate used, with its date, source and approver - shown under "Currency". None
+    (every campaign without a Data Doctor money basis) prints exactly as before.
+    """
     blocks: list[AnyBlock] = [Callout(title=view.claim_label, text=view.headline, tone=_tone(view))]
     for section in view.sections:
         blocks.append(Heading(text=section.title))
@@ -2550,6 +2558,8 @@ def proof_document(view: ProofView, *, client_name: str = "") -> ReportDocument:
                     blocks.append(Callout(title="Suggestion for the next cycle", text=text, tone="warning"))
         if section.notes:
             blocks.append(Bullets(items=section.notes))
+    if money is not None and money.notes:
+        blocks += [Heading(text="Currency"), Bullets(items=money.notes)]
     blocks.append(
         Paragraph(
             text=(

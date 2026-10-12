@@ -130,6 +130,10 @@ class RecipeStepKind(StrEnum):
     # Plan L M156 (DEC-1560): a wide sheet's month columns into rows (level 3, first in the fixed order). Row-wise:
     # each row becomes one row per listed period, from that row's own cells and the frozen parameters only.
     UNPIVOT = "unpivot"
+    # Plan O M242 (DEC-1812): amounts from one currency into another at a rate a person gave, with its date and
+    # source, frozen in the step. Row-wise: a row's output depends on its own cells and the frozen rate only.
+    # Never proposed by the AI or the chat, and never fetched: the rate is the person's.
+    CONVERT_CURRENCY = "convert_currency"
 
 
 class ProposalSource(StrEnum):
@@ -207,6 +211,8 @@ class RecipeStep(StrictBase):
             raise ValueError("a remove_rows step creates no column")
         if self.kind is RecipeStepKind.UNPIVOT and self.new_column is not None:
             raise ValueError("an unpivot step names its new columns in params")
+        if self.kind is RecipeStepKind.CONVERT_CURRENCY and self.new_column is not None:
+            raise ValueError("a convert_currency step rewrites the amounts of its own column")
         return self
 
 

@@ -70,6 +70,7 @@ from engine.pilot.document import (
 
 if TYPE_CHECKING:
     from engine.clients import ClientStore
+    from engine.doctor.currency import ReportMoney
     from engine.storage import Storage
     from engine.uplift.contracts import IncrementalityReport
 
@@ -807,16 +808,26 @@ def _times(value: float) -> str:
     return f"{value:.1f}x"
 
 
-def _amount_measured(view: RoiView, level: str) -> list[AnyBlock]:
-    """ "What was measured" for an amount (Plan J M102): averages instead of rates."""
+def _amount_measured(view: RoiView, level: str, money: ReportMoney | None = None) -> list[AnyBlock]:
+    """ "What was measured" for an amount (Plan J M102): averages instead of rates.
+
+    With a money basis (Plan O M242) the average is an amount in the run's currency, labelled with it.
+    """
 
     def average(value: float | None) -> str:
-        return f"{value:,.2f}" if value is not None else ""
+        if value is None:
+            return ""
+        return money.format(value, decimals=2) if money is not None else f"{value:,.2f}"
 
     return [
         Heading(text="What was measured"),
         Table(
-            columns=("Group", "Customers", "With an amount above zero", "Average amount"),
+            columns=(
+                "Group",
+                "Customers",
+                "With an amount above zero",
+                "Average amount" if money is None else f"Average amount ({money.name})",
+            ),
             rows=(
                 (
                     "Contacted",
@@ -851,10 +862,19 @@ def roi_document(
     campaign_title: str = "",
     simulated_note: str = "",
     now: datetime | None = None,
+    money: ReportMoney | None = None,
 ) -> ReportDocument:
-    """The one-page value view of a campaign."""
+    """The one-page value view of a campaign.
+
+    `money` (Plan O M242, `engine.doctor.currency.report_money`) is the run's currency and the lines it must show
+    (each money column's unit; each rate, its date, source and approver). None - every run without a Data Doctor
+    money basis - prints exactly as before, in rupees.
+    """
     from engine.utils.time import utc_now
 
+    fmt: Callable[..., str] = money.format if money is not None else format_inr
+    name = money.name if money is not None else "rupees"
+    one = money.one if money is not None else "rupee"
     blocks: list[AnyBlock] = []
     level = f"{view.confidence_level:.0%}"
     if view.status != "measured" or view.benefit is None:
@@ -881,9 +901,9 @@ def roi_document(
         if view.net_value is not None and view.net_value.high is not None and view.net_value.high < 0:
             state = "not_ready"
         net_text = (
-            f" Net value: {_range(view.net_value)}."
+            f" Net value: {_range(view.net_value, fmt)}."
             if view.net_value is not None
-            else " Enter your values below to see it in rupees."
+            else f" Enter your values below to see it in {name}."
         )
         blocks.append(
             Verdict(
@@ -893,7 +913,7 @@ def roi_document(
             )
         )
         if view.outcome_kind == "continuous":
-            blocks += _amount_measured(view, level)
+            blocks += _amount_measured(view, level, money)
         else:
             blocks += [
                 Heading(text="What was measured"),
@@ -929,7 +949,7 @@ def roi_document(
                     )
                 ),
             ]
-        blocks.append(Heading(text="Value in rupees"))
+        blocks.append(Heading(text=f"Value in {name}"))
         if view.inputs is None:
             blocks.append(
                 Callout(
@@ -942,13 +962,13 @@ def roi_document(
         else:
             inputs = view.inputs
             rows: list[tuple[str, str]] = [
-                ("Value of those customers", _range(view.gross_value)),
-                ("Cost of contacts", format_inr(view.contact_cost_total or 0.0)),
-                ("Cost of offers taken", format_inr(view.offer_cost_total or 0.0)),
-                ("Net value", _range(view.net_value)),
+                ("Value of those customers", _range(view.gross_value, fmt)),
+                ("Cost of contacts", fmt(view.contact_cost_total or 0.0)),
+                ("Cost of offers taken", fmt(view.offer_cost_total or 0.0)),
+                ("Net value", _range(view.net_value, fmt)),
             ]
             if view.roi is not None:
-                rows.append(("Net value per rupee spent", _range(view.roi, _times)))
+                rows.append((f"Net value per {one} spent", _range(view.roi, _times)))
             blocks.append(KeyValues(rows=tuple(rows)))
             blocks += [
                 Heading(text="Your inputs", level=3),
@@ -960,7 +980,7 @@ def roi_document(
                                 if view.outcome_kind == "continuous"
                                 else "Value of one extra customer"
                             ),
-                            format_inr(
+                            fmt(
                                 inputs.value_per_outcome,
                                 decimals=2 if view.outcome_kind == "continuous" else 0,
                             ),
@@ -974,8 +994,8 @@ def roi_document(
                             ),
                         ),
                         ("What that value is", inputs.value_basis or "not stated"),
-                        ("Offer cost, when taken", format_inr(inputs.offer_cost)),
-                        ("Cost per contact", format_inr(inputs.contact_cost)),
+                        ("Offer cost, when taken", fmt(inputs.offer_cost)),
+                        ("Cost per contact", fmt(inputs.contact_cost)),
                         ("Entered by", inputs.entered_by or "not stated"),
                         (
                             "Entered on",
@@ -985,7 +1005,13 @@ def roi_document(
                 ),
                 Callout(
                     title="The value depends on these inputs",
-                    text="The number of customers is measured. The rupee amounts are that number multiplied by "
+                    text="The number of customers is measured. "
+                    + (
+                        "The rupee amounts"
+                        if money is None or money.currency == "INR"
+                        else f"The amounts in {name}"
+                    )
+                    + " are that number multiplied by "
                     "the values above, which are your estimates; change them and the value changes. Offer cost is "
                     + (
                         "counted for every contacted customer who had the outcome."
@@ -999,6 +1025,8 @@ def roi_document(
                 blocks.append(Paragraph(text=f"Note: {inputs.note}", muted=True))
     if view.value_note:
         blocks.append(Callout(title="How the amount is valued", text=view.value_note, tone="info"))
+    if money is not None and money.notes:
+        blocks += [Heading(text="Currency", level=3), Bullets(items=money.notes)]
     if simulated_note:
         blocks.append(Callout(title="Demo data", text=simulated_note, tone="warning"))
     blocks.append(
@@ -1029,5 +1057,9 @@ def roi_document(
             ),
         ),
         blocks=tuple(blocks),
-        footer="Measured numbers come from the platform's campaign records; rupee values use the inputs shown.",
+        footer=(
+            "Measured numbers come from the platform's campaign records; "
+            + ("rupee values" if money is None or money.currency == "INR" else f"values in {name}")
+            + " use the inputs shown."
+        ),
     )

@@ -37,7 +37,7 @@ _SETTINGS: Final[ConfigDict] = ConfigDict(
 
 
 class DataDoctorConfig(BaseModel):
-    """`data_doctor:` in a use case: Plan O's one Data Doctor agent. Only the switch so far (M230)."""
+    """`data_doctor:` in a use case: Plan O's one Data Doctor agent: the switch (M230) and the workspace currency (M242)."""
 
     model_config = _SETTINGS
 
@@ -46,5 +46,15 @@ class DataDoctorConfig(BaseModel):
         description=(
             "Plan O (DEC-1800): when true, Guided setup and the Doctor page are the one Data Doctor agent. Off "
             "until the parity checklist is met (M249); while off, nothing changes."
+        ),
+    )
+    workspace_currency: str = Field(
+        default="INR",
+        pattern=r"^[A-Z]{3}$",
+        exclude_if=lambda value: value == "INR",
+        description=(
+            "Plan O M242 (DEC-1812): the currency this workspace's reports use, as a code (INR, USD, EUR). A client's "
+            "confirmed locale profile overrides it for that client. Read only while `unified` is on; INR, the "
+            "default, is left out of a dump so nothing moves."
         ),
     )
