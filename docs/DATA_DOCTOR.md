@@ -361,3 +361,41 @@ report.
 - **Read scanned PDFs, photos or free-form documents** as tables.
 - **Invent history.** It can build an outcome from events you recorded; it cannot create one from nothing.
 - **Change your original file, or write code.** Every change is a step from a fixed list that our tested code runs.
+
+## 12. Row and value tools (Plan O M238, DEC-1808)
+
+Five more things Data Doctor can look at or suggest. Each works with no AI service, and nothing changes until
+you tick it and approve.
+
+- **One row per customer, the latest.** When a customer list was exported every month, Data Doctor can keep each
+  customer's latest row - never one dated after the date the row describes - and asks you first. When a
+  customer has two different rows on the same latest date, it asks which one to keep; it never picks for you.
+- **Values that cannot be true.** An age over 120 or below 0, a negative tenure, amount or count, a percentage over
+  100, a date in 2099 (a stand-in for "no date"), a date before 1900, a birth date more than 120 years ago, or a
+  date that has not happened yet. Data Doctor judges by what the column's name says it holds; it offers to empty
+  the impossible values, and for a date in the future it only tells you.
+- **The same value spelt differently.** `Pre-paid`, `PP` and `Prepaid`; `Bombay` and `Mumbai`; `haan` and `Yes`.
+  Data Doctor offers to write them one way. When `PP` could be prepaid or postpaid, it asks.
+- **Units.** `2 GB` and `500 MB` in one column become one unit after you agree; plain numbers beside them are a
+  question ("which unit are these in?"). A column whose values are near 2,000 for most rows and near 2 for a few is
+  flagged: the few may be in thousands. Money in another currency is never converted here.
+- **One file into two.** "Learn from the customers who joined up to March; score the ones who joined after." One set
+  of steps prepares both files. You approve the exact sentence. Rows whose other dates are already after the cut
+  are shown to you.
+
+### For developers
+
+- Step: `keep_latest_per_id` (`engine/agent/latest.py`; `docs/AGENTS.md` step table). Reshape level, which
+  decision O3 turns on for every goal only when `data_doctor.unified` is on (`engine/doctor/reshape_guard.py`
+  `doctor_levels`), with four guards: a blocking question, never ticked, the full point-in-time probe at a training
+  Approve, and the preview receipt (`check_reshape_guards`, `RESHAPE_GUARD_MISSING`).
+- Tools: `engine/doctor/tools_rows.py` declares `synonym_clusters`, `impossible_values`, `detect_units` (READ) and
+  `keep_latest_per_id`, `split_file` (PROPOSE; `split_file` is APPROVE-class) as `DataToolSpec`s, all
+  `session-only`, with `register(registry)` for M232's registry. Engines: `engine/doctor/synonyms.py`
+  (`configs/doctor/value_synonyms.yaml` is the reviewed lexicon), `impossible.py`, `units.py`, `split.py`.
+- Decision O10 (`engine/doctor/change_share.py`): an AI-proposed step that changes more than 30% of a column is
+  shown with `AI_STEP_CHANGES_MANY`; above 60% it is refused with `AI_STEP_CHANGES_TOO_MANY` unless the person
+  writes it as their own edit.
+- Every proposal is a `StepProposal` (`engine/doctor/row_contracts.py`): pending, `check`, never ticked, measured by
+  running the step. A parameter that maps spellings or units travels as `[from, to]` pairs, so no tool result has a
+  dict keyed by a cell; the field names are in `engine.agent.egress.RESULT_KEYS`.

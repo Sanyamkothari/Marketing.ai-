@@ -11,7 +11,8 @@ runs them - and only this module does. Three rules hold for every run:
   (DEC-1004), so the same recipe gives the same result on next month's file and nothing learnt from
   the test rows can leak into training. `combine_rows` is the one step that reads several rows: its
   output for an entity depends only on that entity's own rows and the step's frozen parameters
-  (`engine.agent.reshape`), which keeps the same guarantee one level up.
+  (`engine.agent.reshape`), which keeps the same guarantee one level up; `keep_latest_per_id` (Plan O
+  M238) is entity-wise the same way (`engine.agent.latest`).
 * **Counted.** Every step reports how many values it changed and how many it could not convert, with
   masked examples. A step that fails on more than `max_failure_pct` of a column's non-empty values
   stops the run with `RECIPE_VALUES_UNCONVERTED`; a column the recipe needs and the file lacks stops
@@ -35,6 +36,7 @@ import pandas as pd
 from engine.agent.config import AgentLevel
 from engine.agent.contracts import RecipeReceipt, RecipeStep, RecipeStepKind, StepReceipt, recipe_hash
 from engine.agent.formats import ParseOutcome, map_booleans, normalise_texts, parse_dates, parse_numbers
+from engine.agent.latest import KeepLatestError, KeepLatestSpec, keep_latest_per_id
 from engine.agent.placeholders import MAX_PLACEHOLDER_VALUES, set_missing
 from engine.agent.reshape import CombineError, CombineSpec, LeakCheck, combine_rows
 from engine.agent.unpivot import UnpivotError, UnpivotSpec, unpivot
@@ -87,6 +89,9 @@ STEP_PHASE: Final[dict[RecipeStepKind, int]] = {
     RecipeStepKind.FILL_MISSING: 3,
     RecipeStepKind.REMOVE_ROWS: 3,
     RecipeStepKind.COMBINE_ROWS: 4,
+    # Plan O M238 (DEC-1808 (b)): keeping each ID's latest row is the other way to one row per ID, so it sits
+    # where combining does - after every value is fixed (its date is parsed), before columns are derived.
+    RecipeStepKind.KEEP_LATEST_PER_ID: 4,
     RecipeStepKind.DERIVE: 5,
     RecipeStepKind.DROP_COLUMN: 6,
     RecipeStepKind.RENAME_COLUMN: 6,
@@ -99,6 +104,7 @@ _LEVEL_OF: Final[dict[RecipeStepKind, AgentLevel]] = {
     RecipeStepKind.DERIVE: AgentLevel.DERIVE,
     RecipeStepKind.COMBINE_ROWS: AgentLevel.RESHAPE,
     RecipeStepKind.UNPIVOT: AgentLevel.RESHAPE,
+    RecipeStepKind.KEEP_LATEST_PER_ID: AgentLevel.RESHAPE,
     RecipeStepKind.SPLIT_COLUMN: AgentLevel.DERIVE,
     RecipeStepKind.REMOVE_ROWS: AgentLevel.DERIVE,
 }
@@ -211,6 +217,14 @@ def check_recipe(
                 f"This use case's helper may not use {step.kind.value} steps.",
                 order=step.order,
             )
+        if step.kind is RecipeStepKind.KEEP_LATEST_PER_ID:
+            if combined:
+                raise RecipeError(
+                    "RECIPE_STEP_INVALID", "The rows can be made one per ID only once.", order=step.order
+                )
+            combined = True
+            _check_keep_latest(step, available, primary_key=primary_key, target=target)
+            continue
         if step.kind is RecipeStepKind.COMBINE_ROWS:
             if combined:
                 raise RecipeError(
@@ -335,6 +349,40 @@ def _check_combine(
                 order=step.order,
             )
     return list(spec.output_columns(with_outcome=spec.outcome in available))
+
+
+def _check_keep_latest(
+    step: RecipeStep, available: list[str], *, primary_key: str | None, target: str | None
+) -> None:
+    """Refuse a keep-latest step keyed on another column than the ID, or one that chooses rows by the outcome
+    (Plan O M238, DEC-1808 (b)). The step keeps every column, so the columns after it are the columns before.
+    """
+    if primary_key is not None and step.column != primary_key:
+        raise RecipeError(
+            "RECIPE_STEP_INVALID",
+            f"The latest row is kept per ID column '{primary_key}', not per '{step.column}'.",
+            column=step.column,
+            order=step.order,
+        )
+    try:
+        spec = KeepLatestSpec.from_params(step.column, _params(step))
+    except KeepLatestError as exc:
+        raise RecipeError(exc.code, exc.message, column=exc.column, order=step.order) from exc
+    if target is not None and target in spec.reads:
+        raise RecipeError(
+            "RECIPE_STEP_INVALID",
+            f"The outcome column '{target}' is never used to choose which rows are kept.",
+            column=target,
+            order=step.order,
+        )
+    for column in spec.reads:
+        if column not in available:
+            raise RecipeError(
+                "RECIPE_COLUMN_MISSING",
+                f"The file has no column '{column}'.",
+                column=column,
+                order=step.order,
+            )
 
 
 def _check_unpivot(
@@ -623,7 +671,8 @@ def run_recipe(
 
     `leak_check` is the future-data check a `combine_rows` step runs after combining: `full` on a
     training file (the recipe's first build, onboarding ruling R1), `narrow` on a scoring file, and
-    none on a preview.
+    none on a preview. A `keep_latest_per_id` step runs its point-in-time check under the same value
+    (Plan O M238, DEC-1808).
     """
     check_recipe(
         steps,
@@ -700,6 +749,30 @@ def run_recipe(
                 )
             )
             work = rows.frame
+            continue
+        if step.kind is RecipeStepKind.KEEP_LATEST_PER_ID:
+            try:
+                latest = keep_latest_per_id(
+                    work,
+                    key=step.column,
+                    params=_params(step),
+                    max_failure_pct=max_failure_pct,
+                    leak_check=leak_check,
+                )
+            except KeepLatestError as exc:
+                raise RecipeError(exc.code, exc.message, column=exc.column, order=step.order) from exc
+            receipts.append(
+                StepReceipt(
+                    order=step.order,
+                    kind=step.kind,
+                    column=step.column,
+                    rows=latest.rows_in,
+                    changed=latest.rows_in - latest.rows_out,
+                    failed=latest.failed,
+                    leak_check=latest.leak_check,
+                )
+            )
+            work = latest.frame
             continue
         if step.kind is RecipeStepKind.COMBINE_ROWS:
             try:

@@ -122,7 +122,11 @@ _ENGINE_HIDES: Final[Mapping[str, str]] = {
 """Warnings the engine already acts on by itself: shown as hidden columns, never proposed."""
 
 NEVER_TICKED_STEPS: Final[frozenset[RecipeStepKind]] = frozenset(
-    {RecipeStepKind.SET_MISSING, RecipeStepKind.VALID_RANGE}  # Plan L M153 (DEC-1531): a range is a question
+    {
+        RecipeStepKind.SET_MISSING,
+        RecipeStepKind.VALID_RANGE,  # Plan L M153 (DEC-1531): a range is a question
+        RecipeStepKind.KEEP_LATEST_PER_ID,  # Plan O M238 (DEC-1808, decision O3): reshape is never ticked
+    }
 )
 """Steps only the person may tick, whatever `agent.tick_uncertain` says: emptying a value is right only
 when it really is a code for "unknown", which the file cannot prove (DEC-1224)."""

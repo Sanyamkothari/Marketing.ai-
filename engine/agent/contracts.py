@@ -130,6 +130,9 @@ class RecipeStepKind(StrEnum):
     # Plan L M156 (DEC-1560): a wide sheet's month columns into rows (level 3, first in the fixed order). Row-wise:
     # each row becomes one row per listed period, from that row's own cells and the frozen parameters only.
     UNPIVOT = "unpivot"
+    # Plan O M238 (DEC-1808): one row per ID by keeping each ID's latest row on or before its snapshot (reshape
+    # level, entity-wise like `combine_rows`: an ID's kept row depends only on its own rows and the parameters).
+    KEEP_LATEST_PER_ID = "keep_latest_per_id"
 
 
 class ProposalSource(StrEnum):
@@ -207,6 +210,8 @@ class RecipeStep(StrictBase):
             raise ValueError("a remove_rows step creates no column")
         if self.kind is RecipeStepKind.UNPIVOT and self.new_column is not None:
             raise ValueError("an unpivot step names its new columns in params")
+        if self.kind is RecipeStepKind.KEEP_LATEST_PER_ID and self.new_column is not None:
+            raise ValueError("a keep_latest_per_id step creates no column")
         return self
 
 
