@@ -734,8 +734,9 @@ _Wrapper = tuple[
 
 
 def register_all(registry: DataToolRegistry) -> None:
-    """Register every tool built so far: M232's 22 existing (21 tools and the loop) and first wrappers, then the
-    tools of Plan O wave 1 (`engine.doctor.tools_wave_one`)."""
+    """Register every tool built so far: M232's 22 existing (21 tools and the loop) and first wrappers, the
+    tools of Plan O wave 1 (`engine.doctor.tools_wave_one`), then M236's wrappers and `explain`
+    (`engine.doctor.tools_wrappers`)."""
     for tool in TOOLS.values():
         if tool.kind is ToolKind.READ:
             registry.register(_look_tool(tool))
@@ -935,5 +936,8 @@ def register_all(registry: DataToolRegistry) -> None:
         )
     # Plan O wave 1 integration (DEC-1802 (t)): the tools of M240, M238, M237, M241 and M234, rules and screen only.
     from engine.doctor.tools_wave_one import register_wave_one
+    from engine.doctor.tools_wrappers import register_wrappers
 
     register_wave_one(registry)
+    # Plan O M236 (DEC-1806): the remaining wrappers and `explain`, rules and screen only.
+    register_wrappers(registry)

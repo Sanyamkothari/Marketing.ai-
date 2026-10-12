@@ -67,8 +67,11 @@ if TYPE_CHECKING:
     from engine.agent.contracts import AgentSession, Proposal, ToolResult
     from engine.agent.egress import Egress
     from engine.agentic.ledger import DecisionLedger
+    from engine.clients import ClientStore
     from engine.config import RoleCatalogue, UseCaseConfig
+    from engine.connections.store import ConnectionStore
     from engine.doctor.diagnose import LoadedFile, Offer
+    from engine.doctor.explain import Narrator
     from engine.doctor.locale import LocaleProfile
     from engine.doctor.readiness import CheckReadinessArgs, ReadinessInputs
     from engine.doctor.tools_formats import FormatToolContext
@@ -138,6 +141,8 @@ FORBIDDEN_PREFIXES: Final[tuple[str, ...]] = (
 Caller = Literal["rules", "ai", "person"]
 CALLERS: Final[frozenset[str]] = frozenset({"rules", "ai", "person"})
 _MIN_PROPOSE_ROLE: Final[frozenset[Role]] = frozenset({Role.ANALYST, Role.APPROVER, Role.ADMIN})
+_LAST_ROW: Final[int] = 83
+"""The catalogue's last row (`engine.doctor.catalogue`): #82 and #83 are M240's tools, given rows in M236."""
 _LETTERS: Final[dict[int, int]] = str.maketrans("0123456789abcdef", "abcdefghijklmnop")
 
 
@@ -236,6 +241,21 @@ class DataToolContext:
     readiness: Callable[[CheckReadinessArgs], ReadinessInputs] | None = None
     """The readiness report's inputs for the case's prepared copy (M234's `check_readiness`), built by the
     caller with `engine.doctor.readiness.inputs_for_upload`."""
+    # Plan O M236 (DEC-1806): what the remaining wrappers and `explain` read. Each is optional; a tool that needs
+    # one is not available without it.
+    connections: ConnectionStore | None = None
+    """The deployment's saved connections (`preview_connection`, `propose_import`)."""
+    client_store: ClientStore | None = None
+    """The onboarding registry of sources, mappings and recipes (`check_refresh`)."""
+    meter: Any = None
+    """The metered AI service (`engine.generative.budget.Meter`) for `second_opinion`; None with no AI service."""
+    guardrails: Any = None
+    """The deterministic guardrails (`engine.generative.guardrails.Guardrails`) the AI's words pass."""
+    evidence: tuple[DataToolResult, ...] = ()
+    """Results of this case's earlier registry calls, recorded by the server (`explain`, `request_approval`
+    cite them by evidence id; a model never supplies a result)."""
+    narrator: Narrator | None = None
+    """The AI service's writer of `explain`'s structured narrative; None means the rules' narrative."""
 
     def require_agent(self) -> AgentContext:
         if self.agent is None:  # unreachable through the registry: `needs` makes the tool unavailable
@@ -249,7 +269,20 @@ class DataToolContext:
         return self.agent.config_root if self.agent is not None else None
 
 
-Need = Literal["agent", "files", "storage", "session", "save_session", "turn", "case_files", "readiness"]
+Need = Literal[
+    "agent",
+    "files",
+    "storage",
+    "session",
+    "save_session",
+    "turn",
+    "case_files",
+    "readiness",
+    "connections",
+    "client_store",
+    "meter",
+    "evidence",
+]
 
 In = TypeVar("In", bound=BaseModel)
 Out = TypeVar("Out", bound=BaseModel)
@@ -264,7 +297,7 @@ class DataTool(Generic[In, Out]):
     """One registry entry: Plan K's `AgentTool` shape plus exposure, callers and needs (Plan O §5)."""
 
     number: int
-    """The tool's row in the design's catalogue (§5.5), 1 to 81."""
+    """The tool's row in the design's catalogue (§5.5), 1 to 83."""
     name: str
     kind: DataToolKind
     description: str
@@ -391,7 +424,7 @@ class DataToolRegistry:
             raise ValueError(f"PROPOSE tool {name!r} must name its policy rule set (`policy_kind`).")
         if tool.session_tool and tool.kind is not DataToolKind.READ:
             raise ValueError(f"Only READ tools run as Plan G session tools: {name!r}.")
-        if not 1 <= tool.number <= 81:
+        if not 1 <= tool.number <= _LAST_ROW:
             raise ValueError(f"Tool {name!r} has no row in the catalogue (number {tool.number}).")
         budget = tool.max_output_bytes
         if budget is None and tool.kind is not DataToolKind.PROPOSE:
@@ -585,6 +618,14 @@ def _met(tool: DataTool[Any, Any], ctx: DataToolContext) -> bool:
         if need == "case_files" and ctx.case_files is None:
             return False
         if need == "readiness" and ctx.readiness is None:
+            return False
+        if need == "connections" and ctx.connections is None:
+            return False
+        if need == "client_store" and ctx.client_store is None:
+            return False
+        if need == "meter" and ctx.meter is None:
+            return False
+        if need == "evidence" and not ctx.evidence:
             return False
     return True
 

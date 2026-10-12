@@ -89,6 +89,8 @@ VALUES: dict[str, object] = {
     # Plan K M142: Guided setup's optional second opinions (data_agent_assist)
     "task": "rerank",
     "payload": '{"header_candidates": []}',
+    # Plan O M236: Data Doctor's claim-checked explanation (data_explain, DEC-1806)
+    "facts": '[{"ref": "f1", "type": "count", "about": "rows"}]',
 }
 """One plausible value per variable any shipped prompt declares, so the sweep can render them all."""
 

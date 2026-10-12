@@ -624,7 +624,7 @@ routing the other formats through upload comes later.*
 `engine/intake/other_formats.py`, `engine/intake/sheets.py`, `engine/doctor/parser_loss.py`,
 `engine/doctor/tools_formats.py`; the case's files for these tools are `engine/doctor/case_files.py` (`CaseFiles`,
 over M231's case). `read_other_format` (#4) and `check_parser_loss` (#5) are in the registry;
-`read_workbook_sheets` and `find_excel_serial_dates` wait for a row in the design's catalogue.
+`read_workbook_sheets` (#82) and `find_excel_serial_dates` (#83) are in the registry since M236 (DEC-1806).
 
 ## 18. A rule for everything Data Doctor suggests (Plan O M233, DEC-1803)
 
@@ -693,3 +693,30 @@ Each transition is one write of `case.json`; items and questions of a goal carry
 `VISIT_NOT_WAITING` (409), `VISIT_UNKNOWN_CHOICE` (422), `USE_CASE_NOT_FOUND` for a goal that is not a use case.
 Tests: `tests/unit/doctor/test_goal_brief.py`, `tests/unit/doctor/test_visit.py`,
 `tests/integration/test_api_case_visit.py`.
+
+## 20. More of what Data Doctor can look at, and explanations you can trust (Plan O M236, DEC-1806)
+
+*Behind the switch `data_doctor.unified` (off by default) and not on a screen yet.*
+
+Data Doctor can now do, as one of its own steps, what other screens of the product already do: say what kind of
+file each file is and which column is its ID, suggest how a file's columns map onto the goal's columns, keep how
+a file was read so next month's file is read the same way, look at a table in a saved connection before
+importing it, say which tables next month's build will read, run the pre-flight check on your files, find columns
+holding personal data, give one answer on columns that may hold the answer (leaks), check data for a
+campaign-effect run, read what a training run checked, and ask the AI service for a second opinion. Everything it
+suggests waits for you: nothing is ticked for you unless the rules are sure, and nothing the AI suggests ever is.
+
+When something needs your own yes (for example a join that leaves out more than 2% of a file's rows), Data Doctor
+shows the exact sentence you approve, who may approve it, and whether someone else must.
+
+**Explanations.** Data Doctor can explain what it measured in a few short sentences. The AI service writes only
+the wording; every number and every group name is filled in from what Data Doctor counted, after checking the
+sentence against it ("North has the highest rate" is shown only if North alone has it). A sentence that does not
+check out is dropped; if more than one fails, you see the plain sentences Data Doctor writes itself - which is
+also what you see when no AI service is connected.
+
+### For developers
+
+`engine/doctor/tools_wrappers.py`, `engine/doctor/explain.py` (`docs/AGENTS.md` §18); the rule sets are in
+`configs/agentic/policy.yaml` (`data.propose_role`, ...); the prompt is `configs/prompts/data_explain.v1.md`.
+M240's `read_workbook_sheets` and `find_excel_serial_dates` are catalogue rows #82 and #83 and are registered.
