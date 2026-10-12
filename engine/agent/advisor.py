@@ -42,6 +42,7 @@ import pandas as pd
 
 from engine.agent.config import AgentLevel
 from engine.agent.contracts import (
+    ROWS_PER_ID_STEP_KINDS,
     AgentConfidence,
     AgentSummary,
     Proposal,
@@ -122,7 +123,11 @@ _ENGINE_HIDES: Final[Mapping[str, str]] = {
 """Warnings the engine already acts on by itself: shown as hidden columns, never proposed."""
 
 NEVER_TICKED_STEPS: Final[frozenset[RecipeStepKind]] = frozenset(
-    {RecipeStepKind.SET_MISSING, RecipeStepKind.VALID_RANGE}  # Plan L M153 (DEC-1531): a range is a question
+    {
+        RecipeStepKind.SET_MISSING,
+        RecipeStepKind.VALID_RANGE,  # Plan L M153 (DEC-1531): a range is a question
+        RecipeStepKind.KEEP_LATEST_PER_ID,  # Plan O M238 (DEC-1808, decision O3): reshape is never ticked
+    }
 )
 """Steps only the person may tick, whatever `agent.tick_uncertain` says: emptying a value is right only
 when it really is a code for "unknown", which the file cannot prove (DEC-1224)."""
@@ -951,7 +956,8 @@ def _prepared_context(
         if strict:
             raise
         return ctx
-    combined = any(step.kind is RecipeStepKind.COMBINE_ROWS for step in steps)
+    # One row per ID now (combined, or each ID's latest row kept): the profile counts the rows it describes.
+    combined = any(step.kind in ROWS_PER_ID_STEP_KINDS for step in steps)
     profile = ingest.profile_dataset(
         run.frame,
         ctx.config,
