@@ -169,7 +169,8 @@ test("the demo: the server's card, with exactly one action that opens its campai
   // The server's "what to do" sentence names a "use case" and says "train": until M172 rewords it at the source, the
   // card keeps its title, its sentence and its one action, and leaves that sentence out.
   assert.ok(!shown.includes(server.next_step));
-  assert.equal(cards[0].querySelector(".ov-card-next"), null);
+  // M186 (DEC-1616): the card is an attention item whose one line is the card's sentence, without that one.
+  assert.equal(cards[0].querySelector(".attn-text").textContent, server.text);
   assert.equal(cards[0].querySelector("[data-card-action]").getAttribute("href"), `#/campaigns/${server.campaign_id}/overview`);
   assert.equal(cards[0].querySelector("[data-card-action]").textContent.trim(), "Open the campaign");
 });
@@ -228,7 +229,7 @@ test("a busy day: five cards with one action each, five live rows, and how many 
   assert.equal(rows.length, 5);
   const cells = rows.map((r) => [
     r.querySelector(".ov-row-name").textContent,
-    r.querySelector(".pill").textContent,
+    r.querySelector("[data-status]").textContent, // M186: the status chip of components.js (was `.pill`)
     r.querySelector(".ov-row-next").textContent,
     r.querySelector(".ov-row-name").getAttribute("href"),
   ]);
@@ -265,7 +266,8 @@ test("a server sentence gets the glossary's word for a noun; one that still hold
   assert.equal(page.showable("Approve a risk model for this use case, or train the model on more customers."), "");
   await visit(answer({ ...demo, cards: [card({ code: "CLEAN", text: "A clean sentence.", next_step: "Keep the control group out of every channel." })], cards_total: 1 }));
   assert.match($("[data-card]").textContent, /A clean sentence\./);
-  assert.match($(".ov-card-next").textContent, /^Keep the comparison group out of every channel\.$/);
+  // M186: the clean "what to do" sentence joins the card's one line (it had a line of its own, `.ov-card-next`).
+  assert.equal($("[data-card] .attn-text").textContent, "A clean sentence. Keep the comparison group out of every channel.");
 });
 
 test("a number that could not be traced: the cards and the value are not shown, the campaigns are", async () => {
@@ -296,7 +298,8 @@ test("a unit sentence that holds an engine word is replaced by the kind of unit 
 test("no total while campaigns have results says so, instead of asking for results", async () => {
   await visit(answer({ ...demo, headline: null, checklist: { connected: true, campaign: true, results: true } }));
   assert.ok($("[data-value-empty]"));
-  assert.match($("[data-value-meaning]").textContent, /None of your measured campaigns is counted as proven yet/);
+  // M186: an empty state (icon, sentence) says it, with no number at all.
+  assert.match($("[data-value-empty]").textContent, /None of your measured campaigns is counted as proven yet/);
   assert.doesNotMatch($("[data-value]").textContent, /Once a campaign's results are added/);
 });
 
@@ -314,9 +317,10 @@ test("a fresh install: empty states that say what to do, and three unticked step
   const items = $$("[data-checklist] [data-check]");
   assert.deepEqual(items.map((i) => [i.dataset.check, i.dataset.done]), [["connected", "false"], ["campaign", "false"], ["results", "false"]]);
   assert.deepEqual(items.map((i) => i.textContent.replace(/\s+/g, " ").trim()), [
-    "○Connect or upload your dataTo do",
-    "○Start your first campaignTo do",
-    "○Add its resultsTo do",
+    // M186: the progress list numbers each step (a done step shows a check icon instead); the word is for screen readers
+    "1Connect or upload your dataTo do",
+    "2Start your first campaignTo do",
+    "3Add its resultsTo do",
   ]);
   assert.match(items[0].querySelector("a").getAttribute("href"), /^#\/(data|connections)$/);
   assert.equal(items[1].querySelector("a").getAttribute("href"), "#/campaigns/new");
@@ -329,7 +333,10 @@ test("the checklist ticks each step from real state and leaves the rest", async 
   const state = Object.fromEntries($$("[data-check]").map((i) => [i.dataset.check, i.dataset.done]));
   assert.deepEqual(state, { connected: "true", campaign: "true", results: "false" });
   assert.equal($('[data-check="connected"] a'), null, "a finished step is not a link");
-  assert.match($('[data-check="connected"]').textContent, /✓/);
+  // M186: a done step's tick is a check icon (it was the character ✓), hidden from screen readers, who read "Done".
+  assert.ok($('[data-check="connected"] .ov-tick[aria-hidden="true"] svg'));
+  assert.match($('[data-check="connected"]').textContent, /Done$/);
+  assert.equal($('[data-check="results"] .ov-tick svg'), null);
   assert.ok($('[data-check="results"] a'));
 });
 
@@ -441,4 +448,81 @@ test("it claims only #/overview and is registered once", () => {
   const { phaseModules } = router;
   assert.deepEqual(phaseModules().find((m) => m.name === "overview").routes, ["overview"]);
   assert.deepEqual(overviewModule.ROUTES, ["overview"]);
+});
+
+// --- the look (Plan M M186, DEC-1616): the components of ui/components.js, drawn with the page ------------------------
+
+test("M186: a top-level place has no breadcrumb; the hero figure is the floor, with no range the server did not send", async () => {
+  clear();
+  await visit();
+  assert.equal($('[data-module="overview"] .crumbs'), null, "Overview is a top-level place (visual_common §3)");
+  const hero = $("[data-value-amount] .hero-figure");
+  assert.ok(hero, "the value proven to date is the page's hero figure");
+  assert.match(hero.textContent, /₹81,034/);
+  assert.equal($("[data-value] [data-value-range]"), null, "a floor has no upper end in GET /overview: no bar is invented");
+  assert.ok($("[data-value] .ovp-head [data-how-counted]"), "How this is counted sits in the card's head");
+});
+
+test("M186: each card is an attention item: the tone's icon names it, the campaign is the person's own text, one action apart", async () => {
+  clear();
+  await visit(answer(busy()));
+  const items = $$("[data-attention] [data-card]");
+  assert.ok(items.every((i) => i.classList.contains("attn")));
+  assert.deepEqual(items.map((i) => i.dataset.tone), ["warning", "warning", "warning", "warning", "warning"]);
+  for (const item of items) {
+    assert.equal(item.querySelector(".attn-icon svg").getAttribute("aria-label"), "Warning", "never colour alone");
+    assert.ok(item.querySelector(".attn-action > [data-card-action]"), "the action has its own column (below the text on a phone)");
+  }
+  const who = items[0].querySelector(".attn-meta");
+  assert.ok(who.hasAttribute("data-user-text"), "the recorded campaign name is the person's own (M172)");
+  assert.equal(who.getAttribute("title"), "Win back lapsed customers - March", "the whole name is the tooltip");
+  await visit(answer({ ...demo, cards: [card({ severity: "info" })], cards_total: 1 }));
+  assert.equal($("[data-card]").dataset.tone, "info");
+  assert.equal($("[data-card] .attn-icon svg").getAttribute("aria-label"), "Information");
+});
+
+test("M186: live rows carry the one status chip: an icon hidden from screen readers and the word, in the status's tone", async () => {
+  clear();
+  await visit(answer(busy()));
+  const chips = $$("[data-live-row] [data-status]");
+  assert.deepEqual(
+    chips.map((c) => [c.dataset.status, c.dataset.tone, c.textContent]),
+    [
+      ["live", "info", "Live"],
+      ["waiting", "warning", "Waiting for results"],
+      ["waiting", "warning", "Waiting for results"],
+      ["live", "info", "Live"],
+      ["draft", "neutral", "Draft"],
+    ],
+  );
+  for (const c of chips) assert.equal(c.querySelector("svg").getAttribute("aria-hidden"), "true");
+});
+
+test("M186: the first-visit checklist is a progress list that leads the page, with how many steps are done", async () => {
+  clear();
+  await visit(answer({ ...fresh(), checklist: { connected: true, campaign: false, results: false } }));
+  const grid = $('[data-module="overview"] .ov-grid');
+  assert.equal(grid.firstElementChild, $("[data-checklist]"), "a first visit's guide comes first");
+  assert.equal($("[data-check-count]").textContent, "1 of 3 done");
+  assert.ok($('[data-check="campaign"]').classList.contains("is-next"), "the next step is marked");
+  assert.equal($$("[data-checklist] .is-next").length, 1);
+  assert.equal($("[data-checklist-hide]").className, "btn tertiary sm", "Hide this list is a quiet button");
+});
+
+test("M186: after Home, the page has its own sheet (ov-page-styles, M185) scoped to .ovp, apart from Home's .ov", async () => {
+  clear();
+  w.location.hash = "#/";
+  await settle(8);
+  await visit();
+  const own = w.document.getElementById(page.STYLE_ID);
+  assert.equal(page.STYLE_ID, "ov-page-styles", "not Home's ov-styles");
+  assert.ok(own && own.textContent.includes(".ovp .ovp-grid{"), "the page's own rules are in the document");
+  assert.ok($('[data-module="overview"]').classList.contains("ovp"), "scoped apart from Home's `.ov`");
+  assert.ok(!$('[data-module="overview"]').classList.contains("ov"));
+});
+
+test("M186 review: the value card keeps its own height beside a taller live list; phones get 40px targets", () => {
+  const css = w.document.getElementById(page.STYLE_ID).textContent;
+  assert.match(css, /\.ovp \.ov-value\{grid-area:value;align-self:start\}/);
+  assert.match(css, /@media \(max-width:700px\),\(pointer:coarse\)\{[^}]*\.ovp \.btn\.sm,\.ovp \.btn\.tertiary\{min-height:40px\}/);
 });

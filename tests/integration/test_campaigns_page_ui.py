@@ -1,6 +1,6 @@
 """Plan M M176 (DEC-1606): the Campaigns list and the campaign page, in jsdom, and adding results through its tab.
 
-Three node suites in `tests/integration/production/ui/campaigns/` (sharing that directory's jsdom install):
+Four node suites in `tests/integration/production/ui/campaigns/` (sharing that directory's jsdom install):
 
 * `rules.test.mjs` - the pure rules: the one status-chip rule (Draft, Live, Waiting for results, Measured), short
   names, the next step, the evidence label in words, the contact list (search, 25 rows a page, "Why these
@@ -10,9 +10,12 @@ Three node suites in `tests/integration/production/ui/campaigns/` (sharing that 
 * `results.test.mjs` - a world this file builds with the real app (a Phase 1 scoring run, five campaigns in four
   states): the chips and primary buttons per state, adding results through the Results tab (the requests it sends
   are pinned to the ones this file sent to the real app), a campaign whose results are not all in yet, and
-  "Refresh the list" with its confirmation (the request it sends is the one this file sent to the real `POST /runs`).
+  "Refresh the list" with its confirmation (the request it sends is the one this file sent to the real `POST /runs`);
+* `look.test.mjs` - Plan M M186 (DEC-1616), the look: status chips of the one mapping, goal tags, the net value with
+  its likely range in the list and the tiles, underline tabs over a named tab panel, the header's one primary action
+  per view, "What was sent" as a definition list, and the Results tab's drop zone.
 
-Only those three files are run: the directory is shared with M177's wizard suites, which have their own runner.
+Only those four files are run: the directory is shared with M177's wizard suites, which have their own runner.
 
 The acceptance "adding results from the tab produces the same report as today's route" is checked here, in Python,
 on the real app: the requests the tab sends (pinned in `results.test.mjs` against `expected.json`) give the same
@@ -47,8 +50,9 @@ pytestmark = pytest.mark.integration
 
 NODE_DIR: Final[Path] = Path(__file__).resolve().parent / "production" / "ui"
 TESTS_DIR: Final[Path] = NODE_DIR / "campaigns"
-SUITES: Final[tuple[str, ...]] = ("rules.test.mjs", "demo.test.mjs", "results.test.mjs")
-"""M176's own suites. The directory is shared with M177 (wizard*.test.mjs, run by its own test), so no glob."""
+SUITES: Final[tuple[str, ...]] = ("rules.test.mjs", "demo.test.mjs", "results.test.mjs", "look.test.mjs")
+"""M176's own suites and M186's look. The directory is shared with M177 (wizard*.test.mjs, run by its own test), so no
+glob."""
 RUN_ID: Final[str] = "r_20261007_17600001"
 RESULTS_FILE: Final[str] = "october_results.csv"
 DIFFERS_ONLY_IN: Final[set[str]] = {"computed_at", "campaign_id", "as_of", "test_plan_hash", "early_look"}
