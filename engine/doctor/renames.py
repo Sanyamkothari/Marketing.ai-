@@ -419,6 +419,7 @@ def recipe_columns(steps: Iterable[Any]) -> tuple[frozenset[str], frozenset[str]
     proposed as a rename of another month's.
     """
     from engine.agent.contracts import RecipeStepKind
+    from engine.agent.latest import KeepLatestError, KeepLatestSpec
     from engine.agent.recipe import RecipeError, derive_names
     from engine.agent.reshape import CombineError, CombineSpec
     from engine.agent.unpivot import UnpivotError, UnpivotSpec
@@ -435,11 +436,13 @@ def recipe_columns(steps: Iterable[Any]) -> tuple[frozenset[str], frozenset[str]
                 reads |= set(derive_names(str(params.get("expression", ""))))
             elif step.kind is RecipeStepKind.COMBINE_ROWS:
                 reads |= set(CombineSpec.from_params(step.column, params).reads)
+            elif step.kind is RecipeStepKind.KEEP_LATEST_PER_ID:  # Plan O M238 (DEC-1808)
+                reads |= set(KeepLatestSpec.from_params(step.column, params).reads)
             elif step.kind is RecipeStepKind.UNPIVOT:
                 spec = UnpivotSpec.from_params(step.column, params)
                 months |= {v.column for v in spec.value_columns}
                 reads |= set(spec.reads)
-        except (RecipeError, CombineError, UnpivotError):
+        except (RecipeError, CombineError, UnpivotError, KeepLatestError):
             continue
     return frozenset(reads), frozenset(months)
 

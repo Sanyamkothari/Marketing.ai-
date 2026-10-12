@@ -63,6 +63,7 @@ scoring: POST /runs mode=score ──► replay the model's recipe ──► val
 | `engine/agent/placeholders.py` | Placeholder codes in number columns (Plan I, DEC-1220 … DEC-1224): the detector, the `set_missing` step it shares code with, and the impact figures shown beside the suggestion. |
 | `engine/agent/recipe.py` | `check_recipe` and `run_recipe`: the only code that changes data. |
 | `engine/agent/reshape.py` | Level 3 (M76): plan and run a `combine_rows` step through the onboarding feature engine. |
+| `engine/agent/latest.py` | Level 3 (Plan O M238, DEC-1808): plan and run a `keep_latest_per_id` step - each ID's latest row on or before its snapshot, with the point-in-time probe. |
 | `engine/agent/advisor.py` | Every proposal, question and stop, by rules (§4). |
 | `engine/agent/recommend.py` | The recommended settings (§5). |
 | `engine/agent/session.py` | Deciding, answering, re-advising; the session status rule. |
@@ -135,7 +136,7 @@ other. The advisor never calls them, so its evidence and the benchmark are uncha
 `type`, `kind`, `code`, `name`, `function`, `dtype`, `label` and `message`. Everything derived from a
 cell is under other keys (`value`, `values`, `rows`, `cells`, `matches`, `left_value`, `right_value`,
 `earliest`, `latest`, `shape`, `positive_label`) and has been masked **whole** with the gate's complete scanner
-set (`egress.mask_value`: e-mail, phone, PAN, Aadhaar, card, IBAN, IP, URL, API-key-like token, nine-digit run)
+set (`egress.mask_value`: e-mail, phone, PAN, Aadhaar, GSTIN, voter ID, card, IBAN, IP, URL, API-key-like token, nine-digit run)
 and only then cut to 60 characters (40 in `describe_duplicates`, 80 for an example), so a default-deny egress
 gate can treat every other string as a cell and never depends on seeing a cell before it was cut. **A dict is
 never keyed by a cell value**: its keys are field names of ours (`egress.RESULT_KEYS`) or column names; the
@@ -272,8 +273,10 @@ identically.
 | `set_missing` | `values` (1-10 numbers) | Empty every cell holding one of the values, compared as numbers (`99`, `99.0` and the text `"99"` alike); every other cell is kept. Row-wise; nothing fails, so `failed` is 0 and `changed` counts the emptied cells. Runs after parsing (a code written as text is a number by then) and before combining rows (DEC-1220). |
 | `combine_rows` | the step's `column` is the entity key; `time_column`, `snapshot_column`, `dayfirst` (per date column: a map of column to true/false/null, frozen at planning; a single value applies to every date column), `outcome`, `features` (a frozen `{name, function, column}` list) | Level 3: many rows per entity into one (DEC-1023 … DEC-1025), computed by the onboarding feature engine with its point-in-time guard. Only rows dated on or before the entity's snapshot count; the outcome is read from the latest row, not aggregated; `latest` settles a same-date tie by the later snapshot, then the later row in the file (the row the outcome would read among those rows; across dates `latest` follows the row date and the outcome the snapshot); numbers get sum/mean/max/latest, categories latest/nunique, dates days-since (over dates on or before the snapshot; a date column already holding later dates on earlier rows is left out of the plan, and on a training file stops with `RECIPE_STEP_INVALID` (`FUTURE_EVENTS_LEAKED: ...`) if a later file shows it), plus a row count. A row with no key or date, or whose entity has no readable snapshot on any row, is a counted failure; a blank snapshot on one row is fine when the entity has one elsewhere. Dates with an offset or zone are compared in UTC (a zoned value unreadable in UTC is empty); out-of-range dates are empty. Each date column's day/month order is the one frozen for it at planning (its own values' order, else the file's when its date columns agree, else `null`); the combine never re-decides it, and a `null` column holding an ambiguous date stops with `RECIPE_VALUES_UNCONVERTED`. An untyped key column is read as text on every row, so 7 and `"7"` are one entity. Carried consent/opt-out/last-contact columns keep their header whatever its spelling. Entity-wise rather than row-wise: an entity's output depends only on its own rows and the frozen parameters, never on other entities or a statistic of the whole file. A training Approve runs onboarding's full future-data leak probe, a scoring replay the narrow one, a preview none. Needs the `reshape` level. |
 | `unpivot` | the step's `column` is the ID; `id_columns` (kept on every row, the ID first), `value_columns` (a frozen `{column, measure, period}` list), `name_pattern` (`{measure}<sep>{period}` or `{period}<sep>{measure}`, `<sep>` one of `_ - .` or a space), `period_column`, `outcome` | Plan L M156 (DEC-1560 … DEC-1569): a wide sheet (`2024_01_spend`, `2024_02_spend`, …) into rows, one per input row per listed period, with one column per measure and one for the period. A period is a token from a fixed grammar (a month, quarter or year, with or without a year: `2024_01`, `Jan_2024`, `2024Q1`, `2024`, `Jan`, `M1`, `Q1`); one with a year is written as the date it starts (`2024-01-01`), so `combine_rows` can combine the rows back per customer, and one without is written as it is. `name_pattern` must rebuild every listed name from its measure and period. The outcome is copied onto every row, never turned into rows (`outcome` must be the recipe's outcome); the ID and the outcome are never value columns; every other column is left out. A measure with no column for a period gets an empty cell. Row-wise: a row's output depends only on that row and the frozen list. Receipt: `rows` is rows in, `changed` rows out, `failed` the non-empty cells of columns that fit the pattern for a listed measure but are not listed (next month's new month), which are left out; more of them than `max_conversion_failure_pct` of the cells stop the run with `RECIPE_VALUES_UNCONVERTED`, and a listed column the file lacks is `RECIPE_COLUMN_MISSING`. Runs first, before every other kind (its phase is below every other, so saved recipes order and hash as before), and only once. Needs the `reshape` level. Proposed by the advisor only (a blocking question), not by the chat or an edit. |
+| `keep_latest_per_id` | the step's `column` is the ID; `time_column`, `snapshot_column` (null: each ID's latest date), `dayfirst` (frozen per date column, as `combine_rows`), `ties` (`refuse`, `last_in_file`, `first_in_file`) | Plan O M238 (DEC-1808 (a)(b)): one row per ID by keeping each ID's latest row, every column kept. Only rows dated on or before the ID's snapshot (its latest `snapshot_column`) may be kept, so a row written after the snapshot never is. Rows of the latest date (then snapshot) identical in every column are one row (counted); rows that differ are a conflict, settled only by the person's answer (`ties`); under `refuse` a conflict stops the step with `RECIPE_VALUES_UNCONVERTED`. A row with no ID or readable date, or whose ID has no readable snapshot, is a counted failure, and so is every row of an ID none of whose rows is on or before its snapshot (the ID would vanish; counted as lost); more than `max_conversion_failure_pct` stop the run. Entity-wise: an ID's row depends only on its own rows (in file order) and the frozen parameters. Refused when keyed on another column than the ID, or when its date or snapshot column is the outcome; at most one of it and `combine_rows`. Runs where `combine_rows` does (phase 4). A training Approve runs the full point-in-time probe (a row dated a day after each ID's snapshot is added and no kept row may move), a scoring replay the narrow one (1,000 IDs), a preview none; receipt: `rows` in, `changed` rows left out, `failed`, `leak_check`, and `note` (why rows were left out, as counts, and how many IDs were settled by file order). Needs the `reshape` level; never ticked (`NEVER_TICKED_STEPS`); offered by Data Doctor's `keep_latest_per_id` tool through a blocking question, never by the chat or an edit; memory replay asks that question again rather than ticking it; re-advice keeps it once accepted (`ROW_RESHAPE_STEP_KINDS`). |
 | `derive` | `expression` | A new column from `engine.onboarding.transforms.derive`'s whitelist: names, numbers, `+ - * /`, `days_between`, `months_between`, `year`, `month`, `coalesce`, `lower`, `abs`, and `snapshot_date`. At most 300 characters; no repeated text. Needs the `derive` level. Not proposed by the advisor today. |
 | `drop_column` | — | Hide a column from the model. A file without the column has nothing to hide: the step is skipped and its receipt says `skipped: true`, so a hidden column (a leak, often unknown when scoring) need not be in a scoring file. |
+| `normalise_key` | `prefix` (at most 20 characters), `zeros`, `case`, `spaces`, `phone` (alone) | Plan O M237 (DEC-1807): one customer ID written one way so two files meet (`engine/agent/key_steps.py`): spaces removed, read lower-case, the prefix taken off an ID that starts with it, the zeros at the start dropped, or an Indian phone written `+91` and ten digits (an E.164 number with `+` is kept). Row-wise, once per distinct value; a value the phone rule cannot read is kept as written and counted as failed (`RECIPE_VALUES_UNCONVERTED` over the limit). Never on the recipe's ID or outcome; no new column; phase 1, level `clean`. Proposed by the rules only (the `normalise_key` and `build_dataset` tools; `join_files` applies the same rule inside its join), never by the chat (not in `CHAT_STEP_KINDS`). `build_dataset` runs it on an event log's ID column only, then writes the matched IDs as the customer list writes them: the list's own IDs are never rewritten. |
 
 `recipe_hash` covers kinds, columns and parameters only (not reasons or ids). A recipe also records
 what it was approved under - `primary_key`, `target`, `snapshot_column`, and the use case's `levels`
@@ -458,7 +461,9 @@ which needs a dotted ASCII domain), **address-shaped identifiers** without one (
 id -, `x@intranet`, `ravi@example.भारत`; the host must start with a letter and have three characters, so an
 `@` in prose is not one), payment card (13 to 19 digits, Luhn-valid, joined by a space, `-`, `_`, `/`, `,` or a
 spaced hyphen; when the card is followed by another number the card is found among the groups of digits),
-IBAN, IPv4/IPv6, API-key-like tokens (a feature name such as `total_spend_last_90d` is not one). Then the
+IBAN, IPv4/IPv6, API-key-like tokens (a feature name such as `total_spend_last_90d` is not one). Then a
+**GSTIN** and a **voter ID (EPIC)**, each whole (`[REDACTED:gstin]`, `[REDACTED:epic]`; Plan O M241: before it
+the PAN inside a GSTIN and a voter ID's digits were taken and the rest left). Then the
 platform's own `engine.pii.redact_text` (phone, PAN, Aadhaar, e-mail); then a **PAN typed with spaces or
 hyphens** (`ABCDE 1234 F`), a **phone with a bracketed block** (`+91 (98765) 43210`, `+7 (495) 123-45-67`, at
 least nine digits), any other run of nine or more digits, and groups of three or more digits joined by a
@@ -549,7 +554,7 @@ third party and the data gate above is chosen for it).
 
 **The canary.** `tests/unit/agent/test_egress_canary.py` and `tests/integration/agent/test_egress_sessions.py`
 plant fake personal data (an e-mail, a phone, PAN, card, Aadhaar, IBAN, IPv4 and IPv6, a URL with a token, an
-API key, a name and an address in a sentence) in an obviously personal column, in innocent-looking columns
+API key, a name and an address in a sentence, and - Plan O M241 - a GSTIN and a voter ID in `business_ref`) in an obviously personal column, in innocent-looking columns
 (`notes`, `feedback`, `region_contact`), in the ID column and in **headers**, run whole sessions through the
 real `chat_turn` with a client that calls **every tool** on every column, and search every prompt, every stored
 message and every `sent` preview. No pattern-recognisable value appears in either mode; in `summaries_only`
@@ -923,3 +928,125 @@ same author as the lexicon, so the figure is optimistic about files written by o
 - The second opinions are reached by a "Second opinion" button in the Guided setup checklist (shown only when an AI
   service is connected), which calls `POST …/agent-session/assist` and redraws the returned session; its questions and
   its "What the AI looked at" appear like any other. It is not a chat turn: the chat loop does not call it.
+
+## 14. Data Doctor's one tool registry (Plan O M232, DEC-1802)
+
+### 14.1 In plain words
+
+Every data capability Data Doctor has becomes a **tool** in one list, `engine/doctor/registry.py`. A tool either
+**looks** (READ), **suggests** something the person decides (PROPOSE) or **asks** (ASK). Nothing in the list can
+change data: the steps run only when the person approves (`apply`), and the registry refuses any tool whose name
+says it applies, replays, sends or deletes something. The list is checked against the design's catalogue
+(`engine/doctor/catalogue.py`, the design §5.5), so it cannot drift from what was approved.
+
+### 14.2 What M232 registers
+
+- **The 22 existing tools:** Plan G's 18 look tools (as they are, in `TOOLS` order), the chat's `propose_setting`
+  and `propose_step`, the person's `edit_by_hand`, and the conversation loop (`chat_turn`), which is the caller,
+  not a tool.
+- **The first wrappers:** `diagnose_files`, `find_file_role`, `advise`, `first_look`, `how_files_fit`,
+  `what_can_this_power`, `enough_data`, `data_request`, `find_time_columns`, `recall_treatment`. Each returns the
+  wrapped function's own model, unchanged. In M232 they serve the rules and the screen; the AI reaches them through
+  the visit (M235).
+
+### 14.3 The rules every call follows
+
+- **Role per call.** Every tool has a `RoutePolicy`. A tool that returns a cell, a row or a masked example needs
+  an Analyst; `what_can_this_power` and `data_request` need a Viewer; every PROPOSE or ASK tool needs at least an
+  Analyst, so a Viewer may call READ tools only. A refusal is `TOOL_ROLE_REQUIRED`. The AI and the person always say
+  who is asking; only the engine's own rules, inside a route that already checked the person, may call without.
+- **Who may call.** Each tool lists its callers (rules, AI, person). The AI never sees `edit_by_hand`.
+- **Exposure.** `session-only` tools return row-level data and are never listed on MCP. `aggregate` tools (counts
+  and verdicts) may be, in a later plan. Plan O lists none (O7): `mcp_surface()` is empty.
+- **Content-hash evidence ids.** `registry.call` gives each result `"ev_"` + 16 letters `a`-`p`: Plan K's
+  `sha256(canonical([tool, input, output]))`, 64 bits, spelled in letters so the egress gate's last check never
+  mistakes an id for a number. The same question on the same data gives the same id in every run and process.
+- **Budgets** (the design §5.2). A result through `call` may be at most **5,500 characters** of canonical JSON for a
+  `session-only` (row-level) tool and **16 KB** for an `aggregate` one; beyond it the call is refused
+  (`TOOL_OUTPUT_TOO_LARGE`, "ask a narrower question"). Plan G's look tools already keep under 5,500. The wrappers
+  that list things cut the end of each list to fit, as the look tools do, and say how many there were
+  (`files_total`, `roles_total`, `columns_total`, `links_total`, `proposals_total`, ...). Two exceptions, each
+  named in its registration: `data_request` is built from configuration alone and holds no client data, so it keeps
+  16 KB (and names at most four use cases, which fit); and the three suggestions that run Plan G's own handlers
+  (`propose_setting`, `propose_step`, `edit_by_hand`) get no registry cap, because Plan G already bounds them (the
+  listed settings, `check_recipe`'s 500 spellings) and a second cap would refuse what Plan G accepts.
+- **The Doctor's caps.** `diagnose_files` reads at most 20 files and an even share of 4,000,000 rows, as
+  `POST /doctor/diagnosis` does; `data_request` takes configured use case ids only (`TOOL_INPUT_INVALID` otherwise).
+- **An edit is saved.** `edit_by_hand` hands the edited session to the caller's `save_session`, which stores it
+  under the caller's lock and version check; without one the tool is not available.
+
+### 14.4 Behind the switch
+
+With `data_doctor.unified` on (M230; default off), Plan G's rules advisor and chat call every tool through the
+registry: a look tool through `session_call`, which returns Plan G's own `ToolResult` byte for byte with the session's
+id (`c1-e1`, `e3`), and a chat suggestion through `call`, with the turn's own handlers bound to it. The registry
+checks the role and records the suggestion; Plan G's handler reads the arguments exactly as the model sent them
+(nothing stripped: a padded setting path is still refused, a separator of one space is still one space), and once
+it has made a suggestion the registry's record cannot change or drop it. The chat's route passes who is asking, so
+the role is checked on each call. Plan G's 22 and the 27 Hinglish golden digests and whole
+chat sessions (prompts and stored sessions) are byte-identical with the switch on and off, including suggestions with
+padded strings and one of 401 spellings (`tests/unit/doctor/test_registry_runtime.py`). With the switch off the registry is not reached.
+
+The session ids stay because the screen, Ask your data's charts and every stored session cite them; the content-hash
+id is what the registry's own callers - the visit, the readiness report, the evals - cite.
+
+### 14.5 Adding a tool
+
+A new tool is: a row already in the catalogue; a `DataTool` registered in `engine/doctor/tools.py` with typed input
+(unknown fields refused) and output models, a `RoutePolicy`, its callers, its needs and its exposure; an entry in the
+egress canary (`tests/unit/doctor/test_registry_canary.py`, which fails for a tool without one); and, for PROPOSE, a
+`policy_kind` naming its rule set (M233 refuses a kind with no rules, `POLICY_NO_RULES`).
+
+## 15. Locale and Indian formats (Plan O M241, DEC-1811)
+
+### 15.1 In plain words
+
+Indian files write `₹2.5 L`, `1.2 Cr`, `Rs 3,50,000/-`, `haan` / `nahi` and `हाँ` / `नहीं`, carry GSTINs, voter IDs,
+PIN codes and mobile numbers in several spellings, and put the day before the month. Data Doctor learns how a client
+writes these once - the **locale profile** - asks the person to confirm it once, and then uses it for every file of
+that client, saying so ("Using the number, date and yes/no settings you confirmed on 3 Sep 2026").
+
+### 15.2 The rules (all deterministic; no AI service needed)
+
+- **`detect_locale`** (`engine/doctor/locale.py`, READ): the design §8.1 profile, each field with its source
+  (`default`, `detected`, `confirmed`) and its evidence as counts. It proves the decimal mark from values that read
+  one way only (`formats.decimal_evidence`), Indian (`1,20,000`) or western (`1,200,000`) grouping, the day/month
+  order (`formats.date_order`), the number words, the yes/no words, the currency tokens of money columns (recorded;
+  converting is M242's), phone, PIN and ID shapes, and `+05:30` time stamps. Files that disagree with each other, or
+  with a confirmed profile, are a conflict and a question; nothing is changed silently. A day/month order no value
+  proves stays unproven and is asked, unless the client confirmed one (`dayfirst_for`).
+- **`parse_indian_numbers`** (`engine/doctor/indian_values.py`, PROPOSE): `parse_number` with the new parameter
+  `indian_scale_words: true` - `L`, `lac(s)`, `lakh(s)` = 10⁵, `Cr`, `crore(s)` = 10⁷, `K` = 10³, `M` = 10⁶, and a
+  trailing `/-`. Multiplied exactly (`Decimal`). `sure` only when every value reads and the header names no physical
+  unit; a column where some letters are not a listed unit (`5 kg`) is `check`. Without the parameter (every recipe
+  saved before M241) none of the words is a number, as before, and the recipe hash is unchanged.
+- **`indian_booleans`** (PROPOSE): `map_boolean` with the Hindi and Hinglish spellings the column holds
+  (`haan`, `haa`, `ha`, `haanji`, `nahi`, `nahin`, `nai`, `हाँ`, `हां`, `नहीं`, `नही`, `ना`, ...). Proposed only when
+  **both** yes and no are seen; one side alone, or a spelling outside the lists, is a `check` finding with no step.
+  `na` is never mapped, not even beside a Hindi yes: it may mean no or "not available", so it is a question. Plan G's own yes/no
+  detector (`find_format_issues`) is unchanged.
+- **`detect_india_ids`** (`engine/doctor/india_ids.py`, READ): GSTIN (a PAN or, for a tax deductor, a TAN inside;
+  any 14th character) with its check character (our own code; the
+  LGPL python-stdnum is not used), EPIC, PIN as 6-digit text, and `to_e164_india`, which writes a mobile number as
+  `+91XXXXXXXXXX` so two files join exactly on it (M237's `normalise_key` calls it). Counts only.
+
+All four are `session-only` and rules only; `engine/doctor/tools_locale.py` declares them for M232's registry
+(`register(registry)`). Neither PROPOSE tool touches the ID or the outcome column, and neither applies anything.
+
+### 15.3 Limits
+
+- Hinglish headers on by default (O4) follows Plan O's switch: with `data_doctor.unified` on, M142's rules-only setup
+  help (header reading, mapping questions, lapse drafts, `draft_outcome_labels`) is on whatever `agentic.enabled`
+  says (`engine.agent.tools.header_help_on`); the AI second opinion still needs `agentic.enabled`. Off (shipped), it
+  follows `agentic.enabled` as DEC-1409 (f) set it and the golden digests are unchanged. With the switch on, the 27
+  Hinglish golden cases give the digests M142 recorded with the help on (`test_header_switch_unified.py`).
+- A bare `L`, `K` or `M` is read as lakh, thousand or million `sure` only with money evidence: a money header, a
+  currency sign or code, or `lakh` / `crore` / `/-` in the same column; otherwise `30m` may be minutes and the
+  proposal is `check`. `na` is never mapped (no, or "not available"?): a column holding it is a question.
+- A confirmed money unit is never overwritten by a later file: a different one is a conflict and a question, and a
+  new money column is asked (`unconfirmed_money_units`), never stamped confirmed.
+- A column pandas reads as numbers is a PIN column only when its header says so (six-digit amounts are common), and
+  only `sure` ID findings vote in the locale profile.
+- `M` is read as a million when the parameter is on; in a column whose header names a unit (`data_usage`, `_mb`)
+  the proposal is `check`. Mixed spellings in one value (`1 Cr 20 L`) are not read.
+- Old-format voter IDs (state codes with slashes) are not recognised; only today's three letters and seven digits.
