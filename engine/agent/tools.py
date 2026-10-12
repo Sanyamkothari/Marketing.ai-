@@ -35,7 +35,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
 from pathlib import Path
-from typing import Annotated, Any, Final
+from typing import TYPE_CHECKING, Annotated, Any, Final
 
 import numpy as np
 import pandas as pd
@@ -78,6 +78,9 @@ from engine.pii import marker_for
 from engine.stages import validate
 from engine.utils.logging import get_logger
 from engine.utils.time import utc_now
+
+if TYPE_CHECKING:
+    from engine.storage import Storage
 
 __all__ = [
     "TOOLS",
@@ -151,6 +154,11 @@ class AgentContext:
     target: str | None = None
     schema: FeatureSchema | None = None
     clock: Callable[[], datetime] = utc_now
+    run_history: Storage | None = None
+    """The deployment's store, for Plan O M244's training budget only (DEC-1814): the advisor reads this
+    deployment's past runs from it and keeps the three choices it offered beside the file, so the run that takes
+    one is promised exactly what was shown. None (every context but Guided setup's): the library's runs are the
+    prior and nothing is kept. Read only while `data_doctor.unified` is on; no tool reads it."""
 
     def resolve(self, name: str) -> str:
         """The file's column `name` means: exact, or the one column whose shown (cleaned, cut) name it is."""

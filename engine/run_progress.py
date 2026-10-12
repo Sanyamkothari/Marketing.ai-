@@ -498,6 +498,19 @@ def _make_tracker(flow: Any) -> ProgressTracker | None:
     mode: RunMode = ctx.mode
     keys = tuple(row.key for row in flow._status.status.stages)
     train = mode is RunMode.TRAIN
+    if train and config.data_doctor.unified:
+        # Plan O M244 (DEC-1814): a budget chosen from Data Doctor's three choices brings the expectation it was
+        # shown with, so the first ETA is the promise; when the run ends, actual against expected is recorded.
+        # Behind the switch; any other run (and any failure here) keeps the estimate below.
+        try:
+            from engine.doctor.time_settings import promised_tracker
+
+            promised = promised_tracker(flow, keys)
+        except Exception:  # the promise is a nicety; M189's estimate stands
+            _LOGGER.exception("progress estimate: the time promise for run %s could not be read", ctx.run_id)
+            promised = None
+        if promised is not None:
+            return promised
     budget = train_budget_seconds(config) if train else None
     past = past_durations(
         ctx.storage,

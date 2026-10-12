@@ -882,3 +882,34 @@ yes/no outcome must have two values.
 
 `engine/doctor/outcome_definition.py` and `engine/doctor/tools_outcomes.py` (`docs/AGENTS.md` §21); the rule sets
 are `data.define_outcome` and `data.map_outcome_values` in `configs/agentic/policy.yaml`.
+
+## 25. How long will it take, and which dates? (Plan O M244, DEC-1814)
+
+*Behind the switch `data_doctor.unified` (off by default). With it off, nothing below exists.*
+
+- **A plain choice, never a minutes box.** Data Doctor offers **Quick (about 5 min)**, **Balanced (about 15 min,
+  recommended)** or **Thorough (about 40 min)**, each with what it buys, for example "Thorough has found a better
+  model on 2 of 9 similar past runs". Balanced is where similar past runs stopped finding better models.
+- **Where the numbers come from.** Your file's size, the kinds of model the goal allows and this deployment's own
+  past runs. Before there is any, the estimate says "from similar public datasets", and Balanced is not ticked for
+  you.
+- **The screen and the promise agree.** Guided setup suggests Balanced worked out on this deployment's runs and
+  keeps the three choices it showed you. Start the run with the choice you picked and the progress bar begins at
+  the time you were shown, even if a newer run has since changed what Data Doctor would offer. A time limit you set
+  yourself in Settings > Advanced gets its estimate from the same past runs. When the run ends, the actual time is
+  written down beside the expected one, stage by stage, and the next estimate learns from it.
+- **Dates.** Data Doctor proposes the date each row describes, where testing starts when it tests on the newest
+  dates (never a cut that would leave a part empty), how often to take snapshots of an event file, and it checks
+  whether the newest rows' outcomes can be known yet. It decides the date only when your goal names it; a date
+  column that is empty on most rows (such as the day a customer cancelled, filled only for those who did) is never
+  taken as the date each row describes, and rows with no date are counted and asked about. When the newest outcomes
+  cannot be known yet, it asks: *"Your newest month's outcomes are not final yet. Leave it out of testing?"* Your
+  answer is kept with the case as the change itself (the rows after the cut-off date are left out of the prepared
+  copy), remembered for this client and used next month with that month's own cut-off, shown and changeable. The
+  outcome window and what counts as lapsed are part of the outcome you approve (section 24).
+
+### For developers
+
+`engine/doctor/time_settings.py` and `engine/doctor/tools_time.py` (`docs/AGENTS.md` §22); the rule sets are
+`data.propose_training_budget` and `data.propose_time_settings` in `configs/agentic/policy.yaml`; the settings are
+`data_doctor.time_settings` (defaults in `engine/doctor/config.py`; a use case overrides them under `data_doctor:`).

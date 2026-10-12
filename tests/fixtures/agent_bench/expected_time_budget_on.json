@@ -1,0 +1,122 @@
+{
+  "ambiguous_dates": [
+    "setting model_search.time_limit_minutes=6 (check)"
+  ],
+  "clean": [
+    "setting model_search.time_limit_minutes=6 (check)"
+  ],
+  "constant_column": [
+    "setting model_search.time_limit_minutes=6 (check)"
+  ],
+  "constant_target": [],
+  "duplicate_keys": [],
+  "high_null_column": [
+    "setting model_search.time_limit_minutes=6 (check)"
+  ],
+  "hinglish_ambiguous_ids": [
+    "setting model_search.time_limit_minutes=5 (check)"
+  ],
+  "hinglish_auto_loans": [
+    "setting model_search.time_limit_minutes=5 (check)"
+  ],
+  "hinglish_bank_cards": [
+    "setting model_search.time_limit_minutes=5 (check)"
+  ],
+  "hinglish_dth_hinglish": [],
+  "hinglish_dth_recharge": [],
+  "hinglish_ecom_titlecase": [
+    "setting model_search.time_limit_minutes=5 (check)"
+  ],
+  "hinglish_edtech_whatsapp": [
+    "setting model_search.time_limit_minutes=5 (check)"
+  ],
+  "hinglish_fintech_lending": [
+    "setting model_search.time_limit_minutes=5 (check)"
+  ],
+  "hinglish_food_delivery_camel": [],
+  "hinglish_gold_loan": [
+    "setting model_search.time_limit_minutes=5 (check)"
+  ],
+  "hinglish_housing_finance": [],
+  "hinglish_insurance_renewal": [
+    "setting model_search.time_limit_minutes=5 (check)"
+  ],
+  "hinglish_kirana_orders": [
+    "setting model_search.time_limit_minutes=4 (check)"
+  ],
+  "hinglish_lapse_no_outcome_retail": [],
+  "hinglish_lapse_no_outcome_telco": [],
+  "hinglish_mobile_postpaid_short": [
+    "setting model_search.time_limit_minutes=5 (check)"
+  ],
+  "hinglish_no_flags_hinglish": [
+    "setting model_search.time_limit_minutes=4 (check)"
+  ],
+  "hinglish_pharmacy_chain": [
+    "setting model_search.time_limit_minutes=5 (check)"
+  ],
+  "hinglish_postpaid_bills": [
+    "setting model_search.time_limit_minutes=5 (check)"
+  ],
+  "hinglish_retail_runon": [
+    "setting model_search.time_limit_minutes=5 (check)"
+  ],
+  "hinglish_savings_hinglish": [
+    "setting model_search.time_limit_minutes=5 (check)"
+  ],
+  "hinglish_telco_hinglish": [
+    "setting model_search.time_limit_minutes=5 (check)"
+  ],
+  "hinglish_telco_prepaid_abbr": [
+    "setting model_search.time_limit_minutes=5 (check)"
+  ],
+  "hinglish_travel_app": [
+    "setting model_search.time_limit_minutes=5 (check)"
+  ],
+  "hinglish_upi_wallet": [
+    "setting model_search.time_limit_minutes=5 (check)"
+  ],
+  "hinglish_wide_telecom": [
+    "setting model_search.time_limit_minutes=5 (check)"
+  ],
+  "hinglish_yes_no_values": [
+    "setting model_search.time_limit_minutes=5 (check)"
+  ],
+  "id_like_column": [
+    "setting model_search.time_limit_minutes=6 (check)"
+  ],
+  "leaky_column": [
+    "setting model_search.time_limit_minutes=6 (check)"
+  ],
+  "messy": [
+    "setting model_search.time_limit_minutes=7 (check)"
+  ],
+  "mid_size_file": [
+    "setting model_search.time_limit_minutes=12 (check)"
+  ],
+  "multi_row": [],
+  "multi_row_no_dates": [],
+  "multi_row_one_date": [],
+  "non_binary_target": [],
+  "null_keys": [],
+  "other_use_case_cash_back": [],
+  "other_use_case_next_bill": [],
+  "other_use_case_payment_reminder": [],
+  "pii_column": [
+    "setting model_search.time_limit_minutes=6 (check)"
+  ],
+  "placeholder_value": [
+    "setting model_search.time_limit_minutes=6 (check)"
+  ],
+  "real_ninety_nine": [
+    "setting model_search.time_limit_minutes=6 (check)"
+  ],
+  "renamed_target": [
+    "setting model_search.time_limit_minutes=6 (check)"
+  ],
+  "too_few_positives": [],
+  "too_few_rows": [],
+  "unreadable_numbers": [
+    "setting model_search.time_limit_minutes=6 (check)"
+  ]
+}

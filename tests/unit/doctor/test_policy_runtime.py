@@ -149,8 +149,9 @@ def _propose_tool(policy_kind: str) -> DataTool[Any, Any]:
 
 def test_a_propose_tool_with_no_rule_set_is_refused_with_policy_no_rules() -> None:
     registry = DataToolRegistry()
-    # A kind with no rule set yet (M236 gave `data.propose_role` one, DEC-1806; M239 gave `data.define_outcome`
-    # one, DEC-1809; M242 gave `data.convert_currency` one, DEC-1812 (k)).
+    # A kind with no rule set yet (M236 gave `data.propose_role` one, DEC-1806; M239 gave `data.define_outcome` one,
+    # DEC-1809; M242 gave `data.convert_currency` one, DEC-1812; M244 gave `data.propose_time_settings` one,
+    # DEC-1814).
     registry.register(_propose_tool("data.map_consent"))
     ctx = DataToolContext(principal=ANALYST, caller="person")
     with pytest.raises(DataToolError) as refused:

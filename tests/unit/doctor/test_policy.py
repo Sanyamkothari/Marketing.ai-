@@ -80,9 +80,9 @@ def ai_step(kind: str, facts: StepFacts, **change: Any) -> DataProposal:
 # Default deny
 # ---------------------------------------------------------------------------
 def test_a_propose_kind_with_no_rule_set_is_refused_with_policy_no_rules() -> None:
-    # `data.define_outcome` was here until M239 (DEC-1809) gave it its rule set, and `data.convert_currency` has
-    # M242's (DEC-1812 (k)); the kinds still unbuilt stand in.
-    for kind in ("data.propose_time_settings", "data.map_consent", "data.anything"):
+    # `data.define_outcome` was here until M239 (DEC-1809) gave it its rule set, `data.convert_currency` until M242
+    # (DEC-1812) and `data.propose_time_settings` until M244 (DEC-1814); a kind still unbuilt stands in.
+    for kind in ("data.map_consent", "data.drift_check", "data.anything"):
         decisions = evaluate(DataProposal(kind=kind, source="rules"), context())
         assert codes(decisions) == {"POLICY_NO_RULES"} and not allowed(decisions)
 

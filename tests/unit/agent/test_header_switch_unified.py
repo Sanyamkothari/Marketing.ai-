@@ -31,6 +31,25 @@ from tests.fixtures.agent_bench.cases import (
 from tests.unit.agent.helpers import context_for
 
 GOLDEN: Final[dict[str, Any]] = json.loads(EXPECTED.read_text(encoding="utf-8"))
+TIME_LIMIT: Final[str] = "setting model_search.time_limit_minutes="
+TIME_BUDGET_ON: Final[dict[str, list[str]]] = json.loads(
+    EXPECTED.with_name("expected_time_budget_on.json").read_text(encoding="utf-8")
+)
+"""Plan O M244 (DEC-1814): with the switch on, the training-time suggestion is Data Doctor's Balanced (from similar
+public datasets here: no run history, so `check`) instead of the file-size rule's "10 minutes (sure)". Recorded per
+case; it is the only entry of any digest the time settings move."""
+
+
+def _time(digest_: dict[str, Any]) -> list[str]:
+    return [p for p in digest_.get("proposals", []) if p.startswith(TIME_LIMIT)]
+
+
+def _without_time(digest_: dict[str, Any]) -> dict[str, Any]:
+    if "proposals" not in digest_:
+        return digest_
+    return {**digest_, "proposals": [p for p in digest_["proposals"] if not p.startswith(TIME_LIMIT)]}
+
+
 CHANGED_WITH_THE_SWITCH: Final[frozenset[str]] = frozenset(
     {
         "hinglish_ambiguous_ids",
@@ -108,11 +127,15 @@ def test_header_suggestions_with_the_switch_on_are_never_ticked() -> None:
 @pytest.mark.parametrize("name", sorted(CASES))
 def test_golden_digests_with_the_switch_on_are_the_recorded_ones(name: str) -> None:
     """With the switch on every case gives its recorded digest: the 22 originals are unchanged either way, and each
-    Hinglish or other-use-case case gives the digest M142 recorded with the help on."""
+    Hinglish or other-use-case case gives the digest M142 recorded with the help on. The one exception is M244's: the
+    training-time suggestion is Data Doctor's Balanced, recorded per case (`TIME_BUDGET_ON`); with the switch off it
+    is the recorded file-size rule's."""
     on = _digest(name, switch=True)
-    assert on == GOLDEN[name]
+    assert _without_time(on) == _without_time(GOLDEN[name])
+    assert _time(on) == TIME_BUDGET_ON[name]
+    assert all(entry.endswith("(check)") for entry in _time(on)), "no run history: never sure"
     if name in CHANGED_WITH_THE_SWITCH:
         assert name in HEADER_HELP_CASES
-        assert _digest(name, switch=False) != on
+        assert _without_time(_digest(name, switch=False)) != _without_time(on)
     else:
-        assert _digest(name, switch=False) == on
+        assert _digest(name, switch=False) == GOLDEN[name]
