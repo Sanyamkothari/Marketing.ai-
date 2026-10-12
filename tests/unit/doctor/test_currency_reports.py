@@ -118,17 +118,38 @@ RATE_LINE = (
 )
 
 
-def test_report_in_dollars_shows_dollar_amounts_labelled(storage: LocalStorage) -> None:
-    """Acceptance: "report in dollars" shows dollar amounts, labelled - never a rupee sign on them."""
+APART_LINE = (
+    "The value amounts in this report are worked out from your inputs, which are in rupees; the file's amounts are "
+    "in US dollars. They are shown apart: nothing here is converted or added together across currencies."
+)
+
+
+def test_rupee_inputs_stay_rupees_beside_a_dollar_column(storage: LocalStorage) -> None:
+    """Review blocker (DEC-1812 (h)): the value view's amounts are the person's rupee inputs times measured counts.
+    A money column of the file in US dollars is noted under "Currency" - never used to relabel those rupees.
+    """
     view = compute_roi(storage, RUN, inputs=INPUTS)
+    before = render_html(roi_document(view, now=NOW))
     html = render_html(roi_document(view, now=NOW, money=report_money(_dollars())))
-    assert "Value in US dollars" in html
-    assert "$1,200 to $3,600 (most likely $2,400)" in html, "value of those customers, in dollars"
-    assert "Net value per US dollar spent" in html
-    assert "The amounts in US dollars are that number multiplied by" in html
-    assert "values in US dollars use the inputs shown" in html
+    assert "Value in rupees" in html
+    assert "₹1,200 to ₹3,600 (most likely ₹2,400)" in html, "value of those customers, still in rupees"
+    assert "Net value per rupee spent" in html
+    assert "rupee values use the inputs shown" in html
+    assert "$" not in html and "US dollar spent" not in html and "Value in US dollars" not in html
+    assert ">Currency<" in html
     assert "&#x27;bill_amount&#x27; is in US dollars, as the file gives it; nothing was converted." in html
-    assert "₹" not in html and "rupee" not in html
+    assert APART_LINE.replace("'", "&#x27;") in html
+    assert "Currency" not in before
+
+
+def test_the_document_blocks_only_gain_the_currency_notes(storage: LocalStorage) -> None:
+    view = compute_roi(storage, RUN, inputs=INPUTS)
+    before = roi_document(view, now=NOW)
+    after = roi_document(view, now=NOW, money=report_money(_dollars()))
+    added = [b for b in after.blocks if b not in before.blocks]
+    assert [b.model_dump()["kind"] for b in added] == ["heading", "bullets"]
+    assert [b for b in after.blocks if b in before.blocks] == list(before.blocks)
+    assert after.footer == before.footer
 
 
 def test_an_approved_rate_is_shown_in_the_value_report(storage: LocalStorage) -> None:
@@ -154,14 +175,18 @@ def test_without_a_basis_the_value_report_is_byte_identical(storage: LocalStorag
     assert roi_document(view, now=NOW, money=None).model_dump_json() == before.model_dump_json()
 
 
-def test_an_amount_outcome_is_labelled_with_its_currency(storage: LocalStorage) -> None:
+def test_an_amount_outcome_is_never_relabelled_by_another_column(storage: LocalStorage) -> None:
+    """Review blocker: the outcome column's unit is not recorded (the target is not checked for currency), so its
+    average is never labelled with the currency of another column."""
     view = compute_roi(storage, RUN, inputs=INPUTS).model_copy(
         update={"outcome_kind": "continuous", "treated_mean": 12.5, "control_mean": 10.25}
     )
-    plain = render_html(roi_document(view, now=NOW))
-    assert "Average amount<" in plain and "12.50" in plain
-    dollars = render_html(roi_document(view, now=NOW, money=report_money(_dollars())))
-    assert "Average amount (US dollars)" in dollars and "$12.50" in dollars and "$10.25" in dollars
+    plain = roi_document(view, now=NOW)
+    dollars = roi_document(view, now=NOW, money=report_money(_dollars()))
+    assert [b for b in dollars.blocks if b in plain.blocks] == list(plain.blocks)
+    html = render_html(dollars)
+    assert "Average amount<" in html and "12.50" in html
+    assert "Average amount (US dollars)" not in html and "$12.50" not in html
 
 
 def test_the_proof_pack_shows_the_rate_its_campaign_used(tmp_path: Path) -> None:
@@ -177,3 +202,17 @@ def test_the_proof_pack_shows_the_rate_its_campaign_used(tmp_path: Path) -> None
     added = [b for b in after.blocks if b not in before.blocks]
     assert [b.model_dump()["kind"] for b in added] == ["heading", "bullets"]
     assert json.loads(added[1].model_dump_json())["items"] == [RATE_LINE]
+
+
+def test_the_proof_pack_notes_a_dollar_column_apart_and_keeps_rupees(tmp_path: Path) -> None:
+    from engine.pilot.proof import build_proof, proof_document
+    from tests.unit.pilot.test_proof import _store
+
+    stored = _store(tmp_path, 2_000)
+    view = build_proof(stored.storage, stored.campaign_id)
+    before = proof_document(view)
+    after = proof_document(view, money=report_money(_dollars()))
+    added = [b for b in after.blocks if b not in before.blocks]
+    assert [b.model_dump()["kind"] for b in added] == ["heading", "bullets"]
+    assert json.loads(added[1].model_dump_json())["items"][-1] == APART_LINE
+    assert "$" not in render_html(after)

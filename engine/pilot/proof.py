@@ -2514,7 +2514,8 @@ def proof_document(
     """The pack as a report document: the same blocks for the HTML page and the PDF.
 
     `money` (Plan O M242, `engine.doctor.currency.report_money`): the currency lines of the campaign's run - each
-    money column's unit and every rate used, with its date, source and approver - shown under "Currency". None
+    money column's unit and every rate used, with its date, source and approver - shown under "Currency". The pack's
+    own amounts stay in rupees, the currency of the value inputs; a column in another currency is noted apart. None
     (every campaign without a Data Doctor money basis) prints exactly as before.
     """
     blocks: list[AnyBlock] = [Callout(title=view.claim_label, text=view.headline, tone=_tone(view))]
@@ -2558,8 +2559,12 @@ def proof_document(
                     blocks.append(Callout(title="Suggestion for the next cycle", text=text, tone="warning"))
         if section.notes:
             blocks.append(Bullets(items=section.notes))
-    if money is not None and money.notes:
-        blocks += [Heading(text="Currency"), Bullets(items=money.notes)]
+    if money is not None:
+        # The pack writes every amount in rupees (`format_inr`, the currency of `RoiInputs`): a money column of the
+        # file in another currency is noted beside them, never used to relabel them.
+        currency_lines = money.lines_beside("INR")
+        if currency_lines:
+            blocks += [Heading(text="Currency"), Bullets(items=currency_lines)]
     blocks.append(
         Paragraph(
             text=(

@@ -1,5 +1,6 @@
-"""Plan O M242 (DEC-1812): `GET /pilot/roi/{run_id}` prints the run's currency when the Data Doctor flow stored a money
-basis beside the run, and exactly what it printed before when it did not."""
+"""Plan O M242 (DEC-1812): `GET /pilot/roi/{run_id}` notes the units and rates of the run's money columns when the Data
+Doctor flow stored a money basis beside the run - never relabelling the rupee amounts worked out from the person's
+inputs - and prints exactly what it printed before when it did not."""
 
 from __future__ import annotations
 
@@ -95,12 +96,15 @@ def client(config_root: Path, tmp_path_factory: pytest.TempPathFactory) -> Itera
         yield test_client
 
 
-def test_a_run_reported_in_dollars_prints_dollars(client: TestClient) -> None:
+def test_rupee_inputs_stay_rupees_beside_a_dollar_basis(client: TestClient) -> None:
+    """Review blocker (DEC-1812 (h)): the value inputs are rupees, so the amounts worked out from them stay in rupees
+    when a column of the file is in US dollars; the dollar column is noted apart under "Currency"."""
     page = client.get(f"/pilot/roi/{DOLLARS}", params={"format": "html"})
     assert page.status_code == 200
-    assert "Value in US dollars" in page.text and "$1,200 to $3,600" in page.text
+    assert "Value in rupees" in page.text and "₹1,200 to ₹3,600" in page.text
     assert "is in US dollars, as the file gives it" in page.text
-    assert "₹" not in page.text
+    assert "the file&#x27;s amounts are in US dollars. They are shown apart" in page.text
+    assert "$" not in page.text and "Value in US dollars" not in page.text
 
 
 def test_a_run_with_no_basis_prints_rupees_as_before(client: TestClient) -> None:

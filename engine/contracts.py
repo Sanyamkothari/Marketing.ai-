@@ -1719,6 +1719,10 @@ AGENT_VALIDATION_CODES: Final[frozenset[str]] = frozenset(
         "RECIPE_COLUMN_MISSING",
         "RECIPE_VALUES_UNCONVERTED",
         "RECIPE_STEP_INVALID",
+        # PLAN-O (M242): move into the PLAN-O block at integration. DEC-1812 (c): a recipe step that would put two
+        # currencies in one money column stops with this code (`engine.agent.currency_steps`), and the person is
+        # asked which rows are in which currency.
+        "CURRENCY_MIXED",
     }
 )
 """Plan G's three codes (DEC-1006, DEC-1013): a scoring file the model's saved preparation recipe cannot

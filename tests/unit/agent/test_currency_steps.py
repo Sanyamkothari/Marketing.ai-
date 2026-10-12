@@ -156,6 +156,58 @@ def test_a_selected_row_whose_sign_says_otherwise_stops() -> None:
     assert stopped.value.code == "CURRENCY_MIXED"
 
 
+def test_a_marked_conversion_never_leaves_a_euro_to_be_read_as_rupees() -> None:
+    """Review major (DEC-1812 (c)): before the fix, convert {USD to INR, marked} then a `parse_number` with no unit
+    gave [1005.51, 100.0, 1000.0, 5.0] - the €5 read as 5 rupees. A partial conversion now guards itself."""
+    frame = pd.DataFrame({"id": [1, 2, 3, 4], "amount": ["$12.10", "₹100", "1,000", "€5"]})
+    with pytest.raises(RecipeError) as stopped:
+        run(
+            frame,
+            step(1, RecipeStepKind.CONVERT_CURRENCY, "amount", **RATE, rows="marked"),
+            step(2, RecipeStepKind.PARSE_NUMBER, "amount"),
+        )
+    assert stopped.value.code == "CURRENCY_MIXED"
+    assert stopped.value.order == 1 and "€5" in stopped.value.message
+
+
+def test_a_row_the_column_does_not_choose_still_showing_dollars_stops() -> None:
+    frame = pd.DataFrame({"id": [1, 2, 3], "amount": ["15", "$20", "300"], "ccy": ["US", "IN", "IN"]})
+    with pytest.raises(RecipeError) as stopped:
+        run(
+            frame,
+            step(
+                1, RecipeStepKind.CONVERT_CURRENCY, "amount", **RATE, rows={"column": "ccy", "values": ["US"]}
+            ),
+            step(2, RecipeStepKind.PARSE_NUMBER, "amount"),
+        )
+    assert stopped.value.code == "CURRENCY_MIXED"
+
+
+def test_a_later_conversion_may_take_the_rows_an_earlier_one_left() -> None:
+    """Dollars then euros, both to rupees, each by its sign: the first step leaves the euros for the second."""
+    euro = {**RATE, "from": "EUR", "rate": 90.0}
+    frame = pd.DataFrame({"id": [1, 2, 3, 4], "amount": ["$12.10", "₹100", "1,000", "€5"]})
+    out = run(
+        frame,
+        step(1, RecipeStepKind.CONVERT_CURRENCY, "amount", **RATE, rows="marked"),
+        step(2, RecipeStepKind.CONVERT_CURRENCY, "amount", **euro, rows="marked"),
+        step(3, RecipeStepKind.PARSE_NUMBER, "amount"),
+    )
+    assert out["amount"].tolist() == [1005.51, 100.0, 1000.0, 450.0]
+
+
+def test_the_partial_guard_is_the_steps_own() -> None:
+    """`convert_currency` given its `to` refuses a leftover foreign row; given a pending source it lets it be."""
+    series = pd.Series(["$1", "€1", "₹1"])
+    with pytest.raises(CurrencyStepError) as stopped:
+        convert_currency(series, source_code="USD", rate=83.1, rows="marked", target="INR")
+    assert stopped.value.code == "CURRENCY_MIXED" and stopped.value.rows == 1
+    out = convert_currency(
+        series, source_code="USD", rate=83.1, rows="marked", target="INR", pending=frozenset({"EUR"})
+    )
+    assert out.values.tolist() == [83.1, "€1", "₹1"]
+
+
 def test_a_conversion_counts_what_it_could_not_read() -> None:
     frame = pd.DataFrame({"id": [1, 2], "amount": ["$12", "$abc"]})
     with pytest.raises(RecipeError) as stopped:

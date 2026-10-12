@@ -989,12 +989,17 @@ runs exactly as before.
 - **`parse_number` with `unit`** (a currency code: `INR`, `USD`): the numbers read exactly as without it; a value that
   names another currency (`$15` in a rupee column, or `$12 (₹1,000)`) stops the run with `CURRENCY_MIXED` instead of
   being read into the same column of numbers. Without `unit`, `parse_number` still strips every sign, as before.
+  On `POST /runs`, scoring preparation and a scheduled firing the stop is a 409 check with the code `CURRENCY_MIXED`
+  (registered beside Plan G's three recipe codes) and the suggestion to say which rows are in which currency, never
+  `RECIPE_STEP_INVALID` and its retrain advice.
 - **`convert_currency`** (`engine/agent/currency_steps.py`; phase 1, before the `parse_number` that reads the rest):
   `{from, to, rate, rate_date, source}` frozen - one `from` is `rate` of `to`, at the person's dated rate from the
   person's source; the product never looks a rate up. `rows` says which rows are in `from`: `all` (the default; a
   row naming another currency stops), `marked` (only the values showing the `from` sign or code), or
-  `{"column": ..., "values": [...]}` (the rows whose cell in that column is one of those spellings). Each product is
-  exact (`Decimal`). `check_recipe` refuses a column converted to two currencies, from one currency twice, read in a
+  `{"column": ..., "values": [...]}` (the rows whose cell in that column is one of those spellings). A partial
+  conversion guards itself: a row it leaves as written that names a currency other than `to` (or one a later
+  `convert_currency` on the column takes) stops with `CURRENCY_MIXED`, whether or not the `parse_number` after it
+  names a `unit` - so `€5` is never read as 5 rupees. Each product is exact (`Decimal`). `check_recipe` refuses a column converted to two currencies, from one currency twice, read in a
   `unit` other than the one it was converted to, or converted by sign after it was already turned into numbers.
 
 Neither kind is in `CHAT_STEP_KINDS` or `PERSON_STEP_KINDS`: the chat never suggests a conversion, and a rate reaches

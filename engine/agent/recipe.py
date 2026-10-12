@@ -625,8 +625,24 @@ def _check_unit(series: pd.Series[Any], step: RecipeStep, unit: str) -> None:
         )
 
 
-def _convert(frame: pd.DataFrame, step: RecipeStep) -> ParseOutcome:
-    """Plan O M242: a `convert_currency` step on its column (and the column its `rows` names)."""
+def _later_sources(steps: Sequence[RecipeStep], step: RecipeStep) -> frozenset[str]:
+    """The currencies later `convert_currency` steps convert on `step`'s column: a partial conversion may leave
+    those rows as written, since a later step takes them (review fix, DEC-1812 (c))."""
+    return frozenset(
+        str(_params(other)["from"])
+        for other in steps
+        if other.order > step.order
+        and other.kind is RecipeStepKind.CONVERT_CURRENCY
+        and other.column == step.column
+    )
+
+
+def _convert(frame: pd.DataFrame, step: RecipeStep, pending: frozenset[str]) -> ParseOutcome:
+    """Plan O M242: a `convert_currency` step on its column (and the column its `rows` names).
+
+    A partial conversion guards itself: a row it leaves as written that names a currency other than `to` (or one a
+    later step converts, `pending`) stops with `CURRENCY_MIXED` - whatever the `parse_number` after it says.
+    """
     params = _params(step)
     column = _rows_column(step)
     try:
@@ -638,12 +654,19 @@ def _convert(frame: pd.DataFrame, step: RecipeStep) -> ParseOutcome:
             selector=frame[column] if column is not None else None,
             decimal=str(params.get("decimal", ".")),
             indian_scale_words=bool(params.get("indian_scale_words", False)),
+            target=str(params["to"]),
+            pending=pending,
         )
     except CurrencyStepError as exc:
         raise RecipeError(exc.code, exc.message, column=step.column, order=step.order) from exc
 
 
-def _apply(frame: pd.DataFrame, step: RecipeStep, snapshot_column: str | None) -> ParseOutcome:
+def _apply(
+    frame: pd.DataFrame,
+    step: RecipeStep,
+    snapshot_column: str | None,
+    pending: frozenset[str] = frozenset(),
+) -> ParseOutcome:
     params = _params(step)
     series = frame[step.column] if step.kind is not RecipeStepKind.DERIVE else None
     if step.kind is RecipeStepKind.PARSE_NUMBER and "unit" in params:
@@ -691,7 +714,7 @@ def _apply(frame: pd.DataFrame, step: RecipeStep, snapshot_column: str | None) -
             _series(series), minimum=params.get("minimum"), maximum=params.get("maximum")
         ),
         RecipeStepKind.FILL_MISSING: lambda: fill_missing(_series(series), value=params["value"]),
-        RecipeStepKind.CONVERT_CURRENCY: lambda: _convert(frame, step),
+        RecipeStepKind.CONVERT_CURRENCY: lambda: _convert(frame, step, pending),
     }
     return runners[step.kind]()
 
@@ -851,7 +874,12 @@ def run_recipe(
             work = combined.frame
             continue
         try:
-            outcome = _apply(work, step, snapshot_column)
+            outcome = _apply(
+                work,
+                step,
+                snapshot_column,
+                _later_sources(steps, step) if step.kind is RecipeStepKind.CONVERT_CURRENCY else frozenset(),
+            )
         except (TypeError, ValueError) as exc:
             # A parser tripping over a column type it was not written for (a category column, an
             # unexpected object): a coded refusal naming the step, never a 500 at Approve or scoring.

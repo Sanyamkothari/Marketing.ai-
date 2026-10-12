@@ -208,6 +208,34 @@ def _selected(
     return np.asarray(chosen & present, dtype=bool), present
 
 
+def _left_foreign(
+    series: pd.Series[Any],
+    chosen: np.ndarray[Any, Any],
+    present: np.ndarray[Any, Any],
+    *,
+    source_code: str,
+    allowed: frozenset[str],
+) -> None:
+    """Refuses (`CURRENCY_MIXED`) a row a partial conversion leaves as written whose value names a currency outside
+    `allowed` (the currency converted to, and those a later step of the recipe converts on this column): the next
+    `parse_number` - with or without a `unit` - would read `€5` as 5 of the column's currency."""
+    values = series.tolist()
+    left = [
+        i
+        for i in np.flatnonzero(present & ~chosen)
+        if isinstance(values[i], str) and not currency_codes(values[i]) <= allowed
+    ]
+    if left:
+        examples = tuple(dict.fromkeys(masked_cut(str(values[i]), 80) for i in left[:50]))[:_EXAMPLES]
+        raise CurrencyStepError(
+            CURRENCY_MIXED,
+            f"{len(left)} values left unconverted by the conversion from {source_code} name a currency other than "
+            f"{' or '.join(sorted(allowed))} (for example {', '.join(examples)}); amounts in different currencies "
+            "are never added together. Say which rows are in which currency, or convert them at a rate you give.",
+            rows=len(left),
+        )
+
+
 def convert_currency(
     series: pd.Series[Any],
     *,
@@ -217,12 +245,19 @@ def convert_currency(
     selector: pd.Series[Any] | None = None,
     decimal: str = ".",
     indian_scale_words: bool = False,
+    target: str | None = None,
+    pending: frozenset[str] = frozenset(),
 ) -> ParseOutcome:
     """The amounts of `series` in `from`, times `rate`; rows `rows` does not choose are left exactly as written.
 
-    `selector` is the column `rows` names (`{"column": ..., "values": [...]}`), else None.
+    `selector` is the column `rows` names (`{"column": ..., "values": [...]}`), else None. `target` is the step's
+    `to`: with it, a partial conversion (`rows` not "all") guards itself - a row it leaves as written that names a
+    currency other than `target` (or one of `pending`, the currencies later steps convert on this column) stops with
+    `CURRENCY_MIXED`, so no later step reads foreign money as the column's currency.
     """
     chosen, present = _selected(series, source_code, rows, selector)
+    if target is not None and rows != "all":
+        _left_foreign(series, chosen, present, source_code=source_code, allowed=frozenset({target}) | pending)
     positions = np.flatnonzero(chosen)
     if not len(positions):
         return ParseOutcome(values=series.copy(), changed=0, failed=0, failed_examples=())

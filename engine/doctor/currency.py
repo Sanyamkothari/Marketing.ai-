@@ -25,9 +25,11 @@ the sign and every report assumed rupees; a column holding ₹ and $ became one 
 
 Reports read a :class:`MoneyBasis` stored beside the run (`runs/<run_id>/money_basis.json`, written by the Data Doctor
 flow only, so with `data_doctor.unified` off no file exists and every report is byte-identical). :func:`report_money`
-turns it into what a report prints: the currency's name, amounts in it (:func:`format_money`, which for INR is
-`engine.pilot.roi.format_inr` exactly), and one line per column naming its unit and, when converted, the rate, its
-date, its source and who approved it.
+turns it into the lines a report shows under "Currency": one per column naming its unit and, when converted, the rate,
+its date, its source and who approved it. A report's own amounts keep the currency they were worked out in - the value
+view's are the person's value inputs (`RoiInputs.currency`, rupees) times measured counts - so a column of the file in
+another currency is noted apart (:meth:`ReportMoney.lines_beside`), never used to relabel them. :func:`format_money`
+(which for INR is `engine.pilot.roi.format_inr` exactly) writes an amount that really is in a currency.
 """
 
 from __future__ import annotations
@@ -1044,6 +1046,25 @@ class ReportMoney:
 
     currency: str
     notes: tuple[str, ...] = ()
+    currencies: tuple[str, ...] = ()
+    """Every currency the run's money columns are in after the recipe (one, or several shown apart)."""
+
+    def lines_beside(self, inputs_currency: str) -> tuple[str, ...]:
+        """The lines a report shows under "Currency" when the amounts it writes are in `inputs_currency` (the
+        person's value inputs, `RoiInputs.currency`): the unit and rate lines, and - when a money column of the file
+        is in another currency - one line saying the two are shown apart. The report's amounts keep the inputs'
+        currency: a column of the file never relabels them, and they are never converted without an approved rate.
+        """
+        others = [c for c in (self.currencies or (self.currency,)) if c != inputs_currency]
+        if not others:
+            return self.notes
+        return (
+            *self.notes,
+            f"The value amounts in this report are worked out from your inputs, which are in "
+            f"{_money_words(inputs_currency)}; the file's amounts are in "
+            + " and ".join(_money_words(c) for c in others)
+            + ". They are shown apart: nothing here is converted or added together across currencies.",
+        )
 
     @property
     def name(self) -> str:
@@ -1070,7 +1091,16 @@ def report_money(basis: MoneyBasis | None) -> ReportMoney | None:
     )
     if plain_rupees:
         return None
-    return ReportMoney(currency=basis.report_currency, notes=basis.notes())
+    return ReportMoney(
+        currency=basis.report_currency,
+        notes=basis.notes(),
+        currencies=tuple(sorted({c.reported_in for c in basis.columns})),
+    )
+
+
+def _money_words(code: str) -> str:
+    """`rupees` for INR, as every rupee report already says; else the currency's plain name (`US dollars`)."""
+    return "rupees" if code == "INR" else currency_name(code)
 
 
 # ---------------------------------------------------------------------------

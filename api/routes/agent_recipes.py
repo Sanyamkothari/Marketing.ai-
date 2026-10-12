@@ -89,6 +89,12 @@ _SUGGESTIONS: dict[str, str] = {
         "not be read."
     ),
     "RECIPE_STEP_INVALID": "Retrain the model with Guided setup, so its preparation steps are saved again.",
+    # Plan O M242 (DEC-1812 (c)): a money column with amounts in two currencies is a stop with a question, not a
+    # broken recipe - never rewritten to RECIPE_STEP_INVALID and its retrain advice.
+    "CURRENCY_MIXED": (
+        "Say which rows are in which currency, or convert them at a rate you give; amounts in different "
+        "currencies are never added together."
+    ),
 }
 
 
