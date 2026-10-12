@@ -23,6 +23,7 @@ actually written to justify.
 | Plan K technical design: registry, policy, ledger, claim verifier, evals, MCP, statistics | [`PLAN_K_TECHNICAL_DESIGN.md`](PLAN_K_TECHNICAL_DESIGN.md) | design for review; optional M145 … M148 |
 | Plan L: Data Doctor, one agent for messy data (proposal) | [`MARKETING_AI_PLAN_L_DATA_DOCTOR.md`](MARKETING_AI_PLAN_L_DATA_DOCTOR.md) | new branch from `main`, M150 … M161, DEC-1500 … 1599 (proposed; not claimed) |
 | Plan M: a product a marketer understands in minutes (campaign-centred UI, one glossary, quick wins first) | [`MARKETING_AI_PLAN_M_SIMPLE_UI.md`](MARKETING_AI_PLAN_M_SIMPLE_UI.md) | M170 … M181, DEC-1600 … 1699 (claimed by M170); built M170–M181; layout switch-over pending the usability test (`docs/ux/USABILITY_TEST.md`) |
+| Plan N: autonomous within a signed mandate (L3 per decision type on the client's rails, proven against a client-owned holdout; proposal for management review, nothing built until D1 and D2 are approved) | [`MARKETING_AI_PLAN_N_AUTONOMY.md`](MARKETING_AI_PLAN_N_AUTONOMY.md); evidence in [`docs/research/AUTONOMOUS_MARKETING_AGENT_2026_10.md`](../research/AUTONOMOUS_MARKETING_AGENT_2026_10.md) | M200 … M225, DEC-1700 … 1799 (proposed; not claimed) |
 | The parallel-work protocol (the contract between the phase branches, not a phase plan) | [`PARALLEL_WORK_PROTOCOL.md`](../../PARALLEL_WORK_PROTOCOL.md) | all |
 
 ## Missing
