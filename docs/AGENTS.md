@@ -952,9 +952,10 @@ that client, saying so ("Using the number, date and yes/no settings you confirme
 - **`indian_booleans`** (PROPOSE): `map_boolean` with the Hindi and Hinglish spellings the column holds
   (`haan`, `haa`, `ha`, `haanji`, `nahi`, `nahin`, `nai`, `हाँ`, `हां`, `नहीं`, `नही`, `ना`, ...). Proposed only when
   **both** yes and no are seen; one side alone, or a spelling outside the lists, is a `check` finding with no step.
-  `na` is a no only beside a Hindi or Hinglish yes (beside `yes` it may mean "not available"). Plan G's own yes/no
+  `na` is never mapped, not even beside a Hindi yes: it may mean no or "not available", so it is a question. Plan G's own yes/no
   detector (`find_format_issues`) is unchanged.
-- **`detect_india_ids`** (`engine/doctor/india_ids.py`, READ): GSTIN with its check character (our own code; the
+- **`detect_india_ids`** (`engine/doctor/india_ids.py`, READ): GSTIN (a PAN or, for a tax deductor, a TAN inside;
+  any 14th character) with its check character (our own code; the
   LGPL python-stdnum is not used), EPIC, PIN as 6-digit text, and `to_e164_india`, which writes a mobile number as
   `+91XXXXXXXXXX` so two files join exactly on it (M237's `normalise_key` calls it). Counts only.
 
@@ -963,8 +964,18 @@ All four are `session-only` and rules only; `engine/doctor/tools_locale.py` decl
 
 ### 14.3 Limits
 
-- Hinglish headers on by default (O4) waits for M230's `data_doctor.unified` switch: until then header reading follows
-  `agentic.enabled` as DEC-1409 (f) set it, and the golden digests are unchanged.
+- Hinglish headers on by default (O4) follows Plan O's switch: with `data_doctor.unified` on, M142's rules-only setup
+  help (header reading, mapping questions, lapse drafts, `draft_outcome_labels`) is on whatever `agentic.enabled`
+  says (`engine.agent.tools.header_help_on`); the AI second opinion still needs `agentic.enabled`. Off (shipped), it
+  follows `agentic.enabled` as DEC-1409 (f) set it and the golden digests are unchanged. With the switch on, the 27
+  Hinglish golden cases give the digests M142 recorded with the help on (`test_header_switch_unified.py`).
+- A bare `L`, `K` or `M` is read as lakh, thousand or million `sure` only with money evidence: a money header, a
+  currency sign or code, or `lakh` / `crore` / `/-` in the same column; otherwise `30m` may be minutes and the
+  proposal is `check`. `na` is never mapped (no, or "not available"?): a column holding it is a question.
+- A confirmed money unit is never overwritten by a later file: a different one is a conflict and a question, and a
+  new money column is asked (`unconfirmed_money_units`), never stamped confirmed.
+- A column pandas reads as numbers is a PIN column only when its header says so (six-digit amounts are common), and
+  only `sure` ID findings vote in the locale profile.
 - `M` is read as a million when the parameter is on; in a column whose header names a unit (`data_usage`, `_mb`)
   the proposal is `check`. Mixed spellings in one value (`1 Cr 20 L`) are not read.
 - Old-format voter IDs (state codes with slashes) are not recognised; only today's three letters and seven digits.

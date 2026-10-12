@@ -233,3 +233,64 @@ def test_the_profile_hash_ignores_sources_and_follows_values() -> None:
     assert detected.profile_hash == a.profile_hash
     changed = a.model_copy(update={"decimal_mark": a.decimal_mark.model_copy(update={"value": ","})})
     assert changed.profile_hash != a.profile_hash
+
+
+def test_a_confirmed_money_unit_is_never_overwritten_by_a_later_file(tmp_path: Path) -> None:
+    """Review item 1 (blocker): a later file in dollars asks; it never rewrites the confirmed rupees."""
+    storage = LocalStorage(tmp_path)
+    first = detect_locale(pd.DataFrame({"amount": ["₹1,200", "₹3,400", "₹560"]})).profile
+    assert first.money_units.value == {"amount": "INR"}
+    confirm_profile(storage, first, client_id="acme", confirmed_by="u1", clock=lambda: CONFIRMED_AT)
+    later = pd.DataFrame({"amount": ["$1,200", "$15", "$20"], "spend": ["$5", "$7", "$9"]})
+    outcome = locale_for(storage, "acme", later)
+    assert outcome.applied
+    assert outcome.question is not None and "money_units" in outcome.question.fields
+    assert outcome.profile.money_units.value == {"amount": "INR"}  # kept until the person answers
+    assert outcome.profile.money_units.source == "confirmed"
+    (conflict,) = [c for c in outcome.conflicts if c.field == "money_units"]
+    assert conflict.profile_value == {"amount": "INR"} and conflict.found == {"amount": "USD"}
+    assert outcome.unconfirmed_money_units == {"spend": "USD"}  # a new column waits; never stamped confirmed
+    assert outcome.question.proposed["money_units"] == {"amount": "INR", "spend": "USD"}
+    assert outcome.question.sources["money_units"] == "detected"
+
+
+def test_a_new_money_column_after_confirmation_is_asked_not_confirmed(tmp_path: Path) -> None:
+    storage = LocalStorage(tmp_path)
+    confirm_profile(
+        storage,
+        detect_locale(pd.DataFrame({"amount": ["₹1,200", "₹3,400"]})).profile,
+        client_id="acme",
+        confirmed_by="u1",
+    )
+    outcome = locale_for(storage, "acme", pd.DataFrame({"amount": ["₹5", "₹6"], "fee": ["₹1", "₹2"]}))
+    assert outcome.conflicts == ()
+    assert outcome.question is not None and outcome.question.fields == ("money_units",)
+    assert outcome.profile.money_units.value == {"amount": "INR"}
+    assert outcome.unconfirmed_money_units == {"fee": "INR"}
+
+
+def test_money_units_are_keyed_by_column_not_by_file() -> None:
+    files = {
+        "bills_aug.csv": pd.DataFrame({"amount": ["₹1,200", "₹3,400"]}),
+        "bills_sep.csv": pd.DataFrame({"amount": ["₹5,600", "₹7,800"]}),
+    }
+    assert detect_locale(files).profile.money_units.value == {"amount": "INR"}
+
+
+def test_a_bare_letter_in_a_unit_column_does_not_vote_for_number_words() -> None:
+    """Review item 3: `30m` minutes and `2L` litres are not evidence of million or lakh."""
+    for frame in (pd.DataFrame({"duration": ["30m", "45m", "15m"]}), pd.DataFrame({"qty": ["2L", "5L", "1L"]})):
+        assert detect_locale(frame).profile.number_words.source == "default"
+    money = pd.DataFrame({"ctc": ["12K", "1.5M", "800K"]})
+    assert detect_locale(money).profile.number_words.value == "k_m"
+
+
+def test_six_digit_amounts_do_not_prove_pin_codes() -> None:
+    """Review item 7: only sure findings vote, so an amount column cannot make the postcode `detected`."""
+    frame = pd.DataFrame(
+        {
+            "premium_paid": [100_000 + 7_919 * i for i in range(30)],
+            "bill": [str(100_000 + i) for i in range(30)],
+        }
+    )
+    assert detect_locale(frame).profile.postcode.source == "default"

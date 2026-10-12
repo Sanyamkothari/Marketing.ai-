@@ -17,7 +17,7 @@ from pydantic import ValidationError
 
 from engine.access.roles import Role
 from engine.agent.config import DataAccess
-from engine.agent.egress import assert_clean, prepare
+from engine.agent.egress import RESULT_KEYS, assert_clean, prepare
 from engine.doctor.locale import LocaleProfile, india_defaults
 from engine.doctor.tools_locale import (
     LOCALE_TOOLS,
@@ -155,6 +155,11 @@ def test_canary_no_planted_id_reaches_a_prompt(mode: DataAccess) -> None:
         assert assert_clean(text)[1] == 0, spec.name  # nothing for the last check to catch
 
 
+def test_the_step_parameter_is_a_label_the_gate_knows() -> None:
+    """Review item 5: `indian_scale_words` is a field name of ours, so the gate never reads it as a cell."""
+    assert "indian_scale_words" in RESULT_KEYS
+
+
 def test_result_keys_are_listed_for_the_integrator() -> None:
     """Keys the tools write that the egress gate does not know yet: the integrator adds them to `RESULT_KEYS`
     when M232 wires the tools (otherwise the gate hides them as possible cell values - safe, but empty)."""
@@ -188,7 +193,6 @@ PENDING_RESULT_KEYS = frozenset(
         "findings",
         "found",
         "header_words",
-        "indian_scale_words",
         "invalid_checksum",
         "join_key",
         "keep_as_text",

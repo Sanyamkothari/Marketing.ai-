@@ -183,6 +183,7 @@ RESULT_KEYS: Final[frozenset[str]] = frozenset(
         "id",
         "ids",
         "ids_on_several_rows",
+        "indian_scale_words",  # Plan O M241: a `parse_number` step's parameter, a flag, never a cell
         "issues",
         "kind",
         "label",

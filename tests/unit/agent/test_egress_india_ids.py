@@ -56,3 +56,9 @@ def test_summaries_only_shows_the_shape_and_nothing_of_the_value() -> None:
     shape = mask_value(GSTIN, DataAccess.SUMMARIES_ONLY)
     assert shape and set(shape) <= set("9Aa")
     assert "gstin" in SAFE_LITERALS and "epic" in SAFE_LITERALS
+
+
+@pytest.mark.parametrize("gstin", ["07DELA12345B1D3", "07dela12345b1de", "27AAPFU0939F1AV"])
+def test_a_gstin_with_a_tan_body_or_another_14th_character_is_masked_whole(gstin: str) -> None:
+    """Review item 6: a tax deductor's GSTIN (a TAN inside) and a 14th character other than `Z` passed unmasked."""
+    assert mask_value(f"TDS {gstin}") == "TDS [REDACTED:gstin]"

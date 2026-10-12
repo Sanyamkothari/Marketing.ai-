@@ -37,7 +37,7 @@ from pydantic import AwareDatetime, Field
 from engine.agent.formats import CURRENCY_TOKENS, date_order, decimal_evidence, parse_numbers
 from engine.config import StrictBase
 from engine.doctor.india_ids import detect_india_ids
-from engine.doctor.indian_values import boolean_word_family
+from engine.doctor.indian_values import bare_letters, boolean_word_family, money_evidence
 from engine.storage import Storage, StorageError
 from engine.utils.logging import get_logger
 from engine.utils.time import utc_now
@@ -196,6 +196,13 @@ class LocaleDetection(StrictBase):
         default=(), description="Fields the files need but do not prove (a day/month order every date fits)."
     )
     columns_read: int = 0
+    unconfirmed_money_units: dict[str, str] = Field(
+        default_factory=dict,
+        description=(
+            "Money columns a confirmed profile does not hold yet, with the currency their values show. Kept out of "
+            "the confirmed profile until the person confirms them."
+        ),
+    )
 
 
 class LocaleQuestion(StrictBase):
@@ -215,6 +222,9 @@ class LocaleOutcome(StrictBase):
     notice: str | None = None
     applied: bool = Field(default=False, description="True when a confirmed profile was applied.")
     conflicts: tuple[LocaleConflict, ...] = ()
+    unconfirmed_money_units: dict[str, str] = Field(
+        default_factory=dict, description="New money columns and their currency, asked and not yet confirmed."
+    )
 
 
 def _default(value: T) -> LocaleSetting[T]:
@@ -251,7 +261,8 @@ class _Votes:
     def __init__(self) -> None:
         self.by_field: dict[str, dict[Any, list[str]]] = {}
         self.unproven: set[str] = set()
-        self.money: dict[str, str] = {}
+        self.money: dict[str, set[str]] = {}
+        """Column name (not file label, so the keys do not grow with each month's file) -> currency codes seen."""
         self.columns = 0
 
     def add(self, field: str, value: Any, column: str) -> None:
@@ -265,7 +276,7 @@ def _distinct_text(series: pd.Series[Any]) -> pd.Series[Any]:
     return pd.Series(list(dict.fromkeys(present.str.strip()))[:MAX_DISTINCT], dtype=object)
 
 
-def _read_column(label: str, series: pd.Series[Any], votes: _Votes) -> None:
+def _read_column(label: str, column: str, series: pd.Series[Any], votes: _Votes) -> None:
     cells = _distinct_text(series)
     if cells.empty:
         return
@@ -288,18 +299,22 @@ def _read_column(label: str, series: pd.Series[Any], votes: _Votes) -> None:
         if indian != western:
             votes.add("digit_grouping", "indian" if indian > western else "western", label)
         words = {m.group("word").casefold() for m in (_NUMBER_WORD.match(t) for t in with_digits) if m}
+        # A bare `L`, `K` or `M` speaks only in a money column (`30m` may be minutes, `2L` litres); the words only
+        # money uses (lakh, crore, a trailing `/-`) speak on their own (review item 3).
+        money = not bare_letters(sorted(words)) or money_evidence(column, with_digits.tolist())
         if (
-            words & {"l", "lac", "lacs", "lakh", "lakhs", "cr", "crore", "crores"}
+            words & {"lac", "lacs", "lakh", "lakhs", "cr", "crore", "crores"}
             or with_digits.str.contains(_TRAILING_DASH).any()
+            or ("l" in words and money)
         ):
             votes.add("number_words", "lakh_crore", label)
-        elif words:
+        elif words & {"k", "m"} and money:
             votes.add("number_words", "k_m", label)
         # A currency sign speaks only in a column of amounts: `rs` inside `3 hours` is not rupees.
         amounts = parse_numbers(with_digits, indian_scale_words=True).changed >= MIN_SHARE * len(with_digits)
         codes = {_CURRENCY_CODE[m.group(0).casefold()] for t in with_digits for m in _CURRENCY_RE.finditer(t)}
         if codes and amounts:
-            votes.money[label] = codes.pop() if len(codes) == 1 else "mixed"
+            votes.money.setdefault(column, set()).update(codes)
         if with_digits.str.contains(_IST_OFFSET).any():
             votes.add("time_zone", "Asia/Kolkata", label)
         elif with_digits.str.contains(_OTHER_OFFSET).any():
@@ -338,8 +353,10 @@ def detect_locale(
             label = f"{name}:{column}" if name else str(column)
             series = frame[column]
             if pd.api.types.is_object_dtype(series) or pd.api.types.is_string_dtype(series):
-                _read_column(label, series, votes)
+                _read_column(label, str(column), series, votes)
         for finding in detect_india_ids(frame):
+            if finding.confidence != "sure":
+                continue  # a six-digit amount column is not proof of PIN codes (review item 7)
             label = f"{name}:{finding.column}" if name else finding.column
             ids.setdefault(finding.kind, []).append(label)
             if finding.kind == "phone_in":
@@ -395,14 +412,33 @@ def detect_locale(
                 )
             continue
         updates[field] = LocaleSetting[Any](value=value, source="detected", evidence=evidence)
-    if votes.money:
+    seen_money = {
+        column: (min(codes) if len(codes) == 1 else "mixed") for column, codes in votes.money.items()
+    }
+    unconfirmed_money: dict[str, str] = {}
+    if seen_money and profile.money_units.source == "confirmed":
+        # A confirmed unit is never overwritten by a file: a different one is a question, and a new column waits
+        # for the person, outside the confirmed profile (review item 1).
+        held: dict[str, str] = dict(profile.money_units.value)
+        for column, unit in sorted(seen_money.items()):
+            if column not in held:
+                unconfirmed_money[column] = unit
+            elif held[column] != unit:
+                conflicts.append(
+                    LocaleConflict(
+                        field="money_units",
+                        profile_value={column: held[column]},
+                        found={column: unit},
+                        columns=(column,),
+                    )
+                )
+    elif seen_money:
         current_money: dict[str, str] = dict(profile.money_units.value)
-        current_money.update(votes.money)
-        source: Source = "confirmed" if profile.money_units.source == "confirmed" else "detected"
+        current_money.update(seen_money)
         updates["money_units"] = LocaleSetting[Any](
             value=dict(sorted(current_money.items())),
-            source=source,
-            evidence=(f"{len(votes.money)} columns carry a currency sign or code",),
+            source="detected",
+            evidence=(f"{len(seen_money)} columns carry a currency sign or code",),
         )
     found_ids = sorted(k for k in ids if k in {"gstin", "epic"})
     if found_ids and profile.personal_ids.source != "confirmed":
@@ -418,6 +454,7 @@ def detect_locale(
         profile=LocaleProfile.model_validate(detected.model_dump()),
         conflicts=tuple(conflicts),
         unproven=tuple(unproven),
+        unconfirmed_money_units=unconfirmed_money,
         columns_read=votes.columns,
     )
 
@@ -563,6 +600,7 @@ def locale_for(
     when = f"{at.day} {at:%b %Y}" if at is not None else "earlier"
     notice = f"Using the number, date and yes/no settings you confirmed on {when}. Change"
     question = None
+    new_money = detection.unconfirmed_money_units
     if detection.conflicts:
         fields = tuple(dict.fromkeys(c.field for c in detection.conflicts))
         names = ", ".join(_LABELS[f] for f in fields)
@@ -571,10 +609,30 @@ def locale_for(
             fields,
             f"This file does not match the {names} you confirmed on {when}. Which is right for this file?",
         )
+    if new_money:
+        # A money column the client never confirmed: its currency is asked, never taken as confirmed.
+        held = dict(saved.money_units.value)
+        if question is None:
+            question = _question(
+                saved,
+                ("money_units",),
+                f"{len(new_money)} money column{'s' if len(new_money) != 1 else ''} in this file "
+                f"{'are' if len(new_money) != 1 else 'is'} new since you confirmed the settings on {when}. "
+                "Which currency is each written in?",
+            )
+        if "money_units" not in question.fields:
+            question = question.model_copy(update={"fields": (*question.fields, "money_units")})
+        question = question.model_copy(
+            update={
+                "proposed": {**question.proposed, "money_units": {**held, **new_money}},
+                "sources": {**question.sources, "money_units": "detected"},
+            }
+        )
     return LocaleOutcome(
         profile=detection.profile,
         question=question,
         notice=notice,
         applied=True,
         conflicts=detection.conflicts,
+        unconfirmed_money_units=new_money,
     )

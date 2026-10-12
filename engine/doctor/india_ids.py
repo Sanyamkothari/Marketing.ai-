@@ -54,12 +54,16 @@ _ALPHABET: Final[str] = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 GSTIN_STATE_CODES: Final[frozenset[int]] = frozenset({*range(1, 39), 96, 97, 99})
 """01-38 for the states and union territories, 96 other country, 97 other territory, 99 centre jurisdiction."""
 
-_GSTIN_SHAPE: Final[re.Pattern[str]] = re.compile(r"\d{2}[A-Z]{5}\d{4}[A-Z][1-9A-Z]Z[0-9A-Z]")
+_GSTIN_SHAPE: Final[re.Pattern[str]] = re.compile(
+    r"\d{2}(?:[A-Z]{5}\d{4}|[A-Z]{4}\d{5})[A-Z][1-9A-Z][0-9A-Z]{2}"
+)
+"""Two digits, a PAN (`AAPFU0939F`) or, for a tax deductor, a TAN (`DELA12345B`), the entity character, the 14th
+character (`Z` for most; `D` and others for TDS and other registrations) and the check character."""
 _EPIC_SHAPE: Final[re.Pattern[str]] = re.compile(r"[A-Z]{3}\d{7}")
 _PIN_SHAPE: Final[re.Pattern[str]] = re.compile(r"[1-9]\d{5}")
 
 GSTIN_TEXT: Final[re.Pattern[str]] = re.compile(
-    r"(?<![A-Za-z0-9])\d{2}[A-Za-z]{5}\d{4}[A-Za-z][1-9A-Za-z][Zz][0-9A-Za-z](?![A-Za-z0-9])"
+    r"(?<![A-Za-z0-9])\d{2}(?:[A-Za-z]{5}\d{4}|[A-Za-z]{4}\d{5})[A-Za-z][1-9A-Za-z][0-9A-Za-z]{2}(?![A-Za-z0-9])"
 )
 """A GSTIN anywhere in text, any case, checksum or not: the egress gate masks the shape, valid or not."""
 EPIC_TEXT: Final[re.Pattern[str]] = re.compile(r"(?<![A-Za-z0-9])[A-Za-z]{3}\d{7}(?![A-Za-z0-9])")
@@ -197,8 +201,12 @@ def _as_text(value: Any) -> str:
     return str(value).strip()
 
 
-def _finding(column: str, cells: Sequence[Any]) -> IndiaIdFinding | None:
-    """The identifier a column holds, if its cells say so; the most specific shape first."""
+def _finding(column: str, cells: Sequence[Any], *, textual: bool = True) -> IndiaIdFinding | None:
+    """The identifier a column holds, if its cells say so; the most specific shape first.
+
+    `textual` is False for a column pandas reads as numbers: there six-digit values are far more often amounts
+    (rupees between 1 and 10 lakh) than postcodes, so such a column is a PIN only when its header says so.
+    """
     total = len(cells)
     if not total:
         return None
@@ -237,8 +245,9 @@ def _finding(column: str, cells: Sequence[Any]) -> IndiaIdFinding | None:
             phone == total,
         )
     pin = sum(1 for t in texts if is_pin(t))
-    if pin / total >= MIN_MATCH_SHARE:
-        header = _PIN_HEADER.search(column) is not None
+    pin_header = _PIN_HEADER.search(column) is not None
+    if pin / total >= MIN_MATCH_SHARE and (textual or pin_header):
+        header = pin_header
         # Six-digit numbers are also amounts; without a header that says postcode it is a question.
         return IndiaIdFinding(
             column, "pin", total, pin, 0, confidence(pin / total, header), False, True, False
@@ -268,7 +277,8 @@ def detect_india_ids(
         cells = _cells(series)
         if pd.api.types.is_float_dtype(series) and not all(float(v).is_integer() for v in cells):
             continue
-        finding = _finding(name, cells)
+        textual = bool(pd.api.types.is_object_dtype(series) or pd.api.types.is_string_dtype(series))
+        finding = _finding(name, cells, textual=textual)
         if finding is not None:
             found.append(finding)
     return tuple(found)

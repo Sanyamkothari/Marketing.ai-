@@ -104,6 +104,36 @@ def test_some_letters_not_a_listed_unit_make_it_check_not_sure() -> None:
     assert proposal.unknown_words == 2 and proposal.failed == 2
 
 
+@pytest.mark.parametrize(
+    ("header", "values"),
+    [
+        ("duration", ["30m", "45m", "15m", "60m"]),  # minutes, read as 30,000,000
+        ("qty", ["2L", "5L", "1L"]),  # litres, read as 2,00,000
+        ("size", ["5M", "10M"]),
+        ("pack", ["5k", "10k"]),
+    ],
+)
+def test_a_bare_letter_without_money_evidence_is_check(header: str, values: list[str]) -> None:
+    """Review item 3: a bare L, K or M is lakh, thousand or million only when something says the column is money."""
+    (proposal,) = propose_indian_numbers(pd.DataFrame({header: values}))
+    assert proposal.confidence == "check"
+    assert "nothing says this column is money" in proposal.reason
+
+
+@pytest.mark.parametrize(
+    ("header", "values"),
+    [
+        ("amount", ["2.5 L", "1 L", "3L"]),  # a money header
+        ("plan_x", ["₹2.5 L", "₹1 L", "₹3L"]),  # a currency sign
+        ("plan_y", ["2.5 L", "1 Cr", "3L"]),  # a word only money uses
+        ("ctc", ["12K", "1.5M", "800K"]),
+    ],
+)
+def test_a_bare_letter_with_money_evidence_is_sure(header: str, values: list[str]) -> None:
+    (proposal,) = propose_indian_numbers(pd.DataFrame({header: values}))
+    assert proposal.confidence == "sure"
+
+
 def test_a_header_naming_a_physical_unit_makes_it_check() -> None:
     frame = pd.DataFrame({"data_usage": ["2 L", "3 L", "1.5 L", "4 L"]})
     (proposal,) = propose_indian_numbers(frame)
@@ -233,7 +263,7 @@ def _flags(values: list[str | None]) -> pd.DataFrame:
     [
         (["haan", "nahi", "Haan", "NAHI", None, "haan"], ["Haan", "haan"], ["NAHI", "nahi"]),
         (["हाँ", "नहीं", "हाँ", "नहीं"], ["हाँ"], ["नहीं"]),
-        (["haa", "nahin", "ha", "na"], ["ha", "haa"], ["na", "nahin"]),
+        (["haa", "nahin", "ha", "nai"], ["ha", "haa"], ["nahin", "nai"]),
         (["Yes", "nahi", "haan", "No"], ["Yes", "haan"], ["No", "nahi"]),
         (["जी हाँ", "जी नहीं", " haan ", "nahi"], ["haan", "जी हाँ"], ["nahi", "जी नहीं"]),
     ],
@@ -256,11 +286,23 @@ def test_one_side_only_is_never_mapped(values: list[str | None]) -> None:
     assert "both" in finding.reason
 
 
-def test_na_beside_an_english_yes_may_mean_not_available_and_is_not_mapped() -> None:
-    (finding,) = propose_indian_booleans(_flags(["yes", "haan", "NA", "no"]))
-    assert finding.step is not None  # a Hindi yes is present: `na` is no
-    (english,) = propose_indian_booleans(_flags(["yes", "nahi", "NA", "no"]))
-    assert english.step is None and english.unknown_words == 1  # only an English yes: NA is not mapped
+@pytest.mark.parametrize(
+    "values",
+    [
+        ["haan", "NA"],  # review item 2: NA alone was taken as the no side, sure
+        ["haan", "nahi", "NA"],  # review item 2: NA beside nahi was mapped to no, sure
+        ["yes", "haan", "NA", "no"],
+        ["yes", "nahi", "NA", "no"],
+        ["हाँ", "na", "हाँ"],
+        ["ha", "na", "ha", "na"],
+    ],
+)
+def test_na_is_never_mapped_and_never_sure(values: list[str | None]) -> None:
+    """`na` may be Hinglish for no or "not available": never the evidence for no, never mapped, always a question."""
+    (finding,) = propose_indian_booleans(_flags(values))
+    assert finding.step is None and finding.confidence == "check"
+    assert finding.unknown_words == sum(1 for v in values if v is not None and v.strip().casefold() == "na")
+    assert "not available" in finding.reason
 
 
 def test_an_unknown_spelling_stops_the_proposal_and_is_counted() -> None:

@@ -159,3 +159,19 @@ def test_dates_booleans_and_fractional_numbers_are_never_read_as_ids() -> None:
         }
     )
     assert detect_india_ids(frame) == ()
+
+
+def test_a_tds_gstin_on_a_tan_body_is_a_gstin() -> None:
+    """Review item 6: the 14th character is not always `Z`, and a tax deductor's GSTIN carries a TAN, not a PAN."""
+    assert looks_like_gstin("07DELA12345B1D3")
+    assert gstin_check_char("07DELA12345B1D") == "E" and is_valid_gstin("07DELA12345B1DE")
+    assert not is_valid_gstin("07DELA12345B1D3")
+
+
+def test_six_digit_amounts_read_as_numbers_are_not_pin_codes() -> None:
+    """Review item 7: an integer column of rupee amounts between 1 and 10 lakh is not a PIN column."""
+    amounts = [100_000 + 7_919 * i for i in range(50)]
+    assert detect_india_ids(pd.DataFrame({"premium_paid": amounts})) == ()
+    assert detect_india_ids(pd.DataFrame({"premium_paid": [float(a) for a in amounts]})) == ()
+    (pin,) = detect_india_ids(pd.DataFrame({"pincode": [560_001 + i for i in range(50)]}))
+    assert pin.kind == "pin" and pin.keep_as_text
