@@ -80,6 +80,7 @@ from pydantic import AwareDatetime, BaseModel, Field, JsonValue, ValidationError
 from engine.agent.contracts import AgentConfidence, ProposalSource, ProposalState
 from engine.config import ConfigError, StrictBase, load_engine_config
 from engine.contracts import Artefact
+from engine.doctor.visit_contracts import CaseVisit
 from engine.storage import LocalStorage, Storage, StorageError
 from engine.utils.logging import get_logger
 from engine.utils.time import utc_now
@@ -231,6 +232,11 @@ class TimelineKind(StrEnum):
     HAND_OFF = "hand_off"
     REPLAY = "replay"
     ERASURE = "privacy.erasure"
+    # Plan O M235 (DEC-1805): the visit's own events.
+    GOAL_SET = "goal.set"
+    CHAT = "chat.message"
+    PRESCRIPTION = "prescription.saved"
+    READINESS = "readiness.checked"
 
 
 DetailValue = str | int | float | bool | None
@@ -303,6 +309,11 @@ class CaseItem(StrictBase):
     proposed_at: AwareDatetime = Field(description="When it was proposed.")
     decided_by: str | None = Field(default=None, description="Who ticked or unticked it (user id).")
     decided_at: AwareDatetime | None = Field(default=None, description="When.")
+    goal_id: str | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+        description="Plan O M235: the goal section it belongs to; null for the shared base.",
+    )
 
 
 class CaseOption(StrictBase):
@@ -327,6 +338,11 @@ class CaseQuestion(StrictBase):
     answer: str | None = Field(default=None, description="The chosen option id.")
     answered_by: str | None = Field(default=None, description="Who answered (user id).")
     answered_at: AwareDatetime | None = Field(default=None, description="When.")
+    goal_id: str | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+        description="Plan O M235: the goal section it belongs to; null for the shared base.",
+    )
 
 
 class CaseDoubt(StrictBase):
@@ -460,6 +476,11 @@ class Case(Artefact):
     last_events: tuple[TimelineEvent, ...] = Field(
         default=(),
         description="The timeline events this version wrote; replayed into the timeline after a crash.",
+    )
+    visit: CaseVisit | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+        description="Plan O M235: where the visit stands beyond its state (`engine.doctor.visit`).",
     )
 
     @model_validator(mode="after")
@@ -1106,6 +1127,15 @@ def forget_upload(document: dict[str, Any], upload_id: str) -> tuple[dict[str, A
                 entry["orphaned"] = True
                 orphaned += 1
         counts["prescriptions_orphaned"] = orphaned
+    visit = out.get("visit")
+    if isinstance(visit, dict):  # M235: the visit forgets the file, and the options of its questions
+        asked = {q.get("question_id") for q in out.get("questions") or () if isinstance(q, dict)}
+        offers = visit.get("offers")
+        out["visit"] = {
+            **visit,
+            "taken_in": [u for u in visit.get("taken_in") or () if u != upload_id],
+            "offers": {k: v for k, v in offers.items() if k in asked} if isinstance(offers, dict) else {},
+        }
     files = out.get("files")
     if counts["files"] and isinstance(files, list) and not files and out.get("chat"):
         counts["chat_messages"] = len(out["chat"]) if isinstance(out["chat"], list) else 0
