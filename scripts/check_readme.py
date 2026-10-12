@@ -856,6 +856,11 @@ MILESTONE_TESTS: Final[Mapping[str, tuple[str, ...]]] = {
     ),
     # M190 (DEC-1620), the MODEL_NOT_APPROVED hold covers every run an arbitrated list was built from.
     "M190": ("tests/integration/production/test_model_not_approved.py",),
+    "M192": (
+        "tests/integration/test_ai_service_settings_browser.py",
+        "tests/integration/simple/test_simple_ui.py",
+        "tests/integration/test_visible_text_ui.py",
+    ),
     # --- Plan O (docs/plans/MARKETING_AI_PLAN_O_DATA_DOCTOR.md); each milestone adds its own entry. ---
     # M230 (DEC-1800), the set-up: the PLAN-O blocks, PLAN_O_CODES in the catalogue check, the switch
     # `data_doctor.unified` (off, validated, round-trips, left out of run_config.json while off).
