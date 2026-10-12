@@ -699,7 +699,9 @@ It writes it down instead, in a sentence you approve word for word:
 - **From an event file.** "A customer is yes when there is an order within 30 days after the snapshot", "when
   there is no recharge for 60 days", or "when a bill in the next 30 days was paid more than 7 days late". You may
   add days' grace and name a file whose events leave a customer out (a port-out, a move to another plan). Month-ends
-  whose window is not over yet are left out, and the sentence says how many. Every count is made by the same
+  whose window is not over yet are left out, and the sentence says how many. The sentence names the date each file
+  is read on, and says how many rows count for nothing because their date cannot be read or the amount a threshold
+  tests is not a number; if that number changes, so does the sentence, and you approve it again. Every count is made by the same
   builder that builds the table, and customer IDs written differently in two files (`CUST-00123` and `123`) are
   matched the way Data Doctor matches them elsewhere - never on a near match.
 

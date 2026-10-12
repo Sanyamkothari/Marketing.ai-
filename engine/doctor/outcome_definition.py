@@ -208,6 +208,11 @@ class OutcomeDefinition(StrictBase):
     exclude_upload_ids: tuple[str, ...] = Field(
         default=(), description="Events: the files `exclude` names, in the same order."
     )
+    exclude_date_columns: tuple[str, ...] = Field(
+        default=(),
+        description="Events: the date column each of those files' window is read on, in the same order (asked "
+        "when a file has several, never picked).",
+    )
     censoring: Literal["leave_out"] | None = Field(
         default=None,
         description="Events: month-ends whose window is not over by the end of the data are left out, counted "
@@ -235,6 +240,8 @@ class OutcomeDefinition(StrictBase):
                 raise ValueError("exclude lists the values the map leaves out")
             if self.event_upload_id or self.days or self.operator or self.censoring:
                 raise ValueError("a column_values outcome has no event file, window, threshold or censoring")
+            if self.exclude_upload_ids or self.exclude_date_columns:
+                raise ValueError("a column_values outcome has no file that leaves customers out")
             return self
         if self.map:
             raise ValueError("an outcome from events has no value map")
@@ -248,6 +255,8 @@ class OutcomeDefinition(StrictBase):
             raise ValueError("only a value_threshold outcome has a column, an operator and a threshold")
         if len(self.exclude) != len(self.exclude_upload_ids):
             raise ValueError("exclude and exclude_upload_ids name the same files")
+        if len(self.exclude_date_columns) != len(self.exclude_upload_ids):
+            raise ValueError("exclude_date_columns names the date of each file exclude_upload_ids names")
         return self
 
     @property
@@ -786,19 +795,40 @@ def _article(word: str) -> str:
     return "an" if word[:1].lower() in "aeiou" else "a"
 
 
+@dataclass(frozen=True)
+class ExcludedFile:
+    """A file whose events in the window leave a customer out, as its sentence names it."""
+
+    word: str
+    file_name: str
+    date_column: str
+    unreadable: int = 0
+
+
+def _unread_words(rows: int, file_name: str, column: str, effect: str, effect_one: str) -> str:
+    """'N rows of <file> have a '<date>' that cannot be read as a date and <effect>.' (one row: singular)."""
+    if rows == 1:
+        return f" 1 row of {file_name} has a '{column}' that cannot be read as a date and {effect_one}."
+    return f" {rows:,} rows of {file_name} have a '{column}' that cannot be read as a date and {effect}."
+
+
 def event_sentence(
     definition: OutcomeDefinition,
     *,
     entity: str,
     event: str,
     event_file: str,
-    excluded_files: Sequence[tuple[str, str]],
+    excluded_files: Sequence[ExcludedFile],
     counts: OutcomeCounts | None,
     data_end: date,
     rules_note: str | None,
+    unreadable: int = 0,
+    not_numbers: int = 0,
 ) -> str:
-    """The sentence an event definition is approved with: what *yes* means, the window and its grace, who is left
-    out, the censoring, how the IDs meet and the counts."""
+    """The sentence an event definition is approved with: what *yes* means, the window and its grace, which date
+    each file is read on, who is left out, every row that counts for nothing (a date that cannot be read, a
+    threshold value that is not a number), the censoring, how the IDs meet and the counts. A change in any of
+    them is a new sentence, so an approval of the old one no longer holds (`APPROVAL_SENTENCE_CHANGED`)."""
     days = definition.days or 0
     an_entity = f"{_article(entity).capitalize()} {entity}"
     if definition.kind == "event_presence":
@@ -814,8 +844,25 @@ def event_sentence(
     if definition.grace_days:
         text += f", with {definition.grace_days} days' grace ({days + definition.grace_days} days in all)"
     text += f", read on '{definition.date_column}'; the outcome is saved as '{definition.name}'."
-    for word, file_name in excluded_files:
-        text += f" {an_entity} with {_article(word)} {word} in {file_name} in that window is left out."
+    if unreadable:
+        text += _unread_words(
+            unreadable, event_file, str(definition.date_column), "count as no event", "counts as no event"
+        )
+    if not_numbers:
+        text += (
+            f" 1 '{definition.column}' value is not a number and never meets the threshold."
+            if not_numbers == 1
+            else f" {not_numbers:,} '{definition.column}' values are not numbers and never meet the threshold."
+        )
+    for item in excluded_files:
+        text += (
+            f" {an_entity} with {_article(item.word)} {item.word} in {item.file_name} in that window, read on "
+            f"'{item.date_column}', is left out."
+        )
+        if item.unreadable:
+            text += _unread_words(
+                item.unreadable, item.file_name, item.date_column, "leave nobody out", "leaves nobody out"
+            )
     if rules_note:
         text += f" {rules_note}"
     text += f" Month-ends whose window is not over by {data_end:%d %b %Y} are left out"
@@ -887,6 +934,7 @@ def propose_event_outcome(
     days: int | None = None,
     grace_days: int | None = None,
     exclude_upload_ids: Sequence[str] = (),
+    exclude_date_columns: Mapping[str, str] | None = None,
     column: str | None = None,
     operator: Operator | None = None,
     threshold: float | None = None,
@@ -894,8 +942,10 @@ def propose_event_outcome(
     """`define_outcome`'s rules: the outcome from an event file, measured by the builder's `build_labels`.
 
     The customer list is the diagnosis's (M157's rule). The event file, its date column and the window are the
-    caller's; when one is not given and more than one is possible, it is a blocking question and no definition is
-    proposed. Every count is the label builder's, through the ID rules M157's offer uses.
+    caller's, and so is the date each file that leaves customers out is read on (`exclude_date_columns`, by upload
+    id); when one is not given and more than one is possible, it is a blocking question and no definition is
+    proposed. Rows whose date cannot be read and threshold values that are not numbers are counted in the
+    sentence the person approves. Every count is the label builder's, through the ID rules M157's offer uses.
     """
     from engine.agent.key_steps import KeyColumn
     from engine.doctor.outcomes import _entity_file, _key_text, _label_name, event_word
@@ -999,6 +1049,15 @@ def propose_event_outcome(
         notes.append(
             f"{not_numbers:,} values in '{value_column}' are not numbers; those events never meet the threshold."
         )
+    excluded_dates = dict(exclude_date_columns or {})
+    unknown = set(excluded_dates) - set(exclude_upload_ids)
+    if unknown:
+        raise OutcomeError(
+            "OUTCOME_CANNOT_MEASURE",
+            "A date is given for a file that does not leave customers out: "
+            + ", ".join(sorted(unknown))
+            + ".",
+        )
     for file in (entity, chosen.file):
         if len(file.frame) < file.diagnosis.rows:
             notes.append(
@@ -1008,7 +1067,7 @@ def propose_event_outcome(
     if chosen.rules is not None:
         entity_keys = pd.Series(entity_ids.rows_of(chosen.rules.entity), dtype=object).dropna()
     excluded_tables: dict[str, pd.DataFrame] = {}
-    excluded_files: list[tuple[str, str]] = []
+    excluded_files: list[ExcludedFile] = []
     exclude_roles: list[str] = []
     for upload_id in dict.fromkeys(exclude_upload_ids):
         match = next((file for file in others if file.diagnosis.upload_id == upload_id), None)
@@ -1037,11 +1096,44 @@ def propose_event_outcome(
                 "OUTCOME_CANNOT_MEASURE",
                 f"{match.diagnosis.file_name} is read as the same kind of file as another the outcome reads.",
             )
-        excluded_table, _bad, _ = _table(pair, match.diagnosis.date_columns[0])
+        moved = match.diagnosis
+        excluded_date = excluded_dates.get(upload_id)
+        if excluded_date is not None and excluded_date not in moved.date_columns:
+            raise OutcomeError(
+                "OUTCOME_CANNOT_MEASURE", f"'{excluded_date}' is not a date column of {moved.file_name}."
+            )
+        if excluded_date is None and len(moved.date_columns) > 1:
+            question = _choose_question(
+                "outcome-exclude-date-column",
+                f"Which date in {moved.file_name} says when each event that leaves a {config.entity or 'customer'} "
+                "out happened?",
+                [
+                    (f"date-{index}", name_, f"Read {moved.upload_id}'s window on '{name_}'.")
+                    for index, name_ in enumerate(moved.date_columns[:8], start=1)
+                ],
+            )
+            return _undecided(entity.diagnosis.file_name, diagnosis.file_name, question, notes=tuple(notes))
+        excluded_date = excluded_date or moved.date_columns[0]
+        excluded_table, excluded_bad, _ = _table(pair, excluded_date)
+        if excluded_bad:
+            notes.append(
+                f"{excluded_bad:,} rows of {moved.file_name} have a '{excluded_date}' that could not be read as a "
+                "date; they leave nobody out."
+            )
+        if len(match.frame) < moved.rows:
+            notes.append(
+                f"Counted on the first {len(match.frame):,} of {moved.rows:,} rows of {moved.file_name}."
+            )
         excluded_tables[pair.role] = excluded_table
         exclude_roles.append(pair.role)
+        excluded_dates[upload_id] = excluded_date
         excluded_files.append(
-            (event_word(match.diagnosis.file_name, pair.role, catalogue), match.diagnosis.file_name)
+            ExcludedFile(
+                word=event_word(moved.file_name, pair.role, catalogue),
+                file_name=moved.file_name,
+                date_column=excluded_date,
+                unreadable=excluded_bad,
+            )
         )
     template = catalogue.templates.get(config.id)
     windows = (days,) if days is not None else (template.days if template is not None else _DEFAULT_WINDOWS)
@@ -1078,6 +1170,9 @@ def propose_event_outcome(
             threshold=float(threshold) if value_column and threshold is not None else None,
             exclude=tuple(exclude_roles),
             exclude_upload_ids=tuple(dict.fromkeys(exclude_upload_ids)),
+            exclude_date_columns=tuple(
+                excluded_dates[upload_id] for upload_id in dict.fromkeys(exclude_upload_ids)
+            ),
             censoring="leave_out",
             entity_key_rule=entity_rule,
             event_key_rule=chosen.rules.event if chosen.rules is not None else None,
@@ -1119,6 +1214,8 @@ def propose_event_outcome(
         counts=counts,
         data_end=data_end,
         rules_note=rules_note,
+        unreadable=unreadable,
+        not_numbers=not_numbers,
     )
     return EventOutcomeProposal(
         entity_file_name=entity.diagnosis.file_name,

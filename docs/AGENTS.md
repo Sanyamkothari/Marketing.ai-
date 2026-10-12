@@ -1210,14 +1210,15 @@ the screen; nothing here is offered to the chat's model.*
 `event_presence`, `event_absence`, `value_threshold`), `name` (the dataset's outcome column), `column`, `map`
 (each value -> `yes`, `no` or `exclude`), the event file, its ID and date columns and role, `days`, `grace_days`,
 `operator` and `threshold`, `exclude` (the values left out, or the roles whose events in the window leave a
-customer out), `censoring` (`leave_out`), and the key rules the IDs meet by. It holds the meaning only; its
+customer out), `exclude_upload_ids` and `exclude_date_columns` (those files and the date each is read on),
+`censoring` (`leave_out`), and the key rules the IDs meet by. It holds the meaning only; its
 `definition_hash` is what an approval names. Counts and the sentence belong to the proposal.
 
 ### 18.2 The tools
 
 | # | Tool | Kind | What it returns |
 |---|---|---|---|
-| 45 | `define_outcome` | PROPOSE (APPROVE) | an event definition (`propose_event_outcome`), its `LabelSpec` (`label_spec_of`), counts from `build_labels` on month-end snapshots (M157's measuring, with exclusion tables registered), the exact sentence; the window, a second event file or a second date column, when not given, are a blocking question with no definition |
+| 45 | `define_outcome` | PROPOSE (APPROVE) | an event definition (`propose_event_outcome`), its `LabelSpec` (`label_spec_of`), counts from `build_labels` on month-end snapshots (M157's measuring, with exclusion tables registered), the exact sentence (naming every date it reads, and every row that counts for nothing: a date that cannot be read, a threshold value that is not a number); the window, a second event file, a second date column, or a second date column of a file that leaves customers out (`exclude_date_columns`), when not given, are a blocking question with no definition |
 | 46 | `map_outcome_values` | PROPOSE (APPROVE) | each value of the outcome column with its rows and meaning: the person's answers (`map`), else the rules' (`positive_label`, `validate.POSITIVE_TOKENS`, `NO_WORDS`); every other value a blocking question; a `column_values` definition only when every value has a meaning and there is a yes and a no; at most 20 values (`OUTCOME_TOO_MANY_VALUES`); never the ID or a personal-data column |
 | 47 | `check_target_type` | READ | for a regression use case, the readiness probe `X_REGRESSION_TARGET_NUMERIC` itself; for yes/no, `TARGET_NOT_BINARY` (`next_tool: map_outcome_values`, or `switch_to: regression` for many numbers) or `TARGET_CONSTANT` |
 

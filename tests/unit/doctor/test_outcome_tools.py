@@ -327,7 +327,11 @@ def test_a_threshold_with_grace_and_a_file_that_leaves_customers_out_is_counted_
     assert (counts.rows, counts.yes, counts.excluded) == (customers_, yes, left) and left == 40
     sentence = found.sentence or ""
     assert "with 5 days' grace (35 days in all)" in sentence
-    assert "A customer with a plan change in plan_changes.csv in that window is left out." in sentence
+    assert definition.exclude_date_columns == ("change_date",)
+    assert (
+        "A customer with a plan change in plan_changes.csv in that window, read on 'change_date', is left out."
+        in sentence
+    )
     assert f"{left:,} are left out" in sentence
 
 
@@ -764,3 +768,115 @@ def test_define_outcome_through_the_registry_is_pending_with_its_sentence_and_fi
     later = call("define_outcome", {**given, "days": 45}, ctx).output
     assert later["sentence"] != out["sentence"] and later["definition_hash"] != out["definition_hash"]
     assert timedelta(days=45).days == later["definition"]["days"]
+
+
+# ---------------------------------------------------------------------------
+# Review fixes: the exclusion file's date and every unread row are in the definition or the sentence
+# ---------------------------------------------------------------------------
+def _moves_with_two_dates() -> pd.DataFrame:
+    """The plan moves with a second date (the day the change was keyed in, a week earlier)."""
+    moves = plan_moves()
+    keyed = pd.to_datetime(moves["change_date"]) - pd.Timedelta(days=7)
+    return moves.assign(entered_on=keyed.dt.strftime("%Y-%m-%d"))
+
+
+def test_an_exclusion_files_date_is_asked_never_picked_and_is_part_of_the_definition() -> None:
+    files = [
+        as_file(rca_customers(), "customers.csv", CONFIGS, "u_list"),
+        as_file(bill_payments(), "bill_payments.csv", CONFIGS, "u_pay"),
+        as_file(_moves_with_two_dates(), "plan_changes.csv", CONFIGS, "u_moves"),
+    ]
+    assert len(files[2].diagnosis.date_columns) == 2
+    asked = threshold_proposal(files, exclude_upload_ids=("u_moves",))
+    assert asked.definition is None and asked.sentence is None and asked.blocking == ("OUTCOME_UNDECIDED",)
+    (question,) = asked.questions
+    assert question.question_id == "outcome-exclude-date-column" and question.blocking
+    assert {option.label for option in question.options} == {"change_date", "entered_on"}
+    on_change = threshold_proposal(
+        files, exclude_upload_ids=("u_moves",), exclude_date_columns={"u_moves": "change_date"}
+    )
+    on_entry = threshold_proposal(
+        files, exclude_upload_ids=("u_moves",), exclude_date_columns={"u_moves": "entered_on"}
+    )
+    assert on_change.definition is not None and on_entry.definition is not None
+    assert on_change.definition.exclude_date_columns == ("change_date",)
+    assert on_entry.definition.exclude_date_columns == ("entered_on",)
+    assert on_change.definition.definition_hash != on_entry.definition.definition_hash
+    assert (
+        "A customer with a plan change in plan_changes.csv in that window, read on 'change_date', is left out."
+        in (on_change.sentence or "")
+    )
+    assert "read on 'entered_on', is left out." in (on_entry.sentence or "")
+    with pytest.raises(OutcomeError) as not_a_date:
+        threshold_proposal(
+            files, exclude_upload_ids=("u_moves",), exclude_date_columns={"u_moves": "new_plan"}
+        )
+    assert not_a_date.value.code == "OUTCOME_CANNOT_MEASURE"
+    with pytest.raises(OutcomeError) as not_excluded:
+        threshold_proposal(files, exclude_date_columns={"u_moves": "change_date"})
+    assert not_excluded.value.code == "OUTCOME_CANNOT_MEASURE"
+    dumped = on_change.definition.model_dump(mode="json")
+    with pytest.raises(ValueError, match="exclude_date_columns"):
+        OutcomeDefinition.model_validate({**dumped, "exclude_date_columns": []})
+
+
+def test_an_event_absence_with_an_unreadable_date_says_so_in_the_sentence_approved() -> None:
+    rca = load_use_case("rca", CONFIGS)
+    roles, catalogue = get_roles(CONFIGS), load_outcome_catalogue(CONFIGS)
+    events = recharges()
+    customer = "C0011"
+    assert customer not in set(events.loc[events.index[-1:], "customer_id"])
+
+    def proposal(unread: int) -> Any:
+        broken = events.copy()
+        rows = broken.index[broken["customer_id"].eq(customer)][:unread]
+        broken.loc[rows, "recharge_date"] = "not recorded"
+        files = [
+            as_file(rca_customers(), "customers.csv", CONFIGS, "u_list"),
+            as_file(broken, "recharges_2025.csv", CONFIGS, "u_events"),
+        ]
+        return propose_event_outcome(files, rca, roles, catalogue, kind="event_absence", days=60)
+
+    clean, one, two = proposal(0), proposal(1), proposal(2)
+    assert clean.definition is not None and one.definition == clean.definition == two.definition
+    assert "cannot be read" not in (clean.sentence or "")
+    words = "1 row of recharges_2025.csv has a 'recharge_date' that cannot be read as a date and counts as no event"
+    assert words in (one.sentence or "")
+    assert (
+        "2 rows of recharges_2025.csv have a 'recharge_date' that cannot be read as a date and count as no event"
+        in (two.sentence or "")
+    )
+    assert any("could not be read as a date" in note for note in one.notes)
+    approval = approval_for(one.definition, one.sentence or "", user_id=ANALYST.user_id, at=AT)
+    with pytest.raises(OutcomeError) as changed:
+        check_outcome_approval(
+            kind="data.define_outcome",
+            definition=two.definition,
+            current_sentence=two.sentence,
+            approval=approval,
+            approver=ANALYST,
+            config_root=CONFIGS,
+        )
+    assert changed.value.code == "APPROVAL_SENTENCE_CHANGED", "a new unread count is a new sentence"
+
+
+def test_threshold_values_that_are_not_numbers_and_unread_exclusion_dates_are_in_the_sentence() -> None:
+    payments = bill_payments()
+    payments["days_late"] = payments["days_late"].astype(object)
+    payments.loc[payments.index[:3], "days_late"] = "n/a"
+    moves = plan_moves()
+    moves.loc[moves.index[:2], "change_date"] = "unknown"
+    files = [
+        as_file(rca_customers(), "customers.csv", CONFIGS, "u_list"),
+        as_file(payments, "bill_payments.csv", CONFIGS, "u_pay"),
+        as_file(moves, "plan_changes.csv", CONFIGS, "u_moves"),
+    ]
+    found = threshold_proposal(files, exclude_upload_ids=("u_moves",))
+    assert found.definition is not None and found.definition.exclude_date_columns == ("change_date",)
+    sentence = found.sentence or ""
+    assert "3 'days_late' values are not numbers and never meet the threshold." in sentence
+    assert (
+        "2 rows of plan_changes.csv have a 'change_date' that cannot be read as a date and leave nobody out."
+        in sentence
+    )
+    assert any("plan_changes.csv" in note and "could not be read" in note for note in found.notes)

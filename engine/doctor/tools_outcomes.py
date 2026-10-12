@@ -9,7 +9,8 @@
 Both PROPOSE tools return a pending, never-ticked, `check` proposal of an `OutcomeDefinition` with the exact sentence
 the person approves (M233's `data.define_outcome` and `data.map_outcome_values` rule sets: APPROVE-class, always).
 Whatever decides the meaning and is not given - a value the rules cannot place, a second event file or date column,
-the window - is a blocking question and no definition is proposed (`engine.doctor.outcome_definition`). Nothing
+the date a file that leaves customers out is read on, the window - is a blocking question and no definition is
+proposed (`engine.doctor.outcome_definition`); every row that counts for nothing is counted in the sentence. Nothing
 here applies anything: `apply_outcome_values` and the dataset builder do, after the person approves.
 
 The tools serve the rules and the screen, like M236's; the AI reaches them through the visit (M235). Each is
@@ -205,6 +206,11 @@ class DefineOutcomeArgs(_Args):
         max_length=_MAX_EXCLUDE_FILES,
         description="Event files whose events in the window leave a customer out (a port-out, a move).",
     )
+    exclude_date_columns: dict[str, str] = Field(
+        default_factory=dict,
+        max_length=_MAX_EXCLUDE_FILES,
+        description="The date column each of those files is read on, by upload id; asked when a file has several.",
+    )
     column: str | None = Field(
         default=None, max_length=512, description="value_threshold: the column tested."
     )
@@ -218,6 +224,8 @@ class DefineOutcomeArgs(_Args):
             raise ValueError("a value_threshold outcome names column, operator and threshold")
         if self.kind != "value_threshold" and any(value is not None for value in named):
             raise ValueError("only a value_threshold outcome names column, operator and threshold")
+        if any(len(key) > 128 or len(value) > 512 for key, value in self.exclude_date_columns.items()):
+            raise ValueError("an upload id or a date column name is too long")
         return self
 
 
@@ -274,6 +282,7 @@ def _define_outcome(parsed: DefineOutcomeArgs, ctx: DataToolContext) -> DefineOu
             days=parsed.days,
             grace_days=parsed.grace_days,
             exclude_upload_ids=parsed.exclude_upload_ids,
+            exclude_date_columns=parsed.exclude_date_columns,
             column=parsed.column,
             operator=parsed.operator,
             threshold=parsed.threshold,
