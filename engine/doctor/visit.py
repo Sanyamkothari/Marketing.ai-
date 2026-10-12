@@ -457,7 +457,13 @@ class _Step:
     model_calls: int = 0
     cost_usd: float = 0.0
     after: list[Callable[[Case], None]] = field(default_factory=list)
-    """Plan O M246: side effects once the step is written (a standing answer's use); each is idempotent."""
+    """Plan O M246: side effects once the step is written (a standing answer's use or memory); each is
+    idempotent, and none may fail the step."""
+    within: Callable[[Case], dict[str, Any]] | None = None
+    """Plan O M246: the step's record - Plan K's ledger entry of an approval, a standing answer's revocation - run
+    inside the case's write, under its lock and after its version check, so it is made only for a write that
+    goes ahead. It returns updates merged into the step's (the approval with its receipt). It is idempotent: a
+    write that fails after it (or a process that dies) is retried, and the retry finds what it made."""
 
 
 def _upload_of(result: DataToolResult) -> str | None:
@@ -476,6 +482,9 @@ def _write(run: _Run, case: Case, step: _Step, *, op_id: str | None = None) -> C
     now = run.deps.clock()
 
     def change(current: Case) -> tuple[Case, list[EventDraft]]:
+        updates = dict(step.updates)
+        if step.within is not None:  # first, so a refusal here writes nothing at all
+            updates.update(step.within(current))
         drafts: list[EventDraft] = []
         known = {ref.evidence_id for ref in current.evidence}
         refs = list(current.evidence)
@@ -582,7 +591,7 @@ def _write(run: _Run, case: Case, step: _Step, *, op_id: str | None = None) -> C
                 )
             )
         waiting: WaitingFor | None = _REST.get(step.to)
-        if step.to is VisitState.INTAKE and not current.files and not step.updates.get("files"):
+        if step.to is VisitState.INTAKE and not current.files and not updates.get("files"):
             waiting = "files"
         new_visit = visit.model_copy(
             update={
@@ -605,11 +614,11 @@ def _write(run: _Run, case: Case, step: _Step, *, op_id: str | None = None) -> C
         run.tool_calls = 0
         changed = current.model_copy(
             update={
-                **step.updates,
+                **updates,
                 "state": step.to,
                 "evidence": tuple(refs),
-                "items": tuple(step.updates.get("items", items)),
-                "questions": tuple(step.updates.get("questions", questions)),
+                "items": tuple(updates.get("items", items)),
+                "questions": tuple(updates.get("questions", questions)),
                 "doubts": tuple(doubts),
                 "visit": new_visit,
                 "counters": counters,
@@ -1712,7 +1721,7 @@ def _settle_asks(run: _Run, case: Case, step: _Step, asks: Sequence[Ask]) -> Non
 def _standing(run: _Run, case: Case, step: _Step) -> None:
     """Apply this client's standing answers to the questions TREAT would ask now: pre-ticked, visible, revocable."""
     from engine.doctor.case import StandingAnswerUse
-    from engine.doctor.standing import STANDING_CODES, StandingAnswerStore, describe, may_stand
+    from engine.doctor.standing import STANDING_CODES, StandingAnswerStore, describe, may_stand, meaning_of
 
     candidates = {
         q.question_id
@@ -1736,6 +1745,21 @@ def _standing(run: _Run, case: Case, step: _Step) -> None:
             else next((o for o in question.options if o.label == answer.option_label), None)
         )
         effect = None if option is None else {e.option_id: e for e in effects}.get(option.option_id)
+        if answer is not None and (
+            option is None or effect is None or answer.meaning != meaning_of(effect.kind, effect.payload)
+        ):
+            # The same question, but the choice behind the earlier answer now does something else (or is gone):
+            # it is asked again, and says why, never applied to a change the person did not choose.
+            kept.append((_no_longer_fits(question, answer), effects))
+            step.events.append(
+                EventDraft(
+                    kind=TimelineKind.STANDING_UNFIT,
+                    upload_id=question.upload_id,
+                    item_id=answer.answer_id,
+                    details={"code": question.code, "question": question.question_id},
+                )
+            )
+            continue
         if (
             answer is None
             or option is None
@@ -1792,6 +1816,16 @@ def _standing(run: _Run, case: Case, step: _Step) -> None:
     step.questions = kept
     if len(uses) != len(case.standing_answers_used):
         step.updates["standing_answers_used"] = tuple(uses)
+
+
+def _no_longer_fits(question: CaseQuestion, answer: Any) -> CaseQuestion:
+    """The question, saying that the client's earlier answer was not applied because it no longer fits."""
+    when = answer.answered_at.strftime("%d %b").lstrip("0")
+    note = (
+        f"Your answer from {when} (“{answer.option_label}”) was not used: that choice now makes a different "
+        "change, so please answer again."
+    )
+    return question.model_copy(update={"why": f"{note} {question.why}".strip()})
 
 
 def _used(store: Any, answer_id: str, written: Case) -> None:
@@ -2016,13 +2050,13 @@ def answer(
                 },
             )
         ]
-        remembered = _remember_answer(run, case, answered, effect, actor=actor, now=now)
-        if remembered is not None:
+        remember = _remember_answer(run, case, answered, effect, actor=actor, now=now)
+        if remember is not None:
             events.append(
                 EventDraft(
                     kind=TimelineKind.STANDING_REMEMBERED,
                     upload_id=question.upload_id,
-                    item_id=remembered,
+                    item_id=remember[0],
                     details={"code": question.code, "question": question_id},
                 )
             )
@@ -2030,6 +2064,8 @@ def answer(
             to=VisitState.TREAT if case.state in _AFTER_RECALL else case.state,
             updates={"items": items, "questions": questions},
             events=events,
+            # The client-wide memory is written once the answer is: a refused answer remembers nothing.
+            after=[] if remember is None else [remember[1]],
         )
 
     return _person_step(run, client_id, case_id, expected_version, op_id, build)
@@ -2037,10 +2073,11 @@ def answer(
 
 def _remember_answer(
     run: _Run, case: Case, question: CaseQuestion, effect: OptionEffect | None, *, actor: str, now: datetime
-) -> str | None:
-    """Plan O M246: write the answer down as the client's standing answer when it may stand (never APPROVE-class,
-    never "I don't know"); its id, or None. A side write keyed by its content, so a retry writes the same."""
-    from engine.doctor.standing import StandingAnswerStore, may_stand
+) -> tuple[str, Callable[[Case], None]] | None:
+    """Plan O M246: when the answer may stand (never APPROVE-class, never "I don't know"), its standing answer's
+    id and the write that remembers it for the client - run only once the case holds the answer (`_Step.after`),
+    so a refused or conflicting answer is never remembered. Keyed by its content: a retry writes the same."""
+    from engine.doctor.standing import StandingAnswerStore, answer_id_for, may_stand, meaning_of
 
     option = next((o for o in question.options if o.option_id == question.answer), None)
     if option is None or option.label == DONT_KNOW or (effect is None and option.effect_digest is not None):
@@ -2049,16 +2086,21 @@ def _remember_answer(
     payload: Mapping[str, Any] = {} if effect is None else effect.payload
     if not may_stand(question, kind, payload):
         return None
-    answer = StandingAnswerStore(run.deps.storage).remember(
-        case.client_id,
-        question,
-        option_id=option.option_id,
-        effect_digest=option.effect_digest,
-        title=(effect.title if effect is not None and effect.title else option.label),
-        actor=actor,
-        at=now,
-    )
-    return answer.answer_id
+    title = effect.title if effect is not None and effect.title else option.label
+
+    def remember(written: Case) -> None:
+        StandingAnswerStore(run.deps.storage).remember(
+            written.client_id,
+            question,
+            option_id=option.option_id,
+            effect_digest=option.effect_digest,
+            meaning=meaning_of(kind, payload),
+            title=title,
+            actor=actor,
+            at=now,
+        )
+
+    return answer_id_for(case.client_id, question), remember
 
 
 def _str(value: object) -> str | None:
@@ -2144,6 +2186,7 @@ def approve(
         goal = active_goal(case)
         accepted = [i for i in items if i.state is ProposalState.ACCEPTED]
         brief = stored_brief(run.deps.storage, case)
+        approval_id = f"approval.{len(case.approvals) + 1}"
         body = decision_body(
             case_id=case.case_id,
             upload_id=case.files[0].upload_id if len(case.files) == 1 else None,
@@ -2152,17 +2195,15 @@ def approve(
             decided_by=actor,
             kind="prescription",
             prescription_hash=prescription_digest(case, brief) if deps.prescribe is None else None,
-        )
-        receipt = _record(
-            deps, DATA_PRESCRIPTION_APPROVED, actor, body, case, f"approval.{len(case.approvals) + 1}"
+            approval_id=approval_id,
+            case_version=case.version,
         )
         approval = CaseApproval(
-            approval_id=f"approval.{len(case.approvals) + 1}",
+            approval_id=approval_id,
             item_ids=tuple(i.item_id for i in accepted),
             approved_by=actor,
             approved_at=now,
             text_shown=text,
-            receipt_id=receipt,
             payload_digest=_str(body["payload_digest"]),
         )
         ai_steps = [
@@ -2183,7 +2224,7 @@ def approve(
             after.append(count_patterns)
         return _Step(
             to=VisitState.PRESCRIBE,
-            updates={"approvals": (*case.approvals, approval)},
+            within=_recorded(deps, DATA_PRESCRIPTION_APPROVED, actor, body, approval),
             events=[
                 EventDraft(
                     kind=TimelineKind.APPROVAL,
@@ -2202,17 +2243,31 @@ def approve(
     return _person_step(run, client_id, case_id, expected_version, op_id, build)
 
 
-def _record(deps: VisitDeps, kind: str, actor: str, body: Mapping[str, Any], case: Case, ref: str) -> str:
+def _record(deps: VisitDeps, kind: str, actor: str, body: Mapping[str, Any], ref: str) -> str:
     """The receipt of one decision: Plan K's ledger entry hash when the ledger is on, else the approval's place in
-    the case's timeline. Written before the case, so no approval is stored without its record."""
+    the case's timeline. A ledger that cannot be written refuses the decision."""
     if deps.ledger is not None:
         try:
             return f"ledger:{deps.ledger(kind, actor, body)}"
         except Exception as exc:
             code = getattr(exc, "code", "LEDGER_CHAIN_BROKEN")
             raise CaseError(str(code), "The decision could not be recorded; nothing was approved.") from exc
-    del case
     return f"timeline:{ref}"
+
+
+def _recorded(
+    deps: VisitDeps, kind: str, actor: str, body: Mapping[str, Any], approval: CaseApproval
+) -> Callable[[Case], dict[str, Any]]:
+    """The approval's record, made inside the case's write (:attr:`_Step.within`): after the version check, so
+    no entry is written for an approval the case does not store, and idempotent (the body names the approval and
+    the case version; :func:`engine.doctor.protocol.ledger_port`), so a retry finds the entry instead of adding
+    one. Returns the case's approvals with this one and its receipt."""
+
+    def within(current: Case) -> dict[str, Any]:
+        receipt = _record(deps, kind, actor, body, approval.approval_id)
+        return {"approvals": (*current.approvals, approval.model_copy(update={"receipt_id": receipt}))}
+
+    return within
 
 
 def _timeline_body(body: Mapping[str, Any]) -> dict[str, Any]:
@@ -2228,6 +2283,19 @@ def _approval_required(deps: VisitDeps, case: Case) -> bool:
     if goal is None:
         return False
     return bool(load_use_case(goal.goal_id, deps.config_root).governance.approval_required)
+
+
+def _proposers(case: Case, item: CaseItem) -> tuple[str, ...]:
+    """Everyone who proposed an item or answered the question it came from (separation of duties, O17).
+
+    An item a question's answer added (`<question_id>:<option_id>`) was proposed by whoever answered it; whoever
+    ticked or unticked it since (`decided_by`) took part too. Data Doctor (the rules, the AI) is no one."""
+    found: list[str] = []
+    origin = next((q for q in case.questions if item.item_id.startswith(f"{q.question_id}:")), None)
+    for who in (origin.answered_by if origin is not None else None, item.decided_by):
+        if who is not None and who != AGENT and who not in found:
+            found.append(who)
+    return tuple(found)
 
 
 def confirmed(case: Case, item: CaseItem) -> bool:
@@ -2284,7 +2352,7 @@ def confirm(
         if rule is None:
             raise _unknown("This change does not need its own yes; it is approved with the others.")
         text = item_sentence(item.title, item.payload)
-        proposed_by = item.decided_by if item.decided_by not in (None, AGENT) else None
+        proposed_by = _proposers(case, item)
         required = _approval_required(deps, case)
         refused = confirmation_refusal(
             rule=rule,
@@ -2300,6 +2368,7 @@ def confirm(
                 reason = f"{reason} It now reads: “{text}”"
             raise CaseError(refused.code or "POLICY_NO_RULES", reason)
         role = role_for(rule, approval_required=required)
+        approval_id = f"approval.{len(case.approvals) + 1}"
         body = decision_body(
             case_id=case.case_id,
             upload_id=item.upload_id,
@@ -2309,18 +2378,16 @@ def confirm(
             proposed_by=proposed_by,
             kind=item_kind(item.kind, item.payload),
             identity_verified=False if principal.kind != "user" else None,
-        )
-        receipt = _record(
-            deps, DATA_DECISION, principal.user_id, body, case, f"approval.{len(case.approvals) + 1}"
+            approval_id=approval_id,
+            case_version=case.version,
         )
         approval = CaseApproval(
-            approval_id=f"approval.{len(case.approvals) + 1}",
+            approval_id=approval_id,
             item_ids=(item.item_id,),
             approved_by=principal.user_id,
             approved_at=now,
             text_shown=text,
             approve_class=True,
-            receipt_id=receipt,
             payload_digest=_str(body["payload_digest"]),
             role=role.value,
         )
@@ -2333,10 +2400,8 @@ def confirm(
         )
         return _Step(
             to=VisitState.TREAT if case.state in _AFTER_RECALL else case.state,
-            updates={
-                "approvals": (*case.approvals, approval),
-                "items": [ticked if i.item_id == item_id else i for i in case.items],
-            },
+            updates={"items": [ticked if i.item_id == item_id else i for i in case.items]},
+            within=_recorded(deps, DATA_DECISION, principal.user_id, body, approval),
             events=[
                 EventDraft(
                     kind=TimelineKind.CONFIRMED,
@@ -2374,11 +2439,21 @@ def revoke_standing(
     now = deps.clock()
     store = StandingAnswerStore(deps.storage)
 
-    def build(case: Case) -> _Step:
+    def revoke(current: Case) -> dict[str, Any]:
+        # Inside the case's write, after its version check (`_Step.within`): a refused or conflicting revoke
+        # changes nothing for the client. Revoking twice is revoking once, so a retry is safe.
         try:
             store.revoke(client_id, answer_id, actor=actor, at=now)
         except ProtocolError as exc:
             raise CaseError(exc.code, exc.message) from exc
+        del current
+        return {}
+
+    def build(case: Case) -> _Step:
+        if store.get(client_id, answer_id) is None:
+            raise CaseError(
+                "STANDING_ANSWER_NOT_FOUND", "There is no such remembered answer for this client."
+            )
         questions = [
             (
                 q.model_copy(
@@ -2410,6 +2485,7 @@ def revoke_standing(
                 "standing_answers_used": uses,
             },
             events=[EventDraft(kind=TimelineKind.STANDING_REVOKED, item_id=answer_id, details={"by": actor})],
+            within=revoke,
         )
 
     return _person_step(run, client_id, case_id, expected_version, op_id, build)

@@ -1129,7 +1129,8 @@ never apply fails that test, so it cannot be listed for show.
 ### 16.6 Not wired yet
 
 - ~~The approval-time half is not called by Plan G's Approve.~~ Wired by M246 (DEC-1816, §18.5): the preview
-  records what it showed, Approve builds the reshape items and checks the sentence read and the role.
+  records what it showed, Approve builds the reshape items and checks the sentence read, the role and - from who
+  ticked, answered or added each step (`record_proposers`) - separation of duties.
 - ~~O10's warning is only in the decision's detail.~~ M246: `agent_gate`'s check returns the warnings it allowed
   (`policy.warnings_of`); the chat's step result carries `warnings: ["AI_STEP_CHANGES_MANY"]`, Approve lists it
   and a case's AI item keeps it in its payload. Showing it on screen is M247's.
@@ -1210,11 +1211,18 @@ Detected(asks, doubts, requests, evidence)`); M245 fills them in. The rules' own
   written to `cases/<client>/standing_answers.json`: detector, column fingerprint (code, normalised column, goal),
   value signature (the question's `value_signature`, else its option labels), the option's label, who, when.
   Never "I don't know", never an APPROVE-class effect (`may_stand`), never another client's.
+  The answer also keeps its **meaning** (`meaning_of`: the chosen option's change - kind and payload - without
+  the ids of the file, case or evidence it was made on). It is written only once the case holds the answer (a
+  `_Step.after` effect), so a refused or conflicting answer is never remembered.
 - TREAT applies a live answer to the same detector, fingerprint and signature as a **pre-ticked item** titled
   "Using your answer from 12 Oct: ...", answers the question with `standing_answer_id`, records a
-  `StandingAnswerUse` in the case and a `standing_answer.applied` event, and counts the use once per case.
+  `StandingAnswerUse` in the case and a `standing_answer.applied` event, and counts the use once per case - but only
+  when the option with the same label still has the same meaning. When the same button now makes another change
+  (another spelling, unit factor or format), the question is asked again, its `why` says the earlier answer was not
+  used, and a `standing_answer.unfit` event names the answer.
 - `revoke_standing` (case) or `POST /clients/{client}/standing-answers/{id}/revoke` (Settings) revokes it: the
-  question is asked again, in the case at once and in every later case.
+  question is asked again, in the case at once and in every later case. In a case the revocation is made inside
+  the case's write, after its version check (`_Step.within`), so a refused revoke changes nothing for the client.
 
 ### 18.4 APPROVE-class items (`APPROVE_CLASS_ITEMS`, the design §6.6)
 
@@ -1227,8 +1235,10 @@ Detected(asks, doubts, requests, evidence)`); M245 fills them in. The rules' own
 
 `visit.confirm` gives one item its own yes: the check is M233's `data.approve_class` rule (`confirmation_refusal`),
 so the codes are its - `TOOL_ROLE_REQUIRED` (403), `APPROVAL_SENTENCE_CHANGED` (409, with the new sentence; nothing is
-recorded), `POLICY_ROLE_SEPARATION` (403: with `governance.approval_required` on, whoever proposed or answered it -
-`item.decided_by` - cannot be the one who confirms; the local operator with sign-in off is exempt, as everywhere).
+recorded), `POLICY_ROLE_SEPARATION` (403: with `governance.approval_required` on, no one who proposed or answered it
+can be the one who confirms - the person who answered the question the item came from (`<question_id>:<option>`)
+and the person who ticked it last (`item.decided_by`); the local operator with sign-in off is exempt, as
+everywhere).
 The yes is a `CaseApproval` with `approve_class: true`, the role, `payload_digest` (`approval_digest`: the item's
 payload digest and the sentence) and its receipt. A yes covers the item **as it reads now**: a changed payload or
 sentence needs a new one. `visit.approve` is refused while an accepted APPROVE-class item of the active section
@@ -1242,10 +1252,15 @@ checks, before writing anything: each accepted reshape step as M238's `ReshapeIt
 answered, `full` future-data check, its preview receipt shown for these very steps) under `data.reshape_guard`
 (`RESHAPE_GUARD_MISSING`); and - when a step is APPROVE-class (`remove_rows`; `keep_latest_per_id` leaving out more
 than 2% of the preview's rows) - the role and the exact sentence (`GET .../approval` shows it; `POST .../approve`
-sends it back; `POST .../apply` with none is `APPROVAL_SENTENCE_CHANGED`). A Guided setup session does not record
-who proposed a step, so separation of duties is enforced in cases only. Accepted AI steps carrying O10's warning are
-listed. With `agentic.enabled` on the approval is a `data.prescription.approved` ledger entry (upload id, recipe
-hash, the digest of the accepted proposals and the sentence).
+sends it back; `POST .../apply` with none is `APPROVAL_SENTENCE_CHANGED`). **Separation of duties**: the decide,
+answer and edit routes record who ticked, answered or added each suggestion (`record_proposers`,
+`uploads/<id>/agent/proposed_by.json`, user ids only; nothing with sign-in off); with `governance.approval_required`
+on, an APPROVE-class step is refused to any of them (`POLICY_ROLE_SEPARATION`), and a step a person ticked that no
+record names (the switch turned on mid-session) is refused the same way until it is ticked again. Accepted AI steps
+carrying O10's warning are listed. With `agentic.enabled` on the approval is a signed `data.prescription.approved`
+ledger entry (upload id, recipe hash, the digest of the accepted proposals and the sentence), written right after
+the checks pass and **before** anything keeps the approval's effects (the client's memory of the recipe, the
+session as applied); a ledger that cannot be written refuses the approval and nothing is kept.
 
 ### 18.6 Doubts and requests for more data (§6.7, §6.8)
 
@@ -1260,14 +1275,17 @@ ask for the outcome column this way when no file has it.
 ### 18.7 The record (§6.6, O9)
 
 Every decision carries the user id. `decision_body` is the record: `case_id`, `upload_id`, `payload_digest`,
-`prescription_hash`, `recipe_hash`, `status`, `decided_by`, `proposed_by`, `proposal_kind` (and `identity_verified:
-false` with sign-in off) - ids and digests only. With `agentic.enabled` on, `VisitDeps.ledger`
-(`api.routes.case_visit.ledger_for`) appends it to Plan K's ledger **before** the case is written, as
-`data.decision` (an item's own yes) or `data.prescription.approved` (the approval); `ledger.BODY_KEYS` gained
-`case_id`, `upload_id`, `prescription_hash`, `recipe_hash`. The receipt (`CaseApproval.receipt_id`) is
-`ledger:<entry_hash>`, else `timeline:<approval id>`. With the ledger off the timeline event (`approval`,
-`approval.confirmed`) holds the same body (without `case_id`, the timeline's own). The two kinds are not in
-`SIGNED_KINDS` yet (adding them changes `test_ledger.py`'s list: the integrator's call); the chain verifies.
+`prescription_hash`, `recipe_hash`, `status`, `decided_by`, `proposed_by` (comma-separated when several),
+`proposal_kind`, `approval_id`, `case_version` (and `identity_verified: false` with sign-in off) - ids and digests
+only. With `agentic.enabled` on, `VisitDeps.ledger` (`api.routes.case_visit.ledger_for`) appends it to Plan K's
+ledger **inside the case's write** (`_Step.within`: under the case lock, after the version check, before the
+commit), as `data.decision` (an item's own yes) or `data.prescription.approved` (the approval); both are in
+`SIGNED_KINDS`, so each entry is signed like every other approval. `ledger.BODY_KEYS` gained `case_id`, `upload_id`,
+`prescription_hash`, `recipe_hash`, `approval_id`, `case_version`. A write that loses the version check writes no
+entry; a write that fails after the entry (or a process that dies) is retried, and `ledger_port` is idempotent - an
+entry of the same kind, actor and body is returned, not written again - so the retry finds the first entry. The
+receipt (`CaseApproval.receipt_id`) is `ledger:<entry_hash>`, else `timeline:<approval id>`. With the ledger off the
+timeline event (`approval`, `approval.confirmed`) holds the same body (without `case_id`, the timeline's own).
 
 ### 18.8 New patterns, with permission, then rules ([REQ] 11)
 
@@ -1284,5 +1302,9 @@ deterministic rules by a reviewed change. Nothing changes a rule by itself.
   and the AI's wording of questions and doubts are M247/M248's).
 - A doubt is non-blocking; an APPROVE-class doubt travels with its item's sentence when the detector writes it there.
 - The plan's `AI_STEP_CHANGE_TOO_LARGE` is `AI_STEP_CHANGES_TOO_MANY`, the code M238 shipped (DEC-1808 (g)).
-- A retried approval whose first attempt appended to the ledger but died before writing the case appends a second,
-  identical entry; both verify.
+- An approval whose ledger entry was written but whose case write then failed leaves that entry in the chain until
+  the approval is retried (the retry reuses it); one never retried stays as a signed record of an approval the case
+  does not hold. A standing answer's memory (`_Step.after`) is written after the case: a process that dies in
+  between leaves the answer in the case but not remembered for the client (it is asked again next time).
+- The idempotent look-up reads the entries of one kind (`data.decision` or `data.prescription.approved`) - few,
+  one per person's approval - not the whole chain.

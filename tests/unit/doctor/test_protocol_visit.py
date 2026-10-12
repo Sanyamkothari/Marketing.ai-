@@ -438,6 +438,9 @@ def test_ledger_entries_verify_and_without_the_ledger_the_timeline_holds_the_sam
             entries = list(DecisionLedger(engine, signer=signer, policy_version="p" * 64).entries())
             assert [e.kind for e in entries] == ["data.decision", "data.prescription.approved"]
             assert verify_ledger(engine, signer).ok
+            assert all(
+                e.signature is not None and e.key_id == signer.key_id for e in entries
+            ), "an approval is signed, like every approval of Plan K's ledger"
             bodies = [_without(dict(e.body), "policy_version", "case_id") for e in entries]
             assert bodies == events, "the timeline holds what the ledger holds"
             assert all(e.body["case_id"] == case.case_id for e in entries)
@@ -503,3 +506,200 @@ def test_approving_an_ai_fix_in_a_case_counts_its_pattern(storage: LocalStorage,
 
     (pattern,) = storage.read_model(PATTERNS_KEY, ApprovedPatterns).patterns
     assert pattern.kind == "map_boolean" and pattern.places == (case.case_id,) and not pattern.candidate
+
+
+# ---------------------------------------------------------------------------
+# Review fixes: a record only for a write that goes ahead, once; standing answers keep their meaning; everyone
+# who proposed or answered an item is kept from approving it
+# ---------------------------------------------------------------------------
+class _Racing(CaseStore):
+    """A case store where another writer gets in first (`before`), or the write fails after the change (`commit`)."""
+
+    def __init__(self, storage: LocalStorage, w: World, race: str) -> None:
+        super().__init__(storage, clock=w.clock)
+        self.race = race
+
+    def update(self, client_id: str, case_id: str, *, expected_version: int, actor: str, change: Any) -> Case:
+        if self.race == "before":
+            self.race = ""
+            super().update(
+                client_id,
+                case_id,
+                expected_version=expected_version,
+                actor="u-other",
+                change=lambda c: (c, []),
+            )
+        return super().update(
+            client_id, case_id, expected_version=expected_version, actor=actor, change=change
+        )
+
+    def _commit(self, case: Case, drafts: Any, *, actor: str) -> Case:
+        if self.race == "commit":
+            self.race = ""
+            raise OSError("the disk filled up")
+        return super()._commit(case, drafts, actor=actor)
+
+
+def _racing(deps: VisitDeps, storage: LocalStorage, w: World, race: str) -> VisitDeps:
+    return replace(deps, store=_Racing(storage, w, race))
+
+
+def _ledger_entries(engine: Any, kind: str) -> list[Any]:
+    return list(DecisionLedger(engine, signer=FakeSigner(), policy_version="p" * 64).entries(kind=kind))
+
+
+def test_an_approval_another_writer_got_in_before_writes_no_ledger_entry(
+    tmp_path: Path, storage: LocalStorage, world: World
+) -> None:
+    detector = _found(_remove_rows_ask())
+    engine = sqlite_engine(tmp_path / PLATFORM_DB_FILENAME)
+    ledger = ledger_port(engine, FakeSigner(), "p" * 64)
+    case = _at_approval(storage, world, detector, ledger=ledger)
+    item = _item(case)
+    deps = _deps(storage, world, detector, ledger=ledger)
+    with pytest.raises(CaseError) as raced:
+        visit.confirm(
+            CLIENT, case.case_id, item.item_id, _racing(deps, storage, world, "before"), principal=MEERA,
+            sentence=item.title, expected_version=case.version,
+        )  # fmt: skip
+    assert raced.value.code == "CASE_VERSION_CONFLICT"
+    assert _ledger_entries(engine, "data.decision") == [], "no record of an approval the case never stored"
+
+
+def test_a_retried_approval_whose_write_failed_finds_its_ledger_entry_instead_of_adding_one(
+    tmp_path: Path, storage: LocalStorage, world: World
+) -> None:
+    detector = _found(_remove_rows_ask())
+    engine = sqlite_engine(tmp_path / PLATFORM_DB_FILENAME)
+    ledger = ledger_port(engine, FakeSigner(), "p" * 64)
+    case = _at_approval(storage, world, detector, ledger=ledger)
+    item = _item(case)
+    deps = _deps(storage, world, detector, ledger=ledger)
+    with pytest.raises(OSError):
+        visit.confirm(
+            CLIENT, case.case_id, item.item_id, _racing(deps, storage, world, "commit"), principal=MEERA,
+            sentence=item.title, expected_version=case.version, op_id="op-yes",
+        )  # fmt: skip
+    assert CaseStore(storage).get(CLIENT, case.case_id).version == case.version, "the case was not written"
+    case = visit.confirm(
+        CLIENT, case.case_id, item.item_id, deps, principal=MEERA, sentence=item.title,
+        expected_version=case.version, op_id="op-yes",
+    )  # fmt: skip
+    (entry,) = _ledger_entries(engine, "data.decision")
+    assert case.approvals[-1].receipt_id == f"ledger:{entry.entry_hash}"
+    assert entry.body["approval_id"] == case.approvals[-1].approval_id
+    with pytest.raises(OSError):
+        visit.approve(
+            CLIENT, case.case_id, _racing(deps, storage, world, "commit"), expected_version=case.version,
+            actor=ANALYST, op_id="op-approve",
+        )  # fmt: skip
+    case = visit.approve(
+        CLIENT, case.case_id, deps, expected_version=case.version, actor=ANALYST, op_id="op-approve"
+    )
+    (approved,) = _ledger_entries(engine, "data.prescription.approved")
+    assert [a.receipt_id for a in case.approvals] == [
+        f"ledger:{entry.entry_hash}",
+        f"ledger:{approved.entry_hash}",
+    ]
+    assert verify_ledger(engine, FakeSigner()).ok
+
+
+def test_a_refused_answer_is_not_remembered_for_the_client(storage: LocalStorage, world: World) -> None:
+    detector = _found(_boolean_ask())
+    case = _open(storage, world, detector)
+    asked = _by_code(case, "UNKNOWN_BOOLEAN")
+    with pytest.raises(CaseError) as raced:
+        visit.answer(
+            CLIENT, case.case_id, asked.question_id, "c0",
+            _racing(_deps(storage, world, detector), storage, world, "before"),
+            expected_version=case.version, actor=ANALYST,
+        )  # fmt: skip
+    assert raced.value.code == "CASE_VERSION_CONFLICT"
+    assert (
+        StandingAnswerStore(storage).list(CLIENT) == ()
+    ), "nothing applies later from an answer never stored"
+
+
+def test_a_refused_revoke_leaves_the_standing_answer_standing(storage: LocalStorage, world: World) -> None:
+    detector = _found(_boolean_ask())
+    first = _open(storage, world, detector)
+    asked = _by_code(first, "UNKNOWN_BOOLEAN")
+    visit.answer(
+        CLIENT, first.case_id, asked.question_id, "c0", _deps(storage, world, detector),
+        expected_version=first.version, actor=ANALYST,
+    )  # fmt: skip
+    second = _open(storage, world, detector)
+    (remembered,) = StandingAnswerStore(storage).list(CLIENT)
+    with pytest.raises(CaseError):
+        visit.revoke_standing(
+            CLIENT, second.case_id, remembered.answer_id,
+            _racing(_deps(storage, world, detector), storage, world, "before"),
+            expected_version=second.version, actor=ANALYST,
+        )  # fmt: skip
+    assert StandingAnswerStore(storage).list(CLIENT, include_revoked=False) == (remembered,)
+
+
+def test_a_standing_answer_is_not_applied_when_the_same_button_now_makes_another_change(
+    storage: LocalStorage, world: World
+) -> None:
+    first_detector = _found(_boolean_ask())
+    first = _open(storage, world, first_detector)
+    asked = _by_code(first, "UNKNOWN_BOOLEAN")
+    visit.answer(
+        CLIENT, first.case_id, asked.question_id, "c0", _deps(storage, world, first_detector),
+        expected_version=first.version, actor=ANALYST,
+    )  # fmt: skip
+    (remembered,) = StandingAnswerStore(storage).list(CLIENT)
+    same_label = _boolean_ask()
+    swapped = replace(
+        same_label,
+        options=(
+            AskOption(
+                same_label.options[0].label,  # the same words on the button ...
+                _step_effect(  # ... but now it reads the spellings the other way round
+                    "c0", "map_boolean", "marketing_opt_in", true_values=["nahi"], false_values=["haa"]
+                ),
+                rows_changed=600,
+            ),
+            same_label.options[1],
+        ),
+    )
+    second = _open(storage, world, _found(swapped))
+    again = _by_code(second, "UNKNOWN_BOOLEAN")
+    assert again.answer is None and again.standing_answer_id is None, "the question is asked again"
+    assert again.why.startswith("Your answer from 12 Oct") and "was not used" in again.why
+    assert not [i for i in second.items if i.standing_answer_id == remembered.answer_id]
+    (unfit,) = _events(storage, second, TimelineKind.STANDING_UNFIT)
+    assert unfit.item_id == remembered.answer_id
+    third = _open(storage, world, first_detector)  # the same change as before, on next month's file
+    assert _by_code(third, "UNKNOWN_BOOLEAN").standing_answer_id == remembered.answer_id
+
+
+KIRAN = Principal(user_id="u-kiran", username="kiran", roles=frozenset({Role.ANALYST}), kind="user")
+
+
+def test_the_person_who_answered_an_items_question_cannot_confirm_it_after_someone_else_reticks_it(
+    storage: LocalStorage, world: World
+) -> None:
+    detector = _found(_remove_rows_ask())
+    deps = _deps(storage, world, detector)
+    case = _at_approval(storage, world, detector)  # Asha answered the remove-rows question
+    item = _item(case)
+    for accept in (False, True):  # Meera unticks it and ticks it again: she decided it last
+        case = visit.decide(
+            CLIENT, case.case_id, item.item_id, accept, deps, expected_version=case.version, actor="u-meera"
+        )
+    item = next(i for i in case.items if i.item_id == item.item_id)
+    assert item.decided_by == "u-meera" and item.state is ProposalState.ACCEPTED
+    for person in (ASHA, MEERA):
+        with pytest.raises(CaseError) as refused:
+            visit.confirm(
+                CLIENT, case.case_id, item.item_id, deps, principal=person, sentence=item.title,
+                expected_version=case.version,
+            )  # fmt: skip
+        assert refused.value.code == "POLICY_ROLE_SEPARATION", person.user_id
+    case = visit.confirm(
+        CLIENT, case.case_id, item.item_id, deps, principal=KIRAN, sentence=item.title,
+        expected_version=case.version,
+    )  # fmt: skip
+    assert case.approvals[-1].approved_by == "u-kiran"

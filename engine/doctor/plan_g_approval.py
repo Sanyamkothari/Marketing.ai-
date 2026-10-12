@@ -15,8 +15,12 @@ not call it: the session did not record whether a preview was shown or which sen
 * **The sentence read.** The person approves the sentence the server shows (:func:`approval_of`), word for word.
   When an accepted step is APPROVE-class (`remove_rows`; `keep_latest_per_id` leaving out more than 2% of the
   preview's rows), the sentence names it and the approval needs it read back: M233's `data.approve_class` decides
-  (`APPROVAL_SENTENCE_CHANGED`, `TOOL_ROLE_REQUIRED`; separation of duties needs who proposed it, which a Guided
-  setup session does not record, so it is enforced in Data Doctor's cases, where it is).
+  (`APPROVAL_SENTENCE_CHANGED`, `TOOL_ROLE_REQUIRED`).
+* **Separation of duties** (O17). With the switch on, the decide, answer and edit routes record who ticked,
+  answered or added each suggestion (:func:`record_proposers`, beside the session); with
+  `governance.approval_required` on, an APPROVE-class step is approved by someone else (`POLICY_ROLE_SEPARATION`).
+  A step a person ticked before anyone was recorded (the switch turned on mid-session) cannot be checked, so it
+  is refused the same way until it is ticked again.
 * **O10's warning.** An AI step that changes more than 30% of its column carries `AI_STEP_CHANGES_MANY`
   (`engine.agent.loop`); :func:`approval_of` lists those accepted, so the screen shows them at Approve.
 
@@ -61,6 +65,7 @@ if TYPE_CHECKING:
 
 __all__ = [
     "PREVIEW_SHOWN_FILENAME",
+    "PROPOSERS_FILENAME",
     "WARNING_MESSAGES",
     "ApproveClassStep",
     "PlanGApproval",
@@ -69,11 +74,21 @@ __all__ = [
     "approval_of",
     "approval_refusal",
     "read_preview",
+    "read_proposers",
     "record_preview",
+    "record_proposers",
 ]
 
 PREVIEW_SHOWN_FILENAME: Final[str] = "agent/preview_shown.json"
 """Beside `agent/agent_session.json`: deleted with the upload (retention, erasure)."""
+
+PROPOSERS_FILENAME: Final[str] = "agent/proposed_by.json"
+"""Beside `agent/agent_session.json`: who ticked, answered or added each suggestion (user ids only)."""
+
+_UNRECORDED: Final[str] = (
+    "Who chose this change was not recorded, so another Approver cannot be checked. Untick it and tick it again, "
+    "then someone else approves it."
+)
 
 _KEEP_LATEST: Final[str] = "Keep only the latest row of each “{column}”"
 
@@ -121,6 +136,58 @@ def read_preview(storage: Storage, upload_id: str) -> PreviewShown | None:
         return None
 
 
+class Proposers(StrictBase):
+    """`agent/proposed_by.json`: per suggestion, the people who ticked, answered or added it."""
+
+    upload_id: str
+    by_proposal: dict[str, tuple[str, ...]] = Field(default_factory=dict)
+
+
+def read_proposers(storage: Storage, upload_id: str) -> dict[str, tuple[str, ...]]:
+    key = upload_key(upload_id, PROPOSERS_FILENAME)
+    try:
+        return dict(storage.read_model(key, Proposers).by_proposal) if storage.exists(key) else {}
+    except (StorageError, ValueError):
+        return {}
+
+
+def record_proposers(
+    storage: Storage, upload_id: str, before: AgentSession, after: AgentSession, actor: str | None
+) -> None:
+    """Record `actor` as a proposer of every suggestion their action ticked, changed or added (Plan O M246, O17).
+
+    Called by the decide, answer and edit routes with the session before and after the action, under the
+    session's lock. A suggestion is the person's when it is accepted after the action and was not accepted, or
+    not the same, before: accepting one, answering the question that adds it, or adding an edit by hand. Without
+    a signed-in person (`actor` None: the local operator, who is everyone at once) nothing is recorded.
+    """
+    if actor is None:
+        return
+    earlier = {p.proposal_id: p for p in before.proposals}
+    touched = [
+        p.proposal_id
+        for p in after.proposals
+        if p.state is ProposalState.ACCEPTED
+        and p.decided_by is DecidedBy.USER
+        and (
+            (old := earlier.get(p.proposal_id)) is None
+            or old.state is not ProposalState.ACCEPTED
+            or old.model_dump(exclude={"decided_by", "state"})
+            != p.model_dump(exclude={"decided_by", "state"})
+        )
+    ]
+    if not touched:
+        return
+    found = read_proposers(storage, upload_id)
+    for proposal_id in touched:
+        people = found.get(proposal_id, ())
+        if actor not in people:
+            found[proposal_id] = (*people, actor)
+    storage.write_model(
+        upload_key(upload_id, PROPOSERS_FILENAME), Proposers(upload_id=upload_id, by_proposal=found)
+    )
+
+
 @dataclass(frozen=True)
 class ApproveClassStep:
     """An accepted step that needs its own yes: what it is, its sentence and the role the yes needs."""
@@ -130,6 +197,10 @@ class ApproveClassStep:
     sentence: str
     role: Role
     why: str
+    proposed_by: tuple[str, ...] = ()
+    """Who ticked, answered or added it (:func:`record_proposers`)."""
+    proposer_known: bool = True
+    """False for a step a person ticked that no record names (separation of duties cannot be checked)."""
 
 
 @dataclass(frozen=True)
@@ -203,8 +274,11 @@ def approval_of(
     training: bool,
     approval_required: bool,
     settings: ProtocolSettings = DEFAULT_SETTINGS,
+    proposers: Mapping[str, Sequence[str]] | None = None,
 ) -> PlanGApproval:
-    """What Approve shows now: the sentence, word for word, and what it checks."""
+    """What Approve shows now: the sentence, word for word, and what it checks. `proposers`: who ticked,
+    answered or added each suggestion (:func:`read_proposers`); None reads as nothing recorded."""
+    recorded = proposers or {}
     accepted = [p for p in session.proposals if p.state is ProposalState.ACCEPTED]
     steps = [p for p in accepted if p.kind is ProposalKind.RECIPE_STEP and p.step is not None]
     reshape: list[ReshapeItem] = []
@@ -246,6 +320,8 @@ def approval_of(
                 sentence=sentence,
                 role=role_for(rule, approval_required=approval_required),
                 why=rule.why,
+                proposed_by=tuple(recorded.get(proposal.proposal_id, ())),
+                proposer_known=proposal.proposal_id in recorded or proposal.decided_by is not DecidedBy.USER,
             )
         )
     count = len(accepted)
@@ -269,8 +345,10 @@ def approval_refusal(
 ) -> Decision | None:
     """The first refusal of M233's approval-time rules on this Approve, or None.
 
-    Reshape guards (`RESHAPE_GUARD_MISSING`) first; then, when a step is APPROVE-class, the role and the exact
-    sentence (`TOOL_ROLE_REQUIRED`, `APPROVAL_SENTENCE_CHANGED`); otherwise a sentence sent must still be exact.
+    Reshape guards (`RESHAPE_GUARD_MISSING`) first; then, when a step is APPROVE-class, the role, the exact
+    sentence and - with `approval_required` - separation of duties (`TOOL_ROLE_REQUIRED`,
+    `APPROVAL_SENTENCE_CHANGED`, `POLICY_ROLE_SEPARATION`, also when who chose the step was not recorded);
+    otherwise a sentence sent must still be exact.
     """
     from engine.doctor import policy
 
@@ -295,11 +373,20 @@ def approval_refusal(
             approver=approver,
             sentence_read=sentence_read,
             sentence_now=approval.sentence,
-            proposed_by=None,
+            proposed_by=special.proposed_by,
             approval_required=approval_required,
         )
         if found is not None:
             return found
+        if approval_required and approver.kind == "user" and not special.proposer_known:
+            from engine.agentic.policy import Decision
+
+            return Decision(
+                allowed=False,
+                rule="data.approve_class",
+                code="POLICY_ROLE_SEPARATION",
+                detail={"reason": _UNRECORDED},
+            )
     if sentence_read is not None and sentence_read != approval.sentence:
         from engine.agentic.policy import Decision
 

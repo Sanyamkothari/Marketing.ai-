@@ -706,18 +706,19 @@ Tests: `tests/unit/doctor/test_goal_brief.py`, `tests/unit/doctor/test_visit.py`
   per file.
 - **Your answers are remembered for this client.** Next month's file is treated the same way, ticked for you and
   marked "Using your answer from 12 Oct". Settings lists every remembered answer with **Revoke**; a revoked answer
-  is asked again. Answers about what changes meaning are never remembered: they are asked again.
+  is asked again. Answers about what changes meaning are never remembered: they are asked again. If the same answer
+  would now make a different change, it is not used: the question is asked again and says why.
 - **An explicit yes for what changes meaning.** Consent, keeping personal data, the outcome, leaving rows out,
   currency conversion and loosening a safeguard each need their own yes, from someone with the right role (an
   Approver for consent, personal data and safeguards). You approve the exact sentence shown; if it changed since
-  you read it, nothing is recorded and you see the new one. When your goal asks for two people, the person who chose
-  it cannot also approve it.
+  you read it, nothing is recorded and you see the new one. When your goal asks for two people, no one who chose
+  it - who answered its question, ticked it or added it - can also approve it, in a case and in Guided setup.
 - **Doubts said plainly**: *I am not sure because* ... *Here is what I would do* ... *Here is what changes if not*
   ... - and every number in a doubt was measured, never made up.
 - **Asking for more data or a different file**: "Ask your billing team for the date of each customer's last order;
   Win back needs it", with the columns the file should have.
 - **Who decided what** is kept with every answer, tick and approval; with the decision ledger on, approvals are
-  also written to it.
+  also written to it, signed, and nothing of an approval is kept unless its record is.
 - **New patterns only with your permission.** What the AI suggests is never ticked for you. When people approve
   the same AI suggestion again and again, our product team is told, so it can become a built-in rule.
 

@@ -10,6 +10,11 @@ and revocably ([REQ] 8, 11):
 * Next time the same detector fires on the same fingerprint and the same values - in this case or another case
   of the same client - the visit applies it as a **pre-ticked item** that says so ("Using your answer from
   12 Oct: ..."), shown in the checklist, the preview and the receipt like any other. Nothing is applied silently.
+* **Only for the same meaning.** The answer keeps the meaning of what was chosen (:func:`meaning_of`: the
+  option's change - its kind and parameters - without the ids of the file it was made on). It is applied only
+  when the option with the same label still does exactly that; when the same button now carries another change
+  (another spelling, unit factor or format), the question is asked again and says the earlier answer no longer
+  fits.
 * :meth:`StandingAnswerStore.revoke` revokes it (Settings lists every answer per client with Revoke); a revoked
   answer is asked again next time, and revoking it inside a case asks the question there again.
 * **Never for APPROVE-class items** (O12): an outcome definition, consent, keeping personal data, a threshold,
@@ -41,9 +46,11 @@ __all__ = [
     "StandingAnswer",
     "StandingAnswerStore",
     "StandingAnswers",
+    "answer_id_for",
     "describe",
     "fingerprint_of",
     "may_stand",
+    "meaning_of",
     "signature_of",
     "standing_key",
 ]
@@ -102,6 +109,42 @@ def fingerprint_of(question: CaseQuestion) -> str:
     )[:32]
 
 
+_FILE_IDS: Final[frozenset[str]] = frozenset(
+    {"upload_id", "upload_ids", "evidence_id", "evidence_ids", "item_id", "question_id", "case_id"}
+)
+"""Keys naming the file, case or evidence a change was made on: not part of what the change means."""
+
+
+def _without_ids(value: object) -> object:
+    if isinstance(value, Mapping):
+        return {str(k): _without_ids(v) for k, v in value.items() if str(k) not in _FILE_IDS}
+    if isinstance(value, list | tuple):
+        return [_without_ids(v) for v in value]
+    return value
+
+
+def meaning_of(effect_kind: str | None, effect_payload: Mapping[str, object]) -> str:
+    """What choosing an option does, as a digest: the change's kind and payload without file-specific ids, so
+    the same choice on next month's file has the same meaning and a different change behind the same button
+    does not."""
+    return payload_digest({"kind": effect_kind, "payload": _without_ids(effect_payload)})
+
+
+def answer_id_for(client_id: str, question: CaseQuestion) -> str:
+    """The standing answer's id for this question of this client: stable (the detector, fingerprint, values)."""
+    return (
+        "sa_"
+        + payload_digest(
+            {
+                "client": client_id,
+                "code": question.code,
+                "fp": fingerprint_of(question),
+                "sig": list(signature_of(question)),
+            }
+        )[:24]
+    )
+
+
 def may_stand(question: CaseQuestion, effect_kind: str | None, effect_payload: Mapping[str, object]) -> bool:
     """Whether answering `question` with an option adding `effect_kind` may become a standing answer."""
     from engine.doctor.protocol import approve_class_of
@@ -125,6 +168,10 @@ class StandingAnswer(StrictBase):
     option_label: str = Field(description="The answer chosen, as the person read it.")
     option_id: str
     effect_digest: str | None = Field(default=None, description="The proposal it applied then; null = as is.")
+    meaning: str | None = Field(
+        default=None,
+        description="`meaning_of` the option chosen: applied again only to an option that still means this.",
+    )
     title: str = Field(default="", description="What the answer does, in one plain sentence.")
     answered_by: str = Field(description="Who answered (user id).")
     answered_at: AwareDatetime
@@ -185,6 +232,7 @@ class StandingAnswerStore:
         *,
         option_id: str,
         effect_digest: str | None,
+        meaning: str,
         title: str,
         actor: str,
         at: datetime,
@@ -192,14 +240,8 @@ class StandingAnswerStore:
         """Write the answer down (replacing a live one for the same detector, column and values)."""
         label = next((o.label for o in question.options if o.option_id == option_id), option_id)
         fingerprint, signature = fingerprint_of(question), signature_of(question)
-        answer_id = (
-            "sa_"
-            + payload_digest(
-                {"client": client_id, "code": question.code, "fp": fingerprint, "sig": list(signature)}
-            )[:24]
-        )
         answer = StandingAnswer(
-            answer_id=answer_id,
+            answer_id=answer_id_for(client_id, question),
             client_id=client_id,
             detector=question.code,
             column=question.column,
@@ -208,13 +250,14 @@ class StandingAnswerStore:
             option_label=label,
             option_id=option_id,
             effect_digest=effect_digest,
+            meaning=meaning,
             title=title,
             answered_by=actor,
             answered_at=at,
         )
         with _LOCK:
             document = self._read(client_id)
-            kept = tuple(a for a in document.standing_answers if a.answer_id != answer_id)
+            kept = tuple(a for a in document.standing_answers if a.answer_id != answer.answer_id)
             self._write(document.model_copy(update={"standing_answers": (*kept, answer)}))
         return answer
 

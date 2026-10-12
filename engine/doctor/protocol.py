@@ -427,14 +427,37 @@ def confirmation_refusal(
     approver: Principal,
     sentence_read: str | None,
     sentence_now: str,
-    proposed_by: str | None,
+    proposed_by: str | Sequence[str] | None,
     approval_required: bool,
 ) -> Decision | None:
     """M233's `data.approve_class` rule at approval time, for one APPROVE-class item; None when it may be approved.
 
     The approver holds the role (`TOOL_ROLE_REQUIRED`), approves the sentence the server shows now word for word
     (`APPROVAL_SENTENCE_CHANGED`), and - with separation on - did not propose or answer it themselves
-    (`POLICY_ROLE_SEPARATION`)."""
+    (`POLICY_ROLE_SEPARATION`). `proposed_by` names everyone who proposed or answered it (the person who
+    answered its question, the person who ticked it); the approver may be none of them."""
+    proposers: tuple[str | None, ...] = (
+        (proposed_by,)
+        if isinstance(proposed_by, str) or proposed_by is None
+        else tuple(proposed_by) or (None,)
+    )
+    for proposer in proposers:
+        found = _approve_class_refusal(
+            rule, approver, sentence_read, sentence_now, proposer, approval_required
+        )
+        if found is not None:
+            return found
+    return None
+
+
+def _approve_class_refusal(
+    rule: ApproveClassRule,
+    approver: Principal,
+    sentence_read: str | None,
+    sentence_now: str,
+    proposed_by: str | None,
+    approval_required: bool,
+) -> Decision | None:
     from engine.doctor import policy
 
     rules = policy.DataRuleSet(
@@ -589,18 +612,24 @@ def decision_body(
     item_digests: Sequence[str],
     text: str,
     decided_by: str,
-    proposed_by: str | None = None,
+    proposed_by: str | Sequence[str] | None = None,
     kind: str | None = None,
     prescription_hash: str | None = None,
     recipe_hash: str | None = None,
     identity_verified: bool | None = None,
-) -> dict[str, str | bool | None]:
+    approval_id: str | None = None,
+    case_version: int | None = None,
+) -> dict[str, Any]:
     """One decision as ledger body keys (ids and digests, never a value), and as the timeline event's details.
 
     `payload_digest` is the sha256 of the items' payload digests and the sentence read, so the exact text is
-    bound into the record without the record holding it.
+    bound into the record without the record holding it. `approval_id` and `case_version` name the case's approval
+    and the version it was decided on, so a retried write finds the entry its first attempt made
+    (:func:`ledger_port`). `proposed_by` names everyone who proposed or answered it, comma-separated when there are
+    several (a timeline detail is one scalar).
     """
-    body: dict[str, str | bool | None] = {
+    proposers = [proposed_by] if isinstance(proposed_by, str) else sorted(set(proposed_by or ()))
+    body: dict[str, Any] = {
         "case_id": case_id,
         "upload_id": upload_id,
         "payload_digest": approval_digest(item_digests, text),
@@ -608,11 +637,15 @@ def decision_body(
         "recipe_hash": recipe_hash,
         "status": "approved",
         "decided_by": decided_by,
-        "proposed_by": proposed_by,
+        "proposed_by": ",".join(proposers) or None,
         "proposal_kind": kind,
     }
     if identity_verified is not None:
         body["identity_verified"] = identity_verified
+    if approval_id is not None:
+        body["approval_id"] = approval_id
+    if case_version is not None:
+        body["case_version"] = case_version
     return body
 
 
@@ -622,12 +655,25 @@ def approval_digest(item_digests: Sequence[str], text: str) -> str:
 
 
 def ledger_port(engine: Any, signer: Any, policy_version: str) -> LedgerPort:
-    """A :data:`LedgerPort` writing to the deployment's chain of Plan K's ledger."""
+    """A :data:`LedgerPort` writing to the deployment's chain of Plan K's ledger.
+
+    **Idempotent.** An entry of the same kind, by the same actor, with the same body is written once: a retried
+    write (its first attempt appended, then the case write failed or the process died before it) gets the first
+    entry's hash back instead of a second entry. A case's decision body names the approval and the case version
+    it was decided on (:func:`decision_body`), so two different decisions never share a body. Data Doctor's kinds
+    are few (one per person's approval), so the look-up reads that kind's entries only, newest last.
+    """
+    from engine.agentic.canonical import jsonable
     from engine.agentic.ledger import DecisionLedger
 
     ledger = DecisionLedger(engine, signer=signer, policy_version=policy_version)
 
     def record(kind: str, actor: str, body: Mapping[str, Any]) -> str:
-        return ledger.append(kind, actor, {k: v for k, v in body.items() if v is not None}).entry_hash
+        kept = {k: v for k, v in body.items() if v is not None}
+        wanted = jsonable({**kept, "policy_version": ledger.policy_version})
+        for entry in ledger.entries(kind=kind):
+            if entry.actor == actor and entry.body == wanted:
+                return entry.entry_hash
+        return ledger.append(kind, actor, kept).entry_hash
 
     return record

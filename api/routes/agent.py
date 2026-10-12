@@ -748,6 +748,7 @@ def decide_agent_session(
         ctx = _load_context(
             storage, root, request, upload_id, session.use_case_id, session.model_version_id
         ).ctx
+        before = session
         try:
             if body.decisions:
                 session = decide(session, ctx, [(d.proposal_id, d.state, d.value) for d in body.decisions])
@@ -755,7 +756,9 @@ def decide_agent_session(
                 session = accept_recommended(session, ctx)
         except SessionError as exc:
             raise _session_error(exc) from exc
-        return _response(_save(storage, session), ctx.config, storage, request)
+        saved = _save(storage, session)
+        _note_proposers(storage, ctx.config, request, before, saved)
+        return _response(saved, ctx.config, storage, request)
 
 
 @router.post(
@@ -772,6 +775,7 @@ def edit_agent_session(
         ctx = _load_context(
             storage, root, request, upload_id, session.use_case_id, session.model_version_id
         ).ctx
+        before = session
         try:
             session = add_edit(
                 session,
@@ -783,7 +787,9 @@ def edit_agent_session(
             )
         except SessionError as exc:
             raise _session_error(exc) from exc
-        return _response(_save(storage, session), ctx.config, storage, request)
+        saved = _save(storage, session)
+        _note_proposers(storage, ctx.config, request, before, saved)
+        return _response(saved, ctx.config, storage, request)
 
 
 @router.post(
@@ -830,11 +836,14 @@ def answer_agent_session(
         ctx = _load_context(
             storage, root, request, upload_id, session.use_case_id, session.model_version_id
         ).ctx
+        before = session
         try:
             session = answer(session, ctx, body.question_id, body.option_id)
         except SessionError as exc:
             raise _session_error(exc) from exc
-        return _response(_save(storage, session), ctx.config, storage, request)
+        saved = _save(storage, session)
+        _note_proposers(storage, ctx.config, request, before, saved)
+        return _response(saved, ctx.config, storage, request)
 
 
 @router.post(
@@ -1248,11 +1257,15 @@ def _apply_agent_session(
     applied = session.model_copy(
         update={"status": SessionStatus.APPLIED, "applied_upload_id": prepared.upload_id}
     )
+    if approval is not None:
+        # Plan O M246: the approval's record first - before the client's memory of the recipe, the session or
+        # anything else that keeps the approval's effects - so nothing is kept for an approval not recorded.
+        _record_approval(root, request, session, upload, recipe, approval)
     if ctx.mode is RunMode.TRAIN and recipe is not None and prepared.upload_id != upload_id:
         _remember(storage, ctx, upload, recipe, prepared.upload_id)
-    if approval is not None:
-        _record_approval(storage, root, request, session, upload, recipe, approval)
     _save(storage, applied.model_copy(update={"updated_at": utc_now()}))
+    if approval is not None:
+        _count_patterns(storage, session, upload)
     set_audit_context(
         request,
         object_id=prepared.upload_id,
@@ -1322,8 +1335,19 @@ def _approval_gate(
     return approval
 
 
+def _note_proposers(
+    storage: Storage, config: UseCaseConfig, request: Request, before: AgentSession, after: AgentSession
+) -> None:
+    """Plan O M246 (O17): with Data Doctor on, who ticked, answered or added each suggestion, for separation of
+    duties at Approve (`engine.doctor.plan_g_approval.record_proposers`). Nothing with the switch off."""
+    if not _doctor_on(config):
+        return
+    from engine.doctor.plan_g_approval import record_proposers
+
+    record_proposers(storage, after.upload_id, before, after, requested_by(request))
+
+
 def _record_approval(
-    storage: Storage,
     root: Path,
     request: Request,
     session: AgentSession,
@@ -1331,13 +1355,12 @@ def _record_approval(
     recipe: DataRecipe | None,
     approval: Any,
 ) -> None:
-    """Plan O M246 (DEC-1816): the approval's record - Plan K's ledger (`data.prescription.approved`) when
-    `agentic.enabled` is on, written before the session is saved - and the approved AI patterns counted for the
-    product team ([REQ] 11). Recording a pattern never fails an approval; the ledger does (no approval without
-    its record)."""
+    """Plan O M246 (DEC-1816): the approval's record - Plan K's signed ledger (`data.prescription.approved`) when
+    `agentic.enabled` is on. Called before anything keeps the approval's effects; a ledger that cannot be written
+    refuses the approval (no approval without its record). Idempotent: a retried Approve whose first attempt
+    was recorded finds that entry (`engine.doctor.protocol.ledger_port`)."""
     from engine.agentic.canonical import digest
     from engine.agentic.errors import AgenticError
-    from engine.doctor.patterns import record_approved
     from engine.doctor.protocol import DATA_PRESCRIPTION_APPROVED, decision_body
 
     approver = _approver(request)
@@ -1367,13 +1390,24 @@ def _record_approval(
             )
     except AgenticError as exc:
         raise _refuse(exc.status, exc.code, exc.message) from exc
+
+
+def _count_patterns(storage: Storage, session: AgentSession, upload: UploadRecord) -> None:
+    """[REQ] 11: the approved AI patterns counted for the product team, once the approval is kept. Counting
+    never fails an approval."""
+    from engine.doctor.patterns import record_approved
+
     ai_steps = [
         (p.step.kind.value, dict(p.step.params))
-        for p in accepted
-        if p.source is ProposalSource.AI and p.step is not None
+        for p in session.proposals
+        if p.state is ProposalState.ACCEPTED and p.source is ProposalSource.AI and p.step is not None
     ]
-    if ai_steps:
+    if not ai_steps:
+        return
+    try:
         record_approved(storage, ai_steps, place=upload.upload_id, client_id="default", at=utc_now())
+    except Exception as exc:  # a count never undoes an approval
+        _LOGGER.warning("agent.patterns_not_counted upload=%s error=%s", upload.upload_id, type(exc).__name__)
 
 
 def _remember(

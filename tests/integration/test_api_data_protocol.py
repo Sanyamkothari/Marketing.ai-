@@ -17,7 +17,7 @@ from api.routes import case_visit, data_protocol
 from engine.doctor import case as doctor_case
 from engine.doctor import registry as registry_module
 from engine.doctor.case import CaseQuestion
-from engine.doctor.standing import StandingAnswerStore
+from engine.doctor.standing import StandingAnswerStore, meaning_of
 from engine.storage import LocalStorage
 from engine.utils.time import utc_now
 from tests.fixtures.agent_bench.make_messy import messy_frame
@@ -154,6 +154,7 @@ def test_standing_answers_are_listed_and_revoked_per_client(client: TestClient, 
         question,
         option_id="c0",
         effect_digest=None,
+        meaning=meaning_of(None, {}),
         title="haa is yes",
         actor="u-asha",
         at=utc_now(),
@@ -166,3 +167,44 @@ def test_standing_answers_are_listed_and_revoked_per_client(client: TestClient, 
     missing = client.post("/clients/default/standing-answers/sa_000000000000000000000000/revoke")
     assert missing.status_code == 404 and _code(missing) == "STANDING_ANSWER_NOT_FOUND"
     assert client.get("/data-doctor/candidate-rules").json() == []
+
+
+def test_guided_setup_keeps_nothing_of_an_approval_whose_ledger_entry_cannot_be_written(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Review fix: the approval's record comes first - before the client's memory of the recipe and the session."""
+    from api.routes import agent as agent_routes
+    from engine.agentic import config as agentic_config
+    from engine.agentic.errors import AgenticError
+    from engine.doctor import protocol
+
+    remembered: list[str] = []
+    monkeypatch.setattr(agent_routes, "remember", lambda *_a, **_k: remembered.append("recipe"))
+    monkeypatch.setattr(agentic_config, "agentic_enabled", lambda _root=None: True)
+
+    def broken(*_args: Any) -> Any:
+        def record(kind: str, actor: str, body: Any) -> str:
+            raise AgenticError("LEDGER_CHAIN_BROKEN", "The ledger could not be appended to.", status=503)
+
+        return record
+
+    monkeypatch.setattr(protocol, "ledger_port", broken)
+    upload_id = _upload(client, messy_frame())
+    _start(client, upload_id)
+    _decide_everything(client, upload_id)
+    client.post(f"/uploads/{upload_id}/agent-session/preview")
+    view = client.get(f"/uploads/{upload_id}/agent-session/approval").json()
+    refused = client.post(f"/uploads/{upload_id}/agent-session/approve", json={"sentence": view["sentence"]})
+    assert refused.status_code == 503 and _code(refused) == "LEDGER_CHAIN_BROKEN", refused.text
+    assert remembered == [], "no recipe is remembered for an approval that was not recorded"
+    state = client.get(f"/uploads/{upload_id}/agent-session").json()["session"]
+    assert state["status"] == "ready" and state["applied_upload_id"] is None
+    recorded: list[str] = []
+    monkeypatch.setattr(
+        protocol, "ledger_port", lambda *_a: lambda kind, actor, body: recorded.append(kind) or "e" * 64
+    )
+    approved = client.post(f"/uploads/{upload_id}/agent-session/approve", json={"sentence": view["sentence"]})
+    assert approved.status_code == 200, approved.text
+    assert recorded == ["data.prescription.approved"] and remembered == [
+        "recipe"
+    ], "recorded, then remembered"

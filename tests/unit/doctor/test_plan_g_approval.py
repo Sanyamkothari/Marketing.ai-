@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from datetime import UTC, datetime
+from pathlib import Path
 
 import pandas as pd
 import pytest
@@ -39,7 +40,9 @@ from engine.doctor.plan_g_approval import (
     approval_of,
     approval_refusal,
     read_preview,
+    read_proposers,
     record_preview,
+    record_proposers,
 )
 from engine.storage import LocalStorage
 from tests.fixtures.agent_bench.make_messy import messy_frame
@@ -233,6 +236,7 @@ def test_a_shown_preview_and_the_exact_sentence_let_a_change_to_the_rows_be_appr
         recipe_hash=recipe_hash(steps),
         training=True,
         approval_required=True,
+        proposers={"p-latest": ("u-meera",)},  # Meera answered its question; Asha approves
     )
     assert approval.preview_shown and approval.reshape_missing == ()
     (special,) = approval.approve_class
@@ -280,20 +284,29 @@ def test_two_percent_or_less_left_out_needs_no_own_yes(plans: pd.DataFrame) -> N
     )
 
 
-def test_a_persons_remove_rows_needs_the_sentence_read_back(plans: pd.DataFrame) -> None:
+def test_a_persons_remove_rows_needs_the_sentence_read_back(plans: pd.DataFrame, tmp_path: Path) -> None:
     ctx = context_for(plans)
+    storage = LocalStorage(tmp_path)
+    before = _session(plans)
     session = add_edit(
-        _session(plans),
+        before,
         ctx,
         kind=RecipeStepKind.REMOVE_ROWS,
         column="region",
         params={"operator": "equals", "values": ["TEST"]},
     )
+    record_proposers(storage, session.upload_id, before, session, "u-meera")  # Meera added it by hand
     edit = next(
         p for p in session.proposals if p.step is not None and p.step.kind is RecipeStepKind.REMOVE_ROWS
     )
     approval = approval_of(
-        session, file_name="f.csv", preview=None, recipe_hash=None, training=True, approval_required=True
+        session,
+        file_name="f.csv",
+        preview=None,
+        recipe_hash=None,
+        training=True,
+        approval_required=True,
+        proposers=read_proposers(storage, session.upload_id),
     )
     (special,) = approval.approve_class
     assert special.proposal_id == edit.proposal_id and special.role is Role.ANALYST
@@ -311,8 +324,6 @@ def test_a_persons_remove_rows_needs_the_sentence_read_back(plans: pd.DataFrame)
 
 
 def test_the_preview_shown_is_recorded_beside_the_session(tmp_path: object) -> None:
-    from pathlib import Path
-
     storage = LocalStorage(Path(str(tmp_path)))
     assert read_preview(storage, "up-1") is None
     steps = (RecipeStep(order=1, kind=RecipeStepKind.FILL_MISSING, column="age", params={"value": 0}),)
@@ -322,3 +333,77 @@ def test_the_preview_shown_is_recorded_beside_the_session(tmp_path: object) -> N
     )
     again = read_preview(storage, "up-1")
     assert again is not None and again.recipe_hash == recipe_hash(steps) and again.shown_by == "u-asha"
+
+
+# ---------------------------------------------------------------------------
+# Separation of duties at Guided setup's Approve (O17; review fix)
+# ---------------------------------------------------------------------------
+MEERA = Principal(user_id="u-meera", username="meera", roles=frozenset({Role.ANALYST}), kind="user")
+
+
+def _remove_rows_session(plans: pd.DataFrame) -> tuple[AgentSession, AgentSession]:
+    before = _session(plans)
+    after = add_edit(
+        before,
+        context_for(plans),
+        kind=RecipeStepKind.REMOVE_ROWS,
+        column="region",
+        params={"operator": "equals", "values": ["TEST"]},
+    )
+    return before, after
+
+
+def test_the_person_who_chose_an_approve_class_step_cannot_approve_it_when_separation_is_on(
+    plans: pd.DataFrame, tmp_path: Path
+) -> None:
+    storage = LocalStorage(tmp_path)
+    before, session = _remove_rows_session(plans)
+    record_proposers(storage, session.upload_id, before, session, "u-asha")
+    assert set(read_proposers(storage, session.upload_id).values()) == {("u-asha",)}
+
+    def refusal(approver: Principal, required: bool) -> str | None:
+        approval = approval_of(
+            session,
+            file_name="f.csv",
+            preview=None,
+            recipe_hash=None,
+            training=True,
+            approval_required=required,
+            proposers=read_proposers(storage, session.upload_id),
+        )
+        found = approval_refusal(
+            approval, approver=approver, sentence_read=approval.sentence, approval_required=required
+        )
+        return None if found is None else found.code
+
+    assert refusal(ASHA, True) == "POLICY_ROLE_SEPARATION", "Asha added it, so someone else approves it"
+    assert refusal(MEERA, True) is None
+    assert refusal(ASHA, False) is None, "without approval_required the proposer may approve"
+    assert refusal(LOCAL_OPERATOR, True) is None, "the local operator (sign-in off) is everyone at once"
+
+
+def test_an_approve_class_step_nobody_recorded_choosing_is_refused_when_separation_is_on(
+    plans: pd.DataFrame,
+) -> None:
+    _before, session = _remove_rows_session(plans)
+    approval = approval_of(
+        session, file_name="f.csv", preview=None, recipe_hash=None, training=True, approval_required=True
+    )
+    found = approval_refusal(
+        approval, approver=MEERA, sentence_read=approval.sentence, approval_required=True
+    )
+    assert found is not None and found.code == "POLICY_ROLE_SEPARATION"
+    assert "not recorded" in str(found.detail["reason"])
+
+
+def test_only_what_the_persons_action_ticked_or_added_is_recorded_as_theirs(
+    plans: pd.DataFrame, tmp_path: Path
+) -> None:
+    storage = LocalStorage(tmp_path)
+    before, session = _remove_rows_session(plans)
+    record_proposers(storage, session.upload_id, before, session, None)
+    assert read_proposers(storage, session.upload_id) == {}, "no signed-in person: nothing recorded"
+    record_proposers(storage, session.upload_id, before, session, "u-asha")
+    record_proposers(storage, session.upload_id, session, session, "u-meera")  # changed nothing
+    record_proposers(storage, session.upload_id, before, session, "u-asha")  # recorded once
+    assert list(read_proposers(storage, session.upload_id).values()) == [("u-asha",)]
