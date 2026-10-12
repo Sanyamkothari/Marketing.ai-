@@ -65,6 +65,12 @@ def test_the_reports_tabs_in_jsdom() -> None:
     _node("tabs.test.mjs")
 
 
+def test_the_reports_look_in_jsdom() -> None:
+    """Plan M M188 (DEC-1618): the header, the underline tabs, the status chips, the value range bars, the KPI row and
+    the check form's drop zones and labels, as the markup the look's CSS and a screen reader read."""
+    _node("look.test.mjs")
+
+
 def test_the_check_form_sends_the_old_forms_request_in_jsdom() -> None:
     _node("audit_equal.test.mjs")
 

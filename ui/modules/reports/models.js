@@ -4,16 +4,22 @@
 // `data-technical`, as is the tab that leads to it. The Value Proof Packs, which were the hub's third list, are the
 // first tab; every link here is the one the hub offered (the report pages themselves are unchanged).
 
-import { dataTable, emptyState, esc, fmtDate, fmtInt, present, sortNote } from "../../dom.js";
+import { button, emptyState, statusChip } from "../../components.js";
+import { dataTable, esc, fmtDate, fmtInt, present, sortNote } from "../../dom.js";
 import { goalName } from "../../labels.js";
 import { getDemo, getIndustries, listDatasets, listModels, listScoringRuns, readinessUrl, resultsUrl, roiUrl } from "./api.js";
 
 const cell = (text) => (present(text) ? esc(text) : "—");
 
 const reportActions = (openHref, openLabel, pdfHref) =>
-  `<span class="rp-acts"><a class="btn secondary sm" href="${esc(openHref)}" data-report-open>${esc(openLabel)}</a><a class="btn quiet sm" href="${esc(
-    pdfHref,
-  )}" download data-report-pdf>PDF</a></span>`;
+  `<span class="rp-acts">${button({ label: openLabel, href: openHref, kind: "secondary", size: "sm", attrs: "data-report-open" })}${button({
+    label: "PDF",
+    href: pdfHref,
+    kind: "tertiary",
+    size: "sm",
+    icon: "download",
+    attrs: "download data-report-pdf",
+  })}</span>`;
 
 async function settle(promise) {
   try {
@@ -106,7 +112,7 @@ function readinessPart(datasets, name, demo) {
   return dataTable(
     [{ label: "Dataset" }, { label: "Rows", num: true }, { label: "Built" }, { label: "Report", num: true }],
     rows.map((r) => [
-      `<span class="rp-name">${esc(name(r.uc))}</span>${r.practice ? `<span class="chip neutral">Practice data with problems</span>` : ""}`,
+      `<span class="rp-name">${esc(name(r.uc))}</span>${r.practice ? statusChip("health", "needs_attention", { word: "Practice data with problems" }) : ""}`,
       present(r.n) ? esc(fmtInt(r.n)) : "—",
       present(r.when) ? esc(fmtDate(r.when)) : "—",
       reportActions(`#/pilot/view/readiness/${encodeURIComponent(r.id)}`, "Open", readinessUrl(r.id, "pdf")),

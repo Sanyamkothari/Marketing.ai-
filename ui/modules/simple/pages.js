@@ -37,6 +37,7 @@ import {
   present,
   sortNote,
 } from "../../dom.js";
+import { icon, pageHeader } from "../../components.js"; // Plan M M188 (DEC-1618): the look of Settings
 import { technicalSwitchHtml } from "../../technical.js"; // Plan M M180 (DEC-1610)
 import { RUNS_SHOWN } from "./api.js";
 import { campaignNameHtml, campaignNames, figureHtml } from "../../format.js"; // Plan M M172 (DEC-1602)
@@ -325,23 +326,28 @@ export function resultsHtml({
 
 // --- Settings ------------------------------------------------------------------------------------
 
-/** One entry of a settings group: a link and one short sentence. */
+/**
+ * One entry of a settings group, drawn as a row (M188): the label is the link and the whole row is its target, one short
+ * sentence under it in muted text, a chevron at the right. `sp-entry` stays on it: it is what the page's tests and the
+ * other lists of this module know a row by.
+ */
 const entry = ({ label, href, text, attrs = "" }) =>
-  `<li class="sp-entry"><a href="${esc(href)}"${attrs ? ` ${attrs}` : ""}>${esc(label)}</a>${
-    text ? `<span class="sp-text">${esc(text)}</span>` : ""
-  }</li>`;
+  `<li class="sp-entry st-row"><a class="st-label" href="${esc(href)}"${attrs ? ` ${attrs}` : ""}>${esc(label)}</a>${
+    text ? `<span class="sp-text st-desc">${esc(text)}</span>` : ""
+  }<span class="st-go">${icon("arrowRight", { size: 16 })}</span></li>`;
 
 const group = (title, entries, attrs = "") =>
-  entries.length ? `<section class="card sp-group"${attrs ? ` ${attrs}` : ""}><h3>${esc(title)}</h3><ul class="sp-list">${entries.join("")}</ul></section>` : "";
+  entries.length
+    ? `<section class="card sp-group st-group"${attrs ? ` ${attrs}` : ""}><h3>${esc(title)}</h3><ul class="sp-list">${entries.join("")}</ul></section>`
+    : "";
 
 /**
  * The Settings page. `can(method, path)` says what this person may open; `status` is the sign-in
  * state ("off", "signed-in", ...); `version` the engine version, or null.
  */
 export function settingsHtml({ can = () => true, status = null, version = null } = {}) {
-  const head = pageHead(
-    `${crumbs([{ label: "Settings" }])}<h1 class="h1">Settings</h1><p class="desc">Things you set up once. Your everyday work is on Home and Results.</p>`,
-  );
+  // Settings is a top-level place: no breadcrumb (visual direction 3).
+  const head = pageHeader({ title: "Settings", subtitle: "Things you set up once. Your everyday work is on Home and Results." });
   const main = [
     can("PUT", "/ai-service/{slot}")
       ? entry({ label: "AI service", href: "#/connections", text: "Connect the AI that helps your team in Guided setup and the AI behind what your customer gets. Both are on Connections, with your data." })
@@ -374,7 +380,7 @@ export function settingsHtml({ can = () => true, status = null, version = null }
     entry({ label: "Data request kit", href: "#/pilot/kit", text: "What data to ask for, with templates, and data readiness reports." }),
     // Plain text, not a link: building from raw tables lives inside a use case's Manual setup, and
     // no single screen opens it (a link to Home did not open what it named).
-    `<li class="sp-entry" data-raw-tables><span class="sp-label">Build from raw tables</span><span class="sp-text">${esc(
+    `<li class="sp-entry st-row st-plain" data-raw-tables><span class="sp-label st-label">Build from raw tables</span><span class="sp-text st-desc">${esc(
       "Open a goal, choose Manual setup, then Build from raw tables.",
     )}</span></li>`,
     can("GET", "/schedules")
@@ -417,14 +423,14 @@ export function settingsHtml({ can = () => true, status = null, version = null }
     `<p>Marketing AI${version ? `, version <span class="mono">${esc(version)}</span>` : ""}.</p>`,
     status === "off" ? `<p data-signin-off>Sign-in is off: this is a single-user tool, and whoever opens it can do everything.</p>` : "",
   ].join("");
-  return `<main class="screen sp" data-module="simple">${head}<div class="sp-stack">
+  return `<main class="screen sp st" data-module="simple">${head}<div class="sp-stack">
     ${group("Services and data", main, "data-settings-main")}
     ${group("Admin", admin, "data-settings-admin")}
-    <section class="card sp-group" data-settings-advanced><details class="adv"><summary>Advanced tools</summary><ul class="sp-list">${advanced.join(
+    <section class="card sp-group st-group st-quiet" data-settings-advanced><details class="adv"><summary>Advanced tools</summary><ul class="sp-list">${advanced.join(
       "",
     )}</ul></details></section>
     ${viewHtml()}
-    <section class="card sp-group" data-settings-about><h3>About</h3><div class="sp-about">${about}</div></section>
+    <section class="card sp-group st-group" data-settings-about><h3>About</h3><div class="sp-about">${about}</div></section>
   </div></main>`;
 }
 
@@ -433,7 +439,7 @@ export const TECHNICAL_HINT =
   "Shows the Data, Model and Output pages, the model reports and the settings analysts use. It changes what you see, not what you are allowed to do.";
 
 function viewHtml() {
-  return `<section class="card sp-group" data-settings-view><h3>What you see</h3><div class="sp-view">${technicalSwitchHtml({
+  return `<section class="card sp-group st-group" data-settings-view><h3>What you see</h3><div class="sp-view st-view">${technicalSwitchHtml({
     hint: TECHNICAL_HINT,
     id: "sp-tech-switch",
   })}</div></section>`;
@@ -468,6 +474,59 @@ const CSS = `
 .sp .sp-note{margin:0;padding:12px 20px;border-top:1px solid var(--line);font-size:12px;color:var(--muted)}
 .sp .notice-card{margin-bottom:16px}
 .sp .mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+/* Settings and Help (M188): grouped cards of rows, a proper toggle, a quiet advanced list, the glossary and the dated news */
+.st .st-row{position:relative;display:grid;grid-template-columns:minmax(0,1fr) auto;column-gap:var(--s4);row-gap:2px;align-items:center;min-height:64px;padding:var(--s3) 20px;transition:background-color var(--dur) var(--ease)}
+.st .st-row .st-label{grid-column:1;font-size:var(--fs-body);line-height:var(--lh-body);font-weight:600;color:var(--brand-blue)}
+.st .st-row .st-desc{grid-column:1;font-size:var(--fs-small);line-height:var(--lh-small);color:var(--muted)}
+.st .st-row .st-go{grid-column:2;grid-row:1 / span 2;display:inline-flex;color:var(--muted);transition:transform var(--dur) var(--ease),color var(--dur) var(--ease)}
+.st .st-row:not(.st-plain):hover{background:var(--soft)}
+.st .st-row:not(.st-plain):hover .st-go{color:var(--brand-blue);transform:translateX(2px)}
+.st .st-row a.st-label::after{content:"";position:absolute;inset:0}
+.st .st-row:has(a:focus-visible){outline:2px solid var(--brand-blue);outline-offset:-2px}
+.st .st-row a.st-label:focus-visible{outline:none}
+.st .st-row.st-plain .st-go{display:none}
+.st .st-row.st-plain .st-label{color:var(--ink)}
+.st .st-quiet .st-row{min-height:0;padding:10px 20px}
+.st .st-quiet .st-row .st-label{font-size:var(--fs-small);line-height:var(--lh-small);font-weight:500}
+.st .st-quiet .st-row .st-desc{font-size:var(--fs-caption);line-height:var(--lh-caption)}
+.st .st-quiet details.adv>summary{display:flex;align-items:center;min-height:56px;padding:0 20px;color:var(--ink2)}
+.st .st-view{padding:var(--s4) 20px}
+.st .tech-switch{display:flex;flex-direction:row-reverse;align-items:center;justify-content:space-between;gap:var(--s5);width:100%;min-height:40px}
+.st .tech-switch input[type=checkbox]{-webkit-appearance:none;appearance:none;position:relative;flex:none;width:44px;height:24px;margin:0;border:0;border-radius:var(--r-pill);background:var(--muted);cursor:pointer;transition:background-color var(--dur) var(--ease)}
+.st .tech-switch input[type=checkbox]::after{content:"";position:absolute;top:2px;left:2px;width:20px;height:20px;border-radius:50%;background:#fff;box-shadow:0 1px 2px rgba(16,24,40,.3);transition:transform var(--dur) var(--ease)}
+.st .tech-switch input[type=checkbox]:checked{background:var(--brand-blue)}
+.st .tech-switch input[type=checkbox]:checked::after{transform:translateX(20px)}
+.st .tech-switch input[type=checkbox]:focus-visible{outline:2px solid var(--brand-blue);outline-offset:2px}
+.st .tech-switch .ts-label{font-size:var(--fs-body);line-height:var(--lh-body)}
+.st .sp-about{padding:var(--s4) 20px;font-size:var(--fs-small);line-height:var(--lh-small)}
+.st .sp-about p{margin:0}
+.st .sp-about p+p{margin-top:var(--s1);color:var(--muted)}
+.gl-search{position:relative;display:block;padding:var(--s4) 20px;border-bottom:1px solid var(--line)}
+.gl-search svg{position:absolute;left:32px;top:50%;margin-top:-8px;color:var(--muted);pointer-events:none}
+.gl-search input{width:100%;height:40px;padding:0 var(--s3) 0 36px;border:1px solid var(--line2);border-radius:var(--r);background:var(--surface);color:var(--ink);font:inherit}
+.gl-search input:focus{outline:2px solid var(--brand-blue);outline-offset:1px;border-color:var(--brand-blue)}
+.gl-none{margin:0;padding:var(--s5) 20px;font-size:var(--fs-small);color:var(--muted)}
+.gl-none[hidden],.sp-glossary tr[hidden]{display:none!important}
+.sp-glossary td:first-child{width:30%;color:var(--ink)}
+.sp-glossary td:first-child strong{font-weight:600}
+.sp-glossary td:last-child{color:var(--ink2)}
+.sp-glossary td{padding-top:var(--s4);padding-bottom:var(--s4);vertical-align:top}
+[data-glossary] .tbl-wrap{border:0;border-radius:0}
+@media (max-width:700px){
+.sp-glossary tr{padding:var(--s3) 0}
+.sp-glossary td{display:block;width:auto!important;padding:2px var(--s4);text-align:left}
+.sp-glossary td::before{display:none}
+}
+.st .st-news{padding:0}
+.st .st-entry{display:grid;grid-template-columns:150px minmax(0,1fr);column-gap:var(--s5);row-gap:2px;align-items:baseline;padding:var(--s4) 20px}
+.st .st-entry .sp-when{grid-row:1 / span 2;font-size:var(--fs-small);line-height:var(--lh-body);font-variant-numeric:tabular-nums}
+.st .st-entry strong{grid-column:2;font-size:var(--fs-card);line-height:var(--lh-card);font-weight:600;color:var(--ink)}
+.st .st-entry .sp-text{grid-column:2;font-size:var(--fs-body);line-height:var(--lh-body);color:var(--ink2)}
+@media (max-width:700px){
+.st .st-entry{grid-template-columns:minmax(0,1fr)}
+.st .st-entry .sp-when{grid-row:auto}
+.st .st-entry strong,.st .st-entry .sp-text{grid-column:1}
+}
 .uc-links{display:flex;flex-wrap:wrap;gap:8px 24px;margin:16px 0 0;font-size:13px}
 .uc-links .uc-link{color:var(--brand-blue);font-weight:500}
 .uc-links .uc-link:hover{text-decoration:underline}
