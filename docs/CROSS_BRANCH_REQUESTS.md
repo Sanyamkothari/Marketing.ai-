@@ -4257,3 +4257,78 @@ collection: "'xdist_group' not found in `markers` configuration option". It pass
 installed. **What is needed.** Either add `pytest-xdist` to the `dev` extra (pinned, with the freeze) or register
 `xdist_group` in `markers`. **What Plan L did meanwhile.** Installed xdist in its local venv only, to run the suite;
 nothing committed.
+
+### 2026-10-12 — Plan O wave 1 integration (`integrate-plan-o-1`) → M233 (policy): rule sets and the gates wave 1 left open (request)
+
+**Why.** Wave 1 (M231, M232, M234, M237, M238, M240, M241) registered 16 tools in M232's registry
+(`engine/doctor/tools_wave_one.py`, DEC-1802 (t)) for the rules and the screen only. Every PROPOSE tool names a rule
+set that does not exist yet, so the visit cannot offer them. **What is needed.**
+1. Default deny in `DataToolRegistry.call` for kind PROPOSE, between `check_role` and `tool.run` (`POLICY_NO_RULES`
+   when `policy_kind` has no rule set; raise it as a `DataToolError` so the chat feeds it back).
+2. Rule sets in `configs/agentic/policy.yaml` for `data.setting`, `data.recipe_step`, `data.person_edit` (M232),
+   `data.join_files`, `data.stack_files`, `data.normalise_key`, `data.build_dataset` (M237: rules only, never ticked;
+   `normalise_key` never on the ID or outcome and out of `CHAT_STEP_KINDS`; at most 10 join parts, an `outcome_list`
+   part always APPROVE-class with exact text; `dropped_share`/`removed_share` > `APPROVE_DROP_SHARE` (0.02)
+   APPROVE-class; stack conflicts answered by a person; `drive_builder` needs a person's `BuildApproval`),
+   `data.keep_latest_per_id` and `data.split_file` (M238: APPROVE-class by output and always, respectively; exact
+   text from `KeepLatestOutput.sentence`), `data.parse_indian_numbers` and `data.indian_booleans` (M241: only
+   `parse_number` with params ⊆ {decimal, percent_to_fraction, indian_scale_words} and `indian_scale_words` true;
+   only `map_boolean` with non-empty disjoint lists from the English, Hinglish and Devanagari lexicons and never `na`;
+   never on ID or outcome; level clean; pre-tick only a rules-sourced `sure` proposal; no APPROVE-class kinds).
+3. Wire M238's `engine.doctor.reshape_guard.check_reshape_guards` at Approve for every step in
+   `ROW_RESHAPE_STEP_KINDS`, and `doctor_levels` in level resolution, both only with `data_doctor.unified` on (O3).
+4. Apply M238's `change_share` guard (O10: warn above 30%, refuse above 60%) to every AI-proposed step, not only
+   `synonym_clusters`' AI merges.
+5. M240's `parse_date.excel_serial`/`date_1904`: add the AI rule, then lift or condition the refusal in
+   `engine.agent.loop._propose_step` (`EXCEL_SERIAL_PARAMS`).
+**Meanwhile.** Nothing is wired: the tools are callable by the rules and the screen only, and nothing calls them
+while the switch is off.
+
+### 2026-10-12 — Plan O wave 1 integration → M235 (visit): what the visit must supply and call (request)
+
+**What is needed.**
+1. Build `DataToolContext` with the wave-1 fields: `primary_key` (the decided ID column), `locale_profile`
+   (`engine.doctor.locale.locale_for`), `case_files` (`engine.doctor.case_files.CaseFiles` over the case, with
+   `make_upload` bound to the API layer's `api.routes.uploads.finish_upload`, so a workbook sheet becomes an upload),
+   `readiness` (a callable over `engine.doctor.readiness.inputs_for_upload` for the case's prepared copy; scoring
+   needs `model_version`), and `save_session` for `edit_by_hand`.
+2. Store each registry result with `CaseStore.put_evidence(..., upload_id=)` so retention removes evidence with its
+   upload; store readiness with `store_readiness(storage, report, client_id=, case_id=)`, and delete a case's
+   readiness reports when their upload is erased.
+3. `attach_readiness_to_run(storage, report, run_id)` beside `attach_recipe_to_run` in POST /runs and POST
+   /uplift/runs (`api/routes/agent_recipes.py`) when a run starts from a case's prepared copy, behind the switch;
+   optionally refuse a run whose latest report is `not_ready`. Not done in wave 1: there is no case-to-run link yet.
+4. Give the AI the wave-1 tools (add `"ai"` to their callers in `tools_wave_one.RULES_AND_SCREEN` per tool) only
+   once M233's rule sets exist; then re-measure their outputs against the 5,500-character budget
+   (`build_dataset` and `join_files` on many files may exceed it).
+5. M240's upload and ingest wiring, behind the switch: route `.json`/`.jsonl`/`.ndjson`/`.gz`/`.zip` uploads through
+   `engine.intake.other_formats.read_other_format`; pass `keep_leading_zeros=True` at the ingest call sites M240
+   listed (DEC-1810's result: `api/routes/uploads.py`, `engine/pipeline.py`, sources, scheduling, measurement,
+   uplift, runs, doctor, measure, treat_list, preflight, root_cause, renames) and set `DataRecipe.text_columns` in
+   `api/routes/agent.py::_accepted_recipe`. The training file and every later scoring file must be read the same way.
+
+### 2026-10-12 — Plan O wave 1 integration → M236 (wrappers), M239 (outcomes), M242 (currency) (request)
+
+- **M236.** `plan_build` takes a `RoleProposer` (`propose_role(upload_id) -> RoleSuggestion | None`); pass M236's
+  `propose_role`. New wrappers register in `engine/doctor/tools.py` with a canary entry
+  (`tests/unit/doctor/test_registry_canary.py`); a wave-1-style spec can use `tools_wave_one._Adapter`. M240's
+  `read_workbook_sheets` and `find_excel_serial_dates` have no catalogue row: give them one (or map them onto #2
+  `list_sheets`) with the design's agreement, then register them.
+- **M239.** `X_REGRESSION_TARGET_NUMERIC` exists (M234, gap 7). `APPROVAL_SENTENCE_CHANGED` is in `PLAN_O_CODES`
+  with a help entry (first raised by M237's `drive_builder`); reuse it. M157's outcome offer now measures through
+  key rules (DEC-1807 (n)); `define_outcome` should do the same.
+- **M242.** Build on `LocaleProfile.money_units` ("mixed" = more than one currency), `workspace_currency` and the
+  detection's `unconfirmed_money_units` for `CURRENCY_FOREIGN` and `CURRENCY_MIXED`; M238's `detect_units` reports a
+  currency and never converts it.
+
+### 2026-10-12 — Plan O wave 1 integration → infra owner and UI owner (request)
+
+- **Infra, before M249:** add `cases/` to `OBJECT_PREFIXES` and `ROW_LEVEL_PREFIXES` (`infra/naming.py`), `"cases/"`
+  to `VERSION_PURGE_PREFIXES` (`engine/privacy/layout.py`), and call `purge_old_versions` after `_erase_case` in
+  `engine/privacy/erasure.py`; add a conditional put (`write_bytes_if_absent`) to the S3 storage so the case lock
+  holds across processes. Until then keep `data_doctor.unified` off on AWS.
+- **UI (M247 and `ui/modules/production/retention.js`):** labels for `case_data` ("What a Data Doctor case holds
+  about a file"), `case_log` ("Data Doctor processing log") and `forget_upload` ("Kept; this file's details removed
+  from the case"), and show `RetentionResult.forgotten` apart from `stripped`.
+- **`engine/privacy/access_export.py`:** an access request does not yet export a numeric-id `correct_cells`
+  correction held in a case, which erasure removes.

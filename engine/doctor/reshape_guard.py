@@ -1,7 +1,7 @@
 """The reshape level for every goal, with guards (Plan O decision O3, M238, DEC-1808 (f)).
 
 Today the reshape level - `combine_rows`, `unpivot`, and now `keep_latest_per_id` - is on only where a use case
-lists it (`retail-win-back`; the default is `[clean, derive]`, `configs/engine.yaml` `defaults.agent.levels`).
+lists it (one shipped use case does; the default is `[clean, derive]`, `configs/engine.yaml` `defaults.agent.levels`).
 Decision O3 turns it on for every goal once Data Doctor is the data agent (`data_doctor.unified`), and only with
 four guards, which this module states as code so the planner and Approve can hold every reshape step to them:
 

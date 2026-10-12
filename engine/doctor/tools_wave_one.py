@@ -140,18 +140,14 @@ class _FilesView:
 
     @cached_property
     def _diagnosis(self) -> Diagnosis:
-        from engine.config import get_roles, load_use_case
+        from engine.config import get_roles
         from engine.doctor.contracts import Diagnosis
         from engine.doctor.diagnose import diagnose_file
         from engine.doctor.joins import how_files_fit
+        from engine.doctor.tools import _config
 
         ctx = self.ctx
-        if ctx.agent is not None:
-            config = ctx.agent.config
-        elif ctx.offers:
-            config = ctx.offers[0].config
-        else:
-            config = load_use_case("targeted-advertisement", ctx.root())
+        config = _config(ctx)
         roles = ctx.roles if ctx.roles is not None else get_roles(ctx.root())
         files = list(ctx.files)
         diagnosed = tuple(diagnose_file(loaded, config, roles) for loaded in files)

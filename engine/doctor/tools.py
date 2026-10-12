@@ -368,13 +368,16 @@ def _loaded(ctx: DataToolContext, upload_id: str | None) -> LoadedFile:
 
 
 def _config(ctx: DataToolContext) -> Any:
+    """The file's use case, else the first offer's, else the pilot's first configured use case
+    (`configs/pilot/data_request.yaml` `default_use_cases`): never a use case named in code (DEC-1802 (t))."""
     if ctx.agent is not None:
         return ctx.agent.config
     if ctx.offers:
         return ctx.offers[0].config
     from engine.config import load_use_case
+    from engine.pilot.data_request import load_wording
 
-    return load_use_case("targeted-advertisement", ctx.root())
+    return load_use_case(load_wording(ctx.root()).default_use_cases[0], ctx.root())
 
 
 def _roles(ctx: DataToolContext) -> Any:
