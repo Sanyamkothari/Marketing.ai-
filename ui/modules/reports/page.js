@@ -159,7 +159,10 @@ const CSS = `
 
 /* Model reports: a closed section of three quiet tables */
 .rp .rp-models{background:var(--surface);border:1px solid var(--line);border-radius:var(--r-lg);padding:0}
-.rp .rp-models>summary{display:block;width:100%;box-sizing:border-box;padding:var(--s4) 20px;font-size:var(--fs-card);line-height:var(--lh-card);font-weight:600;color:var(--ink);cursor:pointer}
+.rp .rp-models>summary{display:flex;align-items:center;gap:var(--s2);width:100%;box-sizing:border-box;padding:var(--s4) 20px;list-style:none;font-size:var(--fs-card);line-height:var(--lh-card);font-weight:600;color:var(--ink);cursor:pointer}
+.rp .rp-models>summary::-webkit-details-marker{display:none}
+.rp .rp-models>summary::before{content:"";flex:none;width:7px;height:7px;border-right:1.5px solid var(--muted);border-bottom:1.5px solid var(--muted);transform:rotate(-45deg);transition:transform var(--dur) var(--ease)}
+.rp .rp-models[open]>summary::before{transform:rotate(45deg)}
 .rp .rp-models[open]>summary{border-bottom:1px solid var(--line)}
 .rp .rp-models-part{padding:var(--s4) 0 var(--s2)}
 .rp .rp-models-part+.rp-models-part{border-top:1px solid var(--line)}
