@@ -55,6 +55,7 @@ if TYPE_CHECKING:
 __all__ = [
     "PREPARED_PREFIX",
     "PreparedDataset",
+    "StoredRows",
     "attach_dataset_recipe",
     "consistent_types",
     "dataset_key_conflict",
@@ -63,6 +64,7 @@ __all__ = [
     "recipe_levels",
     "replay_identity",
     "run_saved_recipe",
+    "store_prepared_rows",
 ]
 
 _LOGGER = get_logger(__name__)
@@ -223,9 +225,18 @@ class PreparedDataset:
 
 
 def prepare_dataset(
-    storage: Storage, config: UseCaseConfig, dataset_id: str, recipe: DataRecipe
+    storage: Storage,
+    config: UseCaseConfig,
+    dataset_id: str,
+    recipe: DataRecipe,
+    *,
+    leak_check: LeakCheck = "narrow",
 ) -> PreparedDataset:
-    """Run `recipe` on every row of the built dataset and store the result beside it. Raises `RecipeError`."""
+    """Run `recipe` on every row of the built dataset and store the result beside it. Raises `RecipeError`.
+
+    `leak_check` is the scoring replay's narrow check by default; Plan O M243 (DEC-1813) passes `full` when a
+    prescription's post-build recipe prepares a dataset for training, as a training file's first build does.
+    """
     from engine.onboarding.datasets import DATASET_FRAME_FILENAME, dataset_key
 
     cap = ingest.profile_row_cap(config)
@@ -237,11 +248,39 @@ def prepare_dataset(
         keep_all_rows=True,
     )
     frame = read_all.all_rows if read_all.all_rows is not None else read_all.frame
-    run = run_saved_recipe(frame, recipe, config, upload_id=dataset_id, leak_check="narrow")
-    key = prepared_dataset_key(dataset_id, recipe, config)
+    run = run_saved_recipe(frame, recipe, config, upload_id=dataset_id, leak_check=leak_check)
+    stored = store_prepared_rows(
+        storage, config, dataset_id, run.frame, prepared_dataset_key(dataset_id, recipe, config)
+    )
+    _LOGGER.info(
+        "recipe.dataset_prepared dataset_id=%s recipe=%s rows=%d",
+        dataset_id,
+        recipe.recipe_id,
+        stored.profile.row_count,
+    )
+    return PreparedDataset(
+        source_key=stored.source_key, profile=stored.profile, frame=stored.frame, receipt=run.receipt
+    )
+
+
+@dataclass(frozen=True)
+class StoredRows:
+    """Prepared rows written beside a built dataset: where, their profile, and the rows up to the profiling cap."""
+
+    source_key: str
+    profile: DatasetProfile
+    frame: Any
+
+
+def store_prepared_rows(
+    storage: Storage, config: UseCaseConfig, dataset_id: str, frame: Any, key: str
+) -> StoredRows:
+    """Write `frame` (every prepared row of `dataset_id`) at `key` and profile it as a run reads it. Raises
+    `RecipeError` (`RECIPE_STEP_INVALID`) when a column cannot be saved; nothing is left behind then."""
+    cap = ingest.profile_row_cap(config)
     try:
         with storage.open_write(key) as sink:
-            consistent_types(run.frame).to_parquet(sink, index=False)
+            consistent_types(frame).to_parquet(sink, index=False)
     except (ValueError, TypeError) as exc:  # pyarrow's ArrowInvalid and ArrowTypeError among them
         # The error text quotes values from the data, so it is logged by type only, never shown.
         _LOGGER.warning("recipe.dataset_write_failed dataset_id=%s error=%s", dataset_id, type(exc).__name__)
@@ -264,13 +303,7 @@ def prepare_dataset(
         row_count=read.row_count,
         fingerprint=read.fingerprint,
     )
-    _LOGGER.info(
-        "recipe.dataset_prepared dataset_id=%s recipe=%s rows=%d",
-        dataset_id,
-        recipe.recipe_id,
-        read.row_count,
-    )
-    return PreparedDataset(source_key=key, profile=profile, frame=read.frame, receipt=run.receipt)
+    return StoredRows(source_key=key, profile=profile, frame=read.frame)
 
 
 def attach_dataset_recipe(storage: Storage, run_id: str, recipe: DataRecipe, receipt: RecipeReceipt) -> None:

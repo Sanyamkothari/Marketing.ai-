@@ -192,6 +192,7 @@ VOLATILE_KEYS: Final[frozenset[str]] = frozenset(
         "evidence_id",
         "evidence_ids",
         "computed_at",
+        "checked_at",
         "created_at",
         "generated_at",
         "decided_at",

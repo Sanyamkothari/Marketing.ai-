@@ -847,3 +847,81 @@ a folder of real files with no change.
 `scripts/plan_o_benchmark.py` (the runs), `tests/fixtures/doctor_eval/` (the eval world and its per-tool calls, the
 AI cases, the reference model, the extended cases, the held-out generator). A registered tool without eval calls
 fails `test_every_registered_tool_has_eval_calls`.
+
+## 24. Saying what the outcome is (Plan O M239, DEC-1809)
+
+*Behind the switch `data_doctor.unified` (off by default) and not on a screen yet.*
+
+The outcome is what the model learns, so Data Doctor never picks it on its own and never changes it with a fix.
+It writes it down instead, in a sentence you approve word for word:
+
+- **From a column with more than two values.** A status column holding `Active`, `Churned` and `Suspended` cannot
+  train a yes/no model. Data Doctor suggests what the values it recognises mean (`Churned` is yes, `Active` is no)
+  and asks about every value it does not (`Suspended`: yes, no, leave those rows out, or "I don't know"). Once every
+  value has a meaning you see, for example, *"The model learns 'status' from its values: 'Churned' means yes (579
+  rows), 'Active' means no (1,261 rows); the 160 rows with 'Suspended' are left out of training and testing."*
+- **From an event file.** "A customer is yes when there is an order within 30 days after the snapshot", "when
+  there is no recharge for 60 days", or "when a bill in the next 30 days was paid more than 7 days late". You may
+  add days' grace and name a file whose events leave a customer out (a port-out, a move to another plan). Month-ends
+  whose window is not over yet are left out, and the sentence says how many. The sentence names the date each file
+  is read on, and says how many rows count for nothing because their date cannot be read or the amount a threshold
+  tests is not a number; if that number changes, so does the sentence, and you approve it again. Every count is made by the same
+  builder that builds the table, and customer IDs written differently in two files (`CUST-00123` and `123`) are
+  matched the way Data Doctor matches them elsewhere - never on a near match.
+
+When something that changes the meaning is not settled - which file, which date, which window, what a value
+means - Data Doctor asks, and offers no sentence until you answer. Nothing is ticked for you. If the file or the
+definition changes after you read the sentence, your approval is not recorded and the new sentence is shown
+instead. Next month's file is read with the same meaning; a value your approved outcome never mentioned stops the
+build and is asked, never guessed.
+
+It also checks the outcome's type: an amount to predict must be numbers (a text amount is "not ready"), and a
+yes/no outcome must have two values.
+
+### For developers
+
+`engine/doctor/outcome_definition.py` and `engine/doctor/tools_outcomes.py` (`docs/AGENTS.md` §21); the rule sets
+are `data.define_outcome` and `data.map_outcome_values` in `configs/agentic/policy.yaml`.
+
+## 25. One prescription, used every time (Plan O M243, DEC-1813)
+
+*Behind the switch `data_doctor.unified` (off by default). With it off, nothing below happens and every run is
+exactly as before.*
+
+When you approve what Data Doctor prepared, everything you agreed is kept together as one **prescription**: how each
+file is read, the fixes for each file, how several files are joined into one dataset, what the outcome means, how the
+client writes numbers, dates and yes/no, which currency each money column is in and every rate you gave, the fixes on
+the joined dataset, and, for each goal, its settings. It also keeps a short description of every prepared column as
+it was when you approved it: what kind of values it holds, how often it is empty, its usual range, and its common
+values (only values at least ten rows share, so no single customer is ever in it).
+
+The prescription is used **both when a model is trained and when it scores**:
+
+- **Next month's file** is prepared exactly as you approved, step by step: read the same way, the same fixes, the
+  same joins, the same outcome, the same conversion at the same rate you gave (never a new rate, never fetched).
+- **A dataset built from several files trains with its fixes too** - before, a built dataset could not get Data
+  Doctor's fixes for training. The model then prepares every dataset it scores the same way.
+- **The outcome you approved is the one the model learns.** When the outcome comes from a column's values (for
+  example *Churned* is yes, *Active* is no, *Suspended* is left out), every training file and dataset is turned into
+  yes and no that way, and the rows you left out are removed and counted.
+- **Files and datasets that come later follow it too**: a file you add to the case, next month's file for a goal
+  whose current model was trained this way, and a dataset a schedule rebuilds from the same recipe.
+- **Every training file is checked**, even one no fix changes: if it no longer looks like what you approved, Data
+  Doctor stops and asks before training, as it does before scoring.
+- **Data Doctor stops and asks when something changed**: a column that is gone or now holds another kind of value, a
+  value it has never seen in a column where it knew every value, a yes/no word it has no meaning for, a currency
+  the file did not use before, numbers or dates written another way, or a file laid out differently. Nothing is
+  trained or scored until you look - it never quietly learns the change.
+- **A change that breaks nothing is a warning with a question** ("Is that expected?"): a new column, a column that
+  is empty much more or less often, values that moved a long way, a new common spelling, a different share of yes.
+- **Models trained today keep scoring exactly as they do**: a Guided setup preparation is read as a prescription
+  with one part, and scores byte for byte the same.
+
+Each run made from a prescription keeps which prescription it followed and, for money columns, their currency and
+rates, so reports show them. A run prepared by a Guided setup preparation keeps its money columns' currency and the
+rate you approved in it too.
+
+### For developers
+
+`engine/doctor/prescription.py`, `engine/doctor/prescription_contract.py`, `engine/doctor/prescription_replay.py`,
+`engine/doctor/prescription_runs.py` and `api/routes/run_prescriptions.py` (`docs/AGENTS.md` §22).

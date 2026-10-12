@@ -267,13 +267,20 @@ def _deps(storage: Storage, root: Path, request: Request, principal: Principal |
     """Every visit route carries the CONVERSE port, connected only when a chat turn runs: a visit resumed in
     CONVERSE (the process died during the AI call) is answered by the AI service, not told there is none."""
     from api.routes.doctor import offers as doctor_offers
+    from engine.doctor.prescription import CasePrescriber
     from engine.stages.ingest import profile_row_cap
 
     offers = doctor_offers(root)
     cap = min((profile_row_cap(offer.config) for offer in offers), default=DIAGNOSIS_ROWS)
+
+    def load_files(case: Case) -> tuple[LoadedFile, ...]:
+        return _load_files(storage, case.upload_ids(), cap)
+
     return VisitDeps(
         storage=storage,
-        load_files=lambda case: _load_files(storage, case.upload_ids(), cap),
+        load_files=load_files,
+        # Plan O M243 (DEC-1813): PRESCRIBE writes `prescriptions/<hash>.json` and binds the case's files to it.
+        prescribe=CasePrescriber(storage, load_files=load_files, config_root=root),
         offers=offers,
         config_root=root,
         converse=(

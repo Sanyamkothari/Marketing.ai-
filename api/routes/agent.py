@@ -1383,6 +1383,8 @@ def _record_approval(
         decided_by=approver.user_id,
         kind="guided_setup",
         recipe_hash=recipe.recipe_hash if recipe is not None else None,
+        # Plan O M243 (DEC-1813): Guided setup's recipe is a prescription with one part; its hash is the record's.
+        prescription_hash=_one_part_hash(recipe),
         identity_verified=False if approver.kind != "user" else None,
     )
     try:
@@ -1400,6 +1402,15 @@ def _record_approval(
             )
     except AgenticError as exc:
         raise _refuse(exc.status, exc.code, exc.message) from exc
+
+
+def _one_part_hash(recipe: DataRecipe | None) -> str | None:
+    """Plan O M243: the hash of `recipe` read as a one-part prescription (`engine.doctor.prescription.one_part`)."""
+    if recipe is None:
+        return None
+    from engine.doctor.prescription import one_part
+
+    return one_part(recipe).prescription_hash
 
 
 def _count_patterns(storage: Storage, session: AgentSession, upload: UploadRecord) -> None:

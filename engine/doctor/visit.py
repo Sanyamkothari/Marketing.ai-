@@ -1014,6 +1014,15 @@ def _prescribe(run: _Run, case: Case) -> _Step:
     )
 
 
+def _record_hash(deps: VisitDeps, case: Case, brief: GoalBrief | None) -> str | None:
+    """The `prescription_hash` M246's approval record carries: the default digest, or - Plan O M243 (DEC-1813) - the
+    hash the PRESCRIBE port will write, when the port can say it without writing (`CasePrescriber.digest`)."""
+    if deps.prescribe is None:
+        return prescription_digest(case, brief)
+    digest_of = getattr(deps.prescribe, "digest", None)
+    return str(digest_of(case, brief)) if callable(digest_of) else None
+
+
 def prescription_digest(case: Case, brief: GoalBrief | None) -> str:
     """The default PRESCRIBE: sha256 over the ticked items of the base and the active goal, the answers and the
     brief hash. Wording and who decided are left out, as `recipe_hash` leaves out reasons."""
@@ -1916,17 +1925,27 @@ def add_files(
     actor: str,
     op_id: str | None = None,
 ) -> Case:
-    """Add files to the case; the visit reads them from INTAKE (next month's file: FOLLOW_UP -> INTAKE)."""
+    """Add files to the case; the visit reads them from INTAKE (next month's file: FOLLOW_UP -> INTAKE).
+
+    Plan O M243 (DEC-1813): a file added to a case that already has a stored prescription is bound to it, so a run
+    on next month's file replays the approved preparation (and stops and asks where it changed)."""
     run = _Run(deps, actor)
+    added: list[str] = []
 
     def build(case: Case) -> _Step:
         have = set(case.upload_ids())
         new = tuple(file for file in files if file.upload_id not in have)
+        added[:] = [file.upload_id for file in new]
         events = [EventDraft(kind=TimelineKind.FILE_ADDED, upload_id=file.upload_id) for file in new]
         to = VisitState.INTAKE if new and case.state not in {VisitState.INTAKE} else case.state
         return _Step(to=to, updates={"files": (*case.files, *new)} if new else {}, events=events)
 
-    return _person_step(run, client_id, case_id, expected_version, op_id, build)
+    case = _person_step(run, client_id, case_id, expected_version, op_id, build)
+    if added:
+        from engine.doctor.prescription_runs import bind_case_uploads
+
+        bind_case_uploads(deps.storage, case, added)
+    return case
 
 
 def set_goal(
@@ -2194,7 +2213,7 @@ def approve(
             text=text,
             decided_by=actor,
             kind="prescription",
-            prescription_hash=prescription_digest(case, brief) if deps.prescribe is None else None,
+            prescription_hash=_record_hash(deps, case, brief),
             approval_id=approval_id,
             case_version=case.version,
         )
