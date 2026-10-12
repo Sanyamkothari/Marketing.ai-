@@ -522,6 +522,36 @@ def test_prescribe_writes_the_prescription_with_goal_sections_and_the_record_car
     assert prescriber.digest(case, None) == prescriber.digest(case, None), "the same case hashes the same"
 
 
+def test_next_months_file_added_to_a_prescribed_case_is_bound_to_its_prescription(tmp_path: Path) -> None:
+    """Review fix (DEC-1813 (s)): a file added after PRESCRIBE replays the approved preparation at training."""
+    storage = LocalStorage(tmp_path)
+    w = vs.world()
+    prescriber = CasePrescriber(storage, load_files=w.load)
+    case = vs.open_case(storage, w)
+    for name, _op, act in vs.SCRIPT:
+        case = act(vs.deps_for(storage, w, prescribe=prescriber), case)
+        if name == "next month":
+            break
+    case = CaseStore(storage).get(vs.CLIENT, case.case_id)
+    assert vs.SECOND in case.upload_ids()
+    ref = bound(storage, upload_id=vs.SECOND)
+    assert ref is not None and ref.prescription_hash == case.prescriptions[-1].prescription_hash
+    assert bound(storage, upload_id=vs.FIRST) is not None
+
+
+def test_a_file_added_to_a_case_with_no_stored_prescription_is_bound_to_nothing(tmp_path: Path) -> None:
+    """With M235's default digest no prescription is stored, so nothing is bound (switch-off visits included)."""
+    storage = LocalStorage(tmp_path)
+    w = vs.world()
+    case = vs.open_case(storage, w)
+    for name, _op, act in vs.SCRIPT:
+        case = act(vs.deps_for(storage, w), case)
+        if name == "next month":
+            break
+    assert bound(storage, upload_id=vs.SECOND) is None
+    assert not any(key.endswith("prescription_ref.json") for key in storage.list_keys(""))
+
+
 def test_without_a_prescriber_the_visit_keeps_its_own_digest(tmp_path: Path) -> None:
     """Unchanged: with no PRESCRIBE port the record carries M235's default digest, as before."""
     storage = LocalStorage(tmp_path)

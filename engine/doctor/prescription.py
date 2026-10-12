@@ -62,7 +62,12 @@ from engine.contracts import Artefact
 from engine.doctor.build_driver import BuildRecord
 from engine.doctor.currency import MoneyBasis
 from engine.doctor.locale import LocaleProfile
-from engine.doctor.outcome_definition import OutcomeApproval, OutcomeDefinition
+from engine.doctor.outcome_definition import (
+    OutcomeApproval,
+    OutcomeDefinition,
+    OutcomeError,
+    apply_outcome_values,
+)
 from engine.doctor.prescription_contract import DataContract, DriftFinding, learn_contract
 from engine.intake.contracts import IntakeReport
 from engine.storage import Storage, StorageError
@@ -709,6 +714,19 @@ def _learn(
     return prepared, learn_contract(prepared, primary_key=primary_key, target=target)
 
 
+def _with_outcome(frame: pd.DataFrame, section: GoalSection | None) -> pd.DataFrame | None:
+    """The built rows with the approved outcome from a column's values applied (M239), as a training replay applies
+    it before the post-build recipe and the contract; the rows as built for any other outcome. None when the approved
+    outcome cannot run on them (no contract is learnt from rows a replay would never see)."""
+    outcome = None if section is None else section.outcome
+    if outcome is None or outcome.definition.kind != "column_values" or outcome.approval is None:
+        return frame
+    try:
+        return apply_outcome_values(frame, outcome.definition, outcome.approval)[0]
+    except OutcomeError:
+        return None
+
+
 def _money(
     recipes: Sequence[DataRecipe],
     profile: LocaleProfile | None,
@@ -844,18 +862,6 @@ def prescription_from_case(
         approved_by=approver,
         created_at=created_at,
     )
-    final: DataContract | None = None
-    if build is not None and built is not None:
-        _, final = _learn(built.frame, post_build, primary_key=built.primary_key, target=built.target)
-    profile: LocaleProfile | None = None
-    if case.locale_profile is not None:
-        try:
-            profile = LocaleProfile.model_validate(case.locale_profile)
-        except ValidationError:
-            profile = None
-    recipes = [p.recipe for p in parts if p.recipe is not None] + ([post_build] if post_build else [])
-    basis = _money(recipes, profile, approved, config)
-    locale = None if profile is None and basis is None else LocalePart(profile=profile, money_basis=basis)
     goals = tuple(
         _section(
             case,
@@ -866,6 +872,20 @@ def prescription_from_case(
         )
         for goal in case.goals
     )
+    final: DataContract | None = None
+    if build is not None and built is not None:
+        # Learnt in the order a training replay checks it: the outcome, then the post-build recipe.
+        rows = _with_outcome(built.frame, next((g for g in goals if g.active), None))
+        _, final = _learn(rows, post_build, primary_key=built.primary_key, target=built.target)
+    profile: LocaleProfile | None = None
+    if case.locale_profile is not None:
+        try:
+            profile = LocaleProfile.model_validate(case.locale_profile)
+        except ValidationError:
+            profile = None
+    recipes = [p.recipe for p in parts if p.recipe is not None] + ([post_build] if post_build else [])
+    basis = _money(recipes, profile, approved, config)
+    locale = None if profile is None and basis is None else LocalePart(profile=profile, money_basis=basis)
     return make_prescription(
         files=parts,
         build=build,
@@ -990,7 +1010,7 @@ class CasePrescriber:
         return self.prescription(case, brief).prescription_hash
 
     def __call__(self, case: Case, brief: GoalBrief | None) -> str:
-        from engine.doctor.prescription_runs import PrescriptionRef, bind_dataset, bind_upload
+        from engine.doctor.prescription_runs import PrescriptionRef, bind_dataset, bind_spec, bind_upload
 
         prescription = self.prescription(case, brief)
         save_prescription(self.storage, case.client_id, case.case_id, prescription)
@@ -1003,4 +1023,21 @@ class CasePrescriber:
             bind_upload(self.storage, upload_id, ref)
         if prescription.build is not None and prescription.build.dataset_id is not None:
             bind_dataset(self.storage, prescription.build.dataset_id, ref)
+            spec = self._spec_of(prescription.build.dataset_id)
+            if spec is not None:
+                # Every dataset a firing builds fresh from the same spec follows this prescription too.
+                bind_spec(self.storage, spec[0], spec[1], ref)
         return prescription.prescription_hash
+
+    def _spec_of(self, dataset_id: str) -> tuple[str, str] | None:
+        """`(client_id, spec_id)` of the onboarding spec that built `dataset_id`, when its manifest can be read."""
+        from engine.onboarding.datasets import DATASET_MANIFEST_FILENAME, dataset_key
+        from engine.onboarding.specs import DatasetManifest
+
+        try:
+            manifest = self.storage.read_model(
+                dataset_key(dataset_id, DATASET_MANIFEST_FILENAME), DatasetManifest
+            )
+        except (StorageError, ValidationError, ValueError):
+            return None
+        return manifest.client_id, manifest.spec_id

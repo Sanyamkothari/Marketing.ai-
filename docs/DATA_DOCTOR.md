@@ -901,6 +901,13 @@ The prescription is used **both when a model is trained and when it scores**:
   same joins, the same outcome, the same conversion at the same rate you gave (never a new rate, never fetched).
 - **A dataset built from several files trains with its fixes too** - before, a built dataset could not get Data
   Doctor's fixes for training. The model then prepares every dataset it scores the same way.
+- **The outcome you approved is the one the model learns.** When the outcome comes from a column's values (for
+  example *Churned* is yes, *Active* is no, *Suspended* is left out), every training file and dataset is turned into
+  yes and no that way, and the rows you left out are removed and counted.
+- **Files and datasets that come later follow it too**: a file you add to the case, next month's file for a goal
+  whose current model was trained this way, and a dataset a schedule rebuilds from the same recipe.
+- **Every training file is checked**, even one no fix changes: if it no longer looks like what you approved, Data
+  Doctor stops and asks before training, as it does before scoring.
 - **Data Doctor stops and asks when something changed**: a column that is gone or now holds another kind of value, a
   value it has never seen in a column where it knew every value, a yes/no word it has no meaning for, a currency
   the file did not use before, numbers or dates written another way, or a file laid out differently. Nothing is
@@ -911,7 +918,8 @@ The prescription is used **both when a model is trained and when it scores**:
   with one part, and scores byte for byte the same.
 
 Each run made from a prescription keeps which prescription it followed and, for money columns, their currency and
-rates, so reports show them.
+rates, so reports show them. A run prepared by a Guided setup preparation keeps its money columns' currency and the
+rate you approved in it too.
 
 ### For developers
 

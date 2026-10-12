@@ -66,15 +66,19 @@ if TYPE_CHECKING:
 __all__ = [
     "Mode",
     "PartReceipt",
+    "PreparedReplay",
     "ReplayFile",
     "ReplayReceipt",
     "ReplayResult",
+    "changes_rows",
     "check_files",
     "drift_stop",
+    "replay_after_build",
     "replay_on_prepared",
     "replay_prescription",
     "run_part_recipe",
     "step_drift",
+    "training_goal",
 ]
 
 Mode = Literal["train", "score"]
@@ -479,6 +483,59 @@ def replay_on_prepared(
         own.findings(check_contract(frame, prescription.contract, mode=mode), part="contract")
         own.add("contract", "checked")
     return frame, outcome_receipt, tuple(own.warnings)
+
+
+@dataclass(frozen=True)
+class PreparedReplay:
+    """Steps 6-8 on a prepared file, as the run paths use them: the rows, what the outcome and the post-build recipe
+    did, the warnings, and the parts replayed."""
+
+    frame: pd.DataFrame
+    outcome: OutcomeReceipt | None
+    post_build: RecipeReceipt | None
+    warnings: tuple[DriftFinding, ...]
+    replayed: tuple[str, ...]
+
+
+def training_goal(prescription: Prescription, use_case_id: str | None) -> str | None:
+    """The goal section a training run of `use_case_id` follows: its own section, else the active one (None)."""
+    if use_case_id is not None and prescription.section(use_case_id) is not None:
+        return use_case_id
+    return None
+
+
+def changes_rows(prescription: Prescription, *, mode: Mode, goal_id: str | None = None) -> bool:
+    """Whether steps 6-8 change the rows of a prepared file (a post-build recipe, or - training only - an outcome
+    from a column's values); when not, only the contract is checked."""
+    if prescription.post_build is not None:
+        return True
+    if mode == "score":
+        return False
+    section = prescription.section(goal_id)
+    outcome = None if section is None else section.outcome
+    return outcome is not None and outcome.definition.kind == "column_values"
+
+
+def replay_after_build(
+    prescription: Prescription,
+    frame: pd.DataFrame,
+    *,
+    mode: Mode,
+    goal_id: str | None = None,
+    config: UseCaseConfig | None = None,
+    upload_id: str = "prescription",
+) -> PreparedReplay:
+    """:func:`replay_on_prepared` for a run: the outcome (training only), the post-build recipe and the contract on
+    every row of a built dataset or a prepared file. Raises `PrescriptionError` on a stop."""
+    trail = _Trail()
+    rows, outcome, warnings = replay_on_prepared(
+        prescription, frame, mode=mode, goal_id=goal_id, config=config, upload_id=upload_id, trail=trail
+    )
+    receipt = trail.recipes[-1] if prescription.post_build is not None and trail.recipes else None
+    replayed = tuple(dict.fromkeys(p.part for p in trail.parts if p.status != "skipped"))
+    return PreparedReplay(
+        frame=rows, outcome=outcome, post_build=receipt, warnings=warnings, replayed=replayed
+    )
 
 
 # ---------------------------------------------------------------------------

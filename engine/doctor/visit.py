@@ -1925,17 +1925,27 @@ def add_files(
     actor: str,
     op_id: str | None = None,
 ) -> Case:
-    """Add files to the case; the visit reads them from INTAKE (next month's file: FOLLOW_UP -> INTAKE)."""
+    """Add files to the case; the visit reads them from INTAKE (next month's file: FOLLOW_UP -> INTAKE).
+
+    Plan O M243 (DEC-1813): a file added to a case that already has a stored prescription is bound to it, so a run
+    on next month's file replays the approved preparation (and stops and asks where it changed)."""
     run = _Run(deps, actor)
+    added: list[str] = []
 
     def build(case: Case) -> _Step:
         have = set(case.upload_ids())
         new = tuple(file for file in files if file.upload_id not in have)
+        added[:] = [file.upload_id for file in new]
         events = [EventDraft(kind=TimelineKind.FILE_ADDED, upload_id=file.upload_id) for file in new]
         to = VisitState.INTAKE if new and case.state not in {VisitState.INTAKE} else case.state
         return _Step(to=to, updates={"files": (*case.files, *new)} if new else {}, events=events)
 
-    return _person_step(run, client_id, case_id, expected_version, op_id, build)
+    case = _person_step(run, client_id, case_id, expected_version, op_id, build)
+    if added:
+        from engine.doctor.prescription_runs import bind_case_uploads
+
+        bind_case_uploads(deps.storage, case, added)
+    return case
 
 
 def set_goal(

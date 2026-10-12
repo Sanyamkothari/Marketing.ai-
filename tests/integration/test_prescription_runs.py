@@ -13,7 +13,18 @@ The plan's acceptance, where runs start:
   is a 409 `PRESCRIPTION_DRIFT` naming the column (and a firing's failure with that code); nothing is re-learnt.
 * **Scoring with a single-file recipe is byte-identical to today**, with the switch on, and with a one-part
   prescription bound to the model.
-* **With `data_doctor.unified` off nothing changes**: a bound dataset trains as built and the run holds no reference.
+* **With `data_doctor.unified` off nothing changes**: a bound dataset trains as built and the run holds no reference,
+  and a training upload is read no extra time.
+
+The review fixes (DEC-1813 (q)-(w)):
+
+* **The approved outcome is applied at training** (a file's and a dataset's): Churned is 1, Active 0, Suspended left
+  out and counted; the run carries the recipe alone to scoring.
+* **A file or a dataset made after PRESCRIBE follows the prescription**: a scheduled training firing on a fresh build
+  of the prescribed spec, and next month's upload of a use case whose champion was trained under one.
+* **Rows no recipe prepares are checked against the contract at training** (a dataset with no post-build recipe, a
+  file with no recipe), as at scoring.
+* **A switch-on run a Guided-setup recipe prepared keeps that recipe's money basis** (a conversion's frozen rate).
 """
 
 from __future__ import annotations
@@ -45,9 +56,14 @@ from engine.config import RunMode, get_catalog, load_use_case, resolve_config
 from engine.contracts import RunRecord
 from engine.doctor import registry as doctor_registry
 from engine.doctor.currency import MoneyBasis, MoneyColumn, load_money_basis
+from engine.doctor.outcome_definition import OutcomeDefinition, ValueMeaning, approval_for
 from engine.doctor.prescription import (
+    BuildPart,
+    CasePrescriber,
     FilePart,
+    GoalSection,
     LocalePart,
+    OutcomePart,
     Prescription,
     Provenance,
     make_prescription,
@@ -61,6 +77,8 @@ from engine.doctor.prescription_runs import (
     PrescriptionRef,
     bind_dataset,
     bind_upload,
+    bound,
+    dataset_for_training,
 )
 from engine.jobs import CancelToken
 from engine.onboarding.datasets import DATASET_FRAME_FILENAME, dataset_key
@@ -128,11 +146,15 @@ def _prescribe(
     contract: DataContract | None = None,
     files: tuple[FilePart, ...] = (),
     basis: MoneyBasis | None = BASIS,
+    goals: tuple[GoalSection, ...] = (),
+    build: BuildPart | None = None,
 ) -> tuple[PrescriptionRef, Prescription]:
     made = make_prescription(
         files=files,
+        build=build,
         post_build=post_build,
         contract=contract,
+        goals=goals,
         locale=None if basis is None else LocalePart(money_basis=basis),
         provenance=Provenance(case_id=CASE, client_id="default", created_at=utc_now()),
     )
@@ -514,3 +536,366 @@ def test_an_upload_whose_prepared_rows_break_the_contract_stops_and_leaves_no_co
     detail = response.json()["detail"]
     assert (detail["code"], detail["path"]) == ("PRESCRIPTION_DRIFT", "plan_type")
     assert set(storage.list_keys("uploads/")) == before, "the prepared copy of a stopped run is removed"
+
+
+# ---------------------------------------------------------------------------
+# Review fixes: the approved outcome at training
+# ---------------------------------------------------------------------------
+STATUS = ("Active", "Churned", "Suspended")
+
+
+def _outcome_goal() -> GoalSection:
+    """The churn goal's approved outcome from a column's values (M239): Churned yes, Active no, Suspended left out."""
+    definition = OutcomeDefinition(
+        kind="column_values",
+        name=TARGET,
+        column=TARGET,
+        map=(
+            ValueMeaning(value="Active", meaning="no"),
+            ValueMeaning(value="Churned", meaning="yes"),
+            ValueMeaning(value="Suspended", meaning="exclude"),
+        ),
+        exclude=("Suspended",),
+    )
+    approval = approval_for(definition, f"The model learns '{TARGET}'.", user_id="analyst", at=utc_now())
+    return GoalSection(
+        goal_id=USE_CASE, active=True, outcome=OutcomePart(definition=definition, approval=approval)
+    )
+
+
+def _with_status(frame: pd.DataFrame) -> pd.DataFrame:
+    out = frame.copy()
+    out[TARGET] = [STATUS[n % 3] for n in range(len(out))]
+    return out
+
+
+def test_an_upload_trains_on_its_approved_outcome_with_the_left_out_rows_removed(
+    api: tuple[TestClient, Path], built: tuple[Path, str], unified: None
+) -> None:
+    client, data_dir = api
+    storage = LocalStorage(data_dir)
+    history = _with_status(_history(built, "₹"))
+    upload_id = _upload(client, history)
+    ref, _ = _prescribe(storage, files=(_file_part(upload_id),), goals=(_outcome_goal(),))
+    bind_upload(storage, upload_id, ref)
+    response = client.post(
+        "/runs",
+        json={
+            "use_case": USE_CASE,
+            "mode": "train",
+            "upload_id": upload_id,
+            "primary_key": KEY,
+            "target": TARGET,
+        },
+    )
+    assert response.status_code == 202, response.text
+    run_id = response.json()["run_id"]
+    prepared = _frame(storage, read_job_spec(storage, job_spec_key(run_id)).upload_key)
+    kept = history[history[TARGET] != "Suspended"]
+    assert set(prepared[TARGET]) == {0, 1}, "it trains on the approved outcome, never on the raw words"
+    assert len(prepared) == len(kept), "the rows left out are removed"
+    assert int(prepared[TARGET].sum()) == int((kept[TARGET] == "Churned").sum())
+    assert "North" not in set(prepared["region"]), "the file slot's recipe ran first"
+    kept_recipe = storage.read_model(run_key(run_id, DATA_RECIPE_FILENAME), DataRecipe)
+    assert (
+        kept_recipe.recipe_hash == _recipe().recipe_hash
+    ), "scoring replays the recipe alone, never the outcome"
+    assert storage.read_model(run_key(run_id, PRESCRIPTION_REF_FILENAME), PrescriptionRef) == ref
+
+
+def test_a_dataset_trains_on_its_approved_outcome_and_carries_only_the_post_build_recipe(
+    tmp_path: Path, unified: None
+) -> None:
+    storage = LocalStorage(tmp_path / "data")
+    dataset_id = "ds_outcome"
+    rows = _with_status(
+        pd.DataFrame(
+            {
+                KEY: [f"C{n}" for n in range(300)],
+                "region": [("North", "South", "East")[n % 3 - 1] for n in range(300)],
+                "tenure": np.arange(300) % 40,
+            }
+        )
+    )
+    with storage.open_write(dataset_key(dataset_id, DATASET_FRAME_FILENAME)) as sink:
+        rows.to_parquet(sink, index=False)
+    ref, _ = _prescribe(storage, post_build=_recipe(), goals=(_outcome_goal(),))
+    bind_dataset(storage, dataset_id, ref)
+    training = dataset_for_training(storage, load_use_case(USE_CASE), dataset_id, (KEY,))
+    assert training is not None and training.rows is not None
+    assert training.rows.source_key.startswith(f"datasets/{dataset_id}/prepared_rx_")
+    prepared = _frame(storage, training.rows.source_key)
+    assert set(prepared[TARGET]) == {0, 1} and len(prepared) == 200, "Suspended is left out"
+    assert "North" not in set(prepared["region"]), "then the post-build recipe"
+    assert training.outcome is not None and training.outcome.excluded == 100
+    assert training.recipe is not None and training.recipe.recipe_hash == _recipe().recipe_hash
+    assert training.receipt is not None, "the run carries the post-build recipe and what it did"
+    assert _frame(storage, dataset_key(dataset_id, DATASET_FRAME_FILENAME)).equals(
+        rows
+    ), "the build is untouched"
+
+
+# ---------------------------------------------------------------------------
+# Review fixes: files and datasets made after PRESCRIBE
+# ---------------------------------------------------------------------------
+def _build_record() -> Any:
+    from engine.config import LabelDefinition, LabelType
+    from engine.doctor.build_driver import approval_for as build_approval
+    from engine.doctor.build_driver import drive_builder, plan_build
+    from tests.unit.doctor.m237_support import RecordingBuilder, diagnosis, frames
+
+    label = LabelDefinition(
+        name="churn_next_60d", type=LabelType.EVENT_ABSENCE, role="bills", horizon_days=60
+    )
+    loaded = frames()
+    plan = plan_build(diagnosis(loaded), loaded, use_case="rca", label_spec=label)
+    port = RecordingBuilder()
+    drive_builder(plan, loaded, port, build_approval(plan, user_id="analyst", at=utc_now()))
+    return port.records["spec_1"]
+
+
+class _Case:
+    """What PRESCRIBE reads of a case to bind it."""
+
+    client_id = "default"
+    case_id = CASE
+
+    def upload_ids(self) -> tuple[str, ...]:
+        return ()
+
+
+def test_a_scheduled_training_firing_on_a_fresh_build_of_the_prescribed_spec_follows_the_prescription(
+    built: tuple[Path, str], unified: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root, dataset_id = built
+    storage = LocalStorage(root / "data")
+    manifest = storage.read_model(dataset_key(dataset_id, "dataset_manifest.json"), DatasetManifest)
+    made = make_prescription(
+        build=BuildPart(record=_build_record(), dataset_id=dataset_id),
+        post_build=_recipe(),
+        locale=LocalePart(money_basis=BASIS),
+        provenance=Provenance(case_id=CASE, client_id="default", created_at=utc_now()),
+    )
+    monkeypatch.setattr(CasePrescriber, "prescription", lambda self, case, brief: made)
+    written = CasePrescriber(storage)(_Case(), None)  # type: ignore[arg-type]
+    ref = PrescriptionRef(client_id="default", case_id=CASE, prescription_hash=written)
+    spec = (manifest.client_id, manifest.spec_id)
+    spec_key = f"cases/{manifest.client_id}/prescribed_specs/{manifest.spec_id}.json"
+    try:
+        assert bound(storage, spec=spec) == ref, "PRESCRIBE binds the spec that built the approved dataset"
+        # A firing's fresh build of that spec is another dataset: bound to nothing itself.
+        _unbind(storage, dataset_id)
+        record = _fire(root, dataset_id, RunMode.TRAIN)
+        _assert_trained_prepared(storage, record.run_id, dataset_id, ref)
+        response = _train(root, dataset_id)
+        assert response.status_code == 202, response.text
+        _assert_trained_prepared(storage, response.json()["run_id"], dataset_id, ref)
+    finally:
+        _unbind(storage, dataset_id)
+        if storage.exists(spec_key):
+            storage.delete(spec_key)
+
+
+def test_next_months_upload_follows_the_prescription_its_champion_was_trained_under(
+    api: tuple[TestClient, Path], built: tuple[Path, str], unified: None
+) -> None:
+    client, data_dir = api
+    storage = LocalStorage(data_dir)
+    ref, _ = _prescribe(storage, files=(_file_part("u_september"),))
+    _seed(data_dir, "r_champion", "m_champion", recipe=None)
+    storage.write_model(run_key("r_champion", PRESCRIPTION_REF_FILENAME), ref)
+    upload_id = _upload(client, _history(built, "₹"))  # next month's file: bound to nothing
+    assert bound(storage, upload_id=upload_id) is None
+    response = client.post(
+        "/runs",
+        json={
+            "use_case": USE_CASE,
+            "mode": "train",
+            "upload_id": upload_id,
+            "primary_key": KEY,
+            "target": TARGET,
+        },
+    )
+    assert response.status_code == 202, response.text
+    run_id = response.json()["run_id"]
+    assert storage.read_model(run_key(run_id, PRESCRIPTION_REF_FILENAME), PrescriptionRef) == ref
+    prepared = _frame(storage, read_job_spec(storage, job_spec_key(run_id)).upload_key)
+    assert "North" not in set(prepared["region"]), "it trains on the prescription's prepared copy"
+    dollars = _upload(client, _history(built, "$"))
+    stopped = client.post(
+        "/runs",
+        json={
+            "use_case": USE_CASE,
+            "mode": "train",
+            "upload_id": dollars,
+            "primary_key": KEY,
+            "target": TARGET,
+        },
+    )
+    assert stopped.status_code == 409 and stopped.json()["detail"]["code"] == "CURRENCY_FOREIGN"
+
+
+# ---------------------------------------------------------------------------
+# Review fixes: rows no recipe prepares are checked at training
+# ---------------------------------------------------------------------------
+def test_a_bound_dataset_with_no_post_build_recipe_is_checked_against_its_contract(
+    built: tuple[Path, str], unified: None
+) -> None:
+    root, dataset_id = built
+    storage = LocalStorage(root / "data")
+    rows = _frame(storage, dataset_key(dataset_id, DATASET_FRAME_FILENAME))
+    approved = rows[rows["region"] != "West"]  # at approval the dataset had no West
+    ref, _ = _prescribe(storage, contract=learn_contract(approved, primary_key=KEY, target=TARGET))
+    bind_dataset(storage, dataset_id, ref)
+    try:
+        response = _train(root, dataset_id)
+        assert response.status_code == 409, response.text
+        detail = response.json()["detail"]
+        assert (detail["code"], detail["path"]) == ("PRESCRIPTION_DRIFT", "region")
+        with pytest.raises(FiringError) as failed:
+            _fire(root, dataset_id, RunMode.TRAIN)
+        assert failed.value.code == "PRESCRIPTION_DRIFT"
+        # Rows that match their contract train as built, with the reference kept.
+        ref, _ = _prescribe(storage, contract=learn_contract(rows, primary_key=KEY, target=TARGET))
+        bind_dataset(storage, dataset_id, ref)
+        response = _train(root, dataset_id)
+        assert response.status_code == 202, response.text
+        run_id = response.json()["run_id"]
+        spec = read_job_spec(storage, job_spec_key(run_id))
+        assert spec.upload_key == dataset_key(dataset_id, DATASET_FRAME_FILENAME)
+        assert storage.read_model(run_key(run_id, PRESCRIPTION_REF_FILENAME), PrescriptionRef) == ref
+    finally:
+        _unbind(storage, dataset_id)
+
+
+def test_a_bound_upload_with_no_recipe_is_checked_against_its_contract(
+    api: tuple[TestClient, Path], built: tuple[Path, str], unified: None
+) -> None:
+    client, data_dir = api
+    storage = LocalStorage(data_dir)
+    history = _history(built, "₹")
+    upload_id = _upload(client, history)
+    rare = str(history["plan_type"].value_counts().index[-1])
+    contract = learn_contract(history[history["plan_type"] != rare], primary_key=KEY, target=TARGET)
+    part = FilePart(slot="history", upload_ids=(upload_id,), contract=contract)
+    ref, _ = _prescribe(storage, files=(part,))
+    bind_upload(storage, upload_id, ref)
+    before = set(storage.list_keys("uploads/"))
+    response = client.post(
+        "/runs",
+        json={
+            "use_case": USE_CASE,
+            "mode": "train",
+            "upload_id": upload_id,
+            "primary_key": KEY,
+            "target": TARGET,
+        },
+    )
+    assert response.status_code == 409, response.text
+    detail = response.json()["detail"]
+    assert (detail["code"], detail["path"]) == ("PRESCRIPTION_DRIFT", "plan_type")
+    assert set(storage.list_keys("uploads/")) == before, "nothing is written for a stopped run"
+
+
+# ---------------------------------------------------------------------------
+# Review fixes: switch off reads nothing more; a Guided run keeps its money basis
+# ---------------------------------------------------------------------------
+def test_with_the_switch_off_a_training_upload_is_not_read_again(
+    api: tuple[TestClient, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from api.routes import run_prescriptions
+    from api.routes.uploads import load_upload
+    from engine.stages import ingest
+
+    client, data_dir = api
+    storage = LocalStorage(data_dir)
+    sent = _upload(client, pd.DataFrame({KEY: ["C1", "C2"], TARGET: [0, 1]}))
+    record = load_upload(storage, sent)
+    reads: list[str] = []
+    real = ingest.read_upload
+
+    def counted(*args: Any, **kwargs: Any) -> Any:
+        reads.append(str(args[1]))
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(ingest, "read_upload", counted)
+    config = load_use_case(USE_CASE)
+    for switch in (False, True):  # off; on with nothing bound
+        monkeypatch.setattr(doctor_registry, "unified_on", lambda _config, on=switch: on)
+        found = run_prescriptions.prescribed_training(
+            storage, config, upload=record, dataset_id=None, primary_key=KEY, target=TARGET
+        )
+        assert found is None
+    assert reads == [], "the file is read only once the switch and a binding are confirmed"
+
+
+def _money_recipe(upload: Any) -> DataRecipe:
+    steps = (
+        RecipeStep(
+            order=1,
+            kind=RecipeStepKind.CONVERT_CURRENCY,
+            column="amount",
+            params={
+                "from": "USD",
+                "to": "INR",
+                "rate": 83.1,
+                "rate_date": "2026-10-10",
+                "source": "RBI reference rate",
+            },
+            reason="Convert amount from US dollars at 83.1 (RBI reference rate, 10 Oct 2026).",
+        ),
+    )
+    return DataRecipe(
+        recipe_id="rc-guided-money",
+        use_case_id=USE_CASE,
+        source_fingerprint=upload.fingerprint_hash,
+        steps=steps,
+        recipe_hash=recipe_hash(steps),
+        primary_key=KEY,
+        target=TARGET,
+        levels=(AgentLevel.CLEAN,),
+        max_failure_pct=5.0,
+        approved_by="analyst",
+        created_at=utc_now(),
+    )
+
+
+@pytest.mark.parametrize("switch", [True, False])
+def test_a_guided_run_with_a_conversion_keeps_its_money_basis_with_the_switch_on(
+    api: tuple[TestClient, Path],
+    built: tuple[Path, str],
+    config_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    switch: bool,
+) -> None:
+    from api.routes.agent_recipes import write_derived_upload
+    from api.routes.uploads import load_upload
+
+    monkeypatch.setattr(doctor_registry, "unified_on", lambda _config: switch)
+    client, data_dir = api
+    storage = LocalStorage(data_dir)
+    sent = load_upload(storage, _upload(client, _history(built, "$")))
+    config = load_use_case(USE_CASE, config_root)
+    derived = write_derived_upload(storage, config, sent, _money_recipe(sent))  # Guided setup's Approve
+    response = client.post(
+        "/runs",
+        json={
+            "use_case": USE_CASE,
+            "mode": "train",
+            "upload_id": derived.record.upload_id,
+            "primary_key": KEY,
+            "target": TARGET,
+        },
+    )
+    assert response.status_code == 202, response.text
+    run_id = response.json()["run_id"]
+    assert not storage.exists(run_key(run_id, PRESCRIPTION_REF_FILENAME)), "no stored prescription"
+    basis = load_money_basis(storage, run_id)
+    if not switch:
+        assert basis is None, "with the switch off the run is as before"
+        return
+    assert basis is not None
+    (money,) = basis.columns
+    assert (money.column, money.written_in, money.reported_in) == ("amount", ("USD",), "INR")
+    (rate,) = money.rates
+    assert (rate.rate, rate.source, str(rate.rate_date)) == (83.1, "RBI reference rate", "2026-10-10")

@@ -1475,12 +1475,14 @@ acknowledgements), `provenance`.
   with optional `stage: post_build`; `key`/`outcome_column`/`as_of_column`/`consent_column` items' `column`; `setting`
   `path`/`value`; `definition` (+ `approval`, else the case's `outcome-<hash16>` approval); `build_record` and
   `dataset_id`; `approved_rate`), makes a slot per build source (stacked exports are one slot) and per other file,
-  learns each slot's contract on the visit's rows after its recipe, and a built dataset's contract after the
-  post-build recipe. With one file and no build, post-build steps join the file's recipe. Every recipe records the
+  learns each slot's contract on the visit's rows after its recipe, and a built dataset's contract after the active
+  section's outcome from a column's values (`apply_outcome_values`) and the post-build recipe - the order a training
+  replay checks it in. With one file and no build, post-build steps join the file's recipe. Every recipe records the
   levels and limit it was approved under (the use case's, else `AgentConfig()`'s).
 - **PRESCRIBE.** `CasePrescriber(storage, load_files, config_root)` is `VisitDeps.prescribe` (wired in
-  `api/routes/case_visit.py`): writes the prescription, binds every case upload and the built dataset
-  (`prescription_runs.bind_upload` / `bind_dataset`), returns the hash. `CasePrescriber.digest` is the same hash
+  `api/routes/case_visit.py`): writes the prescription, binds every case upload, the built dataset and the onboarding
+  spec that built it (`prescription_runs.bind_upload` / `bind_dataset` / `bind_spec`), returns the hash.
+  `visit.add_files` binds a file added later to the case's latest stored prescription (`bind_case_uploads`). `CasePrescriber.digest` is the same hash
   without writing; `visit.approve` puts it in M246's `decision_body` (`prescription_hash`), so the ledger entry names
   the prescription PRESCRIBE writes next. Guided setup's record names its recipe's one-part hash. A part that cannot
   be made (`CURRENCY_RATE_UNAPPROVED`) is a `CaseError`.
@@ -1515,18 +1517,30 @@ slot's contract, the build (`replay_build` through the `BuilderPort`; `load_buil
 
 ### 22.4 Runs (`engine/doctor/prescription_runs.py`, `api/routes/run_prescriptions.py`)
 
-- `POST /runs` training: a dataset bound to a prescription with a post-build recipe is prepared by
-  `prepare_dataset(..., leak_check="full")` (the scoring replay's file and key rule; `dataset_key_conflict` first) and
-  its contract checked; the run trains on it and `attach_dataset_recipe` keeps the recipe. An upload bound to one is
-  checked raw (`check_files`), prepared by its slot's recipe with `write_derived_upload` and checked against the
-  slot's contract (a stop removes the prepared copy).
+- `POST /runs` training (`prescribed_training`; the switch is checked before anything is read): a dataset bound to a
+  prescription - or built from a spec bound to one (`datasets/<id>/dataset_manifest.json`'s `spec_id`) - goes
+  through `dataset_for_training`. When steps 6-8 change its rows (`changes_rows`: a post-build recipe, or a
+  `column_values` outcome of the run's goal section - `training_goal`: the use case's own section, else the active
+  one) every row is replayed by `replay_after_build` (outcome, post-build recipe with `leak_check="full"`, final
+  contract; `dataset_key_conflict` first) and written by `store_prepared_rows` at
+  `datasets/<id>/prepared_rx_<16 hex>.parquet` (never a scoring replay's file); the run trains on it and
+  `attach_dataset_recipe` keeps the post-build recipe alone (scoring never replays the outcome). Otherwise the built
+  rows (capped) are checked against the contract. An upload bound to one - or, unbound, of a use case whose champion
+  run carries a reference - goes through `upload_for_training` (the file read lazily, once): `check_files` on the
+  file as sent, its slot's recipe (`write_derived_upload(..., then=...)`; for a file already prepared by it, or with
+  no recipe, `write_derived_rows`), the slot's contract on the prepared rows, then - with no build - steps 6-8. Every
+  check runs before anything is written, so a stop leaves no prepared copy; a file nothing changes is only checked.
 - `POST /runs` scoring: `check_for_scoring` reads `runs/<training run>/prescription_ref.json`; raw checks on the file
   as sent (one-slot prescriptions), the contract on the prepared rows the schema check reads.
 - Every such run: `attach_to_run` writes `runs/<id>/prescription_ref.json`, M242's `save_money_basis`, and
-  `prescription_check.json` when there are warnings. A stop is the M1 error envelope, 409, with the code and the
+  `prescription_check.json` when there are warnings. A switch-on run prepared by a recipe under no stored prescription
+  (Guided setup's, or a model's at scoring) gets `recipe_money_basis`: units from `parse_number`'s `unit`, each
+  `convert_currency` step's frozen rate, date and source as the recipe's approval (`approved_by`, `created_at`); none
+  when a conversion has no readable rate. A stop is the M1 error envelope, 409, with the code and the
   question; a scheduled firing (`engine/scheduling/firing.py`) does the same and fails with the code.
-- Bindings: `uploads/<id>/prescription_ref.json`, `datasets/<id>/prescription_ref.json` (ids and a hash only);
-  retention and erasure remove them with their directories.
+- Bindings: `uploads/<id>/prescription_ref.json`, `datasets/<id>/prescription_ref.json`,
+  `cases/<client>/prescribed_specs/<spec_id>.json` (ids and a hash only); retention and erasure remove them with
+  their directories.
 
 ### 22.5 Not done here
 
