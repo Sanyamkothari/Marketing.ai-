@@ -1150,11 +1150,11 @@ wrapped function's (`tests/unit/doctor/test_tools_wrappers.py` compares them on 
 | # | Tool | Kind | What it returns |
 |---|---|---|---|
 | 3 | `propose_intake` | PROPOSE | the upload's `intake.json` decisions (header row, sheet, rows left out), kept as one item |
-| 6 | `preview_connection` | READ | a saved connection's masked preview (`Connector.preview`); a cell the connector masked part of is shown as its markers alone |
+| 6 | `preview_connection` | READ | a saved connection's masked preview (`Connector.preview`); a cell the connector masked part of is shown as its markers alone. It and `propose_import` take a slot of the connection routes' own gate (`engine.connections.limits.CALLS`, four calls at once); a full gate is `429 CONNECTION_BUSY` |
 | 7 | `propose_import` | PROPOSE | an import from a saved connection, proposed; only the preview is read |
 | 8 | `check_refresh` | READ | `latest_recipe_inputs`: the tables a recipe's next build reads, which are newer, which are bound to a connection |
 | 9 | `preflight` | READ | `run_preflight` on the case's files, each named by the words of its name that name a table |
-| 31 | `second_opinion` | PROPOSE (AI) | `assist_session`'s rerank and leak questions, pending; needs the AI service (`ctx.meter`) |
+| 31 | `second_opinion` | PROPOSE (AI) | `assist_session`'s rerank and leak questions, pending; needs the AI service (`ctx.meter`) and `agentic.enabled` on, as its route does (DEC-1409 (g)); an approved session is `409 AGENT_SESSION_APPLIED`; the saved transcript is capped (`cap_sent`); the caller records `meter.usage()` |
 | 39 | `explain` | READ (AI) | the case's evidence in checked sentences (§17.2) |
 | 41 | `propose_role` | PROPOSE | `detect_roles`, with the diagnosis's rule (`KIND_MIN_CONFIDENCE`) |
 | 42 | `propose_key` | PROPOSE | the rules advisor's ID column (`advise`), or why none can be |

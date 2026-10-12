@@ -462,15 +462,27 @@ def _connector_call(ctx: DataToolContext, parsed: SelectionArgs) -> tuple[Any, A
     return record, conn, secrets, selection
 
 
-def _preview(parsed: SelectionArgs, ctx: DataToolContext) -> Preview:
+def _bounded_preview(ctx: DataToolContext, parsed: SelectionArgs) -> tuple[Any, Any, Any, Preview]:
+    """`(record, connector, selection, preview)`: the preview runs under the connection routes' own gate
+    (`engine.connections.limits.CALLS`, at most four calls to clients' systems at once), and a full gate is
+    `429 CONNECTION_BUSY` straight away, as `POST /connections/{id}/preview` answers."""
+    from engine.connections import limits
     from engine.connections.base import ConnectorError
 
     record, conn, secrets, selection = _connector_call(ctx, parsed)
     try:
-        preview: Preview = conn.preview(record.config, secrets, selection)
+        preview: Preview = limits.bounded_call(
+            limits.CALLS, lambda: conn.preview(record.config, secrets, selection)
+        )
+    except limits.ConnectionBusyError as exc:
+        raise DataToolError("CONNECTION_BUSY", limits.BUSY_MESSAGE, status=429) from exc
     except ConnectorError as exc:
         raise DataToolError(exc.code, f"{exc.message} {exc.fix or ''}".strip(), status=exc.status) from exc
-    return preview
+    return record, conn, selection, preview
+
+
+def _preview(parsed: SelectionArgs, ctx: DataToolContext) -> Preview:
+    return _bounded_preview(ctx, parsed)[3]
 
 
 _MARKER: Final[re.Pattern[str]] = re.compile(r"\[REDACTED:[a-z_]+\]")
@@ -519,9 +531,8 @@ def _propose_import(parsed: ImportArgs, ctx: DataToolContext) -> ImportProposal:
     """Read nothing but the preview: the import itself is the import route's, after the person says yes."""
     from engine.connections.base import ConnectorError
 
-    record, conn, secrets, selection = _connector_call(ctx, parsed)
+    record, conn, selection, preview = _bounded_preview(ctx, parsed)
     try:
-        preview: Preview = conn.preview(record.config, secrets, selection)
         file_format = str(conn.file_format(selection))
     except ConnectorError as exc:
         raise DataToolError(exc.code, f"{exc.message} {exc.fix or ''}".strip(), status=exc.status) from exc
@@ -728,16 +739,46 @@ class SecondOpinion(Pending):
     blocked_by: str | None = Field(description="Why it stopped early: budget, unavailable, prompt_too_large.")
 
 
+def _agentic_on(ctx: DataToolContext) -> bool:
+    """`agentic.enabled` under the context's configuration root; an `agentic.yaml` that does not read leaves it
+    off, as `POST /uploads/{id}/agent-session/assist` does (DEC-1409 (g))."""
+    from engine.agentic.config import agentic_enabled
+    from engine.agentic.errors import AgenticError
+
+    try:
+        return agentic_enabled(ctx.root())
+    except AgenticError:
+        return False
+
+
 def _second_opinion(_parsed: _Args, ctx: DataToolContext) -> SecondOpinion:
     """`assist_session`: the AI reranks candidates the rules listed and asks about possible leaks. Every
     question it adds is pending; it decides, ticks and applies nothing. The session is handed to
-    `save_session`, as `edit_by_hand`'s is."""
+    `save_session`, as `edit_by_hand`'s is.
+
+    It refuses what the route it wraps (`POST /uploads/{id}/agent-session/assist`) refuses: with
+    `agentic.enabled` off the tool is unavailable and a direct call is `404 AGENTIC_DISABLED`, before any AI
+    call; an approved session is `409 AGENT_SESSION_APPLIED`. The saved transcript is capped with
+    `engine.agent.egress.cap_sent`, as the route caps it. The AI's usage stays on `ctx.meter`: the caller that
+    supplied the meter records `meter.usage()` (the route writes it to the upload's `llm_usage.json`)."""
     from engine.agent.assist import assist_session
+    from engine.agent.contracts import SessionStatus
+    from engine.agent.egress import cap_sent
     from engine.agentic.claims import guardrails_for
 
     session, save = ctx.session, ctx.save_session
     if session is None or save is None:  # unreachable through the registry: `needs` makes it unavailable
         raise DataToolError("TOOL_UNKNOWN", "second_opinion needs a session.", status=404)
+    if not _agentic_on(ctx):  # unreachable through the registry: `available` makes it unavailable
+        raise DataToolError(
+            "AGENTIC_DISABLED",
+            "Second opinions on the columns are switched off for this deployment (agentic.enabled is false).",
+            status=404,
+        )
+    if session.status is SessionStatus.APPLIED:
+        raise DataToolError(
+            "AGENT_SESSION_APPLIED", "This setup was already approved. Start again to change it.", status=409
+        )
     before = {question.question_id for question in session.questions}
     result = assist_session(
         ctx.require_agent(),
@@ -748,7 +789,7 @@ def _second_opinion(_parsed: _Args, ctx: DataToolContext) -> SecondOpinion:
         clock=ctx.clock,
     )
     if result.session is not session:
-        save(result.session)
+        save(result.session.model_copy(update={"transcript": cap_sent(result.session.transcript)}))
     added = [q for q in result.session.questions if q.question_id not in before]
     return SecondOpinion(
         source="ai",
@@ -1296,7 +1337,7 @@ def _entries() -> tuple[_Entry, ...]:
             SecondOpinion,
             _second_opinion,
             ("agent", "session", "save_session", "meter"),
-            {"wraps": "engine/agent/assist.py:365 assist_session"},
+            {"available": _agentic_on, "wraps": "engine/agent/assist.py:365 assist_session"},
         ),
         (
             39,

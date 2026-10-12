@@ -50,6 +50,7 @@ from engine.connections import (
     catalogue,
     check_form,
     connector,
+    limits,
 )
 from engine.connections.base import BrowseResult, ConfigValue, Connector, FetchResult, KindInfo, Preview
 from engine.connections.registry import check_name
@@ -68,10 +69,11 @@ _M = TypeVar("_M", bound=BaseModel)
 _NO_STORE: Final[str] = "no-store"
 _MAX_BODY_BYTES: Final[int] = 64 * 1024
 """A connection's form, with a pasted BigQuery key, is a few kilobytes. Anything larger is not one."""
-_MAX_CONCURRENT_CALLS: Final[int] = 4
-_MAX_CONCURRENT_IMPORTS: Final[int] = 2
-_CALLS: Final[threading.BoundedSemaphore] = threading.BoundedSemaphore(_MAX_CONCURRENT_CALLS)
-_IMPORTS: Final[threading.BoundedSemaphore] = threading.BoundedSemaphore(_MAX_CONCURRENT_IMPORTS)
+_MAX_CONCURRENT_CALLS: Final[int] = limits.MAX_CONCURRENT_CALLS
+_MAX_CONCURRENT_IMPORTS: Final[int] = limits.MAX_CONCURRENT_IMPORTS
+_CALLS: Final[threading.BoundedSemaphore] = limits.CALLS
+"""Shared with Data Doctor's `preview_connection` and `propose_import` (`engine.connections.limits`)."""
+_IMPORTS: Final[threading.BoundedSemaphore] = limits.IMPORTS
 IMPORT_MAX_ROWS: Final[int] = 50_000_000
 """A backstop on a table's rows; the use case's `max_file_size_mb` is the limit that normally applies."""
 IMPORT_SOURCE_FILENAME: Final[str] = "connection_source.json"
@@ -531,16 +533,12 @@ def _catch(action: Callable[[], _T]) -> _T:
 
 
 def _bounded(gate: threading.BoundedSemaphore, action: Callable[[], _T]) -> _T:
-    if not gate.acquire(blocking=False):
-        busy = _error(
-            429, "CONNECTION_BUSY", "Other connection calls are running. Try again in a few seconds."
-        )
-        busy.headers = {**(busy.headers or {}), "Retry-After": "5"}
-        raise busy
     try:
-        return _catch(action)
-    finally:
-        gate.release()
+        return limits.bounded_call(gate, lambda: _catch(action))
+    except limits.ConnectionBusyError:
+        busy = _error(429, "CONNECTION_BUSY", limits.BUSY_MESSAGE)
+        busy.headers = {**(busy.headers or {}), "Retry-After": str(limits.RETRY_AFTER_SECONDS)}
+        raise busy from None
 
 
 def _connector_http(exc: ConnectorError) -> HTTPException:

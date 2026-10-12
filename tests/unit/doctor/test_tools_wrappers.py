@@ -28,8 +28,11 @@ import pytest
 from engine.access.roles import Principal, Role
 from engine.agent.advisor import advise
 from engine.agent.assist import assist_session
+from engine.agent.contracts import SessionStatus
+from engine.agent.egress import cap_sent
 from engine.agent.session import start_session
 from engine.agent.tools import AgentContext
+from engine.connections import limits
 from engine.connections import registry as connectors
 from engine.connections.base import Selection, frame_preview
 from engine.connections.store import ConnectionStore
@@ -63,7 +66,7 @@ from engine.uplift.checks import run_uplift_checks
 from engine.utils.ids import seed_from
 from tests.unit.agent.assist_client import AssistClient
 from tests.unit.agent.egress_canary import guardrails, meter_for
-from tests.unit.agent.helpers import context_for
+from tests.unit.agent.helpers import context_for, header_help_root
 
 ANALYST = Principal(user_id="u-asha", username="asha", roles=frozenset({Role.ANALYST}), kind="user")
 NOW = datetime(2026, 10, 12, 9, 0, tzinfo=UTC)
@@ -446,6 +449,33 @@ def test_an_unknown_connection_is_the_routes_refusal(connected: tuple[DataToolCo
     assert caught.value.code == "CONNECTION_NOT_FOUND" and caught.value.status == 404
 
 
+@pytest.mark.parametrize("name", ["preview_connection", "propose_import"])
+def test_the_connection_tools_share_the_routes_cap_on_calls_at_once(
+    connected: tuple[DataToolContext, str, Any], monkeypatch: pytest.MonkeyPatch, name: str
+) -> None:
+    """At most four calls to clients' systems at once, whoever asks: with the connection routes' gate full,
+    the tool is `429 CONNECTION_BUSY` straight away and the connector is never called."""
+    ctx, connection_id, fake = connected
+    asked: list[Selection] = []
+    monkeypatch.setattr(fake, "preview", lambda _c, _s, selection: asked.append(selection))
+    taken = [limits.CALLS.acquire(blocking=False) for _ in range(limits.MAX_CONCURRENT_CALLS)]
+    try:
+        assert all(taken)
+        with pytest.raises(DataToolError) as caught:
+            _call(name, {"connection_id": connection_id, "path": "exports/may.csv"}, ctx)
+    finally:
+        for _ in taken:
+            limits.CALLS.release()
+    assert (caught.value.code, caught.value.status) == ("CONNECTION_BUSY", 429)
+    assert asked == []
+
+
+def test_the_connection_routes_and_the_tools_hold_one_gate() -> None:
+    from api.routes import connections as routes
+
+    assert routes._CALLS is limits.CALLS and routes._IMPORTS is limits.IMPORTS
+
+
 def test_the_connection_tools_need_the_saved_connections(case: DataToolContext) -> None:
     assert data_registry().find("preview_connection", case) is None
     assert data_registry().find("propose_import", case) is None
@@ -520,7 +550,7 @@ def test_second_opinion_is_assist_session_and_ticks_nothing() -> None:
             "monthly_spend": [float(10 + i % 90) for i in range(600)],
         }
     )
-    agent = context_for(frame, target="churn_flg")
+    agent = context_for(frame, target="churn_flg", config_root=header_help_root())
     session = start_session(agent, session_id="s-1")
     scripted = [{"column": "final_status", "why": "It may be set when the customer leaves."}]
     saved: list[Any] = []
@@ -546,8 +576,59 @@ def test_second_opinion_is_assist_session_and_ticks_nothing() -> None:
     assert tuple(out["reordered"]) == direct.reordered and out["blocked_by"] == direct.blocked_by
     assert (out["source"], out["ticked"], out["state"]) == ("ai", False, "pending")
     assert len(saved) == 1 and saved[0].questions == direct.session.questions
+    assert saved[0].transcript == cap_sent(direct.session.transcript), "capped as the route caps it"
     added = [p for q in saved[0].questions for o in q.options if (p := o.proposal) is not None]
     assert added and all(p.state.value == "pending" for p in added)
+
+
+def _assist_case(
+    config_root: Path | None, **session_update: Any
+) -> tuple[DataToolContext, AssistClient, list[Any]]:
+    frame = pd.DataFrame(
+        {
+            "customer_id": [f"C{i}" for i in range(600)],
+            "churn_flg": [1 if i % 4 == 0 else 0 for i in range(600)],
+            "final_status": [("open", "closed", "pending")[i % 3] for i in range(600)],
+        }
+    )
+    agent = context_for(frame, target="churn_flg", config_root=config_root)
+    session = start_session(agent, session_id="s-2").model_copy(update=session_update)
+    client = AssistClient(columns=[{"column": "final_status", "why": "Set when the customer leaves."}])
+    saved: list[Any] = []
+    ctx = DataToolContext(
+        agent=agent,
+        principal=ANALYST,
+        caller="person",
+        session=session,
+        save_session=saved.append,
+        meter=meter_for(client),
+        guardrails=guardrails(),
+        clock=lambda: NOW,
+    )
+    return ctx, client, saved
+
+
+def test_second_opinion_is_off_with_agentic_enabled_off_as_the_assist_route() -> None:
+    """DEC-1409 (g): with `agentic.enabled` off (the shipped default) the AI is never asked for a second
+    opinion; the registry does not offer the tool and a direct run is `404 AGENTIC_DISABLED`."""
+    ctx, client, saved = _assist_case(None)
+    assert data_registry().find("second_opinion", ctx) is None
+    with pytest.raises(DataToolError) as caught:
+        _call("second_opinion", {}, ctx)
+    assert caught.value.status == 404
+    tool = data_registry().get("second_opinion")
+    with pytest.raises(DataToolError) as direct:
+        tool.run(tool.input_model(), ctx)
+    assert (direct.value.code, direct.value.status) == ("AGENTIC_DISABLED", 404)
+    assert not client.calls and not saved, "no AI call, nothing saved"
+
+
+def test_second_opinion_refuses_an_applied_session_as_the_assist_route() -> None:
+    ctx, client, saved = _assist_case(header_help_root(), status=SessionStatus.APPLIED)
+    with pytest.raises(DataToolError) as caught:
+        _call("second_opinion", {}, ctx)
+    assert (caught.value.code, caught.value.status) == ("AGENT_SESSION_APPLIED", 409)
+    assert not client.calls and not saved, "no AI call, the approved session is not changed"
 
 
 def test_second_opinion_needs_an_ai_service(case: DataToolContext) -> None:

@@ -322,10 +322,12 @@ def test_a_viewer_calling_a_propose_tool_is_refused_on_that_call(
 ) -> None:
     tool = data_registry().get(name)
     caller = "person" if "person" in tool.callers else "ai"
-    # What M236's PROPOSE tools also need to exist here (DEC-1806): storage, saved connections, an AI service.
+    # What M236's PROPOSE tools also need to exist here (DEC-1806): storage, saved connections, an AI service,
+    # and for `second_opinion` Plan K's `agentic.enabled` on, as its route needs (DEC-1409 (g)).
     from engine.connections.store import ConnectionStore
     from engine.settings import Settings
     from engine.storage import LocalStorage
+    from tests.unit.agent.helpers import header_help_root
 
     ctx = _full_context(
         agent,
@@ -334,6 +336,7 @@ def test_a_viewer_calling_a_propose_tool_is_refused_on_that_call(
         storage=LocalStorage(tmp_path),
         connections=ConnectionStore(LocalStorage(tmp_path / "c"), Settings()),
         meter=object(),
+        config_root=header_help_root(),
     )
     with pytest.raises(DataToolError) as refused:
         data_registry().call(name, {"kind": "drop_column", "column": "x"}, ctx)
