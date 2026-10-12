@@ -51,6 +51,7 @@ from engine.doctor.registry import (
     unified_on,
 )
 from engine.doctor.tools import LookOutput
+from engine.doctor.tools_wave_one import WAVE_ONE_TOOLS
 from tests.fixtures.make_data import GenerationSpec, generate
 from tests.unit.agent.helpers import context_for
 
@@ -113,7 +114,7 @@ class _Turn:
 # ---------------------------------------------------------------------------
 def test_the_registry_holds_the_22_existing_tools_and_the_first_wrappers() -> None:
     names = set(data_registry().names())
-    assert names == {*LOOK_TOOLS, *CHAT_PROPOSE, "edit_by_hand", *FIRST_WRAPPERS.values()}
+    assert names == {*LOOK_TOOLS, *CHAT_PROPOSE, "edit_by_hand", *FIRST_WRAPPERS.values(), *WAVE_ONE_TOOLS}
     assert len(LOOK_TOOLS) == 18
     # The 22nd existing tool is the conversation loop: it is the caller, not a tool kind.
     assert row("chat_turn") is not None and row("chat_turn").kind is None  # type: ignore[union-attr]
@@ -129,10 +130,8 @@ def test_every_registered_tool_matches_its_catalogue_row() -> None:
         assert entry.number == tool.number, tool.name
         assert entry.kind == tool.kind.value, tool.name
         assert entry.exposure == tool.exposure.value, tool.name
-        assert entry.status in {
-            "existing",
-            "wrapper",
-        }, tool.name  # nothing new is registered before it is built
+        # Nothing new is registered before it is built: the new tools are wave 1's (DEC-1802 (t)).
+        assert entry.status in {"existing", "wrapper"} or tool.name in WAVE_ONE_TOOLS, tool.name
         if tool.number in FIRST_WRAPPERS:
             assert entry.status == "wrapper" and FIRST_WRAPPERS[tool.number] == tool.name
         assert tool.wraps, tool.name
@@ -161,7 +160,8 @@ def test_only_aggregate_tools_may_be_listed_on_mcp_and_plan_o_lists_none(
     listed = data_registry().mcp_surface()
     assert listed, "a later plan could list the aggregate verdicts"
     assert all(tool.exposure is Exposure.AGGREGATE for tool in listed)
-    assert {tool.name for tool in listed} == {"what_can_this_power"}
+    # The catalogue's two aggregates (#36, and M234's #69 since the wave 1 integration).
+    assert {tool.name for tool in listed} == {"what_can_this_power", "check_readiness"}
 
 
 def test_the_mcp_surface_lists_no_data_doctor_tool(tmp_path: Path) -> None:

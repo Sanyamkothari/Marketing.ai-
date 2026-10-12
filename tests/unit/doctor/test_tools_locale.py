@@ -161,8 +161,9 @@ def test_the_step_parameter_is_a_label_the_gate_knows() -> None:
 
 
 def test_result_keys_are_listed_for_the_integrator() -> None:
-    """Keys the tools write that the egress gate does not know yet: the integrator adds them to `RESULT_KEYS`
-    when M232 wires the tools (otherwise the gate hides them as possible cell values - safe, but empty)."""
+    """Keys the tools write that the egress gate did not know when M241 was built: the Plan O wave 1 integration
+    added them to `RESULT_KEYS` when it wired the tools into M232's registry (DEC-1802 (t)), so none is stray.
+    """
     ctx = Ctx(canary_frame())
     stray: set[str] = set()
     for spec in LOCALE_TOOLS:
@@ -174,7 +175,8 @@ def test_result_keys_are_listed_for_the_integrator() -> None:
     detected = _call(LOCALE_TOOLS[0], us)
     assert detected["conflicts"], "the conflict keys are exercised too"
     stray.update(stray_keys(detected, us.frame.columns))
-    assert stray == PENDING_RESULT_KEYS
+    assert stray == set()
+    assert PENDING_RESULT_KEYS <= RESULT_KEYS
 
 
 PENDING_RESULT_KEYS = frozenset(

@@ -36,6 +36,7 @@ from pydantic import Field, model_validator
 
 from engine.agent.formats import ParseOutcome, masked_cut
 from engine.config import StrictBase
+from engine.doctor.india_ids import to_e164_india
 
 __all__ = [
     "KEY_JOIN_OK",
@@ -154,7 +155,15 @@ def key_text(value: Any) -> str | None:
 
 
 def _phone(text: str) -> str | None:
-    """`text` as `+91` and ten digits, or as written when it already is E.164; None when it is not a phone."""
+    """`text` as `+91` and ten digits, or as written when it already is E.164; None when it is not a phone.
+
+    An Indian mobile number is written by M241's `engine.doctor.india_ids.to_e164_india`, the one Indian phone
+    rule (Plan O wave 1 integration, DEC-1807 (q)); what it does not read - a number already in another
+    country's E.164, a ten-digit landline with its area code - keeps M237's reading below.
+    """
+    indian = to_e164_india(text)
+    if indian is not None and indian.isascii():
+        return indian
     compact = _SEPARATORS.sub("", text)
     plus = compact.startswith("+")
     digits = compact[1:] if plus else compact

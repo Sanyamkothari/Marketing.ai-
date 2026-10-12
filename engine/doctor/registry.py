@@ -68,6 +68,9 @@ if TYPE_CHECKING:
     from engine.agentic.ledger import DecisionLedger
     from engine.config import RoleCatalogue, UseCaseConfig
     from engine.doctor.diagnose import LoadedFile, Offer
+    from engine.doctor.locale import LocaleProfile
+    from engine.doctor.readiness import CheckReadinessArgs, ReadinessInputs
+    from engine.doctor.tools_formats import FormatToolContext
     from engine.storage import Storage
 
 __all__ = [
@@ -221,6 +224,17 @@ class DataToolContext:
     clock: Callable[[], datetime] = utc_now
     actor: str = "agent:data-doctor"
     """Who the ledger names."""
+    # Plan O wave 1 integration (DEC-1802 (t)): what the tools of M234, M237, M238, M240 and M241 read beyond the
+    # fields above. Each is optional; a tool that needs one is not available without it.
+    primary_key: str | None = None
+    """The file's ID column as decided in the case or session (M238's and M241's tools never change it)."""
+    locale_profile: LocaleProfile | None = None
+    """The client's confirmed locale profile (M241), when there is one."""
+    case_files: FormatToolContext | None = None
+    """The case's files by id, inside its client scope (M240's tools; `engine.doctor.case_files.CaseFiles`)."""
+    readiness: Callable[[CheckReadinessArgs], ReadinessInputs] | None = None
+    """The readiness report's inputs for the case's prepared copy (M234's `check_readiness`), built by the
+    caller with `engine.doctor.readiness.inputs_for_upload`."""
 
     def require_agent(self) -> AgentContext:
         if self.agent is None:  # unreachable through the registry: `needs` makes the tool unavailable
@@ -234,7 +248,7 @@ class DataToolContext:
         return self.agent.config_root if self.agent is not None else None
 
 
-Need = Literal["agent", "files", "storage", "session", "save_session", "turn"]
+Need = Literal["agent", "files", "storage", "session", "save_session", "turn", "case_files", "readiness"]
 
 In = TypeVar("In", bound=BaseModel)
 Out = TypeVar("Out", bound=BaseModel)
@@ -511,6 +525,10 @@ def _met(tool: DataTool[Any, Any], ctx: DataToolContext) -> bool:
         if need == "save_session" and ctx.save_session is None:
             return False
         if need == "turn" and ctx.turn is None:
+            return False
+        if need == "case_files" and ctx.case_files is None:
+            return False
+        if need == "readiness" and ctx.readiness is None:
             return False
     return True
 

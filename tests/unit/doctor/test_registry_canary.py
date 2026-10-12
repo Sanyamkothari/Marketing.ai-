@@ -30,12 +30,17 @@ from engine.agent.loop import chat_turn
 from engine.agent.session import start_session
 from engine.agent.tools import TOOLS, AgentContext, AgentToolError
 from engine.agent.untrusted import for_prompt
+from engine.contracts import RunMode
 from engine.doctor import registry as registry_module
+from engine.doctor.case import CaseFile, CaseStore
+from engine.doctor.case_files import CaseFiles
 from engine.doctor.diagnose import LoadedFile
 from engine.doctor.memory import remember
+from engine.doctor.readiness import CheckReadinessArgs, ReadinessInputs
 from engine.doctor.registry import DataToolContext, data_registry
 from engine.stages import ingest
-from engine.storage import LocalStorage
+from engine.storage import LocalStorage, upload_key
+from engine.utils.time import utc_now
 from tests.unit.agent.egress_canary import (
     ADDRESS,
     CELL_WORDS,
@@ -68,6 +73,8 @@ PERSONAL_VALUES = (
 MODES = ("masked_data", "summaries_only")
 CUSTOMERS = "up-customers"
 EVENTS = "up-events"
+LATER = "up-events-later"
+"""The next export of the events report, overlapping the first: what M237's `stack_files` reads."""
 ANALYST = Principal(user_id="u-analyst", username="analyst", roles=frozenset({Role.ANALYST}), kind="user")
 
 Calls = Callable[[Sequence[str]], list[dict[str, Any]]]
@@ -79,6 +86,11 @@ def _look(name: str) -> Calls:
 
 def _fixed(*calls: dict[str, Any]) -> Calls:
     return lambda _columns: list(calls)
+
+
+def _each(argument: str) -> Calls:
+    """One call per column of the file, naming it as `argument`."""
+    return lambda columns: [{argument: column} for column in columns]
 
 
 def _edits(columns: Sequence[str]) -> list[dict[str, Any]]:
@@ -109,6 +121,44 @@ SPECS: dict[str, Calls | None] = {
     "data_request": _fixed({}),
     "find_time_columns": _fixed({}, {"upload_id": CUSTOMERS}, {"upload_id": EVENTS}),
     "recall_treatment": _fixed({}),
+    # Plan O wave 1 (DEC-1802 (t)): M240's, M238's, M237's, M241's and M234's tools.
+    "read_other_format": _fixed({"file_id": CUSTOMERS}),
+    "check_parser_loss": _fixed({"file_id": CUSTOMERS}),
+    "synonym_clusters": _each("column"),
+    "impossible_values": _fixed({}),
+    "detect_units": _each("column"),
+    "keep_latest_per_id": _fixed({"time_column": "signup_date"}),
+    "split_file": _fixed(
+        {"rule": {"column": "signup_date", "by": "date", "cut": "2024-06-30"}},
+        {"rule": {"column": "region_contact", "by": "values", "scoring_values": ["North"]}},
+    ),
+    "normalise_key": _fixed(
+        {
+            "upload_id": EVENTS,
+            "column": "customer_id",
+            "other_upload_id": CUSTOMERS,
+            "other_column": "customer_id",
+        }
+    ),
+    "join_files": _fixed(
+        {
+            "base_upload_id": CUSTOMERS,
+            "base_key_column": "customer_id",
+            "upload_ids": [EVENTS],
+            "kinds": {EVENTS: "outcome_list"},
+        },
+        {"base_upload_id": CUSTOMERS, "base_key_column": "customer_id", "upload_ids": [EVENTS, LATER]},
+    ),
+    "stack_files": _fixed(
+        {"upload_ids": [EVENTS, LATER]},
+        {"upload_ids": [EVENTS, LATER], "key_column": "customer_id", "date_column": "bill_date"},
+    ),
+    "build_dataset": _fixed({"use_case": "targeted-advertisement", "upload_ids": [CUSTOMERS, EVENTS, LATER]}),
+    "detect_locale": _fixed({}),
+    "parse_indian_numbers": _fixed({}),
+    "indian_booleans": _fixed({}),
+    "detect_india_ids": _fixed({}),
+    "check_readiness": _fixed({}, {"mode": "train"}),
 }
 
 
@@ -145,8 +195,45 @@ def _profile(ctx: AgentContext, frame: pd.DataFrame, upload_id: str, file_name: 
     )
 
 
+def _stored_case(storage: LocalStorage, ctx: AgentContext, file_name: str) -> CaseFiles:
+    """The canary file as a stored upload in an M231 case, for M240's tools (which read the case's files)."""
+    source = upload_key(CUSTOMERS, "source.csv")
+    storage.write_text(source, ctx.frame.to_csv(index=False))
+    storage.write_text(
+        upload_key(CUSTOMERS, "upload.json"),
+        json.dumps({"upload_id": CUSTOMERS, "file_name": file_name, "source_key": source}),
+    )
+    store = CaseStore(storage)
+    case = store.create(
+        client_id="default",
+        created_by=ANALYST.user_id,
+        files=[
+            CaseFile(upload_id=CUSTOMERS, file_name=file_name, added_at=utc_now(), added_by=ANALYST.user_id)
+        ],
+    )
+    return CaseFiles(store=store, client_id="default", case_id=case.case_id, actor=ANALYST.user_id)
+
+
+def _readiness(ctx: AgentContext) -> Callable[[CheckReadinessArgs], ReadinessInputs]:
+    """M234's inputs for the canary file, as a case would build them for its prepared copy."""
+
+    def inputs(args: CheckReadinessArgs) -> ReadinessInputs:
+        return ReadinessInputs(
+            frame=ctx.frame,
+            config=ctx.config,
+            mode=RunMode(args.mode),
+            primary_key="customer_id",
+            target="converted_30d",
+            upload_id=CUSTOMERS,
+            row_count=len(ctx.frame),
+        )
+
+    return inputs
+
+
 def _case(ctx: AgentContext, root: Path) -> DataToolContext:
     events = _events(ctx)
+    later = pd.concat([events.iloc[600:], _events(ctx, 1_200).iloc[900:]], ignore_index=True)
     files = (
         LoadedFile(
             upload_id=CUSTOMERS,
@@ -161,8 +248,15 @@ def _case(ctx: AgentContext, root: Path) -> DataToolContext:
             frame=events,
             profile=_profile(ctx, events, EVENTS, "bills.csv"),
         ),
+        LoadedFile(
+            upload_id=LATER,
+            file_name=f"bills later {EMAIL}.csv",
+            frame=later,
+            profile=_profile(ctx, later, LATER, "bills later.csv"),
+        ),
     )
     storage = LocalStorage(root)
+    case_files = _stored_case(storage, ctx, files[0].file_name)
     upload_record(storage, "u_month_one", f"{NAME} {EMAIL}.csv")
     remember(
         storage,
@@ -183,6 +277,9 @@ def _case(ctx: AgentContext, root: Path) -> DataToolContext:
         session=start_session(ctx, session_id="canary"),
         save_session=lambda _session: None,
         config_root=ctx.config_root,
+        primary_key="customer_id",
+        case_files=case_files,
+        readiness=_readiness(ctx),
     )
 
 

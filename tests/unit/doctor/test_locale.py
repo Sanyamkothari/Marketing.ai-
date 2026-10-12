@@ -279,7 +279,10 @@ def test_money_units_are_keyed_by_column_not_by_file() -> None:
 
 def test_a_bare_letter_in_a_unit_column_does_not_vote_for_number_words() -> None:
     """Review item 3: `30m` minutes and `2L` litres are not evidence of million or lakh."""
-    for frame in (pd.DataFrame({"duration": ["30m", "45m", "15m"]}), pd.DataFrame({"qty": ["2L", "5L", "1L"]})):
+    for frame in (
+        pd.DataFrame({"duration": ["30m", "45m", "15m"]}),
+        pd.DataFrame({"qty": ["2L", "5L", "1L"]}),
+    ):
         assert detect_locale(frame).profile.number_words.source == "default"
     money = pd.DataFrame({"ctc": ["12K", "1.5M", "800K"]})
     assert detect_locale(money).profile.number_words.value == "k_m"
