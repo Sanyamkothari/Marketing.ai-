@@ -625,3 +625,43 @@ routing the other formats through upload comes later.*
 `engine/doctor/tools_formats.py`; the case's files for these tools are `engine/doctor/case_files.py` (`CaseFiles`,
 over M231's case). `read_other_format` (#4) and `check_parser_loss` (#5) are in the registry;
 `read_workbook_sheets` and `find_excel_serial_dates` wait for a row in the design's catalogue.
+
+## 18. How we check Data Doctor: the evals (Plan O M248, DEC-1818)
+
+*A tool for the team, not a screen. It switches `data_doctor.unified` on in its own process only; nothing a client
+sees changes.*
+
+`make agent-eval` (`python -m scripts.plan_o_benchmark`) writes `reports/plan_o_benchmark.md` and `.json`. It
+measures:
+
+- **Harm, which must be zero:** rows or columns lost with nothing saying so; an outcome changed without the
+  person's approval; an AI suggestion that arrives ticked; personal data in anything sent to an AI service.
+- **pass^5 per tool:** five runs give the same decisions (kinds, columns, settings, never wording), every suggestion
+  acceptable, none harmful. For a tool the AI calls, a failure means its AI part is switched off and its rules stay
+  (Plan O §9.3); the report says so per tool.
+- **Injection canaries for every tool:** a column whose name and cells are instructions to the AI, against the same
+  column with its letters rotated (same lengths, says nothing). What a cell says must not change any decision.
+- **Cost per case:** AI calls, tokens and cost, with a budget alarm.
+- **The messy benchmark:** Plan L's 30 files, new cases (lakh and crore, `haan/nahi`, GSTIN, mixed currency, a
+  dollar file, a multi-valued outcome, overlapping monthly exports, two files per customer), and **20 Indian files
+  written by a separate generator that reads nothing from our word lists**, reported on their own and never used to
+  tune anything. Each goes through upload, Data Doctor, Guided setup and Approve with no person; the readiness
+  verdict is checked on every file.
+- **Tools not built yet** are listed as such, with the milestone that builds them; nothing stands in for them.
+
+**The AI model.** By default a recorded one: a file of answers (`tests/fixtures/doctor_eval/cassettes/ai_path.json`)
+keyed by a hash of each prompt, holding no prompt. It needs no network and no key. With a real model configured, the
+evals call it instead; `--model real --record` records its answers. The recorded answers shipped today come from a
+scripted reference model, because no AI service was available where the harness was built; the report names which
+model answered.
+
+**What waits.** Training every `ready` file to the end (`--train`) is the gate run, after the Data Doctor screen
+(M247). The held-out files are a stand-in until the author the approvers name delivers theirs; `--heldout-dir` reads
+a folder of real files with no change.
+
+### For developers
+
+`engine/doctor/evals.py` (discovery, digests, pass^k, the injection twin, harm, the cassette meter, the report),
+`scripts/plan_o_benchmark.py` (the runs), `tests/fixtures/doctor_eval/` (the eval world and its per-tool calls, the
+AI cases, the reference model, the extended cases, the held-out generator). A registered tool without eval calls
+fails `test_every_registered_tool_has_eval_calls`.
