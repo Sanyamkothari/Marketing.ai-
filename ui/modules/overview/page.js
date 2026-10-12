@@ -13,7 +13,7 @@
 //
 // The look (Plan M M186, DEC-1616) is ui/theme.css's and ui/components.js's: attention items (`attentionItem`), status
 // chips (`statusChip`, the one mapping), empty states with an icon (`emptyState`), buttons (`button`) and the value
-// range's track (`.vrange`). The page adds only its own grid and the hero, in one style tag drawn with the page.
+// range's track (`.vrange`). The page adds only its own grid and the hero, in one sheet (`STYLE_ID`, scoped to `.ovp`).
 //
 // The builders are pure (`overviewHtml`, `cardAction`, `shortName`, `nextStepText`): what they draw comes from their
 // arguments, so the jsdom tests call them with recorded or stubbed answers. Words follow Plan M §4.1. Numbers and days
@@ -343,13 +343,12 @@ export function overviewHtml({ overview = null, error = null, places = DEFAULT_P
       places,
     )}${liveHtml(overview, places)}</div>`;
   }
-  return `<main class="screen ovp" data-module="overview">${STYLE_TAG}${head}${body}</main>`;
+  return `<main class="screen ovp" data-module="overview">${head}${body}</main>`;
 }
 
 // --- styles: the page's grid and hero; everything else is ui/theme.css ----------------------------------------------
-// Drawn with the page (not injected into <head>): Home (`ui/overview.js`) injects a sheet with the same id it used to
-// share, which made this one go missing whenever Home was drawn first. Scoped to `.ovp` so Home's `.ov` rules never
-// reach it. Text colours are tokens on the card's white or the soft panel, which the contrast test checks.
+// Scoped to `.ovp` so Home's `.ov` rules never reach this page. Text colours are tokens on the card's white or the soft
+// panel, which the contrast test checks.
 
 const CSS = `
 .ovp .ovp-grid{display:grid;gap:20px;grid-template-columns:minmax(0,1fr) minmax(0,1fr);grid-template-areas:"attention attention" "value live";align-items:stretch}
@@ -407,5 +406,15 @@ const CSS = `
 }
 `;
 
-const STYLE_TAG = `<style data-overview-style>${CSS}</style>`;
+// Its own id: the classic Home (ui/overview.js) injects a sheet called "ov-styles" (scoped to `.ov`) too, and when app.js
+// drew Home before this module registered, the Overview page used to find that id and skip its own rules (M185 review).
+// M186 also scopes these rules to `.ovp`, so none of Home's `.ov` rules reaches this page either.
+export const STYLE_ID = "ov-page-styles";
 
+export function injectStyles(doc = document) {
+  if (!doc || !doc.head || doc.getElementById(STYLE_ID)) return;
+  const style = doc.createElement("style");
+  style.id = STYLE_ID;
+  style.textContent = CSS;
+  doc.head.appendChild(style);
+}

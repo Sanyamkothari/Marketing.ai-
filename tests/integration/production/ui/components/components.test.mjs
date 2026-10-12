@@ -348,3 +348,15 @@ test("icon: decoration unless labelled, and nothing for an unknown name", () => 
   assert.equal(named.getAttribute("width"), "20");
   assert.equal(C.icon("no-such-icon"), "");
 });
+
+test("the Overview page draws its own rules even when the classic Home's sheet came first (M185 review)", async () => {
+  const { injectStyles } = await import("../../../../../ui/modules/overview/page.js");
+  const page = new JSDOM(`<!DOCTYPE html><html><head><style id="ov-styles">.ov .ov-other-list{margin:0}</style></head><body></body></html>`);
+  const doc = page.window.document;
+  injectStyles(doc);
+  injectStyles(doc);
+  // M186 (DEC-1616) scopes the page's rules to `.ovp` (Home's sheet is `.ov`): the grid rule is `.ovp .ovp-grid{`.
+  const own = [...doc.head.querySelectorAll("style")].filter((s) => s.textContent.includes(".ovp .ovp-grid{"));
+  assert.equal(own.length, 1, "the Overview page's grid rules are in the document, once");
+  assert.notEqual(own[0].id, "ov-styles");
+});

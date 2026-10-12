@@ -87,6 +87,8 @@ dependencies = [
   # ---- END PLAN-K ----
   # ---- PLAN-M (simple UI) — append only below this line ----
   # ---- END PLAN-M ----
+  # ---- PLAN-O (Data Doctor) — append only below this line ----
+  # ---- END PLAN-O ----
 ]
 
 [project.optional-dependencies]
@@ -115,6 +117,7 @@ azure = ["azure-storage-blob>=12.20,<13"]
 local-embeddings = ["sentence-transformers>=3.0,<6"]
 dev = [
   "pytest==9.1.1",
+  "pytest-xdist==3.8.0",                 # CI runs the fast suite on every core (`-n auto`, ci.yml); also registers xdist_group
   "hypothesis==6.168.0",
   "httpx==0.28.1",
   "ruff==0.16.8",
