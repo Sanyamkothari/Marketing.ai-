@@ -130,7 +130,7 @@ fills a missing client from its recipe's client (`api.routes.schedules._client_f
 | `runs/<id>/*` | No. `run.json` names the client of a dataset run | the same test |
 | `uploads/<id>/*` | No. The deployment's own | Phase 1 path |
 | `doctor_memory/<use case>/<shape>.json` | No. Per use case, like the uploads it remembers (Plan L M159); column names and ids only | `tests/unit/doctor/test_memory.py` |
-| `cases/<client>/<case>/*` | **Yes** (Plan O M231, only while `data_doctor.unified` is on). A case is read only under its own client; another client's id answers `404 CASE_NOT_FOUND`. The uploads it refers to stay the deployment's own | `tests/unit/doctor/test_case.py`, `tests/integration/test_api_cases.py` |
+| `cases/<client>/<case>/*` | **Yes** (Plan O M231, only while `data_doctor.unified` is on). A case is read only under its own client; another client's id answers `404 CASE_NOT_FOUND`. The uploads it refers to stay the deployment's own. Local store only for now: `cases/` is not yet an S3 prefix of the AWS task role | `tests/unit/doctor/test_case.py`, `tests/integration/test_api_cases.py` |
 | `models/**`, `runs/<id>/model/**` | No. One registry per deployment | section 4, item 1 |
 | `indexes/<id>/*` | No | section 4, item 4 |
 | `llm_cache/<xx>/<key>.json` | No, and nothing in the served app writes it | `test_the_served_api_keeps_no_completion_cache_to_share_between_clients` (tripwire) |

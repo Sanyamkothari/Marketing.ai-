@@ -18,6 +18,7 @@ from fastapi.testclient import TestClient
 
 from api.access_policy import all_policies
 from api.main import create_app
+from api.routes import cases as cases_routes
 from engine.access.roles import Role
 from engine.doctor import case as doctor_case
 from engine.storage import LocalStorage, upload_key
@@ -190,6 +191,55 @@ def test_an_existing_guided_session_opens_as_a_read_only_case(client: TestClient
     assert other.status_code == 404, "uploads are the deployment's own: no other client sees them as cases"
 
 
+def test_a_guided_session_of_a_file_with_a_long_name_opens(client: TestClient, data_dir: Path) -> None:
+    """Review M231: an upload's name has no length limit; the case's title keeps its first 200 characters."""
+    name = "monthly-bills-" + "x" * 220 + ".csv"
+    upload_id = upload(client, name)
+    LocalStorage(data_dir).write_text(
+        upload_key(upload_id, "agent/agent_session.json"), json.dumps(_session(upload_id))
+    )
+    opened = client.get(f"/cases/guided_{upload_id}")
+    assert opened.status_code == 200, opened.text
+    assert opened.json()["title"] == name[:200] and opened.json()["files"][0]["file_name"] == name
+    assert client.get(f"/cases/guided_{upload_id}/timeline").status_code == 200
+
+
+def test_a_guided_session_that_cannot_be_shown_as_a_case_answers_a_code(
+    client: TestClient, data_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Review M231: an adapter that cannot map a session refuses with a code, never a 500."""
+    upload_id = upload(client, "bills.csv")
+    LocalStorage(data_dir).write_text(
+        upload_key(upload_id, "agent/agent_session.json"), json.dumps(_session(upload_id))
+    )
+
+    def unmappable(*args: object, **kwargs: object) -> object:
+        return doctor_case.Case.model_validate({})
+
+    monkeypatch.setattr(cases_routes, "case_from_session", unmappable)
+    for response in (
+        client.get(f"/cases/guided_{upload_id}"),
+        client.get(f"/cases/guided_{upload_id}/timeline"),
+        client.post(f"/cases/guided_{upload_id}/files", json={"version": 1, "upload_id": upload_id}),
+    ):
+        assert response.status_code == 409 and code_of(response) == "CASE_UNREADABLE", response.text
+
+
+def test_an_unreadable_stored_case_answers_a_code(client: TestClient, data_dir: Path) -> None:
+    case_id = client.post("/cases", json={}).json()["case_id"]
+    storage = LocalStorage(data_dir)
+    key = doctor_case.case_key("default", case_id)
+    document = json.loads(storage.read_bytes(key))
+    document["questions"] = [{"question_id": "", "text": "?"}]
+    storage.write_text(key, json.dumps(document))
+    for response in (
+        client.get(f"/cases/{case_id}"),
+        client.get(f"/cases/{case_id}/timeline"),
+        client.post(f"/cases/{case_id}/files", json={"version": 1, "upload_id": "u_x"}),
+    ):
+        assert response.status_code == 409 and code_of(response) == "CASE_UNREADABLE", response.text
+
+
 def test_the_routes_have_their_policies(client: TestClient) -> None:
     policies = all_policies()
     assert set(policies) >= ROUTES
@@ -217,9 +267,7 @@ def test_a_viewer_reads_a_case_but_cannot_change_it(unified: None, tmp_path: Pat
         assert [e["actor"] for e in events] == [analyst], "the timeline records the user id"
 
 
-def test_with_the_switch_off_there_is_no_case_route_and_the_api_is_unchanged(
-    config_root: Path, tmp_path: Path
-) -> None:
+def test_with_the_switch_off_there_is_no_cases_path(config_root: Path, tmp_path: Path) -> None:
     app = create_app(config_root=config_root, data_dir=tmp_path / "data")
     paths = app.openapi()["paths"]
     assert not [path for path in paths if path.startswith("/cases")]

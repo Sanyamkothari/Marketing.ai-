@@ -1,7 +1,9 @@
 """Data Doctor's cases (Plan O M231, DEC-1801): one persistent object per piece of data work.
 
 Mounted only when `data_doctor.unified` is on (the `PLAN-O (M231)` hook in `api/main.py`): with it off -
-the default - none of these paths exists and the API is byte-identical to Plan M's.
+the default - none of these paths exists and docs/API.md is unchanged. (The OpenAPI schema still gains the
+additive retention values `case_data`, `case_log`, `forget_upload`, `RetentionItem.upload_id` and
+`RetentionResult.forgotten`, which `engine.privacy` defines whatever the switch.)
 
 | Method and path | Role | Does |
 |---|---|---|
@@ -19,6 +21,9 @@ work exist only for the `default` client, because uploads are the deployment's o
 both add a file, the first gets version 4 and the second `409 CASE_VERSION_CONFLICT`: they reload and see
 what changed instead of overwriting it (`engine.doctor.case.CaseStore`).
 
+**Unreadable.** A stored case that no longer validates, or an older Guided session that cannot be shown as
+a case, answers `409 CASE_UNREADABLE`, never a server error.
+
 **Who.** Every change records the signed-in user's id in the timeline (`local-operator` with sign-in off).
 A Viewer may read a case and its timeline; changing one needs an Analyst, as uploading does.
 """
@@ -28,7 +33,7 @@ from __future__ import annotations
 from typing import Annotated, Final
 
 from fastapi import APIRouter, HTTPException, Query, Request
-from pydantic import Field
+from pydantic import Field, ValidationError
 
 from api.access import PrincipalDep, set_audit_context
 from api.access_policy import RoutePolicy, register
@@ -132,6 +137,14 @@ def _error(exc: CaseError) -> Exception:
     return http_error(404 if exc.code == "CASE_NOT_FOUND" else 409, exc.code, exc.message)
 
 
+def _unmappable() -> CaseError:
+    return CaseError(
+        "CASE_UNREADABLE",
+        "This earlier Guided setup cannot be shown as a case. Nothing was changed; open it from the Guided "
+        "setup screen instead.",
+    )
+
+
 def _case_file(storage: Storage, upload_id: str, user_id: str) -> CaseFile:
     """The upload as a case file, by reference; `404 UPLOAD_NOT_FOUND` when there is no such upload."""
     record = load_upload(storage, upload_id)
@@ -153,7 +166,10 @@ def _case_file(storage: Storage, upload_id: str, user_id: str) -> CaseFile:
 
 
 def _adapted(storage: Storage, client_id: str, case_id: str) -> Case | None:
-    """`guided_<upload id>`: that upload's Guided-setup session as a read-only case, or None."""
+    """`guided_<upload id>`: that upload's Guided-setup session as a read-only case, or None.
+
+    `CASE_UNREADABLE` when the session exists but does not map onto a case.
+    """
     if not case_id.startswith("guided_") or client_id != DEFAULT_CLIENT_ID:
         return None
     upload_id = case_id.removeprefix("guided_")
@@ -165,7 +181,10 @@ def _adapted(storage: Storage, client_id: str, case_id: str) -> Case | None:
         file_name = load_upload(storage, upload_id).file_name
     except HTTPException:  # an upload record gone leaves the name blank, not the case
         file_name = ""
-    return case_from_session(session, client_id=client_id, file_name=file_name)
+    try:
+        return case_from_session(session, client_id=client_id, file_name=file_name)
+    except ValidationError as exc:
+        raise _unmappable() from exc
 
 
 @router.post(
@@ -198,11 +217,9 @@ def get_case(
     storage: StorageDep,
     client_id: Annotated[str, Query(pattern=CLIENT_ID_PATTERN)] = DEFAULT_CLIENT_ID,
 ) -> Case:
-    adapted = _adapted(storage, client_id, case_id)
-    if adapted is not None:
-        return adapted
     try:
-        return CaseStore(storage).get(client_id, case_id)
+        adapted = _adapted(storage, client_id, case_id)
+        return adapted if adapted is not None else CaseStore(storage).get(client_id, case_id)
     except CaseError as exc:
         raise _error(exc) from exc
 
@@ -217,9 +234,9 @@ def add_case_file(
     case_id: str, body: AddFileRequest, request: Request, storage: StorageDep, principal: PrincipalDep
 ) -> Case:
     store = CaseStore(storage)
-    if _adapted(storage, body.client_id, case_id) is not None:
-        raise _error(CaseError("CASE_READ_ONLY", _READ_ONLY))
     try:
+        if _adapted(storage, body.client_id, case_id) is not None:
+            raise CaseError("CASE_READ_ONLY", _READ_ONLY)
         store.get(body.client_id, case_id)  # a missing case is named before a missing upload
     except CaseError as exc:
         raise _error(exc) from exc
@@ -245,9 +262,9 @@ def case_timeline(
     storage: StorageDep,
     client_id: Annotated[str, Query(pattern=CLIENT_ID_PATTERN)] = DEFAULT_CLIENT_ID,
 ) -> CaseTimeline:
-    if _adapted(storage, client_id, case_id) is not None:
-        return CaseTimeline(case_id=case_id, events=())
     try:
+        if _adapted(storage, client_id, case_id) is not None:
+            return CaseTimeline(case_id=case_id, events=())
         return CaseTimeline(case_id=case_id, events=CaseStore(storage).timeline(client_id, case_id))
     except CaseError as exc:
         raise _error(exc) from exc

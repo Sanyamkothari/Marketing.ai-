@@ -251,6 +251,14 @@ class RetentionResult(_Doc):
     registry_rows_deleted: int = Field(
         default=0, description="Onboarding source rows removed from the client store."
     )
+    forgotten: tuple[str, ...] = Field(
+        default=(),
+        exclude_if=lambda value: not value,
+        description=(
+            "Plan O M231: Data Doctor cases (`case.json` keys) rewritten without an upload that left "
+            "(`forget_upload`), each once. Left out when empty."
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------

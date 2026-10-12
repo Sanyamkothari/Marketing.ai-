@@ -342,7 +342,8 @@ def apply_retention(
     client_store: ClientStore | None = None,
     now: datetime | None = None,
 ) -> RetentionResult:
-    """Execute `plan` exactly: delete its `delete` keys, empty its `strip_samples` fields, audit once.
+    """Execute `plan` exactly: delete its `delete` keys, empty its `strip_samples` fields, make each case of a
+    `forget_upload` item forget that upload (Plan O M231), audit once.
 
     Nothing is re-planned here, so what was reviewed as a dry run is what happens. A planned key that
     has meanwhile disappeared is reported as `already_gone`, not treated as an error. When a client
@@ -353,6 +354,7 @@ def apply_retention(
     moment = now or utc_now()
     deleted: list[str] = []
     stripped: list[str] = []
+    forgotten: list[str] = []
     gone: list[str] = []
     rows_deleted = 0
     for item in plan.items:
@@ -367,7 +369,8 @@ def apply_retention(
                 rows_deleted += _delete_source_row(client_store, item.owner_id)
         elif item.action is RetentionAction.FORGET_UPLOAD:
             _forget_in_case(storage, item, principal)
-            stripped.append(item.key)
+            if item.key not in forgotten:  # one case may forget several uploads in one pass
+                forgotten.append(item.key)
         else:
             document = json.loads(storage.read_bytes(item.key))
             storage.write_text(
@@ -381,6 +384,7 @@ def apply_retention(
         stripped=tuple(stripped),
         already_gone=tuple(gone),
         registry_rows_deleted=rows_deleted,
+        forgotten=tuple(forgotten),
     )
     if audit_log is not None:
         audit_log.append(
@@ -396,17 +400,18 @@ def apply_retention(
                 details={
                     "request_kind": "retention",
                     "deleted": len(deleted),
-                    "count": len(stripped),
+                    "count": len(stripped) + len(forgotten),  # files changed in place, each once
                     "stores": _counts_text(plan.counts()),
                     "dry_run": False,
                 },
             )
         )
     _LOGGER.info(
-        "retention.apply plan=%s deleted=%d stripped=%d already_gone=%d",
+        "retention.apply plan=%s deleted=%d stripped=%d forgotten=%d already_gone=%d",
         plan.plan_id,
         len(deleted),
         len(stripped),
+        len(forgotten),
         len(gone),
     )
     return result

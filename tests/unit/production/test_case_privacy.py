@@ -22,7 +22,10 @@ from engine.doctor.case import (
     Case,
     CaseFile,
     CaseItem,
+    CaseOption,
+    CaseQuestion,
     CaseStore,
+    EventDraft,
     StandingAnswerUse,
     TimelineKind,
     case_dir,
@@ -39,6 +42,7 @@ from engine.privacy.layout import Store, StoreIndex, store_of
 from engine.privacy.retention import RETENTION_JOB, apply_retention, plan_retention
 from engine.storage import LocalStorage
 from tests.unit.production.privacy_support import customers, write_upload
+from tests.unit.production.test_retention import ListAuditLog
 
 NOW = datetime(2026, 10, 12, 12, 0, tzinfo=UTC)
 SALT = "test-salt-for-cases-0123456789abcdef"
@@ -221,9 +225,46 @@ def test_a_dry_run_lists_exactly_what_the_real_run_does_to_a_case(tmp_path: Path
     plan = plan_retention(storage, config_root, NOW)
     result = apply_retention(plan, storage, None, RETENTION_JOB, now=NOW)
     assert set(result.deleted) == set(plan.planned_keys(RetentionAction.DELETE))
-    assert set(result.stripped) == set(plan.planned_keys(RetentionAction.STRIP_SAMPLES)) | set(
-        plan.planned_keys(RetentionAction.FORGET_UPLOAD)
-    )
+    assert set(result.stripped) == set(plan.planned_keys(RetentionAction.STRIP_SAMPLES))
+    assert set(result.forgotten) == set(plan.planned_keys(RetentionAction.FORGET_UPLOAD))
+    assert not set(result.stripped) & set(result.forgotten), "a forgotten upload is not reported as stripping"
+
+
+def test_two_uploads_leaving_in_one_pass_report_the_case_once(tmp_path: Path, config_root: Path) -> None:
+    """Review M231: the case key is listed once however many of its uploads leave together."""
+    storage = LocalStorage(tmp_path / "data")
+    write_upload(storage, "u_old", customers(["C-1"]), created_at=NOW - timedelta(days=400))
+    write_upload(storage, "u_new", customers(["C-1"]), created_at=NOW - timedelta(days=401))
+    case_id = build_case(storage, at=NOW - timedelta(days=30))
+    plan = plan_retention(storage, config_root, NOW)
+    assert len([i for i in plan.items if i.action is RetentionAction.FORGET_UPLOAD]) == 2
+    log = ListAuditLog()
+    result = apply_retention(plan, storage, log, RETENTION_JOB, now=NOW)
+    assert result.forgotten == (case_key("default", case_id),)
+    assert result.stripped == ()
+    case = CaseStore(storage).get("default", case_id)
+    assert case.files == () and case.items == ()
+    event = log.events[-1]
+    assert event.details["count"] == 1, "one file changed in place, counted once"
+
+
+def test_a_crash_then_retention_keeps_every_event_of_the_processing_log(
+    tmp_path: Path, config_root: Path
+) -> None:
+    """Review M231: a timeline line lost to a crash is replayed before retention rewrites the case."""
+    storage, case_id = _store_with_expiring_upload(tmp_path / "data", case_at=NOW - timedelta(days=30))
+    store = CaseStore(storage, clock=lambda: NOW - timedelta(days=30))
+    current = store.get("default", case_id)
+    extra = CaseFile(upload_id="u_new", file_name="u_new.csv", added_at=current.updated_at, added_by="asha")
+    store.add_file("default", case_id, expected_version=current.version, actor="asha", file=extra)
+    key = timeline_key("default", case_id)
+    expected = [event.event_id for event in CaseStore(storage).timeline("default", case_id)]
+    lines = storage.read_text(key).splitlines()
+    storage.write_text(key, "\n".join(lines[:-1]) + "\n")  # the last write died before appending
+    apply_retention(plan_retention(storage, config_root, NOW), storage, None, RETENTION_JOB, now=NOW)
+    on_disk = [json.loads(line)["event_id"] for line in storage.read_text(key).splitlines()]
+    assert on_disk[: len(expected)] == expected, "the lost event is back, in its place"
+    assert json.loads(storage.read_text(key).splitlines()[-1])["kind"] == TimelineKind.FILE_FORGOTTEN.value
 
 
 def test_a_plan_with_no_case_is_unchanged_in_its_stored_form(tmp_path: Path, config_root: Path) -> None:
@@ -250,7 +291,8 @@ def test_erasing_a_person_removes_their_corrections_and_standing_answers(
     storage, case_id, platform_db = erasure_store
     before = CaseStore(storage).get("default", case_id)
     findings = find_principal(storage, PERSON)
-    assert case_key("default", case_id) in {location.key for location in findings.locations}
+    location = next(loc for loc in findings.locations if loc.key == case_key("default", case_id))
+    assert location.rows == 1, "one correction names them: find and erase count it once"
 
     outcome = erase(
         storage,
@@ -291,6 +333,83 @@ def test_a_numeric_id_is_erased_from_corrections_where_it_is_the_rows_key(
     assert [item.item_id for item in case.items] == ["fix_named"], "an item left with no correction goes"
     assert [answer.answer_id for answer in case.standing_answers_used] == ["sa_1"]
     assert _keys(case.items[0]) == [PERSON, "C-7"]
+
+
+def _tombstone_config(config_root: Path, tmp_path: Path) -> Path:
+    root = tmp_path / "configs"
+    shutil.copytree(config_root, root)
+    path = root / "privacy.yaml"
+    document = yaml.safe_load(path.read_text(encoding="utf-8"))
+    document["erasure"]["mode"] = "tombstone"
+    path.write_text(yaml.safe_dump(document, sort_keys=False), encoding="utf-8")
+    return root
+
+
+def test_tombstone_erasure_of_a_person_named_in_ids_leaves_a_readable_case(
+    erasure_store: tuple[LocalStorage, str, Path], config_root: Path, tmp_path: Path
+) -> None:
+    """Review M231: an id field equal to the person would be masked into an invalid case; it goes instead."""
+    storage, case_id, platform_db = erasure_store
+    store = CaseStore(storage, clock=lambda: NOW)
+    current = store.get("default", case_id)
+    question = CaseQuestion(
+        question_id=PERSON,
+        text=f"Is {PERSON} the same as C-105?",
+        options=(CaseOption(option_id=PERSON, label="Yes"), CaseOption(option_id="no", label="No")),
+    )
+    other = CaseQuestion(question_id="q_other", text="Which column is the outcome?")
+    store.update(
+        "default",
+        case_id,
+        expected_version=current.version,
+        actor="asha",
+        change=lambda case: (case.model_copy(update={"questions": (question, other)}), ()),
+    )
+    outcome = erase(
+        storage,
+        PERSON,
+        engine=sqlite_engine(platform_db),
+        principal=LOCAL_OPERATOR,
+        salt=SALT,
+        config_root=_tombstone_config(config_root, tmp_path),
+    )
+    assert outcome.status == "completed"
+    case = store.get("default", case_id)  # still a valid case
+    assert [q.question_id for q in case.questions] == ["q_other"], "the question naming them went whole"
+    assert PERSON.encode() not in storage.read_bytes(case_key("default", case_id))
+    assert store.timeline("default", case_id)[-1].kind is TimelineKind.ERASURE
+
+
+def test_a_crash_pending_event_naming_the_person_is_replayed_masked(
+    erasure_store: tuple[LocalStorage, str, Path], config_root: Path
+) -> None:
+    """Review M231: the erasure rewrite replays a crash-pending event, and the person does not come back with it."""
+    storage, case_id, platform_db = erasure_store
+    store = CaseStore(storage, clock=lambda: NOW)
+    current = store.get("default", case_id)
+    store.update(
+        "default",
+        case_id,
+        expected_version=current.version,
+        actor="asha",
+        change=lambda case: (case, (EventDraft(kind=TimelineKind.QUESTION_ASKED, item_id=PERSON),)),
+    )
+    key = timeline_key("default", case_id)
+    lines = storage.read_text(key).splitlines()
+    storage.write_text(key, "\n".join(lines[:-1]) + "\n")  # the crash: the event is only in case.json
+    outcome = erase(
+        storage,
+        PERSON,
+        engine=sqlite_engine(platform_db),
+        principal=LOCAL_OPERATOR,
+        salt=SALT,
+        config_root=config_root,
+    )
+    assert outcome.status == "completed"
+    timeline = store.timeline("default", case_id)
+    assert [event.kind for event in timeline[-2:]] == [TimelineKind.QUESTION_ASKED, TimelineKind.ERASURE]
+    assert timeline[-2].item_id == "[erased]", "the processing log keeps that it happened, not who"
+    assert PERSON.encode() not in storage.read_bytes(key)
 
 
 def test_a_case_that_does_not_hold_the_person_is_not_touched(

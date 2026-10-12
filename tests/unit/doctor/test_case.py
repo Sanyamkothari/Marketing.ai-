@@ -52,6 +52,7 @@ from engine.doctor.case import (
     forget_upload,
     payload_digest,
     remove_principal,
+    rewrite_case_document,
     timeline_key,
 )
 from engine.storage import LocalStorage
@@ -335,6 +336,85 @@ def test_a_crash_between_the_case_and_the_timeline_loses_no_event(store: CaseSto
     assert on_disk == ["case.created", "file.added", "file.added"], "the next write replays the lost event"
 
 
+def test_a_crash_then_a_privacy_rewrite_still_loses_no_event(store: CaseStore) -> None:
+    """Review M231: a retention or erasure rewrite replays the crash-pending events before replacing them."""
+    case = store.create(client_id="default", created_by="asha")
+    store.add_file("default", case.case_id, expected_version=1, actor="asha", file=a_file("u_1"))
+    key = timeline_key("default", case.case_id)
+    lines = store.storage.read_text(key).splitlines()
+    store.storage.write_text(key, "\n".join(lines[:-1]) + "\n")  # the process died before appending
+    rewrite_case_document(
+        store.storage,
+        case_key("default", case.case_id),
+        lambda document: forget_upload(document, "u_1"),
+        actor="system:retention",
+        kind=TimelineKind.FILE_FORGOTTEN,
+        upload_id="u_1",
+    )
+    on_disk = [json.loads(line)["kind"] for line in store.storage.read_text(key).splitlines()]
+    assert on_disk == ["case.created", "file.added", "file.forgotten"]
+    assert [event.kind for event in store.timeline("default", case.case_id)] == [
+        TimelineKind.CASE_CREATED,
+        TimelineKind.FILE_ADDED,
+        TimelineKind.FILE_FORGOTTEN,
+    ]
+
+
+def test_a_privacy_rewrite_that_would_leave_an_invalid_case_writes_nothing(store: CaseStore) -> None:
+    """Review M231: `rewrite_case_document` never writes a `case.json` that is no longer a `Case`."""
+    case = store.create(client_id="default", created_by="asha", files=[a_file("u_1")])
+    key = case_key("default", case.case_id)
+    before = store.storage.read_bytes(key)
+
+    def breaks(document: dict[str, Any]) -> tuple[dict[str, Any], dict[str, int]]:
+        return {**document, "case_id": "[erased]"}, {"cells": 1}
+
+    with pytest.raises(CaseError) as refused:
+        rewrite_case_document(store.storage, key, breaks, actor="system:erasure", kind=TimelineKind.ERASURE)
+    assert refused.value.code == "CASE_UNREADABLE"
+    assert store.storage.read_bytes(key) == before
+
+
+def test_timeline_events_are_appended_not_the_file_rewritten(store: CaseStore) -> None:
+    """Review M231: each commit appends to `timeline.jsonl` in place, so a case's lifetime stays linear."""
+    case = store.create(client_id="default", created_by="asha")
+    path = store.storage.local_path(timeline_key("default", case.case_id))
+    inode = path.stat().st_ino
+    version = case.version
+    for n in range(5):
+        version = store.add_file(
+            "default", case.case_id, expected_version=version, actor="asha", file=a_file(f"u_{n}")
+        ).version
+    assert path.stat().st_ino == inode, "appended in place, not rewritten through a temp file"
+    assert len(store.timeline("default", case.case_id)) == 6
+
+
+def test_a_torn_last_timeline_line_does_not_swallow_the_next_event(store: CaseStore) -> None:
+    case = store.create(client_id="default", created_by="asha")
+    path = store.storage.local_path(timeline_key("default", case.case_id))
+    with path.open("ab") as handle:
+        handle.write(b'{"event_id": "ev_')  # a crash mid-append
+    after = store.add_file("default", case.case_id, expected_version=1, actor="asha", file=a_file("u_1"))
+    kinds = [event.kind for event in store.timeline("default", case.case_id)]
+    assert kinds == [TimelineKind.CASE_CREATED, TimelineKind.FILE_ADDED]
+    assert after.last_events[0].event_id in path.read_text(encoding="utf-8").splitlines()[-1]
+
+
+def test_an_unreadable_stored_case_answers_a_code_not_a_crash(store: CaseStore) -> None:
+    """Review M231: a `case.json` that fails validation is `CASE_UNREADABLE`, never an unhandled error."""
+    case = store.create(client_id="default", created_by="asha")
+    key = case_key("default", case.case_id)
+    document = json.loads(store.storage.read_bytes(key))
+    document["questions"] = [{"question_id": "", "text": "?"}]
+    store.storage.write_bytes(key, json.dumps(document).encode("utf-8"))
+    with pytest.raises(CaseError) as unreadable:
+        store.get("default", case.case_id)
+    assert unreadable.value.code == "CASE_UNREADABLE"
+    with pytest.raises(CaseError):
+        store.timeline("default", case.case_id)
+    assert store.list("default") == ()
+
+
 def test_adding_the_same_file_twice_keeps_one_entry(store: CaseStore) -> None:
     case = store.create(client_id="default", created_by="asha", files=[a_file("u_1")])
     again = store.add_file("default", case.case_id, expected_version=1, actor="asha", file=a_file("u_1"))
@@ -443,6 +523,16 @@ def test_a_diagnosis_opens_as_the_same_read_only_case_for_the_same_files() -> No
     assert first.upload_ids() == ("u_a", "u_b") and first.files[0].key_columns == ("customer_id",)
     assert first.diagnosis == diagnosis
     assert case_from_diagnosis(diagnosis, created_at=T0 + timedelta(days=1)).case_id == first.case_id
+    reordered = case_from_diagnosis({**diagnosis, "files": diagnosis["files"][::-1]}, created_at=T0)
+    assert reordered.case_id == first.case_id, "the same files in another order are the same case"
+    assert reordered.upload_ids() == ("u_b", "u_a"), "the files keep the diagnosis's order"
+
+
+def test_a_guided_session_with_a_long_file_name_still_opens() -> None:
+    """Review M231: `Case.title` holds 200 characters; an upload's name has no limit."""
+    name = "x" * 230 + ".csv"
+    case = case_from_session(_session(), file_name=name)
+    assert case.title == name[:200] and case.files[0].file_name == name
 
 
 def test_an_adapters_case_cannot_be_changed_through_the_store(store: CaseStore) -> None:

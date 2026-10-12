@@ -372,8 +372,9 @@ PHASE_ROUTERS.append(overview_router)
 
 
 # Plan O M231 (DEC-1801): the /cases routes, mounted only when `data_doctor.unified` is on (configs/engine.yaml
-# defaults, M230). Off - the default - only the switch reader is imported: no route, so every response and
-# docs/API.md are byte-identical to Plan M's.
+# defaults, M230). Off - the default - only the switch reader is imported: no route is mounted and docs/API.md
+# is unchanged; the OpenAPI schema gains the additive retention enum values case_data, case_log and
+# forget_upload, RetentionItem.upload_id and RetentionResult.forgotten.
 def _install_cases(app: FastAPI) -> None:  # PLAN-O (M231): move into the PLAN-O block at integration
     from engine.doctor import case as doctor_case
 

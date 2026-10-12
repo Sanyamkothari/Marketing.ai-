@@ -24,11 +24,18 @@ writes version 4 and the second is refused rather than silently overwriting it. 
 per-process thread lock of `docs/AGENTS.md` §11 for Data Doctor's own state. A lock left by a crashed
 process is broken after `lock_stale_seconds`. A store with neither exclusive create (an S3 store before
 it gains a conditional put) falls back to a process-wide lock plus an exists check: correct within one
-API process, which is what such a deployment runs today.
+API process only. (`cases/` is not yet among the AWS task role's S3 prefixes either; see
+`docs/DATA_DOCTOR.md`.)
 
 **Crash consistency.** `case.json` carries the events of its own version (`last_events`). The timeline
-is appended after the case is written; the next locked write, and every timeline read, replays any of
-those events the timeline does not hold yet. A crash between the two writes therefore loses no event.
+is appended after the case is written; the next locked write (a retention or erasure rewrite included),
+and every timeline read, replays any of those events the timeline does not hold yet. A crash between the
+two writes therefore loses no event. On a local store the timeline is appended in place and only its tail
+is read to replay, so a write costs its own events, not the case's history.
+
+**Never unreadable.** A stored `case.json` that fails validation answers `CASE_UNREADABLE`, never an
+unhandled error; and a privacy rewrite never turns a valid case into an invalid one (it refuses instead,
+and erasure removes whole the list entries that name the person rather than masking an id field).
 
 **Per-client scope** (the design §4.3). Every case lives under its `client_id`; a lookup under another
 client's id finds nothing (`CASE_NOT_FOUND`), never a refusal that would say the case exists. A
@@ -114,10 +121,10 @@ __all__ = [
     "case_from_diagnosis",
     "case_from_session",
     "case_key",
-    "count_principal",
     "data_doctor_unified",
     "evidence_key",
     "forget_upload",
+    "is_valid_case",
     "new_case_id",
     "payload_digest",
     "remove_principal",
@@ -136,7 +143,9 @@ EVIDENCE_DIRNAME: Final[str] = "evidence"
 DEFAULT_CLIENT_ID: Final[str] = "default"
 """The client of a single-tenant deployment (the design §4.3)."""
 
-CASE_CODES: Final[frozenset[str]] = frozenset({"CASE_NOT_FOUND", "CASE_VERSION_CONFLICT", "CASE_READ_ONLY"})
+CASE_CODES: Final[frozenset[str]] = frozenset(
+    {"CASE_NOT_FOUND", "CASE_VERSION_CONFLICT", "CASE_READ_ONLY", "CASE_UNREADABLE"}
+)
 """The codes this module raises; the integrator adds them to `PLAN_O_CODES` with their help entries."""
 
 CLIENT_ID_PATTERN: Final[str] = r"^[a-z0-9][a-z0-9_-]{0,63}$"
@@ -151,7 +160,8 @@ _POLL_SECONDS: Final[float] = 0.02
 
 
 class CaseError(Exception):
-    """A refusal with a stable code: `CASE_NOT_FOUND` (404), `CASE_VERSION_CONFLICT` and `CASE_READ_ONLY` (409)."""
+    """A refusal with a stable code: `CASE_NOT_FOUND` (404), `CASE_VERSION_CONFLICT`, `CASE_READ_ONLY` and
+    `CASE_UNREADABLE` (409)."""
 
     def __init__(self, code: str, message: str) -> None:
         super().__init__(message)
@@ -651,6 +661,9 @@ class CaseStore:
             case = self._storage.read_model(case_key(client_id, case_id), Case)
         except StorageError as exc:
             raise _not_found(case_id) from exc
+        except ValueError as exc:  # pydantic's ValidationError and a JSON error are both ValueErrors
+            _LOG.warning("case.unreadable a stored case.json failed validation")
+            raise _unreadable() from exc
         if case.client_id != client_id or case.case_id != case_id:
             raise _not_found(case_id)
         return case
@@ -829,19 +842,20 @@ class CaseStore:
 
     def _replay(self, case: Case) -> None:
         """Append the events a crash kept out of the timeline (they are in `case.last_events`)."""
-        if not case.last_events:
-            return
-        key = timeline_key(case.client_id, case.case_id)
-        present = {event.event_id for event in _read_timeline(self._storage, key)}
-        missing = tuple(event for event in case.last_events if event.event_id not in present)
-        if missing:
-            _append_events(self._storage, key, missing)
-            _LOG.warning("case.timeline replayed %d event(s) of case %s", len(missing), case.case_id)
+        _replay_events(self._storage, timeline_key(case.client_id, case.case_id), case.last_events)
 
 
 def _not_found(case_id: str) -> CaseError:
     del case_id  # never echoed: an id from the request could carry anything
     return CaseError("CASE_NOT_FOUND", "There is no such case for this client.")
+
+
+def _unreadable() -> CaseError:
+    return CaseError(
+        "CASE_UNREADABLE",
+        "This case is stored in a form that cannot be read. Nothing was changed; ask an administrator to "
+        "look at it.",
+    )
 
 
 def _read_only(case_id: str) -> CaseError:
@@ -868,15 +882,116 @@ def _read_timeline(storage: Storage, key: str) -> tuple[TimelineEvent, ...]:
     return tuple(events)
 
 
+def _appends_in_place(storage: Storage) -> bool:
+    """A plain local store appends to the file itself; anything else (a subclass, S3) is read and rewritten."""
+    return type(storage) is LocalStorage
+
+
 def _append_events(storage: Storage, key: str, events: Sequence[TimelineEvent]) -> None:
+    """Append `events` to the timeline. The caller holds the case's lock.
+
+    On a local store the lines are appended in place and fsynced, so a write costs its own events, not the
+    timeline's length. A line torn by a crash mid-append is closed with a newline first, so it stays one
+    unreadable line (skipped on read) and never swallows the next event. A store without append (S3) reads
+    the object and writes it back whole.
+    """
     if not events:
+        return
+    lines = "".join(event.model_dump_json() + "\n" for event in events).encode("utf-8")
+    if _appends_in_place(storage):
+        path = storage.local_path(key)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a+b") as handle:
+            handle.seek(0, os.SEEK_END)
+            if handle.tell():
+                handle.seek(-1, os.SEEK_END)
+                if handle.read(1) != b"\n":
+                    lines = b"\n" + lines
+            handle.write(lines)
+            handle.flush()
+            os.fsync(handle.fileno())
         return
     try:
         existing = storage.read_bytes(key)
     except StorageError:
         existing = b""
-    lines = "".join(event.model_dump_json() + "\n" for event in events).encode("utf-8")
+    if existing and not existing.endswith(b"\n"):
+        existing += b"\n"
     storage.write_bytes(key, existing + lines)
+
+
+_TAIL_BLOCK: Final[int] = 1 << 16
+
+
+def _tail_lines(storage: Storage, key: str, count: int) -> tuple[bytes, ...]:
+    """The last `count` lines of the timeline, read from the end on a local store."""
+    if not _appends_in_place(storage):
+        try:
+            return tuple(storage.read_bytes(key).splitlines()[-count:])
+        except StorageError:
+            return ()
+    path = storage.local_path(key)
+    try:
+        with path.open("rb") as handle:
+            end = handle.seek(0, os.SEEK_END)
+            position, chunk = end, b""
+            while position > 0 and chunk.count(b"\n") <= count:
+                step = min(_TAIL_BLOCK, position)
+                position -= step
+                handle.seek(position)
+                chunk = handle.read(step) + chunk
+    except FileNotFoundError:
+        return ()
+    return tuple(chunk.splitlines()[-count:])
+
+
+def _replay_events(storage: Storage, key: str, events: Sequence[TimelineEvent]) -> int:
+    """Append those of `events` the timeline does not hold yet; how many were appended.
+
+    `events` are the latest version's (`last_events`), written after every earlier line, so whichever of
+    them reached the timeline are among its last `len(events)` lines (one more for a torn line): only that
+    tail is read, never the whole log.
+    """
+    if not events:
+        return 0
+    present: set[str] = set()
+    for line in _tail_lines(storage, key, len(events) + 1):
+        try:
+            present.add(TimelineEvent.model_validate_json(line).event_id)
+        except ValidationError:
+            continue
+    missing = tuple(event for event in events if event.event_id not in present)
+    if missing:
+        _append_events(storage, key, missing)
+        _LOG.warning("case.timeline replayed %d event(s)", len(missing))
+    return len(missing)
+
+
+def _lenient_events(
+    raw: object, scrub: Callable[[dict[str, Any]], dict[str, Any] | None] | None = None
+) -> tuple[TimelineEvent, ...]:
+    """`last_events` of a raw document as events; an entry that is not one (an older engine's) is skipped."""
+    events: list[TimelineEvent] = []
+    for entry in raw if isinstance(raw, list) else ():
+        if not isinstance(entry, dict):
+            continue
+        cleaned = scrub(entry) if scrub is not None else entry
+        if cleaned is None:
+            continue
+        try:
+            events.append(TimelineEvent.model_validate(cleaned))
+        except ValidationError:
+            _LOG.warning("case.timeline skipped an unreadable pending event")
+    return tuple(events)
+
+
+def is_valid_case(document: object) -> bool:
+    """True when a raw document is a `Case` as this engine reads it."""
+    try:
+        Case.model_validate(document)
+    except ValidationError:
+        return False
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -891,12 +1006,19 @@ def rewrite_case_document(
     kind: TimelineKind,
     upload_id: str | None = None,
     clock: Callable[[], datetime] = utc_now,
+    scrub_pending: Callable[[dict[str, Any]], dict[str, Any] | None] | None = None,
 ) -> dict[str, int]:
     """Rewrite one stored `case.json` as raw JSON under the case's lock, bump its version, log one event.
 
     Raw on purpose, as `engine.privacy.layout` reads every document: a retention or erasure pass must not
     stop at a case written by an older engine. `transform` returns the new document and counts; when every
     count is zero nothing is written. Returns the counts.
+
+    Before anything else, the events the last write left pending (`last_events` a crash kept out of the
+    timeline) are replayed, as `CaseStore.update` does, so replacing them loses none; `scrub_pending`, when
+    given, cleans each first (erasure: the person's id never re-enters the log through a replay). A case
+    that was valid must stay valid: a rewrite that would leave it unreadable raises `CASE_UNREADABLE` and
+    writes nothing.
     """
     parts = key.split("/")
     if len(parts) != 4 or parts[0] + "/" != CASE_PREFIX or parts[3] != CASE_FILENAME:
@@ -911,6 +1033,12 @@ def rewrite_case_document(
             return {}
         if not isinstance(document, dict):
             return {}
+        _replay_events(
+            storage,
+            directory + TIMELINE_FILENAME,
+            _lenient_events(document.get("last_events"), scrub_pending),
+        )
+        was_valid = is_valid_case(document)
         changed, counts = transform(document)
         if not any(counts.values()):
             return counts
@@ -932,6 +1060,9 @@ def rewrite_case_document(
             details=dict(counts),
         )
         changed["last_events"] = [event.model_dump(mode="json")]
+        if was_valid and not is_valid_case(changed):
+            _LOG.warning("case.rewrite refused: the rewritten case would not be readable")
+            raise _unreadable()
         storage.write_bytes(key, (json.dumps(changed, indent=2, ensure_ascii=False) + "\n").encode("utf-8"))
         _append_events(storage, directory + TIMELINE_FILENAME, (event,))
         return counts
@@ -1045,14 +1176,6 @@ def remove_principal(document: dict[str, Any], principal_id: str) -> tuple[dict[
     return out, counts
 
 
-def count_principal(document: object, principal_id: str) -> int:
-    """How many corrections and standing answers `remove_principal` would remove."""
-    if not isinstance(document, dict):
-        return 0
-    _, counts = remove_principal(json.loads(json.dumps(document)), principal_id)
-    return counts["corrections"] + counts["standing_answers"]
-
-
 def _correct_cells_params(item: object) -> dict[str, Any] | None:
     """The dict holding a `correct_cells` step's `cells` list inside an item's payload, if it is one."""
     if not isinstance(item, dict):
@@ -1161,7 +1284,7 @@ def case_from_session(
         updated_at=max(session.updated_at, session.created_at),
         state=_SESSION_STATES.get(session.status.value, VisitState.TREAT),
         version=1,
-        title=file_name,
+        title=file_name[:200],  # `Case.title` holds 200; the file entry keeps the whole name
         source=CaseSource.GUIDED_SESSION,
         read_only=True,
         files=(
@@ -1191,7 +1314,8 @@ def case_from_diagnosis(
 ) -> Case:
     """A Doctor diagnosis (`POST /doctor/diagnosis`) as a read-only case (`doctor_<16 hex>`). Writes nothing.
 
-    The id is a hash of the file ids, so the same set of files opens as the same case.
+    The id is a hash of the sorted file ids, so the same set of files opens as the same case in any order;
+    the files keep the diagnosis's order.
     """
     document: dict[str, Any] = (
         diagnosis.model_dump(mode="json")
@@ -1211,7 +1335,7 @@ def case_from_diagnosis(
         )
         for entry in files_in
     )
-    ids = ",".join(file.upload_id for file in files)
+    ids = ",".join(sorted(file.upload_id for file in files))
     return Case(
         case_id=f"doctor_{hashlib.sha256(ids.encode('utf-8')).hexdigest()[:16]}",
         client_id=client_id,

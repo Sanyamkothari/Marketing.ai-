@@ -55,7 +55,7 @@ from engine.audit.events import AuditEvent, AuditLog, content_hash, principal_ha
 from engine.doctor.case import (
     CASE_FILENAME,
     TimelineKind,
-    count_principal,
+    is_valid_case,
     remove_principal,
     rewrite_case_document,
 )
@@ -171,7 +171,11 @@ def _locate(storage: Storage, key: str, matcher: Matcher, layout: StoreIndex) ->
             key=key, store=store.value, file_kind=kind.value, occurrences=count, rewritable=False
         )
     try:
-        hits = scan_bytes(kind, storage.read_bytes(key), matcher, columns)
+        data = storage.read_bytes(key)
+        structural, remainder = _case_hits(store, key, data, matcher)
+        # Plan O M231: a case's corrections and standing answers are counted structurally, the rest of the
+        # document generically, on disjoint data, so one correction is one row (as `_erase_case` reports)
+        hits = scan_bytes(kind, data if remainder is None else remainder, matcher, columns)
     except StorageError:
         raise
     except Exception:  # an unparseable file is searched as bytes rather than skipped
@@ -188,7 +192,6 @@ def _locate(storage: Storage, key: str, matcher: Matcher, layout: StoreIndex) ->
             if count
             else None
         )
-    structural = _case_hits(store, key, storage, matcher)
     if structural and not hits.any:  # Plan O M231: a correction keyed by the id, numeric ids included
         return PrincipalLocation(
             key=key, store=store.value, file_kind=kind.value, rows=structural, occurrences=hits.ambiguous
@@ -221,14 +224,41 @@ def _is_case_document(key: str) -> bool:
     return len(parts) == 4 and parts[0] == "cases" and parts[3] == CASE_FILENAME
 
 
-def _case_hits(store: Store, key: str, storage: Storage, matcher: Matcher) -> int:
-    """Plan O M231: corrections and standing answers in a case that hold the id (`remove_principal`)."""
+def _case_hits(store: Store, key: str, data: bytes, matcher: Matcher) -> tuple[int, bytes | None]:
+    """Plan O M231: how many corrections and standing answers of a case hold the id (`remove_principal`),
+    and the document without them for the generic scan; `(0, None)` for any other file."""
     if store is not Store.CASES or not _is_case_document(key):
-        return 0
+        return 0, None
     try:
-        return count_principal(json.loads(storage.read_bytes(key)), matcher.principal_id)
+        document = json.loads(data)
     except ValueError:
-        return 0
+        return 0, None
+    if not isinstance(document, dict):
+        return 0, None
+    remainder, removed = remove_principal(document, matcher.principal_id)
+    structural = removed["corrections"] + removed["standing_answers"]
+    if not structural:
+        return 0, None
+    return structural, json.dumps(remainder, ensure_ascii=False).encode("utf-8")
+
+
+def _holds(value: object, matcher: Matcher) -> bool:
+    """True when the generic JSON rule would mask or remove something in `value`."""
+    return scan_bytes(FileKind.JSON, json.dumps(value, ensure_ascii=False).encode("utf-8"), matcher, None).any
+
+
+def _without_entries_holding(document: dict[str, Any], matcher: Matcher) -> tuple[dict[str, Any], int]:
+    """Plan O M231: every entry of the case's lists (questions, options with them, chat, doubts, items, ...)
+    that holds the id, removed whole, so no id field is left masked into an invalid case."""
+    out = dict(document)
+    dropped = 0
+    for field, values in document.items():
+        if field == "last_events" or not isinstance(values, list):
+            continue
+        kept = [value for value in values if not _holds(value, matcher)]
+        dropped += len(values) - len(kept)
+        out[field] = kept
+    return out, dropped
 
 
 def _erase_case(
@@ -237,20 +267,46 @@ def _erase_case(
     """Plan O M231: a case without the person, rewritten under the case's lock with its version bumped.
 
     Their corrections and standing answers go first, structurally; every other occurrence is then masked or
-    removed by the generic JSON rule, as in any artefact. One `privacy.erasure` event records the counts.
+    removed by the generic JSON rule, as in any artefact. When that would leave the case unreadable (an id
+    field equal to the person, masked by `tombstone`, or a list entry removed into a repeated id), every list
+    entry holding the person is removed whole instead and the rest masked, so the case stays a valid `Case`.
+    A pending timeline event replayed by the rewrite is masked the same way first. One `privacy.erasure`
+    event records the counts.
     """
     tally = {"rows": 0, "cells": 0}
 
+    def generic(document: dict[str, Any]) -> tuple[dict[str, Any], Any]:
+        data = json.dumps(document, ensure_ascii=False).encode("utf-8")
+        new, hits = rewrite_bytes(FileKind.JSON, data, matcher, None, mode=policy_mode, tombstone=tombstone)
+        return json.loads(new), hits
+
     def transform(document: dict[str, Any]) -> tuple[dict[str, Any], dict[str, int]]:
         cleaned, removed = remove_principal(document, matcher.principal_id)
-        data = json.dumps(cleaned, ensure_ascii=False).encode("utf-8")
-        new, hits = rewrite_bytes(FileKind.JSON, data, matcher, None, mode=policy_mode, tombstone=tombstone)
-        tally["rows"] = removed["corrections"] + removed["standing_answers"] + hits.rows
+        new, hits = generic(cleaned)
+        dropped = 0
+        if is_valid_case(document) and not is_valid_case({**new, "last_events": []}):
+            pruned, dropped = _without_entries_holding(cleaned, matcher)
+            new, hits = generic(pruned)
+        tally["rows"] = removed["corrections"] + removed["standing_answers"] + dropped + hits.rows
         tally["cells"] = hits.cells + hits.occurrences
-        counts = {**removed, "rows": hits.rows, "cells": hits.cells + hits.occurrences}
-        return json.loads(new), counts
+        counts = {**removed, "entries": dropped, "rows": hits.rows, "cells": hits.cells + hits.occurrences}
+        return new, counts
 
-    rewrite_case_document(storage, key, transform, actor="system:erasure", kind=TimelineKind.ERASURE)
+    def scrub(event: dict[str, Any]) -> dict[str, Any] | None:
+        masked = rewrite_bytes(
+            FileKind.JSON,
+            json.dumps(event, ensure_ascii=False).encode("utf-8"),
+            matcher,
+            None,
+            mode=ErasureMode.TOMBSTONE,  # the processing log keeps that something happened, not who
+            tombstone=tombstone,
+        )[0]
+        loaded = json.loads(masked)
+        return loaded if isinstance(loaded, dict) else None
+
+    rewrite_case_document(
+        storage, key, transform, actor="system:erasure", kind=TimelineKind.ERASURE, scrub_pending=scrub
+    )
     return tally["rows"], tally["cells"]
 
 
