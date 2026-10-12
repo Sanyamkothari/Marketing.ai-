@@ -422,4 +422,18 @@ def _install_data_protocol(app: FastAPI) -> None:  # PLAN-O (M246): move into th
 
 PHASE_APP_HOOKS.append(_install_data_protocol)  # PLAN-O (M246): move into the PLAN-O block at integration
 
+
+# Plan O M247 (DEC-1817): what the Data Doctor screen reads (/cases/{id}/screen, /data-doctor/cases), mounted only
+# when `data_doctor.unified` is on. Off: nothing is imported and docs/API.md is unchanged.
+def _install_case_screen(app: FastAPI) -> None:  # PLAN-O (M247): move into the PLAN-O block at integration
+    from engine.doctor import case as doctor_case
+
+    if doctor_case.data_doctor_unified(app.state.config_root):
+        from api.routes.case_screen import router as case_screen_router
+
+        app.include_router(case_screen_router)
+
+
+PHASE_APP_HOOKS.append(_install_case_screen)  # PLAN-O (M247): move into the PLAN-O block at integration
+
 app: FastAPI = create_app()

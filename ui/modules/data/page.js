@@ -28,6 +28,10 @@ import { injectDataStyles } from "./styles.js";
 // Plan M M192 (DEC-1622): the note under the sources opens Settings › AI service itself, not Settings (which used to
 // send the AI service back to Connections, which the campaigns layout redirects here: a loop).
 import { AI_SETTINGS_HREF } from "../../availability.js";
+// Plan O M247 (DEC-1817): with `data_doctor.unified` on, "Check my data" is the one Data Doctor screen itself, drawn
+// in the tab (a component that draws no H1 of its own), and the header's link goes to the tab. Off: unchanged.
+import { dataDoctorOn, dataDoctorOnNow } from "../datadoctor/switch.js";
+import { mountDataDoctor } from "../datadoctor/screen.js";
 
 export const DATA_HOME = "#/data";
 export const DOCTOR_HREF = "#/doctor";
@@ -53,7 +57,7 @@ const state = {
   showAllFiles: false,
 };
 
-let view = { app: null, tab: "sources", hash: "" };
+let view = { app: null, tab: "sources", hash: "", doctor: false };
 
 /** True while the person is still on the screen this page drew: an answer that arrives after they left must not paint over it. */
 const stillHere = () => window.location.hash === view.hash;
@@ -115,7 +119,7 @@ function header(tab) {
     title: "Data",
     subtitle,
     primary: { label: "+ Add a source", id: "dt-add", attrs: `aria-expanded="${state.chooserOpen}" aria-controls="dt-chooser"` },
-    secondary: [{ label: "Check my data", href: DOCTOR_HREF, attrs: "data-dt-doctor" }],
+    secondary: [{ label: "Check my data", href: dataDoctorOnNow() ? `${DATA_HOME}/check` : DOCTOR_HREF, attrs: "data-dt-doctor" }],
   });
 }
 
@@ -279,7 +283,11 @@ function sourcesHtml() {
 
 // --- the Check my data tab -------------------------------------------------------------------------
 
+/** Plan O M247: the tab holds the Data Doctor screen: the case on the left, the chat on the right. */
+const DOCTOR_SLOTS = `<section class="dt-doctor" data-dt-doctor-screen aria-label="Data Doctor"><div class="dds-layout"><div class="dds-main" data-dds-main></div><aside class="dds-aside" data-dds-aside></aside></div></section>`;
+
 function checkHtml() {
+  if (view.doctor) return DOCTOR_SLOTS;
   const point = (text) => `<li>${icon("checkCircle", { size: 18 })}<span>${esc(text)}</span></li>`;
   return `<section class="dt-check card" aria-labelledby="dt-check-h"><div class="dt-check-h"><span class="dt-ico lg">${icon("checkCircle", { size: 24 })}</span><div><h2 id="dt-check-h">Check my data</h2>
     <p>Data Doctor looks at your files before you use them. It never changes them.</p></div></div>
@@ -299,6 +307,11 @@ function draw() {
     tab === "check" ? checkHtml() : sourcesHtml()
   }</main>`;
   bind(app);
+  if (tab === "check" && view.doctor) {
+    const main = app.querySelector("[data-dds-main]");
+    const aside = app.querySelector("[data-dds-aside]");
+    if (main) mountDataDoctor({ main, aside }, { place: "data" });
+  }
   revealSelectedTab(app);
   document.title = `${tab === "check" ? "Check my data" : "Data"} · Marketing AI`;
 }
@@ -388,9 +401,13 @@ export const tabOf = (parts) => (parts[1] === "check" ? "check" : "sources");
 /** `registerModule`'s render for `#/data[/<tab>]`: paint a skeleton, load, draw. */
 export async function renderData(app, parts) {
   const tab = tabOf(parts);
-  view = { app, tab, hash: window.location.hash };
+  view = { app, tab, hash: window.location.hash, doctor: false };
   injectDataStyles();
   if (tab === "check") {
+    // Plan O M247: only this tab waits for `/auth/me` (the call the app already made at start-up).
+    const doctor = await dataDoctorOn();
+    if (view.app !== app || view.tab !== tab) return;
+    view.doctor = doctor;
     draw();
     return;
   }
