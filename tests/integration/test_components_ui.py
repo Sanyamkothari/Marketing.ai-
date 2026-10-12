@@ -235,7 +235,8 @@ def test_a_small_button_is_a_40px_target_on_a_touch_screen() -> None:
 
 def test_a_value_range_without_an_estimate_draws_its_bar_in_the_brand_colour() -> None:
     """M187 review, at integration: with no estimate dot the bar is the range's only mark, so it is drawn in
-    `--brand-blue` (the pale `--brand-200` reached about 1.4:1 on white); with a dot the bar stays the tint."""
+    `--brand-blue` (the pale `--brand-200` reached about 1.4:1 on white); with a dot the bar stays the tint.
+    """
     by_selector = each_selector(theme())
     assert "background: var(--brand-blue)" in by_selector[".vrange:not(:has(.vr-dot)) .vr-bar"]
     assert "background: var(--brand-200)" in by_selector[".vrange .vr-bar"]

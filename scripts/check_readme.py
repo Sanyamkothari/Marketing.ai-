@@ -811,6 +811,42 @@ MILESTONE_TESTS: Final[Mapping[str, tuple[str, ...]]] = {
         "tests/integration/production/test_approvals_identity.py",
         "tests/unit/agentic/test_verified_identity.py",
     ),
+    # M185 (DEC-1615), the look's foundation: ui/theme.css, the Inter font and ui/components.js. test_components_ui.py
+    # checks the sheet, the font and the bridges and runs components.test.mjs; test_accessibility_ui.py runs
+    # contrast.test.mjs over theme.css's tokens; test_shell_ui.py's classic differential strips M185's marks;
+    # test_shell_browser.py and test_brand_browser.py are the look in Chromium (both layouts, a custom brand colour).
+    "M185": (
+        "tests/integration/test_components_ui.py",
+        "tests/integration/test_accessibility_ui.py",
+        "tests/integration/test_shell_ui.py",
+        "tests/integration/test_shell_browser.py",
+        "tests/integration/test_brand_browser.py",
+        "tests/integration/test_ui.py",
+    ),
+    # M186 (DEC-1616), the look of the Overview, the Campaigns list and the campaign page. test_campaigns_page_ui.py
+    # runs campaigns/look.test.mjs; test_overview_ui.py runs overview.test.mjs; test_campaigns_look_browser.py is
+    # Chromium at 1440 and 390 px.
+    "M186": (
+        "tests/integration/test_campaigns_look_browser.py",
+        "tests/integration/test_campaigns_page_ui.py",
+        "tests/integration/test_overview_ui.py",
+        "tests/integration/test_components_ui.py",
+    ),
+    # M187 (DEC-1617), the look of the New campaign wizard. test_campaign_wizard_look.py runs wizard_look.test.mjs
+    # and checks the wizard in Chromium (1440, 390 and 320 px, a touch screen); test_campaign_wizard_ui.py runs the
+    # wizard's cases (the chosen goal is forgotten on leaving).
+    "M187": (
+        "tests/integration/test_campaign_wizard_look.py",
+        "tests/integration/test_campaign_wizard_ui.py",
+    ),
+    # M188 (DEC-1618), the look of Reports, Data, Settings and Help. test_reports_ui.py, test_data_ui.py and
+    # test_simple_ui.py run reports/, data/ and simple/look.test.mjs; test_look_pages_browser.py is slow (Chromium).
+    "M188": (
+        "tests/integration/test_look_pages_browser.py",
+        "tests/integration/test_reports_ui.py",
+        "tests/integration/data_page/test_data_ui.py",
+        "tests/integration/simple/test_simple_ui.py",
+    ),
     "M189": (
         "tests/unit/test_run_progress.py",
         "tests/unit/test_run_progress_pipeline.py",
@@ -818,6 +854,8 @@ MILESTONE_TESTS: Final[Mapping[str, tuple[str, ...]]] = {
         "tests/integration/test_run_progress_ui.py",
         "tests/integration/test_ui.py",
     ),
+    # M190 (DEC-1620), the MODEL_NOT_APPROVED hold covers every run an arbitrated list was built from.
+    "M190": ("tests/integration/production/test_model_not_approved.py",),
     # --- Plan O (docs/plans/MARKETING_AI_PLAN_O_DATA_DOCTOR.md); each milestone adds its own entry. ---
     # M230 (DEC-1800), the set-up: the PLAN-O blocks, PLAN_O_CODES in the catalogue check, the switch
     # `data_doctor.unified` (off, validated, round-trips, left out of run_config.json while off).
