@@ -62,6 +62,8 @@ from api.routes.agent_recipes import (  # Plan G (DEC-1006)
     replay_for_scoring,
     replay_on_dataset,
 )
+from api.routes.run_prescriptions import Prescribed, prescribed_scoring, prescribed_training  # Plan O M243
+from api.routes.run_prescriptions import attach as attach_prescription
 from api.routes.uploads import (
     UPLOAD_VALIDATION_FILENAME,
     http_error,
@@ -456,11 +458,31 @@ def create_run_endpoint(
     source_id: str = dataset.manifest.dataset_id if dataset is not None else upload_id
 
     version: ModelVersion | None = None
+    # Plan O M243 (DEC-1813): the prescription the run follows; None unless `data_doctor.unified` binds one.
+    prescribed: Prescribed | None = None
     if body.mode is RunMode.TRAIN:
         if upload is not None:
             refuse_other_roles(
                 load_recipe(storage, upload.upload_id), primary_key=primary_key, target=target, training=True
             )
+        prescribed = prescribed_training(
+            storage,
+            config,
+            upload=upload,
+            dataset_id=dataset.manifest.dataset_id if dataset is not None else None,
+            primary_key=primary_key,
+            target=target,
+        )
+        if prescribed is not None and prescribed.upload is not None and prescribed.profile is not None:
+            # The file prepared by its prescription's recipe, written beside it as Guided setup's Approve does.
+            upload, profile = prescribed.upload, prescribed.profile
+            source_key, file_format, source_id = upload.source_key, upload.file_format, upload.upload_id
+        elif prescribed is not None and prescribed.dataset_prepared is not None:
+            # A built dataset trains with its post-build recipe (closes [INV] §8), read as a scoring replay reads it.
+            dataset_prepared = prescribed.dataset_prepared
+            ready = dataset_prepared[1]
+            dataset = replace(_require_dataset(dataset), profile=ready.profile, source_key=ready.source_key)
+            profile, source_key = ready.profile, ready.source_key
         report = validate.validate_for_training(
             read_frame(storage, source_key, file_format, profile_row_cap(config)),
             config,
@@ -493,6 +515,7 @@ def create_run_endpoint(
                 _require_dataset(dataset), profile=prepared.profile, source_key=prepared.source_key
             )
             profile, source_key = prepared.profile, prepared.source_key
+        sent = upload  # the file as the person sent it, before the model's recipe prepares it
         if upload is not None:
             # Before anything is prepared, as the dry run does: a refused run leaves no prepared upload.
             refuse_other_roles(recipe, primary_key=primary_key, target=None, training=False)
@@ -504,8 +527,11 @@ def create_run_endpoint(
                 return validation_conflict(replayed)
             upload, profile = replayed
             source_key, file_format, source_id = upload.source_key, upload.file_format, upload.upload_id
+        scoring_frame = read_frame(storage, source_key, file_format, profile_row_cap(config))
+        # Plan O M243 (DEC-1813): a model trained under a prescription checks the file against it first.
+        prescribed = prescribed_scoring(storage, config, version, scoring_frame, sent=sent)
         report = validate.validate_against_schema(
-            read_frame(storage, source_key, file_format, profile_row_cap(config)),
+            scoring_frame,
             storage.read_model(version.schema_key, FeatureSchema),
             primary_key=primary_key,
             config=config,
@@ -564,6 +590,7 @@ def create_run_endpoint(
         attach_recipe_to_run(storage, upload.upload_id, record.run_id)  # Plan G (DEC-1006)
     elif dataset_prepared is not None:
         attach_dataset_recipe(storage, record.run_id, dataset_prepared[0], dataset_prepared[1].receipt)
+    attach_prescription(storage, record.run_id, prescribed)  # Plan O M243: reference, money basis, warnings
     if stamped_at_creation(config, scoring=body.mode is RunMode.SCORE):
         # Plan J M100 part B (DEC-1310): the catalogue the use case's action ids were just checked against
         # (this root), stamped before the job starts, so the run is stamped and priced from the same file.

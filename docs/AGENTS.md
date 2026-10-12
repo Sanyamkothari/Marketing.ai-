@@ -1448,3 +1448,91 @@ proposed). Rule sets `data.define_outcome` and `data.map_outcome_values`: `data.
   sentence, so it works with no AI service; the AI reaches the tools through the visit (M235/M246).
 - Replaying the definition at training and scoring is M243's prescription; storing questions and answers is
   M246's.
+
+## 22. The prescription (Plan O M243, DEC-1813)
+
+*Behind `data_doctor.unified` (off by default). With it off no prescription is written, nothing is bound, and every
+hook below returns before reading anything: runs are byte-identical.*
+
+### 22.1 The contract (`engine/doctor/prescription.py`, the design §9.1)
+
+`Prescription` (an `Artefact`): `files` (`FilePart` per slot: `IntakeDecision`, `DataRecipe`, `DataContract`), `build`
+(`BuildPart`: M237's `BuildRecord`), `locale` (`LocalePart`: M241's `LocaleProfile`, M242's `MoneyBasis`),
+`post_build` (a `DataRecipe`), `contract` (the final prepared file's), `goals` (`GoalSection` per goal: outcome
+`OutcomePart` with M239's `OutcomeDefinition` and its approval, roles, settings, the brief's split and time settings,
+acknowledgements), `provenance`.
+
+- **One hash.** `prescription_hash` = `engine.agentic.canonical.digest` of the replayed parts' logic: a recipe by
+  `recipe_logic` (its `recipe_hash` and the roles, levels, limit and text columns `prepares_like` compares), the
+  intake decisions, the contracts, a build by `plan_hash`, the locale by `LocaleProfile.profile_hash` and
+  `MoneyBasis.basis_hash`, an outcome by `definition_hash`, a section's roles, settings, split, time settings,
+  acknowledgements and whether it is active. Never reasons, wording, recipe ids, upload ids, file names, brief
+  hashes, item digests, approvers or times (provenance). Checked on load (`ValueError` when the parts do not match).
+- **Stored** content-addressed: `cases/<client_id>/<case_id>/prescriptions/<hash>.json` (`save_prescription` writes
+  once; `load_prescription` checks the hash, `PRESCRIPTION_NOT_FOUND` otherwise).
+- **One part.** `one_part(recipe)` is an existing `DataRecipe` as a prescription: one slot `file`, nothing else.
+- **From a case.** `prescription_from_case` reads the approved items of the base and the active goal (payloads: `step`
+  with optional `stage: post_build`; `key`/`outcome_column`/`as_of_column`/`consent_column` items' `column`; `setting`
+  `path`/`value`; `definition` (+ `approval`, else the case's `outcome-<hash16>` approval); `build_record` and
+  `dataset_id`; `approved_rate`), makes a slot per build source (stacked exports are one slot) and per other file,
+  learns each slot's contract on the visit's rows after its recipe, and a built dataset's contract after the
+  post-build recipe. With one file and no build, post-build steps join the file's recipe. Every recipe records the
+  levels and limit it was approved under (the use case's, else `AgentConfig()`'s).
+- **PRESCRIBE.** `CasePrescriber(storage, load_files, config_root)` is `VisitDeps.prescribe` (wired in
+  `api/routes/case_visit.py`): writes the prescription, binds every case upload and the built dataset
+  (`prescription_runs.bind_upload` / `bind_dataset`), returns the hash. `CasePrescriber.digest` is the same hash
+  without writing; `visit.approve` puts it in M246's `decision_body` (`prescription_hash`), so the ledger entry names
+  the prescription PRESCRIBE writes next. Guided setup's record names its recipe's one-part hash. A part that cannot
+  be made (`CURRENCY_RATE_UNAPPROVED`) is a `CaseError`.
+
+### 22.2 The column contract (`engine/doctor/prescription_contract.py`)
+
+`ColumnContract`: role (`id`, `outcome`, `feature`), type group (as `validate_against_schema` groups types), empty
+share, distinct band, p1/p50/p99 (numbers; dates as days), common values with shares (`MIN_GROUP` = 10 rows; never the
+ID's; none for `many`/`unique` columns), `complete` (every value of 10 rows or more listed, at most 50), `closed`
+(every value listed, at most 20), outcome rate. `check_contract(frame, contract, mode)`:
+
+| Finding | Stops? |
+|---|---|
+| `MISSING_COLUMN`, `MEANING_CHANGED` (type group), `NEW_VALUE` (closed column) | yes: `PRESCRIPTION_DRIFT` |
+| `NEW_COLUMN`, `NEW_CATEGORY` (over 1% of rows and 10 rows, complete open column), `VALUE_DRIFT` (median outside p1-p99; empty share moved over 10 points; outcome rate moved over max(5 points, half of itself)) | no: a warning with a question |
+
+At scoring the outcome column is not read. Every finding carries one `Question` (blocking for a stop; options
+`review`/`stop`, or `expected`/`review`), counts only, with the values it is about in `examples`.
+
+### 22.3 Replay (`engine/doctor/prescription_replay.py`, the design §9.3)
+
+`replay_prescription(prescription, files, mode, goal_id, config, builder, load_built)`: every given `ReplayFile` must
+fill a slot and every slot must be given (`MISSING_FILE`); then intake (`INTAKE_CHANGED` stops on a different format,
+sheet, header row(s) or intake switch; new missing words are a warning), locale (`detect_locale` on the frozen profile;
+any changed field but `money_units`, or a conflict, is `LOCALE_CHANGED`), currency (a money column of the basis
+naming a currency it was not written in: `CURRENCY_FOREIGN`, or `CURRENCY_MIXED` for more than one), each slot's
+recipe (`run_saved_recipe` exactly; a `map_boolean` spelling it has no meaning for is `NEW_VALUE` before the step runs;
+a step failing on a column the contract knows is `PRESCRIPTION_DRIFT` via `step_drift`, else its own code), each
+slot's contract, the build (`replay_build` through the `BuilderPort`; `load_built` reads the dataset), the outcome
+(training only; `apply_outcome_values` with the approved definition), the post-build recipe, the final contract.
+`ReplayReceipt.replayed()` lists the parts that ran. Nothing writes a prescription, learns a contract or proposes.
+
+### 22.4 Runs (`engine/doctor/prescription_runs.py`, `api/routes/run_prescriptions.py`)
+
+- `POST /runs` training: a dataset bound to a prescription with a post-build recipe is prepared by
+  `prepare_dataset(..., leak_check="full")` (the scoring replay's file and key rule; `dataset_key_conflict` first) and
+  its contract checked; the run trains on it and `attach_dataset_recipe` keeps the recipe. An upload bound to one is
+  checked raw (`check_files`), prepared by its slot's recipe with `write_derived_upload` and checked against the
+  slot's contract (a stop removes the prepared copy).
+- `POST /runs` scoring: `check_for_scoring` reads `runs/<training run>/prescription_ref.json`; raw checks on the file
+  as sent (one-slot prescriptions), the contract on the prepared rows the schema check reads.
+- Every such run: `attach_to_run` writes `runs/<id>/prescription_ref.json`, M242's `save_money_basis`, and
+  `prescription_check.json` when there are warnings. A stop is the M1 error envelope, 409, with the code and the
+  question; a scheduled firing (`engine/scheduling/firing.py`) does the same and fails with the code.
+- Bindings: `uploads/<id>/prescription_ref.json`, `datasets/<id>/prescription_ref.json` (ids and a hash only);
+  retention and erasure remove them with their directories.
+
+### 22.5 Not done here
+
+- Codes for `PLAN_O_CODES` and `configs/pilot/help.yaml`: `PRESCRIPTION_DRIFT`, `PRESCRIPTION_NOT_FOUND`
+  (`PRESCRIPTION_CODES`), returned for the integrator.
+- Who calls `replay_prescription` on next month's files inside the visit (FOLLOW_UP to INTAKE) and turns a stop or a
+  warning into a case question with a standing answer is M245's (`DetectorPort`); M247 shows `prescription_check.json`.
+- Item payload conventions (`build_record`, `definition`, `approved_rate`, `stage: post_build`) are for the visit's
+  adapters (M235, M237, M239, M242) to write; today's visit writes roles, settings and steps.

@@ -223,9 +223,18 @@ class PreparedDataset:
 
 
 def prepare_dataset(
-    storage: Storage, config: UseCaseConfig, dataset_id: str, recipe: DataRecipe
+    storage: Storage,
+    config: UseCaseConfig,
+    dataset_id: str,
+    recipe: DataRecipe,
+    *,
+    leak_check: LeakCheck = "narrow",
 ) -> PreparedDataset:
-    """Run `recipe` on every row of the built dataset and store the result beside it. Raises `RecipeError`."""
+    """Run `recipe` on every row of the built dataset and store the result beside it. Raises `RecipeError`.
+
+    `leak_check` is the scoring replay's narrow check by default; Plan O M243 (DEC-1813) passes `full` when a
+    prescription's post-build recipe prepares a dataset for training, as a training file's first build does.
+    """
     from engine.onboarding.datasets import DATASET_FRAME_FILENAME, dataset_key
 
     cap = ingest.profile_row_cap(config)
@@ -237,7 +246,7 @@ def prepare_dataset(
         keep_all_rows=True,
     )
     frame = read_all.all_rows if read_all.all_rows is not None else read_all.frame
-    run = run_saved_recipe(frame, recipe, config, upload_id=dataset_id, leak_check="narrow")
+    run = run_saved_recipe(frame, recipe, config, upload_id=dataset_id, leak_check=leak_check)
     key = prepared_dataset_key(dataset_id, recipe, config)
     try:
         with storage.open_write(key) as sink:

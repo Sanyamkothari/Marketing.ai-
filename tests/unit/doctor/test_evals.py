@@ -533,7 +533,10 @@ def test_the_report_puts_harm_first_lists_tools_not_built_and_says_what_was_not_
         tools=tools,
         files=(
             BenchFile(
-                name="x06", group="extended", use_case="targeted-advertisement", needs=("estimate_training_time",)
+                name="x06",
+                group="extended",
+                use_case="targeted-advertisement",
+                needs=("estimate_training_time",),
             ),
         ),
         notes=("Parts run: tools.",),

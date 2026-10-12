@@ -882,3 +882,38 @@ yes/no outcome must have two values.
 
 `engine/doctor/outcome_definition.py` and `engine/doctor/tools_outcomes.py` (`docs/AGENTS.md` §21); the rule sets
 are `data.define_outcome` and `data.map_outcome_values` in `configs/agentic/policy.yaml`.
+
+## 25. One prescription, used every time (Plan O M243, DEC-1813)
+
+*Behind the switch `data_doctor.unified` (off by default). With it off, nothing below happens and every run is
+exactly as before.*
+
+When you approve what Data Doctor prepared, everything you agreed is kept together as one **prescription**: how each
+file is read, the fixes for each file, how several files are joined into one dataset, what the outcome means, how the
+client writes numbers, dates and yes/no, which currency each money column is in and every rate you gave, the fixes on
+the joined dataset, and, for each goal, its settings. It also keeps a short description of every prepared column as
+it was when you approved it: what kind of values it holds, how often it is empty, its usual range, and its common
+values (only values at least ten rows share, so no single customer is ever in it).
+
+The prescription is used **both when a model is trained and when it scores**:
+
+- **Next month's file** is prepared exactly as you approved, step by step: read the same way, the same fixes, the
+  same joins, the same outcome, the same conversion at the same rate you gave (never a new rate, never fetched).
+- **A dataset built from several files trains with its fixes too** - before, a built dataset could not get Data
+  Doctor's fixes for training. The model then prepares every dataset it scores the same way.
+- **Data Doctor stops and asks when something changed**: a column that is gone or now holds another kind of value, a
+  value it has never seen in a column where it knew every value, a yes/no word it has no meaning for, a currency
+  the file did not use before, numbers or dates written another way, or a file laid out differently. Nothing is
+  trained or scored until you look - it never quietly learns the change.
+- **A change that breaks nothing is a warning with a question** ("Is that expected?"): a new column, a column that
+  is empty much more or less often, values that moved a long way, a new common spelling, a different share of yes.
+- **Models trained today keep scoring exactly as they do**: a Guided setup preparation is read as a prescription
+  with one part, and scores byte for byte the same.
+
+Each run made from a prescription keeps which prescription it followed and, for money columns, their currency and
+rates, so reports show them.
+
+### For developers
+
+`engine/doctor/prescription.py`, `engine/doctor/prescription_contract.py`, `engine/doctor/prescription_replay.py`,
+`engine/doctor/prescription_runs.py` and `api/routes/run_prescriptions.py` (`docs/AGENTS.md` §22).

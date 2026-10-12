@@ -1014,6 +1014,15 @@ def _prescribe(run: _Run, case: Case) -> _Step:
     )
 
 
+def _record_hash(deps: VisitDeps, case: Case, brief: GoalBrief | None) -> str | None:
+    """The `prescription_hash` M246's approval record carries: the default digest, or - Plan O M243 (DEC-1813) - the
+    hash the PRESCRIBE port will write, when the port can say it without writing (`CasePrescriber.digest`)."""
+    if deps.prescribe is None:
+        return prescription_digest(case, brief)
+    digest_of = getattr(deps.prescribe, "digest", None)
+    return str(digest_of(case, brief)) if callable(digest_of) else None
+
+
 def prescription_digest(case: Case, brief: GoalBrief | None) -> str:
     """The default PRESCRIBE: sha256 over the ticked items of the base and the active goal, the answers and the
     brief hash. Wording and who decided are left out, as `recipe_hash` leaves out reasons."""
@@ -2194,7 +2203,7 @@ def approve(
             text=text,
             decided_by=actor,
             kind="prescription",
-            prescription_hash=prescription_digest(case, brief) if deps.prescribe is None else None,
+            prescription_hash=_record_hash(deps, case, brief),
             approval_id=approval_id,
             case_version=case.version,
         )
