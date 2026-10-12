@@ -31,7 +31,7 @@ jobs:
   lint-test:
     name: lint + fast tests
     runs-on: ubuntu-latest
-    timeout-minutes: 30                 # the fast suite is minutes; this only catches a hang or a wedged install
+    timeout-minutes: 60                 # the fast suite (~14k tests) takes 15-30 min on the runner's cores; this only catches a hang or a wedged install
 
     # Phase 4a: the metadata tests skip with a reason when there is no server. Here there is one, so
     # MARKETING_AI_REQUIRE_POSTGRES turns that skip into a failure - a test that silently stopped
@@ -130,7 +130,7 @@ jobs:
       - name: make test
         run: make test
         env:
-          PYTEST_ADDOPTS: --junitxml=${{ runner.temp }}/junit-fast.xml
+          PYTEST_ADDOPTS: -n auto --junitxml=${{ runner.temp }}/junit-fast.xml   # one worker per core (pytest-xdist)
 
       # Plan A M39: a milestone the README calls "pending" whose mapped tests just passed fails the
       # build (scripts/check_readme.py says which, and at which line). It reads the report the step
