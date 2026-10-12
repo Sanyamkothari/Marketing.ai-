@@ -509,12 +509,20 @@ test("M186: the first-visit checklist is a progress list that leads the page, wi
   assert.equal($("[data-checklist-hide]").className, "btn tertiary sm", "Hide this list is a quiet button");
 });
 
-test("M186: the page draws its own styles, so Home's sheet (which once shared their id) can never stand in for them", async () => {
+test("M186: after Home, the page has its own sheet (ov-page-styles, M185) scoped to .ovp, apart from Home's .ov", async () => {
   clear();
   w.location.hash = "#/";
   await settle(8);
   await visit();
-  assert.ok($('[data-module="overview"] style[data-overview-style]'), "the style tag is drawn with the page");
+  const own = w.document.getElementById(page.STYLE_ID);
+  assert.equal(page.STYLE_ID, "ov-page-styles", "not Home's ov-styles");
+  assert.ok(own && own.textContent.includes(".ovp .ovp-grid{"), "the page's own rules are in the document");
   assert.ok($('[data-module="overview"]').classList.contains("ovp"), "scoped apart from Home's `.ov`");
   assert.ok(!$('[data-module="overview"]').classList.contains("ov"));
+});
+
+test("M186 review: the value card keeps its own height beside a taller live list; phones get 40px targets", () => {
+  const css = w.document.getElementById(page.STYLE_ID).textContent;
+  assert.match(css, /\.ovp \.ov-value\{grid-area:value;align-self:start\}/);
+  assert.match(css, /@media \(max-width:700px\),\(pointer:coarse\)\{[^}]*\.ovp \.btn\.sm,\.ovp \.btn\.tertiary\{min-height:40px\}/);
 });

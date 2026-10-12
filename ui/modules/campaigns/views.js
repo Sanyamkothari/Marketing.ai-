@@ -134,6 +134,13 @@ export function changedLine(proof) {
   return line && line.value && line.low && line.high ? line : null;
 }
 
+/** What a changed-outcome line counts, in two words for a list cell: "extra outcomes", "extra amount". */
+export const changedUnit = (line) =>
+  String((line && line.label) || "")
+    .trim()
+    .replace(/\s+because of the campaign$/i, "")
+    .toLowerCase();
+
 /** The net value line's label for a tile: "Net value", or the Pack's own conditional wording, first letter up. */
 const netLabel = (line) => {
   const label = String(line.label || "Net value").trim();
@@ -142,16 +149,24 @@ const netLabel = (line) => {
 
 // --- the list -------------------------------------------------------------------------------------------------
 
-/** The result column: the net value and its likely range once measured; the day results are due before that. */
+/** A figure and its range for the result column: the number, what it counts, the bar and the words. */
+const resultFigure = (line, unit, kind) =>
+  `<div class="cp-result" data-result="${kind}"><p class="cp-result-value"><span class="num" title="${esc(
+    line.value.text || "",
+  )}">${esc(figureText(line.value))}</span> <span class="cp-result-unit">${esc(unit)}</span></p>${valueRange(rangeOf(line))}</div>`;
+
+/**
+ * The result column: once measured, the net value and its likely range; a Pack with no rupee value (no value per
+ * outcome entered) gives what the campaign changed instead ("+26 extra outcomes", with its range). The verdict's short
+ * sentence only when there is no Pack to read. Before that, the day results are due.
+ */
 function resultCell(entry) {
   const { campaign, view, proof, status } = entry;
   if (status.key === "measured") {
-    const line = netValueLine(proof);
-    if (line && line.value) {
-      return `<div class="cp-result" data-result><p class="cp-result-value"><span class="num" title="${esc(
-        line.value.text || "",
-      )}">${esc(figureText(line.value))}</span> <span class="cp-result-unit">net value</span></p>${valueRange(rangeOf(line))}</div>`;
-    }
+    const net = netValueLine(proof);
+    if (net && net.value) return resultFigure(net, "net value", "net");
+    const changed = changedLine(proof);
+    if (changed) return resultFigure(changed, changedUnit(changed), "changed");
     const verdict = view && view.verdict && view.verdict.headline;
     return verdict ? `<span class="cp-result-note" data-result>${esc(verdict)}</span>` : `<span class="muted">Measured</span>`;
   }
@@ -174,12 +189,12 @@ function listRow(entry) {
   // The long recorded name is a secondary line, cut to one line; the whole of it is the tooltip.
   const subtitle =
     campaign.name && campaign.name !== name
-      ? `<span class="cp-sub" ${USER_TEXT_ATTRIBUTE} title="${esc(campaign.name)}">${esc(campaign.name)}</span>`
+      ? `<span class="td-sub cp-sub" ${USER_TEXT_ATTRIBUTE} title="${esc(campaign.name)}">${esc(campaign.name)}</span>`
       : "";
   const ours = !(runElsewhere(campaign) || wholeProgramme(campaign) || !campaign.use_case_id);
   return [
     `<div class="cp-cell">${link}${subtitle}</div>`,
-    ours ? tagChip(goal) : `<span class="muted">${EM_DASH}</span>`,
+    ours ? tagChip(goal, { attrs: `title="${esc(goal)}"` }) : `<span class="muted">${EM_DASH}</span>`,
     campaignChip(status),
     esc(fmtInt(counts(campaign).intended_treated || 0)),
     resultCell(entry),
@@ -249,7 +264,11 @@ function tabsHtml(campaignId, tab) {
   });
 }
 
-/** The third tile: the net value with its likely range once measured, else the list's predicted value, else none. */
+/**
+ * The third tile: the net value with its likely range once measured; a Pack with no rupee value gives what the
+ * campaign changed, with its range; before a result, the list's predicted value; else none. A measured campaign never
+ * shows a prediction beside its measured figures.
+ */
 function valueTile(model) {
   const line = netValueLine(model.proof);
   if (line && line.value) {
@@ -261,6 +280,17 @@ function valueTile(model) {
       attrs: `data-tile-value title="${esc(line.value.text || "")}"`,
     });
   }
+  const changed = changedLine(model.proof);
+  if (changed) {
+    return statTile({
+      label: changed.label,
+      value: figureText(changed.value),
+      range: rangeOf(changed),
+      caption: "No value in rupees was entered for this campaign.",
+      attrs: `data-tile-value data-tile-changed title="${esc(changed.value.text || "")}"`,
+    });
+  }
+  if (model.status && model.status.key === "measured") return "";
   const summary = model.summary;
   if (summary && summary.net_value_total !== null && summary.net_value_total !== undefined) {
     return statTile({
@@ -567,10 +597,16 @@ function measuredHtml(model) {
         })
       : "",
   ].filter(Boolean);
-  return `<section class="card" data-results-measured><h3>Result</h3><div class="card-body cp-result-body">
-      ${label}<p class="cp-headline" data-headline>${esc(headline)}</p>
+  // With figures to show, they lead (a KPI row) and the Pack's sentence is the card's secondary text; without, the
+  // sentence is the result, drawn as the card's headline. Either way it stays the Pack's own words ([data-headline]).
+  const sentence = tiles.length
+    ? `<p class="cp-help" data-headline>${esc(headline)}</p>`
+    : `<p class="cp-headline" data-headline>${esc(headline)}</p>`;
+  const card = `<section class="card"><h3>Result</h3><div class="card-body cp-result-body">
+      ${label}${sentence}
       <p class="cp-help">Measured on ${esc(day(campaign.measured_at))}.</p>
-    </div></section>${tiles.length ? kpiRow(tiles, { attrs: "data-result-tiles" }) : ""}`;
+    </div></section>`;
+  return `<div class="cp-measured" data-results-measured>${tiles.length ? kpiRow(tiles, { attrs: "data-result-tiles" }) : ""}${card}</div>`;
 }
 
 function uploadHtml(model) {
@@ -757,8 +793,7 @@ const STYLE = `
 .cp .cp-sub{display:block;max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;line-height:16px;color:var(--muted)}
 .cp p.cp-long-name{margin:4px 0 0;max-width:min(720px,100%);min-width:0}
 .cp .cp-list td{vertical-align:middle}
-.cp .cp-list .tag{white-space:nowrap}
-@media (max-width:1279px){.cp .cp-list .tag{white-space:normal;max-width:220px;padding:3px 10px;border-radius:12px;line-height:16px}}
+.cp .cp-list .tag{display:inline-block;max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;line-height:22px;vertical-align:middle}
 .cp .cp-list th:nth-child(4),.cp .cp-list td:nth-child(4){width:1%;white-space:nowrap}
 .cp .cp-list td:nth-child(5){min-width:260px}
 .cp .cp-result{display:flex;flex-direction:column;gap:4px}
@@ -807,6 +842,7 @@ const STYLE = `
 .cp .cp-why-bar{display:block;height:6px;max-width:480px;border-radius:3px;background:var(--neutral-t);overflow:hidden}
 .cp .cp-why-bar>span{display:block;height:100%;border-radius:3px;background:var(--brand-blue)}
 .cp .cp-result-body{display:flex;flex-direction:column;gap:12px}
+.cp .cp-measured{display:flex;flex-direction:column;gap:24px}
 .cp .cp-evidence{margin:0;display:flex;align-items:center;flex-wrap:wrap;gap:8px;font-size:13px;line-height:20px;color:var(--ink2)}
 .cp .cp-headline{margin:0;font-size:18px;line-height:26px;font-weight:600;letter-spacing:-.01em;color:var(--ink);max-width:880px}
 .cp .cp-file-in{display:flex;align-items:flex-start;gap:8px;margin:0 0 12px;font-size:13px;color:var(--ink2)}
@@ -826,6 +862,11 @@ const STYLE = `
 .cp .cp-links{margin:8px 0;padding-left:20px;font-size:13px;line-height:1.8}
 .cp .cp-facts{display:grid;grid-template-columns:max-content 1fr;gap:4px 16px;font-size:12px;color:var(--ink2)}
 .cp .cp-facts dd{margin:0}
+@media (max-width:700px),(pointer:coarse){
+  .cp .btn.sm,.cp .btn.tertiary,.cp .btn.quiet{min-height:40px}
+  .cp .btn.sm:not(.tertiary):not(.quiet){height:40px}
+  .cp .cp-panel-note a,.cp .cp-links a{display:inline-flex;align-items:center;min-height:40px}
+}
 @media (max-width:700px){
   .cp .cp-stand-row{display:grid;grid-template-columns:40px minmax(0,1fr);align-items:start;gap:12px 16px;padding:16px}
   .cp .cp-stand-action{grid-column:2}

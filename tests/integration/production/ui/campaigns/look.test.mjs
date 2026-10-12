@@ -240,6 +240,60 @@ test("the Results tab once measured: the evidence chip, the Pack's sentence and 
   assert.deepEqual([$("[data-evidence] [data-status]").textContent, $("[data-evidence] [data-status]").dataset.tone], ["Estimated", "info"]);
 });
 
+// --- the reviews' regressions (M186 review) -------------------------------------------------------------------------
+
+/** A Pack whose net value is not measured (no value per outcome entered): only what the campaign changed. */
+const noRupees = {
+  ...proof,
+  sections: [proof.sections[0], { key: "net_value", status: "not_measured", lines: [] }],
+};
+
+test("review: a Pack with no rupee value shows what the campaign changed, in the list and the third tile", () => {
+  draw(views.campaignsListHtml({ entries: [entry(measured, STATUS.measured, { proof: noRupees })] }));
+  const cell = $("[data-result]");
+  assert.equal(cell.dataset.result, "changed");
+  assert.equal(cell.querySelector(".cp-result-value").textContent, "+26 extra outcomes");
+  assert.equal(cell.querySelector(".vr-text").textContent, "Likely +9 to +43");
+  assert.ok(!cell.textContent.includes("added about"), "not the verdict's sentence");
+  const done = { ...measured };
+  draw(views.campaignPageHtml(pageModel({ campaign: done, view: { campaign: done, plan }, status: STATUS.measured, proof: noRupees })));
+  assert.equal($("[data-tile-value] .stat-label").textContent, "Extra outcomes because of the campaign");
+  assert.equal($("[data-tile-value] .stat-value").textContent, "+26");
+  assert.ok(!/predicted/i.test($("[data-kpis]").textContent), "a measured campaign shows no prediction beside its figures");
+  // No Pack at all: no third tile rather than a prediction.
+  draw(views.campaignPageHtml(pageModel({ campaign: done, view: { campaign: done, plan }, status: STATUS.measured, proof: null })));
+  assert.equal($$("[data-kpis] > .stat").length, 2);
+  assert.equal(views.changedUnit({ label: "Extra amount because of the campaign" }), "extra amount");
+});
+
+test("review: on a measured Results tab the figures lead and the Pack's sentence is secondary text", () => {
+  const done = { ...measured };
+  draw(views.campaignPageHtml(pageModel({ campaign: done, view: { campaign: done, plan }, status: STATUS.measured, proof, tab: "results" })));
+  const holder = $("[data-results-measured]");
+  assert.equal(holder.firstElementChild.getAttribute("data-result-tiles"), "", "the KPI row comes first");
+  const sentence = $("[data-headline]");
+  assert.ok(sentence.classList.contains("cp-help") && !sentence.classList.contains("cp-headline"), "demoted");
+  assert.ok(holder.firstElementChild.compareDocumentPosition(sentence) & 4, "the sentence follows the figures");
+  // Without figures the sentence is the result, as before.
+  draw(views.campaignPageHtml(pageModel({ campaign: done, view: { campaign: done, plan }, status: STATUS.measured, proof: { ...proof, sections: [] }, tab: "results" })));
+  assert.ok($("[data-headline]").classList.contains("cp-headline"));
+});
+
+test("review: the goal chip stays on one line with an ellipsis and the whole goal in its title", () => {
+  draw(views.campaignsListHtml({ entries: [entry(base, STATUS.live)] }));
+  const tag = $("tbody td:nth-child(2) .tag");
+  assert.equal(tag.getAttribute("title"), "Win back lapsed customers");
+  const css = $("style[data-campaigns-style]").textContent;
+  assert.match(css, /\.cp \.cp-list \.tag\{display:inline-block;max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap/);
+  assert.ok($("tbody .cp-sub").classList.contains("td-sub"), "the long name is the cell's second line (theme td-sub)");
+});
+
+test("review: small buttons and links are 40px on a phone or a coarse pointer", () => {
+  draw(views.campaignsListHtml({ entries: [entry(base, STATUS.live)] }));
+  const css = $("style[data-campaigns-style]").textContent;
+  assert.match(css, /@media \(max-width:700px\),\(pointer:coarse\)\{\s*\.cp \.btn\.sm,\.cp \.btn\.tertiary,\.cp \.btn\.quiet\{min-height:40px\}/);
+});
+
 test("figureText writes each server figure in ui/format.js's one format", () => {
   assert.equal(views.figureText(fig(418481.2, "₹4,18,481")), "₹4.18 lakh");
   assert.equal(views.figureText(fig(26, "+26", "signed_count")), "+26");

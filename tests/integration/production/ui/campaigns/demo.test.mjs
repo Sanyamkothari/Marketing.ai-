@@ -97,6 +97,30 @@ test("the list: both campaigns, each with a short name, its goal, a status chip,
     });
 });
 
+test("review: one GET /pilot/proof; a Pack that is not ready is never asked for, and its row shows the verdict", async () => {
+    const summaries = recorded["GET /pilot/proof"].body;
+    const before = JSON.stringify(summaries);
+    summaries.proofs.find((p) => p.campaign_id === C_SPEND).status = "refused";
+    const asked = [];
+    const fetchFirst = w.fetch;
+    w.fetch = (input, init) => {
+        asked.push(String(typeof input === "string" ? input : input.url));
+        return fetchFirst(input, init);
+    };
+    try {
+        await visit("#/campaigns");
+    } finally {
+        w.fetch = fetchFirst;
+        recorded["GET /pilot/proof"].body = JSON.parse(before);
+    }
+    const proofs = asked.filter((u) => u.includes("/pilot/proof"));
+    assert.equal(proofs.filter((u) => /\/pilot\/proof(\?|$)/.test(u)).length, 1, "one list call");
+    assert.ok(!proofs.some((u) => u.includes(`/pilot/proof/${C_SPEND}`)), "no per-id read of a refused Pack (no 409)");
+    assert.equal(proofs.filter((u) => u.includes(`/pilot/proof/${C_CONVERSION}`)).length, 1, "the ready one is read");
+    const spend = $(`[data-campaign-link="${C_SPEND}"]`).closest("tr");
+    assert.equal(spend.querySelector("[data-result]").textContent, view(C_SPEND).verdict.headline);
+});
+
 for (const [name, id] of [
     ["conversion", C_CONVERSION],
     ["spend", C_SPEND],

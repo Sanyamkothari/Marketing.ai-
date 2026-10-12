@@ -162,6 +162,8 @@ def test_the_campaigns_list_table_and_its_phone_cards(browser: Any, server: Repl
     contacted = "[data-campaigns-list] tbody tr td:nth-child(4)"
     assert _style(page, contacted, "textAlign") == "right"
     assert _style(page, contacted, "fontVariantNumeric") == "tabular-nums"
+    goal = _box(page, "[data-campaigns-list] tbody tr td:nth-child(2) .tag")
+    assert goal["height"] <= 26, "the goal chip stays on one line (an ellipsis, the whole goal in its title)"
     bar = _box(page, "[data-campaigns-list] [data-result] .vr-bar")
     assert bar["width"] > 8, "the likely range is drawn as a bar"
     assert _style(page, "[data-campaigns-list] [data-result] .vr-dot", "backgroundColor") == BRAND_BLUE
@@ -199,6 +201,8 @@ def test_the_campaign_page_header_tabs_and_tiles(
         if tab == "overview":
             assert page.locator("[data-kpis] > .stat").count() == 3
             assert _box(page, "[data-tile-value] .vr-bar")["width"] > 8
+            if viewport is PHONE:
+                assert _box(page, "[data-refresh-ask]")["height"] >= 40, "a 40 px touch target on a phone"
         assert errors == []
         page.context.close()
 

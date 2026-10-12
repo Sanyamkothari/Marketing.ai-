@@ -38,6 +38,7 @@ import {
   loadContactList,
   getIndustries,
   getProof,
+  getProofs,
   getRun,
   postMeasure,
   postOutcomes,
@@ -129,17 +130,32 @@ async function apiGoalNames(campaigns) {
 }
 
 /**
+ * The ids whose Value Proof Pack can be read: `GET /pilot/proof` lists the newest campaigns' Packs (at most
+ * `PROOFS_LISTED`, 20, in api/routes/pilot.py) with a status each; only a `ready` one is asked for in full, so an early
+ * look, an unfinished period or a refused Pack never costs a request that answers 409, and the reads are capped.
+ */
+export function readyProofIds(summaries) {
+  return new Set(((summaries && summaries.proofs) || []).filter((p) => p && p.status === "ready").map((p) => p.campaign_id));
+}
+
+/**
  * The list's rows: each campaign with its page's answer (status and result date), its Value Proof Pack once measured
- * (the net value and its range: M186 draws the figures, not the Pack's sentence) and its goal. The Packs are read six
- * at a time, like the pages, and only for measured campaigns; one that cannot be read leaves its row with the verdict.
+ * and ready (the net value or what it changed, with its range: M186 draws the figures, not the Pack's sentence) and
+ * its goal. One `GET /pilot/proof` says which Packs are ready; those are read six at a time, like the pages. A row
+ * whose Pack is not ready, or cannot be read, shows its verdict's short sentence.
  */
 export async function loadListEntries() {
   const campaigns = ((await getCampaigns()) || {}).campaigns || [];
-  const [views, proofs, names] = await Promise.all([
+  const measured = campaigns.some((c) => c.status === "measured");
+  const [views, summaries, names] = await Promise.all([
     mapLimit(campaigns, 6, (c) => getCampaign(c.campaign_id).catch(() => null)),
-    mapLimit(campaigns, 6, (c) => (c.status === "measured" ? getProof(c.campaign_id).catch(() => null) : null)),
+    measured ? getProofs().catch(() => null) : null,
     apiGoalNames(campaigns),
   ]);
+  const ready = readyProofIds(summaries);
+  const proofs = await mapLimit(campaigns, 6, (c) =>
+    c.status === "measured" && ready.has(c.campaign_id) ? getProof(c.campaign_id).catch(() => null) : null,
+  );
   return campaigns.map((campaign, i) => {
     const view = views[i];
     return {

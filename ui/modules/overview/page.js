@@ -353,7 +353,7 @@ export function overviewHtml({ overview = null, error = null, places = DEFAULT_P
 const CSS = `
 .ovp .ovp-grid{display:grid;gap:20px;grid-template-columns:minmax(0,1fr) minmax(0,1fr);grid-template-areas:"attention attention" "value live";align-items:stretch}
 .ovp .ovp-grid.has-check{grid-template-areas:"check check" "attention attention" "value live"}
-.ovp .ov-attention{grid-area:attention}.ovp .ov-value{grid-area:value}.ovp .ov-live{grid-area:live}.ovp .ov-checklist{grid-area:check}
+.ovp .ov-attention{grid-area:attention}.ovp .ov-value{grid-area:value;align-self:start}.ovp .ov-live{grid-area:live}.ovp .ov-checklist{grid-area:check}
 .ovp .card{overflow:hidden}
 .ovp .ovp-head{display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:56px;padding:12px 20px;border-bottom:1px solid var(--line)}
 .ovp .ov-h{margin:0;font-size:var(--fs-card,15px);line-height:var(--lh-card,22px);font-weight:600;letter-spacing:-.005em;color:var(--ink)}
@@ -394,6 +394,11 @@ const CSS = `
 .ovp a.ov-check-label{text-decoration:none}
 .ovp a.ov-check-label:hover{color:var(--brand-blue);text-decoration:underline;text-underline-offset:3px}
 .ovp .ov-check.done .ov-check-label{font-weight:500;color:var(--ink2)}
+@media (max-width:700px),(pointer:coarse){
+  .ovp .btn.sm,.ovp .btn.tertiary{min-height:40px}
+  .ovp .btn.sm:not(.tertiary){height:40px}
+  .ovp .ov-link,.ovp .ov-more a,.ovp a.ov-check-label{display:inline-flex;align-items:center;min-height:40px}
+}
 @media (max-width:900px){
   .ovp .ovp-grid,.ovp .ovp-grid.has-check{grid-template-columns:minmax(0,1fr);grid-template-areas:none;gap:16px}
   .ovp .ovp-grid>*{grid-area:auto}
