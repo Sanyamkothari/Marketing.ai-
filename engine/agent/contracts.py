@@ -262,6 +262,14 @@ class DataRecipe(Artefact):
             "replay uses it. Null on a recipe saved before it was recorded: the current limit applies."
         ),
     )
+    text_columns: tuple[str, ...] = Field(
+        default=(),
+        description=(
+            "Columns of the source file the recipe was approved on that were read as text, so a leading zero "
+            "(`0000123`) survives. Every replay of a CSV reads them as text too (Plan O M240); empty on a "
+            "recipe that recorded none, which reads the file as it always did."
+        ),
+    )
     created_at: AwareDatetime = Field(description="When it was approved.")
 
     @model_validator(mode="after")
@@ -289,6 +297,7 @@ class DataRecipe(Artefact):
             self.snapshot_column,
             self.levels,
             self.max_failure_pct,
+            self.text_columns,
         ) == (
             other.recipe_hash,
             other.primary_key,
@@ -296,6 +305,7 @@ class DataRecipe(Artefact):
             other.snapshot_column,
             other.levels,
             other.max_failure_pct,
+            other.text_columns,
         )
 
 
