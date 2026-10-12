@@ -334,7 +334,7 @@ def plan_build(
     """Propose how the diagnosed files become one built dataset (the `build_dataset` tool's rules)."""
     proposer: RoleProposer = roles or DiagnosisRoles(diagnosis)
     answers = dict(stack_answers or {})
-    files = {item.upload_id: item for item in diagnosis.files if item.upload_id in frames}
+    files = {item.upload_id: _named(item) for item in diagnosis.files if item.upload_id in frames}
     left: list[LeftOutFile] = []
     role_of: dict[str, RoleSuggestion] = {}
     for upload_id, item in files.items():
@@ -534,6 +534,13 @@ def plan_build(
             + (f"; {len(left)} file{'' if len(left) == 1 else 's'} left out." if left else ".")
         ),
     )
+
+
+def _named(item: FileDiagnosis) -> FileDiagnosis:
+    """The file with a name to print: its stored name, else its upload id, never an empty string (the plan names
+    each source in the approval sentence and in the files it leaves out)."""
+    name = item.file_name.strip()
+    return item if name else item.model_copy(update={"file_name": item.upload_id})
 
 
 def _rewrites(base_rule: KeyRule, events: Sequence[PlannedSource]) -> bool:
