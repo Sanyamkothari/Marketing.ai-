@@ -754,7 +754,10 @@ distinct value; the preview runs on 1,000 rows (or entities). Reproduce with
   plan's rule is conservative: it also leaves out an honest per-event date (a refund or delivery
   date) that fell after the snapshot on the preview, although the combine's masking would make it
   safe, so that signal is lost.
-- `make agent-eval` (the benchmark on Bedrock) is not built yet.
+- `make agent-eval` is built in Plan O M248 (DEC-1818; `docs/DATA_DOCTOR.md` §23): Data Doctor's evals on a
+  recorded model (a cassette: no network, no key) or a real one when configured. Its committed cassette was
+  recorded from a scripted reference model, because no AI service was available where it was built; a real
+  model's cassette replaces it with `--model real --record`.
 - Chat is English only.
 
 ## 12. Ask your data (Plan I, DEC-1250 … DEC-1258)
