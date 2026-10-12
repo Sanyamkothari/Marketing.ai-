@@ -259,3 +259,30 @@ data:
         map_boolean: {allowed: [true_values, false_values]}
       tick_only_sure: true
       change_share: true
+    # M236 (DEC-1806): the wrappers' proposals carry no step - a file's role, its ID column, a mapping, how a file
+    # is read, an import from a connection, the AI's second opinion. Each lands pending; only a proposal the
+    # rules are sure of may start ticked (`propose_role`, `propose_mapping` and `propose_import` are never offered
+    # sure), and nothing the AI proposes is ticked.
+    data.propose_role:
+      proposes: plan
+      rules: [data.never_ticked]
+      tick_only_sure: true
+    data.propose_key:
+      proposes: plan
+      rules: [data.never_ticked]
+      tick_only_sure: true
+    data.propose_mapping:
+      proposes: plan
+      rules: [data.never_ticked]
+      tick_only_sure: true
+    data.propose_intake:
+      proposes: plan
+      rules: [data.never_ticked]
+      tick_only_sure: true
+    data.propose_import:
+      proposes: plan
+      rules: [data.never_ticked]
+      tick_only_sure: true
+    data.second_opinion:
+      proposes: plan
+      rules: [data.never_ticked]

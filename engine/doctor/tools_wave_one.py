@@ -21,8 +21,10 @@ each of them an adapter that turns the spec into a :class:`~engine.doctor.regist
 * **Refusals.** A module's own coded refusal (`JoinError`, `StackError`, `BuildDriveError`, `RowToolError`)
   becomes a `DataToolError` with the same code (422), so the caller reads it like any other.
 
-Two M240 tools are not registered: `read_workbook_sheets` and `find_excel_serial_dates` have no row in the
-design's catalogue (:data:`UNCATALOGUED`), and the catalogue changes only with the design.
+M240's `read_workbook_sheets` and `find_excel_serial_dates` had no row in the design's catalogue in wave 1; M236
+(DEC-1806) gave them rows #82 and #83 with the design, so :data:`UNCATALOGUED` is empty and both are registered.
+`find_excel_serial_dates` declares the step kind it proposes (`parse_date`), so the registry decides its steps by
+M233's `data.excel_serial_dates` rule set.
 
 Nothing here changes what the product does while `data_doctor.unified` is off: the registry is reached only
 through its callers, and none of these tools is offered to the AI.
@@ -63,8 +65,8 @@ __all__ = ["RULES_AND_SCREEN", "UNCATALOGUED", "WAVE_ONE_TOOLS", "register_wave_
 
 RULES_AND_SCREEN: Final[frozenset[str]] = frozenset({"rules", "person"})
 
-UNCATALOGUED: Final[frozenset[str]] = frozenset({"read_workbook_sheets", "find_excel_serial_dates"})
-"""M240 tools with no row in the design's catalogue: left out until the design gives them one."""
+UNCATALOGUED: Final[frozenset[str]] = frozenset()
+"""Wave-1 tools with no row in the design's catalogue: none since M236 gave M240's two tools rows #82 and #83."""
 
 WAVE_ONE_TOOLS: Final[tuple[str, ...]] = (
     "read_other_format",
@@ -83,6 +85,8 @@ WAVE_ONE_TOOLS: Final[tuple[str, ...]] = (
     "indian_booleans",
     "detect_india_ids",
     "check_readiness",
+    "read_workbook_sheets",
+    "find_excel_serial_dates",
 )
 """Every tool this module registers, in catalogue order."""
 
@@ -156,6 +160,12 @@ class _FilesView:
 
     def diagnosis(self) -> Diagnosis | None:
         return self._diagnosis if self.ctx.files else None
+
+    def role_proposer(self) -> Any:
+        """M236's `propose_role`, through the registry, as the build plan's `RoleProposer` (DEC-1806)."""
+        from engine.doctor.tools_wrappers import ProposedRoles
+
+        return ProposedRoles(self.ctx)
 
 
 @dataclass(frozen=True)

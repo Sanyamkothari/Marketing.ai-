@@ -82,6 +82,8 @@ def test_the_wave_registers_every_catalogued_tool_by_its_row() -> None:
     for name in UNCATALOGUED:
         assert row(name) is None and name not in registry.names()
     assert {spec.name for spec in FORMAT_TOOLS} - UNCATALOGUED <= set(WAVE_ONE_TOOLS)
+    # Plan O M236 (DEC-1806): M240's two tools have rows #82 and #83 now, so every format tool is registered.
+    assert not UNCATALOGUED and {spec.name for spec in FORMAT_TOOLS} <= set(registry.names())
 
 
 def test_the_wave_serves_the_rules_and_the_screen_never_the_ai() -> None:
