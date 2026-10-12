@@ -518,27 +518,30 @@ def test_the_components_hold_on_a_phone(browser: Any, campaigns_server: str, sho
 
 
 def test_the_older_status_chips_carry_an_icon(browser: Any, campaigns_server: str) -> None:
-    """M185 review: Reports' evidence label and Data's health chip show the status mapping's icon with their word,
-    like the campaign status chip, until M187/M188 draw statusChip.
+    """M185 review: Reports' evidence label and Data's health chip show the status mapping's icon with their word.
+    Since M188 both are components.js `statusChip` (an inline 12 px icon), so the theme's bridges for them were
+    removed at integration; Connections' `.cn-badge[data-cn-status]` chips keep the bridge's 12 px `::before` icon.
     """
     problems: list[str] = []
     page = _page(browser, campaigns_server, width=1440, height=900, problems=problems)
-    before = "el => getComputedStyle(el, '::before')"
+    icon_width = "el => el.querySelector('svg').getBoundingClientRect().width"
     _open(page, campaigns_server, "#/reports/value-proof")
-    page.wait_for_selector("#app [data-claim] > .pill, #app [data-claim] > .chip")
-    proven = page.locator("#app [data-claim='proven'] > .pill").first
-    assert proven.evaluate(f"el => ({before})(el).width") == "12px"
-    assert proven.evaluate(f"el => ({before})(el).backgroundColor") == "rgb(21, 128, 61)"
+    page.wait_for_selector("#app [data-claim] .badge")
+    proven = page.locator("#app [data-claim='proven'] .badge").first
+    assert proven.evaluate(icon_width) == 12
+    assert proven.evaluate("el => getComputedStyle(el).color") == "rgb(21, 128, 61)"
     assert proven.inner_text().strip() == "Proven"
-    for chip in page.locator("#app [data-claim] > .pill, #app [data-claim] > .chip").all():
-        assert chip.evaluate(f"el => ({before})(el).width") == "12px", chip.inner_text()
+    for chip in page.locator("#app [data-claim] .badge").all():
+        assert chip.evaluate(icon_width) == 12, chip.inner_text()
     _open(page, campaigns_server, "#/data")
-    page.wait_for_selector("#app .cn-badge[data-dt-status='read']")
-    read = page.locator("#app .cn-badge[data-dt-status='read']").first
-    assert read.evaluate(f"el => ({before})(el).width") == "12px"
+    page.wait_for_selector("#app .badge[data-dt-status='read']")
+    read = page.locator("#app .badge[data-dt-status='read']").first
+    assert read.evaluate(icon_width) == 12
     assert read.evaluate("el => getComputedStyle(el).color") == "rgb(21, 128, 61)"
     assert read.inner_text().strip() == "Read correctly"
-    for chip in page.locator("#app .cn-badge[data-cn-status], #app .cn-badge[data-dt-status]").all():
-        assert chip.evaluate(f"el => ({before})(el).width") == "12px", chip.inner_text()
+    _open(page, campaigns_server, "#/connections/ai/product")
+    page.wait_for_selector("#app .cn-badge[data-cn-status]")
+    for chip in page.locator("#app .cn-badge[data-cn-status]").all():
+        assert chip.evaluate("el => getComputedStyle(el, '::before').width") == "12px", chip.inner_text()
     assert problems == []
     page.context.close()

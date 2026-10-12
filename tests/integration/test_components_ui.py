@@ -188,31 +188,57 @@ def each_selector(css: str) -> dict[str, str]:
 
 
 def test_status_colours_come_with_an_icon_and_a_word() -> None:
-    """The status bridges for markup drawn before M185 add an icon to every tone they colour: the campaign status
-    chip, Reports' evidence label and the health chips of Data and Connections (M185 review)."""
+    """The status bridge for markup drawn before M185 adds an icon to every tone it colours: the health chips of
+    Connections (M185 review). The campaign status chip (M186), Reports' evidence label and Data's health chip (M188)
+    are components.js `statusChip` now, an inline icon and the word, so their bridges were removed at integration
+    (`test_no_page_draws_the_removed_status_bridges`)."""
     by_selector = each_selector(theme())
-    bridged = [f".chip.cp-status.{tone}" for tone in ("cp-ok", "cp-live", "cp-warn", "cp-neutral")]
-    bridged += [
-        f'[data-claim="{key}"] > .{kind}'
-        for key in ("proven", "estimated", "not-proven")
-        for kind in ("pill", "chip")
-    ]
-    bridged += ['.cn-badge[data-dt-status="read"]']
     statuses = set()
     for path in sorted((UI / "modules").rglob("*.js")):
         statuses.update(re.findall(r'data-cn-status="([a-z_]+)"', path.read_text(encoding="utf-8")))
     assert {"connected", "failed", "not_tested"} <= statuses
-    bridged += [f'.cn-badge[data-cn-status="{status}"]' for status in sorted(statuses)]
-    for selector in bridged:
+    for status in sorted(statuses):
+        selector = f'.cn-badge[data-cn-status="{status}"]'
         body = by_selector.get(selector, "")
         assert "--ds-icon: url(" in body and "color: var(--" in body, f"{selector} has no icon or tone"
-    for group in (
-        ".chip.cp-status",
-        "[data-claim] > .pill",
-        "[data-claim] > .chip",
-        ".cn-badge[data-cn-status]",
-    ):
-        assert "mask: var(--ds-icon)" in by_selector[f"{group}::before"], group
+    assert "mask: var(--ds-icon)" in by_selector[".cn-badge[data-cn-status]::before"]
+
+
+def test_no_page_draws_the_removed_status_bridges() -> None:
+    """Integration of the look (M186-M188 hand-backs): no page draws the campaign status chip `.chip.cp-status`, a
+    `.pill` or `.chip` inside Reports' `[data-claim]`, or a `.cn-badge` with `data-dt-status`, so the theme no longer
+    styles them. A page that draws one again must use `statusChip` instead."""
+    clean = re.sub(r"/\*.*?\*/", "", theme(), flags=re.DOTALL)
+    for gone in (".cp-status", "[data-claim", "data-dt-status"):
+        assert gone not in clean, f"theme.css still styles {gone}"
+    for path in sorted(UI.rglob("*.js")):
+        text = path.read_text(encoding="utf-8")
+        assert "cp-status" not in text, path
+        assert not re.search(r"cn-badge[^>]*data-dt-status|data-dt-status[^>]*cn-badge", text), path
+        assert not re.search(r"""data-claim=[^>]*>\s*<span class=["'](?:pill|chip)""", text), path
+    proof = (UI / "modules" / "reports" / "value_proof.js").read_text(encoding="utf-8")
+    assert 'data-claim="${esc(claim.key)}">${statusChip("evidence"' in proof, "Reports' label is a statusChip"
+
+
+def test_a_small_button_is_a_40px_target_on_a_touch_screen() -> None:
+    """M186-M188 reviews, at integration: on a coarse pointer every small button (secondary, tertiary and quiet) is
+    at least 40 px tall, whatever page draws it; the pages keep their own rules."""
+    css = theme()
+    block = css[css.index("@media (pointer: coarse) {") :]
+    block = block[: block.index("}\n}") + 3]
+    inner = each_selector(block)
+    for selector in (".btn.sm", ".btn.tertiary.sm", ".btn.quiet.sm"):
+        assert "min-height: 40px" in inner.get(selector, ""), selector
+    # it comes after the 24 px tertiary and quiet rule, so it wins at the same specificity
+    assert css.index("@media (pointer: coarse) {") > css.index(".btn.tertiary.sm {")
+
+
+def test_a_value_range_without_an_estimate_draws_its_bar_in_the_brand_colour() -> None:
+    """M187 review, at integration: with no estimate dot the bar is the range's only mark, so it is drawn in
+    `--brand-blue` (the pale `--brand-200` reached about 1.4:1 on white); with a dot the bar stays the tint."""
+    by_selector = each_selector(theme())
+    assert "background: var(--brand-blue)" in by_selector[".vrange:not(:has(.vr-dot)) .vr-bar"]
+    assert "background: var(--brand-200)" in by_selector[".vrange .vr-bar"]
 
 
 def test_the_helpers_hold_in_narrow_places() -> None:

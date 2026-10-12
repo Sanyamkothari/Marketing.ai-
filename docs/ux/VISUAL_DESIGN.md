@@ -109,30 +109,32 @@ Forms use 40 px controls (`.input`) with 8 px corners, a hairline and a brand fo
 | | `not_tested` | warning | clock | Not tested yet |
 | | `needs_attention` | warning | warning sign | Needs attention |
 | | `failed` | critical | cross in a circle | Failed |
+| | `needs_addon` | neutral | dashed circle | Needs the add-on |
 
 An unknown value is neutral and shows its own text. `{word}` replaces the word with the server's own sentence, for
-example "Failed: the file is empty", and keeps the tone and the icon. Until the page milestones draw `statusChip`, the
-theme gives the chips the older modules draw the same tones and icons (`theme.css` section 8):
-
-- the campaign status chip (`.chip.cp-status`), which no page draws since M186 (DEC-1616): the Overview, Campaigns and
-  the campaign page draw `statusChip("campaign" | "evidence", …)` themselves;
-- the evidence label on Reports (a pill or chip inside `[data-claim="proven|estimated|not-proven"]`);
-- the health chips on Data and the Connections page (`.cn-badge` with `data-dt-status` or `data-cn-status`).
-
-M187 and M188 replace these with `statusChip("evidence" | "health", …)` and then the bridges can go.
+example "Failed: the file is empty", and keeps the tone and the icon. The Overview, Campaigns, the campaign page and
+the wizard (M186, M187), and Reports and Data (M188) draw `statusChip` themselves. Only the Connections page's health
+chips (`.cn-badge` with `data-cn-status`) are still older markup; the theme gives them the same tones and icons
+(`theme.css` section 8) until that page draws `statusChip("health", …)`. The bridges for the campaign status chip
+(`.chip.cp-status`), Reports' evidence label (`[data-claim]`) and Data's health chip (`data-dt-status`) were removed
+when the look was integrated.
 
 Chips keep their own width in any parent (`width: fit-content`): a chip in a card is never a full-width band.
 
 A value range is drawn only where the server sends both ends of a figure (the Value Proof Pack's net value and its
 "Extra ... because of the campaign" line). The Overview's "Value proven to date" is a floor, the sum of each measured
-campaign's lower bound, with no upper end in `GET /overview`: it is a hero figure with no bar (M186).
+campaign's lower bound, with no upper end in `GET /overview`: it is a hero figure with no bar (M186). A range with no
+estimate dot draws its bar in `--brand-blue`, because the bar is then its only mark; with a dot the bar is the pale
+tint.
 
 ## Accessibility
 
 - Contrast is AA everywhere. `--muted` is #667085, one step darker than before, so captions on the canvas still
   reach 4.5:1.
 - Focus is visible everywhere: a 2 px brand ring, offset 2 px.
-- Touch targets are at least 40 px, the bar's bell and Help on a phone included.
+- Touch targets are at least 40 px, the bar's bell and Help on a phone included. On a touch screen
+  (`pointer: coarse`) the theme makes every small button (`.btn.sm`, and tertiary or quiet `sm`) at least 40 px tall;
+  pages keep their own phone rules for links and other small controls.
 - Status never relies on colour alone.
 - Motion is off when the person asks for reduced motion.
 

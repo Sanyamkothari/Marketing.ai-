@@ -148,7 +148,7 @@ function connectionChip(c) {
     return `${statusChip("health", "connected", { attrs })}${sub(c.last_test ? `Tested ${fmtStamp(c.last_test.tested_at)}` : "")}`;
   }
   if (status === "failed") return `${statusChip("health", "failed", { attrs })}${sub(c.failure || "See the test.")}`;
-  // `needs_addon` is not a status of the mapping yet (cross-branch note to M185): it is drawn neutral, with its own word.
+  // `needs_addon` is the mapping's own neutral status (added to components.js STATUS_MAP.health at integration).
   if (status === "needs_addon") return statusChip("health", "needs_addon", { word: "Needs the add-on", attrs });
   return statusChip("health", "not_tested", { attrs });
 }

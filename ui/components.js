@@ -85,6 +85,8 @@ export const STATUS_MAP = Object.freeze({
     not_tested: entry("not_tested", "warning", "clock", "Not tested yet"),
     needs_attention: entry("needs_attention", "warning", "alert", "Needs attention"),
     failed: entry("failed", "critical", "critical", "Failed"),
+    // a connection whose add-on is not installed: nothing is wrong and nothing is claimed (M188 review, integration)
+    needs_addon: entry("needs_addon", "neutral", "draft", "Needs the add-on"),
   }),
 });
 
