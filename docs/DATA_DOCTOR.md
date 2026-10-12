@@ -399,6 +399,19 @@ advice, beside the decision on the Approver's screen (`engine.model_gates.approv
 yet: the dataset build's own checks (the future-data probe, `LABEL_RATE_UNSTABLE`) stay on the Readiness
 report.
 
+## 10a. Indian numbers, yes/no words and IDs (Plan O M241)
+
+Data Doctor reads Indian files as they are written. `₹2.5 L` is 2,50,000, `1.2 Cr` is 1,20,00,000, `Rs 3,50,000/-`
+is 3,50,000 and `12K` is 12,000 - exactly. A yes/no column written `haan` / `nahi` or `हाँ` / `नहीं` is read as yes and
+no, but only when the file shows both a yes and a no: a column with only `haan` is a question, not a guess. GSTINs
+(checked with their check character), voter IDs, PIN codes and mobile numbers are recognised; a PIN code stays
+text, never a number, and a mobile number written `+91 98765 43210` in one file and `09876543210` in another is the
+same number when two files are joined. GSTINs and voter IDs are hidden before anything is sent to an AI service.
+
+How a client writes numbers, dates and yes/no is asked **once** per client and then used for every file, with a
+note saying so; a file that disagrees is asked about, never silently changed. Nothing is converted between
+currencies here.
+
 ## 11. What Data Doctor will not do
 
 - **Match people across files with no shared key.** It can tidy keys (leading zeros, prefixes) and say how many

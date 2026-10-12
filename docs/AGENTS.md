@@ -136,7 +136,7 @@ other. The advisor never calls them, so its evidence and the benchmark are uncha
 `type`, `kind`, `code`, `name`, `function`, `dtype`, `label` and `message`. Everything derived from a
 cell is under other keys (`value`, `values`, `rows`, `cells`, `matches`, `left_value`, `right_value`,
 `earliest`, `latest`, `shape`, `positive_label`) and has been masked **whole** with the gate's complete scanner
-set (`egress.mask_value`: e-mail, phone, PAN, Aadhaar, card, IBAN, IP, URL, API-key-like token, nine-digit run)
+set (`egress.mask_value`: e-mail, phone, PAN, Aadhaar, GSTIN, voter ID, card, IBAN, IP, URL, API-key-like token, nine-digit run)
 and only then cut to 60 characters (40 in `describe_duplicates`, 80 for an example), so a default-deny egress
 gate can treat every other string as a cell and never depends on seeing a cell before it was cut. **A dict is
 never keyed by a cell value**: its keys are field names of ours (`egress.RESULT_KEYS`) or column names; the
@@ -461,7 +461,9 @@ which needs a dotted ASCII domain), **address-shaped identifiers** without one (
 id -, `x@intranet`, `ravi@example.भारत`; the host must start with a letter and have three characters, so an
 `@` in prose is not one), payment card (13 to 19 digits, Luhn-valid, joined by a space, `-`, `_`, `/`, `,` or a
 spaced hyphen; when the card is followed by another number the card is found among the groups of digits),
-IBAN, IPv4/IPv6, API-key-like tokens (a feature name such as `total_spend_last_90d` is not one). Then the
+IBAN, IPv4/IPv6, API-key-like tokens (a feature name such as `total_spend_last_90d` is not one). Then a
+**GSTIN** and a **voter ID (EPIC)**, each whole (`[REDACTED:gstin]`, `[REDACTED:epic]`; Plan O M241: before it
+the PAN inside a GSTIN and a voter ID's digits were taken and the rest left). Then the
 platform's own `engine.pii.redact_text` (phone, PAN, Aadhaar, e-mail); then a **PAN typed with spaces or
 hyphens** (`ABCDE 1234 F`), a **phone with a bracketed block** (`+91 (98765) 43210`, `+7 (495) 123-45-67`, at
 least nine digits), any other run of nine or more digits, and groups of three or more digits joined by a
@@ -552,7 +554,7 @@ third party and the data gate above is chosen for it).
 
 **The canary.** `tests/unit/agent/test_egress_canary.py` and `tests/integration/agent/test_egress_sessions.py`
 plant fake personal data (an e-mail, a phone, PAN, card, Aadhaar, IBAN, IPv4 and IPv6, a URL with a token, an
-API key, a name and an address in a sentence) in an obviously personal column, in innocent-looking columns
+API key, a name and an address in a sentence, and - Plan O M241 - a GSTIN and a voter ID in `business_ref`) in an obviously personal column, in innocent-looking columns
 (`notes`, `feedback`, `region_contact`), in the ID column and in **headers**, run whole sessions through the
 real `chat_turn` with a client that calls **every tool** on every column, and search every prompt, every stored
 message and every `sent` preview. No pattern-recognisable value appears in either mode; in `summaries_only`
@@ -994,3 +996,57 @@ A new tool is: a row already in the catalogue; a `DataTool` registered in `engin
 (unknown fields refused) and output models, a `RoutePolicy`, its callers, its needs and its exposure; an entry in the
 egress canary (`tests/unit/doctor/test_registry_canary.py`, which fails for a tool without one); and, for PROPOSE, a
 `policy_kind` naming its rule set (M233 refuses a kind with no rules, `POLICY_NO_RULES`).
+
+## 15. Locale and Indian formats (Plan O M241, DEC-1811)
+
+### 15.1 In plain words
+
+Indian files write `₹2.5 L`, `1.2 Cr`, `Rs 3,50,000/-`, `haan` / `nahi` and `हाँ` / `नहीं`, carry GSTINs, voter IDs,
+PIN codes and mobile numbers in several spellings, and put the day before the month. Data Doctor learns how a client
+writes these once - the **locale profile** - asks the person to confirm it once, and then uses it for every file of
+that client, saying so ("Using the number, date and yes/no settings you confirmed on 3 Sep 2026").
+
+### 15.2 The rules (all deterministic; no AI service needed)
+
+- **`detect_locale`** (`engine/doctor/locale.py`, READ): the design §8.1 profile, each field with its source
+  (`default`, `detected`, `confirmed`) and its evidence as counts. It proves the decimal mark from values that read
+  one way only (`formats.decimal_evidence`), Indian (`1,20,000`) or western (`1,200,000`) grouping, the day/month
+  order (`formats.date_order`), the number words, the yes/no words, the currency tokens of money columns (recorded;
+  converting is M242's), phone, PIN and ID shapes, and `+05:30` time stamps. Files that disagree with each other, or
+  with a confirmed profile, are a conflict and a question; nothing is changed silently. A day/month order no value
+  proves stays unproven and is asked, unless the client confirmed one (`dayfirst_for`).
+- **`parse_indian_numbers`** (`engine/doctor/indian_values.py`, PROPOSE): `parse_number` with the new parameter
+  `indian_scale_words: true` - `L`, `lac(s)`, `lakh(s)` = 10⁵, `Cr`, `crore(s)` = 10⁷, `K` = 10³, `M` = 10⁶, and a
+  trailing `/-`. Multiplied exactly (`Decimal`). `sure` only when every value reads and the header names no physical
+  unit; a column where some letters are not a listed unit (`5 kg`) is `check`. Without the parameter (every recipe
+  saved before M241) none of the words is a number, as before, and the recipe hash is unchanged.
+- **`indian_booleans`** (PROPOSE): `map_boolean` with the Hindi and Hinglish spellings the column holds
+  (`haan`, `haa`, `ha`, `haanji`, `nahi`, `nahin`, `nai`, `हाँ`, `हां`, `नहीं`, `नही`, `ना`, ...). Proposed only when
+  **both** yes and no are seen; one side alone, or a spelling outside the lists, is a `check` finding with no step.
+  `na` is never mapped, not even beside a Hindi yes: it may mean no or "not available", so it is a question. Plan G's own yes/no
+  detector (`find_format_issues`) is unchanged.
+- **`detect_india_ids`** (`engine/doctor/india_ids.py`, READ): GSTIN (a PAN or, for a tax deductor, a TAN inside;
+  any 14th character) with its check character (our own code; the
+  LGPL python-stdnum is not used), EPIC, PIN as 6-digit text, and `to_e164_india`, which writes a mobile number as
+  `+91XXXXXXXXXX` so two files join exactly on it (M237's `normalise_key` calls it). Counts only.
+
+All four are `session-only` and rules only; `engine/doctor/tools_locale.py` declares them for M232's registry
+(`register(registry)`). Neither PROPOSE tool touches the ID or the outcome column, and neither applies anything.
+
+### 15.3 Limits
+
+- Hinglish headers on by default (O4) follows Plan O's switch: with `data_doctor.unified` on, M142's rules-only setup
+  help (header reading, mapping questions, lapse drafts, `draft_outcome_labels`) is on whatever `agentic.enabled`
+  says (`engine.agent.tools.header_help_on`); the AI second opinion still needs `agentic.enabled`. Off (shipped), it
+  follows `agentic.enabled` as DEC-1409 (f) set it and the golden digests are unchanged. With the switch on, the 27
+  Hinglish golden cases give the digests M142 recorded with the help on (`test_header_switch_unified.py`).
+- A bare `L`, `K` or `M` is read as lakh, thousand or million `sure` only with money evidence: a money header, a
+  currency sign or code, or `lakh` / `crore` / `/-` in the same column; otherwise `30m` may be minutes and the
+  proposal is `check`. `na` is never mapped (no, or "not available"?): a column holding it is a question.
+- A confirmed money unit is never overwritten by a later file: a different one is a conflict and a question, and a
+  new money column is asked (`unconfirmed_money_units`), never stamped confirmed.
+- A column pandas reads as numbers is a PIN column only when its header says so (six-digit amounts are common), and
+  only `sure` ID findings vote in the locale profile.
+- `M` is read as a million when the parameter is on; in a column whose header names a unit (`data_usage`, `_mb`)
+  the proposal is `check`. Mixed spellings in one value (`1 Cr 20 L`) are not read.
+- Old-format voter IDs (state codes with slashes) are not recognised; only today's three letters and seven digits.

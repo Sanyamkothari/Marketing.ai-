@@ -710,7 +710,8 @@ def _find_roles(ctx: AgentContext, _: NoArgs) -> dict[str, Any]:
 
 
 def header_help_on(ctx: AgentContext) -> bool:
-    """Whether M142's setup help for new sources is on: Plan K's `agentic.enabled` under the session's root.
+    """Whether M142's setup help for new sources is on: Plan O's `data_doctor.unified` in the use case, or else
+    Plan K's `agentic.enabled` under the session's root.
 
     Off (the default), Guided setup reads no header with the lexicon, drafts no lapse outcome and asks no mapping
     question, `find_roles` has no `header_candidates` key and `draft_outcome_labels` is not a tool, so the advice,
@@ -720,6 +721,11 @@ def header_help_on(ctx: AgentContext) -> bool:
     from engine.agentic.config import agentic_enabled
     from engine.agentic.errors import AgenticError
 
+    if ctx.config.data_doctor.unified:
+        # Plan O O4 (DEC-1811 (k)): with Data Doctor on, the rules-only header reading is on by default, whatever
+        # Plan K's switch says. Its suggestions stay "please check" and are never ticked; the AI second opinion
+        # (`POST …/agent-session/assist`) still follows `agentic.enabled`. Off, this line changes nothing.
+        return True
     try:
         return agentic_enabled(ctx.config_root)
     except AgenticError as exc:

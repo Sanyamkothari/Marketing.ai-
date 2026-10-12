@@ -35,6 +35,7 @@ import warnings
 from collections import Counter
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
+from decimal import Decimal, InvalidOperation
 from enum import StrEnum
 from typing import Any, Final
 
@@ -49,10 +50,12 @@ __all__ = [
     "BOOLEAN_FALSE",
     "BOOLEAN_TRUE",
     "CURRENCY_TOKENS",
+    "INDIAN_SCALE_WORDS",
     "FormatIssue",
     "FormatIssueKind",
     "ParseOutcome",
     "date_order",
+    "decimal_evidence",
     "find_excel_serial_dates",
     "find_format_issues",
     "map_booleans",
@@ -75,6 +78,25 @@ CURRENCY_TOKENS: Final[tuple[str, ...]] = ("INR", "Rs.", "Rs", "₹", "USD", "US
 BOOLEAN_TRUE: Final[frozenset[str]] = frozenset({"true", "t", "yes", "y", "1"})
 BOOLEAN_FALSE: Final[frozenset[str]] = frozenset({"false", "f", "no", "n", "0"})
 """The same tokens as `engine.stages.ingest.BOOL_TRUE_TOKENS` / `BOOL_FALSE_TOKENS`, compared casefolded."""
+
+INDIAN_SCALE_WORDS: Final[dict[str, int]] = {
+    "k": 10**3,
+    "m": 10**6,
+    "l": 10**5,
+    "lac": 10**5,
+    "lacs": 10**5,
+    "lakh": 10**5,
+    "lakhs": 10**5,
+    "cr": 10**7,
+    "crore": 10**7,
+    "crores": 10**7,
+}
+"""Plan O M241 (the design §8.1): the number words `parse_number` reads when its `indian_scale_words` parameter
+is on, compared casefolded - `₹2.5 L` is 250000, `1.2 Cr` 12000000, `12K` 12000. A trailing `/-` (`Rs 3,50,000/-`)
+is read too. Off (the default, and every recipe saved before M241), none of them is a number, as before."""
+
+_SCALED_RE: Final[re.Pattern[str]] = re.compile(r"^(?P<number>.*?\d\.?)(?P<word>[A-Za-z]+)\.?$")
+"""A number followed by one word (spaces already removed): `2.5L`, `1.2Cr`, `12K`, `5lakhs`."""
 
 _CURRENCY_RE: Final[re.Pattern[str]] = re.compile(
     "|".join(re.escape(token) for token in CURRENCY_TOKENS), flags=re.IGNORECASE
@@ -299,7 +321,30 @@ def _plain_number(core: str, decimal: str) -> str | None:
     return core.replace(",", "") if _GROUPED_RE["."].match(core) else None
 
 
-def _number_one(text: str, decimal: str, percent_to_fraction: bool) -> float | None:
+def _scaled(raw: str, decimal: str) -> float | None:
+    """`raw` (no sign, symbol or spaces) read with a number word or a trailing `/-` (M241); None when it is not
+    such a number. Multiplied exactly (`Decimal`), so `1.2 Cr` is 12000000 and not 11999999.999999998."""
+    if raw.endswith("/-"):
+        raw = raw[:-2]
+    match = _SCALED_RE.match(raw)
+    scale = 1
+    if match is not None:
+        word = INDIAN_SCALE_WORDS.get(match.group("word").casefold())
+        if word is None:
+            return None
+        raw, scale = match.group("number"), word
+    plain = _plain_number(raw, decimal)
+    if plain is None:
+        return None
+    try:
+        return float(Decimal(plain) * scale)
+    except InvalidOperation:  # pragma: no cover - `_plain_number` only returns what `float()` reads
+        return None
+
+
+def _number_one(
+    text: str, decimal: str, percent_to_fraction: bool, scale_words: bool = False
+) -> float | None:
     raw = text.strip()
     if not raw:
         return None
@@ -316,6 +361,9 @@ def _number_one(text: str, decimal: str, percent_to_fraction: bool) -> float | N
         raw = raw[1:].strip()
     raw = raw.replace(" ", "").replace(" ", "").replace("'", "")
     plain = _plain_number(raw, decimal)
+    if plain is None and scale_words and not percent:
+        scaled = _scaled(raw, decimal)
+        return None if scaled is None else (-scaled if negative else scaled)
     if plain is None:
         return None
     number = float(plain)
@@ -325,12 +373,18 @@ def _number_one(text: str, decimal: str, percent_to_fraction: bool) -> float | N
 
 
 def parse_numbers(
-    series: pd.Series[Any], *, decimal: str = ".", percent_to_fraction: bool = True
+    series: pd.Series[Any],
+    *,
+    decimal: str = ".",
+    percent_to_fraction: bool = True,
+    indian_scale_words: bool = False,
 ) -> ParseOutcome:
     """Text to float: currency symbols, thousands separators, `%` and `(negative)` handled.
 
     `decimal` is `"."` (1,200.50) or `","` (1.200,50). Numbers already numeric pass through, and so
     does a real number inside a text column: it is read by its value, not by its text.
+    `indian_scale_words` (Plan O M241) also reads the words of `INDIAN_SCALE_WORDS` and a trailing `/-`;
+    a value that reads without them reads exactly as it does with the parameter off.
     """
     if decimal not in {".", ","}:
         raise ValueError("decimal must be '.' or ','")
@@ -339,7 +393,9 @@ def parse_numbers(
     positions, cells = _present(series)
     numeric = _numeric_cells(series, positions)
     text = cells[~numeric]
-    numbers = _per_value(text, lambda value: _number_one(value, decimal, percent_to_fraction))
+    numbers = _per_value(
+        text, lambda value: _number_one(value, decimal, percent_to_fraction, indian_scale_words)
+    )
     parsed = np.array([np.nan if number is None else number for number in numbers], dtype="float64")
     failed = np.array([number is None for number in numbers], dtype=bool)
     values = np.full(len(series), np.nan, dtype="float64")
@@ -383,6 +439,17 @@ def _decimal_style(cells: pd.Series[Any]) -> str | None:
     if votes["."] != votes[","]:
         return "." if votes["."] > votes[","] else ","
     return "." if not votes["."] and not votes["?"] else None
+
+
+def decimal_evidence(cells: pd.Series[Any]) -> tuple[int, int]:
+    """How many distinct values prove a decimal point and how many a decimal comma (Plan O M241's locale profile).
+
+    The votes `_decimal_style` counts: a value counts only when it reads one way and not the other.
+    """
+    votes = Counter(
+        _per_value(pd.Series(list(dict.fromkeys(cells.astype(str))), dtype=object), _decimal_vote)
+    )
+    return votes["."], votes[","]
 
 
 def _number_issue(name: str, present: pd.Series[Any]) -> FormatIssue | None:
