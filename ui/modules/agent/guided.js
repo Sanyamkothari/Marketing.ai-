@@ -36,6 +36,8 @@ import {
   glossaryCode,
   present,
 } from "../../dom.js";
+import { aiNotConnectedHtml, campaignLayoutNow } from "../../availability.js"; // Plan M M192 (DEC-1622)
+import { canAccess } from "../router.js";
 import { createConnectionPicker } from "../connections/picker.js";
 import { TABLE_FILE_TYPES, bindIntakeNotes, intakeNotesHtml } from "../intake/notes.js";
 import { takeHandoff } from "../doctor/handoff.js";
@@ -629,7 +631,11 @@ function asideHtml(entry, openSent = new Set()) {
   const empty = `<div class="empty">Ask why a fix is suggested, or ask for a change such as “make training faster”. A change the helper suggests appears in the list to tick.</div>`;
   if (off) {
     // No Product AI: the rules-based suggestions on the page still work; only the chat needs a service.
-    return `<section class="card ag-chat" id="ag-chat"><h3>${esc(session.agent_name)}</h3><div class="gchat">${messages}</div><div class="ag-nochat" data-ag-nochat role="status"><p><a href="${PRODUCT_AI_HREF}">Connect an AI service</a> to chat with the helper.</p><p class="sub">The suggestions in the list work without it.</p></div></section>`;
+    // Plan M M192 (DEC-1622): in the campaigns layout the sentence names Settings › AI service and links there.
+    const say = campaignLayoutNow()
+      ? aiNotConnectedHtml({ canConnect: canAccess("PUT", "/ai-service/{slot}") })
+      : `<p><a href="${PRODUCT_AI_HREF}">Connect an AI service</a> to chat with the helper.</p>`;
+    return `<section class="card ag-chat" id="ag-chat"><h3>${esc(session.agent_name)}</h3><div class="gchat">${messages}</div><div class="ag-nochat" data-ag-nochat role="status">${say}<p class="sub">The suggestions in the list work without it.</p></div></section>`;
   }
   return `<section class="card ag-chat" id="ag-chat"><h3>${esc(session.agent_name)}</h3><div class="gchat">${
     messages || pending ? `${messages}${pending}` : empty

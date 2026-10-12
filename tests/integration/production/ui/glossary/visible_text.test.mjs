@@ -119,6 +119,8 @@ export const PAGES = [
   { id: "reports-models", hash: "#/reports/models", expect: /Model reports/, selector: "[data-models-part]" },
   { id: "value-report", hash: `#/pilot/value/${SCORE_RISK}`, expect: /Value of one extra customer/ },
   { id: "settings", hash: "#/settings", expect: /AI service/ },
+  // Plan M M192 (DEC-1622): Settings › AI service, a new page with an EMPTY allow-list (no never-shown word).
+  { id: "settings-ai-service", hash: "#/settings/ai", expect: /AI that helps your team[\s\S]*AI that writes for your customers/, selector: "[data-ai-svc-card='deliverable']" },
   { id: "connections", hash: "#/connections", expect: /The places your data lives/ },
   { id: "data-doctor", hash: "#/doctor", expect: /Data Doctor|Bring your data/ },
   { id: "uplift-workbench", hash: "#/uplift", expect: /Measure what a campaign changes/ },

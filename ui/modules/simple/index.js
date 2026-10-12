@@ -7,8 +7,11 @@
 // report, which used to be top-level menu items. The top bar's four places are `ui/chrome.js`'s.
 // Plan M M173 adds the Help pages (`#/help/glossary`, `#/help/whats-new`, drawn by `help.js`) and their
 // two entries in the Help (?) menu.
+// Plan M M192 (DEC-1622) adds Settings › AI service (`#/settings/ai`, drawn by `ai_service.js`): the two AI services in
+// plain words, each with a direct button to its key form.
 
 import { accessStatus } from "../../chrome.js";
+import { trackAiSettingsOrigin } from "../../availability.js";
 import { skeleton } from "../../dom.js";
 import {
   announceModulesChanged,
@@ -18,7 +21,16 @@ import {
   registerResultLink,
   resultsListsHtml,
 } from "../router.js";
-import { engineVersion, getAllRuns, getCampaigns, getProofs, getSummary, waitingForApproval } from "./api.js";
+import {
+  engineVersion,
+  getAiServiceState,
+  getAllRuns,
+  getCampaigns,
+  getProofs,
+  getSummary,
+  waitingForApproval,
+} from "./api.js";
+import { aiServiceHtml } from "./ai_service.js";
 import { glossaryEntry, glossaryHtml, loadWhatsNew, whatsNewEntry, whatsNewHtml } from "./help.js";
 import { injectStyles, resultsHtml, settingsHtml } from "./pages.js";
 
@@ -66,6 +78,24 @@ async function renderSettings(app, parts) {
   paint(draw(await engineVersion()));
 }
 
+/**
+ * Plan M M192 (DEC-1622): `#/settings/ai`, Settings › AI service. Drawn at once ("Loading…"), then from
+ * `GET /ai-service`; a failed call is the error with "Try again"; a person who may not read the AI service gets the
+ * page's notice without a call.
+ */
+async function renderAiSettings(app, parts) {
+  const paint = painter(app, parts);
+  const can = canAccess;
+  document.title = "AI service · Marketing AI";
+  paint(aiServiceHtml({ can }));
+  if (!can("GET", "/ai-service")) return;
+  try {
+    paint(aiServiceHtml({ state: await getAiServiceState(), can }));
+  } catch (error) {
+    paint(aiServiceHtml({ error, can }));
+  }
+}
+
 /** `#/help/glossary` (also bare `#/help`) and `#/help/whats-new`: the Help menu's two pages (M173). */
 async function renderHelp(app, parts) {
   const paint = painter(app, parts);
@@ -83,7 +113,8 @@ registerModule({
   routes: ROUTES,
   render: async (app, parts) => {
     injectStyles();
-    if (parts[0] === "settings") await renderSettings(app, parts);
+    if (parts[0] === "settings" && parts[1] === "ai") await renderAiSettings(app, parts); // Plan M M192
+    else if (parts[0] === "settings") await renderSettings(app, parts);
     else if (parts[0] === "help") await renderHelp(app, parts);
     else await renderResults(app, parts);
   },
@@ -121,5 +152,6 @@ registerResultLink({
 });
 
 injectStyles();
+trackAiSettingsOrigin(); // Plan M M192: a key form opened from Settings › AI service says so in its breadcrumb
 // A deep link to one of these pages was resolved by `app.js` before this module existed: draw it now.
 if (ROUTES.includes(hashParts()[0])) announceModulesChanged();

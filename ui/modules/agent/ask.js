@@ -18,6 +18,7 @@
 
 import { announceStatus, barTrack, errorBox, esc, fmtInt, fmtNum, fmtPct, present } from "../../dom.js";
 import { canAccess } from "../router.js";
+import { aiNotConnectedFor, aiNotConnectedHtml, campaignLayoutNow } from "../../availability.js"; // Plan M M192 (DEC-1622)
 import { clearAsk, getAsk, postAsk } from "./api.js";
 import { plain, sentHtml, statusHtml } from "./sent.js";
 import { guidedApplies } from "./guided.js";
@@ -151,7 +152,11 @@ export function panelHtml(st, open = new Set()) {
   const messages = messagesHtml(st, open);
   const log = messages ? `<div class="gchat" data-ask-chat>${messages}</div>` : "";
   if (chat.available === false) {
-    return `${head}${lead}${log}<div class="ag-nochat" data-ask-nochat role="status"><p><a href="${PRODUCT_AI_HREF}">Connect an AI service</a> to chat with the helper.</p></div></section>`;
+    // Plan M M192 (DEC-1622): in the campaigns layout the sentence names Settings › AI service and links there.
+    const say = campaignLayoutNow()
+      ? aiNotConnectedHtml({ canConnect: canAccess("PUT", "/ai-service/{slot}") })
+      : `<p><a href="${PRODUCT_AI_HREF}">Connect an AI service</a> to chat with the helper.</p>`;
+    return `${head}${lead}${log}<div class="ag-nochat" data-ask-nochat role="status">${say}</div></section>`;
   }
   if (!canAccess("POST", ASK_ROUTE)) {
     // A Viewer reads the chat; asking spends the AI service's budget, which is an Analyst's (DEC-1253).
@@ -160,7 +165,10 @@ export function panelHtml(st, open = new Set()) {
   const again = st.view.session
     ? `<button type="button" class="btn quiet" data-ask-clear="${id}"${st.busy ? " disabled" : ""}>New chat</button>`
     : "";
-  return `${head}${lead}${log}${st.chatError ? `<div class="card-body">${errorBox(st.chatError)}</div>` : ""}<form class="gaskrow" data-ask-form="${id}"><div class="control"><input type="text" data-ask-input="${id}" aria-label="Ask about your data" placeholder="${esc(
+  const failed = st.chatError
+    ? aiNotConnectedFor(st.chatError, { canConnect: canAccess("PUT", "/ai-service/{slot}") }) || errorBox(st.chatError)
+    : "";
+  return `${head}${lead}${log}${failed ? `<div class="card-body">${failed}</div>` : ""}<form class="gaskrow" data-ask-form="${id}"><div class="control"><input type="text" data-ask-input="${id}" aria-label="Ask about your data" placeholder="${esc(
     ASK_PLACEHOLDER,
   )}" value="${esc(st.draft)}" autocomplete="off" maxlength="1000"${st.busy ? " disabled" : ""}></div><button type="submit" class="btn secondary"${
     st.busy ? " disabled" : ""

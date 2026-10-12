@@ -69,7 +69,16 @@ test("the only things the Connections page draws that the Data page leaves to Se
   const aiLinks = $$("[data-cn-ai] a").map((a) => a.getAttribute("href")).sort();
   assert.deepEqual(aiLinks, ["#/connections/ai/deliverable", "#/connections/ai/product"]);
   await show("#/data");
-  assert.equal($("[data-dt-settings]").getAttribute("href"), "#/settings", "the Data page says where the AI service is");
+  // Plan M M192 (DEC-1622): straight to Settings › AI service, not to Settings (whose row used to open Connections,
+  // which the campaigns layout redirects back here: a loop).
+  assert.equal($("[data-dt-settings]").getAttribute("href"), "#/settings/ai", "the Data page says where the AI service is");
+});
+
+test("the Data page's note names the place in words and links it: Settings › AI service (M192)", async () => {
+  await show("#/data");
+  const note = $("[data-dt-settings]").closest("p");
+  assert.equal(note.textContent.replace(/\s+/g, " ").trim(), "Connect an AI service in Settings › AI service.");
+  assert.equal($("[data-dt-settings]").textContent, "Settings › AI service");
 });
 
 test("the old Connections route is still registered and still draws", async () => {

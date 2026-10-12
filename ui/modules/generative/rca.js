@@ -16,6 +16,7 @@
 // Technical details.
 
 import { ApiError, getArtefacts, getRun } from "../../api.js";
+import { aiNotConnectedFor } from "../../availability.js";
 import {
   emptyState,
   errorBox,
@@ -109,7 +110,9 @@ const generateAction = (s) =>
     s.generating ? "Starting…" : "Generate root causes"
   }</button>`;
 
-const generateErrorHtml = (s) => (s.generateError ? `<div class="gbody">${errorBox(s.generateError)}</div>` : "");
+// Plan M M192 (DEC-1622): no AI service (409 AI_NOT_CONNECTED) says so and links Settings › AI service (campaigns layout).
+const generateErrorHtml = (s) =>
+  s.generateError ? `<div class="gbody">${aiNotConnectedFor(s.generateError) || errorBox(s.generateError)}</div>` : "";
 
 function rootCausesCard(s) {
   const rca = s.art["root_cause_summary.json"];

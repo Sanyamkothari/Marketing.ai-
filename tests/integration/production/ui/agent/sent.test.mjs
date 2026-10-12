@@ -229,3 +229,28 @@ test("an older API (no `sent`, no `data_access`) shows nothing extra", async () 
   assert.equal($("#ag-chat details"), null);
   assert.equal($("#ag-chat [data-ag-access]"), null, "an unknown mode is never claimed");
 });
+
+test("campaigns layout (M192): no Product AI says 'No AI service is connected' and links Settings › AI service", async () => {
+  document.documentElement.setAttribute("data-ui-layout", "campaigns");
+  try {
+    await upload("unavailable");
+    const notice = $("#ag-chat [data-ag-nochat]");
+    assert.equal(
+      flat(notice),
+      "No AI service is connected. Connect one in Settings › AI service.The suggestions in the list work without it.",
+    );
+    assert.equal(notice.querySelector("a").getAttribute("href"), "#/settings/ai");
+    assert.equal(notice.querySelector('a[href^="#/connections/ai/"]'), null);
+    assert.equal($("#ag-question"), null, "no input to type into");
+    // The 409 a chat message answers lands on the same sentence.
+    await upload("vanished");
+    $("#ag-question").value = "What about monthly_spend?";
+    $("#ag-question").dispatchEvent(new w.Event("input", { bubbles: true }));
+    $("#ag-ask").dispatchEvent(new w.Event("submit", { bubbles: true, cancelable: true }));
+    await until(() => $("#ag-chat [data-ag-nochat] [data-ai-not-connected]"), 3000, "the sentence");
+    assert.equal($("#ag-chat [data-ag-nochat] a").getAttribute("href"), "#/settings/ai");
+    assert.equal($("#ag-chat .apierr"), null);
+  } finally {
+    document.documentElement.removeAttribute("data-ui-layout");
+  }
+});

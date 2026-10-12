@@ -18,7 +18,8 @@ test("Settings groups what a new user does not need, each a link to a screen tha
   await until(() => $("[data-settings-main]") && $("[data-signin-off]"), 3000, "the Settings page");
   assert.equal($("main h1").textContent, "Settings");
   // Plan M M173: Costs (`#/cost`) had no way in; it is the fourth entry.
-  assert.deepEqual(hrefs("[data-settings-main]"), ["#/connections", "#/privacy/consent", "#/monitoring/schedules", "#/cost"]);
+  // Plan M M192 (DEC-1622): the AI service has its own page, Settings › AI service, instead of the Connections page.
+  assert.deepEqual(hrefs("[data-settings-main]"), ["#/settings/ai", "#/privacy/consent", "#/monitoring/schedules", "#/cost"]);
   assert.deepEqual(
     $$("[data-settings-main] a").map((a) => a.textContent),
     ["AI service", "Privacy", "Schedules", "Costs"],
@@ -116,4 +117,8 @@ test("with sign-in on, an Admin gets Users and Audit log, and a role that may no
   assert.equal(viewer.querySelector('a[href="#/privacy/consent"]'), null);
   assert.equal(viewer.querySelector('a[href="#/monitoring/schedules"]'), null);
   assert.equal(viewer.querySelector('a[href="#/connections"]'), null, "changing the AI service is a PUT");
+  // Plan M M192: a role that may only read the AI service still finds its page, which says who may connect one; the
+  // page's Connect buttons are the PUT (simple/ai_service.test.mjs).
+  assert.equal(viewer.querySelector('a[href="#/settings/ai"]').textContent, "AI service");
+  assert.equal(viewer.querySelector('a[href^="#/connections/ai/"]'), null, "no key form from Settings itself");
 });

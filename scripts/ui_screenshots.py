@@ -56,6 +56,7 @@ PAGES: Final[tuple[tuple[str, str, str], ...]] = (
     ("reports", "classic", "#/reports"),
     ("connections", "classic", "#/connections"),
     ("settings", "classic", "#/settings"),
+    ("ai-service", "classic", "#/settings/ai"),  # Plan M M192 (DEC-1622)
     ("glossary", "classic", "#/help/glossary"),
     ("overview", "campaigns", "#/overview"),
     ("campaigns", "campaigns", "#/campaigns"),
@@ -64,6 +65,7 @@ PAGES: Final[tuple[tuple[str, str, str], ...]] = (
     ("data", "campaigns", "#/data"),
     ("reports", "campaigns", "#/reports"),
     ("settings", "campaigns", "#/settings"),
+    ("ai-service", "campaigns", "#/settings/ai"),  # Plan M M192 (DEC-1622)
     ("glossary", "campaigns", "#/help/glossary"),
 )
 

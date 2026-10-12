@@ -20,6 +20,7 @@
 // is off. Judge scores, every passed check and the cost sit under closed disclosures.
 
 import { ApiError, getArtefacts, getRun } from "../../api.js";
+import { aiNotConnectedFor } from "../../availability.js";
 import {
   RESULTS_CRUMB,
   crumbs,
@@ -280,7 +281,9 @@ const generateAction = (s) =>
     s.generating ? "Starting…" : "Generate campaign copy"
   }</button>`;
 
-const generateErrorHtml = (s) => (s.generateError ? `<div class="gbody">${errorBox(s.generateError)}</div>` : "");
+// Plan M M192 (DEC-1622): no AI service (409 AI_NOT_CONNECTED) says so and links Settings › AI service (campaigns layout).
+const generateErrorHtml = (s) =>
+  s.generateError ? `<div class="gbody">${aiNotConnectedFor(s.generateError) || errorBox(s.generateError)}</div>` : "";
 
 /** The choice a person makes before generating: "Write one message per" band, main reason or uplift segment. */
 export function perChooserHtml(s) {

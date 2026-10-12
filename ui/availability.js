@@ -132,6 +132,7 @@ export const CONNECT_HREF = "#/connections/ai/deliverable";
 
 /** The notice card alone: a title, two sentences and one button that depends on the role. */
 export function aiNoticeCard(uc) {
+  if (campaignLayoutNow()) return aiNoticeCardCampaigns(uc); // Plan M M192 (DEC-1622)
   const back = journeyBack(uc);
   const admin = mayConnect();
   return noticeCard({
@@ -160,4 +161,98 @@ export function aiNoticeHtml(uc, backHtml) {
   return `<main class="screen" data-ai-notice>${pageHead(
     `${backHtml}<h1 class="h1">${esc(uc.name)}</h1>${uc.description ? `<p class="desc">${esc(uc.description)}</p>` : ""}${chip}`,
   )}${aiNoticeCard(uc)}</main>`;
+}
+
+// --- Plan M M192 (DEC-1622): the AI service in one click -------------------------------------------------------
+//
+// Settings › AI service (`#/settings/ai`, drawn by `modules/simple/ai_service.js`) is the one place a person finds the
+// two AI services, in plain words, with a direct Connect / Change button to each key form. In the campaigns layout a
+// feature that answers 409 `AI_NOT_CONNECTED` says so in one sentence that links there (`aiNotConnectedHtml`), and the
+// notice above sends there too; the classic layout keeps its own words and links. The layout is read from
+// `<html data-ui-layout>` (`ui/layout.js` sets it only in the campaigns layout), so this file still imports only
+// `api.js` and `dom.js`.
+
+/** The Settings › AI service page. */
+export const AI_SETTINGS_HREF = "#/settings/ai";
+
+/** The first sentence a feature shows when no AI service is connected (campaigns layout). */
+export const AI_NOT_CONNECTED_SENTENCE = "No AI service is connected.";
+
+/** True in the campaigns layout (the five-place sidebar), read from the mark `ui/layout.js` puts on `<html>`. */
+export function campaignLayoutNow(doc = typeof document === "undefined" ? null : document) {
+  return Boolean(doc && doc.documentElement && doc.documentElement.getAttribute("data-ui-layout") === "campaigns");
+}
+
+/**
+ * "No AI service is connected. Connect one in Settings › AI service." with the place as a link, for a person who may
+ * connect one (`canConnect`: `PUT /ai-service/{slot}`); anyone else is told to ask an admin, with no link to a form
+ * they could not save. Without `canConnect` the question registered with `registerAiServiceAccess` answers it. `tag`
+ * is the element ("p" by default), `attrs` extra attribute markup the caller wrote.
+ */
+export function aiNotConnectedHtml({ canConnect = undefined, tag = "p", attrs = "" } = {}) {
+  const el = /^[a-z][a-z0-9]*$/.test(tag) ? tag : "p";
+  const may = canConnect === undefined ? mayConnect() : Boolean(canConnect);
+  const rest = may
+    ? `Connect one in <a href="${AI_SETTINGS_HREF}" data-ai-settings-link>Settings › AI service</a>.`
+    : "Ask an admin to connect one in Settings › AI service.";
+  return `<${el} data-ai-not-connected${attrs ? ` ${attrs}` : ""}>${esc(AI_NOT_CONNECTED_SENTENCE)} ${rest}</${el}>`;
+}
+
+/** The sentence for an error a call answered, or "" when it is not `AI_NOT_CONNECTED` or the layout is classic. */
+export function aiNotConnectedFor(error, options = {}) {
+  if (!error || error.code !== "AI_NOT_CONNECTED" || !campaignLayoutNow()) return "";
+  return aiNotConnectedHtml(options);
+}
+
+/** The notice card in the campaigns layout: the same title, the one sentence, and the way to Settings › AI service. */
+function aiNoticeCardCampaigns(uc) {
+  const admin = mayConnect();
+  const back = journeyBack(uc);
+  return noticeCard({
+    title: AI_NOTICE_TITLE,
+    text: [
+      admin
+        ? `${AI_NOT_CONNECTED_SENTENCE} Connect one in Settings › AI service.`
+        : `${AI_NOT_CONNECTED_SENTENCE} Ask an admin to connect one in Settings › AI service.`,
+      "Everything else works without it.",
+    ],
+    action: admin
+      ? { label: "Open Settings › AI service", href: AI_SETTINGS_HREF, kind: "primary" }
+      : { label: `Back to ${back.label}`, href: back.href, kind: "secondary" },
+    attrs: "data-ai-notice-card data-ai-not-connected",
+  });
+}
+
+// Where a key form was opened from. Settings › AI service marks its buttons `data-ai-from-settings="<slot>"`; a click on
+// one remembers the slot, and the key form (`modules/connections/ai.js`) asks `openedFromAiSettings(slot)` for its
+// breadcrumb: Settings › AI service › ... instead of Connections › .... Any other address forgets it, so the form
+// reached from Connections, a bookmark or a reload keeps the Connections breadcrumb.
+let aiFrom = null;
+let aiFromWired = false;
+
+/** Listen once, on `doc`, for the clicks and the address changes above. */
+export function trackAiSettingsOrigin(doc = typeof document === "undefined" ? null : document) {
+  if (aiFromWired || !doc || typeof doc.addEventListener !== "function") return;
+  aiFromWired = true;
+  doc.addEventListener(
+    "click",
+    (event) => {
+      const target = event.target;
+      const link = target && typeof target.closest === "function" ? target.closest("[data-ai-from-settings]") : null;
+      if (link) aiFrom = link.getAttribute("data-ai-from-settings");
+    },
+    true,
+  );
+  const view = doc.defaultView;
+  if (view && typeof view.addEventListener === "function") {
+    view.addEventListener("hashchange", () => {
+      if (aiFrom && view.location.hash.replace(/\/+$/, "") !== `#/connections/ai/${aiFrom}`) aiFrom = null;
+    });
+  }
+}
+
+/** Whether the key form for `slot` was opened from Settings › AI service (and the address has not moved since). */
+export function openedFromAiSettings(slot) {
+  if (!aiFrom || aiFrom !== slot || typeof window === "undefined") return false;
+  return window.location.hash.replace(/\/+$/, "") === `#/connections/ai/${slot}`;
 }

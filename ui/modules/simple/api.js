@@ -88,3 +88,6 @@ export async function engineVersion() {
     return null;
   }
 }
+
+/** Plan M M192 (DEC-1622): the two AI services (`GET /ai-service`); an ApiError when the call fails, for "Try again". */
+export const getAiServiceState = () => request("/ai-service");

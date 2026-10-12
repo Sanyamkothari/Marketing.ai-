@@ -25,6 +25,9 @@ import { injectConnectionStyles } from "../connections/styles.js";
 import { userText } from "../../labels.js";
 import { getUploads } from "./api.js";
 import { injectDataStyles } from "./styles.js";
+// Plan M M192 (DEC-1622): the note under the sources opens Settings › AI service itself, not Settings (which used to
+// send the AI service back to Connections, which the campaigns layout redirects here: a loop).
+import { AI_SETTINGS_HREF } from "../../availability.js";
 
 export const DATA_HOME = "#/data";
 export const DOCTOR_HREF = "#/doctor";
@@ -271,7 +274,7 @@ function sourcesHtml() {
     ? errorBox(state.uploadsError, { title: "The uploaded files could not be listed." })
     : "";
   return `${chooserHtml()}<section class="dt-sec" aria-labelledby="dt-sources-h"><h2 id="dt-sources-h">Your sources</h2><p>Saved connections and uploaded files, with their health and when they last brought in data.</p>${list}${problem}</section>
-    <p class="dt-foot">The AI service has its own place under <a href="#/settings" data-dt-settings>Settings</a>.</p>`;
+    <p class="dt-foot">Connect an AI service in <a href="${AI_SETTINGS_HREF}" data-dt-settings>Settings › AI service</a>.</p>`;
 }
 
 // --- the Check my data tab -------------------------------------------------------------------------

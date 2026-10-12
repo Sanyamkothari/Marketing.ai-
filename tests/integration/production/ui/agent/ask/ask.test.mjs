@@ -185,3 +185,32 @@ test("without an AI service: the same 'Connect an AI service' line as Guided set
   assert.equal(line.querySelector("a").getAttribute("href"), "#/connections/ai/product");
   assert.equal($("[data-ask-input]"), null);
 });
+
+test("campaigns layout (M192): 'No AI service is connected' links Settings › AI service, or says to ask an admin", () => {
+  const holder = document.createElement("div");
+  const st = { uploadId: "u_off", view: { chat: { available: false, reason: "AI_NOT_CONNECTED" }, session: null }, draft: "" };
+  document.documentElement.setAttribute("data-ui-layout", "campaigns");
+  try {
+    router.registerAccess({ can: () => true });
+    holder.innerHTML = ask.panelHtml(st);
+    const line = holder.querySelector("[data-ask-nochat]");
+    assert.equal(line.textContent.replace(/\s+/g, " ").trim(), "No AI service is connected. Connect one in Settings › AI service.");
+    assert.equal(line.querySelector("a").getAttribute("href"), "#/settings/ai");
+    router.registerAccess({ can: (method, path) => !(method === "PUT" && path === "/ai-service/{slot}") });
+    holder.innerHTML = ask.panelHtml(st);
+    assert.match(holder.querySelector("[data-ask-nochat]").textContent, /Ask an admin to connect one in Settings › AI service\./);
+    assert.equal(holder.querySelector("[data-ask-nochat] a"), null);
+    // A chat message the server refuses with 409 AI_NOT_CONNECTED says the same, not an error box.
+    router.registerAccess({ can: () => true });
+    holder.innerHTML = ask.panelHtml({
+      uploadId: "u_x",
+      view: { chat: { available: true }, session: null },
+      draft: "",
+      chatError: { code: "AI_NOT_CONNECTED", status: 409, message: "No AI service is connected." },
+    });
+    assert.equal(holder.querySelector(".apierr"), null);
+    assert.equal(holder.querySelector("[data-ai-not-connected] a").getAttribute("href"), "#/settings/ai");
+  } finally {
+    document.documentElement.removeAttribute("data-ui-layout");
+  }
+});

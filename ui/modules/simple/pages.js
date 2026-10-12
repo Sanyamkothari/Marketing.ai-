@@ -38,6 +38,8 @@ import {
   sortNote,
 } from "../../dom.js";
 import { icon, pageHeader } from "../../components.js"; // Plan M M188 (DEC-1618): the look of Settings
+import { AI_SETTINGS_HREF } from "../../availability.js"; // Plan M M192 (DEC-1622): Settings › AI service
+import { AI_SERVICE_CSS } from "./ai_service.js";
 import { technicalSwitchHtml } from "../../technical.js"; // Plan M M180 (DEC-1610)
 import { RUNS_SHOWN } from "./api.js";
 import { campaignNameHtml, campaignNames, figureHtml } from "../../format.js"; // Plan M M172 (DEC-1602)
@@ -349,8 +351,15 @@ export function settingsHtml({ can = () => true, status = null, version = null }
   // Settings is a top-level place: no breadcrumb (visual direction 3).
   const head = pageHeader({ title: "Settings", subtitle: "Things you set up once. Your everyday work is on Home and Results." });
   const main = [
-    can("PUT", "/ai-service/{slot}")
-      ? entry({ label: "AI service", href: "#/connections", text: "Connect the AI that helps your team in Guided setup and the AI behind what your customer gets. Both are on Connections, with your data." })
+    // Plan M M192 (DEC-1622): its own page, Settings › AI service, for anyone who may read the AI service; that page
+    // says who may connect one. It used to open Connections, which the campaigns layout sends to the Data page.
+    can("GET", "/ai-service")
+      ? entry({
+          label: "AI service",
+          href: AI_SETTINGS_HREF,
+          text: "Connect the AI that helps your team and the AI that writes for your customers.",
+          attrs: "data-settings-ai",
+        })
       : "",
     can("GET", "/privacy/purposes")
       ? entry({ label: "Privacy", href: "#/privacy/consent", text: "Consent, requests to erase or see a person's data, and how long data is kept." })
@@ -416,7 +425,8 @@ export function settingsHtml({ can = () => true, status = null, version = null }
     entry({
       label: "Document assistant",
       href: "#/uc/ai-onboarding-assistant",
-      text: "Answers questions from your own documents. Needs the Deliverable AI.",
+      // Plan M M192 (DEC-1622): the AI service's plain name, as Settings › AI service calls it.
+      text: "Answers questions from your own documents. Needs the AI that writes for your customers.",
     }),
   ].filter(Boolean);
   const about = [
@@ -537,6 +547,6 @@ export function injectStyles(doc = document) {
   if (!doc || !doc.head || doc.getElementById("sp-styles")) return;
   const style = doc.createElement("style");
   style.id = "sp-styles";
-  style.textContent = CSS;
+  style.textContent = CSS + AI_SERVICE_CSS; // Plan M M192: Settings › AI service's cards
   doc.head.appendChild(style);
 }

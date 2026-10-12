@@ -241,7 +241,8 @@ def samples(e: Entities) -> dict[str, list[str]]:
         # Plan M M177 (DEC-1607): the New campaign wizard.
         + ["#/campaigns/new"],
         "results": ["#/results"],
-        "settings": ["#/settings"],
+        # Plan M M192 (DEC-1622): Settings › AI service.
+        "settings": ["#/settings", "#/settings/ai"],
         "help": ["#/help/glossary", "#/help/whats-new"],
         "connections": [
             "#/connections",

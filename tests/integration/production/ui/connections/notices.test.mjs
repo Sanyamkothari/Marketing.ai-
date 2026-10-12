@@ -152,3 +152,64 @@ test("connecting one makes Home read again, and the tag goes", async () => {
   await until(() => tags("asst") === "", 3000, "the tag to go");
   assert.equal($$("a.uc .uc-tags").length, 0);
 });
+
+// --- Plan M M192 (DEC-1622): in the campaigns layout, no AI service says so and links Settings › AI service ------
+
+const inCampaigns = (on) => {
+  if (on) document.documentElement.setAttribute("data-ui-layout", "campaigns");
+  else document.documentElement.removeAttribute("data-ui-layout");
+};
+
+test("campaigns layout: the notice says 'No AI service is connected' and opens Settings › AI service", () => {
+  inCampaigns(true);
+  try {
+    availability.registerAiServiceAccess(() => true);
+    const holder = document.createElement("div");
+    holder.innerHTML = availability.aiNoticeCard({ id: "asst", name: "Assistant" });
+    const card = holder.querySelector("[data-ai-notice-card]");
+    assert.equal(text(card.querySelector("h3")), "Needs AI service connection");
+    assert.equal(text(card.querySelector("p")), "No AI service is connected. Connect one in Settings › AI service.");
+    const link = card.querySelector("a.btn.primary");
+    assert.equal(link.getAttribute("href"), "#/settings/ai");
+    assert.doesNotMatch(text(card), /Deliverable|Product AI/, "plain words: no engineering name");
+    availability.registerAiServiceAccess(() => false);
+    holder.innerHTML = availability.aiNoticeCard({ id: "asst", name: "Assistant" });
+    assert.match(text(holder), /No AI service is connected\. Ask an admin to connect one in Settings › AI service\./);
+    assert.equal(holder.querySelector('a[href="#/settings/ai"]'), null, "no way to a form they could not save");
+    assert.equal(holder.querySelector('a[href^="#/connections/ai/"]'), null);
+  } finally {
+    availability.registerAiServiceAccess(null);
+    inCampaigns(false);
+  }
+  // The classic layout keeps its words and its link.
+  const holder = document.createElement("div");
+  holder.innerHTML = availability.aiNoticeCard({ id: "asst", name: "Assistant" });
+  assert.equal(holder.querySelector("a.btn.primary").getAttribute("href"), "#/connections/ai/deliverable");
+});
+
+test("the one sentence: a link for whoever may connect one, 'Ask an admin' for anyone else", () => {
+  const holder = document.createElement("div");
+  holder.innerHTML = availability.aiNotConnectedHtml({ canConnect: true });
+  assert.equal(text(holder), "No AI service is connected. Connect one in Settings › AI service.");
+  const link = holder.querySelector("[data-ai-not-connected] a");
+  assert.equal(link.getAttribute("href"), "#/settings/ai");
+  assert.equal(text(link), "Settings › AI service");
+  holder.innerHTML = availability.aiNotConnectedHtml({ canConnect: false });
+  assert.equal(text(holder), "No AI service is connected. Ask an admin to connect one in Settings › AI service.");
+  assert.equal(holder.querySelector("a"), null);
+});
+
+test("a 409 AI_NOT_CONNECTED answer becomes that sentence in the campaigns layout, and nothing else does", () => {
+  const refused = { code: "AI_NOT_CONNECTED", status: 409, message: "No AI service is connected." };
+  assert.equal(availability.aiNotConnectedFor(refused), "", "the classic layout keeps its error box");
+  inCampaigns(true);
+  try {
+    const holder = document.createElement("div");
+    holder.innerHTML = availability.aiNotConnectedFor(refused, { canConnect: true });
+    assert.equal(holder.querySelector("[data-ai-not-connected] a").getAttribute("href"), "#/settings/ai");
+    assert.equal(availability.aiNotConnectedFor({ code: "INTERNAL", status: 500 }), "", "another error stays an error");
+    assert.equal(availability.aiNotConnectedFor(null), "");
+  } finally {
+    inCampaigns(false);
+  }
+});

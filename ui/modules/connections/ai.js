@@ -24,8 +24,19 @@
 // Every string from the API goes through `esc()` (or a text node); nothing is put in with `innerHTML`
 // unescaped.
 
-import { CONNECTIONS_CRUMB, announceStatus, crumbs, errorBox, esc, fmtStamp, notFound, pageHead, skeleton } from "../../dom.js";
-import { forgetAiServiceStatus } from "../../availability.js";
+import {
+  CONNECTIONS_CRUMB,
+  SETTINGS_CRUMB,
+  announceStatus,
+  crumbs,
+  errorBox,
+  esc,
+  fmtStamp,
+  notFound,
+  pageHead,
+  skeleton,
+} from "../../dom.js";
+import { AI_SETTINGS_HREF, forgetAiServiceStatus, openedFromAiSettings } from "../../availability.js";
 import { deleteAiService, getAiService, listAiModels, putAiService, testAiService } from "./api.js";
 import { injectConnectionStyles } from "./styles.js";
 
@@ -318,10 +329,17 @@ const errorsHtml = () =>
 /** Whether Test has something to test: something on screen, or something saved. */
 const canTest = () => Boolean(s.provider) && (s.dirty || Boolean(s.data && s.data.connected));
 
+/**
+ * The way back: Settings › AI service when the form was opened from that page (Plan M M192, DEC-1622), else
+ * Connections, as before.
+ */
+const backCrumbs = (slotId) =>
+  openedFromAiSettings(slotId) ? [SETTINGS_CRUMB, { label: "AI service", href: AI_SETTINGS_HREF }] : [CONNECTIONS_CRUMB];
+
 function headHtml() {
   const slot = SLOTS[s.slot];
   return pageHead(
-    `${crumbs([CONNECTIONS_CRUMB, { label: slot.title }])}<h1 class="h1">${esc(slot.title)}</h1><p class="desc" data-ai-blurb>${esc(
+    `${crumbs([...backCrumbs(s.slot), { label: slot.title }])}<h1 class="h1">${esc(slot.title)}</h1><p class="desc" data-ai-blurb>${esc(
       slot.blurb,
     )}</p><p class="sub">It does not train or score your models.</p>`,
   );
