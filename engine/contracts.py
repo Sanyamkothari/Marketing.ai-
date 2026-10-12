@@ -352,6 +352,17 @@ class StageStatus(Artefact):
     ended_at: AwareDatetime | None = Field(default=None, description="UTC time this stage ended.")
     duration_seconds: float | None = Field(default=None, description="Wall-clock duration of the stage.")
     error: RunError | None = Field(default=None, description="Failure detail when this stage failed.")
+    # Plan M M189 (DEC-1619): an added, defaulted field, so every status.json written before it still
+    # reads, as null. Declared in place because a pydantic field cannot be added from a block at the foot
+    # of the file (the precedent is Plan J M95's `RunRecord.synthetic`).
+    fraction: float | None = Field(
+        default=None,
+        description=(
+            "How far through its expected duration the running stage is, 0 to 1 (capped at 0.95 while it "
+            "runs longer than expected); null for every stage that is not running, and when no estimate "
+            "could be made."
+        ),
+    )
 
 
 class RunStatus(Artefact):
@@ -366,6 +377,37 @@ class RunStatus(Artefact):
     )
     current_stage: StageKey | None = Field(default=None, description="Stage currently running, when any.")
     progress_pct: int = Field(description="Pre-computed completion percentage, done stages over total.")
+    # Plan M M189 (DEC-1619): three added, defaulted fields, so every status.json written before them still
+    # reads, as null. `progress_pct` keeps its meaning; these are the time-weighted estimate beside it.
+    estimated_pct: int | None = Field(
+        default=None,
+        description=(
+            "Time-weighted completion estimate, 0 to 100: each stage weighted by its expected duration and "
+            "the running stage credited for the time it has run. Never goes backwards within a run, never "
+            "exceeds 99 before the run is done, and is 100 only when it is. Null when no estimate could be "
+            "made (a run started before this field existed, or a training run with neither a time budget "
+            "nor a past run to go by)."
+        ),
+    )
+    eta_seconds: int | None = Field(
+        default=None,
+        description=(
+            "Expected seconds left, from the same expected durations. Null when there is no estimate, when "
+            "the run has ended (done, failed or cancelled), and while the running stage has run past its "
+            "expected duration."
+        ),
+    )
+    estimate_basis: Literal["time_budget", "past_runs", "stages"] | None = Field(
+        default=None,
+        description=(
+            "What the expected durations came from. A training run: `time_budget` (its train stage is "
+            "expected to take the search's wall-clock budget, whenever the trainer honours one) or "
+            "`past_runs` (a trainer with no budget, an uplift learner on LightGBM: the median train duration "
+            "of this deployment's finished runs of the same use case and trainer). A "
+            "scoring run: `past_runs` (medians of its finished runs of the same use case) or `stages` "
+            "(documented per-stage defaults, no history yet). Null when `estimated_pct` is null."
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -305,6 +305,9 @@ The failure attached to a failed run or stage.
 | `stages` | list[StageStatus] | yes | The full stage list in execution order, eight for train and seven for score. |
 | `current_stage` | StageKey ("ingest" \| "validate" \| "prepare" \| "split" \| "train" \| "evaluate" \| "explain" \| "register" \| "validate_against_schema" \| "predict" \| "explain_rows" \| "actions" \| "export") \| null | no | Stage currently running, when any. |
 | `progress_pct` | integer | yes | Pre-computed completion percentage, done stages over total. |
+| `estimated_pct` | integer \| null | no | Time-weighted completion estimate, 0 to 100: each stage weighted by its expected duration and the running stage credited for the time it has run. Never goes backwards within a run, never exceeds 99 before the run is done, and is 100 only when it is. Null when no estimate could be made (a run started before this field existed, or a training run with neither a time budget nor a past run to go by). |
+| `eta_seconds` | integer \| null | no | Expected seconds left, from the same expected durations. Null when there is no estimate, when the run has ended (done, failed or cancelled), and while the running stage has run past its expected duration. |
+| `estimate_basis` | "time_budget" \| "past_runs" \| "stages" \| null | no | What the expected durations came from. A training run: `time_budget` (its train stage is expected to take the search's wall-clock budget, whenever the trainer honours one) or `past_runs` (a trainer with no budget, an uplift learner on LightGBM: the median train duration of this deployment's finished runs of the same use case and trainer). A scoring run: `past_runs` (medians of its finished runs of the same use case) or `stages` (documented per-stage defaults, no history yet). Null when `estimated_pct` is null. |
 
 #### StageStatus
 
@@ -322,6 +325,7 @@ One engine stage on the Running screen (the UI groups rows by `group_label`; DEC
 | `ended_at` | datetime (ISO-8601, with timezone) \| null | no | UTC time this stage ended. |
 | `duration_seconds` | number \| null | no | Wall-clock duration of the stage. |
 | `error` | RunError \| null | no | Failure detail when this stage failed. |
+| `fraction` | number \| null | no | How far through its expected duration the running stage is, 0 to 1 (capped at 0.95 while it runs longer than expected); null for every stage that is not running, and when no estimate could be made. |
 
 ### `run_config.json`
 
