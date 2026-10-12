@@ -86,10 +86,11 @@ def load_help(root: Path | None = None) -> HelpCatalogue:
 
 
 def known_codes() -> frozenset[str]:
-    """Every code the catalogue must explain: the engine's check codes plus Plan E's, Plan J's and Plan K's own."""
+    """Every code the catalogue must explain: the engine's check codes plus Plan E's, J's, K's and O's own."""
     from engine.agentic.codes import PLAN_K_CODES  # Plan K M130, pre-approved additive edit (DEC-1400)
     from engine.contracts import CHECK_CODES
     from engine.decide.codes import PLAN_J_CODES  # Plan J M90, pre-approved additive edit (DEC-1300)
+    from engine.doctor.codes import PLAN_O_CODES  # Plan O M230, additive edit (DEC-1800 (b))
     from engine.pilot.preflight import PREFLIGHT_CODES
 
     return frozenset(
@@ -99,6 +100,7 @@ def known_codes() -> frozenset[str]:
         | PREFLIGHT_CODES
         | PLAN_J_CODES
         | PLAN_K_CODES
+        | PLAN_O_CODES
     )
 
 
