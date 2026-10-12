@@ -130,6 +130,9 @@ class RecipeStepKind(StrEnum):
     # Plan L M156 (DEC-1560): a wide sheet's month columns into rows (level 3, first in the fixed order). Row-wise:
     # each row becomes one row per listed period, from that row's own cells and the frozen parameters only.
     UNPIVOT = "unpivot"
+    # Plan O M237 (DEC-1807): one customer ID written one way (prefix, leading zeros, case, spaces, +91 phone)
+    # so two files meet. Row-wise and stateless: a cell's output depends on that cell and the frozen rule only.
+    NORMALISE_KEY = "normalise_key"
 
 
 class ProposalSource(StrEnum):
@@ -207,6 +210,8 @@ class RecipeStep(StrictBase):
             raise ValueError("a remove_rows step creates no column")
         if self.kind is RecipeStepKind.UNPIVOT and self.new_column is not None:
             raise ValueError("an unpivot step names its new columns in params")
+        if self.kind is RecipeStepKind.NORMALISE_KEY and self.new_column is not None:
+            raise ValueError("a normalise_key step rewrites the IDs of its own column")
         return self
 
 

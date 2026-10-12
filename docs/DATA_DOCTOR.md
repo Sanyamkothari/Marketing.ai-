@@ -192,6 +192,38 @@ the column it misses. The dataset itself is never changed.
 - The tests: `tests/unit/doctor/test_joins.py`, `tests/integration/test_api_doctor_joins.py`,
   `tests/integration/agent/test_dataset_recipe_refusal.py`.
 
+### Joining, stacking and building, done for you (Plan O M237, DEC-1807)
+
+What section 5 measures, Data Doctor can now also do - always as a suggestion you approve, never on its own:
+
+- **Join files about the same customers.** A second customer file (the plan from one CRM export, the usage from
+  another) adds its columns to the customer list; a list of customers who left (or bought) becomes a 1/0 column.
+  The customer list keeps every row and its IDs as written. A file with a customer on two different rows is
+  refused: stack it, or keep the latest row, first. Turning a list into the outcome always needs your own yes, to
+  the exact sentence shown.
+- **Stack monthly exports without counting twice.** A row that a later export repeats from an earlier one (the
+  last week of last month, exported again) is counted once, and the receipt says how many rows each file
+  repeated and which dates they span. Two identical rows inside one file are two rows and both stay. When two
+  exports give the same customer and date different values, you are asked once which export to keep.
+- **Write the IDs one way** (`normalise_key`): take `CUST-` off, drop the zeros at the start, ignore spaces or upper
+  and lower case, or write an Indian phone number as `+91` and ten digits. Two IDs meet only when they are then
+  written exactly alike; nothing is matched because it looks similar.
+- **Build the dataset.** With a customer list, its logs and an agreed outcome, Data Doctor proposes the whole build -
+  which file is what, the stacks, the ID tidy-up, which column names the customer and the date in each - and, once
+  you approve it, makes the same calls the Manual setup screens make (add the files, map them, save the recipe
+  with the outcome unchanged, build). Nothing is set up by hand.
+
+Every join, stack and tidy-up counts the rows in and out. One that removes more than 2% of a file's rows needs your
+own yes.
+
+For developers: `engine/doctor/join_files.py` (`plan_join`, `run_join`), `engine/doctor/stack_files.py`
+(`plan_stack`, `run_stack`), `engine/agent/key_steps.py` (the `normalise_key` step and `propose_key_rules`),
+`engine/doctor/build_driver.py` (`plan_build` proposes, `drive_builder` runs an approved plan through a
+`BuilderPort`; `engine/doctor/builder_api.py` is the port over the onboarding routes), `engine/doctor/tools_files.py`
+(the four tool specs and `register`). Tests: `tests/unit/agent/test_key_steps.py`,
+`tests/unit/doctor/test_{join_files,stack_files,build_driver,tools_files}.py`,
+`tests/integration/test_m237_several_files.py`.
+
 ## 6. The outcome from your events (M157)
 
 Most people have no "churned" column. They have a log of what customers did: recharges, orders, logins. When
