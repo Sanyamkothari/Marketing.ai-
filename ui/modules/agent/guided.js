@@ -15,6 +15,9 @@
 // unticked rejected (DEC-1010: only the person decides). A question is answered the moment an option
 // is clicked, because an answer can change what the helper suggests next.
 //
+// The ID and, for training, the outcome are required: unticking either makes the helper ask for it
+// (DEC-1821), and Approve then stops at that question instead of sending a setup the run would refuse.
+//
 // Approve ends where Manual setup ends: `apply` returns the prepared upload, the two columns and the
 // overrides, and `host.approved(...)` fills the Setup form's state with them - its paths come from the
 // API, never from this file - so the Run button below is `ui/usecase.js`'s own `submit()`.
@@ -804,6 +807,13 @@ async function approve(entry) {
   draw(entry);
   try {
     await syncDecisions(entry);
+    if (openQuestions(g.session).length) {
+      // DEC-1821: an unticked ID or outcome is asked for again - nothing is approved until it is answered.
+      g.busy = "";
+      announceStatus("One more question needs an answer before approving");
+      draw(entry);
+      return;
+    }
     g.applied = await postApply(g.upload.upload_id);
   } catch (error) {
     g.busy = "";
