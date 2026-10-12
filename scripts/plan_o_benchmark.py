@@ -661,19 +661,44 @@ def unified_app(config_root: Path) -> Iterator[tuple[Any, Path]]:
             yield client, data_dir
 
 
-class _Recording:
-    """The test client, keeping Approve's answer and checking every "accept the recommended" it passes on: the
-    session before and after, so a step it ticks that it never may is counted (`ticked_harms`)."""
+def same_column(written: Any, true: str) -> bool:
+    """Whether a column name (or its label) is the file's true column: compared case-blind, with spaces,
+    underscores and punctuation ignored (`Grahak ID` is `grahak_id`)."""
 
-    def __init__(self, client: Any, where: str) -> None:
+    def plain(name: Any) -> str:
+        return re.sub(r"[\W_]+", "", str(name).casefold())
+
+    return bool(plain(true)) and plain(written) == plain(true)
+
+
+class _Recording:
+    """The test client between Plan L's driver and the API.
+
+    It keeps Approve's answer; it checks every "accept the recommended" it passes on (the session before and after,
+    so a step it ticks that it never may is counted: `ticked_harms`); and it answers a role question (DEC-1821's
+    `a<round>-role-id` / `-role-outcome`) as a person who knows the file would, with the file's true ID or outcome
+    column. The driver picks the first option of a question with no recommended one; for a role question that
+    would be a guess, so the answer is replaced. When the true column is not among the options, the first option is
+    sent and the file says so (`not_measured`): a wrong column is never chosen silently.
+    """
+
+    def __init__(self, client: Any, where: str, truth: Truth | None = None) -> None:
         self.client = client
         self.where = where
+        self.truth = truth
         self.applied: dict[str, Any] | None = None
         self.harms: list[Any] = []
         self.accepts = 0
+        self.not_measured: list[str] = []
 
     def post(self, url: str, **kwargs: Any) -> Any:
         body = kwargs.get("json")
+        if (
+            url.endswith("/answers")
+            and isinstance(body, dict)
+            and "-role-" in str(body.get("question_id", ""))
+        ):
+            kwargs["json"] = self._role_answer(url.removesuffix("/answers"), body)
         accepting = url.endswith("/decisions") and isinstance(body, dict) and body.get("accept_recommended")
         before = self._session(url.removesuffix("/decisions")) if accepting else None
         response = self.client.post(url, **kwargs)
@@ -685,6 +710,31 @@ class _Recording:
 
     def get(self, url: str, **kwargs: Any) -> Any:
         return self.client.get(url, **kwargs)
+
+    def _role_answer(self, base: str, body: dict[str, Any]) -> dict[str, Any]:
+        question_id = str(body["question_id"])
+        role = "ID" if "-role-id" in question_id else "outcome"
+        session = self._session(base) or {}
+        question = next(
+            (q for q in session.get("questions", []) if q.get("question_id") == question_id), None
+        )
+        options = list(question.get("options", [])) if question else []
+        sent = next((o for o in options if o.get("option_id") == body.get("option_id")), None)
+        sent_label = str(sent.get("label")) if sent else str(body.get("option_id"))
+        if self.truth is None:
+            self.not_measured.append(
+                f"the {role} question was answered '{sent_label}' (no truth to answer from)"
+            )
+            return body
+        true = self.truth.key if role == "ID" else self.truth.outcome
+        for option in options:
+            value = (option.get("proposal") or {}).get("value")
+            if same_column(value, true) or same_column(option.get("label"), true):
+                return {**body, "option_id": option["option_id"]}
+        self.not_measured.append(
+            f"the true {role} column '{true}' was not offered in the {role} question; answered '{sent_label}'"
+        )
+        return body
 
     def _session(self, base: str) -> Any | None:
         response = self.client.get(base)
@@ -892,7 +942,8 @@ def run_job(
         handed = client.post("/doctor/handoff", json={"upload_id": upload_id, "use_case": job.use_case})
         if handed.status_code in (200, 201):
             upload_id = handed.json()["upload_id"]
-    recording = _Recording(client, job.name)
+    truth = job.truth()
+    recording = _Recording(client, job.name, truth)
     outcome = Outcome(name=job.name, use_case=job.use_case)
     _drive(recording, upload_id, job.use_case, outcome)
     bench = bench.model_copy(
@@ -905,7 +956,7 @@ def run_job(
         }
     )
     harms: list[Any] = list(recording.harms)
-    unmeasured: list[str] = []
+    unmeasured: list[str] = list(recording.not_measured)
     applied = recording.applied
     storage = LocalStorage(data_dir)
     report_problem: str | None = None
@@ -939,7 +990,6 @@ def run_job(
             verdict, report_problem = report.verdict, invariant_problem(report)
         except ValueError as exc:  # the report's own invariant refused to exist: that is the finding
             verdict, report_problem = "invalid", f"the readiness report broke its invariant: {str(exc)[:120]}"
-        truth = job.truth()
         receipt = applied.get("receipt") or {}
         steps = receipt.get("steps") or []
         if truth is None:

@@ -14,6 +14,7 @@ import io
 import json
 import random
 import socket
+from collections.abc import Sequence
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -338,10 +339,7 @@ def _in_01_shaped(rows: int = 1_200) -> tuple[bytes, dict[str, str], dict[str, s
     return out.getvalue().encode("utf-8"), labels, days
 
 
-def test_a_file_called_ready_that_cannot_reach_approve_breaks_the_invariant() -> None:
-    """B1: "ready" must reach Approve (and, in the gate run, train to the end). Today a file shaped like in_01 is
-    called ready by Guided setup with no ID or outcome settled, and Approve fails; the harness must say so. Once
-    the product is fixed (fix-ready-without-roles) the file either reaches Approve or is not called ready."""
+def _run_in_01_shaped() -> Any:
     data, labels, days = _in_01_shaped()
     job = bench.Job(
         "in_01_shape",
@@ -358,15 +356,69 @@ def test_a_file_called_ready_that_cannot_reach_approve_breaks_the_invariant() ->
     )
     configs = REPO / "configs"
     with bench.unified_app(configs) as (client, data_dir):
-        result = bench.run_job(client, data_dir, job, available=set(), config_root=configs, train=False)
-    said_ready = "ready" in (result.doctor_status, result.session_status) or result.verdict in (
-        "ready",
-        "ready_with_warnings",
-    )
-    if said_ready and not (result.approved and result.roles_settled):
-        assert result.invariant_problem is not None and result.invariant_problem.startswith("ready (said by ")
-    if result.invariant_problem is None:
-        assert result.approved or not said_ready, result
+        return bench.run_job(client, data_dir, job, available=set(), config_root=configs, train=False)
+
+
+def test_an_in_01_shaped_file_reaches_approve_with_its_true_columns() -> None:
+    """With DEC-1821, a session with no ID or outcome settled asks for them; the harness answers each role question
+    with the file's true column, as a person who knows the file would, and the file reaches Approve."""
+    result = _run_in_01_shaped()
+    assert result.approved and result.roles_settled, result
+    assert result.invariant_problem is None
+    assert not any("not offered" in note or "settled" in note for note in result.not_measured), result
+    assert result.harms == (), "the right ID and outcome: no row, label or column harm"
+
+
+def test_the_invariant_catches_ready_with_no_roles_settled(monkeypatch: pytest.MonkeyPatch) -> None:
+    """B1, kept meaningful after the fix: with the product's behaviour before DEC-1821 (no role question, ready
+    with roles unsettled), the in_01 shape is called ready and fails at Approve; the harness must say so."""
+    from engine.agent import session as session_module
+
+    monkeypatch.setattr(session_module, "unsettled_roles", lambda _session: ())
+    monkeypatch.setattr(session_module, "_ask_for_unsettled_roles", lambda session, _ctx: session)
+    result = _run_in_01_shaped()
+    assert not result.approved and result.session_status == "ready"
+    assert result.invariant_problem == "ready (said by Guided setup) but no ID or outcome settled"
+
+
+class _RoleClient:
+    """A session with one open ID question, and the answer the driver sends."""
+
+    def __init__(self, columns: Sequence[str]) -> None:
+        options = [
+            {"option_id": f"use-{n}", "label": c, "proposal": {"value": c}} for n, c in enumerate(columns, 1)
+        ]
+        self.session = {"questions": [{"question_id": "a2-role-id", "options": options}]}
+        self.sent: list[Any] = []
+
+    def get(self, url: str, **_kwargs: Any) -> Any:
+        return SimpleNamespace(status_code=200, json=lambda: {"session": self.session})
+
+    def post(self, url: str, **kwargs: Any) -> Any:
+        self.sent.append(kwargs.get("json"))
+        return SimpleNamespace(status_code=200, json=lambda: {"session": self.session})
+
+
+def test_a_role_question_is_answered_with_the_true_column_or_says_it_was_not_offered() -> None:
+    truth = bench.Truth(key="Grahak ID", outcome="Kharida (30 din)", header=(), labels={})
+    answer = {"question_id": "a2-role-id", "option_id": "use-1"}
+    offered = _RoleClient(["Mobile No", "grahak_id"])
+    recording = bench._Recording(offered, "in_xx", truth)
+    recording.post("/uploads/u/agent-session/answers", json=dict(answer))
+    assert offered.sent == [{**answer, "option_id": "use-2"}] and recording.not_measured == []
+    missing = _RoleClient(["Mobile No", "Naam"])
+    recording = bench._Recording(missing, "in_xx", truth)
+    recording.post("/uploads/u/agent-session/answers", json=dict(answer))
+    assert missing.sent == [answer], "no true column offered: the first option, as the driver chose"
+    assert recording.not_measured == [
+        "the true ID column 'Grahak ID' was not offered in the ID question; answered 'Mobile No'"
+    ]
+    other = _RoleClient(["Mobile No"])
+    plain = bench._Recording(other, "in_xx", truth)
+    plain.post("/uploads/u/agent-session/answers", json={"question_id": "a2-combine", "option_id": "use-1"})
+    assert other.sent == [
+        {"question_id": "a2-combine", "option_id": "use-1"}
+    ], "only role questions are answered"
 
 
 # ---------------------------------------------------------------------------

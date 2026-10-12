@@ -655,7 +655,8 @@ measures:
   written by a separate generator that reads nothing from our word lists**, reported on their own and never used to
   tune anything. Each goes through upload, Data Doctor, Guided setup and Approve with no person; the readiness
   verdict is checked on every file, and each prepared copy is compared to what the file really held (IDs, outcome
-  meanings, columns, days).
+  meanings, columns, days). A question asking which column is the ID or the outcome is answered with the file's
+  true column, as a person who knows the file would; when it is not offered, the file is marked "not measured".
 - **Tools not built yet** are listed as such, with the milestone that builds them; nothing stands in for them.
 
 **The AI model.** By default a recorded one: a file of answers (`tests/fixtures/doctor_eval/cassettes/ai_path.json`)
