@@ -399,19 +399,6 @@ advice, beside the decision on the Approver's screen (`engine.model_gates.approv
 yet: the dataset build's own checks (the future-data probe, `LABEL_RATE_UNSTABLE`) stay on the Readiness
 report.
 
-## 10a. Indian numbers, yes/no words and IDs (Plan O M241)
-
-Data Doctor reads Indian files as they are written. `₹2.5 L` is 2,50,000, `1.2 Cr` is 1,20,00,000, `Rs 3,50,000/-`
-is 3,50,000 and `12K` is 12,000 - exactly. A yes/no column written `haan` / `nahi` or `हाँ` / `नहीं` is read as yes and
-no, but only when the file shows both a yes and a no: a column with only `haan` is a question, not a guess. GSTINs
-(checked with their check character), voter IDs, PIN codes and mobile numbers are recognised; a PIN code stays
-text, never a number, and a mobile number written `+91 98765 43210` in one file and `09876543210` in another is the
-same number when two files are joined. GSTINs and voter IDs are hidden before anything is sent to an AI service.
-
-How a client writes numbers, dates and yes/no is asked **once** per client and then used for every file, with a
-note saying so; a file that disagrees is asked about, never silently changed. Nothing is converted between
-currencies here.
-
 ## 11. What Data Doctor will not do
 
 - **Match people across files with no shared key.** It can tidy keys (leading zeros, prefixes) and say how many
@@ -429,8 +416,9 @@ by the product owner on 12 October 2026 (decisions O1–O19 as recommended). **D
 [`plans/DATA_DOCTOR_AGENT_DESIGN.md`](plans/DATA_DOCTOR_AGENT_DESIGN.md). **Decisions:** DEC-1800 … DEC-1899 in
 [`DECISIONS.md`](DECISIONS.md).
 
-**Nothing in this section is built yet.** It says what is coming, so that nobody reads it as what the product does
-today. Each milestone fills in its own part, in plain words, when it lands.
+**Built so far, all behind the switch below (off): §13-§17 and "Joining, stacking and building" in §5** (Plan O
+wave 1: M231, M232, M234, M237, M238, M240, M241). None of it is on a screen yet; the rest of this section says what
+is still coming. Each milestone fills in its own part, in plain words, when it lands.
 
 ### What is coming
 
@@ -472,7 +460,9 @@ data_doctor:
 
 `engine/doctor/config.py` holds `DataDoctorConfig` (the switch; `UseCaseConfig.data_doctor`), and
 `engine/doctor/codes.py` holds `PLAN_O_CODES`, which `engine.pilot.help.known_codes()` includes: a code added there
-needs its entry in `configs/pilot/help.yaml` in the same change (DEC-1800).
+needs its entry in `configs/pilot/help.yaml` in the same change (DEC-1800). Every Data Doctor capability is a tool in
+one registry, `engine/doctor/registry.py` (M232, DEC-1802; `docs/AGENTS.md` §14): wave 1 registered the tools of
+M234, M237, M238, M240 and M241 there (`engine/doctor/tools_wave_one.py`), for the rules and the screen only.
 
 ## 13. Plan O: one case per piece of work (M231, DEC-1801)
 
@@ -513,7 +503,33 @@ is not among the S3 prefixes the task role may write (`infra/naming.py`) nor the
 before M249). Tests: `tests/unit/doctor/test_case.py`, `tests/unit/production/test_case_privacy.py`,
 `tests/integration/test_api_cases.py`.
 
-## 14. Row and value tools (Plan O M238, DEC-1808)
+## 14. Will it train? One readiness verdict (Plan O M234, DEC-1804)
+
+*Behind the switch `data_doctor.unified` (off by default). Nothing on screen shows it yet.*
+
+Before a run starts, Data Doctor can say whether the prepared file **will** train (or score) to the end - not just
+whether the first checks pass. It runs the same checks the run itself makes, then fifteen more that try the steps
+after them on your rows: are there enough rows left once those without consent or without a known outcome are
+taken out, can the rows be divided into a part to learn from and two parts to check on, does each part hold both
+kinds of outcome, are the newest outcomes known yet, did the file lose lines when it was read. The answer is one of:
+
+- **Ready** - the run will not stop for a reason in the data.
+- **Ready, with warnings** - it will run; read the warnings first (for example, a check that could not count).
+- **Needs answers** or **needs approval** - a question is open, or something needs a person's yes.
+- **Not ready** - the run would stop or silently lose rows, and the report names the check and what to do.
+
+A "ready" is never given over a failing check: that rule is built into the report itself. The report holds counts,
+column names and plain sentences, never a value from your file. On the thirty Plan L test files, 26 are ready and
+4 ready with warnings.
+
+### For developers
+
+`engine/doctor/readiness.py` (`check_readiness`, `inputs_for_upload`, `store_readiness`, `attach_readiness_to_run`),
+`readiness_contracts.py` (`DataReadinessReport`, `ReadinessSummary`, the 15 `X_*` codes) and `readiness_probes.py`.
+The tool `check_readiness` (#69, aggregate) is in the registry; its inputs come from the caller
+(`DataToolContext.readiness`). Nothing stores a report in a case or a run yet: that waits for the visit (M235).
+
+## 15. Row and value tools (Plan O M238, DEC-1808)
 
 Five more things Data Doctor will look at or suggest once it is the data agent (the setting
 `data_doctor.unified`) and these tools are wired into its tool list and planner (Plan O integration). They are
@@ -558,7 +574,7 @@ until you tick it and approve.
   IDs lost because every row is after their snapshot, IDs settled by file order). A lost ID's rows count as
   failures under `max_conversion_failure_pct`. The tool's output is APPROVE-class (`approve_class`, `sentence`,
   `role: analyst`) when the step leaves out more than 2% of the rows (design §6.6).
-- Tools (not yet registered: `register()` has no caller until M232's registry is merged): `engine/doctor/tools_rows.py` declares `synonym_clusters`, `impossible_values`, `detect_units` (READ) and
+- Tools (registered in M232's registry at the wave 1 integration, for the rules and the screen): `engine/doctor/tools_rows.py` declares `synonym_clusters`, `impossible_values`, `detect_units` (READ) and
   `keep_latest_per_id`, `split_file` (PROPOSE; `split_file` is APPROVE-class) as `DataToolSpec`s, all
   `session-only`, with `register(registry)` for M232's registry. Engines: `engine/doctor/synonyms.py`
   (`configs/doctor/value_synonyms.yaml` is the reviewed lexicon), `impossible.py`, `units.py`, `split.py`.
@@ -568,3 +584,44 @@ until you tick it and approve.
 - Every proposal is a `StepProposal` (`engine/doctor/row_contracts.py`): pending, `check`, never ticked, measured by
   running the step. A parameter that maps spellings or units travels as `[from, to]` pairs, so no tool result has a
   dict keyed by a cell; the field names are in `engine.agent.egress.RESULT_KEYS`.
+
+## 16. Indian numbers, yes/no words and IDs (Plan O M241, DEC-1811)
+
+*The tools below are behind the switch `data_doctor.unified` (off by default) and not on a screen yet. Two parts
+work today whatever the switch: a GSTIN or a voter ID is hidden before anything is sent to an AI service, and a
+saved step can read lakh and crore when it asks to (`indian_scale_words`). With the switch on, Hinglish headers
+are read whether or not the agents' setting is on.*
+
+Data Doctor reads Indian files as they are written. `₹2.5 L` is 2,50,000, `1.2 Cr` is 1,20,00,000, `Rs 3,50,000/-`
+is 3,50,000 and `12K` is 12,000 - exactly. A yes/no column written `haan` / `nahi` or `हाँ` / `नहीं` is read as yes and
+no, but only when the file shows both a yes and a no: a column with only `haan` is a question, not a guess. GSTINs
+(checked with their check character), voter IDs, PIN codes and mobile numbers are recognised; a PIN code stays
+text, never a number, and a mobile number written `+91 98765 43210` in one file and `09876543210` in another is the
+same number when two files are joined. GSTINs and voter IDs are hidden before anything is sent to an AI service.
+
+How a client writes numbers, dates and yes/no is asked **once** per client and then used for every file, with a
+note saying so; a file that disagrees is asked about, never silently changed. Nothing is converted between
+currencies here.
+
+## 17. More file formats, and lines a reader drops (Plan O M240, DEC-1810)
+
+*Behind the switch `data_doctor.unified` (off by default). Uploads still take CSV, Parquet and Excel as before;
+routing the other formats through upload comes later.*
+
+- **JSON, JSON Lines, and a `.gz` or `.zip` holding one table** can be read as a table. Nested fields become
+  columns named `outer.inner`. A zip with two tables, or JSON that is not a table, is refused with the reason.
+- **Lines the reader drops.** A CSV line with more values than there are column names (a stray comma) is skipped
+  by the reader without a word. Data Doctor counts the lines and names them (`X_PARSER_ROW_LOSS`); when the very
+  first line is wider, every row has shifted one column to the left, and it says so (`X_PARSER_COLUMNS_SHIFTED`).
+- **Leading zeros stay.** An ID such as `0000123` can be kept as `0000123` through reading, the steps and next
+  month's file, instead of becoming the number 123.
+- **Excel dates as numbers** (`44927` for 1 January 2023) can be read as dates.
+- **A workbook's sheets as files.** A workbook with a customer sheet and a bills sheet can become two files of one
+  case, each kept like any upload.
+
+### For developers
+
+`engine/intake/other_formats.py`, `engine/intake/sheets.py`, `engine/doctor/parser_loss.py`,
+`engine/doctor/tools_formats.py`; the case's files for these tools are `engine/doctor/case_files.py` (`CaseFiles`,
+over M231's case). `read_other_format` (#4) and `check_parser_loss` (#5) are in the registry;
+`read_workbook_sheets` and `find_excel_serial_dates` wait for a row in the design's catalogue.
