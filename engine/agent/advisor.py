@@ -42,6 +42,7 @@ import pandas as pd
 
 from engine.agent.config import AgentLevel
 from engine.agent.contracts import (
+    ROWS_PER_ID_STEP_KINDS,
     AgentConfidence,
     AgentSummary,
     Proposal,
@@ -941,7 +942,8 @@ def _prepared_context(
         if strict:
             raise
         return ctx
-    combined = any(step.kind is RecipeStepKind.COMBINE_ROWS for step in steps)
+    # One row per ID now (combined, or each ID's latest row kept): the profile counts the rows it describes.
+    combined = any(step.kind in ROWS_PER_ID_STEP_KINDS for step in steps)
     profile = ingest.profile_dataset(
         run.frame,
         ctx.config,

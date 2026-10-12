@@ -11,12 +11,19 @@ into families with frozen factors:
 | weight | `g`, `kg` | the column's most common unit |
 | Indian scale | `K` (10³), `L`/`lac`/`lakh` (10⁵), `Cr`/`crore` (10⁷) | plain numbers (factor 1) |
 
+**The decimal mark.** The step reads the one mark a number may hold (`1,5` or `1.5`) as a decimal mark. So the
+rules first ask the column's numbers which mark they use, by the rule `parse_number` uses (`formats._decimal_style`:
+a value that reads only one way votes). A number whose mark the column does not prove to be a decimal mark -
+`1,500 MB` beside `2 GB`, where the comma groups thousands - would be read 1000 times too small, so such values
+are counted as unreadable, the reason is given, and nothing is proposed.
+
 What it proposes:
 
 * **One family, every value with a unit** - a pending `convert_units` step, after the rules verify it: the step
   is run on the column and proposed only when no more than the use case's failure limit fails.
 * **Units and plain numbers mixed** - one question: which unit are the plain numbers in? Each option is a
-  `convert_units` step with `bare: as_target` and that unit as the target; "I don't know" adds nothing.
+  `convert_units` step with `bare: as_target` and that unit as the target; "I don't know" adds nothing. For the
+  Indian scale the first option is "Plain numbers (as written)": `250000`, `2.5 L` and `0.25 Cr` all become 250000.
 * **Two families in one column** (`2 GB` beside `3 kg`) or **`L` with nothing to say whether it is litres or
   lakh** - `UNIT_MISMATCH`, no proposal: the person says what the column holds.
 * **A currency token** (`₹`, `Rs`, `$`, …) - reported (`currencies`), never converted here: a currency is changed
@@ -40,7 +47,7 @@ import pandas as pd
 from pydantic import Field
 
 from engine.agent.contracts import ProposalSource, RecipeStepKind
-from engine.agent.formats import CURRENCY_TOKENS, MAX_EXAMPLES, masked_cut
+from engine.agent.formats import CURRENCY_TOKENS, MAX_EXAMPLES, _decimal_style, masked_cut
 from engine.agent.value_steps import _UNIT_VALUE, convert_units
 from engine.config import StrictBase
 from engine.doctor.row_contracts import Doubt, StepProposal
@@ -177,6 +184,25 @@ def _proposal(
     )
 
 
+def _misread_marks(numbers: Mapping[str, str], counts: Mapping[str, int]) -> list[str]:
+    """Texts whose number holds a mark the step would read as a decimal mark, though the column does not prove
+    that it is one (`1,500` where the column's mark is a point): read so, it would be 1000 times too small.
+
+    `numbers` maps each readable text to its number. The column's decimal mark is voted by every value, by
+    `formats._decimal_style`; a number with no mark is always read right.
+    """
+    marked = {text: number for text, number in numbers.items() if "," in number or "." in number}
+    if not marked:
+        return []
+    votes = pd.Series([number for text, number in marked.items() for _ in range(counts[text])], dtype=object)
+    style = _decimal_style(votes)
+    return [
+        text
+        for text, number in marked.items()
+        if not (("," in number and style == ",") or ("." in number and style == "."))
+    ]
+
+
 def _jump(column: str, series: pd.Series[Any]) -> Doubt | None:
     numbers = pd.to_numeric(series, errors="coerce").dropna()
     positive = numbers[numbers > 0].to_numpy(dtype=float)
@@ -230,9 +256,14 @@ def detect_units(series: pd.Series[Any], *, column: str, max_failure_pct: float 
     counts: Counter[str] = Counter()
     bare = 0
     unreadable: list[str] = []
-    for text, n in Counter(texts.tolist()).items():
+    distinct = Counter(texts.tolist())
+    matches = {text: m for text in distinct if (m := _UNIT_VALUE.match(text)) is not None}
+    # Only a column with unit words is ever converted here; plain numbers with separators are parse_number's.
+    with_units = any(m.group(2) for m in matches.values())
+    misread = _misread_marks({t: m.group(1) for t, m in matches.items()}, distinct) if with_units else []
+    for text, n in distinct.items():
         match = _UNIT_VALUE.match(text)
-        if match is None:
+        if match is None or text in misread:
             unreadable += [text] * n
         elif match.group(2):
             counts[match.group(2).casefold()] += n
@@ -248,6 +279,17 @@ def detect_units(series: pd.Series[Any], *, column: str, max_failure_pct: float 
         "currencies": currencies,
         "examples": tuple(masked_cut(t, 60) for t in list(dict.fromkeys(unreadable))[:MAX_EXAMPLES]),
     }
+    if misread:
+        shown = sum(distinct[t] for t in misread)
+        report.update(
+            sentence=(
+                f"{shown:,} of {non_empty:,} values of '{column}' (such as '{masked_cut(next(iter(misread)), 40)}') "
+                "hold a number whose comma or point the column does not prove to be a decimal mark - it may "
+                "group thousands - and converting would read it as a decimal. Nothing is converted: export the "
+                "numbers without thousands separators."
+            )
+        )
+        return UnitReport(**report)
     known = {u: n for u, n in units.items() if any(u in t for t in UNIT_FAMILIES.values())}
     if not known or sum(known.values()) < _MIN_UNIT_SHARE * non_empty:
         if bare >= _MIN_UNIT_SHARE * non_empty and not units:
@@ -286,6 +328,14 @@ def detect_units(series: pd.Series[Any], *, column: str, max_failure_pct: float 
         )
         return UnitReport(**report)
     options: list[UnitOption] = []
+    if family == "indian_scale":
+        # Plain numbers are most often the amount itself (250000 rupees beside "2.5 L"): offered first.
+        plain = _proposal(
+            column, series, factors, "as_target", max_failure_pct,
+            f"Write every value of '{column}' as a plain number, reading plain numbers as written",
+        )  # fmt: skip
+        if plain is not None:
+            options.append(UnitOption(option_id="unit-plain", label="Plain numbers (as written)", step=plain))
     for unit in sorted(known, key=lambda u: (-known[u], u)):
         unit_factors = _factors(family, unit, known) if family != "indian_scale" else {**factors}
         if family == "indian_scale":

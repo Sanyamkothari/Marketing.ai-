@@ -123,3 +123,20 @@ def test_the_question_is_blocking_and_shows_the_preview() -> None:
             receipt=item.receipt,
             rows_out=6,
         )
+
+
+def test_a_step_that_fills_empty_cells_is_measured_against_every_row_of_the_column() -> None:
+    # Review fix: 4 of 10 cells are empty and the fill writes into all 4. That is 40% of the column (a warning),
+    # not 4 of the 6 non-empty values (67%, which would refuse it); a fill can never score above 100%.
+    frame = pd.DataFrame(
+        {
+            "id": range(10),
+            "region": ["North", None, "South", None, "East", None, "West", None, "North", "South"],
+            "y": [0, 1] * 5,
+        }
+    )
+    fill = RecipeStep(order=1, kind=RecipeStepKind.FILL_MISSING, column="region", params={"value": "Unknown"})
+    changed, out_of = measure_step(frame, fill, primary_key="id", target="y")
+    assert (changed, out_of) == (4, 10)
+    verdict = change_share_verdict(changed=changed, out_of=out_of, source=ProposalSource.AI)
+    assert (verdict.level, verdict.code) == ("warn", "AI_STEP_CHANGES_MANY")  # 40%: shown, not refused

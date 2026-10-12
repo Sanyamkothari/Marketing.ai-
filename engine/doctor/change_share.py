@@ -11,7 +11,9 @@ trusted for its effect. Its preview is measured, and the share of the column it 
 
 The guard reads the source of the proposal only: a step the rules or the person proposed is not an AI step, and
 the person re-proposing the AI's step as their own edit is exactly the way past a refusal. The share is of the
-column's non-empty values for a value step and of the rows for a step that leaves rows out; it is computed by
+column's non-empty values for a value step, of the column's rows for a step that fills empty cells
+(`fill_missing`, so a fill never scores above its real share), and of the rows for a step that leaves rows out;
+it is computed by
 running the step itself on a copy (`measure_step`), never estimated.
 
 This module has no state and reads no configuration: the limits are passed in (`ChangeShareLimits`), defaulting
@@ -50,6 +52,9 @@ _ROW_STEPS: Final[frozenset[RecipeStepKind]] = frozenset(
     }
 )
 """Steps whose change is counted in rows, not in one column's values."""
+
+_FILLS_EMPTY_STEPS: Final[frozenset[RecipeStepKind]] = frozenset({RecipeStepKind.FILL_MISSING})
+"""Value steps that write into empty cells: their share is measured against every row of the column."""
 
 
 @dataclass(frozen=True)
@@ -142,4 +147,7 @@ def measure_step(
         return abs(len(frame) - len(run.frame)), len(frame)
     if step.column not in frame.columns:
         return receipt.changed, 0
+    if step.kind in _FILLS_EMPTY_STEPS:
+        # It writes into empty cells, so its share is of the column's rows, not of its non-empty values.
+        return receipt.changed, len(frame)
     return receipt.changed, int(frame[step.column].notna().sum())

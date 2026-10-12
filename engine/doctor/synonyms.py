@@ -6,15 +6,18 @@ step that would write every spelling of a group as the group's canonical spellin
 
 The rules, each deterministic and each reading only the column's distinct spellings and their counts:
 
-1. **Same letters** - equal once case, spaces and punctuation are ignored (`Pre-paid`, `pre paid`, `PREPAID`).
+1. **Same letters** - equal once case and the separators between letters (space, hyphen, underscore, dot,
+   other punctuation) are ignored (`Pre-paid`, `pre paid`, `PREPAID`). A sign is never ignored: `+`, `%`, `&`
+   and a leading or trailing `-` change the value (`O+` and `O-` are blood groups, `A+` is not `A`).
 2. **Lexicon** - listed as one value in `configs/doctor/value_synonyms.yaml` (`Bombay` and `Mumbai`; `haan`
    and `Yes`). A group needs two of its spellings in the column.
 3. **Initials** - a short all-letter spelling equal to the initials of exactly one other group's words
    (`PP` and `Pre-paid`). When the initials fit two groups (`Pre-paid` and `Post-paid`), nothing is merged and
    the spelling is listed as ambiguous: a question for the person, never a guess.
-4. **One-letter slip** - two spellings of five or more letters, no digits, one edit apart (a letter added,
-   dropped, changed or two swapped), where the rarer is at most a fifth as common as the other (`Mumbai`
-   and `Mumabi`). Digits never take part: `Plan 1` and `Plan 2` are different plans.
+4. **One-letter slip** - two spellings with no digits, one edit apart (a letter added, dropped, changed or two
+   swapped) inside one word of five or more letters, every other word identical, where the rarer is at most a
+   fifth as common as the other (`Mumbai` and `Mumabi`). Digits never take part, and a short word that differs
+   is a different value: `Plan 1` and `Plan 2`, `Plan A` and `Plan B` stay apart.
 5. **AI** (`check_ai_merge`) - the AI may propose a group too; the rules then verify that every spelling is in
    the column, measure the change, and apply decision O10's change-share guard.
 
@@ -70,13 +73,43 @@ Rule = Literal["same_letters", "lexicon", "initials", "one_letter_slip", "ai"]
 _RULE_ORDER: Final[tuple[Rule, ...]] = ("same_letters", "lexicon", "initials", "one_letter_slip", "ai")
 
 
+_SIGNS: Final[frozenset[str]] = frozenset("+%&")
+"""Characters that change what a value means (`O+`, `10%`, `R&D`): kept in the key, never ignored."""
+
+
+def _kept(text: str, i: int) -> bool:
+    ch = text[i]
+    if unicodedata.category(ch)[0] in "LNM" or ch in _SIGNS:
+        return True
+    # A hyphen joins two parts (`Pre-paid`) unless it ends or starts the value, where it is a sign (`O-`).
+    return ch == "-" and (i == 0 or i == len(text) - 1)
+
+
 def spelling_key(text: str) -> str:
-    """Case, spaces and punctuation ignored; letters, digits and Indian-script vowel signs kept."""
-    return "".join(
-        ch
-        for ch in unicodedata.normalize("NFC", str(text)).casefold()
-        if unicodedata.category(ch)[0] in "LNM"
-    )
+    """Case and separators ignored; letters, digits, Indian-script vowel signs and signs (`+`, `%`, `&`, a
+    leading or trailing `-`) kept, so `O+` and `O-`, or `A+` and `A`, never share a key."""
+    folded = unicodedata.normalize("NFC", str(text)).casefold().strip()
+    return "".join(ch for i, ch in enumerate(folded) if _kept(folded, i))
+
+
+def _slip_words(text: str) -> list[str]:
+    """The words of a spelling for the one-letter-slip rule: runs of kept characters, signs included."""
+    folded = unicodedata.normalize("NFC", str(text)).casefold().strip()
+    spaced = "".join(ch if _kept(folded, i) else " " for i, ch in enumerate(folded))
+    return spaced.split()
+
+
+def _slip_in_one_word(a: str, b: str) -> bool:
+    """Whether `a` and `b` differ by one edit inside one word of five or more letters, every other word equal."""
+    wa, wb = _slip_words(a), _slip_words(b)
+    if len(wa) != len(wb):
+        return False
+    differ = [(x, y) for x, y in zip(wa, wb, strict=True) if x != y]
+    if len(differ) != 1:
+        return False
+    x, y = differ[0]
+    letters = all(unicodedata.category(ch)[0] in "LM" for ch in x + y)
+    return letters and min(len(x), len(y)) >= EDIT_MIN_LENGTH and _one_edit(x, y)
 
 
 @lru_cache(maxsize=8)
@@ -251,6 +284,8 @@ def _cluster(
                 continue
             if total[b] > EDIT_MAX_MINOR_SHARE * total[a] or not _one_edit(a, b):
                 continue
+            if not any(_slip_in_one_word(x, y) for x in by_key[a] for y in by_key[b]):
+                continue  # the edit is not inside one long word (`Plan A`/`Plan B`), or a sign differs
             groups.join(by_key[a][0], by_key[b][0], "one_letter_slip")
     return groups, abbreviations, ambiguous
 

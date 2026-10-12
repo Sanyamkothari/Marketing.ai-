@@ -4,6 +4,7 @@ or `UNIT_MISMATCH`; currencies are reported, never converted; a magnitude jump i
 from __future__ import annotations
 
 import pandas as pd
+import pytest
 
 from engine.agent.config import AgentLevel
 from engine.agent.contracts import RecipeStepKind
@@ -79,3 +80,57 @@ def test_smooth_numbers_raise_no_doubt() -> None:
 def test_the_report_is_deterministic() -> None:
     series = pd.Series(["2 GB", "500 MB", "700", "1 GB"])
     assert detect_units(series, column="d") == detect_units(series, column="d")
+
+
+def test_a_thousands_separator_is_never_read_as_a_decimal_comma() -> None:
+    # Review regression: '1,500 MB' was read as 1.5 MB (1000 times too small) by a step the rules called verified.
+    report = detect_units(pd.Series(["1,500 MB", "2 GB", "800 MB", "1 GB"] * 10), column="data_used")
+    assert report.step is None and report.question is None
+    assert report.unreadable == 10 and report.examples == ("1,500 MB",)
+    assert "decimal mark" in report.sentence and "thousands" in report.sentence
+
+
+def test_a_decimal_comma_the_column_proves_is_still_converted() -> None:
+    # '1,25' reads only as a decimal comma, so the column proves the mark and '1,5 GB' is 1.5 GB.
+    report = detect_units(pd.Series(["1,5 GB", "1,25 GB", "512 MB", "2 GB"] * 5), column="data_used")
+    assert report.step is not None and report.unreadable == 0
+    out = run_recipe(
+        pd.DataFrame({"data_used": ["1,5 GB", "512 MB"]}),
+        [report.step.as_step(1)],
+        upload_id="u",
+        primary_key=None,
+        target=None,
+        levels=(AgentLevel.CLEAN,),
+        max_failure_pct=5.0,
+    ).frame
+    assert out["data_used"].tolist() == [1.5, 0.5]
+
+
+def test_plain_rupees_beside_lakh_and_crore_can_be_read_as_written() -> None:
+    # Review fix: the first option reads plain numbers as rupees, so every option gives one unit for the column.
+    values = ["250000", "2.5 L", "0.025 Cr", "300000", "1 Cr", "4 L"] * 4
+    question = detect_units(pd.Series(values), column="income").question
+    assert question is not None
+    assert question.options[0].label == "Plain numbers (as written)"
+    for option in question.options:
+        if option.step is None:
+            continue
+        out = run_recipe(
+            pd.DataFrame({"income": ["250000", "2.5 L", "0.025 Cr"]}),
+            [option.step.as_step(1)],
+            upload_id="u",
+            primary_key=None,
+            target=None,
+            levels=(AgentLevel.CLEAN,),
+            max_failure_pct=5.0,
+        ).frame["income"]
+        if option.option_id == "unit-plain":
+            assert out.tolist() == [250000.0, 250000.0, 250000.0]
+        else:  # '2.5 L' and '0.025 Cr' are one amount, written in the option's unit
+            assert out.iloc[1] == pytest.approx(out.iloc[2])
+    assert [o.label for o in question.options] == ["Plain numbers (as written)", "CR", "L", "I don't know"]
+
+
+def test_plain_numbers_with_thousands_separators_are_not_a_unit_finding() -> None:
+    report = detect_units(pd.Series(["1,500", "2,300", "800"] * 5), column="spend")
+    assert report.finding is None and report.sentence == "" and report.unreadable == 0

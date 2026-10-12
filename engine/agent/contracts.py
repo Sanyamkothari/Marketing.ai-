@@ -39,6 +39,8 @@ __all__ = [
     "AGENT_SESSION_FILENAME",
     "DATA_RECIPE_FILENAME",
     "RECIPE_RECEIPT_FILENAME",
+    "ROWS_PER_ID_STEP_KINDS",
+    "ROW_RESHAPE_STEP_KINDS",
     "AgentConfidence",
     "AgentSession",
     "AgentSummary",
@@ -141,6 +143,19 @@ class ProposalSource(StrEnum):
     RULES = "rules"
     AI = "ai"
     PERSON = "person"
+
+
+ROW_RESHAPE_STEP_KINDS: Final[frozenset[RecipeStepKind]] = frozenset(
+    {RecipeStepKind.COMBINE_ROWS, RecipeStepKind.UNPIVOT, RecipeStepKind.KEEP_LATEST_PER_ID}
+)
+"""Steps that change what a row is (Plan O M238): the reshape level. Every seam that must know the rows
+changed - the helper's profile, the preview's sample, a re-advice keeping a step on the ID - reads this set."""
+
+ROWS_PER_ID_STEP_KINDS: Final[frozenset[RecipeStepKind]] = frozenset(
+    {RecipeStepKind.COMBINE_ROWS, RecipeStepKind.KEEP_LATEST_PER_ID}
+)
+"""Entity-wise steps that make the rows one per ID (their `column` is the ID): a sample of the file for them
+takes whole IDs, never part of an ID's rows."""
 
 
 class SessionStatus(StrEnum):
@@ -328,6 +343,14 @@ class StepReceipt(StrictBase):
         description=(
             "`drop_column` only: true when the file did not have the column, so there was nothing to "
             "hide - a column hidden at setup need not be in a later scoring file."
+        ),
+    )
+    note: str | None = Field(
+        default=None,
+        description=(
+            "`keep_latest_per_id` only (Plan O M238): why rows were left out, as counts in plain words - "
+            "identical copies, rows dated after the snapshot, IDs with no row on or before it, and IDs "
+            "settled by file order; null for every other step."
         ),
     )
 

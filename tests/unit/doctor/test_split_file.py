@@ -173,3 +173,18 @@ def test_the_tool_proposes_an_approve_class_item_with_the_exact_text() -> None:
     with pytest.raises(RowToolError) as refused:
         tool.run(SplitFileInput(rule=SplitRule(column=TARGET, by="values", scoring_values=("1",))), ctx)
     assert refused.value.code == "DOCTOR_COLUMN_PROTECTED"
+
+
+def test_the_tool_freezes_a_day_first_order_the_dates_prove() -> None:
+    # Review fix: '25/03/2024' proves day first, so the tool freezes it instead of refusing with a false reason.
+    data = customers().assign(
+        joined=["25/03/2024", "05/03/2024", "10/01/2024", "01/04/2024", "15/05/2024", "02/04/2024"]
+    )
+    tool = next(t for t in ROW_TOOLS if t.name == "split_file")
+    ctx = RowToolFrame(frame=data, primary_key=KEY, target=TARGET, as_of=date(2026, 10, 12))
+    rule = SplitRule(column="joined", by="date", cut="2024-03-31")
+    out = tool.run(SplitFileInput(rule=rule), ctx)
+    assert out.rule.dayfirst is True and out.receipt.rule.dayfirst is True
+    assert out.receipt.rule_hash == out.rule.rule_hash != rule.rule_hash
+    assert out.sentence == out.rule.sentence() and "read day first" in out.sentence
+    assert out.receipt.rows_training == 3  # 25 Mar, 5 Mar, 10 Jan; 1 Apr, 15 May and 2 Apr are scored

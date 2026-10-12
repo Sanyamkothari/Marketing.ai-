@@ -129,3 +129,30 @@ def test_an_ai_merge_changing_over_30_percent_warns_and_over_60_is_refused() -> 
     with pytest.raises(AiMergeRefusedError) as refused:
         check_ai_merge(refuse, column="c", groups=[["A1", "B1"]], canonicals=["A1"])
     assert refused.value.code == "AI_STEP_CHANGES_TOO_MANY"
+
+
+@pytest.mark.parametrize(
+    "values",
+    [
+        ["O+"] * 50 + ["O-"] * 8,  # blood groups: a sign is never ignored
+        ["Grade A+"] * 50 + ["Grade A"] * 8,
+        ["Plan A"] * 100 + ["Plan B"] * 10,  # a one-letter word that differs is another value
+        ["Mumbai North"] * 50 + ["Mumbai South"] * 5,
+    ],
+)
+def test_values_that_differ_by_a_sign_or_a_short_word_are_never_merged(values: list[str]) -> None:
+    report = find_synonym_clusters(pd.Series(values), column="x", lexicon=())
+    assert report.clusters == () and report.step is None
+
+
+def test_signs_stay_in_the_spelling_key_and_separators_do_not() -> None:
+    assert spelling_key("O+") != spelling_key("O-") != spelling_key("O")
+    assert spelling_key("A+") != spelling_key("A")
+    assert spelling_key("Pre-paid") == spelling_key("pre paid") == spelling_key("PRE_PAID") == "prepaid"
+
+
+def test_a_slip_inside_one_long_word_still_merges_beside_an_equal_word() -> None:
+    report = find_synonym_clusters(
+        pd.Series(["Navi Mumbai"] * 30 + ["Navi Mumabi"] * 2), column="city", lexicon=()
+    )
+    assert [c.rules for c in report.clusters] == [("one_letter_slip",)]

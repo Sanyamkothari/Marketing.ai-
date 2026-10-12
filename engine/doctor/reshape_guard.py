@@ -23,7 +23,14 @@ from dataclasses import dataclass
 from typing import Final
 
 from engine.agent.config import AgentLevel
-from engine.agent.contracts import Question, QuestionOption, RecipeStep, RecipeStepKind, StepReceipt
+from engine.agent.contracts import (
+    ROW_RESHAPE_STEP_KINDS,
+    Question,
+    QuestionOption,
+    RecipeStep,
+    RecipeStepKind,
+    StepReceipt,
+)
 from engine.agent.reshape import LeakCheck
 
 __all__ = [
@@ -37,9 +44,8 @@ __all__ = [
     "reshape_question",
 ]
 
-RESHAPE_STEP_KINDS: Final[frozenset[RecipeStepKind]] = frozenset(
-    {RecipeStepKind.COMBINE_ROWS, RecipeStepKind.UNPIVOT, RecipeStepKind.KEEP_LATEST_PER_ID}
-)
+RESHAPE_STEP_KINDS: Final[frozenset[RecipeStepKind]] = ROW_RESHAPE_STEP_KINDS
+"""The one list of reshape kinds (`engine.agent.contracts`), which the session, advisor and routes read too."""
 RESHAPE_GUARD_CODES: Final[frozenset[str]] = frozenset({"RESHAPE_GUARD_MISSING"})
 
 _ORDER: Final[tuple[AgentLevel, ...]] = (AgentLevel.CLEAN, AgentLevel.DERIVE, AgentLevel.RESHAPE)
@@ -111,13 +117,18 @@ _WHAT: Final[dict[RecipeStepKind, str]] = {
 
 
 def reshape_question(step: RecipeStep, *, receipt: StepReceipt, rows_out: int) -> Question:
-    """The one blocking question a reshape step is offered through (guard 1), with its preview (guard 4)."""
+    """The one blocking question a reshape step is offered through (guard 1), with its preview (guard 4).
+
+    The receipt's `note` (why rows are left out, as counts) is part of the question's text."""
     if step.kind not in RESHAPE_STEP_KINDS:
         raise ValueError(f"{step.kind.value} is not a change to the rows")
     what = _WHAT[step.kind].format(column=step.column)
     return Question(
         question_id=f"reshape-{step.kind.value.replace('_', '-')}",
-        text=f"Should Data Doctor {what}? The file has {receipt.rows:,} rows; this leaves {rows_out:,}.",
+        text=(
+            f"Should Data Doctor {what}? The file has {receipt.rows:,} rows; this leaves {rows_out:,}."
+            + (f" {receipt.note}" if receipt.note else "")
+        ),
         options=(
             QuestionOption(
                 option_id="yes",

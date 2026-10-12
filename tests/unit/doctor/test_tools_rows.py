@@ -223,3 +223,47 @@ def test_examples_are_masked_in_the_result_itself() -> None:
     frame = canary()
     out = TOOLS["detect_units"].run(DetectUnitsInput(column="card_hint"), ctx(frame, target="converted_30d"))
     assert out.examples and leaks(json.dumps(out.model_dump(mode="json")), HARD_SECRETS) == []
+
+
+def _history(ids: int, extra_rows: int) -> pd.DataFrame:
+    """`ids` customers with one row each, plus `extra_rows` older rows: keeping the latest drops exactly those."""
+    keys = [f"C{i}" for i in range(ids)]
+    older = keys[:extra_rows]
+    return pd.DataFrame(
+        {
+            "customer_id": keys + older,
+            "seen": ["2024-02-01"] * ids + ["2024-01-01"] * extra_rows,
+            "plan": ["plus"] * ids + ["basic"] * extra_rows,
+            "churned": [0] * (ids + extra_rows),
+        }
+    )
+
+
+@pytest.mark.parametrize(("extra", "approve"), [(3, True), (1, False)])
+def test_keep_latest_is_approve_class_when_it_drops_more_than_2_percent(extra: int, approve: bool) -> None:
+    # Review fix (design §6.6): a de-duplication that drops more than 2% of rows needs the Analyst's exact yes.
+    spec = TOOLS["keep_latest_per_id"]
+    assert spec.approve_class == "by_output" and spec.role is Role.ANALYST
+    data = _history(100 - extra, extra)  # 100 rows; `extra` of them are left out
+    out = spec.run(KeepLatestInput(time_column="seen"), ctx(data))
+    assert (out.rows_in, out.rows_out) == (100, 100 - extra)
+    assert out.approve_class is approve and out.role is Role.ANALYST
+    assert out.sentence == (
+        f"Keep only the latest row of each 'customer_id' on or before its snapshot, leaving out {extra} of 100 rows."
+    )
+
+
+def test_keep_latest_counts_an_id_lost_after_its_snapshot_and_says_so_in_the_question() -> None:
+    data = pd.DataFrame(
+        {
+            "customer_id": ["a", "a", "b"],
+            "seen": ["2024-01-01", "2024-03-01", "2024-05-01"],
+            "snap": ["2024-02-01", None, "2024-04-01"],
+            "churned": [0, 0, 1],
+        }
+    )
+    out = TOOLS["keep_latest_per_id"].run(
+        KeepLatestInput(time_column="seen", snapshot_column="snap"), ctx(data)
+    )
+    assert (out.counts.ids_lost, out.counts.failed, out.counts.after_snapshot) == (1, 1, 1)
+    assert "1 IDs with no row on or before their snapshot, which are lost" in out.question.text

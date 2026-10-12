@@ -107,9 +107,14 @@ class SplitRule(StrictBase):
     def sentence(self) -> str:
         """The exact text the person approves (exact-text consent, design §6.6)."""
         if self.by == "date":
+            order = (
+                ""
+                if self.dayfirst is None
+                else f" Dates written with numbers are read {'day' if self.dayfirst else 'month'} first."
+            )
             return (
                 f"Learn from the rows whose '{self.column}' is on or before {self.cut}, and score the rows whose "
-                f"'{self.column}' is after it."
+                f"'{self.column}' is after it.{order}"
             )
         shown = ", ".join(f"'{v}'" for v in self.scoring_values[:5]) + (
             " …" if len(self.scoring_values) > 5 else ""

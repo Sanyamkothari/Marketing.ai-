@@ -770,6 +770,7 @@ def run_recipe(
                     changed=latest.rows_in - latest.rows_out,
                     failed=latest.failed,
                     leak_check=latest.leak_check,
+                    note=latest.note,
                 )
             )
             work = latest.frame

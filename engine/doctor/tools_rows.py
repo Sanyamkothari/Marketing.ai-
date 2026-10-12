@@ -33,8 +33,10 @@ from engine.agent.latest import (
     LatestConflicts,
     find_conflicts,
     keep_latest_per_id,
+    latest_note,
     plan_keep_latest,
 )
+from engine.agent.reshape import _order
 from engine.doctor.change_share import CHANGE_SHARE_CODES
 from engine.doctor.impossible import IMPOSSIBLE_CODES, ImpossibleReport, find_impossible_values
 from engine.doctor.reshape_guard import RESHAPE_GUARD_CODES, reshape_question
@@ -144,8 +146,9 @@ class DataToolSpec(Generic[In, Out]):
     """True when the same input on the same file always gives the same output (no AI inside)."""
     step_kinds: tuple[RecipeStepKind, ...]
     """The step kinds its proposals carry: what M233's policy rule set for it must allow."""
-    approve_class: bool
-    """Whether the item it proposes needs the person's explicit yes with the exact text (design §6.6)."""
+    approve_class: bool | Literal["by_output"]
+    """Whether the item it proposes needs the person's explicit yes with the exact text (design §6.6);
+    `by_output` when that depends on the file, and each output's own `approve_class` field says."""
     run: Callable[[In, RowToolContext], Out]
     milestone: str = "M238"
 
@@ -241,12 +244,19 @@ class KeepLatestInput(_Input):
     )
 
 
+APPROVE_DROP_SHARE: Final[float] = 0.02
+"""Design §6.6: a join, stack or de-duplication that drops more than 2% of rows is an APPROVE-class item."""
+
+
 class ConflictCounts(_Output):
     ids: int
     rows: int
     ids_with_identical_copies: int
     after_snapshot: int
     failed: int
+    ids_lost: int = Field(
+        default=0, ge=0, description="IDs whose every row is dated after their snapshot: left out entirely."
+    )
 
 
 class KeepLatestOutput(_Output):
@@ -262,6 +272,12 @@ class KeepLatestOutput(_Output):
     conflict_question: Question | None = Field(
         default=None, description="When IDs have different rows on their latest date: which one to keep."
     )
+    sentence: str = Field(description="The exact text the person approves when the item is APPROVE-class.")
+    approve_class: bool = Field(
+        description="True when the step drops more than 2% of the rows (design §6.6): the Analyst approves it "
+        "with the exact text of `sentence`."
+    )
+    role: Role = Field(description="The least role that may approve it.")
 
 
 def _conflict_question(conflicts: LatestConflicts, key: str) -> Question:
@@ -306,6 +322,15 @@ def _keep_latest(given: KeepLatestInput, ctx: RowToolContext) -> KeepLatestOutpu
     except KeepLatestError as exc:
         raise RowToolError(exc.code, exc.message) from exc
     removed = preview.rows_in - preview.rows_out
+    note = latest_note(
+        rows_in=preview.rows_in,
+        rows_out=preview.rows_out,
+        failed=preview.failed,
+        ids_lost=preview.ids_lost,
+        identical_copies=preview.identical_copies,
+        after_snapshot=preview.after_snapshot,
+        conflicts=conflicts.ids,
+    )
     step = StepProposal(
         kind=RecipeStepKind.KEEP_LATEST_PER_ID,
         column=key,
@@ -327,7 +352,9 @@ def _keep_latest(given: KeepLatestInput, ctx: RowToolContext) -> KeepLatestOutpu
         rows=preview.rows_in,
         changed=removed,
         failed=preview.failed,
+        note=note,
     )
+    approve = bool(preview.rows_in) and removed / preview.rows_in > APPROVE_DROP_SHARE
     return KeepLatestOutput(
         step=step,
         rows_in=preview.rows_in,
@@ -338,9 +365,16 @@ def _keep_latest(given: KeepLatestInput, ctx: RowToolContext) -> KeepLatestOutpu
             ids_with_identical_copies=conflicts.ids_with_identical_copies,
             after_snapshot=conflicts.after_snapshot,
             failed=conflicts.failed,
+            ids_lost=conflicts.ids_lost,
         ),
         question=reshape_question(step.as_step(1), receipt=receipt, rows_out=preview.rows_out),
         conflict_question=_conflict_question(conflicts, key) if conflicts.ids else None,
+        sentence=(
+            f"Keep only the latest row of each '{key}' on or before its snapshot, leaving out {removed:,} of "
+            f"{preview.rows_in:,} rows."
+        ),
+        approve_class=approve,
+        role=Role.ANALYST,
     )
 
 
@@ -352,6 +386,9 @@ class SplitFileInput(_Input):
 
 
 class SplitFileOutput(_Output):
+    rule: SplitRule = Field(
+        description="The rule as frozen: a text date column's day/month order is set when its values prove it."
+    )
     receipt: SplitReceipt = Field(
         description="The split measured on this file (the recipe runs first at Approve)."
     )
@@ -361,18 +398,25 @@ class SplitFileOutput(_Output):
 
 
 def _split_file(given: SplitFileInput, ctx: RowToolContext) -> SplitFileOutput:
-    _column(ctx, given.rule.column)
+    series = _column(ctx, given.rule.column)
+    rule = given.rule
+    if rule.by == "date" and rule.dayfirst is None:
+        # Frozen as `plan_keep_latest` freezes it: a value like 25/03 proves the order, and the rule's hash and
+        # the approved sentence then carry it, so Approve reads every date as the preview did.
+        proven = _order(series)[0]
+        if proven is not None:
+            rule = SplitRule.model_validate({**rule.model_dump(), "dayfirst": proven})
     try:
         parts = split_rows(
             ctx.frame,
-            given.rule,
+            rule,
             primary_key=ctx.primary_key,
             target=ctx.target,
             max_failure_pct=ctx.max_failure_pct,
         )
     except SplitError as exc:
         raise RowToolError(exc.code, exc.message) from exc
-    return SplitFileOutput(receipt=parts.receipt, sentence=given.rule.sentence())
+    return SplitFileOutput(rule=rule, receipt=parts.receipt, sentence=rule.sentence())
 
 
 ROW_TOOLS: Final[tuple[DataToolSpec[Any, Any], ...]] = (
@@ -437,7 +481,7 @@ ROW_TOOLS: Final[tuple[DataToolSpec[Any, Any], ...]] = (
         wraps=("engine.agent.latest:keep_latest_per_id", "engine.agent.latest:find_conflicts"),
         deterministic=True,
         step_kinds=(RecipeStepKind.KEEP_LATEST_PER_ID,),
-        approve_class=False,
+        approve_class="by_output",
         run=_keep_latest,
     ),
     DataToolSpec(

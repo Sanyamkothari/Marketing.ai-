@@ -109,7 +109,6 @@ _EARLIEST: Final[pd.Timestamp] = pd.Timestamp("1900-01-01")
 _MAX_AGE_YEARS: Final[int] = 120
 _MIN_SHARE: Final[float] = 0.5
 """A column is read as numbers (or dates) only when at least half its non-empty values are."""
-_MAX_DISTINCT_DATES: Final[int] = 50_000
 _YEAR: Final[re.Pattern[str]] = re.compile(r"(?<!\d)(\d{4})(?!\d)")
 _CAMEL: Final[re.Pattern[str]] = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
 _SPLIT: Final[re.Pattern[str]] = re.compile(r"[^0-9A-Za-zऀ-ॿ]+")
@@ -219,7 +218,11 @@ def _number_findings(name: str, series: pd.Series[Any], meaning: _NumberMeaning)
 
 
 def _as_dates(series: pd.Series[Any]) -> tuple[pd.Series[Any], pd.Series[Any]] | None:
-    """(dates, the text they were read from) for a date column or a text column of mostly dates, else None."""
+    """(dates, the text they were read from) for a date column or a text column of mostly dates, else None.
+
+    Text is read once per distinct spelling and mapped back to the rows, so a million rows of a few thousand
+    spellings cost a few thousand reads, and no column is skipped for having many spellings.
+    """
     present = series.dropna()
     if present.empty or pd.api.types.is_bool_dtype(series):
         return None
@@ -231,13 +234,22 @@ def _as_dates(series: pd.Series[Any]) -> tuple[pd.Series[Any], pd.Series[Any]] |
     if pd.api.types.is_numeric_dtype(series):
         return None
     text = present.astype(str).str.strip()
-    if text.nunique() > _MAX_DISTINCT_DATES or not text.str.contains(r"\d{2}", regex=True).all():
+    codes, spellings = pd.factorize(text)
+    distinct = pd.Series(spellings, dtype=object)
+    if not distinct.str.contains(r"\d{2}", regex=True).all():
         return None
-    order = date_order(text)
-    parsed = parse_dates(text, dayfirst=bool(order)).values
+    parsed_once = parse_dates(distinct, dayfirst=bool(date_order(distinct))).values
+    parsed = pd.Series(parsed_once.to_numpy()[codes], index=text.index)
     if parsed.notna().sum() < _MIN_SHARE * len(text):
         return None
     return parsed, text
+
+
+def _latest_years(text: pd.Series[Any]) -> pd.Series[Any]:
+    """Each value's largest four-digit year as written (0 when none), read once per distinct spelling."""
+    codes, spellings = pd.factorize(text)
+    years = [max((int(y) for y in _YEAR.findall(str(s))), default=0) for s in spellings]
+    return pd.Series(pd.array(years, dtype="int64").to_numpy()[codes], index=text.index)
 
 
 def _date_findings(
@@ -252,7 +264,7 @@ def _date_findings(
     birth = bool(words & _BIRTH)
     meaning: Meaning = "birth_date" if birth else "date"
     # A year of 2099 or later is a placeholder; 9999 is beyond what a date can hold, so the text is read too.
-    years = text.str.findall(_YEAR).map(lambda found: max((int(y) for y in found), default=0))
+    years = _latest_years(text)
     placeholder = (dates.dt.year >= _PLACEHOLDER_YEAR).fillna(False) | (years >= _PLACEHOLDER_YEAR)
     rules: list[tuple[Rule, pd.Series[Any], str]] = [
         (
@@ -268,7 +280,9 @@ def _date_findings(
             ("age_over_120", (dates < oldest) & (dates >= _EARLIEST), f"more than {_MAX_AGE_YEARS} years ago")
         )
     if birth or not (words & _FUTURE_ALLOWED):
-        rules.append(("future_date", (dates > as_of) & ~placeholder, f"after {as_of.date().isoformat()}"))
+        # The whole reference day has happened: a time later that day is not in the future.
+        tomorrow = as_of.normalize() + pd.Timedelta(days=1)
+        rules.append(("future_date", (dates >= tomorrow) & ~placeholder, f"after {as_of.date().isoformat()}"))
     found: list[ImpossibleFinding] = []
     for rule, mask, side in rules:
         mask = mask.fillna(False).astype(bool)

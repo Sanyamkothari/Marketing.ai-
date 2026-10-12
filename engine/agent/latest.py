@@ -24,9 +24,12 @@ planner asks: `refuse` (the default: a conflict stops the step with `RECIPE_VALU
 guessed), `last_in_file` or `first_in_file` (the later or earlier of the ID's own rows as the file lists them).
 
 **Counted.** A row with no ID, no readable date, or whose ID has no readable snapshot on any row belongs to no
-ID at no time; it is left out and counted as a failure, and more failures than the use case's
-`max_conversion_failure_pct` stop the step. The result lists the rows kept, the identical copies and the rows
-dated after the snapshot that were left out.
+ID at no time; it is left out and counted as a failure. So is every row of an ID whose rows are *all* dated after
+its snapshot (possible only with a separate snapshot column): that ID would vanish from the prepared file - a
+customer silently not scored - so it is counted as lost (`ids_lost`) and its rows as failures. More failures than
+the use case's `max_conversion_failure_pct` stop the step. The result lists the rows kept, the identical copies,
+the rows dated after the snapshot that were left out, the IDs lost and the IDs settled by file order, and
+`note` says the same in one plain sentence for the step's receipt.
 
 The step never reads the outcome to choose a row: it is refused when its date, snapshot or ID column is the
 outcome (`engine.agent.recipe.check_recipe`). The outcome is carried on the kept row like every other column.
@@ -52,6 +55,7 @@ __all__ = [
     "LatestConflicts",
     "find_conflicts",
     "keep_latest_per_id",
+    "latest_note",
     "plan_keep_latest",
 ]
 
@@ -151,14 +155,29 @@ class KeepLatestResult:
     rows_in: int
     rows_out: int
     failed: int
-    """Rows with no ID, no readable date, or whose ID has no readable snapshot: left out."""
+    """Rows with no ID, no readable date, or whose ID has no readable snapshot, and every row of a lost ID."""
+    ids_lost: int
+    """IDs with readable rows of which none is dated on or before the ID's snapshot: left out entirely."""
     identical_copies: int
     """Rows left out because another row of the same ID and latest date is identical in every column."""
     after_snapshot: int
-    """Rows dated after their ID's snapshot: never kept."""
+    """Rows dated after their ID's snapshot (of IDs that keep a row): never kept."""
     conflicts: int
     """IDs whose latest rows differ, settled by `ties` (0 under `refuse`, which stops instead)."""
     leak_check: str | None
+
+    @property
+    def note(self) -> str:
+        """Why rows were left out, in one plain sentence from the counts (the step receipt's `note`)."""
+        return latest_note(
+            rows_in=self.rows_in,
+            rows_out=self.rows_out,
+            failed=self.failed,
+            ids_lost=self.ids_lost,
+            identical_copies=self.identical_copies,
+            after_snapshot=self.after_snapshot,
+            conflicts=self.conflicts,
+        )
 
 
 @dataclass(frozen=True)
@@ -170,6 +189,46 @@ class LatestConflicts:
     ids_with_identical_copies: int
     after_snapshot: int
     failed: int
+    ids_lost: int = 0
+    """IDs every one of whose rows is dated after its snapshot: they would be left out entirely."""
+
+
+def latest_note(
+    *,
+    rows_in: int,
+    rows_out: int,
+    failed: int,
+    ids_lost: int,
+    identical_copies: int,
+    after_snapshot: int,
+    conflicts: int,
+) -> str:
+    """One sentence of counts: why `rows_in - rows_out` rows are left out, and which rows file order chose."""
+    parts = [f"{rows_in - rows_out:,} of {rows_in:,} rows are left out"]
+    detail: list[str] = []
+    if identical_copies:
+        detail.append(f"{identical_copies:,} are identical copies")
+    if after_snapshot:
+        detail.append(f"{after_snapshot:,} are dated after their ID's snapshot")
+    if failed:
+        detail.append(
+            f"{failed:,} have no ID or no readable date"
+            + (
+                f", or belong to the {ids_lost:,} IDs with no row on or before their snapshot, which are lost"
+                if ids_lost
+                else ""
+            )
+        )
+    rest = rows_in - rows_out - identical_copies - after_snapshot - failed
+    if rest > 0:
+        detail.append(f"{rest:,} are other rows of an ID that keeps one")
+    sentence = parts[0] + (": " + "; ".join(detail) if detail else "") + "."
+    if conflicts:
+        sentence += (
+            f" For {conflicts:,} IDs the latest rows differ, and the row kept was chosen by its place in the "
+            "file, not by its date."
+        )
+    return sentence
 
 
 # ---------------------------------------------------------------------------
@@ -272,7 +331,23 @@ class _Prepared:
     known: np.ndarray[Any, Any]
     usable: np.ndarray[Any, Any]
     eligible: np.ndarray[Any, Any]
+    lost: np.ndarray[Any, Any]
+    """Usable rows of an ID none of whose rows is eligible: the ID would vanish, so they count as failures."""
     row_hash: np.ndarray[Any, Any]
+
+    @property
+    def failed(self) -> np.ndarray[Any, Any]:
+        out: np.ndarray[Any, Any] = ~self.usable | self.lost
+        return out
+
+    @property
+    def after_snapshot(self) -> np.ndarray[Any, Any]:
+        out: np.ndarray[Any, Any] = self.usable & ~self.eligible & ~self.lost
+        return out
+
+    @property
+    def ids_lost(self) -> int:
+        return int(pd.unique(self.keys[self.lost]).size) if self.lost.any() else 0
 
 
 def _prepare(frame: pd.DataFrame, key: str, params: Mapping[str, Any]) -> _Prepared:
@@ -297,7 +372,34 @@ def _prepare(frame: pd.DataFrame, key: str, params: Mapping[str, Any]) -> _Prepa
     snap = _ns(snapshot_at)
     has_key = pd.notna(keys)
     known, usable, eligible = _eligibility(keys, has_key, event, snap)
-    return _Prepared(spec, keys, has_key, event, snap, known, usable, eligible, _row_hashes(frame))
+    return _Prepared(
+        spec,
+        keys,
+        has_key,
+        event,
+        snap,
+        known,
+        usable,
+        eligible,
+        _lost(keys, usable, eligible),
+        _row_hashes(frame),
+    )
+
+
+def _lost(
+    keys: np.ndarray[Any, Any], usable: np.ndarray[Any, Any], eligible: np.ndarray[Any, Any]
+) -> np.ndarray[Any, Any]:
+    """Usable rows whose ID has no eligible row at all (every row dated after its snapshot); per ID only."""
+    if not (usable & ~eligible).any():
+        return np.zeros(len(keys), dtype=bool)
+    any_eligible = (
+        pd.Series(eligible.astype(np.int8))
+        .groupby(pd.Series(keys, dtype=object), sort=False, dropna=False)
+        .transform("max")
+        .to_numpy()
+    )
+    lost: np.ndarray[Any, Any] = usable & (any_eligible == 0)
+    return lost
 
 
 def _eligibility(
@@ -330,8 +432,9 @@ def find_conflicts(frame: pd.DataFrame, *, key: str, params: Mapping[str, Any]) 
         ids=choice.conflict_ids,
         rows=choice.conflict_rows,
         ids_with_identical_copies=choice.copy_ids,
-        after_snapshot=int((prepared.usable & ~prepared.eligible).sum()),
-        failed=int((~prepared.usable).sum()),
+        after_snapshot=int(prepared.after_snapshot.sum()),
+        failed=int(prepared.failed.sum()),
+        ids_lost=prepared.ids_lost,
     )
 
 
@@ -387,7 +490,8 @@ def keep_latest_per_id(
 ) -> KeepLatestResult:
     """One row per ID of `frame`, by the step's frozen parameters. `frame` is not modified."""
     prepared = _prepare(frame, key, params)
-    failed = int((~prepared.usable).sum())
+    failed = int(prepared.failed.sum())
+    lost = prepared.ids_lost
     if len(frame) and failed / len(frame) * 100.0 > max_failure_pct:
         raise KeepLatestError(
             "RECIPE_VALUES_UNCONVERTED",
@@ -395,6 +499,12 @@ def keep_latest_per_id(
             + (
                 f", or no readable '{prepared.spec.snapshot_column}' on any row of their '{key}'"
                 if prepared.spec.snapshot_column
+                else ""
+            )
+            + (
+                f", or belong to one of {lost} IDs whose every row is dated after its snapshot (those IDs "
+                "would be left out entirely)"
+                if lost
                 else ""
             )
             + f" ({failed / len(frame):.1%}), more than the {max_failure_pct:g}% limit.",
@@ -424,8 +534,9 @@ def keep_latest_per_id(
         rows_in=len(frame),
         rows_out=len(out),
         failed=failed,
+        ids_lost=lost,
         identical_copies=choice.identical_copies,
-        after_snapshot=int((prepared.usable & ~prepared.eligible).sum()),
+        after_snapshot=int(prepared.after_snapshot.sum()),
         conflicts=choice.conflict_ids,
         leak_check=summary,
     )

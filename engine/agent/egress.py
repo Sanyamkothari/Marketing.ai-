@@ -357,6 +357,7 @@ RESULT_KEYS: Final[frozenset[str]] = frozenset(
         "from_headers",
         "guard",
         "guard_code",
+        "ids_lost",
         "ids_with_identical_copies",
         "if_not",
         "later_dates",
