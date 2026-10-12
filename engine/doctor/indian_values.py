@@ -54,6 +54,7 @@ __all__ = [
     "bare_letters",
     "boolean_word_family",
     "money_evidence",
+    "money_header",
     "propose_indian_booleans",
     "propose_indian_numbers",
 ]
@@ -213,6 +214,11 @@ def money_evidence(header: str, cells: Sequence[str]) -> bool:
         if any(word.casefold() in _UNAMBIGUOUS_WORDS for word in _LETTERS.findall(text)):
             return True
     return False
+
+
+def money_header(header: str) -> bool:
+    """Whether a column's name says it holds money (`amount`, `price`, `spend`, ...): Plan O M242 reads it."""
+    return _MONEY_HEADER.search(header) is not None
 
 
 def bare_letters(cells: Sequence[str]) -> tuple[str, ...]:

@@ -1719,6 +1719,10 @@ AGENT_VALIDATION_CODES: Final[frozenset[str]] = frozenset(
         "RECIPE_COLUMN_MISSING",
         "RECIPE_VALUES_UNCONVERTED",
         "RECIPE_STEP_INVALID",
+        # Plan O M242 (DEC-1812 (c)): a recipe step that would put two currencies in one money column stops with
+        # this code (`engine.agent.currency_steps`), and the person is asked which rows are in which currency.
+        # Kept in this literal, not the PLAN-O block: see the note there.
+        "CURRENCY_MIXED",
     }
 )
 """Plan G's three codes (DEC-1006, DEC-1013): a scoring file the model's saved preparation recipe cannot
@@ -1793,4 +1797,9 @@ def _plan_j_check_codes() -> frozenset[str]:
 # ---- PLAN-M (simple UI) — append only below this line ----
 # ---- END PLAN-M ----
 # ---- PLAN-O (Data Doctor) — append only below this line ----
+# Plan O M242 (DEC-1812 (c)): `CURRENCY_MIXED` is one line inside `AGENT_VALIDATION_CODES` above, beside Plan G's
+# recipe codes, and deliberately: `CHECK_CODES` is the union of the tables built at import time, and
+# `api.routes.agent_recipes.recipe_failure_report` must return the code as a check of its own (a 409 that asks
+# which rows are in which currency), never rewritten to `RECIPE_STEP_INVALID`. A rebinding down here would not
+# register it, as the PHASE-4A note says for `JobSpec`.
 # ---- END PLAN-O ----

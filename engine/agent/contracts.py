@@ -138,6 +138,10 @@ class RecipeStepKind(StrEnum):
     # Plan O M237 (DEC-1807): one customer ID written one way (prefix, leading zeros, case, spaces, +91 phone)
     # so two files meet. Row-wise and stateless: a cell's output depends on that cell and the frozen rule only.
     NORMALISE_KEY = "normalise_key"
+    # Plan O M242 (DEC-1812): amounts from one currency into another at a rate a person gave, with its date and
+    # source, frozen in the step. Row-wise: a row's output depends on its own cells and the frozen rate only.
+    # Never proposed by the AI or the chat, and never fetched: the rate is the person's.
+    CONVERT_CURRENCY = "convert_currency"
 
 
 class ProposalSource(StrEnum):
@@ -232,6 +236,8 @@ class RecipeStep(StrictBase):
             raise ValueError("a keep_latest_per_id step creates no column")
         if self.kind is RecipeStepKind.NORMALISE_KEY and self.new_column is not None:
             raise ValueError("a normalise_key step rewrites the IDs of its own column")
+        if self.kind is RecipeStepKind.CONVERT_CURRENCY and self.new_column is not None:
+            raise ValueError("a convert_currency step rewrites the amounts of its own column")
         return self
 
 

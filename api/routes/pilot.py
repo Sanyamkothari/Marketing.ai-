@@ -367,6 +367,7 @@ def read_roi(
         Query(alias="format", description="json (default, the view), html or pdf."),
     ] = "json",
 ) -> Response:
+    from engine.doctor.currency import load_money_basis, report_money
     from engine.pilot.roi import roi_document
 
     view = _roi_view(request, storage, run_id, root)
@@ -380,6 +381,9 @@ def read_roi(
         client_name=client_name,
         campaign_title=campaign.title if campaign else "",
         simulated_note=campaign.simulated_effect if campaign else "",
+        # Plan O M242 (DEC-1812 (h)): only a run the Data Doctor flow (`data_doctor.unified`) gave a money basis has
+        # one; every other run reads None and the document is byte-identical.
+        money=report_money(load_money_basis(storage, run_id)),
     )
     return _report(document, fmt, f"value_{run_id}")
 
@@ -652,6 +656,7 @@ def read_proof(
     root: ConfigRootDep,
     fmt: FormatQuery = "html",
 ) -> Response:
+    from engine.doctor.currency import money_basis_for_campaign, report_money
     from engine.pilot.proof import proof_document
 
     view = _proof(storage, campaign_id, root)
@@ -659,7 +664,9 @@ def read_proof(
         return view
     if fmt == "json":
         return Response(view.model_dump_json(), media_type="application/json")
-    return _report(proof_document(view), fmt, f"value_proof_{campaign_id}")
+    # Plan O M242 (DEC-1812 (h)): the currency lines of the campaign's run, when the Data Doctor flow gave it a basis.
+    money = report_money(money_basis_for_campaign(storage, campaign_id))
+    return _report(proof_document(view, money=money), fmt, f"value_proof_{campaign_id}")
 
 
 @router.put(

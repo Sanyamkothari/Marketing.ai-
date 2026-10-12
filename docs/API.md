@@ -376,7 +376,7 @@ A fully merged, validated use case. This is what the whole engine consumes.
 | `onboarding` | OnboardingConfig | no | `engine.yaml:defaults.onboarding` - every onboarding default, per use case (plan section 5.3). |
 | `uplift` | UpliftConfig | no | `uplift:` in a use case. Inert unless `problem_type` is `uplift`.  The data limits, the randomness check and anything about the treatment assignment are **not** agent-editable: an agent that could loosen them could make a targeted campaign look causal. |
 | `agent` | AgentConfig | no | `agent:` in a use case: the Guided-setup helper for that use case. |
-| `data_doctor` | DataDoctorConfig | no | `data_doctor:` in a use case: Plan O's one Data Doctor agent. Only the switch so far (M230). |
+| `data_doctor` | DataDoctorConfig | no | `data_doctor:` in a use case: Plan O's one Data Doctor agent: the switch (M230) and the workspace currency (M242). |
 
 #### TargetConfig
 
@@ -630,11 +630,12 @@ How the target is derived (plan section 5.2).  `agent_editable` is `False` and c
 
 #### DataDoctorConfig
 
-`data_doctor:` in a use case: Plan O's one Data Doctor agent. Only the switch so far (M230).
+`data_doctor:` in a use case: Plan O's one Data Doctor agent: the switch (M230) and the workspace currency (M242).
 
 | Field | Type | Required | Meaning |
 |---|---|---|---|
 | `unified` | boolean | no | Plan O (DEC-1800): when true, Guided setup and the Doctor page are the one Data Doctor agent. Off until the parity checklist is met (M249); while off, nothing changes. |
+| `workspace_currency` | string | no | Plan O M242 (DEC-1812): the currency this workspace's reports use, as a code (INR, USD, EUR). A client's confirmed locale profile overrides it for that client. Read only while `unified` is on; INR, the default, is left out of a dump so nothing moves. |
 
 #### ThresholdConfig
 

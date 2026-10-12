@@ -756,3 +756,40 @@ Approve with the switch on), `patterns.py` (candidate rules), the visit's `confi
 `detectors` and `ledger` ports; routes in `api/routes/case_visit.py` and `api/routes/data_protocol.py`.
 `docs/AGENTS.md` §19. Tests: `tests/unit/doctor/test_protocol.py`, `test_protocol_visit.py`,
 `test_plan_g_approval.py`, `tests/integration/test_api_data_protocol.py`.
+
+## 22. Currency (Plan O M242, DEC-1812)
+
+*Behind the switch `data_doctor.unified` (off by default). With it off, nothing below runs.*
+
+Money keeps its currency. Each workspace has a currency (`data_doctor.workspace_currency`, rupees unless set; a
+client's confirmed currency wins for that client), and every money column of a file is read for its own: the signs
+and codes in its values (`₹`, `Rs`, `$`, `USD`, `€`, `£`) and the words in its name (`amount_usd`, `Price (INR)`).
+
+- **The same currency as the workspace:** nothing to ask. The column is read with its currency recorded.
+- **Another currency** (`CURRENCY_FOREIGN`, a question): "This file's `bill_amount` is in US dollars, and this
+  workspace reports in Indian rupees. Report in US dollars, or convert to Indian rupees at a rate you give?"
+  Reporting in dollars converts nothing: the column's amounts stay dollars, labelled as dollars, and are never added
+  to rupees. The value view and the Value Proof Pack work their amounts out from your value inputs, which are in
+  rupees, so those stay in rupees; the dollar column is noted apart under "Currency", never used to relabel them.
+  Converting needs a rate **you** give, with its date and where it comes from ("RBI reference rate, 10 Oct 2026"). An Analyst approves
+  the exact sentence shown; who approved it and when are recorded, and every report that uses the rate shows it,
+  its date, its source and the approver. **The product never looks a rate up.**
+- **Two currencies in one column** (`CURRENCY_MIXED`, a stop): nothing is built from the column until you say which
+  rows are in which currency - a column that says so (`country`, `currency`), or the sign on every amount. The other
+  currency's rows are then converted at a rate you give. Amounts in different currencies are never added together.
+- **Money that names no currency** (`CURRENCY_UNSTATED`, a question): asked once for the client, never assumed.
+
+A recipe records the currency: `parse_number` with `unit` stops (`CURRENCY_MIXED`) if next month's file has an
+amount in another currency, and `convert_currency` keeps the rate, its date and source frozen, so replay converts
+exactly as approved. With `data_doctor.unified` off, nothing here runs and every report is as it was; an INR
+workspace with nothing converted prints exactly as before.
+
+### For developers
+
+`engine/doctor/currency.py` (`check_currency`, `report_in`, `propose_conversion`, `approve_conversion`,
+`answer_mixed`, `money_basis`, `report_money`, `format_money`, `add_amounts`), `engine/agent/currency_steps.py`
+(the step runners), `engine/doctor/tools_currency.py` (the registry entries for M232). A run's money basis is
+`runs/<run_id>/money_basis.json`; `GET /pilot/roi/{run_id}` and `GET /pilot/proof/{campaign_id}` print its unit and
+rate lines under "Currency" when it exists (`ReportMoney.lines_beside`), and keep writing their own amounts in the
+currency of `RoiInputs` (rupees). A run or scoring file stopped by `CURRENCY_MIXED` comes back as a 409 check with that
+code and the question to answer, not as `RECIPE_STEP_INVALID`. `ui/format.js` `setWorkspaceCurrency(code)` makes `money(value)` use the workspace currency (INR by default).
