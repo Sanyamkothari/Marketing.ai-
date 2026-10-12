@@ -788,7 +788,7 @@ workspace with nothing converted prints exactly as before.
 
 `engine/doctor/currency.py` (`check_currency`, `report_in`, `propose_conversion`, `approve_conversion`,
 `answer_mixed`, `money_basis`, `report_money`, `format_money`, `add_amounts`), `engine/agent/currency_steps.py`
-(the step runners), `engine/doctor/tools_currency.py` (the registry entries for M232). A run's money basis is
+(the step runners), `engine/doctor/tools_currency.py` (the registry entries; `convert_currency`, #64, is registered, the person's only). A run's money basis is
 `runs/<run_id>/money_basis.json`; `GET /pilot/roi/{run_id}` and `GET /pilot/proof/{campaign_id}` print its unit and
 rate lines under "Currency" when it exists (`ReportMoney.lines_beside`), and keep writing their own amounts in the
 currency of `RoiInputs` (rupees). A run or scoring file stopped by `CURRENCY_MIXED` comes back as a 409 check with that
