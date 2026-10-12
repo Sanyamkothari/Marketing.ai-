@@ -43,6 +43,7 @@ from engine.agent.formats import (
     parse_excel_serial_dates,
     parse_numbers,
 )
+from engine.agent.key_steps import normalise_keys, rule_from_params
 from engine.agent.latest import KeepLatestError, KeepLatestSpec, keep_latest_per_id
 from engine.agent.placeholders import MAX_PLACEHOLDER_VALUES, set_missing
 from engine.agent.reshape import CombineError, CombineSpec, LeakCheck, combine_rows
@@ -92,6 +93,8 @@ STEP_PHASE: Final[dict[RecipeStepKind, int]] = {
     RecipeStepKind.NORMALISE_TEXT: 1,
     RecipeStepKind.CONVERT_UNITS: 1,
     RecipeStepKind.SPLIT_COLUMN: 1,
+    # Plan O M237 (DEC-1807 (b)): a key is tidied with the other values, before rows are left out or combined.
+    RecipeStepKind.NORMALISE_KEY: 1,
     RecipeStepKind.SET_MISSING: 2,
     RecipeStepKind.VALID_RANGE: 2,
     RecipeStepKind.FILL_MISSING: 3,
@@ -463,6 +466,7 @@ def _check_params(step: RecipeStep) -> None:
         RecipeStepKind.FILL_MISSING: frozenset({"value"}),
         RecipeStepKind.REMOVE_ROWS: frozenset({"operator", "values"}),
         RecipeStepKind.RENAME_COLUMN: frozenset(),
+        RecipeStepKind.NORMALISE_KEY: frozenset({"prefix", "zeros", "case", "spaces", "phone"}),
     }
     unknown = set(params) - allowed[kind]
     if unknown:
@@ -510,6 +514,22 @@ def _check_params(step: RecipeStep) -> None:
     if kind is RecipeStepKind.DERIVE and not isinstance(params.get("expression"), str):
         raise refuse("a new column needs an expression")
     _check_plan_l_params(kind, params, refuse)
+    if kind is RecipeStepKind.NORMALISE_KEY:
+        _check_normalise_key(params, refuse)
+
+
+def _check_normalise_key(params: dict[str, Any], refuse: Callable[[str], RecipeError]) -> None:
+    """Plan O M237 (DEC-1807 (b)): a frozen rule that changes something; the switches are true or false."""
+    if any(name != "prefix" and not isinstance(value, bool) for name, value in params.items()):
+        raise refuse("zeros, case, spaces and phone are true or false")
+    if "prefix" in params and not isinstance(params["prefix"], str):
+        raise refuse("the prefix is text")
+    try:
+        rule = rule_from_params(params)
+    except ValueError as exc:
+        raise refuse("the rule is a prefix, zeros, case, spaces or phone, and phone stands alone") from exc
+    if rule.changes_nothing:
+        raise refuse("say how the IDs are to be written: a prefix, zeros, case, spaces or phone")
 
 
 _STATISTIC_WORDS: Final[frozenset[str]] = frozenset(
@@ -643,6 +663,7 @@ def _apply(frame: pd.DataFrame, step: RecipeStep, snapshot_column: str | None) -
             _series(series), minimum=params.get("minimum"), maximum=params.get("maximum")
         ),
         RecipeStepKind.FILL_MISSING: lambda: fill_missing(_series(series), value=params["value"]),
+        RecipeStepKind.NORMALISE_KEY: lambda: normalise_keys(_series(series), rule_from_params(params)),
     }
     return runners[step.kind]()
 
