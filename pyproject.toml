@@ -117,6 +117,7 @@ azure = ["azure-storage-blob>=12.20,<13"]
 local-embeddings = ["sentence-transformers>=3.0,<6"]
 dev = [
   "pytest==9.1.1",
+  "pytest-xdist==3.8.0",                 # CI runs the fast suite on every core (`-n auto`, ci.yml); also registers xdist_group
   "hypothesis==6.168.0",
   "httpx==0.28.1",
   "ruff==0.16.8",
@@ -210,6 +211,5 @@ markers = [
   "postgres: needs a PostgreSQL server (`make postgres-up`); skips with a reason when there is none",
   "docker: needs a working Docker daemon and a pullable base image; skips with a reason when there is none",
   "aws: talks to a real AWS account; never selected by default, run by hand against a dev account",
-  "xdist_group(name): pytest-xdist runs every test of one group in the same worker; registered here so `--strict-markers` collects without pytest-xdist installed (CI runs without it)",
   "statistical: Monte Carlo validity tests (Plan J); collected only with MARKETING_AI_STATISTICAL=1, run nightly by `make test-statistical` (DEC-1300)",
 ]
