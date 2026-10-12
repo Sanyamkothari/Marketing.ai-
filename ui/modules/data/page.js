@@ -16,9 +16,11 @@
 //
 // This page does not import `ui/layout.js`: it draws the same in the classic and the campaigns layout.
 
-import { announceStatus, emptyState, errorBox, esc, fmtInt, fmtSize, fmtStamp, headActions, pageHead, skeleton } from "../../dom.js";
+import { button, emptyState, icon, pageHeader, statusChip, tabs } from "../../components.js";
+import { announceStatus, errorBox, esc, fmtInt, fmtSize, fmtStamp, skeleton } from "../../dom.js";
 import { deleteConnection, getConnections, getKinds, testConnection } from "../connections/api.js";
-import { statusBadge, stepsHtml } from "../connections/page.js";
+import { stepsHtml } from "../connections/page.js";
+import { revealSelectedTab } from "../reports/page.js";
 import { injectConnectionStyles } from "../connections/styles.js";
 import { userText } from "../../labels.js";
 import { getUploads } from "./api.js";
@@ -102,24 +104,53 @@ function fileOrigin(u) {
   }
 }
 
+/** The header: "+ Add a source" is the Sources tab's one primary action; the Check tab keeps its one action in its card. */
 function header(tab) {
-  const primary =
-    tab === "sources"
-      ? { label: "+ Add a source", id: "dt-add", attrs: `aria-expanded="${state.chooserOpen}" aria-controls="dt-chooser"` }
-      : { label: "Open Data Doctor", href: DOCTOR_HREF };
-  const secondary = tab === "sources" ? [{ label: "Check my data", href: DOCTOR_HREF, attrs: "data-dt-doctor" }] : [];
-  return pageHead(
-    `<h1 class="h1">Data</h1><p class="desc">Where your customer data comes from, and whether it is ready to use.</p>${headActions({
-      primary,
-      secondary,
-    })}`,
-  );
+  const subtitle = "Where your customer data comes from, and whether it is ready to use.";
+  if (tab !== "sources") return pageHeader({ title: "Data", subtitle });
+  return pageHeader({
+    title: "Data",
+    subtitle,
+    primary: { label: "+ Add a source", id: "dt-add", attrs: `aria-expanded="${state.chooserOpen}" aria-controls="dt-chooser"` },
+    secondary: [{ label: "Check my data", href: DOCTOR_HREF, attrs: "data-dt-doctor" }],
+  });
 }
 
-function tabs(tab) {
-  return `<nav class="dt-tabs" aria-label="Data sections">${TABS.map(
-    (t) => `<a href="${t.href}" data-dt-tab="${t.id}"${t.id === tab ? ' aria-current="page"' : ""}>${esc(t.label)}</a>`,
-  ).join("")}</nav>`;
+/** The underline tabs: a link to each route; the current one is also `aria-current="page"`, as a link to a page is. */
+function tabsHtml(tab) {
+  return tabs({
+    label: "Data sections",
+    current: tab,
+    items: TABS.map((t) => ({
+      id: t.id,
+      label: t.label,
+      href: t.href,
+      attrs: `data-dt-tab="${t.id}"${t.id === tab ? ' aria-current="page"' : ""}`,
+    })),
+  });
+}
+
+/** What kind of source a row is, drawn: a document for a file, a database for a saved connection (the words are beside it). */
+const FILE_ICON =
+  '<svg class="ds-ico" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" focusable="false" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></svg>';
+const typeIcon = (kind) => `<span class="dt-ico" data-dt-type="${kind}">${kind === "file" ? FILE_ICON : icon("data", { size: 20 })}</span>`;
+
+/**
+ * A saved connection's health: a short status chip (an icon and one or two words) and, on a line under it, the rest of
+ * what the Connections page says - when it was tested, or the server's reason it failed - in the same order and words
+ * (M188 review: a long sentence inside a pill wraps into a blob).
+ */
+function connectionChip(c) {
+  const status = ["connected", "failed", "needs_addon"].includes(c.status) ? c.status : "not_tested";
+  const attrs = `data-cn-status="${status}"`;
+  const sub = (text) => (text ? `<span class="dt-sub" data-dt-health-detail>${esc(text)}</span>` : "");
+  if (status === "connected") {
+    return `${statusChip("health", "connected", { attrs })}${sub(c.last_test ? `Tested ${fmtStamp(c.last_test.tested_at)}` : "")}`;
+  }
+  if (status === "failed") return `${statusChip("health", "failed", { attrs })}${sub(c.failure || "See the test.")}`;
+  // `needs_addon` is not a status of the mapping yet (cross-branch note to M185): it is drawn neutral, with its own word.
+  if (status === "needs_addon") return statusChip("health", "needs_addon", { word: "Needs the add-on", attrs });
+  return statusChip("health", "not_tested", { attrs });
 }
 
 // --- the Sources tab -------------------------------------------------------------------------------
@@ -133,13 +164,20 @@ function deleteQuestion(c) {
 
 function connectionActions(c) {
   const busy = state.busy[c.connection_id];
-  return `<button type="button" class="btn secondary sm" data-dt-test="${esc(c.connection_id)}" aria-label="Test ${esc(c.name)}"${
-    busy || !c.available ? " disabled" : ""
-  }>${busy === "test" ? "Testing…" : "Test"}</button><a class="btn quiet sm" href="${esc(
-    `#/connections/${c.connection_id}`,
-  )}" data-dt-edit="${esc(c.connection_id)}" aria-label="Edit ${esc(c.name)}">Edit</a><button type="button" class="btn quiet sm" data-dt-delete="${esc(
-    c.connection_id,
-  )}" aria-label="Delete ${esc(c.name)}"${busy ? " disabled" : ""}>Delete</button>`;
+  const id = esc(c.connection_id);
+  return `${button({
+    label: busy === "test" ? "Testing…" : "Test",
+    kind: "secondary",
+    size: "sm",
+    attrs: `data-dt-test="${id}" aria-label="Test ${esc(c.name)}"`,
+    disabled: Boolean(busy || !c.available),
+  })}${button({ label: "Edit", href: `#/connections/${c.connection_id}`, kind: "tertiary", size: "sm", attrs: `data-dt-edit="${id}" aria-label="Edit ${esc(c.name)}"` })}${button({
+    label: "Delete",
+    kind: "tertiary",
+    size: "sm",
+    attrs: `data-dt-delete="${id}" aria-label="Delete ${esc(c.name)}"`,
+    disabled: Boolean(busy),
+  })}`;
 }
 
 function connectionRow(c) {
@@ -154,8 +192,8 @@ function connectionRow(c) {
     state.reports[c.connection_id],
   )}`;
   return `<li class="dt-row" data-dt-source="connection" data-dt-id="${esc(c.connection_id)}">
-    <div><h3 class="dt-name">${userText(c.name)}<span class="dt-sub">${esc(c.kind_label)}</span></h3></div>
-    <div class="dt-cell" data-dt-health>${statusBadge(c)}${addon}${unreadable}</div>
+    ${typeIcon("connection")}<div><h3 class="dt-name">${userText(c.name)}<span class="dt-sub">${esc(c.kind_label)}</span></h3></div>
+    <div class="dt-cell" data-dt-health>${connectionChip(c)}${addon}${unreadable}</div>
     <div class="dt-cell" data-dt-when>${esc(when)}</div>
     <div class="dt-actions">${confirming ? "" : connectionActions(c)}</div>${detail ? `<div class="dt-wide">${detail}</div>` : ""}
   </li>`;
@@ -165,8 +203,8 @@ function fileRow(u) {
   const { kind, verb } = fileOrigin(u);
   const sample = u.synthetic ? " · Sample data" : "";
   return `<li class="dt-row" data-dt-source="file" data-dt-id="${esc(u.upload_id)}">
-    <div><h3 class="dt-name">${userText(u.file_name)}<span class="dt-sub">${kind}${esc(sample)}</span></h3></div>
-    <div class="dt-cell" data-dt-health><span class="pill ok cn-badge" data-dt-status="read">Read correctly</span><span class="dt-sub">${esc(
+    ${typeIcon("file")}<div><h3 class="dt-name">${userText(u.file_name)}<span class="dt-sub">${kind}${esc(sample)}</span></h3></div>
+    <div class="dt-cell" data-dt-health>${statusChip("health", "read", { attrs: 'data-dt-status="read"' })}<span class="dt-sub">${esc(
       `${plural(u.row_count, "row", "rows")} · ${plural(u.column_count, "column", "columns")} · ${fmtSize(u.file_size_bytes)}`,
     )}</span></div>
     <div class="dt-cell" data-dt-when>${esc(`${verb} ${fmtStamp(u.created_at)}`)}</div>
@@ -180,14 +218,20 @@ function chooserHtml() {
     .map((k) => {
       const used = state.connections.some((c) => c.kind === k.kind);
       const action = k.available
-        ? `<div class="btn-row"><a class="btn secondary sm" href="${esc(`#/connections/new/${k.kind}`)}" data-dt-new="${esc(k.kind)}">${
-            used ? "Set up another" : "Set up"
-          }</a></div>`
+        ? `<div class="btn-row">${button({
+            label: used ? "Set up another" : "Set up",
+            href: `#/connections/new/${k.kind}`,
+            kind: "secondary",
+            size: "sm",
+            attrs: `data-dt-new="${esc(k.kind)}"`,
+          })}</div>`
         : `<p class="dt-note">Needs an add-on. Ask your administrator to install it.</p>`;
-      return `<article class="dt-kind" data-dt-kind="${esc(k.kind)}"><h3>${esc(k.label)}</h3>${action}</article>`;
+      return `<article class="dt-kind" data-dt-kind="${esc(k.kind)}"><div class="dt-kind-h">${typeIcon("connection")}<h3>${esc(k.label)}</h3></div>${action}</article>`;
     })
     .join("");
-  const file = `<article class="dt-kind" data-dt-kind="file"><h3>A file from your computer</h3><p class="dt-note">CSV, Excel or Parquet. Data Doctor reads it first and says what it can be used for.</p><div class="btn-row"><a class="btn secondary sm" href="${DOCTOR_HREF}" data-dt-new="file">Choose a file</a></div></article>`;
+  const file = `<article class="dt-kind" data-dt-kind="file"><div class="dt-kind-h">${typeIcon("file")}<h3>A file from your computer</h3></div><p class="dt-note">CSV, Excel or Parquet. Data Doctor reads it first and says what it can be used for.</p><div class="btn-row">${button(
+    { label: "Choose a file", href: DOCTOR_HREF, kind: "secondary", size: "sm", attrs: 'data-dt-new="file"' },
+  )}</div></article>`;
   return `<section class="dt-chooser" id="dt-chooser" aria-labelledby="dt-chooser-h"${state.chooserOpen ? "" : " hidden"}><h2 id="dt-chooser-h">Add a source</h2><p>Marketing AI only reads from a source. It never changes anything there.</p><div class="dt-kinds">${cards}${file}</div></section>`;
 }
 
@@ -198,12 +242,13 @@ function sourcesHtml() {
   const files = shown.map(fileRow).join("");
   const hidden = state.uploads.length > shown.length;
   // The list holds the newest files the API sent. When there are more files than that, the button must not say "all".
-  const button = hidden
-    ? `<button type="button" class="btn quiet sm" data-dt-show-all>${esc(
-        filesCut()
-          ? `Show the newest ${fmtInt(state.uploads.length)} files`
-          : `Show all ${fmtInt(state.uploads.length)} files`,
-      )}</button>`
+  const showAll = hidden
+    ? button({
+        label: filesCut() ? `Show the newest ${fmtInt(state.uploads.length)} files` : `Show all ${fmtInt(state.uploads.length)} files`,
+        kind: "tertiary",
+        size: "sm",
+        attrs: "data-dt-show-all",
+      })
     : "";
   const cut =
     !hidden && filesCut()
@@ -211,11 +256,17 @@ function sourcesHtml() {
           `Showing the newest ${fmtInt(state.uploads.length)} of ${fmtInt(state.uploadsTotal)} files.`,
         )}</span>`
       : "";
-  const more = button || cut ? `<div class="dt-more">${button}${cut}</div>` : "";
+  const more = showAll || cut ? `<div class="dt-more">${showAll}${cut}</div>` : "";
   const list =
     connections || files
       ? `<ul class="dt-list" aria-label="Your data sources">${connections}${files}</ul>${more}`
-      : emptyState({ title: "No data sources yet", text: "Add a source or choose a file to get started." });
+      : `<div class="card">${emptyState({
+          icon: "data",
+          title: "No data sources yet",
+          text: "Add a source or choose a file to get started.",
+          // The one way forward is the header's: this opens the same "Add a source" chooser (M188 review).
+          action: { label: "Add a source", kind: "secondary", attrs: 'data-dt-open-chooser aria-controls="dt-chooser"' },
+        })}</div>`;
   const problem = state.uploadsError
     ? errorBox(state.uploadsError, { title: "The uploaded files could not be listed." })
     : "";
@@ -226,14 +277,12 @@ function sourcesHtml() {
 // --- the Check my data tab -------------------------------------------------------------------------
 
 function checkHtml() {
-  return `<section class="dt-check" aria-labelledby="dt-check-h"><h2 id="dt-check-h">Check my data</h2>
-    <p>Data Doctor looks at your files before you use them. It never changes them.</p>
-    <ul>
-      <li>It says what each file is and what it can be used for.</li>
-      <li>It says what is missing, so you know what to ask your data team for.</li>
-      <li>It shows how several files fit together.</li>
-    </ul>
-    <p>Choose your files there, or open it from here at any time.</p></section>`;
+  const point = (text) => `<li>${icon("checkCircle", { size: 18 })}<span>${esc(text)}</span></li>`;
+  return `<section class="dt-check card" aria-labelledby="dt-check-h"><div class="dt-check-h"><span class="dt-ico lg">${icon("checkCircle", { size: 24 })}</span><div><h2 id="dt-check-h">Check my data</h2>
+    <p>Data Doctor looks at your files before you use them. It never changes them.</p></div></div>
+    <ul class="dt-points">${point("It says what each file is and what it can be used for.")}${point("It says what is missing, so you know what to ask your data team for.")}${point("It shows how several files fit together.")}</ul>
+    <p class="dt-after">Choose your files there, or open it from here at any time.</p>
+    <div class="dt-go">${button({ label: "Open Data Doctor", href: DOCTOR_HREF })}</div></section>`;
 }
 
 // --- drawing and behaviour -------------------------------------------------------------------------
@@ -243,10 +292,11 @@ function draw() {
   if (!app || !stillHere()) return;
   injectDataStyles();
   injectConnectionStyles();
-  app.innerHTML = `<main class="screen dt" data-dt-tab-shown="${tab}">${header(tab)}${tabs(tab)}${
+  app.innerHTML = `<main class="screen dt" data-dt-tab-shown="${tab}">${header(tab)}${tabsHtml(tab)}${
     tab === "check" ? checkHtml() : sourcesHtml()
   }</main>`;
   bind(app);
+  revealSelectedTab(app);
   document.title = `${tab === "check" ? "Check my data" : "Data"} · Marketing AI`;
 }
 
@@ -285,6 +335,17 @@ async function remove(id) {
 
 function bind(app) {
   const add = app.querySelector("#dt-add");
+  const opener = app.querySelector("[data-dt-open-chooser]");
+  if (opener) {
+    opener.addEventListener("click", () => {
+      state.chooserOpen = true;
+      const chooser = app.querySelector("#dt-chooser");
+      if (chooser) chooser.hidden = false;
+      if (add) add.setAttribute("aria-expanded", "true");
+      const first = chooser && chooser.querySelector("a, button");
+      if (first) first.focus();
+    });
+  }
   if (add) {
     add.addEventListener("click", () => {
       state.chooserOpen = !state.chooserOpen;

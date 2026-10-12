@@ -17,9 +17,9 @@ import { auditBody, fileOf, programmeBody } from "../decide/audit.js";
 import { injectStyles as injectSimpleStyles } from "../simple/pages.js";
 import { checkHtml } from "./check.js";
 import { loadModelReports, modelReportsHtml } from "./models.js";
-import { injectStyles, reportsPageHtml, tabOf } from "./page.js";
+import { injectStyles, reportsHeaderHtml, reportsPageHtml, revealSelectedTab, tabOf } from "./page.js";
 import { programmeHtml } from "./programme.js";
-import { valueProofHtml } from "./value_proof.js";
+import { newestPackAction, valueProofHtml } from "./value_proof.js";
 
 export const ROUTES = ["reports"];
 
@@ -41,18 +41,20 @@ async function settle(promise) {
   }
 }
 
-/** The tab's body, once its answers are in. */
+/** The tab's body, once its answers are in, and the page header's one primary action when the tab has one (Value proof's). */
 async function bodyOf(tab) {
-  if (tab === "check") return checkHtml({ can: canAccess, state: check });
+  if (tab === "check") return { html: checkHtml({ can: canAccess, state: check }) };
   if (tab === "programme") {
     // A summary that cannot be read is an error with a retry, never "nothing is proven yet" (that is a 200 with no totals).
     // Plan M M172: with the campaigns' short names (`GET /campaigns`), as Results names them; null when unreadable.
     const [answer, campaigns] = await Promise.all([settle(readSummary()), getCampaigns()]);
-    return answer.error ? errorBox(answer.error, { retry: true }) : programmeHtml(answer.value, campaigns);
+    return { html: answer.error ? errorBox(answer.error, { retry: true }) : programmeHtml(answer.value, campaigns) };
   }
-  if (tab === "models") return modelReportsHtml(await loadModelReports());
+  if (tab === "models") return { html: modelReportsHtml(await loadModelReports()) };
   const answer = await settle(listProofs());
-  return answer.error ? errorBox(answer.error, { retry: true }) : valueProofHtml(answer.value);
+  return answer.error
+    ? { html: errorBox(answer.error, { retry: true }) }
+    : { html: valueProofHtml(answer.value), primary: newestPackAction(answer.value) };
 }
 
 async function render(app, parts) {
@@ -64,12 +66,20 @@ async function render(app, parts) {
   lastTab = tab;
   setActiveNav("reports"); // "reports" is the campaigns layout's item; the classic top bar maps it to Results (ui/chrome.js OLD_GOALS)
   document.title = "Reports · Marketing AI";
-  app.innerHTML = reportsPageHtml({ tab, bodyHtml: loading });
-  const html = await bodyOf(tab);
+  // Value proof's one primary action (the newest pack) is known only once the list is in: until then an empty slot of
+  // the button's height holds its place, so the tabs do not jump down when it arrives on a phone (M188 review).
+  app.innerHTML = reportsPageHtml({ tab, bodyHtml: loading, primary: tab === "value-proof" ? SLOT : null });
+  revealSelectedTab(app);
+  const { html, primary = null } = await bodyOf(tab);
   if (seq !== paintSeq || hashParts()[0] !== "reports") return;
   const body = app.querySelector("[data-reports-body]");
   if (body) body.innerHTML = html;
+  // The newest pack's button takes the slot; with no ready pack (or a list that failed) the slot goes.
+  const header = tab === "value-proof" && app.querySelector("[data-reports-header]");
+  if (header) header.outerHTML = reportsHeaderHtml({ primary });
 }
+
+const SLOT = '<span class="rp-slot" aria-hidden="true" data-reports-slot></span>';
 
 registerModule({ name: "reports", routes: ROUTES, render });
 

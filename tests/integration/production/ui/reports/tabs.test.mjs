@@ -25,7 +25,7 @@ test("the page has one H1, one sentence, four tabs and one primary button", asyn
   await open(w, "#/reports", proofsReady);
   assert.equal($$("h1").length, 1);
   assert.equal(text($("h1")), "Reports");
-  assert.equal($$(".head .desc").length, 1);
+  assert.equal($$(".page-header .desc").length, 1);
   assert.deepEqual($$("[data-reports-tab]").map((a) => text(a)), ["Value proof", "Programme summary", "Check a past campaign", "Model reports"]);
   assert.equal($$("main .btn.primary").length, 1, "one primary button on the page");
   assert.equal(text($("main .btn.primary")), "Open the newest Value Proof Pack");
