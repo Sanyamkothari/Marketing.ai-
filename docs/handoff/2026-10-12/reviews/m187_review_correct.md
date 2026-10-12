@@ -1,0 +1,6 @@
+M187 correctness review (d80bd07): approve with 4 small fixes, no blockers.
+1. ui/modules/campaigns/wizard.js: ui.chosenGoal (set ~line 669) never cleared on leaving the wizard; hashchange handler (~161-169) resets parts/justDownloaded but not chosenGoal → previous goal shows chosen on a fresh visit. Fix: ui.chosenGoal = null in that handler. Test: jsdom click goal → #/campaigns → back to #/campaigns/new → no .cw-goal.is-selected.
+2. wizard_views.js shareBar: Math.max(2, …) gives 2% for n=0 and NaN% for non-numeric. Fix: const v=Number(n); const w = most>0 && v>0 ? Math.max(2, Math.round((v/most)*100)) : 0;
+3. wizard_views.js problemBox: tone critical gets icon("alert",{label:"Warning"}). Fix: critical→icon("critical",{label:"Problem"}), warning→alert/"Warning", info→info/"Information".
+4. wizard_styles.js + summaryTiles: data-cw-summary="value" (1fr 1fr 2fr) emitted even with 2 tiles. Fix: "value" only when tiles.length===3 else "counts" (auto-fit); add two-tile case to wizard_look.test.mjs:174.
+Optional: 5. Review numbers appear twice (contacted line under tile; comparison card repeats) — leave unless trivial without changing words/tests. 6. (M185 cross-branch) .vrange with no .vr-dot looks washed out: draw .vrange:not(:has(.vr-dot)) .vr-bar in --brand-blue (can be done in M187's own styles if theme.css untouched).

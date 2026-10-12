@@ -1,0 +1,183 @@
+{
+  "summary": "Build one Plan J milestone in a worktree: builder, two adversarial Opus reviewers, repair (milestone given in args)",
+  "agentCount": 3,
+  "logs": [],
+  "result": {
+    "final": {
+      "worktree_path": "/home/user/Marketing.ai-/.claude/worktrees/wf_86b03f4d-4bd-1",
+      "branch": "worktree-wf_86b03f4d-4bd-1",
+      "commit": "4ebab719c7be97609534861552cbeab902a960cd",
+      "tests_run": "From the worktree root: /home/user/Marketing.ai-/.venv/bin/python -m pytest tests/unit/doctor/test_outcome_tools.py tests/unit/doctor/test_policy.py tests/unit/doctor/test_policy_runtime.py tests/unit/doctor/test_registry.py tests/unit/doctor/test_registry_canary.py tests/unit/doctor/test_outcomes.py -p no:cacheprovider > .m239_tests.log 2>&1. Exit code 0. Final line of the log: \"170 passed, 54 warnings in 168.45s (0:02:48)\". The log is complete and covers all 5 changed test files plus M157's test_outcomes.py. It is left untracked at /home/user/Marketing.ai-/.claude/worktrees/wf_86b03f4d-4bd-1/.m239_tests.log. The earlier log had no summary line because the extra -q I passed, added to the addopts -q, hid it. After the last docstring-only edit to tools_outcomes.py I re-ran test_outcome_tools.py, test_registry.py and test_registry_canary.py: \"92 passed in 75.03s\". The 3 new tests failed on the unchanged code (d3ad5c3), each for the reason the review gave: the exclusion file's date was picked silently and a definition was proposed; the unreadable date was missing from the sentence and appeared only in notes (\"1 rows ... count for nothing\"); OutcomeDefinition had no exclude_date_columns. All three pass now. Lint on every changed .py file: ruff check passes, black --check passes, mypy --strict reports no issues.",
+      "lint_clean": true,
+      "files_changed": [
+        "configs/agentic/policy.yaml",
+        "docs/AGENTS.md",
+        "docs/DATA_DOCTOR.md",
+        "engine/doctor/outcome_definition.py",
+        "engine/doctor/policy.py",
+        "engine/doctor/tools.py",
+        "engine/doctor/tools_outcomes.py",
+        "tests/unit/doctor/test_outcome_tools.py",
+        "tests/unit/doctor/test_policy.py",
+        "tests/unit/doctor/test_policy_runtime.py",
+        "tests/unit/doctor/test_registry.py",
+        "tests/unit/doctor/test_registry_canary.py"
+      ],
+      "new_codes": [
+        {
+          "code": "OUTCOME_UNDECIDED",
+          "help_title": "Something that decides the outcome is not answered yet",
+          "help_text": "meaning: The outcome is what the model learns, so Data Doctor never picks it on its own. Something that changes its meaning is still open: what a value means, which file or date to read (including the date of a file that leaves customers out), or the window. No definition is offered until it is answered. fix: Answer the question shown. Data Doctor then shows the outcome in one sentence for you to approve."
+        },
+        {
+          "code": "OUTCOME_TOO_MANY_VALUES",
+          "help_title": "This column has too many different values to be a yes/no outcome",
+          "help_text": "meaning: A yes/no outcome is mapped value by value, and this column has more than 20 different values. A number is an amount to predict, or a threshold such as 'paid more than 7 days late'. Text with many values is not an outcome. fix: Choose the column that says yes or no, define the outcome from an event file, or switch the use case to predicting an amount."
+        },
+        {
+          "code": "OUTCOME_CANNOT_MEASURE",
+          "help_title": "The outcome cannot be measured from these files",
+          "help_text": "meaning: The outcome asked for cannot be built from the case's files. Possible reasons: no customer list with an ID column; no event file with a date whose customer IDs meet the list, as written or once written one way; a date or column name the file does not have; a threshold column that is not numbers; a date given for a file that leaves nobody out. fix: Check the file, date and column named in the message, add the missing file, or choose another."
+        },
+        {
+          "code": "OUTCOME_NOT_APPROVED",
+          "help_title": "This approval is not for this outcome",
+          "help_text": "meaning: An approval names one outcome definition and the person who approved it. This one names another definition or another person, so nothing was recorded. fix: Read the outcome sentence shown now and approve it yourself."
+        },
+        {
+          "code": "OUTCOME_VALUE_NOT_MAPPED",
+          "help_title": "A value the approved outcome never mentioned",
+          "help_text": "meaning: The approved outcome says what each of its values means. This file has a value the approval never mentioned, so the build stopped instead of guessing whether it means yes or no. fix: Say what the new value means. Data Doctor shows the outcome again with it, for you to approve."
+        }
+      ],
+      "dec_text": "DEC-1809 (Plan O M239, outcome tools: define_outcome, map_outcome_values, check_target_type)\n(a) The outcome is defined, not edited. An OutcomeDefinition records the meaning only: kind (column_values, event_presence, event_absence, value_threshold), name, column, value map, the event file with its ID, date and role, days, grace_days, operator and threshold, exclude, exclude_upload_ids and exclude_date_columns, censoring (leave_out), and the key rules. Its definition_hash, over the canonical JSON, is what an approval names and what a replay checks. Counts and the sentence belong to the proposal.\n(b) Never picked silently. Whatever decides the meaning and is not given is a blocking question, and no definition is proposed (OUTCOME_UNDECIDED). This covers a value the rules cannot place, a second event file, a second date column of the event file, a second date column of a file that leaves customers out (review fix), and the window. A value map needs a yes and a no. At most 20 values are mapped (OUTCOME_TOO_MANY_VALUES). The ID column and personal-data columns are never an outcome.\n(c) Every definition is APPROVE-class with its exact sentence. The rule sets data.define_outcome and data.map_outcome_values in policy.yaml are data.never_ticked plus data.approve_class, approve: always, Analyst. They are read by policy._read_outcome in OUTPUT_READERS. The check goes through M233's approve_class: APPROVAL_SENTENCE_CHANGED, TOOL_ROLE_REQUIRED, POLICY_ROLE_SEPARATION, and default deny with POLICY_NO_RULES. A refused approval writes nothing to the case or the timeline.\n(d) Event outcomes are measured by the onboarding builder. label_spec_of turns a definition into a LabelSpec. build_labels runs on month-end snapshots, as in M157's _measure, with the exclusion tables registered. Customer IDs meet through M157/M237's key rules, never on a near match. Month-ends whose window is not over are left out and counted (censoring leave_out).\n(e) No unknown silently becomes 1 or 0 (review fix). The approved sentence names the date column every file is read on. It also counts the rows that count for nothing: event rows whose date cannot be read ('count as no event'), threshold values that are not numbers ('never meet the threshold'), and exclusion rows whose date cannot be read ('leave nobody out'). A change in any of these counts changes the sentence, so an earlier approval fails with APPROVAL_SENTENCE_CHANGED. The counts are also in notes. A threshold column with less than 95% numbers is refused (OUTCOME_CANNOT_MEASURE).\n(f) The builder runs only the approved definition. apply_outcome_values is an executor bound to the approved definition_hash. A value the map never mentioned stops the build and is asked, never guessed (OUTCOME_VALUE_NOT_MAPPED). The recipe still refuses any step on the outcome, and map_outcome_values writes no step.\n(g) check_target_type (READ). A regression use case gets the readiness probe X_REGRESSION_TARGET_NUMERIC itself. A yes/no use case gets TARGET_NOT_BINARY (next_tool map_outcome_values, or switch_to regression for many numbers) or TARGET_CONSTANT.\n(h) Callers and switch. The tools serve the rules and the screen only (callers rules and person; the AI cannot call them), need an Analyst, and are session-only. They are registered in register_all, which is used only in the registry built when data_doctor.unified is on, so behaviour with the default config is unchanged.",
+      "readme_note": "M239 | Outcome tools | done: define_outcome (event presence, absence or a value threshold, with grace, files that leave customers out, each read on a named date, and censoring), map_outcome_values (a multi-valued column mapped to yes, no or leave out) and check_target_type. Each outcome is an APPROVE-class definition approved with its exact sentence; unread dates and non-number values are counted in that sentence. Behind data_doctor.unified (DEC-1809).",
+      "cross_branch": [
+        "Integrator (engine/decide/codes.py PLAN_O_CODES and configs/pilot/help.yaml): add M239's OUTCOME_CODES: OUTCOME_UNDECIDED, OUTCOME_TOO_MANY_VALUES, OUTCOME_CANNOT_MEASURE, OUTCOME_NOT_APPROVED, OUTCOME_VALUE_NOT_MAPPED, with the help text in new_codes. APPROVAL_SENTENCE_CHANGED, X_REGRESSION_TARGET_NUMERIC, TARGET_NOT_BINARY and TARGET_CONSTANT already have help entries.",
+        "Owner of the doctor eval world (tests/eval doctor_eval world.py CALLS; not in this tree): add CALLS entries for define_outcome, map_outcome_values and check_target_type. Callers are rules and person only, Analyst, session-only. define_outcome args: kind, event_upload_id, date_column, days, grace_days, exclude_upload_ids, exclude_date_columns (new in the review fixes: a map from upload id to date column), column, operator, threshold.",
+        "Plan O screen (M247 and other Data Doctor screen owners): a define_outcome proposal may now return the blocking question 'outcome-exclude-date-column' (options date-1..date-N labelled with the column names). Answer it by sending exclude_date_columns {upload_id: column}. OutcomeDefinition gains exclude_date_columns, parallel to exclude_upload_ids, and it is part of definition_hash. Show the sentence verbatim: it now also names each exclusion file's date and counts unread dates and non-number threshold values.",
+        "Builder/mapping owners (POST /clients/{id}/mappings): when building an approved event outcome with exclusions, map each exclusion file's exclude_date_columns[i] to event_time, not its first date column."
+      ],
+      "test_files": [
+        "tests/unit/doctor/test_outcome_tools.py",
+        "tests/unit/doctor/test_policy.py",
+        "tests/unit/doctor/test_policy_runtime.py",
+        "tests/unit/doctor/test_registry.py",
+        "tests/unit/doctor/test_registry_canary.py"
+      ],
+      "notes": "I fixed all 3 major issues from the review. The fixes are in commit 4ebab71, on top of d3ad5c3.\n(1) Exclusion file's date column. OutcomeDefinition has a new field, exclude_date_columns: tuple[str, ...], parallel to exclude_upload_ids. _shape checks the two have the same length and that a column_values outcome has neither, so the field is part of definition_hash. propose_event_outcome and the define_outcome tool take exclude_date_columns (a map from upload id to column). When an exclusion file has several date columns and none is given, the proposal returns the blocking question 'outcome-exclude-date-column' and no definition. A column that is not a date column, or a date given for a file that is not in exclude_upload_ids, is refused with OUTCOME_CANNOT_MEASURE. The sentence now reads \"A customer with a plan change in plan_changes.csv in that window, read on 'change_date', is left out.\" Unreadable exclusion dates are counted in notes and in the sentence (\"... cannot be read as a date and leave nobody out\"). Rows of exclusion files cut by the row cap are noted too.\n(2) Unread rows in the sentence. event_sentence now takes unreadable and not_numbers and puts both in the approved sentence, worded for one row or many. A changed count gives a new sentence, so check_outcome_approval fails with APPROVAL_SENTENCE_CHANGED (tested with event_absence and one, then two, unreadable dates). The notes still carry the counts. I chose to state the counts in the sentence rather than block event_absence: the person sees and approves the exact effect, and a change in the count forces a new approval.\n(3) Test log. It was regenerated to completion and its last line is \"170 passed\". The old log lacked the summary because the -q I added doubled the addopts -q.\nIn test_a_threshold_with_grace_and_a_file_that_leaves_customers_out_is_counted_by_the_builder, a test this milestone added, I updated the exclusion-sentence assertion to the new wording, which also names the date. I also added an assertion on exclude_date_columns. The test is stricter, not looser.\nNew tests: test_an_exclusion_files_date_is_asked_never_picked_and_is_part_of_the_definition, test_an_event_absence_with_an_unreadable_date_says_so_in_the_sentence_approved, and test_threshold_values_that_are_not_numbers_and_unread_exclusion_dates_are_in_the_sentence. All three failed on the unchanged code.\nNo forbidden docs were edited. Nothing was pushed. .m239_tests.log is left untracked as evidence. I rejected no review issue."
+    },
+    "reviews": [
+      {
+        "lens": "Correctness and safety (approval of the exact sentence, no silent 0/1, time rules, rule sets / OUTPUT_READERS / eval entries, switch-off identity, codes, forbidden docs, lint)",
+        "issues": [
+          {
+            "severity": "major",
+            "where": "engine/doctor/outcome_definition.py propose_event_outcome, exclusion loop: `excluded_table, _bad, _ = _table(pair, match.diagnosis.date_columns[0])`",
+            "problem": "When an exclusion file (a port-out or move file) has more than one date column, the code uses the first one without asking. That date decides which customers are left out, so it changes the outcome. It is not recorded in OutcomeDefinition: the definition holds `date_column` only for the main event file and has no date column for the exclusion files. So it is not covered by `definition_hash` and not named in the approved sentence. If a later file lists its date columns in a different order, the replay reads a different date under the same approved hash. Rows of the exclusion file whose date cannot be read are also dropped silently (`_bad` is discarded and never noted), so those customers are labelled when they should have been left out. This breaks 'never picked silently' and 'never changed without approval of the exact sentence'.",
+            "fix": "Handle the exclusion file's date column the way the main file's is handled. When the exclusion file has more than one date column and none was given, return a blocking `_choose_question` and propose no definition. Add `exclude_date_columns: tuple[str, ...]` to OutcomeDefinition (parallel to `exclude_upload_ids`, checked in `_shape`) so it is part of the hash, and name it in `event_sentence` (\"... is left out, read on '<col>'\"). Count the unreadable rows and put them in notes and in the sentence. Add a test with an exclusion file that has two date columns."
+          },
+          {
+            "severity": "major",
+            "where": "engine/doctor/outcome_definition.py propose_event_outcome / _table / event_sentence (unreadable dates and non-number threshold values go to `notes` only)",
+            "problem": "Events whose date cannot be read are dropped, and threshold values that are not numbers become NaN. Both change labels without the person approving it. For `event_absence`, a customer whose only payment has an unreadable date is labelled 'yes' (churned). For `value_threshold`, an event with a non-number amount never meets the threshold, so the customer is labelled 'no'. Up to 5% non-number values pass the `_READABLE_SHARE` gate. The counts are reported in `notes`, which are not part of the sentence the person approves. A later file with more unreadable rows produces the same sentence shape, so `APPROVAL_SENTENCE_CHANGED` is never raised for it. Unknown values are silently becoming 1 or 0, which the lens forbids.",
+            "fix": "When `unreadable` or `not_numbers` is nonzero, add it to the sentence, e.g. \"; N rows of <file> have a '<date>' that cannot be read and count for nothing\" and \"; N '<column>' values are not numbers and never meet the threshold\". The person then approves it, and a change in the count changes the sentence. Alternatively, return a blocking question when the count is above zero for `event_absence`. Add a test with an `event_absence` case and one unreadable date."
+          },
+          {
+            "severity": "major",
+            "where": "/home/user/Marketing.ai-/.claude/worktrees/wf_86b03f4d-4bd-1/.m239_tests.log",
+            "problem": "The saved test log is incomplete. It stops in the middle of tests/unit/doctor/test_registry_canary.py (`....`) with no pass/fail summary line, so `tests_run` cannot quote a real summary. The log also covers only 3 of the 5 test files the commit changed: test_policy.py and test_policy_runtime.py are missing. My own run of `test_outcome_tools.py` and `test_policy.py` passed (46 passed in 58.46s), so the code passed the tests I ran. The evidence the builder saved does not show this.",
+            "fix": "Run `/home/user/Marketing.ai-/.venv/bin/python -m pytest tests/unit/doctor/test_outcome_tools.py tests/unit/doctor/test_policy.py tests/unit/doctor/test_policy_runtime.py tests/unit/doctor/test_registry.py tests/unit/doctor/test_registry_canary.py > .m239_tests.log 2>&1` to completion, without a timeout or pipe that cuts the output. Quote its final 'N passed' line in tests_run."
+          }
+        ],
+        "verdict": "Needs fixes before integration: 3 majors, no blockers. Checks that passed: both proposing kinds have default-deny rule sets in policy.yaml `data:` (never_ticked + approve_class, approve: always) and `_read_outcome` OUTPUT_READERS entries. Proposals are pending, never ticked, `check`. Values the rules cannot place are blocking questions. `apply_outcome_values` refuses a value the map does not place and refuses a hash mismatch. The exact-sentence check goes through M233's `approve_class` (`APPROVAL_SENTENCE_CHANGED`) and writes nothing when refused. The AI cannot call the tools (callers are rules and person only). Event outcomes are measured through M157's key rules and `build_labels` with censored windows dropped. The tools are registered only in the registry built when `unified_on`, so behaviour with the switch off is unaffected. No forbidden docs were edited. ruff, black --check and mypy --strict are clean on the changed files. OUTCOME_CODES (help text) and the doctor_eval CALLS entries (world.py is not in this tree) have to come through the result's codes and cross_branch fields; I could not check those from the tree. The majors: (1) the exclusion file's date column is picked silently and is missing from the definition, its hash and the sentence; (2) unreadable dates and non-number threshold values change labels with no mention in the approved sentence, which matters most for event_absence; (3) .m239_tests.log is truncated, has no summary and leaves out two of the changed test files."
+      }
+    ]
+  },
+  "workflowProgress": [
+    {
+      "type": "workflow_phase",
+      "index": 1,
+      "title": "Build"
+    },
+    {
+      "type": "workflow_phase",
+      "index": 2,
+      "title": "Review"
+    },
+    {
+      "type": "workflow_phase",
+      "index": 3,
+      "title": "Repair"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 1,
+      "label": "build:M239",
+      "phaseIndex": 1,
+      "phaseTitle": "Build",
+      "agentId": "ad5a7f7e9c566de62",
+      "isolation": "worktree",
+      "model": "claude-opus-5-5",
+      "state": "done",
+      "startedAt": 1791810474300,
+      "queuedAt": 1791810473504,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "lastToolSummary": "/home/user/Marketing.ai-/.claude/worktrees/wf_86b03f4d-4bd-1",
+      "promptPreview": "You are a staff engineer building Marketing AI.\nFIRST, from your worktree root, run `git merge --no-ff worktree-wf_72216512-af1-1`. That is M236 (wrappers and explain, DEC-1806, tip bcbd3cd), which already contains Plan O wave 1 integrated and M233's default-deny policy. Then run `git fetch origin fix-ready-without-roles && git merge --no-ff origin/fix-ready-without-roles` (DEC-1821: a session is …",
+      "promptFramed": true,
+      "lastProgressAt": 1791812016974,
+      "tokens": 447518,
+      "toolCalls": 148,
+      "durationMs": 1542672,
+      "resultPreview": "{\"worktree_path\":\"/home/user/Marketing.ai-/.claude/worktrees/wf_86b03f4d-4bd-1\",\"branch\":\"worktree-wf_86b03f4d-4bd-1\",\"commit\":\"d3ad5c3\",\"tests_run\":\"Merged worktree-wf_72216512-af1-1 (M236, bcbd3cd) and origin/fix-ready-without-roles (DEC-1821) first; both merged cleanly with no conflicts. Each changed test file was run and passed: tests/unit/doctor/test_outcome_tools.py had 17 non-slow tests pas…"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 2,
+      "label": "review:M239:review",
+      "phaseIndex": 2,
+      "phaseTitle": "Review",
+      "agentId": "a922e7a6ffed83218",
+      "model": "claude-opus-5-5",
+      "state": "done",
+      "startedAt": 1791812019801,
+      "queuedAt": 1791812019751,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "lastToolSummary": "Correctness and safety (approval of the exact sentence, no …",
+      "promptPreview": "You are an adversarial reviewer. Lens: CORRECTNESS AND SAFETY in one pass: the outcome is never picked or changed without the person's approval of the exact sentence; label mapping never silently turns unknown values into 0 or 1; leakage and time rules are respected (an outcome from events in the window only); every proposing tool has a rule set, an OUTPUT_READERS entry and an eval CALLS entry (or…",
+      "promptFramed": true,
+      "lastProgressAt": 1791812338803,
+      "tokens": 121122,
+      "toolCalls": 25,
+      "durationMs": 319001,
+      "resultPreview": "{\"lens\":\"Correctness and safety (approval of the exact sentence, no silent 0/1, time rules, rule sets / OUTPUT_READERS / eval entries, switch-off identity, codes, forbidden docs, lint)\",\"issues\":[{\"severity\":\"major\",\"where\":\"engine/doctor/outcome_definition.py propose_event_outcome, exclusion loop: `excluded_table, _bad, _ = _table(pair, match.diagnosis.date_columns[0])`\",\"problem\":\"When an exclus…"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 3,
+      "label": "repair:M239",
+      "phaseIndex": 3,
+      "phaseTitle": "Repair",
+      "agentId": "a186adabe33a09aab",
+      "model": "claude-opus-5-5",
+      "state": "done",
+      "startedAt": 1791812340595,
+      "queuedAt": 1791812340591,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "lastToolSummary": "/home/user/Marketing.ai-/.claude/worktrees/wf_86b03f4d-4bd-1",
+      "promptPreview": "You built M239. Work ONLY in your existing worktree /home/user/Marketing.ai-/.claude/worktrees/wf_86b03f4d-4bd-1 (cd there; branch worktree-wf_86b03f4d-4bd-1). \nRULES: You work in an isolated git worktree of /home/user/Marketing.ai-. Run commands from your worktree root: /home/user/Marketing.ai-/.venv/bin/python -m pytest <paths> (pytest pythonpath=[\".\"] imports your worktree's code), /home/user/M…",
+      "promptFramed": true,
+      "lastProgressAt": 1791812957270,
+      "tokens": 125784,
+      "toolCalls": 31,
+      "durationMs": 616674,
+      "resultPreview": "{\"worktree_path\":\"/home/user/Marketing.ai-/.claude/worktrees/wf_86b03f4d-4bd-1\",\"branch\":\"worktree-wf_86b03f4d-4bd-1\",\"commit\":\"4ebab719c7be97609534861552cbeab902a960cd\",\"tests_run\":\"From the worktree root: /home/user/Marketing.ai-/.venv/bin/python -m pytest tests/unit/doctor/test_outcome_tools.py tests/unit/doctor/test_policy.py tests/unit/doctor/test_policy_runtime.py tests/unit/doctor/test_regi…"
+    }
+  ],
+  "totalTokens": 694424,
+  "totalToolCalls": 204
+}

@@ -1,0 +1,169 @@
+{
+  "summary": "Build one Plan J milestone in a worktree: builder, two adversarial Opus reviewers, repair (milestone given in args)",
+  "agentCount": 3,
+  "logs": [],
+  "result": {
+    "final": {
+      "worktree_path": "/home/user/Marketing.ai-/.claude/worktrees/wf_fc7a3afb-4fc-1",
+      "branch": "worktree-wf_fc7a3afb-4fc-1",
+      "commit": "3f26188",
+      "tests_run": "Targeted runs only, as the protocol asks:\n(1) tests/unit/doctor (whole dir) + tests/integration/test_api_case_screen.py, test_api_case_visit.py, test_api_cases.py, test_api_data_protocol.py, test_m237_several_files.py, test_data_doctor_ui.py (REQUIRE_JSDOM=1), test_doctor_ui.py, run with -n 2: all passed except 1 test, tests/unit/doctor/test_eval_harness.py::test_every_registered_tool_passes_pass5_and_the_injection_canary (preflight, check_uplift_data). That test fails the same way on the unchanged commit 5613af3 with every M247 change stashed. It comes from the M248 eval harness merged in from integrate-plan-o-2, not from M247.\n(2) After the last view tweak, I re-ran test_data_doctor_ui.py (REQUIRE_JSDOM=1: 36 node cases, 8 of them new), test_screen.py, test_goal_names.py and test_api_case_screen.py: 26 pytest items, all passed.\n(3) tests/integration/test_data_doctor_journey.py (Playwright, real uvicorn, real training): passed. Screenshots are 01..06 under scratchpad/look, including the new 05_wizard_approved, which shows the left-out list and \"Continue with this data\".\nNew tests fail on unchanged code: with only the UI reverted, the jsdom cases 12, 13 and 16-23 fail. With the engine reverted, test_api_case_screen fails (KeyError 'can_agree'), and test_screen.py / test_goal_names.py fail at import (engine.doctor.goal_names is missing).",
+      "lint_clean": true,
+      "files_changed": [
+        "engine/doctor/goal_names.py",
+        "engine/doctor/visit.py",
+        "engine/doctor/screen.py",
+        "api/routes/case_screen.py",
+        "ui/modules/datadoctor/view.js",
+        "ui/modules/datadoctor/screen.js",
+        "ui/modules/datadoctor/styles.js",
+        "docs/DATA_DOCTOR.md",
+        "tests/unit/doctor/test_goal_names.py",
+        "tests/unit/doctor/test_screen.py",
+        "tests/unit/doctor/screen_support.py",
+        "tests/integration/test_api_case_screen.py",
+        "tests/integration/test_data_doctor_ui.py",
+        "tests/integration/test_data_doctor_journey.py",
+        "tests/integration/production/ui/datadoctor/screen_cases.mjs",
+        "tests/integration/production/ui/datadoctor/common.mjs"
+      ],
+      "new_codes": [],
+      "dec_text": "DEC-1817 (Plan O M247), review sub-decisions. These follow the letters already returned for DEC-1817; renumber them if needed.\n(r1) The sentence a person approves word for word names the goal as the screens name it. Example: \"Prepare 1 file with 3 changes for the goal “Find customers likely to buy”. Nothing else changes.\" The id is never used. engine/doctor/goal_names.py goal_display_name picks the name in this order: the ui/labels.js GOAL_NAMES display name, else the brief's configured goal_name, else the id. The server keeps a copy of GOAL_NAMES, and tests/unit/doctor/test_goal_names.py parses labels.js and fails if the two differ. visit.approve and the screen build the sentence the same way (approval_sentence(case, goal_name=approval_goal_name(storage, case))), so exact-text consent still holds. An approval read before this change is refused once with APPROVAL_SENTENCE_CHANGED, which carries the new sentence. This text change is not behind the switch. visit.approve runs with the switch off too, and no existing test asserted the old wording.\n(r2) An APPROVE-class yes is a deliberate act. \"I agree to this sentence\" stays disabled until the person ticks \"I have read this sentence\". The button is aria-describedby the blockquote that holds the sentence. The browser also refuses to send a confirmation whose box is not ticked.\n(r3) GET /cases/{id}/screen is read for the caller (PrincipalDep). Each ScreenApproveClass carries can_agree and cannot_agree ('role' | 'separation'), computed by the same rule visit.confirm applies: protocol.confirmation_refusal with visit.item_proposers and the goal's approval_required. When can_agree is false, the screen shows \"Ask someone with the X role to agree to this.\" or \"You suggested or answered this, so ask someone else with the X role to agree to this.\" instead of a button that can only be refused. With no principal (build_screen called directly), can_agree defaults to true. The server's check at confirm time is unchanged.\n(r4) A change that needs its own yes and is neither agreed nor ticked is left out. It is listed in the server's own sentences under \"Left out until someone agrees:\", beside Approve and beside a ready verdict. In the wizard and a goal's setup, Approve never starts the run while one is left out. Continuing without it is a separate choice, \"Continue with this data\", with a line saying what continuing leaves out. The Playwright journey keeps CLICKS_PINNED = 3 from the file to Approve, and counts the continue as CHOICES_AFTER_APPROVE = 1.\n(r5) ready_with_warnings always carries ScreenVerdict.note: \"Data Doctor found a few small things to know about this data. None of them stops this goal.\" The note is shown when none of the warnings' own sentences is plain enough to show. The technical ones stay under Technical details.\n(r6) An answered question can be changed in place. \"Change answer\" (aria-expanded, with aria-controls on the answers list once it is shown) offers the answers again, the given answer marked aria-pressed. The server replaces the answer as before. An answer given in this case that the client's memory now holds is listed in view.remembered (question_id, answer_id, answered_at, revoked), taken from StandingAnswerStore by answer_id_for and the same option. The question then shows \"Remembered for next time, <date>.\" with the same Revoke as the standing list. Revoking stops the answer standing next time, and this case keeps it.",
+      "readme_note": "M247 (DEC-1817), after review: the approved sentence names the goal by its display name. \"I agree to this sentence\" needs \"I have read this sentence\" first, and a reader the server would refuse is told whom to ask. Changes left out until someone agrees are listed, and Approve never starts the run while one is left out (\"Continue with this data\" is a separate choice). \"Ready, with notes\" always shows a plain note. Answered questions have \"Change answer\", and an answer remembered for next time shows its date and Revoke where it was given. All of this is behind data_doctor.unified, except the approval sentence's wording (r1).",
+      "cross_branch": [
+        "Plan O / anyone asserting the case approval sentence: visit.approval_sentence now names the active goal as “<display name>” (for example “Find customers likely to buy”), not by its id. Callers that hold storage should pass goal_name=visit.approval_goal_name(storage, case). Goals listed in GOAL_NAMES give the same sentence without it.",
+        "Plan M / labels owners: ui/labels.js GOAL_NAMES now has a server copy, engine/doctor/goal_names.py GOAL_DISPLAY_NAMES. Change both together; tests/unit/doctor/test_goal_names.py fails if they differ.",
+        "Integrator: tests/unit/doctor/test_eval_harness.py::test_every_registered_tool_passes_pass5_and_the_injection_canary already fails at 5613af3 without any M247 change (preflight, check_uplift_data: 'rules are not deterministic; a planted instruction changed its decisions'). It belongs to M248's eval harness or the tools it measures, not M247."
+      ],
+      "test_files": [
+        "tests/unit/doctor/test_goal_names.py",
+        "tests/unit/doctor/test_screen.py",
+        "tests/unit/doctor/screen_support.py",
+        "tests/integration/test_api_case_screen.py",
+        "tests/integration/test_data_doctor_ui.py",
+        "tests/integration/test_data_doctor_journey.py",
+        "tests/integration/production/ui/datadoctor/screen_cases.mjs",
+        "tests/integration/production/ui/datadoctor/common.mjs"
+      ],
+      "notes": "I fixed all four majors from the review. I rejected none of them; I only changed how two of them are implemented, as follows.\n1) Goal name in the approval sentence. The server had no copy of the UI's plain goal names, so I added engine/doctor/goal_names.py, kept in step with labels.js by a test. The fallback is the brief's configured name, so visit.approve and the screen build the same sentence. Test helpers that call approval_sentence(case) without a name still match, because goals listed in GOAL_NAMES get the same sentence either way.\n2) Change answer and remembered answers. view.remembered is new. Revoke from the question card uses the existing standing-answers revoke route.\n3) Deliberate yes. There is a read checkbox plus aria-describedby, and the screen route now takes the principal for can_agree and cannot_agree.\n4) Left out and auto-proceed. Left-out items are listed. Approve no longer auto-starts the run while an APPROVE-class item is left out. ready_with_warnings gets a server-written plain note.\nExisting tests I changed, without loosening any:\n- screen_cases.mjs: two existing cases now tick \"I have read this sentence\" before clicking \"I agree\", because one click no longer records a yes.\n- The journey adds one deliberate \"Continue with this data\" step after Approve. CLICKS_PINNED = 3 (file to Approve) is unchanged; the continue step is pinned separately as CHOICES_AFTER_APPROVE = 1. The journey also asserts that the sentence names the goal, that the left-out list is shown, and that Approve alone started nothing.\n- test_data_doctor_ui.py's verdict map now includes the two new scenarios, approve_class_own and ready_with_warnings.\nTo run jsdom I temporarily symlinked node_modules from the main checkout, and removed the link before committing. .m247_tests.log is still untracked from the earlier run and was not committed. The eval-harness failure is pre-existing; details are in cross_branch."
+    },
+    "reviews": [
+      {
+        "lens": "UX, correctness and safety (product designer + careful engineer) on M247 at 5613af3: one Data Doctor screen in three places",
+        "issues": [
+          {
+            "severity": "major",
+            "where": "engine/doctor/visit.py:404 (approval_sentence), shown by ui/modules/datadoctor/view.js approveHtml; seen in look_after_m247/04_wizard_case_desktop.png",
+            "problem": "The sentence the person approves word for word reads \"Prepare 1 file with 3 changes for the goal targeted-advertisement. Nothing else changes.\" It is the most important sentence on the screen, and it shows the goal's internal ID (a slug) instead of its plain name (\"Find customers likely to buy\"). The glossary and visible-text checks pass only because the jsdom fixtures and test_data_doctor_ui never assert on approval_sentence once a goal is set.",
+            "fix": "Build the sentence from the goal's display name (labels' goalName, or the use case's configured name) instead of goal.goal_id. The server both shows and checks the sentence, so exact-text consent still holds; an old pending approval just gets APPROVAL_SENTENCE_CHANGED once. Add a visible-text assertion on view.approval_sentence for a goal case to screen_cases.mjs and to the Playwright journey."
+          },
+          {
+            "severity": "major",
+            "where": "ui/modules/datadoctor/view.js questionHtml (`const changeable = open || q.assumed`) together with engine/doctor/visit.py answer() / _remember_answer",
+            "problem": "Once a question is answered, its options disappear and only \"Your answer: customer_id, 12 Oct 2026.\" is left. The server supports changing an answer (answer() replaces the earlier item, `changed: replaced is not None`), but the screen gives no way to do it. So one stray click on the wrong ID column cannot be undone anywhere on this screen. The same answer is also saved as a standing answer for future cases (STANDING_REMEMBERED). On the case where it is saved, nothing says it was remembered and there is no Revoke; Revoke only appears on a later case that reuses it.",
+            "fix": "For answered (non-request) questions, add a secondary \"Change answer\" control that shows the options again (aria-expanded), and the jsdom case to test it. When the timeline or view shows the answer was remembered, add \"Remembered for next time\" with the date and the same Revoke button standingHtml uses. Have screen.py expose the remembered answer_id on the question so this needs no guessing."
+          },
+          {
+            "severity": "major",
+            "where": "ui/modules/datadoctor/view.js approvalHtml; engine/doctor/screen.py ScreenApproveClass",
+            "problem": "An APPROVE-class item (for example the consent column, which \"decides who may be contacted\") is approved with one primary button directly under the sentence. One stray click records the yes. The button has no aria-describedby pointing to the sentence, so a screen-reader user hears only \"I agree to this sentence\". The button is also shown to everyone, even though the card itself says \"someone with the Approver role, other than whoever suggested or answered it\". A marketer without that role, or the person who answered, gets a primary button that can only fail with TOOL_ROLE_REQUIRED or POLICY_ROLE_SEPARATION in an error box.",
+            "fix": "Put a deliberate step in front of the button: an unticked checkbox \"I have read this sentence\" that enables \"I agree to this sentence\", or a two-step confirm. Give the blockquote an id and set aria-describedby on the button. Add `can_agree` (role held and not a proposer when separation is on) to ScreenApproveClass. When it is false, replace the button with \"Ask someone with the Approver role to agree to this.\" Add jsdom cases for both."
+          },
+          {
+            "severity": "major",
+            "where": "ui/modules/datadoctor/view.js approveHtml (`waiting` counts only accepted items) + screen.js approve() auto-proceed; engine/doctor/screen.py _verdict; screenshots 04_wizard_case_desktop / 02_data_case_phone / 05_wizard_started_desktop",
+            "problem": "While the consent item (\"marketing_opt_in says who agreed to be contacted\") still waits for its own yes, Approve stays enabled with no warning beside it. In the wizard, the same click then starts learning straight away (approve() → proceed → host.approved), which the journey confirms: 3 clicks, the run starts, and the consent change is never agreed. Afterwards the verdict chip says \"Ready, with notes\", but no note is shown (plainOrTechnical drops the reasons), so nothing tells the person that the consent column was left out of what the campaign uses.",
+            "fix": "In approveHtml, list every unconfirmed APPROVE-class item that will be left out, in plain words (\"Left out until someone agrees: who agreed to be contacted\"). Do not auto-proceed after Approve while any approve_class item is unconfirmed; show \"Continue with this data\" so continuing is a separate choice. For ready_with_warnings, always show at least one plain note: have screen.py write plain sentences for warnings that would otherwise go only to technical details, and add a jsdom case."
+          }
+        ],
+        "verdict": "Not ready to merge as is. Four majors, no blockers. The basics hold: there is one component in all three places, the case continues from the Data page into the wizard with nothing asked twice, the click count is pinned, there are 40px targets and theme tokens, the no-AI chat goes to #/settings/ai, and with the switch off today's screens are unchanged (off.test.mjs; mountGuided returns early only when the switch is on). The phone layout reads well. The majors: the approved sentence shows the goal ID 'targeted-advertisement'; an answered question cannot be changed, and its remembered answer cannot be revoked where it was given; an APPROVE-class yes is one undescribed click, offered even to people the server will refuse; and Approve auto-starts the run while the consent item is left out, with a 'Ready, with notes' chip that shows no notes. I re-ran tests/integration/test_data_doctor_ui.py with REQUIRE_JSDOM=1 and it passed. The saved log /home/user/Marketing.ai-/.claude/worktrees/wf_fc7a3afb-4fc-1/.m247_tests.log shows 252 passed and 1 journey passed."
+      }
+    ]
+  },
+  "workflowProgress": [
+    {
+      "type": "workflow_phase",
+      "index": 1,
+      "title": "Build"
+    },
+    {
+      "type": "workflow_phase",
+      "index": 2,
+      "title": "Review"
+    },
+    {
+      "type": "workflow_phase",
+      "index": 3,
+      "title": "Repair"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 1,
+      "label": "build:M247",
+      "phaseIndex": 1,
+      "phaseTitle": "Build",
+      "agentId": "ac276a7e088ea1e2c",
+      "isolation": "worktree",
+      "model": "claude-opus-5-5",
+      "state": "done",
+      "startedAt": 1791811093420,
+      "queuedAt": 1791811092807,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "lastToolSummary": "/home/user/Marketing.ai-/.claude/worktrees/wf_fc7a3afb-4fc-1",
+      "promptPreview": "You are a staff engineer building Marketing AI.\nFIRST, from your worktree root, run:\n`git fetch origin main m246-protocol m236-wrappers && git merge --no-ff origin/m246-protocol && git merge --no-ff origin/m236-wrappers`\nResolve conflicts by keeping every side. Your branch starts from main, which has the new look (M185–M188 components: ui/theme.css, ui/components.js), Plan O wave 1 and M192 (Setti…",
+      "promptFramed": true,
+      "lastProgressAt": 1791815608797,
+      "tokens": 569871,
+      "toolCalls": 274,
+      "durationMs": 4515376,
+      "resultPreview": "{\"worktree_path\":\"/home/user/Marketing.ai-/.claude/worktrees/wf_fc7a3afb-4fc-1\",\"branch\":\"worktree-wf_fc7a3afb-4fc-1\",\"commit\":\"5613af3\",\"tests_run\":\"Ran from the worktree root with REQUIRE_JSDOM=1. The main checkout's tests/integration/production/ui/node_modules was linked in for the run and removed again before the commit. The log is in /home/user/Marketing.ai-/.claude/worktrees/wf_fc7a3afb-4fc-…"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 2,
+      "label": "review:M247:review",
+      "phaseIndex": 2,
+      "phaseTitle": "Review",
+      "agentId": "a1c1e58c709a68d53",
+      "model": "claude-opus-5-5",
+      "state": "done",
+      "startedAt": 1791815612892,
+      "queuedAt": 1791815612854,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "lastToolSummary": "UX, correctness and safety (product designer + careful engi…",
+      "promptPreview": "You are an adversarial reviewer. Lens: UX, CORRECTNESS AND SAFETY in one pass, as a demanding product designer and a careful engineer:\n- it is ONE component in three places, with the same case and nothing asked twice;\n- plain words (no jargon outside the technical switch);\n- every question, approval and doubt shape renders correctly and accessibly;\n- APPROVE-class items show the exact sentence and…",
+      "promptFramed": true,
+      "lastProgressAt": 1791815817244,
+      "tokens": 139171,
+      "toolCalls": 28,
+      "durationMs": 204351,
+      "resultPreview": "{\"lens\":\"UX, correctness and safety (product designer + careful engineer) on M247 at 5613af3: one Data Doctor screen in three places\",\"issues\":[{\"severity\":\"major\",\"where\":\"engine/doctor/visit.py:404 (approval_sentence), shown by ui/modules/datadoctor/view.js approveHtml; seen in look_after_m247/04_wizard_case_desktop.png\",\"problem\":\"The sentence the person approves word for word reads \\\"Prepare 1…"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 3,
+      "label": "repair:M247",
+      "phaseIndex": 3,
+      "phaseTitle": "Repair",
+      "agentId": "aa2ae23c3f8cce723",
+      "model": "claude-opus-5-5",
+      "state": "done",
+      "startedAt": 1791815818997,
+      "queuedAt": 1791815818992,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "lastToolSummary": "/home/user/Marketing.ai-/.claude/worktrees/wf_fc7a3afb-4fc-1",
+      "promptPreview": "You built M247. Work ONLY in your existing worktree /home/user/Marketing.ai-/.claude/worktrees/wf_fc7a3afb-4fc-1 (cd there; branch worktree-wf_fc7a3afb-4fc-1). \nRULES: You work in an isolated git worktree of /home/user/Marketing.ai-. Run commands from your worktree root: /home/user/Marketing.ai-/.venv/bin/python -m pytest <paths> (pytest pythonpath=[\".\"] imports your worktree's code), /home/user/M…",
+      "promptFramed": true,
+      "lastProgressAt": 1791817549858,
+      "tokens": 268074,
+      "toolCalls": 98,
+      "durationMs": 1730860,
+      "resultPreview": "{\"worktree_path\":\"/home/user/Marketing.ai-/.claude/worktrees/wf_fc7a3afb-4fc-1\",\"branch\":\"worktree-wf_fc7a3afb-4fc-1\",\"commit\":\"3f26188\",\"tests_run\":\"Targeted runs only, as the protocol asks:\\n(1) tests/unit/doctor (whole dir) + tests/integration/test_api_case_screen.py, test_api_case_visit.py, test_api_cases.py, test_api_data_protocol.py, test_m237_several_files.py, test_data_doctor_ui.py (REQUIR…"
+    }
+  ],
+  "totalTokens": 977116,
+  "totalToolCalls": 400
+}
