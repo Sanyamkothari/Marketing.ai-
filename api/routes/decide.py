@@ -26,7 +26,7 @@ from pydantic import Field
 from api.access_policy import RoutePolicy, register
 from api.deps import ConfigRootDep, RegistryDep, StorageDep
 from api.routes.campaigns import default_outcome_window, get_campaign_store
-from api.routes.runs import load_run, refuse_unapproved_list, requested_by
+from api.routes.runs import load_run, refuse_unapproved_sources, requested_by
 from api.routes.uplift import _finished_scoring_run
 from api.routes.uploads import http_error, use_case_config
 from api.schemas import ErrorResponse
@@ -420,9 +420,9 @@ def _arbitrated_file(request: Request, storage: Storage, registry: ModelRegistry
         summary = storage.read_model(f"decide/{ARBITRATION_SUMMARY_FILENAME}", ArbitrationSummary)
     except StorageError as exc:
         raise http_error(404, "ARBITRATION_NOT_FOUND", "No arbitration has been performed yet.") from exc
-    # Plan M final integration (DEC-1611 (p)): one list made with an unapproved model holds the whole arbitrated list.
-    for run_id in summary.run_ids:
-        refuse_unapproved_list(request, storage, registry, run_id)
+    # Plan M final integration (DEC-1611 (p)): one list made with an unapproved model holds the whole arbitrated list,
+    # once a campaign record names any of its runs (DEC-1620: not only the run with the unapproved model).
+    refuse_unapproved_sources(request, storage, registry, summary.run_ids)
     for run_id in summary.run_ids:
         try:
             return storage.read_bytes(run_key(run_id, name))

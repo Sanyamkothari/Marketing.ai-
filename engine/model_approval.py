@@ -5,7 +5,8 @@ One rule, two callers, one code. While a use case requires approval (`governance
 * **Held everywhere** - a version still `pending_approval`, and one `archived` without ever having been the
   champion (`promoted_at` unset: a rejected challenger). A demoted former champion keeps `promoted_at` and stays
   usable. The contact-list routes hold such a list (`api.routes.runs.unapproved_list_model`, Plan M final
-  integration, DEC-1611 (p)), and so does every step below.
+  integration, DEC-1611 (p)), and a cross-goal arbitrated list when any run it was built from used such a model
+  (`api.routes.runs.refuse_unapproved_sources`, DEC-1620), and so does every step below.
 * **Held only where nobody chooses the model** (`unattended=True`) - also a plain `candidate` (a version the
   champion rule kept back that no person approved or promoted). A person who names a candidate on `POST /runs`
   is asking for that model, and `engine.stages.score.resolve_model_version` honours it whatever its status
