@@ -11,7 +11,8 @@ runs them - and only this module does. Three rules hold for every run:
   (DEC-1004), so the same recipe gives the same result on next month's file and nothing learnt from
   the test rows can leak into training. `combine_rows` is the one step that reads several rows: its
   output for an entity depends only on that entity's own rows and the step's frozen parameters
-  (`engine.agent.reshape`), which keeps the same guarantee one level up.
+  (`engine.agent.reshape`), which keeps the same guarantee one level up; `keep_latest_per_id` (Plan O
+  M238) is entity-wise the same way (`engine.agent.latest`).
 * **Counted.** Every step reports how many values it changed and how many it could not convert, with
   masked examples. A step that fails on more than `max_failure_pct` of a column's non-empty values
   stops the run with `RECIPE_VALUES_UNCONVERTED`; a column the recipe needs and the file lacks stops
@@ -34,7 +35,16 @@ import pandas as pd
 
 from engine.agent.config import AgentLevel
 from engine.agent.contracts import RecipeReceipt, RecipeStep, RecipeStepKind, StepReceipt, recipe_hash
-from engine.agent.formats import ParseOutcome, map_booleans, normalise_texts, parse_dates, parse_numbers
+from engine.agent.formats import (
+    ParseOutcome,
+    map_booleans,
+    normalise_texts,
+    parse_dates,
+    parse_excel_serial_dates,
+    parse_numbers,
+)
+from engine.agent.key_steps import normalise_keys, rule_from_params
+from engine.agent.latest import KeepLatestError, KeepLatestSpec, keep_latest_per_id
 from engine.agent.placeholders import MAX_PLACEHOLDER_VALUES, set_missing
 from engine.agent.reshape import CombineError, CombineSpec, LeakCheck, combine_rows
 from engine.agent.unpivot import UnpivotError, UnpivotSpec, unpivot
@@ -56,6 +66,7 @@ from engine.onboarding.transforms import TransformError, derive
 from engine.utils.time import utc_now
 
 __all__ = [
+    "EXCEL_SERIAL_PARAMS",
     "STEP_PHASE",
     "RecipeError",
     "RecipeRun",
@@ -82,11 +93,16 @@ STEP_PHASE: Final[dict[RecipeStepKind, int]] = {
     RecipeStepKind.NORMALISE_TEXT: 1,
     RecipeStepKind.CONVERT_UNITS: 1,
     RecipeStepKind.SPLIT_COLUMN: 1,
+    # Plan O M237 (DEC-1807 (b)): a key is tidied with the other values, before rows are left out or combined.
+    RecipeStepKind.NORMALISE_KEY: 1,
     RecipeStepKind.SET_MISSING: 2,
     RecipeStepKind.VALID_RANGE: 2,
     RecipeStepKind.FILL_MISSING: 3,
     RecipeStepKind.REMOVE_ROWS: 3,
     RecipeStepKind.COMBINE_ROWS: 4,
+    # Plan O M238 (DEC-1808 (b)): keeping each ID's latest row is the other way to one row per ID, so it sits
+    # where combining does - after every value is fixed (its date is parsed), before columns are derived.
+    RecipeStepKind.KEEP_LATEST_PER_ID: 4,
     RecipeStepKind.DERIVE: 5,
     RecipeStepKind.DROP_COLUMN: 6,
     RecipeStepKind.RENAME_COLUMN: 6,
@@ -99,6 +115,7 @@ _LEVEL_OF: Final[dict[RecipeStepKind, AgentLevel]] = {
     RecipeStepKind.DERIVE: AgentLevel.DERIVE,
     RecipeStepKind.COMBINE_ROWS: AgentLevel.RESHAPE,
     RecipeStepKind.UNPIVOT: AgentLevel.RESHAPE,
+    RecipeStepKind.KEEP_LATEST_PER_ID: AgentLevel.RESHAPE,
     RecipeStepKind.SPLIT_COLUMN: AgentLevel.DERIVE,
     RecipeStepKind.REMOVE_ROWS: AgentLevel.DERIVE,
 }
@@ -211,6 +228,14 @@ def check_recipe(
                 f"This use case's helper may not use {step.kind.value} steps.",
                 order=step.order,
             )
+        if step.kind is RecipeStepKind.KEEP_LATEST_PER_ID:
+            if combined:
+                raise RecipeError(
+                    "RECIPE_STEP_INVALID", "The rows can be made one per ID only once.", order=step.order
+                )
+            combined = True
+            _check_keep_latest(step, available, primary_key=primary_key, target=target)
+            continue
         if step.kind is RecipeStepKind.COMBINE_ROWS:
             if combined:
                 raise RecipeError(
@@ -337,6 +362,40 @@ def _check_combine(
     return list(spec.output_columns(with_outcome=spec.outcome in available))
 
 
+def _check_keep_latest(
+    step: RecipeStep, available: list[str], *, primary_key: str | None, target: str | None
+) -> None:
+    """Refuse a keep-latest step keyed on another column than the ID, or one that chooses rows by the outcome
+    (Plan O M238, DEC-1808 (b)). The step keeps every column, so the columns after it are the columns before.
+    """
+    if primary_key is not None and step.column != primary_key:
+        raise RecipeError(
+            "RECIPE_STEP_INVALID",
+            f"The latest row is kept per ID column '{primary_key}', not per '{step.column}'.",
+            column=step.column,
+            order=step.order,
+        )
+    try:
+        spec = KeepLatestSpec.from_params(step.column, _params(step))
+    except KeepLatestError as exc:
+        raise RecipeError(exc.code, exc.message, column=exc.column, order=step.order) from exc
+    if target is not None and target in spec.reads:
+        raise RecipeError(
+            "RECIPE_STEP_INVALID",
+            f"The outcome column '{target}' is never used to choose which rows are kept.",
+            column=target,
+            order=step.order,
+        )
+    for column in spec.reads:
+        if column not in available:
+            raise RecipeError(
+                "RECIPE_COLUMN_MISSING",
+                f"The file has no column '{column}'.",
+                column=column,
+                order=step.order,
+            )
+
+
 def _check_unpivot(
     step: RecipeStep, available: list[str], *, primary_key: str | None, target: str | None
 ) -> list[str]:
@@ -372,6 +431,12 @@ def _check_unpivot(
     return list(spec.output_columns(with_outcome=spec.outcome in available))
 
 
+EXCEL_SERIAL_PARAMS: Final[frozenset[str]] = frozenset({"excel_serial", "date_1904"})
+"""`parse_date` parameters of Plan O M240 (DEC-1810 (d)). A recipe and the person's own edits accept them, but
+the live chat's `propose_step` refuses them until the Data Doctor switch is on and M233's default-deny policy
+rule for them exists (`engine.agent.loop`): a model must not gain a new proposable behaviour on the default path."""
+
+
 def _check_params(step: RecipeStep) -> None:
     params = _params(step)
     kind = step.kind
@@ -383,8 +448,8 @@ def _check_params(step: RecipeStep) -> None:
 
     allowed: dict[RecipeStepKind, frozenset[str]] = {
         RecipeStepKind.DROP_COLUMN: frozenset(),
-        RecipeStepKind.PARSE_NUMBER: frozenset({"decimal", "percent_to_fraction"}),
-        RecipeStepKind.PARSE_DATE: frozenset({"dayfirst"}),
+        RecipeStepKind.PARSE_NUMBER: frozenset({"decimal", "percent_to_fraction", "indian_scale_words"}),
+        RecipeStepKind.PARSE_DATE: frozenset({"dayfirst", "excel_serial", "date_1904"}),
         RecipeStepKind.MAP_BOOLEAN: frozenset({"true_values", "false_values"}),
         RecipeStepKind.NORMALISE_TEXT: frozenset({"strip", "merge"}),
         RecipeStepKind.SET_MISSING: frozenset({"values"}),
@@ -401,14 +466,27 @@ def _check_params(step: RecipeStep) -> None:
         RecipeStepKind.FILL_MISSING: frozenset({"value"}),
         RecipeStepKind.REMOVE_ROWS: frozenset({"operator", "values"}),
         RecipeStepKind.RENAME_COLUMN: frozenset(),
+        RecipeStepKind.NORMALISE_KEY: frozenset({"prefix", "zeros", "case", "spaces", "phone"}),
     }
     unknown = set(params) - allowed[kind]
     if unknown:
         raise refuse(f"unknown parameter {sorted(unknown)[0]!r}")
     if kind is RecipeStepKind.PARSE_NUMBER and params.get("decimal", ".") not in {".", ","}:
         raise refuse("decimal must be '.' or ','")
-    if kind is RecipeStepKind.PARSE_DATE and not isinstance(params.get("dayfirst"), bool):
-        raise refuse("the day/month order must be decided (dayfirst true or false)")
+    if kind is RecipeStepKind.PARSE_NUMBER and not isinstance(params.get("indian_scale_words", False), bool):
+        raise refuse("indian_scale_words is true or false")  # Plan O M241
+    if kind is RecipeStepKind.PARSE_DATE:
+        # Plan O M240 (DEC-1810 (d)): `excel_serial` reads Excel's day numbers, where no day/month order exists.
+        serial = params.get("excel_serial", False)
+        if not isinstance(serial, bool) or not isinstance(params.get("date_1904", False), bool):
+            raise refuse("excel_serial and date_1904 are true or false")
+        if "date_1904" in params and not serial:
+            raise refuse("date_1904 only applies to excel_serial dates")
+        if serial:
+            if "dayfirst" in params:
+                raise refuse("Excel day numbers have no day/month order; leave dayfirst out")
+        elif not isinstance(params.get("dayfirst"), bool):
+            raise refuse("the day/month order must be decided (dayfirst true or false)")
     if kind is RecipeStepKind.MAP_BOOLEAN:
         true_values, false_values = params.get("true_values"), params.get("false_values")
         if not (
@@ -438,6 +516,22 @@ def _check_params(step: RecipeStep) -> None:
     if kind is RecipeStepKind.DERIVE and not isinstance(params.get("expression"), str):
         raise refuse("a new column needs an expression")
     _check_plan_l_params(kind, params, refuse)
+    if kind is RecipeStepKind.NORMALISE_KEY:
+        _check_normalise_key(params, refuse)
+
+
+def _check_normalise_key(params: dict[str, Any], refuse: Callable[[str], RecipeError]) -> None:
+    """Plan O M237 (DEC-1807 (b)): a frozen rule that changes something; the switches are true or false."""
+    if any(name != "prefix" and not isinstance(value, bool) for name, value in params.items()):
+        raise refuse("zeros, case, spaces and phone are true or false")
+    if "prefix" in params and not isinstance(params["prefix"], str):
+        raise refuse("the prefix is text")
+    try:
+        rule = rule_from_params(params)
+    except ValueError as exc:
+        raise refuse("the rule is a prefix, zeros, case, spaces or phone, and phone stands alone") from exc
+    if rule.changes_nothing:
+        raise refuse("say how the IDs are to be written: a prefix, zeros, case, spaces or phone")
 
 
 _STATISTIC_WORDS: Final[frozenset[str]] = frozenset(
@@ -530,8 +624,13 @@ def _apply(frame: pd.DataFrame, step: RecipeStep, snapshot_column: str | None) -
             _series(series),
             decimal=str(params.get("decimal", ".")),
             percent_to_fraction=bool(params.get("percent_to_fraction", True)),
+            indian_scale_words=bool(params.get("indian_scale_words", False)),
         ),
-        RecipeStepKind.PARSE_DATE: lambda: parse_dates(_series(series), dayfirst=bool(params["dayfirst"])),
+        RecipeStepKind.PARSE_DATE: lambda: (
+            parse_excel_serial_dates(_series(series), date_1904=bool(params.get("date_1904", False)))
+            if params.get("excel_serial")
+            else parse_dates(_series(series), dayfirst=bool(params["dayfirst"]))
+        ),
         RecipeStepKind.MAP_BOOLEAN: lambda: map_booleans(
             _series(series),
             true_values=[str(v) for v in params["true_values"]],
@@ -567,6 +666,7 @@ def _apply(frame: pd.DataFrame, step: RecipeStep, snapshot_column: str | None) -
             _series(series), minimum=params.get("minimum"), maximum=params.get("maximum")
         ),
         RecipeStepKind.FILL_MISSING: lambda: fill_missing(_series(series), value=params["value"]),
+        RecipeStepKind.NORMALISE_KEY: lambda: normalise_keys(_series(series), rule_from_params(params)),
     }
     return runners[step.kind]()
 
@@ -623,7 +723,8 @@ def run_recipe(
 
     `leak_check` is the future-data check a `combine_rows` step runs after combining: `full` on a
     training file (the recipe's first build, onboarding ruling R1), `narrow` on a scoring file, and
-    none on a preview.
+    none on a preview. A `keep_latest_per_id` step runs its point-in-time check under the same value
+    (Plan O M238, DEC-1808).
     """
     check_recipe(
         steps,
@@ -700,6 +801,31 @@ def run_recipe(
                 )
             )
             work = rows.frame
+            continue
+        if step.kind is RecipeStepKind.KEEP_LATEST_PER_ID:
+            try:
+                latest = keep_latest_per_id(
+                    work,
+                    key=step.column,
+                    params=_params(step),
+                    max_failure_pct=max_failure_pct,
+                    leak_check=leak_check,
+                )
+            except KeepLatestError as exc:
+                raise RecipeError(exc.code, exc.message, column=exc.column, order=step.order) from exc
+            receipts.append(
+                StepReceipt(
+                    order=step.order,
+                    kind=step.kind,
+                    column=step.column,
+                    rows=latest.rows_in,
+                    changed=latest.rows_in - latest.rows_out,
+                    failed=latest.failed,
+                    leak_check=latest.leak_check,
+                    note=latest.note,
+                )
+            )
+            work = latest.frame
             continue
         if step.kind is RecipeStepKind.COMBINE_ROWS:
             try:

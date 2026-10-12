@@ -192,6 +192,51 @@ the column it misses. The dataset itself is never changed.
 - The tests: `tests/unit/doctor/test_joins.py`, `tests/integration/test_api_doctor_joins.py`,
   `tests/integration/agent/test_dataset_recipe_refusal.py`.
 
+### Joining, stacking and building, done for you (Plan O M237, DEC-1807)
+
+**Status: engine core (M237).** Available in Data Doctor once its tool registry (M232) and approval rules (M233)
+are integrated, behind `data_doctor.unified`. Until then no screen or route reaches these tools; the outcome offer
+below is the one part you can already see.
+
+What section 5 measures, Data Doctor will also be able to do - always as a suggestion you approve, never on its own:
+
+- **Join files about the same customers.** A second customer file (the plan from one CRM export, the usage from
+  another) will add its columns to the customer list; a list of customers who left (or bought) will become a 1/0
+  column. The customer list keeps every row and its IDs as written; a row of the list with no ID gets no outcome
+  (it is left empty, and counted), never a "no". A file with a customer on two different rows is refused: stack
+  it, or keep the latest row, first. Turning a list into the outcome always needs your own yes, to the exact
+  sentence shown.
+- **Stack monthly exports without counting twice.** A row that a later export repeats from an earlier one (the
+  last week of last month, exported again) is counted once, and the receipt says how many rows each file
+  repeated and which dates they span. Two identical rows inside one file are two rows and both stay. When two
+  exports give the same customer and date different values, you are asked once which export to keep.
+- **Match IDs written differently** (`normalise_key`): take `CUST-` off, drop the zeros at the start, ignore spaces
+  or upper and lower case, or write an Indian phone number as `+91` and ten digits. Two IDs meet only when they
+  are then written exactly alike; nothing is matched because it looks similar. Your customer list keeps its own
+  IDs: a log's `123` that meets `CUST-00123` is written `CUST-00123`, so the dataset and every score name your
+  customers as you do. The outcome offer of section 6 already measures through the same rule: a customer list
+  keyed `CUST-00123` and a recharge log keyed `123` are offered the sentence, with a note saying how the IDs
+  were matched.
+- **Build the dataset.** With a customer list, its logs and an agreed outcome, Data Doctor will propose the whole
+  build - which file is what, the stacks, how the IDs meet, which column names the customer and the date in
+  each - and, once you approve it, make the same calls the Manual setup screens make (add the files, map them,
+  save the recipe with the outcome unchanged, build). The approved plan is kept beside the recipe, so next
+  month's files (or a scoring file) go through the same stacks and ID rules without a new question.
+
+Every join, stack and ID match counts the rows in and out. One that leaves out more than 2% of a file's rows -
+a log whose customers are partly missing from the list, say - needs your own yes, and the sentence you approve
+says how many rows and why.
+
+For developers: `engine/doctor/join_files.py` (`plan_join`, `run_join`), `engine/doctor/stack_files.py`
+(`plan_stack`, `run_stack`), `engine/agent/key_steps.py` (the `normalise_key` step, `propose_key_rules`, and
+`KeyColumn`, which reads a key column once and writes each distinct ID once, in C where it can: planning a join
+of a million rows takes seconds), `engine/doctor/build_driver.py` (`plan_build` proposes, `drive_builder` runs an
+approved plan through a `BuilderPort` and keeps a `BuildRecord`, `replay_build` replays it;
+`engine/doctor/builder_api.py` is the port over the onboarding routes), `engine/doctor/outcomes.py` (the offer's
+`_ruled_join_column`), `engine/doctor/tools_files.py` (the four tool specs and `register`). Tests:
+`tests/unit/agent/test_key_steps.py`, `tests/unit/doctor/test_{join_files,stack_files,build_driver,tools_files,
+outcomes_key_rules}.py`, `tests/integration/test_m237_several_files.py`.
+
 ## 6. The outcome from your events (M157)
 
 Most people have no "churned" column. They have a log of what customers did: recharges, orders, logins. When
@@ -371,8 +416,9 @@ by the product owner on 12 October 2026 (decisions O1–O19 as recommended). **D
 [`plans/DATA_DOCTOR_AGENT_DESIGN.md`](plans/DATA_DOCTOR_AGENT_DESIGN.md). **Decisions:** DEC-1800 … DEC-1899 in
 [`DECISIONS.md`](DECISIONS.md).
 
-**Nothing in this section is built yet.** It says what is coming, so that nobody reads it as what the product does
-today. Each milestone fills in its own part, in plain words, when it lands.
+**Built so far, all behind the switch below (off): §13-§17 and "Joining, stacking and building" in §5** (Plan O
+wave 1: M231, M232, M234, M237, M238, M240, M241). None of it is on a screen yet; the rest of this section says what
+is still coming. Each milestone fills in its own part, in plain words, when it lands.
 
 ### What is coming
 
@@ -414,4 +460,168 @@ data_doctor:
 
 `engine/doctor/config.py` holds `DataDoctorConfig` (the switch; `UseCaseConfig.data_doctor`), and
 `engine/doctor/codes.py` holds `PLAN_O_CODES`, which `engine.pilot.help.known_codes()` includes: a code added there
-needs its entry in `configs/pilot/help.yaml` in the same change (DEC-1800).
+needs its entry in `configs/pilot/help.yaml` in the same change (DEC-1800). Every Data Doctor capability is a tool in
+one registry, `engine/doctor/registry.py` (M232, DEC-1802; `docs/AGENTS.md` §14): wave 1 registered the tools of
+M234, M237, M238, M240 and M241 there (`engine/doctor/tools_wave_one.py`), for the rules and the screen only.
+
+## 13. Plan O: one case per piece of work (M231, DEC-1801)
+
+*Behind the switch `data_doctor.unified` (off by default). With it off, nothing below exists.*
+
+A **case** keeps everything about one piece of data work in one place: the files (by upload, never a copy of
+their cells), what Data Doctor found, every suggestion with who made it, the questions with who answered,
+the approvals with who approved and the exact sentence they read, the remembered answers that were used, the
+chat as it was stored (masked), and a **timeline** of what happened, oldest first, each line naming the person.
+Close the browser and the case is still there.
+
+- **Yours only.** A case belongs to one client. Asking for it under another client's name finds nothing, and
+  the answer does not say whether it exists.
+- **No silent overwrite.** If two people add a file to the same case at once, the first one wins and the
+  second is told the case changed, so they reload rather than undo the first person's work.
+- **Earlier work, shown the same way.** A Guided setup already in progress can be opened as a case to read;
+  it cannot be changed from there.
+- **How long it is kept.** What a case holds about a file goes when that file's own retention ends. The
+  record of who decided what (the timeline) is kept for `processing_log_days` in
+  [`configs/privacy.yaml`](../configs/privacy.yaml), a year by default. Erasing a customer removes the
+  corrections and remembered answers that name them.
+
+### For developers
+
+`engine/doctor/case.py` (`Case`, `CaseFile`, `TimelineEvent`, `CaseStore`, the adapters `case_from_session` and
+`case_from_diagnosis`), `api/routes/cases.py` (`POST /cases`, `GET /cases/{id}`, `POST /cases/{id}/files`,
+`GET /cases/{id}/timeline`), the store `cases` in `engine/privacy/layout.py`, retention in
+`engine/privacy/retention.py` (`case_data`, `case_log`, the `forget_upload` action) and erasure in
+`engine/privacy/erasure.py`. Storage: `cases/<client_id>/<case_id>/case.json` (written atomically, with a
+version check through an exclusive-create lock file, so separate API processes cannot both write one version
+on a local store. On S3, until the storage gains a conditional put (`write_bytes_if_absent`), the lock holds
+within one API process only), `timeline.jsonl` (append-only, appended in place on a local store; the events of
+the latest version are also kept inside `case.json` and replayed by the next locked write, a retention or
+erasure rewrite included, so a crash between the two writes loses no event), `evidence/<id>.json`. A stored
+case that no longer validates answers `409 CASE_UNREADABLE`, never a server error. **Not yet on AWS:** `cases/`
+is not among the S3 prefixes the task role may write (`infra/naming.py`) nor the version-purge prefixes
+(`engine/privacy/layout.py`), so keep the switch off on an AWS deployment until those are added (requested
+before M249). Tests: `tests/unit/doctor/test_case.py`, `tests/unit/production/test_case_privacy.py`,
+`tests/integration/test_api_cases.py`.
+
+## 14. Will it train? One readiness verdict (Plan O M234, DEC-1804)
+
+*Behind the switch `data_doctor.unified` (off by default). Nothing on screen shows it yet.*
+
+Before a run starts, Data Doctor can say whether the prepared file **will** train (or score) to the end - not just
+whether the first checks pass. It runs the same checks the run itself makes, then fifteen more that try the steps
+after them on your rows: are there enough rows left once those without consent or without a known outcome are
+taken out, can the rows be divided into a part to learn from and two parts to check on, does each part hold both
+kinds of outcome, are the newest outcomes known yet, did the file lose lines when it was read. The answer is one of:
+
+- **Ready** - the run will not stop for a reason in the data.
+- **Ready, with warnings** - it will run; read the warnings first (for example, a check that could not count).
+- **Needs answers** or **needs approval** - a question is open, or something needs a person's yes.
+- **Not ready** - the run would stop or silently lose rows, and the report names the check and what to do.
+
+A "ready" is never given over a failing check: that rule is built into the report itself. The report holds counts,
+column names and plain sentences, never a value from your file. On the thirty Plan L test files, 26 are ready and
+4 ready with warnings.
+
+### For developers
+
+`engine/doctor/readiness.py` (`check_readiness`, `inputs_for_upload`, `store_readiness`, `attach_readiness_to_run`),
+`readiness_contracts.py` (`DataReadinessReport`, `ReadinessSummary`, the 15 `X_*` codes) and `readiness_probes.py`.
+The tool `check_readiness` (#69, aggregate) is in the registry; its inputs come from the caller
+(`DataToolContext.readiness`). Nothing stores a report in a case or a run yet: that waits for the visit (M235).
+
+## 15. Row and value tools (Plan O M238, DEC-1808)
+
+Five more things Data Doctor will look at or suggest once it is the data agent (the setting
+`data_doctor.unified`) and these tools are wired into its tool list and planner (Plan O integration). They are
+built and tested; until then nothing on screen offers them. Each works with no AI service, and nothing changes
+until you tick it and approve.
+
+- **One row per customer, the latest.** When a customer list was exported every month, Data Doctor will offer to
+  keep each customer's latest row - never one dated after the date the row describes - and asks you first, with
+  the count of rows left out and why. When a customer has two different rows on the same latest date, it asks
+  which one to keep; it never picks for you. A customer with no row on or before that date is counted as lost,
+  never dropped silently. When more than 2% of the rows would be left out, an Analyst approves the exact
+  sentence.
+- **Values that cannot be true.** An age over 120 or below 0, a negative tenure, amount or count, a percentage over
+  100, a date in 2099 (a stand-in for "no date"), a date before 1900, a birth date more than 120 years ago, or a
+  date that has not happened yet (a time later today is not in the future). Data Doctor judges by what the
+  column's name says it holds; it will offer to empty the impossible values, and for a date in the future it only
+  tells you.
+- **The same value spelt differently.** `Pre-paid`, `PP` and `Prepaid`; `Bombay` and `Mumbai`; `haan` and `Yes`.
+  Data Doctor will offer to write them one way. When `PP` could be prepaid or postpaid, it asks. Values that
+  differ by a sign or a short word stay apart: `O+` and `O-`, `A+` and `A`, `Plan A` and `Plan B`.
+- **Units.** `2 GB` and `500 MB` in one column become one unit after you agree; plain numbers beside them are a
+  question ("which unit are these in?"; beside `2.5 L` and `1 Cr` the first answer is "plain numbers, as
+  written"). A number like `1,500 MB`, whose comma may group thousands, is never converted: you are told why. A
+  column whose values are near 2,000 for most rows and near 2 for a few is flagged: the few may be in thousands.
+  Money in another currency is never converted here.
+- **One file into two.** "Learn from the customers who joined up to March; score the ones who joined after." One set
+  of steps prepares both files. You approve the exact sentence. Rows whose other dates are already after the cut
+  are shown to you. A date like 25/03/2024 settles that dates are written day first, and the sentence says so.
+
+### For developers
+
+- Step: `keep_latest_per_id` (`engine/agent/latest.py`; `docs/AGENTS.md` step table). Reshape level, which
+  decision O3 turns on for every goal only when `data_doctor.unified` is on (`engine/doctor/reshape_guard.py`
+  `doctor_levels`), with four guards: a blocking question, never ticked, the full point-in-time probe at a training
+  Approve, and the preview receipt (`check_reshape_guards`, `RESHAPE_GUARD_MISSING`). `doctor_levels` and
+  `check_reshape_guards` are defined and tested here; wiring them into level resolution and Approve is Plan O
+  integration work, so today nothing calls them. What is live now: the step kind in `check_recipe`/`run_recipe`
+  (reached only when a recipe holds it), the reshape seams that read `engine.agent.contracts.ROW_RESHAPE_STEP_KINDS`
+  and `ROWS_PER_ID_STEP_KINDS` (re-advice keeps an accepted step on the ID, the helper's profile and the preview
+  sample see whole IDs), and memory replay, which asks the step's question again instead of ticking it.
+- The step's receipt carries `note`: why rows were left out, as counts (identical copies, rows after the snapshot,
+  IDs lost because every row is after their snapshot, IDs settled by file order). A lost ID's rows count as
+  failures under `max_conversion_failure_pct`. The tool's output is APPROVE-class (`approve_class`, `sentence`,
+  `role: analyst`) when the step leaves out more than 2% of the rows (design §6.6).
+- Tools (registered in M232's registry at the wave 1 integration, for the rules and the screen): `engine/doctor/tools_rows.py` declares `synonym_clusters`, `impossible_values`, `detect_units` (READ) and
+  `keep_latest_per_id`, `split_file` (PROPOSE; `split_file` is APPROVE-class) as `DataToolSpec`s, all
+  `session-only`, with `register(registry)` for M232's registry. Engines: `engine/doctor/synonyms.py`
+  (`configs/doctor/value_synonyms.yaml` is the reviewed lexicon), `impossible.py`, `units.py`, `split.py`.
+- Decision O10 (`engine/doctor/change_share.py`): an AI-proposed step that changes more than 30% of a column is
+  shown with `AI_STEP_CHANGES_MANY`; above 60% it is refused with `AI_STEP_CHANGES_TOO_MANY` unless the person
+  writes it as their own edit.
+- Every proposal is a `StepProposal` (`engine/doctor/row_contracts.py`): pending, `check`, never ticked, measured by
+  running the step. A parameter that maps spellings or units travels as `[from, to]` pairs, so no tool result has a
+  dict keyed by a cell; the field names are in `engine.agent.egress.RESULT_KEYS`.
+
+## 16. Indian numbers, yes/no words and IDs (Plan O M241, DEC-1811)
+
+*The tools below are behind the switch `data_doctor.unified` (off by default) and not on a screen yet. Two parts
+work today whatever the switch: a GSTIN or a voter ID is hidden before anything is sent to an AI service, and a
+saved step can read lakh and crore when it asks to (`indian_scale_words`). With the switch on, Hinglish headers
+are read whether or not the agents' setting is on.*
+
+Data Doctor reads Indian files as they are written. `₹2.5 L` is 2,50,000, `1.2 Cr` is 1,20,00,000, `Rs 3,50,000/-`
+is 3,50,000 and `12K` is 12,000 - exactly. A yes/no column written `haan` / `nahi` or `हाँ` / `नहीं` is read as yes and
+no, but only when the file shows both a yes and a no: a column with only `haan` is a question, not a guess. GSTINs
+(checked with their check character), voter IDs, PIN codes and mobile numbers are recognised; a PIN code stays
+text, never a number, and a mobile number written `+91 98765 43210` in one file and `09876543210` in another is the
+same number when two files are joined. GSTINs and voter IDs are hidden before anything is sent to an AI service.
+
+How a client writes numbers, dates and yes/no is asked **once** per client and then used for every file, with a
+note saying so; a file that disagrees is asked about, never silently changed. Nothing is converted between
+currencies here.
+
+## 17. More file formats, and lines a reader drops (Plan O M240, DEC-1810)
+
+*Behind the switch `data_doctor.unified` (off by default). Uploads still take CSV, Parquet and Excel as before;
+routing the other formats through upload comes later.*
+
+- **JSON, JSON Lines, and a `.gz` or `.zip` holding one table** can be read as a table. Nested fields become
+  columns named `outer.inner`. A zip with two tables, or JSON that is not a table, is refused with the reason.
+- **Lines the reader drops.** A CSV line with more values than there are column names (a stray comma) is skipped
+  by the reader without a word. Data Doctor counts the lines and names them (`X_PARSER_ROW_LOSS`); when the very
+  first line is wider, every row has shifted one column to the left, and it says so (`X_PARSER_COLUMNS_SHIFTED`).
+- **Leading zeros stay.** An ID such as `0000123` can be kept as `0000123` through reading, the steps and next
+  month's file, instead of becoming the number 123.
+- **Excel dates as numbers** (`44927` for 1 January 2023) can be read as dates.
+- **A workbook's sheets as files.** A workbook with a customer sheet and a bills sheet can become two files of one
+  case, each kept like any upload.
+
+### For developers
+
+`engine/intake/other_formats.py`, `engine/intake/sheets.py`, `engine/doctor/parser_loss.py`,
+`engine/doctor/tools_formats.py`; the case's files for these tools are `engine/doctor/case_files.py` (`CaseFiles`,
+over M231's case). `read_other_format` (#4) and `check_parser_loss` (#5) are in the registry;
+`read_workbook_sheets` and `find_excel_serial_dates` wait for a row in the design's catalogue.

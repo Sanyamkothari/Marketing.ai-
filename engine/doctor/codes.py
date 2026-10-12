@@ -15,6 +15,67 @@ from typing import Final
 
 __all__ = ["PLAN_O_CODES"]
 
-PLAN_O_CODES: Final[frozenset[str]] = frozenset()
-"""Empty at M230: the set-up raises nothing new. Each Plan O milestone adds the codes it raises, grouped by milestone
-(for example M231's `CASE_VERSION_CONFLICT` and `CASE_NOT_FOUND`)."""
+PLAN_O_CODES: Final[frozenset[str]] = frozenset(
+    {
+        # M231 (DEC-1801): the case (`engine.doctor.case.CASE_CODES`).
+        "CASE_NOT_FOUND",
+        "CASE_READ_ONLY",
+        "CASE_UNREADABLE",
+        "CASE_VERSION_CONFLICT",
+        # M234 (DEC-1804): the readiness report's fifteen probes (`engine.doctor.readiness_contracts.READINESS_CODES`;
+        # X_PARSER_ROW_LOSS is also M240's parser check).
+        "X_ALLOWED_FIELDS_FILLED",
+        "X_CHANNEL_COLUMNS_PRESENT",
+        "X_COMPLAINT_COLUMN_PRESENT",
+        "X_CONSENT_VOCAB",
+        "X_GROUPS_ENOUGH",
+        "X_LABEL_MATURITY",
+        "X_PARSER_ROW_LOSS",
+        "X_PK_UNIQUE_FULL",
+        "X_POST_FILTER_THRESHOLDS",
+        "X_REGRESSION_TARGET_NUMERIC",
+        "X_SPLIT_CLASSES",
+        "X_TIME_ALL_PARSE",
+        "X_TIME_CUTS_FEASIBLE",
+        "X_TREATMENT_TOKENS",
+        "X_VALUE_COLUMN_MISSING_SHARE",
+        # M237 (DEC-1807): several files (`engine.doctor.join_files.JOIN_CODES`, `stack_files.STACK_CODES`,
+        # `build_driver.BUILD_CODES`). APPROVAL_SENTENCE_CHANGED is the plan's shared exact-text code (M239, M246);
+        # M237's `drive_builder` is the first to raise it.
+        "APPROVAL_SENTENCE_CHANGED",
+        "BUILD_DEFINES_OUTCOME",
+        "BUILD_FILE_LEFT_OUT",
+        "BUILD_PLAN_INCOMPLETE",
+        "BUILD_PLAN_NOT_APPROVED",
+        "BUILD_REPLAY_FILES",
+        "BUILD_REWRITES_IDS",
+        "BUILD_STEP_FAILED",
+        "JOIN_COLUMN_CLASH",
+        "JOIN_COLUMN_MISSING",
+        "JOIN_DEFINES_OUTCOME",
+        "JOIN_DROPS_ROWS",
+        "JOIN_KEYS_DO_NOT_MEET",
+        "JOIN_KEY_REPEATS",
+        "STACK_COLUMN_MISSING",
+        "STACK_CONFLICTS_UNDECIDED",
+        "STACK_DROPS_ROWS",
+        "STACK_TOO_FEW_FILES",
+        # M238 (DEC-1808): row and value tools (`engine.doctor.tools_rows.ROW_TOOL_CODES`).
+        "AI_STEP_CHANGES_MANY",
+        "AI_STEP_CHANGES_TOO_MANY",
+        "DOCTOR_COLUMN_PROTECTED",
+        "DOCTOR_COLUMN_UNKNOWN",
+        "IMPOSSIBLE_VALUE",
+        "RESHAPE_GUARD_MISSING",
+        "SPLIT_LATER_DATES_IN_TRAINING",
+        "SPLIT_PART_EMPTY",
+        "SPLIT_RULE_INVALID",
+        "SPLIT_VALUES_UNREADABLE",
+        "SYNONYM_MERGE_INVALID",
+        "UNIT_MISMATCH",
+        # M240 (DEC-1810): parser safety (`engine.doctor.parser_loss.PARSER_LOSS_CODES`, with X_PARSER_ROW_LOSS above).
+        "X_PARSER_COLUMNS_SHIFTED",
+    }
+)
+"""Every code Plan O raises, grouped by milestone. M232 (the registry) reuses Plan K's TOOL_* codes and M241 (locale)
+raises none. Each code here has its entry in `configs/pilot/help.yaml`."""

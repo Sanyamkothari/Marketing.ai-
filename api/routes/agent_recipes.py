@@ -153,13 +153,18 @@ def refuse_other_roles(
         )
 
 
-def _all_rows(storage: Storage, config: UseCaseConfig, source: UploadRecord) -> Any:
+def _all_rows(
+    storage: Storage, config: UseCaseConfig, source: UploadRecord, recipe: DataRecipe | None = None
+) -> Any:
     read_all = ingest.read_upload(
         storage,
         source.source_key,
         file_format=source.file_format,
         row_cap=profile_row_cap(config),
         keep_all_rows=True,
+        # The columns the recipe was approved with as text (Plan O M240), so a replay reads `0000123` as
+        # the approval did; empty (the read as it always was) for a recipe that recorded none.
+        text_columns=recipe.text_columns if recipe is not None else (),
     )
     # Every row, never the profiling cap: a recipe prepares the whole file.
     return read_all.all_rows if read_all.all_rows is not None else read_all.frame
@@ -176,7 +181,7 @@ def write_derived_upload(
     storage: Storage, config: UseCaseConfig, source: UploadRecord, recipe: DataRecipe
 ) -> DerivedUpload:
     """Run `recipe` on every row of `source` and store the result as a new upload. Raises `RecipeError`."""
-    frame = _all_rows(storage, config, source)
+    frame = _all_rows(storage, config, source, recipe)
     derived_id = new_upload_id()
     run = run_saved_recipe(
         frame,
@@ -350,7 +355,7 @@ def prepare_in_memory(
         return read.frame, load_upload_profile(storage, source.upload_id).row_count
     try:
         run = run_saved_recipe(
-            _all_rows(storage, config, source),
+            _all_rows(storage, config, source, recipe),
             recipe,
             config,
             upload_id=source.upload_id,

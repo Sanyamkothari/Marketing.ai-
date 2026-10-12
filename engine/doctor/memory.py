@@ -366,6 +366,19 @@ def use_same_treatment(
     from engine.agent.session import SessionError, identity, roles_of, with_summary
     from engine.agent.untrusted import display_name
 
+    # Steps that change the rows come back only through their own blocking question (decision O3): memory
+    # never ticks one. `unpivot` keeps its Plan L behaviour (it is re-added ticked) until Plan L's owners decide.
+    asked_first: dict[RecipeStepKind, str] = {
+        RecipeStepKind.COMBINE_ROWS: (
+            "Last time the rows of each customer were combined. Answer the helper's question about "
+            "combining rows first, then use the same treatment."
+        ),
+        RecipeStepKind.KEEP_LATEST_PER_ID: (
+            "Last time only the latest row of each customer was kept. Answer the helper's question about "
+            "keeping the latest row first, then use the same treatment."
+        ),
+    }
+
     if session.status is SessionStatus.APPLIED:
         raise SessionError(
             "AGENT_SESSION_APPLIED", "This setup was already approved. Start again to change it."
@@ -400,17 +413,13 @@ def use_same_treatment(
         if p.kind is ProposalKind.RECIPE_STEP and p.step is not None and p.state is ProposalState.ACCEPTED
     }
     for step in recipe.steps:
-        if step.kind is RecipeStepKind.COMBINE_ROWS and not any(
-            p.step is not None
-            and p.step.kind is RecipeStepKind.COMBINE_ROWS
-            and p.state is ProposalState.ACCEPTED
+        if step.kind in asked_first and not any(
+            p.step is not None and p.step.kind is step.kind and p.state is ProposalState.ACCEPTED
             for p in proposals
         ):
-            raise SessionError(
-                "DOCTOR_MEMORY_COMBINE",
-                "Last time the rows of each customer were combined. Answer the helper's question about "
-                "combining rows first, then use the same treatment.",
-            )
+            # A change to the rows comes back only through its own blocking question, never ticked by memory
+            # (decision O3, Plan O M238).
+            raise SessionError("DOCTOR_MEMORY_COMBINE", asked_first[step.kind])
 
     evidence_id = f"m{len(session.tool_results) + 1}"
     while any(r.evidence_id == evidence_id for r in session.tool_results):
@@ -418,7 +427,7 @@ def use_same_treatment(
     when = _day(memory.approved_at)
     added = 0
     for step in recipe.steps:
-        if step.kind is RecipeStepKind.COMBINE_ROWS:
+        if step.kind in asked_first:
             continue  # accepted above, through the helper's own question
         candidate = Proposal(
             proposal_id="m0",

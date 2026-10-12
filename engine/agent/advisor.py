@@ -42,6 +42,7 @@ import pandas as pd
 
 from engine.agent.config import AgentLevel
 from engine.agent.contracts import (
+    ROWS_PER_ID_STEP_KINDS,
     AgentConfidence,
     AgentSummary,
     Proposal,
@@ -122,7 +123,11 @@ _ENGINE_HIDES: Final[Mapping[str, str]] = {
 """Warnings the engine already acts on by itself: shown as hidden columns, never proposed."""
 
 NEVER_TICKED_STEPS: Final[frozenset[RecipeStepKind]] = frozenset(
-    {RecipeStepKind.SET_MISSING, RecipeStepKind.VALID_RANGE}  # Plan L M153 (DEC-1531): a range is a question
+    {
+        RecipeStepKind.SET_MISSING,
+        RecipeStepKind.VALID_RANGE,  # Plan L M153 (DEC-1531): a range is a question
+        RecipeStepKind.KEEP_LATEST_PER_ID,  # Plan O M238 (DEC-1808, decision O3): reshape is never ticked
+    }
 )
 """Steps only the person may tick, whatever `agent.tick_uncertain` says: emptying a value is right only
 when it really is a code for "unknown", which the file cannot prove (DEC-1224)."""
@@ -162,6 +167,20 @@ class Advice:
     target: str | None
 
 
+def _call_tool(
+    ctx: AgentContext, tool: str, args: Mapping[str, Any] | None, *, evidence_id: str
+) -> ToolResult:
+    """One look tool for the rules: Plan G's `call_tool`, or, with `data_doctor.unified` on (Plan O M232), the
+    same tool through Data Doctor's registry (`session_call`), which returns the same result byte for byte."""
+    from engine.doctor import registry as doctor_registry
+
+    if not doctor_registry.unified_on(ctx.config):
+        return call_tool(ctx, tool, args, evidence_id=evidence_id)
+    return doctor_registry.data_registry().session_call(
+        tool, args, doctor_registry.DataToolContext(agent=ctx, caller="rules"), evidence_id=evidence_id
+    )
+
+
 @dataclass
 class _Builder:
     ctx: AgentContext
@@ -180,7 +199,7 @@ class _Builder:
     def call(
         self, tool: str, args: Mapping[str, Any] | None = None, ctx: AgentContext | None = None
     ) -> ToolResult:
-        result = call_tool(
+        result = _call_tool(
             ctx or self.ctx, tool, args, evidence_id=f"{self.prefix}e{next(iter(self._evidence))}"
         )
         self.results.append(result)
@@ -509,7 +528,7 @@ def _label_draft(builder: _Builder) -> str:
     """
     if not header_help_on(builder.ctx):
         return ""  # Plan K off: no draft, and the stop reason is what it was before M142 (DEC-1409 (f))
-    trial = call_tool(builder.ctx, "draft_outcome_labels", None, evidence_id=f"{builder.prefix}e0")
+    trial = _call_tool(builder.ctx, "draft_outcome_labels", None, evidence_id=f"{builder.prefix}e0")
     found = _rows(trial, "drafts")
     if not found:
         return ""  # nothing to draft from: an empty answer is not evidence anything cites, and uses no id
@@ -937,7 +956,8 @@ def _prepared_context(
         if strict:
             raise
         return ctx
-    combined = any(step.kind is RecipeStepKind.COMBINE_ROWS for step in steps)
+    # One row per ID now (combined, or each ID's latest row kept): the profile counts the rows it describes.
+    combined = any(step.kind in ROWS_PER_ID_STEP_KINDS for step in steps)
     profile = ingest.profile_dataset(
         run.frame,
         ctx.config,
