@@ -41,6 +41,8 @@ URL = "https://example.test/u?token=abc123def456ghi789"
 TOKEN = (
     "zk_live_51HxAbCdEf123456789012345"  # secret-scan: allow (a fake key the masking tests plant on purpose)
 )
+GSTIN = "27AAPFU0939F1ZV"  # Plan O M241: a GSTIN (it holds a PAN) and a voter ID are masked whole
+EPIC = "XYZ1234567"
 NAME = "Jane Roe"
 ADDRESS = "221B Baker Street"
 HEADER_EMAIL = EMAIL  # a column whose *name* is personal data
@@ -80,6 +82,11 @@ HARD_SECRETS: tuple[str, ...] = (
     "5500 0000 0000 0004",
     "3782 822463 10005",
     "2001:db8:",
+    GSTIN,
+    "AAPFU0939F",
+    "1ZV",
+    EPIC,
+    "XYZ123",
 )
 """Values a pattern can catch: they must be absent from everything in every mode."""
 
@@ -135,6 +142,7 @@ def canary_frame(rows: int = 1_500) -> pd.DataFrame:
             "label": _cycle([f"{NAME} (VIP)", "standard"], rows),
             "type": _cycle([f"{NAME} type", "standard"], rows),
             "code": _cycle([IBAN, "A-100"], rows),
+            "business_ref": _cycle([f"GST {GSTIN}", f"voter card {EPIC}", "none"], rows),
             HEADER_EMAIL: _cycle(["x", "y", "z"], rows),
             HEADER_NUMBER: [i % 97 for i in range(rows)],
             HEADER_PHONE: _cycle(["a", "b"], rows),

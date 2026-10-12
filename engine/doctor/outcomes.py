@@ -46,6 +46,7 @@ from engine.utils.logging import get_logger
 if TYPE_CHECKING:
     import pandas as pd
 
+    from engine.agent.key_steps import KeyColumn, KeyRule
     from engine.config import RoleCatalogue, UseCaseConfig
     from engine.doctor.contracts import FileDiagnosis, UseCaseReadiness
 
@@ -320,6 +321,17 @@ class _Events:
     table: pd.DataFrame  # entity_key (text), event_time (timestamp), readable rows only
     unreadable: int
     coverage: float
+    # Plan O M237 (DEC-1807): set only when the IDs meet the list once written one way (`normalise_key`), not
+    # as written; the table's keys and the list's are then compared as the two rules write them.
+    rules: KeyRulePair | None = None
+
+
+@dataclass(frozen=True)
+class KeyRulePair:
+    """The list's rule and the event file's, under which their IDs meet (`propose_key_rules`)."""
+
+    entity: KeyRule
+    event: KeyRule
 
 
 def _key_text(series: pd.Series[Any]) -> pd.Series[Any]:
@@ -332,8 +344,11 @@ def _key_text(series: pd.Series[Any]) -> pd.Series[Any]:
     return values.astype(str).str.strip()
 
 
-def _event_table(frame: pd.DataFrame, id_column: str, date_column: str) -> tuple[pd.DataFrame, int]:
-    """`(entity_key, event_time)` read as the builder reads them; and how many dates could not be read."""
+def _event_table(
+    frame: pd.DataFrame, id_column: str, date_column: str, rules: KeyRulePair | None = None
+) -> tuple[pd.DataFrame, int]:
+    """`(entity_key, event_time)` read as the builder reads them; and how many dates could not be read. With
+    `rules`, the keys are the event file's IDs written by its rule (Plan O M237)."""
     import pandas as pd
 
     from engine.config import StandardType
@@ -341,10 +356,15 @@ def _event_table(frame: pd.DataFrame, id_column: str, date_column: str) -> tuple
 
     times = cast_series(frame[date_column], StandardType.DATE).values
     keys = frame[id_column]
+    if rules is not None:
+        from engine.agent.key_steps import KeyColumn
+
+        keys = pd.Series(KeyColumn(keys).rows_of(rules.event), index=frame.index, dtype=object)
     table = pd.DataFrame({"entity_key": keys, "event_time": pd.to_datetime(times)})
     unreadable = int((frame[date_column].notna() & table["event_time"].isna()).sum())
     table = table.dropna(subset=["entity_key", "event_time"])
-    table["entity_key"] = _key_text(table["entity_key"])
+    if rules is None:
+        table["entity_key"] = _key_text(table["entity_key"])
     return table.reset_index(drop=True), unreadable
 
 
@@ -384,6 +404,35 @@ def _join_column(
         if best is None or rank > best[0]:
             best = (rank, column, coverage)
     return None if best is None else (best[1], best[2])
+
+
+def _ruled_join_column(
+    events: OutcomeFile, entity_ids: KeyColumn, entity_id: str
+) -> tuple[str, float, KeyRulePair] | None:
+    """Plan O M237 (DEC-1807): when no column meets the list as written, the column whose IDs meet it once
+    each side is written one way (`propose_key_rules`: a prefix, zeros, case, spaces, +91 phones; never a near
+    match), at onboarding's own bar (`KEY_JOIN_OK`). None when none does."""
+    from engine.agent.key_steps import KeyColumn, propose_key_rules
+
+    diagnosis = events.diagnosis
+    dates = set(diagnosis.date_columns)
+    best: tuple[tuple[float, int, int], str, float, KeyRulePair] | None = None
+    for name in list(events.frame.columns)[:MAX_JOIN_COLUMNS]:
+        column = str(name)
+        series = events.frame[name]
+        if column in dates or not _key_like(series):
+            continue
+        found = propose_key_rules(KeyColumn(series), entity_ids)
+        if not found.meets:
+            continue
+        rank = (
+            round(found.fixed_coverage, 2),
+            int(column.casefold() == entity_id.casefold()),
+            int(column == diagnosis.id_column),
+        )
+        if best is None or rank > best[0]:
+            best = (rank, column, found.fixed_coverage, KeyRulePair(entity=found.base_rule, event=found.rule))
+    return None if best is None else (best[1], best[2], best[3])
 
 
 @dataclass(frozen=True)
@@ -483,6 +532,7 @@ def _candidates(
     *,
     event_upload_id: str | None,
     date_column: str | None,
+    entity_ids: KeyColumn | None = None,
 ) -> list[_Events]:
     events: list[_Events] = []
     fallback = "other_event" if "other_event" in roles.roles else None
@@ -500,12 +550,17 @@ def _candidates(
         if when not in diagnosis.date_columns:
             continue
         joined = _join_column(file, entity_keys, entity.diagnosis.id_column or "")
+        rules: KeyRulePair | None = None
+        if joined is None and entity_ids is not None:
+            ruled = _ruled_join_column(file, entity_ids, entity.diagnosis.id_column or "")
+            if ruled is not None:
+                joined, rules = (ruled[0], ruled[1]), ruled[2]
         if joined is None:
             continue
-        table, unreadable = _event_table(file.frame, joined[0], when)
+        table, unreadable = _event_table(file.frame, joined[0], when, rules)
         if table.empty:
             continue
-        events.append(_Events(file, kind, joined[0], when, table, unreadable, joined[1]))
+        events.append(_Events(file, kind, joined[0], when, table, unreadable, joined[1], rules))
     events.sort(key=lambda item: (template.event_kinds.index(item.kind), -item.coverage, -len(item.table)))
     return events
 
@@ -549,6 +604,9 @@ def offer_outcome(
     if name is None or entity is None or entity.diagnosis.id_column is None:
         return None
     entity_keys = _key_text(entity.frame[entity.diagnosis.id_column])
+    from engine.agent.key_steps import KeyColumn
+
+    entity_ids = KeyColumn(entity.frame[entity.diagnosis.id_column])
     candidates = _candidates(
         files,
         entity,
@@ -557,10 +615,23 @@ def offer_outcome(
         roles,
         event_upload_id=event_upload_id,
         date_column=date_column,
+        entity_ids=entity_ids,
     )
     if not candidates:
         return None
     chosen = candidates[0]
+    ruled_note: str | None = None
+    if chosen.rules is not None:
+        # The list's IDs as its rule writes them, so the counts below compare like with like; the list itself
+        # is never rewritten (the builder writes the event file's IDs as the list writes them).
+        import pandas as pd
+
+        entity_keys = pd.Series(entity_ids.rows_of(chosen.rules.entity), dtype=object).dropna()
+        ruled_note = (
+            f"The IDs of {chosen.file.diagnosis.file_name} meet {entity.diagnosis.file_name} once written one way "
+            f"({entity.diagnosis.file_name}: {chosen.rules.entity.words()}; {chosen.file.diagnosis.file_name}: "
+            f"{chosen.rules.event.words()}); nothing is matched on a near match."
+        )
     word = event_word(chosen.file.diagnosis.file_name, chosen.kind, catalogue)
     noun = config.entity or "customer"
     inclusive = config.onboarding.snapshots.inclusive_snapshot_time
@@ -603,7 +674,7 @@ def offer_outcome(
         )
     customers = int(entity_keys.nunique())
     matched = int(entity_keys.drop_duplicates().isin(set(chosen.table["entity_key"])).sum())
-    notes: list[str] = []
+    notes: list[str] = [] if ruled_note is None else [ruled_note]
     for file in (entity, chosen.file):
         if len(file.frame) < file.diagnosis.rows:
             notes.append(

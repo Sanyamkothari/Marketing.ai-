@@ -94,6 +94,8 @@ __all__ = [
     "fingerprint_columns",
     "infer_column_type",
     "ingest_detail",
+    "key_like_columns",
+    "leading_zero_columns",
     "primary_key_candidates",
     "profile_column",
     "profile_dataset",
@@ -252,6 +254,8 @@ class ReadResult:
     truncated: bool
     fingerprint: DatasetFingerprint | None = None
     """Covers every row of the file, including rows above the cap; `None` on a bounded preview read."""
+    text_columns: tuple[str, ...] = ()
+    """The columns read as text because of `keep_leading_zeros` or `text_columns` (Plan O M240); empty by default."""
     all_rows: pd.DataFrame | None = None
     """Every row of the file, when the caller asked for them with `keep_all_rows`; else `None`.
 
@@ -366,6 +370,61 @@ def _estimate_rows(head_text: str, delimiter: str, *, size: int, encoding: str) 
     return round((size - header_bytes) * (len(records) - 1) / data_bytes)
 
 
+_LEADING_ZERO_RE: Final[re.Pattern[str]] = re.compile(r"^0[0-9]+$")
+"""A digit string that starts with a zero and is longer than one character: `0000123`, `007`, never `0` or `0.5`."""
+
+
+_KEY_LIKE_RE: Final[re.Pattern[str]] = re.compile(
+    r"(?i:(?:^|[^A-Za-z0-9])(?:id|code|account|phone|mobile|zip|postcode))$|[a-z](?:Id|Code)$"
+)
+"""A column named like a key: `id`, `customer_id`, `Customer ID`, `customerId`, `promo_code`, `phone`, `zip`.
+
+The name ends in the word, so `paid` and `valid` are not keys. `pin` is left to M241's India-ID detection."""
+
+
+def key_like_columns(head_text: str, delimiter: str) -> tuple[str, ...]:
+    """The columns of `head_text` whose name says they hold an ID, a code, an account, a phone or a postcode."""
+    reader = csv.reader(io.StringIO(head_text), delimiter=delimiter, skipinitialspace=True)
+    header = next(reader, None) or []
+    return tuple(name for name in header if name and _KEY_LIKE_RE.search(name.strip()))
+
+
+def leading_zero_columns(head_text: str, delimiter: str) -> tuple[str, ...]:
+    """The columns of `head_text` that hold a digit string with a leading zero, in header order.
+
+    A number never starts with a zero, so such a cell is an ID, a postcode, a phone number or a code, and
+    reading it as a number would drop the zeros. The names are the header record's, as pandas reads it.
+    """
+    reader = csv.reader(io.StringIO(head_text), delimiter=delimiter, skipinitialspace=True)
+    header = next(reader, None)
+    if not header:
+        return ()
+    found: set[int] = set()
+    for record in reader:
+        for index, cell in enumerate(record[: len(header)]):
+            if index not in found and _LEADING_ZERO_RE.match(cell.strip()):
+                found.add(index)
+        if len(found) == len(header):
+            break
+    return tuple(header[index] for index in sorted(found) if header[index])
+
+
+def _text_dtypes(
+    head_text: str, delimiter: str, *, keep_leading_zeros: bool, text_columns: tuple[str, ...]
+) -> dict[str, type[str]]:
+    """The `dtype` map for columns that must be read as text; empty when nothing asks for any (DEC-1810 (c))."""
+    if not keep_leading_zeros and not text_columns:
+        return {}
+    reader = csv.reader(io.StringIO(head_text), delimiter=delimiter, skipinitialspace=True)
+    header = [name for name in (next(reader, None) or []) if name]
+    wanted = set(text_columns)
+    if keep_leading_zeros:
+        # A zero can first show up past the head that was sniffed, so a column named like a key is text too.
+        wanted.update(leading_zero_columns(head_text, delimiter))
+        wanted.update(key_like_columns(head_text, delimiter))
+    return {name: str for name in header if name in wanted or name.strip() in wanted}
+
+
 def profile_row_cap(config: UseCaseConfig) -> int:
     """`config.validation.profile_row_cap` when the config carries one, else the module default."""
     configured: object = getattr(config.validation, "profile_row_cap", None)
@@ -383,6 +442,8 @@ def read_upload(
     row_cap: int = DEFAULT_PROFILE_ROW_CAP,
     chunk_rows: int = CHUNK_ROWS,
     keep_all_rows: bool = False,
+    keep_leading_zeros: bool = False,
+    text_columns: Sequence[str] = (),
 ) -> ReadResult:
     """Read `key` once: the profiled rows, the exact row count and the dataset fingerprint.
 
@@ -392,6 +453,16 @@ def read_upload(
 
     `keep_all_rows` also returns every row of the file as `ReadResult.all_rows`, from the same pass;
     it is ignored on a bounded preview, which by definition does not read them all.
+
+    `keep_leading_zeros` and `text_columns` are Plan O's leading-zero-safe read (M240, DEC-1810 (c)); both
+    are off by default, so a read without them is exactly what it always was. A CSV is read in chunks, each
+    typed on its own, so an ID such as `0000123` is the number 123 by the time it is a cell. With
+    `text_columns` the named columns are read as text; with `keep_leading_zeros` every column whose first
+    64 KB holds a digit string with a leading zero (`0000123`, `007`), and every column named like a key
+    (`customer_id`, `promo_code`, `phone`, `zip`; a zero may first appear after those 64 KB), is read as
+    text too. Other columns are typed as before. `ReadResult.text_columns` names the columns read as text,
+    so a caller can record how the file was read and replay it the same way. A Parquet file is typed
+    already and ignores both.
     """
     resolved = file_format if file_format is not None else file_format_for(key)
     if storage.size_bytes(key) == 0:
@@ -402,7 +473,14 @@ def read_upload(
             storage, key, max_rows=max_rows, row_cap=row_cap, chunk_rows=chunk_rows, keep_all_rows=keep
         )
     return _read_csv(
-        storage, key, max_rows=max_rows, row_cap=row_cap, chunk_rows=chunk_rows, keep_all_rows=keep
+        storage,
+        key,
+        max_rows=max_rows,
+        row_cap=row_cap,
+        chunk_rows=chunk_rows,
+        keep_all_rows=keep,
+        keep_leading_zeros=keep_leading_zeros,
+        text_columns=tuple(text_columns),
     )
 
 
@@ -414,6 +492,8 @@ def _read_csv(
     row_cap: int,
     chunk_rows: int,
     keep_all_rows: bool,
+    keep_leading_zeros: bool = False,
+    text_columns: tuple[str, ...] = (),
 ) -> ReadResult:
     size = storage.size_bytes(key)
     with storage.open_read(key) as handle:
@@ -425,6 +505,9 @@ def _read_csv(
         head_text = _complete_lines(decoded)
         delimiter = sniff_delimiter(head_text)
         _check_header(_header_fields(head_text, delimiter))
+        text_dtypes = _text_dtypes(
+            head_text, delimiter, keep_leading_zeros=keep_leading_zeros, text_columns=text_columns
+        )
         try:
             return _read_csv_once(
                 storage,
@@ -437,6 +520,7 @@ def _read_csv(
                 row_cap=row_cap,
                 chunk_rows=chunk_rows,
                 keep_all_rows=keep_all_rows,
+                text_dtypes=text_dtypes,
             )
         except UnicodeDecodeError:
             _LOG.info("ingest.encoding_retry encoding=%s", encoding)
@@ -459,6 +543,7 @@ def _read_csv_once(
     row_cap: int,
     chunk_rows: int,
     keep_all_rows: bool,
+    text_dtypes: dict[str, type[str]] | None = None,
 ) -> ReadResult:
     """One decoded pass. Raises `UnicodeDecodeError` so the caller can try the next codec."""
     import pandas as pd
@@ -487,7 +572,7 @@ def _read_csv_once(
                 skip_blank_lines=True,
                 keep_default_na=True,
                 na_values=[""],
-                dtype=None,
+                dtype=text_dtypes or None,
                 engine="c",
                 on_bad_lines="warn",
                 encoding=None,
@@ -530,6 +615,7 @@ def _read_csv_once(
         row_count_estimated=bounded,
         truncated=row_count > len(frame),
         fingerprint=None if bounded else digest.finish(frame, n_rows=row_count),
+        text_columns=tuple(text_dtypes or ()),
         all_rows=_all_rows(frame, every) if keep_all_rows else None,
     )
 
