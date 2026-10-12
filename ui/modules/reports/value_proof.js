@@ -51,7 +51,11 @@ const claimHtml = (entry) => {
 };
 
 const SIGN = /^[-−]$/;
-const NET = /\bNet value\s+([-−]?)₹([\d,]+(?:\.\d+)?)\s+to\s+([-−]?)₹([\d,]+(?:\.\d+)?)/;
+// The server writes each end with `format_inr` (engine/pilot/roi.py): "₹81,034", "-₹67,912", and from one lakh up the
+// words beside it, "₹1,23,456 (1.23 lakh)" or "₹2,50,00,000 (2.50 crore)". The words after the low end are skipped
+// here; the text drawn is still the server's whole sentence.
+const NET =
+  /\bNet value\s+([-−]?)₹([\d,]+(?:\.\d+)?)(?:\s*\([\d.]+\s+(?:lakh|crore)\))?\s+to\s+([-−]?)₹([\d,]+(?:\.\d+)?)/;
 const figure = (sign, digits) => (SIGN.test(sign) ? -1 : 1) * Number(digits.replace(/,/g, ""));
 
 /**

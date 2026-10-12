@@ -107,6 +107,19 @@ test("splitHeadline: the effect and the net value's two figures; a headline with
   const minus = splitHeadline("Extra amount: -10 (likely -30 to +5). Net value -₹5,000 to ₹12,500.");
   assert.equal(minus.low, -5000);
   assert.equal(minus.high, 12500);
+  // M188 review 1: from one lakh up the server writes the words beside the figure, "₹1,23,456 (1.23 lakh)"
+  // (engine/pilot/roi.py format_inr). The low end can carry them too, and the best campaigns are exactly those.
+  const lakh = splitHeadline("Extra outcomes: +60 (likely +40 to +80). Net value ₹1,23,456 (1.23 lakh) to ₹4,18,481 (4.18 lakh).");
+  assert.equal(lakh.low, 123456);
+  assert.equal(lakh.high, 418481);
+  assert.equal(lakh.net, "Net value ₹1,23,456 (1.23 lakh) to ₹4,18,481 (4.18 lakh).", "the server's whole sentence is kept");
+  const negativeLakh = splitHeadline("Extra amount: -900 (likely -2,000 to +100). Net value -₹2,50,000 (2.50 lakh) to ₹12,500.");
+  assert.equal(negativeLakh.low, -250000);
+  assert.equal(negativeLakh.high, 12500);
+  const crore = splitHeadline("Extra amount: +9,000 (likely +5,000 to +13,000). Net value ₹45,00,000 (45.00 lakh) to ₹2,50,00,000 (2.50 crore).");
+  assert.equal(crore.low, 4500000);
+  assert.equal(crore.high, 25000000);
+  assert.equal(crore.net, "Net value ₹45,00,000 (45.00 lakh) to ₹2,50,00,000 (2.50 crore).");
   const none = splitHeadline("Descriptive only: the groups were not chosen at random.");
   assert.deepEqual(none, { effect: "Descriptive only: the groups were not chosen at random.", net: "", low: null, high: null });
   assert.deepEqual(splitHeadline(""), { effect: "", net: "", low: null, high: null });
@@ -130,6 +143,30 @@ test("no pack yet: an empty state with a 40px icon, one sentence and one action"
   assert.ok(empty && empty.querySelector(".es-icon svg"), "an icon");
   assert.equal(empty.querySelectorAll("a.btn, button.btn").length, 1, "one action");
   assert.equal($("main .btn.primary"), null, "nothing to open: no primary button in the header either");
+  assert.equal($("[data-reports-slot]"), null, "and the slot held for it while loading is gone");
+  delete overlay["GET /pilot/proof"];
+});
+
+test("the header holds a slot for the newest pack while the list loads, so nothing jumps; the button takes it", async () => {
+  let release;
+  const gate = new Promise((resolve) => (release = resolve));
+  overlay["GET /pilot/proof"] = async () => {
+    await gate;
+    return { status: 200, body: recorded["GET /pilot/proof"].body };
+  };
+  w.location.hash = "#/__between";
+  await settle(3);
+  w.location.hash = "#/reports";
+  await settle(3);
+  const slot = $("[data-reports-header] .ph-actions [data-reports-slot]");
+  assert.ok(slot, "a slot in the header's action place while the list loads");
+  assert.equal(slot.getAttribute("aria-hidden"), "true");
+  assert.equal($("main .btn"), null, "no button yet: nothing to press before the list is in");
+  release();
+  const until = Date.now() + 3000;
+  while (!$("[data-proof-newest]") && Date.now() < until) await settle(2);
+  assert.ok($("[data-reports-header] .ph-actions [data-proof-newest]"), "the newest pack's button takes the slot");
+  assert.equal($("[data-reports-slot]"), null);
   delete overlay["GET /pilot/proof"];
 });
 
@@ -170,6 +207,12 @@ test("check a past campaign: three drop zones, a label above every field tied to
     assert.equal(zone.querySelector(".rp-drop-ico svg").getAttribute("aria-hidden"), "true");
     assert.match(text(zone), /Choose a file or drop it here/);
   }
+  // M188 review 5: each drop zone's hint, and the "never assumed" hint, are read with their control.
+  for (const input of $$('input[type="file"][data-rp-file]')) {
+    const hint = w.document.getElementById(input.getAttribute("aria-describedby").split(" ")[0]);
+    assert.ok(hint && hint.classList.contains("rp-hint"), `${input.dataset.rpFile}: the hint describes the file input`);
+  }
+  assert.equal(w.document.getElementById($("[data-rp-basis]").getAttribute("aria-describedby")).textContent.slice(0, 15), "Never assumed. ");
   const basis = $$("[data-rp-basis] .rp-choice");
   assert.equal(basis.length, 2, "how the groups were chosen: two choice cards");
   assert.ok(basis.every((c) => c.querySelector('input[type="radio"]')), "each a real radio");
@@ -191,6 +234,8 @@ test("check a past campaign: with a file chosen, every column question is labell
   while (!$("[data-file-name]") && Date.now() < until) await settle(2);
   assert.match(text($("[data-file-name]")), /groups\.csv · /, "the file's name and rows once chosen");
   assert.ok($(".rp-drop.has-file"), "the zone shows it is filled");
+  const chosen = $('[data-rp-file="assignment"]');
+  assert.ok(chosen.getAttribute("aria-describedby").split(" ").includes("rp-file-assignment-got"), "the chosen file's name is read with it");
   for (const field of $$(".rp-field")) {
     const control = field.querySelector("input, select");
     const label = field.querySelector("label");

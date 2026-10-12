@@ -17,7 +17,7 @@ import { auditBody, fileOf, programmeBody } from "../decide/audit.js";
 import { injectStyles as injectSimpleStyles } from "../simple/pages.js";
 import { checkHtml } from "./check.js";
 import { loadModelReports, modelReportsHtml } from "./models.js";
-import { injectStyles, reportsHeaderHtml, reportsPageHtml, tabOf } from "./page.js";
+import { injectStyles, reportsHeaderHtml, reportsPageHtml, revealSelectedTab, tabOf } from "./page.js";
 import { programmeHtml } from "./programme.js";
 import { newestPackAction, valueProofHtml } from "./value_proof.js";
 
@@ -66,15 +66,20 @@ async function render(app, parts) {
   lastTab = tab;
   setActiveNav("reports"); // "reports" is the campaigns layout's item; the classic top bar maps it to Results (ui/chrome.js OLD_GOALS)
   document.title = "Reports · Marketing AI";
-  app.innerHTML = reportsPageHtml({ tab, bodyHtml: loading });
+  // Value proof's one primary action (the newest pack) is known only once the list is in: until then an empty slot of
+  // the button's height holds its place, so the tabs do not jump down when it arrives on a phone (M188 review).
+  app.innerHTML = reportsPageHtml({ tab, bodyHtml: loading, primary: tab === "value-proof" ? SLOT : null });
+  revealSelectedTab(app);
   const { html, primary = null } = await bodyOf(tab);
   if (seq !== paintSeq || hashParts()[0] !== "reports") return;
   const body = app.querySelector("[data-reports-body]");
   if (body) body.innerHTML = html;
-  // The header drew first, with no action; the newest pack's button joins it now that the list is in.
-  const header = primary && app.querySelector("[data-reports-header]");
+  // The newest pack's button takes the slot; with no ready pack (or a list that failed) the slot goes.
+  const header = tab === "value-proof" && app.querySelector("[data-reports-header]");
   if (header) header.outerHTML = reportsHeaderHtml({ primary });
 }
+
+const SLOT = '<span class="rp-slot" aria-hidden="true" data-reports-slot></span>';
 
 registerModule({ name: "reports", routes: ROUTES, render });
 

@@ -135,6 +135,10 @@ export function filterGlossary(root, query) {
   return shown;
 }
 
+/** How long after the last key the number of words left is said to screen readers. */
+export const ANNOUNCE_AFTER_MS = 300;
+let announceTimer = null;
+
 // One delegated listener, as the other pages of this module do: the Help page is drawn by innerHTML, so nothing is bound to it.
 if (typeof document !== "undefined" && typeof document.addEventListener === "function") {
   document.addEventListener("input", (event) => {
@@ -143,7 +147,9 @@ if (typeof document !== "undefined" && typeof document.addEventListener === "fun
     const root = input.closest("[data-glossary]");
     if (!root) return;
     const shown = filterGlossary(root, input.value);
-    announceStatus(shown === 1 ? "1 word" : `${shown} words`);
+    // Said once the person pauses, not on every key: a screen reader would otherwise read a count per letter.
+    clearTimeout(announceTimer);
+    announceTimer = setTimeout(() => announceStatus(shown === 1 ? "1 word" : `${shown} words`), ANNOUNCE_AFTER_MS);
   });
 }
 

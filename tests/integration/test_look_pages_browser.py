@@ -272,3 +272,52 @@ def test_a_brand_colour_reaches_every_new_brand_coloured_thing_of_these_pages(
         assert _style(settings, "[data-settings-main] .st-label", "color") == GREEN_RGB, "the row links"
     finally:
         settings.context.close()
+
+
+@pytest.mark.parametrize(("fragment", "technical"), [("#/reports/check", False), ("#/reports/models", True)])
+def test_on_a_phone_the_selected_tab_is_scrolled_into_view(
+    browser: Any, base: str, fragment: str, technical: bool
+) -> None:
+    """M188 review 3: the row of tabs scrolls inside itself on a phone; the selected one must not be cut off."""
+    page = _open(browser, base, fragment, 390, 844, technical=technical)
+    try:
+        tab = _box(page, '[role="tab"][aria-selected="true"]')
+        row = _box(page, '[role="tablist"]')
+        assert (
+            tab["x"] >= row["x"] - 1 and tab["r"] <= row["r"] + 1
+        ), f"the selected tab shows whole: {tab} in {row}"
+        assert page.evaluate("() => window.scrollY") == 0, "the page itself did not scroll"
+    finally:
+        page.context.close()
+
+
+def _small_targets(page: Any, selector: str) -> list[str]:
+    found = page.evaluate(
+        "(s) => [...document.querySelectorAll(s)].filter(e => e.offsetParent !== null)"
+        ".map(e => [e.textContent.trim(), e.getBoundingClientRect().height])",
+        selector,
+    )
+    assert found, f"nothing matched {selector}"
+    return [f"{text} ({height}px)" for text, height in found if height < 40]
+
+
+def test_on_a_phone_every_row_action_is_a_40px_target(browser: Any, base: str) -> None:
+    """M188 review 2: the small (32px and 24px) buttons of a row grow to 40px on a phone."""
+    reports = _open(browser, base, "#/reports", 390, 844)
+    try:
+        assert _small_targets(reports, "[data-proofs] .rp-acts .btn") == []
+    finally:
+        reports.context.close()
+    models = _open(browser, base, "#/reports/models", 390, 844, technical=True)
+    try:
+        models.evaluate("() => { document.querySelector('[data-rp-models]').open = true; }")
+        assert _small_targets(models, "[data-rp-models] .rp-acts .btn") == []
+    finally:
+        models.context.close()
+    data = _open(browser, base, "#/data", 390, 844)
+    try:
+        data.click("#dt-add")
+        data.wait_for_timeout(300)
+        assert _small_targets(data, "#dt-chooser .btn") == []
+    finally:
+        data.context.close()

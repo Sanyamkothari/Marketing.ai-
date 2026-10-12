@@ -73,6 +73,16 @@ export function reportsTabsHtml(tab) {
   });
 }
 
+/**
+ * On a phone a row of tabs scrolls inside itself (theme.css `.ds-tabs`), so the selected tab can sit past the right edge
+ * ("Check a past c…"). Bring it into view inside its row after a paint. Nothing moves on a wide screen, where every tab
+ * already shows; `block: "nearest"` never scrolls the page itself up or down. (The Data page uses it too.)
+ */
+export function revealSelectedTab(root) {
+  const tab = root && typeof root.querySelector === "function" ? root.querySelector('[role="tab"][aria-selected="true"]') : null;
+  if (tab && typeof tab.scrollIntoView === "function") tab.scrollIntoView({ block: "nearest", inline: "nearest" });
+}
+
 /** The page: header, tab strip, and the body of the current tab (`bodyHtml`, already built). */
 export function reportsPageHtml({ tab, bodyHtml = "", primary = null }) {
   return `<main class="screen rp sp" data-module="reports" data-reports-page data-tab="${esc(tab)}">${reportsHeaderHtml({
@@ -147,7 +157,8 @@ const CSS = `
 .rp .rp-programme .rp-actions{border-top:0;padding-top:var(--s4)}
 
 /* Programme summary: the KPI row, then the card Results draws (its markup is the same), drawn as a compact table */
-.rp [data-proven] .sp-note{padding:0 20px var(--s3);border-top:0;font-size:var(--fs-small);line-height:var(--lh-small);color:var(--muted)}
+.rp [data-proven] [data-counted-as]{display:block;margin-top:2px}
+.rp [data-proven] .sp-note{padding:var(--s4) 20px var(--s3);border-top:0;font-size:var(--fs-small);line-height:var(--lh-small);color:var(--muted)}
 .rp [data-proven]>.sp-list>.sp-entry{padding:var(--s4) 20px}
 .rp [data-proven] .sp-label{font-size:var(--fs-body);color:var(--ink)}
 .rp [data-proven] .sp-facts{margin:var(--s2) 0 0;border-top:1px solid var(--line)}
@@ -170,6 +181,20 @@ const CSS = `
 .rp .rp-models-part>.rp-note{margin:0 20px}
 .rp .rp-models .tbl-wrap{border:0;border-radius:0}
 .rp .rp-models-part .badge{margin-left:var(--s2)}
+
+/* the header's action slot while Value proof loads: the newest pack's button fills it, so nothing jumps on a phone */
+.rp .rp-slot{display:block;width:0;height:40px}
+
+/* a phone (or any coarse pointer): every action is a 40px target, and the form keeps the full width */
+@media (max-width:700px),(pointer:coarse){
+.rp .rp-acts .btn.sm,.rp .rp-models .btn.sm{min-height:40px;height:40px;padding:0 var(--s3)}
+.rp .rp-acts{gap:var(--s3)}
+}
+@media (max-width:700px){
+.rp .rp-step{padding:var(--s5) var(--s4)}
+.rp .rp-step>.rp-note,.rp .rp-form{margin-left:0}
+.rp .rp-drop{padding:var(--s4)}
+}
 `;
 
 export function injectStyles(doc = document) {

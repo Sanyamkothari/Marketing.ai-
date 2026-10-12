@@ -13,7 +13,7 @@ const CSS = `
 .dt .dt-name{margin:0;font-size:var(--fs-body);line-height:var(--lh-body);font-weight:600;color:var(--ink);overflow-wrap:anywhere}
 .dt .dt-sub{display:block;margin-top:2px;font-size:var(--fs-caption);line-height:var(--lh-caption);font-weight:400;color:var(--muted);overflow-wrap:anywhere}
 .dt .dt-cell{font-size:var(--fs-small);line-height:var(--lh-small);color:var(--ink2);overflow-wrap:anywhere}
-.dt .dt-cell .badge{height:auto;min-height:24px;padding-top:2px;padding-bottom:2px;border-radius:12px;white-space:normal;text-align:left}
+.dt .dt-cell .badge{max-width:100%}
 .dt .dt-cell[data-dt-when]{color:var(--muted)}
 .dt .dt-actions{display:flex;flex-wrap:wrap;gap:var(--s1);align-items:center;justify-content:flex-end}
 .dt .dt-wide{grid-column:1/-1}
@@ -40,8 +40,13 @@ const CSS = `
 .dt .dt-check p{margin:0;font-size:var(--fs-body);line-height:var(--lh-body);color:var(--ink2)}
 .dt .dt-points{list-style:none;margin:0 0 var(--s4);padding:0;display:flex;flex-direction:column;gap:var(--s3)}
 .dt .dt-points li{display:flex;align-items:flex-start;gap:var(--s3);font-size:var(--fs-body);line-height:var(--lh-body);color:var(--ink2)}
-.dt .dt-points svg{margin-top:2px;color:var(--good)}
+.dt .dt-points svg{margin-top:2px;color:var(--brand-blue)}
 .dt .dt-after{margin-bottom:var(--s4)!important;color:var(--muted)!important}
+/* a phone (or any coarse pointer): every action is a 40px target, with room between Edit and Delete */
+@media (max-width:700px),(pointer:coarse){
+.dt .dt-actions .btn.sm,.dt .dt-kind .btn.sm,.dt .dt-more .btn.sm,.dt .cn-confirm .btn.sm{min-height:40px;height:40px;padding:0 var(--s3)}
+.dt .dt-actions{gap:var(--s2)}
+}
 @media (max-width:700px){
 .dt .dt-row{grid-template-columns:40px minmax(0,1fr);align-items:start;padding:var(--s4)}
 .dt .dt-row>.dt-cell,.dt .dt-row>.dt-actions{grid-column:2}

@@ -498,6 +498,7 @@ const CSS = `
 .st .tech-switch input[type=checkbox]:checked::after{transform:translateX(20px)}
 .st .tech-switch input[type=checkbox]:focus-visible{outline:2px solid var(--brand-blue);outline-offset:2px}
 .st .tech-switch .ts-label{font-size:var(--fs-body);line-height:var(--lh-body)}
+@media (forced-colors:active){.st .tech-switch input[type=checkbox]{border:1px solid CanvasText}.st .tech-switch input[type=checkbox]::after{background:CanvasText}.st .tech-switch input[type=checkbox]:checked{background:Highlight}}
 .st .sp-about{padding:var(--s4) 20px;font-size:var(--fs-small);line-height:var(--lh-small)}
 .st .sp-about p{margin:0}
 .st .sp-about p+p{margin-top:var(--s1);color:var(--muted)}

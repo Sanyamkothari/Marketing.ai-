@@ -55,7 +55,7 @@ const field = (name, label, attrs = "", help = "") =>
 /** A file chosen in a drop zone: a whole-zone file input (a click opens the picker, a dropped file lands on it), its words, the file's name once chosen, and a hint. */
 function filePicker(kind, label, hint, file) {
   const got = file
-    ? `<span class="rp-got" data-file-name="${esc(kind)}">${icon("checkCircle", { size: 16 })}<span>${userText(file.fileName)} · ${esc(
+    ? `<span class="rp-got" id="rp-file-${esc(kind)}-got" data-file-name="${esc(kind)}">${icon("checkCircle", { size: 16 })}<span>${userText(file.fileName)} · ${esc(
         fmtInt(file.rows),
       )} rows</span></span>`
     : "";
@@ -63,7 +63,9 @@ function filePicker(kind, label, hint, file) {
     size: 20,
   })}</span><span class="rp-drop-t">${esc(label)}</span><span class="rp-drop-go">${
     file ? "Choose a different file" : "Choose a file or drop it here"
-  }</span><input type="file" accept=".csv,.xlsx,.xlsm,.parquet" data-rp-file="${esc(kind)}"></label>${got}<p class="rp-hint">${esc(hint)}</p></div>`;
+  }</span><input type="file" accept=".csv,.xlsx,.xlsm,.parquet" data-rp-file="${esc(kind)}" aria-describedby="rp-file-${esc(kind)}-h${
+    file ? ` rp-file-${esc(kind)}-got` : ""
+  }"></label>${got}<p class="rp-hint" id="rp-file-${esc(kind)}-h">${esc(hint)}</p></div>`;
 }
 
 const problem = (error) =>
@@ -93,12 +95,12 @@ function stepOne(state) {
        ${select("sent_date_column", "Column with the date each customer was contacted", a.columns, { blank: "None: one date for everyone" })}
        ${select("intended_column", "Column saying the customer was meant to be contacted", a.columns, { blank: "None: compare everyone" })}`
     : "";
-  const basis = `<fieldset class="rp-basis" data-rp-basis><legend>How were the groups chosen?</legend>
+  const basis = `<fieldset class="rp-basis" data-rp-basis aria-describedby="rp-basis-h"><legend>How were the groups chosen?</legend>
       <div class="rp-choices">
         <label class="rp-choice"><input type="radio" name="assignment_basis" value="random" required><span>At random</span></label>
         <label class="rp-choice"><input type="radio" name="assignment_basis" value="not_random"><span>Not at random: by a ranking, a rule or a person's choice</span></label>
       </div>
-      <p class="rp-hint">Never assumed. If you say at random and the file has customer details, we test it; the answer decides whether the result can be called proven.</p>
+      <p class="rp-hint" id="rp-basis-h">Never assumed. If you say at random and the file has customer details, we test it; the answer decides whether the result can be called proven.</p>
     </fieldset>`;
   return step(
     1,

@@ -128,6 +128,30 @@ test("Glossary: typing narrows the list to the words and meanings that hold it, 
   assert.equal(root.querySelector("[data-glossary-none]").hidden, true);
 });
 
+test("Glossary: the number of words left is said once the person pauses, not on every key", async () => {
+  const { ANNOUNCE_AFTER_MS } = await import("../../../../../ui/modules/simple/help.js");
+  // ui/index.html has the status region (<div id="status">); this test's page is built without it, so it adds one.
+  let status = w.document.getElementById("status");
+  if (!status) {
+    status = w.document.createElement("div");
+    status.id = "status";
+    status.setAttribute("role", "status");
+    w.document.body.appendChild(status);
+  }
+  status.textContent = "";
+  const box = $("[data-glossary] input[data-glossary-filter]");
+  for (const value of ["c", "co", "com"]) {
+    box.value = value;
+    box.dispatchEvent(new w.Event("input", { bubbles: true }));
+  }
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(status.textContent, "", "nothing is said while typing");
+  await new Promise((resolve) => setTimeout(resolve, ANNOUNCE_AFTER_MS + 100));
+  assert.match(status.textContent, /^\d+ words?$/, "one count, after the pause");
+  box.value = "";
+  box.dispatchEvent(new w.Event("input", { bubbles: true }));
+});
+
 test("filterGlossary: the count it returns, on any glossary markup", () => {
   const holder = w.document.createElement("div");
   holder.innerHTML = glossaryHtml([

@@ -20,6 +20,7 @@ import { button, emptyState, icon, pageHeader, statusChip, tabs } from "../../co
 import { announceStatus, errorBox, esc, fmtInt, fmtSize, fmtStamp, skeleton } from "../../dom.js";
 import { deleteConnection, getConnections, getKinds, testConnection } from "../connections/api.js";
 import { stepsHtml } from "../connections/page.js";
+import { revealSelectedTab } from "../reports/page.js";
 import { injectConnectionStyles } from "../connections/styles.js";
 import { userText } from "../../labels.js";
 import { getUploads } from "./api.js";
@@ -134,15 +135,20 @@ const FILE_ICON =
   '<svg class="ds-ico" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" focusable="false" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></svg>';
 const typeIcon = (kind) => `<span class="dt-ico" data-dt-type="${kind}">${kind === "file" ? FILE_ICON : icon("data", { size: 20 })}</span>`;
 
-/** A saved connection's health as a status chip (icon and word), in the words the Connections page uses. */
+/**
+ * A saved connection's health: a short status chip (an icon and one or two words) and, on a line under it, the rest of
+ * what the Connections page says - when it was tested, or the server's reason it failed - in the same order and words
+ * (M188 review: a long sentence inside a pill wraps into a blob).
+ */
 function connectionChip(c) {
   const status = ["connected", "failed", "needs_addon"].includes(c.status) ? c.status : "not_tested";
   const attrs = `data-cn-status="${status}"`;
+  const sub = (text) => (text ? `<span class="dt-sub" data-dt-health-detail>${esc(text)}</span>` : "");
   if (status === "connected") {
-    const when = c.last_test ? ` · tested ${fmtStamp(c.last_test.tested_at)}` : "";
-    return statusChip("health", "connected", { word: `Connected${when}`, attrs });
+    return `${statusChip("health", "connected", { attrs })}${sub(c.last_test ? `Tested ${fmtStamp(c.last_test.tested_at)}` : "")}`;
   }
-  if (status === "failed") return statusChip("health", "failed", { word: `Failed: ${c.failure || "see the test"}`, attrs });
+  if (status === "failed") return `${statusChip("health", "failed", { attrs })}${sub(c.failure || "See the test.")}`;
+  // `needs_addon` is not a status of the mapping yet (cross-branch note to M185): it is drawn neutral, with its own word.
   if (status === "needs_addon") return statusChip("health", "needs_addon", { word: "Needs the add-on", attrs });
   return statusChip("health", "not_tested", { attrs });
 }
@@ -258,7 +264,8 @@ function sourcesHtml() {
           icon: "data",
           title: "No data sources yet",
           text: "Add a source or choose a file to get started.",
-          action: { label: "Choose a file", href: DOCTOR_HREF, kind: "secondary" },
+          // The one way forward is the header's: this opens the same "Add a source" chooser (M188 review).
+          action: { label: "Add a source", kind: "secondary", attrs: 'data-dt-open-chooser aria-controls="dt-chooser"' },
         })}</div>`;
   const problem = state.uploadsError
     ? errorBox(state.uploadsError, { title: "The uploaded files could not be listed." })
@@ -289,6 +296,7 @@ function draw() {
     tab === "check" ? checkHtml() : sourcesHtml()
   }</main>`;
   bind(app);
+  revealSelectedTab(app);
   document.title = `${tab === "check" ? "Check my data" : "Data"} · Marketing AI`;
 }
 
@@ -327,6 +335,17 @@ async function remove(id) {
 
 function bind(app) {
   const add = app.querySelector("#dt-add");
+  const opener = app.querySelector("[data-dt-open-chooser]");
+  if (opener) {
+    opener.addEventListener("click", () => {
+      state.chooserOpen = true;
+      const chooser = app.querySelector("#dt-chooser");
+      if (chooser) chooser.hidden = false;
+      if (add) add.setAttribute("aria-expanded", "true");
+      const first = chooser && chooser.querySelector("a, button");
+      if (first) first.focus();
+    });
+  }
   if (add) {
     add.addEventListener("click", () => {
       state.chooserOpen = !state.chooserOpen;

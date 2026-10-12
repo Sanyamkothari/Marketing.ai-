@@ -85,11 +85,16 @@ test("every source row has a type icon that screen readers skip, and a health ch
   assert.equal(text(file.querySelector(".badge")), "Read correctly");
   const failed = row(ids.pg);
   assert.equal(failed.querySelector(".badge").dataset.tone, "critical", "a failed connection is critical");
-  assert.match(text(failed.querySelector(".badge")), /^Failed: /);
+  // M188 review 4: the chip is short (one word); the server's reason is the line under it, never inside the pill.
+  assert.equal(text(failed.querySelector(".badge")), "Failed");
+  const reason = failed.querySelector("[data-dt-health] .badge + [data-dt-health-detail]");
+  assert.ok(reason && reason.classList.contains("dt-sub") && text(reason).length > 3, "the reason follows the chip as a quiet line");
   assert.equal(failed.querySelector(".badge").getAttribute("data-cn-status"), "failed", "the connection's own status stays on it");
   const connected = row(ids.s3);
   assert.equal(connected.querySelector(".badge").dataset.tone, "good");
-  assert.match(text(connected.querySelector(".badge")), /^Connected · tested /);
+  assert.equal(text(connected.querySelector(".badge")), "Connected");
+  assert.match(text(connected.querySelector(".badge + [data-dt-health-detail]")), /^Tested /);
+  for (const chip of $$(".dt-list .badge")) assert.ok(text(chip).split(" ").length <= 3, `a short chip, not a sentence: ${text(chip)}`);
   assert.equal($(".dt-list .pill, .dt-list .chip"), null, "no old pills");
 });
 
@@ -128,6 +133,15 @@ test("an installation with no sources: an empty state with an icon, one sentence
   assert.ok(empty.closest(".card"), "it sits in a card, not on the bare canvas");
   assert.ok(empty.querySelector(".es-icon svg"), "an icon");
   assert.equal(empty.querySelectorAll("a.btn, button.btn").length, 1, "one action");
+  // M188 review 13: the action is the header's way forward: it opens the same "Add a source" chooser.
+  const action = empty.querySelector("button.btn");
+  assert.equal(action.textContent.trim(), "Add a source");
+  assert.equal(action.getAttribute("aria-controls"), "dt-chooser");
+  assert.equal($("#dt-chooser").hidden, true);
+  action.click();
+  assert.equal($("#dt-chooser").hidden, false, "it opens the chooser");
+  assert.equal($("#dt-add").getAttribute("aria-expanded"), "true", "and the header's button says so");
+  assert.ok($("#dt-chooser").contains(w.document.activeElement), "focus moves into the chooser");
   assert.equal($$("main .btn.primary").length, 1, "the page's one primary action is still the header's");
   world.connections = saved.c;
   world.uploads = saved.u;
