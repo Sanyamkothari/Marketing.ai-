@@ -273,4 +273,7 @@ test-statistical: ## the nightly statistical suite (Plan J): Monte Carlo coverag
 # ---- PLAN-M (simple UI) — append only below this line ----
 # ---- END PLAN-M ----
 # ---- PLAN-O (Data Doctor) — append only below this line ----
+.PHONY: agent-eval
+agent-eval: ## Plan O M248: Data Doctor evals (pass^5, canaries, harm, cost, benchmark); recorded model unless a real one is set
+	$(BIN)/python -m scripts.plan_o_benchmark $(ARGS)
 # ---- END PLAN-O ----

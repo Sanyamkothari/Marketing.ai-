@@ -1091,6 +1091,83 @@ codes:
     title: "Every row was read one or more columns to the left"
     meaning: "The first data line has more values than the header has column names, so the reader took the extra leading values as a row label and threw them away. No row is lost, but the first column(s) are gone and each value sits under the wrong name. A stray comma or a missing column name is the usual cause."
     fix: "Open the file, look at the line the check names, fix it and upload the file again."
+  # --- Plan O M233: a policy for every Data Doctor suggestion (DEC-1803) -------------------------------------------
+  POLICY_NEVER_TICKED:
+    title: "This suggestion cannot start ticked"
+    meaning: "Some suggestions are always left for you to decide: whatever the AI suggests, placeholder codes, ranges, and keeping the latest row per customer. This one arrived already ticked, so it was refused. Only you may tick it."
+    fix: "Read the before and after, then tick it yourself if you agree."
+  POLICY_STEP_NOT_TRIED:
+    title: "This AI suggestion was not tried on the file first"
+    meaning: "An AI suggestion is shown only after it has been tried on the file's first 1,000 rows, so you can see what it would change. This one was not tried, so it is not shown."
+    fix: "Ask again so it can be tried."
+  POLICY_BOOLEAN_SPELLING:
+    title: "This yes/no reading was not made"
+    meaning: "'NA' may mean no or 'not available', so it is asked, never read as yes or no. The rules read only the yes and no words they know, in English, Hinglish and Hindi; another spelling needs your approval."
+    fix: "Answer the question about 'NA', or approve the new spelling yourself."
+  # --- Plan O M235: the visit and the goal brief (DEC-1805) --------------------------------------------------------
+  VISIT_NOT_WAITING:
+    title: "Data Doctor is not waiting for that now"
+    meaning: "You tried to approve, or to write in the chat, at a moment when Data Doctor was not waiting for it. For example, nothing was ready to approve yet, or the files were still being read. Nothing was changed."
+    fix: "Reload the case to see what it is waiting for: an answer, an approval or the next file."
+  VISIT_UNKNOWN_CHOICE:
+    title: "That question or suggestion is not in this case"
+    meaning: "The question, the answer or the suggestion you picked is not part of this case as it stands now. It may belong to a goal you have put aside. Nothing was changed."
+    fix: "Reload the case and pick again. To see a goal you put aside, choose that goal again."
+  # --- Plan O M236: the remaining wrapper tools and explain (DEC-1806) ---------------------------------------------
+  CONNECTION_BUSY:
+    title: "Too many connection calls at once"
+    meaning: "At most four calls to a client's systems (a test, a listing or a preview of a saved connection) run at once. This counts the Connections screen and Data Doctor's previews and imports together. All four were taken, so this call was not made. Nothing was read or changed."
+    fix: "Wait a few seconds and try again."
+  AGENT_SESSION_APPLIED:
+    title: "This setup was already approved"
+    meaning: "The Guided setup session was approved and its recipe ran. Neither a second opinion nor any other change can be added to it."
+    fix: "Start a new Guided setup on the file to change the setup."
+  CONNECTION_NEEDS_ADDON:
+    title: "This connection needs an add-on"
+    meaning: "The saved connection's kind (for example Snowflake, BigQuery or Azure Blob Storage) needs an optional add-on that is not installed on this server, so its tables cannot be previewed or imported."
+    fix: "Ask whoever runs Marketing AI to install it, for example pip install 'marketing-ai[snowflake]'."
+  # --- Plan O M246: the protocol (DEC-1816) -----------------------------------------------------------------------
+  APPROVAL_CONFIRMATION_MISSING:
+    title: "A change needs its own yes first"
+    meaning: "Some changes alter what your data means: consent, keeping personal data, the outcome, leaving rows out, converting currency, or loosening a safeguard. Each of these needs its own yes before the whole preparation can be approved. Someone with the right role gives it (an Approver for consent, personal data and safeguards)."
+    fix: "Open the change, read its sentence and confirm it. Then approve again."
+  DOUBT_UNGROUNDED:
+    title: "A doubt stated a number nothing measured"
+    meaning: "When Data Doctor is unsure, it says why, what it would do and what changes if not. Every number it gives must come from something it measured. One of its checks gave a number no measurement holds, so the visit stopped instead of showing it. Nothing was changed."
+    fix: "Try again; if this keeps happening, report it to whoever looks after your Data Doctor setup."
+  STANDING_ANSWER_NOT_FOUND:
+    title: "No such remembered answer"
+    meaning: "That remembered answer does not exist for this client. It may belong to another client, or the link may be out of date."
+    fix: "Open Settings, then Remembered answers, to see this client's answers and revoke any of them there."
+  DATA_REQUESTED:
+    title: "More data is needed"
+    meaning: "Data Doctor needs data the file does not have, for example a column saying whether each customer converted, or the date of each customer's last order. The request says what to ask for, from whom, why your goal needs it, and which columns the file should have, one row per customer."
+    fix: "Add it and upload again, or answer 'I cannot get it', which keeps things as they are."
+  DIFFERENT_FILE_REQUESTED:
+    title: "A different file is needed"
+    meaning: "This file cannot be made usable for your goal by any change Data Doctor could make: for example, it holds one row per order when one row per customer is needed. The request says which file to ask for, from whom and why."
+    fix: "Upload that file, or answer 'I cannot get it', which keeps things as they are."
+  # --- Plan O M242: currency (DEC-1812) ----------------------------------------------------------------------------
+  CURRENCY_FOREIGN:
+    title: "This file's money is in another currency"
+    meaning: "A money column is written in a currency other than the one this workspace reports in, for example US dollars in a rupee workspace. Nothing is converted on its own."
+    fix: "Choose to report the column in its own currency, or give a rate, its date and where it comes from to convert it; an Analyst approves the rate."
+  CURRENCY_MIXED:
+    title: "One money column holds amounts in two currencies"
+    meaning: "Some amounts in this column are written in one currency and some in another, for example a $12 in a column of rupees. Amounts in different currencies are never added together, so nothing is built from the column until you say which rows are in which currency."
+    fix: "Say which rows are in which currency, or convert them at a rate you give."
+  CURRENCY_UNSTATED:
+    title: "A money column names no currency"
+    meaning: "The amounts in this column carry no currency sign, code or word in the column's name, and the client has not confirmed one. The currency is never assumed."
+    fix: "Say which currency the column is in. Once you confirm it for the client, it is not asked again."
+  CURRENCY_RATE_INVALID:
+    title: "The exchange rate cannot be used"
+    meaning: "The rate given to convert a money column is missing a part or does not make sense, for example a rate of zero, a date in the future, or no source."
+    fix: "Give a rate above zero, the date it applies to (not after today) and where it comes from, such as 'RBI reference rate, 10 Oct 2026'."
+  CURRENCY_RATE_UNAPPROVED:
+    title: "A currency conversion has not been approved"
+    meaning: "A conversion of a money column has no approved rate, so no report may use it. Rates are never looked up by the product."
+    fix: "Ask an Analyst to approve the conversion by sending back the exact sentence it shows."
 
 settings:
   actions.bands[*].min_score:

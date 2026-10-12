@@ -159,7 +159,68 @@ SPECS: dict[str, Calls | None] = {
     "indian_booleans": _fixed({}),
     "detect_india_ids": _fixed({}),
     "check_readiness": _fixed({}, {"mode": "train"}),
+    # Plan O M236 (DEC-1806): M240's two tools, catalogued as #82 and #83, and M236's wrappers and `explain`.
+    "read_workbook_sheets": _fixed({"file_id": CUSTOMERS}),
+    "find_excel_serial_dates": _fixed({"file_id": CUSTOMERS}),
+    "propose_intake": _fixed({}, {"upload_id": CUSTOMERS}),
+    "preview_connection": lambda _columns: [{"connection_id": _IDS["connection"], "table": "customers"}],
+    "propose_import": lambda _columns: [
+        {"connection_id": _IDS["connection"], "path": "exports/customers.csv"}
+    ],
+    "check_refresh": lambda _columns: [{"spec_id": _IDS["spec"]}],
+    "preflight": _fixed({}),
+    "second_opinion": _fixed({}),
+    "explain": lambda _columns: [{"evidence_ids": list(_IDS["evidence"])}],
+    "propose_role": _fixed({}, {"upload_id": CUSTOMERS}, {"upload_id": EVENTS}),
+    "propose_key": _fixed({}, {"target": "converted_30d"}),
+    "propose_mapping": _fixed({}, {"upload_id": EVENTS}),
+    "find_personal_data": _fixed({}),
+    "check_leaks": _fixed({"outcome": "converted_30d", "primary_key": "customer_id"}),
+    "check_uplift_data": _fixed({"primary_key": "customer_id", "target": "converted_30d"}),
+    "read_run_checks": lambda _columns: [{"run_id": _IDS["run"]}],
+    "request_approval": lambda _columns: [{"evidence_id": evidence} for evidence in _IDS["evidence"]],
+    # Plan O wave 2 integration: M242's conversion on every column (a column that holds no money is refused in
+    # the output, which must be clean too).
+    "convert_currency": lambda columns: [
+        {
+            "column": column,
+            "from_currency": "USD",
+            "to_currency": "INR",
+            "rate": 83.1,
+            "rate_date": "2026-10-01",
+            "source": "RBI reference rate, 1 Oct 2026",
+        }
+        for column in columns
+    ],
 }
+
+_IDS: dict[str, Any] = {}
+"""What M236's canary calls name (a connection, a recipe, a run, earlier results), set by `_case`."""
+
+
+class _CanaryConnector:
+    """A saved connection's connector serving the canary file, masked as every connector masks its preview."""
+
+    kind = "postgres"
+
+    def __init__(self, frame: pd.DataFrame) -> None:
+        self.frame = frame
+
+    def available(self) -> bool:
+        return True
+
+    def info(self) -> Any:
+        from engine.connections.registry import CONNECTORS
+
+        return CONNECTORS["postgres"].info()
+
+    def preview(self, config: Any, secrets: Any, selection: Any) -> Any:
+        from engine.connections.base import frame_preview
+
+        return frame_preview(self.frame)
+
+    def file_format(self, selection: Any) -> str:
+        return "csv"
 
 
 def test_every_registered_tool_has_a_canary_entry() -> None:
@@ -257,6 +318,7 @@ def _case(ctx: AgentContext, root: Path) -> DataToolContext:
     )
     storage = LocalStorage(root)
     case_files = _stored_case(storage, ctx, files[0].file_name)
+    _m236(storage, ctx, root)
     upload_record(storage, "u_month_one", f"{NAME} {EMAIL}.csv")
     remember(
         storage,
@@ -280,7 +342,91 @@ def _case(ctx: AgentContext, root: Path) -> DataToolContext:
         primary_key="customer_id",
         case_files=case_files,
         readiness=_readiness(ctx),
+        **_m236_context(ctx, root, storage, files),
     )
+
+
+def _m236(storage: LocalStorage, ctx: AgentContext, root: Path) -> None:
+    """What M236's tools read: the canary file's intake report (planted text in its notes and footer labels), a
+    training run's artefacts."""
+    from engine.intake.contracts import IntakeReport
+    from tests.unit.doctor.test_result_alarm import RUN_ID, write_training_run
+
+    report = IntakeReport(
+        source_format="csv",
+        applied=True,
+        header_row=2,
+        rows_above_header=1,
+        footer_rows=1,
+        footer_labels=(f"Total for {NAME} {EMAIL}",),
+        notes=(f"Left out the title row '{NAME} {PHONE}'.",),
+    )
+    storage.write_model(upload_key(CUSTOMERS, "intake.json"), report)
+    write_training_run(storage, ctx.config_root or Path("configs"))
+    _IDS["run"] = RUN_ID
+
+
+def _m236_context(
+    ctx: AgentContext, root: Path, storage: LocalStorage, files: Sequence[LoadedFile]
+) -> dict[str, Any]:
+    """M236's context fields: saved connections (a fake connector serving the canary file), an onboarding recipe,
+    an AI service whose second opinion names planted text, and earlier results to explain and approve."""
+    from engine.connections import registry as connectors
+    from engine.connections.store import ConnectionStore
+    from engine.settings import Settings
+    from tests.unit.agent.assist_client import AssistClient
+    from tests.unit.production.scheduling_support import make_world
+
+    store = ConnectionStore(LocalStorage(root / "connections"), Settings())
+    record = store.create(
+        kind="postgres", name=f"CRM of {NAME}", config={"host": "db.example.test"}, secrets={}
+    )
+    _IDS["connection"] = record.connection_id
+    fake = _CanaryConnector(ctx.frame)
+    _PATCHES.append((connectors, "connector", connectors.connector))
+    connectors.connector = lambda _kind: fake  # type: ignore[assignment,return-value]
+    world = make_world(root / "world", ctx.config_root or Path("configs"))
+    _IDS["spec"] = world.spec.spec_id
+    first = DataToolContext(
+        agent=ctx,
+        principal=ANALYST,
+        caller="person",
+        storage=storage,
+        files=tuple(files),
+        primary_key="customer_id",
+    )
+    evidence = (
+        data_registry().call("describe_missing", {}, first),
+        data_registry().call(
+            "rate_by", {"column": "region_contact", "outcome_column": "converted_30d"}, first
+        ),
+        data_registry().call(
+            "join_files",
+            {"base_upload_id": CUSTOMERS, "base_key_column": "customer_id", "upload_ids": [EVENTS, LATER]},
+            first,
+        ),
+        data_registry().call("stack_files", {"upload_ids": [EVENTS, LATER]}, first),
+    )
+    _IDS["evidence"] = tuple(result.evidence_id for result in evidence)
+    planted = [{"column": column, "why": f"{NAME} wrote {EMAIL} here."} for column in ctx.frame.columns]
+    return {
+        "connections": store,
+        "client_store": world.client_store,
+        "meter": meter_for(AssistClient(columns=planted)),
+        "guardrails": guardrails(),
+        "evidence": evidence,
+    }
+
+
+_PATCHES: list[tuple[Any, str, Any]] = []
+
+
+@pytest.fixture(autouse=True)
+def _restore_patches() -> Any:
+    yield
+    while _PATCHES:
+        module, name, original = _PATCHES.pop()
+        setattr(module, name, original)
 
 
 def _gate(case: DataToolContext, mode: str) -> Egress:

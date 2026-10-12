@@ -80,6 +80,7 @@ from pydantic import AwareDatetime, BaseModel, Field, JsonValue, ValidationError
 from engine.agent.contracts import AgentConfidence, ProposalSource, ProposalState
 from engine.config import ConfigError, StrictBase, load_engine_config
 from engine.contracts import Artefact
+from engine.doctor.visit_contracts import CaseVisit
 from engine.storage import LocalStorage, Storage, StorageError
 from engine.utils.logging import get_logger
 from engine.utils.time import utc_now
@@ -231,6 +232,21 @@ class TimelineKind(StrEnum):
     HAND_OFF = "hand_off"
     REPLAY = "replay"
     ERASURE = "privacy.erasure"
+    # Plan O M235 (DEC-1805): the visit's own events.
+    GOAL_SET = "goal.set"
+    CHAT = "chat.message"
+    PRESCRIPTION = "prescription.saved"
+    READINESS = "readiness.checked"
+    # Plan O M246 (DEC-1816): the protocol's events.
+    ASSUMED = "question.assumed"
+    STANDING_REMEMBERED = "standing_answer.remembered"
+    STANDING_APPLIED = "standing_answer.applied"
+    STANDING_REVOKED = "standing_answer.revoked"
+    DOUBT = "doubt.raised"
+    DATA_REQUESTED = "data.requested"
+    CONFIRMED = "approval.confirmed"
+    STANDING_UNFIT = "standing_answer.unfit"
+    """A standing answer was not applied: the same button now makes another change, so the question is asked."""
 
 
 DetailValue = str | int | float | bool | None
@@ -303,6 +319,24 @@ class CaseItem(StrictBase):
     proposed_at: AwareDatetime = Field(description="When it was proposed.")
     decided_by: str | None = Field(default=None, description="Who ticked or unticked it (user id).")
     decided_at: AwareDatetime | None = Field(default=None, description="When.")
+    goal_id: str | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+        description="Plan O M235: the goal section it belongs to; null for the shared base.",
+    )
+    # Plan O M246 (DEC-1816): added, defaulted and left out of a dump while unset, so a case written before reads
+    # and dumps exactly as it did.
+    assumption: str | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+        description="Plan O M246: the assumption the rules stated when they decided a small ambiguity; the "
+        "person may change it (answer its question).",
+    )
+    standing_answer_id: str | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+        description="Plan O M246: the client's standing answer that added it, pre-ticked and revocable.",
+    )
 
 
 class CaseOption(StrictBase):
@@ -311,6 +345,23 @@ class CaseOption(StrictBase):
     option_id: str = Field(description="Stable within the question.")
     label: str = Field(description="Button text.")
     effect_digest: str | None = Field(default=None, description="The proposal it adds; null = leave as is.")
+    # Plan O M246 (DEC-1816): what the option was measured to do, and the safe choice behind "I don't know".
+    rows_changed: int | None = Field(
+        default=None,
+        ge=0,
+        exclude_if=lambda value: value is None,
+        description="Plan O M246: rows this option changes, measured by the rules.",
+    )
+    label_rate: float | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+        description="Plan O M246: the share of yes outcomes with this option, in percent, when it moves it.",
+    )
+    safe: bool = Field(
+        default=False,
+        exclude_if=lambda value: not value,
+        description='Plan O M246: the safe choice (hide, leave as text, stop) an "I don\'t know" maps to.',
+    )
 
 
 class CaseQuestion(StrictBase):
@@ -327,6 +378,33 @@ class CaseQuestion(StrictBase):
     answer: str | None = Field(default=None, description="The chosen option id.")
     answered_by: str | None = Field(default=None, description="Who answered (user id).")
     answered_at: AwareDatetime | None = Field(default=None, description="When.")
+    goal_id: str | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+        description="Plan O M235: the goal section it belongs to; null for the shared base.",
+    )
+    # Plan O M246 (DEC-1816): Question v2 (the design §6.5), added and defaulted.
+    why: str = Field(
+        default="",
+        exclude_if=lambda value: not value,
+        description='Plan O M246: why it is asked ("Both readings are valid for 1,204 of 3,000 values.").',
+    )
+    value_signature: tuple[str, ...] = Field(
+        default=(),
+        exclude_if=lambda value: not value,
+        description="Plan O M246: the values it is about (a detector's spellings), for a standing answer.",
+    )
+    assumed: bool = Field(
+        default=False,
+        exclude_if=lambda value: not value,
+        description="Plan O M246: answered by the rules as a stated assumption (the choice changes too little "
+        "to ask); answering it changes the assumption.",
+    )
+    standing_answer_id: str | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+        description="Plan O M246: answered by this client's standing answer; revoking it asks it again.",
+    )
 
 
 class CaseDoubt(StrictBase):
@@ -351,6 +429,17 @@ class CaseApproval(StrictBase):
     text_shown: str = Field(default="", description="The sentence the person read, word for word.")
     approve_class: bool = Field(default=False, description="An APPROVE-class item's own confirmation.")
     receipt_id: str | None = Field(default=None, description="The receipt issued, if any.")
+    # Plan O M246 (DEC-1816): what was approved, by digest, and the role it needed; added and defaulted.
+    payload_digest: str | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+        description="Plan O M246: sha256 of the items approved (their payload digests) and the sentence read.",
+    )
+    role: str | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+        description="Plan O M246: the role an APPROVE-class item needed (`analyst` or `approver`).",
+    )
 
 
 class StandingAnswerUse(StrictBase):
@@ -460,6 +549,11 @@ class Case(Artefact):
     last_events: tuple[TimelineEvent, ...] = Field(
         default=(),
         description="The timeline events this version wrote; replayed into the timeline after a crash.",
+    )
+    visit: CaseVisit | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+        description="Plan O M235: where the visit stands beyond its state (`engine.doctor.visit`).",
     )
 
     @model_validator(mode="after")
@@ -1106,6 +1200,15 @@ def forget_upload(document: dict[str, Any], upload_id: str) -> tuple[dict[str, A
                 entry["orphaned"] = True
                 orphaned += 1
         counts["prescriptions_orphaned"] = orphaned
+    visit = out.get("visit")
+    if isinstance(visit, dict):  # M235: the visit forgets the file, and the options of its questions
+        asked = {q.get("question_id") for q in out.get("questions") or () if isinstance(q, dict)}
+        offers = visit.get("offers")
+        out["visit"] = {
+            **visit,
+            "taken_in": [u for u in visit.get("taken_in") or () if u != upload_id],
+            "offers": {k: v for k, v in offers.items() if k in asked} if isinstance(offers, dict) else {},
+        }
     files = out.get("files")
     if counts["files"] and isinstance(files, list) and not files and out.get("chat"):
         counts["chat_messages"] = len(out["chat"]) if isinstance(out["chat"], list) else 0

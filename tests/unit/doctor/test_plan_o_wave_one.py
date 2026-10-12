@@ -40,7 +40,7 @@ from engine.doctor.registry import DataToolContext, DataToolError, DataToolKind,
 from engine.doctor.stack_files import STACK_CODES
 from engine.doctor.tools_formats import FORMAT_TOOLS
 from engine.doctor.tools_rows import ROW_TOOL_CODES
-from engine.doctor.tools_wave_one import UNCATALOGUED, WAVE_ONE_TOOLS
+from engine.doctor.tools_wave_one import UNCATALOGUED, WAVE_ONE_TOOLS, _FilesView
 from engine.pilot.help import known_codes
 from engine.storage import LocalStorage, upload_key
 from engine.utils.time import utc_now
@@ -82,6 +82,8 @@ def test_the_wave_registers_every_catalogued_tool_by_its_row() -> None:
     for name in UNCATALOGUED:
         assert row(name) is None and name not in registry.names()
     assert {spec.name for spec in FORMAT_TOOLS} - UNCATALOGUED <= set(WAVE_ONE_TOOLS)
+    # Plan O M236 (DEC-1806): M240's two tools have rows #82 and #83 now, so every format tool is registered.
+    assert not UNCATALOGUED and {spec.name for spec in FORMAT_TOOLS} <= set(registry.names())
 
 
 def test_the_wave_serves_the_rules_and_the_screen_never_the_ai() -> None:
@@ -257,3 +259,17 @@ def test_normalise_key_keeps_its_wider_reading_where_m241_reads_no_mobile() -> N
 
 def test_the_frame_helper_stays_a_dataframe(case_files: CaseFiles) -> None:
     assert isinstance(case_files.frame("u-csv"), pd.DataFrame)
+
+
+def test_a_file_with_no_name_is_named_by_its_upload_id() -> None:
+    """Wave-2 integration, as fix-build-sentence did in `build_driver.plan_build`: a file tool's sentence never
+    names an empty file ("customers.csv and ."); it names the upload id."""
+    frame = pd.DataFrame({"customer_id": ["C-1"]})
+    files = tuple(
+        LoadedFile(upload_id=upload_id, file_name=name, frame=frame, profile=None)  # type: ignore[arg-type]
+        for upload_id, name in (("up-blank", ""), ("up-spaces", "  "), ("up-named", "bills.csv"))
+    )
+    view = _FilesView(DataToolContext(files=files))
+    assert view.file_name("up-blank") == "up-blank"
+    assert view.file_name("up-spaces") == "up-spaces"
+    assert view.file_name("up-named") == "bills.csv"

@@ -10,7 +10,7 @@ A **locale profile** is detected per client, confirmed once, and remembered. Eac
 * `detect_locale` (#60, READ, rules) - reads one or more frames and proves what it can: the decimal mark from values
   that read one way only (`engine.agent.formats.decimal_evidence`), Indian or western digit grouping, the day/month
   order (`formats.date_order`), the number words, the yes/no words, the currency tokens of money columns
-  (`formats.CURRENCY_TOKENS`; recorded, never converted - that is M242), phone, PIN and ID shapes
+  (`formats.currency_codes`; recorded, never converted - that is M242), phone, PIN and ID shapes
   (`engine.doctor.india_ids`) and `+05:30` time stamps. **Counts only**: no cell value is returned.
 * `locale_for` - the per-client flow: with no confirmed profile, the detection and **one question** to confirm it;
   with one, the confirmed profile **applied** with a visible notice ("Using the number and date settings you
@@ -34,7 +34,7 @@ from typing import Any, Final, Generic, Literal, TypeVar
 import pandas as pd
 from pydantic import AwareDatetime, Field
 
-from engine.agent.formats import CURRENCY_TOKENS, date_order, decimal_evidence, parse_numbers
+from engine.agent.formats import currency_codes, date_order, decimal_evidence, parse_numbers
 from engine.config import StrictBase
 from engine.doctor.india_ids import detect_india_ids
 from engine.doctor.indian_values import bare_letters, boolean_word_family, money_evidence
@@ -95,22 +95,6 @@ _OTHER_OFFSET: Final[re.Pattern[str]] = re.compile(
 _NUMERIC_DATE: Final[re.Pattern[str]] = re.compile(r"^\s*\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4}")
 _ZIP_HEADER: Final[re.Pattern[str]] = re.compile(r"(?i)(^|_)(zip|zipcode|zip_code)($|_)")
 _ZIP: Final[re.Pattern[str]] = re.compile(r"\d{5}(?:-\d{4})?")
-_CURRENCY_CODE: Final[dict[str, str]] = {
-    "inr": "INR",
-    "rs.": "INR",
-    "rs": "INR",
-    "₹": "INR",
-    "usd": "USD",
-    "us$": "USD",
-    "$": "USD",
-    "eur": "EUR",
-    "€": "EUR",
-    "gbp": "GBP",
-    "£": "GBP",
-}
-_CURRENCY_RE: Final[re.Pattern[str]] = re.compile(
-    "|".join(re.escape(token) for token in CURRENCY_TOKENS), flags=re.IGNORECASE
-)
 
 
 class LocaleSetting(StrictBase, Generic[T]):
@@ -312,7 +296,7 @@ def _read_column(label: str, column: str, series: pd.Series[Any], votes: _Votes)
             votes.add("number_words", "k_m", label)
         # A currency sign speaks only in a column of amounts: `rs` inside `3 hours` is not rupees.
         amounts = parse_numbers(with_digits, indian_scale_words=True).changed >= MIN_SHARE * len(with_digits)
-        codes = {_CURRENCY_CODE[m.group(0).casefold()] for t in with_digits for m in _CURRENCY_RE.finditer(t)}
+        codes = {code for t in with_digits for code in currency_codes(t)}
         if codes and amounts:
             votes.money.setdefault(column, set()).update(codes)
         if with_digits.str.contains(_IST_OFFSET).any():

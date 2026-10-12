@@ -37,6 +37,9 @@ function withoutOutcome(body) {
 }
 /** The main session with no Product AI connected: the chat, and so typed answers, are not offered. */
 const NO_CHAT = "u_no_chat";
+/** The conflict file again, where Approve meets the Run button's own checks (the recorded `POST /runs` 409 on
+ * that file with no outcome): the decisions answer leaves nothing open, so the screen goes on to Approve. */
+const CHECKS = "u_checks";
 const hostileChat = (() => {
   const copy = hostile(fixture("main_chat"));
   copy.session.transcript[copy.session.transcript.length - 1].text = HOSTILE;
@@ -69,6 +72,7 @@ const CHANGES = {
 const flows = {
   [ids.main]: { start: "main_start", messages: "main_chat", answers: "main_answer", decisions: "main_decided", preview: "main_preview", apply: "main_apply" },
   [ids.conflict]: { start: "conflict_start", answers: "conflict_answer", decisions: "conflict_decided", apply: "conflict_apply" },
+  [CHECKS]: { start: "conflict_start", answers: "conflict_answer", decisions: "conflict_answer", apply: "conflict_checks" },
   [ids.placeholder]: { start: "placeholder_start", decisions: "placeholder_decided", preview: "placeholder_preview" },
   [ids.stopped]: { start: "stopped_start", messages: "stopped_start" },
 };
@@ -82,6 +86,7 @@ const server = (request) => {
   if (method === "POST" && path === "/uploads") {
     if (nextUpload === "tricky") return { status: 201, body: { ...fixture("upload_main"), upload_id: TRICKY } };
     if (nextUpload === "no_chat") return { status: 201, body: { ...fixture("upload_main"), upload_id: NO_CHAT } };
+    if (nextUpload === "checks") return { status: 201, body: { ...fixture("upload_conflict"), upload_id: CHECKS } };
     if (nextUpload === "renamed") return { status: 201, body: { ...fixture("upload_main"), upload_id: RENAMED } };
     if (nextUpload === "no_outcome") {
       return { status: 201, body: { ...fixture("upload_placeholder"), upload_id: NO_OUTCOME } };
@@ -366,10 +371,10 @@ test("after the run, Manual setup shows the prepared file with every choice fill
   assert.ok($("[data-ag-applied]"), "the Guided tab still shows what was approved");
 });
 
-test("an Approve the Run button's checks refuse shows those checks, and fills nothing", async () => {
-  const before = controller.state.upload.upload_id;
-  $("#ag-restart").click();
-  await chooseFile("conflict");
+/** Untick the outcome, answer the leak question "hide", and press Approve: what both conflict flows do. */
+async function untickOutcomeAndApprove(name, uploadId) {
+  if ($("#ag-restart")) $("#ag-restart").click(); // after an approved session; an open one keeps its upload control
+  await chooseFile(name);
   const target = session("conflict_start").proposals.find((p) => p.kind === "role" && p.path === "target");
   box(target.proposal_id).click();
   assert.equal(box(target.proposal_id).checked, false);
@@ -377,14 +382,33 @@ test("an Approve the Run button's checks refuse shows those checks, and fills no
   $(`[data-ag-question="${question.question_id}"][data-ag-option="hide"]`).click();
   await until(() => !$(`[data-ag-q="${question.question_id}"] .pill`), 2000, "the answer");
   assert.equal(box(target.proposal_id).checked, false, "the untick survives the answer");
+  const sentBefore = sent.decisions.filter((d) => d.uploadId === uploadId).length;
   $("#ag-approve").click();
-  await until(() => $("[data-ag-checks]"), 2000, "the refusal");
-  const decided = sent.decisions.filter((d) => d.uploadId === ids.conflict);
-  assert.equal(decided.length, 1);
+  await until(() => sent.decisions.filter((d) => d.uploadId === uploadId).length > sentBefore, 2000, "the ticks");
+  const decided = sent.decisions.filter((d) => d.uploadId === uploadId);
   assert.deepEqual(
-    decided[0].body.decisions.find((d) => d.proposal_id === target.proposal_id),
+    decided[decided.length - 1].body.decisions.find((d) => d.proposal_id === target.proposal_id),
     { proposal_id: target.proposal_id, state: "rejected" },
   );
+}
+
+test("an unticked outcome is asked for again: Approve stops at that question and fills nothing (DEC-1821)", async () => {
+  const before = controller.state.upload.upload_id;
+  await untickOutcomeAndApprove("conflict", ids.conflict);
+  const asked = session("conflict_decided").questions.find((q) => q.blocking && q.answer === null);
+  assert.ok(asked, "the recorded session asks for the outcome");
+  await until(() => $(`[data-ag-q="${asked.question_id}"] .pill`), 2000, "the outcome question");
+  assert.equal(text(`[data-ag-q="${asked.question_id}"] .pill`), "Needs an answer");
+  assert.ok($("#ag-approve").disabled, "Approve waits for the answer");
+  assert.equal($("[data-ag-checks]"), null, "no run was attempted, so no checks are shown");
+  assert.equal($("[data-ag-applied]"), null);
+  assert.equal(controller.state.upload.upload_id, before, "the Setup form was not touched");
+});
+
+test("an Approve the Run button's checks refuse shows those checks, and fills nothing", async () => {
+  const before = controller.state.upload.upload_id;
+  await untickOutcomeAndApprove("checks", CHECKS);
+  await until(() => $("[data-ag-checks]"), 2000, "the refusal");
   assert.ok($('[data-ag-checks] [data-code="TARGET_MISSING"]'));
   assert.equal($("[data-ag-applied]"), null);
   assert.equal(controller.state.upload.upload_id, before, "the Setup form was not touched");

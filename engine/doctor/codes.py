@@ -75,7 +75,35 @@ PLAN_O_CODES: Final[frozenset[str]] = frozenset(
         "UNIT_MISMATCH",
         # M240 (DEC-1810): parser safety (`engine.doctor.parser_loss.PARSER_LOSS_CODES`, with X_PARSER_ROW_LOSS above).
         "X_PARSER_COLUMNS_SHIFTED",
+        # M233 (DEC-1803): the data policy (`engine.doctor.policy`; POLICY_NO_RULES and POLICY_PAYLOAD_INVALID are
+        # Plan K's).
+        "POLICY_BOOLEAN_SPELLING",
+        "POLICY_NEVER_TICKED",
+        "POLICY_STEP_NOT_TRIED",
+        # M235 (DEC-1805): the visit (`engine.doctor.visit`, `api/routes/case_visit.py`).
+        "VISIT_NOT_WAITING",
+        "VISIT_UNKNOWN_CHOICE",
+        # M236 (DEC-1806): route codes the wrapper tools now raise too (`engine.doctor.tools_wrappers`;
+        # `engine.connections.limits`; AGENTIC_DISABLED is Plan K's).
+        "AGENT_SESSION_APPLIED",
+        "CONNECTION_BUSY",
+        "CONNECTION_NEEDS_ADDON",
+        # M246 (DEC-1816): the protocol (`engine.doctor.protocol`, `engine.doctor.standing`; it also reuses
+        # APPROVAL_SENTENCE_CHANGED above and Plan K's POLICY_ROLE_SEPARATION and LEDGER_CHAIN_BROKEN).
+        "APPROVAL_CONFIRMATION_MISSING",
+        "DATA_REQUESTED",
+        "DIFFERENT_FILE_REQUESTED",
+        "DOUBT_UNGROUNDED",
+        "STANDING_ANSWER_NOT_FOUND",
+        # M242 (DEC-1812): currency (`engine.doctor.currency`; CURRENCY_MIXED is also a recipe check code in
+        # `engine.contracts.AGENT_VALIDATION_CODES`). M242's rate approval also raises APPROVAL_SENTENCE_CHANGED above.
+        "CURRENCY_FOREIGN",
+        "CURRENCY_MIXED",
+        "CURRENCY_RATE_INVALID",
+        "CURRENCY_RATE_UNAPPROVED",
+        "CURRENCY_UNSTATED",
     }
 )
-"""Every code Plan O raises, grouped by milestone. M232 (the registry) reuses Plan K's TOOL_* codes and M241 (locale)
-raises none. Each code here has its entry in `configs/pilot/help.yaml`."""
+"""Every code Plan O raises, grouped by milestone. M232 (the registry) reuses Plan K's TOOL_* codes, and M241 (locale)
+and M248 (the evals; its EVAL_* codes are for developers only) raise none. Each code here has its entry in
+`configs/pilot/help.yaml`."""

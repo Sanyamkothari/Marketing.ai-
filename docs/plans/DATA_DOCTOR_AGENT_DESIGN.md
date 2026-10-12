@@ -501,14 +501,23 @@ they are not a second cleaning engine for single files.
 | 80 | `propose_training_budget` | PROPOSE | rules | `engine/agent/recommend.py:317-341` `_time_rules` (replaced); `model_search.time_limit_minutes` | new |
 | 81 | `propose_time_settings` | PROPOSE | rules | `recommend.py:538`; `advisor.py:132`; `prepare.py:1143-1184`; `snapshots.py:66`; `label_drafts.py:83`; `configs/outcomes.yaml` | new |
 
+#### M. Added with Plan O M236 (DEC-1806)
+
+M240 built two READ tools in wave 1 that had no row. They are numbered after #81 so no other number changes.
+
+| # | Tool | Kind | Mode | Wraps (file:line) | Status |
+|---|---|---|---|---|---|
+| 82 | `read_workbook_sheets` | READ | rules | `engine/intake/sheets.py` `split_workbook`: each sheet with a table becomes a file of the case (the workbook is kept; no value changes) | new |
+| 83 | `find_excel_serial_dates` | READ | rules | `engine/agent/formats.py` `find_excel_serial_dates`: Excel day numbers, proposed as pending `parse_date` steps with `excel_serial` (M233's `data.excel_serial_dates`) | new |
+
 #### Catalogue size
 
 | Status | Count | Tools |
 |---|---|---|
 | Existing | 22 | the 18 look tools, `propose_setting`, `propose_step`, `edit_by_hand`, and the CONVERSE loop (counted once; `ask_your_data` is its read-only mode) |
 | Wrapper | 29 | #1–3, #6–10, #29–34, #36–38, #40–43, #50, #58, #65, #66, #68, #71, #73, #76 |
-| New | 29 | #4, #5, #35, #39, #45–47, #51–57, #59–64, #67, #69, #70, #72, #74, #75, #79–81. Inside `propose_step` they add 3 step kinds and 3 parameter extensions (counted with #54, #55, #61, #62, #64). |
-| **Total** | **80 tools** | 24 PROPOSE and 4 ASK; the rest READ or the conversation loop |
+| New | 31 | #4, #5, #35, #39, #45–47, #51–57, #59–64, #67, #69, #70, #72, #74, #75, #79–83. Inside `propose_step` they add 3 step kinds and 3 parameter extensions (counted with #54, #55, #61, #62, #64). |
+| **Total** | **82 tools** | 24 PROPOSE and 4 ASK; the rest READ or the conversation loop (80 in the design as approved; #82 and #83 added with M236) |
 
 The executors that change data (`apply_prescription`, `replay_prescription`, the builder's `build` and `replay`
 (`engine/onboarding/replay.py:101`), `memory.remember` (`memory.py:144`)) are not in the catalogue on purpose.

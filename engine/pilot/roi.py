@@ -70,6 +70,7 @@ from engine.pilot.document import (
 
 if TYPE_CHECKING:
     from engine.clients import ClientStore
+    from engine.doctor.currency import ReportMoney
     from engine.storage import Storage
     from engine.uplift.contracts import IncrementalityReport
 
@@ -851,8 +852,17 @@ def roi_document(
     campaign_title: str = "",
     simulated_note: str = "",
     now: datetime | None = None,
+    money: ReportMoney | None = None,
 ) -> ReportDocument:
-    """The one-page value view of a campaign."""
+    """The one-page value view of a campaign.
+
+    `money` (Plan O M242, `engine.doctor.currency.report_money`): the units of the run's money columns and every rate
+    used, with its date, source and approver, shown under "Currency". It never changes how an amount on this page is
+    written: gross value, costs and net value are the measured counts times the person's own inputs, which are in
+    `RoiInputs.currency` (rupees), so they stay in rupees whatever currency a column of the file is in; when the
+    file's amounts are in another currency a line says the two are shown apart. None (every run without a Data
+    Doctor money basis, and every rupee run with nothing converted) prints exactly as before.
+    """
     from engine.utils.time import utc_now
 
     blocks: list[AnyBlock] = []
@@ -999,6 +1009,10 @@ def roi_document(
                 blocks.append(Paragraph(text=f"Note: {inputs.note}", muted=True))
     if view.value_note:
         blocks.append(Callout(title="How the amount is valued", text=view.value_note, tone="info"))
+    if money is not None:
+        currency_lines = money.lines_beside(view.inputs.currency if view.inputs is not None else "INR")
+        if currency_lines:
+            blocks += [Heading(text="Currency", level=3), Bullets(items=currency_lines)]
     if simulated_note:
         blocks.append(Callout(title="Demo data", text=simulated_note, tone="warning"))
     blocks.append(

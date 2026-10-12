@@ -52,6 +52,8 @@ from engine.doctor.registry import (
 )
 from engine.doctor.tools import LookOutput
 from engine.doctor.tools_wave_one import WAVE_ONE_TOOLS
+from engine.doctor.tools_wave_two import WAVE_TWO_TOOLS
+from engine.doctor.tools_wrappers import M236_TOOLS
 from tests.fixtures.make_data import GenerationSpec, generate
 from tests.unit.agent.helpers import context_for
 
@@ -114,7 +116,15 @@ class _Turn:
 # ---------------------------------------------------------------------------
 def test_the_registry_holds_the_22_existing_tools_and_the_first_wrappers() -> None:
     names = set(data_registry().names())
-    assert names == {*LOOK_TOOLS, *CHAT_PROPOSE, "edit_by_hand", *FIRST_WRAPPERS.values(), *WAVE_ONE_TOOLS}
+    assert names == {
+        *LOOK_TOOLS,
+        *CHAT_PROPOSE,
+        "edit_by_hand",
+        *FIRST_WRAPPERS.values(),
+        *WAVE_ONE_TOOLS,
+        *M236_TOOLS,  # Plan O M236 (DEC-1806): the remaining wrappers and `explain`
+        *WAVE_TWO_TOOLS,  # Plan O M242 (DEC-1812 (k)): `convert_currency`
+    }
     assert len(LOOK_TOOLS) == 18
     # The 22nd existing tool is the conversation loop: it is the caller, not a tool kind.
     assert row("chat_turn") is not None and row("chat_turn").kind is None  # type: ignore[union-attr]
@@ -130,25 +140,32 @@ def test_every_registered_tool_matches_its_catalogue_row() -> None:
         assert entry.number == tool.number, tool.name
         assert entry.kind == tool.kind.value, tool.name
         assert entry.exposure == tool.exposure.value, tool.name
-        # Nothing new is registered before it is built: the new tools are wave 1's (DEC-1802 (t)).
-        assert entry.status in {"existing", "wrapper"} or tool.name in WAVE_ONE_TOOLS, tool.name
+        # Nothing new is registered before it is built: the new tools are wave 1's (DEC-1802 (t)), M236's
+        # `explain` (DEC-1806) and wave 2's (M242's `convert_currency`).
+        built_new = {*WAVE_ONE_TOOLS, "explain", *WAVE_TWO_TOOLS}
+        assert entry.status in {"existing", "wrapper"} or tool.name in built_new, tool.name
         if tool.number in FIRST_WRAPPERS:
             assert entry.status == "wrapper" and FIRST_WRAPPERS[tool.number] == tool.name
         assert tool.wraps, tool.name
 
 
 def test_the_catalogue_is_the_designs_eighty_tools() -> None:
+    """The design's 80 tools in 81 rows, and since Plan O M236 (DEC-1806) M240's two READ tools as #82, #83."""
     counted = [entry for entry in CATALOGUE if entry.counted_with is None]
-    assert len(CATALOGUE) == 81 and [e.number for e in CATALOGUE] == list(range(1, 82))
-    assert len(counted) == 80
-    assert Counter(e.status for e in counted) == {"existing": 22, "wrapper": 29, "new": 29}
+    assert len(CATALOGUE) == 83 and [e.number for e in CATALOGUE] == list(range(1, 84))
+    assert len(counted) == 82
+    assert Counter(e.status for e in counted) == {"existing": 22, "wrapper": 29, "new": 31}
     kinds = Counter(e.kind for e in counted)
     assert kinds["propose"] == 24 and kinds["ask"] == 4
     assert {e.name for e in CATALOGUE if e.exposure == "aggregate"} == {
         "what_can_this_power",
         "check_readiness",
     }
-    assert len({e.name for e in CATALOGUE}) == 81
+    assert len({e.name for e in CATALOGUE}) == 83
+    assert [(e.number, e.name, e.kind) for e in CATALOGUE[81:]] == [
+        (82, "read_workbook_sheets", "read"),
+        (83, "find_excel_serial_dates", "read"),
+    ]
     assert not EXECUTOR_NAMES & {e.name for e in CATALOGUE}, "an executor is never in the catalogue"
 
 
@@ -303,10 +320,27 @@ def _full_context(
 
 
 @pytest.mark.parametrize("name", [t.name for t in data_registry().list(kind=DataToolKind.PROPOSE)])
-def test_a_viewer_calling_a_propose_tool_is_refused_on_that_call(agent: AgentContext, name: str) -> None:
+def test_a_viewer_calling_a_propose_tool_is_refused_on_that_call(
+    agent: AgentContext, name: str, tmp_path: Path
+) -> None:
     tool = data_registry().get(name)
     caller = "person" if "person" in tool.callers else "ai"
-    ctx = _full_context(agent, VIEWER, caller)
+    # What M236's PROPOSE tools also need to exist here (DEC-1806): storage, saved connections, an AI service,
+    # and for `second_opinion` Plan K's `agentic.enabled` on, as its route needs (DEC-1409 (g)).
+    from engine.connections.store import ConnectionStore
+    from engine.settings import Settings
+    from engine.storage import LocalStorage
+    from tests.unit.agent.helpers import header_help_root
+
+    ctx = _full_context(
+        agent,
+        VIEWER,
+        caller,
+        storage=LocalStorage(tmp_path),
+        connections=ConnectionStore(LocalStorage(tmp_path / "c"), Settings()),
+        meter=object(),
+        config_root=header_help_root(),
+    )
     with pytest.raises(DataToolError) as refused:
         data_registry().call(name, {"kind": "drop_column", "column": "x"}, ctx)
     assert refused.value.code == "TOOL_ROLE_REQUIRED" and refused.value.status == 403

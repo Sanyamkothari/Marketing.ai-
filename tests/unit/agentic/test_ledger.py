@@ -101,11 +101,14 @@ def test_entries_chain_from_genesis_and_carry_the_policy_version(
 
 def test_the_signed_kinds_are_approvals_test_plans_and_evidence_labels() -> None:
     # Plan M M184 (DEC-1614 (d)): a copy template's approval is an approval too, so it is signed as well.
+    # Plan O M246 (DEC-1816): so are Data Doctor's approvals - the prepared data and an APPROVE-class item's own yes.
     assert {
         "proposal.approved",
         "test_plan.frozen",
         "evidence.label",
         "copy_template.approved",
+        "data.prescription.approved",
+        "data.decision",
     } == SIGNED_KINDS
 
 

@@ -55,6 +55,7 @@ from typing import TYPE_CHECKING, Any, Final, Generic, Literal, Protocol, TypeVa
 from pydantic import AwareDatetime, BaseModel, Field, ValidationError
 
 from engine.access.roles import ROLE_DESCRIPTIONS, Principal, Role
+from engine.agent.contracts import RecipeStepKind
 from engine.agent.tools import AgentContext, AgentToolError, call_tool
 from engine.agentic.canonical import canonical_bytes, canonical_json, digest, sha256_hex
 from engine.agentic.registry import DEFAULT_OUTPUT_BUDGET
@@ -66,8 +67,11 @@ if TYPE_CHECKING:
     from engine.agent.contracts import AgentSession, Proposal, ToolResult
     from engine.agent.egress import Egress
     from engine.agentic.ledger import DecisionLedger
+    from engine.clients import ClientStore
     from engine.config import RoleCatalogue, UseCaseConfig
+    from engine.connections.store import ConnectionStore
     from engine.doctor.diagnose import LoadedFile, Offer
+    from engine.doctor.explain import Narrator
     from engine.doctor.locale import LocaleProfile
     from engine.doctor.readiness import CheckReadinessArgs, ReadinessInputs
     from engine.doctor.tools_formats import FormatToolContext
@@ -137,6 +141,8 @@ FORBIDDEN_PREFIXES: Final[tuple[str, ...]] = (
 Caller = Literal["rules", "ai", "person"]
 CALLERS: Final[frozenset[str]] = frozenset({"rules", "ai", "person"})
 _MIN_PROPOSE_ROLE: Final[frozenset[Role]] = frozenset({Role.ANALYST, Role.APPROVER, Role.ADMIN})
+_LAST_ROW: Final[int] = 83
+"""The catalogue's last row (`engine.doctor.catalogue`): #82 and #83 are M240's tools, given rows in M236."""
 _LETTERS: Final[dict[int, int]] = str.maketrans("0123456789abcdef", "abcdefghijklmnop")
 
 
@@ -235,6 +241,21 @@ class DataToolContext:
     readiness: Callable[[CheckReadinessArgs], ReadinessInputs] | None = None
     """The readiness report's inputs for the case's prepared copy (M234's `check_readiness`), built by the
     caller with `engine.doctor.readiness.inputs_for_upload`."""
+    # Plan O M236 (DEC-1806): what the remaining wrappers and `explain` read. Each is optional; a tool that needs
+    # one is not available without it.
+    connections: ConnectionStore | None = None
+    """The deployment's saved connections (`preview_connection`, `propose_import`)."""
+    client_store: ClientStore | None = None
+    """The onboarding registry of sources, mappings and recipes (`check_refresh`)."""
+    meter: Any = None
+    """The metered AI service (`engine.generative.budget.Meter`) for `second_opinion`; None with no AI service."""
+    guardrails: Any = None
+    """The deterministic guardrails (`engine.generative.guardrails.Guardrails`) the AI's words pass."""
+    evidence: tuple[DataToolResult, ...] = ()
+    """Results of this case's earlier registry calls, recorded by the server (`explain`, `request_approval`
+    cite them by evidence id; a model never supplies a result)."""
+    narrator: Narrator | None = None
+    """The AI service's writer of `explain`'s structured narrative; None means the rules' narrative."""
 
     def require_agent(self) -> AgentContext:
         if self.agent is None:  # unreachable through the registry: `needs` makes the tool unavailable
@@ -248,7 +269,20 @@ class DataToolContext:
         return self.agent.config_root if self.agent is not None else None
 
 
-Need = Literal["agent", "files", "storage", "session", "save_session", "turn", "case_files", "readiness"]
+Need = Literal[
+    "agent",
+    "files",
+    "storage",
+    "session",
+    "save_session",
+    "turn",
+    "case_files",
+    "readiness",
+    "connections",
+    "client_store",
+    "meter",
+    "evidence",
+]
 
 In = TypeVar("In", bound=BaseModel)
 Out = TypeVar("Out", bound=BaseModel)
@@ -263,7 +297,7 @@ class DataTool(Generic[In, Out]):
     """One registry entry: Plan K's `AgentTool` shape plus exposure, callers and needs (Plan O §5)."""
 
     number: int
-    """The tool's row in the design's catalogue (§5.5), 1 to 81."""
+    """The tool's row in the design's catalogue (§5.5), 1 to 83."""
     name: str
     kind: DataToolKind
     description: str
@@ -289,8 +323,24 @@ class DataTool(Generic[In, Out]):
     """True for Plan G's look tools: `session_call` runs them as Plan G's `call_tool` does, byte for byte."""
     policy_kind: str | None = None
     """For PROPOSE: the policy rule set that decides it (M233 reads it; default deny when it has no rules)."""
+    step_kinds: tuple[RecipeStepKind, ...] = ()
+    """The step kinds its results propose (M238's and M240's READ tools return pending steps beside their
+    evidence). A tool that declares any is decided by the data policy like a PROPOSE tool (M233, DEC-1803)."""
     wraps: str = ""
     """The engine function it wraps, as file:line (the design §5.5)."""
+
+    @property
+    def proposal_kind(self) -> str | None:
+        """The policy kind its results are decided by: a PROPOSE tool's `policy_kind`, or - for a READ tool that
+        returns pending steps (`step_kinds`) - its own (`policy.policy_kind_for`); None for a tool proposing
+        nothing."""
+        if self.policy_kind:
+            return self.policy_kind
+        if self.kind is DataToolKind.PROPOSE or self.step_kinds:
+            from engine.doctor.policy import policy_kind_for
+
+            return policy_kind_for(self.name)
+        return None
 
     @property
     def budget(self) -> int | None:
@@ -374,7 +424,7 @@ class DataToolRegistry:
             raise ValueError(f"PROPOSE tool {name!r} must name its policy rule set (`policy_kind`).")
         if tool.session_tool and tool.kind is not DataToolKind.READ:
             raise ValueError(f"Only READ tools run as Plan G session tools: {name!r}.")
-        if not 1 <= tool.number <= 81:
+        if not 1 <= tool.number <= _LAST_ROW:
             raise ValueError(f"Tool {name!r} has no row in the catalogue (number {tool.number}).")
         budget = tool.max_output_bytes
         if budget is None and tool.kind is not DataToolKind.PROPOSE:
@@ -446,6 +496,9 @@ class DataToolRegistry:
         if tool is None:
             raise DataToolError("TOOL_UNKNOWN", f"There is no tool called {name[:40]!r} here.", status=404)
         self.check_role(tool, ctx)
+        kind = tool.proposal_kind
+        if kind is not None:
+            _require_rule_set(tool, kind, ctx)
         try:
             parsed = tool.input_model.model_validate(dict(given))
         except ValidationError as exc:
@@ -467,6 +520,8 @@ class DataToolRegistry:
                     "ask a narrower question.",
                     status=413,
                 )
+        if kind is not None:
+            _check_output(kind, output, ctx)
         given_json = parsed.model_dump(mode="json", exclude_none=True)
         result = DataToolResult(
             evidence_id=data_evidence_id(name, given_json, output),
@@ -512,6 +567,40 @@ class DataToolRegistry:
         return call_tool(ctx.require_agent(), name, given, evidence_id=evidence_id)
 
 
+def _require_rule_set(tool: DataTool[Any, Any], kind: str, ctx: DataToolContext) -> None:
+    """Plan O M233 (DEC-1803): default deny. A tool that proposes (PROPOSE, or a READ tool returning pending
+    steps) whose kind has no rule set in the data policy (`configs/agentic/policy.yaml`, `data.rule_sets`) is
+    refused before it runs (`POLICY_NO_RULES`), as is every such tool when the policy cannot be read. What it
+    returns is then decided by :func:`_check_output`; the chat's and the person's kinds are decided in their
+    handlers (`loop._propose_step`, `loop._propose`, `edits.add_edit`), where the facts they read are known.
+    """
+    from engine.agentic.errors import AgenticError
+    from engine.doctor.policy import load_data_policy
+
+    try:
+        rule_sets = load_data_policy(ctx.root()).rule_sets
+    except AgenticError:
+        rule_sets = {}
+    if kind not in rule_sets:
+        raise DataToolError(
+            "POLICY_NO_RULES", f"No policy rules are set for a {kind or tool.name} proposal.", status=403
+        )
+
+
+def _check_output(kind: str, output: Mapping[str, Any], ctx: DataToolContext) -> None:
+    """Plan O M233 (DEC-1803): every proposal in a tool's output, decided by its kind's rule set after the tool
+    ran and before its result is recorded; the first refusal is raised with its code (403). Never ticked unless
+    the rules allow it, `na` never mapped, a reshape only through its question, an APPROVE-class item with its
+    exact sentence, decision O10 on an AI's merge (`policy.check_tool_output`)."""
+    from engine.doctor.policy import check_tool_output, tool_policy_context
+
+    found = check_tool_output(kind, output, tool_policy_context(ctx, kind))
+    if found is not None:
+        raise DataToolError(
+            found.code or "POLICY_NO_RULES", str(found.detail.get("reason", "Not allowed."))[:400], status=403
+        )
+
+
 def _met(tool: DataTool[Any, Any], ctx: DataToolContext) -> bool:
     for need in tool.needs:
         if need == "agent" and ctx.agent is None:
@@ -529,6 +618,14 @@ def _met(tool: DataTool[Any, Any], ctx: DataToolContext) -> bool:
         if need == "case_files" and ctx.case_files is None:
             return False
         if need == "readiness" and ctx.readiness is None:
+            return False
+        if need == "connections" and ctx.connections is None:
+            return False
+        if need == "client_store" and ctx.client_store is None:
+            return False
+        if need == "meter" and ctx.meter is None:
+            return False
+        if need == "evidence" and not ctx.evidence:
             return False
     return True
 

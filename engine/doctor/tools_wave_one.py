@@ -21,8 +21,10 @@ each of them an adapter that turns the spec into a :class:`~engine.doctor.regist
 * **Refusals.** A module's own coded refusal (`JoinError`, `StackError`, `BuildDriveError`, `RowToolError`)
   becomes a `DataToolError` with the same code (422), so the caller reads it like any other.
 
-Two M240 tools are not registered: `read_workbook_sheets` and `find_excel_serial_dates` have no row in the
-design's catalogue (:data:`UNCATALOGUED`), and the catalogue changes only with the design.
+M240's `read_workbook_sheets` and `find_excel_serial_dates` had no row in the design's catalogue in wave 1; M236
+(DEC-1806) gave them rows #82 and #83 with the design, so :data:`UNCATALOGUED` is empty and both are registered.
+`find_excel_serial_dates` declares the step kind it proposes (`parse_date`), so the registry decides its steps by
+M233's `data.excel_serial_dates` rule set.
 
 Nothing here changes what the product does while `data_doctor.unified` is off: the registry is reached only
 through its callers, and none of these tools is offered to the AI.
@@ -41,6 +43,7 @@ from pydantic import BaseModel
 
 from api.access_policy import RoutePolicy
 from engine.access.roles import Role
+from engine.agent.contracts import RecipeStepKind
 from engine.doctor.catalogue import row
 from engine.doctor.registry import (
     BY_EXPOSURE,
@@ -58,12 +61,13 @@ if TYPE_CHECKING:
     from engine.doctor.locale import LocaleProfile
     from engine.doctor.readiness import CheckReadinessArgs, ReadinessInputs
 
-__all__ = ["RULES_AND_SCREEN", "UNCATALOGUED", "WAVE_ONE_TOOLS", "register_wave_one"]
+__all__ = ["PERSON_ONLY", "RULES_AND_SCREEN", "UNCATALOGUED", "WAVE_ONE_TOOLS", "register_wave_one"]
 
 RULES_AND_SCREEN: Final[frozenset[str]] = frozenset({"rules", "person"})
+PERSON_ONLY: Final[frozenset[str]] = frozenset({"person"})
 
-UNCATALOGUED: Final[frozenset[str]] = frozenset({"read_workbook_sheets", "find_excel_serial_dates"})
-"""M240 tools with no row in the design's catalogue: left out until the design gives them one."""
+UNCATALOGUED: Final[frozenset[str]] = frozenset()
+"""Wave-1 tools with no row in the design's catalogue: none since M236 gave M240's two tools rows #82 and #83."""
 
 WAVE_ONE_TOOLS: Final[tuple[str, ...]] = (
     "read_other_format",
@@ -82,6 +86,8 @@ WAVE_ONE_TOOLS: Final[tuple[str, ...]] = (
     "indian_booleans",
     "detect_india_ids",
     "check_readiness",
+    "read_workbook_sheets",
+    "find_excel_serial_dates",
 )
 """Every tool this module registers, in catalogue order."""
 
@@ -136,7 +142,10 @@ class _FilesView:
         return frame
 
     def file_name(self, upload_id: str) -> str:
-        return str(self._loaded(upload_id).file_name)
+        """The file's name, or its upload id when the name is blank: a sentence never names an empty file
+        (as `engine.doctor.build_driver.plan_build` does since fix-build-sentence)."""
+        name = str(self._loaded(upload_id).file_name or "").strip()
+        return name or upload_id
 
     @cached_property
     def _diagnosis(self) -> Diagnosis:
@@ -155,6 +164,12 @@ class _FilesView:
 
     def diagnosis(self) -> Diagnosis | None:
         return self._diagnosis if self.ctx.files else None
+
+    def role_proposer(self) -> Any:
+        """M236's `propose_role`, through the registry, as the build plan's `RoleProposer` (DEC-1806)."""
+        from engine.doctor.tools_wrappers import ProposedRoles
+
+        return ProposedRoles(self.ctx)
 
 
 @dataclass(frozen=True)
@@ -215,6 +230,8 @@ class _Adapter:
     view: Callable[[DataToolContext], Any]
     needs: tuple[Need, ...]
     registered: list[str] = field(default_factory=list)
+    uncatalogued: frozenset[str] = UNCATALOGUED
+    """Specs with no catalogue row yet: skipped, never stood in for (wave 2 passes its own)."""
 
     def __call__(self, spec: Any) -> None:
         self.register(spec)
@@ -223,7 +240,7 @@ class _Adapter:
         self.register(spec)
 
     def register(self, spec: Any) -> None:
-        if spec.name in UNCATALOGUED:
+        if spec.name in self.uncatalogued:
             return
         entry = row(spec.name)
         if entry is None or entry.kind is None:
@@ -252,7 +269,8 @@ class _Adapter:
                 route_policy=RoutePolicy(role=role, action=f"doctor.{spec.name}", purpose=purpose),
                 exposure=exposure,
                 run=_coded(spec.run, self.view),
-                callers=RULES_AND_SCREEN,
+                # A person-only spec (M242's `convert_currency`: the rate is the person's words) is the screen's.
+                callers=PERSON_ONLY if getattr(spec, "person_only", False) else RULES_AND_SCREEN,
                 needs=self.needs,
                 max_output_bytes=BY_EXPOSURE,
                 policy_kind=(
@@ -261,6 +279,10 @@ class _Adapter:
                     else None
                 ),
                 wraps=wraps or f"{spec.run.__module__}.{spec.name}",
+                step_kinds=tuple(
+                    RecipeStepKind(k)
+                    for k in (getattr(spec, "step_kinds", ()) or getattr(spec, "proposes", ()))
+                ),
             )
         )
         self.registered.append(spec.name)

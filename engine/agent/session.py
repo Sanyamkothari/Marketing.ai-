@@ -24,7 +24,10 @@ touches data. The API stores the result at `uploads/<upload_id>/agent/agent_sess
   the combined file; with Stop a repeating ID stops the session. Answering "turn them into rows?" (Plan L
   M156) re-runs it as well: with Turn into rows the advice is about the rows the wide sheet becomes.
 * `status_of` is the one rule for where a session is: stopped when the data cannot work, ready
-  when nothing is left to decide, needs review otherwise.
+  when nothing is left to decide and every role a run needs (the ID; the outcome when training) is
+  chosen, needs review otherwise. A required role nobody has chosen - its suggestion rejected - is
+  asked for again by a blocking question (`with_summary`, DEC-1821), so "ready" never precedes a
+  run that fails for want of an ID or an outcome.
 """
 
 from __future__ import annotations
@@ -45,12 +48,14 @@ from engine.agent.advisor import (
 )
 from engine.agent.contracts import (
     ROW_RESHAPE_STEP_KINDS,
+    AgentConfidence,
     AgentSession,
     DecidedBy,
     Proposal,
     ProposalKind,
     ProposalState,
     Question,
+    QuestionOption,
     RecipeStep,
     RecipeStepKind,
     SessionStatus,
@@ -73,11 +78,13 @@ __all__ = [
     "answer",
     "decide",
     "identity",
+    "required_roles",
     "reshape_of",
     "roles_of",
     "start_session",
     "status_of",
     "unpivot_declined",
+    "unsettled_roles",
     "with_summary",
 ]
 
@@ -104,11 +111,40 @@ def identity(proposal: Proposal) -> tuple[str, ...]:
 
 
 def status_of(session: AgentSession) -> SessionStatus:
+    """Applied, stopped, needs review, or ready. Ready only when nothing is left to decide AND every role a run
+    needs is chosen: a session never says ready while its ID (or, for training, its outcome) is unsettled."""
     if session.status is SessionStatus.APPLIED:
         return SessionStatus.APPLIED
     if session.stop_reason is not None:
         return SessionStatus.STOPPED
-    return SessionStatus.NEEDS_REVIEW if session.undecided else SessionStatus.READY
+    if session.undecided or unsettled_roles(session):
+        return SessionStatus.NEEDS_REVIEW
+    return SessionStatus.READY
+
+
+def required_roles(session: AgentSession) -> tuple[str, ...]:
+    """The roles a run cannot start without: the ID column always, the outcome too when training.
+
+    `check_plan` refuses a missing ID in both modes (`PK_MISSING`) and a missing outcome in training
+    (`TARGET_MISSING`), so Approve would fail on either. An Ask-your-data session runs nothing and needs none.
+    """
+    if session.explore:
+        return ()
+    if session.mode == RunMode.TRAIN.value:
+        return (ROLE_PRIMARY_KEY, ROLE_TARGET)
+    return (ROLE_PRIMARY_KEY,)
+
+
+def unsettled_roles(session: AgentSession) -> tuple[str, ...]:
+    """The required roles no accepted proposal settles (a suggestion still pending, rejected, or none at all)."""
+    return tuple(
+        path
+        for path in required_roles(session)
+        if not any(
+            p.kind is ProposalKind.ROLE and p.path == path and p.state is ProposalState.ACCEPTED
+            for p in session.proposals
+        )
+    )
 
 
 def roles_of(session: AgentSession) -> tuple[str | None, str | None]:
@@ -177,8 +213,147 @@ def with_summary(
     summary = summarise(
         ctx, session.proposals, assumptions=session.assumptions, engine_hidden=session.engine_hidden
     )
-    updated = session.model_copy(update={"summary": summary, "updated_at": clock()})
+    updated = _ask_for_unsettled_roles(session, ctx).model_copy(
+        update={"summary": summary, "updated_at": clock()}
+    )
     return updated.model_copy(update={"status": status_of(updated)})
+
+
+_MAX_ROLE_OPTIONS = 4
+
+
+def _asks_role(question: Question, path: str) -> bool:
+    """A question whose answers choose the column for `path` (the advisor's, or `_ask_for_unsettled_roles`')."""
+    return any(
+        option.proposal is not None
+        and option.proposal.kind is ProposalKind.ROLE
+        and option.proposal.path == path
+        for option in question.options
+    )
+
+
+def _role_choices(session: AgentSession, ctx: AgentContext, path: str) -> list[str]:
+    """The columns to offer for `path`, likeliest first; a column already rejected for it comes last.
+
+    The ID: the columns the profile found unique and complete, those holding personal data after the rest. The
+    outcome: the two-valued columns that hold no personal data. Never the column the other role already uses. When fewer than two are likely, other columns
+    fill in: the answer re-runs the advisor with that column, whose own checks then say why it cannot be used.
+    """
+    other_path = ROLE_TARGET if path == ROLE_PRIMARY_KEY else ROLE_PRIMARY_KEY
+    taken = {
+        str(p.value)
+        for p in session.proposals
+        if p.kind is ProposalKind.ROLE and p.path == other_path and p.state is ProposalState.ACCEPTED
+    }
+    rejected = {
+        str(p.value)
+        for p in session.proposals
+        if p.kind is ProposalKind.ROLE and p.path == path and p.state is ProposalState.REJECTED
+    }
+    present = {str(c) for c in ctx.frame.columns}
+    columns = [c for c in ctx.profile.columns if c.name in present and c.name not in taken]
+    if path == ROLE_PRIMARY_KEY:
+        unique = set(ctx.profile.primary_key_candidates)
+        # A phone or an email can identify a row, but a column holding no personal data is offered first.
+        likely = [c.name for c in columns if c.name in unique and not c.pii_kinds]
+        likely += [c.name for c in columns if c.name in unique and c.pii_kinds]
+    else:
+        likely = [c.name for c in columns if c.distinct_count == 2 and not c.pii_kinds]
+    ordered = [c for c in likely if c not in rejected] + [c for c in likely if c in rejected]
+    if len(ordered) < 2:
+        ordered += [c.name for c in columns if c.name not in ordered and not c.pii_kinds]
+    return ordered[:_MAX_ROLE_OPTIONS]
+
+
+def _role_evidence(session: AgentSession, path: str) -> tuple[str, ...]:
+    """What a role question rests on: the evidence the helper's own suggestions for `path` cited, else the
+    session's latest profile and role reading."""
+    known = {r.evidence_id for r in session.tool_results}
+    cited = [
+        e
+        for p in session.proposals
+        if p.kind is ProposalKind.ROLE and p.path == path
+        for e in p.evidence_ids
+        if e in known
+    ]
+    if not cited:
+        cited = [r.evidence_id for r in session.tool_results if r.tool in ("get_profile", "find_roles")][-2:]
+    return tuple(dict.fromkeys(cited))
+
+
+def _role_question(session: AgentSession, ctx: AgentContext, path: str) -> Question | None:
+    """A blocking question asking which column is the ID or the outcome; None when the file offers no choice."""
+    choices = _role_choices(session, ctx, path)
+    evidence = _role_evidence(session, path)
+    if len(choices) < 2 or not evidence:
+        return (
+            None  # a question needs two answers and its evidence; `status_of` keeps the session out of ready
+        )
+    taken = {q.question_id for q in session.questions}
+    question_id = f"a{session.rounds}-role-{'id' if path == ROLE_PRIMARY_KEY else 'outcome'}"
+    while question_id in taken:
+        question_id += "x"
+    if path == ROLE_PRIMARY_KEY:
+        text = f"Which column identifies each {ctx.config.entity}? The run needs one."
+        as_what = "the ID column"
+    else:
+        definition = ctx.config.target.definition or "the outcome"
+        text = f"Which column says whether {definition.lower()}? The run needs one to learn from."
+        as_what = "the outcome"
+    options = tuple(
+        QuestionOption(
+            option_id=f"use-{number}",
+            label=display_name(column),
+            effect=f"Use '{display_name(column)}'.",
+            proposal=Proposal(
+                proposal_id=f"{question_id}-p{number}",
+                kind=ProposalKind.ROLE,
+                title=f"Use '{display_name(column)}' as {as_what}",
+                reason="You chose it.",
+                path=path,
+                value=column,
+                suggested_value=column,
+                evidence_ids=evidence,
+                confidence=AgentConfidence.SURE,
+            ),
+        )
+        for number, column in enumerate(choices, start=1)
+    )
+    return Question(question_id=question_id, text=text, options=options, blocking=True, evidence_ids=evidence)
+
+
+def _ask_for_unsettled_roles(session: AgentSession, ctx: AgentContext) -> AgentSession:
+    """Keep a blocking question open for each required role nobody has chosen (DEC-1821).
+
+    Rejecting the helper's ID or outcome suggestion used to leave nothing to decide, so the session said ready
+    and Approve then failed with `VALIDATION_FAILED`. Now a rejected (or never proposed) role is asked for: a
+    role question answered earlier is opened again, otherwise a new one lists the likely columns. A suggestion
+    still pending, or a role question still open, already blocks Approve, so nothing is added for it.
+    """
+    if session.stop_reason is not None or session.status is SessionStatus.APPLIED:
+        return session
+    questions = list(session.questions)
+    for path in unsettled_roles(session):
+        if any(
+            p.kind is ProposalKind.ROLE and p.path == path and p.state is ProposalState.PENDING
+            for p in session.proposals
+        ):
+            continue
+        asked = [i for i, q in enumerate(questions) if _asks_role(q, path)]
+        if any(questions[i].answer is None and questions[i].blocking for i in asked):
+            continue
+        if asked:
+            last = asked[-1]
+            questions[last] = questions[last].model_copy(update={"answer": None, "blocking": True})
+            continue
+        question = _role_question(session.model_copy(update={"questions": tuple(questions)}), ctx, path)
+        if question is not None:
+            questions.append(question)
+    if len(questions) == len(session.questions) and all(
+        a is b for a, b in zip(questions, session.questions, strict=True)
+    ):
+        return session
+    return session.model_copy(update={"questions": tuple(questions)})
 
 
 def _from_advice(
@@ -372,6 +547,17 @@ def _one_value_per_setting(proposals: Sequence[Proposal], decided_now: set[str])
     )
 
 
+def _never_ticked(ctx: AgentContext) -> frozenset[RecipeStepKind]:
+    """`NEVER_TICKED_STEPS`, and - behind `data_doctor.unified` - the data policy's list too (Plan O M233)."""
+    from engine.doctor import registry as doctor_registry
+
+    if not doctor_registry.unified_on(ctx.config):
+        return NEVER_TICKED_STEPS  # the switch off: nothing of the policy is read
+    from engine.doctor.policy import never_ticked_steps
+
+    return never_ticked_steps(ctx.config, ctx.config_root)
+
+
 def accept_recommended(
     session: AgentSession, ctx: AgentContext, *, clock: Callable[[], datetime] = utc_now
 ) -> AgentSession:
@@ -381,6 +567,7 @@ def accept_recommended(
     them to decide, so this never rejects their choice on their behalf (DEC-1010).
     """
     tick_uncertain = ctx.config.agent.tick_uncertain
+    never = _never_ticked(ctx)
     # A value the person has accepted for a setting is theirs: the helper's default never replaces it.
     settled = {
         p.path
@@ -392,8 +579,8 @@ def accept_recommended(
         if p.state is ProposalState.PENDING and (p.confidence.value == "sure" or tick_uncertain):
             if p.kind is ProposalKind.SETTING and p.path in settled:
                 continue  # left pending, for the person to decide
-            if p.step is not None and p.step.kind in NEVER_TICKED_STEPS:
-                continue  # only the person decides these (DEC-1224)
+            if p.step is not None and p.step.kind in never:
+                continue  # only the person decides these (DEC-1224; Plan O M233 reads the policy's too)
             if p.from_headers:
                 continue  # a column read from its header is only ever ticked by the person (M142)
             # Two pending suggestions for one setting: the later one, never a conflict.

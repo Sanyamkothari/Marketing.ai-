@@ -734,8 +734,9 @@ _Wrapper = tuple[
 
 
 def register_all(registry: DataToolRegistry) -> None:
-    """Register every tool built so far: M232's 22 existing (21 tools and the loop) and first wrappers, then the
-    tools of Plan O wave 1 (`engine.doctor.tools_wave_one`)."""
+    """Register every tool built so far: M232's 22 existing (21 tools and the loop) and first wrappers, the
+    tools of Plan O wave 1 (`engine.doctor.tools_wave_one`), then M236's wrappers and `explain`
+    (`engine.doctor.tools_wrappers`), and M242's `convert_currency` (`engine.doctor.tools_wave_two`)."""
     for tool in TOOLS.values():
         if tool.kind is ToolKind.READ:
             registry.register(_look_tool(tool))
@@ -935,5 +936,14 @@ def register_all(registry: DataToolRegistry) -> None:
         )
     # Plan O wave 1 integration (DEC-1802 (t)): the tools of M240, M238, M237, M241 and M234, rules and screen only.
     from engine.doctor.tools_wave_one import register_wave_one
+    from engine.doctor.tools_wrappers import register_wrappers
 
     register_wave_one(registry)
+    # Plan O M236 (DEC-1806): the remaining wrappers and `explain`, rules and screen only.
+    register_wrappers(registry)
+    # Plan O wave 2 integration: M242's `convert_currency` (#64, DEC-1812 (k); the person's only). M235's
+    # `load_goal_brief` (#35) stays on `engine.doctor.visit.visit_registry`: it lists the AI as a caller, so here
+    # it would change the chat's prompt with the switch on (docs/CROSS_BRANCH_REQUESTS.md).
+    from engine.doctor.tools_wave_two import register_wave_two
+
+    register_wave_two(registry)

@@ -153,6 +153,8 @@ class GenerativePurpose(StrEnum):
     # enumerated choices; AGENT_NARRATIVE writes the structured, claim-checked narrative of a draft.
     AGENT_PLANNER = "agent_planner"
     AGENT_NARRATIVE = "agent_narrative"
+    # Plan O M236 (DEC-1806): Data Doctor's `explain` - a claim-checked explanation of data evidence.
+    DATA_EXPLAIN = "data_explain"
 
 
 class GuardrailOutcome(StrEnum):

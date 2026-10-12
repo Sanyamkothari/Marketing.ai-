@@ -4332,3 +4332,67 @@ while the switch is off.
   from the case"), and show `RetentionResult.forgotten` apart from `stripped`.
 - **`engine/privacy/access_export.py`:** an access request does not yet export a numeric-id `correct_cells`
   correction held in a case, which erasure removes.
+
+### 2026-10-12 — Plan O wave 2 integration, batch A (`integrate-plan-o-2`) → M243 (prescription) (request)
+
+1. **PRESCRIBE port.** M235's visit records only a `CasePrescriptionRef` (the default `prescription_digest` hashes the
+   ticked base and active-section items, the answers, the brief hash and the upload ids). Supply
+   `VisitDeps.prescribe(case, brief) -> hash` that writes `prescriptions/<hash>.json`, its goal sections taken from
+   `CaseItem.goal_id` (DEC-1805 (j)).
+2. **Currency.** Record each money column's unit (`parse_number` `unit`) and `MoneyBasis.basis_hash` (units and rates,
+   not approvers) for currency drift; a `convert_currency` step replays with its frozen rate, date and source and is
+   never re-proposed (DEC-1812 (c), (g)).
+3. **Record.** M246's `decision_body` carries `prescription_hash` (now in Plan K's `BODY_KEYS`); fill it at PRESCRIBE.
+
+### 2026-10-12 — Plan O wave 2 integration, batch A → M247 (screen) and M246's follow-ups (request)
+
+1. **Show the protocol.** `question.why` (it starts "Your answer from <date> (...) was not used ..." when a standing
+   answer no longer fits; timeline kind `standing_answer.unfit`), the confirmations of APPROVE-class items
+   (`POST /cases/{id}/confirmations`, `APPROVAL_CONFIRMATION_MISSING`), doubts in three parts, data requests,
+   remembered answers under Settings with Revoke, and `POLICY_ROLE_SEPARATION` from
+   `POST /uploads/{id}/agent-session/approve` and `/apply` (its reason may say who chose the step was not recorded:
+   untick and tick it again). `CaseApproval.receipt_id` is `ledger:<hash>` or `timeline:<approval id>`.
+2. **The visit's answer** carries `state`, `visit.waiting_for` and the active goal (DEC-1805 (m)); every non-chat
+   caller building `VisitDeps` passes a lazy CONVERSE port (`lazy_converse`), never None.
+3. **Currency.** Expose the workspace currency and call `ui/format.js` `setWorkspaceCurrency`; `convert_currency` is
+   the person's only (its registry callers are the screen): its rate, date and source come from what the person
+   typed, and an Analyst approves the exact sentence. The value view's rupee inputs are never relabelled.
+4. **Tools for the AI.** Before the visit offers any M236 or wave-2 tool to the AI: add their output field names to
+   `engine.agent.egress.RESULT_KEYS`; offer `second_opinion` only with `agentic.enabled` on; make the four ASK tools
+   (#70, #74, #75, #76) model-callable; surface O10's `AI_STEP_CHANGES_MANY` from the decision detail.
+5. **`load_goal_brief` (#35) into `register_all`** (M235's request, not done at integration). It lists the AI as a
+   caller and keeps the 16 KB budget, so in the general registry it joins the chat's tool list with the switch on
+   (the recorded chat prompts change and M248's cassette misses) and breaks
+   `test_every_tool_gets_the_budget_of_its_exposure`. Decide with the screen: either register it with callers rules
+   and person only, or accept the prompt change, re-record the cassette and exempt its budget; then add it to
+   `test_registry.py`'s expected set, the canary's `SPECS` and `world.CALLS`. Until then it is on
+   `engine.doctor.visit.visit_registry()` only.
+6. **Gate run.** `python -m scripts.plan_o_benchmark --train` (k=5, all parts); regenerate
+   `reports/plan_o_benchmark.{md,json}` there.
+
+### 2026-10-12 — Plan O wave 2 integration, batch A → M239 (outcomes), M245 (detectors), M248 owner, design owner, Guided setup / privacy (request)
+
+- **M239.** `define_outcome` and `map_consent` need M233 rule sets and `OUTPUT_READERS` entries, or they are refused
+  (`POLICY_NO_RULES`); `map_outcome_values` unblocks the extended case x06. Reuse `APPROVAL_SENTENCE_CHANGED` (one
+  help entry). Each new tool needs a canary `SPECS` entry and `world.CALLS` entries.
+- **M245.** Implement `DetectorPort` `(case, files, brief) -> Detected(asks, doubts, requests, evidence)` and pass it
+  in `VisitDeps.detectors`; set `Ask.value_signature`, `column` and `upload_id` so standing answers can match; ground
+  every number in a doubt in an evidence result you return (`DOUBT_UNGROUNDED` otherwise).
+- **M248 owner (the eval world).** `tests/fixtures/doctor_eval/world.py` builds no saved connection, client store,
+  AI meter or earlier evidence, so `preview_connection`, `propose_import`, `check_refresh`, `second_opinion`,
+  `explain`, `read_run_checks` and `request_approval` are evaluated on their refusals; give the world M236's context
+  fields (`tests/unit/doctor/test_registry_canary.py` `_m236_context` shows how). `leaks_admitted` stays "not measured"
+  until the harness gets leak cases for `check_leaks`, now registered. With `convert_currency` registered the extended
+  cases x04 and x05 no longer wait: check at the first slow run that their journeys measure what they should.
+  Re-record the cassette from a real model when one is available (`--model real --record`).
+- **Design owner.** M242's `check_currency` (READ) and `report_in_currency` (PROPOSE) have no row in the design's
+  catalogue (§5.5 G has only #64 `convert_currency`), so they are not registered
+  (`engine/doctor/tools_wave_two.py` `UNCATALOGUED`). Give them rows (after #83, as M236 did for #82 and #83) or map
+  them onto existing rows (#74 `ask_question`, `propose_step`); then remove them from `UNCATALOGUED` and add a
+  `data.report_in_currency` rule set with its `OUTPUT_READERS` entry, canary `SPECS` and `world.CALLS` entries.
+- **Guided setup and privacy.** With `data_doctor.unified` on, M246 writes `uploads/<id>/agent/proposed_by.json`
+  (user ids only) beside the session; retention and erasure must delete it with its upload, like the session's other
+  `agent/` files that hold user ids. An agentic deployment needs its ledger signer (`signer_for_data_dir`) now that
+  `data.decision` and `data.prescription.approved` are signed kinds.
+- **Still open from wave 1:** the infra (`cases/` S3 prefixes and conditional put) and UI retention-label requests
+  above; keep `data_doctor.unified` off on AWS until they are done.
