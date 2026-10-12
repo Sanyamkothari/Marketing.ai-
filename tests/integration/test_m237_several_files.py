@@ -2,11 +2,14 @@
 
 A customer list keyed `CUST-00123`, three bill exports keyed `123` that overlap by one week each (the third
 renamed `amount` to `bill_amount`) and a ticket log keyed `cust_no` go in through `POST /uploads`. The
-diagnosis says what each file is and how they fit; the person agrees to the churn outcome sentence. Then,
-with no Manual setup: `plan_build` (the `build_dataset` proposal) stacks the bills counting the overlap once,
-writes the customer list's IDs the way the logs write them (`normalise_key`), and maps each file; once the
-plan is approved, `drive_builder` runs it through the builder's own routes (`ApiBuilderPort`); the dataset
-builds and passes its checks, and `POST /runs` accepts it for training.
+diagnosis says what each file is and how they fit, and offers the churn sentence measured through the ID rule
+(`normalise_key`); the person agrees to it with `POST /doctor/outcome`. Then, with no Manual setup:
+`plan_build` (the `build_dataset` proposal) stacks the bills counting the overlap once, matches each log's IDs
+to the list's (the list keeps `CUST-00123`; the logs' `123` is written `CUST-00123`), counts the tickets the
+list does not have, and maps each file; once the plan is approved, `drive_builder` runs it through the
+builder's own routes (`ApiBuilderPort`) and keeps the approved plan beside the recipe; the dataset builds and
+passes its checks, `POST /runs` accepts it for training, and a scoring build of the saved recipe and a replay
+of next month's files both name the customers `CUST-00123`.
 """
 
 from __future__ import annotations
@@ -27,7 +30,7 @@ from api.main import create_app
 from api.routes.doctor import _load
 from engine.config import LabelDefinition, SnapshotDefinition
 from engine.contracts import RunRecord
-from engine.doctor.build_driver import BuildDriveError, approval_for, drive_builder, plan_build
+from engine.doctor.build_driver import BuildDriveError, approval_for, drive_builder, plan_build, replay_build
 from engine.doctor.builder_api import ApiBuilderPort
 from engine.doctor.contracts import Diagnosis
 from engine.storage import LocalStorage
@@ -144,33 +147,57 @@ def journey(client: TestClient, data_dir: Path) -> dict[str, Any]:
     return {"ids": ids, "diagnosis": diagnosis, "frames": frames}
 
 
-def _churn_label() -> LabelDefinition:
-    """The outcome the churn sentence builds: what `POST /doctor/outcome` returns for "A customer has churned when
-    there is no bill for 60 days after the snapshot" (`engine.doctor.outcomes.offer_outcome`'s `LabelSpec`).
-
-    The diagnosis cannot offer that sentence on these files today: it measures the bills against the customer
-    list as written, and `123` never meets `CUST-00123` (`test_the_offer_needs_the_ids_to_meet_as_written`). The
-    agreed label is therefore written here exactly as the offer would write it."""
-    return LabelDefinition(
-        name="churn_next_60d",
-        type="event_absence",  # type: ignore[arg-type]
-        role="bills",
-        horizon_days=60,
-        description="A customer has churned when there is no bill for 60 days after the snapshot.",
+def _agreed_label(client: TestClient, diagnosis: Diagnosis) -> LabelDefinition:
+    """The churn outcome as a person agrees it: the diagnosis's offer (measured through the ID rule, M237),
+    the 60-day sentence, `POST /doctor/outcome` with `agreed: true`, and the `LabelSpec` it returns."""
+    verdict = next(item for item in diagnosis.use_cases if item.use_case_id == USE_CASE)
+    offer = verdict.outcome_offer
+    assert offer is not None, "the IDs meet once written one way, so the outcome is offered"
+    choice = next(item for item in offer.choices if item.days == 60)
+    agreed = client.post(
+        "/doctor/outcome",
+        json={
+            "use_case": USE_CASE,
+            "entity_upload_id": offer.entity_upload_id,
+            "event_upload_id": offer.event_upload_id,
+            "date_column": offer.date_column,
+            "days": 60,
+            "sentence": choice.sentence,
+            "agreed": True,
+        },
     )
+    assert agreed.status_code == 201, agreed.text
+    return LabelDefinition.model_validate(agreed.json()["label_spec"])
 
 
-def test_the_offer_needs_the_ids_to_meet_as_written(journey: dict[str, Any]) -> None:
-    """A follow-up recorded in DEC-1807: the M157 offer does not yet measure through `normalise_key`."""
+def _tickets_dropped() -> int:
+    """Tickets for `cust_no` 301 to 330: customers the list does not have."""
+    return sum(1 for n in range(900) if 1 + n % (CUSTOMERS + 30) > CUSTOMERS)
+
+
+def _dataset_keys(data_dir: Path, client: TestClient, dataset_id: str) -> set[str]:
+    final = _poll(client, dataset_id)
+    assert final["status"]["state"] == "done", final["status"]
+    manifest = final["manifest"]
+    frame = pd.read_parquet(data_dir / "datasets" / manifest["dataset_id"] / "dataset.parquet")
+    return {str(value) for value in frame[manifest["primary_key"][0]]}
+
+
+def test_the_offer_measures_the_ids_through_the_rule(journey: dict[str, Any]) -> None:
+    """M237 review: the M157 offer no longer needs the IDs to meet as written."""
     verdict = next(item for item in journey["diagnosis"].use_cases if item.use_case_id == USE_CASE)
-    assert verdict.outcome_offer is None
+    offer = verdict.outcome_offer
+    assert offer is not None and offer.entity_upload_id == journey["ids"]["customers"]
+    assert offer.event_rows_matched == 1.0 and offer.customers == CUSTOMERS
+    assert any("written one way" in note for note in offer.notes)
 
 
 def test_the_m155_journey_trains_through_data_doctor_with_no_manual_setup(
     client: TestClient, app: FastAPI, journey: dict[str, Any], data_dir: Path
 ) -> None:
     ids, diagnosis, frames = journey["ids"], journey["diagnosis"], journey["frames"]
-    label = _churn_label()
+    label = _agreed_label(client, diagnosis)
+    assert (label.name, label.role, label.horizon_days) == ("churn_next_60d", "bills", 60)
     plan = plan_build(
         diagnosis,
         frames,
@@ -188,15 +215,27 @@ def test_the_m155_journey_trains_through_data_doctor_with_no_manual_setup(
     assert bills.upload_ids == (ids["jul"], ids["nov"], ids["mar"]) and bills.stack is not None
     assert (bills.key_column, bills.date_column) == ("customer_id", "invoice_date")
     assert bills.coverage == 0.0 and bills.fixed_coverage == 1.0
-    assert roles["complaints"].key_column == "cust_no"
+    tickets = roles["complaints"]
+    assert tickets.key_column == "cust_no"
+    assert (tickets.rows, tickets.rows_dropped) == (
+        900,
+        _tickets_dropped(),
+    ), "the strangers' tickets, counted"
     (stacked,) = plan.stack_receipts
     assert stacked.duplicates_removed == _overlap_rows(), "each overlapping bill counted once"
     assert stacked.rows_out == len(all_bills())
-    assert {"BUILD_REWRITES_IDS", "STACK_DROPS_ROWS", "BUILD_DEFINES_OUTCOME"} <= set(plan.approval_reasons)
+    assert {
+        "BUILD_REWRITES_IDS",
+        "JOIN_DROPS_ROWS",
+        "STACK_DROPS_ROWS",
+        "BUILD_DEFINES_OUTCOME",
+    } <= set(plan.approval_reasons)
+    assert f"leaves out {_tickets_dropped()} of 900 rows" in plan.approval_sentence
 
     created = client.post("/clients", json={"name": "Bills Co", "industry": "telecom", "notes": ""})
     assert created.status_code == 201, created.text
-    port = ApiBuilderPort(client, created.json()["client_id"])
+    client_id = created.json()["client_id"]
+    port = ApiBuilderPort(client, client_id, storage=LocalStorage(data_dir))
 
     unapproved = approval_for(plan, user_id="analyst-7", at=datetime.now(UTC)).model_copy(
         update={"plan_hash": "0" * 64}
@@ -208,8 +247,10 @@ def test_the_m155_journey_trains_through_data_doctor_with_no_manual_setup(
     result = drive_builder(plan, frames, port, approval_for(plan, user_id="analyst-7", at=datetime.now(UTC)))
     assert result.approved_by == "analyst-7" and result.dataset_id is not None
     assert len(result.source_ids) == 3 and len(result.mapping_ids) == 3
-    key_receipt, *_ = result.key_receipts
-    assert key_receipt.steps[0].changed == CUSTOMERS and key_receipt.steps[0].failed == 0
+    matched = {receipt.source_name: receipt for receipt in result.match_receipts}
+    assert matched["bills_stacked.csv"].rows_matched == len(all_bills()) == matched["bills_stacked.csv"].rows
+    assert matched["support_tickets.csv"].rows_not_on_list == _tickets_dropped()
+    assert result.record_key is not None
 
     final = _poll(client, result.dataset_id)
     assert final["status"]["state"] == "done", final["status"]
@@ -219,6 +260,29 @@ def test_the_m155_journey_trains_through_data_doctor_with_no_manual_setup(
     assert report["passed"], [c for c in report["checks"] if c["severity"] == "error"]
     sources = {source["role"]: source for source in report["sources"]}
     assert sources["bills"]["rows"] == len(all_bills()), "the builder read every bill once"
+    assert sources["bills"]["join_coverage"] == 1.0, "every bill met its customer"
+    customer_ids = {f"CUST-{n:05d}" for n in range(1, CUSTOMERS + 1)}
+    trained = pd.read_parquet(data_dir / "datasets" / manifest["dataset_id"] / "dataset.parquet")
+    assert {str(value) for value in trained[manifest["primary_key"][0]]} <= customer_ids, "the list's own IDs"
+
+    # A scoring build of the saved recipe names the customers as the client does.
+    scoring = client.post(
+        "/datasets", json={"client_id": client_id, "spec_id": result.spec_id, "mode": "score"}
+    )
+    assert scoring.status_code == 202, scoring.text
+    assert _dataset_keys(data_dir, client, scoring.json()["dataset_id"]) <= customer_ids
+
+    # Next month: the kept plan replays the frozen stack and ID rules on new files, without a new question.
+    kept = port.load_record(result.spec_id)
+    assert kept.plan == plan and kept.approval.approved_by == "analyst-7"
+    next_month = {
+        "customers.csv": [frames[ids["customers"]]],
+        "bills_stacked.csv": [frames[ids["nov"]], frames[ids["mar"]]],
+        "support_tickets.csv": [frames[ids["tickets"]]],
+    }
+    replayed = replay_build(kept, next_month, port, mode="score")
+    assert replayed.dataset_id is not None and replayed.spec_id != result.spec_id
+    assert _dataset_keys(data_dir, client, replayed.dataset_id) <= customer_ids
 
     app.state.jobs = RecordingJobs()  # training is accepted; the job itself is not run here
     run = client.post(
@@ -234,7 +298,7 @@ def test_the_m155_journey_trains_through_data_doctor_with_no_manual_setup(
 def test_the_spec_saved_keeps_the_agreed_label_unchanged(client: TestClient, journey: dict[str, Any]) -> None:
     """DEC-1578's promise, kept by the driver: the agreed `LabelSpec` is saved exactly as it was agreed."""
     diagnosis, frames = journey["diagnosis"], journey["frames"]
-    label = _churn_label()
+    label = _agreed_label(client, diagnosis)
     plan = plan_build(diagnosis, frames, use_case=USE_CASE, label_spec=label)
     client_id = client.post("/clients", json={"name": "Co", "industry": "telecom", "notes": ""}).json()[
         "client_id"

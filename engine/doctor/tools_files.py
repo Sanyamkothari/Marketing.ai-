@@ -33,7 +33,7 @@ from engine.agent.key_steps import KeyRule, propose_key_rules
 from engine.config import LabelDefinition, SnapshotDefinition, StrictBase
 from engine.doctor.build_driver import BuildPlan, plan_build
 from engine.doctor.contracts import ColumnDrift, Diagnosis, FileStack
-from engine.doctor.join_files import MAX_JOIN_PARTS, JoinInput, JoinProposal, PartKind, plan_join
+from engine.doctor.join_files import MAX_JOIN_PARTS, JoinError, JoinInput, JoinProposal, PartKind, plan_join
 from engine.doctor.stack_files import ConflictRule, StackProposal, plan_stack
 
 __all__ = [
@@ -199,16 +199,24 @@ def _stack(given: StackFilesInput, ctx: FilesContext) -> StackProposal:
     )
 
 
-def _column(frame: pd.DataFrame, name: str) -> pd.Series[Any]:
+def _column(frame: pd.DataFrame, name: str, *, file_name: str, upload_id: str) -> pd.Series[Any]:
     names = {str(column): column for column in frame.columns}
     if name not in names:
-        raise KeyError(name)
+        raise JoinError(
+            "JOIN_COLUMN_MISSING",
+            f"{file_name} has no column '{name}', which the tool reads.",
+            column=name,
+            upload_id=upload_id,
+        )
     return frame[names[name]]
 
 
 def _normalise_key(given: NormaliseKeyInput, ctx: FilesContext) -> NormaliseKeyProposal:
-    keys = _column(ctx.frame(given.upload_id), given.column)
-    base = _column(ctx.frame(given.other_upload_id), given.other_column)
+    name, other = ctx.file_name(given.upload_id), ctx.file_name(given.other_upload_id)
+    keys = _column(ctx.frame(given.upload_id), given.column, file_name=name, upload_id=given.upload_id)
+    base = _column(
+        ctx.frame(given.other_upload_id), given.other_column, file_name=other, upload_id=given.other_upload_id
+    )
     measured = propose_key_rules(keys, base)
     steps: list[dict[str, Any]] = []
     for upload_id, column, rule in (
@@ -219,7 +227,6 @@ def _normalise_key(given: NormaliseKeyInput, ctx: FilesContext) -> NormaliseKeyP
             steps.append(
                 {"upload_id": upload_id, "kind": "normalise_key", "column": column, "params": rule.params()}
             )
-    name, other = ctx.file_name(given.upload_id), ctx.file_name(given.other_upload_id)
     if not measured.needed:
         summary = (
             f"{measured.coverage:.0%} of the IDs in {name} are in {other} as written; nothing to change."
@@ -291,7 +298,10 @@ TOOLS: Final[tuple[DataToolSpec, ...]] = (
         exposure="session-only",
         role=Role.ANALYST,
         mode="rules",
-        wraps="engine.doctor.stack_files.plan_stack (joins.file_stacks' drift; replaces build.py's bare concat)",
+        wraps=(
+            "engine.doctor.stack_files.plan_stack (joins.file_stacks' drift; drive_builder stacks before the "
+            "builder sees one source; build.py's concat is unchanged)"
+        ),
         policy_kind="data.stack_files",
         run=_stack,
     ),

@@ -10,6 +10,7 @@ is built by the same builder with the same checks a person would have run (DEC-1
 | `save_mapping` | `PUT /clients/{id}/mappings/{mapping_id}` |
 | `save_spec` | `POST /clients/{id}/onboarding-specs` |
 | `build` | `POST /datasets` |
+| `save_record` | no route: the approved plan (`BuildRecord`) is written to `storage`, beside the client's sources |
 
 `http` is anything with `post` and `put` that returns a response with `status_code` and `json()`: FastAPI's
 `TestClient` in the tests, an `httpx.Client` pointed at the API in a deployment. A refused call raises
@@ -22,7 +23,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-from engine.doctor.build_driver import BuildDriveError
+from engine.doctor.build_driver import BuildDriveError, BuildRecord, build_record_key
 
 __all__ = ["ApiBuilderPort", "ResponseLike"]
 
@@ -65,6 +66,8 @@ class ApiBuilderPort:
     http: Any
     """`TestClient` or `httpx.Client`: anything whose `post` and `put` answer a `ResponseLike`."""
     client_id: str
+    storage: Any = None
+    """The API's `Storage`, where the approved plan is kept for `replay_build`; None keeps no record."""
 
     def add_source(self, *, file_name: str, data: bytes, role: str) -> str:
         response = self.http.post(
@@ -110,3 +113,20 @@ class ApiBuilderPort:
             "/datasets", json={"client_id": self.client_id, "spec_id": spec_id, "mode": mode}
         )
         return str(_body(response, 202, "Building the dataset")["dataset_id"])
+
+    def save_record(self, record: BuildRecord) -> str | None:
+        if self.storage is None:
+            return None
+        key = build_record_key(self.client_id, record.spec_id)
+        self.storage.write_model(key, record)
+        return key
+
+    def load_record(self, spec_id: str) -> BuildRecord:
+        """The approved plan kept for the recipe `spec_id`; `BUILD_PLAN_NOT_APPROVED` when none was kept."""
+        key = build_record_key(self.client_id, spec_id)
+        if self.storage is None or not self.storage.exists(key):
+            raise BuildDriveError(
+                "BUILD_PLAN_NOT_APPROVED", f"No approved Data Doctor plan is kept for the recipe {spec_id}."
+            )
+        record: BuildRecord = self.storage.read_model(key, BuildRecord)
+        return record

@@ -20,6 +20,7 @@ from engine.config import LabelDefinition, LabelType
 from engine.doctor.build_driver import BuildDriveError
 from engine.doctor.builder_api import ApiBuilderPort
 from engine.doctor.contracts import Diagnosis
+from engine.doctor.join_files import JoinError
 from engine.doctor.stack_files import StackProposal
 from engine.doctor.tools_files import TOOLS, NormaliseKeyProposal, register
 from tests.unit.doctor.m237_support import diagnosis, frames
@@ -229,3 +230,16 @@ def test_a_refused_call_raises_the_routes_own_code(answer: Answer, code: str) ->
     with pytest.raises(BuildDriveError) as raised:
         port.add_source(file_name="a.csv", data=b"", role="entity")
     assert raised.value.code == code
+
+
+def test_a_missing_column_is_the_coded_join_error_not_a_key_error() -> None:
+    spec = next(tool for tool in TOOLS if tool.name == "normalise_key")
+    given = spec.input_model.model_validate({**INPUTS["normalise_key"], "column": "nope"})
+    with pytest.raises(JoinError) as raised:
+        spec.run(given, _context())
+    assert (raised.value.code, raised.value.column) == ("JOIN_COLUMN_MISSING", "nope")
+
+
+def test_the_stack_tool_does_not_claim_to_replace_the_builders_concat() -> None:
+    spec = next(tool for tool in TOOLS if tool.name == "stack_files")
+    assert "replaces" not in spec.wraps and "build.py's concat is unchanged" in spec.wraps

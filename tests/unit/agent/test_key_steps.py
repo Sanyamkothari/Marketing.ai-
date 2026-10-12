@@ -17,9 +17,12 @@ from hypothesis import strategies as st
 from engine.agent.config import AgentLevel
 from engine.agent.contracts import RecipeStep, RecipeStepKind
 from engine.agent.key_steps import (
+    _PREFIX,
     KEY_JOIN_OK,
+    KeyColumn,
     KeyRule,
     key_coverage,
+    key_text,
     normalise_key_value,
     normalise_keys,
     propose_key_rules,
@@ -254,3 +257,74 @@ def test_the_step_tidies_with_the_other_values_and_is_a_clean_level_step() -> No
 def test_the_ai_cannot_propose_the_step() -> None:
     """Rules propose `normalise_key` (design §5.5 E); the chat's step list does not include it."""
     assert RecipeStepKind.NORMALISE_KEY not in CHAT_STEP_KINDS
+
+
+# ---------------------------------------------------------------------------
+# M237 review: a column is read once, in C where the IDs allow it, and writes exactly what the rule says
+# ---------------------------------------------------------------------------
+_ALL_RULES = [
+    KeyRule(spaces=spaces, case=case, zeros=zeros, prefix=prefix)
+    for spaces in (False, True)
+    for case in (False, True)
+    for zeros in (False, True)
+    for prefix in (None, "CUST-", "c", "Ab")
+] + [KeyRule(phone=True), KeyRule(phone=True, spaces=True, case=True)]
+
+_ID_TEXT = st.text(
+    alphabet=st.sampled_from(
+        [*"0123456789CUSTcust-_ #.()+", "\t", "\u00a0", "\u00df", "\u0130", "\u0663", "\x1c"]
+    )
+)
+
+
+def _reference_prefix(series: pd.Series[Any]) -> str | None:
+    """`_common_prefix` as M237 first wrote it: the regex on every row's ID."""
+    texts = pd.Series([key_text(value) for value in series if key_text(value) is not None], dtype=object)
+    if texts.empty:
+        return None
+    found = texts.str.extract(_PREFIX, expand=False).dropna()
+    if found.empty:
+        return None
+    counts = found.value_counts()
+    return str(counts.index[0]) if int(counts.iloc[0]) / len(texts) >= 0.9 else None
+
+
+@settings(max_examples=60, deadline=None)
+@given(
+    st.lists(
+        st.one_of(_ID_TEXT, st.integers(-(10**20), 10**20), st.floats(allow_infinity=True), st.none()),
+        max_size=40,
+    )
+)
+def test_the_column_writes_every_id_exactly_as_the_value_rule_does(values: list[Any]) -> None:
+    series = pd.Series(values, dtype=object)
+    column = KeyColumn(series)
+    for rule in _ALL_RULES:
+        assert list(column.rows_of(rule)) == [normalise_key_value(value, rule)[0] for value in values], rule
+    texts = [value for value in values if isinstance(value, str)]
+    if texts:
+        assert KeyColumn(pd.Series(texts, dtype=object)).common_prefix() == _reference_prefix(
+            pd.Series(texts)
+        )
+
+
+@pytest.mark.parametrize(
+    "series",
+    [
+        pd.Series([1.0, 2.5, None, 1e20, 7.0, -3.0, float("inf")]),
+        pd.Series([1, 2, 30, 2]),
+        pd.Series(["CUST-001", "x" * 70, " cust-002 "], dtype=object),  # one ID too long for the C path
+        pd.Series(["a\x00", "a", "00"], dtype=object),  # numpy would drop the trailing NUL: read by Python
+    ],
+)
+def test_numbers_and_long_ids_are_written_as_the_value_rule_writes_them(series: pd.Series[Any]) -> None:
+    column = KeyColumn(series)
+    for rule in _ALL_RULES:
+        assert list(column.rows_of(rule)) == [normalise_key_value(value, rule)[0] for value in series], rule
+
+
+def test_a_rule_that_changes_nothing_shares_the_ids_already_written() -> None:
+    column = KeyColumn(pd.Series([str(n) for n in range(1, 1000)]))
+    as_written = column.written(KeyRule())[0]
+    for rule in (KeyRule(spaces=True), KeyRule(zeros=True), KeyRule(spaces=True, case=True, zeros=True)):
+        assert column.written(rule)[0] is as_written, "no text changed: no new array, no new lookup"

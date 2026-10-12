@@ -194,35 +194,48 @@ the column it misses. The dataset itself is never changed.
 
 ### Joining, stacking and building, done for you (Plan O M237, DEC-1807)
 
-What section 5 measures, Data Doctor can now also do - always as a suggestion you approve, never on its own:
+**Status: engine core (M237).** Available in Data Doctor once its tool registry (M232) and approval rules (M233)
+are integrated, behind `data_doctor.unified`. Until then no screen or route reaches these tools; the outcome offer
+below is the one part you can already see.
+
+What section 5 measures, Data Doctor will also be able to do - always as a suggestion you approve, never on its own:
 
 - **Join files about the same customers.** A second customer file (the plan from one CRM export, the usage from
-  another) adds its columns to the customer list; a list of customers who left (or bought) becomes a 1/0 column.
-  The customer list keeps every row and its IDs as written. A file with a customer on two different rows is
-  refused: stack it, or keep the latest row, first. Turning a list into the outcome always needs your own yes, to
-  the exact sentence shown.
+  another) will add its columns to the customer list; a list of customers who left (or bought) will become a 1/0
+  column. The customer list keeps every row and its IDs as written; a row of the list with no ID gets no outcome
+  (it is left empty, and counted), never a "no". A file with a customer on two different rows is refused: stack
+  it, or keep the latest row, first. Turning a list into the outcome always needs your own yes, to the exact
+  sentence shown.
 - **Stack monthly exports without counting twice.** A row that a later export repeats from an earlier one (the
   last week of last month, exported again) is counted once, and the receipt says how many rows each file
   repeated and which dates they span. Two identical rows inside one file are two rows and both stay. When two
   exports give the same customer and date different values, you are asked once which export to keep.
-- **Write the IDs one way** (`normalise_key`): take `CUST-` off, drop the zeros at the start, ignore spaces or upper
-  and lower case, or write an Indian phone number as `+91` and ten digits. Two IDs meet only when they are then
-  written exactly alike; nothing is matched because it looks similar.
-- **Build the dataset.** With a customer list, its logs and an agreed outcome, Data Doctor proposes the whole build -
-  which file is what, the stacks, the ID tidy-up, which column names the customer and the date in each - and, once
-  you approve it, makes the same calls the Manual setup screens make (add the files, map them, save the recipe
-  with the outcome unchanged, build). Nothing is set up by hand.
+- **Match IDs written differently** (`normalise_key`): take `CUST-` off, drop the zeros at the start, ignore spaces
+  or upper and lower case, or write an Indian phone number as `+91` and ten digits. Two IDs meet only when they
+  are then written exactly alike; nothing is matched because it looks similar. Your customer list keeps its own
+  IDs: a log's `123` that meets `CUST-00123` is written `CUST-00123`, so the dataset and every score name your
+  customers as you do. The outcome offer of section 6 already measures through the same rule: a customer list
+  keyed `CUST-00123` and a recharge log keyed `123` are offered the sentence, with a note saying how the IDs
+  were matched.
+- **Build the dataset.** With a customer list, its logs and an agreed outcome, Data Doctor will propose the whole
+  build - which file is what, the stacks, how the IDs meet, which column names the customer and the date in
+  each - and, once you approve it, make the same calls the Manual setup screens make (add the files, map them,
+  save the recipe with the outcome unchanged, build). The approved plan is kept beside the recipe, so next
+  month's files (or a scoring file) go through the same stacks and ID rules without a new question.
 
-Every join, stack and tidy-up counts the rows in and out. One that removes more than 2% of a file's rows needs your
-own yes.
+Every join, stack and ID match counts the rows in and out. One that leaves out more than 2% of a file's rows -
+a log whose customers are partly missing from the list, say - needs your own yes, and the sentence you approve
+says how many rows and why.
 
 For developers: `engine/doctor/join_files.py` (`plan_join`, `run_join`), `engine/doctor/stack_files.py`
-(`plan_stack`, `run_stack`), `engine/agent/key_steps.py` (the `normalise_key` step and `propose_key_rules`),
-`engine/doctor/build_driver.py` (`plan_build` proposes, `drive_builder` runs an approved plan through a
-`BuilderPort`; `engine/doctor/builder_api.py` is the port over the onboarding routes), `engine/doctor/tools_files.py`
-(the four tool specs and `register`). Tests: `tests/unit/agent/test_key_steps.py`,
-`tests/unit/doctor/test_{join_files,stack_files,build_driver,tools_files}.py`,
-`tests/integration/test_m237_several_files.py`.
+(`plan_stack`, `run_stack`), `engine/agent/key_steps.py` (the `normalise_key` step, `propose_key_rules`, and
+`KeyColumn`, which reads a key column once and writes each distinct ID once, in C where it can: planning a join
+of a million rows takes seconds), `engine/doctor/build_driver.py` (`plan_build` proposes, `drive_builder` runs an
+approved plan through a `BuilderPort` and keeps a `BuildRecord`, `replay_build` replays it;
+`engine/doctor/builder_api.py` is the port over the onboarding routes), `engine/doctor/outcomes.py` (the offer's
+`_ruled_join_column`), `engine/doctor/tools_files.py` (the four tool specs and `register`). Tests:
+`tests/unit/agent/test_key_steps.py`, `tests/unit/doctor/test_{join_files,stack_files,build_driver,tools_files,
+outcomes_key_rules}.py`, `tests/integration/test_m237_several_files.py`.
 
 ## 6. The outcome from your events (M157)
 

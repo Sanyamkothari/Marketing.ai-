@@ -7,18 +7,23 @@ turns those words into a plan and runs it, in two separate halves:
 * `plan_build` is the **`build_dataset` proposal** (PROPOSE, rules): from the diagnosis (each file's role -
   `propose_role` - its ID and date columns, the stacks it found), the frames, and an outcome (`LabelSpec`, for
   example an agreement's), it proposes a `BuildPlan`: the customer list and each event log as a builder source,
-  monthly exports stacked (`stack_files`), the IDs written one way where they do not meet (`normalise_key`),
-  which column is `entity_key` and `event_time` in each (`propose_mapping`'s required columns; the builder's own
-  suggestion adds the rest), the features and the snapshot rule. It is pending, `check`, never ticked, and
-  lists every APPROVE-class reason it carries (rows a stack removes, IDs written another way, the outcome).
-  A file it cannot place is left out with a code, never guessed into the build.
+  monthly exports stacked (`stack_files`), the rule each side's IDs are compared by where they do not meet as
+  written (`normalise_key`), which column is `entity_key` and `event_time` in each (`propose_mapping`'s required
+  columns; the builder's own suggestion adds the rest), the features and the snapshot rule. It is pending,
+  `check`, never ticked, and lists every APPROVE-class reason it carries (rows a stack removes, log IDs written
+  as the list writes them, a log losing more than 2% of its rows to the join, the outcome). A file it cannot
+  place is left out with a code, never guessed into the build.
 * `drive_builder` is an **executor, never a tool** (design §5.1: APPLY is never a tool). It runs only a plan
   whose hash the person approved (`BuildApproval`), with the exact sentence for an APPROVE-class plan. It
-  stacks, applies the `normalise_key` step through the recipe engine (so the step's receipt is the recipe's
-  own), and calls the builder through a `BuilderPort`: add each source, suggest and save each mapping, save the
-  onboarding recipe with the label unchanged, build. `engine.doctor.builder_api.ApiBuilderPort` is the adapter
-  over the HTTP routes the Manual setup screens use, so the dataset is built by exactly the builder a person
-  would have driven.
+  stacks, applies each log's `normalise_key` step through the recipe engine (so the step's receipt is the
+  recipe's own), and writes each log's matched IDs **as the customer list writes them**: the list's own IDs are
+  never rewritten, so the built dataset, and every score joined back on `entity_key`, names the client's
+  customers as the client does (`CUST-00123`, not `123`). It then calls the builder through a `BuilderPort`:
+  add each source, suggest and save each mapping, save the onboarding recipe with the label unchanged, build,
+  and keep the approved plan beside the recipe (`BuildRecord`) so that `replay_build` runs next month's (or a
+  scoring) file through the same frozen rules. `engine.doctor.builder_api.ApiBuilderPort` is the adapter over
+  the HTTP routes the Manual setup screens use, so the dataset is built by exactly the builder a person would
+  have driven.
 
 The plan holds column names, roles, rules and counts; no ID and no cell.
 """
@@ -30,17 +35,35 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Final, Literal, Protocol
 
+import numpy as np
+import numpy.typing as npt
 import pandas as pd
 from pydantic import AwareDatetime, Field
 
 from engine.agent.config import AgentLevel
 from engine.agent.contracts import Question, RecipeReceipt, RecipeStep, RecipeStepKind
-from engine.agent.key_steps import KeyRule, KeyRuleProposal, fit_rule, propose_key_rules
+from engine.agent.key_steps import (
+    KeyColumn,
+    KeyRule,
+    KeyRuleProposal,
+    factorize_exact,
+    fit_rule,
+    propose_key_rules,
+)
 from engine.agent.recipe import RecipeError, run_recipe
 from engine.agentic.canonical import canonical_bytes, sha256_hex
 from engine.config import AggFunction, FeatureDef, LabelDefinition, SnapshotDefinition, StrictBase
 from engine.doctor.contracts import Diagnosis, FileDiagnosis, FileStack
-from engine.doctor.stack_files import ConflictRule, StackError, StackReceipt, StackSpec, plan_stack, run_stack
+from engine.doctor.join_files import APPROVE_DROP_SHARE
+from engine.doctor.stack_files import (
+    ConflictRule,
+    StackError,
+    StackFile,
+    StackReceipt,
+    StackSpec,
+    plan_stack,
+    run_stack,
+)
 
 __all__ = [
     "BUILD_CODES",
@@ -48,15 +71,21 @@ __all__ = [
     "BuildDriveError",
     "BuildDriveResult",
     "BuildPlan",
+    "BuildRecord",
     "BuilderPort",
     "DiagnosisRoles",
+    "KeyMatchReceipt",
     "LeftOutFile",
+    "ListKeys",
     "PlannedSource",
     "RoleProposer",
     "RoleSuggestion",
+    "approval_for",
+    "build_record_key",
     "drive_builder",
     "mapping_columns",
     "plan_build",
+    "replay_build",
 ]
 
 BUILD_CODES: Final[frozenset[str]] = frozenset(
@@ -67,6 +96,7 @@ BUILD_CODES: Final[frozenset[str]] = frozenset(
         "BUILD_DEFINES_OUTCOME",
         "BUILD_FILE_LEFT_OUT",
         "BUILD_STEP_FAILED",
+        "BUILD_REPLAY_FILES",
     }
 )
 """The codes this module raises or records (M237). `APPROVAL_SENTENCE_CHANGED` is M246's (PLAN_O_CODES)."""
@@ -123,6 +153,18 @@ class PlannedSource(StrictBase):
         default=None, description="Share of its IDs on the customer list as written."
     )
     fixed_coverage: float | None = Field(default=None, description="The same share under the key rules.")
+    rows: int | None = Field(default=None, description="Event logs: rows in its files, before stacking.")
+    rows_dropped: int | None = Field(
+        default=None,
+        description=(
+            "Event logs: rows the join to the customer list leaves out - no ID, a customer not on the list, or "
+            "an ID that two of the list's customers share under the rules."
+        ),
+    )
+    dropped_share: float | None = Field(
+        default=None,
+        description="`rows_dropped` / `rows`, rounded to 4 places; over 2% needs the person's yes.",
+    )
 
 
 class LeftOutFile(StrictBase):
@@ -181,6 +223,85 @@ def _features(roles: Sequence[str]) -> tuple[FeatureDef, ...]:
     return tuple(out)
 
 
+class KeyMatchReceipt(StrictBase):
+    """How one log's IDs met the customer list: every row counted (Plan O §3.1, "nothing is silent")."""
+
+    source_name: str
+    rows: int
+    rows_without_key: int = Field(description="Rows with an empty customer column.")
+    rows_matched: int = Field(description="Rows whose customer is on the list, under the rules.")
+    rows_rewritten: int = Field(
+        description="Matched rows whose ID was written differently; they now carry the list's ID as written."
+    )
+    rows_ambiguous: int = Field(
+        description="Rows whose ID two different customers of the list share under the rules; left as written."
+    )
+    rows_not_on_list: int = Field(description="Rows whose customer is not on the list; left as written.")
+    dropped_share: float = Field(
+        description="Rows the builder cannot join (all but `rows_matched`) / `rows`."
+    )
+
+
+@dataclass(frozen=True)
+class _Met:
+    """A log's distinct IDs looked up in the list: the list's ID as written (None when not found) and whether
+    the ID is one two of the list's customers share."""
+
+    written_as: npt.NDArray[np.object_]
+    ambiguous: npt.NDArray[np.bool_]
+
+
+class ListKeys:
+    """The customer list's IDs, by the match key its rule writes them to, and back to the ID as written.
+
+    A log's ID meets the list when its match key (by the log's rule) is the match key of exactly one of the
+    list's IDs; it is then written as the list writes it, so the list keeps its own IDs (`CUST-00123`) and the
+    log reads `CUST-00123` too. A match key two of the list's IDs share (`CUST-007` and `CUST-0007` with zeros
+    dropped) names no one customer: those rows are left as written and counted, never assigned to one of them.
+    """
+
+    def __init__(self, column: KeyColumn, rule: KeyRule) -> None:
+        written = column.written(rule)[0]
+        keys, key_values = factorize_exact(written)
+        ids, _ = factorize_exact(column.texts)
+        # How many different IDs (as written) each match key stands for, and the first of them.
+        pairs = np.unique(keys * (int(ids.max(initial=0)) + 1) + ids)
+        per_key = np.bincount(pairs // (int(ids.max(initial=0)) + 1), minlength=len(key_values))
+        first_at = np.full(len(key_values), -1, dtype=np.int64)
+        first_at[keys[::-1]] = np.arange(len(keys))[::-1]
+        single = per_key == 1
+        self.rule = rule
+        self._keys: pd.Index[Any] = pd.Index(key_values[single])
+        self._ids: npt.NDArray[np.object_] = column.texts[first_at[single]]
+        self._shared: pd.Index[Any] = pd.Index(key_values[per_key > 1])
+
+    def meet(self, column: KeyColumn, rule: KeyRule) -> _Met:
+        written = column.written(rule)[0]
+        at = np.asarray(self._keys.get_indexer(pd.Index(written, copy=False)))
+        found = at >= 0
+        written_as = np.full(len(written), None, dtype=object)
+        written_as[found] = self._ids[at[found]]
+        ambiguous = np.asarray(self._shared.get_indexer(pd.Index(written, copy=False)) >= 0, dtype=np.bool_)
+        return _Met(written_as, ambiguous)
+
+    def receipt(self, name: str, series: pd.Series[Any], column: KeyColumn, met: _Met) -> KeyMatchReceipt:
+        found = np.array([value is not None for value in met.written_as], dtype=bool)
+        rewritten = found & (met.written_as != column.texts)
+        rows = len(series)
+        matched = int(column.counts[found].sum())
+        ambiguous = int(column.counts[met.ambiguous].sum())
+        return KeyMatchReceipt(
+            source_name=name,
+            rows=rows,
+            rows_without_key=rows - column.rows,
+            rows_matched=matched,
+            rows_rewritten=int(column.counts[rewritten].sum()),
+            rows_ambiguous=ambiguous,
+            rows_not_on_list=column.rows - matched - ambiguous,
+            dropped_share=round((rows - matched) / rows, 4) if rows else 0.0,
+        )
+
+
 @dataclass(frozen=True)
 class _Pending:
     """An event source measured against the customer list, before the list's one rule is chosen."""
@@ -192,6 +313,7 @@ class _Pending:
     key_column: str
     date_column: str
     keys: pd.Series[Any]
+    column: KeyColumn
     measured: KeyRuleProposal
 
 
@@ -235,7 +357,7 @@ def plan_build(
             "No file is a customer list with an ID column, so there is nothing to build the table around.",
         )
     customer = max(lists, key=lambda item: item.rows)
-    list_keys = _frame_column(frames[customer.upload_id], str(customer.id_column))
+    list_keys = KeyColumn(_frame_column(frames[customer.upload_id], str(customer.id_column)))
     for item in lists:
         if item.upload_id != customer.upload_id:
             left.append(
@@ -302,7 +424,11 @@ def plan_build(
                 blocking.append("STACK_CONFLICTS_UNDECIDED")
             if proposal.receipt is not None:
                 receipts.append(proposal.receipt)
-        keys = pd.concat([_frame_column(frames[one], key_column) for one in ids if key_column in frames[one]])
+        keys = pd.concat(
+            [_frame_column(frames[one], key_column) for one in ids if key_column in frames[one]],
+            ignore_index=True,
+        )
+        column = KeyColumn(keys)
         name = item.file_name if group is None else f"{suggestion.role}_stacked.csv"
         pending.append(
             _Pending(
@@ -313,7 +439,8 @@ def plan_build(
                 key_column,
                 date_column,
                 keys,
-                propose_key_rules(keys, list_keys),
+                column,
+                propose_key_rules(column, list_keys),
             )
         )
     # One rule for the customer list's IDs, from the first log that needs one; every log then meets the list
@@ -326,10 +453,11 @@ def plan_build(
         ),
         KeyRule.identity(),
     )
+    on_list = ListKeys(list_keys, base_rule)
     for p in pending:
         measured = p.measured
         if measured.meets and measured.base_rule != base_rule:
-            measured = fit_rule(p.keys, list_keys, base_rule)
+            measured = fit_rule(p.column, list_keys, base_rule)
         if not measured.meets:
             for one in p.ids:
                 left.append(
@@ -344,6 +472,10 @@ def plan_build(
                     )
                 )
             continue
+        # Rows the builder will not join, counted on every row of the log's files: no ID, a customer not on
+        # the list, or an ID two of the list's customers share (the acceptance's "a join that drops >2%").
+        met = on_list.meet(p.column, measured.rule)
+        counted = on_list.receipt(p.name, p.keys, p.column, met)
         events.append(
             PlannedSource(
                 source_name=p.name,
@@ -356,6 +488,9 @@ def plan_build(
                 date_column=p.date_column,
                 coverage=measured.coverage,
                 fixed_coverage=measured.fixed_coverage,
+                rows=counted.rows,
+                rows_dropped=counted.rows - counted.rows_matched,
+                dropped_share=counted.dropped_share,
             )
         )
     entity = PlannedSource(
@@ -371,8 +506,10 @@ def plan_build(
     if label_spec is not None and label_spec.type.value.startswith("event") and label_role not in event_roles:
         blocking.append("BUILD_PLAN_INCOMPLETE")
     reasons: list[str] = []
-    if not base_rule.changes_nothing:
+    if _rewrites(base_rule, events):
         reasons.append("BUILD_REWRITES_IDS")
+    if any((source.dropped_share or 0.0) > APPROVE_DROP_SHARE for source in events):
+        reasons.append("JOIN_DROPS_ROWS")
     for receipt in receipts:
         reasons += [reason for reason in receipt.approval_reasons if reason not in reasons]
     if label_spec is not None:
@@ -399,6 +536,11 @@ def plan_build(
     )
 
 
+def _rewrites(base_rule: KeyRule, events: Sequence[PlannedSource]) -> bool:
+    """Whether some log's IDs are written as the list writes them (a rule on either side)."""
+    return not base_rule.changes_nothing or any(not source.key_rule.changes_nothing for source in events)
+
+
 def _approval_sentence(
     list_name: str,
     events: Sequence[PlannedSource],
@@ -407,8 +549,20 @@ def _approval_sentence(
     receipts: Sequence[StackReceipt],
 ) -> str:
     parts = [f"Build the table from {list_name} and " + ", ".join(e.source_name for e in events) + "."]
-    if not base_rule.changes_nothing:
-        parts.append(f"The customer IDs of {list_name} are written another way: {base_rule.words()}.")
+    if _rewrites(base_rule, events):
+        ruled = [e for e in events if not (base_rule.changes_nothing and e.key_rule.changes_nothing)]
+        parts.append(
+            f"The customer IDs in {', '.join(e.source_name for e in ruled)} are matched to {list_name} by a rule "
+            f"({list_name}: {base_rule.words()}; "
+            + "; ".join(f"{e.source_name}: {e.key_rule.words()}" for e in ruled)
+            + f") and written as {list_name} writes them; {list_name} keeps its IDs as they are."
+        )
+    for event in events:
+        if (event.dropped_share or 0.0) > APPROVE_DROP_SHARE and event.rows:
+            parts.append(
+                f"Joining {event.source_name} to {list_name} leaves out {event.rows_dropped} of {event.rows} rows "
+                f"({event.dropped_share:.1%}): they have no customer ID, or their customer is not in {list_name}."
+            )
     for receipt in receipts:
         parts.append(
             f"Stacking removes {receipt.duplicates_removed + receipt.conflict_rows_removed} of "
@@ -442,7 +596,8 @@ class BuildApproval(StrictBase):
 
 class BuilderPort(Protocol):
     """The builder calls Data Doctor makes - exactly the Manual setup screens' (sources, mappings, recipes,
-    datasets). `engine.doctor.builder_api.ApiBuilderPort` answers them over the HTTP routes."""
+    datasets) - and where the approved plan is kept beside the recipe it saved. `engine.doctor.builder_api.
+    ApiBuilderPort` answers them over the HTTP routes."""
 
     def add_source(self, *, file_name: str, data: bytes, role: str) -> str: ...
 
@@ -462,6 +617,38 @@ class BuilderPort(Protocol):
 
     def build(self, *, spec_id: str, mode: str) -> str: ...
 
+    def save_record(self, record: BuildRecord) -> str | None:
+        """Keep `record` beside the recipe it built (`build_record_key`); the key, or None when the port keeps
+        no records."""
+        ...
+
+
+class BuildRecord(StrictBase):
+    """The approved plan, kept beside the onboarding recipe it saved: what `replay_build` runs next month's
+    files (or a scoring file) through, so the stacks and the ID rules replay exactly as approved. Rules, column
+    names and counts only: no ID, no cell."""
+
+    plan: BuildPlan
+    approval: BuildApproval
+    spec_id: str
+    source_ids: dict[str, str] = Field(description="Planned source name to builder source id.")
+    mapping_ids: tuple[str, ...]
+
+    def check(self) -> None:
+        if (
+            self.approval.plan_hash != self.plan.plan_hash
+            or self.approval.sentence != self.plan.approval_sentence
+        ):
+            raise BuildDriveError(
+                "BUILD_PLAN_NOT_APPROVED",
+                "This record's plan is not the one that was approved; nothing replays.",
+            )
+
+
+def build_record_key(client_id: str, spec_id: str) -> str:
+    """Where a `BuildRecord` is kept: beside the client's sources, so erasing the client erases it too."""
+    return f"clients/{client_id}/doctor_builds/{spec_id}.json"
+
 
 class BuildDriveResult(StrictBase):
     plan_hash: str
@@ -471,7 +658,11 @@ class BuildDriveResult(StrictBase):
     spec_id: str
     dataset_id: str | None
     stack_receipts: tuple[StackReceipt, ...]
-    key_receipts: tuple[RecipeReceipt, ...]
+    key_receipts: tuple[RecipeReceipt, ...] = Field(description="Each log's `normalise_key` step, as run.")
+    match_receipts: tuple[KeyMatchReceipt, ...] = Field(
+        default=(), description="How each log's IDs met the customer list and were written as it writes them."
+    )
+    record_key: str | None = Field(default=None, description="Where the `BuildRecord` was kept, if anywhere.")
 
 
 def mapping_columns(
@@ -498,22 +689,36 @@ def mapping_columns(
     return columns
 
 
-def _source_frame(
-    source: PlannedSource, frames: Mapping[str, pd.DataFrame]
+def _stacked(
+    source: PlannedSource, frames: Sequence[pd.DataFrame]
 ) -> tuple[pd.DataFrame, StackReceipt | None]:
-    if source.stack is None:
-        return frames[source.upload_ids[0]], None
+    """The source's files as one table: stacked by the plan's frozen spec, or the one file as it is."""
+    if source.stack is None or len(frames) == 1:
+        return frames[0], None
+    spec = source.stack
+    if len(frames) != len(spec.files):  # next month's exports: the same rules, other files
+        spec = spec.model_copy(
+            update={
+                "files": tuple(
+                    StackFile(
+                        upload_id=f"{source.source_name}#{index + 1}",
+                        file_name=f"{source.source_name} #{index + 1}",
+                    )
+                    for index in range(len(frames))
+                )
+            }
+        )
     try:
-        run = run_stack([frames[upload_id] for upload_id in source.upload_ids], source.stack)
+        run = run_stack(list(frames), spec)
     except StackError as exc:
         raise BuildDriveError(exc.code, exc.message) from exc
     return run.frame, run.receipt
 
 
-def _normalised(
+def _key_step(
     frame: pd.DataFrame, source: PlannedSource, clock: Any
 ) -> tuple[pd.DataFrame, RecipeReceipt | None]:
-    """The source with its `normalise_key` step applied by the recipe engine, or as it is."""
+    """The log with its `normalise_key` step applied by the recipe engine, or as it is."""
     if source.key_rule.changes_nothing:
         return frame, None
     step = RecipeStep(
@@ -539,45 +744,66 @@ def _normalised(
     return run.frame, run.receipt
 
 
-def drive_builder(
+def _matched(
+    frame: pd.DataFrame, source: PlannedSource, on_list: ListKeys | None, clock: Any
+) -> tuple[pd.DataFrame, RecipeReceipt | None, KeyMatchReceipt | None]:
+    """A log whose IDs are written as the customer list writes them, where the rules make them meet; every
+    other ID kept as written (the builder leaves those rows out, and the receipt has counted them)."""
+    if on_list is None:
+        return frame, None, None
+    if source.key_column not in {str(column) for column in frame.columns}:
+        raise BuildDriveError(
+            "BUILD_STEP_FAILED",
+            f"{source.source_name} has no column '{source.key_column}', which the plan reads.",
+        )
+    written, step_receipt = _key_step(frame, source, clock)
+    keys = _frame_column(written, source.key_column)
+    column = KeyColumn(keys)
+    met = on_list.meet(column, KeyRule.identity())  # the step has written them by the log's rule
+    as_list = pd.Series(column.take(met.written_as), index=frame.index, dtype=object)
+    original = _frame_column(frame, source.key_column)
+    out = frame.copy()
+    out[source.key_column] = as_list.where(as_list.notna(), original.astype(object))
+    return out, step_receipt, on_list.receipt(source.source_name, keys, column, met)
+
+
+def _run_plan(
     plan: BuildPlan,
-    frames: Mapping[str, pd.DataFrame],
-    port: BuilderPort,
     approval: BuildApproval,
+    files: Mapping[str, Sequence[pd.DataFrame]],
+    port: BuilderPort,
     *,
-    mode: str = "train",
-    build: bool = True,
-    clock: Any = None,
+    mode: str,
+    build: bool,
+    clock: Any,
 ) -> BuildDriveResult:
-    """Run an approved plan through the builder: stack, write the IDs one way, add sources, save mappings and
-    the recipe (the label unchanged), and build. Refuses a plan that is not the one approved."""
-    if approval.plan_hash != plan.plan_hash:
-        raise BuildDriveError(
-            "BUILD_PLAN_NOT_APPROVED",
-            "This plan is not the one that was approved; review it and approve again.",
-        )
-    if approval.sentence != plan.approval_sentence:
-        raise BuildDriveError(
-            "APPROVAL_SENTENCE_CHANGED",
-            "The plan now reads differently from what was approved; read it again before approving.",
-        )
-    if plan.blocking or plan.questions:
-        raise BuildDriveError(
-            "BUILD_PLAN_INCOMPLETE",
-            "The plan still has an open question or a missing part: "
-            + ", ".join(plan.blocking or ("question",)),
-        )
+    """Prepare each planned source from `files` (by source name), then make the Manual setup calls."""
     source_ids: dict[str, str] = {}
     mapping_ids: list[str] = []
     stack_receipts: list[StackReceipt] = []
     key_receipts: list[RecipeReceipt] = []
-    for source in (plan.entity, *plan.events):
-        frame, stack_receipt = _source_frame(source, frames)
+    match_receipts: list[KeyMatchReceipt] = []
+    entity, _ = _stacked(plan.entity, files[plan.entity.source_name])
+    on_list: ListKeys | None = None
+    if _rewrites(plan.entity.key_rule, plan.events):
+        if plan.entity.key_column not in {str(column) for column in entity.columns}:
+            raise BuildDriveError(
+                "BUILD_STEP_FAILED",
+                f"{plan.entity.source_name} has no column '{plan.entity.key_column}', which the plan reads.",
+            )
+        on_list = ListKeys(KeyColumn(_frame_column(entity, plan.entity.key_column)), plan.entity.key_rule)
+    prepared: list[tuple[PlannedSource, pd.DataFrame]] = [(plan.entity, entity)]  # the list: as written
+    for source in plan.events:
+        frame, stack_receipt = _stacked(source, files[source.source_name])
         if stack_receipt is not None:
             stack_receipts.append(stack_receipt)
-        frame, key_receipt = _normalised(frame, source, clock)
+        frame, key_receipt, match_receipt = _matched(frame, source, on_list, clock)
         if key_receipt is not None:
             key_receipts.append(key_receipt)
+        if match_receipt is not None:
+            match_receipts.append(match_receipt)
+        prepared.append((source, frame))
+    for source, frame in prepared:
         data = frame.to_csv(index=False).encode("utf-8")
         source_id = port.add_source(file_name=source.source_name, data=data, role=source.role)
         source_ids[source.source_name] = source_id
@@ -611,6 +837,15 @@ def drive_builder(
         "snapshot_spec": plan.snapshot_spec.model_dump(mode="json", exclude_defaults=True),
     }
     spec_id = port.save_spec(body)
+    record_key = port.save_record(
+        BuildRecord(
+            plan=plan,
+            approval=approval,
+            spec_id=spec_id,
+            source_ids=source_ids,
+            mapping_ids=tuple(mapping_ids),
+        )
+    )
     dataset_id = port.build(spec_id=spec_id, mode=mode) if build else None
     return BuildDriveResult(
         plan_hash=plan.plan_hash,
@@ -621,7 +856,72 @@ def drive_builder(
         dataset_id=dataset_id,
         stack_receipts=tuple(stack_receipts),
         key_receipts=tuple(key_receipts),
+        match_receipts=tuple(match_receipts),
+        record_key=record_key,
     )
+
+
+def drive_builder(
+    plan: BuildPlan,
+    frames: Mapping[str, pd.DataFrame],
+    port: BuilderPort,
+    approval: BuildApproval,
+    *,
+    mode: str = "train",
+    build: bool = True,
+    clock: Any = None,
+) -> BuildDriveResult:
+    """Run an approved plan through the builder: stack, match each log's IDs to the list (written as the list
+    writes them; the list itself as written), add sources, save mappings and the recipe (the label unchanged),
+    keep the plan beside it, and build. Refuses a plan that is not the one approved."""
+    if approval.plan_hash != plan.plan_hash:
+        raise BuildDriveError(
+            "BUILD_PLAN_NOT_APPROVED",
+            "This plan is not the one that was approved; review it and approve again.",
+        )
+    if approval.sentence != plan.approval_sentence:
+        raise BuildDriveError(
+            "APPROVAL_SENTENCE_CHANGED",
+            "The plan now reads differently from what was approved; read it again before approving.",
+        )
+    if plan.blocking or plan.questions:
+        raise BuildDriveError(
+            "BUILD_PLAN_INCOMPLETE",
+            "The plan still has an open question or a missing part: "
+            + ", ".join(plan.blocking or ("question",)),
+        )
+    files = {
+        source.source_name: [frames[upload_id] for upload_id in source.upload_ids]
+        for source in (plan.entity, *plan.events)
+    }
+    return _run_plan(plan, approval, files, port, mode=mode, build=build, clock=clock)
+
+
+def replay_build(
+    record: BuildRecord,
+    files: Mapping[str, Sequence[pd.DataFrame]],
+    port: BuilderPort,
+    *,
+    mode: str = "score",
+    build: bool = True,
+    clock: Any = None,
+) -> BuildDriveResult:
+    """Next month's files (or a scoring file) through the approved plan's frozen rules: the same stacks, the
+    same ID rules (the list's IDs as written, each log's written as the list writes them), the same mappings,
+    features and outcome. `files` gives each planned source's files by its `source_name`, oldest first; a
+    stacked source may now have more or fewer exports. The person's approval is the record's: nothing new is
+    decided here, so nothing new is asked."""
+    record.check()
+    plan = record.plan
+    missing = [
+        source.source_name for source in (plan.entity, *plan.events) if not files.get(source.source_name)
+    ]
+    if missing:
+        raise BuildDriveError(
+            "BUILD_REPLAY_FILES",
+            f"Give a file for each source the plan built: {', '.join(missing)} is missing.",
+        )
+    return _run_plan(plan, record.approval, files, port, mode=mode, build=build, clock=clock)
 
 
 def approval_for(plan: BuildPlan, *, user_id: str, at: datetime) -> BuildApproval:

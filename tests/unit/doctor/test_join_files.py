@@ -235,3 +235,70 @@ def test_the_proposal_holds_no_customer_id() -> None:
     for frame, column in ((customers(), "customer_id"), (churned(), "customer_id"), (crm_usage(), "cust_no")):
         for value in frame[column]:
             assert f'"{value}"' not in text
+
+
+# ---------------------------------------------------------------------------
+# M237 review: nothing silent, coded errors, and a million rows
+# ---------------------------------------------------------------------------
+def test_an_outcome_is_left_empty_for_a_list_row_with_no_id() -> None:
+    base = JoinInput(
+        "u_list", "list.csv", pd.DataFrame({"customer_id": ["1", "2", None, "4"], "x": [1, 2, 3, 4]})
+    )
+    left = JoinInput("u_left", "left.csv", pd.DataFrame({"customer_id": ["1"]}), kind="outcome_list")
+    proposal = plan_join(base, [left], base_key_column="customer_id", outcome_name="churned")
+    assert proposal.spec is not None and proposal.receipt is not None
+    run = run_join(base.frame, {"u_left": left.frame}, proposal.spec)
+    assert run.frame["churned"].tolist() == [1, 0, pd.NA, 0], "an ID that cannot be looked up is not a 'no'"
+    assert str(run.frame["churned"].dtype) == "Int64"
+    assert run.receipt.base_rows_without_key == 1
+    assert proposal.outcome_sentences == (
+        "'churned' is 1 for a customer whose ID is in left.csv, and 0 for every other customer in the list. "
+        "1 row of the list has no ID; 'churned' is left empty there.",
+    )
+
+
+def test_a_missing_base_key_column_is_a_coded_error() -> None:
+    base, others = _inputs()
+    with pytest.raises(JoinError) as raised:
+        plan_join(base, others, base_key_column="nope")
+    assert (raised.value.code, raised.value.column) == ("JOIN_COLUMN_MISSING", "nope")
+
+
+def test_a_file_left_out_of_the_join_is_always_recorded_with_its_reason() -> None:
+    base, _ = _inputs()
+    plans = crm_plans()
+    only_ids = JoinInput("u_ids", "ids_only.csv", plans[["customer_id"]], kind="attributes")
+    many = [
+        JoinInput(f"u_{n}", f"crm_{n}.csv", plans.rename(columns={"plan": f"plan_{n}"})) for n in range(11)
+    ]
+    proposal = plan_join(base, [only_ids, *many], base_key_column="customer_id")
+    by_id = {part.upload_id: part for part in proposal.parts}
+    assert len(by_id) == 12, "every file offered has a line in the proposal"
+    assert not by_id["u_ids"].joined and "adds nothing" in by_id["u_ids"].summary
+    assert not by_id["u_10"].joined and "at most 10 files" in by_id["u_10"].summary
+    assert proposal.spec is not None and len(proposal.spec.parts) == 9
+
+
+@pytest.mark.slow
+def test_planning_a_join_of_a_million_rows_takes_seconds_not_minutes() -> None:
+    """M237 review: `CUST-0000001` against `1` on 1M rows each took about 150 s; each ID is now read once."""
+    import time
+
+    rows = 1_000_000
+    base = JoinInput(
+        "u_list",
+        "customers.csv",
+        pd.DataFrame({"customer_id": [f"CUST-{n:07d}" for n in range(1, rows + 1)]}),
+    )
+    crm = JoinInput(
+        "u_crm",
+        "crm.csv",
+        pd.DataFrame(
+            {"customer_id": [str(n) for n in range(1, rows + 1)], "plan": ["pre", "post"] * (rows // 2)}
+        ),
+    )
+    started = time.process_time()
+    proposal = plan_join(base, [crm], base_key_column="customer_id")
+    spent = time.process_time() - started
+    assert proposal.receipt is not None and proposal.receipt.parts[0].rows_matched == rows
+    assert spent < 60.0, f"planning took {spent:.0f} s of CPU"

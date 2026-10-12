@@ -146,6 +146,7 @@ class RecordingBuilder:
 
     calls: list[tuple[str, dict[str, Any]]] = field(default_factory=list)
     data: dict[str, pd.DataFrame] = field(default_factory=dict)
+    records: dict[str, Any] = field(default_factory=dict)
 
     def add_source(self, *, file_name: str, data: bytes, role: str) -> str:
         import io
@@ -184,3 +185,8 @@ class RecordingBuilder:
     def build(self, *, spec_id: str, mode: str) -> str:
         self.calls.append(("build", {"spec_id": spec_id, "mode": mode}))
         return "ds_1"
+
+    def save_record(self, record: Any) -> str | None:
+        self.calls.append(("save_record", {"spec_id": record.spec_id}))
+        self.records[record.spec_id] = record
+        return f"records/{record.spec_id}"

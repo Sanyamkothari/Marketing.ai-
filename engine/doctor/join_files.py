@@ -10,13 +10,15 @@ could not become one table ([INV] gap 2). `join_files` closes that gap, by rules
   customer: rows that repeat exactly are counted and kept once; a customer on two different rows is
   `JOIN_KEY_REPEATS`, because a join would have to pick one (stack, or keep the latest row, first).
 * **An outcome list.** A list of customer IDs (the churned, the converted) becomes a 1/0 column on the base:
-  1 when the customer's ID is on the list. It defines what the model learns, so it is **always** an
-  APPROVE-class item, with its sentence shown word for word.
+  1 when the customer's ID is on the list, 0 when it is not, and empty (`pd.NA`, a nullable `Int64`) for a base
+  row with no ID, which cannot be looked up (counted in `base_rows_without_key`, and said in the sentence). It
+  defines what the model learns, so it is **always** an APPROVE-class item, with its sentence shown word for word.
 * **Exact keys only.** IDs are compared as text after each side's frozen `KeyRule` (the `normalise_key` step's
   rule: prefix, leading zeros, case, spaces, +91 phones). The base's IDs are matched through their rule but
   **written as they were**: the rule makes a match key, it never rewrites the customer list's own IDs. Nothing
   is matched by being similar (Plan O §1.3).
-* **Nothing is silent.** The receipt counts, per file: rows, rows with no ID, exact repeats removed, IDs, the
+* **Nothing is silent.** A file offered but not joined - its IDs do not meet, it adds no column, or it is past
+  the tenth - has a `JoinPartPlan` with `joined: false` and the reason. The receipt counts, per file: rows, rows with no ID, exact repeats removed, IDs, the
   rows that found their customer, the rows that did not (dropped: their customer is not on the base) and the
   share that is; the base rows that got a value; the columns added and the columns left out. A file whose
   dropped share is over `APPROVE_DROP_SHARE` (2%) makes the join an APPROVE-class item (design §6.6).
@@ -40,11 +42,10 @@ from pydantic import Field, model_validator
 
 from engine.agent.key_steps import (
     KEY_JOIN_OK,
+    KeyColumn,
     KeyRule,
     KeyRuleProposal,
     fit_rule,
-    key_text,
-    normalise_key_value,
     propose_key_rules,
 )
 from engine.agentic.canonical import canonical_bytes, sha256_hex
@@ -248,23 +249,16 @@ def _require(frame: pd.DataFrame, column: str, *, file_name: str, upload_id: str
     return names[column]
 
 
-def _match_keys(series: pd.Series[Any], rule: KeyRule) -> tuple[pd.Series[Any], int]:
-    """The match key of every row (None for an empty ID) and the number of cells the rule could not read."""
-    cache: dict[Any, tuple[str | None, bool]] = {}
-    out: list[str | None] = []
-    failed = 0
-    for value in series:
-        text = key_text(value)
-        if text is None:
-            out.append(None)
-            continue
-        hit = cache.get(text)
-        if hit is None:
-            hit = normalise_key_value(text, rule)
-            cache[text] = hit
-        out.append(hit[0])
-        failed += 0 if hit[1] else 1
-    return pd.Series(out, index=series.index, dtype=object), failed
+Read = dict[tuple[str, str], KeyColumn]
+"""Key columns already read, by (upload id, column): `plan_join`'s dry run reuses what it measured."""
+
+
+def _key_column(read: Read, upload_id: str, frame: pd.DataFrame, column: Any) -> KeyColumn:
+    found = read.get((upload_id, str(column)))
+    if found is None:
+        found = KeyColumn(frame[column])
+        read[(upload_id, str(column))] = found
+    return found
 
 
 def _share(part: int, whole: int) -> float:
@@ -273,12 +267,16 @@ def _share(part: int, whole: int) -> float:
 
 def run_join(base: pd.DataFrame, parts: Mapping[str, pd.DataFrame], spec: JoinSpec) -> JoinRun:
     """Run `spec` on `base` and the part frames (by upload id). The inputs are never modified."""
+    return _run_join(base, parts, spec, {})
+
+
+def _run_join(base: pd.DataFrame, parts: Mapping[str, pd.DataFrame], spec: JoinSpec, read: Read) -> JoinRun:
     base_key_col = _require(
         base, spec.base_key_column, file_name=spec.base_file_name, upload_id=spec.base_upload_id
     )
-    base_keys, _ = _match_keys(base[base_key_col], spec.base_key_rule)
+    base_column = _key_column(read, spec.base_upload_id, base, base_key_col)
+    base_keys = pd.Series(base_column.rows_of(spec.base_key_rule), index=base.index, dtype=object)
     base_present = base_keys.dropna()
-    base_set = set(base_present)
     repeats = int(base_present.duplicated(keep=False).sum())
     existing = set(_by_name(base))
     out = base.copy()
@@ -305,7 +303,9 @@ def run_join(base: pd.DataFrame, parts: Mapping[str, pd.DataFrame], spec: JoinSp
                 column=clash[0],
                 upload_id=part.upload_id,
             )
-        keys, not_converted = _match_keys(frame[key_col], part.key_rule)
+        part_column = _key_column(read, part.upload_id, frame, key_col)
+        keys = pd.Series(part_column.rows_of(part.key_rule), index=frame.index, dtype=object)
+        not_converted = part_column.failed_rows(part.key_rule)
         has_key = keys.notna()
         rows_without_key = int((~has_key).sum())
         used = [key_col] + [names[pick.source] for pick in part.columns]
@@ -328,13 +328,19 @@ def run_join(base: pd.DataFrame, parts: Mapping[str, pd.DataFrame], spec: JoinSp
                 column=part.key_column,
                 upload_id=part.upload_id,
             )
-        matched_rows = has_key & keys.isin(base_set)
-        rows_matched = int(matched_rows.sum())
+        # Each distinct ID is looked up once, then spread over its rows.
+        found = part_column.found_in(part.key_rule, base_column, spec.base_key_rule)
+        rows_matched = int(part_column.counts[found].sum())
         rows_dropped = len(frame) - rows_matched
-        on_list = set(unique["__key"])
-        base_hit = base_keys.isin(on_list) & base_keys.notna()
+        on_list = len(part_column.index(part.key_rule))
+        base_found = base_column.found_in(spec.base_key_rule, part_column, part.key_rule)
+        base_hit = pd.Series(base_column.flags(base_found), index=base.index)
         if part.kind == "outcome_list":
-            out[str(part.outcome_column)] = base_hit.astype("int64").to_numpy()
+            # A base row with no ID cannot be looked up: its outcome is unknown, not "no" (counted in
+            # `base_rows_without_key`).
+            flags = pd.array(base_hit.astype("int64").to_numpy(), dtype="Int64")
+            flags[base_keys.isna().to_numpy()] = pd.NA
+            out[str(part.outcome_column)] = flags
         else:
             lookup = unique.set_index("__key")
             for pick in part.columns:
@@ -357,7 +363,7 @@ def run_join(base: pd.DataFrame, parts: Mapping[str, pd.DataFrame], spec: JoinSp
                 rows=len(frame),
                 rows_without_key=rows_without_key,
                 exact_repeats_removed=exact_repeats,
-                keys=len(on_list),
+                keys=on_list,
                 keys_not_converted=not_converted,
                 rows_matched=rows_matched,
                 rows_dropped=rows_dropped,
@@ -434,9 +440,15 @@ def _stem(file_name: str) -> str:
     return _STEM.sub("_", base).strip("_") or "file"
 
 
-def outcome_sentence(file_name: str, column: str) -> str:
-    """The sentence an outcome list is agreed with: exact text, compared word for word at approval."""
-    return f"'{column}' is 1 for a customer whose ID is in {file_name}, and 0 for every other customer in the list."
+def outcome_sentence(file_name: str, column: str, *, rows_without_id: int = 0) -> str:
+    """The sentence an outcome list is agreed with: exact text, compared word for word at approval. Rows of
+    the list with no ID cannot be looked up, so their outcome is left empty, and the sentence says how many.
+    """
+    sentence = f"'{column}' is 1 for a customer whose ID is in {file_name}, and 0 for every other customer in the list."
+    if rows_without_id:
+        rows = "1 row of the list has" if rows_without_id == 1 else f"{rows_without_id} rows of the list have"
+        sentence += f" {rows} no ID; '{column}' is left empty there."
+    return sentence
 
 
 def _guess_kind(item: JoinInput, key: str) -> PartKind:
@@ -466,6 +478,29 @@ def _key_candidates(item: JoinInput, base_key: str) -> list[str]:
     return list(dict.fromkeys(ordered))[:4]
 
 
+def _left_out(
+    item: JoinInput,
+    kind: PartKind,
+    column: str | None,
+    found: KeyRuleProposal | None,
+    base_rule: KeyRule,
+    summary: str,
+) -> JoinPartPlan:
+    """A file that is not in the proposed join, recorded with the reason (nothing is silent)."""
+    return JoinPartPlan(
+        upload_id=item.upload_id,
+        file_name=item.file_name,
+        kind=kind,
+        key_column=column,
+        coverage=found.coverage if found else 0.0,
+        fixed_coverage=found.fixed_coverage if found else 0.0,
+        key_rule=KeyRule.identity(),
+        base_key_rule=base_rule,
+        joined=False,
+        summary=summary,
+    )
+
+
 def plan_join(
     base: JoinInput,
     others: Sequence[JoinInput],
@@ -478,15 +513,33 @@ def plan_join(
     A file is joined only when its IDs meet the base's (`KEY_JOIN_OK`), as written or under a key rule; the
     rule is a pending `normalise_key` item, never applied before the person approves the whole join.
     """
-    base_keys = base.frame[_by_name(base.frame)[base_key_column]]
+    base_column = _require(base.frame, base_key_column, file_name=base.file_name, upload_id=base.upload_id)
+    read: Read = {}
+    base_keys = _key_column(
+        read, base.upload_id, base.frame, base_column
+    )  # read once for every file and rule
     taken = set(_by_name(base.frame))
     plans: list[JoinPartPlan] = []
     parts: list[JoinPart] = []
     measured: list[tuple[JoinInput, PartKind, str | None, KeyRuleProposal | None]] = []
+    for item in others[MAX_JOIN_PARTS:]:
+        plans.append(
+            _left_out(
+                item,
+                item.kind or "attributes",
+                None,
+                None,
+                KeyRule.identity(),
+                f"{item.file_name} is left out: at most {MAX_JOIN_PARTS} files are joined onto one list at a "
+                "time. Join it in a second step.",
+            )
+        )
     for item in others[:MAX_JOIN_PARTS]:
         best: tuple[str, KeyRuleProposal] | None = None
         for candidate in _key_candidates(item, base_key_column):
-            tried = propose_key_rules(item.frame[_by_name(item.frame)[candidate]], base_keys)
+            tried = propose_key_rules(
+                _key_column(read, item.upload_id, item.frame, _by_name(item.frame)[candidate]), base_keys
+            )
             if best is None or tried.fixed_coverage > best[1].fixed_coverage:
                 best = (candidate, tried)
         kind = _guess_kind(item, best[0] if best else "")
@@ -503,7 +556,11 @@ def plan_join(
     )
     for item, kind, column, found in measured:
         if column is not None and found is not None and found.meets and found.base_rule != base_rule:
-            found = fit_rule(item.frame[_by_name(item.frame)[column]], base_keys, base_rule)
+            found = fit_rule(
+                _key_column(read, item.upload_id, item.frame, _by_name(item.frame)[column]),
+                base_keys,
+                base_rule,
+            )
         if column is None or found is None or not found.meets:
             coverage = found.coverage if found else 0.0
             plans.append(
@@ -554,6 +611,17 @@ def plan_join(
                 taken.add(output)
                 picks.append(ColumnPick(source=source, output=output))
             if not picks:
+                plans.append(
+                    _left_out(
+                        item,
+                        kind,
+                        column,
+                        found,
+                        base_rule,
+                        f"{item.file_name} is left out: it has no column but its customer column, so it adds "
+                        "nothing to the list.",
+                    )
+                )
                 continue
             part = JoinPart(
                 upload_id=item.upload_id,
@@ -596,7 +664,7 @@ def plan_join(
         parts=tuple(parts),
     )
     try:
-        run = run_join(base.frame, {item.upload_id: item.frame for item in others}, spec)
+        run = _run_join(base.frame, {item.upload_id: item.frame for item in others}, spec, read)
     except JoinError as exc:
         return JoinProposal(
             spec=None,
@@ -615,7 +683,9 @@ def plan_join(
         if not rule.changes_nothing
     )
     sentences = tuple(
-        outcome_sentence(part.file_name, str(part.outcome_column))
+        outcome_sentence(
+            part.file_name, str(part.outcome_column), rows_without_id=run.receipt.base_rows_without_key
+        )
         for part in spec.parts
         if part.kind == "outcome_list"
     )
