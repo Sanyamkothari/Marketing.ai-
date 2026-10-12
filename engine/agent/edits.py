@@ -83,6 +83,21 @@ def _merged_params(kind: RecipeStepKind, old: Mapping[str, Any], new: Mapping[st
     return {"key_column": new.get("key_column", old.get("key_column")), "cells": list(by_key.values())}
 
 
+def _policy_gate(ctx: AgentContext, session: AgentSession) -> Callable[..., None] | None:
+    """Plan O M233: the data policy's `data.person_edit` rules for this edit, behind `data_doctor.unified`."""
+    from engine.doctor.policy import agent_gate
+
+    key, target = roles_of(session)
+    return agent_gate(
+        ctx,
+        "data.person_edit",
+        source="person",
+        primary_key=key,
+        target=target,
+        raise_as=SessionError,
+    )
+
+
 def add_edit(
     session: AgentSession,
     ctx: AgentContext,
@@ -96,6 +111,7 @@ def add_edit(
     """The session with the person's edit added as an accepted step; `SessionError` when it cannot run."""
     from engine.agent.advisor import ordered_steps, recipe_steps
     from engine.agent.recipe import RecipeError, check_recipe, run_recipe
+    from engine.doctor import policy as data_policy
 
     if session.status.value == "applied":
         raise SessionError(
@@ -105,6 +121,11 @@ def add_edit(
         raise SessionError("AGENT_EDIT_NOT_ALLOWED", "Edits are made while setting up a training file.")
     if kind not in PERSON_STEP_KINDS:
         raise SessionError("AGENT_EDIT_NOT_ALLOWED", f"{kind.value} is not an edit made by hand.")
+    # Plan O M233 (DEC-1803): behind `data_doctor.unified`, each check here is followed by the same rule of the
+    # data policy (`data.person_edit`), with the same code; None (nothing read) when the switch is off.
+    gate = _policy_gate(ctx, session)
+    if gate is not None:
+        gate(data_policy.STEP_KIND, steps=(data_policy.StepFacts(kind, column),))
     try:
         column = ctx.resolve(column)
     except AgentToolError as exc:
@@ -114,6 +135,8 @@ def add_edit(
     )
     if column in personal and kind is not RecipeStepKind.DROP_COLUMN:
         raise SessionError("AGENT_EDIT_NOT_ALLOWED", "A column holding personal data can only be hidden.")
+    if gate is not None:
+        gate(data_policy.PERSONAL, steps=(data_policy.StepFacts(kind, column),))
     params = dict(params)
     if kind is RecipeStepKind.CORRECT_CELLS:
         # Always the ID column: a correction found by any other column would be a lookup on it (and
@@ -169,6 +192,8 @@ def add_edit(
             target=target,
             levels=levels,
         )
+        if gate is not None:
+            gate(data_policy.PROTECTED, data_policy.LEVEL, steps=(data_policy.StepFacts.of(step),))
         trial = run_recipe(
             ctx.frame.head(SAMPLE_ROWS),
             [step],

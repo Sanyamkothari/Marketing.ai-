@@ -265,12 +265,16 @@ def _build(given: BuildDatasetInput, ctx: FilesContext) -> BuildPlan:
             "BUILD_PLAN_INCOMPLETE", "Diagnose the files first: the plan reads what each file is."
         )
     frames: Mapping[str, pd.DataFrame] = {upload_id: ctx.frame(upload_id) for upload_id in given.upload_ids}
+    # Plan O M236 (DEC-1806): each file's role is `propose_role`'s when the context offers it (the registry's
+    # tool, decided by its policy); otherwise the diagnosis's, as M237 built it.
+    role_proposer = getattr(ctx, "role_proposer", None)
     return plan_build(
         diagnosis,
         frames,
         use_case=given.use_case,
         label_spec=given.label_spec,
         snapshot_spec=given.snapshot_spec,
+        roles=role_proposer() if callable(role_proposer) else None,
         stack_answers=given.stack_answers,
     )
 
