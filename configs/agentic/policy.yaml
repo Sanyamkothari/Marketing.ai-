@@ -64,11 +64,12 @@ data:
     - features.max_features
     - monitoring.retraining
   # Decision O10: an AI step changing more than 30% of a column carries a warning, more than 60% is refused (the
-  # person may make it as their own edit). Re-typing steps count the values they could not read.
+  # person may make it as their own edit). Re-typing steps (a type or a unit) count the values they could not
+  # read; a rename, hiding a column and a step writing a new column rewrite none of their column's values.
   change_share:
     warn_pct: 30
     refuse_pct: 60
-    retyping_kinds: [parse_number, parse_date, map_boolean]
+    retyping_kinds: [parse_number, parse_date, map_boolean, convert_units]
   # Design §6.6: a join, stack or de-duplication dropping more than this share of rows needs the person's yes.
   approve_drop_share_pct: 2.0
   # An AI's fix is tried on the file's first rows before it is shown (loop.STEP_SAMPLE_ROWS).
@@ -181,7 +182,8 @@ data:
       proposes: plan
       rules: [data.approve_class]
       approve: always
-    # M238: the steps its look tools propose; an AI's merge of spellings is held to O10.
+    # M238: the steps its look tools propose (pending, `check`: never offered ticked); an AI's merge of spellings
+    # is held to O10.
     data.synonym_clusters:
       proposes: steps
       rules:
@@ -196,6 +198,7 @@ data:
       step_kinds: [map_values]
       params:
         map_values: {allowed: [mapping]}
+      tick_only_sure: true
       change_share: true
     data.impossible_values:
       proposes: steps
@@ -204,12 +207,14 @@ data:
       params:
         valid_range: {allowed: [minimum, maximum]}
         set_missing_text: {allowed: [values]}
+      tick_only_sure: true
     data.detect_units:
       proposes: steps
       rules: [data.step_kind, data.step_params, data.protected_columns, data.personal_data, data.never_ticked]
       step_kinds: [convert_units]
       params:
         convert_units: {allowed: [units, bare]}
+      tick_only_sure: true
     # M240: Excel day numbers are the rules' own fix (`find_excel_serial_dates`), never the chat's.
     data.excel_serial_dates:
       proposes: steps

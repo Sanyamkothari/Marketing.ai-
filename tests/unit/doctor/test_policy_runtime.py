@@ -63,18 +63,35 @@ def frame() -> pd.DataFrame:
     return _frame()
 
 
+@pytest.fixture(scope="module")
+def wide_frame() -> pd.DataFrame:
+    """The frame with a column of sizes in two units and one of codes to split (decision O10's other steps)."""
+    wide = _frame()
+    wide["data_usage"] = ["2 GB" if index % 2 else "500 MB" for index in range(len(wide))]
+    wide["region_code"] = [f"{region}-{index % 5}" for index, region in enumerate(wide["region"])]
+    return wide
+
+
 def _look(column: str) -> str:
     return json.dumps({"action": "value_counts", "args": {"column": column}})
 
 
-def _step(kind: str, column: str, evidence: tuple[str, ...] = ("c1-e1",), **params: Any) -> str:
-    args = {
+def _step(
+    kind: str,
+    column: str,
+    evidence: tuple[str, ...] = ("c1-e1",),
+    new_column: str | None = None,
+    **params: Any,
+) -> str:
+    args: dict[str, Any] = {
         "kind": kind,
         "column": column,
         "params": params,
         "reason": "Fix it.",
         "evidence_ids": list(evidence),
     }
+    if new_column is not None:
+        args["new_column"] = new_column
     return json.dumps({"action": "propose_step", "args": args})
 
 
@@ -141,10 +158,16 @@ def test_a_propose_tool_with_no_rule_set_is_refused_with_policy_no_rules() -> No
 
 def test_a_propose_tool_whose_kind_has_rules_runs(tmp_path: Path, config_root: Path) -> None:
     registry = DataToolRegistry()
-    registry.register(_propose_tool("data.split_file"))
+    registry.register(_propose_tool("data.setting"))  # decided in its handler: the registry runs it
     assert registry.call("propose_role", {}, DataToolContext(principal=ANALYST, caller="person")).output == {
         "made": True
     }
+    # A wave-1 kind's output is read as proposals after the call: one the policy cannot read is refused.
+    other = DataToolRegistry()
+    other.register(_propose_tool("data.split_file"))
+    with pytest.raises(DataToolError) as unread:
+        other.call("propose_role", {}, DataToolContext(principal=ANALYST, caller="person"))
+    assert unread.value.code == "POLICY_PAYLOAD_INVALID" and unread.value.status == 403
     # Without a readable policy every PROPOSE tool is refused (default deny), and a READ tool still runs.
     with pytest.raises(DataToolError) as refused:
         registry.call(
@@ -195,6 +218,19 @@ CHAT_REFUSALS: dict[str, tuple[str, ...]] = {
     "a safeguard": (_setting("validation.min_rows", 10),) * 2,
     "a setting no stage reads": (_setting("features.selection", "auto"),) * 2,
     "an unknown setting": (_setting("no.such.setting", 1),) * 2,
+    # A malformed yes/no step is `check_recipe`'s RECIPE_STEP_INVALID today; the policy keeps that code.
+    "yes/no: one spelling on both sides": (
+        _look("is_premium"),
+        *(_step("map_boolean", "is_premium", true_values=["yes", "Y"], false_values=["yes", "N"]),) * 2,
+    ),
+    "yes/no: no spelling of no": (
+        _look("is_premium"),
+        *(_step("map_boolean", "is_premium", true_values=["yes", "Y"], false_values=[]),) * 2,
+    ),
+    "yes/no: no list of no": (
+        _look("is_premium"),
+        *(_step("map_boolean", "is_premium", true_values=["yes", "Y"]),) * 2,
+    ),
 }
 
 
@@ -264,6 +300,34 @@ def test_what_is_allowed_today_is_still_allowed(frame: pd.DataFrame, switch: Cal
     made_on = add_edit(session, ctx, **edit)
     assert [p.model_dump() for p in made_off.proposals] == [p.model_dump() for p in made_on.proposals]
     assert [r.result for r in made_off.tool_results] == [r.result for r in made_on.tool_results]
+
+
+ALLOWED_TODAY: dict[str, tuple[str, str]] = {
+    # Decision O10 counts only what a step rewrites in its own column: a rename and a split into a new column
+    # rewrite none, hiding a column rewrites none, and a unit conversion re-types every value it can read.
+    "rename a column": ("city", _step("rename_column", "city", new_column="town")),
+    "split into a new column": (
+        "region_code",
+        _step("split_column", "region_code", new_column="region_part", separator="-", part=0),
+    ),
+    "convert units": ("data_usage", _step("convert_units", "data_usage", units={"GB": 1024, "MB": 1})),
+    "hide a column": ("city", _step("drop_column", "city")),
+    "read numbers": ("monthly_spend", _step("parse_number", "monthly_spend")),
+}
+
+
+@pytest.mark.parametrize("name", sorted(ALLOWED_TODAY))
+def test_every_chat_step_kind_allowed_today_is_still_allowed(
+    name: str, wide_frame: pd.DataFrame, switch: Callable[[bool], None]
+) -> None:
+    column, step = ALLOWED_TODAY[name]
+    script = (_look(column), step)
+    switch(False)
+    off = _chat(wide_frame, *script)
+    switch(True)
+    on = _chat(wide_frame, *script)
+    assert len(off.proposals) == 1, (off.blocked_by, "allowed today")
+    assert [p.model_dump() for p in on.proposals] == [p.model_dump() for p in off.proposals], on.blocked_by
 
 
 # ---------------------------------------------------------------------------

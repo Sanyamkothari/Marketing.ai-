@@ -55,6 +55,7 @@ from typing import TYPE_CHECKING, Any, Final, Generic, Literal, Protocol, TypeVa
 from pydantic import AwareDatetime, BaseModel, Field, ValidationError
 
 from engine.access.roles import ROLE_DESCRIPTIONS, Principal, Role
+from engine.agent.contracts import RecipeStepKind
 from engine.agent.tools import AgentContext, AgentToolError, call_tool
 from engine.agentic.canonical import canonical_bytes, canonical_json, digest, sha256_hex
 from engine.agentic.registry import DEFAULT_OUTPUT_BUDGET
@@ -275,8 +276,24 @@ class DataTool(Generic[In, Out]):
     """True for Plan G's look tools: `session_call` runs them as Plan G's `call_tool` does, byte for byte."""
     policy_kind: str | None = None
     """For PROPOSE: the policy rule set that decides it (M233 reads it; default deny when it has no rules)."""
+    step_kinds: tuple[RecipeStepKind, ...] = ()
+    """The step kinds its results propose (M238's and M240's READ tools return pending steps beside their
+    evidence). A tool that declares any is decided by the data policy like a PROPOSE tool (M233, DEC-1803)."""
     wraps: str = ""
     """The engine function it wraps, as file:line (the design §5.5)."""
+
+    @property
+    def proposal_kind(self) -> str | None:
+        """The policy kind its results are decided by: a PROPOSE tool's `policy_kind`, or - for a READ tool that
+        returns pending steps (`step_kinds`) - its own (`policy.policy_kind_for`); None for a tool proposing
+        nothing."""
+        if self.policy_kind:
+            return self.policy_kind
+        if self.kind is DataToolKind.PROPOSE or self.step_kinds:
+            from engine.doctor.policy import policy_kind_for
+
+            return policy_kind_for(self.name)
+        return None
 
     @property
     def budget(self) -> int | None:
@@ -432,8 +449,9 @@ class DataToolRegistry:
         if tool is None:
             raise DataToolError("TOOL_UNKNOWN", f"There is no tool called {name[:40]!r} here.", status=404)
         self.check_role(tool, ctx)
-        if tool.kind is DataToolKind.PROPOSE:
-            _require_rule_set(tool, ctx)
+        kind = tool.proposal_kind
+        if kind is not None:
+            _require_rule_set(tool, kind, ctx)
         try:
             parsed = tool.input_model.model_validate(dict(given))
         except ValidationError as exc:
@@ -455,6 +473,8 @@ class DataToolRegistry:
                     "ask a narrower question.",
                     status=413,
                 )
+        if kind is not None:
+            _check_output(kind, output, ctx)
         given_json = parsed.model_dump(mode="json", exclude_none=True)
         result = DataToolResult(
             evidence_id=data_evidence_id(name, given_json, output),
@@ -500,15 +520,16 @@ class DataToolRegistry:
         return call_tool(ctx.require_agent(), name, given, evidence_id=evidence_id)
 
 
-def _require_rule_set(tool: DataTool[Any, Any], ctx: DataToolContext) -> None:
-    """Plan O M233 (DEC-1803): default deny. A PROPOSE tool whose kind has no rule set in the data policy
-    (`configs/agentic/policy.yaml`, `data.rule_sets`) is refused before it runs (`POLICY_NO_RULES`), as is every
-    PROPOSE tool when the policy cannot be read. The rules themselves are applied where the facts they read are
-    known: in the tool's handler (the chat's `loop._propose_step`, the person's `edits.add_edit`)."""
+def _require_rule_set(tool: DataTool[Any, Any], kind: str, ctx: DataToolContext) -> None:
+    """Plan O M233 (DEC-1803): default deny. A tool that proposes (PROPOSE, or a READ tool returning pending
+    steps) whose kind has no rule set in the data policy (`configs/agentic/policy.yaml`, `data.rule_sets`) is
+    refused before it runs (`POLICY_NO_RULES`), as is every such tool when the policy cannot be read. What it
+    returns is then decided by :func:`_check_output`; the chat's and the person's kinds are decided in their
+    handlers (`loop._propose_step`, `loop._propose`, `edits.add_edit`), where the facts they read are known.
+    """
     from engine.agentic.errors import AgenticError
     from engine.doctor.policy import load_data_policy
 
-    kind = tool.policy_kind or ""
     try:
         rule_sets = load_data_policy(ctx.root()).rule_sets
     except AgenticError:
@@ -516,6 +537,20 @@ def _require_rule_set(tool: DataTool[Any, Any], ctx: DataToolContext) -> None:
     if kind not in rule_sets:
         raise DataToolError(
             "POLICY_NO_RULES", f"No policy rules are set for a {kind or tool.name} proposal.", status=403
+        )
+
+
+def _check_output(kind: str, output: Mapping[str, Any], ctx: DataToolContext) -> None:
+    """Plan O M233 (DEC-1803): every proposal in a tool's output, decided by its kind's rule set after the tool
+    ran and before its result is recorded; the first refusal is raised with its code (403). Never ticked unless
+    the rules allow it, `na` never mapped, a reshape only through its question, an APPROVE-class item with its
+    exact sentence, decision O10 on an AI's merge (`policy.check_tool_output`)."""
+    from engine.doctor.policy import check_tool_output, tool_policy_context
+
+    found = check_tool_output(kind, output, tool_policy_context(ctx, kind))
+    if found is not None:
+        raise DataToolError(
+            found.code or "POLICY_NO_RULES", str(found.detail.get("reason", "Not allowed."))[:400], status=403
         )
 
 

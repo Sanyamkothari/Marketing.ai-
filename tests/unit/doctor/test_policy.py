@@ -309,7 +309,12 @@ def test_never_ticked_kinds_and_ai_proposals_never_start_ticked() -> None:
     )
     assert codes(evaluate(chat, context())) == {"POLICY_NEVER_TICKED"}
     units = dataclasses.replace(base("data.detect_units", rules_of("data.detect_units")), ticked=True)
-    assert allowed(evaluate(units, context())), "a rules suggestion of an ordinary kind may start ticked"
+    sure = dataclasses.replace(units, confidence="sure")
+    assert allowed(
+        evaluate(sure, context())
+    ), "a rules suggestion of an ordinary kind may start ticked when sure"
+    checked = dataclasses.replace(units, confidence="check")
+    assert codes(evaluate(checked, context())) == {"POLICY_NEVER_TICKED"}, "M238: a `check` step is pending"
     person = DataProposal(
         kind="data.person_edit",
         source="person",
@@ -370,8 +375,9 @@ def _booleans(true: list[str], false: list[str], source: str = "rules") -> DataP
 def test_m241_indian_booleans_both_sides_from_the_lexicons_never_na() -> None:
     assert allowed(evaluate(_booleans(["haan", "Haa"], ["nahi"]), context()))
     assert allowed(evaluate(_booleans(["हाँ"], ["नहीं"]), context()))
-    assert codes(evaluate(_booleans(["haan"], []), context())) == {"POLICY_BOOLEAN_SPELLING"}
-    assert codes(evaluate(_booleans(["haan"], ["haan"]), context())) == {"POLICY_BOOLEAN_SPELLING"}
+    # Malformed steps keep `check_recipe`'s code today; only `na` and unknown rules spellings are new refusals.
+    assert codes(evaluate(_booleans(["haan"], []), context())) == {"RECIPE_STEP_INVALID"}
+    assert codes(evaluate(_booleans(["haan"], ["haan"]), context())) == {"RECIPE_STEP_INVALID"}
     assert codes(evaluate(_booleans(["haan"], ["NA"]), context())) == {"POLICY_BOOLEAN_SPELLING"}
     assert codes(evaluate(_booleans(["haan", "sahi"], ["nahi"]), context())) == {"POLICY_BOOLEAN_SPELLING"}
 

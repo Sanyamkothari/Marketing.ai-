@@ -51,7 +51,10 @@ __all__ = [
     "DATA_POLICY_CODES",
     "DATA_RULES",
     "DATA_RULE_NAMES",
+    "FILES_KINDS",
+    "HANDLER_CHECKED",
     "NOT_ALLOWED_CODES",
+    "OUTPUT_READERS",
     "POLICY_KINDS",
     "ApprovalFacts",
     "ChangeShareSettings",
@@ -67,17 +70,21 @@ __all__ = [
     "agent_gate",
     "agent_policy_context",
     "allowed",
+    "check_tool_output",
     "data_policy_on",
     "effect_of",
     "evaluate",
     "first_refusal",
+    "keeps_its_values",
     "load_data_policy",
     "never_ticked_steps",
+    "output_proposals",
     "policy_kind_for",
     "policy_or_deny",
     "refusal",
     "rule_mutants",
     "rule_set_mutants",
+    "tool_policy_context",
 ]
 
 # ---------------------------------------------------------------------------
@@ -235,9 +242,12 @@ class ChangeShareSettings(_Strict):
         RecipeStepKind.PARSE_NUMBER,
         RecipeStepKind.PARSE_DATE,
         RecipeStepKind.MAP_BOOLEAN,
+        RecipeStepKind.CONVERT_UNITS,
     )
-    """Steps whose purpose is to rewrite every value in another type (`haan` to 1): for them the share is of the
-    values they could not read, so `haan`/`nahi` to 1/0 is not refused for converting every value."""
+    """Steps whose purpose is to rewrite every value in another type or unit (`haan` to 1, `2 GB` to 2048): for
+    them the share is of the values they could not read, so `haan`/`nahi` to 1/0 is not refused for converting
+    every value. Steps that rewrite none of their column's values (a rename, hiding a column, a step writing a
+    new column) count nothing: :func:`effect_of`."""
 
     @model_validator(mode="after")
     def _ordered(self) -> ChangeShareSettings:
@@ -494,9 +504,12 @@ def _lexicon() -> tuple[frozenset[str], frozenset[str]]:
 def spellings(subject: DataProposal, ctx: DataPolicyContext, rules: DataRuleSet) -> Decision | None:
     """A yes/no step maps both sides, never one spelling to both, and never `na` (M241).
 
-    The rules' spellings come from the lexicons only. An AI's spelling outside them is the approval's "new
-    pattern, with permission": allowed here, and held by `data.grounded`, `data.tried`, `data.change_share` and
-    `data.never_ticked` instead (it is never ticked; the person approves it).
+    A step that does not list both sides, or lists one spelling on both, is malformed: `check_recipe` refuses it
+    today with `RECIPE_STEP_INVALID` and its words, so the policy refuses it with the same code and words. Only
+    what the policy adds has its own code (`POLICY_BOOLEAN_SPELLING`): `na`, and a rules spelling outside the
+    lexicons. An AI's spelling outside them is the approval's "new pattern, with permission": allowed here, and
+    held by `data.grounded`, `data.tried`, `data.change_share` and `data.never_ticked` instead (it is never
+    ticked; the person approves it).
     """
     del rules
     booleans = [step for step in subject.steps if step.kind is RecipeStepKind.MAP_BOOLEAN]
@@ -505,17 +518,30 @@ def spellings(subject: DataProposal, ctx: DataPolicyContext, rules: DataRuleSet)
     never = {_spelling(word) for word in ctx.policy.boolean_spellings.never}
     yes_words, no_words = _lexicon()
     code = "POLICY_BOOLEAN_SPELLING"
-    for step in booleans:
+    for order, step in enumerate(subject.steps, start=1):
+        if step.kind is not RecipeStepKind.MAP_BOOLEAN:
+            continue
+        malformed = f"Step {order} ({step.kind.value}): "
         true_values = step.params.get("true_values")
         false_values = step.params.get("false_values")
-        if not isinstance(true_values, list | tuple) or not isinstance(false_values, list | tuple):
-            return _refuse(SPELLINGS, code, "A yes/no step lists the spellings of yes and of no.")
+        if not (
+            isinstance(true_values, list | tuple)
+            and true_values
+            and isinstance(false_values, list | tuple)
+            and false_values
+        ):
+            return _refuse(
+                SPELLINGS, "RECIPE_STEP_INVALID", malformed + "list the spellings of yes and of no"
+            )
         yes = {_spelling(word) for word in true_values}
         no = {_spelling(word) for word in false_values}
-        if not yes or not no:
-            return _refuse(SPELLINGS, code, "A yes/no column is read only when both yes and no are seen.")
         if yes & no:
-            return _refuse(SPELLINGS, code, "One spelling cannot mean both yes and no.", both=len(yes & no))
+            return _refuse(
+                SPELLINGS,
+                "RECIPE_STEP_INVALID",
+                malformed + "a spelling cannot mean both yes and no",
+                both=len(yes & no),
+            )
         if (yes | no) & never:
             return _refuse(
                 SPELLINGS,
@@ -910,12 +936,32 @@ def refusal(subject: DataProposal, ctx: DataPolicyContext, *names: str) -> Decis
     return first_refusal(evaluate(subject, ctx, names=names))
 
 
+KEEPS_ITS_VALUES: Final[frozenset[RecipeStepKind]] = frozenset(
+    {RecipeStepKind.RENAME_COLUMN, RecipeStepKind.DROP_COLUMN}
+)
+"""Steps that rewrite none of their column's values: a rename keeps every value, hiding a column keeps the file's
+values as they are (the column is left out of what the model reads, which is its own decision, never O10's)."""
+
+
+def keeps_its_values(step: RecipeStep) -> bool:
+    """Whether `step` leaves every value of its own column as it is: a rename, hiding a column, or a step that
+    writes its result into a new column (`split_column` with `new_column`; Plan G's receipt still counts the
+    values it wrote there as changed)."""
+    if step.kind in KEEPS_ITS_VALUES:
+        return True
+    return step.new_column is not None and step.new_column != step.column
+
+
 def effect_of(step: RecipeStep, sample: Any, *, changed: int, failed: int) -> StepEffect:
     """A tried step's effect, counted as decision O10 counts it (M238's `change_share.measure_step`).
 
     Out of the column's non-empty values for a value step, of its rows for a fill, of the rows for a step that
     changes the rows. `changed` and `failed` are the trial's receipt on `sample` (the rows it was tried on).
+    O10 is about the values of the column a step rewrites: a step that rewrites none of them
+    (:func:`keeps_its_values`) changes none, whatever the receipt counts.
     """
+    if keeps_its_values(step):
+        changed, failed = 0, 0
     rows = len(sample)
     if step.kind in ROW_RESHAPE_STEP_KINDS or step.kind in (
         RecipeStepKind.REMOVE_ROWS,
@@ -1012,6 +1058,295 @@ def never_ticked_steps(config: Any, config_root: Path | None) -> frozenset[Recip
     except AgenticError:
         return NEVER_TICKED_STEPS
     return NEVER_TICKED_STEPS | frozenset(extra)
+
+
+# ---------------------------------------------------------------------------
+# What the wave-1 tools return, read as proposals (the registry asks after each call)
+# ---------------------------------------------------------------------------
+HANDLER_CHECKED: Final[frozenset[str]] = frozenset({"data.setting", "data.recipe_step", "data.person_edit"})
+"""Kinds whose handler asks the rules itself, where its own checks are (`loop._propose`, `loop._propose_step`,
+`edits.add_edit`): the registry adds no second reading of their output."""
+
+FILES_KINDS: Final[frozenset[str]] = frozenset(
+    {"data.join_files", "data.stack_files", "data.build_dataset", "data.normalise_key"}
+)
+"""Kinds over several files (M237): each file has its own ID column, which `normalise_key` writes by design, so
+no single file's ID is protected for them; the outcome still is."""
+
+_Reader = Callable[[str, Mapping[str, Any]], list[DataProposal]]
+
+
+def _facts(raw: Any) -> StepFacts:
+    """A step as a tool returns it (a `RecipeStep`, a `StepProposal`, or `{kind, column, params}`)."""
+    if not isinstance(raw, Mapping):
+        raise TypeError("a step is an object")
+    params = raw.get("params") or {}
+    if not isinstance(params, Mapping):
+        raise TypeError("a step's params are an object")
+    new_column = raw.get("new_column")
+    return StepFacts(
+        kind=RecipeStepKind(str(raw["kind"])),
+        column=str(raw["column"]),
+        params=dict(params),
+        new_column=str(new_column) if new_column else None,
+    )
+
+
+def _source(raw: Mapping[str, Any], default: Source = "rules") -> Source:
+    value = str(raw.get("source", default))
+    if value not in ("rules", "ai", "person"):
+        raise ValueError(f"unknown source {value!r}")
+    return value  # type: ignore[return-value]
+
+
+def _step_proposal(kind: str, raw: Any, **extra: Any) -> DataProposal:
+    """M238's `StepProposal`: who proposed it, never ticked, measured on the file (its O10 effect for an AI's)."""
+    if not isinstance(raw, Mapping):
+        raise TypeError("a proposal is an object")
+    source = _source(raw)
+    facts: dict[str, Any] = {
+        "ticked": bool(raw.get("ticked", False)),
+        "confidence": "sure" if raw.get("confidence") == "sure" else "check",
+    }
+    if source == "ai":
+        # The tool itself read the column it proposes for, and measured the step on the whole file.
+        out_of = int(raw["out_of"])
+        facts["looked_at"] = True
+        facts["effect"] = StepEffect(changed=int(raw["changed"]), failed=0, out_of=out_of, rows_tried=out_of)
+    return DataProposal(kind=kind, source=source, steps=(_facts(raw),), **{**facts, **extra})
+
+
+def _present(*values: Any) -> list[Any]:
+    return [value for value in values if value is not None]
+
+
+def _read_synonyms(kind: str, output: Mapping[str, Any]) -> list[DataProposal]:
+    steps = _present(output["report"].get("step"), output.get("ai_step"))
+    return [_step_proposal(kind, step) for step in steps]
+
+
+def _read_impossible(kind: str, output: Mapping[str, Any]) -> list[DataProposal]:
+    return [_step_proposal(kind, f["step"]) for f in output["findings"] if f.get("step") is not None]
+
+
+def _read_units(kind: str, output: Mapping[str, Any]) -> list[DataProposal]:
+    return [_step_proposal(kind, step) for step in _present(output.get("step"))]
+
+
+def _read_keep_latest(kind: str, output: Mapping[str, Any]) -> list[DataProposal]:
+    return [
+        _step_proposal(
+            kind,
+            output["step"],
+            asked=output.get("question") is not None,
+            rows_in=int(output["rows_in"]),
+            rows_out=int(output["rows_out"]),
+            sentence=str(output.get("sentence") or "") or None,
+        )
+    ]
+
+
+def _read_excel_serial(kind: str, output: Mapping[str, Any]) -> list[DataProposal]:
+    found: list[DataProposal] = []
+    for column in output["columns"]:
+        params: dict[str, Any] = {"excel_serial": bool(column.get("excel_serial", True))}
+        if column.get("date_1904"):
+            params["date_1904"] = True
+        step = StepFacts(RecipeStepKind.PARSE_DATE, str(column["column"]), params)
+        found.append(DataProposal(kind=kind, source="rules", steps=(step,)))
+    return found
+
+
+def _read_locale(kind: str, output: Mapping[str, Any]) -> list[DataProposal]:
+    """M241: a proposal the rules are `sure` of is offered ticked; any other is pending."""
+    found: list[DataProposal] = []
+    for proposal in output["proposals"]:
+        if proposal.get("step") is None:
+            continue
+        sure = proposal.get("confidence") == "sure"
+        found.append(
+            DataProposal(
+                kind=kind,
+                source="rules",
+                steps=(_facts(proposal["step"]),),
+                ticked=sure,
+                confidence="sure" if sure else "check",
+            )
+        )
+    return found
+
+
+def _sentence(output: Mapping[str, Any], *names: str) -> str | None:
+    for name in names:
+        text = output.get(name)
+        if isinstance(text, str) and text.strip():
+            return text
+    return None
+
+
+def _read_split(kind: str, output: Mapping[str, Any]) -> list[DataProposal]:
+    receipt = output["receipt"]
+    rows_out = int(receipt["rows_training"]) + int(receipt["rows_scoring"])
+    return [
+        DataProposal(
+            kind=kind,
+            source="rules",
+            rows_in=int(receipt["rows_in"]),
+            rows_out=rows_out,
+            sentence=_sentence(output, "sentence"),
+        )
+    ]
+
+
+def _read_join(kind: str, output: Mapping[str, Any]) -> list[DataProposal]:
+    """The file that loses the largest share of its rows decides (M237: over 2% of any file is APPROVE-class)."""
+    receipt = output.get("receipt")
+    rows_in: int | None = None
+    rows_out: int | None = None
+    if receipt is not None:
+        parts = list(receipt["parts"])
+        if parts:
+            worst = max(parts, key=lambda part: (int(part["rows_dropped"]) / max(int(part["rows"]), 1)))
+            rows_in, rows_out = int(worst["rows"]), int(worst["rows"]) - int(worst["rows_dropped"])
+    return [
+        DataProposal(
+            kind=kind,
+            source="rules",
+            rows_in=rows_in,
+            rows_out=rows_out,
+            sentence=_sentence(output, "summary"),
+        )
+    ]
+
+
+def _read_stack(kind: str, output: Mapping[str, Any]) -> list[DataProposal]:
+    receipt = output.get("receipt")
+    rows_in = None if receipt is None else int(receipt["rows_in"])
+    rows_out = None if receipt is None else int(receipt["rows_out"])
+    return [
+        DataProposal(
+            kind=kind,
+            source="rules",
+            rows_in=rows_in,
+            rows_out=rows_out,
+            sentence=_sentence(output, "summary"),
+        )
+    ]
+
+
+def _read_build(kind: str, output: Mapping[str, Any]) -> list[DataProposal]:
+    """The plan's key rules as `normalise_key` steps; its stacks' worst row loss; its approval sentence."""
+    from engine.agent.key_steps import KeyRule
+
+    steps: list[StepFacts] = []
+    for source in (output["entity"], *output.get("events", ())):
+        rule = KeyRule.model_validate(source.get("key_rule") or {})
+        if not rule.changes_nothing:
+            steps.append(StepFacts(RecipeStepKind.NORMALISE_KEY, str(source["key_column"]), rule.params()))
+    rows_in: int | None = None
+    rows_out: int | None = None
+    receipts = list(output.get("stack_receipts", ()))
+    if receipts:
+        worst = max(
+            receipts, key=lambda r: (int(r["rows_in"]) - int(r["rows_out"])) / max(int(r["rows_in"]), 1)
+        )
+        rows_in, rows_out = int(worst["rows_in"]), int(worst["rows_out"])
+    return [
+        DataProposal(
+            kind=kind,
+            source="rules",
+            steps=tuple(steps),
+            rows_in=rows_in,
+            rows_out=rows_out,
+            sentence=_sentence(output, "approval_sentence"),
+        )
+    ]
+
+
+def _read_normalise_key(kind: str, output: Mapping[str, Any]) -> list[DataProposal]:
+    steps = tuple(_facts(step) for step in output["steps"])
+    return [DataProposal(kind=kind, source="rules", steps=steps)] if steps else []
+
+
+OUTPUT_READERS: Final[Mapping[str, _Reader]] = {
+    "data.synonym_clusters": _read_synonyms,
+    "data.impossible_values": _read_impossible,
+    "data.detect_units": _read_units,
+    "data.keep_latest_per_id": _read_keep_latest,
+    "data.split_file": _read_split,
+    "data.excel_serial_dates": _read_excel_serial,
+    "data.parse_indian_numbers": _read_locale,
+    "data.indian_booleans": _read_locale,
+    "data.join_files": _read_join,
+    "data.stack_files": _read_stack,
+    "data.build_dataset": _read_build,
+    "data.normalise_key": _read_normalise_key,
+}
+"""How each wave-1 kind's output reads as proposals: the steps with who proposed them, whether they would be
+offered ticked and how sure the rules are, the question a reshape is offered through, rows before and after, and
+the exact sentence an APPROVE-class item is approved with."""
+
+
+def output_proposals(kind: str, output: Mapping[str, Any]) -> list[DataProposal]:
+    """The proposals in one tool's output (`model_dump(mode="json")`); `ValueError` when it cannot be read."""
+    reader = OUTPUT_READERS.get(kind)
+    if reader is None:
+        raise ValueError(f"the policy cannot read what a {kind} proposal carries")
+    try:
+        return reader(kind, output)
+    except (KeyError, TypeError, ValueError, ValidationError) as exc:
+        raise ValueError(f"a {kind} proposal is not shaped as its tool's output: {exc}") from exc
+
+
+def check_tool_output(kind: str, output: Mapping[str, Any], ctx: DataPolicyContext) -> Decision | None:
+    """The first refusal of what a tool proposed, by its kind's rule set; None when every proposal is allowed.
+
+    Default deny: a kind with no rule set (`POLICY_NO_RULES`), or whose output the policy cannot read
+    (`POLICY_PAYLOAD_INVALID`), is refused. The chat's and the person's kinds (:data:`HANDLER_CHECKED`) are
+    decided in their handlers. An output that proposes nothing (no step found) has nothing to decide.
+    """
+    if kind in HANDLER_CHECKED:
+        return None
+    if kind not in ctx.policy.rule_sets:
+        return _refuse("default", "POLICY_NO_RULES", f"No policy rules are set for a {kind} proposal.")
+    try:
+        proposals = output_proposals(kind, output)
+    except ValueError as exc:
+        return _refuse("default", "POLICY_PAYLOAD_INVALID", str(exc)[:300])
+    for subject in proposals:
+        found = first_refusal(evaluate(subject, ctx))
+        if found is not None:
+            return found
+    return None
+
+
+def tool_policy_context(ctx: Any, kind: str) -> DataPolicyContext:
+    """The facts the rules read for one registry call (`DataToolContext`), computed by the server.
+
+    The file's ID (the context's `primary_key` once M232's integration gives it one, else the session's), its
+    outcome, its personal columns and the use case's levels with decision O3's reshape; for several files
+    (:data:`FILES_KINDS`) no single ID is protected. A call with no file reads only the policy.
+    """
+    from engine.agent.session import roles_of
+    from engine.doctor.reshape_guard import doctor_levels
+
+    policy = policy_or_deny(ctx.root())
+    session = getattr(ctx, "session", None)
+    key, target = roles_of(session) if session is not None else (None, None)
+    key = getattr(ctx, "primary_key", None) or key
+    agent = getattr(ctx, "agent", None)
+    if agent is None:
+        return DataPolicyContext(policy=policy, target=target)
+    personal = {c.name for c in agent.profile.columns if c.pii_kinds} | set(
+        agent.config.agent.always_hide_columns
+    )
+    return DataPolicyContext(
+        policy=policy,
+        primary_key=None if kind in FILES_KINDS else key,
+        target=getattr(agent, "target", None) or target,
+        personal_columns=frozenset(personal),
+        levels=doctor_levels(tuple(agent.config.agent.levels), unified=True),
+    )
 
 
 # ---------------------------------------------------------------------------
