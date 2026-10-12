@@ -374,3 +374,57 @@ currencies here.
 - **Read scanned PDFs, photos or free-form documents** as tables.
 - **Invent history.** It can build an outcome from events you recorded; it cannot create one from nothing.
 - **Change your original file, or write code.** Every change is a step from a fixed list that our tested code runs.
+
+---
+
+## 12. Plan O: one Data Doctor for all your data (coming; M230–M250)
+
+**Plan:** [`plans/MARKETING_AI_PLAN_O_DATA_DOCTOR.md`](plans/MARKETING_AI_PLAN_O_DATA_DOCTOR.md) (M230–M250), approved
+by the product owner on 12 October 2026 (decisions O1–O19 as recommended). **Design:**
+[`plans/DATA_DOCTOR_AGENT_DESIGN.md`](plans/DATA_DOCTOR_AGENT_DESIGN.md). **Decisions:** DEC-1800 … DEC-1899 in
+[`DECISIONS.md`](DECISIONS.md).
+
+**Nothing in this section is built yet.** It says what is coming, so that nobody reads it as what the product does
+today. Each milestone fills in its own part, in plain words, when it lands.
+
+### What is coming
+
+Today your data is prepared in several places that do not know about each other: Guided setup, the Doctor page
+and the screens around them. Plan O makes them **one Data Doctor**:
+
+- **One case per piece of work**, with a timeline of what was found, asked, approved and changed (M231).
+- **Every data feature is a tool** Data Doctor can use, each with a rule for who may approve what it proposes
+  (M232, M233, M236–M240).
+- **One readiness report** whose "ready" means the run will not fail for a data reason (M234).
+- **Several files joined and stacked** without counting anything twice (M237); outcomes built from values, events
+  or thresholds (M239); more file formats read safely (M240).
+- **Indian formats and currency**: lakh and crore, `/-`, `haan`/`nahi`, GSTIN and PIN; a workspace currency, so a
+  file in dollars is noticed and never mixed with rupees (M241, M242).
+- **One prescription** that is replayed at training and at scoring, and plain time settings: how long training
+  takes, and which dates to use, proposed rather than guessed (M243, M244).
+- **It notices what it does not know**, asks once, and remembers your answer (M245, M246). A new value pattern
+  no rule covers may be fixed only with your approval, and only with a step from the fixed list.
+- **One Data Doctor screen**, in three places (M247), after the visual redesign.
+
+### The switch
+
+All of this is built behind one switch, `data_doctor.unified`, in each use case's configuration (default in
+[`configs/engine.yaml`](../configs/engine.yaml) under `defaults.data_doctor`):
+
+```yaml
+data_doctor:
+  unified: false   # the default
+```
+
+- **While it is off (the default), nothing changes.** Guided setup and the Doctor page work exactly as the
+  sections above describe; every run, file and result is the same as before Plan O. The switch is not even written
+  into a run's `run_config.json` while it is off.
+- It cannot be changed for a single run; it is a setting of the use case.
+- It is turned on at M249, and only once the plan's parity checklist is met (§3.2 of the plan): the same results
+  as today on the golden files and the benchmark, and every existing test passing through the new Data Doctor.
+
+### For developers
+
+`engine/doctor/config.py` holds `DataDoctorConfig` (the switch; `UseCaseConfig.data_doctor`), and
+`engine/doctor/codes.py` holds `PLAN_O_CODES`, which `engine.pilot.help.known_codes()` includes: a code added there
+needs its entry in `configs/pilot/help.yaml` in the same change (DEC-1800).

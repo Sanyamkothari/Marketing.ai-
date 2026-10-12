@@ -489,3 +489,5 @@ export function bindUploadNotes(root, handlers = {}) {
 // ---- END PLAN-K ----
 // ---- PLAN-M (simple UI) — append only below this line ----
 // ---- END PLAN-M ----
+// ---- PLAN-O (Data Doctor) — append only below this line ----
+// ---- END PLAN-O ----

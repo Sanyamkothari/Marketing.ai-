@@ -109,7 +109,9 @@ Each shared file gets three marked blocks, added by the contracts-first task:
   | DEC-1400…1499 | Plan K — agents that check, not agents that send (M130–M144; `docs/plans/MARKETING_AI_PLAN_K_PROPOSAL.md`, `docs/AGENTIC.md`); its `PLAN-K (agents that check)` block follows Plan L's in every shared file. M131, M135 and M137 were built earlier under Plan J's range, as DEC-1323, DEC-1324 and DEC-1325 | claimed 2026-10-10 by M130 |
   | DEC-1500…1599 | Plan L — Data Doctor, one agent for messy data (M150–M161, `docs/plans/MARKETING_AI_PLAN_L_DATA_DOCTOR.md`) | claimed 2026-10-10 by M150 |
   | DEC-1600…1699 | Plan M — a product a marketer understands in minutes (M170–M181, `docs/plans/MARKETING_AI_PLAN_M_SIMPLE_UI.md`); its `PLAN-M (simple UI)` block follows Plan K's in every shared file | claimed 2026-10-11 by M170 |
-  | DEC-1700 up | unallocated | — |
+  | DEC-1700…1799 | Plan N (proposed; not claimed): autonomy within a signed mandate (M200–M225, `docs/plans/MARKETING_AI_PLAN_N_AUTONOMY.md`); M200 claims it once its D1 and D2 are approved | — |
+  | DEC-1800…1899 | Plan O — Data Doctor, the one data agent (M230–M250, `docs/plans/MARKETING_AI_PLAN_O_DATA_DOCTOR.md`); its `PLAN-O (Data Doctor)` block follows Plan M's in every shared file | claimed 2026-10-12 by M230 |
+  | DEC-1900 up | unallocated | — |
 
   A new phase, or a phase that exhausts its hundred, takes the **next free hundred** and adds its row to this table *before* its first entry — the row is the claim. Never borrow a number inside another workstream's hundred, even an unused one.
 - `docs/API.md` is generated; never hand-edit. Run `gen_api_docs` after adding models.
