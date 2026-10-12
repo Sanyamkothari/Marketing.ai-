@@ -859,7 +859,9 @@ places, and it is the same check in all three:
 - **Data › Check my data.** Choose a file. Data Doctor reads it, asks only what it cannot tell, and says what the
   data can be used for. "Choose this goal" takes you straight into the "New campaign" wizard on the same check.
 - **The wizard's Customers step.** The check for that goal, inside the step. What you answered on the Data page
-  stands: nothing is asked twice. When the data is approved and ready, the list starts, as before.
+  stands: nothing is asked twice. When the data is approved and ready, the list starts, as before - unless a change
+  that needs its own yes (such as the column that says who agreed to be contacted) is still waiting: then the
+  screen lists it as left out, and continuing without it is a separate choice ("Continue with this data").
 - **A goal's setup.** The same check, where Guided setup used to be.
 
 On the screen: the verdict and the one thing to do next; each question with why it is asked, what each answer
@@ -871,12 +873,32 @@ Approve, with the sentence it records, word for word; the chat with "What the AI
 far, with the receipt of each approval. With no AI service connected, the chat says so and opens Settings › AI
 service; everything else works. Technical names (codes, ids, steps) are only under "Technical details".
 
+A few things keep you from agreeing to something by accident, and let you take an answer back:
+
+- **The sentence you approve names your goal by its name** ("for the goal “Find customers likely to buy”"),
+  never by an internal id. It is the sentence that is recorded.
+- **"I agree to this sentence" is a deliberate step.** It stays off until you tick "I have read this sentence",
+  and a screen reader reads the sentence with the button. If you cannot give that yes - you lack the role, or you
+  answered or suggested the change yourself and someone else must agree - you see who to ask instead of a button.
+- **Every change left out until someone agrees is listed** beside Approve and beside the verdict. Approve never
+  starts the list while one is left out; you choose to continue without it.
+- **"Ready, with notes" always shows a note** in plain words, even when the details are technical.
+- **"Change answer"** shows an answered question's answers again, so a wrong click can be undone where it was made.
+  An answer that is remembered for your next files says "Remembered for next time" with its date, and Revoke there
+  stops it being used next time (this check keeps the answer).
+
 ### For developers
 
 `ui/modules/datadoctor/` (`screen.js` the component, `view.js` its markup, `switch.js` the switch read from
 `GET /auth/me` `data_doctor`), mounted by `ui/modules/data/page.js` and, through Guided setup's own mount
 (`ui/modules/agent/guided.js` `mountGuided`), by the wizard and a goal's setup. The server side is
-`engine/doctor/screen.py` (the verdict, the approval sentence, APPROVE-class items, standing answers with dates,
-the hand-off) and `api/routes/case_screen.py` (`GET /cases/{case_id}/screen`, `GET /data-doctor/cases`).
+`engine/doctor/screen.py` (the verdict with `note` under `ready_with_warnings`, the approval sentence, APPROVE-class
+items with `can_agree` / `cannot_agree` for the reader - the rule `visit.confirm` applies,
+`protocol.confirmation_refusal` - standing answers with dates, `remembered` (answers given here that are remembered,
+by question), the hand-off) and `api/routes/case_screen.py` (`GET /cases/{case_id}/screen`, read for the caller,
+`GET /data-doctor/cases`). The approval sentence names the goal through `engine/doctor/goal_names.py`
+(`goal_display_name`: `ui/labels.js` `GOAL_NAMES`, kept equal by `tests/unit/doctor/test_goal_names.py`, else the
+brief's configured name, else the id); the server shows and checks the same sentence, so an approval read before
+this change is refused once with `APPROVAL_SENTENCE_CHANGED` and the new sentence.
 Tests: `tests/unit/doctor/test_screen.py`, `tests/integration/test_api_case_screen.py`,
 `tests/integration/test_data_doctor_ui.py` (jsdom), `tests/integration/test_data_doctor_journey.py` (Playwright).

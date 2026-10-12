@@ -46,6 +46,11 @@ export const CSS = `
 .dds-standing,.dds-goal{display:flex;gap:var(--s3);align-items:center;justify-content:space-between;min-height:48px;padding:var(--s2) 0;flex-wrap:wrap}
 .dds-goal .dds-item-body{flex-direction:row;align-items:center;flex-wrap:wrap;gap:var(--s2)}
 .dds-standing .btn.sm,.dds-goal .btn{min-height:40px}
+.dds-remembered{display:flex;gap:var(--s3);align-items:center;justify-content:space-between;flex-wrap:wrap}
+.dds-remembered .btn.sm{min-height:40px}
+.dds-head .dds-leftout,.dds-head [data-dds-note]{grid-column:1/-1;margin:0}
+.dds-leftout{display:flex;flex-direction:column;gap:var(--s1)}
+.dds-leftout .dds-reasons{margin:0;padding-left:20px;color:var(--ink2);font-size:var(--fs-small);overflow-wrap:anywhere}
 .dds-group{display:flex;flex-direction:column;gap:var(--s2)}
 .dds-approve{padding:var(--s4) 20px;display:flex;flex-direction:column;gap:var(--s3)}
 .dds-upload{display:flex;flex-direction:column;gap:var(--s3);align-items:flex-start}

@@ -138,6 +138,7 @@ __all__ = [
     "active_section",
     "add_files",
     "answer",
+    "approval_goal_name",
     "approval_sentence",
     "approve",
     "brief_key",
@@ -145,6 +146,7 @@ __all__ = [
     "confirm",
     "confirmed",
     "decide",
+    "item_proposers",
     "lazy_converse",
     "mode_of",
     "open_blocking",
@@ -394,15 +396,27 @@ def stored_brief(storage: Storage, case: Case) -> GoalBrief | None:
         return None  # GOAL_BRIEF loads and writes it again
 
 
-def approval_sentence(case: Case) -> str:
-    """The sentence the person approves, word for word (recorded with the approval)."""
+def approval_sentence(case: Case, *, goal_name: str | None = None) -> str:
+    """The sentence the person approves, word for word (recorded with the approval).
+
+    Plan O M247 (DEC-1817): the goal is named as the screens name it (`goal_display_name`: its display name, else
+    `goal_name` - the brief's configured name, see :func:`approval_goal_name` - else its id), never by its id alone.
+    """
+    from engine.doctor.goal_names import goal_display_name
+
     items, _ = active_section(case)
     ticked = sum(1 for item in items if item.state is ProposalState.ACCEPTED)
     goal = active_goal(case)
     what = f"{ticked} change{'s' if ticked != 1 else ''}"
     files = len(case.files)
-    to = f" for the goal {goal.goal_id}" if goal is not None else ""
+    to = f" for the goal “{goal_display_name(goal.goal_id, goal_name)}”" if goal is not None else ""
     return f"Prepare {files} file{'s' if files != 1 else ''} with {what}{to}. Nothing else changes."
+
+
+def approval_goal_name(storage: Storage, case: Case) -> str | None:
+    """The configured name of the active goal (its stored brief's `goal_name`), for :func:`approval_sentence`."""
+    brief = stored_brief(storage, case)
+    return brief.goal_name if brief is not None else None
 
 
 # ---------------------------------------------------------------------------
@@ -2176,7 +2190,7 @@ def approve(
                 f"{len(missing)} change{'s' if len(missing) != 1 else ''} need{'' if len(missing) != 1 else 's'} "
                 f"their own yes first: “{missing[0].title}”.",
             )
-        text = approval_sentence(case)
+        text = approval_sentence(case, goal_name=approval_goal_name(run.deps.storage, case))
         if sentence is not None and sentence != text:
             raise CaseError(
                 "APPROVAL_SENTENCE_CHANGED",
@@ -2296,6 +2310,12 @@ def _proposers(case: Case, item: CaseItem) -> tuple[str, ...]:
         if who is not None and who != AGENT and who not in found:
             found.append(who)
     return tuple(found)
+
+
+def item_proposers(case: Case, item: CaseItem) -> tuple[str, ...]:
+    """Everyone who proposed or answered an item (`_proposers`): what :func:`confirm` checks separation against,
+    so the screen can say before a click who may give the yes (Plan O M247)."""
+    return _proposers(case, item)
 
 
 def confirmed(case: Case, item: CaseItem) -> bool:

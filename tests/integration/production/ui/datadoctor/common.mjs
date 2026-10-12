@@ -53,6 +53,7 @@ export function serverFor(world) {
       return ok({ cases: [{ case_id: CASE, title: c.title, goal_id: goal ? goal.goal_id : null, state: c.state, files: [], updated_at: c.updated_at }] });
     }
     if (method === "GET" && p === `/cases/${CASE}/screen`) return ok(screen(world.at));
+    if (method === "GET" && /^\/uploads\/[^/]+\/profile$/.test(p)) return ok({ rows: 1200, columns: [] });
     if (method === "POST" && p === "/uploads") {
       world.uploads += 1;
       world.posted.push({ path: p, body: null });

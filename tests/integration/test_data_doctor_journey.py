@@ -6,9 +6,12 @@ service connected. Chromium opens the Data page's "Check my data" (no goal), and
     choose the file -> [1] answer the one question (which column names each customer?)
                     -> [2] Choose this goal ("Find customers likely to buy")
                     -> the "New campaign" wizard's Customers step, on the SAME case, nothing asked again
-                    -> [3] Approve (the sentence shown is the one recorded) -> the list starts
+                    -> [3] Approve (the sentence shown is the one recorded, naming the goal by its name)
+                    -> the consent change ("who agreed to be contacted") was never agreed, so it is listed as left
+                       out, and the list starts only on a separate choice: "Continue with this data"
 
-The clicks from the file to Approve are pinned (`CLICKS_PINNED`): a change that adds one fails here. The test then
+The clicks from the file to Approve are pinned (`CLICKS_PINNED`): a change that adds one fails here. Continuing
+without a change left out is a choice of its own after Approve (`CHOICES_AFTER_APPROVE`), never part of Approve. The test then
 checks through the API that the wizard used the same case, that the question was answered once (the timeline holds one
 answer and the wizard asked nothing), that the approval recorded the exact sentence shown, and that the run started
 on the case's file with its ID and outcome columns; with no AI service the chat links to Settings › AI service.
@@ -49,6 +52,10 @@ SEED: Final[int] = 20_261_011
 CLICKS_PINNED: Final[int] = 3
 """From the chosen file to Approve: the one answer, the goal, Approve. A change that adds a click fails here; one that
 removes one updates the pin."""
+CHOICES_AFTER_APPROVE: Final[int] = 1
+"""Continuing while the consent change is left out (M247 review): its own choice, so Approve never starts the run with
+a change that needs its own yes silently left out."""
+GOAL_NAME: Final[str] = "Find customers likely to buy"
 WAIT_MS: Final[int] = 180_000
 PHONE: Final[dict[str, int]] = {"width": 390, "height": 844}
 DESKTOP: Final[dict[str, int]] = {"width": 1440, "height": 900}
@@ -195,14 +202,30 @@ def test_data_page_to_the_campaign_on_one_case_nothing_asked_twice(
             assert answered.count() == 1, "the Data page's answer stands"
             assert wizard.locator(".dds-q.is-open").filter(has_text="Needed to go on").count() == 0
             sentence = page.locator("[data-dds-approve-sentence]").inner_text()
+            assert f"for the goal “{GOAL_NAME}”" in sentence and GOAL not in sentence, sentence
+            left_out = wizard.locator('[data-dds-left-out="approve"]')
+            assert left_out.count() == 1, "the consent change waiting for its own yes is said to be left out"
+            assert "who agreed to be contacted" in left_out.inner_text()
             shoot("04_wizard_case")
 
             click("[data-dds-approve-button]")  # 3
+            assert len(clicks) == CLICKS_PINNED, clicks
+            proceed = wizard.locator("[data-dds-continue]:not([disabled])")
+            proceed.wait_for(timeout=WAIT_MS)
+            assert (
+                page.evaluate("location.hash") == "#/campaigns/new/customers/" + GOAL
+            ), "Approve started nothing"
+            assert wizard.locator('[data-dds-header] [data-dds-left-out="head"]').count() == 1
+            assert wizard.locator("[data-dds-continue-without]").count() == 1
+            assert proceed.inner_text().strip() == "Continue with this data"
+            shoot("05_wizard_approved")
+            choices = [proceed]
+            proceed.click()  # the person's own choice to continue without the consent change
             page.wait_for_function(
                 f"location.hash.startsWith('#/campaigns/new/customers/{GOAL}/')", timeout=WAIT_MS
             )
             run_id = page.evaluate("location.hash").rsplit("/", 1)[-1]
-            shoot("05_wizard_started")
+            shoot("06_wizard_started")
 
             phone = browser.new_page(viewport=PHONE)
             phone.on("pageerror", lambda error: errors.append(str(error)))
@@ -225,6 +248,7 @@ def test_data_page_to_the_campaign_on_one_case_nothing_asked_twice(
             browser.close()
 
     assert len(clicks) == CLICKS_PINNED, clicks
+    assert len(choices) == CHOICES_AFTER_APPROVE
     case = _get(server, f"/cases/{case_id}")
     assert [g["goal_id"] for g in case["goals"] if g["active"]] == [GOAL]
     key_questions = [q for q in case["questions"] if q["code"] == "KEY_AMBIGUOUS"]

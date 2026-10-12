@@ -10,12 +10,17 @@ the rules the visit and the protocol already use, never re-implemented in the br
   mode is done: pick a goal to check the data against it). `not_ready` carries the readiness report's own
   sentences (the run's checks and the probes, M234) and the report's reason as the technical detail;
 * **the approval sentence** (`engine.doctor.visit.approval_sentence`): what the person approves, word for word,
-  to send back with Approve (exact-text consent, M246);
+  to send back with Approve (exact-text consent, M246), naming the goal as the screens name it;
 * **the APPROVE-class items** of the active section (`engine.doctor.protocol.approve_class_of`): the role their
-  own yes needs, why, the exact sentence ("I agree to this sentence"), whether it is given, and whether someone
-  else must give it (separation of duties);
+  own yes needs, why, the exact sentence ("I agree to this sentence"), whether it is given, whether someone
+  else must give it (separation of duties), and whether the person reading may give it (`can_agree`, by the rule
+  `confirm` applies: `engine.doctor.protocol.confirmation_refusal`), so nobody is offered a button that can only
+  be refused;
 * **the remembered answers** used here, with the date they were given (`StandingAnswerStore`) and whether they
-  were revoked since;
+  were revoked since, and the answers given here that are **remembered for next time** (`remembered`), each by
+  its question, so the screen says so where it was given and offers Revoke there;
+* **a plain note** under `ready_with_warnings` (`ScreenVerdict.note`), so "Ready, with notes" always shows one even
+  when every warning's own sentence is technical;
 * **the hand-off** once the visit handed the data on: the file, its ID column and its outcome column, which is
   what `POST /runs` takes (the wizard and a goal's setup start the run with it, as Guided setup's Approve did).
 
@@ -31,17 +36,26 @@ from typing import Final, Literal
 
 from pydantic import Field
 
+from engine.access.roles import Principal
 from engine.agent.contracts import ProposalState
 from engine.config import ConfigError, StrictBase
 from engine.doctor.case import Case, CaseStore, TimelineEvent
-from engine.doctor.protocol import DEFAULT_SETTINGS, approve_class_of, item_sentence, role_for
+from engine.doctor.protocol import (
+    DEFAULT_SETTINGS,
+    approve_class_of,
+    confirmation_refusal,
+    item_sentence,
+    role_for,
+)
 from engine.doctor.readiness_contracts import DataReadinessReport
-from engine.doctor.standing import StandingAnswerStore
+from engine.doctor.standing import StandingAnswerStore, answer_id_for
 from engine.doctor.visit import (
     active_goal,
     active_section,
+    approval_goal_name,
     approval_sentence,
     confirmed,
+    item_proposers,
     open_blocking,
     prescription_digest,
     stored_brief,
@@ -55,6 +69,7 @@ __all__ = [
     "CaseScreenView",
     "CaseSummary",
     "ScreenApproveClass",
+    "ScreenRemembered",
     "ScreenStanding",
     "ScreenStart",
     "ScreenVerdict",
@@ -81,6 +96,11 @@ CASES_LISTED: Final[int] = 20
 _REASONS: Final[int] = 4
 """Readiness sentences shown under a `not_ready` verdict at most."""
 
+WARNINGS_NOTE: Final[str] = (
+    "Data Doctor found a few small things to know about this data. None of them stops this goal."
+)
+"""The plain note `ready_with_warnings` always carries (the warnings' own sentences may be technical)."""
+
 
 class ScreenVerdict(StrictBase):
     """The verdict of §10.3 with its one next action, in plain words."""
@@ -92,6 +112,9 @@ class ScreenVerdict(StrictBase):
         default=(), description="The readiness report's own sentences (the run's checks, the probes)."
     )
     technical: str | None = Field(default=None, description="The report's reason, with its codes.")
+    note: str | None = Field(
+        default=None, description="`ready_with_warnings`: one plain sentence, shown when no reason is plain."
+    )
 
 
 class ScreenApproveClass(StrictBase):
@@ -103,6 +126,13 @@ class ScreenApproveClass(StrictBase):
     sentence: str = Field(description="The exact sentence agreed to; sent back word for word.")
     confirmed: bool = Field(description="Whether its own yes is recorded for what it says now.")
     separate: bool = Field(description="Whether someone other than who proposed or answered it must agree.")
+    can_agree: bool = Field(
+        default=True,
+        description="Whether the person reading may give the yes (their role; not its proposer under separation).",
+    )
+    cannot_agree: Literal["role", "separation"] | None = Field(
+        default=None, description="Why not: they lack the role, or they proposed or answered it themselves."
+    )
 
 
 class ScreenStanding(StrictBase):
@@ -114,6 +144,15 @@ class ScreenStanding(StrictBase):
     column: str | None = None
     answered_at: datetime = Field(description="When it was given (the date the screen shows).")
     revoked: bool = Field(description="Revoked since: it is asked again next time.")
+
+
+class ScreenRemembered(StrictBase):
+    """An answer given in this case that is remembered for the client's next files (M246's standing answers)."""
+
+    question_id: str
+    answer_id: str
+    answered_at: datetime = Field(description="When it was remembered (the date the screen shows).")
+    revoked: bool = Field(description="Revoked since: it is not used next time.")
 
 
 class ScreenStart(StrictBase):
@@ -137,6 +176,9 @@ class CaseScreenView(StrictBase):
     )
     approve_class: tuple[ScreenApproveClass, ...] = ()
     standing: tuple[ScreenStanding, ...] = ()
+    remembered: tuple[ScreenRemembered, ...] = Field(
+        default=(), description="Answers given here that are remembered for next time, by question."
+    )
     start: ScreenStart | None = None
     missing_for: tuple[str, ...] = Field(
         default=(), description="Goals the files are missing something for (no goal chosen yet)."
@@ -190,24 +232,38 @@ def case_summaries(
     return tuple(out)
 
 
-def build_screen(storage: Storage, client_id: str, case_id: str, *, config_root: Path | None) -> CaseScreen:
-    """The case, its timeline and its view (`CASE_NOT_FOUND` / `CASE_UNREADABLE` as `CaseStore.get`)."""
+def build_screen(
+    storage: Storage,
+    client_id: str,
+    case_id: str,
+    *,
+    config_root: Path | None,
+    principal: Principal | None = None,
+) -> CaseScreen:
+    """The case, its timeline and its view (`CASE_NOT_FOUND` / `CASE_UNREADABLE` as `CaseStore.get`), for
+    `principal` (who reads it; None: whether they may give a yes is not judged here)."""
     store = CaseStore(storage)
     case = store.get(client_id, case_id)
     return CaseScreen(
         case=case,
         timeline=store.timeline(client_id, case_id),
-        view=screen_view(storage, case, config_root=config_root),
+        view=screen_view(storage, case, config_root=config_root, principal=principal),
     )
 
 
-def screen_view(storage: Storage, case: Case, *, config_root: Path | None) -> CaseScreenView:
+def screen_view(
+    storage: Storage, case: Case, *, config_root: Path | None, principal: Principal | None = None
+) -> CaseScreenView:
     """The view of one case (see the module docstring)."""
     goal = active_goal(case)
     separate = _approval_required(case, config_root)
-    approve_class = _approve_class(case, separate=separate)
+    approve_class = _approve_class(case, separate=separate, principal=principal)
     visit = case.visit
-    sentence = approval_sentence(case) if case.state.value == "approve" else None
+    sentence = (
+        approval_sentence(case, goal_name=approval_goal_name(storage, case))
+        if case.state.value == "approve"
+        else None
+    )
     return CaseScreenView(
         mode="goal" if goal is not None else "generic",
         goal_id=goal.goal_id if goal is not None else None,
@@ -215,6 +271,7 @@ def screen_view(storage: Storage, case: Case, *, config_root: Path | None) -> Ca
         approval_sentence=sentence,
         approve_class=approve_class,
         standing=_standing(storage, case),
+        remembered=_remembered(storage, case),
         start=_start(case, visit.hand_off if visit is not None else None),
         missing_for=visit.missing_for if visit is not None and goal is None else (),
     )
@@ -236,7 +293,9 @@ def _approval_required(case: Case, config_root: Path | None) -> bool:
         return False
 
 
-def _approve_class(case: Case, *, separate: bool) -> tuple[ScreenApproveClass, ...]:
+def _approve_class(
+    case: Case, *, separate: bool, principal: Principal | None
+) -> tuple[ScreenApproveClass, ...]:
     items, _ = active_section(case)
     out: list[ScreenApproveClass] = []
     for item in items:
@@ -246,14 +305,57 @@ def _approve_class(case: Case, *, separate: bool) -> tuple[ScreenApproveClass, .
         if rule is None:
             continue
         role = role_for(rule, approval_required=separate)
+        sentence = item_sentence(item.title, item.payload)
+        why_not: Literal["role", "separation"] | None = None
+        if principal is not None:
+            # The very rule `visit.confirm` applies, with the sentence as shown: what it would refuse, said first.
+            refused = confirmation_refusal(
+                rule=rule,
+                approver=principal,
+                sentence_read=sentence,
+                sentence_now=sentence,
+                proposed_by=item_proposers(case, item),
+                approval_required=separate,
+            )
+            if refused is not None:
+                why_not = "separation" if refused.code == "POLICY_ROLE_SEPARATION" else "role"
         out.append(
             ScreenApproveClass(
                 item_id=item.item_id,
                 role="approver" if role.value == "approver" else "analyst",
                 why=rule.why,
-                sentence=item_sentence(item.title, item.payload),
+                sentence=sentence,
                 confirmed=confirmed(case, item),
                 separate=separate,
+                can_agree=why_not is None,
+                cannot_agree=why_not,
+            )
+        )
+    return tuple(out)
+
+
+def _remembered(storage: Storage, case: Case) -> tuple[ScreenRemembered, ...]:
+    """The answers given in this case (not taken from an earlier one, not assumed) that the client's memory holds
+    for the same answer: what `visit.answer` remembered (`STANDING_REMEMBERED`)."""
+    asked = [
+        q
+        for q in active_section(case)[1]
+        if q.answer is not None and q.standing_answer_id is None and not q.assumed
+    ]
+    if not asked:
+        return ()
+    answers = {a.answer_id: a for a in StandingAnswerStore(storage).list(case.client_id)}
+    out: list[ScreenRemembered] = []
+    for question in asked:
+        answer = answers.get(answer_id_for(case.client_id, question))
+        if answer is None or answer.option_id != question.answer:
+            continue
+        out.append(
+            ScreenRemembered(
+                question_id=question.question_id,
+                answer_id=answer.answer_id,
+                answered_at=answer.answered_at,
+                revoked=answer.revoked_at is not None,
             )
         )
     return tuple(out)
@@ -406,6 +508,7 @@ def _verdict(storage: Storage, case: Case, approve_class: tuple[ScreenApproveCla
                 next="Your data is ready for this goal.",
                 reasons=reasons if warned else (),
                 technical=technical,
+                note=WARNINGS_NOTE if warned else None,
             )
         if verdict == "not_ready":
             return ScreenVerdict(

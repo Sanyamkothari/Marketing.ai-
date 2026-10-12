@@ -32,6 +32,10 @@ import { sentHtml, plain } from "../agent/sent.js";
 export const DONT_KNOW = "I don't know";
 /** The button of an APPROVE-class item (the design §13.2). */
 export const AGREE = "I agree to this sentence";
+/** The deliberate step before it: unticked, it keeps "I agree to this sentence" off. */
+export const READ_IT = "I have read this sentence";
+/** The control that offers an answered question's answers again. */
+export const CHANGE_ANSWER = "Change answer";
 export const REQUEST_CODES = Object.freeze(["DATA_REQUESTED", "DIFFERENT_FILE_REQUESTED"]);
 
 /** The verdict in plain words, with the chip's tone (the status mapping of `components.js`, kind "health"). */
@@ -83,6 +87,9 @@ export const EVENT_WORDS = Object.freeze({
 });
 
 const ROLE_WORDS = Object.freeze({ analyst: "someone with the Analyst role", approver: "someone with the Approver role" });
+
+/** An id safe in an `id` attribute (and in `aria-describedby`'s list), from a question or item id. */
+const domId = (prefix, id) => `${prefix}-${String(id).replace(/[^A-Za-z0-9_-]/g, "_")}`;
 
 // --- small pieces ---------------------------------------------------------------------------------------------
 
@@ -170,12 +177,36 @@ export function headerHtml(screen, { level = 2, title = "" } = {}) {
     heading,
   )}</h${level}>${files}</div><div class="dds-head-side">${statusChip("health", v.status, { word: v.word })}</div><p class="dds-next" data-dds-next>${esc(
     view.verdict.next,
-  )}</p>${reasons ? `<ul class="dds-reasons" data-dds-reasons>${reasons}</ul>` : ""}</div>`;
+  )}</p>${reasons ? `<ul class="dds-reasons" data-dds-reasons>${reasons}</ul>` : ""}${
+    // "Ready, with notes" always shows one: the server's plain note when no warning's own sentence is plain.
+    !reasons && view.verdict.note ? `<p class="dds-why" data-dds-note>${esc(view.verdict.note)}</p>` : ""
+  }${READY.includes(view.verdict.key) ? leftOutHtml(screen) : ""}</div>`;
+}
+
+/**
+ * The changes that need their own yes and are left out of what is used until someone agrees (pending and not
+ * agreed), in the server's sentences: shown beside the verdict, Approve and continuing, so leaving one out is never
+ * silent.
+ */
+const READY = Object.freeze(["ready", "ready_with_warnings"]);
+
+export function leftOutOf(screen) {
+  const { case: c, view } = screen;
+  return (view.approve_class || []).filter((a) => !a.confirmed && !itemAccepted(c, a.item_id));
+}
+
+export function leftOutHtml(screen, { where = "head" } = {}) {
+  const left = leftOutOf(screen);
+  if (!left.length) return "";
+  const names = namesOf(screen.case);
+  return `<div class="dds-leftout" data-dds-left-out="${esc(where)}"><p class="dds-why"><span class="dds-label">Left out until someone agrees:</span></p><ul class="dds-reasons">${left
+    .map((a) => `<li data-dds-left-out-item="${esc(a.item_id)}">${userTextIn(a.sentence, names)}</li>`)
+    .join("")}</ul></div>`;
 }
 
 // --- questions ------------------------------------------------------------------------------------------------
 
-export function questionHtml(q, c, { busy = false, standing = [] } = {}) {
+export function questionHtml(q, c, { busy = false, standing = [], changing = false, remembered = null } = {}) {
   const names = namesOf(c);
   const open = isOpen(q);
   const id = esc(q.question_id);
@@ -220,27 +251,70 @@ export function questionHtml(q, c, { busy = false, standing = [] } = {}) {
       `Your answer: ${chose ? chose.label : q.answer}${q.answered_at ? `, ${day(q.answered_at)}` : ""}.`,
     )}</span></p>`;
   }
-  const changeable = open || q.assumed;
-  return `<article class="dds-card dds-q${open ? " is-open" : ""}" data-dds-question="${id}" data-dds-code="${esc(q.code)}" aria-labelledby="ddsq-${id}"><p class="dds-card-t" id="ddsq-${id}">${userTextIn(q.text, names)}</p>${tag ? `<p class="dds-tag-row">${tag}</p>` : ""}${why}${state}${changeable ? `<ul class="dds-opts" aria-label="Answers">${options}${dontKnow}</ul>` : ""}</article>`;
+  // An answer given here and remembered for the next files: said where it was given, with the same Revoke.
+  let memory = "";
+  if (remembered && !open) {
+    memory = remembered.revoked
+      ? `<p class="dds-state" data-dds-remembered="revoked">${icon("info", { size: 14 })}<span>Not remembered for next time. Data Doctor asks again next time.</span></p>`
+      : `<div class="dds-remembered" data-dds-remembered="${esc(remembered.answer_id)}"><p class="dds-state">${icon("clock", { size: 14 })}<span>Remembered for next time, <span data-dds-remembered-date>${esc(
+          day(remembered.answered_at),
+        )}</span>.</span></p>${button({
+          label: "Revoke",
+          kind: "secondary",
+          size: "sm",
+          attrs: `data-dds-revoke="${esc(remembered.answer_id)}" aria-label="Revoke your answer from ${esc(day(remembered.answered_at))} for next time"`,
+          disabled: busy,
+        })}</div>`;
+  }
+  const optsId = domId("ddsopts", q.question_id);
+  // An answered question can be changed: "Change answer" shows its answers again (the server replaces the answer).
+  const answered = !open && !q.assumed;
+  const change = answered
+    ? `<div class="dds-actions">${button({
+        label: CHANGE_ANSWER,
+        kind: "tertiary",
+        attrs: `data-dds-change="${id}" aria-expanded="${changing}"${changing ? ` aria-controls="${esc(optsId)}"` : ""}`,
+        disabled: busy,
+      })}</div>`
+    : "";
+  const showOptions = open || q.assumed || changing;
+  return `<article class="dds-card dds-q${open ? " is-open" : ""}" data-dds-question="${id}" data-dds-code="${esc(q.code)}" aria-labelledby="ddsq-${id}"><p class="dds-card-t" id="ddsq-${id}">${userTextIn(q.text, names)}</p>${tag ? `<p class="dds-tag-row">${tag}</p>` : ""}${why}${state}${memory}${change}${
+    showOptions ? `<ul class="dds-opts" id="${esc(optsId)}" aria-label="Answers">${options}${dontKnow}</ul>` : ""
+  }</article>`;
 }
 
 // --- approvals (APPROVE-class) ----------------------------------------------------------------------------------
 
-export function approvalHtml(entry, item, c, { busy = false } = {}) {
+export function approvalHtml(entry, item, c, { busy = false, read = false } = {}) {
   const names = namesOf(c);
   const who = ROLE_WORDS[entry.role] || ROLE_WORDS.analyst;
   const whoText = entry.separate ? `${who}, other than whoever suggested or answered it` : who;
   const done = entry.confirmed;
   const pending = item && item.state !== "accepted";
-  const action = done
-    ? `<p class="dds-state" data-dds-agreed>${icon("checkCircle", { size: 14 })}<span>Agreed. It is part of what you approve.</span></p>`
-    : `<div class="dds-actions">${button({
-        label: AGREE,
-        kind: "primary",
-        attrs: `data-dds-agree="${esc(entry.item_id)}"`,
-        disabled: busy,
-      })}</div>`;
-  return `<article class="dds-card dds-approval" data-dds-approval="${esc(entry.item_id)}" data-dds-role="${esc(entry.role)}"><p class="dds-card-t has-icon">${icon("alert", { size: 16 })}<span>Needs its own yes</span></p><blockquote class="dds-sentence" data-dds-sentence>${userTextIn(
+  const sentenceId = domId("dds-sentence", entry.item_id);
+  const readId = domId("dds-read", entry.item_id);
+  let action;
+  if (done) {
+    action = `<p class="dds-state" data-dds-agreed>${icon("checkCircle", { size: 14 })}<span>Agreed. It is part of what you approve.</span></p>`;
+  } else if (entry.can_agree === false) {
+    // The server would refuse this reader: no button that can only fail, but who to ask.
+    const ask =
+      entry.cannot_agree === "separation"
+        ? `You suggested or answered this, so ask ${who.replace(/^someone/, "someone else")} to agree to this.`
+        : `Ask ${who} to agree to this.`;
+    action = `<p class="dds-state" data-dds-ask-other="${esc(entry.cannot_agree || "role")}">${icon("info", { size: 14 })}<span>${esc(ask)}</span></p>`;
+  } else {
+    // A deliberate step first: "I have read this sentence" turns "I agree to this sentence" on.
+    action = `<label class="dds-tick dds-read"><input type="checkbox" id="${esc(readId)}" data-dds-read="${esc(entry.item_id)}"${read ? " checked" : ""}${
+      busy ? " disabled" : ""
+    }><span class="dds-item-body"><span class="dds-item-t">${esc(READ_IT)}</span></span></label><div class="dds-actions">${button({
+      label: AGREE,
+      kind: "primary",
+      attrs: `data-dds-agree="${esc(entry.item_id)}" aria-describedby="${esc(sentenceId)}"`,
+      disabled: busy || !read,
+    })}</div>`;
+  }
+  return `<article class="dds-card dds-approval" data-dds-approval="${esc(entry.item_id)}" data-dds-role="${esc(entry.role)}"><p class="dds-card-t has-icon">${icon("alert", { size: 16 })}<span>Needs its own yes</span></p><blockquote class="dds-sentence" id="${esc(sentenceId)}" data-dds-sentence>${userTextIn(
     entry.sentence,
     names,
   )}</blockquote><p class="dds-why"><span class="dds-label">Why:</span> ${esc(entry.why.charAt(0).toUpperCase() + entry.why.slice(1))}.</p><p class="dds-why"><span class="dds-label">Who must agree:</span> ${esc(
@@ -373,12 +447,16 @@ export function approveHtml(screen, { busy = false, level = 3 } = {}) {
   const { view } = screen;
   if (!view.approval_sentence) return "";
   const waiting = (view.approve_class || []).filter((a) => !a.confirmed && itemAccepted(screen.case, a.item_id)).length;
-  return `<section class="dds-approve card" data-dds-approve aria-labelledby="dds-approve-t"><h${level} id="dds-approve-t" class="dds-group-t">Approve the changes</h${level}><p class="dds-why">You approve this sentence, word for word. Your files are not changed.</p><blockquote class="dds-sentence" data-dds-approve-sentence>${esc(
+  const left = leftOutOf(screen).length;
+  return `<section class="dds-approve card" data-dds-approve aria-labelledby="dds-approve-t"><h${level} id="dds-approve-t" class="dds-group-t">Approve the changes</h${level}><p class="dds-why">You approve this sentence, word for word. Your files are not changed.</p><blockquote class="dds-sentence" id="dds-approve-sentence" data-dds-approve-sentence>${esc(
     view.approval_sentence,
-  )}</blockquote>${waiting ? `<p class="dds-why">${esc(`First give your own yes to ${plural(waiting, "change", "changes")} above.`)}</p>` : ""}<div class="dds-actions">${button({
+  )}</blockquote>${waiting ? `<p class="dds-why">${esc(`First give your own yes to ${plural(waiting, "change", "changes")} above.`)}</p>` : ""}${leftOutHtml(
+    screen,
+    { where: "approve" },
+  )}${left ? `<p class="dds-why" data-dds-left-out-choice>${esc(`After you approve, you choose whether to continue without ${left === 1 ? "it" : "them"}.`)}</p>` : ""}<div class="dds-actions">${button({
     label: "Approve",
     kind: "primary",
-    attrs: "data-dds-approve-button",
+    attrs: `data-dds-approve-button aria-describedby="dds-approve-sentence"`,
     disabled: busy || waiting > 0,
     busy: busy === "approve",
   })}</div></section>`;

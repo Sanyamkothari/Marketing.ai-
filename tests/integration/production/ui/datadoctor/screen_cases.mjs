@@ -32,6 +32,15 @@ async function show(at, options = {}) {
 
 const posts = (tail) => world.posted.filter((p) => p.path === `/cases/${CASE}/${tail}`);
 
+/** Tick "I have read this sentence" for a change that needs its own yes. */
+function readIt(itemId) {
+  const box = $$("input[data-dds-read]").find((b) => b.dataset.ddsRead === itemId);
+  assert.ok(box, `the read box of ${itemId}`);
+  box.checked = true;
+  box.dispatchEvent(new window.Event("change", { bubbles: true }));
+}
+const agreeOf = (itemId) => $$("[data-dds-agree]").find((b) => b.dataset.ddsAgree === itemId);
+
 // --- questions -----------------------------------------------------------------------------------------------
 
 test("a question: its text, why it is asked, each answer with what it changes, and I don't know", async () => {
@@ -106,6 +115,7 @@ test("a change that needs its own yes: the exact sentence, why, who, and I agree
   assert.ok(approve.disabled, "Approve waits for the own yes");
   const rows = s.view.approve_class.find((a) => a.role === "analyst");
   world.next.confirmations = "approve_class";
+  readIt(rows.item_id);
   $(`[data-dds-agree="${rows.item_id}"]`).click();
   await until(() => posts("confirmations").length === 1, 2000, "the yes");
   const sent = posts("confirmations")[0].body;
@@ -120,6 +130,7 @@ test("a refused yes shows the server's reason and records nothing", async () => 
     path: `/cases/${CASE}/confirmations`,
     answer: { status: 403, body: { detail: { code: "TOOL_ROLE_REQUIRED", message: "Only someone with the Approver role can agree to this." } } },
   };
+  readIt(consent.item_id);
   $(`[data-dds-agree="${consent.item_id}"]`).click();
   await until(() => $("[data-dds] .apierr"), 2000, "the refusal");
   assert.match($("[data-dds] .apierr").textContent, /Approver role/);
@@ -146,6 +157,147 @@ test("a sentence that changed meanwhile records nothing and is shown again", asy
   await until(() => $("[data-dds-notice]"), 2000, "the notice");
   assert.match($("[data-dds-notice]").textContent, /has changed\. Read it again/);
   assert.ok($("[data-dds-approve-sentence]"), "the sentence is drawn again to read");
+});
+
+// --- M247 review: the goal's name, a deliberate yes, who may agree, what is left out -------------------------
+
+test("the sentence approved names the goal as the screens do, never its id", async () => {
+  const s = await show("approve_class");
+  const shown = $("[data-dds-approve-sentence]").textContent;
+  assert.equal(shown, s.view.approval_sentence);
+  assert.equal(shown, "Prepare 1 file with 4 changes for the goal “Find customers likely to buy”. Nothing else changes.");
+  assert.ok(!shown.includes(GOAL), "not the goal's id");
+  assert.ok(visibleText(app).includes("Find customers likely to buy"), "it is visible text, checked by the glossary below");
+  assert.equal($("[data-dds-approve-button]").getAttribute("aria-describedby"), "dds-approve-sentence");
+  assert.equal($("#dds-approve-sentence").textContent, shown);
+});
+
+test("I agree to this sentence is a deliberate step: off until I have read this sentence is ticked", async () => {
+  const s = await show("approve_class");
+  const consent = s.view.approve_class.find((a) => a.role === "approver");
+  const agree = agreeOf(consent.item_id);
+  assert.ok(agree.disabled, "one stray click records nothing");
+  const described = document.getElementById(agree.getAttribute("aria-describedby"));
+  assert.ok(described, "the button is described by the sentence");
+  assert.equal(described.textContent, consent.sentence, "a screen reader hears the sentence agreed to");
+  const box = $$("input[data-dds-read]").find((b) => b.dataset.ddsRead === consent.item_id);
+  assert.equal(box.closest("label").textContent.trim(), "I have read this sentence");
+  assert.equal(box.checked, false);
+  agree.click();
+  await settle(2);
+  assert.equal(posts("confirmations").length, 0, "nothing sent before the sentence is marked as read");
+  readIt(consent.item_id);
+  assert.equal(agreeOf(consent.item_id).disabled, false, "ticked: the yes can be given");
+  box.checked = false;
+  box.dispatchEvent(new window.Event("change", { bubbles: true }));
+  assert.ok(agreeOf(consent.item_id).disabled, "unticked again: off again");
+  readIt(consent.item_id);
+  agreeOf(consent.item_id).click();
+  await until(() => posts("confirmations").length === 1, 2000, "the yes");
+  assert.equal(posts("confirmations")[0].body.sentence, consent.sentence);
+});
+
+test("someone the server would refuse is told whom to ask, with no I agree button", async () => {
+  const s = await show("approve_class_own");
+  for (const entry of s.view.approve_class) {
+    assert.equal(entry.can_agree, false, entry.item_id);
+    const card = $(`[data-dds-approval="${entry.item_id}"]`);
+    assert.ok(!card.querySelector("[data-dds-agree]"), "no button that can only fail");
+    assert.ok(!card.querySelector("input[data-dds-read]"));
+    const ask = card.querySelector("[data-dds-ask-other]");
+    assert.equal(ask.dataset.ddsAskOther, entry.cannot_agree);
+    if (entry.cannot_agree === "role") {
+      assert.equal(ask.textContent.trim(), "Ask someone with the Approver role to agree to this.");
+    } else {
+      assert.equal(ask.textContent.trim(), "You suggested or answered this, so ask someone else with the Analyst role to agree to this.");
+    }
+  }
+  assert.deepEqual(new Set(s.view.approve_class.map((a) => a.cannot_agree)), new Set(["role", "separation"]));
+});
+
+test("Approve lists every change left out until someone agrees, in plain words", async () => {
+  const s = await show("not_ready");
+  const consent = s.view.approve_class.find((a) => a.role === "approver");
+  const left = $('[data-dds-left-out="approve"]');
+  assert.ok(left, "the left-out list beside Approve");
+  assert.match(left.textContent, /Left out until someone agrees:/);
+  const row = left.querySelector(`[data-dds-left-out-item="${consent.item_id}"]`);
+  assert.equal(row.textContent, consent.sentence);
+  assert.ok(row.textContent.includes("says who agreed to be contacted"));
+  assert.match($("[data-dds-left-out-choice]").textContent, /After you approve, you choose whether to continue without it\./);
+  assert.equal($("[data-dds-approve-button]").disabled, false, "Approve itself is not blocked by a change left out");
+});
+
+test("in the wizard, Approve does not start the list while a change is left out; continuing is its own choice", async () => {
+  const started = [];
+  await show("not_ready", { host: { place: "wizard", goalId: GOAL, approved: (fill) => started.push(fill) } });
+  world.next.approval = "ready";
+  $("[data-dds-approve-button]").click();
+  await until(() => $("[data-dds-continue]"), 3000, "the case approved and ready");
+  await settle(3);
+  assert.deepEqual(started, [], "the run did not start on Approve");
+  const button = $("[data-dds-continue]");
+  assert.equal(button.textContent.trim(), "Continue with this data");
+  assert.match($("[data-dds-continue-without]").textContent, /Continuing uses the data without the change left out above\./);
+  const head = $('[data-dds-header] [data-dds-left-out="head"]');
+  assert.ok(head && head.textContent.includes("says who agreed to be contacted"), "the verdict says what is left out");
+  button.click();
+  await until(() => started.length === 1, 3000, "the list started by the person's own choice");
+  const s = screen("ready");
+  assert.equal(started[0].target, s.view.start.outcome);
+  assert.equal(started[0].upload.upload_id, s.view.start.upload_id);
+});
+
+test("Ready, with notes always shows a plain note", async () => {
+  const s = await show("ready_with_warnings");
+  assert.equal($("[data-dds-verdict]").dataset.ddsVerdict, "ready_with_warnings");
+  assert.ok($("[data-dds-header]").textContent.includes("Ready, with notes"));
+  assert.equal(s.view.verdict.reasons.length, 0, "this check's warnings have no sentence of their own to show");
+  assert.equal($$("[data-dds-reasons] li").length, 0);
+  assert.equal($("[data-dds-note]").textContent, s.view.verdict.note, "the plain note stands in for them");
+  assert.equal(s.view.verdict.note, "Data Doctor found a few small things to know about this data. None of them stops this goal.");
+});
+
+// --- answers: change one, and what is remembered -------------------------------------------------------------
+
+test("an answered question can be changed: Change answer shows its answers again", async () => {
+  const s = await show("approve");
+  const q = s.case.questions.find((x) => x.code === "KEY_AMBIGUOUS");
+  const card = () => $(`[data-dds-question="${q.question_id}"]`);
+  const change = card().querySelector("[data-dds-change]");
+  assert.equal(change.textContent.trim(), "Change answer");
+  assert.equal(change.getAttribute("aria-expanded"), "false");
+  assert.equal(card().querySelectorAll("[data-dds-answer]").length, 0);
+  change.click();
+  await settle(1);
+  const open = card().querySelector("[data-dds-change]");
+  assert.equal(open.getAttribute("aria-expanded"), "true");
+  assert.equal(document.activeElement, open, "the focus stays on the control");
+  const list = document.getElementById(open.getAttribute("aria-controls"));
+  assert.ok(list && card().contains(list), "the control names the answers it shows");
+  const chosen = card().querySelector('[data-dds-answer="c0"]:not([data-dds-dont-know])');
+  assert.equal(chosen.getAttribute("aria-pressed"), "true", "the answer given is marked");
+  const other = card().querySelector('[data-dds-answer="c1"]');
+  assert.equal(other.disabled, false);
+  other.click();
+  await until(() => posts("answers").length === 1, 2000, "the changed answer");
+  assert.deepEqual([posts("answers")[0].body.question_id, posts("answers")[0].body.option_id], [q.question_id, "c1"]);
+  await settle(2);
+  assert.equal(card().querySelector("[data-dds-change]").getAttribute("aria-expanded"), "false", "closed once saved");
+});
+
+test("an answer remembered for next time says so where it was given, with its date and Revoke", async () => {
+  const s = await show("approve");
+  const q = s.case.questions.find((x) => x.code === "UNKNOWN_BOOLEAN");
+  const mine = s.view.remembered.find((r) => r.question_id === q.question_id);
+  assert.ok(mine, "the server names the remembered answer by its question");
+  const card = $(`[data-dds-question="${q.question_id}"]`);
+  const memory = card.querySelector(`[data-dds-remembered="${mine.answer_id}"]`);
+  assert.match(memory.textContent, /Remembered for next time, 12 Oct 2026\./);
+  const key = s.case.questions.find((x) => x.code === "KEY_AMBIGUOUS");
+  assert.ok(!$(`[data-dds-question="${key.question_id}"] [data-dds-remembered]`), "only what is remembered says so");
+  memory.querySelector(`[data-dds-revoke="${mine.answer_id}"]`).click();
+  await until(() => world.posted.some((p) => p.path === `/cases/${CASE}/standing-answers/${mine.answer_id}/revoke`), 2000, "the revoke");
 });
 
 // --- doubts and requests -------------------------------------------------------------------------------------
@@ -278,7 +430,18 @@ test("the timeline lists what happened, newest last, with the receipt of an appr
 
 // --- accessibility, touch targets and words ---------------------------------------------------------------------
 
-const ALL = ["question", "assumed", "approve", "approve_class", "ready", "not_ready", "standing", "revoked"];
+const ALL = [
+  "question",
+  "assumed",
+  "approve",
+  "approve_class",
+  "approve_class_own",
+  "ready",
+  "ready_with_warnings",
+  "not_ready",
+  "standing",
+  "revoked",
+];
 
 test("accessibility (Plan M M181): every shape passes the structural checks", async () => {
   for (const at of ALL) {

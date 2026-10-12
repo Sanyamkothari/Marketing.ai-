@@ -130,3 +130,45 @@ def test_with_the_switch_off_nothing_changes(config_root: Path, tmp_path: Path) 
         me = client.get("/auth/me").json()
         assert "data_doctor" not in me, "with the switch off /auth/me answers exactly as before"
         assert client.get("/data-doctor/cases").status_code == 404
+
+
+def test_the_screen_names_the_goal_and_says_who_may_agree(unified: None, tmp_path: Path) -> None:
+    """M247 review: the sentence Approve records names the goal as the screens do, and each change that needs its
+    own yes says whether the person reading may give it - a viewer is not offered a yes the server refuses."""
+    app = local_app(tmp_path)
+    viewer = make_user(app, "vera", [Role.VIEWER])
+    analyst = make_user(app, "asha", [Role.ANALYST])
+    approver = make_user(app, "ravi", [Role.APPROVER])
+    frame = generate(GenerationSpec(use_case_id=GOAL, rows=1_500, seed=3))
+    buffer = io.StringIO()
+    frame.to_csv(buffer, index=False)
+    with TestClient(app, raise_server_exceptions=False) as client:
+        as_asha = bearer(app, analyst)
+        upload = client.post(
+            "/uploads",
+            files={"file": ("customers.csv", buffer.getvalue().encode(), "text/csv")},
+            data={"use_case": GOAL, "mode": "train"},
+            headers=as_asha,
+        )
+        assert upload.status_code == 201, upload.text
+        case = client.post(
+            "/cases", json={"upload_ids": [upload.json()["upload_id"]]}, headers=as_asha
+        ).json()
+        case = client.post(f"/cases/{case['case_id']}/visit", json={}, headers=as_asha).json()
+        case = client.post(
+            f"/cases/{case['case_id']}/goal",
+            json={"version": case["version"], "goal_id": GOAL},
+            headers=as_asha,
+        ).json()
+
+        def consent(who: Any) -> dict[str, Any]:
+            screen = client.get(f"/cases/{case['case_id']}/screen", headers=bearer(app, who)).json()
+            return next(a for a in screen["view"]["approve_class"] if a["role"] == "approver")
+
+        assert (consent(viewer)["can_agree"], consent(viewer)["cannot_agree"]) == (False, "role")
+        assert (consent(analyst)["can_agree"], consent(analyst)["cannot_agree"]) == (False, "role")
+        assert consent(approver)["can_agree"] is True and consent(approver)["cannot_agree"] is None
+        screen = client.get(f"/cases/{case['case_id']}/screen", headers=as_asha).json()
+        assert screen["case"]["state"] == "approve", screen["case"]["state"]
+        sentence = screen["view"]["approval_sentence"]
+        assert "“Find customers likely to buy”" in sentence and GOAL not in sentence

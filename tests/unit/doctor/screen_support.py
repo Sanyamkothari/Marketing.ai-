@@ -12,7 +12,13 @@ the screen draws is one the engine really produces.
     assumed         a small ambiguity decided by the rules, with the assumption stated and revocable
     approve         everything answered: waiting at Approve, with the exact sentence
     approve_class   a goal chosen; a change that leaves rows out waits for its own yes ("I agree to this sentence")
-    ready           its own yes given, approved, checked ready: what the hand-off starts with
+    approve_class_own
+                    the same, read by the analyst who answered: the consent change needs the Approver role and the
+                    rows change someone else (separation), so neither offers "I agree" (`can_agree` false)
+    ready           its own yes given, approved, checked ready: what the hand-off starts with (the consent change
+                    left out, never agreed)
+    ready_with_warnings
+                    the same, checked ready with warnings: the plain note "Ready, with notes" always shows
     not_ready       approved, and the readiness check said not ready
     standing        next month's case: the earlier answer applied, with its date and Revoke
     revoked         the same, after Revoke: the question is asked again
@@ -31,6 +37,7 @@ from engine.doctor.screen import CaseScreen, build_screen
 from engine.storage import LocalStorage
 from tests.unit.doctor import visit_support as vs
 from tests.unit.doctor.test_protocol_visit import (
+    ASHA,
     _answer_key,
     _boolean_ask,
     _by_code,
@@ -52,7 +59,9 @@ SCENARIOS = (
     "assumed",
     "approve",
     "approve_class",
+    "approve_class_own",
     "ready",
+    "ready_with_warnings",
     "not_ready",
     "standing",
     "revoked",
@@ -90,8 +99,10 @@ def _open(storage: LocalStorage, w: World, detector: Any) -> Case:
     return visit.resume(CLIENT, created.case_id, _deps(storage, w, detector), actor=ANALYST)
 
 
-def _screen(storage: LocalStorage, case: Case, root: Path | None) -> CaseScreen:
-    return build_screen(storage, case.client_id, case.case_id, config_root=root)
+def _screen(
+    storage: LocalStorage, case: Case, root: Path | None, principal: Principal | None = None
+) -> CaseScreen:
+    return build_screen(storage, case.client_id, case.case_id, config_root=root, principal=principal)
 
 
 def scenario(name: str, storage: LocalStorage, w: World, root: Path | None = None) -> CaseScreen:
@@ -115,7 +126,7 @@ def scenario(name: str, storage: LocalStorage, w: World, root: Path | None = Non
     if name == "assumed":
         detector = _found(_boolean_ask(rows_disagree=3))
         return _screen(storage, _answer_key(storage, w, _open(storage, w, detector), detector), root)
-    if name in {"approve_class", "ready", "not_ready"}:
+    if name in {"approve_class", "approve_class_own", "ready", "ready_with_warnings", "not_ready"}:
         detector = _found(_remove_rows_ask())
         deps = _deps(storage, w, detector)
         case = _answer_key(storage, w, _open(storage, w, detector), detector)
@@ -133,12 +144,14 @@ def scenario(name: str, storage: LocalStorage, w: World, root: Path | None = Non
         )
         if name == "approve_class":
             return _screen(storage, case, root)
+        if name == "approve_class_own":
+            return _screen(storage, case, root, principal=ASHA)  # who answered: ANALYST, as ASHA
         item = next(i for i in case.items if i.payload.get("step", {}).get("kind") == "remove_rows")  # type: ignore[union-attr]
         case = visit.confirm(
             CLIENT, case.case_id, item.item_id, deps, principal=MEERA, sentence=item.title,
             expected_version=case.version,
         )  # fmt: skip
-        w.verdict = "ready" if name == "ready" else "not_ready"
+        w.verdict = name if name in {"ready", "ready_with_warnings"} else "not_ready"
         case = visit.approve(
             CLIENT, case.case_id, deps, expected_version=case.version, actor=ANALYST,
             sentence=visit.approval_sentence(case),

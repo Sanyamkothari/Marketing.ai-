@@ -13,13 +13,15 @@ from pathlib import Path
 import pytest
 
 from engine.doctor import visit
-from engine.doctor.case import CaseStore, VisitState
+from engine.doctor.case import CaseError, CaseStore, VisitState
+from engine.doctor.goal_names import goal_display_name
 from engine.doctor.protocol import express_doubt, item_sentence
-from engine.doctor.screen import build_screen, case_summaries, screen_view
+from engine.doctor.screen import WARNINGS_NOTE, build_screen, case_summaries, screen_view
+from engine.doctor.standing import answer_id_for
 from engine.storage import LocalStorage
 from tests.unit.doctor import visit_support as vs
 from tests.unit.doctor.screen_support import MEERA, scenario
-from tests.unit.doctor.test_protocol_visit import _answer_key, _deps, _evidence, _found
+from tests.unit.doctor.test_protocol_visit import ASHA, RAVI, _answer_key, _deps, _evidence, _found
 from tests.unit.doctor.visit_support import ANALYST, CLIENT, GOAL_A, World
 
 
@@ -164,3 +166,95 @@ def test_the_clients_cases_newest_first_and_by_goal(storage: LocalStorage, world
     assert case_summaries(storage, CLIENT, goal_id="telco-churn") == ()
     assert case_summaries(storage, "c_nobody") == ()
     assert build_screen(storage, CLIENT, ready.case.case_id, config_root=None).case == ready.case
+
+
+# ---------------------------------------------------------------------------
+# M247 review: the goal's name, who may agree, answers remembered here, the plain note
+# ---------------------------------------------------------------------------
+def test_the_approval_sentence_names_the_goal_as_the_screens_do(storage: LocalStorage, world: World) -> None:
+    """The sentence a person approves word for word names the goal ("Find customers likely to buy"), not its id."""
+    screen = scenario("not_ready", storage, world)
+    sentence = screen.view.approval_sentence
+    assert (
+        sentence
+        == "Prepare 1 file with 4 changes for the goal “Find customers likely to buy”. Nothing else changes."
+    )
+    assert GOAL_A not in sentence
+    assert sentence == visit.approval_sentence(screen.case), "the server shows and checks the same sentence"
+    stale = sentence.replace("“Find customers likely to buy”", GOAL_A)
+    with pytest.raises(CaseError) as changed:
+        visit.approve(
+            CLIENT, screen.case.case_id, _deps(storage, world, _found()), expected_version=screen.case.version,
+            actor=ANALYST, sentence=stale,
+        )  # fmt: skip
+    assert (
+        changed.value.code == "APPROVAL_SENTENCE_CHANGED"
+    ), "a sentence read before the change is refused once"
+
+
+def test_a_goal_without_a_display_name_is_named_by_its_configured_name() -> None:
+    assert (
+        goal_display_name("targeted-advertisement", "Targeted Advertisement")
+        == "Find customers likely to buy"
+    )
+    assert goal_display_name("bank-term-deposit", "Term deposit sign-ups") == "Term deposit sign-ups"
+    assert goal_display_name("bank-term-deposit", None) == "bank-term-deposit"
+
+
+def test_who_may_give_the_own_yes_is_said_before_the_click(storage: LocalStorage, world: World) -> None:
+    """The analyst who answered may give neither yes: the consent change needs the Approver role, and the rows
+    change needs someone other than who answered (separation). `confirm` refuses exactly those."""
+    own = scenario("approve_class_own", storage, world)
+    by_kind = {
+        next(i for i in own.case.items if i.item_id == a.item_id).kind: a for a in own.view.approve_class
+    }
+    consent, rows = by_kind["consent_column"], by_kind["recipe_step"]
+    assert (consent.can_agree, consent.cannot_agree) == (False, "role")
+    assert (rows.can_agree, rows.cannot_agree) == (False, "separation")
+    with pytest.raises(CaseError) as refused:
+        visit.confirm(
+            CLIENT, own.case.case_id, rows.item_id, _deps(storage, world, _found()), principal=ASHA,
+            sentence=rows.sentence, expected_version=own.case.version,
+        )  # fmt: skip
+    assert refused.value.code == "POLICY_ROLE_SEPARATION", "the screen said what the server does"
+    meera = screen_view(storage, own.case, config_root=None, principal=MEERA)
+    assert {a.item_id: a.can_agree for a in meera.approve_class} == {
+        consent.item_id: False,
+        rows.item_id: True,
+    }
+    ravi = screen_view(storage, own.case, config_root=None, principal=RAVI)
+    assert next(a for a in ravi.approve_class if a.item_id == consent.item_id).can_agree
+    unjudged = screen_view(storage, own.case, config_root=None)
+    assert all(
+        a.can_agree and a.cannot_agree is None for a in unjudged.approve_class
+    ), "no reader: not judged"
+
+
+def test_an_answer_remembered_here_says_so_on_its_question_and_can_be_revoked_here(
+    storage: LocalStorage, world: World
+) -> None:
+    screen = scenario("approve", storage, world)
+    boolean = next(q for q in screen.case.questions if q.code == "UNKNOWN_BOOLEAN")
+    (mine,) = screen.view.remembered
+    assert mine.question_id == boolean.question_id and not mine.revoked
+    assert mine.answered_at.date().isoformat() == "2026-10-12"
+    assert mine.answer_id == answer_id_for(CLIENT, boolean)
+    revoked = visit.revoke_standing(
+        CLIENT, screen.case.case_id, mine.answer_id, _deps(storage, world, _found()),
+        expected_version=screen.case.version, actor=ANALYST,
+    )  # fmt: skip
+    after = screen_view(storage, revoked, config_root=None)
+    assert [(r.question_id, r.revoked) for r in after.remembered] == [(boolean.question_id, True)]
+    still = next(q for q in revoked.questions if q.question_id == boolean.question_id)
+    assert still.answer == "c0", "revoking stops it standing next time; this case keeps the answer"
+
+
+def test_ready_with_notes_always_carries_a_plain_note(storage: LocalStorage, world: World) -> None:
+    screen = scenario("ready_with_warnings", storage, world)
+    assert (
+        screen.view.verdict.key == "ready_with_warnings" and screen.view.verdict.title == "Ready, with notes"
+    )
+    assert screen.view.verdict.note == WARNINGS_NOTE
+    assert (
+        scenario("ready", LocalStorage(storage.root.parent / "ready"), vs.world()).view.verdict.note is None
+    )

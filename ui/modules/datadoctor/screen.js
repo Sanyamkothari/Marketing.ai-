@@ -50,6 +50,7 @@ import {
   doubtHtml,
   goalsHtml,
   headerHtml,
+  leftOutOf,
   missingHtml,
   questionHtml,
   questionsOf,
@@ -82,6 +83,8 @@ function fresh() {
     draft: "",
     ai: null, // true | false | null (not known)
     started: null, // the case whose hand-off was started from here
+    changing: new Set(), // answered questions whose answers are shown again ("Change answer")
+    read: new Set(), // changes needing their own yes whose "I have read this sentence" is ticked
   };
 }
 
@@ -117,12 +120,15 @@ function mainHtml(entry) {
   const view = screen.view;
   const busy = Boolean(s.busy);
   const standing = view.standing || [];
+  const remembered = new Map((view.remembered || []).map((r) => [r.question_id, r]));
   const questions = questionsOf(c)
-    .map((q) => questionHtml(q, c, { busy, standing }))
+    .map((q) =>
+      questionHtml(q, c, { busy, standing, changing: s.changing.has(q.question_id), remembered: remembered.get(q.question_id) || null }),
+    )
     .join("");
   const items = new Map((c.items || []).map((i) => [i.item_id, i]));
   const approvals = (view.approve_class || [])
-    .map((a) => approvalHtml(a, items.get(a.item_id), c, { busy }))
+    .map((a) => approvalHtml(a, items.get(a.item_id), c, { busy, read: s.read.has(a.item_id) }))
     .join("");
   const doubts = (c.doubts || []).map((d) => doubtHtml(d, c)).join("");
   const goalIds = view.goal_id ? [view.goal_id] : view.missing_for || [];
@@ -156,7 +162,13 @@ function continueHtml(entry) {
   const view = s.screen && s.screen.view;
   if (!view || !["ready", "ready_with_warnings"].includes(view.verdict.key) || !view.start) return "";
   const label = host.approved ? "Continue with this data" : "Continue to the campaign";
-  return `<section class="card dds-continue" data-dds-ready><p class="dds-why">The data is ready for this goal. Approved, checked and saved with this check.</p><div class="dds-actions">${button(
+  const left = leftOutOf(s.screen).length;
+  const without = left
+    ? `<p class="dds-why" data-dds-continue-without>${esc(
+        `Continuing uses the data without the ${left === 1 ? "change" : `${left} changes`} left out above. Someone can still agree to ${left === 1 ? "it" : "them"} first.`,
+      )}</p>`
+    : "";
+  return `<section class="card dds-continue" data-dds-ready><p class="dds-why">The data is ready for this goal. Approved, checked and saved with this check.</p>${without}<div class="dds-actions">${button(
     { label, kind: "primary", attrs: "data-dds-continue", disabled: Boolean(s.busy), busy: s.busy === "continue" },
   )}</div></section>`;
 }
@@ -309,9 +321,17 @@ async function proceed(entry) {
 async function approve(entry) {
   const sentence = entry.state.screen.view.approval_sentence;
   await act(entry, "approve", () => approveCase(theCase(entry), sentence), { announce: "Approved" });
-  const view = entry.state.screen && entry.state.screen.view;
-  // One flow: approved and ready goes straight on, as Guided setup's Approve did.
-  if (view && ["ready", "ready_with_warnings"].includes(view.verdict.key) && view.start && entry.host.approved) {
+  const screen = entry.state.screen;
+  const view = screen && screen.view;
+  // One flow: approved and ready goes straight on, as Guided setup's Approve did - unless a change that needs its
+  // own yes is left out: then continuing without it is its own choice ("Continue with this data").
+  if (
+    view &&
+    ["ready", "ready_with_warnings"].includes(view.verdict.key) &&
+    view.start &&
+    entry.host.approved &&
+    !leftOutOf(screen).length
+  ) {
     await proceed(entry);
   }
 }
@@ -331,10 +351,30 @@ function bind(entry) {
     const target = event.target && event.target.closest ? event.target.closest("button, a") : null;
     if (!target || target.disabled) return;
     const d = target.dataset;
-    if (d.ddsAnswer && d.ddsQ) act(entry, "answer", () => answerQuestion(theCase(entry), d.ddsQ, d.ddsAnswer), { announce: "Answer saved" });
+    if (d.ddsAnswer && d.ddsQ) {
+      act(
+        entry,
+        "answer",
+        async () => {
+          await answerQuestion(theCase(entry), d.ddsQ, d.ddsAnswer);
+          entry.state.changing.delete(d.ddsQ);
+        },
+        { announce: "Answer saved" },
+      );
+    } else if (d.ddsChange) toggleChange(entry, d.ddsChange);
     else if (d.ddsAgree) {
       const found = entry.state.screen.view.approve_class.find((a) => a.item_id === d.ddsAgree);
-      if (found) act(entry, "agree", () => confirmItem(theCase(entry), found.item_id, found.sentence), { announce: "Agreed" });
+      if (found && entry.state.read.has(found.item_id)) {
+        act(
+          entry,
+          "agree",
+          async () => {
+            await confirmItem(theCase(entry), found.item_id, found.sentence);
+            entry.state.read.delete(found.item_id);
+          },
+          { announce: "Agreed" },
+        );
+      }
     } else if (target.hasAttribute("data-dds-approve-button")) approve(entry);
     else if (d.ddsRevoke) act(entry, "revoke", () => revokeStanding(theCase(entry), d.ddsRevoke), { announce: "Answer revoked" });
     else if (d.ddsGoal) pickGoal(entry, d.ddsGoal);
@@ -349,6 +389,15 @@ function bind(entry) {
     if (!input) return;
     if (input.matches && input.matches("input[data-dds-tick]")) {
       act(entry, "tick", () => decideItem(theCase(entry), input.dataset.ddsTick, input.checked));
+    } else if (input.matches && input.matches("input[data-dds-read]")) {
+      // "I have read this sentence": kept for the next drawing, and turns its "I agree" on or off in place, so
+      // the focus stays on the box.
+      const itemId = input.dataset.ddsRead;
+      if (input.checked) entry.state.read.add(itemId);
+      else entry.state.read.delete(itemId);
+      const card = input.closest("[data-dds-approval]");
+      const agree = card && card.querySelector("[data-dds-agree]");
+      if (agree) agree.disabled = Boolean(entry.state.busy) || !input.checked;
     } else if (input.type === "file" && input.files && input.files[0]) {
       upload(entry, input.files[0]);
     }
@@ -366,6 +415,16 @@ function bind(entry) {
       entry.state.draft = "";
     });
   });
+}
+
+/** "Change answer": show an answered question's answers again (or hide them), keeping the focus on the control. */
+function toggleChange(entry, questionId) {
+  const changing = entry.state.changing;
+  if (changing.has(questionId)) changing.delete(questionId);
+  else changing.add(questionId);
+  draw(entry);
+  const again = [...entry.main.querySelectorAll("[data-dds-change]")].find((b) => b.dataset.ddsChange === questionId);
+  if (again) again.focus();
 }
 
 async function readAi(entry) {
