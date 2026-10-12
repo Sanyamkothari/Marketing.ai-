@@ -636,6 +636,7 @@ How the target is derived (plan section 5.2).  `agent_editable` is `False` and c
 |---|---|---|---|
 | `unified` | boolean | no | Plan O (DEC-1800): when true, Guided setup and the Doctor page are the one Data Doctor agent. Off until the parity checklist is met (M249); while off, nothing changes. |
 | `workspace_currency` | string | no | Plan O M242 (DEC-1812): the currency this workspace's reports use, as a code (INR, USD, EUR). A client's confirmed locale profile overrides it for that client. Read only while `unified` is on; INR, the default, is left out of a dump so nothing moves. |
+| `time_settings` | TimeSettingsConfig | no | Plan O M244 (DEC-1814): the training budget's diminishing-returns step and the ratios of its three choices. Read only while `unified` is on; the defaults are left out of a dump so nothing moves. |
 
 #### ThresholdConfig
 
@@ -933,6 +934,17 @@ Extra column-name hints the helper uses on top of the use case's own detection h
 | `consent` | list[string] | no |  |
 | `opt_out` | list[string] | no |  |
 | `recently_contacted` | list[string] | no |  |
+
+#### TimeSettingsConfig
+
+`data_doctor.time_settings` (Plan O M244, DEC-1814): how the training budget's three choices are made.  Read only while `unified` is on. The defaults are left out of a dump, so nothing moves while they hold.
+
+| Field | Type | Required | Meaning |
+|---|---|---|---|
+| `score_step_per_minute` | number | no | The diminishing-returns step: a minute more is worth it only while similar past runs gained at least this much validation score per extra minute. Balanced is the first budget after which they gained less. |
+| `quick_ratio` | number | no | Quick's time limit as a share of Balanced's. |
+| `thorough_ratio` | number | no | Thorough's time limit as a multiple of Balanced's. |
+| `sure_min_runs` | integer | no | Balanced is pre-selected (`sure`) only when at least this many past runs were close in size. |
 
 #### ChannelSuppressionConfig
 
