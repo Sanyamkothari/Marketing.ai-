@@ -844,7 +844,7 @@ def _propose_step(
     pending, `check`, labelled as the AI's, and never ticked for the person.
     """
     from engine.agent.advisor import ordered_steps, recipe_steps
-    from engine.agent.recipe import RecipeError, check_recipe, run_recipe
+    from engine.agent.recipe import EXCEL_SERIAL_PARAMS, RecipeError, check_recipe, run_recipe
 
     try:
         kind = RecipeStepKind(str(args.get("kind", "")))
@@ -878,6 +878,11 @@ def _propose_step(
         )
     raw_params = args.get("params")
     params: dict[str, Any] = dict(raw_params) if isinstance(raw_params, dict) else {}
+    gated = sorted(EXCEL_SERIAL_PARAMS & params.keys())
+    if gated:
+        # Plan O M240: Excel day numbers are the Data Doctor's own fix (found by `find_excel_serial_dates`);
+        # the chat has no such parameter until M233's policy rule allows it, so it is refused as unknown.
+        raise AgentToolError("RECIPE_STEP_INVALID", f"Step 1 ({kind.value}): unknown parameter {gated[0]!r}")
     new_column = args.get("new_column")
     try:
         step = RecipeStep(

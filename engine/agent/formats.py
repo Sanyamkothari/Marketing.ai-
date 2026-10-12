@@ -53,11 +53,13 @@ __all__ = [
     "FormatIssueKind",
     "ParseOutcome",
     "date_order",
+    "find_excel_serial_dates",
     "find_format_issues",
     "map_booleans",
     "masked_cut",
     "normalise_texts",
     "parse_dates",
+    "parse_excel_serial_dates",
     "parse_numbers",
 ]
 
@@ -118,6 +120,9 @@ class FormatIssueKind(StrEnum):
     BOOLEAN_AS_TEXT = "boolean_as_text"
     CATEGORY_VARIANTS = "category_variants"
     UNTRIMMED_TEXT = "untrimmed_text"
+    EXCEL_SERIAL_DATES = "excel_serial_dates"
+    """Plan O M240 (DEC-1810 (d)): dates stored as Excel's day numbers (`44927`). Reported by
+    `find_excel_serial_dates` only, never by `find_format_issues`, so that tool's output is unchanged."""
 
 
 @dataclass(frozen=True)
@@ -509,6 +514,146 @@ def parse_dates(series: pd.Series[Any], *, dayfirst: bool) -> ParseOutcome:
     return ParseOutcome(
         values=out, changed=int(ok.sum()), failed=len(failures), failed_examples=_masked(failures)
     )
+
+
+# ---------------------------------------------------------------------------
+# Excel serial dates (Plan O M240, DEC-1810 (d))
+# ---------------------------------------------------------------------------
+_EXCEL_EPOCH_1900: Final[np.datetime64] = np.datetime64("1899-12-30", "ms")
+_EXCEL_EPOCH_1904: Final[np.datetime64] = np.datetime64("1904-01-01", "ms")
+EXCEL_FIRST_SERIAL_1900: Final[int] = 61
+"""1 March 1900. Excel counts a 29 February 1900 that never existed, so earlier day numbers are one off."""
+EXCEL_LAST_SERIAL: Final[int] = 2_958_465
+"""31 December 9999, the last date Excel holds."""
+_NS_LAST_SERIAL_1900: Final[float] = 109_205.0
+"""Day number of 11 April 2262 in the 1900 system: the last day `datetime64[ns]` can hold."""
+_NS_LAST_SERIAL_1904: Final[float] = _NS_LAST_SERIAL_1900 - 1462.0
+EXCEL_PLAUSIBLE_SERIALS: Final[tuple[int, int]] = (7_306, 73_415)
+"""1 January 1920 to 31 December 2100: where a customer file's dates are. A detector reads a column of
+numbers as dates only inside it (and only when its name says date), so an amount is never one."""
+EXCEL_MIN_CELLS: Final[int] = 5
+EXCEL_MIN_SHARE: Final[float] = 0.95
+
+_DATE_WORDS: Final[frozenset[str]] = frozenset(
+    {
+        "date", "dt", "datetime", "timestamp", "day", "dob", "birthday", "birth", "expiry", "expires",
+        "expiration", "joined", "created", "updated", "signup", "renewal", "anniversary", "dated",
+    }
+)  # fmt: skip
+_DATE_SUFFIX_WORDS: Final[frozenset[str]] = frozenset({"on", "at"})
+_NOT_DATE_WORDS: Final[frozenset[str]] = frozenset(
+    {"candidate", "mandate", "validate", "consolidate", "update", "updates", "invalidate"}
+)
+_NAME_TOKEN_RE: Final[re.Pattern[str]] = re.compile(r"[A-Z]?[a-z]+|[A-Z]+(?![a-z])|\d+")
+
+
+def _name_words(name: str) -> list[str]:
+    """`LastLoginDate` / `last_login_date` / `signup-dt` as lower-case words."""
+    return [token.lower() for token in _NAME_TOKEN_RE.findall(str(name))]
+
+
+def looks_like_date_name(name: str) -> bool:
+    """Whether a column's name says it holds dates: a word such as `date`, `created` or `dob`, or a closing `_on` / `_at`."""
+    words = _name_words(name)
+    if not words:
+        return False
+    if words[-1] in _DATE_SUFFIX_WORDS and len(words) > 1:
+        return True
+    for word in words:
+        if word in _NOT_DATE_WORDS:
+            continue
+        if word in _DATE_WORDS or (len(word) > 4 and (word.endswith("date") or word.startswith("date"))):
+            return True
+    return False
+
+
+def _serials(cells: pd.Series[Any]) -> pd.Series[Any]:
+    """The cells as floats; text that is not a plain finite number is NaN."""
+    numbers = pd.to_numeric(cells, errors="coerce")
+    return numbers.where(np.isfinite(numbers))
+
+
+def parse_excel_serial_dates(series: pd.Series[Any], *, date_1904: bool = False) -> ParseOutcome:
+    """Excel's day numbers to dates, one value at a time: `44927` is 2023-01-01, `44927.5` is noon that day.
+
+    The result is stateless (DEC-1004): a value's date depends on it and on the calendar alone. A day number
+    below 61 (before 1 March 1900, where Excel's own calendar is wrong), one past the dates a table can hold,
+    a negative one, and anything that is not a plain number fail and are counted. The time of day is rounded
+    to the millisecond. `date_1904` reads the Mac workbook calendar, which starts on 1 January 1904.
+    """
+    if pd.api.types.is_datetime64_any_dtype(series):
+        return ParseOutcome(values=series, changed=0, failed=0, failed_examples=())
+    cells = _text_cells(series)
+    distinct = pd.Series(list(dict.fromkeys(cells.tolist())), dtype=object)
+    numbers = _serials(distinct).to_numpy(dtype=float)
+    low = 0.0 if date_1904 else float(EXCEL_FIRST_SERIAL_1900)
+    high = min(float(EXCEL_LAST_SERIAL), _NS_LAST_SERIAL_1904 if date_1904 else _NS_LAST_SERIAL_1900)
+    valid = np.isfinite(numbers) & (numbers >= low) & (numbers <= high)
+    epoch = _EXCEL_EPOCH_1904 if date_1904 else _EXCEL_EPOCH_1900
+    millis = np.zeros(len(numbers), dtype="int64")
+    millis[valid] = np.round(numbers[valid] * 86_400_000.0).astype("int64")
+    stamps = (epoch + millis.astype("timedelta64[ms]")).astype("datetime64[ns]")
+    stamps[~valid] = np.datetime64("NaT")
+    lookup = pd.Series(stamps, index=pd.Index(distinct, dtype=object))
+    spread = lookup.reindex(pd.Index(cells.tolist(), dtype=object))
+    parsed = pd.Series(spread.array, index=cells.index)
+    out = pd.Series(pd.NaT, index=series.index, dtype="datetime64[ns]")
+    ok = parsed.notna()
+    out.loc[parsed.index[ok]] = parsed[ok]
+    failures = cells[~ok].tolist()
+    return ParseOutcome(
+        values=out, changed=int(ok.sum()), failed=len(failures), failed_examples=_masked(failures)
+    )
+
+
+def find_excel_serial_dates(frame: pd.DataFrame) -> list[FormatIssue]:
+    """The columns that hold dates as Excel's day numbers, measured on the whole column.
+
+    A column is reported when its name says date (`looks_like_date_name`), at least `EXCEL_MIN_CELLS` cells
+    are filled, and at least 95% of them are numbers between 1 January 1920 and 31 December 2100. Both must
+    hold: a column of day numbers with no date in its name, or an amount named `date_fee`, is left alone. The
+    fix is a `parse_date` step with `excel_serial` true; the workbook's calendar (1900 or 1904) cannot be told
+    from the numbers, so the note says what to check.
+    """
+    issues: list[FormatIssue] = []
+    for name in frame.columns:
+        column = frame[name]
+        if pd.api.types.is_bool_dtype(column) or pd.api.types.is_datetime64_any_dtype(column):
+            continue
+        if not looks_like_date_name(str(name)):
+            continue
+        cells = _text_cells(column)
+        if len(cells) < EXCEL_MIN_CELLS:
+            continue
+        numbers = _serials(cells)
+        low, high = EXCEL_PLAUSIBLE_SERIALS
+        inside = numbers.between(low, high)
+        if inside.sum() / len(cells) < EXCEL_MIN_SHARE:
+            continue
+        parsed = parse_excel_serial_dates(cells)
+        shown = cells[inside]
+        examples = _distinct_examples(shown) if len(shown) else ()
+        dates = parsed.values.dropna()
+        notes = [
+            f"{int(inside.sum())} of {len(cells)} values are whole day numbers as Excel stores dates",
+            f"read this way they run from {dates.min().date()} to {dates.max().date()}",
+            "if they come out four years early, the workbook used the 1904 calendar",
+        ]
+        issues.append(
+            FormatIssue(
+                column=str(name),
+                kind=FormatIssueKind.EXCEL_SERIAL_DATES,
+                non_empty=len(cells),
+                convertible=len(cells) - parsed.failed,
+                failed=parsed.failed,
+                examples=examples,
+                failed_examples=parsed.failed_examples,
+                params={"excel_serial": True, "date_1904": False},
+                notes=tuple(notes),
+                example_cells=examples,
+            )
+        )
+    return issues
 
 
 def _date_issue(name: str, cells: pd.Series[Any]) -> FormatIssue | None:

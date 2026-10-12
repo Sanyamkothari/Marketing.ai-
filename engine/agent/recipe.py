@@ -35,7 +35,14 @@ import pandas as pd
 
 from engine.agent.config import AgentLevel
 from engine.agent.contracts import RecipeReceipt, RecipeStep, RecipeStepKind, StepReceipt, recipe_hash
-from engine.agent.formats import ParseOutcome, map_booleans, normalise_texts, parse_dates, parse_numbers
+from engine.agent.formats import (
+    ParseOutcome,
+    map_booleans,
+    normalise_texts,
+    parse_dates,
+    parse_excel_serial_dates,
+    parse_numbers,
+)
 from engine.agent.latest import KeepLatestError, KeepLatestSpec, keep_latest_per_id
 from engine.agent.placeholders import MAX_PLACEHOLDER_VALUES, set_missing
 from engine.agent.reshape import CombineError, CombineSpec, LeakCheck, combine_rows
@@ -58,6 +65,7 @@ from engine.onboarding.transforms import TransformError, derive
 from engine.utils.time import utc_now
 
 __all__ = [
+    "EXCEL_SERIAL_PARAMS",
     "STEP_PHASE",
     "RecipeError",
     "RecipeRun",
@@ -420,6 +428,12 @@ def _check_unpivot(
     return list(spec.output_columns(with_outcome=spec.outcome in available))
 
 
+EXCEL_SERIAL_PARAMS: Final[frozenset[str]] = frozenset({"excel_serial", "date_1904"})
+"""`parse_date` parameters of Plan O M240 (DEC-1810 (d)). A recipe and the person's own edits accept them, but
+the live chat's `propose_step` refuses them until the Data Doctor switch is on and M233's default-deny policy
+rule for them exists (`engine.agent.loop`): a model must not gain a new proposable behaviour on the default path."""
+
+
 def _check_params(step: RecipeStep) -> None:
     params = _params(step)
     kind = step.kind
@@ -432,7 +446,7 @@ def _check_params(step: RecipeStep) -> None:
     allowed: dict[RecipeStepKind, frozenset[str]] = {
         RecipeStepKind.DROP_COLUMN: frozenset(),
         RecipeStepKind.PARSE_NUMBER: frozenset({"decimal", "percent_to_fraction"}),
-        RecipeStepKind.PARSE_DATE: frozenset({"dayfirst"}),
+        RecipeStepKind.PARSE_DATE: frozenset({"dayfirst", "excel_serial", "date_1904"}),
         RecipeStepKind.MAP_BOOLEAN: frozenset({"true_values", "false_values"}),
         RecipeStepKind.NORMALISE_TEXT: frozenset({"strip", "merge"}),
         RecipeStepKind.SET_MISSING: frozenset({"values"}),
@@ -455,8 +469,18 @@ def _check_params(step: RecipeStep) -> None:
         raise refuse(f"unknown parameter {sorted(unknown)[0]!r}")
     if kind is RecipeStepKind.PARSE_NUMBER and params.get("decimal", ".") not in {".", ","}:
         raise refuse("decimal must be '.' or ','")
-    if kind is RecipeStepKind.PARSE_DATE and not isinstance(params.get("dayfirst"), bool):
-        raise refuse("the day/month order must be decided (dayfirst true or false)")
+    if kind is RecipeStepKind.PARSE_DATE:
+        # Plan O M240 (DEC-1810 (d)): `excel_serial` reads Excel's day numbers, where no day/month order exists.
+        serial = params.get("excel_serial", False)
+        if not isinstance(serial, bool) or not isinstance(params.get("date_1904", False), bool):
+            raise refuse("excel_serial and date_1904 are true or false")
+        if "date_1904" in params and not serial:
+            raise refuse("date_1904 only applies to excel_serial dates")
+        if serial:
+            if "dayfirst" in params:
+                raise refuse("Excel day numbers have no day/month order; leave dayfirst out")
+        elif not isinstance(params.get("dayfirst"), bool):
+            raise refuse("the day/month order must be decided (dayfirst true or false)")
     if kind is RecipeStepKind.MAP_BOOLEAN:
         true_values, false_values = params.get("true_values"), params.get("false_values")
         if not (
@@ -579,7 +603,11 @@ def _apply(frame: pd.DataFrame, step: RecipeStep, snapshot_column: str | None) -
             decimal=str(params.get("decimal", ".")),
             percent_to_fraction=bool(params.get("percent_to_fraction", True)),
         ),
-        RecipeStepKind.PARSE_DATE: lambda: parse_dates(_series(series), dayfirst=bool(params["dayfirst"])),
+        RecipeStepKind.PARSE_DATE: lambda: (
+            parse_excel_serial_dates(_series(series), date_1904=bool(params.get("date_1904", False)))
+            if params.get("excel_serial")
+            else parse_dates(_series(series), dayfirst=bool(params["dayfirst"]))
+        ),
         RecipeStepKind.MAP_BOOLEAN: lambda: map_booleans(
             _series(series),
             true_values=[str(v) for v in params["true_values"]],
