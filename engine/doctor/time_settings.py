@@ -21,16 +21,21 @@ module is the one place that says, from the data and this deployment's own past 
   never a raw minutes field. Balanced is `sure` (offered ticked) only when at least `sure_min_runs` past runs here
   were close in size; otherwise `check`.
 * **The promise.** The offer (all three choices with their expectations) is kept beside the data
-  (`uploads/<id>/time_offers/<use case>.json`, or `datasets/<id>/...`). A training run whose budget is one of them
-  takes that choice's expectation as its progress estimate (:func:`promised_tracker`, called from
-  `engine.run_progress`), so the bar's first ETA is the promise, to the second. The run keeps the promise
-  (`runs/<id>/time_promise.json`).
+  (`uploads/<id>/time_offers/<use case>.json`, or `datasets/<id>/...`), every offer for that file and goal, newest
+  first, so a choice already taken stays matchable after a newer run moves the next offer. Guided setup's advisor
+  (`engine.agent.advisor`, with the deployment's store) and the visit's detector make the offer from the same
+  computation as the setting they suggest. A training run whose budget is one of the offered choices takes that
+  choice's expectation as its progress estimate (:func:`promised_tracker`, called from `engine.run_progress`), so
+  the bar's first ETA is the promise, to the second; a limit set some other way is promised :func:`estimate` of it
+  from the same history. The run keeps the promise (`runs/<id>/time_promise.json`).
 * **Learning.** When the run ends, actual against expected is recorded per stage (`runs/<id>/time_record.json`,
   :func:`record_run_time`). The next estimate corrects each stage by the median of actual over the rules' own
   estimate in the last ten records, so a bias (a search that runs past its budget, a slow explanation stage) is
   learnt rather than repeated.
 
-**(b) The data time settings** (:func:`propose_time_settings`): the date each row describes (as-of), feasible
+**(b) The data time settings** (:func:`propose_time_settings`): the date each row describes (as-of: decided only
+when the goal or its settings name it, or the person chose it; a candidate must have a date on nearly every row, so
+an outcome's own date - filled only where the outcome is yes - is never one), feasible
 time-split cut points (the split's own arithmetic: a date never straddles a cut, and a cut that leaves a part empty
 is never proposed - `X_TIME_CUTS_FEASIBLE`), whether the newest slice is mature (`X_LABEL_MATURITY`: "Your newest
 month's outcomes are not final yet. Leave it out of testing?"), the outcome window and the lapse definition (both
@@ -38,7 +43,9 @@ part of the outcome definition, APPROVE-class: settled through `define_outcome`,
 cadence. :func:`time_settings_asks` turns them into M246's asks (:class:`engine.doctor.protocol.Ask`), so the
 protocol decides AUTO, a stated assumption or one question, and M246's standing answers remember the person's answer
 per client for the as-of date, the cut points, the maturity choice and the cadence (`AS_OF_COLUMN`, `TIME_CUTS`,
-`LABEL_MATURITY`, `SNAPSHOT_CADENCE`).
+`LABEL_MATURITY`, `SNAPSHOT_CADENCE`). Each answer's item carries the change itself - a setting's path and value,
+the recipe step that leaves the newest rows out (with its cut-off, worked out again on each file), the build's
+snapshot frequency - and :func:`time_setting_changes` / :func:`apply_time_settings` read them back.
 
 Everything here is behind `data_doctor.unified`: with the switch off nothing calls it, `_time_rules` and the
 budgets are byte-identical, and the progress bar is M189's.
@@ -49,13 +56,14 @@ from __future__ import annotations
 import json
 import math
 import statistics
+import threading
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal
 
-from pydantic import AwareDatetime, Field
+from pydantic import AwareDatetime, Field, JsonValue
 
 from engine.config import RunMode, StrictBase
 from engine.contracts import RunState, RunStatus, StageKey
@@ -83,11 +91,14 @@ if TYPE_CHECKING:
 
 __all__ = [
     "CHOICES",
+    "MAX_OFFERS",
     "OFFERS_DIR",
     "PRIOR_RUNS",
     "PROMISE_FILENAME",
     "RECORD_FILENAME",
+    "SNAPSHOT_SPEC_PATH",
     "TIME_CODES",
+    "TIME_SETTING_NAMES",
     "TRAIN_STAGE_KEYS",
     "AsOf",
     "BudgetChoice",
@@ -100,14 +111,17 @@ __all__ = [
     "PromiseTracker",
     "Shape",
     "StageTime",
+    "TimeChanges",
     "TimeInputs",
     "TimeOffer",
+    "TimeOffers",
     "TimePromise",
     "TimeRecord",
     "TimeSettings",
     "TimeSettingsError",
     "TrainingBudget",
     "TrainingTimeEstimate",
+    "apply_time_settings",
     "choice_label",
     "date_values",
     "estimate",
@@ -118,10 +132,12 @@ __all__ = [
     "propose_time_settings",
     "read_history",
     "read_offer",
+    "read_offers",
     "record_run_time",
     "save_offer",
     "setting_path",
     "time_inputs",
+    "time_setting_changes",
     "time_settings_asks",
     "time_settings_detector",
 ]
@@ -133,6 +149,10 @@ TIME_CODES: Final[frozenset[str]] = frozenset({"TIME_COLUMN_UNREADABLE", "TIME_B
 
 Choice = Literal["quick", "balanced", "thorough"]
 CHOICES: Final[tuple[Choice, ...]] = ("quick", "balanced", "thorough")
+PromisedChoice = Literal["quick", "balanced", "thorough", "custom"]
+"""What a run was promised from: one of the three choices, or `custom` - a limit set some other way (Settings >
+Advanced), estimated from the same history when the run starts."""
+CUSTOM_LABEL: Final[str] = "Your own time limit"
 _NAMES: Final[Mapping[Choice, str]] = {"quick": "Quick", "balanced": "Balanced", "thorough": "Thorough"}
 
 TRAIN_STAGE_KEYS: Final[tuple[StageKey, ...]] = (
@@ -175,12 +195,24 @@ MIN_PART_POSITIVES: Final[int] = 10
 MIN_SNAPSHOTS: Final[int] = 3
 """A cadence must leave at least this many snapshot dates to be offered."""
 READABLE_SHARE: Final[float] = 0.95
-"""A column is a date column when at least this share of its filled cells read as dates."""
+"""A column is a date column when at least this share of its filled cells read as dates; it can say which date each
+row describes only when it also has a date on at least this share of all rows."""
+OUTCOME_DATE_RATE: Final[float] = 0.5
+"""A sparsely filled date column whose filled rows are at least this share 'yes' (and twice the file's own rate) is
+the outcome's own date - the day a customer left or a fault happened - never the date a row describes."""
 MATURITY_WARN_RATIO: Final[float] = 0.5
 MATURITY_Z: Final[float] = 3.0
 """The readiness probe's own thresholds (`engine.doctor.readiness_probes.LABEL_MATURITY_*`)."""
 
 OFFERS_DIR: Final[str] = "time_offers"
+SNAPSHOT_SPEC_PATH: Final[str] = "snapshots.frequency"
+"""The build's setting the snapshot cadence answer sets (`engine.config.SnapshotDefinition.frequency`)."""
+TIME_SETTING_NAMES: Final[frozenset[str]] = frozenset(
+    {"training_budget", "cuts", "label_maturity", "snapshot_cadence"}
+)
+"""The `setting` an answered time question's item names in its payload (:func:`time_setting_changes`)."""
+MAX_OFFERS: Final[int] = 20
+"""Offers kept per file and goal, newest first: an earlier offer the person took stays matchable."""
 PROMISE_FILENAME: Final[str] = "time_promise.json"
 RECORD_FILENAME: Final[str] = "time_record.json"
 
@@ -283,7 +315,7 @@ class TrainingBudget(StrictBase):
 
 class TimeOffer(StrictBase):
     """The three choices as they were shown, kept beside the data: the run whose budget is one of them keeps its
-    expectation as the promise (`uploads/<id>/time_offers/<use case>.json`)."""
+    expectation as the promise (`uploads/<id>/time_offers/<use case>.json`, in :class:`TimeOffers`)."""
 
     use_case_id: str
     source_kind: Literal["upload", "dataset"]
@@ -294,20 +326,29 @@ class TimeOffer(StrictBase):
     budget: TrainingBudget
 
 
+class TimeOffers(StrictBase):
+    """Every offer made for one file and goal, newest first (at most `MAX_OFFERS`): a newer run in the history
+    moves the next offer's minutes, never the choice the person already took."""
+
+    offers: tuple[TimeOffer, ...] = ()
+
+
 class TimePromise(StrictBase):
     """What a run was promised: the chosen budget's expectation, per stage (`runs/<id>/time_promise.json`)."""
 
     run_id: str
     use_case_id: str
     source_id: str
-    choice: Choice
+    choice: PromisedChoice
     minutes: int
     label: str
     expected_seconds: int
     stages: dict[str, int]
     base: dict[str, float]
     basis: Basis
-    offered_at: AwareDatetime
+    offered_at: AwareDatetime = Field(
+        description="When the offer it rests on was made (the newest, for custom)."
+    )
     promised_at: AwareDatetime
 
 
@@ -323,7 +364,7 @@ class TimeRecord(StrictBase):
     run_id: str
     use_case_id: str
     state: str
-    choice: Choice
+    choice: PromisedChoice
     minutes: int
     capped: bool = Field(description="Whether the rules expected the search to stop at its limit.")
     stages: dict[str, StageTime]
@@ -335,8 +376,19 @@ class TimeRecord(StrictBase):
 
 class AsOf(StrictBase):
     column: str | None = Field(description="The date each row describes; null when none could be chosen.")
-    candidates: tuple[str, ...] = Field(default=(), description="Every column that reads as dates.")
-    sure: bool = False
+    candidates: tuple[str, ...] = Field(
+        default=(), description="Every column that reads as dates and has a date on nearly every row."
+    )
+    left_out: tuple[str, ...] = Field(
+        default=(),
+        description=(
+            "Columns that read as dates but cannot say which date a row describes: filled on too few rows, the "
+            "outcome itself, or a date filled mostly where the outcome is yes."
+        ),
+    )
+    sure: bool = Field(
+        default=False, description="Only when the goal or its settings name it, or you chose it."
+    )
     reason: str
 
 
@@ -346,6 +398,10 @@ class CutPoints(StrictBase):
     column: str
     feasible: bool
     distinct_dates: int
+    undated_rows: int = Field(
+        default=0,
+        description="Rows with no date in the column: placed in no part, so the cuts are a question.",
+    )
     validation_from: str | None = None
     test_from: str | None = None
     train_rows: int
@@ -732,6 +788,8 @@ class TimeInputs:
     history: tuple[PastRun, ...]
     others: PastDurations
     settings: TimeSettingsConfig
+    from_store: bool = False
+    """Whether this deployment's runs were read (False: no store was given, so nothing is known about them)."""
     natural: _Natural = field(init=False)
     factors: _Factors = field(init=False)
 
@@ -797,6 +855,7 @@ def time_inputs(
         history=history,
         others=others,
         settings=config.data_doctor.time_settings,
+        from_store=storage is not None,
     )
 
 
@@ -984,7 +1043,12 @@ def propose_budget(inputs: TimeInputs) -> TrainingBudget:
     )
     label = _basis_label(inputs)
     if inputs.natural.basis == "public_library":
-        reason = f"Estimated {PUBLIC_LABEL}: there is no finished training run here to go by yet."
+        # Only a store that was read can say there is no run here; without one, the basis is all that is known.
+        reason = (
+            f"Estimated {PUBLIC_LABEL}: there is no finished training run here to go by yet."
+            if inputs.from_store
+            else f"Estimated {PUBLIC_LABEL}."
+        )
     else:
         reason = (
             f"Estimated {label}; {close} of them close in size to this file. "
@@ -1022,24 +1086,41 @@ def source_kind_of(storage: Storage, source_id: str) -> Literal["upload", "datas
         return "upload"
 
 
+_OFFERS_LOCK: Final = threading.Lock()
+
+
 def save_offer(storage: Storage, offer: TimeOffer) -> str:
+    """Keep `offer` as the newest for its file and goal. Earlier offers are kept (an accepted choice stays
+    matchable); an earlier offer of exactly the same choices is replaced by this one."""
     key = offer_key(offer.source_kind, offer.source_id, offer.use_case_id)
-    storage.write_model(key, offer)
+    with _OFFERS_LOCK:
+        earlier = read_offers(storage, offer.source_kind, offer.source_id, offer.use_case_id)
+        kept = [o for o in earlier if o.budget.choices != offer.budget.choices]
+        storage.write_model(key, TimeOffers(offers=(offer, *kept)[:MAX_OFFERS]))
     return key
 
 
-def read_offer(
+def read_offers(
     storage: Storage, source_kind: Literal["upload", "dataset"], source_id: str, use_case_id: str
-) -> TimeOffer | None:
+) -> tuple[TimeOffer, ...]:
+    """Every offer kept for this file and goal, newest first; none when unreadable."""
     from engine.storage import StorageError
 
     key = offer_key(source_kind, source_id, use_case_id)
     try:
         if not storage.exists(key):
-            return None
-        return storage.read_model(key, TimeOffer)
+            return ()
+        return storage.read_model(key, TimeOffers).offers
     except (StorageError, ValueError):
-        return None
+        return ()
+
+
+def read_offer(
+    storage: Storage, source_kind: Literal["upload", "dataset"], source_id: str, use_case_id: str
+) -> TimeOffer | None:
+    """The newest offer for this file and goal, or None."""
+    offers = read_offers(storage, source_kind, source_id, use_case_id)
+    return offers[0] if offers else None
 
 
 _ENDED: Final[frozenset[RunState]] = frozenset({RunState.DONE, RunState.FAILED, RunState.CANCELLED})
@@ -1112,8 +1193,14 @@ class PromiseTracker(ProgressTracker):
 
 
 def promised_tracker(flow: Any, keys: Sequence[StageKey]) -> ProgressTracker | None:
-    """The tracker of a training run whose budget is one of the choices Data Doctor offered for its data, or None
-    (then M189's own estimate stands). Writes the promise into the run directory. Behind `data_doctor.unified`.
+    """The tracker of a training run on data Data Doctor offered training-time choices for, or None (then M189's own
+    estimate stands: a run on data no offer was made for). Writes the promise into the run directory. Behind
+    `data_doctor.unified`.
+
+    The run's limit is looked up among every kept offer, newest first: a choice the person took is promised exactly
+    what was shown, even after a newer run has moved the next offer's minutes. A limit that is none of them (set in
+    Settings > Advanced) is promised :func:`estimate` of that limit, from the same history, on the file the offer
+    was made for - so every run on offered data has its ETA from one source.
     """
     from engine.run_progress import train_budget_seconds
     from engine.storage import run_key
@@ -1130,33 +1217,50 @@ def promised_tracker(flow: Any, keys: Sequence[StageKey]) -> ProgressTracker | N
     source_id = record.dataset_id or record.upload_id
     if not source_id:
         return None
-    offer = read_offer(ctx.storage, source_kind, source_id, config.id)
-    if offer is None:
+    offers = read_offers(ctx.storage, source_kind, source_id, config.id)
+    if not offers:
         return None
-    chosen = next((c for c in offer.budget.choices if c.minutes * 60.0 == budget), None)
-    if chosen is None or any(key.value not in chosen.stages for key in keys):
+    found = next(
+        ((offer, c) for offer in offers for c in offer.budget.choices if c.minutes * 60.0 == budget), None
+    )
+    if found is not None:
+        offer, chosen = found
+        choice: PromisedChoice = chosen.choice
+        minutes, label, stages, base = chosen.minutes, chosen.label, chosen.stages, chosen.base
+        basis = offer.budget.basis
+    else:
+        offer = offers[0]
+        try:
+            inputs = time_inputs(
+                ctx.storage, config, rows=offer.rows, columns=offer.columns, exclude_run_id=ctx.run_id
+            )
+        except TimeSettingsError:
+            return None
+        expected = estimate(inputs, _current_minutes(config, inputs.setting_path))
+        choice = "custom"
+        minutes, stages, base, basis = expected.minutes, expected.stages, expected.base, expected.basis
+        label = f"{CUSTOM_LABEL} (about {expected.about_minutes} min)"
+    if any(key.value not in stages for key in keys):
         return None
     promise = TimePromise(
         run_id=ctx.run_id,
         use_case_id=config.id,
         source_id=source_id,
-        choice=chosen.choice,
-        minutes=chosen.minutes,
-        label=chosen.label,
-        expected_seconds=sum(chosen.stages[key.value] for key in keys),
-        stages={key.value: chosen.stages[key.value] for key in keys},
-        base={key.value: chosen.base.get(key.value, 0.0) for key in keys},
-        basis=offer.budget.basis,
+        choice=choice,
+        minutes=minutes,
+        label=label,
+        expected_seconds=sum(stages[key.value] for key in keys),
+        stages={key.value: stages[key.value] for key in keys},
+        base={key.value: base.get(key.value, 0.0) for key in keys},
+        basis=basis,
         offered_at=offer.offered_at,
         promised_at=utc_now(),
     )
     ctx.storage.write_model(run_key(ctx.run_id, PROMISE_FILENAME), promise)
     expectations = Expectations(
-        seconds=MappingProxyType({key: float(chosen.stages[key.value]) for key in keys}), basis="time_budget"
+        seconds=MappingProxyType({key: float(stages[key.value]) for key in keys}), basis="time_budget"
     )
-    _LOGGER.info(
-        "progress estimate: run=%s promised %s (%ss)", ctx.run_id, chosen.label, promise.expected_seconds
-    )
+    _LOGGER.info("progress estimate: run=%s promised %s (%ss)", ctx.run_id, label, promise.expected_seconds)
     return PromiseTracker(expectations, storage=ctx.storage, promise=promise)
 
 
@@ -1192,17 +1296,58 @@ def _norm(name: str) -> str:
     return "".join(ch for ch in name.lower() if ch.isalnum())
 
 
-def _as_of(frame: pd.DataFrame, names: Sequence[str], given: str | None, hinted: Sequence[str]) -> AsOf:
-    readable = [str(column) for column in frame.columns if date_values(frame[column]) is not None]
+def _filled_share(dates: pd.Series[Any], rows: int) -> float:
+    return float(dates.notna().sum()) / rows if rows else 0.0
+
+
+def _why_not(name: str, dates: pd.Series[Any], rows: int, yes: pd.Series[Any] | None) -> str:
+    share = _filled_share(dates, rows)
+    filled = dates.notna()
+    if yes is not None and filled.any():
+        hits = yes.reindex(dates.index).fillna(False).astype(bool)
+        rate, overall = float(hits[filled].mean()), float(hits.mean())
+        if rate >= OUTCOME_DATE_RATE and rate >= 2 * overall:
+            return (
+                f"'{name}' has a date on only {share:.0%} of rows, nearly all of them where the outcome is yes: it "
+                "is the outcome's own date, so testing on it would let the test rows give the answer away"
+            )
+    return f"'{name}' has a date on only {share:.0%} of rows, so it cannot say which date every row describes"
+
+
+def _as_of(
+    frame: pd.DataFrame,
+    names: Sequence[str],
+    given: str | None,
+    hinted: Sequence[str],
+    *,
+    exclude: Sequence[str] = (),
+    yes: pd.Series[Any] | None = None,
+) -> AsOf:
+    """The date each row describes. `sure` only when the goal or its settings name the column, or the person chose
+    it: being the only date column is a reason to ask, never to decide - an outcome date (filled only where the
+    outcome is yes) reads as dates too. A column is a candidate only when it has a date on nearly every row; the
+    outcome column (`exclude`) never is."""
+    rows = len(frame)
+    parsed = {
+        str(column): values
+        for column in frame.columns
+        if str(column) not in exclude and (values := date_values(frame[column])) is not None
+    }
+    readable = [name for name, values in parsed.items() if _filled_share(values, rows) >= READABLE_SHARE]
+    left_out = tuple(name for name in parsed if name not in readable)
+    notes = [_why_not(name, parsed[name], rows, yes) for name in left_out]
     if given is not None:
         if given not in frame.columns:
             raise TimeSettingsError("TIME_COLUMN_UNREADABLE", f"There is no column '{given}' in this file.")
-        if given not in readable:
+        if given not in parsed:
             raise TimeSettingsError(
                 "TIME_COLUMN_UNREADABLE",
                 f"'{given}' cannot be read as dates, so it cannot say which date each row describes.",
             )
-        return AsOf(column=given, candidates=tuple(readable), sure=True, reason="You chose it.")
+        # Your choice stands; rows it has no date for are counted with the cut points, which then ask.
+        return AsOf(
+            column=given, candidates=tuple(readable), left_out=left_out, sure=True, reason="You chose it."
+        )
     wanted = [_norm(n) for n in names if n]
     named = [column for column in readable if _norm(column) in wanted]
     if named:
@@ -1210,24 +1355,39 @@ def _as_of(frame: pd.DataFrame, names: Sequence[str], given: str | None, hinted:
         return AsOf(
             column=best,
             candidates=tuple(readable),
+            left_out=left_out,
             sure=True,
             reason=f"'{best}' is the date this goal names.",
         )
-    ranked = [c for c in hinted if c in readable] or readable
+    ranked = list(dict.fromkeys([*(c for c in hinted if c in readable), *readable]))
+    tail = (" " + "; ".join(notes) + ".") if notes else ""
     if len(readable) == 1:
         return AsOf(
-            column=readable[0],
-            candidates=tuple(readable),
-            sure=True,
-            reason=f"'{readable[0]}' is the only column that reads as dates.",
+            column=None,
+            candidates=tuple(ranked),
+            left_out=left_out,
+            reason=(
+                f"'{readable[0]}' is the only column with a date on every row, but nothing says it is the date "
+                f"each row describes: that is a question.{tail}"
+            ),
         )
     if readable:
         return AsOf(
             column=None,
             candidates=tuple(ranked),
-            reason=f"{len(readable)} columns read as dates; which one each row describes is a question.",
+            left_out=left_out,
+            reason=f"{len(readable)} columns read as dates; which one each row describes is a question.{tail}",
         )
-    return AsOf(column=None, candidates=(), reason="No column of the file reads as dates.")
+    return AsOf(
+        column=None,
+        candidates=(),
+        left_out=left_out,
+        reason=(
+            ("No column of the file has a date on every row." + tail)
+            if notes
+            else ("No column of the file reads as dates.")
+        ),
+    )
 
 
 def _positive(values: pd.Series[Any], positive: object) -> pd.Series[Any]:
@@ -1249,8 +1409,10 @@ def _cuts(
     validation_fraction: float,
     test_fraction: float,
     yes: pd.Series[Any] | None,
+    undated: int = 0,
 ) -> CutPoints:
-    """The split's own rule (`engine.stages.prepare._part_sizes`, `_tie_boundary`) on the as-of dates."""
+    """The split's own rule (`engine.stages.prepare._part_sizes`, `_tie_boundary`) on the as-of dates. `undated`
+    rows have no date: they are in no part, said so, and the cuts are then a question, never decided."""
     from engine.stages.prepare import _part_sizes, _tie_boundary
 
     order = dates.dropna().sort_values(kind="stable")
@@ -1274,11 +1436,13 @@ def _cuts(
     if yes is not None:
         hits = yes.reindex(order.index).fillna(False).astype(bool).tolist()
         positives = (sum(hits[first_validation:first_test]), sum(hits[first_test:]))
+    unplaced = f" {undated:,} rows have no date in '{column}' and are not in any part." if undated else ""
     if empty:
         return CutPoints(
             column=column,
             feasible=False,
             distinct_dates=distinct,
+            undated_rows=undated,
             train_rows=got[0],
             validation_rows=got[1],
             test_rows=got[2],
@@ -1287,7 +1451,8 @@ def _cuts(
             reason=(
                 f"Too many rows share one date at a cut ({distinct} different dates in {rows:,} rows): the "
                 f"{empty[0]} part would be empty, so the rows are split at random instead."
-            ),
+            )
+            + unplaced,
         )
     small_parts = [
         name
@@ -1304,10 +1469,12 @@ def _cuts(
     )
     if small_parts:
         reason += f" That leaves the {small_parts[0]} part too small to judge a model on."
+    reason += unplaced
     return CutPoints(
         column=column,
         feasible=True,
         distinct_dates=distinct,
+        undated_rows=undated,
         validation_from=day(first_validation) if got[1] else None,
         test_from=day(first_test) if got[2] else None,
         train_rows=got[0],
@@ -1532,7 +1699,12 @@ def propose_time_settings(
         if n
     ]
     hints = [*file.profile.time_column_candidates, *config.time_column_hints]
-    as_of = _as_of(frame, names, as_of_column, hints)
+    target = outcome_column or (brief.outcome.column if brief is not None else None) or config.target.column
+    yes = None
+    if target and target in frame.columns:
+        positive = config.target.positive_label if target == config.target.column else None
+        yes = _positive(frame[target], positive)
+    as_of = _as_of(frame, names, as_of_column, hints, exclude=[target] if target else (), yes=yes)
     window = window_days
     if window is None and brief is not None:
         window = brief.time_rules.outcome_window_days
@@ -1548,7 +1720,7 @@ def propose_time_settings(
     )
     questions: list[str] = []
     if as_of.column is None:
-        if len(as_of.candidates) > 1:
+        if as_of.candidates or as_of.left_out:
             questions.append("Which date does each row describe? Testing uses the newest dates.")
         return TimeSettings(
             budget=budget,
@@ -1559,11 +1731,6 @@ def propose_time_settings(
         )
     dates = date_values(frame[as_of.column])
     assert dates is not None  # _as_of chose a readable column
-    target = outcome_column or (brief.outcome.column if brief is not None else None) or config.target.column
-    yes = None
-    if target and target in frame.columns:
-        positive = config.target.positive_label if target == config.target.column else None
-        yes = _positive(frame[target], positive)
     time_split = config.split.type is SplitType.TIME_BASED or (
         brief is not None and brief.time_rules.split_type == SplitType.TIME_BASED.value
     )
@@ -1586,11 +1753,12 @@ def propose_time_settings(
             validation_fraction=config.split.validation_fraction,
             test_fraction=config.split.test_fraction,
             yes=yes,
+            undated=int(dates.isna().sum()),
         )
         if measured is not dates:
             note = " (Measured with the rows whose outcome is not final yet left out.)"
             cuts = cuts.model_copy(update={"reason": cuts.reason + note})
-        if cuts.feasible and cuts.too_small:
+        if cuts.feasible and (cuts.too_small or cuts.undated_rows):
             questions.append(cuts.reason + " Keep testing on the newest dates, or split at random?")
     cadence = _cadence(frame, dates, primary_key, window)
     if cadence is not None and cadence.ask:
@@ -1659,6 +1827,7 @@ def time_settings_asks(
                     choice.choice,
                     "setting",
                     f"Training: {choice.label}. {choice.buys}",
+                    setting="training_budget",
                     path=budget.setting_path,
                     value=choice.minutes,
                     choice=choice.choice,
@@ -1685,20 +1854,24 @@ def time_settings_asks(
     column = settings.as_of.column
     cuts = settings.cuts
     if cuts is not None and column is not None:
+        # Both answers are the split's own setting, so the run's configuration carries them (M243's prescription
+        # reads a `setting` item's path and value). The cut points follow from the split's rule on the date.
         random = _effect(
             "random",
             "setting",
             "Split the rows at random",
+            setting="cuts",
             path="split.type",
             value="random_stratified",
         )
         keep = _effect(
             "dates",
-            "time_setting",
+            "setting",
             f"Test on the newest dates, from {cuts.test_from}",
             setting="cuts",
+            path="split.type",
+            value="time_based",
             column=column,
-            split="time_based",
         )
         if not cuts.feasible:
             asks.append(
@@ -1715,7 +1888,9 @@ def time_settings_asks(
                     proven="random",
                 )
             )
-        elif cuts.too_small:
+        elif cuts.too_small or cuts.undated_rows:
+            # A part too small to judge a model on, or rows with no date that no part holds: the rules cannot be
+            # sure, so the person is asked (random is the safe answer).
             asks.append(
                 Ask(
                     code="TIME_CUTS",
@@ -1748,15 +1923,28 @@ def time_settings_asks(
                 )
             )
     maturity = settings.maturity
-    if maturity is not None and not maturity.mature and maturity.question and column is not None:
+    if (
+        maturity is not None
+        and not maturity.mature
+        and maturity.question
+        and maturity.immature_from is not None
+        and column is not None
+    ):
+        # The change itself: the rows dated after the cut-off are left out, as a recipe step the prescription
+        # replays (M243 reads an item's `step`). The cut-off and the step are worked out again on each file
+        # (`per_file`), so next month's standing answer leaves next month's newest rows out.
         leave = _effect(
             "leave_out",
             "time_setting",
-            f"Leave out the {maturity.immature_rows:,} newest rows: their outcomes are not final yet.",
+            f"Leave out the {maturity.immature_rows:,} rows dated after {maturity.immature_from}: their outcomes "
+            "are not final yet.",
             setting="label_maturity",
             choice="leave_out",
             column=column,
             window_days=maturity.window_days,
+            after=maturity.immature_from,
+            step=maturity_step(column, maturity.immature_from).model_dump(mode="json"),
+            per_file=["after", "step"],
         )
         asks.append(
             Ask(
@@ -1778,6 +1966,7 @@ def time_settings_asks(
         )
     cadence = settings.cadence
     if cadence is not None and cadence.proposed != "as_is" and column is not None:
+        # The build's own setting (`DatasetSpec.snapshots.frequency`, M237's build reads `spec_path`).
         monthly = _effect(
             "monthly",
             "time_setting",
@@ -1785,6 +1974,8 @@ def time_settings_asks(
             setting="snapshot_cadence",
             cadence="monthly",
             column=column,
+            spec_path=SNAPSHOT_SPEC_PATH,
+            value="monthly",
         )
         weekly = _effect(
             "weekly",
@@ -1793,6 +1984,8 @@ def time_settings_asks(
             setting="snapshot_cadence",
             cadence="weekly",
             column=column,
+            spec_path=SNAPSHOT_SPEC_PATH,
+            value="weekly",
         )
         options = (
             (AskOption("Every month", monthly, safe=True), AskOption("Every week", weekly))
@@ -1815,6 +2008,79 @@ def time_settings_asks(
             )
         )
     return asks
+
+
+# ---------------------------------------------------------------------------
+# The answers, applied: what an accepted time setting changes
+# ---------------------------------------------------------------------------
+class TimeChanges(StrictBase):
+    """What a case's accepted time settings change, read back from its items (:func:`time_setting_changes`).
+
+    `settings` are the run's configuration (`model_search.time_limit_minutes`, `split.type`), `steps` the recipe
+    steps per upload (leaving out the rows whose outcome is not final), `spec` the build's (`snapshots.frequency`).
+    M243's prescription reads the same items (a `setting` item's path and value, any item's `step`); this is the
+    one place that says which items are time settings and what each does."""
+
+    settings: dict[str, JsonValue] = Field(default_factory=dict)
+    steps: dict[str, tuple[dict[str, JsonValue], ...]] = Field(default_factory=dict)
+    spec: dict[str, JsonValue] = Field(default_factory=dict)
+
+
+def time_setting_changes(case: Case, goal_id: str) -> TimeChanges:
+    """The changes the accepted time settings of `goal_id` make (newest decision first wins a setting)."""
+    from engine.agent.contracts import ProposalState
+
+    settings: dict[str, JsonValue] = {}
+    steps: dict[str, list[dict[str, JsonValue]]] = {}
+    spec: dict[str, JsonValue] = {}
+    accepted = [
+        item
+        for item in case.items
+        if item.goal_id == goal_id
+        and item.state is ProposalState.ACCEPTED
+        and item.payload.get("setting") in TIME_SETTING_NAMES
+    ]
+    accepted.sort(key=lambda item: item.decided_at or item.proposed_at, reverse=True)
+    for item in accepted:
+        payload = item.payload
+        path, spec_path, step = payload.get("path"), payload.get("spec_path"), payload.get("step")
+        if item.kind == "setting" and isinstance(path, str):
+            settings.setdefault(path, payload.get("value"))
+        if isinstance(spec_path, str):
+            spec.setdefault(spec_path, payload.get("value"))
+        if isinstance(step, dict) and item.upload_id:
+            kept = steps.setdefault(item.upload_id, [])
+            if step not in kept:
+                kept.append(step)
+    return TimeChanges(
+        settings=settings, steps={upload: tuple(found) for upload, found in steps.items()}, spec=spec
+    )
+
+
+def apply_time_settings(
+    frame: pd.DataFrame, changes: TimeChanges, *, upload_id: str, config: UseCaseConfig
+) -> pd.DataFrame:
+    """`frame` with the time settings' recipe steps replayed on it, the way a prepared copy is made
+    (`engine.agent.recipe.run_recipe`): the rows whose outcome is not final are left out."""
+    from engine.agent.contracts import RecipeStep
+    from engine.agent.recipe import run_recipe
+
+    found = changes.steps.get(upload_id, ())
+    if not found:
+        return frame
+    steps = [
+        RecipeStep.model_validate(step).model_copy(update={"order": index + 1})
+        for index, step in enumerate(found)
+    ]
+    return run_recipe(
+        frame,
+        steps,
+        upload_id=upload_id,
+        primary_key=None,
+        target=None,
+        levels=config.agent.levels,
+        max_failure_pct=config.agent.max_conversion_failure_pct,
+    ).frame
 
 
 # ---------------------------------------------------------------------------

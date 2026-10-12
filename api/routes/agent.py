@@ -559,6 +559,9 @@ def _load_context(
         profile=profile,
         frame=frame,
         schema=schema,
+        # Plan O M244 (DEC-1814): the training budget is worked out on this deployment's past runs, and the
+        # choices offered are kept beside the file for the run's promise. Read only while the switch is on.
+        run_history=storage,
     )
     return _Loaded(
         ctx=ctx, upload=upload, recipe_error=recipe_error, version=version, model_has_recipe=model_has_recipe

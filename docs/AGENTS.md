@@ -1488,22 +1488,29 @@ answer for the client.
   runs within a factor of 3 of this file's work; otherwise `check`. A goal whose learner takes no limit (uplift on
   LightGBM) is refused with `TIME_BUDGET_NOT_USED`.
 - **The promise**: the three choices are kept beside the data (`uploads/<id>/time_offers/<use case>.json`, or
-  `datasets/<id>/...`). A training run whose limit is one of them gets that choice's per-stage expectation as its
-  progress estimate (`promised_tracker`, the one hook in `engine/run_progress._make_tracker`), so its first
-  `eta_seconds` is the promise; the promise is copied to `runs/<id>/time_promise.json`. A custom limit (Settings >
-  Advanced) keeps M189's estimate.
+  `datasets/<id>/...`): every offer for that file and goal, newest first (at most 20; the same choices offered again
+  are kept once), so a choice already taken stays matchable after a newer run moves the next offer's minutes. Guided
+  setup's advisor (`advisor._training_budget`, with `AgentContext.run_history`, the store `api/routes/agent.py`
+  passes) and the visit's detector make the offer from the same computation as the setting they suggest. A training
+  run whose limit is one of the offered choices gets that choice's per-stage expectation as its progress estimate
+  (`promised_tracker`, the one hook in `engine/run_progress._make_tracker`), so its first `eta_seconds` is the
+  promise; the promise is copied to `runs/<id>/time_promise.json`. A custom limit (Settings > Advanced) on offered
+  data is promised `estimate` of that limit from the same history on the offer's file (`choice: custom`, "Your own
+  time limit (about N min)"); a run on data with no offer keeps M189's estimate.
 - **The record**: when the run ends, `runs/<id>/time_record.json` holds, per stage, the expected seconds, the rules'
   base and the actual duration, and the whole run's actual over expected.
 - **`_time_rules`**: with the switch on, `recommend_settings` proposes Balanced instead of the file-size rule, titled
-  "Training time: Balanced (about N min, recommended)" with Quick and Thorough in the reason; a caller with no store
-  (Guided setup's advisor) gets the library prior. Off, nothing changes.
+  "Training time: Balanced (about N min, recommended)" with Quick and Thorough in the reason. Guided setup's advisor
+  passes the budget worked out on this deployment's runs (`training_budget`); a caller with no store gets the
+  library prior, and its reason says only "Estimated from similar public datasets." (it read no runs, so it claims
+  nothing about them). Off, nothing changes.
 
 ### 22.3 The data time settings (tool #81 `propose_time_settings`)
 
 | Setting | How | Asked (M246's `settle`) |
 |---|---|---|
-| As-of date | the goal's named column if it reads as dates (at least 95% of filled cells, day/month order proven), else the only date column | two date columns: M235's `AS_OF_COLUMN` |
-| Cut points | the split's own rule (`prepare._part_sizes`, `_tie_boundary`) on the mature rows | `TIME_CUTS`: infeasible cuts become "split at random" (AUTO, never a time split); a validation or test part under 100 rows or 10 yes is a question; feasible cuts are AUTO |
+| As-of date | the goal's or its settings' named column, or the person's choice. A candidate reads as dates (at least 95% of filled cells, day/month order proven) **and** has a date on at least 95% of all rows; the outcome column never is. A sparse date column is listed in `left_out` with why (an outcome's own date: its filled rows at least half yes and twice the file's rate). Being the only date column decides nothing | any undecided candidate: the question "Which date does each row describe?" (M235's `AS_OF_COLUMN` in the visit) |
+| Cut points | the split's own rule (`prepare._part_sizes`, `_tie_boundary`) on the mature rows; rows with no date are counted (`undated_rows`) and named in the sentence | `TIME_CUTS`: infeasible cuts become "split at random" (AUTO, never a time split); a validation or test part under 100 rows or 10 yes, or any undated row, is a question; feasible cuts are AUTO. Both answers are the `split.type` setting |
 | Maturity | rows within the outcome window of the newest date; a newest run of dates with no yes where the older rate says at least 5 were due; a newest month far below the older rate (the probe's 0.5 ratio and z <= -3) | `LABEL_MATURITY`: "Leave it out of testing?", blocking when `X_LABEL_MATURITY` would fail; "Leave it out" is the recommended and safe choice |
 | Outcome window, lapse | the goal's window and choices; `label_drafts.draft_labels` for an `event_absence` goal | never here: APPROVE-class through `define_outcome` |
 | Cadence | an event file (a customer on several rows): week-ends and month-ends after the window, at least 3 | `SNAPSHOT_CADENCE` when both work |
@@ -1511,12 +1518,28 @@ answer for the client.
 
 The visit runs these through its detector port (`time_settings_detector`, wired in `api/routes/case_visit._deps`).
 `AS_OF_COLUMN`, `TIME_CUTS`, `LABEL_MATURITY` and `SNAPSHOT_CADENCE` are standing codes (M246): the answer is
-remembered for the client and applied next time, pre-ticked and saying so. Leaving immature rows out is
-`leave_out_immature` (`remove_rows` `after` the cut-off); `maturity_step` is the same change as a recipe step for the
-prescription to replay (M243). The rule sets are `data.propose_training_budget` and `data.propose_time_settings`
-(never ticked unless `sure`).
+remembered for the client and applied next time, pre-ticked and saying so. The rule sets are
+`data.propose_training_budget` and `data.propose_time_settings` (never ticked unless `sure`).
+
+**What an answer changes.** Each answered item names its `setting` (`training_budget`, `cuts`, `label_maturity`,
+`snapshot_cadence`) and carries the change itself:
+
+| Answer | Item | Change |
+|---|---|---|
+| a budget choice | `setting` | `path` `model_search.time_limit_minutes` (or `uplift.time_limit_minutes`), `value` the minutes |
+| Test on the newest dates / Split at random | `setting` | `path` `split.type`, `value` `time_based` / `random_stratified` |
+| Leave it out | `time_setting` | `after` (the cut-off date) and `step`, the `remove_rows` `after` recipe step (`maturity_step`); both listed in `per_file` |
+| Every month / Every week | `time_setting` | `spec_path` `snapshots.frequency`, `value` `monthly` / `weekly` (the build's) |
+
+`time_setting_changes(case, goal_id)` reads them back as `TimeChanges` (run settings, recipe steps per upload, build
+settings) and `apply_time_settings` replays the steps on a file the way a prepared copy is made (`run_recipe`).
+M243's prescription reads the same items (a `setting` item's path and value, any item's `step`). A standing answer
+is applied to next month's item, so its cut-off is next month's: `standing.meaning_of` leaves out the keys an effect
+lists under `per_file`, so the same choice with a later date still means the same.
 
 ### 22.4 Not done here
 
-- Replaying the time settings at training and scoring is M243's prescription (`maturity_step`, the setting items).
+- Replaying the time settings at training and scoring is M243's prescription (the items' `step` and `setting`
+  path/value, as above); the cadence is M237's build (`spec_path`). VERIFY (M234's `readiness_verify`) reads the
+  stored upload until the prescription's prepared copy exists.
 - The screen's rendering of the three choices is M247's; it shows the options' labels.

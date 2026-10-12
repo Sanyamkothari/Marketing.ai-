@@ -400,7 +400,31 @@ def test_with_the_switch_off_the_progress_bar_is_m189s_and_nothing_is_promised(
     assert not storage.exists(run_key(RUN_ID, ts.RECORD_FILENAME))
 
 
-def test_a_custom_budget_not_among_the_choices_keeps_m189s_estimate(
+def test_a_custom_budget_not_among_the_choices_is_promised_the_estimate_from_the_same_history(
+    monkeypatch: pytest.MonkeyPatch,
+    resolved: ResolvedConfig,
+    storage: RecordingStorage,
+    registry: LocalModelRegistry,
+    clock: FakeClock,
+) -> None:
+    """A limit set in Settings > Advanced is none of the three choices: its ETA still comes from the same history
+    and the same file the offer was made for, never from a second estimate that disagrees with the screen."""
+    StageStubs().install(monkeypatch)
+    budget = _offer_for(storage, _on(resolved.config))
+    custom = max(c.minutes for c in budget.choices) + 7
+    config = _on(resolved.config, time_limit_minutes=custom)
+    expected = ts.estimate(ts.time_inputs(storage, config, rows=40, columns=4), custom)
+    pipeline_for(storage, registry).run_train(make_context(resolved, storage, registry, config=config))
+    first = next(s for s in storage.statuses() if s.estimated_pct is not None)
+    assert first.eta_seconds == expected.expected_seconds and first.estimate_basis == "time_budget"
+    promise = storage.read_model(run_key(RUN_ID, ts.PROMISE_FILENAME), ts.TimePromise)
+    assert promise.choice == "custom" and promise.minutes == custom
+    assert promise.label == f"Your own time limit (about {expected.about_minutes} min)"
+    record = storage.read_model(run_key(RUN_ID, ts.RECORD_FILENAME), ts.TimeRecord)
+    assert record.choice == "custom" and record.expected_seconds == expected.expected_seconds
+
+
+def test_a_run_on_data_no_offer_was_made_for_keeps_m189s_estimate(
     monkeypatch: pytest.MonkeyPatch,
     resolved: ResolvedConfig,
     storage: RecordingStorage,
@@ -408,13 +432,115 @@ def test_a_custom_budget_not_among_the_choices_keeps_m189s_estimate(
     clock: FakeClock,
 ) -> None:
     StageStubs().install(monkeypatch)
-    budget = _offer_for(storage, _on(resolved.config))
-    custom = max(c.minutes for c in budget.choices) + 7
-    config = _on(resolved.config, time_limit_minutes=custom)
+    config = _on(resolved.config, time_limit_minutes=12)
     pipeline_for(storage, registry).run_train(make_context(resolved, storage, registry, config=config))
     first = next(s for s in storage.statuses() if s.estimated_pct is not None)
-    assert first.eta_seconds is not None and first.eta_seconds >= custom * 60
+    assert first.eta_seconds is not None and first.eta_seconds >= 12 * 60  # M189's rule: the budget
     assert not storage.exists(run_key(RUN_ID, ts.PROMISE_FILENAME))
+
+
+def test_a_choice_already_taken_stays_promised_after_a_newer_run_moves_the_next_offer(
+    monkeypatch: pytest.MonkeyPatch,
+    resolved: ResolvedConfig,
+    storage: RecordingStorage,
+    registry: LocalModelRegistry,
+    clock: FakeClock,
+) -> None:
+    """The person took Balanced; before the run starts, a newer finished run changes the history and the visit offers
+    again with other minutes. The earlier offer is kept, so the run is promised what the person was shown."""
+    StageStubs().install(monkeypatch)
+    base = _on(resolved.config)
+    taken = _offer_for(storage, base)
+    balanced = next(c for c in taken.choices if c.choice == "balanced")
+    newer = taken.model_copy(
+        update={
+            "choices": tuple(
+                c.model_copy(update={"minutes": c.minutes + 50, "expected_seconds": c.expected_seconds + 999})
+                for c in taken.choices
+            )
+        }
+    )
+    ts.save_offer(
+        storage,
+        ts.TimeOffer(
+            use_case_id=base.id, source_kind="upload", source_id=UPLOAD_ID, offered_at=T0 + timedelta(hours=1),
+            rows=40, columns=4, budget=newer,
+        ),
+    )  # fmt: skip
+    offers = ts.read_offers(storage, "upload", UPLOAD_ID, base.id)
+    assert [o.budget for o in offers] == [newer, taken], "newest first, the earlier one kept"
+    assert ts.read_offer(storage, "upload", UPLOAD_ID, base.id) == offers[0]
+    config = _on(resolved.config, time_limit_minutes=balanced.minutes)
+    pipeline_for(storage, registry).run_train(make_context(resolved, storage, registry, config=config))
+    first = next(s for s in storage.statuses() if s.estimated_pct is not None)
+    assert first.eta_seconds == balanced.expected_seconds
+    promise = storage.read_model(run_key(RUN_ID, ts.PROMISE_FILENAME), ts.TimePromise)
+    assert promise.choice == "balanced" and promise.offered_at == T0
+    # The same choices offered again are kept once, as the newest.
+    ts.save_offer(storage, offers[1].model_copy(update={"offered_at": T0 + timedelta(hours=2)}))
+    again = ts.read_offers(storage, "upload", UPLOAD_ID, base.id)
+    assert [o.budget for o in again] == [taken, newer]
+
+
+# ---------------------------------------------------------------------------
+# Guided setup's advisor: the setting it suggests and the offer are one computation
+# ---------------------------------------------------------------------------
+def test_the_advisors_suggested_budget_is_the_offer_and_the_run_is_promised_exactly_it(
+    monkeypatch: pytest.MonkeyPatch,
+    resolved: ResolvedConfig,
+    storage: RecordingStorage,
+    registry: LocalModelRegistry,
+    clock: FakeClock,
+) -> None:
+    """With four finished runs here, the advisor (the only path that writes `model_search.time_limit_minutes` into a
+    run's configuration) works the budget out on them, says so, and keeps the offer; the person accepts its
+    suggestion, the run starts, and the bar's first ETA is the offered Balanced to the second."""
+    import dataclasses
+
+    from engine.agent.advisor import advise, run_overrides
+    from engine.agent.contracts import ProposalKind, ProposalState
+    from tests.unit.agent.egress_canary import canary_frame
+    from tests.unit.agent.helpers import context_for
+
+    StageStubs().install(monkeypatch)
+    base = _on(resolved.config)
+    frame = canary_frame(1_500)
+    for index in range(4):
+        _past_run(
+            storage,
+            f"r_20260901_0000000{index}",
+            base,
+            rows=1_400 + 100 * index,
+            columns=len(frame.columns),
+            minutes=30,
+            durations=_durations(600.0 + 20 * index),
+            curve_seconds=600.0 + 20 * index,
+        )
+    ctx = context_for(frame, base.id, target="converted_30d")
+    ctx = dataclasses.replace(ctx, config=_on(ctx.config), upload_id=UPLOAD_ID, run_history=storage)
+    assert ctx.config.id == resolved.config.id
+    advice = advise(ctx, primary_key="customer_id", target="converted_30d")
+    suggested = [
+        p
+        for p in advice.proposals
+        if p.kind is ProposalKind.SETTING and p.path == "model_search.time_limit_minutes"
+    ]
+    assert len(suggested) == 1, [p.path for p in advice.proposals]
+    proposal = suggested[0]
+    assert "from 4 past runs here" in proposal.reason
+    assert "no finished training run" not in proposal.reason
+    offer = ts.read_offer(storage, "upload", UPLOAD_ID, base.id)
+    assert offer is not None and offer.budget.basis == "this_deployment"
+    balanced = next(c for c in offer.budget.choices if c.choice == "balanced")
+    assert proposal.value == balanced.minutes and proposal.title == f"Training time: {balanced.label}"
+
+    overrides = run_overrides([proposal.model_copy(update={"state": ProposalState.ACCEPTED})])
+    config = _on(resolved.config, time_limit_minutes=overrides["model_search.time_limit_minutes"])
+    pipeline_for(storage, registry).run_train(make_context(resolved, storage, registry, config=config))
+    first = next(s for s in storage.statuses() if s.estimated_pct is not None)
+    assert first.eta_seconds == balanced.expected_seconds, (first.eta_seconds, balanced.expected_seconds)
+    promise = storage.read_model(run_key(RUN_ID, ts.PROMISE_FILENAME), ts.TimePromise)
+    assert promise.choice == "balanced" and promise.basis == "this_deployment"
 
 
 # ---------------------------------------------------------------------------
@@ -479,11 +605,17 @@ def test_on_a_replayed_history_of_ten_runs_the_median_actual_over_expected_is_wi
 # (b) Data time settings: maturity, cut points, the as-of date
 # ---------------------------------------------------------------------------
 def _monthly(
-    rows_per_month: int = 300, months: int = 6, *, newest_yes: bool = False, seed: int = 0
+    rows_per_month: int = 300,
+    months: int = 6,
+    *,
+    newest_yes: bool = False,
+    seed: int = 0,
+    first: str = "2026-04-30",
 ) -> pd.DataFrame:
-    """Fault-prediction snapshots at month-ends, Apr to Sep 2026; the newest month's outcomes not known yet."""
+    """Fault-prediction snapshots at month-ends, Apr to Sep 2026 (from `first`); the newest month's outcomes not
+    known yet."""
     rng = np.random.default_rng(seed)
-    ends = pd.date_range("2026-04-30", periods=months, freq="ME")
+    ends = pd.date_range(first, periods=months, freq="ME")
     count = rows_per_month * months
     dates = np.repeat(ends, rows_per_month)
     faults = (rng.random(count) < 0.3).astype(int)
@@ -576,7 +708,8 @@ def test_a_time_split_whose_cuts_would_leave_a_part_empty_is_never_proposed() ->
     assert all(e.payload.get("split") != "time_based" for e in effects), "no time split is offered"
     settled = settle(asks[0], now=T0)
     assert settled.how == "auto" and settled.item is not None
-    assert settled.item.payload == {"path": "split.type", "value": "random_stratified"}
+    assert settled.item.kind == "setting"
+    assert settled.item.payload == {"setting": "cuts", "path": "split.type", "value": "random_stratified"}
 
 
 def test_feasible_cut_points_are_proposed_with_the_splits_own_rule() -> None:
@@ -613,6 +746,60 @@ def test_two_date_columns_leave_the_as_of_date_a_question() -> None:
     assert settings.questions == ("Which date does each row describe? Testing uses the newest dates.",)
 
 
+def _cancellations(rows: int = 30_000, seed: int = 7) -> pd.DataFrame:
+    """A fault file whose only date column is the outcome's own date: filled (10%) only where the fault happened."""
+    rng = np.random.default_rng(seed)
+    faults = (rng.random(rows) < 0.1).astype(int)
+    days = pd.Timestamp("2025-01-01") + pd.to_timedelta(rng.integers(0, 620, rows), unit="D")
+    return pd.DataFrame(
+        {
+            "asset_id": [f"A-{i:06d}" for i in range(rows)],
+            "error_rate_24h": rng.random(rows).round(3) * 50,
+            "device_model": rng.choice(["ONT-220", "RTR-900", "ONT-410"], rows),
+            "cancelled_on": np.where(faults == 1, days.strftime("%Y-%m-%d"), None),
+            "fault_next_72h": faults,
+        }
+    )
+
+
+def test_a_sparse_outcome_date_is_never_taken_as_the_date_each_row_describes() -> None:
+    """The reviewer's case: the outcome's own date, filled only on the 10% of rows where the fault happened, read as
+    the as-of date for sure, cut the test set by the outcome and left 27,000 rows out - and accepted it unasked.
+    """
+    config = load_use_case("fault-prediction")
+    frame = _cancellations()
+    brief = load_goal_brief("fault-prediction")
+    settings = ts.propose_time_settings(_loaded(frame, config), config, brief=brief)
+    as_of = settings.as_of
+    assert as_of.column is None and not as_of.sure and as_of.candidates == ()
+    assert as_of.left_out == ("cancelled_on",)
+    assert "outcome's own date" in as_of.reason and "10% of rows" in as_of.reason
+    assert settings.cuts is None and settings.maturity is None
+    assert settings.questions == ("Which date does each row describe? Testing uses the newest dates.",)
+    asks = ts.time_settings_asks(settings, rows=len(frame), upload_id="u", goal_id=brief.goal_id)
+    assert not [a for a in asks if a.code == "TIME_CUTS"], "no time split is decided on it"
+
+
+def test_a_chosen_date_column_with_undated_rows_counts_them_and_asks() -> None:
+    """When the person picks a sparsely filled date column anyway, the rows it has no date for are counted in the
+    sentence and the cut points are a question - never accepted by the rules."""
+    config = load_use_case("fault-prediction")
+    frame = _cancellations()
+    undated = int(frame["cancelled_on"].isna().sum())
+    settings = ts.propose_time_settings(_loaded(frame, config), config, as_of_column="cancelled_on")
+    cuts = settings.cuts
+    assert settings.as_of.column == "cancelled_on" and cuts is not None and cuts.feasible
+    assert cuts.undated_rows == undated
+    assert cuts.train_rows + cuts.validation_rows + cuts.test_rows == len(frame) - undated
+    assert f"{undated:,} rows have no date in 'cancelled_on' and are not in any part." in cuts.reason
+    ask = next(a for a in ts.time_settings_asks(settings, rows=len(frame), upload_id="u", goal_id="g")
+               if a.code == "TIME_CUTS")  # fmt: skip
+    assert ask.proven is None
+    settled = settle(ask, now=T0)
+    assert settled.how == "ask" and settled.item is None and settled.question is not None
+    assert settled.question.recommended is None or settled.question.recommended != "dates"
+
+
 def test_an_event_file_offers_monthly_or_weekly_snapshots() -> None:
     config = load_use_case("targeted-advertisement")
     days = pd.date_range("2025-01-01", periods=400, freq="D")
@@ -623,8 +810,13 @@ def test_an_event_file_offers_monthly_or_weekly_snapshots() -> None:
             "amount": np.arange(400) % 70,
         }
     )
+    # The only date column is not decided for the person: nothing names it, so it is a question.
+    undecided = ts.propose_time_settings(_loaded(frame, config), config, primary_key="customer_id")
+    assert undecided.as_of.column is None and undecided.as_of.candidates == ("event_date",)
+    assert not undecided.as_of.sure and undecided.cadence is None
+    assert undecided.questions == ("Which date does each row describe? Testing uses the newest dates.",)
     settings = ts.propose_time_settings(
-        _loaded(frame, config), config, primary_key="customer_id", window_days=30
+        _loaded(frame, config), config, as_of_column="event_date", primary_key="customer_id", window_days=30
     )
     cadence = settings.cadence
     assert cadence is not None and cadence.ask and cadence.proposed == "monthly"
@@ -676,6 +868,8 @@ def test_with_the_switch_on_the_budget_replaces_the_file_size_rule() -> None:
     assert rec.confidence is AgentConfidence.CHECK  # no run history: from similar public datasets
     assert "Quick (about" in rec.reason and "Thorough (about" in rec.reason
     assert "from similar public datasets" in rec.reason
+    # No store was read: nothing is known about this deployment's runs, so nothing is claimed about them.
+    assert "no finished training run" not in rec.reason
 
 
 def test_the_settings_defaults_are_left_out_of_a_dump() -> None:

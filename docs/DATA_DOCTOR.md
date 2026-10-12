@@ -892,14 +892,20 @@ are `data.define_outcome` and `data.map_outcome_values` in `configs/agentic/poli
 - **Where the numbers come from.** Your file's size, the kinds of model the goal allows and this deployment's own
   past runs. Before there is any, the estimate says "from similar public datasets", and Balanced is not ticked for
   you.
-- **The screen and the promise agree.** Start the run with the choice you picked and the progress bar begins at the
-  time you were shown. When the run ends, the actual time is written down beside the expected one, stage by stage,
-  and the next estimate learns from it.
+- **The screen and the promise agree.** Guided setup suggests Balanced worked out on this deployment's runs and
+  keeps the three choices it showed you. Start the run with the choice you picked and the progress bar begins at
+  the time you were shown, even if a newer run has since changed what Data Doctor would offer. A time limit you set
+  yourself in Settings > Advanced gets its estimate from the same past runs. When the run ends, the actual time is
+  written down beside the expected one, stage by stage, and the next estimate learns from it.
 - **Dates.** Data Doctor proposes the date each row describes, where testing starts when it tests on the newest
   dates (never a cut that would leave a part empty), how often to take snapshots of an event file, and it checks
-  whether the newest rows' outcomes can be known yet. When they cannot, it asks: *"Your newest month's outcomes are
-  not final yet. Leave it out of testing?"* Your answer is remembered for this client and used next month, shown and
-  changeable. The outcome window and what counts as lapsed are part of the outcome you approve (section 24).
+  whether the newest rows' outcomes can be known yet. It decides the date only when your goal names it; a date
+  column that is empty on most rows (such as the day a customer cancelled, filled only for those who did) is never
+  taken as the date each row describes, and rows with no date are counted and asked about. When the newest outcomes
+  cannot be known yet, it asks: *"Your newest month's outcomes are not final yet. Leave it out of testing?"* Your
+  answer is kept with the case as the change itself (the rows after the cut-off date are left out of the prepared
+  copy), remembered for this client and used next month with that month's own cut-off, shown and changeable. The
+  outcome window and what counts as lapsed are part of the outcome you approve (section 24).
 
 ### For developers
 
