@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import csv
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -11,11 +12,14 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from engine.agent.checks import check_plan
+from engine.agent.contracts import DataRecipe, RecipeStep, RecipeStepKind, recipe_hash
 from engine.config import ColumnRole, ColumnType, ProblemType, RunMode, load_all_use_cases
 from engine.contracts import FeatureSchema, FeatureSchemaColumn
 from engine.doctor.readiness import (
     CHECK_READINESS_TOOL,
     READINESS_RUN_FILENAME,
+    RECIPE_ROLES_MISMATCH,
     CheckReadinessArgs,
     ReadinessInputs,
     ReadinessToolSpec,
@@ -24,12 +28,14 @@ from engine.doctor.readiness import (
     check_readiness,
     readiness_key,
     register_readiness_tool,
+    roles_refusal,
     store_readiness,
     summarise,
     use_case_type,
 )
 from engine.doctor.readiness_contracts import PROBE_CODES, READINESS_CODES, DataReadinessReport, OpenQuestion
-from engine.doctor.readiness_probes import SourceScan
+from engine.doctor.readiness_probes import FIELD_TOO_LONG, SourceScan, scan_source
+from engine.stages import ingest, prepare
 from engine.storage import LocalStorage
 from tests.fixtures.make_data import GenerationSpec, generate
 from tests.unit.doctor.readiness_fixtures import CONFIGS, config, customers, report
@@ -73,9 +79,14 @@ def test_every_shipped_use_case_gets_a_report_and_clean_data_is_ready(use_case_i
 @pytest.mark.parametrize(
     ("levels", "values", "status"),
     [
-        ((), ["1", "0"], "pass"),
+        pytest.param((), ["1", "0"], "pass", marks=pytest.mark.slow),  # the uplift checks run in full
         ((), ["yes", "no"], "fail"),
-        (("control", "offer_a", "offer_b"), ["control", "offer_a", "offer_b"], "pass"),
+        pytest.param(
+            ("control", "offer_a", "offer_b"),
+            ["control", "offer_a", "offer_b"],
+            "pass",
+            marks=pytest.mark.slow,
+        ),
         (("control", "offer_a", "offer_b"), ["control", "offer_a", "offer_c"], "fail"),
     ],
 )
@@ -264,8 +275,9 @@ def test_without_the_stored_file_the_report_says_what_it_did_not_measure() -> No
     assert result.verdict == "ready_with_warnings"
     sampled = report(customers(), config("targeted-advertisement"), row_count=5000, now=NOW)
     assert sampled.probe("X_PK_UNIQUE_FULL").status == "warn"
-    assert sampled.post_filter_counts is not None and sampled.post_filter_counts.estimated
-    assert sampled.post_filter_counts.rows_after_filters == 5000
+    # The run prepares the rows it reads (up to the row cap), so the counts are of those rows, never scaled.
+    assert sampled.post_filter_counts is not None and not sampled.post_filter_counts.estimated
+    assert sampled.post_filter_counts.rows_after_filters == 2000
 
 
 # -- no cell value, a stable hash, storage -------------------------------------------------------
@@ -337,3 +349,188 @@ def test_a_frame_from_a_csv_reads_the_same_as_the_frame(tmp_path: Path) -> None:
     frame.to_csv(path, index=False)
     again = pd.read_csv(path)
     assert report(again, config("targeted-advertisement"), now=NOW).verdict == "ready"
+
+
+# -- review fixes (M234): counts past the row cap, skipped checks, a prepare that stops, the CSV limit ---
+def test_post_filter_counts_are_of_the_rows_the_run_reads_never_scaled_past_the_cap() -> None:
+    """The reviewer's reproduction: 3,000 rows read with a 2,500-row cap; consent removes 60 positives.
+
+    The run prepares the 2,500 rows it reads and gets 190 positives (200 needed). Scaling them to the
+    file's 3,000 rows said 228 and passed; the probe must say what training gets.
+    """
+    cfg = config("targeted-advertisement", governance={"consent_column": "marketing_opt_in"})
+    frame = customers(3000, positive_rate=0.0)
+    positive = np.zeros(len(frame), dtype=bool)
+    positive[:2500:10] = True  # 250 positives among the rows the run reads
+    positive[2500::5] = True  # 100 more past the cap, which the run never reads
+    frame["converted_30d"] = positive.astype(int)
+    frame["marketing_opt_in"] = True
+    frame.loc[np.flatnonzero(positive[:2500])[:60], "marketing_opt_in"] = False
+    read = frame.head(2500)
+    assert dry_run_passes(read, cfg, row_count=3000)  # TARGET_TOO_FEW_POSITIVES counts 250 on the read rows
+    rows, _plan = prepare.prepare_rows(read, cfg, primary_key=("customer_id",), target="converted_30d")
+    assert int(rows["converted_30d"].sum()) == 190  # what training gets
+    result = report(read, cfg, row_count=3000, now=NOW)
+    assert result.verdict == "not_ready", result.verdict_reason
+    probe = result.probe("X_POST_FILTER_THRESHOLDS")
+    assert probe.status == "fail" and "X_POST_FILTER_THRESHOLDS" in result.verdict_reason
+    assert probe.details["positives_after_filters"] == 190
+    assert probe.details["rows_in"] == 2500 and probe.details["rows_in_file"] == 3000
+    counts = result.post_filter_counts
+    assert counts is not None and not counts.estimated and counts.positives_after_filters == 190
+
+
+def dry_run_passes(frame: pd.DataFrame, cfg: Any, *, row_count: int) -> bool:
+    return check_plan(
+        frame,
+        cfg,
+        mode=RunMode.TRAIN,
+        primary_key="customer_id",
+        target="converted_30d",
+        upload_id="u-fixture",
+        row_count=row_count,
+    ).passed
+
+
+def test_a_check_that_did_not_run_is_listed_as_skipped_with_its_reason() -> None:
+    result = report(customers(), config("targeted-advertisement"), now=NOW)  # no consent column, random split
+    by_id = {r.id: r for r in result.requirements}
+    assert by_id["CONSENT_COLUMN_MISSING"].status == "skipped"
+    assert by_id["CONSENT_COLUMN_MISSING"].skip_reason == "no consent column configured"
+    assert by_id["TIME_COLUMN_MISSING"].status == "skipped"
+    assert by_id["TIME_COLUMN_MISSING"].skip_reason == "split is not time-based"
+    assert by_id["PK_NOT_UNIQUE"].status == "pass" and by_id["PK_NOT_UNIQUE"].skip_reason is None
+    amounts = customers()
+    amounts["converted_30d"] = np.random.default_rng(3).random(len(amounts)).round(2) * 100  # an amount
+    regression = report(
+        amounts, config("targeted-advertisement", top={"problem_type": ProblemType.REGRESSION}), now=NOW
+    )
+    assert {r.id: r.status for r in regression.requirements}["TARGET_TOO_FEW_POSITIVES"] == "skipped"
+    assert result.verdict == "ready"  # a skip is not a failure
+
+
+@pytest.mark.parametrize("mode", [RunMode.TRAIN, RunMode.SCORE])
+def test_the_dry_run_report_is_check_plans_own(mode: RunMode) -> None:
+    cfg = config("targeted-advertisement")
+    frame = customers(1500, seed=4)
+    frame.loc[:9, "customer_id"] = frame.loc[10:19, "customer_id"].to_numpy()  # a finding in both modes
+    if mode is RunMode.SCORE:
+        frame = frame.drop(columns=["converted_30d", "tenure_months"])
+    target = "converted_30d" if mode is RunMode.TRAIN else None
+    schema = _schema() if mode is RunMode.SCORE else None
+    theirs = check_plan(
+        frame,
+        cfg,
+        mode=mode,
+        primary_key="customer_id",
+        target=target,
+        upload_id="u-fixture",
+        row_count=len(frame),
+        schema=schema,
+    )
+    ours = report(frame, cfg, mode=mode, target=target, schema=schema, now=NOW).dry_run_report
+    assert ours is not None
+    assert ours.model_dump(exclude={"validated_at"}) == theirs.model_dump(exclude={"validated_at"})
+
+
+def test_a_prepare_step_that_stops_fails_the_report(monkeypatch: pytest.MonkeyPatch) -> None:
+    def stops(*_args: Any, **_kwargs: Any) -> Any:
+        raise TypeError("unhashable type: 'list'")
+
+    monkeypatch.setattr(prepare, "prepare_rows", stops)
+    result = report(customers(), config("targeted-advertisement"), now=NOW)
+    probe = result.probe("X_POST_FILTER_THRESHOLDS")
+    assert probe.status == "fail" and probe.details["error"] == "TypeError"
+    assert "unhashable" not in probe.message  # the class only: a message can quote a value
+    assert result.verdict == "not_ready"
+    assert result.probe("X_TIME_ALL_PARSE").status == "skipped"
+
+
+def test_counting_the_csv_leaves_the_process_wide_field_limit_alone(tmp_path: Path) -> None:
+    storage = LocalStorage(tmp_path)
+    frame = customers(50)
+    frame["notes"] = "short"
+    frame.loc[3, "notes"] = "x" * (csv.field_size_limit() + 10)  # longer than the default limit
+    storage.write_bytes("uploads/u1/source.csv", frame.to_csv(index=False).encode())
+    before = csv.field_size_limit()
+    scan = scan_source(
+        storage,
+        "uploads/u1/source.csv",
+        file_format="csv",
+        rows_parsed=50,
+        key_columns=("customer_id",),
+    )
+    assert csv.field_size_limit() == before
+    assert scan.parse_error == FIELD_TOO_LONG
+    result = report(frame, config("targeted-advertisement"), scan=scan, now=NOW)
+    probe = result.probe("X_PARSER_ROW_LOSS")
+    assert probe.status == "warn" and probe.details["error"] == FIELD_TOO_LONG
+    plain = customers(50)
+    storage.write_bytes("uploads/u2/source.csv", plain.to_csv(index=False).encode())
+    clean = scan_source(storage, "uploads/u2/source.csv", file_format="csv", rows_parsed=50)
+    assert clean.parse_error is None and clean.rows_physical == 50
+    assert csv.field_size_limit() == before
+
+
+def _recipe(primary_key: str | None, target: str | None) -> DataRecipe:
+    steps = (RecipeStep(order=1, kind=RecipeStepKind.DROP_COLUMN, column="region"),)
+    return DataRecipe(
+        recipe_id="rec1",
+        use_case_id="targeted-advertisement",
+        source_fingerprint="f",
+        steps=steps,
+        recipe_hash=recipe_hash(steps),
+        primary_key=primary_key,
+        target=target,
+        created_at=NOW,
+    )
+
+
+def test_roles_refusal_is_refuse_other_roles_rule() -> None:
+    recipe = _recipe("customer_id", "converted_30d")
+    same: dict[str, Any] = {
+        "primary_key": "customer_id",
+        "target": "converted_30d",
+        "applies_to": "propensity:train",
+    }
+    assert roles_refusal(recipe, training=True, **same) is None
+    assert roles_refusal(None, training=True, **{**same, "target": "other"}) is None
+    other_target = roles_refusal(recipe, training=True, **{**same, "target": "marketing_opt_in"})
+    assert other_target is not None and other_target.id == RECIPE_ROLES_MISMATCH
+    assert other_target.gate == "recipe_replay" and other_target.status == "fail" and other_target.blocking
+    assert roles_refusal(recipe, training=True, **{**same, "primary_key": ["customer_id", "region"]})
+    # scoring compares the ID column only, and only when the recipe named one
+    assert roles_refusal(recipe, training=False, **{**same, "target": None}) is None
+    assert roles_refusal(recipe, training=False, **{**same, "primary_key": "region", "target": None})
+    assert roles_refusal(_recipe(None, None), training=False, **{**same, "primary_key": "region"}) is None
+
+
+def test_a_refusal_before_validation_fails_the_dry_run() -> None:
+    refusal = roles_refusal(
+        _recipe("customer_id", "converted_30d"),
+        primary_key="customer_id",
+        target="marketing_opt_in",
+        training=True,
+        applies_to="propensity:train",
+    )
+    assert refusal is not None
+    result = report(customers(), config("targeted-advertisement"), refusals=(refusal,), now=NOW)
+    assert not result.dry_run_passed and result.dry_run_report is None
+    assert result.verdict == "not_ready" and RECIPE_ROLES_MISMATCH in result.verdict_reason
+    assert summarise(result).failing_requirements == (RECIPE_ROLES_MISMATCH,)
+
+
+def test_a_scoring_report_from_storage_needs_the_model_version(tmp_path: Path) -> None:
+    from engine.doctor.readiness import inputs_for_upload
+
+    with pytest.raises(ValueError, match="model version"):
+        inputs_for_upload(
+            LocalStorage(tmp_path),
+            "u1",
+            config=config("targeted-advertisement"),
+            mode=RunMode.SCORE,
+            primary_key="customer_id",
+            target=None,
+            schema=_schema(),
+        )
+    assert ingest.profile_row_cap(config("targeted-advertisement")) > 0

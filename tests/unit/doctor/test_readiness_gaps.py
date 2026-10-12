@@ -2,24 +2,29 @@
 
 For each gap a fixture passes `check_plan` - exactly what `POST /runs` validates - and then fails the
 run, or silently loses rows, at a later step; the readiness report on it is `not_ready` and names the
-probe. "Fails the run" is shown with the engine's own code wherever that is cheap (the prepare stage,
-the split, the reader); for the two gaps whose failure is in training itself (a text amount, an
-untestable newest part) the test shows the exact condition the train and evaluate stages refuse.
+probe. "Fails the run" is shown with the engine's own code: the prepare stage, the split and the reader
+are called directly; the evaluate stage is called on the real test part with a canned scorer (gap 6:
+`EVAL_PRIMARY_METRIC_UNDEFINED`); and a real training run on a temporary store fails at train (gap 7:
+`TRAIN_NO_MODEL_FITTED`, marked slow because it starts AutoGluon).
 """
 
 from __future__ import annotations
 
 import io
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pandas as pd
 import pytest
 
-from engine.config import ProblemType, SplitType, UseCaseConfig
+from engine.config import Metric, ProblemType, RunMode, SplitType, ThresholdMode, UseCaseConfig
+from engine.contracts import CalibrationSummary, RunState
 from engine.doctor.readiness_contracts import DataReadinessReport
 from engine.doctor.readiness_probes import scan_source
 from engine.stages import ingest, prepare
+from engine.stages.evaluate import EvaluationError, evaluate
 from engine.storage import LocalStorage
 from tests.unit.doctor.readiness_fixtures import assets, config, customers, dry_run, report
 
@@ -139,12 +144,39 @@ def test_gap_6_immature_newest_outcomes_leave_a_one_class_test_part() -> None:
     parts, _ = prepare.split_dataset(
         _rows(frame, cfg, "asset_id", "fault_next_72h"), cfg, run_id="r1", target="fault_next_72h"
     )
-    assert parts["test"]["fault_next_72h"].nunique() == 1  # EVAL_PRIMARY_METRIC_UNDEFINED at evaluate
+    test = parts["test"]
+    assert test["fault_next_72h"].nunique() == 1
+    scorer = _CannedScorer(
+        target_column="fault_next_72h",
+        primary_metric=cfg.model_search.metric,
+        scores=np.linspace(0.05, 0.95, len(test)),
+    )
+    with pytest.raises(EvaluationError) as stopped:  # the evaluate stage itself, on the real test part
+        evaluate(scorer, test, cfg.evaluation, run_id="r1")
+    assert stopped.value.code == "EVAL_PRIMARY_METRIC_UNDEFINED"
     result = report(frame, cfg)
     _not_ready_naming(result, "X_LABEL_MATURITY")
     assert result.probe("X_SPLIT_CLASSES").status == "fail"
     assert result.post_filter_counts is not None
     assert result.post_filter_counts.test_primary_metric_defined is False
+
+
+@dataclass
+class _CannedScorer:
+    """A fitted model's scorer, serving fixed scores: evaluate measures it and fits nothing."""
+
+    target_column: str
+    primary_metric: Metric
+    scores: Any
+    threshold: float = 0.5
+    threshold_mode: ThresholdMode = ThresholdMode.FIXED
+    threshold_detail: str = "Fixed: 0.50"
+    calibration: CalibrationSummary | None = None
+    classes: tuple[object, object] | None = (0, 1)
+    problem_type: ProblemType = ProblemType.BINARY_CLASSIFICATION
+
+    def predict_proba(self, frame: pd.DataFrame) -> Any:
+        return np.asarray(self.scores, dtype=float)
 
 
 # 7 -------------------------------------------------------------------------------------------------
@@ -204,3 +236,67 @@ def test_gap_9_size_limits_are_measured_before_the_rows_the_run_removes() -> Non
 def test_the_nine_fixtures_cover_the_split_kinds_they_claim() -> None:
     assert config("fault-prediction").split.type is SplitType.TIME_BASED
     assert config("targeted-advertisement").split.type is SplitType.RANDOM_STRATIFIED
+
+
+class _NoJobs:
+    """`run_train` runs on this thread; the runner is only there to satisfy the constructor."""
+
+    def submit(self, job_id: str, fn: object) -> object:  # pragma: no cover - never called
+        raise AssertionError("run_train must not submit jobs")
+
+    def status(self, job_id: str) -> object:  # pragma: no cover - never called
+        raise AssertionError("run_train must not read job status")
+
+    def cancel(self, job_id: str) -> bool:  # pragma: no cover - never called
+        return False
+
+    def shutdown(self, *, wait: bool = True) -> None:  # pragma: no cover - never called
+        return None
+
+
+@pytest.mark.slow
+def test_gap_7_the_text_amount_fails_a_real_training_run_at_train(tmp_path: Path) -> None:
+    """The run itself, on a temporary store: it passes ingest, validate, prepare and split, and stops at train."""
+    from engine.config import resolve_config
+    from engine.contracts import RunRecord, StageKey
+    from engine.jobs import CancelToken
+    from engine.pipeline import Pipeline, StageContext
+    from engine.registry import LocalModelRegistry
+    from engine.stages.scorer import TrainError
+    from engine.storage import run_key, upload_key
+    from tests.unit.doctor.readiness_fixtures import CONFIGS
+
+    storage = LocalStorage(tmp_path / "data")
+    registry = LocalModelRegistry(tmp_path / "registry.db")
+    frame = customers()
+    frame["converted_30d"] = np.random.default_rng(7).choice(["low", "medium", "high"], len(frame))
+    source = upload_key("u1", "source.csv")
+    storage.write_text(source, frame.to_csv(index=False))
+    overrides = {
+        "problem_type": "regression",
+        "model_search.time_limit_minutes": 1,
+        "model_search.strategy": "fast",
+        "model_search.tuning_trials": 5,
+    }
+    resolved = resolve_config("targeted-advertisement", overrides, root=CONFIGS)
+    storage.write_model(run_key("r-gap-7", "run_config.json"), resolved)
+    context = StageContext(
+        run_id="r-gap-7",
+        mode=RunMode.TRAIN,
+        config=resolved.config,
+        resolved=resolved,
+        storage=storage,
+        registry=registry,
+        cancel=CancelToken(),
+        primary_key=["customer_id"],
+        target="converted_30d",
+        upload_key=source,
+        model_version_id=None,
+    )
+    with pytest.raises(TrainError) as stopped:
+        Pipeline(storage, registry, _NoJobs()).run_train(context)  # type: ignore[arg-type]
+    assert stopped.value.code == "TRAIN_NO_MODEL_FITTED"
+    record = storage.read_model(run_key("r-gap-7", "run.json"), RunRecord)
+    assert record.state is RunState.FAILED and record.error is not None
+    assert record.error.code == "TRAIN_NO_MODEL_FITTED" and record.error.stage is StageKey.TRAIN
+    assert report(frame, resolved.config).probe("X_REGRESSION_TARGET_NUMERIC").status == "fail"

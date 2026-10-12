@@ -164,9 +164,20 @@ def _with_consent(frame: Any, how: str | None, seed: int) -> tuple[Any, dict[str
     return frame, {"governance": {"consent_column": "consent"}}
 
 
-@settings(max_examples=16, deadline=None, suppress_health_check=[HealthCheck.too_slow])
+@settings(max_examples=3, deadline=None, suppress_health_check=[HealthCheck.too_slow])
 @given(_TIME_GAPS)
 def test_ready_by_date_means_the_split_and_the_outcome_parts_work(gaps: dict[str, Any]) -> None:
+    _ready_by_date(gaps)
+
+
+@pytest.mark.slow
+@settings(max_examples=16, deadline=None, suppress_health_check=[HealthCheck.too_slow])
+@given(_TIME_GAPS)
+def test_ready_by_date_means_the_split_and_the_outcome_parts_work_on_more_files(gaps: dict[str, Any]) -> None:
+    _ready_by_date(gaps)
+
+
+def _ready_by_date(gaps: dict[str, Any]) -> None:
     frame = assets(gaps["rows"], seed=gaps["seed"], days=gaps["days"], positive_rate=gaps["positive_rate"])
     if gaps["empty_dates"]:
         frame.loc[frame.sample(n=gaps["empty_dates"], random_state=gaps["seed"]).index, "snapshot_date"] = (
@@ -195,9 +206,22 @@ _RANDOM_GAPS = st.fixed_dictionaries(
 )
 
 
-@settings(max_examples=16, deadline=None, suppress_health_check=[HealthCheck.too_slow])
+@settings(max_examples=3, deadline=None, suppress_health_check=[HealthCheck.too_slow])
 @given(_RANDOM_GAPS)
 def test_ready_at_random_means_the_split_and_the_outcome_parts_work(gaps: dict[str, Any]) -> None:
+    _ready_at_random(gaps)
+
+
+@pytest.mark.slow
+@settings(max_examples=16, deadline=None, suppress_health_check=[HealthCheck.too_slow])
+@given(_RANDOM_GAPS)
+def test_ready_at_random_means_the_split_and_the_outcome_parts_work_on_more_files(
+    gaps: dict[str, Any],
+) -> None:
+    _ready_at_random(gaps)
+
+
+def _ready_at_random(gaps: dict[str, Any]) -> None:
     frame = customers(gaps["rows"], seed=gaps["seed"], positive_rate=gaps["positive_rate"])
     sections: dict[str, Any] = {}
     if gaps["groups"] is not None:

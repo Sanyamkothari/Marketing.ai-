@@ -22,7 +22,6 @@ from __future__ import annotations
 import csv
 import io
 import math
-import sys
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Final, Literal
@@ -46,9 +45,11 @@ if TYPE_CHECKING:
 __all__ = [
     "DRY_RUN_IDS",
     "FALSY_TEXT",
+    "FIELD_TOO_LONG",
     "TRUTHY_TEXT",
     "ProbeRun",
     "SourceScan",
+    "key_counts",
     "label_key",
     "run_probes",
     "scan_source",
@@ -70,6 +71,8 @@ LABEL_MATURITY_Z: Final[float] = 3.0
 VALUE_COLUMN_MAX_MISSING: Final[float] = 0.10
 """Above this share missing, no money figure is shown (`uplift/policy.py:276-330`)."""
 LOST_LINES_SHOWN: Final[int] = 20
+FIELD_TOO_LONG: Final[str] = "FIELD_TOO_LONG"
+"""`SourceScan.parse_error` when one value is longer than the `csv` module's default field limit."""
 _CHUNK_ROWS: Final[int] = 100_000
 
 
@@ -91,6 +94,9 @@ class SourceScan:
     full_key_distinct: int | None = None
     full_key_nulls: int | None = None
     key_error: str | None = None
+    lines_of_upload: str | None = None
+    """For a prepared copy, the upload whose stored file `rows_physical` and `lost_lines` count (the
+    file the recipe read, `PreparedCopy.source_upload_id`); None when they count the copy itself."""
 
     @property
     def rows_dropped(self) -> int | None:
@@ -125,7 +131,9 @@ def scan_source(
             physical, lost = _count_records(
                 storage, key, encoding=encoding or "utf-8", delimiter=delimiter or ","
             )
-        except (csv.Error, UnicodeDecodeError, ValueError) as exc:
+        except csv.Error as exc:
+            parse_error = FIELD_TOO_LONG if "field larger than field limit" in str(exc) else "Error"
+        except (UnicodeDecodeError, ValueError) as exc:
             parse_error = type(exc).__name__
     key_rows: int | None = None
     distinct: int | None = None
@@ -159,7 +167,9 @@ def scan_source(
 def _count_records(
     storage: Storage, key: str, *, encoding: str, delimiter: str
 ) -> tuple[int, tuple[int, ...]]:
-    csv.field_size_limit(min(sys.maxsize, 2**31 - 1))
+    # `csv.field_size_limit` is never raised here: it is one setting for the whole process, which
+    # intake, the privacy rewrite and consent read under its default. A value longer than the default
+    # limit stops the count with `csv.Error`, reported as `FIELD_TOO_LONG` (a warning, not a failure).
     records = 0
     lost: list[int] = []
     with storage.open_read(key) as raw:
@@ -232,6 +242,18 @@ def _scan_keys(
     return rows, int(np.unique(every).size), nulls
 
 
+def key_counts(frame: pd.DataFrame, key_columns: Sequence[str]) -> tuple[int, int, int]:
+    """`(rows, distinct non-empty keys, rows with an empty key part)` of an in-memory frame - for a
+    copy prepared in memory, whose every row is at hand (`scan_source` streams a stored file instead)."""
+    names = list(key_columns)
+    missing = [name for name in names if name not in frame.columns]
+    if missing:
+        raise KeyError(missing[0])
+    empty = frame[names].isna().any(axis=1)
+    joined = keys.key_series(frame.loc[~empty], names)
+    return len(frame), int(joined.nunique()), int(empty.sum())
+
+
 # ---------------------------------------------------------------------------
 # Running the probes
 # ---------------------------------------------------------------------------
@@ -259,6 +281,8 @@ class _State:
     results: dict[str, ProbeResult] = field(default_factory=dict)
     rows: pd.DataFrame | None = None
     rows_note: str | None = None
+    prepare_error: str | None = None
+    """The exception class the engine's `prepare_rows` raised on this file: the run would stop there."""
     hidden: tuple[str, ...] = ()
     counts: PostFilterCounts | None = None
     parts: dict[str, pd.DataFrame] | None = None
@@ -404,6 +428,19 @@ def _parser_row_loss(state: _State) -> None:
     if scan.file_format == "parquet":
         _put(state, code, "pass", message="A Parquet file has no lines to drop.", measured=0.0, threshold=0.0)
         return
+    if scan.parse_error == FIELD_TOO_LONG:
+        _put(
+            state,
+            code,
+            "warn",
+            message=(
+                f"A value in the file is longer than {_fmt(csv.field_size_limit())} characters, so its lines "
+                "were not counted; lines the reader drops cannot be ruled out."
+            ),
+            fix="Check that no column holds whole documents; shorten or remove such a column, then check again.",
+            details={"error": scan.parse_error, "of_the_original_file": scan.lines_of_upload is not None},
+        )
+        return
     if scan.parse_error is not None or scan.rows_physical is None:
         _put(
             state,
@@ -420,7 +457,9 @@ def _parser_row_loss(state: _State) -> None:
         "rows_parsed": scan.rows_parsed,
         "rows_dropped": dropped,
         "lines": ", ".join(str(line) for line in scan.lost_lines[:dropped] or scan.lost_lines),
+        "of_the_original_file": scan.lines_of_upload is not None,
     }
+    which = "the file Guided setup prepared this copy from" if scan.lines_of_upload else "the file"
     if dropped:
         where = f" (line {details['lines']})" if scan.lost_lines else ""
         _put(
@@ -428,7 +467,7 @@ def _parser_row_loss(state: _State) -> None:
             code,
             "fail",
             message=(
-                f"{_fmt(dropped)} of {_fmt(scan.rows_physical)} records in the file have more values than "
+                f"{_fmt(dropped)} of {_fmt(scan.rows_physical)} records in {which} have more values than "
                 f"there are column names, and the reader drops them without saying so{where}."
             ),
             fix="Fix or remove those lines in the export (often a comma inside an unquoted value), then upload again.",
@@ -441,7 +480,7 @@ def _parser_row_loss(state: _State) -> None:
         state,
         code,
         "pass",
-        message=f"Every one of the {_fmt(scan.rows_physical)} records is read.",
+        message=f"Every one of the {_fmt(scan.rows_physical)} records in {which} is read.",
         measured=0.0,
         threshold=0.0,
         details=details,
@@ -621,8 +660,10 @@ def _simulate_prepare(state: _State) -> None:
     carried = (*state.key_columns, keys.ROW_KEY_COLUMN) if len(state.key_columns) > 1 else state.key_columns
     try:
         rows, plan = prepare.prepare_rows(framed, state.config, primary_key=carried, target=state.target)
-    except (ValueError, KeyError, TypeError) as exc:
-        state.rows_note = f"the prepare step stopped: {exc}"
+    except Exception as exc:  # any exception here is the run's STAGE_FAILED at prepare
+        # The class only: a pandas message can quote a cell value.
+        state.prepare_error = type(exc).__name__
+        state.rows_note = "the run's prepare step stops on this file (X_POST_FILTER_THRESHOLDS says so)"
         return
     state.rows = rows
     state.hidden = tuple(column.name for column in plan.dropped_columns) + tuple(
@@ -633,19 +674,21 @@ def _simulate_prepare(state: _State) -> None:
     after_consent = rows_in - removed.get("consent_false", 0)
     after_target = after_consent - removed.get("missing_target", 0)
     after_dedupe = after_target - removed.get("duplicate", 0)
-    scale = state.row_count / len(state.frame) if state.sampled and len(state.frame) else 1.0
+    # Never scaled to the file's full row count: a training run reads the rows up to the profile row cap
+    # and prepares exactly those (`pipeline._ingest` keeps `read.frame`, `_prepare` runs `prepare_rows`
+    # on it), so these are the rows and positives it will train on.
     positives: int | None = None
     if state.binary:
         state.positive_key = _positive_key(rows, state)
         positives = _count_positives(rows, state)
     state.counts = PostFilterCounts(
-        rows_in=round(rows_in * scale),
-        rows_after_consent=round(after_consent * scale),
-        rows_after_missing_target=round(after_target * scale),
-        rows_after_dedupe=round(after_dedupe * scale),
-        rows_after_filters=round(len(rows) * scale),
-        positives_after_filters=None if positives is None else round(positives * scale),
-        estimated=state.sampled,
+        rows_in=rows_in,
+        rows_after_consent=after_consent,
+        rows_after_missing_target=after_target,
+        rows_after_dedupe=after_dedupe,
+        rows_after_filters=len(rows),
+        positives_after_filters=positives,
+        estimated=False,
     )
 
 
@@ -671,6 +714,22 @@ def _post_filter_thresholds(state: _State) -> None:
         _skip(state, code, _not_trained_reason(state))
         return
     counts = state.counts
+    if state.prepare_error is not None:
+        _put(
+            state,
+            code,
+            "fail",
+            message=(
+                f"The run's prepare step stops on this file ({state.prepare_error}), so the run would fail "
+                "before the split, although the checks pass."
+            ),
+            fix=(
+                "Check the file's columns against the use case's settings (the outcome, the consent column, "
+                "the excluded columns); if they are right, report the file with its use case."
+            ),
+            details={"error": state.prepare_error},
+        )
+        return
     if counts is None:
         _skip(state, code, state.rows_note or "the rows could not be prepared")
         return
@@ -685,7 +744,8 @@ def _post_filter_thresholds(state: _State) -> None:
         "min_rows": validation.min_rows,
         "positives_after_filters": positives,
         "min_positive": validation.min_positive if state.binary else None,
-        "estimated": counts.estimated,
+        "rows_in_file": state.row_count,
+        "rows_the_run_reads": len(state.frame),
     }
     removed = counts.rows_in - rows
     if short_rows or short_positives:
@@ -701,6 +761,11 @@ def _post_filter_thresholds(state: _State) -> None:
             message=(
                 f"The file passes the size checks as uploaded, but the run first removes {_fmt(removed)} rows "
                 f"(no consent, no outcome, exact repeats) and would then train on {' and '.join(parts)}."
+                + (
+                    f" The run reads the first {_fmt(len(state.frame))} of the file's {_fmt(state.row_count)} rows."
+                    if state.sampled
+                    else ""
+                )
             ),
             fix="Collect more history, or rows with consent and a known outcome; the limits are not lowered for you.",
             measured=float(rows),

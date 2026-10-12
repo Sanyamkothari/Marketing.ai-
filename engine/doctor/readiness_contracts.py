@@ -137,6 +137,19 @@ class SourceFacts(StrictBase):
     fingerprint: str | None = Field(default=None, description="The dataset fingerprint, when known.")
     profile_row_cap: int = Field(description="Rows the checks read; rows past it are counted, not checked.")
     sampled: bool = Field(description="True when the file has more rows than the checks read.")
+    original_upload_id: str | None = Field(
+        default=None,
+        description="For a prepared copy: the upload Guided setup's recipe read (the file a person sent).",
+    )
+    original_rows_physical: int | None = Field(
+        default=None, description="Data records in that original file, counted line by line."
+    )
+    original_rows_parsed: int | None = Field(
+        default=None, description="Rows the engine's reader keeps from that original file."
+    )
+    original_rows_dropped_by_parser: int | None = Field(
+        default=None, description="Records of that original file the reader drops without saying so."
+    )
 
 
 class PreparedCopy(StrictBase):
@@ -238,7 +251,10 @@ class PostFilterCounts(StrictBase):
     positives_after_filters: int | None = None
     estimated: bool = Field(
         default=False,
-        description="True when the file is larger than the rows read and the counts are scaled.",
+        description=(
+            "Always False: the counts are of the rows the run reads (up to the profile row cap) and "
+            "prepares, never scaled to the file's full row count."
+        ),
     )
     parts: tuple[SimulatedPart, ...] = ()
     test_primary_metric_defined: bool | None = Field(
