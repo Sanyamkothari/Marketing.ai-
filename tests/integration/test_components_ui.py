@@ -177,13 +177,71 @@ def test_every_class_the_components_draw_is_styled() -> None:
     assert missing == [], f"components.js draws classes theme.css never styles: {missing}"
 
 
+def each_selector(css: str) -> dict[str, str]:
+    """Every rule's body under each selector of its group (`a, b {x}` gives a and b the body x), in source order."""
+    out: dict[str, str] = {}
+    for group, body in rules(css):
+        for selector in group.split(","):
+            key = selector.strip()
+            out[key] = out.get(key, "") + body
+    return out
+
+
 def test_status_colours_come_with_an_icon_and_a_word() -> None:
-    """The status bridges for markup drawn before M185 add an icon to every tone they colour."""
-    css = re.sub(r"/\*.*?\*/", "", theme(), flags=re.DOTALL)
-    by_selector = dict(rules(css))
-    for tone in ("cp-ok", "cp-live", "cp-warn", "cp-neutral"):
-        assert "--ds-icon: url(" in by_selector[f".chip.cp-status.{tone}"], tone
-    assert "mask: var(--ds-icon)" in by_selector[".chip.cp-status::before"]
+    """The status bridges for markup drawn before M185 add an icon to every tone they colour: the campaign status
+    chip, Reports' evidence label and the health chips of Data and Connections (M185 review)."""
+    by_selector = each_selector(theme())
+    bridged = [f".chip.cp-status.{tone}" for tone in ("cp-ok", "cp-live", "cp-warn", "cp-neutral")]
+    bridged += [
+        f'[data-claim="{key}"] > .{kind}'
+        for key in ("proven", "estimated", "not-proven")
+        for kind in ("pill", "chip")
+    ]
+    bridged += ['.cn-badge[data-dt-status="read"]']
+    statuses = set()
+    for path in sorted((UI / "modules").rglob("*.js")):
+        statuses.update(re.findall(r'data-cn-status="([a-z_]+)"', path.read_text(encoding="utf-8")))
+    assert {"connected", "failed", "not_tested"} <= statuses
+    bridged += [f'.cn-badge[data-cn-status="{status}"]' for status in sorted(statuses)]
+    for selector in bridged:
+        body = by_selector.get(selector, "")
+        assert "--ds-icon: url(" in body and "color: var(--" in body, f"{selector} has no icon or tone"
+    for group in (
+        ".chip.cp-status",
+        "[data-claim] > .pill",
+        "[data-claim] > .chip",
+        ".cn-badge[data-cn-status]",
+    ):
+        assert "mask: var(--ds-icon)" in by_selector[f"{group}::before"], group
+
+
+def test_the_helpers_hold_in_narrow_places() -> None:
+    """M185 review: the rules that keep the helpers usable on a phone (test_shell_browser draws them in Chromium).
+
+    A stepper's link back has a box and a focus ring (not `display: contents`); a tile's unit wraps whole and its
+    figure never breaks mid-number; a value range's track shrinks; a chip keeps its own width in a flex column; the
+    bar's bell and Help are never made smaller than 40 px.
+    """
+    css = theme()
+    by_selector = each_selector(css)
+    link = by_selector[".stepper .st-step a"]
+    assert "display: contents" not in link and "display: flex" in link
+    assert "outline: 2px solid var(--brand-blue)" in by_selector[".stepper .st-step a:focus-visible"]
+    value = by_selector[".stat .stat-value"]
+    assert "overflow-wrap: anywhere" not in value and "overflow-wrap: break-word" in value
+    unit = by_selector[".stat .stat-unit"]
+    assert "white-space: nowrap" in unit and "display: inline-block" in unit
+    track = by_selector[".vrange .vr-track"]
+    assert "flex: 1 1 120px" in track and "max-width: 160px" in track and "min-width: 64px" in track
+    for chip in (".chip", ".pill", ".badge", ".tag"):
+        assert "width: fit-content" in by_selector[chip], chip
+    for selector, body in rules(css):
+        if any(part.strip().endswith(".sh-icon") for part in selector.split(",")):
+            for size in re.findall(r"(?:^|;|\s)(?:width|height):\s*(\d+)px", body):
+                assert int(size) >= 40, f"{selector} makes a bar target {size} px"
+    assert (
+        "td .td-sub" in by_selector and ".ds-table" not in css
+    ), "the second line works inside dataTable's .tbl"
 
 
 def test_reduced_motion_turns_the_motion_off() -> None:

@@ -45,6 +45,7 @@ MODULES: Final[tuple[str, ...]] = (
     "overview.js",
     "pages.js",
     "power.js",  # the control-group size card on a scoring run's Output page (DEC-1234)
+    "run_progress.js",  # the running bar: the time-weighted estimate, the time left, "Finishing up" (Plan M M189, DEC-1619)
     "settings.js",
     "shell.js",  # the campaigns layout's sidebar, bell and Help (Plan M M174, DEC-1604)
     "technical.js",  # "Show technical details": the switch, its class and CSS rule (Plan M M180, DEC-1610)

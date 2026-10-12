@@ -337,6 +337,7 @@ Each row adds a defaulted declaration in place: in a shared file outside the PLA
 | `engine/config.py` `GenerativeConfig` (Phase 3a) | `variant_arms: bool = False`, left out of a dump while off. Plan K keeps no register of its own, so its in-place declarations are listed here (DEC-1407) | Plan K M140 |
 | `engine/decide/treat_list.py` `TreatListSummary`, `engine/decide/catalogue.py` `ActionItem` (Plan J M98, M100) | Six optional `compliance_*` summary fields, absent with the gate off; `dlt_template_text`, `message_text` (DEC-1405); `variant_arm_counts`, `variant_note` (DEC-1407) | Plan K M134, M140 |
 | `engine/config.py` `Strategy`, `CHOICE_LABELS`, `_choices_for`, `Catalog._complete`, `load_use_case`, `resolve_config`; `configs/engine.yaml` `strategy_presets` | `Strategy.FOUNDATION` (opt-in, never offered unless already chosen), its label and catalogue line, the opt-in exemption, and the calls to the model licence check (DEC-1410) | Plan K M143 |
+| `engine/config.py` `UseCaseConfig` (after Plan G's `agent`); `engine/pilot/help.py` `known_codes()` (Plan E) | `data_doctor: DataDoctorConfig` (type in `engine/doctor/config.py`; the switch `unified`, off), left out of a dump while it holds only defaults; `known_codes()` unions `PLAN_O_CODES` (`engine/doctor/codes.py`). Plan O keeps no register of its own, so its in-place declarations are listed here (DEC-1800) | Plan O M230 |
 
 ---
 

@@ -404,6 +404,10 @@ def test_the_look_on_a_phone(browser: Any, campaigns_server: str, shots: Path) -
     assert page.locator(
         "#pb-bar a.tb-logo"
     ).is_hidden(), "the folded bar is the name, Menu, the bell and Help"
+    # the bell and Help stay 40 x 40 touch targets on a phone (visual_common section 7)
+    for target in ("#pb-bar a.sh-icon.sh-bell", "#pb-bar .sh-help > .sh-icon"):
+        box = _box(page, target)
+        assert box["width"] >= 40 and box["height"] >= 40, f"{target} is {box['width']} x {box['height']}"
     page.locator("#pb-bar .sh-menu-btn").click()
     assert page.locator("#pb-bar .sh-side").is_visible()
     logo = _box(page, "#pb-bar a.tb-logo")
@@ -413,5 +417,126 @@ def test_the_look_on_a_phone(browser: Any, campaigns_server: str, shots: Path) -
     page.screenshot(path=str(shots / "m185_campaigns_390_drawer.png"))
     page.keyboard.press("Escape")
     assert page.locator("#pb-bar .sh-side").is_hidden()
+    assert problems == []
+    page.context.close()
+
+
+# The helpers M186-M188 build every page from, drawn by ui/components.js into the running app (index.html's styles
+# and theme.css): a KPI row with a unit and a value range, status chips in a card, and a stepper with links back.
+PROBE: Final[str] = """async () => {
+  const c = await import(new URL('./components.js', document.baseURI).href);
+  const screen = document.createElement('div');
+  screen.className = 'screen';
+  screen.id = 'm185-probe';
+  screen.innerHTML =
+    c.kpiRow([
+      c.statTile({ label: 'Customers', value: '12,862', unit: 'customers' }),
+      c.statTile({
+        label: 'Extra revenue',
+        value: '₹2.6 lakh',
+        range: { low: 88187, high: 418000, estimate: 260000, text: 'Likely 88,187 to 4.18 lakh' },
+      }),
+      c.statTile({ label: 'Lift', value: '3.1%', range: { low: -0.4, high: 6.2, estimate: 3.1, text: 'Likely -0.4% to 6.2%' } }),
+    ]) +
+    '<div class="card" id="m185-chips" style="padding:16px">' +
+    ['draft', 'live', 'waiting', 'measured'].map((v) => c.statusChip('campaign', v)).join('') +
+    c.statusChip('health', 'failed') + c.tagChip('Win-back') + '</div>' +
+    '<button type="button" id="m185-before">Before</button>' +
+    c.stepper({
+      steps: [
+        { label: 'Goal', href: '#/campaigns/new?step=goal' },
+        { label: 'Customers', href: '#/campaigns/new?step=customers' },
+        'Offer',
+        'Check',
+        'Export',
+      ],
+      current: 2,
+    });
+  const app = document.querySelector('#app');
+  app.replaceChildren(screen);
+  return true;
+}"""
+
+
+def test_the_components_hold_on_a_phone(browser: Any, campaigns_server: str, shots: Path) -> None:
+    """M185 review: at 390 px a tile's unit wraps whole (never "cust/omers"), a value range's track stays inside its
+    tile, a chip in a card keeps its own width, and a stepper's links back are reachable by Tab with a focus ring.
+    """
+    problems: list[str] = []
+    page = _page(browser, campaigns_server, width=390, height=844, problems=problems)
+    _open(page, campaigns_server, "#/campaigns")
+    page.wait_for_selector("#app h1")
+    assert page.evaluate(PROBE) is True
+    page.wait_for_selector("#m185-probe .stepper")
+    page.evaluate("document.fonts.ready")
+    # the unit is one line box: it moves to its own line as a whole word, and the value never breaks mid-number
+    unit = page.locator("#m185-probe .stat .stat-unit").first
+    assert unit.evaluate("el => el.getClientRects().length") == 1, "the unit breaks mid-word"
+    assert unit.evaluate("el => el.textContent") == "customers"
+    for value in page.locator("#m185-probe .stat .stat-value").all():
+        lines = value.evaluate(
+            "el => { const r = document.createRange(); r.selectNodeContents(el.firstChild);"
+            " return new Set([...r.getClientRects()].map((b) => Math.round(b.top))).size; }"
+        )
+        assert lines == 1, f"the figure {value.inner_text()!r} breaks mid-number"
+    # every value range's track ends at or inside its tile
+    outside = page.evaluate(
+        "() => [...document.querySelectorAll('#m185-probe .vr-track')].map((t) => {"
+        " const tile = t.closest('.stat').getBoundingClientRect(); const box = t.getBoundingClientRect();"
+        " return [box.left - tile.left, tile.right - box.right, box.width]; })"
+    )
+    assert len(outside) == 2
+    for left, right, width in outside:
+        assert left >= 0 and right >= 0, f"a value range's track leaves its tile ({left}, {right})"
+        assert 64 <= width <= 160
+    # a chip in a card (a flex column) keeps its own width
+    card = _box(page, "#m185-chips")
+    for chip in page.locator("#m185-chips .badge, #m185-chips .tag").all():
+        box = chip.bounding_box()
+        assert (
+            box is not None and box["width"] < card["width"] / 2
+        ), f"{chip.inner_text()!r} stretches to a band"
+    # the stepper's done steps are links with a box, reached by Tab, drawn with the 2 px brand ring
+    page.focus("#m185-before")
+    for name in ("Goal", "Customers"):
+        page.keyboard.press("Tab")
+        focused = page.evaluate(
+            "() => { const a = document.activeElement; const r = a.getBoundingClientRect(); const s = getComputedStyle(a);"
+            " return { tag: a.tagName, href: a.getAttribute('href'), in: !!a.closest('.stepper .st-step.done'),"
+            " w: r.width, h: r.height, outline: s.outlineStyle, ow: s.outlineWidth, oc: s.outlineColor }; }"
+        )
+        assert focused["tag"] == "A" and focused["in"], f"Tab skips the {name} link back: {focused}"
+        assert focused["href"].endswith(name.lower())
+        assert focused["w"] > 0 and focused["h"] > 0, f"the {name} link has no box"
+        assert (focused["outline"], focused["ow"], focused["oc"]) == ("solid", "2px", BRAND_BLUE)
+    assert page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth")
+    page.screenshot(path=str(shots / "m185_components_390.png"), full_page=True)
+    assert problems == []
+    page.context.close()
+
+
+def test_the_older_status_chips_carry_an_icon(browser: Any, campaigns_server: str) -> None:
+    """M185 review: Reports' evidence label and Data's health chip show the status mapping's icon with their word,
+    like the campaign status chip, until M187/M188 draw statusChip.
+    """
+    problems: list[str] = []
+    page = _page(browser, campaigns_server, width=1440, height=900, problems=problems)
+    before = "el => getComputedStyle(el, '::before')"
+    _open(page, campaigns_server, "#/reports/value-proof")
+    page.wait_for_selector("#app [data-claim] > .pill, #app [data-claim] > .chip")
+    proven = page.locator("#app [data-claim='proven'] > .pill").first
+    assert proven.evaluate(f"el => ({before})(el).width") == "12px"
+    assert proven.evaluate(f"el => ({before})(el).backgroundColor") == "rgb(21, 128, 61)"
+    assert proven.inner_text().strip() == "Proven"
+    for chip in page.locator("#app [data-claim] > .pill, #app [data-claim] > .chip").all():
+        assert chip.evaluate(f"el => ({before})(el).width") == "12px", chip.inner_text()
+    _open(page, campaigns_server, "#/data")
+    page.wait_for_selector("#app .cn-badge[data-dt-status='read']")
+    read = page.locator("#app .cn-badge[data-dt-status='read']").first
+    assert read.evaluate(f"el => ({before})(el).width") == "12px"
+    assert read.evaluate("el => getComputedStyle(el).color") == "rgb(21, 128, 61)"
+    assert read.inner_text().strip() == "Read correctly"
+    for chip in page.locator("#app .cn-badge[data-cn-status], #app .cn-badge[data-dt-status]").all():
+        assert chip.evaluate(f"el => ({before})(el).width") == "12px", chip.inner_text()
     assert problems == []
     page.context.close()
