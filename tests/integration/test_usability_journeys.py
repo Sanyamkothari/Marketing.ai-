@@ -605,8 +605,11 @@ def test_task_2_by_reports_is_one_click_and_shows_each_campaigns_value_and_how_s
     assert len(walk.clicks) == TASK2_REPORTS_PINNED, walk.clicks
     for proof in task2.proofs:
         text = task2.reports_rows[proof["campaign_id"]]
-        assert (
-            proof["headline"] in text
+        # M188 (DEC-1618): the row draws the net value on its own line, under a range bar, so the row's text has a line
+        # break where the headline has a space. The words and figures are the API's, unchanged and in the same order;
+        # only the whitespace between them is compared loosely.
+        assert " ".join(proof["headline"].split()) in " ".join(
+            text.split()
         ), f"the row shows the API's headline for {proof['campaign_id']}: {text!r}"
         # the row's evidence label is the one the API's own `claim` for this campaign maps to (all three values)
         claim = str(_get(task2.base, f"/pilot/proof/{proof['campaign_id']}?format=json")["claim"])
