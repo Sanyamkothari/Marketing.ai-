@@ -274,6 +274,12 @@ def plan_retention(
                 )
             )
 
+    # -- Data Doctor's cases (Plan O M231, DEC-1801) ------------------------------------------
+    # The processing log (the case, its timeline, prescriptions) is kept `processing_log_days` after the
+    # case's last change, then the whole case goes. Before that, what the case holds about an upload goes
+    # with the upload: its evidence files are deleted and the case forgets it (file entry, items, questions).
+    items.extend(_case_items(index, keys, leaving, privacy.processing_log_days, moment, skipped))
+
     # -- built datasets ----------------------------------------------------------------------
     dataset_days: dict[str, int] = {}
     for dataset_id, dataset in sorted(index.datasets.items()):
@@ -359,6 +365,9 @@ def apply_retention(
             deleted.append(item.key)
             if item.category is RetentionCategory.SOURCE and client_store is not None and _is_raw(item.key):
                 rows_deleted += _delete_source_row(client_store, item.owner_id)
+        elif item.action is RetentionAction.FORGET_UPLOAD:
+            _forget_in_case(storage, item, principal)
+            stripped.append(item.key)
         else:
             document = json.loads(storage.read_bytes(item.key))
             storage.write_text(
@@ -401,6 +410,85 @@ def apply_retention(
         len(gone),
     )
     return result
+
+
+def _case_items(
+    index: StoreIndex,
+    keys: tuple[str, ...],
+    leaving: set[str],
+    log_days: int,
+    moment: datetime,
+    skipped: list[RetentionSkip],
+) -> list[RetentionItem]:
+    """Plan O M231: the cases' share of the plan (see the comment at the call)."""
+    planned: list[RetentionItem] = []
+    present = frozenset(keys)
+    for key, case in sorted(index.cases.items()):
+        if case.updated_at is None:
+            skipped.append(
+                RetentionSkip(
+                    owner_id=case.case_id, category=RetentionCategory.CASE_LOG, reason_code="UNDATED"
+                )
+            )
+            continue
+        common: dict[str, Any] = {
+            "owner_id": case.case_id,
+            "client_id": case.client_id,
+            "created_at": case.updated_at,
+            "retention_days": log_days,
+        }
+        if _due(case.updated_at, log_days, moment, consumed=False):
+            planned.extend(
+                RetentionItem(
+                    key=item, category=RetentionCategory.CASE_LOG, action=RetentionAction.DELETE, **common
+                )
+                for item in _under(keys, case.directory)
+            )
+            continue
+        gone = {
+            upload_id
+            for upload_id in (*case.upload_ids, *(upload for _, upload in case.evidence_uploads))
+            if upload_id in leaving or upload_id not in index.uploads
+        }
+        for upload_id in sorted(gone):
+            for evidence_id, read in case.evidence_uploads:
+                evidence = f"{case.directory}evidence/{evidence_id}.json"
+                if read == upload_id and evidence in present:
+                    planned.append(
+                        RetentionItem(
+                            key=evidence,
+                            category=RetentionCategory.CASE_DATA,
+                            action=RetentionAction.DELETE,
+                            **common,
+                        )
+                    )
+            planned.append(
+                RetentionItem(
+                    key=key,
+                    category=RetentionCategory.CASE_DATA,
+                    action=RetentionAction.FORGET_UPLOAD,
+                    upload_id=upload_id,
+                    **common,
+                )
+            )
+    return planned
+
+
+def _forget_in_case(storage: Storage, item: RetentionItem, principal: Principal) -> None:
+    """Plan O M231: the case named by `item` rewritten without its upload, under the case's lock."""
+    from engine.doctor.case import TimelineKind, forget_upload, rewrite_case_document
+
+    upload_id = item.upload_id
+    if upload_id is None:
+        return
+    rewrite_case_document(
+        storage,
+        item.key,
+        lambda document: forget_upload(document, upload_id),
+        actor=principal.user_id,
+        kind=TimelineKind.FILE_FORGOTTEN,
+        upload_id=upload_id,
+    )
 
 
 def strip_fields(document: Any, paths: Iterable[str]) -> Any:

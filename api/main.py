@@ -370,4 +370,19 @@ from api.routes.overview import router as overview_router  # noqa: E402
 PHASE_ROUTERS.append(overview_router)
 # ---- END PLAN-M ----
 
+
+# Plan O M231 (DEC-1801): the /cases routes, mounted only when `data_doctor.unified` is on (configs/engine.yaml
+# defaults, M230). Off - the default - only the switch reader is imported: no route, so every response and
+# docs/API.md are byte-identical to Plan M's.
+def _install_cases(app: FastAPI) -> None:  # PLAN-O (M231): move into the PLAN-O block at integration
+    from engine.doctor import case as doctor_case
+
+    if doctor_case.data_doctor_unified(app.state.config_root):
+        from api.routes.cases import router as cases_router
+
+        app.include_router(cases_router)
+
+
+PHASE_APP_HOOKS.append(_install_cases)  # PLAN-O (M231): move into the PLAN-O block at integration
+
 app: FastAPI = create_app()

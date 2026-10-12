@@ -174,6 +174,12 @@ class RetentionCategory(StrEnum):
     """Plan J M94: a campaign's assignment and outcomes."""
     DOCTOR_MEMORY = "doctor_memory"
     """Plan L M159: Data Doctor's memory of a shape's treatment; goes with the upload holding its recipe."""
+    CASE_DATA = "case_data"
+    """Plan O M231: what a Data Doctor case holds about one upload (its file entry, items, evidence); goes
+    with that upload."""
+    CASE_LOG = "case_log"
+    """Plan O M231: a case's processing log (the case, its timeline, prescriptions); kept for
+    `processing_log_days` after its last change."""
 
 
 class RetentionAction(StrEnum):
@@ -181,6 +187,8 @@ class RetentionAction(StrEnum):
 
     DELETE = "delete"
     STRIP_SAMPLES = "strip_samples"
+    FORGET_UPLOAD = "forget_upload"
+    """Plan O M231: rewrite a case without one upload's data (`engine.doctor.case.forget_upload`)."""
 
 
 class RetentionItem(_Doc):
@@ -196,6 +204,11 @@ class RetentionItem(_Doc):
     retention_days: int = Field(description="The `governance.retention_days` that applied.")
     fields: tuple[str, ...] = Field(
         default=(), description="Dotted field paths emptied; `strip_samples` only."
+    )
+    upload_id: str | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+        description="`forget_upload` only (Plan O M231): the upload the case forgets. Left out otherwise.",
     )
 
 

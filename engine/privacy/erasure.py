@@ -44,7 +44,7 @@ import uuid
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
-from typing import Final
+from typing import Any, Final
 
 from sqlalchemy import update
 from sqlalchemy.engine import Engine
@@ -52,6 +52,13 @@ from sqlmodel import Session, col, select
 
 from engine.access.roles import Principal
 from engine.audit.events import AuditEvent, AuditLog, content_hash, principal_hash
+from engine.doctor.case import (
+    CASE_FILENAME,
+    TimelineKind,
+    count_principal,
+    remove_principal,
+    rewrite_case_document,
+)
 from engine.privacy.config import ErasureMode, load_privacy_config
 from engine.privacy.consent import ConsentLedger, principal_key
 from engine.privacy.contracts import (
@@ -181,6 +188,11 @@ def _locate(storage: Storage, key: str, matcher: Matcher, layout: StoreIndex) ->
             if count
             else None
         )
+    structural = _case_hits(store, key, storage, matcher)
+    if structural and not hits.any:  # Plan O M231: a correction keyed by the id, numeric ids included
+        return PrincipalLocation(
+            key=key, store=store.value, file_kind=kind.value, rows=structural, occurrences=hits.ambiguous
+        )
     if not hits.any:
         if not hits.ambiguous:
             return None
@@ -198,10 +210,48 @@ def _locate(storage: Storage, key: str, matcher: Matcher, layout: StoreIndex) ->
         store=store.value,
         file_kind=kind.value,
         key_columns=columns,
-        rows=hits.rows,
+        rows=hits.rows + structural,
         cells=hits.cells,
         occurrences=hits.occurrences,
     )
+
+
+def _is_case_document(key: str) -> bool:
+    parts = key.split("/")
+    return len(parts) == 4 and parts[0] == "cases" and parts[3] == CASE_FILENAME
+
+
+def _case_hits(store: Store, key: str, storage: Storage, matcher: Matcher) -> int:
+    """Plan O M231: corrections and standing answers in a case that hold the id (`remove_principal`)."""
+    if store is not Store.CASES or not _is_case_document(key):
+        return 0
+    try:
+        return count_principal(json.loads(storage.read_bytes(key)), matcher.principal_id)
+    except ValueError:
+        return 0
+
+
+def _erase_case(
+    storage: Storage, key: str, matcher: Matcher, *, policy_mode: ErasureMode, tombstone: str
+) -> tuple[int, int]:
+    """Plan O M231: a case without the person, rewritten under the case's lock with its version bumped.
+
+    Their corrections and standing answers go first, structurally; every other occurrence is then masked or
+    removed by the generic JSON rule, as in any artefact. One `privacy.erasure` event records the counts.
+    """
+    tally = {"rows": 0, "cells": 0}
+
+    def transform(document: dict[str, Any]) -> tuple[dict[str, Any], dict[str, int]]:
+        cleaned, removed = remove_principal(document, matcher.principal_id)
+        data = json.dumps(cleaned, ensure_ascii=False).encode("utf-8")
+        new, hits = rewrite_bytes(FileKind.JSON, data, matcher, None, mode=policy_mode, tombstone=tombstone)
+        tally["rows"] = removed["corrections"] + removed["standing_answers"] + hits.rows
+        tally["cells"] = hits.cells + hits.occurrences
+        counts = {**removed, "rows": hits.rows, "cells": hits.cells + hits.occurrences}
+        return json.loads(new), counts
+
+    rewrite_case_document(storage, key, transform, actor="system:erasure", kind=TimelineKind.ERASURE)
+    return tally["rows"], tally["cells"]
 
 
 def is_intake_original(key: str) -> bool:
@@ -809,6 +859,11 @@ def _erase_file(
     tombstone: str,
 ) -> tuple[int, int, FileKind | None]:
     """Erase the principal from one file: `(rows, cells, kind)`, `kind` None for a deleted cache entry."""
+    if location.store == Store.CASES.value and _is_case_document(location.key):
+        rows, cells = _erase_case(
+            storage, location.key, matcher, policy_mode=policy_mode, tombstone=tombstone
+        )
+        return rows, cells, FileKind.JSON
     if location.store in _DELETED_ON_HIT or is_intake_original(location.key):  # deleted, not rewritten
         storage.delete(location.key)
         purge_old_versions(storage, location.key)
