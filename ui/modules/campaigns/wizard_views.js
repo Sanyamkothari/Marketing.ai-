@@ -125,12 +125,21 @@ const actions = (inner, extra = "") => `<div class="cw-actions${extra ? ` ${extr
 const act = ({ label, href = null, kind = "primary", attrs = "", disabled = false, busy = false, iconName = "" }) =>
   button({ label, href, kind, attrs, disabled, busy, icon: iconName });
 
+/** Each tone's icon in a problem box, and the name a screen reader hears for it (as `attentionItem` names its). */
+const PROBLEM_ICONS = Object.freeze({
+  warning: { name: "alert", label: "Warning" },
+  critical: { name: "critical", label: "Problem" },
+  info: { name: "info", label: "Information" },
+});
+
 /** A problem inside a card (the checks' report, a cost to confirm, a model to wait for): an icon and its words. */
-const problemBox = (inner, attrs = "", tone = "warning") =>
-  `<div class="cw-problem tone-${esc(tone)}"${attrs ? ` ${attrs}` : ""}><span class="cw-problem-icon">${icon(
-    tone === "info" ? "info" : "alert",
-    { size: 18, label: tone === "info" ? "Information" : "Warning" },
-  )}</span><div class="cw-problem-body">${inner}</div></div>`;
+const problemBox = (inner, attrs = "", tone = "warning") => {
+  const t = PROBLEM_ICONS[tone] ? tone : "warning";
+  return `<div class="cw-problem tone-${t}"${attrs ? ` ${attrs}` : ""}><span class="cw-problem-icon">${icon(PROBLEM_ICONS[t].name, {
+    size: 18,
+    label: PROBLEM_ICONS[t].label,
+  })}</span><div class="cw-problem-body">${inner}</div></div>`;
+};
 
 /**
  * A notice in place of a step that cannot go on, with at most one way forward: the design system's attention item
@@ -318,9 +327,20 @@ export function stoppedHtml({ ucId, detail, reason }) {
 
 // --- Step 3: Audience -----------------------------------------------------------------------------------
 
+/**
+ * The share of a count among its table's counts, as a whole percentage for its bar: 0 for nothing (or for a value
+ * that is not a number), and at least 2 for any count above nothing, so a small one still shows.
+ */
+export function shareWidth(n, most) {
+  const v = Number(n);
+  const top = Number(most);
+  if (!Number.isFinite(v) || !Number.isFinite(top) || top <= 0 || v <= 0) return 0;
+  return Math.min(100, Math.max(2, Math.round((v / top) * 100)));
+}
+
 /** The share bar of a count among its table's counts: a track and a brand bar, hidden from screen readers. */
 const shareBar = (n, most) =>
-  `<span class="cw-bar" aria-hidden="true"><span style="width:${most > 0 ? Math.max(2, Math.round((Number(n) / most) * 100)) : 0}%"></span></span>`;
+  `<span class="cw-bar" aria-hidden="true"><span style="width:${shareWidth(n, most)}%"></span></span>`;
 
 const numCell = (n, most) => `<td class="num"><span class="cw-num">${shareBar(n, most)}<span>${esc(count(n))}</span></span></td>`;
 
@@ -556,7 +576,9 @@ function summaryTiles({ list, preview, value }) {
     );
   }
   if (!tiles.length) return "";
-  return kpiRow(tiles, { attrs: `data-cw-summary="${value ? "value" : "counts"}"` });
+  // The wide value tile's grid (1fr 1fr 2fr) only for the three tiles it was drawn for; any other row lays its tiles
+  // out evenly (a list without a comparison group, or without a value, has two).
+  return kpiRow(tiles, { attrs: `data-cw-summary="${value && tiles.length === 3 ? "value" : "counts"}"` });
 }
 
 /** The compliance gate's result as a status chip and its sentence: who may be contacted, who was taken off. */

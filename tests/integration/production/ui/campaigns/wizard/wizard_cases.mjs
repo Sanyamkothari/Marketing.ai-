@@ -198,6 +198,38 @@ test("Goal: business names (Plan M §4.2), the stage as a label, operational goa
   assert.equal(w.location.hash, `#/campaigns/new/customers/${UC}`);
 });
 
+test("M187: the chosen goal is drawn chosen on coming back, and forgotten on a fresh visit or once a campaign exists", async () => {
+  const chosen = () => $$("[data-cw-goal].is-selected").map((e) => e.getAttribute("data-cw-goal"));
+  const toGoal = async () => {
+    w.location.hash = "#/campaigns/new";
+    await settle(8);
+    await until(() => $("[data-cw-goal-card]"), 3000, "the goal cards");
+  };
+  await open("#/campaigns/new");
+  await until(() => $("[data-cw-goal-card]"), 3000, "the goal cards");
+  assert.deepEqual(chosen(), [], "nothing is chosen on a first visit");
+  $(`[data-cw-goal="${UC}"]`).click();
+  await settle(4);
+  assert.equal(w.location.hash, `#/campaigns/new/customers/${UC}`);
+  // Back to step 1 inside the wizard: the card the person chose is still drawn chosen.
+  await toGoal();
+  assert.deepEqual(chosen(), [UC]);
+  // Leaving the wizard and opening New campaign again is a fresh visit.
+  w.location.hash = "#/campaigns";
+  await settle(8);
+  await toGoal();
+  assert.deepEqual(chosen(), [], "a fresh visit starts with no goal chosen");
+  // Chosen, then on to the campaign made from it (Review or Send): a New campaign from there starts clean too.
+  $(`[data-cw-goal="${UC}"]`).click();
+  await settle(4);
+  world.view = fx("campaign_draft");
+  w.location.hash = `#/campaigns/new/review/${CID}`;
+  await settle(8);
+  await until(() => $("[data-cw-review]"), 3000, "the review");
+  await toGoal();
+  assert.deepEqual(chosen(), [], "once a campaign exists the choice is spent");
+});
+
 test("a goal that contacts nobody opens its own classic page instead", async () => {
   await open("#/campaigns/new/customers/order-fulfillment");
   await until(() => w.location.hash === "#/uc/order-fulfillment", 3000, "the classic page");

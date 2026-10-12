@@ -165,6 +165,7 @@ window.addEventListener("hashchange", () => {
   clearTimeout(ui.timer);
   ui.seq += 1;
   ui.justDownloaded = null;
+  ui.chosenGoal = null; // a fresh visit starts with no goal chosen (M187 review)
   // Coming back is a fresh visit: the screen's own state (a refusal, "downloading") is not carried over.
   ui.parts = null;
 });
@@ -457,6 +458,8 @@ async function toCampaign(token, uc, detail) {
 // --- 3 Audience and 4 Review (one screen), 5 Send ------------------------------------------------------------
 
 async function campaignStepScreen(token, route) {
+  // A campaign exists now: the goal chosen for it is spent, so a New campaign started from here starts clean.
+  ui.chosenGoal = null;
   const view = await getCampaign(route.campaignId);
   if (!ours(token)) return;
   // A campaign whose results were added is past the wizard: its own page shows them.

@@ -195,7 +195,75 @@ def test_review_summary_and_phone_buttons(browser: Any, server: str) -> None:
         assert box["x"] >= card["x"] and box["x"] + box["width"] <= card["x"] + card["width"] + 0.5, selector
         assert box["width"] >= card["width"] - 2 * 17 - 1, f"{selector} is full width on a phone"
         assert box["height"] >= 40
+    # M187 review: every action of the wizard's own (Guided setup's are its own) is a 40px target on a phone,
+    # the technical details' Copy buttons and summaries included.
+    phone.evaluate("() => document.querySelectorAll('.cw details.tech').forEach((d) => { d.open = true; })")
+    small = phone.evaluate("""() => [...document.querySelectorAll('.cw .btn, .cw details.tech > summary')]
+             .filter((e) => !e.closest('[data-cw-guided]') && e.getClientRects().length)
+             .filter((e) => e.getBoundingClientRect().height < 40)
+             .map((e) => e.outerHTML.slice(0, 80))""")
+    assert small == [], small
     _close(phone)
+    assert problems == [], problems
+
+
+def test_a_touch_screen_gets_40px_targets_at_any_width(browser: Any, server: str) -> None:
+    """A tablet (coarse pointer, 1024 px): the wizard's tertiary links and Copy buttons are 40px targets too."""
+    problems: list[str] = []
+    context = browser.new_context(viewport={"width": 1024, "height": 800}, has_touch=True, is_mobile=True)
+    context.route(lambda url: not url.startswith(server), lambda route: route.abort())
+
+    def answer(route: Any) -> None:
+        body = route.fetch().json()
+        body["report"] = None
+        body["plan"] = None
+        body["campaign"] = {
+            **body["campaign"],
+            "status": "live",
+            "test_plan_hash": None,
+            "test_plan_version": None,
+        }
+        route.fulfill(status=200, content_type="application/json", body=json.dumps(body))
+
+    context.route(lambda url: url.endswith(f"/campaigns/{CAMPAIGN}"), answer)
+    page = context.new_page()
+    page.on("pageerror", lambda error: problems.append(f"uncaught: {error}"))
+    _open(page, server, f"#/campaigns/new/review/{CAMPAIGN}", "[data-cw-review] [data-cw-approve]")
+    assert page.evaluate("() => matchMedia('(pointer: coarse)').matches"), "the context is a touch screen"
+    page.evaluate("() => document.querySelectorAll('.cw details.tech').forEach((d) => { d.open = true; })")
+    small = page.evaluate("""() => [...document.querySelectorAll('.cw .btn, .cw details.tech > summary')]
+             .filter((e) => !e.closest('[data-cw-guided]') && e.getClientRects().length)
+             .filter((e) => e.getBoundingClientRect().height < 40)
+             .map((e) => e.outerHTML.slice(0, 80))""")
+    assert small == [], small
+    _close(page)
+    assert problems == [], problems
+
+
+@pytest.mark.parametrize("width", [390, 320])
+def test_the_stepper_is_not_clipped_on_a_phone(browser: Any, server: str, width: int) -> None:
+    """M185 note: the five circles, the line and "Step 4 of 5 · Review" fit a phone, even a narrow one."""
+    problems: list[str] = []
+    page = _page(browser, server, problems, viewport={"width": width, "height": 800}, mode="draft")
+    _open(page, server, f"#/campaigns/new/review/{CAMPAIGN}", "[data-cw-review] [data-cw-approve]")
+    stepper = page.locator(".cw ol.stepper")
+    box = stepper.bounding_box()
+    assert box["x"] >= 0 and box["x"] + box["width"] <= width
+    assert page.evaluate(
+        "() => { const s = document.querySelector('.cw ol.stepper'); return s.scrollWidth <= s.clientWidth; }"
+    )
+    dots = page.locator(".cw ol.stepper .st-dot")
+    assert dots.count() == 5
+    for i in range(5):
+        dot = dots.nth(i).bounding_box()
+        assert dot["x"] >= box["x"] and dot["x"] + dot["width"] <= box["x"] + box["width"] + 0.5, i
+        assert dot["width"] >= 24
+    line = page.locator(".cw .stepper-phone")
+    assert line.inner_text() == "Step 4 of 5 · Review"
+    lb = line.bounding_box()
+    assert lb["x"] + lb["width"] <= width
+    assert not _sideways(page)
+    _close(page)
     assert problems == [], problems
 
 

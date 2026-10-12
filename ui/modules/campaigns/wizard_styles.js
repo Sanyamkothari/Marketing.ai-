@@ -4,8 +4,11 @@
 // attention items, cards - are drawn and styled by the design system (`ui/components.js`, `ui/theme.css`,
 // docs/ux/VISUAL_DESIGN.md). This sheet only lays them out for the wizard: the goal cards, the "More goals"
 // disclosure, the frame around Guided setup, the Review summary and its small tables, the decision bar, the Send
-// success state, and the phone (no squeezed columns, full-width buttons). Every colour is a theme token: brand
-// things read `--brand-blue` and its tints, so a deployment's own colour (M182) reaches them.
+// success state, and the phone (no squeezed columns, full-width buttons, 40px targets). Every colour reads a theme
+// token: brand things read `--brand-blue` and its tints, so a deployment's own colour (M182) reaches them; a tinted
+// box's border is mixed from its tone's tokens (color-mix, with the hairline where it is not supported). The one
+// exception is the goal card's hover shadow, neutral ink at low alpha like theme.css's own button and pop-up shadows:
+// a shadow is depth, not colour, and the theme has no shadow token for a lifted card.
 
 const CSS = `
 .cw .stepper{margin:var(--s2, 8px) 0 var(--s6, 32px)}
@@ -34,7 +37,7 @@ const CSS = `
 .cw .cw-goal.is-selected{border-color:var(--brand-blue);box-shadow:0 0 0 1px var(--brand-blue);background:var(--brand-50)}
 .cw .cw-goal-icon{display:inline-grid;place-items:center;width:40px;height:40px;border-radius:var(--r, 8px);background:var(--brand-50);color:var(--brand-blue);transition:background-color var(--dur, 140ms) var(--ease, ease-out),color var(--dur, 140ms) var(--ease, ease-out)}
 .cw .cw-goal:hover .cw-goal-icon{background:var(--brand-100)}
-.cw .cw-goal.is-selected .cw-goal-icon{background:var(--brand-blue);color:#FFFFFF}
+.cw .cw-goal.is-selected .cw-goal-icon{background:var(--brand-blue);color:var(--btn-ink)}
 .cw .cw-goal-name{font-size:var(--fs-card, 15px);line-height:var(--lh-card, 22px);font-weight:600;color:var(--ink)}
 .cw .cw-goal-stage{margin-top:auto;display:inline-flex}
 .cw .cw-goal-go{position:absolute;top:20px;right:20px;display:inline-grid;color:var(--brand-blue);opacity:0;transform:translateX(-4px);transition:opacity var(--dur, 140ms) var(--ease, ease-out),transform var(--dur, 140ms) var(--ease, ease-out)}
@@ -62,10 +65,10 @@ const CSS = `
 .cw .cw-problem-body{flex:1;min-width:0}
 .cw .cw-problem-body>.cw-p:first-child{margin-top:0}
 .cw .cw-problem-body>.cw-p:last-child{margin-bottom:0}
-.cw .cw-problem.tone-warning{background:var(--warning-t, #FEF3C7);border-color:#F6DE9C}
-.cw .cw-problem.tone-warning .cw-problem-icon{color:var(--warning, #B45309)}
-.cw .cw-problem.tone-critical{background:var(--critical-t, #FDECEC);border-color:#F4C7C3}
-.cw .cw-problem.tone-critical .cw-problem-icon{color:var(--critical, #B42318)}
+.cw .cw-problem.tone-warning{background:var(--warning-t);border-color:var(--line);border-color:color-mix(in srgb, var(--warning) 30%, var(--warning-t))}
+.cw .cw-problem.tone-warning .cw-problem-icon{color:var(--warning)}
+.cw .cw-problem.tone-critical{background:var(--critical-t);border-color:var(--line);border-color:color-mix(in srgb, var(--critical) 25%, var(--critical-t))}
+.cw .cw-problem.tone-critical .cw-problem-icon{color:var(--critical)}
 .cw .cw-problem.tone-info{background:var(--brand-50);border-color:var(--brand-200)}
 .cw .cw-problem.tone-info .cw-problem-icon{color:var(--brand-blue)}
 
@@ -74,6 +77,8 @@ const CSS = `
 .cw .stat-row[data-cw-summary="value"]{grid-template-columns:minmax(0,1fr) minmax(0,1fr) minmax(0,2fr)}
 .cw [data-cw-tile="value"] .vrange{margin-top:var(--s2, 8px)}
 .cw [data-cw-tile="value"] .vr-text{flex:1 1 220px}
+/* a range with no central estimate (the wizard's are all such) has no dot to carry it: the bar itself is brand blue */
+.cw .vrange:not(:has(.vr-dot)) .vr-bar{background:var(--brand-blue)}
 .cw .cw-breakdowns{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:var(--s5, 24px) var(--s6, 32px);margin-top:var(--s4, 16px)}
 .cw .cw-breakdown{min-width:0}
 .cw .cw-breakdown>.cw-note{margin:2px 0 0}
@@ -82,9 +87,8 @@ const CSS = `
 .cw .cw-tbl th:last-child,.cw .cw-tbl td:last-child{padding-right:0}
 .cw .cw-tbl th.num,.cw .cw-tbl td.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
 .cw .cw-pri-name{display:block;font-weight:500;color:var(--ink)}
-.cw .cw-pri-action{display:block;margin-top:2px;font-size:var(--fs-caption, 12px);line-height:var(--lh-caption, 16px);color:var(--muted)}
 .cw .cw-num{display:inline-flex;align-items:center;justify-content:flex-end;gap:var(--s3, 12px)}
-.cw .cw-bar{display:inline-block;width:72px;height:6px;border-radius:3px;background:var(--neutral-t, #F3F4F6);overflow:hidden}
+.cw .cw-bar{display:inline-block;width:72px;height:6px;border-radius:3px;background:var(--neutral-t);overflow:hidden}
 .cw .cw-bar>span{display:block;height:100%;border-radius:3px;background:var(--brand-blue)}
 .cw .cw-kvs{margin:var(--s2, 8px) 0 0}
 .cw .cw-kv{display:grid;grid-template-columns:minmax(140px,200px) minmax(0,1fr);gap:var(--s3, 12px);padding:var(--s3, 12px) 0;border-top:1px solid var(--line);font-size:var(--fs-body, 14px);line-height:var(--lh-body, 22px)}
@@ -97,7 +101,7 @@ const CSS = `
 
 /* step 5: the success state - a check, the title, the campaign's status, one sentence, the actions */
 .cw .cw-done-body{display:flex;flex-direction:column;align-items:center;text-align:center;max-width:600px;margin:0 auto;padding:40px var(--s5, 24px)}
-.cw .cw-done-icon{display:inline-grid;place-items:center;width:56px;height:56px;border-radius:50%;background:var(--good-t, #E8F6EE);color:var(--good, #15803D);margin-bottom:var(--s4, 16px)}
+.cw .cw-done-icon{display:inline-grid;place-items:center;width:56px;height:56px;border-radius:50%;background:var(--good-t);color:var(--good);margin-bottom:var(--s4, 16px)}
 .cw .cw-done-icon svg{stroke-width:2.25}
 .cw .cw-done-title{font-size:20px;line-height:28px}
 .cw .cw-done-chip{margin:var(--s3, 12px) 0 0}
@@ -126,8 +130,14 @@ const CSS = `
   .cw .cw-actions .btn,.cw .cw-notice .attn-action .btn{width:100%;justify-content:center;height:auto;min-height:44px;padding-top:10px;padding-bottom:10px;white-space:normal;text-align:center}
   .cw .cw-notice .attn{padding:var(--s4, 16px)}
   .cw .cw-notice .attn-action{grid-column:1 / -1}
-  .cw .cw-done-body{padding:var(--s6, 32px) 0 var(--s2, 8px)}
+  .cw .cw-done-body{padding:var(--s6, 32px) var(--s4, 16px) var(--s4, 16px)}
   .cw .cw-done-actions{align-self:stretch}
+}
+/* a phone or any coarse pointer: every action of the wizard's own is a 40px target (Guided setup keeps its own) */
+@media (max-width:700px),(pointer:coarse){
+  .cw .btn:not([data-cw-guided] .btn),.cw .cw-tech .btn{min-height:40px}
+  .cw .btn.sm:not([data-cw-guided] .btn){height:auto;padding-top:var(--s2, 8px);padding-bottom:var(--s2, 8px)}
+  .cw .cw-tech summary,.cw .tech summary{min-height:40px;display:flex;align-items:center}
 }
 @media (prefers-reduced-motion: reduce){
   .cw .cw-goal,.cw .cw-goal-go,.cw .cw-goal-icon,.cw .cw-more-chev,.cw .cw-more>summary{transition:none}

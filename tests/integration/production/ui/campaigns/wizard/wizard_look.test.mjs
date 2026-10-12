@@ -150,7 +150,13 @@ test("Customers: a calm card around Guided setup, with the goal's icon", () => {
   const checks = $("[data-cw-checks]");
   assert.ok(checks.classList.contains("tone-critical"));
   assert.equal(checks.getAttribute("role"), "alert");
-  assert.equal(checks.querySelector(".cw-problem-icon svg").getAttribute("aria-label"), "Warning", "an icon with a name, not colour alone");
+  // a critical problem's icon is the critical one, named "Problem" (M187 review), never colour alone
+  assert.equal(checks.querySelector(".cw-problem-icon svg").getAttribute("aria-label"), "Problem");
+  assert.ok(checks.querySelector(".cw-problem-icon svg").innerHTML.includes("m15 9-6 6"), "the cross in a circle");
+  draw(V.customersHtml({ uc: { id: "win-back-campaign" }, first: false, problem: { confirm: "This costs more." } }));
+  const cost = $("[data-cw-cost-confirm]");
+  assert.ok(cost.classList.contains("tone-warning"));
+  assert.equal(cost.querySelector(".cw-problem-icon svg").getAttribute("aria-label"), "Warning");
 });
 
 test("notices are the design system's attention items, the action a primary button", () => {
@@ -193,6 +199,41 @@ test("Review: a summary of three tiles - contacted, comparison group, expected v
   draw(V.reviewHtml({ campaign, scoring, list, policy: null, preview, cost: null, compliance: null, resultsOn: null }));
   assert.equal($("[data-cw-review-value] .vr-track"), null);
   assert.match(text($("[data-cw-review-value]")), /A range cannot be given for this list\./);
+});
+
+test("Review: two tiles when there is no comparison group or no value - laid out evenly, not on the three-tile grid", () => {
+  draw(V.reviewHtml({ campaign, scoring, list, policy, preview: null, cost: null, compliance: null, resultsOn: null }));
+  let row = $(".stat-row[data-cw-summary]");
+  assert.deepEqual([...row.children].map((t) => t.getAttribute("data-cw-tile")), ["contacted", "value"]);
+  assert.equal(row.getAttribute("data-cw-summary"), "counts", "the 1fr 1fr 2fr grid is for three tiles only");
+  draw(V.reviewHtml({ campaign, scoring, list: { treat_rows: 10 }, policy: null, preview, cost: null, compliance: null, resultsOn: null }));
+  row = $(".stat-row[data-cw-summary]");
+  assert.deepEqual([...row.children].map((t) => t.getAttribute("data-cw-tile")), ["contacted", "comparison"]);
+  assert.equal(row.getAttribute("data-cw-summary"), "counts");
+  draw(V.reviewHtml({ campaign, scoring, list, policy, preview, cost: null, compliance: null, resultsOn: null }));
+  assert.equal($(".stat-row[data-cw-summary]").getAttribute("data-cw-summary"), "value");
+  S.injectWizardStyles(document);
+  const css = document.getElementById("cw-styles").textContent;
+  assert.match(css, /\.stat-row\[data-cw-summary="value"\]\{grid-template-columns:minmax\(0,1fr\) minmax\(0,1fr\) minmax\(0,2fr\)\}/);
+  assert.doesNotMatch(css, /data-cw-summary="counts"\][^{]*\{grid-template-columns:[^}]*2fr/);
+});
+
+test("the share bar's width: nothing for 0, a negative or a value that is not a number; at least 2% for any count", () => {
+  assert.equal(V.shareWidth(0, 100), 0);
+  assert.equal(V.shareWidth(-5, 100), 0);
+  assert.equal(V.shareWidth("n/a", 100), 0);
+  assert.equal(V.shareWidth(null, 100), 0);
+  assert.equal(V.shareWidth(5, 0), 0);
+  assert.equal(V.shareWidth(5, NaN), 0);
+  assert.equal(V.shareWidth(1, 100000), 2);
+  assert.equal(V.shareWidth(50, 100), 50);
+  assert.equal(V.shareWidth(100, 100), 100);
+  draw(V.audienceCardHtml({ scoring: { bands: [{ name: "A", rows: 10 }, { name: "B", rows: 0 }] }, list: null }));
+  assert.deepEqual(
+    $$("[data-cw-priority] .cw-bar > span").map((b) => b.style.width),
+    ["100%", "0%"],
+  );
+  assert.ok(!app.innerHTML.includes("NaN"));
 });
 
 test("Review: small tables with share bars; what happens to a priority is a second line, not a column", () => {
@@ -280,6 +321,16 @@ test("the wizard's style sheet lays out the helpers and reads the brand token, n
   const css = document.getElementById("cw-styles").textContent;
   assert.doesNotMatch(css, /\.cw-step\b/, "the pill steps' rules are gone");
   assert.doesNotMatch(css, /#1E57BD/i, "no rule names the default brand colour");
+  // M187 review: every colour reads a token; the only literals are the hover shadows' neutral ink (said in the header)
+  assert.doesNotMatch(css, /#[0-9a-f]{3,8}\b/i, "no hex colour");
+  for (const m of css.matchAll(/rgba?\([^)]*\)/g)) {
+    const before = css.slice(Math.max(0, m.index - 80), m.index);
+    assert.match(before, /box-shadow:[^;{}]*$/, `a literal colour outside a shadow: ${m[0]}`);
+  }
+  assert.match(css, /\.cw-problem\.tone-warning\{[^}]*color-mix\(in srgb, var\(--warning\)/);
+  assert.match(css, /\.cw-problem\.tone-critical\{[^}]*color-mix\(in srgb, var\(--critical\)/);
+  assert.match(css, /\.vrange:not\(:has\(\.vr-dot\)\) \.vr-bar\{background:var\(--brand-blue\)\}/);
+  assert.match(css, /@media \(max-width:700px\),\(pointer:coarse\)\{[^]*min-height:40px/, "40px targets on a phone or touch");
   for (const rule of [".cw .cw-goal.is-selected{", ".cw .cw-goal-icon{", ".cw .cw-bar>span{", ".st-step.current + .st-step.current::before{"]) {
     const at = css.indexOf(rule);
     assert.ok(at >= 0, rule);
