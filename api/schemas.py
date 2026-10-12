@@ -868,7 +868,7 @@ class MeResponse(StrictBase):
         description="The deployment's name, logo and accent colour; today's product with nothing set.",
     )
     # PLAN-O (M247, DEC-1817): added field only, left out of the answer while unset, so with `data_doctor.unified`
-    # off `GET /auth/me` answers byte for byte as before. Move beside the PLAN-O block's notes at integration.
+    # off `GET /auth/me` answers byte for byte as before (noted in the PLAN-O block below).
     data_doctor: bool | None = Field(
         default=None,
         exclude_if=lambda value: value is None,
@@ -1470,4 +1470,6 @@ class PilotFeedbackResponse(StrictBase):
 # ---- PLAN-M (simple UI) — append only below this line ----
 # ---- END PLAN-M ----
 # ---- PLAN-O (Data Doctor) — append only below this line ----
+# In-place additions elsewhere in this file (a field must live in its model):
+# - MeResponse.data_doctor (M247, DEC-1817): present only while `data_doctor.unified` is on.
 # ---- END PLAN-O ----

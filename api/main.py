@@ -391,12 +391,11 @@ def _install_cases(app: FastAPI) -> None:
 
 
 PHASE_APP_HOOKS.append(_install_cases)
-# ---- END PLAN-O ----
 
 
 # Plan O M235 (DEC-1805): the visit's routes (/cases/{id}/visit, goal, answers, decisions, approval, chat and
 # /goal-briefs/{goal_id}), mounted only when `data_doctor.unified` is on, like M231's. Off: nothing is imported.
-def _install_case_visit(app: FastAPI) -> None:  # PLAN-O (M235): move into the PLAN-O block at integration
+def _install_case_visit(app: FastAPI) -> None:
     from engine.doctor import case as doctor_case
 
     if doctor_case.data_doctor_unified(app.state.config_root):
@@ -405,13 +404,13 @@ def _install_case_visit(app: FastAPI) -> None:  # PLAN-O (M235): move into the P
         app.include_router(case_visit_router)
 
 
-PHASE_APP_HOOKS.append(_install_case_visit)  # PLAN-O (M235): move into the PLAN-O block at integration
+PHASE_APP_HOOKS.append(_install_case_visit)
 
 
 # Plan O M246 (DEC-1816): the protocol's routes outside a case (Guided setup's Approve with the sentence read,
 # standing answers per client, candidate rules), mounted only when `data_doctor.unified` is on. Off: nothing is
 # imported and docs/API.md is unchanged.
-def _install_data_protocol(app: FastAPI) -> None:  # PLAN-O (M246): move into the PLAN-O block at integration
+def _install_data_protocol(app: FastAPI) -> None:
     from engine.doctor import case as doctor_case
 
     if doctor_case.data_doctor_unified(app.state.config_root):
@@ -420,12 +419,12 @@ def _install_data_protocol(app: FastAPI) -> None:  # PLAN-O (M246): move into th
         app.include_router(data_protocol_router)
 
 
-PHASE_APP_HOOKS.append(_install_data_protocol)  # PLAN-O (M246): move into the PLAN-O block at integration
+PHASE_APP_HOOKS.append(_install_data_protocol)
 
 
 # Plan O M247 (DEC-1817): what the Data Doctor screen reads (/cases/{id}/screen, /data-doctor/cases), mounted only
 # when `data_doctor.unified` is on. Off: nothing is imported and docs/API.md is unchanged.
-def _install_case_screen(app: FastAPI) -> None:  # PLAN-O (M247): move into the PLAN-O block at integration
+def _install_case_screen(app: FastAPI) -> None:
     from engine.doctor import case as doctor_case
 
     if doctor_case.data_doctor_unified(app.state.config_root):
@@ -434,6 +433,8 @@ def _install_case_screen(app: FastAPI) -> None:  # PLAN-O (M247): move into the 
         app.include_router(case_screen_router)
 
 
-PHASE_APP_HOOKS.append(_install_case_screen)  # PLAN-O (M247): move into the PLAN-O block at integration
+PHASE_APP_HOOKS.append(_install_case_screen)
+# ---- END PLAN-O ----
+
 
 app: FastAPI = create_app()
