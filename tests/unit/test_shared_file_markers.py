@@ -19,7 +19,8 @@ not pin them. Plan L (Data Doctor) was set up after Plan J, so its `PLAN-L` bloc
 shared file (DEC-1500). Plan K (agents that check) was set up after Plan L reached `main`, so its
 `PLAN-K` block follows Plan L's in every shared file (DEC-1400). Plan M (a product a marketer
 understands in minutes) was set up after Plan K, so its `PLAN-M` block follows Plan K's in every shared
-file (DEC-1600 (j)).
+file (DEC-1600 (j)). Plan O (Data Doctor, the one data agent) was set up after Plan M, so its `PLAN-O` block
+follows Plan M's in every shared file (DEC-1800 (a)); Plan N's range is proposed, not claimed, and has no block.
 
 `docs/API.md` is in §4's list and deliberately absent from this one: it is generated and `make
 lint` fails on a hand-edit (DEC-014), so a block there would be deleted by the next `make
@@ -66,6 +67,7 @@ PHASES: Final[tuple[str, ...]] = (
     "PLAN-L",
     "PLAN-K",
     "PLAN-M",
+    "PLAN-O",
 )
 
 OPEN: Final[str] = "---- {phase} ("

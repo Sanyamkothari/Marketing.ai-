@@ -811,6 +811,14 @@ MILESTONE_TESTS: Final[Mapping[str, tuple[str, ...]]] = {
         "tests/integration/production/test_approvals_identity.py",
         "tests/unit/agentic/test_verified_identity.py",
     ),
+    # --- Plan O (docs/plans/MARKETING_AI_PLAN_O_DATA_DOCTOR.md); each milestone adds its own entry. ---
+    # M230 (DEC-1800), the set-up: the PLAN-O blocks, PLAN_O_CODES in the catalogue check, the switch
+    # `data_doctor.unified` (off, validated, round-trips, left out of run_config.json while off).
+    "M230": (
+        "tests/unit/test_shared_file_markers.py",
+        "tests/unit/pilot/test_help.py",
+        "tests/unit/doctor/test_plan_o_setup.py",
+    ),
 }
 """Milestone id -> the test files (or directories, with a trailing `/`) that prove it is built.
 

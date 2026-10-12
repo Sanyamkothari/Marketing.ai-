@@ -1750,3 +1750,5 @@ def _plan_j_check_codes() -> frozenset[str]:
 # ---- END PLAN-K ----
 # ---- PLAN-M (simple UI) — append only below this line ----
 # ---- END PLAN-M ----
+# ---- PLAN-O (Data Doctor) — append only below this line ----
+# ---- END PLAN-O ----

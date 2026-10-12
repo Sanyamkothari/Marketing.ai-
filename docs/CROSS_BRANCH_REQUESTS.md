@@ -2814,6 +2814,18 @@ is ranked keeps `campaign_scope`'s rule: never cut by key order.
 
 **What I did meanwhile.** Nothing was blocked.
 
+### 2026-10-12 — plan-o M230 (on main) → trunk (owner of `engine/config.py` and `configs/engine.yaml`), Plan E (owner of `engine/pilot/help.py`) and every branch: `UseCaseConfig.data_doctor`, `PLAN_O_CODES` and the `PLAN-O` blocks (announcement and record of in-place edits)
+
+**What changed** (DEC-1800). `engine/config.py`: the import `from engine.doctor.config import DataDoctorConfig` (that
+module imports nothing from `engine`) and the defaulted field `UseCaseConfig.data_doctor`, with a comment, after Plan
+G's `agent`; it is left out of a dump while it holds only defaults, is not overridable per run and is outside the
+recipe hash, so no `run_config.json`, recipe hash or golden digest moves. `configs/engine.yaml` `defaults` gained a
+`PLAN-O (Data Doctor)` block holding `data_doctor: {unified: false}`. `engine/pilot/help.py` `known_codes()` unions
+`PLAN_O_CODES` (`engine/doctor/codes.py`, empty). Every shared file gained an empty `PLAN-O (Data Doctor)` block after
+its `PLAN-M` block, and `tests/unit/test_shared_file_markers.py` gained `PLAN-O` in `PHASES`. `docs/API.md` was
+regenerated. **What is needed.** Nothing; this is an announcement. Plan N, when it claims DEC-1700 … 1799, changes
+its "proposed; not claimed" row in `PARALLEL_WORK_PROTOCOL.md` §4 and puts its blocks after Plan O's.
+
 ### 2026-09-23 — plan-e-pilot (on main) → all branches: every change Plan E made outside its own files and blocks
 
 **What is needed.** Nothing from anybody; this is the announcement §3 asks for. Measured with

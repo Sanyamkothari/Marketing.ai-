@@ -372,6 +372,7 @@ A fully merged, validated use case. This is what the whole engine consumes.
 | `onboarding` | OnboardingConfig | no | `engine.yaml:defaults.onboarding` - every onboarding default, per use case (plan section 5.3). |
 | `uplift` | UpliftConfig | no | `uplift:` in a use case. Inert unless `problem_type` is `uplift`.  The data limits, the randomness check and anything about the treatment assignment are **not** agent-editable: an agent that could loosen them could make a targeted campaign look causal. |
 | `agent` | AgentConfig | no | `agent:` in a use case: the Guided-setup helper for that use case. |
+| `data_doctor` | DataDoctorConfig | no | `data_doctor:` in a use case: Plan O's one Data Doctor agent. Only the switch so far (M230). |
 
 #### TargetConfig
 
@@ -622,6 +623,14 @@ How the target is derived (plan section 5.2).  `agent_editable` is `False` and c
 | `max_tool_steps_per_turn` | integer | no |  |
 | `ai_data_access` | DataAccess ("masked_data" \| "summaries_only") | no | What the chat model may see of the file's cells (`agent.ai_data_access`).  `masked_data` shows the values a tool asks for after masking (`engine.agent.egress.mask_value`): the model can look at real cells so it does not have to guess. `summaries_only` shows no cell at all: every string that comes from a cell is replaced by its *shape* (`Aaaaa 9999`), so the model still sees formats and counts and never a value. Personal-data columns never yield a value in either mode. |
 | `always_hide_columns` | list[string] | no |  |
+
+#### DataDoctorConfig
+
+`data_doctor:` in a use case: Plan O's one Data Doctor agent. Only the switch so far (M230).
+
+| Field | Type | Required | Meaning |
+|---|---|---|---|
+| `unified` | boolean | no | Plan O (DEC-1800): when true, Guided setup and the Doctor page are the one Data Doctor agent. Off until the parity checklist is met (M249); while off, nothing changes. |
 
 #### ThresholdConfig
 
@@ -2137,6 +2146,8 @@ Keys of the default document that no advanced-settings field renders, with their
 | `agent.max_tool_steps_per_turn` | int 1..20; tool calls the helper may make before it must reply |
 | `agent.ai_data_access` | enum masked_data \| summaries_only; what the chat model sees of cells: masked values, or only their shape (`Aaaaa 9999`) |
 | `agent.always_hide_columns` | list[str]; columns (case-insensitive) whose values the chat model never sees, whatever the profile says |
+| `data_doctor` | Plan O (DEC-1800). The one Data Doctor agent; not overridable per run |
+| `data_doctor.unified` | bool; true = Guided setup and the Doctor page are one Data Doctor. Off until M249's parity checklist is met; while off nothing changes |
 
 ### Catalog keys
 
