@@ -48,12 +48,19 @@ export function ratio(a, b) {
 
 const stripComments = (text) => text.replace(/\/\*[\s\S]*?\*\//g, "");
 
-/** `--name: value` declarations of the first `:root{...}` in an HTML or CSS string, aliases resolved. */
-export function tokens(text) {
-  const root = stripComments(text).match(/:root\s*\{([^}]*)\}/);
-  if (!root) return {};
+/**
+ * `--name: value` declarations of the first `:root{...}` in an HTML or CSS string, aliases resolved. Given several
+ * (ui/index.html, then ui/theme.css - M185), they are read in cascade order: a later file's token replaces an earlier
+ * one's, and an alias resolves against all of them, as the browser resolves them on the one <html> element.
+ */
+export function tokens(...texts) {
   const raw = {};
-  for (const m of root[1].matchAll(/(--[a-z0-9-]+)\s*:\s*([^;]+);?/gi)) raw[m[1]] = m[2].trim();
+  for (const text of texts) {
+    const root = stripComments(text).match(/:root\s*\{([^}]*)\}/);
+    if (!root) continue;
+    for (const m of root[1].matchAll(/(--[a-z0-9-]+)\s*:\s*([^;]+);?/gi)) raw[m[1]] = m[2].trim();
+  }
+  if (!Object.keys(raw).length) return {};
   const resolved = {};
   const resolve = (value, depth = 0) => {
     if (depth > 8) return null;
