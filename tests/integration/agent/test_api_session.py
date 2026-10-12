@@ -12,14 +12,16 @@ from fastapi.testclient import TestClient
 
 from api.main import create_app
 from api.routes import runs
+from api.routes.agent import SESSION_FILENAME
 from engine import ai_service
-from engine.agent.contracts import DATA_RECIPE_FILENAME
+from engine.agent.contracts import DATA_RECIPE_FILENAME, AgentSession, SessionStatus
 from engine.jobs import CancelToken
 from engine.llm import FakeLLMClient, FakeLLMMode
-from engine.storage import LocalStorage, run_key
+from engine.storage import LocalStorage, run_key, upload_key
 from tests.fixtures.agent_bench.make_messy import messy_frame
 from tests.fixtures.make_data import GenerationSpec, generate
 from tests.integration.agent.test_recipe_runs import _messy, _recipe, _seed_model
+from tests.unit.agent.test_ready_needs_roles import in_02_shaped
 
 pytestmark = pytest.mark.integration
 
@@ -124,6 +126,48 @@ def test_nothing_is_approved_while_anything_is_undecided(client: TestClient) -> 
     response = client.post(f"/uploads/{upload_id}/agent-session/apply")
     assert response.status_code == 409
     assert response.json()["detail"]["code"] == "AGENT_UNDECIDED"
+
+
+def test_a_rejected_outcome_is_asked_for_and_never_ready(client: TestClient, data_dir: Path) -> None:
+    """DEC-1821 (M248's in_02): ticking what the helper is sure of and rejecting the rest used to say ready with
+    no outcome, and Approve failed with VALIDATION_FAILED. Now the outcome is asked for; and a session saved as
+    ready before the rule is refused at Approve with a plain reason."""
+    upload_id = _upload(client, in_02_shaped())
+    _start(client, upload_id)
+    session = _session(
+        client.post(f"/uploads/{upload_id}/agent-session/decisions", json={"accept_recommended": True})
+    )
+    pending = [p["proposal_id"] for p in session["proposals"] if p["state"] == "pending"]
+    session = _session(
+        client.post(
+            f"/uploads/{upload_id}/agent-session/decisions",
+            json={"decisions": [{"proposal_id": pid, "state": "rejected"} for pid in pending]},
+        )
+    )
+    assert session["status"] == "needs_review"
+    asked = [q for q in session["questions"] if q["blocking"] and q["answer"] is None]
+    assert [q["question_id"] for q in asked] == ["a1-role-outcome"]
+    refused = client.post(f"/uploads/{upload_id}/agent-session/apply")
+    assert refused.status_code == 409
+    assert refused.json()["detail"]["code"] == "AGENT_UNDECIDED"
+
+    # A session stored as ready by the old rule, with its outcome rejected and nothing open.
+    storage = LocalStorage(data_dir)
+    key = upload_key(upload_id, SESSION_FILENAME)
+    stored = storage.read_model(key, AgentSession)
+    stale = stored.model_copy(
+        update={
+            "status": SessionStatus.READY,
+            "questions": tuple(q for q in stored.questions if not q.question_id.endswith("role-outcome")),
+        }
+    )
+    assert stale.undecided == ()
+    storage.write_model(key, stale)
+    refused = client.post(f"/uploads/{upload_id}/agent-session/apply")
+    assert refused.status_code == 409
+    detail = refused.json()["detail"]
+    assert detail["code"] == "AGENT_UNDECIDED"
+    assert "outcome" in detail["message"]
 
 
 def test_approve_prepares_a_copy_that_trains(client: TestClient, data_dir: Path) -> None:
