@@ -369,6 +369,8 @@ from api.routes.overview import router as overview_router  # noqa: E402
 
 PHASE_ROUTERS.append(overview_router)
 # ---- END PLAN-M ----
+# ---- PLAN-O (Data Doctor) — append only below this line ----
+# ---- END PLAN-O ----
 
 
 # Plan O M231 (DEC-1801): the /cases routes, mounted only when `data_doctor.unified` is on (configs/engine.yaml
