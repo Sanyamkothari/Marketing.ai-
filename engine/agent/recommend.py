@@ -48,6 +48,7 @@ from engine.measurement.planner import (
 
 if TYPE_CHECKING:
     from engine.decide.reasons import BusinessReasonDictionary
+    from engine.doctor.time_settings import TrainingBudget
 
 __all__ = [
     "NEVER_RECOMMENDED",
@@ -341,6 +342,39 @@ def _time_rules(config: UseCaseConfig, facts: DataFacts) -> list[SettingRecommen
     return []
 
 
+def _budget_rules(
+    config: UseCaseConfig, facts: DataFacts, budget: TrainingBudget | None
+) -> list[SettingRecommendation]:
+    """Plan O M244 (DEC-1814), behind `data_doctor.unified`: `_time_rules` replaced by Data Doctor's budget.
+
+    The search's limit is Balanced, the point of diminishing returns, offered as a plain choice ("Balanced (about
+    15 min, recommended)") with Quick and Thorough beside it; never a raw number of minutes to type. Without a
+    budget worked out on this deployment's past runs (the caller has no store), the library's runs are the prior.
+    """
+    from engine.doctor.time_settings import TimeSettingsError, propose_budget, time_inputs
+
+    if budget is None:
+        try:
+            inputs = time_inputs(None, config, rows=facts.rows, columns=max(1, len(facts.columns)))
+        except TimeSettingsError:
+            return []  # this goal's learner takes no time limit
+        budget = propose_budget(inputs)
+    balanced = next(choice for choice in budget.choices if choice.choice == budget.recommended)
+    if balanced.minutes == budget.current_minutes:
+        return []
+    others = " and ".join(choice.label for choice in budget.choices if choice is not balanced)
+    return [
+        SettingRecommendation(
+            budget.setting_path,
+            balanced.minutes,
+            f"Training time: {balanced.label}",
+            f"{balanced.buys} {others} are the other choices. {budget.reason}",
+            AgentConfidence.SURE if budget.confidence == "sure" else AgentConfidence.CHECK,
+            facts.evidence_ids,
+        )
+    ]
+
+
 def _consent_rules(config: UseCaseConfig, facts: DataFacts) -> list[SettingRecommendation]:
     if config.governance.consent_column is not None or not facts.consent_candidates:
         return []
@@ -542,11 +576,14 @@ def recommend_settings(
     *,
     config_root: Path | None = None,
     holdout: HoldoutAdvice | EllipsisType | None = ...,
+    training_budget: TrainingBudget | None = None,
 ) -> tuple[SettingRecommendation, ...]:
     """The changes these facts justify, each allowed by the schema, and resolvable together.
 
     `holdout` is the planner's reading (`holdout_advice`) when the caller has it already, so it is worked out
     once per setup pass; left out (`...`), it is worked out here. `None` means there is nothing to plan.
+    `training_budget` is Data Doctor's budget worked out on this deployment's runs (Plan O M244); it is read only
+    while `data_doctor.unified` is on, when it replaces the file-size rule.
     """
     advice = holdout_advice(config, facts) if isinstance(holdout, EllipsisType) else holdout
     fields = settings_fields(schema)
@@ -561,7 +598,14 @@ def recommend_settings(
     groups: Sequence[Sequence[SettingRecommendation]] = [
         _split_rules(config, facts, resolves),  # one group: a split and its column go together
         *([rec] for rec in _metric_rules(config, facts)),
-        *([rec] for rec in _time_rules(config, facts)),
+        *(
+            [rec]
+            for rec in (
+                _budget_rules(config, facts, training_budget)
+                if config.data_doctor.unified
+                else _time_rules(config, facts)
+            )
+        ),
         *([rec] for rec in _consent_rules(config, facts)),
         *([rec] for rec in _value_rules(config, facts)),
         *([rec] for rec in _holdout_rules(advice, facts)),

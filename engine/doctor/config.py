@@ -23,7 +23,7 @@ from typing import Final
 
 from pydantic import BaseModel, ConfigDict, Field, StrictBool
 
-__all__ = ["DataDoctorConfig"]
+__all__ = ["DataDoctorConfig", "TimeSettingsConfig"]
 
 _SETTINGS: Final[ConfigDict] = ConfigDict(
     extra="forbid",
@@ -34,6 +34,37 @@ _SETTINGS: Final[ConfigDict] = ConfigDict(
     populate_by_name=True,
     protected_namespaces=(),
 )
+
+
+class TimeSettingsConfig(BaseModel):
+    """`data_doctor.time_settings` (Plan O M244, DEC-1814): how the training budget's three choices are made.
+
+    Read only while `unified` is on. The defaults are left out of a dump, so nothing moves while they hold."""
+
+    model_config = _SETTINGS
+
+    score_step_per_minute: float = Field(
+        default=0.0005,
+        gt=0.0,
+        le=0.1,
+        description=(
+            "The diminishing-returns step: a minute more is worth it only while similar past runs gained at "
+            "least this much validation score per extra minute. Balanced is the first budget after which they "
+            "gained less."
+        ),
+    )
+    quick_ratio: float = Field(
+        default=0.34, gt=0.0, lt=1.0, description="Quick's time limit as a share of Balanced's."
+    )
+    thorough_ratio: float = Field(
+        default=2.5, gt=1.0, le=10.0, description="Thorough's time limit as a multiple of Balanced's."
+    )
+    sure_min_runs: int = Field(
+        default=3,
+        ge=1,
+        le=50,
+        description="Balanced is pre-selected (`sure`) only when at least this many past runs were close in size.",
+    )
 
 
 class DataDoctorConfig(BaseModel):
@@ -56,5 +87,13 @@ class DataDoctorConfig(BaseModel):
             "Plan O M242 (DEC-1812): the currency this workspace's reports use, as a code (INR, USD, EUR). A client's "
             "confirmed locale profile overrides it for that client. Read only while `unified` is on; INR, the "
             "default, is left out of a dump so nothing moves."
+        ),
+    )
+    time_settings: TimeSettingsConfig = Field(
+        default_factory=TimeSettingsConfig,
+        exclude_if=lambda value: value == TimeSettingsConfig(),
+        description=(
+            "Plan O M244 (DEC-1814): the training budget's diminishing-returns step and the ratios of its three "
+            "choices. Read only while `unified` is on; the defaults are left out of a dump so nothing moves."
         ),
     )

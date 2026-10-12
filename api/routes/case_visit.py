@@ -267,6 +267,7 @@ def _deps(storage: Storage, root: Path, request: Request, principal: Principal |
     """Every visit route carries the CONVERSE port, connected only when a chat turn runs: a visit resumed in
     CONVERSE (the process died during the AI call) is answered by the AI service, not told there is none."""
     from api.routes.doctor import offers as doctor_offers
+    from engine.doctor.time_settings import time_settings_detector
     from engine.stages.ingest import profile_row_cap
 
     offers = doctor_offers(root)
@@ -282,6 +283,9 @@ def _deps(storage: Storage, root: Path, request: Request, principal: Principal |
             else doctor_visit.lazy_converse(lambda: _converse(storage, root, request, principal, offers))
         ),
         ledger=ledger_for(request, root),
+        # Plan O M244 (DEC-1814): the time settings - the training budget's three choices and the data time
+        # settings - asked through M246's protocol, for a goal.
+        detectors=(time_settings_detector(storage, config_root=root),),
     )
 
 

@@ -1447,3 +1447,76 @@ proposed). Rule sets `data.define_outcome` and `data.map_outcome_values`: `data.
   sentence, so it works with no AI service; the AI reaches the tools through the visit (M235/M246).
 - Replaying the definition at training and scoring is M243's prescription; storing questions and answers is
   M246's.
+
+## 22. Time settings (Plan O M244, DEC-1814)
+
+*Behind `data_doctor.unified` (off by default). With it off, `_time_rules`, every budget and M189's progress bar are
+byte-identical.*
+
+### 22.1 In plain words
+
+Nobody has to guess how long training takes or which dates to use. Data Doctor predicts the training time from the
+file's size, the model families the goal allows and this deployment's own past runs, and offers it as a plain
+choice - **Quick (about N min) / Balanced (about N min, recommended) / Thorough (about N min)** - never a minutes
+field. The run's progress bar then promises exactly what the screen showed, and after the run the actual time is
+written down beside the expected one so the next estimate is better. It also proposes the date each row describes,
+where a split by date cuts, whether the newest rows' outcomes are final yet, and how often to take snapshots;
+it asks when unsure ("Your newest month's outcomes are not final yet. Leave it out of testing?") and remembers the
+answer for the client.
+
+### 22.2 The training budget (`engine/doctor/time_settings.py`)
+
+- **Estimate** (`estimate`, tool #79 `estimate_training_time`): per stage, for one time limit. The training stage's
+  natural length is `a x work^b` with `work = rows x columns x model families`, fitted on this deployment's finished
+  training runs with the same trainer that ended before their limit (read from each run's `status.json`, the stored
+  stage durations M189 reads). With none, the library's three real runs (telco 7,043 x 21 in 624 s; bank 41,188 x
+  22 in 1,314 s and 1,148 s) are the prior and the estimate says "from similar public datasets". A run stopped by its
+  limit raises `a` (it would have run at least that long). The search stops at its limit, so training is expected
+  to take the smaller of the two. Every other stage is M189's median for the use case (`past_durations`), else its
+  default.
+- **Learning**: each stage is multiplied by the median, over the newest ten `time_record.json`, of actual over the
+  rules' own estimate (the `base` before correction), clamped to 0.5-2; the training stage has separate factors for
+  searches expected to stop at their limit and for those expected to finish.
+- **Diminishing returns** (`propose_budget`, tool #80 `propose_training_budget`): each past leaderboard becomes best
+  validation score against fitting time (models in stack-level, then trial order: the fitting order is not stored),
+  scaled to this file by `(work / work_run)^b`. Balanced is the first budget on the grid (1 ... 240 minutes) after
+  which the curves gained, on average, less than `data_doctor.time_settings.score_step_per_minute` (0.0005) per
+  extra minute. With no leaderboard, Balanced is the time the search needs to finish on its own (at most 120).
+  Quick and Thorough are Balanced x `quick_ratio` (0.34) and x `thorough_ratio` (2.5); the three limits are always
+  different. Each choice carries "about N minutes" (the whole run) and what it buys ("Thorough has found a better
+  model on 2 of 9 similar past runs"). `sure` (Balanced offered ticked) needs at least `sure_min_runs` (3) past
+  runs within a factor of 3 of this file's work; otherwise `check`. A goal whose learner takes no limit (uplift on
+  LightGBM) is refused with `TIME_BUDGET_NOT_USED`.
+- **The promise**: the three choices are kept beside the data (`uploads/<id>/time_offers/<use case>.json`, or
+  `datasets/<id>/...`). A training run whose limit is one of them gets that choice's per-stage expectation as its
+  progress estimate (`promised_tracker`, the one hook in `engine/run_progress._make_tracker`), so its first
+  `eta_seconds` is the promise; the promise is copied to `runs/<id>/time_promise.json`. A custom limit (Settings >
+  Advanced) keeps M189's estimate.
+- **The record**: when the run ends, `runs/<id>/time_record.json` holds, per stage, the expected seconds, the rules'
+  base and the actual duration, and the whole run's actual over expected.
+- **`_time_rules`**: with the switch on, `recommend_settings` proposes Balanced instead of the file-size rule, titled
+  "Training time: Balanced (about N min, recommended)" with Quick and Thorough in the reason; a caller with no store
+  (Guided setup's advisor) gets the library prior. Off, nothing changes.
+
+### 22.3 The data time settings (tool #81 `propose_time_settings`)
+
+| Setting | How | Asked (M246's `settle`) |
+|---|---|---|
+| As-of date | the goal's named column if it reads as dates (at least 95% of filled cells, day/month order proven), else the only date column | two date columns: M235's `AS_OF_COLUMN` |
+| Cut points | the split's own rule (`prepare._part_sizes`, `_tie_boundary`) on the mature rows | `TIME_CUTS`: infeasible cuts become "split at random" (AUTO, never a time split); a validation or test part under 100 rows or 10 yes is a question; feasible cuts are AUTO |
+| Maturity | rows within the outcome window of the newest date; a newest run of dates with no yes where the older rate says at least 5 were due; a newest month far below the older rate (the probe's 0.5 ratio and z <= -3) | `LABEL_MATURITY`: "Leave it out of testing?", blocking when `X_LABEL_MATURITY` would fail; "Leave it out" is the recommended and safe choice |
+| Outcome window, lapse | the goal's window and choices; `label_drafts.draft_labels` for an `event_absence` goal | never here: APPROVE-class through `define_outcome` |
+| Cadence | an event file (a customer on several rows): week-ends and month-ends after the window, at least 3 | `SNAPSHOT_CADENCE` when both work |
+| Budget | §22.2 | `TRAINING_BUDGET`: AUTO when `sure`, else one non-blocking question with the three labelled choices |
+
+The visit runs these through its detector port (`time_settings_detector`, wired in `api/routes/case_visit._deps`).
+`AS_OF_COLUMN`, `TIME_CUTS`, `LABEL_MATURITY` and `SNAPSHOT_CADENCE` are standing codes (M246): the answer is
+remembered for the client and applied next time, pre-ticked and saying so. Leaving immature rows out is
+`leave_out_immature` (`remove_rows` `after` the cut-off); `maturity_step` is the same change as a recipe step for the
+prescription to replay (M243). The rule sets are `data.propose_training_budget` and `data.propose_time_settings`
+(never ticked unless `sure`).
+
+### 22.4 Not done here
+
+- Replaying the time settings at training and scoring is M243's prescription (`maturity_step`, the setting items).
+- The screen's rendering of the three choices is M247's; it shows the options' labels.

@@ -81,8 +81,7 @@ def test_every_catalogue_tool_is_listed_and_an_unregistered_one_is_not_built_yet
     assert statuses["stack_files"].built and statuses["check_readiness"].built
     for name, milestone in (
         ("map_consent", "M239"),  # define_outcome stood here until M239 (DEC-1809) built it
-        ("estimate_training_time", "M244"),
-        ("drift_check", "M245"),
+        ("drift_check", "M245"),  # estimate_training_time stood here until M244 (DEC-1814) built it
     ):
         assert not statuses[name].built and statuses[name].built_by == milestone
     assert {s.name for s in statuses.values() if s.built} == set(data_registry().names()) - {"chat_turn"}

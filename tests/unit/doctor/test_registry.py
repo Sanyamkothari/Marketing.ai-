@@ -52,6 +52,7 @@ from engine.doctor.registry import (
 )
 from engine.doctor.tools import LookOutput
 from engine.doctor.tools_outcomes import M239_TOOLS
+from engine.doctor.tools_time import M244_TOOLS
 from engine.doctor.tools_wave_one import WAVE_ONE_TOOLS
 from engine.doctor.tools_wave_two import WAVE_TWO_TOOLS
 from engine.doctor.tools_wrappers import M236_TOOLS
@@ -126,6 +127,7 @@ def test_the_registry_holds_the_22_existing_tools_and_the_first_wrappers() -> No
         *M236_TOOLS,  # Plan O M236 (DEC-1806): the remaining wrappers and `explain`
         *WAVE_TWO_TOOLS,  # Plan O M242 (DEC-1812 (k)): `convert_currency`
         *M239_TOOLS,  # Plan O M239 (DEC-1809): the outcome tools
+        *M244_TOOLS,  # Plan O M244 (DEC-1814): the time-settings tools
     }
     assert len(LOOK_TOOLS) == 18
     # The 22nd existing tool is the conversation loop: it is the caller, not a tool kind.
@@ -143,8 +145,9 @@ def test_every_registered_tool_matches_its_catalogue_row() -> None:
         assert entry.kind == tool.kind.value, tool.name
         assert entry.exposure == tool.exposure.value, tool.name
         # Nothing new is registered before it is built: the new tools are wave 1's (DEC-1802 (t)), M236's
-        # `explain` (DEC-1806), wave 2's (M242's `convert_currency`) and M239's outcome tools (DEC-1809).
-        built_new = {*WAVE_ONE_TOOLS, "explain", *WAVE_TWO_TOOLS, *M239_TOOLS}
+        # `explain` (DEC-1806), wave 2's (M242's `convert_currency`), M239's outcome tools (DEC-1809) and M244's
+        # time-settings tools (DEC-1814).
+        built_new = {*WAVE_ONE_TOOLS, "explain", *WAVE_TWO_TOOLS, *M239_TOOLS, *M244_TOOLS}
         assert entry.status in {"existing", "wrapper"} or tool.name in built_new, tool.name
         if tool.number in FIRST_WRAPPERS:
             assert entry.status == "wrapper" and FIRST_WRAPPERS[tool.number] == tool.name

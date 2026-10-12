@@ -1335,6 +1335,9 @@ OUTPUT_READERS: Final[Mapping[str, _Reader]] = {
     "data.convert_currency": _read_convert,
     "data.define_outcome": _read_outcome,
     "data.map_outcome_values": _read_outcome,
+    # Plan O M244 (DEC-1814): the training budget and the data time settings - one pending item each, no step.
+    "data.propose_training_budget": _read_pending,
+    "data.propose_time_settings": _read_pending,
 }
 """How each wave-1 kind's output reads as proposals: the steps with who proposed them, whether they would be
 offered ticked and how sure the rules are, the question a reshape is offered through, rows before and after, and
