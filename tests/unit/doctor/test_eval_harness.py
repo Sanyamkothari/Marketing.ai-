@@ -8,9 +8,14 @@ whole AI path at k = 5 are `slow`: `make agent-eval` and the nightly run take th
 from __future__ import annotations
 
 import ast
+import csv
+import dataclasses
+import io
 import json
+import random
 import socket
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -126,6 +131,7 @@ def test_the_ai_path_runs_on_the_recorded_model_with_no_network_and_no_key() -> 
     step, setting = ai["pass_k"]["propose_step"], ai["pass_k"]["propose_setting"]
     assert step.passed and setting.passed and step.proposals >= 1 and setting.proposals >= 1
     assert ai["harms"] == [] and ai["leaks"] == 0
+    assert ai["pii_checked"], "the personal-data case's profiled and planted values were looked for"
     costs = {c.case: c for c in ai["costs"]}
     assert costs["ai/messy"].calls > 0 and costs["ai/messy"].input_tokens > 0
 
@@ -209,3 +215,180 @@ def test_the_committed_cassette_is_what_the_reference_model_answers_today() -> N
     assert {k: v.text for k, v in model.cassette.entries.items()} == {
         k: v.text for k, v in committed.entries.items()
     }
+
+
+# ---------------------------------------------------------------------------
+# "Accept the recommended" never ticks what it may not (the pre-ticked AI step metric)
+# ---------------------------------------------------------------------------
+def test_an_ai_session_catches_an_ai_step_that_accept_recommended_ticks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With `agent.tick_uncertain` on, the product's own button would tick the AI's `check` suggestion."""
+    from tests.fixtures.doctor_eval import world
+
+    real = world.ai_context
+
+    def ticking(case: str) -> Any:
+        ctx = real(case)
+        agent = ctx.config.agent.model_copy(update={"tick_uncertain": True})
+        return dataclasses.replace(ctx, config=ctx.config.model_copy(update={"agent": agent}))
+
+    monkeypatch.setattr(world, "ai_context", ticking)
+    run = bench.ai_session("messy", _live(ReferenceModel()))
+    assert {h.metric for h in run.harms} == {"pre_ticked_ai_step"}
+    assert {h.where for h in run.harms} >= {"messy/propose_step", "messy/propose_setting"}
+
+
+class _FakeClient:
+    """The two calls `_Recording` makes around "accept the recommended": the session before, then the decision."""
+
+    def __init__(self, before: Any, after: Any) -> None:
+        self.sessions = [before, after]
+
+    def get(self, url: str, **_kwargs: Any) -> Any:
+        return SimpleNamespace(status_code=200, json=lambda: {"session": self.sessions[0]})
+
+    def post(self, url: str, **_kwargs: Any) -> Any:
+        return SimpleNamespace(status_code=200, json=lambda: {"session": self.sessions[1]})
+
+
+def test_the_journey_checks_every_accept_recommended_it_passes_on() -> None:
+    from engine.agent.contracts import DecidedBy, ProposalSource, ProposalState
+
+    before = bench.ai_session("messy", _live(ReferenceModel())).session  # with the AI's pending suggestions
+    pending = [p.proposal_id for p in before.proposals if p.source is ProposalSource.AI]
+    assert pending
+    ticked = tuple(
+        (
+            p.model_copy(update={"state": ProposalState.ACCEPTED, "decided_by": DecidedBy.USER})
+            if p.proposal_id in pending
+            else p
+        )
+        for p in before.proposals
+    )
+    after = before.model_copy(update={"proposals": ticked})
+    recording = bench._Recording(
+        _FakeClient(before.model_dump(mode="json"), after.model_dump(mode="json")), "in_xx"
+    )
+    recording.post("/uploads/u/agent-session/decisions", json={"accept_recommended": True})
+    assert recording.accepts == 1
+    assert [h.metric for h in recording.harms] == ["pre_ticked_ai_step"] * len(pending)
+    clean = bench._Recording(
+        _FakeClient(before.model_dump(mode="json"), before.model_dump(mode="json")), "in_xx"
+    )
+    clean.post("/uploads/u/agent-session/decisions", json={"accept_recommended": True})
+    assert clean.harms == []
+
+
+# ---------------------------------------------------------------------------
+# The end-to-end readiness invariant (the in_01 finding), on a synthetic file of the same shape
+# ---------------------------------------------------------------------------
+IN_01_SHAPE = (
+    "Grahak ID",
+    "Naam",
+    "Shahar",
+    "Pin Code",
+    "Mobile No",
+    "Judne ki tareekh",
+    "Kitne mahine se",
+    "Visits (7 din)",
+    "Kul Kharch",
+    "Yojana",
+    "Sakriya",
+    "GSTIN",
+    "SMS ki anumati",
+    "Kharida (30 din)",
+)
+
+
+def _in_01_shaped(rows: int = 1_200) -> tuple[bytes, dict[str, str], dict[str, str]]:
+    """A synthetic customer export shaped like held-out in_01 (Hinglish headers, lakh amounts, haan/nahi, a 1/0
+    outcome, day-first dates), written here: the held-out generator is never imported outside the harness."""
+    rng = random.Random(7)
+    out = io.StringIO()
+    writer = csv.writer(out, lineterminator="\n")
+    writer.writerow(IN_01_SHAPE)
+    labels: dict[str, str] = {}
+    days: dict[str, str] = {}
+    for i in range(rows):
+        customer = f"G{100_001 + i * 3:06d}"
+        visits = rng.randrange(0, 15)
+        bought = 1 if rng.random() < 0.15 + 0.03 * visits else 0
+        day, month = (i * 7) % 28 + 1, i % 12 + 1
+        writer.writerow(
+            [
+                customer,
+                f"Name {i}",
+                "Pune",
+                f"{411_001 + i % 50:06d}",
+                f"+91 98450 {10_000 + i:05d}",
+                f"{day:02d}/{month:02d}/2024",
+                rng.randrange(1, 96),
+                visits,
+                f"₹{rng.randrange(1, 9)}.{rng.randrange(10)} L",
+                "Gold",
+                "haan" if rng.random() < 0.7 else "nahi",
+                "",
+                "haan",
+                bought,
+            ]
+        )
+        labels[customer] = str(bought)
+        days[customer] = f"2024-{month:02d}-{day:02d}"
+    return out.getvalue().encode("utf-8"), labels, days
+
+
+def test_a_file_called_ready_that_cannot_reach_approve_breaks_the_invariant() -> None:
+    """B1: "ready" must reach Approve (and, in the gate run, train to the end). Today a file shaped like in_01 is
+    called ready by Guided setup with no ID or outcome settled, and Approve fails; the harness must say so. Once
+    the product is fixed (fix-ready-without-roles) the file either reaches Approve or is not called ready."""
+    data, labels, days = _in_01_shaped()
+    job = bench.Job(
+        "in_01_shape",
+        "heldout",
+        "targeted-advertisement",
+        lambda: ("in_01_shape.csv", data, "text/csv"),
+        lambda: bench.Truth(
+            key="Grahak ID",
+            outcome="Kharida (30 din)",
+            header=IN_01_SHAPE,
+            labels=labels,
+            dates={"Judne ki tareekh": days},
+        ),
+    )
+    configs = REPO / "configs"
+    with bench.unified_app(configs) as (client, data_dir):
+        result = bench.run_job(client, data_dir, job, available=set(), config_root=configs, train=False)
+    said_ready = "ready" in (result.doctor_status, result.session_status) or result.verdict in (
+        "ready",
+        "ready_with_warnings",
+    )
+    if said_ready and not (result.approved and result.roles_settled):
+        assert result.invariant_problem is not None and result.invariant_problem.startswith("ready (said by ")
+    if result.invariant_problem is None:
+        assert result.approved or not said_ready, result
+
+
+# ---------------------------------------------------------------------------
+# `make agent-eval` fails a failed gate
+# ---------------------------------------------------------------------------
+def test_the_script_exits_non_zero_on_a_failed_gate(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    from engine.doctor.evals import BenchFile, BenchmarkReport, ToolEval, discover_tools
+
+    tools = tuple(ToolEval(status=s) for s in discover_tools(data_registry()) if s.built)
+    clean = BenchmarkReport(model="m", tools=tools)
+    broken = clean.model_copy(
+        update={
+            "files": (
+                BenchFile(
+                    name="in_01",
+                    group="heldout",
+                    use_case="targeted-advertisement",
+                    invariant_problem="ready (said by Guided setup) but no ID or outcome settled",
+                ),
+            )
+        }
+    )
+    for report, code in ((clean, 0), (broken, 1)):
+        monkeypatch.setattr(bench, "run", lambda report=report, **_kwargs: report)
+        assert bench.main(["--parts", "tools", "--out", str(tmp_path)]) == code

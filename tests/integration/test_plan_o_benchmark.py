@@ -10,11 +10,12 @@ M247 (`--train`).
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
 
-from engine.doctor.evals import kill_verdict
+from engine.doctor.evals import gate_failures, kill_verdict
 from scripts import plan_o_benchmark as bench
 
 
@@ -35,7 +36,8 @@ def test_the_script_writes_the_report_with_every_part(tmp_path: Path) -> None:
         ]
     )
     text = (tmp_path / "plan_o_benchmark.md").read_text(encoding="utf-8")
-    assert code == 0, text[:2000]
+    summary = json.loads((tmp_path / "plan_o_benchmark.json").read_text(encoding="utf-8"))["summary"]
+    assert code == (1 if summary["gate_failures"] else 0), "the exit code is the gate's"
     for heading in (
         "## Harm metrics (each must be zero)",
         "## Tools: pass^5",
@@ -55,6 +57,7 @@ def test_the_script_writes_the_report_with_every_part(tmp_path: Path) -> None:
 @pytest.mark.slow
 def test_the_whole_benchmark_has_no_harm_and_holds_the_invariant() -> None:
     report = bench.run(model="recorded", k=5)
+    assert gate_failures(report) == []
     assert report.harms.total == 0, report.harm_events
     for tool in report.tools:
         if not tool.status.built:

@@ -151,6 +151,10 @@ class HeldoutFile:
     ids: tuple[str, ...]
     outcomes: tuple[int, ...] = field(repr=False)
     """Each data row's outcome, 1 or 0, in row order (aligned with `ids`)."""
+    date_column: str = ""
+    """The join-date column's header as written (its days are written in the file's own day-first style)."""
+    dates: tuple[str, ...] = field(default=(), repr=False)
+    """Each data row's true join day (ISO), in row order: what a day/month order is checked against."""
     personal_values: tuple[str, ...] = field(default=(), repr=False)
     """A few planted personal values (names, mobiles, GSTINs): none may reach a prompt."""
 
@@ -257,6 +261,7 @@ def _one(spec: _Spec) -> HeldoutFile:
     rows: list[dict[str, Any]] = []
     ids: list[str] = []
     outcomes: list[int] = []
+    days: list[str] = []
     personal: list[str] = []
     start = date(2023, 4, 1)
     for index in range(spec.rows):
@@ -271,16 +276,19 @@ def _one(spec: _Spec) -> HeldoutFile:
         name = f"{rng.choice(_FIRST)} {rng.choice(_LAST)}"
         mobile = _mobile(rng)
         gst = _gstin(rng) if rng.random() < 0.35 else ""
+        city = rng.choice(_CITIES)  # drawn in the order the rows were first written: the files never change
+        pin = f"{rng.randrange(110_001, 855_999):06d}"
+        joined = start + timedelta(days=rng.randrange(0, 900))
         if index < 3:
             personal += [name, mobile] + ([gst] if gst and spec.with_gstin else [])
         rows.append(
             {
                 "id": customer,
                 "name": name,
-                "city": rng.choice(_CITIES),
-                "pin": f"{rng.randrange(110_001, 855_999):06d}",
+                "city": city,
+                "pin": pin,
                 "mobile": mobile,
-                "joined": _date(start + timedelta(days=rng.randrange(0, 900)), spec.date_style),
+                "joined": _date(joined, spec.date_style),
                 "tenure": tenure,
                 "visits": visits,
                 "spend": _money(spend, spec.money, rng),
@@ -293,6 +301,7 @@ def _one(spec: _Spec) -> HeldoutFile:
         )
         ids.append(customer)
         outcomes.append(bought)
+        days.append(joined.isoformat())
     header = tuple(headers[key] for key in order)
     width = len(header)
     grid: list[list[Any]] = []
@@ -336,6 +345,8 @@ def _one(spec: _Spec) -> HeldoutFile:
         data_rows=spec.rows,
         ids=tuple(ids),
         outcomes=tuple(outcomes),
+        date_column=headers["joined"],
+        dates=tuple(days),
         personal_values=tuple(personal),
     )
 

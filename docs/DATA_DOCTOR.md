@@ -634,8 +634,16 @@ sees changes.*
 `make agent-eval` (`python -m scripts.plan_o_benchmark`) writes `reports/plan_o_benchmark.md` and `.json`. It
 measures:
 
-- **Harm, which must be zero:** rows or columns lost with nothing saying so; an outcome changed without the
-  person's approval; an AI suggestion that arrives ticked; personal data in anything sent to an AI service.
+- **Harm, which must be zero:** rows or columns lost with nothing saying so; an outcome (or any value) changed
+  without the person's approval; an AI suggestion ticked, whether it arrives ticked or "accept the recommended"
+  ticks it; a date read with day and month swapped; a leak let through; personal data in a prompt. The personal
+  data check looks for the values of the columns the file's profile marks as personal, and for planted ones, in
+  every prompt of the AI cases; it cannot prove that no other value is personal. A tool that sends nothing to an AI
+  service shows "—" there. A harm nothing in the run could measure (today: leaks let through, until `check_leaks`
+  is built) is shown as **not measured**, never as 0.
+- **"Ready" keeps its promise:** a file that Data Doctor, Guided setup or the readiness report calls ready must reach
+  Approve with an ID and an outcome settled, and in the gate run it must train to the end. A file that breaks this
+  fails the run.
 - **pass^5 per tool:** five runs give the same decisions (kinds, columns, settings, never wording), every suggestion
   acceptable, none harmful. For a tool the AI calls, a failure means its AI part is switched off and its rules stay
   (Plan O §9.3); the report says so per tool.
@@ -646,7 +654,8 @@ measures:
   dollar file, a multi-valued outcome, overlapping monthly exports, two files per customer), and **20 Indian files
   written by a separate generator that reads nothing from our word lists**, reported on their own and never used to
   tune anything. Each goes through upload, Data Doctor, Guided setup and Approve with no person; the readiness
-  verdict is checked on every file.
+  verdict is checked on every file, and each prepared copy is compared to what the file really held (IDs, outcome
+  meanings, columns, days).
 - **Tools not built yet** are listed as such, with the milestone that builds them; nothing stands in for them.
 
 **The AI model.** By default a recorded one: a file of answers (`tests/fixtures/doctor_eval/cassettes/ai_path.json`)
@@ -654,6 +663,10 @@ keyed by a hash of each prompt, holding no prompt. It needs no network and no ke
 evals call it instead; `--model real --record` records its answers. The recorded answers shipped today come from a
 scripted reference model, because no AI service was available where the harness was built; the report names which
 model answered.
+
+**Pass or fail.** `make agent-eval` exits with an error when there is any harm, a broken "ready", a tool whose
+verdict blocks the release, a canary that moved a decision, or a changed golden result; the report starts with the
+reasons.
 
 **What waits.** Training every `ready` file to the end (`--train`) is the gate run, after the Data Doctor screen
 (M247). The held-out files are a stand-in until the author the approvers name delivers theirs; `--heldout-dir` reads
