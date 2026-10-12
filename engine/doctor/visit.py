@@ -124,6 +124,7 @@ __all__ = [
     "brief_key",
     "chat",
     "decide",
+    "lazy_converse",
     "mode_of",
     "open_blocking",
     "plan_g_converse",
@@ -190,10 +191,32 @@ class ConverseResult:
     sent: tuple[dict[str, JsonValue], ...] = ()
     model_calls: int = 0
     cost_usd: float = 0.0
+    ai: bool = True
+    """False: no AI service answered (the reply is :data:`AI_NEEDED_REPLY`); the timeline records which."""
 
 
 class ConversePort(Protocol):
     def __call__(self, case: Case, message: str, files: tuple[LoadedFile, ...]) -> ConverseResult: ...
+
+
+def lazy_converse(build: Callable[[], ConversePort | None]) -> ConversePort:
+    """A CONVERSE port that connects to the AI service only when a chat turn needs it, then keeps it.
+
+    Every visit call can carry it at no cost: a resume that finds a message waiting in CONVERSE (the process
+    died during the AI call) answers it with the AI service, as the chat would have. `build` returns None when
+    no AI service is connected; then the reply is :data:`AI_NEEDED_REPLY`.
+    """
+    built: list[ConversePort | None] = []
+
+    def converse(case: Case, message: str, files: tuple[LoadedFile, ...]) -> ConverseResult:
+        if not built:
+            built.append(build())
+        port = built[0]
+        if port is None:
+            return ConverseResult(reply=AI_NEEDED_REPLY, ai=False)
+        return port(case, message, files)
+
+    return converse
 
 
 @dataclass(frozen=True)
@@ -794,7 +817,9 @@ def _converse(run: _Run, case: Case) -> _Step:
     now = run.deps.clock()
     port = run.deps.converse
     result = (
-        ConverseResult(reply=AI_NEEDED_REPLY) if port is None else port(case, message.text, run.files(case))
+        ConverseResult(reply=AI_NEEDED_REPLY, ai=False)
+        if port is None
+        else port(case, message.text, run.files(case))
     )
     reply = CaseChatEntry(role="agent", text=result.reply, at=now, sent=result.sent)
     items = [
@@ -815,7 +840,7 @@ def _converse(run: _Run, case: Case) -> _Step:
         events=[
             EventDraft(
                 kind=TimelineKind.CHAT,
-                details={"role": "agent", "ai": port is not None, "proposals": len(items)},
+                details={"role": "agent", "ai": result.ai, "proposals": len(items)},
             )
         ],
         model_calls=result.model_calls,
@@ -1513,10 +1538,16 @@ def _person_step(
     op_id: str | None,
     build: Callable[[Case], _Step],
 ) -> Case:
-    """Apply one action of the person as one transition, then run the machine to its next rest."""
+    """Apply one action of the person as one transition, then run the machine to its next rest.
+
+    The action is written first and the machine advanced after, so both a retry whose first attempt was written
+    (the process may have died before advancing) and a race with another writer end at the next rest: an
+    applied action never answers `CASE_VERSION_CONFLICT`.
+    """
     case = run.store.get(client_id, case_id)
     if _seen(case, op_id):
-        return case  # its first attempt was written: nothing is applied twice
+        # its first attempt was written: nothing is applied twice, and the visit goes on to its next rest
+        return case if case.read_only else _settle(run, client_id, case_id, case, applied=True)
     if case.version != expected_version:
         raise CaseError(
             "CASE_VERSION_CONFLICT",
@@ -1527,6 +1558,32 @@ def _person_step(
         raise CaseError("CASE_READ_ONLY", "This case cannot be changed here.")
     step = build(case)
     case = _write(run, case, step, op_id=op_id)
+    return _settle(run, client_id, case_id, case, applied=True)
+
+
+_SETTLE_TRIES: Final[int] = 3
+
+
+def _settle(run: _Run, client_id: str, case_id: str, case: Case, *, applied: bool = False) -> Case:
+    """Advance to the next rest; when another writer moved the case on, read it again and continue from there.
+
+    `applied`: the person's action is already written, so a writer that keeps racing does not make it fail;
+    the case is answered as that writer left it.
+    """
+    for _ in range(_SETTLE_TRIES):
+        try:
+            return _advance(run, case)
+        except CaseError as exc:
+            if exc.code != "CASE_VERSION_CONFLICT":
+                raise
+            case = run.store.get(client_id, case_id)
+    if applied:
+        try:
+            return _advance(run, case)
+        except CaseError as exc:
+            if exc.code != "CASE_VERSION_CONFLICT":
+                raise
+            return run.store.get(client_id, case_id)
     return _advance(run, case)
 
 
@@ -1536,14 +1593,7 @@ def resume(client_id: str, case_id: str, deps: VisitDeps, *, actor: str = AGENT)
     case = run.store.get(client_id, case_id)
     if case.read_only:
         return case
-    for _ in range(3):  # another writer moved the case on: read it again and continue from there
-        try:
-            return _advance(run, case)
-        except CaseError as exc:
-            if exc.code != "CASE_VERSION_CONFLICT":
-                raise
-            case = run.store.get(client_id, case_id)
-    return _advance(run, case)
+    return _settle(run, client_id, case_id, case)
 
 
 def add_files(

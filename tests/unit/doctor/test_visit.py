@@ -384,6 +384,134 @@ def test_a_retried_action_is_applied_once(storage: LocalStorage, world: World) -
     assert stale.value.code == "CASE_VERSION_CONFLICT"
 
 
+REST_STATES = {VisitState.ASK, VisitState.APPROVE, VisitState.FOLLOW_UP}
+
+
+def _answer_key(storage: LocalStorage, w: World, case: Case, op_id: str, *, stale: float = 30.0) -> Case:
+    q = question(case, "KEY_AMBIGUOUS")
+    return visit.answer(
+        CLIENT, case.case_id, q.question_id, option(q, "customer_id"), _deps(storage, w, stale=stale),
+        expected_version=case.version, actor=ANALYST, op_id=op_id,
+    )  # fmt: skip
+
+
+def test_a_retried_action_whose_process_died_before_the_visit_moved_on_ends_at_a_rest(
+    tmp_path: Path, world: World
+) -> None:
+    """The action is written, then the process dies before the machine advances; the client retries with the
+    same key. The retry applies nothing twice and the visit goes on to its next rest, as if nothing had died.
+    """
+    clean_storage = LocalStorage(tmp_path / "clean")
+    clean = visit.resume(
+        CLIENT, open_case(clean_storage, world).case_id, _deps(clean_storage, world), actor=ANALYST
+    )
+    clean = _answer_key(clean_storage, world, clean, "answer-1")
+
+    root = tmp_path / "data"
+    storage = LocalStorage(root)
+    case = visit.resume(CLIENT, open_case(storage, world).case_id, _deps(storage, world), actor=ANALYST)
+    with pytest.raises(_Killed):
+        _answer_key(_Crashing(root, 1, after=True), world, case, "answer-1")
+    died = _reload(storage, case)
+    assert died.visit is not None and "answer-1" in died.visit.ops, "the action was written"
+    assert died.state not in REST_STATES and died.visit.waiting_for is None, "and the visit did not move on"
+
+    retried = _answer_key(LocalStorage(root), world, case, "answer-1", stale=0.0)
+    assert retried.state in REST_STATES and retried.visit is not None and retried.visit.waiting_for
+    assert retried == _reload(storage, retried)
+    assert summary(retried) == summary(clean), "nothing lost or repeated"
+    assert timeline_summary(storage, retried) == timeline_summary(clean_storage, clean)
+
+
+def test_an_action_raced_by_another_writer_is_applied_and_never_answers_a_conflict(
+    storage: LocalStorage, world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Another writer (a resume) moves the case on between the action's write and its advance: the action is
+    applied, so the person is not told the case changed since they loaded it."""
+    case = visit.resume(CLIENT, open_case(storage, world).case_id, _deps(storage, world), actor=ANALYST)
+    real = visit._advance
+    raced: list[int] = []
+
+    def racing(run: Any, current: Case) -> Case:
+        if not raced:  # the first advance after the action's write: another writer gets there first
+            raced.append(current.version)
+            other = visit.resume(CLIENT, current.case_id, _deps(storage, world), actor=ANALYST)
+            assert other.version > current.version
+        return real(run, current)
+
+    monkeypatch.setattr(visit, "_advance", racing)
+    answered = _answer_key(storage, world, case, "answer-1")
+    assert raced, "the race happened"
+    assert answered.state in REST_STATES and answered == _reload(storage, answered)
+    q = next(q for q in answered.questions if q.code == "KEY_AMBIGUOUS")
+    assert q.answer is not None and q.answered_by == ANALYST
+
+
+def test_a_visit_resumed_in_converse_is_answered_by_the_ai_service(
+    storage: LocalStorage, world: World
+) -> None:
+    """The process dies during the AI call (the case rests in CONVERSE with the message unanswered); the next
+    call that resumes the visit carries a lazy CONVERSE port and the AI service answers the message."""
+    case = _generic(storage, world)
+    asked: list[str] = []
+
+    def dying(case: Case, message: str, files: tuple[LoadedFile, ...]) -> visit.ConverseResult:
+        raise _Killed
+
+    def answering(case: Case, message: str, files: tuple[LoadedFile, ...]) -> visit.ConverseResult:
+        asked.append(message)
+        return visit.ConverseResult(reply="Here is what I found.", model_calls=1)
+
+    with pytest.raises(_Killed):
+        visit.chat(
+            CLIENT, case.case_id, "What is in this file?", _deps(storage, world, converse=dying),
+            expected_version=case.version, actor=ANALYST, op_id="chat-1",
+        )  # fmt: skip
+    died = _reload(storage, case)
+    assert died.state is VisitState.CONVERSE and died.chat[-1].role == "user"
+
+    built: list[int] = []
+
+    def build() -> visit.ConversePort:
+        built.append(1)
+        return answering
+
+    resumed = visit.resume(
+        CLIENT, case.case_id, _deps(storage, world, converse=visit.lazy_converse(build)), actor=ANALYST
+    )
+    assert asked == ["What is in this file?"] and built == [1]
+    assert [(c.role, c.text) for c in resumed.chat[-2:]] == [
+        ("user", "What is in this file?"),
+        ("agent", "Here is what I found."),
+    ]
+    assert resumed.state in REST_STATES
+    chats = [e for e in CaseStore(storage).timeline(CLIENT, case.case_id) if e.kind is TimelineKind.CHAT]
+    assert chats[-1].details["ai"] is True
+
+
+def test_a_lazy_converse_port_connects_only_when_a_chat_turn_runs(
+    storage: LocalStorage, world: World
+) -> None:
+    built: list[int] = []
+
+    def build() -> visit.ConversePort | None:
+        built.append(1)
+        return None  # no AI service connected
+
+    case = visit.resume(
+        CLIENT, open_case(storage, world).case_id,
+        _deps(storage, world, converse=visit.lazy_converse(build)), actor=ANALYST,
+    )  # fmt: skip
+    assert built == [], "a visit that does not chat never connects"
+    case = visit.chat(
+        CLIENT, case.case_id, "Hello", _deps(storage, world, converse=visit.lazy_converse(build)),
+        expected_version=case.version, actor=ANALYST,
+    )  # fmt: skip
+    assert built == [1] and case.chat[-1].text == AI_NEEDED_REPLY
+    chats = [e for e in CaseStore(storage).timeline(CLIENT, case.case_id) if e.kind is TimelineKind.CHAT]
+    assert chats[-1].details["ai"] is False, "the timeline says no AI service answered"
+
+
 def test_refusals_name_their_code(storage: LocalStorage, world: World) -> None:
     case = visit.resume(CLIENT, open_case(storage, world).case_id, _deps(storage, world), actor=ANALYST)
     calls: dict[str, Callable[[], Case]] = {

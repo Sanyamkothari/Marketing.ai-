@@ -1018,7 +1018,12 @@ PRESCRIBE, VERIFY, HAND_OFF, FOLLOW_UP. ASK, APPROVE and FOLLOW_UP are the inter
   `configs/outcomes.yaml`; `brief_hash` is the SHA-256 of its canonical JSON. The AI never writes one.
 - **The AI only adds pending items.** Whatever a CONVERSE port returns lands `ai`, `pending`, `check`. Without an AI
   service the chat answers `AI_NEEDED_REPLY` and the visit goes on; every other state is rules only.
+- **Every visit call carries the CONVERSE port** (`lazy_converse`: it connects to the AI service only when a chat
+  turn runs). A process killed during the AI call leaves the case in CONVERSE; whichever call resumes it next must
+  answer with the AI service, never with `AI_NEEDED_REPLY` while one is connected.
 - **Person actions** (`set_goal`, `answer`, `decide`, `approve`, `chat`, `add_files`) carry the version they were
-  made against and an optional `op_id`; a retried action whose first attempt was written changes nothing.
+  made against and an optional `op_id`; a retried action whose first attempt was written changes nothing, and still
+  runs the visit on to its next rest (the first attempt may have died before advancing). Once an action is written
+  it never answers `CASE_VERSION_CONFLICT`: a race with another writer is settled by reading the case again.
 - **Ports** (`VisitDeps`): PREVIEW, PRESCRIBE, VERIFY (default: M234's `check_readiness` on the file holding the
   goal's outcome) and HAND_OFF (default: records the target, starts nothing) are filled by M243, M244 and M247.

@@ -18,9 +18,12 @@ from fastapi.testclient import TestClient
 from api.access_policy import all_policies
 from api.main import create_app
 from api.routes import case_visit
+from engine import ai_service
 from engine.access.roles import Role
 from engine.doctor import case as doctor_case
 from engine.doctor.goal_brief import load_goal_brief
+from engine.doctor.visit import AI_NEEDED_REPLY
+from engine.llm import FakeLLMClient, FakeLLMMode
 from tests.fixtures.make_data import GenerationSpec, generate
 from tests.integration.production.access_support import bearer, local_app, make_user
 
@@ -116,6 +119,56 @@ def test_a_visit_goes_from_generic_to_a_goal_to_a_readiness_verdict(
         assert case["state"] == "follow_up" and case["visit"]["hand_off"]["target"] == "runs"
     else:
         assert case["state"] == "approve", "not ready: back to the person with the reason"
+
+
+class _Killed(BaseException):
+    """The process dies during the AI call: nothing after it runs."""
+
+
+class _DiesOnce(FakeLLMClient):
+    """A connected AI service whose first call never returns (the process is killed while it waits)."""
+
+    died = False
+
+    def complete(self, *args: Any, **kwargs: Any) -> Any:
+        if not type(self).died:
+            type(self).died = True
+            raise _Killed
+        return super().complete(*args, **kwargs)
+
+
+def test_a_chat_whose_process_died_during_the_ai_call_is_answered_by_the_ai_on_resume(
+    unified: None, config_root: Path, data_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The process is killed while the AI service is answering a chat (the case rests in CONVERSE). A new process
+    on the same data resumes the visit with the AI service still connected: the AI answers the message."""
+    built: list[_DiesOnce] = []
+
+    def build(*_args: Any, **_kwargs: Any) -> FakeLLMClient:
+        built.append(_DiesOnce(mode=FakeLLMMode.GROUNDED))
+        return built[-1]
+
+    monkeypatch.setattr(ai_service, "build_client", build)
+    monkeypatch.setattr(_DiesOnce, "died", False)
+    first = TestClient(create_app(config_root=config_root, data_dir=data_dir))
+    first.__enter__()  # never left: the process dies
+    case = first.post("/cases", json={"upload_ids": [_upload(first)]}).json()
+    case = _answer_open(first, first.post(f"/cases/{case['case_id']}/visit", json={}).json())
+    case_id = case["case_id"]
+    with pytest.raises(_Killed):
+        first.post(f"/cases/{case_id}/chat", json={"version": case["version"], "message": "What is here?"})
+    asked = len(built)
+
+    with TestClient(create_app(config_root=config_root, data_dir=data_dir)) as second:
+        died = second.get(f"/cases/{case_id}").json()
+        assert died["state"] == "converse" and died["chat"][-1]["role"] == "user"
+        resumed = second.post(f"/cases/{case_id}/visit", json={})
+    assert resumed.status_code == 200, resumed.text
+    case = resumed.json()
+    assert [m["role"] for m in case["chat"]] == ["user", "agent"]
+    assert case["chat"][-1]["text"] != AI_NEEDED_REPLY, "the AI service answered, not 'none is connected'"
+    assert any(c.calls for c in built[asked:]), "the resumed visit asked the AI service"
+    assert case["state"] in {"ask", "approve"} and case["counters"]["model_calls"] >= 1
 
 
 def test_refusals_answer_their_codes(client: TestClient) -> None:

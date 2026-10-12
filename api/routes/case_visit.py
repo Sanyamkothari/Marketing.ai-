@@ -203,9 +203,9 @@ def _converse(
     )
 
 
-def _deps(
-    storage: Storage, root: Path, request: Request, principal: Principal | None, *, chat: bool = False
-) -> VisitDeps:
+def _deps(storage: Storage, root: Path, request: Request, principal: Principal | None) -> VisitDeps:
+    """Every visit route carries the CONVERSE port, connected only when a chat turn runs: a visit resumed in
+    CONVERSE (the process died during the AI call) is answered by the AI service, not told there is none."""
     from api.routes.doctor import offers as doctor_offers
     from engine.stages.ingest import profile_row_cap
 
@@ -217,7 +217,9 @@ def _deps(
         offers=offers,
         config_root=root,
         converse=(
-            _converse(storage, root, request, principal, offers) if chat and principal is not None else None
+            None
+            if principal is None
+            else doctor_visit.lazy_converse(lambda: _converse(storage, root, request, principal, offers))
         ),
     )
 
@@ -365,7 +367,7 @@ def chat_message(
             body.client_id,
             case_id,
             body.message,
-            _deps(storage, root, request, principal, chat=True),
+            _deps(storage, root, request, principal),
             expected_version=body.version,
             actor=principal.user_id,
             op_id=body.op_id,
