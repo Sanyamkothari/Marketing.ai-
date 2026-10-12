@@ -174,7 +174,7 @@ test("each state has its own next step and one primary button", async () => {
     assert.equal(primaries()[0].getAttribute("href"), `#/campaigns/${ids.due}/results`);
 
     await open(`#/campaigns/${ids.old}/overview`);
-    assert.equal(text("[data-overview] [data-status]"), "Waiting for results");
+    assert.equal(text("#app .head [data-status]"), "Waiting for results");
     assert.equal(text("[data-next-step]"), "Next step: add results. They were due on 30 Jul 2026.");
     assert.equal(primaries().length, 1);
     assert.equal(primaries()[0].textContent, "Add results");
@@ -204,11 +204,23 @@ test("adding results on the Results tab sends exactly what gave today's report, 
     const proof = fixture("proof_due");
     assert.equal(proof.status, 200);
     assert.equal(text("[data-headline]"), proof.body.headline);
-    assert.equal(text("[data-evidence] .chip"), "Proven");
+    assert.equal(text("[data-evidence] [data-status]"), "Proven"); // M186: the evidence status chip (was `.chip`)
     assert.equal(primaries().length, 1);
     assert.equal(primaries()[0].getAttribute("href"), `#/pilot/proof/${ids.due}`);
     await open(`#/campaigns/${ids.due}/overview`);
-    assert.equal(text("[data-overview] [data-status]"), "Measured");
+    assert.equal(text("#app .head [data-status]"), "Measured");
+});
+
+test("M186: choosing a results file names it in the drop zone, as the person's own text", async () => {
+    await open(`#/campaigns/${ids.old}/results`);
+    assert.equal($("[data-results-chosen]").hidden, true);
+    chooseFile();
+    $("[data-results-file-input]").dispatchEvent(new w.Event("change", { bubbles: true }));
+    const chosen = $("[data-results-chosen]");
+    assert.equal(chosen.hidden, false);
+    assert.equal(text("[data-results-chosen]"), "Chosen: october_results.csv");
+    assert.ok(chosen.querySelector("[data-user-text]"), "a file name is the person's own text (M172)");
+    assert.ok($("[data-results-drop]").contains($("[data-results-file-input]")), "the zone is the input's label");
 });
 
 test("results not all in yet: the day to come back, never a number, and the file stays in", async () => {
@@ -237,7 +249,7 @@ test("results not all in yet: the day to come back, never a number, and the file
     assert.equal(text("[data-results-notice]"), refusal.body.detail.message);
     // A results file in before the results date does not change the chip: the date decides (M175's rule).
     await open(`#/campaigns/${ids.fresh}/overview`);
-    assert.equal(text("[data-overview] [data-status]"), "Live");
+    assert.equal(text("#app .head [data-status]"), "Live");
     assert.match(
         text("[data-next-step]"),
         /^The results file is in\. The result can be read on or after \d{1,2} [A-Z][a-z]{2} \d{4}\.$/,
