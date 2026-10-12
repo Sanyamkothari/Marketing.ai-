@@ -12,10 +12,11 @@ registry milestone by milestone; the catalogue itself changes only with the desi
 * **exposure** - `aggregate` only for counts and verdicts (`what_can_this_power`, `check_readiness`); every
   other tool returns a cell, a row or a masked example and is `session-only` (the design §5.3).
 
-The catalogue counts 82 tools in 83 rows: Ask your data (#78) is the conversation loop's read-only mode and is
+The catalogue counts 83 tools in 84 rows: Ask your data (#78) is the conversation loop's read-only mode and is
 counted once with it (#77). Rows #82 and #83 were added with the design in Plan O M236 (DEC-1806): M240's
 `read_workbook_sheets` and `find_excel_serial_dates`, built in wave 1 before the design gave them a row. They are
-numbered after #81 so that no other tool's number changes.
+numbered after #81 so that no other tool's number changes. Row #84 was added with the design in Plan O M245
+(DEC-1815): `propose_pattern_fix`, the AI's fix of a new value pattern that the approval of 12 October asked for.
 """
 
 from __future__ import annotations
@@ -140,6 +141,8 @@ CATALOGUE: Final[tuple[CatalogueRow, ...]] = (
     # M. Added in Plan O M236 (DEC-1806): M240's two tools, built in wave 1 (§A reading, §E fixing)
     _R(82, "read_workbook_sheets", "read", "rules", "new"),
     _R(83, "find_excel_serial_dates", "read", "rules", "new"),
+    # N. Added in Plan O M245 (DEC-1815): the AI's fix of a new value pattern, with permission ([REQ] 11)
+    _R(84, "propose_pattern_fix", "propose", "ai", "new"),
 )
 """The design §5.5, row by row."""
 

@@ -228,6 +228,15 @@ class StandingAnswerStore:
         answers = self._read(client_id).standing_answers
         return answers if include_revoked else tuple(a for a in answers if a.revoked_at is None)
 
+    def every_client(self) -> tuple[StandingAnswer, ...]:
+        """Plan O M245 (DEC-1815): every client's answers, by client then oldest first (Settings' one list)."""
+        clients = sorted(
+            parts[1]
+            for key in self._storage.list_keys(CASE_PREFIX)
+            if len(parts := key.split("/")) == 3 and parts[2] == STANDING_FILENAME
+        )
+        return tuple(answer for client in clients for answer in self.list(client))
+
     def find(self, client_id: str, question: CaseQuestion) -> StandingAnswer | None:
         """The live answer for this question's detector, column and values, if the client has one."""
         fingerprint, signature = fingerprint_of(question), signature_of(question)

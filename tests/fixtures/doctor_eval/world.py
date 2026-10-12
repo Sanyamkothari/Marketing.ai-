@@ -378,6 +378,20 @@ CALLS: Final[dict[str, Calls | None]] = {
     "propose_time_settings": lambda columns: [{}, {"window_days": 30}]
     + [{"as_of_column": column} for column in columns]
     + [{"outcome_column": column} for column in columns],
+    # Plan O M245 (DEC-1815): next month's bills against this month's (and a file against itself); a file with no
+    # approved preparation in the world's case is refused (`DRIFT_NO_BASELINE`), cleanly. The AI's fix of a new
+    # pattern on every column, as the notice detector relays it: with no look cited it is refused as ungrounded,
+    # and the refusal must be clean too.
+    "drift_check": _fixed(
+        {"upload_id": LATER, "against_upload_id": EVENTS},
+        {"upload_id": EVENTS, "against_upload_id": EVENTS, "mode": "score"},
+        {"upload_id": CUSTOMERS},
+    ),
+    "propose_pattern_fix": lambda columns: [
+        {"column": column, "kind": "set_missing_text", "params": {"values": ["unknown"]}, "reason": "unknown"}
+        for column in columns
+    ]
+    + [{"column": "region", "kind": "derive", "params": {}}],
 }
 """Per registered tool, the calls it is evaluated with (None: a chat suggestion, evaluated by chat sessions)."""
 

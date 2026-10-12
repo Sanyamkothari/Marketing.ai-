@@ -317,3 +317,39 @@ data:
       proposes: plan
       rules: [data.never_ticked]
       tick_only_sure: true
+    # M245 (DEC-1815): the AI's fix of a new value pattern ("new patterns, with permission"): one of the value-fix
+    # step kinds only (never a row filter, a new column, an expression or a rate), never on the ID, the outcome or
+    # personal data, grounded in a look at the column, tried on 1,000 rows, decision O10's change share, and never
+    # ticked: the person's answer applies it.
+    data.propose_pattern_fix:
+      proposes: steps
+      rules:
+        - data.step_kind
+        - data.personal_data
+        - data.grounded
+        - data.step_params
+        - data.spellings
+        - data.protected_columns
+        - data.tried
+        - data.change_share
+        - data.never_ticked
+      step_kinds:
+        - map_boolean
+        - map_values
+        - set_missing_text
+        - normalise_text
+        - parse_number
+        - parse_date
+        - convert_units
+      params:
+        map_boolean: {allowed: [true_values, false_values]}
+        map_values: {allowed: [mapping]}
+        set_missing_text: {allowed: [values]}
+        normalise_text: {allowed: [strip, merge]}
+        parse_number:
+          allowed: [decimal, percent_to_fraction, indian_scale_words]
+          one_of: {decimal: [".", ","]}
+        parse_date: {allowed: [dayfirst]}
+        convert_units: {allowed: [units, bare]}
+      levels: [clean]
+      change_share: true

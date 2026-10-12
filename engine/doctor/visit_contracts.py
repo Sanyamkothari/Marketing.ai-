@@ -32,6 +32,11 @@ class OptionEffect(StrictBase):
     kind: str | None = Field(default=None, description="The item kind it adds; null = leave as is.")
     title: str = Field(default="", description="The item's title, in one plain sentence.")
     payload: dict[str, JsonValue] = Field(default_factory=dict, description="What it would do, as data.")
+    source: Literal["rules", "ai"] = Field(
+        default="rules",
+        description="Plan O M245 (DEC-1815): who proposed the change. `ai`: a fix the AI suggested for a new pattern; "
+        "the person's answer applies it, and it is counted as the AI's at approval.",
+    )
 
 
 class VisitStop(StrictBase):

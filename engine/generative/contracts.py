@@ -155,6 +155,8 @@ class GenerativePurpose(StrEnum):
     AGENT_NARRATIVE = "agent_narrative"
     # Plan O M236 (DEC-1806): Data Doctor's `explain` - a claim-checked explanation of data evidence.
     DATA_EXPLAIN = "data_explain"
+    # Plan O M245 (DEC-1815): Data Doctor's AI-proposed fix of a new value pattern (one fixed step kind, never code).
+    DATA_PATTERN_FIX = "data_pattern_fix"
 
 
 class GuardrailOutcome(StrEnum):

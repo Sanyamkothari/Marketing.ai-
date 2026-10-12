@@ -10,6 +10,8 @@ default - none of these paths exists and docs/API.md is unchanged.
 | `GET /clients/{client_id}/standing-answers` | Analyst | The client's remembered answers (Settings), revoked ones too. |
 | `POST /clients/{client_id}/standing-answers/{answer_id}/revoke` | Analyst | Revoke one: it is asked again next time. |
 | `GET /data-doctor/candidate-rules` | Admin | AI-proposed patterns people approved often enough to become a rule (for the product team). |
+| `GET /data-doctor/standing-answers` | Analyst | Plan O M245 (DEC-1815): every client's remembered answers, for Settings' one list with Revoke. |
+| `GET /data-doctor/tool-requests` | Admin | Plan O M245: fixes the AI was asked for that no step kind can make yet ("I can't do this safely yet"). |
 
 Refusals: `409 APPROVAL_SENTENCE_CHANGED` (the sentence is no longer the one shown; nothing is recorded),
 `409 RESHAPE_GUARD_MISSING` (a change to the rows without its question, its preview or its future-data check),
@@ -34,6 +36,7 @@ from api.schemas import ErrorResponse, ValidationErrorResponse
 from engine.access.roles import Role
 from engine.config import RunMode, StrictBase
 from engine.doctor.case import CLIENT_ID_PATTERN
+from engine.doctor.pattern_fix import ToolRequest, tool_requests
 from engine.doctor.patterns import ApprovedPattern, candidate_rules
 from engine.doctor.protocol import ProtocolError
 from engine.doctor.standing import StandingAnswer, StandingAnswerStore
@@ -67,6 +70,13 @@ POLICIES: Final[dict[tuple[str, str], RoutePolicy]] = {
     ),
     ("GET", "/data-doctor/candidate-rules"): RoutePolicy(
         role=Role.ADMIN, action="doctor.candidate_rules_read", purpose="see patterns to promote into rules"
+    ),
+    # Plan O M245 (DEC-1815): Settings' list of every remembered answer, and the product team's tool requests.
+    ("GET", "/data-doctor/standing-answers"): RoutePolicy(
+        role=Role.ANALYST, action="doctor.standing_read", purpose="see the answers Data Doctor remembers"
+    ),
+    ("GET", "/data-doctor/tool-requests"): RoutePolicy(
+        role=Role.ADMIN, action="doctor.tool_requests_read", purpose="see the fixes Data Doctor cannot make yet"
     ),
 }
 register(POLICIES)
@@ -206,3 +216,21 @@ def revoke_standing_answer(
 )
 def read_candidate_rules(storage: StorageDep) -> tuple[ApprovedPattern, ...]:
     return candidate_rules(storage)
+
+
+@router.get(
+    "/data-doctor/standing-answers",
+    response_model=tuple[StandingAnswer, ...],
+    summary="Every client's remembered answers (Settings)",
+)
+def list_every_standing_answer(storage: StorageDep) -> tuple[StandingAnswer, ...]:
+    return StandingAnswerStore(storage).every_client()
+
+
+@router.get(
+    "/data-doctor/tool-requests",
+    response_model=tuple[ToolRequest, ...],
+    summary="Fixes Data Doctor was asked for that no step kind can make yet",
+)
+def read_tool_requests(storage: StorageDep) -> tuple[ToolRequest, ...]:
+    return tool_requests(storage)

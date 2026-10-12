@@ -91,6 +91,8 @@ VALUES: dict[str, object] = {
     "payload": '{"header_candidates": []}',
     # Plan O M236: Data Doctor's claim-checked explanation (data_explain, DEC-1806)
     "facts": '[{"ref": "f1", "type": "count", "about": "rows"}]',
+    # Plan O M245: Data Doctor's AI-proposed fix of a new value pattern (data_pattern_fix, DEC-1815)
+    "column_look": '{"column": "sakriya", "values": [{"value": "bilkul", "rows": 12}]}',
 }
 """One plausible value per variable any shipped prompt declares, so the sweep can render them all."""
 

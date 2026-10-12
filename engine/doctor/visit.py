@@ -2028,13 +2028,16 @@ def answer(
         replaced = f"{question_id}:{question.answer}" if question.answer is not None else None
         items = [item for item in case.items if item.item_id != replaced]
         if effect is not None and effect.kind is not None:
+            # Plan O M245 (DEC-1815): an AI's fix for a new pattern stays the AI's (`check`), applied by this answer;
+            # approval counts its pattern towards a candidate rule (`engine.doctor.patterns`).
+            ai = effect.source == "ai"
             items.append(
                 CaseItem(
                     item_id=f"{question_id}:{option_id}"[:128],
                     kind=effect.kind,
                     title=effect.title,
-                    source=ProposalSource.RULES,
-                    confidence=AgentConfidence.SURE,
+                    source=ProposalSource.AI if ai else ProposalSource.RULES,
+                    confidence=AgentConfidence.CHECK if ai else AgentConfidence.SURE,
                     state=ProposalState.ACCEPTED,
                     upload_id=question.upload_id or _str(effect.payload.get("upload_id")),
                     payload=dict(effect.payload),

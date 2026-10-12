@@ -141,8 +141,9 @@ FORBIDDEN_PREFIXES: Final[tuple[str, ...]] = (
 Caller = Literal["rules", "ai", "person"]
 CALLERS: Final[frozenset[str]] = frozenset({"rules", "ai", "person"})
 _MIN_PROPOSE_ROLE: Final[frozenset[Role]] = frozenset({Role.ANALYST, Role.APPROVER, Role.ADMIN})
-_LAST_ROW: Final[int] = 83
-"""The catalogue's last row (`engine.doctor.catalogue`): #82 and #83 are M240's tools, given rows in M236."""
+_LAST_ROW: Final[int] = 84
+"""The catalogue's last row (`engine.doctor.catalogue`): #82 and #83 are M240's tools, given rows in M236; #84 is
+M245's `propose_pattern_fix` (DEC-1815)."""
 _LETTERS: Final[dict[int, int]] = str.maketrans("0123456789abcdef", "abcdefghijklmnop")
 
 
@@ -297,7 +298,7 @@ class DataTool(Generic[In, Out]):
     """One registry entry: Plan K's `AgentTool` shape plus exposure, callers and needs (Plan O §5)."""
 
     number: int
-    """The tool's row in the design's catalogue (§5.5), 1 to 83."""
+    """The tool's row in the design's catalogue (§5.5), 1 to 84."""
     name: str
     kind: DataToolKind
     description: str

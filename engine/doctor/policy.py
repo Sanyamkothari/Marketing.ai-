@@ -1313,6 +1313,30 @@ def _read_outcome(kind: str, output: Mapping[str, Any]) -> list[DataProposal]:
     ]
 
 
+def _read_pattern_fix(kind: str, output: Mapping[str, Any]) -> list[DataProposal]:
+    """M245 (DEC-1815): the AI's fix of a new value pattern - its one step, whether it cites a look at its column,
+    what it did on the rows it was tried on, never ticked."""
+    step = output["step"]
+    effect = output["effect"]
+    params = dict(step["params"])
+    return [
+        DataProposal(
+            kind=kind,
+            source="ai",
+            steps=(StepFacts(kind=RecipeStepKind(step["kind"]), column=str(step["column"]), params=params),),
+            ticked=bool(output["ticked"]),
+            confidence="check",
+            looked_at=bool(output["looked_at"]),
+            effect=StepEffect(
+                changed=int(effect["changed"]),
+                failed=int(effect["failed"]),
+                out_of=int(effect["out_of"]),
+                rows_tried=int(effect["rows_tried"]),
+            ),
+        )
+    ]
+
+
 OUTPUT_READERS: Final[Mapping[str, _Reader]] = {
     "data.propose_role": _read_pending,
     "data.propose_key": _read_pending,
@@ -1338,6 +1362,8 @@ OUTPUT_READERS: Final[Mapping[str, _Reader]] = {
     # Plan O M244 (DEC-1814): the training budget and the data time settings - one pending item each, no step.
     "data.propose_training_budget": _read_pending,
     "data.propose_time_settings": _read_pending,
+    # Plan O M245 (DEC-1815): the AI's fix of a new value pattern, tried and never ticked.
+    "data.propose_pattern_fix": _read_pattern_fix,
 }
 """How each wave-1 kind's output reads as proposals: the steps with who proposed them, whether they would be
 offered ticked and how sure the rules are, the question a reshape is offered through, rows before and after, and

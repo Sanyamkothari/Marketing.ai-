@@ -737,7 +737,8 @@ def register_all(registry: DataToolRegistry) -> None:
     """Register every tool built so far: M232's 22 existing (21 tools and the loop) and first wrappers, the
     tools of Plan O wave 1 (`engine.doctor.tools_wave_one`), then M236's wrappers and `explain`
     (`engine.doctor.tools_wrappers`), M242's `convert_currency` (`engine.doctor.tools_wave_two`), M239's
-    outcome tools (`engine.doctor.tools_outcomes`) and M244's time-settings tools (`engine.doctor.tools_time`).
+    outcome tools (`engine.doctor.tools_outcomes`), M244's time-settings tools (`engine.doctor.tools_time`) and
+    M245's notice tools (`engine.doctor.tools_notice`).
     """
     for tool in TOOLS.values():
         if tool.kind is ToolKind.READ:
@@ -957,3 +958,7 @@ def register_all(registry: DataToolRegistry) -> None:
     from engine.doctor.tools_time import register_time_tools
 
     register_time_tools(registry)
+    # Plan O M245 (DEC-1815): `drift_check` and `propose_pattern_fix`, rules and screen only.
+    from engine.doctor.tools_notice import register_notice_tools
+
+    register_notice_tools(registry)

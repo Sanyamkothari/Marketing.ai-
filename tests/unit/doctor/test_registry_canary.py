@@ -216,6 +216,25 @@ SPECS: dict[str, Calls | None] = {
     "propose_time_settings": lambda columns: [{}, {"window_days": 30}]
     + [{"as_of_column": column} for column in columns]
     + [{"outcome_column": column} for column in columns],
+    # Plan O M245 (DEC-1815): next month's bills against this month's, and the AI's fix of a new pattern on every
+    # column (a personal-data column, the ID and the outcome are refused, and the refusal must be clean too).
+    "drift_check": _fixed(
+        {"upload_id": LATER, "against_upload_id": EVENTS},
+        {"upload_id": CUSTOMERS, "against_upload_id": CUSTOMERS},
+        {"upload_id": CUSTOMERS},
+    ),
+    "propose_pattern_fix": lambda columns: [
+        {"column": column, "kind": "set_missing_text", "params": {"values": ["unknown"]}} for column in columns
+    ]
+    + [
+        {
+            "column": "region_contact",
+            "kind": "map_values",
+            "params": {"mapping": {"North": "N", f"{NAME} {EMAIL}": PHONE}},
+            "reason": "North is written N.",
+            "evidence_ids": [_IDS["look"]],
+        }
+    ],
 }
 
 _IDS: dict[str, Any] = {}
@@ -430,8 +449,11 @@ def _m236_context(
             first,
         ),
         data_registry().call("stack_files", {"upload_ids": [EVENTS, LATER]}, first),
+        # Plan O M245 (DEC-1815): a look at a column, which the AI's fix of a new pattern cites.
+        data_registry().call("value_counts", {"column": "region_contact"}, first),
     )
     _IDS["evidence"] = tuple(result.evidence_id for result in evidence)
+    _IDS["look"] = evidence[-1].evidence_id
     planted = [{"column": column, "why": f"{NAME} wrote {EMAIL} here."} for column in ctx.frame.columns]
     return {
         "connections": store,

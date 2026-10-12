@@ -52,6 +52,7 @@ from engine.doctor.registry import (
 )
 from engine.doctor.tools import LookOutput
 from engine.doctor.tools_outcomes import M239_TOOLS
+from engine.doctor.tools_notice import M245_TOOLS
 from engine.doctor.tools_time import M244_TOOLS
 from engine.doctor.tools_wave_one import WAVE_ONE_TOOLS
 from engine.doctor.tools_wave_two import WAVE_TWO_TOOLS
@@ -128,6 +129,7 @@ def test_the_registry_holds_the_22_existing_tools_and_the_first_wrappers() -> No
         *WAVE_TWO_TOOLS,  # Plan O M242 (DEC-1812 (k)): `convert_currency`
         *M239_TOOLS,  # Plan O M239 (DEC-1809): the outcome tools
         *M244_TOOLS,  # Plan O M244 (DEC-1814): the time-settings tools
+        *M245_TOOLS,  # Plan O M245 (DEC-1815): `drift_check` and `propose_pattern_fix`
     }
     assert len(LOOK_TOOLS) == 18
     # The 22nd existing tool is the conversation loop: it is the caller, not a tool kind.
@@ -145,9 +147,9 @@ def test_every_registered_tool_matches_its_catalogue_row() -> None:
         assert entry.kind == tool.kind.value, tool.name
         assert entry.exposure == tool.exposure.value, tool.name
         # Nothing new is registered before it is built: the new tools are wave 1's (DEC-1802 (t)), M236's
-        # `explain` (DEC-1806), wave 2's (M242's `convert_currency`), M239's outcome tools (DEC-1809) and M244's
-        # time-settings tools (DEC-1814).
-        built_new = {*WAVE_ONE_TOOLS, "explain", *WAVE_TWO_TOOLS, *M239_TOOLS, *M244_TOOLS}
+        # `explain` (DEC-1806), wave 2's (M242's `convert_currency`), M239's outcome tools (DEC-1809), M244's
+        # time-settings tools (DEC-1814) and M245's notice tools (DEC-1815).
+        built_new = {*WAVE_ONE_TOOLS, "explain", *WAVE_TWO_TOOLS, *M239_TOOLS, *M244_TOOLS, *M245_TOOLS}
         assert entry.status in {"existing", "wrapper"} or tool.name in built_new, tool.name
         if tool.number in FIRST_WRAPPERS:
             assert entry.status == "wrapper" and FIRST_WRAPPERS[tool.number] == tool.name
@@ -155,21 +157,23 @@ def test_every_registered_tool_matches_its_catalogue_row() -> None:
 
 
 def test_the_catalogue_is_the_designs_eighty_tools() -> None:
-    """The design's 80 tools in 81 rows, and since Plan O M236 (DEC-1806) M240's two READ tools as #82, #83."""
+    """The design's 80 tools in 81 rows, and since Plan O M236 (DEC-1806) M240's two READ tools as #82, #83;
+    since Plan O M245 (DEC-1815) the AI's fix of a new value pattern as #84."""
     counted = [entry for entry in CATALOGUE if entry.counted_with is None]
-    assert len(CATALOGUE) == 83 and [e.number for e in CATALOGUE] == list(range(1, 84))
-    assert len(counted) == 82
-    assert Counter(e.status for e in counted) == {"existing": 22, "wrapper": 29, "new": 31}
+    assert len(CATALOGUE) == 84 and [e.number for e in CATALOGUE] == list(range(1, 85))
+    assert len(counted) == 83
+    assert Counter(e.status for e in counted) == {"existing": 22, "wrapper": 29, "new": 32}
     kinds = Counter(e.kind for e in counted)
-    assert kinds["propose"] == 24 and kinds["ask"] == 4
+    assert kinds["propose"] == 25 and kinds["ask"] == 4
     assert {e.name for e in CATALOGUE if e.exposure == "aggregate"} == {
         "what_can_this_power",
         "check_readiness",
     }
-    assert len({e.name for e in CATALOGUE}) == 83
+    assert len({e.name for e in CATALOGUE}) == 84
     assert [(e.number, e.name, e.kind) for e in CATALOGUE[81:]] == [
         (82, "read_workbook_sheets", "read"),
         (83, "find_excel_serial_dates", "read"),
+        (84, "propose_pattern_fix", "propose"),
     ]
     assert not EXECUTOR_NAMES & {e.name for e in CATALOGUE}, "an executor is never in the catalogue"
 

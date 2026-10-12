@@ -263,10 +263,31 @@ def _converse(
     )
 
 
+def _pattern_ai(storage: Storage, root: Path, request: Request, offers: Sequence[Any]) -> Any:
+    """Plan O M245 (DEC-1815): the AI's side of a new pattern's fix when an AI service is connected; None
+    otherwise (the rules' question stands). Connected only when a new pattern needs it."""
+    from api.routes.ai_service import resolve_slot
+    from engine.doctor.pattern_fix import meter_pattern_ai
+    from engine.generative.budget import Meter
+
+    if not offers:
+        return None
+    default = offers[0].config
+    try:
+        ai = resolve_slot(
+            default.generative.llm, slot="product", storage=storage, settings=get_settings(request)
+        )
+    except HTTPException:
+        return None
+    meter = Meter(ai.client, job_id="data-doctor", llm=ai.llm, budget=default.generative.budget)
+    return meter_pattern_ai(meter, root, mode=default.agent.ai_data_access)
+
+
 def _deps(storage: Storage, root: Path, request: Request, principal: Principal | None) -> VisitDeps:
     """Every visit route carries the CONVERSE port, connected only when a chat turn runs: a visit resumed in
     CONVERSE (the process died during the AI call) is answered by the AI service, not told there is none."""
     from api.routes.doctor import offers as doctor_offers
+    from engine.doctor.notice import notice_detector
     from engine.doctor.prescription import CasePrescriber
     from engine.doctor.time_settings import time_settings_detector
     from engine.stages.ingest import profile_row_cap
@@ -292,7 +313,17 @@ def _deps(storage: Storage, root: Path, request: Request, principal: Principal |
         ledger=ledger_for(request, root),
         # Plan O M244 (DEC-1814): the time settings - the training budget's three choices and the data time
         # settings - asked through M246's protocol, for a goal.
-        detectors=(time_settings_detector(storage, config_root=root),),
+        # Plan O M245 (DEC-1815): what Data Doctor notices it does not know - one question each, remembered for the
+        # client - with the AI's fix of a new pattern when an AI service is connected.
+        detectors=(
+            time_settings_detector(storage, config_root=root),
+            notice_detector(
+                storage,
+                config_root=root,
+                offers=offers,
+                ai=lambda: _pattern_ai(storage, root, request, offers),
+            ),
+        ),
     )
 
 
