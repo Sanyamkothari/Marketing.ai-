@@ -393,15 +393,17 @@ class RunStatus(Artefact):
         default=None,
         description=(
             "Expected seconds left, from the same expected durations. Null when there is no estimate, when "
-            "the run has ended, and while the running stage has run past its expected duration."
+            "the run has ended (done, failed or cancelled), and while the running stage has run past its "
+            "expected duration."
         ),
     )
     estimate_basis: Literal["time_budget", "past_runs", "stages"] | None = Field(
         default=None,
         description=(
             "What the expected durations came from. A training run: `time_budget` (its train stage is "
-            "expected to take the search's wall-clock budget) or `past_runs` (the median train duration of "
-            "this deployment's finished runs of the same use case and trainer, capped at the budget). A "
+            "expected to take the search's wall-clock budget, whenever the trainer honours one) or "
+            "`past_runs` (a trainer with no budget, an uplift learner on LightGBM: the median train duration "
+            "of this deployment's finished runs of the same use case and trainer). A "
             "scoring run: `past_runs` (medians of its finished runs of the same use case) or `stages` "
             "(documented per-stage defaults, no history yet). Null when `estimated_pct` is null."
         ),

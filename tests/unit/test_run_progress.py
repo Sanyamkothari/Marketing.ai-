@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 
 from engine.config import ProblemType, RunMode, load_use_case
-from engine.contracts import RunRecord, RunState, RunStatus, StageKey, StageStatus
+from engine.contracts import RunError, RunRecord, RunState, RunStatus, StageKey, StageStatus
 from engine.pipeline import RUN_FILENAME, STATUS_FILENAME, TRAIN_STAGES, stages_for
 from engine.run_progress import (
     DEFAULT_STAGE_SECONDS,
@@ -28,7 +28,7 @@ from engine.run_progress import (
     train_budget_seconds,
     trainer_of,
 )
-from engine.runs import RUN_CONFIG_FILENAME, cancel_run, update_stage
+from engine.runs import RUN_CONFIG_FILENAME, cancel_run, restore_ending, update_stage
 from engine.storage import LocalStorage, run_key
 from engine.uplift.config import UpliftBaseModel
 from engine.utils.time import utc_now
@@ -92,9 +92,9 @@ def test_the_eta_counts_the_running_stages_remainder_and_every_stage_after_it() 
     assert estimate.overrun is False
 
 
-def test_past_runs_path_the_median_of_past_train_durations_wins_below_the_budget() -> None:
+def test_past_runs_path_the_median_of_past_train_durations_when_the_trainer_has_no_budget() -> None:
     past = PastDurations(stages={StageKey.INGEST: (2.0, 4.0, 9.0)}, train=(100.0, 120.0, 400.0))
-    expectations = expected_durations(TRAIN_STAGES, budget_seconds=BUDGET, past=past)
+    expectations = expected_durations(TRAIN_STAGES, budget_seconds=None, past=past)
     assert expectations is not None
     assert expectations.basis == "past_runs"
     assert expectations.seconds[StageKey.TRAIN] == 120.0
@@ -102,12 +102,27 @@ def test_past_runs_path_the_median_of_past_train_durations_wins_below_the_budget
     assert expectations.seconds[StageKey.EXPLAIN] == DEFAULT_STAGE_SECONDS[StageKey.EXPLAIN]
 
 
-def test_past_runs_path_is_capped_at_the_budget_and_stands_alone_without_one() -> None:
-    past = PastDurations(stages={}, train=(5000.0,))
-    capped = expected_durations(TRAIN_STAGES, budget_seconds=BUDGET, past=past)
-    assert capped is not None and capped.seconds[StageKey.TRAIN] == BUDGET and capped.basis == "past_runs"
-    alone = expected_durations(TRAIN_STAGES, budget_seconds=None, past=past)
-    assert alone is not None and alone.seconds[StageKey.TRAIN] == 5000.0 and alone.basis == "past_runs"
+def test_the_budget_wins_over_past_runs_whenever_the_trainer_honours_one() -> None:
+    for train_history in ((5000.0,), (100.0, 120.0, 400.0)):
+        past = PastDurations(stages={StageKey.INGEST: (2.0, 4.0, 9.0)}, train=train_history)
+        expectations = expected_durations(TRAIN_STAGES, budget_seconds=BUDGET, past=past)
+        assert expectations is not None
+        assert expectations.seconds[StageKey.TRAIN] == BUDGET and expectations.basis == "time_budget"
+        # the other stages still come from history
+        assert expectations.seconds[StageKey.INGEST] == 4.0
+
+
+def test_past_runs_under_a_smaller_budget_do_not_hold_back_a_larger_budget_now() -> None:
+    """Review fix: a user raises `time_limit_minutes` from 5 to 60. The past runs took ~300 s under the old
+    budget; expecting 300 s now would put the bar on "Finishing up" after five minutes, for the 55 left."""
+    past = PastDurations(stages={}, train=(300.0, 290.0, 310.0))
+    expectations = expected_durations(TRAIN_STAGES, budget_seconds=3600.0, past=past)
+    assert expectations is not None
+    assert expectations.seconds[StageKey.TRAIN] == 3600.0
+    assert expectations.basis == "time_budget"
+    ten_minutes_in = estimate_progress(running_train(), expectations.seconds, running_elapsed=600.0)
+    assert ten_minutes_in.overrun is False and ten_minutes_in.eta_seconds is not None
+    assert ten_minutes_in.eta_seconds > 50 * 60
 
 
 def test_no_basis_path_a_training_run_with_neither_budget_nor_history_gets_no_estimate() -> None:
@@ -156,7 +171,7 @@ def test_never_more_than_99_before_the_run_is_done_and_100_only_when_it_is() -> 
     assert estimate_progress(almost, expectations, running_elapsed=50.0).pct == 99
     done = rows(dict.fromkeys(TRAIN_STAGES, RunState.DONE))
     final = estimate_progress(done, expectations, running_elapsed=None)
-    assert (final.pct, final.eta_seconds) == (100, 0)
+    assert (final.pct, final.eta_seconds) == (100, None)  # an ended run has no time left (the contract)
 
 
 def test_monotonic_a_reading_never_goes_below_the_last_one() -> None:
@@ -321,7 +336,7 @@ def test_past_durations_reads_finished_runs_of_the_same_use_case_and_keeps_train
     )
     assert sorted(past.train) == [100.0, 140.0]
     assert sorted(past.stages[StageKey.INGEST]) == [3.0, 4.0, 5.0]
-    expectations = expected_durations(TRAIN_STAGES, budget_seconds=BUDGET, past=past)
+    expectations = expected_durations(TRAIN_STAGES, budget_seconds=None, past=past)
     assert expectations is not None and expectations.seconds[StageKey.TRAIN] == 120.0
 
 
@@ -372,6 +387,64 @@ def test_cancel_run_and_a_failure_from_outside_clear_the_time_left(tmp_path: Pat
     failed = update_stage(storage, "r_20261006_00000006", StageKey.TRAIN, state=RunState.FAILED)
     assert failed.eta_seconds is None
     assert all(row.fraction is None for row in failed.stages)
+
+
+def _live_training(storage: LocalStorage, run_id: str) -> RunStatus:
+    """A seeded run whose status.json says train is running, as a stray heartbeat write would leave it."""
+    _seed_run(storage, run_id, seconds={}, problem_type="binary_classification", state=RunState.RUNNING)
+    key = run_key(run_id, STATUS_FILENAME)
+    status = storage.read_model(key, RunStatus)
+    live = status.model_copy(
+        update={
+            "stages": tuple(
+                (
+                    row.model_copy(update={"state": RunState.RUNNING, "fraction": 0.4})
+                    if row.key is StageKey.TRAIN
+                    else row.model_copy(update={"state": RunState.PENDING})
+                )
+                for row in status.stages
+            ),
+            "state": RunState.RUNNING,
+            "current_stage": StageKey.TRAIN,
+            "estimated_pct": 40,
+            "eta_seconds": 300,
+        }
+    )
+    storage.write_model(key, live)
+    return live
+
+
+def test_restore_ending_puts_a_cancel_or_a_failure_back_and_leaves_everything_else_alone(
+    tmp_path: Path,
+) -> None:
+    storage = LocalStorage(tmp_path)
+    run_id = "r_20261007_00000007"
+    status_key, record_key = run_key(run_id, STATUS_FILENAME), run_key(run_id, RUN_FILENAME)
+    _live_training(storage, run_id)
+    running = storage.read_model(record_key, RunRecord)
+    assert restore_ending(storage, running) is None, "a run that has not ended is left alone"
+
+    moment = utc_now()
+    cancelled = running.model_copy(update={"state": RunState.CANCELLED, "finished_at": moment})
+    storage.write_model(record_key, cancelled)
+    restored = restore_ending(storage, cancelled)
+    assert restored is not None and storage.read_model(status_key, RunStatus) == restored
+    assert (restored.state, restored.current_stage, restored.eta_seconds) == (RunState.CANCELLED, None, None)
+    assert restored.updated_at == moment and all(row.fraction is None for row in restored.stages)
+    assert restore_ending(storage, cancelled) is None, "an ended status.json is never rewritten"
+
+    _live_training(storage, run_id)
+    error = RunError(code="E_TEST", message="The instance was reclaimed.", stage=StageKey.TRAIN)
+    failed = running.model_copy(update={"state": RunState.FAILED, "finished_at": moment, "error": error})
+    after = restore_ending(storage, failed)
+    assert after is not None and after.state is RunState.FAILED
+    train_row = next(row for row in after.stages if row.key is StageKey.TRAIN)
+    assert train_row.state is RunState.FAILED and train_row.error == error
+
+    _live_training(storage, run_id)
+    done = running.model_copy(update={"state": RunState.DONE, "finished_at": moment})
+    assert restore_ending(storage, done) is None, "done is the flow's own ending, never restored from outside"
+    assert storage.read_model(status_key, RunStatus).state is RunState.RUNNING
 
 
 def test_a_status_written_before_m189_still_reads_with_the_new_fields_null() -> None:

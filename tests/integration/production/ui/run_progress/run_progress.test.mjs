@@ -63,6 +63,7 @@ test("a run past its expected time says Finishing up and its bar moves on its ow
   const html = card(overrun);
   assert.match(html, /<p class="run-eta" data-run-eta>Finishing up…<\/p>/);
   assert.match(html, /class="run-meter run-meter-busy"[^>]*aria-valuetext="Finishing up"/);
+  assert.match(html, /<div class="run-meter-fill run-busy-fill"><\/div>/);
   assert.ok(!/aria-valuenow/.test(html), "an indeterminate bar has no value");
   assert.ok(!html.includes('class="run-pct"'), "no frozen number in the pill");
   assert.ok(!/left/.test(text(html)), "no time left is promised");
@@ -114,4 +115,16 @@ test("every new word passes the visible-text check (no engine words)", () => {
     }
   }
   assert.match(card(mid), /Building your model…/);
+});
+
+test("the helper brings its own two rules, once, with no new colour and a still bar under reduced motion", () => {
+  card(overrun);
+  card(mid);
+  const sheets = [...document.head.querySelectorAll("style#run-progress-styles")];
+  assert.equal(sheets.length, 1, "injected once, however many bars are drawn");
+  const css = sheets[0].textContent;
+  assert.match(css, /\.run-eta\{[^}]*color:var\(--muted\)/);
+  assert.match(css, /@media \(prefers-reduced-motion:no-preference\)\{[^]*animation:run-busy/);
+  assert.ok(!/\.run-meter-fill/.test(css), "does not restyle the shared fill");
+  assert.ok(!/#[0-9a-f]{3,8}\b|rgba?\(|hsla?\(/i.test(css), "no colour value of its own");
 });

@@ -87,4 +87,4 @@ def test_the_status_route_carries_the_estimate_mid_training_and_progress_pct_kee
 
     with TestClient(create_app(config_root=config_root, data_dir=tmp_path / "data")) as client:
         done = RunDetailResponse.model_validate(client.get(f"/runs/{RUN_ID}").json())
-    assert (done.status.progress_pct, done.status.estimated_pct, done.status.eta_seconds) == (100, 100, 0)
+    assert (done.status.progress_pct, done.status.estimated_pct, done.status.eta_seconds) == (100, 100, None)

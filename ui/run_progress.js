@@ -8,6 +8,30 @@
 // running stage takes longer than expected the server sends no time left: the bar then moves on its own
 // ("Finishing up…") instead of showing a number that has stopped.
 
+// The two rules this helper's markup needs, injected once from here rather than added to ui/index.html (whose
+// shared styles another milestone restyles): the time-left line, and the bar that moves on its own while a
+// run is "Finishing up…". Their own class names, so they do not lean on `.run-meter-fill`'s geometry; no new
+// colour (the moving fill borrows the bar's own fill colour through `.run-meter-fill`, the line `--muted`);
+// with reduced motion the busy fill stands still across the whole bar.
+const STYLE_ID = "run-progress-styles";
+const CSS = `
+.run-eta{margin:6px 0 0;font-size:12px;color:var(--muted)}
+.run-meter .run-busy-fill{width:100%;opacity:.45}
+@media (prefers-reduced-motion:no-preference){
+  .run-meter .run-busy-fill{width:30%;opacity:1;animation:run-busy 1.4s ease-in-out infinite}
+  @keyframes run-busy{0%{transform:translateX(-100%)}100%{transform:translateX(340%)}}
+}
+`;
+
+/** Add the helper's style sheet to the page once; a no-op where there is no document (node, server). */
+export function injectRunProgressStyles(doc = typeof document === "undefined" ? null : document) {
+  if (!doc || !doc.head || doc.getElementById(STYLE_ID)) return;
+  const style = doc.createElement("style");
+  style.id = STYLE_ID;
+  style.textContent = CSS;
+  doc.head.appendChild(style);
+}
+
 const num = (value) => (typeof value === "number" && !Number.isNaN(value) ? value : null);
 const clamp = (value) => Math.max(0, Math.min(100, Math.round(value)));
 
@@ -59,9 +83,10 @@ export function progressBadgeHtml(progress) {
  */
 export function progressMeterHtml(progress, extraClass = "") {
   if (!progress || (progress.pct === null && !progress.finishing)) return "";
+  injectRunProgressStyles();
   const cls = extraClass ? ` ${extraClass}` : "";
   if (progress.finishing) {
-    return `<div class="run-meter run-meter-busy${cls}" role="progressbar" aria-label="Progress" aria-valuemin="0" aria-valuemax="100" aria-valuetext="Finishing up" data-run-busy><div class="run-meter-fill"></div></div>`;
+    return `<div class="run-meter run-meter-busy${cls}" role="progressbar" aria-label="Progress" aria-valuemin="0" aria-valuemax="100" aria-valuetext="Finishing up" data-run-busy><div class="run-meter-fill run-busy-fill"></div></div>`;
   }
   return `<div class="run-meter${cls}" role="progressbar" aria-label="Progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${progress.pct}"><div class="run-meter-fill" style="width:${progress.pct}%"></div></div>`;
 }
@@ -70,5 +95,6 @@ export function progressMeterHtml(progress, extraClass = "") {
 export function progressNoteHtml(progress) {
   if (!progress) return "";
   const text = progress.finishing ? "Finishing up…" : progress.eta;
+  if (text) injectRunProgressStyles();
   return text ? `<p class="run-eta" data-run-eta>${text}</p>` : "";
 }

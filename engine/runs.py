@@ -95,6 +95,7 @@ __all__ = [
     "job_spec_for",
     "job_spec_key",
     "read_job_spec",
+    "restore_ending",
     "run_job_spec",
     "update_run",
     "update_stage",
@@ -330,7 +331,14 @@ def cancel_run(
     """
     moment = now or utc_now()
     key = run_key(run_id, STATUS_FILENAME)
-    status = storage.read_model(key, RunStatus)
+    storage.write_model(key, _cancelled(storage.read_model(key, RunStatus), moment))
+    if error is not None:
+        return update_run(storage, run_id, state=RunState.CANCELLED, finished_at=moment, error=error)
+    return update_run(storage, run_id, state=RunState.CANCELLED, finished_at=moment)
+
+
+def _cancelled(status: RunStatus, moment: datetime) -> RunStatus:
+    """`status` as `cancel_run` leaves it: every unfinished stage and the run itself cancelled at `moment`."""
     stages = tuple(
         (
             row.model_copy(update={"state": RunState.CANCELLED, "ended_at": moment, "fraction": None})
@@ -339,22 +347,44 @@ def cancel_run(
         )
         for row in status.stages
     )
-    storage.write_model(
-        key,
-        status.model_copy(
-            update={
-                "stages": stages,
-                "state": RunState.CANCELLED,
-                "current_stage": None,
-                "progress_pct": _progress(stages),
-                "eta_seconds": None,  # Plan M M189 (DEC-1619): a cancelled run has no time left
-                "updated_at": moment,
-            }
-        ),
+    return status.model_copy(
+        update={
+            "stages": stages,
+            "state": RunState.CANCELLED,
+            "current_stage": None,
+            "progress_pct": _progress(stages),
+            "eta_seconds": None,  # Plan M M189 (DEC-1619): a cancelled run has no time left
+            "updated_at": moment,
+        }
     )
-    if error is not None:
-        return update_run(storage, run_id, state=RunState.CANCELLED, finished_at=moment, error=error)
-    return update_run(storage, run_id, state=RunState.CANCELLED, finished_at=moment)
+
+
+def restore_ending(storage: Storage, record: RunRecord) -> RunStatus | None:
+    """Put an ended run's ending back into a `status.json` that says it is still going; `None` if it needn't.
+
+    Plan M M189 (DEC-1619). `cancel_run` and `fail_run` write `status.json` and then `run.json`, from a
+    process that holds no lock of the flow's. A progress heartbeat write already on its way when they ran
+    can land on top of the ending in `status.json`; `run.json`, written second, still says how the run
+    ended. This rewrites `status.json` the way that ending wrote it (`finished_at` as the moment), and is
+    a no-op when `run.json` has not ended or `status.json` already has. A `done` record is the flow's own
+    ending and is never restored here.
+    """
+    key = run_key(record.run_id, STATUS_FILENAME)
+    status = storage.read_model(key, RunStatus)
+    if status.state in _TERMINAL or record.state not in _TERMINAL:
+        return None
+    moment = record.finished_at or utc_now()
+    if record.state is RunState.CANCELLED:
+        restored = _cancelled(status, moment)
+        storage.write_model(key, restored)
+        return restored
+    if record.state is RunState.FAILED and record.error is not None:
+        stage = _stage_to_blame(status)
+        if stage is not None:
+            return update_stage(
+                storage, record.run_id, stage, state=RunState.FAILED, error=record.error, now=moment
+            )
+    return None
 
 
 def fail_run(

@@ -18,6 +18,7 @@ import pytest
 from engine import run_progress
 from engine.contracts import RunState, RunStatus, StageKey
 from engine.jobs import CancelToken, JobCancelledError
+from engine.runs import cancel_run
 from engine.stages import train
 from tests.unit.run_progress_support import (  # noqa: F401 - fixtures, by name
     FakeClock,
@@ -26,6 +27,7 @@ from tests.unit.run_progress_support import (  # noqa: F401 - fixtures, by name
     registry_fixture,
     resolved_fixture,
     storage_fixture,
+    wait_for,
 )
 from tests.unit.test_run_train import (
     RUN_ID,
@@ -33,6 +35,7 @@ from tests.unit.test_run_train import (
     StageStubs,
     make_context,
     pipeline_for,
+    read_run,
     read_status,
 )
 
@@ -78,7 +81,7 @@ def test_estimated_pct_rises_during_the_train_stage_while_progress_pct_stays(
 
     final = read_status(storage)
     assert final.state is RunState.DONE
-    assert (final.progress_pct, final.estimated_pct, final.eta_seconds) == (100, 100, 0)
+    assert (final.progress_pct, final.estimated_pct, final.eta_seconds) == (100, 100, None)
     # Every status write is a monotonic reading.
     written = [status.estimated_pct for status in storage.statuses() if status.estimated_pct is not None]
     assert written == sorted(written)
@@ -124,6 +127,88 @@ def test_the_heartbeat_never_writes_after_a_cancel(monkeypatch, resolved, storag
     count = len(storage.statuses())
     time.sleep(0.1)
     assert len(storage.statuses()) == count
+
+
+def test_the_heartbeat_never_overwrites_a_cancel_written_from_outside_the_flow(
+    monkeypatch, resolved, storage, registry, clock
+) -> None:
+    """The cancel route, the cost cap and SageMaker's reconcile call `runs.cancel_run`, which writes CANCELLED
+    to status.json without the flow's lock, while the flow's own token is set only later (on SageMaker, at the
+    SIGTERM that follows StopTrainingJob). The heartbeat must leave that ending alone in the meantime."""
+    StageStubs().install(monkeypatch)
+    seen: dict[str, Any] = {}
+
+    def cancelled_from_outside(recipe: Any, parts: Any, evaluation: Any, **kwargs: Any) -> Any:
+        clock.now += 600.0
+        last = next_heartbeat(storage)
+        # the recording store notes a write before it reaches the file: let that one land first
+        wait_for(lambda: read_status(storage).updated_at >= last.updated_at, "the heartbeat's write to land")
+        cancel_run(storage, RUN_ID)  # the token is NOT set: the container has not heard yet
+        for _ in range(4):  # the heartbeat had many chances to write while the clock moved on
+            clock.now += 60.0
+            time.sleep(0.05)
+        seen["written"] = list(storage.statuses())
+        seen["stored"] = read_status(storage)
+        raise JobCancelledError("The run was cancelled.")
+
+    monkeypatch.setattr(train, "train", cancelled_from_outside)
+    with pytest.raises(JobCancelledError):
+        pipeline_for(storage, registry).run_train(make_context(resolved, storage, registry))
+    written: list[RunStatus] = seen["written"]
+    cancelled_at = next(i for i, status in enumerate(written) if status.state is RunState.CANCELLED)
+    later = [status.state for status in written[cancelled_at + 1 :]]
+    assert RunState.RUNNING not in later, f"status.json went back to running after the cancel: {later}"
+    assert seen["stored"].state is RunState.CANCELLED
+    assert read_status(storage).state is RunState.CANCELLED
+
+
+def test_a_heartbeat_write_already_on_its_way_when_the_cancel_lands_is_put_right_by_the_next_beat(
+    monkeypatch, resolved, storage, registry, clock
+) -> None:
+    """No lock is shared across processes, so a heartbeat write can be in flight while `cancel_run` writes.
+    Made deterministic here: `cancel_run` runs inside a heartbeat's own write, before it reaches the file.
+    The next beat finds run.json cancelled under a status.json that says running, and puts the ending back."""
+    StageStubs().install(monkeypatch)
+    armed = threading.Event()
+    fired = threading.Event()
+    record = storage.write_model
+
+    def write_model(key: str, model: Any) -> None:
+        if (
+            armed.is_set()
+            and threading.current_thread().name.startswith("progress-")
+            and key.endswith("status.json")
+        ):
+            armed.clear()
+            cancel_run(storage, RUN_ID)  # lands first; the heartbeat's RUNNING then lands on top of it
+            fired.set()
+        record(key, model)
+
+    monkeypatch.setattr(storage, "write_model", write_model)
+    seen: dict[str, Any] = {}
+
+    def cancelled_mid_write(recipe: Any, parts: Any, evaluation: Any, **kwargs: Any) -> Any:
+        clock.now += 600.0
+        next_heartbeat(storage)
+        armed.set()
+        wait_for(fired.is_set, "the cancel inside a heartbeat write")
+        wait_for(
+            lambda: read_status(storage).state is RunState.CANCELLED, "the next beat to put the ending back"
+        )
+        time.sleep(0.1)  # and ten more chances to write
+        seen["written"] = list(storage.statuses())
+        seen["stored"] = read_status(storage)
+        raise JobCancelledError("The run was cancelled.")
+
+    monkeypatch.setattr(train, "train", cancelled_mid_write)
+    with pytest.raises(JobCancelledError):
+        pipeline_for(storage, registry).run_train(make_context(resolved, storage, registry))
+    written: list[RunStatus] = seen["written"]
+    cancelled_at = next(i for i, status in enumerate(written) if status.state is RunState.CANCELLED)
+    after = [status.state for status in written[cancelled_at + 1 :]]
+    assert after == [RunState.RUNNING, RunState.CANCELLED], "one stray write, then the ending put back"
+    assert seen["stored"].state is RunState.CANCELLED and seen["stored"].eta_seconds is None
+    assert read_run(storage).state is RunState.CANCELLED
 
 
 def test_a_training_run_with_no_basis_carries_no_estimate_and_no_heartbeat(

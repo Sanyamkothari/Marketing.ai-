@@ -6,10 +6,10 @@ at 50% for nearly the whole run and then raced to 100. `progress_pct` keeps that
 its tests pin the 12, 25, 38 ... sequence); this module adds the estimate beside it:
 
 * `expected_durations` gives every stage an expected duration. The train stage takes the search's
-  wall-clock budget when the trainer honours one (AutoGluon's `time_limit`), or the median of this
-  deployment's finished runs of the same use case and trainer - capped at the budget, which is an upper
-  bound - and otherwise has none, so a training run without either gets no estimate at all. Every other
-  stage takes the median of past runs, or a small documented default (`DEFAULT_STAGE_SECONDS`).
+  wall-clock budget whenever the trainer honours one (AutoGluon's `time_limit`); only a trainer without
+  a budget (an uplift learner on LightGBM) takes the median of this deployment's finished runs of the
+  same use case and trainer; with neither there is no estimate at all. Every other stage takes the
+  median of past runs, or a small documented default (`DEFAULT_STAGE_SECONDS`).
 * `estimate_progress` is the pure rule: the done stages' expected durations, plus the running stage's
   expected duration times the share of it that has elapsed, over the total. A running stage that has
   run past its expectation is credited at most `OVERRUN_FRACTION` of it and has no time left to give
@@ -18,8 +18,9 @@ its tests pin the 12, 25, 38 ... sequence); this module adds the estimate beside
 * `install_progress_estimate` wires that into the pipeline without touching a stage (train.py is
   frozen): each status write is decorated with the estimate, and while a long stage runs a heartbeat
   thread rewrites `status.json` every `HEARTBEAT_SECONDS` so the bar moves. The heartbeat writes under
-  the same lock as the flow's own writes, only while its stage is still the running one, and never once
-  the run was cancelled, so it cannot overwrite an ending.
+  the same lock as the flow's own writes, only while its stage is still the running one, and only while
+  the stored document is still the flow's own - never over an ending another process wrote (a cancel
+  from the API or the cost cap) and never once the run was cancelled.
 
 Nothing here can fail a run: an estimate that cannot be made is left null and logged.
 """
@@ -32,6 +33,7 @@ import threading
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from datetime import datetime
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, cast
 
@@ -111,6 +113,9 @@ SCANNED_RECORDS: Final[int] = 60
 CLOCK: Callable[[], float] = time.monotonic
 """The clock elapsed time is measured on; a test replaces it to make a slow stage without waiting."""
 
+_ENDED: Final[frozenset[RunState]] = frozenset({RunState.DONE, RunState.FAILED, RunState.CANCELLED})
+"""A stored status in one of these states is an ending the heartbeat must never write over."""
+
 _TRACKER_ATTR: Final[str] = "_run_progress_tracker"
 _INSTALLED: Final[str] = "_run_progress_installed"
 
@@ -163,9 +168,11 @@ def expected_durations(
 ) -> Expectations | None:
     """The expected duration of each stage in `keys`, or `None` when the train stage has no basis.
 
-    The train stage: the median of past train durations with the same trainer, capped at the budget
-    when there is one (the budget is an upper bound the search may stop well short of); else the
-    budget; else nothing, and then there is no estimate - a guess at the stage that is almost all of
+    The train stage: the search's wall-clock budget whenever the trainer honours one; past runs are not
+    consulted then, because a past run says how long the search took under *its* budget, and a budget
+    raised since (5 minutes to 60) would leave the bar "Finishing up" for most of the run. Without a
+    budget (an uplift learner on LightGBM): the median of past train durations with the same trainer.
+    Without either: nothing, and then there is no estimate - a guess at the stage that is almost all of
     the run would be a number that means nothing. Every other stage: the median of past runs, else
     `DEFAULT_STAGE_SECONDS`.
     """
@@ -174,13 +181,12 @@ def expected_durations(
     basis: EstimateBasis | None = None
     for key in keys:
         if key is StageKey.TRAIN:
-            past_train = statistics.median(past.train) if past.train else None
-            if past_train is not None:
-                value = past_train if budget_seconds is None else min(past_train, budget_seconds)
-                basis = "past_runs"
-            elif budget_seconds is not None:
+            if budget_seconds is not None:
                 value = budget_seconds
                 basis = "time_budget"
+            elif past.train:
+                value = statistics.median(past.train)
+                basis = "past_runs"
             else:
                 return None
         else:
@@ -286,11 +292,11 @@ def estimate_progress(
     """The time-weighted estimate for `stages`, never below `floor` (the last value this run showed).
 
     `running_elapsed` is how long the running stage has run, in seconds (`None` when it has only just
-    started, or when no stage is running). Every stage done is 100; a run that failed or was cancelled
-    keeps `floor` and has no time left to give.
+    started, or when no stage is running). Every stage done is 100 with no time left (`eta_seconds` is
+    null for every ended run, as the contract says); a run that failed or was cancelled keeps `floor`.
     """
     if stages and all(row.state is RunState.DONE for row in stages):
-        return Estimate(pct=100, eta_seconds=0, fraction=None, overrun=False)
+        return Estimate(pct=100, eta_seconds=None, fraction=None, overrun=False)
     if any(row.state in (RunState.FAILED, RunState.CANCELLED) for row in stages):
         return Estimate(pct=min(floor, 99), eta_seconds=None, fraction=None, overrun=False)
 
@@ -492,16 +498,16 @@ def _make_tracker(flow: Any) -> ProgressTracker | None:
     mode: RunMode = ctx.mode
     keys = tuple(row.key for row in flow._status.status.stages)
     train = mode is RunMode.TRAIN
+    budget = train_budget_seconds(config) if train else None
     past = past_durations(
         ctx.storage,
         use_case_id=config.id,
         mode=mode,
-        trainer=trainer_of(config) if train else None,
+        # past train durations are only used without a budget, so only then is each run's trainer read
+        trainer=trainer_of(config) if train and budget is None else None,
         exclude_run_id=ctx.run_id,
     )
-    expectations = expected_durations(
-        keys, budget_seconds=train_budget_seconds(config) if train else None, past=past
-    )
+    expectations = expected_durations(keys, budget_seconds=budget, past=past)
     if expectations is None:
         _LOGGER.info("progress estimate: none for run %s (no time budget, no past run)", ctx.run_id)
         return None
@@ -515,22 +521,72 @@ def _make_tracker(flow: Any) -> ProgressTracker | None:
 
 
 def _start_heartbeat(flow: Any, tracker: ProgressTracker, key: StageKey) -> _Heartbeat:
-    """Rewrite `status.json` every `HEARTBEAT_SECONDS` while `key` is the running stage of a live run."""
-    from engine.pipeline import STATUS_FILENAME
-    from engine.storage import run_key
+    """Rewrite `status.json` every `HEARTBEAT_SECONDS` while `key` is the running stage of a live run.
+
+    Each beat is a compare-and-write under the tracker's lock. It writes only when the flow's token is not
+    cancelled, the flow's own status still has `key` running, `run.json` has not ended, and the stored
+    `status.json` is still the one this flow (or this heartbeat) wrote last: not terminal, and not newer.
+    `runs.cancel_run` (the cancel route, the cost cap, SageMaker's reconcile) and `runs.fail_run` write
+    `status.json` and then `run.json` without the flow's lock, and on SageMaker the flow's token is set
+    only at the SIGTERM that follows, so the token alone cannot tell; the stored documents can, and the
+    heartbeat stops for good the first time it sees someone else's write.
+
+    Across processes no lock is shared, so one write of the heartbeat's already on its way can still land
+    on top of that ending. The next beat then finds `run.json` ended under a `status.json` that is not, and
+    puts the ending back (`runs.restore_ending`) before it stops.
+    """
+    from engine.pipeline import RUN_FILENAME, STATUS_FILENAME
+    from engine.runs import restore_ending
+    from engine.storage import StorageError, run_key
 
     writer = flow._status
     cancel = flow._ctx.cancel
     status_key = run_key(flow._ctx.run_id, STATUS_FILENAME)
+    record_key = run_key(flow._ctx.run_id, RUN_FILENAME)
+    last_beat: list[datetime] = []  # the `updated_at` this heartbeat last wrote
 
     def beat() -> bool:
         if cancel.cancelled:
-            return False  # the cancel route has written, or is writing, the ending; never overwrite it
+            return False  # the cancel has written, or is writing, the ending; never overwrite it
         with tracker.lock:
+            if cancel.cancelled:
+                return False
             status: RunStatus = writer.status
+            if any(row.key is key and row.state is RunState.PENDING for row in status.stages):
+                return True  # the flow has not written this stage's start yet; wait for it, do not give up
             if status.state is not RunState.RUNNING or status.current_stage is not key:
                 return False
-            writer._storage.write_model(status_key, status.model_copy(update={"updated_at": utc_now()}))
+            raw = getattr(writer._storage, "_inner", writer._storage)  # undecorated: an ending is not ours
+            try:
+                record: RunRecord | None = raw.read_model(record_key, RunRecord)
+            except (StorageError, ValueError):
+                record = None  # the status check below still guards the write
+            if record is not None and record.state in _ENDED:
+                if restore_ending(raw, record) is not None:
+                    _LOGGER.warning(
+                        "progress heartbeat: run %s status.json put back to %s",
+                        status.run_id,
+                        record.state.value,
+                    )
+                return False
+            try:
+                stored = raw.read_model(status_key, RunStatus)
+            except (StorageError, ValueError):
+                _LOGGER.warning(
+                    "progress heartbeat: run %s status.json unreadable; beat skipped", status.run_id
+                )
+                return True
+            ours = max([status.updated_at, *last_beat])
+            if stored.state in _ENDED or stored.updated_at > ours:
+                _LOGGER.info(
+                    "progress heartbeat: run %s status.json was written outside the flow (%s); it stops",
+                    status.run_id,
+                    stored.state.value,
+                )
+                return False
+            moment = max(utc_now(), ours)
+            writer._storage.write_model(status_key, status.model_copy(update={"updated_at": moment}))
+            last_beat[:] = [moment]
         return True
 
     return _Heartbeat(beat, HEARTBEAT_SECONDS, name=f"progress-{flow._ctx.run_id}-{key.value}")
