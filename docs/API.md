@@ -305,6 +305,9 @@ The failure attached to a failed run or stage.
 | `stages` | list[StageStatus] | yes | The full stage list in execution order, eight for train and seven for score. |
 | `current_stage` | StageKey ("ingest" \| "validate" \| "prepare" \| "split" \| "train" \| "evaluate" \| "explain" \| "register" \| "validate_against_schema" \| "predict" \| "explain_rows" \| "actions" \| "export") \| null | no | Stage currently running, when any. |
 | `progress_pct` | integer | yes | Pre-computed completion percentage, done stages over total. |
+| `estimated_pct` | integer \| null | no | Time-weighted completion estimate, 0 to 100: each stage weighted by its expected duration and the running stage credited for the time it has run. Never goes backwards within a run, never exceeds 99 before the run is done, and is 100 only when it is. Null when no estimate could be made (a run started before this field existed, or a training run with neither a time budget nor a past run to go by). |
+| `eta_seconds` | integer \| null | no | Expected seconds left, from the same expected durations. Null when there is no estimate, when the run has ended (done, failed or cancelled), and while the running stage has run past its expected duration. |
+| `estimate_basis` | "time_budget" \| "past_runs" \| "stages" \| null | no | What the expected durations came from. A training run: `time_budget` (its train stage is expected to take the search's wall-clock budget, whenever the trainer honours one) or `past_runs` (a trainer with no budget, an uplift learner on LightGBM: the median train duration of this deployment's finished runs of the same use case and trainer). A scoring run: `past_runs` (medians of its finished runs of the same use case) or `stages` (documented per-stage defaults, no history yet). Null when `estimated_pct` is null. |
 
 #### StageStatus
 
@@ -322,6 +325,7 @@ One engine stage on the Running screen (the UI groups rows by `group_label`; DEC
 | `ended_at` | datetime (ISO-8601, with timezone) \| null | no | UTC time this stage ended. |
 | `duration_seconds` | number \| null | no | Wall-clock duration of the stage. |
 | `error` | RunError \| null | no | Failure detail when this stage failed. |
+| `fraction` | number \| null | no | How far through its expected duration the running stage is, 0 to 1 (capped at 0.95 while it runs longer than expected); null for every stage that is not running, and when no estimate could be made. |
 
 ### `run_config.json`
 
@@ -372,6 +376,7 @@ A fully merged, validated use case. This is what the whole engine consumes.
 | `onboarding` | OnboardingConfig | no | `engine.yaml:defaults.onboarding` - every onboarding default, per use case (plan section 5.3). |
 | `uplift` | UpliftConfig | no | `uplift:` in a use case. Inert unless `problem_type` is `uplift`.  The data limits, the randomness check and anything about the treatment assignment are **not** agent-editable: an agent that could loosen them could make a targeted campaign look causal. |
 | `agent` | AgentConfig | no | `agent:` in a use case: the Guided-setup helper for that use case. |
+| `data_doctor` | DataDoctorConfig | no | `data_doctor:` in a use case: Plan O's one Data Doctor agent. Only the switch so far (M230). |
 
 #### TargetConfig
 
@@ -622,6 +627,14 @@ How the target is derived (plan section 5.2).  `agent_editable` is `False` and c
 | `max_tool_steps_per_turn` | integer | no |  |
 | `ai_data_access` | DataAccess ("masked_data" \| "summaries_only") | no | What the chat model may see of the file's cells (`agent.ai_data_access`).  `masked_data` shows the values a tool asks for after masking (`engine.agent.egress.mask_value`): the model can look at real cells so it does not have to guess. `summaries_only` shows no cell at all: every string that comes from a cell is replaced by its *shape* (`Aaaaa 9999`), so the model still sees formats and counts and never a value. Personal-data columns never yield a value in either mode. |
 | `always_hide_columns` | list[string] | no |  |
+
+#### DataDoctorConfig
+
+`data_doctor:` in a use case: Plan O's one Data Doctor agent. Only the switch so far (M230).
+
+| Field | Type | Required | Meaning |
+|---|---|---|---|
+| `unified` | boolean | no | Plan O (DEC-1800): when true, Guided setup and the Doctor page are the one Data Doctor agent. Off until the parity checklist is met (M249); while off, nothing changes. |
 
 #### ThresholdConfig
 
@@ -2137,6 +2150,8 @@ Keys of the default document that no advanced-settings field renders, with their
 | `agent.max_tool_steps_per_turn` | int 1..20; tool calls the helper may make before it must reply |
 | `agent.ai_data_access` | enum masked_data \| summaries_only; what the chat model sees of cells: masked values, or only their shape (`Aaaaa 9999`) |
 | `agent.always_hide_columns` | list[str]; columns (case-insensitive) whose values the chat model never sees, whatever the profile says |
+| `data_doctor` | Plan O (DEC-1800). The one Data Doctor agent; not overridable per run |
+| `data_doctor.unified` | bool; true = Guided setup and the Doctor page are one Data Doctor. Off until M249's parity checklist is met; while off nothing changes |
 
 ### Catalog keys
 

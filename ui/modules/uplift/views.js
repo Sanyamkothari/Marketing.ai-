@@ -64,6 +64,7 @@ import {
   signed,
 } from "./format.js";
 import { runResultsLineHtml } from "../campaigns/links.js"; // Plan M M176 (DEC-1606)
+import { progressBadgeHtml, progressMeterHtml, progressNoteHtml, runProgress } from "../../run_progress.js"; // Plan M M189 (DEC-1619)
 
 /** The one-line explanation plan B §8 gives the problem type, shown wherever it is chosen. */
 export const UPLIFT_EXPLANATION = "predicts who changes behaviour because of your action";
@@ -689,13 +690,10 @@ function runningBody(uc, s) {
   const cancel = s.confirmCancel
     ? `<div class="btn-row ucancel"><span>Cancel it? It stops now and cannot be resumed.</span><button type="button" class="btn danger sm confirm" id="u-cancel">Yes, cancel</button><button type="button" class="btn quiet sm" id="u-cancel-keep">Keep running</button></div>`
     : `<div class="btn-row ucancel"><span class="spacer"></span><button type="button" class="btn danger sm" id="u-cancel">Cancel</button></div>`;
-  const pct = status && typeof status.progress_pct === "number" && !Number.isNaN(status.progress_pct)
-    ? Math.max(0, Math.min(100, Math.round(status.progress_pct)))
-    : null;
-  const pctBadge = pct !== null ? `<span class="run-pct">${pct}%</span>` : "";
-  const meter = pct !== null
-    ? `<div class="run-meter" role="progressbar" aria-valuenow="${pct}" aria-valuemin="0" aria-valuemax="100"><div class="run-meter-fill" style="width:${pct}%"></div></div>`
-    : "";
+  // Plan M M189 (DEC-1619): the time-weighted estimate and the time left when the status has them.
+  const reading = runProgress(status);
+  const pctBadge = progressBadgeHtml(reading);
+  const meter = `${progressMeterHtml(reading)}${progressNoteHtml(reading)}`;
   return `<div class="setup-grid"><section class="card"><div class="run-title-row"><h3>${esc(
     train ? "Building your effect model…" : "Making the contact list…",
   )}</h3>${pctBadge}</div><p class="urun-intro">${esc(
