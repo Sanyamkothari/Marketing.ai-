@@ -210,5 +210,6 @@ markers = [
   "postgres: needs a PostgreSQL server (`make postgres-up`); skips with a reason when there is none",
   "docker: needs a working Docker daemon and a pullable base image; skips with a reason when there is none",
   "aws: talks to a real AWS account; never selected by default, run by hand against a dev account",
+  "xdist_group(name): pytest-xdist runs every test of one group in the same worker; registered here so `--strict-markers` collects without pytest-xdist installed (CI runs without it)",
   "statistical: Monte Carlo validity tests (Plan J); collected only with MARKETING_AI_STATISTICAL=1, run nightly by `make test-statistical` (DEC-1300)",
 ]
