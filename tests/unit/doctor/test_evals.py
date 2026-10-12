@@ -137,6 +137,17 @@ def test_a_decision_digest_ignores_wording_ids_and_clocks_but_not_decisions() ->
     assert decision_digest(base) != decision_digest({**base, "state": "accepted"})
 
 
+def test_a_decision_digest_ignores_when_a_check_ran_but_not_what_it_found() -> None:
+    """`preflight` and `check_uplift_data` stamp `checked_at` (the UTC time the checks ran): a clock, never a
+    decision. Each call reads the clock afresh, so without this pass^5 and the injection canary both fail."""
+    base = {"result": {"verdict": "ready", "checks": [{"name": "rows", "passed": True}]}}
+    first = {"result": {**base["result"], "checked_at": "2026-10-12T15:07:55.714180Z"}}
+    later = {"result": {**base["result"], "checked_at": "2026-10-12T15:07:56.170371Z"}}
+    assert decision_digest(first) == decision_digest(later) == decision_digest(base)
+    failed = {"result": {**first["result"], "checks": [{"name": "rows", "passed": False}]}}
+    assert decision_digest(first) != decision_digest(failed)
+
+
 def _proposal(**update: Any) -> Proposal:
     fields: dict[str, Any] = {
         "proposal_id": "c1-p1",
