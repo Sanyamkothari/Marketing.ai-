@@ -84,6 +84,7 @@ import {
 import * as seams from "./modules/router.js";
 import { COST_NEEDS_CONFIRMATION, costConfirmHtml, costLineHtml } from "./cost.js"; // Plan J M108 (DEC-1318)
 import { USER_TEXT_ATTRIBUTE, plainText, userText } from "./labels.js"; // Plan M M172 (DEC-1602): the marketer's words; names the person supplied
+import { progressBadgeHtml, progressMeterHtml, progressNoteHtml, runProgress } from "./run_progress.js"; // Plan M M189 (DEC-1619)
 
 import {
   allScoresSlotHtml,
@@ -998,6 +999,10 @@ function groupLine(group) {
  * `groups` are `groupStages(status.stages)`; `placeholder` names the rows to draw before the first
  * status arrives. `cancel` is the Cancel control's HTML (`cancelControls`); `listId` is the `<ol>`'s
  * id; `error` is HTML (an errorBox).
+ *
+ * `progress` is `runProgress(status)` (Plan M M189, DEC-1619): the time-weighted estimate when the status
+ * carries one, with the time left under the bar, or "Finishing up…" and a moving bar while the run takes
+ * longer than expected. `progressPct` alone (a bare number) still draws the plain bar.
  */
 export function runningCard({
   title,
@@ -1008,6 +1013,7 @@ export function runningCard({
   listId = "",
   error = "",
   progressPct = null,
+  progress = null,
 }) {
   const cls = { running: "active", done: "done", failed: "failed", cancelled: "cancelled", pending: "" };
   const rows = (groups.length ? groups : placeholder.map((label) => ({ label, state: "pending", stages: [] })))
@@ -1024,17 +1030,14 @@ export function runningCard({
         .map((stage) => `<div><dt>${esc(stage.title || stage.key)}</dt><dd>${esc(stage.detail)}</dd></div>`)
         .join("")}</dl></details>`
     : "";
-  const hasPct = typeof progressPct === "number" && !Number.isNaN(progressPct);
-  const clampedPct = hasPct ? Math.max(0, Math.min(100, Math.round(progressPct))) : null;
-  const pctBadge = clampedPct !== null ? `<span class="run-pct">${clampedPct}%</span>` : "";
-  const meter = clampedPct !== null
-    ? `<div class="run-meter" role="progressbar" aria-valuenow="${clampedPct}" aria-valuemin="0" aria-valuemax="100"><div class="run-meter-fill" style="width:${clampedPct}%"></div></div>`
-    : "";
+  const reading = progress || runProgress({ progress_pct: progressPct });
+  const pctBadge = progressBadgeHtml(reading);
+  const meter = progressMeterHtml(reading);
   return `<section class="card run-card" aria-busy="true"><div class="run-head"><div><div class="run-title-row"><h3>${esc(
     title,
   )}</h3>${pctBadge}</div>${
     intro ? `<p class="run-intro">${esc(intro)}</p>` : ""
-  }${meter}</div>${cancel ? `<div class="run-cancel">${cancel}</div>` : ""}</div><ol class="progress"${
+  }${meter}${progressNoteHtml(reading)}</div>${cancel ? `<div class="run-cancel">${cancel}</div>` : ""}</div><ol class="progress"${
     listId ? ` id="${esc(listId)}"` : ""
   }>${rows}</ol>${tech}${error}</section>`;
 }
@@ -1051,7 +1054,6 @@ export const cancelControls = (button, confirm, confirming) =>
 function runningHtml(uc, s) {
   const status = s.detail && s.detail.status;
   const train = s.mode === "train";
-  const pct = status && typeof status.progress_pct === "number" ? status.progress_pct : null;
   return `<div class="uc-running">${runningCard({
     // Plan M M172 review: the running screen in the glossary's words (no "train", "score" or "run").
     title: train ? "Building your model…" : `Ranking your ${people(uc)}…`,
@@ -1065,7 +1067,7 @@ function runningHtml(uc, s) {
     ),
     listId: "prog",
     error: s.submitError ? errorBox(s.submitError) : "",
-    progressPct: pct,
+    progress: runProgress(status), // Plan M M189: the estimate when the status has one, else progress_pct
   })}${runsCard(uc, s, { folded: true })}</div>`;
 }
 

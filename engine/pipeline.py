@@ -1976,4 +1976,12 @@ install_channel_column_guard(_ScoreFlow)
 # ---- PLAN-K (agents that check) — append only below this line ----
 # ---- END PLAN-K ----
 # ---- PLAN-M (simple UI) — append only below this line ----
+# Plan M M189 (DEC-1619): an honest progress estimate. Each flow's `_run_stage` is wrapped so every
+# status.json write also carries `estimated_pct`, `eta_seconds`, `estimate_basis` and the running stage's
+# `fraction` (stages weighted by their expected durations), and a long stage (train, explain, predict)
+# gets a heartbeat that rewrites status.json every few seconds while it runs. `progress_pct` and every
+# stage body are unchanged; the frozen train stage is not touched.
+from engine.run_progress import install_progress_estimate  # noqa: E402
+
+install_progress_estimate(_TrainFlow, _ScoreFlow)
 # ---- END PLAN-M ----

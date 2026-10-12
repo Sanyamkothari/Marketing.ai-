@@ -562,6 +562,16 @@ details.tbl-more[open] + .tbl-wrap .tbl .more{display:table-cell}
 <script type="module" src="./modules/overview/index.js"></script>
 <!-- M179: the Data page (#/data, #/data/check), in both layouts. -->
 <script type="module" src="./modules/data/index.js"></script>
+<!-- M189: the time left under a running bar, and the bar that moves on its own while a run is "Finishing up…"
+     (ui/run_progress.js). No new colour: the fill is the bar's own; with reduced motion it stands still. -->
+<style>
+.run-eta{margin:6px 0 0;font-size:12px;color:var(--muted)}
+.run-meter-busy .run-meter-fill{width:100%;opacity:.45}
+@media (prefers-reduced-motion:no-preference){
+  .run-meter-busy .run-meter-fill{width:30%;opacity:1;animation:run-busy 1.4s ease-in-out infinite}
+  @keyframes run-busy{0%{transform:translateX(-100%)}100%{transform:translateX(340%)}}
+}
+</style>
 <!-- ---- END PLAN-M ---- -->
 </body>
 </html>

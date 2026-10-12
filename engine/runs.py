@@ -304,15 +304,18 @@ def update_stage(
         _moved(row, moment, state=state, detail=detail, error=error) if row.key is stage else row
         for row in status.stages
     )
-    updated = status.model_copy(
-        update={
-            "stages": stages,
-            "state": _run_state(stages),
-            "current_stage": stage if state is RunState.RUNNING else None,
-            "progress_pct": _progress(stages),
-            "updated_at": moment,
-        }
-    )
+    run_state = _run_state(stages)
+    changes: dict[str, Any] = {
+        "stages": stages,
+        "state": run_state,
+        "current_stage": stage if state is RunState.RUNNING else None,
+        "progress_pct": _progress(stages),
+        "updated_at": moment,
+    }
+    if run_state in _TERMINAL:
+        # Plan M M189 (DEC-1619): an ended run has no time left; its last estimate stays as it was.
+        changes["eta_seconds"] = None
+    updated = status.model_copy(update=changes)
     storage.write_model(key, updated)
     return updated
 
@@ -330,7 +333,7 @@ def cancel_run(
     status = storage.read_model(key, RunStatus)
     stages = tuple(
         (
-            row.model_copy(update={"state": RunState.CANCELLED, "ended_at": moment})
+            row.model_copy(update={"state": RunState.CANCELLED, "ended_at": moment, "fraction": None})
             if row.state in _UNFINISHED
             else row
         )
@@ -344,6 +347,7 @@ def cancel_run(
                 "state": RunState.CANCELLED,
                 "current_stage": None,
                 "progress_pct": _progress(stages),
+                "eta_seconds": None,  # Plan M M189 (DEC-1619): a cancelled run has no time left
                 "updated_at": moment,
             }
         ),
@@ -691,6 +695,9 @@ def _moved(
         "started_at": started,
         "ended_at": ended,
         "duration_seconds": None if started is None or ended is None else (ended - started).total_seconds(),
+        # Plan M M189 (DEC-1619): only the pipeline's own tracker knows a stage's share; a move made here
+        # (a queued job, a failure from outside the flow) leaves none behind.
+        "fraction": None,
     }
     if detail is not None:
         changes["detail"] = detail
