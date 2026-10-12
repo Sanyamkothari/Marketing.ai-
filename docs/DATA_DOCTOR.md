@@ -415,3 +415,42 @@ data_doctor:
 `engine/doctor/config.py` holds `DataDoctorConfig` (the switch; `UseCaseConfig.data_doctor`), and
 `engine/doctor/codes.py` holds `PLAN_O_CODES`, which `engine.pilot.help.known_codes()` includes: a code added there
 needs its entry in `configs/pilot/help.yaml` in the same change (DEC-1800).
+
+## Plan O: one case per piece of work (M231)
+
+*Behind the switch `data_doctor.unified` (off by default). With it off, nothing below exists.*
+
+A **case** keeps everything about one piece of data work in one place: the files (by upload, never a copy of
+their cells), what Data Doctor found, every suggestion with who made it, the questions with who answered,
+the approvals with who approved and the exact sentence they read, the remembered answers that were used, the
+chat as it was stored (masked), and a **timeline** of what happened, oldest first, each line naming the person.
+Close the browser and the case is still there.
+
+- **Yours only.** A case belongs to one client. Asking for it under another client's name finds nothing, and
+  the answer does not say whether it exists.
+- **No silent overwrite.** If two people add a file to the same case at once, the first one wins and the
+  second is told the case changed, so they reload rather than undo the first person's work.
+- **Earlier work, shown the same way.** A Guided setup already in progress can be opened as a case to read;
+  it cannot be changed from there.
+- **How long it is kept.** What a case holds about a file goes when that file's own retention ends. The
+  record of who decided what (the timeline) is kept for `processing_log_days` in
+  [`configs/privacy.yaml`](../configs/privacy.yaml), a year by default. Erasing a customer removes the
+  corrections and remembered answers that name them.
+
+### For developers
+
+`engine/doctor/case.py` (`Case`, `CaseFile`, `TimelineEvent`, `CaseStore`, the adapters `case_from_session` and
+`case_from_diagnosis`), `api/routes/cases.py` (`POST /cases`, `GET /cases/{id}`, `POST /cases/{id}/files`,
+`GET /cases/{id}/timeline`), the store `cases` in `engine/privacy/layout.py`, retention in
+`engine/privacy/retention.py` (`case_data`, `case_log`, the `forget_upload` action) and erasure in
+`engine/privacy/erasure.py`. Storage: `cases/<client_id>/<case_id>/case.json` (written atomically, with a
+version check through an exclusive-create lock file, so separate API processes cannot both write one version
+on a local store. On S3, until the storage gains a conditional put (`write_bytes_if_absent`), the lock holds
+within one API process only), `timeline.jsonl` (append-only, appended in place on a local store; the events of
+the latest version are also kept inside `case.json` and replayed by the next locked write, a retention or
+erasure rewrite included, so a crash between the two writes loses no event), `evidence/<id>.json`. A stored
+case that no longer validates answers `409 CASE_UNREADABLE`, never a server error. **Not yet on AWS:** `cases/`
+is not among the S3 prefixes the task role may write (`infra/naming.py`) nor the version-purge prefixes
+(`engine/privacy/layout.py`), so keep the switch off on an AWS deployment until those are added (requested
+before M249). Tests: `tests/unit/doctor/test_case.py`, `tests/unit/production/test_case_privacy.py`,
+`tests/integration/test_api_cases.py`.

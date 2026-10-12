@@ -163,6 +163,13 @@ class PrivacyConfig(_Model):
     )
     retention: RetentionPolicy
     erasure: ErasurePolicy = Field(default_factory=ErasurePolicy)
+    processing_log_days: Annotated[int, Field(ge=1, le=3650)] = Field(
+        default=365,
+        description=(
+            "Plan O M231 (DEC-1801): days a Data Doctor case's processing log (the case without row data, its "
+            "timeline, prescriptions) is kept after its last change. DPDP Rule 8(3) asks for at least a year."
+        ),
+    )
 
     @model_validator(mode="after")
     def _purposes_are_declared(self) -> PrivacyConfig:
