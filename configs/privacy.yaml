@@ -84,3 +84,8 @@ erasure:
   mode: delete                          # delete | tombstone (DEC-742)
   tombstone: "[erased]"                 # what a tombstoned identifier or masked cell becomes
   consent_history: keep                 # keep | delete: the hashed consent ledger rows of an erased principal
+
+# Plan O M231 (DEC-1801): days a Data Doctor case's processing log is kept after its last change - the case
+# without row data, its timeline of decisions and approvals (with user ids) and its prescriptions. The data
+# itself follows its uploads' retention. DPDP Rule 8(3) asks for at least one year.
+processing_log_days: 365
