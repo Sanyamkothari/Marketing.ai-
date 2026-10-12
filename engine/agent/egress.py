@@ -39,6 +39,7 @@ from typing import Any, Final
 from engine.agent.config import DataAccess
 from engine.agent.contracts import ChatMessage, SentItem
 from engine.agent.untrusted import MAX_NAME_CHARS, clean_text, display_name, quoted
+from engine.doctor.india_ids import EPIC_TEXT, GSTIN_TEXT
 from engine.pii import REDACTION_MARKER_PATTERN, TEXT_SCANNERS, marker_for, redact_text
 
 __all__ = [
@@ -182,6 +183,7 @@ RESULT_KEYS: Final[frozenset[str]] = frozenset(
         "id",
         "ids",
         "ids_on_several_rows",
+        "indian_scale_words",  # Plan O M241: a `parse_number` step's parameter, a flag, never a cell
         "issues",
         "kind",
         "label",
@@ -419,7 +421,7 @@ EGRESS_LATE_MASK: Final[str] = "EGRESS_LATE_MASK"
 """The turn-log code for a prompt that `assert_clean` had to mask before sending."""
 
 _PII_KINDS: Final[frozenset[str]] = frozenset(
-    {"email", "phone", "pan", "aadhaar", "name", "address", "ssn", "passport"}
+    {"email", "phone", "pan", "aadhaar", "name", "address", "ssn", "passport", "gstin", "epic"}
 )
 SAFE_LITERALS: Final[frozenset[str]] = _PII_KINDS | {
     PERSONAL_DATA,
@@ -786,6 +788,14 @@ def _scan(text: str, *, json_numbers: bool = False) -> tuple[str, int]:
         (_IPV4, "ip", _is_ipv4),
         (_IPV6, "ip", _is_ipv6),
         (_TOKEN, "token", _is_token),
+    ):
+        text, count = _sub(pattern, kind, text, accept)
+        total += count
+    for pattern, kind, accept in (
+        # Plan O M241: a GSTIN and a voter ID whole, before `engine.pii` takes the PAN inside a GSTIN or the
+        # digits of a voter ID and leaves the rest (`27[REDACTED:pan]1ZV`, `ABC[REDACTED:phone]`).
+        (GSTIN_TEXT, "gstin", None),
+        (EPIC_TEXT, "epic", None),
     ):
         text, count = _sub(pattern, kind, text, accept)
         total += count

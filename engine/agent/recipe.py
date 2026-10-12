@@ -445,7 +445,7 @@ def _check_params(step: RecipeStep) -> None:
 
     allowed: dict[RecipeStepKind, frozenset[str]] = {
         RecipeStepKind.DROP_COLUMN: frozenset(),
-        RecipeStepKind.PARSE_NUMBER: frozenset({"decimal", "percent_to_fraction"}),
+        RecipeStepKind.PARSE_NUMBER: frozenset({"decimal", "percent_to_fraction", "indian_scale_words"}),
         RecipeStepKind.PARSE_DATE: frozenset({"dayfirst", "excel_serial", "date_1904"}),
         RecipeStepKind.MAP_BOOLEAN: frozenset({"true_values", "false_values"}),
         RecipeStepKind.NORMALISE_TEXT: frozenset({"strip", "merge"}),
@@ -469,6 +469,8 @@ def _check_params(step: RecipeStep) -> None:
         raise refuse(f"unknown parameter {sorted(unknown)[0]!r}")
     if kind is RecipeStepKind.PARSE_NUMBER and params.get("decimal", ".") not in {".", ","}:
         raise refuse("decimal must be '.' or ','")
+    if kind is RecipeStepKind.PARSE_NUMBER and not isinstance(params.get("indian_scale_words", False), bool):
+        raise refuse("indian_scale_words is true or false")  # Plan O M241
     if kind is RecipeStepKind.PARSE_DATE:
         # Plan O M240 (DEC-1810 (d)): `excel_serial` reads Excel's day numbers, where no day/month order exists.
         serial = params.get("excel_serial", False)
@@ -602,6 +604,7 @@ def _apply(frame: pd.DataFrame, step: RecipeStep, snapshot_column: str | None) -
             _series(series),
             decimal=str(params.get("decimal", ".")),
             percent_to_fraction=bool(params.get("percent_to_fraction", True)),
+            indian_scale_words=bool(params.get("indian_scale_words", False)),
         ),
         RecipeStepKind.PARSE_DATE: lambda: (
             parse_excel_serial_dates(_series(series), date_1904=bool(params.get("date_1904", False)))
