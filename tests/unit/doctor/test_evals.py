@@ -79,6 +79,8 @@ def test_every_catalogue_tool_is_listed_and_an_unregistered_one_is_not_built_yet
     statuses = {s.name: s for s in discover_tools(data_registry())}
     assert set(statuses) == {row.name for row in CATALOGUE if row.kind is not None}
     assert statuses["stack_files"].built and statuses["check_readiness"].built
+    # Plan O M239 (DEC-1809) built `define_outcome`; `map_consent` (#67) stands in as the M239 row not built yet.
+    assert statuses["define_outcome"].built
     for name, milestone in (
         ("map_consent", "M239"),  # define_outcome stood here until M239 (DEC-1809) built it
         ("drift_check", "M245"),  # estimate_training_time stood here until M244 (DEC-1814) built it

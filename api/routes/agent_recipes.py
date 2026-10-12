@@ -21,6 +21,7 @@ This module imports nothing from `api.routes.runs`, which imports it.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Final
 
@@ -70,6 +71,7 @@ __all__ = [
     "replay_on_dataset",
     "run_saved_recipe",
     "scoring_source",
+    "write_derived_rows",
     "write_derived_upload",
 ]
 
@@ -184,9 +186,18 @@ def _leak_check(source: UploadRecord) -> LeakCheck:
 
 
 def write_derived_upload(
-    storage: Storage, config: UseCaseConfig, source: UploadRecord, recipe: DataRecipe
+    storage: Storage,
+    config: UseCaseConfig,
+    source: UploadRecord,
+    recipe: DataRecipe,
+    *,
+    then: Callable[[Any], Any] | None = None,
 ) -> DerivedUpload:
-    """Run `recipe` on every row of `source` and store the result as a new upload. Raises `RecipeError`."""
+    """Run `recipe` on every row of `source` and store the result as a new upload. Raises `RecipeError`.
+
+    `then` (Plan O M243) takes the prepared rows and returns the rows to store - a prescription's outcome and
+    post-build recipe for a training copy; the stored recipe stays `recipe`, the one a scoring file replays.
+    """
     frame = _all_rows(storage, config, source, recipe)
     derived_id = new_upload_id()
     run = run_saved_recipe(
@@ -197,10 +208,45 @@ def write_derived_upload(
         derived_upload_id=derived_id,
         leak_check=_leak_check(source),
     )
+    rows = run.frame if then is None else then(run.frame)
+    record, profile = _store_derived(
+        storage, config, source, rows, derived_id=derived_id, recipe=recipe, receipt=run.receipt
+    )
+    return DerivedUpload(record=record, profile=profile, recipe=recipe, receipt=run.receipt)
+
+
+def write_derived_rows(
+    storage: Storage,
+    config: UseCaseConfig,
+    source: UploadRecord,
+    then: Callable[[Any], Any],
+    *,
+    recipe: DataRecipe | None = None,
+    receipt: RecipeReceipt | None = None,
+) -> tuple[UploadRecord, DatasetProfile]:
+    """Every row of `source` as it is, through `then`, stored as a new upload (Plan O M243: a prescription's outcome
+    on a file no recipe prepares, or one already prepared). It keeps `recipe` and `receipt` - the ones `source`
+    was prepared with, for scoring - and none for a file sent as it is. Raises `RecipeError`."""
+    rows = then(_all_rows(storage, config, source, recipe))
+    return _store_derived(
+        storage, config, source, rows, derived_id=new_upload_id(), recipe=recipe, receipt=receipt
+    )
+
+
+def _store_derived(
+    storage: Storage,
+    config: UseCaseConfig,
+    source: UploadRecord,
+    frame: Any,
+    *,
+    derived_id: str,
+    recipe: DataRecipe | None,
+    receipt: RecipeReceipt | None,
+) -> tuple[UploadRecord, DatasetProfile]:
     source_key = upload_key(derived_id, source_filename("parquet"))
     try:
         with storage.open_write(source_key) as sink:
-            consistent_types(run.frame).to_parquet(sink, index=False)
+            consistent_types(frame).to_parquet(sink, index=False)
     except (ValueError, TypeError) as exc:  # pyarrow's ArrowInvalid and ArrowTypeError among them
         # The error text quotes values from the file, so it is logged by type only, never shown.
         _LOGGER.warning(
@@ -245,10 +291,12 @@ def write_derived_upload(
     )
     storage.write_model(record.profile_key, profile)
     storage.write_model(record.fingerprint_key, profile.fingerprint)
-    storage.write_model(upload_key(derived_id, DATA_RECIPE_FILENAME), recipe)
-    storage.write_model(upload_key(derived_id, RECIPE_RECEIPT_FILENAME), run.receipt)
+    if recipe is not None:
+        storage.write_model(upload_key(derived_id, DATA_RECIPE_FILENAME), recipe)
+    if receipt is not None:
+        storage.write_model(upload_key(derived_id, RECIPE_RECEIPT_FILENAME), receipt)
     storage.write_model(upload_key(derived_id, UPLOAD_RECORD_FILENAME), record)
-    return DerivedUpload(record=record, profile=profile, recipe=recipe, receipt=run.receipt)
+    return record, profile
 
 
 def attach_recipe_to_run(storage: Storage, upload_id: str, run_id: str) -> None:

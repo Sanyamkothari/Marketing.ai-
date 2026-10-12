@@ -717,7 +717,7 @@ also what you see when no AI service is connected.
 
 ### For developers
 
-`engine/doctor/tools_wrappers.py`, `engine/doctor/explain.py` (`docs/AGENTS.md` §21); the rule sets are in
+`engine/doctor/tools_wrappers.py`, `engine/doctor/explain.py` (`docs/AGENTS.md` §18); the rule sets are in
 `configs/agentic/policy.yaml` (`data.propose_role`, ...); the prompt is `configs/prompts/data_explain.v1.md`.
 M240's `read_workbook_sheets` and `find_excel_serial_dates` are catalogue rows #82 and #83 and are registered.
 
@@ -913,3 +913,46 @@ are `data.define_outcome` and `data.map_outcome_values` in `configs/agentic/poli
 `engine/doctor/time_settings.py` and `engine/doctor/tools_time.py` (`docs/AGENTS.md` §22); the rule sets are
 `data.propose_training_budget` and `data.propose_time_settings` in `configs/agentic/policy.yaml`; the settings are
 `data_doctor.time_settings` (defaults in `engine/doctor/config.py`; a use case overrides them under `data_doctor:`).
+
+## 26. One prescription, used every time (Plan O M243, DEC-1813)
+
+*Behind the switch `data_doctor.unified` (off by default). With it off, nothing below happens and every run is
+exactly as before.*
+
+When you approve what Data Doctor prepared, everything you agreed is kept together as one **prescription**: how each
+file is read, the fixes for each file, how several files are joined into one dataset, what the outcome means, how the
+client writes numbers, dates and yes/no, which currency each money column is in and every rate you gave, the fixes on
+the joined dataset, and, for each goal, its settings. It also keeps a short description of every prepared column as
+it was when you approved it: what kind of values it holds, how often it is empty, its usual range, and its common
+values (only values at least ten rows share, so no single customer is ever in it).
+
+The prescription is used **both when a model is trained and when it scores**:
+
+- **Next month's file** is prepared exactly as you approved, step by step: read the same way, the same fixes, the
+  same joins, the same outcome, the same conversion at the same rate you gave (never a new rate, never fetched).
+- **A dataset built from several files trains with its fixes too** - before, a built dataset could not get Data
+  Doctor's fixes for training. The model then prepares every dataset it scores the same way.
+- **The outcome you approved is the one the model learns.** When the outcome comes from a column's values (for
+  example *Churned* is yes, *Active* is no, *Suspended* is left out), every training file and dataset is turned into
+  yes and no that way, and the rows you left out are removed and counted.
+- **Files and datasets that come later follow it too**: a file you add to the case, next month's file for a goal
+  whose current model was trained this way, and a dataset a schedule rebuilds from the same recipe.
+- **Every training file is checked**, even one no fix changes: if it no longer looks like what you approved, Data
+  Doctor stops and asks before training, as it does before scoring.
+- **Data Doctor stops and asks when something changed**: a column that is gone or now holds another kind of value, a
+  value it has never seen in a column where it knew every value, a yes/no word it has no meaning for, a currency
+  the file did not use before, numbers or dates written another way, or a file laid out differently. Nothing is
+  trained or scored until you look - it never quietly learns the change.
+- **A change that breaks nothing is a warning with a question** ("Is that expected?"): a new column, a column that
+  is empty much more or less often, values that moved a long way, a new common spelling, a different share of yes.
+- **Models trained today keep scoring exactly as they do**: a Guided setup preparation is read as a prescription
+  with one part, and scores byte for byte the same.
+
+Each run made from a prescription keeps which prescription it followed and, for money columns, their currency and
+rates, so reports show them. A run prepared by a Guided setup preparation keeps its money columns' currency and the
+rate you approved in it too.
+
+### For developers
+
+`engine/doctor/prescription.py`, `engine/doctor/prescription_contract.py`, `engine/doctor/prescription_replay.py`,
+`engine/doctor/prescription_runs.py` and `api/routes/run_prescriptions.py` (`docs/AGENTS.md` §23).

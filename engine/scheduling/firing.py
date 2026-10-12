@@ -56,7 +56,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import TYPE_CHECKING, Final, Literal
+from typing import TYPE_CHECKING, Any, Final, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -325,6 +325,70 @@ def _row_cap(config: UseCaseConfig) -> int:
     return int(getattr(config.validation, "profile_row_cap", ingest.DEFAULT_PROFILE_ROW_CAP))
 
 
+@dataclass(frozen=True)
+class _Prescribed:
+    """Plan O M243: what a prescription changed about a scheduled run, and what the run keeps."""
+
+    ref: Any
+    prescription: Any
+    mode: Literal["train", "score"]
+    rows: Any = None
+    """`TrainingRows` the run trains on when the prescription changed them."""
+    carried: tuple[DataRecipe, Any] | None = None
+    """The post-build recipe the run carries to scoring, and its receipt."""
+    warnings: tuple[Any, ...] = ()
+
+
+def _prescribed(
+    storage: Storage,
+    config: UseCaseConfig,
+    manifest: DatasetManifest,
+    mode: RunMode,
+    version: ModelVersion | None,
+    capped: Any,
+) -> _Prescribed | None:
+    """Plan O M243 (DEC-1813): the prescription a scheduled run follows - the one bound to its dataset, or to the
+    spec a fresh build came from - or None (switch off, or nothing bound), before anything is read. A stop is the
+    firing's failure code."""
+    from engine.doctor.prescription import PrescriptionError
+    from engine.doctor.prescription_runs import check_for_scoring, dataset_for_training
+
+    dataset_id = manifest.dataset_id
+    try:
+        if mode is RunMode.TRAIN:
+            training = dataset_for_training(
+                storage, config, dataset_id, tuple(manifest.primary_key), manifest=manifest, capped=capped
+            )
+            if training is None:
+                return None
+            return _Prescribed(
+                ref=training.ref,
+                prescription=training.prescription,
+                mode="train",
+                rows=training.rows,
+                carried=(
+                    None
+                    if training.recipe is None or training.receipt is None
+                    else (training.recipe, training.receipt)
+                ),
+                warnings=training.warnings,
+            )
+        if version is None:
+            return None
+        checked = check_for_scoring(storage, config, version.run_id, capped)
+    except PrescriptionError as exc:
+        raise FiringError(exc.code, exc.message, dataset_id=dataset_id) from exc
+    except RecipeError as exc:
+        raise FiringError(exc.code, exc.message, dataset_id=dataset_id) from exc
+    except ingest.IngestError as exc:
+        raise FiringError(exc.code, exc.message, dataset_id=dataset_id) from exc
+    if checked is None:
+        return None
+    return _Prescribed(
+        ref=checked.ref, prescription=checked.prescription, mode="score", warnings=checked.warnings
+    )
+
+
 def start_dataset_run(
     *,
     storage: Storage,
@@ -396,6 +460,12 @@ def start_dataset_run(
             raise FiringError(exc.code, exc.message, dataset_id=dataset_id) from exc
         prepared = (recipe, ready)
         frame_key, profile, capped = ready.source_key, ready.profile, ready.frame
+    # Plan O M243 (DEC-1813): with `data_doctor.unified` on, a dataset bound to a prescription trains with its
+    # post-build recipe, and a model trained under one checks every dataset it scores; None otherwise.
+    prescribed = _prescribed(storage, config, manifest, mode, version, capped)
+    if prescribed is not None and prescribed.rows is not None:
+        rows = prescribed.rows
+        frame_key, profile, capped = rows.source_key, rows.profile, rows.frame
     if mode is RunMode.TRAIN:
         report = validate.validate_for_training(
             capped,
@@ -449,8 +519,29 @@ def start_dataset_run(
         requested_by=requested_by,
         synthetic=is_demo_client(storage, manifest.client_id),  # Plan J M95: planted data stays flagged
     )
-    if prepared is not None:
+    if prescribed is not None and prescribed.carried is not None:
+        attach_dataset_recipe(
+            storage, record.run_id, *prescribed.carried
+        )  # Plan O M243: the post-build recipe
+    elif prepared is not None:
         attach_dataset_recipe(storage, record.run_id, prepared[0], prepared[1].receipt)  # Plan L M155
+    if prescribed is not None:
+        # Plan O M243: the run keeps its prescription's reference, its money basis and its warnings.
+        from engine.doctor.prescription_runs import attach_to_run
+
+        attach_to_run(
+            storage,
+            record.run_id,
+            prescribed.ref,
+            prescribed.prescription,
+            mode=prescribed.mode,
+            warnings=prescribed.warnings,
+        )
+    elif prepared is not None:
+        # Plan O M243: switch on, no prescription - the money basis of the recipe that prepared the dataset.
+        from engine.doctor.prescription_runs import attach_recipe_basis
+
+        attach_recipe_basis(storage, record.run_id, prepared[0], config)
     if stamped_at_creation(config, scoring=mode is RunMode.SCORE):
         # Plan J M100 part B (DEC-1310): as `POST /runs` does, from the root the use case was resolved from.
         stamp_checked_catalogue(
