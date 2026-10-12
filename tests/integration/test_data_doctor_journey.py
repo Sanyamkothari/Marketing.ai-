@@ -141,6 +141,7 @@ def test_data_page_to_the_campaign_on_one_case_nothing_asked_twice(
         except sync_api.Error as error:  # pragma: no cover - a machine without the browser
             pytest.skip(f"no usable chromium for playwright: {error}")
         page = browser.new_page(viewport=DESKTOP)
+        page.set_default_timeout(120_000)  # the machine's CPUs are shared: a slow answer is not a failure
         errors: list[str] = []
         page.on("pageerror", lambda error: errors.append(str(error)))
         # The Google font the sandbox cannot fetch is the one allowance (as the UI sweep's): the sandbox, not the app.

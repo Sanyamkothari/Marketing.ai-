@@ -102,11 +102,11 @@ function mainHtml(entry) {
   const err = s.error ? errorBox(s.error) : "";
   const notice = s.notice ? `<p class="dds-why" role="status" data-dds-notice>${esc(s.notice)}</p>` : "";
   if (s.loading && !s.screen) {
-    return `<div class="dd" data-dds data-dds-place="${esc(host.place)}"><p class="loading" role="status">Opening Data Doctor…</p></div>`;
+    return `<div class="dds" data-dds data-dds-place="${esc(host.place)}"><p class="loading" role="status">Opening Data Doctor…</p></div>`;
   }
   if (!s.screen) {
     const title = host.goalId ? "Check the customers' file" : "Check my data";
-    return `<div class="dd" data-dds data-dds-place="${esc(host.place)}"><section class="card dds-start" data-dds-start>${emptyState({
+    return `<div class="dds" data-dds data-dds-place="${esc(host.place)}"><section class="card dds-start" data-dds-start>${emptyState({
       icon: "data",
       title,
       text: "Data Doctor reads your file, asks only what it cannot tell, and gets it ready. It never changes your file.",
@@ -133,7 +133,7 @@ function mainHtml(entry) {
   const checklist = `${checklistHtml(screen, { busy, level: sub })}${standingHtml(view, { busy, level: sub })}`;
   const proceed = continueHtml(entry);
   const more = c.files && c.files.length && !c.read_only ? `<div class="dds-more" data-dds-more>${uploadHtml({ accept, busy: s.uploadNote, first: false })}</div>` : "";
-  return `<div class="dd" data-dds data-dds-place="${esc(host.place)}" data-dds-case="${esc(c.case_id)}"><section class="card" data-dds-header>${headerHtml(
+  return `<div class="dds" data-dds data-dds-place="${esc(host.place)}" data-dds-case="${esc(c.case_id)}"><section class="card" data-dds-header>${headerHtml(
     screen,
     { level },
   )}</section>${notice}${err}${proceed}${section("Questions", questions, "data-dds-questions", sub)}${section(

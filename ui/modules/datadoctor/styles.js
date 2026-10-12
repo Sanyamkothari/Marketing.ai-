@@ -5,7 +5,7 @@
 const STYLE_ID = "data-doctor-styles";
 
 export const CSS = `
-.dd{display:flex;flex-direction:column;gap:var(--s4);min-width:0}
+.dds{display:flex;flex-direction:column;gap:var(--s4);min-width:0}
 .dds-layout{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,340px);gap:var(--s5);align-items:start}
 .dds-layout>.dds-aside{position:sticky;top:var(--s4)}
 @media (max-width:900px){.dds-layout{grid-template-columns:minmax(0,1fr)}.dds-layout>.dds-aside{position:static}}
