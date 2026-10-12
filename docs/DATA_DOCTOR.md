@@ -454,3 +454,40 @@ is not among the S3 prefixes the task role may write (`infra/naming.py`) nor the
 (`engine/privacy/layout.py`), so keep the switch off on an AWS deployment until those are added (requested
 before M249). Tests: `tests/unit/doctor/test_case.py`, `tests/unit/production/test_case_privacy.py`,
 `tests/integration/test_api_cases.py`.
+
+## Plan O: the visit, with or without a goal (M235)
+
+*Behind the switch `data_doctor.unified` (off by default). With it off, nothing below exists.*
+
+Data Doctor is **one helper with an optional goal**. You can start without choosing anything, and choose a goal
+later without starting again.
+
+- **Without a goal**, it reads your files, works out what each one is and which column names each customer, fixes
+  what does not depend on a goal, and tells you **what the data can power** today and **what is missing** for the
+  other goals (with the data request to send for it).
+- **With a goal** (for example *Targeted Advertisement*), it knows what you are trying to achieve: the outcome it
+  learns from, the dates it splits on, the columns the goal needs (consent for a goal that contacts people), how
+  much data is enough. It asks the goal's own questions and checks the goal's readiness before training. This is
+  the goal's **brief**; it comes from the goal's settings, never from the AI.
+- **Choosing a goal mid-way keeps everything.** What you already decided stays decided and nothing you answered is
+  asked again. Only the goal's own questions are new.
+- **Two goals on one case.** Each goal keeps its own decisions. Switching to another goal puts the first goal's
+  decisions aside, not away: switch back and they are exactly as you left them.
+- **Close the browser at any moment.** Every step is saved as it happens. When you come back, Data Doctor goes on
+  from where it was, without losing or repeating anything.
+- **No AI service needed.** Every step works without one. Only the chat needs one; without it, Data Doctor says so
+  and everything else carries on. Whatever the AI suggests waits for your tick.
+- **Who did what.** Your answers, your ticks and your approval are kept with your name, and the approval with the
+  exact sentence you read.
+
+### For developers
+
+`engine/doctor/goal_brief.py` (`GoalBrief`, `load_goal_brief`, `brief_hash`; tool #35 `load_goal_brief`),
+`engine/doctor/visit.py` (the state machine: `resume`, `set_goal`, `answer`, `decide`, `approve`, `chat`,
+`add_files`; the ports `VisitDeps`), `engine/doctor/visit_contracts.py` (`CaseVisit`, kept in `case.visit`) and
+`api/routes/case_visit.py` (`POST /cases/{id}/visit`, `/goal`, `/answers`, `/decisions`, `/approval`, `/chat`;
+`GET /goal-briefs/{goal_id}`). The brief is frozen into the case at `cases/<client>/<case>/briefs/<goal>_<hash>.json`.
+Each transition is one write of `case.json`; items and questions of a goal carry its `goal_id`. Refusals:
+`VISIT_NOT_WAITING` (409), `VISIT_UNKNOWN_CHOICE` (422), `USE_CASE_NOT_FOUND` for a goal that is not a use case.
+Tests: `tests/unit/doctor/test_goal_brief.py`, `tests/unit/doctor/test_visit.py`,
+`tests/integration/test_api_case_visit.py`.

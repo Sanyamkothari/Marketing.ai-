@@ -991,3 +991,34 @@ A new tool is: a row already in the catalogue; a `DataTool` registered in `engin
 (unknown fields refused) and output models, a `RoutePolicy`, its callers, its needs and its exposure; an entry in the
 egress canary (`tests/unit/doctor/test_registry_canary.py`, which fails for a tool without one); and, for PROPOSE, a
 `policy_kind` naming its rule set (M233 refuses a kind with no rules, `POLICY_NO_RULES`).
+
+## 15. The visit and the goal brief (Plan O M235, DEC-1805)
+
+Data Doctor's outer loop is a **visit**: a persisted state machine over one case (`engine/doctor/visit.py`), copied
+from Plan K's planner pattern. Plan G's chat (`chat_turn`) is one of its states, CONVERSE; it is not the loop.
+
+**States** (`VisitState`): INTAKE, UNDERSTAND, RECALL, GOAL_BRIEF, TREAT, ASK, CONVERSE, PREVIEW, APPROVE,
+PRESCRIBE, VERIFY, HAND_OFF, FOLLOW_UP. ASK, APPROVE and FOLLOW_UP are the interrupts (`case.visit.waiting_for`:
+`answer`, `approval`, `next_file`; `files` for a case with none).
+
+**Rules for whoever changes it:**
+
+- **One transition, one write.** A state computes its work from version *n* of the case and writes it, with the new
+  state and its `state.changed` event, as version *n + 1* (`CaseStore.update`). Never write part of a step in a
+  separate case write: a process killed between two writes must find either the whole step or none of it.
+- **Ids are content.** An item's id is its kind, its goal and the digest of its payload; a question's id is its code,
+  its goal and the digest of its subject - never the mode it was asked in. A step merges by id and never replaces a
+  decided item or an answered question. This is what makes a resume repeat nothing and a goal ask nothing again.
+- **Side files are content-addressed** (evidence by evidence id, the brief by its hash), so writing one again before
+  the commit writes the same bytes.
+- **Goal sections.** `CaseItem.goal_id` / `CaseQuestion.goal_id` name the goal a proposal belongs to; null is the
+  shared base. Only the base and the active goal's section are shown, previewed, approved and hashed
+  (`active_section`); other sections are set aside, never deleted.
+- **The brief is configuration.** `load_goal_brief` (tool #35, READ, rules) reads the use case's configuration and
+  `configs/outcomes.yaml`; `brief_hash` is the SHA-256 of its canonical JSON. The AI never writes one.
+- **The AI only adds pending items.** Whatever a CONVERSE port returns lands `ai`, `pending`, `check`. Without an AI
+  service the chat answers `AI_NEEDED_REPLY` and the visit goes on; every other state is rules only.
+- **Person actions** (`set_goal`, `answer`, `decide`, `approve`, `chat`, `add_files`) carry the version they were
+  made against and an optional `op_id`; a retried action whose first attempt was written changes nothing.
+- **Ports** (`VisitDeps`): PREVIEW, PRESCRIBE, VERIFY (default: M234's `check_readiness` on the file holding the
+  goal's outcome) and HAND_OFF (default: records the target, starts nothing) are filled by M243, M244 and M247.

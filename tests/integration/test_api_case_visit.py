@@ -1,0 +1,184 @@
+"""The Data Doctor visit through the API (Plan O M235, DEC-1805).
+
+A real upload, a real case, and the default ports: the visit goes generic -> goal -> approval -> M234's readiness
+report on the stored file -> hand-off, with no AI service. Also the routes' policies, their refusals, the goal
+brief route, and with the switch off no path at all.
+"""
+
+from __future__ import annotations
+
+import io
+from collections.abc import Iterator
+from pathlib import Path
+from typing import Any
+
+import pytest
+from fastapi.testclient import TestClient
+
+from api.access_policy import all_policies
+from api.main import create_app
+from api.routes import case_visit
+from engine.access.roles import Role
+from engine.doctor import case as doctor_case
+from engine.doctor.goal_brief import load_goal_brief
+from tests.fixtures.make_data import GenerationSpec, generate
+from tests.integration.production.access_support import bearer, local_app, make_user
+
+GOAL = "targeted-advertisement"
+ROUTES = set(case_visit.POLICIES)
+
+
+@pytest.fixture
+def unified(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(doctor_case, "data_doctor_unified", lambda root=None: True)
+
+
+@pytest.fixture
+def data_dir(tmp_path: Path) -> Path:
+    return tmp_path / "data"
+
+
+@pytest.fixture
+def client(unified: None, config_root: Path, data_dir: Path) -> Iterator[TestClient]:
+    with TestClient(create_app(config_root=config_root, data_dir=data_dir)) as test_client:
+        yield test_client
+
+
+def _upload(client: TestClient) -> str:
+    frame = generate(GenerationSpec(use_case_id=GOAL, rows=1_500, seed=3))
+    buffer = io.StringIO()
+    frame.to_csv(buffer, index=False)
+    response = client.post(
+        "/uploads",
+        files={"file": ("customers.csv", buffer.getvalue().encode(), "text/csv")},
+        data={"use_case": GOAL, "mode": "train"},
+    )
+    assert response.status_code == 201, response.text
+    return str(response.json()["upload_id"])
+
+
+def _code(response: Any) -> str:
+    return str(response.json()["detail"]["code"])
+
+
+def _answer_open(client: TestClient, case: dict[str, Any]) -> dict[str, Any]:
+    """Answer each open blocking question with its first option, as a person picking would."""
+    while case["state"] == "ask":
+        open_ = next(q for q in case["questions"] if q["blocking"] and q["answer"] is None)
+        response = client.post(
+            f"/cases/{case['case_id']}/answers",
+            json={"version": case["version"], "question_id": open_["question_id"], "option_id": "c0"},
+        )
+        assert response.status_code == 200, response.text
+        case = response.json()
+    return case
+
+
+def test_a_visit_goes_from_generic_to_a_goal_to_a_readiness_verdict(
+    client: TestClient, data_dir: Path
+) -> None:
+    upload_id = _upload(client)
+    case = client.post("/cases", json={"upload_ids": [upload_id]}).json()
+    case_id = case["case_id"]
+    case = client.post(f"/cases/{case_id}/visit", json={}).json()
+    assert case["state"] in {"ask", "approve"} and case["goals"] == []
+    assert case["diagnosis"]["use_cases"], "generic mode says what the file can power"
+    case = _answer_open(client, case)
+    assert case["state"] == "approve"
+
+    chatted = client.post(f"/cases/{case_id}/chat", json={"version": case["version"], "message": "Hello"})
+    assert chatted.status_code == 200, chatted.text
+    case = chatted.json()
+    assert [m["role"] for m in case["chat"]] == ["user", "agent"] and case["state"] == "approve"
+
+    chosen = client.post(
+        f"/cases/{case_id}/goal", json={"version": case["version"], "goal_id": GOAL, "op_id": "g1"}
+    )
+    assert chosen.status_code == 200, chosen.text
+    case = _answer_open(client, chosen.json())
+    assert [g["brief_hash"] for g in case["goals"]] == [load_goal_brief(GOAL).brief_hash]
+    outcome = [i for i in case["items"] if i["kind"] == "outcome_column"]
+    assert outcome and outcome[0]["goal_id"] == GOAL and outcome[0]["state"] == "accepted"
+    again = client.post(f"/cases/{case_id}/goal", json={"version": 1, "goal_id": GOAL, "op_id": "g1"})
+    assert again.status_code == 200 and again.json()["version"] == case["version"], "a retry changes nothing"
+
+    approved = client.post(f"/cases/{case_id}/approval", json={"version": case["version"]})
+    assert approved.status_code == 200, approved.text
+    case = approved.json()
+    (readiness,) = case["readiness"]
+    assert readiness["goal_id"] == GOAL and readiness["verdict"]
+    stored = list((data_dir / "cases" / "default" / case_id / "readiness").glob(f"{GOAL}_*.json"))
+    assert stored, "M234's report is kept in the case"
+    events = client.get(f"/cases/{case_id}/timeline").json()["events"]
+    kinds = [e["kind"] for e in events]
+    assert "readiness.checked" in kinds and "approval" in kinds and "prescription.saved" in kinds
+    if readiness["verdict"] in {"ready", "ready_with_warnings"}:
+        assert case["state"] == "follow_up" and case["visit"]["hand_off"]["target"] == "runs"
+    else:
+        assert case["state"] == "approve", "not ready: back to the person with the reason"
+
+
+def test_refusals_answer_their_codes(client: TestClient) -> None:
+    case = client.post("/cases", json={"upload_ids": [_upload(client)]}).json()
+    case = client.post(f"/cases/{case['case_id']}/visit", json={}).json()
+    case_id, version = case["case_id"], case["version"]
+    stale = client.post(f"/cases/{case_id}/goal", json={"version": version - 1, "goal_id": GOAL})
+    assert stale.status_code == 409 and _code(stale) == "CASE_VERSION_CONFLICT"
+    unknown = client.post(
+        f"/cases/{case_id}/answers", json={"version": version, "question_id": "q.x", "option_id": "c0"}
+    )
+    assert unknown.status_code == 422 and _code(unknown) == "VISIT_UNKNOWN_CHOICE"
+    if case["state"] != "approve":
+        waiting = client.post(f"/cases/{case_id}/approval", json={"version": version})
+        assert waiting.status_code == 409 and _code(waiting) == "VISIT_NOT_WAITING"
+    no_goal = client.post(f"/cases/{case_id}/goal", json={"version": version, "goal_id": "no-such-goal"})
+    assert no_goal.status_code == 404 and _code(no_goal) == "USE_CASE_NOT_FOUND"
+    missing = client.post("/cases/case_0000000000000000/visit", json={})
+    assert missing.status_code == 404 and _code(missing) == "CASE_NOT_FOUND"
+
+
+def test_the_goal_brief_route(client: TestClient) -> None:
+    found = client.get(f"/goal-briefs/{GOAL}")
+    assert found.status_code == 200 and found.json()["brief_hash"] == load_goal_brief(GOAL).brief_hash
+    scored = client.get(f"/goal-briefs/{GOAL}", params={"mode": "score"})
+    assert scored.json()["mode"] == "score"
+    assert client.get("/goal-briefs/no-such-goal").status_code == 404
+
+
+def test_the_routes_have_their_policies(client: TestClient) -> None:
+    policies = all_policies()
+    assert set(policies) >= ROUTES
+    for key in ROUTES:
+        expected = Role.VIEWER if key[0] == "GET" else Role.ANALYST
+        assert policies[key].role is expected, key
+    paths = set(client.app.openapi()["paths"])  # type: ignore[attr-defined]
+    assert {path for _method, path in ROUTES} <= paths
+
+
+def test_a_viewer_reads_a_brief_but_cannot_move_a_visit(unified: None, tmp_path: Path) -> None:
+    app = local_app(tmp_path)
+    viewer = make_user(app, "vera", [Role.VIEWER])
+    analyst = make_user(app, "asha", [Role.ANALYST])
+    with TestClient(app, raise_server_exceptions=False) as client:
+        case = client.post("/cases", json={}, headers=bearer(app, analyst)).json()
+        refused = client.post(
+            f"/cases/{case['case_id']}/goal",
+            json={"version": 1, "goal_id": GOAL},
+            headers=bearer(app, viewer),
+        )
+        assert refused.status_code == 403 and _code(refused) == "ROLE_REQUIRED"
+        assert client.get(f"/goal-briefs/{GOAL}", headers=bearer(app, viewer)).status_code == 200
+        moved = client.post(f"/cases/{case['case_id']}/visit", json={}, headers=bearer(app, analyst))
+        assert moved.status_code == 200 and moved.json()["visit"]["waiting_for"] == "files"
+        events = client.get(f"/cases/{case['case_id']}/timeline", headers=bearer(app, viewer)).json()[
+            "events"
+        ]
+        assert {e["actor"] for e in events} == {analyst}, "the timeline records the user id"
+
+
+def test_with_the_switch_off_there_is_no_visit_path(config_root: Path, tmp_path: Path) -> None:
+    app = create_app(config_root=config_root, data_dir=tmp_path / "data")
+    paths = app.openapi()["paths"]
+    assert not [path for path in paths if path.startswith(("/cases", "/goal-briefs"))]
+    with TestClient(app) as client:
+        assert client.get(f"/goal-briefs/{GOAL}").status_code == 404
