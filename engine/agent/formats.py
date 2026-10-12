@@ -49,11 +49,13 @@ from engine.pii import REDACTION_MARKER_PATTERN
 __all__ = [
     "BOOLEAN_FALSE",
     "BOOLEAN_TRUE",
+    "CURRENCY_CODES",
     "CURRENCY_TOKENS",
     "INDIAN_SCALE_WORDS",
     "FormatIssue",
     "FormatIssueKind",
     "ParseOutcome",
+    "currency_codes",
     "date_order",
     "decimal_evidence",
     "find_excel_serial_dates",
@@ -101,6 +103,31 @@ _SCALED_RE: Final[re.Pattern[str]] = re.compile(r"^(?P<number>.*?\d\.?)(?P<word>
 _CURRENCY_RE: Final[re.Pattern[str]] = re.compile(
     "|".join(re.escape(token) for token in CURRENCY_TOKENS), flags=re.IGNORECASE
 )
+CURRENCY_CODES: Final[dict[str, str]] = {
+    "inr": "INR",
+    "rs.": "INR",
+    "rs": "INR",
+    "₹": "INR",
+    "usd": "USD",
+    "us$": "USD",
+    "$": "USD",
+    "eur": "EUR",
+    "€": "EUR",
+    "gbp": "GBP",
+    "£": "GBP",
+}
+"""Plan O M242: each of `CURRENCY_TOKENS`, casefolded, to the currency it names (ISO 4217). A bare `$` is read as
+US dollars; the question that asks about a foreign currency names it, so a person can say otherwise."""
+
+
+def currency_codes(text: str) -> frozenset[str]:
+    """The currencies `text` names with a sign or code (`₹`, `Rs`, `$`, `USD`, ...); empty when it names none.
+
+    Plan O M242. Two codes mean the value itself is mixed (`$12 (₹1,000)`), which no step reads.
+    """
+    return frozenset(CURRENCY_CODES[match.group(0).casefold()] for match in _CURRENCY_RE.finditer(text))
+
+
 _PLAIN_NUMBER_RE: Final[re.Pattern[str]] = re.compile(r"^[+-]?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?$")
 _PLAIN_COMMA_RE: Final[re.Pattern[str]] = re.compile(r"^[+-]?(\d+(,\d*)?|,\d+)([eE][+-]?\d+)?$")
 _GROUPED_RE: Final[dict[str, re.Pattern[str]]] = {

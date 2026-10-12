@@ -206,6 +206,21 @@ def _log_with_strangers(strangers: int) -> tuple[Diagnosis, dict[str, pd.DataFra
     return Diagnosis(files=files, use_cases=(), links=(), stacks=()), {"c": listed, "e": log}
 
 
+def test_a_file_with_no_name_is_named_by_its_upload_id_never_left_blank() -> None:
+    """M237 probe: the sentence read "... customers.csv and . ..." for a file whose stored name was empty."""
+    found, loaded = _log_with_strangers(15)
+    blank = tuple(
+        item.model_copy(update={"file_name": "  " if item.upload_id == "e" else item.file_name})
+        for item in found.files
+    )
+    plan = plan_build(found.model_copy(update={"files": blank}), loaded, use_case="rca", label_spec=None)
+    (log,) = plan.events
+    assert log.source_name == "e"
+    assert plan.approval_sentence.startswith("Build the table from c.csv and e.")
+    assert "Joining e to c.csv leaves out 15 of 100 rows" in plan.approval_sentence
+    assert " and ." not in plan.approval_sentence and "Joining  to" not in plan.approval_sentence
+
+
 def test_a_join_that_drops_more_than_two_percent_of_a_log_needs_approval() -> None:
     """M237 review: 15 of 100 log rows name customers the list lacks; the plan says so and asks."""
     found, loaded = _log_with_strangers(15)

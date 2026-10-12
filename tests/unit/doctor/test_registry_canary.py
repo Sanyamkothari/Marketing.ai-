@@ -179,6 +179,19 @@ SPECS: dict[str, Calls | None] = {
     "check_uplift_data": _fixed({"primary_key": "customer_id", "target": "converted_30d"}),
     "read_run_checks": lambda _columns: [{"run_id": _IDS["run"]}],
     "request_approval": lambda _columns: [{"evidence_id": evidence} for evidence in _IDS["evidence"]],
+    # Plan O wave 2 integration: M242's conversion on every column (a column that holds no money is refused in
+    # the output, which must be clean too).
+    "convert_currency": lambda columns: [
+        {
+            "column": column,
+            "from_currency": "USD",
+            "to_currency": "INR",
+            "rate": 83.1,
+            "rate_date": "2026-10-01",
+            "source": "RBI reference rate, 1 Oct 2026",
+        }
+        for column in columns
+    ],
 }
 
 _IDS: dict[str, Any] = {}

@@ -931,6 +931,48 @@ MILESTONE_TESTS: Final[Mapping[str, tuple[str, ...]]] = {
         "tests/unit/agent/test_egress_india_ids.py",
         "tests/unit/agent/test_header_switch_unified.py",
     ),
+    # Plan O wave 2, batch A (merged together; each behind `data_doctor.unified`, off).
+    # M233 (DEC-1803), a default-deny policy for every proposal kind, mutation-tested, applied in the registry.
+    "M233": (
+        "tests/unit/doctor/test_policy.py",
+        "tests/unit/doctor/test_policy_mutation.py",
+        "tests/unit/doctor/test_policy_runtime.py",
+        "tests/unit/doctor/test_policy_tools.py",
+    ),
+    # M235 (DEC-1805), the visit (a kill at every state) and the goal brief.
+    "M235": (
+        "tests/unit/doctor/test_visit.py",
+        "tests/unit/doctor/test_goal_brief.py",
+        "tests/integration/test_api_case_visit.py",
+    ),
+    # M236 (DEC-1806), the remaining wrappers and `explain`, the shared connection gate.
+    "M236": (
+        "tests/unit/doctor/test_tools_wrappers.py",
+        "tests/unit/doctor/test_explain.py",
+    ),
+    # M242 (DEC-1812), currency: the unit, convert_currency and its guards, the reports, the 409.
+    "M242": (
+        "tests/unit/agent/test_currency_steps.py",
+        "tests/unit/doctor/test_currency.py",
+        "tests/unit/doctor/test_currency_reports.py",
+        "tests/unit/doctor/test_tools_currency.py",
+        "tests/unit/ux/test_workspace_currency_js.py",
+        "tests/integration/pilot/test_currency_reports_api.py",
+        "tests/integration/agent/test_currency_recipe_api.py",
+    ),
+    # M246 (DEC-1816), the protocol: questions, standing answers, APPROVE-class yes, doubts, the signed record.
+    "M246": (
+        "tests/unit/doctor/test_protocol.py",
+        "tests/unit/doctor/test_protocol_visit.py",
+        "tests/unit/doctor/test_plan_g_approval.py",
+        "tests/unit/agentic/test_ledger.py",
+        "tests/integration/test_api_data_protocol.py",
+    ),
+    # M248 (DEC-1818), the eval harness (its fast tests; the benchmark itself is `slow`).
+    "M248": (
+        "tests/unit/doctor/test_evals.py",
+        "tests/unit/doctor/test_eval_harness.py",
+    ),
 }
 """Milestone id -> the test files (or directories, with a trailing `/`) that prove it is built.
 

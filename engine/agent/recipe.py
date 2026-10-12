@@ -35,6 +35,14 @@ import pandas as pd
 
 from engine.agent.config import AgentLevel
 from engine.agent.contracts import RecipeReceipt, RecipeStep, RecipeStepKind, StepReceipt, recipe_hash
+from engine.agent.currency_steps import (
+    CURRENCY_MIXED,
+    CurrencyStepError,
+    check_convert_params,
+    check_unit_param,
+    convert_currency,
+    foreign_values,
+)
 from engine.agent.formats import (
     ParseOutcome,
     map_booleans,
@@ -95,6 +103,9 @@ STEP_PHASE: Final[dict[RecipeStepKind, int]] = {
     RecipeStepKind.SPLIT_COLUMN: 1,
     # Plan O M237 (DEC-1807 (b)): a key is tidied with the other values, before rows are left out or combined.
     RecipeStepKind.NORMALISE_KEY: 1,
+    # Plan O M242 (DEC-1812 (c)): a conversion reads the values as written (`$12`, or `12` beside a `currency`
+    # column) and comes before the `parse_number` that reads the rest in the column's one currency.
+    RecipeStepKind.CONVERT_CURRENCY: 1,
     RecipeStepKind.SET_MISSING: 2,
     RecipeStepKind.VALID_RANGE: 2,
     RecipeStepKind.FILL_MISSING: 3,
@@ -300,6 +311,14 @@ def check_recipe(
             )
         elif step.kind is RecipeStepKind.DROP_COLUMN:
             available.remove(step.column)
+        elif step.kind is RecipeStepKind.CONVERT_CURRENCY and _rows_column(step) not in (None, *available):
+            raise RecipeError(
+                "RECIPE_COLUMN_MISSING",
+                f"The file has no column '{_rows_column(step)}' to tell which rows are in "
+                f"{_params(step)['from']}.",
+                column=_rows_column(step),
+                order=step.order,
+            )
         elif step.kind is RecipeStepKind.CORRECT_CELLS and str(_params(step)["key_column"]) not in available:
             raise RecipeError(
                 "RECIPE_COLUMN_MISSING",
@@ -326,6 +345,65 @@ def check_recipe(
                     order=step.order,
                 )
             available.append(step.new_column)
+    _check_currency(steps)
+
+
+def _rows_column(step: RecipeStep) -> str | None:
+    """The column a `convert_currency` step's `rows` names (it says which rows are in `from`), if any."""
+    rows = _params(step).get("rows")
+    return str(rows["column"]) if isinstance(rows, dict) else None
+
+
+def _check_currency(steps: Sequence[RecipeStep]) -> None:
+    """Plan O M242 (DEC-1812 (c)): one currency per money column at the end of the recipe.
+
+    Every conversion of a column goes to the same currency and converts each source currency once; the
+    `parse_number` that reads the column, when it names a `unit`, names the currency converted to; and a conversion
+    of the values `marked` with a sign comes before the step that turns them into numbers (a number shows no sign).
+    """
+    conversions: dict[str, list[RecipeStep]] = {}
+    parsed: set[str] = set()
+    for step in steps:
+        params = _params(step)
+        if step.kind is RecipeStepKind.CONVERT_CURRENCY:
+            earlier = conversions.setdefault(step.column, [])
+            for other in earlier:
+                before = _params(other)
+                if before["to"] != params["to"]:
+                    raise RecipeError(
+                        "RECIPE_STEP_INVALID",
+                        f"'{step.column}' is converted to {before['to']} and to {params['to']}; a column holds "
+                        "one currency.",
+                        column=step.column,
+                        order=step.order,
+                    )
+                if before["from"] == params["from"]:
+                    raise RecipeError(
+                        "RECIPE_STEP_INVALID",
+                        f"'{step.column}' is converted from {params['from']} twice.",
+                        column=step.column,
+                        order=step.order,
+                    )
+            if step.column in parsed and params.get("rows", "all") == "marked":
+                raise RecipeError(
+                    "RECIPE_STEP_INVALID",
+                    f"The amounts of '{step.column}' marked {params['from']} must be converted before they are "
+                    "read as numbers: a number no longer shows its currency sign.",
+                    column=step.column,
+                    order=step.order,
+                )
+            earlier.append(step)
+        elif step.kind is RecipeStepKind.PARSE_NUMBER:
+            parsed.add(step.column)
+            unit = params.get("unit")
+            for other in conversions.get(step.column, []):
+                if unit is not None and unit != _params(other)["to"]:
+                    raise RecipeError(
+                        "RECIPE_STEP_INVALID",
+                        f"'{step.column}' is converted to {_params(other)['to']} but read as {unit}.",
+                        column=step.column,
+                        order=step.order,
+                    )
 
 
 def _check_combine(
@@ -448,7 +526,9 @@ def _check_params(step: RecipeStep) -> None:
 
     allowed: dict[RecipeStepKind, frozenset[str]] = {
         RecipeStepKind.DROP_COLUMN: frozenset(),
-        RecipeStepKind.PARSE_NUMBER: frozenset({"decimal", "percent_to_fraction", "indian_scale_words"}),
+        RecipeStepKind.PARSE_NUMBER: frozenset(
+            {"decimal", "percent_to_fraction", "indian_scale_words", "unit"}
+        ),
         RecipeStepKind.PARSE_DATE: frozenset({"dayfirst", "excel_serial", "date_1904"}),
         RecipeStepKind.MAP_BOOLEAN: frozenset({"true_values", "false_values"}),
         RecipeStepKind.NORMALISE_TEXT: frozenset({"strip", "merge"}),
@@ -467,6 +547,9 @@ def _check_params(step: RecipeStep) -> None:
         RecipeStepKind.REMOVE_ROWS: frozenset({"operator", "values"}),
         RecipeStepKind.RENAME_COLUMN: frozenset(),
         RecipeStepKind.NORMALISE_KEY: frozenset({"prefix", "zeros", "case", "spaces", "phone"}),
+        RecipeStepKind.CONVERT_CURRENCY: frozenset(
+            {"from", "to", "rate", "rate_date", "source", "rows", "decimal", "indian_scale_words"}
+        ),
     }
     unknown = set(params) - allowed[kind]
     if unknown:
@@ -475,6 +558,10 @@ def _check_params(step: RecipeStep) -> None:
         raise refuse("decimal must be '.' or ','")
     if kind is RecipeStepKind.PARSE_NUMBER and not isinstance(params.get("indian_scale_words", False), bool):
         raise refuse("indian_scale_words is true or false")  # Plan O M241
+    if kind is RecipeStepKind.PARSE_NUMBER:
+        check_unit_param(params, refuse)  # Plan O M242
+    if kind is RecipeStepKind.CONVERT_CURRENCY:
+        check_convert_params(params, refuse)  # Plan O M242
     if kind is RecipeStepKind.PARSE_DATE:
         # Plan O M240 (DEC-1810 (d)): `excel_serial` reads Excel's day numbers, where no day/month order exists.
         serial = params.get("excel_serial", False)
@@ -616,9 +703,66 @@ def _check_plan_l_params(
                 raise refuse("before and after need a date") from exc
 
 
-def _apply(frame: pd.DataFrame, step: RecipeStep, snapshot_column: str | None) -> ParseOutcome:
+def _check_unit(series: pd.Series[Any], step: RecipeStep, unit: str) -> None:
+    """Plan O M242: a money column read in `unit` holds no amount in another currency, or the run stops."""
+    count, examples = foreign_values(series, unit)
+    if count:
+        raise RecipeError(
+            CURRENCY_MIXED,
+            f"{count} values in '{step.column}' name a currency other than {unit} (for example "
+            f"{', '.join(examples)}). Amounts in different currencies are never added together: say which rows "
+            "are in which currency, or convert them at a rate you give.",
+            column=step.column,
+            order=step.order,
+        )
+
+
+def _later_sources(steps: Sequence[RecipeStep], step: RecipeStep) -> frozenset[str]:
+    """The currencies later `convert_currency` steps convert on `step`'s column: a partial conversion may leave
+    those rows as written, since a later step takes them (review fix, DEC-1812 (c))."""
+    return frozenset(
+        str(_params(other)["from"])
+        for other in steps
+        if other.order > step.order
+        and other.kind is RecipeStepKind.CONVERT_CURRENCY
+        and other.column == step.column
+    )
+
+
+def _convert(frame: pd.DataFrame, step: RecipeStep, pending: frozenset[str]) -> ParseOutcome:
+    """Plan O M242: a `convert_currency` step on its column (and the column its `rows` names).
+
+    A partial conversion guards itself: a row it leaves as written that names a currency other than `to` (or one a
+    later step converts, `pending`) stops with `CURRENCY_MIXED` - whatever the `parse_number` after it says.
+    """
+    params = _params(step)
+    column = _rows_column(step)
+    try:
+        return convert_currency(
+            frame[step.column],
+            source_code=str(params["from"]),
+            rate=float(params["rate"]),
+            rows=params.get("rows", "all"),
+            selector=frame[column] if column is not None else None,
+            decimal=str(params.get("decimal", ".")),
+            indian_scale_words=bool(params.get("indian_scale_words", False)),
+            target=str(params["to"]),
+            pending=pending,
+        )
+    except CurrencyStepError as exc:
+        raise RecipeError(exc.code, exc.message, column=step.column, order=step.order) from exc
+
+
+def _apply(
+    frame: pd.DataFrame,
+    step: RecipeStep,
+    snapshot_column: str | None,
+    pending: frozenset[str] = frozenset(),
+) -> ParseOutcome:
     params = _params(step)
     series = frame[step.column] if step.kind is not RecipeStepKind.DERIVE else None
+    if step.kind is RecipeStepKind.PARSE_NUMBER and "unit" in params:
+        _check_unit(_series(series), step, str(params["unit"]))
     runners: dict[RecipeStepKind, Callable[[], ParseOutcome]] = {
         RecipeStepKind.PARSE_NUMBER: lambda: parse_numbers(
             _series(series),
@@ -667,6 +811,7 @@ def _apply(frame: pd.DataFrame, step: RecipeStep, snapshot_column: str | None) -
         ),
         RecipeStepKind.FILL_MISSING: lambda: fill_missing(_series(series), value=params["value"]),
         RecipeStepKind.NORMALISE_KEY: lambda: normalise_keys(_series(series), rule_from_params(params)),
+        RecipeStepKind.CONVERT_CURRENCY: lambda: _convert(frame, step, pending),
     }
     return runners[step.kind]()
 
@@ -852,7 +997,12 @@ def run_recipe(
             work = combined.frame
             continue
         try:
-            outcome = _apply(work, step, snapshot_column)
+            outcome = _apply(
+                work,
+                step,
+                snapshot_column,
+                _later_sources(steps, step) if step.kind is RecipeStepKind.CONVERT_CURRENCY else frozenset(),
+            )
         except (TypeError, ValueError) as exc:
             # A parser tripping over a column type it was not written for (a category column, an
             # unexpected object): a coded refusal naming the step, never a 500 at Approve or scoring.

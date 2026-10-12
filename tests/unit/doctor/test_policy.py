@@ -80,7 +80,7 @@ def ai_step(kind: str, facts: StepFacts, **change: Any) -> DataProposal:
 # Default deny
 # ---------------------------------------------------------------------------
 def test_a_propose_kind_with_no_rule_set_is_refused_with_policy_no_rules() -> None:
-    for kind in ("data.define_outcome", "data.convert_currency", "data.map_consent", "data.anything"):
+    for kind in ("data.define_outcome", "data.propose_time_settings", "data.map_consent", "data.anything"):
         decisions = evaluate(DataProposal(kind=kind, source="rules"), context())
         assert codes(decisions) == {"POLICY_NO_RULES"} and not allowed(decisions)
 
@@ -205,7 +205,7 @@ def test_the_catalogues_unbuilt_propose_kinds_stay_refused_until_their_milestone
     unbuilt = [
         row.name for row in CATALOGUE if row.kind == "propose" and policy_kind_for(row.name) not in built
     ]
-    assert "define_outcome" in unbuilt and "convert_currency" in unbuilt
+    assert "define_outcome" in unbuilt and "map_consent" in unbuilt  # convert_currency: M242, wave 2
     for name in unbuilt:
         assert policy_kind_for(name) not in shipped().rule_sets, name
 

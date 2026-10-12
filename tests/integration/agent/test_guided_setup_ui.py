@@ -9,8 +9,9 @@ screen asks for it:
   question answered "hide", every pending suggestion decided as its box starts (the helper's `sure`
   ones ticked, its `check` ones not), the preview, Approve, the prepared upload's profile, and the
   `POST /runs` the Setup form's Run then sends;
-* **conflict** - the same file with the outcome unticked, whose Approve answers `409` with the Run
-  button's own checks;
+* **conflict** - the same file with the outcome unticked: the helper asks for the outcome again and
+  Approve is refused as undecided (DEC-1821); and the Run button's own `409` checks on that file with
+  no outcome, which the screen shows whenever Approve meets them;
 * **placeholder** - a file with a placeholder code (`99`) in a number column: the session as started,
   its `set_missing` suggestion ticked by the person with the rest as their boxes start, and the preview;
 * **stopped** - a file too small to learn from, where the helper stops and says why.
@@ -161,7 +162,9 @@ def write_fixtures(root: Path, config_root: Path) -> Path:
         ids["run"] = created["run_id"]
         bodies["run"] = _ok(client.get(f"/runs/{created['run_id']}"))
 
-        # conflict: the outcome unticked, so Approve answers with the Run button's checks.
+        # conflict: the outcome unticked. The helper asks for it again (DEC-1821), so Approve is refused as
+        # undecided; and the Run button's own checks on that file with no outcome, the 409 body the screen
+        # shows when Approve meets them (`validation_conflict`, the body Approve itself answers with).
         bodies["upload_conflict"] = _upload(client, messy_frame())
         conflict = ids["conflict"] = bodies["upload_conflict"]["upload_id"]
         base = f"/uploads/{conflict}/agent-session"
@@ -176,6 +179,16 @@ def write_fixtures(root: Path, config_root: Path) -> Path:
         refused = client.post(f"{base}/apply")
         assert refused.status_code == 409, refused.text
         bodies["conflict_apply"] = refused.json()
+        key = next(
+            p["value"]
+            for p in bodies["conflict_decided"]["session"]["proposals"]
+            if p["kind"] == "role" and p["path"] == "primary_key" and p["state"] == "accepted"
+        )
+        checks = client.post(
+            "/runs", json={"use_case": USE_CASE, "mode": "train", "upload_id": conflict, "primary_key": key}
+        )
+        assert checks.status_code == 409, checks.text
+        bodies["conflict_checks"] = checks.json()
 
         # placeholder: `99` in a column whose real values stop at 16 (DEC-1220): the suggestion starts
         # unticked with its measured impact; the person ticks it, then previews.
@@ -238,7 +251,12 @@ def test_the_fixtures_are_the_world_the_screen_is_tested_in(tmp_path: Path, conf
     assert applied["upload_id"] != _read(out, "ids")["main"], "Approve prepared a copy"
     assert applied["overrides"], "an accepted setting reaches the Run request"
     assert applied["receipt"]["steps"]
-    conflict = _read(out, "conflict_apply")
+    decided = _read(out, "conflict_decided")["session"]
+    assert decided["status"] == "needs_review", "an unticked outcome is never ready (DEC-1821)"
+    asked = [q for q in decided["questions"] if q["blocking"] and q["answer"] is None]
+    assert [q["question_id"] for q in asked] == ["a1-role-outcome"]
+    assert _read(out, "conflict_apply")["detail"]["code"] == "AGENT_UNDECIDED"
+    conflict = _read(out, "conflict_checks")
     assert conflict["detail"]["code"] == "VALIDATION_FAILED"
     assert "TARGET_MISSING" in [c["code"] for c in conflict["validation"]["checks"]]
     placeholder = _read(out, "placeholder_start")["session"]

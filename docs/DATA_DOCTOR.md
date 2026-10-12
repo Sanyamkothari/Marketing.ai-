@@ -657,7 +657,7 @@ Excel day numbers (`45123`) are read by Data Doctor's own rules, never suggested
 The rule sets are the `data:` section of `configs/agentic/policy.yaml`; `engine/doctor/policy.py` reads and
 applies them (`docs/AGENTS.md` §16).
 
-## 19. Plan O: the visit, with or without a goal (M235)
+## 19. Plan O: the visit, with or without a goal (M235, DEC-1805)
 
 *Behind the switch `data_doctor.unified` (off by default). With it off, nothing below exists.*
 
@@ -694,7 +694,34 @@ Each transition is one write of `case.json`; items and questions of a goal carry
 Tests: `tests/unit/doctor/test_goal_brief.py`, `tests/unit/doctor/test_visit.py`,
 `tests/integration/test_api_case_visit.py`.
 
-## 20. Asking, approving and saying "I'm not sure" (Plan O M246, DEC-1816)
+## 20. More of what Data Doctor can look at, and explanations you can trust (Plan O M236, DEC-1806)
+
+*Behind the switch `data_doctor.unified` (off by default) and not on a screen yet.*
+
+Data Doctor can now do, as one of its own steps, what other screens of the product already do: say what kind of
+file each file is and which column is its ID, suggest how a file's columns map onto the goal's columns, keep how
+a file was read so next month's file is read the same way, look at a table in a saved connection before
+importing it, say which tables next month's build will read, run the pre-flight check on your files, find columns
+holding personal data, give one answer on columns that may hold the answer (leaks), check data for a
+campaign-effect run, read what a training run checked, and ask the AI service for a second opinion. Everything it
+suggests waits for you: nothing is ticked for you unless the rules are sure, and nothing the AI suggests ever is.
+
+When something needs your own yes (for example a join that leaves out more than 2% of a file's rows), Data Doctor
+shows the exact sentence you approve, who may approve it, and whether someone else must.
+
+**Explanations.** Data Doctor can explain what it measured in a few short sentences. The AI service writes only
+the wording; every number and every group name is filled in from what Data Doctor counted, after checking the
+sentence against it ("North has the highest rate" is shown only if North alone has it). A sentence that does not
+check out is dropped; if more than one fails, you see the plain sentences Data Doctor writes itself - which is
+also what you see when no AI service is connected.
+
+### For developers
+
+`engine/doctor/tools_wrappers.py`, `engine/doctor/explain.py` (`docs/AGENTS.md` §18); the rule sets are in
+`configs/agentic/policy.yaml` (`data.propose_role`, ...); the prompt is `configs/prompts/data_explain.v1.md`.
+M240's `read_workbook_sheets` and `find_excel_serial_dates` are catalogue rows #82 and #83 and are registered.
+
+## 21. Asking, approving and saying "I'm not sure" (Plan O M246, DEC-1816)
 
 *Behind the switch `data_doctor.unified` (off by default). With it off, nothing below exists.*
 
@@ -727,37 +754,101 @@ Tests: `tests/unit/doctor/test_goal_brief.py`, `tests/unit/doctor/test_visit.py`
 `engine/doctor/protocol.py` (the rules), `standing.py` (remembered answers), `plan_g_approval.py` (Guided setup's
 Approve with the switch on), `patterns.py` (candidate rules), the visit's `confirm`, `revoke_standing` and the
 `detectors` and `ledger` ports; routes in `api/routes/case_visit.py` and `api/routes/data_protocol.py`.
-`docs/AGENTS.md` §18. Tests: `tests/unit/doctor/test_protocol.py`, `test_protocol_visit.py`,
+`docs/AGENTS.md` §19. Tests: `tests/unit/doctor/test_protocol.py`, `test_protocol_visit.py`,
 `test_plan_g_approval.py`, `tests/integration/test_api_data_protocol.py`.
 
-## 21. More of what Data Doctor can look at, and explanations you can trust (Plan O M236, DEC-1806)
+## 22. Currency (Plan O M242, DEC-1812)
 
-*Behind the switch `data_doctor.unified` (off by default) and not on a screen yet.*
+*Behind the switch `data_doctor.unified` (off by default). With it off, nothing below runs.*
 
-Data Doctor can now do, as one of its own steps, what other screens of the product already do: say what kind of
-file each file is and which column is its ID, suggest how a file's columns map onto the goal's columns, keep how
-a file was read so next month's file is read the same way, look at a table in a saved connection before
-importing it, say which tables next month's build will read, run the pre-flight check on your files, find columns
-holding personal data, give one answer on columns that may hold the answer (leaks), check data for a
-campaign-effect run, read what a training run checked, and ask the AI service for a second opinion. Everything it
-suggests waits for you: nothing is ticked for you unless the rules are sure, and nothing the AI suggests ever is.
+Money keeps its currency. Each workspace has a currency (`data_doctor.workspace_currency`, rupees unless set; a
+client's confirmed currency wins for that client), and every money column of a file is read for its own: the signs
+and codes in its values (`₹`, `Rs`, `$`, `USD`, `€`, `£`) and the words in its name (`amount_usd`, `Price (INR)`).
 
-When something needs your own yes (for example a join that leaves out more than 2% of a file's rows), Data Doctor
-shows the exact sentence you approve, who may approve it, and whether someone else must.
+- **The same currency as the workspace:** nothing to ask. The column is read with its currency recorded.
+- **Another currency** (`CURRENCY_FOREIGN`, a question): "This file's `bill_amount` is in US dollars, and this
+  workspace reports in Indian rupees. Report in US dollars, or convert to Indian rupees at a rate you give?"
+  Reporting in dollars converts nothing: the column's amounts stay dollars, labelled as dollars, and are never added
+  to rupees. The value view and the Value Proof Pack work their amounts out from your value inputs, which are in
+  rupees, so those stay in rupees; the dollar column is noted apart under "Currency", never used to relabel them.
+  Converting needs a rate **you** give, with its date and where it comes from ("RBI reference rate, 10 Oct 2026"). An Analyst approves
+  the exact sentence shown; who approved it and when are recorded, and every report that uses the rate shows it,
+  its date, its source and the approver. **The product never looks a rate up.**
+- **Two currencies in one column** (`CURRENCY_MIXED`, a stop): nothing is built from the column until you say which
+  rows are in which currency - a column that says so (`country`, `currency`), or the sign on every amount. The other
+  currency's rows are then converted at a rate you give. Amounts in different currencies are never added together.
+- **Money that names no currency** (`CURRENCY_UNSTATED`, a question): asked once for the client, never assumed.
 
-**Explanations.** Data Doctor can explain what it measured in a few short sentences. The AI service writes only
-the wording; every number and every group name is filled in from what Data Doctor counted, after checking the
-sentence against it ("North has the highest rate" is shown only if North alone has it). A sentence that does not
-check out is dropped; if more than one fails, you see the plain sentences Data Doctor writes itself - which is
-also what you see when no AI service is connected.
+A recipe records the currency: `parse_number` with `unit` stops (`CURRENCY_MIXED`) if next month's file has an
+amount in another currency, and `convert_currency` keeps the rate, its date and source frozen, so replay converts
+exactly as approved. With `data_doctor.unified` off, nothing here runs and every report is as it was; an INR
+workspace with nothing converted prints exactly as before.
 
 ### For developers
 
-`engine/doctor/tools_wrappers.py`, `engine/doctor/explain.py` (`docs/AGENTS.md` §17); the rule sets are in
-`configs/agentic/policy.yaml` (`data.propose_role`, ...); the prompt is `configs/prompts/data_explain.v1.md`.
-M240's `read_workbook_sheets` and `find_excel_serial_dates` are catalogue rows #82 and #83 and are registered.
+`engine/doctor/currency.py` (`check_currency`, `report_in`, `propose_conversion`, `approve_conversion`,
+`answer_mixed`, `money_basis`, `report_money`, `format_money`, `add_amounts`), `engine/agent/currency_steps.py`
+(the step runners), `engine/doctor/tools_currency.py` (the registry entries; `convert_currency`, #64, is registered, the person's only). A run's money basis is
+`runs/<run_id>/money_basis.json`; `GET /pilot/roi/{run_id}` and `GET /pilot/proof/{campaign_id}` print its unit and
+rate lines under "Currency" when it exists (`ReportMoney.lines_beside`), and keep writing their own amounts in the
+currency of `RoiInputs` (rupees). A run or scoring file stopped by `CURRENCY_MIXED` comes back as a 409 check with that
+code and the question to answer, not as `RECIPE_STEP_INVALID`. `ui/format.js` `setWorkspaceCurrency(code)` makes `money(value)` use the workspace currency (INR by default).
 
-## 22. One Data Doctor screen, in the three places you work (Plan O M247, DEC-1817)
+## 23. How we check Data Doctor: the evals (Plan O M248, DEC-1818)
+
+*A tool for the team, not a screen. It switches `data_doctor.unified` on in its own process only; nothing a client
+sees changes.*
+
+`make agent-eval` (`python -m scripts.plan_o_benchmark`) writes `reports/plan_o_benchmark.md` and `.json`. It
+measures:
+
+- **Harm, which must be zero:** rows or columns lost with nothing saying so; an outcome (or any value) changed
+  without the person's approval; an AI suggestion ticked, whether it arrives ticked or "accept the recommended"
+  ticks it; a date read with day and month swapped; a leak let through; personal data in a prompt. The personal
+  data check looks for the values of the columns the file's profile marks as personal, and for planted ones, in
+  every prompt of the AI cases; it cannot prove that no other value is personal. A tool that sends nothing to an AI
+  service shows "—" there. A harm nothing in the run could measure (today: leaks let through, until `check_leaks`
+  is built) is shown as **not measured**, never as 0.
+- **"Ready" keeps its promise:** a file that Data Doctor, Guided setup or the readiness report calls ready must reach
+  Approve with an ID and an outcome settled, and in the gate run it must train to the end. A file that breaks this
+  fails the run.
+- **pass^5 per tool:** five runs give the same decisions (kinds, columns, settings, never wording), every suggestion
+  acceptable, none harmful. For a tool the AI calls, a failure means its AI part is switched off and its rules stay
+  (Plan O §9.3); the report says so per tool.
+- **Injection canaries for every tool:** a column whose name and cells are instructions to the AI, against the same
+  column with its letters rotated (same lengths, says nothing). What a cell says must not change any decision.
+- **Cost per case:** AI calls, tokens and cost, with a budget alarm.
+- **The messy benchmark:** Plan L's 30 files, new cases (lakh and crore, `haan/nahi`, GSTIN, mixed currency, a
+  dollar file, a multi-valued outcome, overlapping monthly exports, two files per customer), and **20 Indian files
+  written by a separate generator that reads nothing from our word lists**, reported on their own and never used to
+  tune anything. Each goes through upload, Data Doctor, Guided setup and Approve with no person; the readiness
+  verdict is checked on every file, and each prepared copy is compared to what the file really held (IDs, outcome
+  meanings, columns, days). A question asking which column is the ID or the outcome is answered with the file's
+  true column, as a person who knows the file would; when it is not offered, the file is marked "not measured".
+- **Tools not built yet** are listed as such, with the milestone that builds them; nothing stands in for them.
+
+**The AI model.** By default a recorded one: a file of answers (`tests/fixtures/doctor_eval/cassettes/ai_path.json`)
+keyed by a hash of each prompt, holding no prompt. It needs no network and no key. With a real model configured, the
+evals call it instead; `--model real --record` records its answers. The recorded answers shipped today come from a
+scripted reference model, because no AI service was available where the harness was built; the report names which
+model answered.
+
+**Pass or fail.** `make agent-eval` exits with an error when there is any harm, a broken "ready", a tool whose
+verdict blocks the release, a canary that moved a decision, or a changed golden result; the report starts with the
+reasons.
+
+**What waits.** Training every `ready` file to the end (`--train`) is the gate run, after the Data Doctor screen
+(M247). The held-out files are a stand-in until the author the approvers name delivers theirs; `--heldout-dir` reads
+a folder of real files with no change.
+
+### For developers
+
+`engine/doctor/evals.py` (discovery, digests, pass^k, the injection twin, harm, the cassette meter, the report),
+`scripts/plan_o_benchmark.py` (the runs), `tests/fixtures/doctor_eval/` (the eval world and its per-tool calls, the
+AI cases, the reference model, the extended cases, the held-out generator). A registered tool without eval calls
+fails `test_every_registered_tool_has_eval_calls`.
+
+## 24. One Data Doctor screen, in the three places you work (Plan O M247, DEC-1817)
 
 *Behind the switch `data_doctor.unified` (off by default). With it off, the Data page, the wizard's Customers step
 and a goal's setup are exactly as before.*

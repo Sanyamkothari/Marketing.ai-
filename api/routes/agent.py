@@ -44,7 +44,7 @@ from api.routes.runs import read_frame, requested_by, score_version, validation_
 from api.routes.uploads import http_error, load_upload, load_upload_profile, profile_row_cap, use_case_config
 from api.schemas import ErrorResponse, UploadRecord, ValidationErrorResponse
 from engine.access.roles import Role
-from engine.agent.advisor import recipe_steps, run_overrides
+from engine.agent.advisor import ROLE_PRIMARY_KEY, recipe_steps, run_overrides
 from engine.agent.assist import assist_session
 from engine.agent.checks import check_plan
 from engine.agent.config import DataAccess
@@ -77,6 +77,7 @@ from engine.agent.session import (
     decide,
     roles_of,
     start_session,
+    unsettled_roles,
     with_summary,
 )
 from engine.agent.tools import AgentContext, AgentToolError
@@ -1213,6 +1214,15 @@ def _apply_agent_session(
             "AGENT_UNDECIDED",
             f"{len(session.undecided)} suggestion(s) or question(s) still need a decision before approving.",
         )
+    missing = unsettled_roles(session)
+    if missing:
+        # DEC-1821: a session saved before the rule (ready with its ID or outcome rejected) is refused plainly
+        # here, rather than by the run checks' VALIDATION_FAILED.
+        what = " and ".join(
+            "the column that identifies each row" if path == ROLE_PRIMARY_KEY else "the outcome column"
+            for path in missing
+        )
+        raise _refuse(409, "AGENT_UNDECIDED", f"Choose {what} before approving.")
     key, target = roles_of(session)
     recipe = _accepted_recipe(session, upload, requested_by(request), ctx.config)
     approval = None
