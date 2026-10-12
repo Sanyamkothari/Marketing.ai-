@@ -23,7 +23,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import Field, JsonValue
 
-from api.access import set_audit_context
+from api.access import current_principal, set_audit_context
 from api.access_policy import RoutePolicy, register
 from api.deps import ConfigRootDep, StorageDep, get_registry, get_settings
 from api.routes.agent_recipes import (
@@ -872,7 +872,15 @@ def message_agent_session(
         meter = Meter(ai.client, job_id=session.session_id, llm=ai.llm, budget=generative.budget)
         guardrails = Guardrails(load_policy(root), meter=meter, prompts_root=root)
         text = redact_text(body.text)[0]
-        turn = chat_turn(ctx, session, text, meter=meter, guardrails=guardrails, config_root=root)
+        turn = chat_turn(
+            ctx,
+            session,
+            text,
+            meter=meter,
+            guardrails=guardrails,
+            config_root=root,
+            principal=current_principal(request),  # Plan O M232: role per tool call, behind the switch
+        )
         asked = ChatMessage(role=ChatRole.USER, text=text, created_at=utc_now())
         session = session.model_copy(
             update={
@@ -1461,7 +1469,15 @@ def ask_message(
         meter = Meter(ai.client, job_id=session.session_id, llm=ai.llm, budget=generative.budget)
         guardrails = Guardrails(load_policy(root), meter=meter, prompts_root=root)
         text = redact_text(body.text)[0]
-        turn = chat_turn(ctx, session, text, meter=meter, guardrails=guardrails, config_root=root)
+        turn = chat_turn(
+            ctx,
+            session,
+            text,
+            meter=meter,
+            guardrails=guardrails,
+            config_root=root,
+            principal=current_principal(request),  # Plan O M232: role per tool call, behind the switch
+        )
         asked = ChatMessage(role=ChatRole.USER, text=text, created_at=utc_now())
         session = session.model_copy(
             update={

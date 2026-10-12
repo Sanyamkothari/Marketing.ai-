@@ -43,6 +43,13 @@ that is not a known tool, `propose_setting` or `reply` is logged as `unknown`, n
 An *Ask your data* session (`AgentSession.explore`, Plan I DEC-1250/1251) runs the same turn read-only:
 no setting is listed, the state block is one fixed sentence, and `propose_setting` is refused with
 `AGENT_EXPLORE_READ_ONLY` like any other refused action.
+
+Plan O M232 (DEC-1802): with `data_doctor.unified` on, the turn calls every tool through Data Doctor's registry
+(`engine.doctor.registry`): the tools listed to the model are the registry's READ tools for the AI in this
+session, a read is `session_call` and a suggestion is `call`, with the turn's own handlers bound to it
+(`_RegistryTurn`). The registry checks the person's role on every call (`TOOL_ROLE_REQUIRED`) when the route
+passes who is asking (`principal`). Everything else - the ids, the prompts, the results - is what it was.
+With the switch off (the default) the registry is not reached.
 """
 
 from __future__ import annotations
@@ -55,6 +62,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Final
 
+from engine.access.roles import Principal
 from engine.agent.contracts import (
     AgentConfidence,
     AgentSession,
@@ -337,8 +345,13 @@ def chat_turn(
     guardrails: Guardrails,
     config_root: Path | None = None,
     clock: Callable[[], datetime] = utc_now,
+    principal: Principal | None = None,
 ) -> TurnResult:
-    """Answer one message. Never raises for a model's mistake; the reply says what happened."""
+    """Answer one message. Never raises for a model's mistake; the reply says what happened.
+
+    `principal` is who is asking; with `data_doctor.unified` on, the registry checks their role on every
+    tool call (Plan O M232). Unused with the switch off.
+    """
     agent = ctx.config.agent
     prefix = f"c{len(session.transcript) // 2 + 1}-"
     message = scrub(message[:MAX_MESSAGE_CHARS])
@@ -415,6 +428,9 @@ def chat_turn(
         gate, STATE_TOOL, {}, state + "\n" + column_choices, extra_text_keys=STATE_TEXT_KEYS
     )
     state_recorded = False
+    doctor = _registry_turn(
+        ctx, session, principal, gate, fields, checker, results, proposals, prefix, config_root, clock
+    )
 
     def finish(text: str, evidence: tuple[str, ...] = (), blocked_by: str | None = None) -> TurnResult:
         log = TurnLog(llm_calls=calls, tools=tuple(actions), error_codes=tuple(errors), blocked_by=blocked_by)
@@ -441,7 +457,7 @@ def chat_turn(
             "goal": agent.goal_for(ctx.config.target.definition),
             "entity": ctx.config.entity,
             "knowledge": knowledge,
-            "tools": _tools(ctx),
+            "tools": _tools(ctx) if doctor is None else doctor.tools(),
             "settings": shown_settings,
             "state": state,
             "column_choices": column_choices,
@@ -492,6 +508,19 @@ def chat_turn(
                     EXPLORE_READ_ONLY,
                     "This chat only answers questions about the data; it cannot suggest a setting. Reply instead.",
                 )
+            if doctor is not None and name in {PROPOSE_TOOL, STEP_TOOL}:
+                result, proposal = doctor.propose(name, args)
+                results.append(result)
+                proposals.append(proposal)
+                _record(
+                    gate,
+                    names,
+                    feedback,
+                    items,
+                    result,
+                    PROPOSE_TEXT_KEYS if name == PROPOSE_TOOL else STEP_TEXT_KEYS,
+                )
+                continue
             if name == PROPOSE_TOOL:
                 result, proposal = _propose(
                     ctx,
@@ -521,12 +550,20 @@ def chat_turn(
                 proposals.append(proposal)
                 _record(gate, names, feedback, items, result, STEP_TEXT_KEYS)
                 continue
-            tool = TOOLS.get(name)
-            if tool is None or tool.kind is not ToolKind.READ or not tool_available(ctx, name):
+            if doctor is None:
+                tool = TOOLS.get(name)
+                if tool is None or tool.kind is not ToolKind.READ or not tool_available(ctx, name):
+                    raise AgentToolError("AGENT_TOOL_UNKNOWN", f"There is no tool called {name[:40]!r}.")
+            elif not doctor.reads(name):
                 raise AgentToolError("AGENT_TOOL_UNKNOWN", f"There is no tool called {name[:40]!r}.")
             if name == "find_values":
                 _limit_searches(ctx, session, results, args)
-            result = call_tool(ctx, name, args, evidence_id=f"{prefix}e{len(results) + 1}")
+            evidence_id = f"{prefix}e{len(results) + 1}"
+            result = (
+                call_tool(ctx, name, args, evidence_id=evidence_id)
+                if doctor is None
+                else doctor.read(name, args, evidence_id)
+            )
             results.append(result)
             checker.grounded = checker.grounded | evidence_numbers(result.result, result.typed_args)
             _record(gate, names, feedback, items, result, frozenset())
@@ -544,6 +581,143 @@ def chat_turn(
             return finish(FALLBACK, blocked_by=TURN_FAILED)
         del step
     return finish(FALLBACK, blocked_by="too_many_steps")
+
+
+@dataclass
+class _RegistryTurn:
+    """One chat turn's binding to Data Doctor's registry (Plan O M232), behind `data_doctor.unified`.
+
+    The registry decides which tools the model may use here and whether `principal` may call them; Plan G's
+    look tools run exactly as `call_tool` runs them, and the two suggestions run this turn's own handlers
+    (`_propose`, `_propose_step`), bound through `propose` (the registry's `ChatTurn`).
+    """
+
+    registry: Any
+    context: Any
+    ctx: AgentContext
+    session: AgentSession
+    fields: dict[str, Any]
+    checker: _Checker
+    results: list[ToolResult]
+    proposals: list[Proposal]
+    prefix: str
+    clock: Callable[[], datetime]
+    made: list[tuple[ToolResult, Proposal]] = dataclasses.field(default_factory=list)
+
+    def tools(self) -> list[dict[str, str]]:
+        """What `_tools(ctx)` lists, from the registry: each READ tool this session's AI may call."""
+        from engine.doctor.registry import DataToolKind
+
+        listed: list[dict[str, str]] = []
+        for tool in self.registry.listed_for(self.context, DataToolKind.READ):
+            schema = tool.input_model.model_json_schema()
+            args = {"properties": schema.get("properties", {}), "required": schema.get("required", [])}
+            listed.append({"name": tool.name, "description": tool.description, "args": json.dumps(args)})
+        return listed
+
+    def reads(self, name: str) -> bool:
+        from engine.doctor.registry import DataToolKind
+
+        tool = self.registry.find(name, self.context)
+        return tool is not None and tool.kind is DataToolKind.READ
+
+    def read(self, name: str, args: dict[str, Any], evidence_id: str) -> ToolResult:
+        result: ToolResult = self.registry.session_call(name, args, self.context, evidence_id=evidence_id)
+        return result
+
+    def propose(self, name: str, args: dict[str, Any]) -> tuple[ToolResult, Proposal]:
+        """As the model: through the registry (role, input), which calls back into `ChatTurn.propose`.
+
+        The registry decides who may suggest and records the suggestion; Plan G's handler gets `args` exactly
+        as the model sent them (`_Bound` keeps them), never the registry's validated copy. Once the handler has
+        made a suggestion, the registry's record of it cannot change or drop it. `made` is emptied whatever
+        happens, so nothing from one call is left for the next.
+        """
+        from engine.doctor.tools import PROPOSE_ARG_FIELDS
+
+        given = {key: value for key, value in args.items() if key in PROPOSE_ARG_FIELDS[name]}
+        bound = dataclasses.replace(self.context, turn=_Bound(self, args))
+        try:
+            self.registry.call(name, given, bound)
+        except (AgentToolError, ValueError):
+            if not self.made:
+                raise  # refused before or by the handler: the role, the input, or Plan G's own checks
+        finally:
+            made, self.made = self.made[-1:], []
+        return made[0]
+
+    def handle(self, name: str, args: dict[str, Any]) -> tuple[ToolResult, Proposal]:
+        evidence_id = f"{self.prefix}e{len(self.results) + 1}"
+        proposal_id = f"{self.prefix}p{len(self.proposals) + 1}"
+        if name == PROPOSE_TOOL:
+            made = _propose(self.ctx, args, self.fields, self.checker, evidence_id, proposal_id, self.clock)
+        else:
+            made = _propose_step(
+                self.ctx,
+                self.session,
+                args,
+                self.results,
+                self.checker,
+                evidence_id,
+                proposal_id,
+                self.clock,
+            )
+        self.made.append(made)
+        return made
+
+
+@dataclass(frozen=True)
+class _Bound:
+    """The registry's `ChatTurn`: its `propose` runs the turn's own handler on the model's own arguments."""
+
+    turn: _RegistryTurn
+    sent: dict[str, Any]
+    """The arguments as the model sent them: what Plan G's handler reads, so nothing is stripped or reshaped."""
+
+    def propose(self, name: str, args: dict[str, Any]) -> tuple[ToolResult, Proposal]:
+        del args  # the registry's validated copy; the handler reads what the model sent
+        return self.turn.handle(name, self.sent)
+
+
+def _registry_turn(
+    ctx: AgentContext,
+    session: AgentSession,
+    principal: Principal | None,
+    gate: Egress,
+    fields: dict[str, Any],
+    checker: _Checker,
+    results: list[ToolResult],
+    proposals: list[Proposal],
+    prefix: str,
+    config_root: Path | None,
+    clock: Callable[[], datetime],
+) -> _RegistryTurn | None:
+    """The turn's registry binding when `data_doctor.unified` is on; None (Plan G as it was) when off."""
+    from engine.doctor import registry as doctor_registry
+
+    if not doctor_registry.unified_on(ctx.config):
+        return None
+    context = doctor_registry.DataToolContext(
+        agent=ctx,
+        principal=principal,
+        caller="ai",
+        egress=gate,
+        session=session,
+        config_root=config_root,
+        clock=clock,
+    )
+    return _RegistryTurn(
+        registry=doctor_registry.data_registry(),
+        context=context,
+        ctx=ctx,
+        session=session,
+        fields=fields,
+        checker=checker,
+        results=results,
+        proposals=proposals,
+        prefix=prefix,
+        clock=clock,
+    )
 
 
 def _limit_searches(
