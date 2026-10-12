@@ -625,3 +625,107 @@ routing the other formats through upload comes later.*
 `engine/doctor/tools_formats.py`; the case's files for these tools are `engine/doctor/case_files.py` (`CaseFiles`,
 over M231's case). `read_other_format` (#4) and `check_parser_loss` (#5) are in the registry;
 `read_workbook_sheets` and `find_excel_serial_dates` wait for a row in the design's catalogue.
+
+## 18. A rule for everything Data Doctor suggests (Plan O M233, DEC-1803)
+
+**Status: built, behind `data_doctor.unified` (off by default).** With the switch off nothing here is read and
+everything works as the sections above describe.
+
+Every kind of suggestion Data Doctor can make - a data fix, a setting, your own edit, joining or stacking files,
+keeping each customer's latest row, cutting one file in two, reading lakh and crore or `haan`/`nahi` - has its own
+written **rule set**. A kind of suggestion with no rule set is never made at all. The rule sets say:
+
+- **which fixes** each kind may suggest (the chat may tidy, read and merge values; correcting a cell or leaving
+  rows out stays yours);
+- **never the ID or the outcome**, and a column holding personal data can only be hidden;
+- **how far** a fix may go for this goal (tidy, add a column, or change the rows);
+- **what is never ticked for you**: placeholder codes, ranges, keeping the latest row per customer, and anything
+  the AI suggests;
+- **which settings** may be suggested (never a safeguard, a threshold, or a setting nothing reads yet);
+- **what needs your explicit yes**: joins and stacks that leave out more than 2% of the rows, cutting one file
+  into two. You approve the exact sentence; if it has changed since you read it, nothing is recorded and you see
+  the new one.
+
+**A new pattern, only with your permission.** When the AI sees spellings no rule knows (say `ho`/`nako` in a
+yes/no column), it may suggest reading them - but only with a fix from the fixed list, after looking at that
+column, tried on the first 1,000 rows, never ticked for you, and never if it would change more than 60% of the
+column (above 30% you are warned). `NA` is never read as yes or no: it may mean "not available", so it is asked.
+Excel day numbers (`45123`) are read by Data Doctor's own rules, never suggested by the chat.
+
+### For developers
+
+The rule sets are the `data:` section of `configs/agentic/policy.yaml`; `engine/doctor/policy.py` reads and
+applies them (`docs/AGENTS.md` §16).
+
+## 19. Plan O: the visit, with or without a goal (M235)
+
+*Behind the switch `data_doctor.unified` (off by default). With it off, nothing below exists.*
+
+Data Doctor is **one helper with an optional goal**. You can start without choosing anything, and choose a goal
+later without starting again.
+
+- **Without a goal**, it reads your files, works out what each one is and which column names each customer, fixes
+  what does not depend on a goal, and tells you **what the data can power** today and **what is missing** for the
+  other goals (with the data request to send for it).
+- **With a goal** (for example *Targeted Advertisement*), it knows what you are trying to achieve: the outcome it
+  learns from, the dates it splits on, the columns the goal needs (consent for a goal that contacts people), how
+  much data is enough. It asks the goal's own questions and checks the goal's readiness before training. This is
+  the goal's **brief**; it comes from the goal's settings, never from the AI.
+- **Choosing a goal mid-way keeps everything.** What you already decided stays decided and nothing you answered is
+  asked again. Only the goal's own questions are new.
+- **Two goals on one case.** Each goal keeps its own decisions. Switching to another goal puts the first goal's
+  decisions aside, not away: switch back and they are exactly as you left them.
+- **Close the browser at any moment.** Every step is saved as it happens. When you come back, Data Doctor goes on
+  from where it was, without losing or repeating anything.
+- **No AI service needed.** Every step works without one. Only the chat needs one; without it, Data Doctor says so
+  and everything else carries on. Whatever the AI suggests waits for your tick.
+- **Who did what.** Your answers, your ticks and your approval are kept with your name, and the approval with the
+  exact sentence you read.
+
+### For developers
+
+`engine/doctor/goal_brief.py` (`GoalBrief`, `load_goal_brief`, `brief_hash`; tool #35 `load_goal_brief`),
+`engine/doctor/visit.py` (the state machine: `resume`, `set_goal`, `answer`, `decide`, `approve`, `chat`,
+`add_files`; the ports `VisitDeps`), `engine/doctor/visit_contracts.py` (`CaseVisit`, kept in `case.visit`) and
+`api/routes/case_visit.py` (`POST /cases/{id}/visit`, `/goal`, `/answers`, `/decisions`, `/approval`, `/chat`;
+`GET /goal-briefs/{goal_id}`). The brief is frozen into the case at `cases/<client>/<case>/briefs/<goal>_<hash>.json`.
+Each transition is one write of `case.json`; items and questions of a goal carry its `goal_id`. Refusals:
+`VISIT_NOT_WAITING` (409), `VISIT_UNKNOWN_CHOICE` (422), `USE_CASE_NOT_FOUND` for a goal that is not a use case.
+Tests: `tests/unit/doctor/test_goal_brief.py`, `tests/unit/doctor/test_visit.py`,
+`tests/integration/test_api_case_visit.py`.
+
+## 20. Asking, approving and saying "I'm not sure" (Plan O M246, DEC-1816)
+
+*Behind the switch `data_doctor.unified` (off by default). With it off, nothing below exists.*
+
+- **One clear question at a time, only when it matters.** Data Doctor asks only when the choices give really
+  different data - more than 1 row in 200 changes, or the share of yes outcomes moves by more than half a point.
+  Below that it decides, **tells you what it assumed** ("I took 'Day first': the choices differ on only 12 of 3,000
+  rows") and lets you change it. Each question says why it is asked and what each answer changes, and always has
+  **"I don't know"**, which picks the safe choice (leave as it is, hide, stop) - never a guess. At most 10 questions
+  per file.
+- **Your answers are remembered for this client.** Next month's file is treated the same way, ticked for you and
+  marked "Using your answer from 12 Oct". Settings lists every remembered answer with **Revoke**; a revoked answer
+  is asked again. Answers about what changes meaning are never remembered: they are asked again. If the same answer
+  would now make a different change, it is not used: the question is asked again and says why.
+- **An explicit yes for what changes meaning.** Consent, keeping personal data, the outcome, leaving rows out,
+  currency conversion and loosening a safeguard each need their own yes, from someone with the right role (an
+  Approver for consent, personal data and safeguards). You approve the exact sentence shown; if it changed since
+  you read it, nothing is recorded and you see the new one. When your goal asks for two people, no one who chose
+  it - who answered its question, ticked it or added it - can also approve it, in a case and in Guided setup.
+- **Doubts said plainly**: *I am not sure because* ... *Here is what I would do* ... *Here is what changes if not*
+  ... - and every number in a doubt was measured, never made up.
+- **Asking for more data or a different file**: "Ask your billing team for the date of each customer's last order;
+  Win back needs it", with the columns the file should have.
+- **Who decided what** is kept with every answer, tick and approval; with the decision ledger on, approvals are
+  also written to it, signed, and nothing of an approval is kept unless its record is.
+- **New patterns only with your permission.** What the AI suggests is never ticked for you. When people approve
+  the same AI suggestion again and again, our product team is told, so it can become a built-in rule.
+
+### For developers
+
+`engine/doctor/protocol.py` (the rules), `standing.py` (remembered answers), `plan_g_approval.py` (Guided setup's
+Approve with the switch on), `patterns.py` (candidate rules), the visit's `confirm`, `revoke_standing` and the
+`detectors` and `ledger` ports; routes in `api/routes/case_visit.py` and `api/routes/data_protocol.py`.
+`docs/AGENTS.md` §18. Tests: `tests/unit/doctor/test_protocol.py`, `test_protocol_visit.py`,
+`test_plan_g_approval.py`, `tests/integration/test_api_data_protocol.py`.
