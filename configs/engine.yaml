@@ -357,3 +357,8 @@ defaults:
     max_tool_steps_per_turn: 12         # int 1..20; tool calls the helper may make before it must reply
     ai_data_access: masked_data         # enum masked_data | summaries_only; what the chat model sees of cells: masked values, or only their shape (`Aaaaa 9999`)
     always_hide_columns: []             # list[str]; columns (case-insensitive) whose values the chat model never sees, whatever the profile says
+
+  # ---- PLAN-O (Data Doctor) — append only below this line ----
+  data_doctor:                          # Plan O (DEC-1800). The one Data Doctor agent; not overridable per run
+    unified: false                      # bool; true = Guided setup and the Doctor page are one Data Doctor. Off until M249's parity checklist is met; while off nothing changes
+  # ---- END PLAN-O ----
