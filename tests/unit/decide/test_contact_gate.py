@@ -212,3 +212,46 @@ def test_a_customer_file_that_is_gone_leaves_the_list_as_scored_unless_rules_wer
     build_treat_list(storage, run_id)
     lines = _summary(storage, run_id).contact_exclusion_lines or []
     assert lines and "no longer stored" in lines[0]
+
+
+def test_every_status_and_do_not_disturb_column_is_read_not_only_the_first(rules: GateRules) -> None:
+    frame = pd.DataFrame(
+        {
+            "kyc_status": ["Verified", "Verified", "Verified"],
+            "account_status": ["Active", "Deceased", "Active"],
+            "dnd_flag": ["N", "N", "Y"],  # found by the word in its name, read because its answers are known
+            "dnd_checked_on": ["2026-09-01"] * 3,  # dates: not an answer column, and no note
+        }
+    )
+    reasons, verdict = gate_customers(frame, rules, ContactRules(), as_of=DAY)
+    assert reasons.tolist() == [None, "blocked_status", "dnd"]
+    assert verdict.columns["dnd"] == "dnd_flag" and verdict.notes == []
+
+
+def test_a_do_not_disturb_column_whose_answers_are_not_known_is_named_not_guessed(rules: GateRules) -> None:
+    frame = pd.DataFrame({"dnd_status": ["Active", "Inactive", "Active"]})
+    reasons, verdict = gate_customers(frame, rules, ContactRules(), as_of=DAY)
+    assert reasons.tolist() == [None, None, None]
+    assert any("'dnd_status' looks like a do-not-disturb column" in note for note in verdict.notes)
+
+
+def test_a_suppression_list_of_phone_numbers_meets_a_hashed_working_key_through_the_vault(
+    tmp_path: Path,
+) -> None:
+    from engine.privacy.working_key import KEY_VAULT_FILENAME
+
+    run_id = "run_20260101_dddddddd"
+    storage = LocalStorage(tmp_path)
+    write_run(storage, run_id, value=True)
+    source = pd.read_csv(io.BytesIO(storage.read_bytes(upload_key("u_dddddddd", "source.csv"))))
+    ids = source["customer_id"].astype(str).tolist()  # stands in for the hashes the table holds
+    vault = pd.DataFrame({"working_key": ids, "real_key": [f"98765{n:05d}" for n in range(len(ids))]})
+    buffer = io.BytesIO()
+    vault.to_parquet(buffer, index=False)
+    storage.write_bytes(upload_key("u_dddddddd", KEY_VAULT_FILENAME), buffer.getvalue())
+    write_suppression_list(storage, run_id, ["+91 98765 00001"])
+
+    build_treat_list(storage, run_id)
+    summary = _summary(storage, run_id)
+    assert (summary.contact_exclusions or {}).get("suppression_list", 0) >= 1
+    assert "1 of 1 on your suppression list were found" in " ".join(summary.contact_exclusion_lines or [])

@@ -157,6 +157,12 @@ def _one_row_per_customer(
         return working_key(values, salt) if hashed else values.astype(str)
 
     text = written(keys)
+    if hashed and (text.isna().any() or text.duplicated().any()):
+        # `98765 43210` and `+919876543210` are one customer once written one way: never two rows for one hash.
+        raise AgentToolError(
+            "COMBINE_KEY_REPEATS",
+            f"{entity.source_name} does not have one row per customer once its numbers are written one way.",
+        )
     by_role: dict[str, list[pd.DataFrame]] = {}
     for source, frame in logs:
         if source.date_column is None:

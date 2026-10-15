@@ -146,3 +146,16 @@ def test_an_approved_join_whose_key_turns_out_to_be_aadhaar_numbers_stops_withou
     with pytest.raises(AgentToolError) as raised:
         combine_item(item, Diagnosis.model_validate(case.diagnosis), frames, {}, key_salt="s")
     assert raised.value.code == "KEY_AADHAAR_NOT_STORED"
+
+
+def test_two_rows_that_are_one_number_written_two_ways_stop_the_join(tmp_path: Path) -> None:
+    files = _files()
+    customers = files["up-c"][1].copy()
+    first = _phones()[0]
+    phones = customers["phone"].tolist()
+    phones[-1] = f"+91 {first[:5]} {first[5:]}"  # one customer, two rows
+    customers["phone"] = phones
+    files["up-c"] = ("customers.csv", customers)
+    with pytest.raises(AgentToolError) as raised:
+        _built(tmp_path, files, "case-salt")
+    assert raised.value.code == "COMBINE_KEY_REPEATS"

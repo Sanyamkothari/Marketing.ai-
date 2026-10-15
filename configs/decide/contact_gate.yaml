@@ -9,8 +9,11 @@
 
 minimum_age: 18
 
-# Columns by name.
-age_columns: [age, customer_age, age_years]
+# Columns by name. Status, do-not-disturb and consent columns are also found when the name holds one of these as
+# whole words (`kyc_status`, `dnd_flag`, `sms_consent`); such a do-not-disturb or consent column is read only when
+# most of its answers are ones listed below, and the list says so when it is not. Every status column is read,
+# and every do-not-disturb column; consent is read from the first column found.
+age_columns: [age, customer_age, cust_age, age_years, age_in_years, applicant_age]
 birth_date_columns: [dob, birth_date, birthdate, date_of_birth]
 status_columns: [status, customer_status, account_status, lifecycle_status, legal_status]
 dnd_columns: [dnd, ndnc, do_not_disturb, do_not_call, do_not_contact, dnc]

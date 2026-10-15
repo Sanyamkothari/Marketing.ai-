@@ -993,6 +993,7 @@ def _contact_gate(
             source_keys,
             handled_columns=(config.governance.consent_column, config.actions.suppression.opt_out_column),
             config_root=config_root,
+            real_keys=_real_key_lookup(storage, record),
         )
     except (StorageError, ValueError, KeyError, OSError) as exc:
         _LOGGER.warning(
@@ -1023,16 +1024,32 @@ def _with_real_keys(storage: Storage, record: RunRecord, table: pa.Table) -> pa.
     wait in the upload's `key_vault`. They are added to the download only, as `contact_key`; the parquet file and the
     summary never hold them. A run with no vault, or a composite key, is returned as it is.
     """
-    from engine.privacy.working_key import KEY_VAULT_FILENAME, attach_real_keys
+    from engine.privacy.working_key import attach_real_keys
 
-    if record.upload_id is None or isinstance(record.primary_key, (list, tuple)):
+    vault = _key_vault(storage, record)
+    if vault is None or str(record.primary_key) not in table.column_names:
         return table
-    key = upload_key(record.upload_id, KEY_VAULT_FILENAME)
-    if not storage.exists(key) or str(record.primary_key) not in table.column_names:
-        return table
-    vault = pd.read_parquet(io.BytesIO(storage.read_bytes(key)))
     frame = attach_real_keys(table.to_pandas(), vault, str(record.primary_key))
     return pa.Table.from_pandas(frame, preserve_index=False)
+
+
+def _key_vault(storage: Storage, record: RunRecord) -> pd.DataFrame | None:
+    """The upload's key vault (working key to real key) for a single-column key, or None when it has none."""
+    from engine.privacy.working_key import KEY_VAULT_FILENAME
+
+    if record.upload_id is None or isinstance(record.primary_key, (list, tuple)):
+        return None
+    key = upload_key(record.upload_id, KEY_VAULT_FILENAME)
+    if not storage.exists(key):
+        return None
+    return pd.read_parquet(io.BytesIO(storage.read_bytes(key)))
+
+
+def _real_key_lookup(storage: Storage, record: RunRecord) -> dict[str, str] | None:
+    vault = _key_vault(storage, record)
+    if vault is None:
+        return None
+    return dict(zip(vault["working_key"].astype(str), vault["real_key"].astype(str), strict=True))
 
 
 def _gate_summary(gate: Any, counts: dict[str, int]) -> dict[str, Any]:

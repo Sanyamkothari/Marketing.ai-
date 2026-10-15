@@ -189,12 +189,56 @@ def _cell(value: Any) -> str:
     return " ".join(_WORD.findall(str(value).lower()))
 
 
-def _find(frame: pd.DataFrame, listed: frozenset[str], *, tokens: bool = False) -> str | None:
+def _find(frame: pd.DataFrame, listed: frozenset[str]) -> str | None:
+    """The first column whose whole name is in `listed`."""
+    return next((str(c) for c in frame.columns if _norm(c) in listed), None)
+
+
+def _named(frame: pd.DataFrame, listed: frozenset[str]) -> list[tuple[str, bool]]:
+    """Every column whose name is, or holds as whole words, a name in `listed` (`kyc_status`, `dnd_flag`), and
+    whether the whole name matched."""
+    found: list[tuple[str, bool]] = []
     for column in frame.columns:
         name = _norm(column)
-        if name in listed or (tokens and set(name.split("_")) & listed):
-            return str(column)
-    return None
+        if name in listed:
+            found.append((str(column), True))
+        elif any(f"_{word}_" in f"_{name}_" for word in listed):
+            found.append((str(column), False))
+    return found
+
+
+def _answer_columns(
+    frame: pd.DataFrame, listed: frozenset[str], known: frozenset[str], what: str, skip: set[str]
+) -> tuple[list[str], list[str]]:
+    """The yes/no columns a rule reads, and notes on the columns it could not read.
+
+    A column named exactly (`dnd`) is always read: an answer it does not know is "unclear", never a yes. A column
+    whose name only holds the word (`dnd_flag`, `consent_date`) is read when most of its answers are ones the rule
+    knows; otherwise the list says it was not used, unless it holds dates.
+    """
+    used: list[str] = []
+    notes: list[str] = []
+    for column, exact in _named(frame, listed):
+        if _norm(column) in skip:
+            continue
+        if exact:
+            used.append(column)
+            continue
+        cells = frame[column].head(1_000).map(_cell)
+        cells = cells[cells != ""]
+        if len(cells) and float(cells.isin(known).mean()) >= 0.5:
+            used.append(column)
+        elif (
+            len(cells)
+            and float(
+                pd.to_datetime(frame[column].head(1_000), errors="coerce", format="mixed").notna().mean()
+            )
+            < 0.5
+        ):
+            notes.append(
+                f"'{column}' looks like a {what} column but its answers were not recognised, so it was not used."
+            )
+    return used, notes
 
 
 def _ages(frame: pd.DataFrame, rules: GateRules, as_of: date) -> tuple[pd.Series[Any] | None, str | None]:
@@ -237,10 +281,11 @@ def gate_customers(
         rank[hit] = np.minimum(rank[hit], _ORDER.index(reason))
 
     blocked = rules.blocked_statuses | _set(overrides.extra_blocked_statuses)
-    status = _find(source, rules.status_columns, tokens=True)
-    if status is not None:
-        verdict.columns["blocked_status"] = status
+    statuses = [column for column, _ in _named(source, rules.status_columns)]
+    for status in statuses:  # every status column: `kyc_status` must not hide `account_status`
         mark(source[status].map(_cell).isin(blocked), "blocked_status")
+    if statuses:
+        verdict.columns["blocked_status"] = ", ".join(statuses)
 
     ages, age_column = _ages(source, rules, as_of)
     if ages is not None and age_column is not None:
@@ -250,17 +295,19 @@ def gate_customers(
         if unknown:
             verdict.flagged["age_unknown"] = unknown
 
-    dnd = _find(source, rules.dnd_columns)
-    if dnd is not None:
-        verdict.columns["dnd"] = dnd
+    dnd_known = rules.dnd_yes | rules.dnd_no | rules.dnd_partial
+    dnds, notes = _answer_columns(source, rules.dnd_columns, dnd_known, "do-not-disturb", set())
+    verdict.notes.extend(notes)
+    for dnd in dnds:  # on do-not-disturb in any column is on do-not-disturb
         cells = source[dnd].map(_cell)
         partial = cells.isin(rules.dnd_partial)
-        clear = cells.isin(rules.dnd_no)
         mark(cells.isin(rules.dnd_yes) | (partial & (not overrides.partial_dnd_means_ok)), "dnd")
-        unclear = ~(cells.isin(rules.dnd_yes) | clear | partial)
+        unclear = ~cells.isin(dnd_known)
         if overrides.blank_dnd_means_ok:
             unclear = unclear & (cells != "")
         mark(unclear, "dnd_unknown")
+    if dnds:
+        verdict.columns["dnd"] = ", ".join(dnds)
         if overrides.dnd_scrubbed_on is not None:
             age_days = (as_of - overrides.dnd_scrubbed_on).days
             if age_days > rules.dnd_scrub_max_days:
@@ -270,10 +317,11 @@ def gate_customers(
                 )
 
     skipped = {_norm(c) for c in skip_consent}
-    consent = next(
-        (str(c) for c in source.columns if _norm(c) in rules.consent_columns and _norm(c) not in skipped),
-        None,
+    consents, notes = _answer_columns(
+        source, rules.consent_columns, rules.consent_yes | rules.consent_no, "consent", skipped
     )
+    verdict.notes.extend(notes)
+    consent = next(iter(consents), None)  # consent may differ by channel: the first column found is read
     if consent is not None:
         verdict.columns["consent"] = consent
         cells = source[consent].map(_cell)
@@ -367,12 +415,14 @@ def contact_gate_for_run(
     handled_columns: Iterable[str | None] = (),
     as_of: date | datetime | None = None,
     config_root: Path | None = None,
+    real_keys: Mapping[str, str] | None = None,
 ) -> Verdict:
     """The gate's verdict for the scored customers (`row_keys`), read from the customer file `source`.
 
     `handled_columns` are the consent and opt-in columns the scoring run already applies (the use case's own), which
     are not read twice. `source_keys` are the file's own join keys (one per source row). A customer with several rows in the file is taken
     off when any row says so. The run's date (when it was created) is the age date unless `as_of` is given.
+    `real_keys` maps a hashed working key to the real one (the upload's key vault), for the suppression list only.
     """
     rules = load_gate_rules(config_root)
     overrides = _read_rules(storage, record.run_id)
@@ -386,7 +436,8 @@ def contact_gate_for_run(
         as_of=day,
         skip_consent=[c for c in handled_columns if c],
         suppression_keys=suppression,
-        key=source_keys.reset_index(drop=True),
+        # A hashed working key (a phone, a PAN) is matched to the suppression list by its real value.
+        key=source_keys.reset_index(drop=True).map(lambda k: real_keys.get(k, k) if real_keys else k),
     )
     ranks = reasons.map(lambda r: _ORDER.index(r) if r is not None else len(_ORDER))
     best = ranks.groupby(source_keys.reset_index(drop=True).to_numpy()).min()
