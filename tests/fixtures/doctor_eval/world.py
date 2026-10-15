@@ -315,6 +315,15 @@ CALLS: Final[dict[str, Calls | None]] = {
         {"upload_ids": [EVENTS, LATER], "key_column": "customer_id", "date_column": "bill_date"},
     ),
     "build_dataset": _fixed({"use_case": USE_CASE, "upload_ids": [CUSTOMERS, EVENTS, LATER]}),
+    # The SQL step reads tables named after their files (`customers.csv` is `t_customers`).
+    "propose_sql_step": _fixed(
+        {
+            "description": "Bills per customer",
+            "sql": "SELECT customer_id, COUNT(*) AS bills FROM t_bills GROUP BY customer_id ORDER BY customer_id",
+            "output_name": "bill_counts",
+            "upload_ids": [EVENTS],
+        }
+    ),
     "detect_locale": _fixed({}),
     "parse_indian_numbers": _fixed({}),
     "indian_booleans": _fixed({}),

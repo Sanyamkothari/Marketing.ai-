@@ -493,6 +493,7 @@ def test_openapi_builds_and_documents_every_route(client: TestClient) -> None:
         "/campaign-runs/{campaign_run_id}",
         "/campaign-runs/{campaign_run_id}/cancel",
         "/campaign-runs/{campaign_run_id}/restart",
+        "/campaign-runs/{campaign_run_id}/top-customers",
         "/campaigns/{campaign_id}/outcomes",
         "/campaigns/{campaign_id}/measure",
         "/campaigns/{campaign_id}/plan",

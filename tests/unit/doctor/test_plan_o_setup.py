@@ -33,7 +33,7 @@ USE_CASE = "targeted-advertisement"
 
 
 def test_the_switch_is_off_in_the_engine_defaults(config_root: Path) -> None:
-    assert load_engine_config(config_root).defaults["data_doctor"] == {"unified": False}
+    assert load_engine_config(config_root).defaults["data_doctor"]["unified"] is False
     assert DataDoctorConfig().unified is False
 
 

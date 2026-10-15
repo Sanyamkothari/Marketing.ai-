@@ -218,6 +218,7 @@ def test_the_approve_class_list_is_the_designs() -> None:
         "keep_latest_per_id",
         "split_file",
         "remove_rows",
+        "sql_query",  # a query the Doctor wrote changes rows in ways no fixed step does: its own yes
     }
     assert set(APPROVE_CLASS_ITEMS) == approver | analyst
     assert {k for k, r in APPROVE_CLASS_ITEMS.items() if r.role is Role.APPROVER} == approver
