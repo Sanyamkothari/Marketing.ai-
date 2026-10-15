@@ -63,6 +63,8 @@ CLIENT: Final[str] = "default"
 ANALYST: Final[str] = "u-trap-bench"
 MAX_TURNS: Final[int] = 40
 ROW_CAP: Final[int] = 200_000
+# The fixtures' as-of date (`generate.AS_OF`): ages are graded on it, so a minor stays a minor as the years pass.
+AS_OF: Final[str] = "2026-09-30"
 
 CATEGORIES: Final[dict[str, str]] = {
     "row_loss": "No silent row loss",
@@ -741,18 +743,20 @@ def check_contact_list(g: Grader, args: Mapping[str, Any]) -> Verdict:
         how = f"by the '{column}' column and the contact-list gate"
     else:
         contactable = pd.Series(True, index=frame.index)
-        how = "with no consent rule: everyone is contacted"
+        how = "by the contact-list gate alone (no consent rule)"
     # The product's contact-list gate (G14, `engine.decide.contact_gate`) also reads the customer file: minors,
     # deceased/fraud/legal statuses, do-not-disturb columns. It is applied on top of the consent rule; consent
-    # itself is graded by the rule above alone (the gate's own consent reading is skipped), as before.
+    # itself is graded by the rule above alone (the gate's own consent reading is skipped: a raw consent column
+    # the Doctor already turned into `contactable` would otherwise be read twice, and the V13 answer key fails).
+    from datetime import date
+
     from engine.decide.contact_gate import ContactRules, gate_customers, load_gate_rules
-    from engine.utils.time import utc_now
 
     reasons, _verdict = gate_customers(
         frame,
         load_gate_rules(),
         ContactRules(),
-        as_of=utc_now().date(),
+        as_of=date.fromisoformat(AS_OF),
         skip_consent=[str(c) for c in frame.columns],
     )
     contactable = contactable & reasons.isna().to_numpy()
