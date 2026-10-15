@@ -79,8 +79,8 @@ def _customers(rows: int = 400) -> pd.DataFrame:
             "signup_date": [f"2024-{1 + i % 12:02d}-{1 + i % 27:02d}" for i in range(rows)],
             "plan": [("Gold", "Silver", "Bronze")[i % 3] for i in range(rows)],
             "monthly_spend": [float(100 + (i * 7) % 900) for i in range(rows)],
-            "cancel_reason": [
-                ("price", "none", "moved")[i % 3] if i % 4 == 0 else "none" for i in range(rows)
+            "preferred_channel": [
+                ("sms", "none", "email")[i % 3] if i % 4 == 0 else "none" for i in range(rows)
             ],
             "converted_30d": [1 if i % 4 == 0 else 0 for i in range(rows)],
         }
