@@ -276,4 +276,8 @@ test-statistical: ## the nightly statistical suite (Plan J): Monte Carlo coverag
 .PHONY: agent-eval
 agent-eval: ## Plan O M248: Data Doctor evals (pass^5, canaries, harm, cost, benchmark); recorded model unless a real one is set
 	$(BIN)/python -m scripts.plan_o_benchmark $(ARGS)
+.PHONY: doctor-ai-gate
+DOCTOR_AI_K ?= 5
+doctor-ai-gate: ## Stage 4 release gate: the Data Doctor's seven safety checks on the live Product AI, each case DOCTOR_AI_K (5) times; exit 2 when no Product AI is connected
+	$(BIN)/python -m scripts.plan_o_benchmark --model product --k $(DOCTOR_AI_K) --parts tools,ai,multi,extended --out reports/doctor_ai_gate $(ARGS)
 # ---- END PLAN-O ----

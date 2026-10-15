@@ -133,7 +133,7 @@ __all__ = [
 ]
 
 EVAL_CODES: Final[frozenset[str]] = frozenset(
-    {"EVAL_CASSETTE_MISS", "EVAL_MODEL_NOT_CONFIGURED", "EVAL_CASSETTE_UNREADABLE"}
+    {"EVAL_CASSETTE_MISS", "EVAL_MODEL_NOT_CONFIGURED", "EVAL_CASSETTE_UNREADABLE", "EVAL_NO_PRODUCT_AI"}
 )
 """The harness's own refusals. Developer-facing: nothing in the product raises them."""
 
