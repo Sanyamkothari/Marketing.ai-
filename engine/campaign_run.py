@@ -123,6 +123,10 @@ class CampaignRun(Artefact):
     upload_id: str | None = None
     dataset_id: str | None = None
     client_id: str | None = None
+    case_id: str | None = Field(
+        default=None,
+        description="The Data Doctor case the prepared file came from, for 'What the Doctor did'.",
+    )
     primary_key: PrimaryKey | None = None
     target: str | None = None
     speed: Speed = Speed.BALANCED
@@ -206,14 +210,18 @@ class CampaignRunStore:
         except (StorageError, ValueError):
             return None
 
-    def list(self, *, state: CampaignRunState | None = None, limit: int = 50) -> list[CampaignRun]:
-        """Newest first (ids sort by date)."""
+    def list(
+        self, *, state: CampaignRunState | None = None, limit: int = 50, score_run_id: str | None = None
+    ) -> list[CampaignRun]:
+        """Newest first (ids sort by date); `score_run_id` keeps only the run that made that contact list."""
         kept: list[CampaignRun] = []
         for key in sorted(self._storage.list_keys(PREFIX), reverse=True):
             if not key.endswith(f"/{RECORD_FILENAME}"):
                 continue
             run = self.get(key[len(PREFIX) : -len(RECORD_FILENAME) - 1])
             if run is None or (state is not None and run.state is not state):
+                continue
+            if score_run_id is not None and run.score_run_id != score_run_id:
                 continue
             kept.append(run)
             if len(kept) == limit:

@@ -99,6 +99,17 @@ const CSS = `
 .cw .cw-decide .cw-actions{margin-top:0}
 .cw .cw-decide .cw-note{margin:var(--s3, 12px) 0 0;max-width:760px}
 
+/* the Review page's plain summary, and the technical details folded under one button */
+.cw .cw-sum-lead{font-size:20px;line-height:28px;font-weight:600;color:var(--ink);margin:var(--s2, 8px) 0}
+.cw .cw-sum-h{margin-top:var(--s4, 16px)}
+.cw .cw-sum-scroll{overflow-x:auto}
+.cw .cw-techbox{margin-top:var(--s4, 16px)}
+.cw .cw-techbox>summary{list-style:none;cursor:pointer;display:inline-flex}
+.cw .cw-techbox>summary::-webkit-details-marker{display:none}
+.cw .cw-techbox .cw-techbox-hide,.cw .cw-techbox[open] .cw-techbox-show{display:none}
+.cw .cw-techbox[open] .cw-techbox-hide{display:inline}
+.cw .cw-techbox-body{margin-top:var(--s4, 16px)}
+
 /* step 5: the success state - a check, the title, the campaign's status, one sentence, the actions */
 .cw .cw-done-body{display:flex;flex-direction:column;align-items:center;text-align:center;max-width:600px;margin:0 auto;padding:40px var(--s5, 24px)}
 .cw .cw-done-icon{display:inline-grid;place-items:center;width:56px;height:56px;border-radius:50%;background:var(--good-t);color:var(--good);margin-bottom:var(--s4, 16px)}

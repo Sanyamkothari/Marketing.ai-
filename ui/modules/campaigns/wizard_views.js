@@ -39,6 +39,7 @@ import {
   valueFigure,
   valueSentence,
 } from "./wizard_rules.js";
+import { resultsSummaryHtml, technicalBoxHtml } from "./summary_views.js";
 
 export const TITLE = "New campaign";
 export const LEAD =
@@ -518,6 +519,10 @@ function complianceLine(checked) {
  * for the model behind the list (`state` from `listModelState`: approved, pending, refused, superseded, or unknown
  * when the registry did not answer, which offers nothing). `busy` is the button's label while its calls are on
  * their way, else "".
+ *
+ * The plain summary comes first (`resultsSummaryHtml`; `summary` is `{ top, caseId }`: the first customers the server
+ * gave and the Data Doctor case the file came from), then the check and approve card; the numbers and tables above
+ * are folded behind "Show technical details" (`technicalBoxHtml`).
  */
 export function reviewHtml({
   campaign,
@@ -532,6 +537,7 @@ export function reviewHtml({
   model = null,
   busy = "",
   error = null,
+  summary = null,
 }) {
   const value = expectedValue(list, policy);
   const costText = costLine(cost);
@@ -550,14 +556,29 @@ export function reviewHtml({
     ["Why the cost is not known", cost && !(costText && costText.known) ? cost.reason : null],
   ]);
   const decision = decisionParts({ campaign, model, canApprove, busy });
-  return `${summaryTiles({ list, preview, value })}${audienceHtml({ scoring, list, preview })}${card(
+  const runId = ((campaign && campaign.run_ids) || [])[0];
+  const version = model && model.version ? model.version : null;
+  const useCase = campaign && encodeURIComponent(campaign.use_case_id);
+  const details = `${summaryTiles({ list, preview, value })}${audienceHtml({ scoring, list, preview })}${
+    tech ? `<div class="cw-tech">${tech}</div>` : ""
+  }`;
+  return `${resultsSummaryHtml({
+    list,
+    version,
+    top: summary && summary.top,
+    caseId: summary && summary.caseId,
+    resultsOn: resultsOn ? dayOf(resultsOn) : "",
+  })}${card(
     "Check and approve",
     `${rows ? `<dl class="cw-kvs">${rows}</dl>` : ""}${decision.lead}${error ? errorBox(error) : ""}<div class="cw-decide">${actions(
       decision.buttons,
       "cw-decide-actions",
     )}${p(decision.note, "data-cw-approve-note", "cw-note")}</div>`,
     "data-cw-review",
-  )}${tech ? `<div class="cw-tech">${tech}</div>` : ""}`;
+  )}${technicalBoxHtml(details, [
+    ["Open the full results page", runId && useCase ? `#/uc/${useCase}/output/${encodeURIComponent(runId)}` : ""],
+    ["Open the model's page", version && version.run_id && useCase ? `#/uc/${useCase}/model/${encodeURIComponent(version.run_id)}` : ""],
+  ])}`;
 }
 
 // --- Step 5: Send ---------------------------------------------------------------------------------------

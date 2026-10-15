@@ -1,0 +1,168 @@
+/* The plain results summary a person sees first when a campaign is ready: how many customers to contact and who was
+   left out, the first customers best first, how well the model did on customers it had not seen, what is not proven
+   yet, "What the Doctor did", and everything else one click away behind "Show technical details". Drawn by the
+   wizard's own builders in jsdom from recorded-shape answers. Run through tests/integration/test_campaign_run_results.py. */
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { JSDOM } from "jsdom";
+
+const dom = new JSDOM(`<!DOCTYPE html><html><head></head><body><div id="app"></div></body></html>`, {
+  url: "http://localhost/ui/#/campaigns/new/review/c_1",
+  pretendToBeVisual: true,
+});
+globalThis.window = dom.window;
+globalThis.document = dom.window.document;
+
+const V = await import("../../../../../ui/modules/campaigns/wizard_views.js");
+const SV = await import("../../../../../ui/modules/campaigns/summary_views.js");
+const SR = await import("../../../../../ui/modules/campaigns/summary_rules.js");
+const RV = await import("../../../../../ui/modules/campaigns/run_views.js");
+const { findNeverShown } = await import("../../../../../ui/labels.js");
+
+const app = document.getElementById("app");
+const $ = (sel) => app.querySelector(sel);
+const $$ = (sel) => [...app.querySelectorAll(sel)];
+const draw = (html) => {
+  app.innerHTML = html;
+  return app;
+};
+const text = (el) => (el ? el.textContent.replace(/\s+/g, " ").trim() : null);
+
+const campaign = { campaign_id: "c_1", use_case_id: "win-back-campaign", run_ids: ["r_score"], status: "live" };
+const list = {
+  total_rows: 8214,
+  treat_rows: 1240,
+  holdout_rows: 600,
+  suppressed_rows: 35,
+  uncontactable_rows: 0,
+  compliance_withheld_rows: 12,
+};
+const version = { model_id: "m_1", run_id: "r_train", metric: "roc_auc", metric_label: "ROC AUC", test_score: 0.781 };
+const top = {
+  customers: [
+    { customer: "C7", score: 0.91, priority: "High", offer: "Call back", channel: "phone", reason: "Short contract" },
+    { customer: "C9", score: 0.7, priority: "Medium", offer: "Email", channel: "email", reason: null },
+  ],
+  unavailable: null,
+};
+const model = { state: "approved", canApprove: true, own: false, version };
+const review = (extra = {}) =>
+  V.reviewHtml({ campaign, list, preview: null, cost: null, compliance: null, resultsOn: "2026-11-10", model, canApprove: true, summary: { top, caseId: "case_42" }, ...extra });
+
+test("the summary comes first: how many to contact, who was left out and why, in plain words", () => {
+  draw(review());
+  assert.equal(app.firstElementChild, $("[data-cw-results]"), "the summary is the first thing on the page");
+  assert.equal(text($("[data-cw-sum-contact]")), "1,240 customers to contact of the 8,214 checked");
+  const left = $$("[data-cw-sum-excluded] li").map(text);
+  assert.equal(left.length, 3, "only the reasons that hold somebody: comparison group, contact rules, compliance");
+  assert.match(left[0], /^600 customers: kept back on purpose as the comparison group/);
+  assert.match(left[1], /^35 customers: left out by your contact rules/);
+  assert.match(left[2], /^12 customers: taken off by the compliance check/);
+});
+
+test("the first customers are a table, best first, with their likelihood, and only the columns that hold something", () => {
+  draw(review());
+  const rows = $$("[data-cw-sum-customers] tbody tr").map((r) => [...r.children].map(text));
+  assert.deepEqual(rows[0], ["C7", "91%", "High", "Call back", "phone", "Short contract"]);
+  assert.deepEqual(rows[1].slice(0, 2), ["C9", "70%"]);
+  draw(
+    SV.resultsSummaryHtml({
+      list,
+      version,
+      top: { customers: [{ customer: "C1", score: 0.5, priority: null, offer: null, channel: null, reason: null }] },
+    }),
+  );
+  assert.deepEqual($$("[data-cw-sum-customers] th").map(text), ["Customer", "Likelihood"]);
+});
+
+test("when the names cannot be shown the page says why, in words, instead of leaving a gap", () => {
+  draw(review({ summary: { top: { customers: [], unavailable: "The new model still waits for approval." }, caseId: null } }));
+  assert.match(text($("[data-cw-sum-names]")), /No customers are shown yet\. The new model still waits for approval\./);
+  draw(review({ summary: { top: { error: new Error("down") }, caseId: null } }));
+  assert.match(text($("[data-cw-sum-names]")), /could not be loaded just now/);
+  draw(review({ summary: { top: { denied: true }, caseId: null } }));
+  assert.match(text($("[data-cw-sum-names]")), /needs the Analyst role/);
+  draw(V.reviewHtml({ campaign, list, preview: null, cost: null, compliance: null, resultsOn: null, model }));
+  assert.equal($("[data-cw-sum-names]"), null, "a list made without a campaign run has no names to show, and no gap");
+  assert.ok($("[data-cw-sum-contact]"));
+});
+
+test("how well it did on customers it had not seen: the Model page's sentence; a missing record is said, not skipped", () => {
+  draw(review());
+  assert.match(
+    text($("[data-cw-sum-model]")),
+    /^On customers it had not seen while learning, the model put a customer who has the outcome above one who does not 78% of the time\. 50% would be no better than a coin toss; 100% would be perfect\.$/,
+  );
+  const other = SR.unseenSentence({ ...version, metric: "auuc", metric_label: "AUUC", test_score: 0.4123 });
+  assert.match(other, /main measure was 0\.412\./);
+  assert.deepEqual(findNeverShown(other), {}, "an analyst's measure name is not shown here");
+  assert.equal(SR.unseenSentence(null), null);
+  draw(review({ model: { ...model, version: null } }));
+  assert.match(text($("[data-cw-sum-model]")), /could not be read/);
+});
+
+test("what is not proven yet is always said, with the day results can be added", () => {
+  draw(review());
+  assert.match(text($("[data-cw-sum-unproven]")), /^Not yet proven: nothing shows yet that contacting these customers works\./);
+  assert.match(text($("[data-cw-sum-unproven]")), /Add the results after /);
+  draw(review({ resultsOn: null }));
+  assert.doesNotMatch(text($("[data-cw-sum-unproven]")), /Add the results after/);
+});
+
+test("What the Doctor did opens the case; it is not offered when the list has no case", () => {
+  draw(review());
+  assert.equal($("[data-cw-sum-doctor]").getAttribute("href"), "#/data/check/case/case_42");
+  assert.equal(text($("[data-cw-sum-doctor]")), "What the Doctor did");
+  draw(review({ summary: { top, caseId: null } }));
+  assert.equal($("[data-cw-sum-doctor]"), null);
+  assert.equal(SR.doctorHref("a b"), "#/data/check/case/a%20b");
+});
+
+test("Approve and download follows the summary; the numbers and tables are folded behind Show technical details", () => {
+  draw(review());
+  const order = $$("[data-cw-results], [data-cw-review], [data-cw-technical]").map((el) => el.getAttribute("data-cw-results") !== null ? "summary" : el.hasAttribute("data-cw-review") ? "approve" : "technical");
+  assert.deepEqual(order, ["summary", "approve", "technical"]);
+  assert.equal(text($("[data-cw-approve]")), "Approve and download");
+  const box = $("details[data-cw-technical]");
+  assert.equal(box.open, false, "closed until asked for");
+  assert.equal(text(box.querySelector("summary .cw-techbox-show")), "Show technical details");
+  assert.ok(box.querySelector("[data-cw-tile=contacted]"), "the old tiles are inside");
+  assert.ok(box.querySelector("[data-cw-audience]"), "... and the old tables");
+  assert.deepEqual(
+    [...box.querySelectorAll("[data-cw-technical-links] a")].map((a) => a.getAttribute("href")),
+    ["#/uc/win-back-campaign/output/r_score", "#/uc/win-back-campaign/model/r_train"],
+    "the way to the existing full pages",
+  );
+  assert.equal($$("[data-cw-results] .btn.primary").length, 0, "one primary button on the page: Approve");
+});
+
+test("a summary with nothing to go on says so rather than showing zeros", () => {
+  draw(SV.resultsSummaryHtml({}));
+  assert.match(text($("[data-cw-sum-contact]")), /could not be read for this list/);
+  assert.equal($("[data-cw-sum-excluded]"), null);
+  assert.deepEqual(SR.exclusionLines({ holdout_rows: 0, suppressed_rows: 0 }), []);
+  assert.deepEqual(
+    SR.exclusionLines({ exclusions: [{ label: "Duplicates", rows: 3 }] }).map((l) => l.text),
+    ["3 customers: Duplicates"],
+  );
+});
+
+test("the words are plain: none of the glossary's never-shown words", () => {
+  draw(review());
+  const words = text($("[data-cw-results]"));
+  assert.deepEqual(findNeverShown(words), {});
+});
+
+test("the progress page, once done, leads to the summary and links to What the Doctor did when it has a case", () => {
+  const record = (extra) => ({
+    record: { campaign_run_id: "cr_1", state: "done", use_case_id: "win-back-campaign", campaign_id: "c_1", score_run_id: "r_score", steps: [], ...extra },
+    pct: 100,
+    summary: "Done",
+  });
+  draw(RV.runPageHtml(record({ case_id: "case_42" })));
+  assert.equal($("[data-run-doctor]").getAttribute("href"), "#/data/check/case/case_42");
+  assert.match(text($("[data-run-summary]")), /how many customers to contact, the best of them first, and how well the model did/);
+  assert.equal($("[data-run-ready]").getAttribute("href"), "#/campaigns/new/review/c_1");
+  draw(RV.runPageHtml(record({ case_id: null })));
+  assert.equal($("[data-run-doctor]"), null);
+});

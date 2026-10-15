@@ -26,6 +26,7 @@ Contract schema version: 1.
 | GET | `/campaign-runs/{campaign_run_id}` | Where a campaign run is: its steps, time left and, when done, its campaign | CampaignRunView |
 | POST | `/campaign-runs/{campaign_run_id}/cancel` | Stop a campaign run; a model it already learned stays in the registry | CampaignRunView |
 | POST | `/campaign-runs/{campaign_run_id}/restart` | Start a stopped or failed campaign run again, as a new one with the same choices | CampaignRunView |
+| GET | `/campaign-runs/{campaign_run_id}/top-customers` | The first customers of a finished campaign run's contact list, best first | TopCustomersResponse |
 | GET | `/campaigns` | Campaigns, newest first | CampaignListResponse |
 | POST | `/campaigns` | Record a campaign sent from a finished scoring run's list | CampaignView |
 | POST | `/campaigns/audit` | Audit a campaign another tool ran: who was in which group, and what happened | CampaignView |

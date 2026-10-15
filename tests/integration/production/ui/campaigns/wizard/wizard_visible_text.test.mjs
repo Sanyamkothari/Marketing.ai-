@@ -31,6 +31,8 @@ const CAMPAIGN = "c_20261011_c9276210";
 
 /** Answers the recording does not hold, which the wizard asks for and does without (the cost line is left out). */
 const EXPECTED_UNRECORDED = new Set([`GET /use-cases/${UC}/cost-estimate?mode=score`]);
+/** The demo's campaigns were not made by a campaign run, so Review's look-up of the run behind the list finds none. */
+const isRunLookup = (key) => key.startsWith("GET /campaign-runs?");
 
 const { w, state, missing } = installDemoPage({ hash: "#/__start" });
 await loadModules();
@@ -98,7 +100,7 @@ for (const step of STEPS) {
     await visit(step.hash);
     assert.ok($(step.selector), `${step.id} did not draw: ${$("#app").textContent.slice(0, 300)}`);
     if (step.guided) assert.ok($("[data-cw-guided] #ag-file"), "Guided setup itself is mounted, unchanged");
-    const unrecorded = [...missing].filter((k) => !k.includes("/__") && !EXPECTED_UNRECORDED.has(k));
+    const unrecorded = [...missing].filter((k) => !k.includes("/__") && !EXPECTED_UNRECORDED.has(k) && !isRunLookup(k));
     assert.deepEqual(unrecorded, [], `${step.id} asked for answers that are not recorded`);
     const text = wizardText();
     const v = violations(text, {});

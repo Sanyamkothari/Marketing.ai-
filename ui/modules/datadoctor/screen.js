@@ -442,6 +442,7 @@ async function proceed(entry) {
     target: start.outcome,
     overrides: {},
     speed: s.speed,
+    caseId: s.caseId,
   });
 }
 
@@ -458,6 +459,7 @@ async function startCampaignRun(entry, start) {
       primary_key: start.primary_key,
       target: start.outcome,
       speed: s.speed,
+      case_id: s.caseId,
     });
     s.started = s.caseId;
     s.busy = "";
@@ -652,7 +654,10 @@ export function mountDataDoctor(slots, host) {
   entry.host = full;
   // A case continued from the Data page since this place last drew is the one to show.
   const wanted = goalId && remembered.get(goalId);
-  const reopen = !isNew && wanted && wanted !== entry.state.caseId;
+  // ... or the case a link names (`host.caseId`, "What the Doctor did" on a finished campaign).
+  const linked = Boolean(full.caseId) && full.caseId !== entry.state.caseId && full.caseId !== entry.linked;
+  const reopen = !isNew && Boolean((wanted && wanted !== entry.state.caseId) || linked);
+  entry.linked = full.caseId || null;
   if (reopen) entry.state = { ...fresh(), ai: entry.state.ai };
   draw(entry);
   slots.main.replaceChildren(entry.main);
