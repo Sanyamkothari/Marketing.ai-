@@ -1785,6 +1785,13 @@
    ]
   }
  },
+ "GET /campaign-runs": {
+  "status": 200,
+  "content_type": "application/json",
+  "body": {
+   "campaign_runs": []
+  }
+ },
  "GET /campaigns": {
   "status": 200,
   "content_type": "application/json",
