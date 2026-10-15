@@ -17,6 +17,7 @@ counted here from the rows; nothing is written by the AI.
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Callable
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final
@@ -37,7 +38,6 @@ from engine.doctor.checks_time_keys import (
     tail_checks,
 )
 from engine.doctor.protocol import Ask, AskOption, DataRequest
-from engine.doctor.sample_rows import KEY_NAME
 from engine.doctor.visit_contracts import OptionEffect
 from engine.utils.logging import get_logger
 from engine.utils.time import utc_now
@@ -55,8 +55,16 @@ _LOG = get_logger(__name__)
 CHECK_KIND: Final[str] = "data_check"
 """The item kind of a flag or a note: something to look at, with no change attached."""
 MAX_QUESTIONS: Final[int] = 3
-"""Findings that may interrupt the person with a question; the rest wait on the approval page."""
+"""Findings that may interrupt the person with a question; the rest wait on the approval page. A stop (a blocking
+question) is always asked, whatever the count."""
 MAX_KEY_COLUMNS: Final[int] = 4
+_ID_NAME: Final[re.Pattern[str]] = re.compile(
+    r"(^id$|_id$|^id_|_key$|(customer|cust|client|member|account)[_ ]?(no|num|number|code|ref)$"
+    r"|phone|mobile|email|^pan$)",
+    re.I,
+)
+"""Columns checked as IDs besides the file's own key: named like an ID, not merely like a customer
+(`customer_segment` is not an ID)."""
 
 
 def time_keys_detector(*, clock: Callable[[], datetime] = utc_now) -> DetectorPort:
@@ -74,11 +82,17 @@ def time_keys_detector(*, clock: Callable[[], datetime] = utc_now) -> DetectorPo
                 _file(case, loaded, brief, now, found, asks, requests)
             except Exception as exc:  # a file a check cannot read is not a reason to stop the visit
                 _LOG.info("doctor.time_keys_failed upload=%s error=%s", loaded.upload_id, type(exc).__name__)
-        if len(files) > 1:
+        try:  # one file's repeated headers and copied rows, and rows two files share
             by_name = [(f.file_name or f.upload_id, f.frame) for f in files]
             found.extend((None, check) for check in file_checks(by_name))
+        except Exception as exc:
+            _LOG.info("doctor.time_keys_files_failed error=%s", type(exc).__name__)
         questions = [ask for _, ask in sorted(asks, key=lambda pair: pair[0])]
-        kept, spilled = questions[:MAX_QUESTIONS], questions[MAX_QUESTIONS:]
+        # A stop always stops; the budget only holds back the questions that do not block.
+        stops = [ask for ask in questions if ask.blocking]
+        others = [ask for ask in questions if not ask.blocking]
+        room = max(0, MAX_QUESTIONS - len(stops))
+        kept, spilled = [*stops, *others[:room]], others[room:]
         items = [
             _check_item(upload_id, check, now) for upload_id, check in found if not _is_asked(check, kept)
         ]
@@ -108,7 +122,7 @@ def _file(
 
     # Keys: the report, rounded digits, stand-ins, lost zeros.
     names = [str(c) for c in frame.columns]
-    key_columns = list(dict.fromkeys([*([key] if key else []), *(n for n in names if KEY_NAME.search(n))]))
+    key_columns = list(dict.fromkeys([*([key] if key else []), *(n for n in names if _ID_NAME.search(n))]))
     for column in key_columns[:MAX_KEY_COLUMNS]:
         report = key_quality(
             frame[column], column, expect_unique=column == key, exact=loaded.exact.get(column)

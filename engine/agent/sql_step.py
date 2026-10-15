@@ -150,7 +150,23 @@ _DATE_TEXT: Final[re.Pattern[str]] = re.compile(
     r"^\s*(\d{4}[-/.]\d{1,2}[-/.]\d{1,2}|\d{1,2}[-/.]\d{1,2}[-/.]\d{4})([ T]\d{1,2}:\d{2}(:\d{2}(\.\d+)?)?)?\s*$"
 )
 """A string literal that is nothing but a date (a time of day may follow): `'2026-01-01'`, `'01/02/2026 09:30'`."""
-_MAKE_DATE: Final[frozenset[str]] = frozenset({"make_date", "make_timestamp", "make_timestamptz"})
+_MAKE_DATE: Final[frozenset[str]] = frozenset(
+    {
+        "make_date",
+        "make_timestamp",
+        "make_timestamptz",
+        "strptime",
+        "try_strptime",
+        "to_timestamp",
+        "to_date",
+        "epoch_ms",
+    }
+)
+"""Functions that make a date: refused when fed only fixed values (`make_date(2026, 1, 1)`)."""
+_DATE_TYPES: Final[frozenset[str]] = frozenset(
+    {"DATE", "TIMESTAMP", "TIMESTAMP WITH TIME ZONE", "TIMESTAMP_S", "TIMESTAMP_MS", "TIMESTAMP_NS"}
+)
+_NOT_FIXED: Final[frozenset[str]] = frozenset({"COLUMN_REF", "PARAMETER", "SUBQUERY", "STAR"})
 _PARAMETER: Final[re.Pattern[str]] = re.compile(r"\$([A-Za-z_][A-Za-z0-9_]*)")
 _QUOTED: Final[re.Pattern[str]] = re.compile(r"'(?:[^']|'')*'|\"(?:[^\"]|\"\")*\"|--[^\n]*|/\*.*?\*/", re.S)
 _ALIAS_CHARS: Final[re.Pattern[str]] = re.compile(r"[^a-z0-9_]+")
@@ -201,7 +217,7 @@ class SqlStepParams(StrictBase):
     reads_future: bool = Field(
         default=False,
         description="The query reads rows dated after `$as_of` on purpose (it builds the outcome); the "
-        "future-rows check is not run on it.",
+        "future-rows check then leaves the outcome column out, and every other column must still not move.",
     )
 
 
@@ -364,9 +380,21 @@ def _check_dates(node: dict[str, Any], as_of: date | None) -> None:
         if typed and (as_of is None or _literal_date(str(text)) != as_of):
             raise _fixed_date_refusal(str(text).strip()[:19])
     elif node.get("class") == "FUNCTION" and str(node.get("function_name", "")).lower() in _MAKE_DATE:
-        children = node.get("children") or []
-        if children and all(isinstance(c, dict) and c.get("class") == "CONSTANT" for c in children):
-            raise _fixed_date_refusal(f"{node.get('function_name')} of fixed numbers")
+        if node.get("children") and _fixed(node):
+            raise _fixed_date_refusal(f"{node.get('function_name')} of fixed values")
+    elif (
+        node.get("class") == "CAST"
+        and str((node.get("cast_type") or {}).get("id", "")).upper() in _DATE_TYPES
+    ):
+        child = node.get("child")
+        # A single literal is the CONSTANT case above; a fixed expression (`'2026-' || '01-01'`) is refused here.
+        if isinstance(child, dict) and child.get("class") != "CONSTANT" and _fixed(child):
+            raise _fixed_date_refusal("a date built from fixed values")
+
+
+def _fixed(node: dict[str, Any]) -> bool:
+    """True when nothing under `node` reads a column, a parameter or a table: its value is typed into the query."""
+    return not any(isinstance(n, dict) and n.get("class") in _NOT_FIXED for n in _walk(node))
 
 
 def _check_node(node: dict[str, Any], allowed: set[str], as_of: date | None = None) -> None:
@@ -570,14 +598,20 @@ def _event_column(frame: pd.DataFrame) -> str | None:
 
 
 def future_rows_moved(
-    sql: str, tables: Mapping[str, pd.DataFrame], *, output_name: str, as_of: date
+    sql: str,
+    tables: Mapping[str, pd.DataFrame],
+    *,
+    output_name: str,
+    as_of: date,
+    ignore: Collection[str] = (),
 ) -> int | None:
     """How many rows of the query's table change when every row dated after `as_of` is taken out of its inputs.
 
     A table made of what was known on the as-of date does not move: the rows that came later were never in it. Each
     input that has a date column (`_event_column`) is cut at `as_of`; the query runs again; the two tables are
-    compared row by row. None when no input holds a row dated after `as_of` (nothing to test). Our code runs both
-    queries, so the answer is not the writer's word.
+    compared row by row, without the `ignore` columns (the outcome of a query that builds it from later rows). None
+    when no input holds a row dated after `as_of` (nothing to test). Our code runs both queries, so the answer is
+    not the writer's word.
     """
     cut: dict[str, pd.DataFrame] = {}
     later = False
@@ -594,6 +628,8 @@ def future_rows_moved(
         return None
     whole = run_sql(sql, tables, output_name=output_name, as_of=as_of).frame
     part = run_sql(sql, cut, output_name=output_name, as_of=as_of).frame
+    whole = whole.drop(columns=[c for c in whole.columns if c in ignore])
+    part = part.drop(columns=[c for c in part.columns if c in ignore])
     if list(whole.columns) != list(part.columns):
         return len(whole)
     left = Counter(whole.astype(str).itertuples(index=False, name=None))

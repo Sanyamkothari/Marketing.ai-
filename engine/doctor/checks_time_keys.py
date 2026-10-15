@@ -85,20 +85,24 @@ def _cells(series: pd.Series[Any]) -> pd.Series[Any]:
 # ---------------------------------------------------------------------------
 _E_PLUS: Final[re.Pattern[str]] = re.compile(r"^[+-]?\d(\.\d+)?[eE][+-]?\d{1,2}$")
 _PLACEHOLDER_KEY: Final[re.Pattern[str]] = re.compile(
-    r"^(0+|1+|9+|x+|-+|\.+|1234567890|123456789)$"
-    r"|^(na|n/a|nan|null|none|nil|unknown|tbd|temp)$"
-    r"|^(test|dummy|sample|demo)([\W_]|\d|$)",
+    r"^(na|n/a|nan|null|none|nil|unknown|tbd|temp|x+|-+|\.+)$" r"|^(test|dummy|sample|demo)([\W_]|\d|$)",
     re.IGNORECASE,
 )
+_PLACEHOLDER_DIGITS: Final[re.Pattern[str]] = re.compile(r"^(0+|1+|9+|1234567890|123456789)$")
+"""All zeros, ones or nines: a stand-in only when more than one row holds it (`1` and `99` are real IDs too)."""
 _SHORT_SHARE: Final[float] = 0.01
 _TOP: Final[int] = 5
 
 
 def _rounded_digits(series: pd.Series[Any]) -> int:
     """Numbers of nine or more digits that end in five or more zeros: an ID Excel rounded to six digits."""
-    if not pd.api.types.is_numeric_dtype(series) or pd.api.types.is_bool_dtype(series):
+    if pd.api.types.is_bool_dtype(series):
         return 0
-    numbers = pd.to_numeric(series, errors="coerce").dropna()
+    if pd.api.types.is_numeric_dtype(series):
+        numbers = pd.to_numeric(series, errors="coerce").dropna()
+    else:  # an ID read as text (keeping its zeros) still shows Excel's rounding as trailing zeros
+        cells = _cells(series)
+        numbers = pd.to_numeric(cells[cells.str.fullmatch(r"\d{9,}")], errors="coerce").dropna()
     big = numbers[numbers.abs() >= 1e9]
     if len(big) < 5:
         return 0
@@ -160,7 +164,8 @@ def key_quality(
                 {"repeated": filled - distinct, "filled": filled},
             )
         )
-    placeholder = cells[cells.str.match(_PLACEHOLDER_KEY)]
+    repeated = cells.map(counts) >= 2
+    placeholder = cells[cells.str.match(_PLACEHOLDER_KEY) | (cells.str.match(_PLACEHOLDER_DIGITS) & repeated)]
     if len(placeholder):
         named = [masked_cut(str(v), 30) for v in placeholder.value_counts().head(3).index]
         found.append(
@@ -264,7 +269,10 @@ PLACEHOLDER_DATES: Final[tuple[date, ...]] = (
     date(1970, 1, 1),
 )
 """Zero in Excel's two calendars, 1 January 1900, and zero in Unix time: what a blank turns into."""
-_OPEN_YEAR: Final[re.Pattern[str]] = re.compile(r"(?<!\d)(?:9999|2999|2099)(?!\d)")
+_OPEN_YEAR: Final[re.Pattern[str]] = re.compile(
+    r"^(?:(?:9999|2999|2099)[-/.]\d{1,2}[-/.]\d{1,2}|\d{1,2}[-/.]\d{1,2}[-/.](?:9999|2999|2099))(?:[ T].*)?$"
+)
+"""A cell that is a date in 9999, 2999 or 2099 (year first or last), not any text holding those digits."""
 _END_WORDS: Final[frozenset[str]] = frozenset(
     {
         "end",

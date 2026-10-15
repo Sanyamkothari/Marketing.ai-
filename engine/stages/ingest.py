@@ -511,6 +511,8 @@ def _read_csv(
         text_dtypes = _text_dtypes(
             head_text, delimiter, keep_leading_zeros=keep_leading_zeros, text_columns=text_columns
         )
+        if sampler is not None:
+            sampler.reset()
         try:
             return _read_csv_once(
                 storage,
@@ -739,13 +741,19 @@ class _Sampler:
     not read as only its first rows."""
 
     def __init__(self, rows: int, seed: int, exact_columns: Sequence[str]) -> None:
+        self.rows = max(1, rows)
+        self._seed = seed
+        self._names = tuple(dict.fromkeys(exact_columns))
+        self.reset()
+
+    def reset(self) -> None:
+        """Forget every row seen: a pass that failed part way (the next encoding is tried) starts again."""
         import numpy as np
 
-        self.rows = max(1, rows)
-        self._rng = np.random.default_rng(seed)
+        self._rng = np.random.default_rng(self._seed)
         self._seen = 0
         self._kept: pd.DataFrame | None = None
-        self.stats = {name: _StatsAccumulator(name) for name in dict.fromkeys(exact_columns)}
+        self.stats = {name: _StatsAccumulator(name) for name in self._names}
 
     def update(self, chunk: pd.DataFrame) -> None:
         import numpy as np

@@ -934,9 +934,17 @@ def _run_sql_step(
             used = resolve_as_of_rule(rule, source[rule.column])
         used = used or params.as_of
         run = run_sql(params.sql, read, output_name=params.output_name, as_of=used)
+        # A query that builds the outcome from later rows (`reads_future`) is let off for the outcome column only:
+        # every other column must still be what was known on the as-of date.
         moved = (
-            future_rows_moved(params.sql, read, output_name=params.output_name, as_of=used)
-            if leak_check == "full" and used is not None and not params.reads_future
+            future_rows_moved(
+                params.sql,
+                read,
+                output_name=params.output_name,
+                as_of=used,
+                ignore=(target,) if params.reads_future and target else (),
+            )
+            if leak_check == "full" and used is not None
             else None
         )
     except SqlStepError as exc:

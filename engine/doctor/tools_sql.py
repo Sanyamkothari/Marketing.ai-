@@ -76,7 +76,9 @@ class ProposeSqlStepArgs(BaseModel):
         default=None, max_length=128, description="The date column the rule reads."
     )
     reads_future: bool = Field(
-        default=False, description="True only for a query that builds the outcome from rows after `$as_of`."
+        default=False,
+        description="True only for a query that builds the outcome from rows after `$as_of`; only the outcome "
+        "column is let off the future-rows check.",
     )
 
 

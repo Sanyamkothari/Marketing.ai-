@@ -34,7 +34,7 @@ from engine.doctor.checks_time_keys import (
     outcome_direction,
     tail_checks,
 )
-from engine.doctor.detect_time_keys import CHECK_KIND, time_keys_detector
+from engine.doctor.detect_time_keys import CHECK_KIND, MAX_QUESTIONS, time_keys_detector
 from engine.doctor.diagnose import Offer
 from engine.doctor.impossible import _as_dates
 from engine.stages import validate as v
@@ -61,6 +61,10 @@ def codes(checks: list[Check]) -> set[str]:
         "SELECT * FROM t_orders WHERE order_date > '01/12/2025'",
         "SELECT * FROM t_orders WHERE order_date > make_date(2025, 12, 1)",
         "SELECT * FROM t_orders WHERE order_date > strptime('2025-12-01 10:00:00', '%Y-%m-%d %H:%M:%S')",
+        "SELECT * FROM t_orders WHERE order_date > CAST('2025-' || '12-01' AS DATE)",
+        "SELECT * FROM t_orders WHERE order_date > make_date(2025, 12, 1 + 0)",
+        "SELECT * FROM t_orders WHERE order_date > strptime('20251201', '%Y%m%d')",
+        "SELECT * FROM t_orders WHERE order_date > to_timestamp(1764547200)",
     ],
 )
 def test_a_date_typed_into_the_query_is_refused(sql: str) -> None:
@@ -142,7 +146,39 @@ def test_a_table_that_uses_rows_dated_after_the_as_of_date_is_caught() -> None:
         _run(frame, _sql_step(leaky, as_of="2026-01-31"), leak_check="full")
     assert caught.value.code == "FUTURE_EVENTS_LEAKED"
     assert len(_run(frame, _sql_step(clean, as_of="2026-01-31"), leak_check="full")) == 2
-    assert len(_run(frame, _sql_step(leaky, as_of="2026-01-31", reads_future=True), leak_check="full")) == 2
+    # A query that builds the outcome is let off for the outcome column only, never for the whole table.
+    outcome_step = _sql_step(leaky, as_of="2026-01-31", reads_future=True)
+    built = run_recipe(
+        frame,
+        [outcome_step],
+        upload_id="u",
+        primary_key=None,
+        target="total",
+        levels=LEVELS,
+        max_failure_pct=5.0,
+        leak_check="full",
+    ).frame
+    assert len(built) == 2
+    with pytest.raises(RecipeError) as caught:  # no outcome named: every column is checked
+        _run(frame, outcome_step, leak_check="full")
+    assert caught.value.code == "FUTURE_EVENTS_LEAKED"
+    feature = _sql_step(
+        "SELECT customer_id, sum(amount) AS spend, count(*) AS total FROM t_this GROUP BY 1 ORDER BY 1",
+        as_of="2026-01-31",
+        reads_future=True,
+    )
+    with pytest.raises(RecipeError) as caught:  # `spend` reads later rows and is not the outcome
+        run_recipe(
+            frame,
+            [feature],
+            upload_id="u",
+            primary_key=None,
+            target="total",
+            levels=LEVELS,
+            max_failure_pct=5.0,
+            leak_check="full",
+        )
+    assert caught.value.code == "FUTURE_EVENTS_LEAKED"
     assert len(_run(frame, _sql_step(leaky, as_of="2026-01-31"))) == 2  # a preview does not run the check
 
 
@@ -192,6 +228,11 @@ def test_key_report_names_rounded_digits_stand_ins_and_lost_zeros() -> None:
     ids = pd.Series([f"{n:07d}" for n in range(1, 101)] + [str(n) for n in range(1, 6)])
     short = next(check for check in key_quality(ids, "customer_id") if check.code == "KEY_MIXED_LENGTHS")
     assert short.numbers == {"shorter": 5, "usual_length": 7, "filled": 105}
+
+    sequential = pd.Series([str(n) for n in range(1, 200)])  # 1, 9, 11, 99, 111: real IDs, each once
+    assert "KEY_PLACEHOLDER" not in codes(key_quality(sequential, "customer_id"))
+    as_text = pd.Series([str(123_457_000_000 + 100_000 * n) for n in range(30)])  # read as text, zeros kept
+    assert "KEY_DIGITS_ROUNDED" in codes(key_quality(as_text, "mobile"))
 
     repeated = key_quality(pd.Series(["a", "a", "b"]), "id", expect_unique=True)
     report = next(check for check in repeated if check.code == "KEY_REPORT")
@@ -293,6 +334,9 @@ def test_placeholder_open_future_and_out_of_order_dates_are_found() -> None:
     out_of_order = found["DATE_ORDER_VIOLATED:signup_date"]
     assert out_of_order.numbers["both_filled"] == n and out_of_order.numbers["rows"] > 0
     assert not any(key.endswith(":valid_to") and key.startswith("DATE_AFTER") for key in found)
+    # Those digits inside text that is not a date say nothing about dates.
+    not_dates = pd.DataFrame({"ref": ["AB-9999-X", "+91 9999 123456", "PO Box 2099"] * 10})
+    assert not codes(date_checks(not_dates, date(2025, 12, 31)))
 
 
 def test_excel_day_numbers_from_the_mac_calendar_are_flagged() -> None:
@@ -381,6 +425,8 @@ def test_repeated_headers_copies_and_shared_rows_are_reported_not_dropped() -> N
     assert by_code["DUPLICATE_ROWS"].numbers["rows"] == 5
     assert by_code["FILES_SHARE_ROWS"].numbers["rows"] == 20
     assert len(pasted) == 56  # nothing was dropped
+    alone = {check.code for check in file_checks([("jan.csv", pasted)])}
+    assert {"REPEATED_HEADER_ROWS", "DUPLICATE_ROWS"} <= alone
     assert not file_checks(
         [("a.csv", january), ("b.csv", january.assign(order_id=lambda f: "X" + f.order_id))]
     )
@@ -404,6 +450,16 @@ def test_the_sample_comes_from_the_whole_file_with_ids_as_text_and_exact_counts(
     assert one.exact["status"].value_counts == {"active": 4000, "churned": 1000}
     assert one.exact["customer_id"].distinct_count == rows
     assert not read_sample(storage, "u/f.csv", rows=9000, seed=7).sampled
+
+
+def test_a_sample_read_again_in_another_encoding_counts_each_row_once(tmp_path: Any) -> None:
+    storage = LocalStorage(tmp_path)
+    rows = 150_000  # past the first chunk, so the UTF-8 pass fails part way and the next encoding is tried
+    lines = [f"{n:07d},{'caf' + chr(233) if n == 140_000 else 'x'}" for n in range(rows)]
+    storage.write_bytes("u/f.csv", ("customer_id,name\n" + "\n".join(lines) + "\n").encode("latin-1"))
+    sample = read_sample(storage, "u/f.csv", rows=500, seed=1, exact_columns=("customer_id",))
+    assert sample.row_count == rows and sample.exact["customer_id"].row_count == rows
+    assert not sample.frame["customer_id"].duplicated().any()
 
 
 # ---------------------------------------------------------------------------
@@ -444,3 +500,21 @@ def test_the_detector_stops_on_rounded_ids_and_mixed_dates_and_flags_the_rest(tm
     after = visit.resume(vs.CLIENT, case.case_id, deps, actor=vs.ANALYST)
     assert any(q.code == "DATE_ORDER_BOTH" for q in after.questions)
     assert any(i.kind == CHECK_KIND for i in after.items)
+
+
+def test_every_stop_is_asked_whatever_the_question_budget(tmp_path: Any) -> None:
+    config = load_use_case(vs.GOAL_A)
+    rows = 100
+    frame = pd.DataFrame(
+        {
+            f"date_{k}": ["25/03/2024" if n % 2 else "03/25/2024" for n in range(rows)]
+            for k in range(MAX_QUESTIONS + 2)
+        }
+    )
+    w = vs.World(
+        files={vs.FIRST: vs.loaded(vs.FIRST, "dates.csv", frame, config)},
+        offers=(Offer(config=config, stage="Acquire"),),
+    )
+    case = vs.open_case(LocalStorage(tmp_path), w)
+    found = time_keys_detector()(case, tuple(w.files.values()), None)
+    assert len(found.asks) == MAX_QUESTIONS + 2 and all(a.blocking for a in found.asks)
