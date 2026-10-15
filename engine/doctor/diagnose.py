@@ -32,7 +32,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Final
 
 from engine.config import RunMode
-from engine.doctor.contracts import FileDiagnosis, ReadinessStatus, UseCaseReadiness
+from engine.doctor.contracts import FileDiagnosis, ReadinessReason, ReadinessStatus, UseCaseReadiness
 from engine.doctor.first_look import FirstLook, advised_leaks, outcome_look
 from engine.doctor.sufficiency import enough_data, with_alternatives
 from engine.utils.logging import get_logger
@@ -43,7 +43,7 @@ if TYPE_CHECKING:
     from engine.config import RoleCatalogue, UseCaseConfig
     from engine.contracts import DatasetProfile
 
-__all__ = ["ADVISE_ROWS", "LoadedFile", "Offer", "diagnose_file", "readiness"]
+__all__ = ["ADVISE_ROWS", "LoadedFile", "Offer", "diagnose_file", "outcome_columns", "readiness"]
 
 _LOG = get_logger(__name__)
 
@@ -133,37 +133,101 @@ def _kind_label(description: str) -> str:
     return text[:1].lower() + text[1:] if text else "a table Data Doctor could not place"
 
 
-def _outcome_named(frame: pd.DataFrame, config: UseCaseConfig) -> str | None:
-    """The column that names this use case's outcome: exact, ignoring case, or by a synonym."""
+def _norm(name: str) -> str:
+    return re.sub(r"[^0-9a-z]+", "_", str(name).casefold()).strip("_")
+
+
+_LEVEL_ORDER: Final[dict[str, int]] = {"target": 0, "synonym": 1, "guess": 2}
+
+
+@dataclass(frozen=True)
+class OutcomeColumn:
+    """A column that may be a use case's 'yes': how its name matched, and whether it holds two values."""
+
+    column: str
+    level: str  # target (the use case's own column), synonym (a recorded one) or guess (a word in the name)
+    two_valued: bool
+
+
+def outcome_columns(frame: pd.DataFrame, config: UseCaseConfig) -> list[OutcomeColumn]:
+    """The one way to find a use case's outcome: its target name, then its synonyms, then a word of the
+    name; each must hold two values (a guess must; a named column that does not is kept only if nothing
+    two-valued is). Only the best name level is returned, so `purchased` never competes with a guess."""
     from engine.agent.tools import _name_matches
 
-    names = [str(column) for column in frame.columns]
     wanted = config.target.column
     if wanted is None:
+        return []
+    synonyms = config.agent.column_hints.target_synonyms
+    found: list[OutcomeColumn] = []
+    for column in frame.columns:
+        name = str(column)
+        if _norm(name) == _norm(wanted):
+            level = "target"
+        elif _norm(name) in {_norm(word) for word in synonyms}:
+            level = "synonym"
+        elif _name_matches(name, synonyms):
+            level = "guess"
+        else:
+            continue
+        found.append(OutcomeColumn(name, level, int(frame[column].nunique(dropna=True)) == 2))
+    pool = [c for c in found if c.two_valued] or [c for c in found if c.level != "guess"]
+    best = min((_LEVEL_ORDER[c.level] for c in pool), default=0)
+    return [c for c in pool if _LEVEL_ORDER[c.level] == best]
+
+
+def _outcome_named(frame: pd.DataFrame, config: UseCaseConfig) -> str | None:
+    """The first column that may name this use case's outcome, or None."""
+    found = outcome_columns(frame, config)
+    return found[0].column if found else None
+
+
+_YES_WORDS: Final[frozenset[str]] = frozenset({"1", "1.0", "true", "yes", "y", "t"})
+
+
+def _yes_count(frame: pd.DataFrame, column: str, config: UseCaseConfig, file_rows: int) -> int | None:
+    """How many of the file's rows are a 'yes' in `column`, scaled up when only the first rows were read."""
+    series = frame[column].dropna()
+    if series.empty:
         return None
-    if wanted in names:
-        return wanted
-    folded = [name for name in names if name.casefold() == wanted.casefold()]
-    if folded:
-        return folded[0]
-    synonyms = [name for name in names if _name_matches(name, config.agent.column_hints.target_synonyms)]
-    return synonyms[0] if len(synonyms) == 1 else None
+    label = config.target.positive_label
+    yes = _YES_WORDS | ({str(label).casefold()} if label is not None else set())
+    hits = int(series.map(lambda value: str(value).casefold() in yes).sum())
+    return round(hits / len(series) * max(file_rows, len(frame)))
+
+
+def _plural(entity: str) -> str:
+    return entity if entity.endswith("s") else f"{entity}s"
 
 
 def readiness(
     files: Sequence[LoadedFile], offers: Sequence[Offer], root: Path
 ) -> tuple[UseCaseReadiness, ...]:
-    """Each offered use case's verdict over all files, best first."""
+    """Each offered use case's verdict over all files, best first: ready before check before not enough,
+    a question after a plain check, then the most 'yes' examples."""
     verdicts = [_one_use_case(files, offer, root) for offer in offers]
     order = {offer.config.id: index for index, offer in enumerate(offers)}
-    ranked = tuple(sorted(verdicts, key=lambda v: (_STATUS_ORDER[v.status], order[v.use_case_id])))
+    ranked = tuple(
+        sorted(
+            verdicts,
+            key=lambda v: (_rank_of(v), -(v.yes_count or 0), order[v.use_case_id]),
+        )
+    )
     return with_alternatives(ranked)  # Plan L M158 (DEC-1582): the use cases the same files do power
+
+
+_RANK: Final[dict[str, int]] = {"ready": 0, "check": 1, "too_small": 3, "missing": 4}
+
+
+def _rank_of(verdict: UseCaseReadiness) -> int:
+    """A question about the outcome column ranks between a plain check and not enough data."""
+    return 2 if verdict.reason_code in {"GUESSED_COLUMN", "TWO_COLUMNS"} else _RANK[verdict.status]
 
 
 def _one_use_case(files: Sequence[LoadedFile], offer: Offer, root: Path) -> UseCaseReadiness:
     config = offer.config
-    named = [(loaded, column) for loaded in files if (column := _outcome_named(loaded.frame, config))]
-    if not named:
+    found = [(loaded, c) for loaded in files for c in outcome_columns(loaded.frame, config)]
+    if not found:
         return UseCaseReadiness(
             use_case_id=config.id,
             name=config.name,
@@ -172,13 +236,93 @@ def _one_use_case(files: Sequence[LoadedFile], offer: Offer, root: Path) -> UseC
             upload_id=None,
             summary=f"None of your files has the outcome {config.name} learns from.",
             needs=_needs(config),
+            reason_code="NO_OUTCOME",
+            why=f"None of your files has the outcome {config.name} learns from.",
+            first_fix=_needs(config)[0],
         )
+    best = min(_LEVEL_ORDER[c.level] for _, c in found)
+    found = [(loaded, c) for loaded, c in found if _LEVEL_ORDER[c.level] == best]
+    # A name alone is a guess, and two different columns are a choice: both are asked, never assumed.
+    if best == _LEVEL_ORDER["guess"] or len({_norm(c.column) for _, c in found}) > 1:
+        return _asked(found, offer)
+    named = [(loaded, c.column) for loaded, c in found]
     advised = [_advised(loaded, column, config, root) for loaded, column in named]
     advised.sort(key=lambda pair: (_STATUS_ORDER[pair[0].status], pair[0].questions, pair[0].suggestions))
     verdict, look = advised[0]
     # DEC-1596: the first look is counted for the chosen file only, so the diagnosis stays bounded.
     first = look() if look is not None else None
-    return verdict.model_copy(update={"stage": offer.stage, "first_look": first})
+    chosen = next(loaded for loaded, _ in named if loaded.upload_id == verdict.upload_id)
+    return verdict.model_copy(
+        update={"stage": offer.stage, "first_look": first, **_facts(verdict, chosen, config)}
+    )
+
+
+def _facts(verdict: UseCaseReadiness, loaded: LoadedFile, config: UseCaseConfig) -> dict[str, object]:
+    """The customer and 'yes' counts, the one-line why and the first fix, for a verdict on one file."""
+    column = verdict.outcome_column or ""
+    rows = loaded.profile.row_count
+    yes = _yes_count(loaded.frame, column, config, rows) if column in loaded.frame.columns else None
+    entity = _plural(config.entity or "customer")
+    why = f"{loaded.file_name} has {rows:,} {entity}"
+    why += f"; {yes:,} of them are a yes in {column}." if yes is not None else f" and a column {column}."
+    fix: str | None = None
+    steps = verdict.next_steps
+    if verdict.status == "check":
+        parts = []
+        if verdict.questions:
+            parts.append(f"answer {verdict.questions} question{'s' if verdict.questions != 1 else ''}")
+        if verdict.suggestions:
+            parts.append(f"review {verdict.suggestions} suggestion{'s' if verdict.suggestions != 1 else ''}")
+        todo = " and ".join(parts) or "check the rest"
+        fix = f"Open Guided setup and {todo}."
+    elif steps is not None:
+        fix = (
+            steps.shortfalls[0].sentence
+            if steps.shortfalls
+            else (steps.collect[0] if steps.collect else None)
+        )
+    code: dict[str, object] = {}
+    if verdict.status == "too_small":
+        code["reason_code"] = "NOT_ENOUGH"
+    elif verdict.status == "missing":
+        code["reason_code"] = "STOPPED"
+    return {"customers": rows, "yes_count": yes, "why": why, "first_fix": fix, **code}
+
+
+def _asked(found: list[tuple[LoadedFile, OutcomeColumn]], offer: Offer) -> UseCaseReadiness:
+    """No assumption: one guessed column, or several candidates, become a question for the person."""
+    config = offer.config
+    columns = tuple(dict.fromkeys(c.column for _, c in found))
+    loaded = found[0][0]
+    rows = loaded.profile.row_count
+    meaning = config.target.definition.strip().rstrip(".").lower() or f"the {config.name} outcome"
+    if len(columns) == 1:
+        text = f"{loaded.file_name} has a column {columns[0]}. Is it whether {meaning}?"
+        code: ReadinessReason = "GUESSED_COLUMN"
+    else:
+        shown = ", ".join(columns[:5])
+        text = f"{loaded.file_name} has several columns that might be it ({shown}). Which one says whether {meaning}?"
+        code = "TWO_COLUMNS"
+    counts = [
+        n
+        for file, c in found
+        if (n := _yes_count(file.frame, c.column, config, file.profile.row_count)) is not None
+    ]
+    return UseCaseReadiness(
+        use_case_id=config.id,
+        name=config.name,
+        stage=offer.stage,
+        status="check",
+        upload_id=loaded.upload_id,
+        summary=text,
+        questions=1,
+        reason_code=code,
+        customers=rows,
+        yes_count=max(counts) if counts else None,
+        why=text,
+        first_fix="Tell us which column it is.",
+        candidate_columns=columns,
+    )
 
 
 def _needs(config: UseCaseConfig) -> tuple[str, ...]:

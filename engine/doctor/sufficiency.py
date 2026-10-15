@@ -154,7 +154,9 @@ def enough_data(
 
 def with_alternatives(verdicts: Sequence[UseCaseReadiness]) -> tuple[UseCaseReadiness, ...]:
     """`verdicts` with, on each one that is not ready, the use cases the same files do power today."""
-    powered = [v for v in verdicts if v.status in {"ready", "check"} and v.upload_id is not None]
+    powered = [
+        v for v in verdicts if v.status in {"ready", "check"} and v.upload_id is not None and v.outcome_column
+    ]
     out: list[UseCaseReadiness] = []
     for verdict in verdicts:
         if verdict.status in {"ready", "check"}:
