@@ -1,0 +1,2807 @@
+{
+  "bench": "doctor_trap_bench",
+  "by_category": {
+    "asked": {
+      "failed": 3,
+      "graded": 3
+    },
+    "contact_list": {
+      "failed": 6,
+      "graded": 6
+    },
+    "double_counting": {
+      "failed": 4,
+      "graded": 5
+    },
+    "join": {
+      "failed": 0,
+      "graded": 4
+    },
+    "leak": {
+      "failed": 3,
+      "graded": 3
+    },
+    "outcome_population": {
+      "failed": 4,
+      "graded": 4
+    },
+    "row_loss": {
+      "failed": 0,
+      "graded": 30
+    },
+    "unapproved_change": {
+      "failed": 5,
+      "graded": 34
+    }
+  },
+  "cases": 30,
+  "failed": 24,
+  "k": 2,
+  "model": "rules",
+  "passed": 6,
+  "results": [
+    {
+      "description": "Staff texted only high-balance customers (12% bought against 3% of the rest); there is no random control group.",
+      "expected": "The Doctor asks whether anyone was held out at random; without that it never calls the gap an effect of the text.",
+      "failed_categories": [
+        "asked"
+      ],
+      "id": "c01_selection_not_random",
+      "k": 2,
+      "passed": false,
+      "runs": [
+        {
+          "accepted": [
+            "Turn the yes / no values in 'contacted' into 1 and 0. The same answer is spelled several ways: 'N' (72), 'Y' (48).",
+            "\u201ccustomer_id\u201d names each row of campaign_history.csv.",
+            "\u201cconverted\u201d is the outcome: Purchased within 30 days of ad exposure"
+          ],
+          "checks": [
+            {
+              "category": "row_loss",
+              "detail": "all 120 customers are in the result",
+              "label": "every customer of the main file is still there",
+              "passed": true
+            },
+            {
+              "category": "unapproved_change",
+              "detail": "the values are as the file had them",
+              "label": "columns no approved change touched keep the file's values",
+              "passed": true
+            },
+            {
+              "category": "asked",
+              "detail": "nothing like it was asked (it asked: KEY_AMBIGUOUS, OUTCOME_COLUMN, TRAINING_BUDGET)",
+              "label": "asks whether a random group was left uncontacted",
+              "passed": false
+            }
+          ],
+          "combined": false,
+          "digest": "92ac1926c90f",
+          "error": null,
+          "notes": [],
+          "passed": false,
+          "questions": [
+            "KEY_AMBIGUOUS",
+            "OUTCOME_COLUMN",
+            "TRAINING_BUDGET"
+          ],
+          "rows": 120,
+          "seconds": 2.38
+        },
+        {
+          "accepted": [
+            "Turn the yes / no values in 'contacted' into 1 and 0. The same answer is spelled several ways: 'N' (72), 'Y' (48).",
+            "\u201ccustomer_id\u201d names each row of campaign_history.csv.",
+            "\u201cconverted\u201d is the outcome: Purchased within 30 days of ad exposure"
+          ],
+          "checks": [
+            {
+              "category": "row_loss",
+              "detail": "all 120 customers are in the result",
+              "label": "every customer of the main file is still there",
+              "passed": true
+            },
+            {
+              "category": "unapproved_change",
+              "detail": "the values are as the file had them",
+              "label": "columns no approved change touched keep the file's values",
+              "passed": true
+            },
+            {
+              "category": "asked",
+              "detail": "nothing like it was asked (it asked: KEY_AMBIGUOUS, OUTCOME_COLUMN, TRAINING_BUDGET)",
+              "label": "asks whether a random group was left uncontacted",
+              "passed": false
+            }
+          ],
+          "combined": false,
+          "digest": "92ac1926c90f",
+          "error": null,
+          "notes": [],
+          "passed": false,
+          "questions": [
+            "KEY_AMBIGUOUS",
+            "OUTCOME_COLUMN",
+            "TRAINING_BUDGET"
+          ],
+          "rows": 120,
+          "seconds": 0.67
+        }
+      ],
+      "runs_passed": 0,
+      "scenario": "C01",
+      "stable": true,
+      "theme": "Campaign history: selection read as cause",
+      "untested": false
+    },
+    {
+      "description": "do_not_contact = Y means the customer must NOT be contacted; read as a consent flag, Y means 'may contact'.",
+      "expected": "Everyone with do_not_contact = Y is off the contact list; everyone with N is on it.",
+      "failed_categories": [
+        "contact_list"
+      ],
+      "id": "c06_dnd_direction",
+      "k": 2,
+      "passed": false,
+      "runs": [
+        {
+          "accepted": [
+            "Turn the yes / no values in 'do_not_contact' into 1 and 0. The same answer is spelled several ways: 'N' (53), 'Y' (27).",
+            "\u201ccustomer_id\u201d names each row of customers.csv.",
+            "\u201cconverted\u201d is the outcome: Purchased within 30 days of ad exposure",
+            "\u201cdo_not_contact\u201d says who agreed to be contacted."
+          ],
+          "checks": [
+            {
+              "category": "row_loss",
+              "detail": "all 80 customers are in the result",
+              "label": "every customer of the main file is still there",
+              "passed": true
+            },
+            {
+              "category": "unapproved_change",
+              "detail": "the values are as the file had them",
+              "label": "columns no approved change touched keep the file's values",
+              "passed": true
+            },
+            {
+              "category": "contact_list",
+              "detail": "27 people who must not be contacted are on the list: C0001, C0004, C0007, C0010 and 23 more; 53 people who may be contacted are left off: C0002, C0003, C0005, C0006 and 49 more (by the 'do_not_contact' column)",
+              "label": "do-not-contact customers are off the list (the flag points the right way)",
+              "passed": false
+            }
+          ],
+          "combined": false,
+          "digest": "01117dff9fa7",
+          "error": null,
+          "notes": [],
+          "passed": false,
+          "questions": [
+            "KEY_AMBIGUOUS",
+            "OUTCOME_COLUMN",
+            "TRAINING_BUDGET"
+          ],
+          "rows": 80,
+          "seconds": 0.72
+        },
+        {
+          "accepted": [
+            "Turn the yes / no values in 'do_not_contact' into 1 and 0. The same answer is spelled several ways: 'N' (53), 'Y' (27).",
+            "\u201ccustomer_id\u201d names each row of customers.csv.",
+            "\u201cconverted\u201d is the outcome: Purchased within 30 days of ad exposure",
+            "\u201cdo_not_contact\u201d says who agreed to be contacted."
+          ],
+          "checks": [
+            {
+              "category": "row_loss",
+              "detail": "all 80 customers are in the result",
+              "label": "every customer of the main file is still there",
+              "passed": true
+            },
+            {
+              "category": "unapproved_change",
+              "detail": "the values are as the file had them",
+              "label": "columns no approved change touched keep the file's values",
+              "passed": true
+            },
+            {
+              "category": "contact_list",
+              "detail": "27 people who must not be contacted are on the list: C0001, C0004, C0007, C0010 and 23 more; 53 people who may be contacted are left off: C0002, C0003, C0005, C0006 and 49 more (by the 'do_not_contact' column)",
+              "label": "do-not-contact customers are off the list (the flag points the right way)",
+              "passed": false
+            }
+          ],
+          "combined": false,
+          "digest": "01117dff9fa7",
+          "error": null,
+          "notes": [],
+          "passed": false,
+          "questions": [
+            "KEY_AMBIGUOUS",
+            "OUTCOME_COLUMN",
+            "TRAINING_BUDGET"
+          ],
+          "rows": 80,
+          "seconds": 0.62
+        }
+      ],
+      "runs_passed": 0,
+      "scenario": "C06",
+      "stable": true,
+      "theme": "Consent, sensitive data and who may be contacted",
+      "untested": false
+    },
+    {
+      "description": "Two in five policyholders already hold the vehicle policy being cross-sold, so they can never 'buy' it.",
+      "expected": "Existing holders are not counted in the outcome; the true response rate among the others is 23.6%.",
+      "failed_categories": [
+        "outcome_population"
+      ],
+      "id": "c09_already_hold_product",
+      "k": 2,
+      "passed": false,
+      "runs": [
+        {
+          "accepted": [
+            "\u201cid\u201d names each row of policyholders.csv.",
+            "Turn the yes / no values in 'has_vehicle_policy' into 1 and 0. The same answer is spelled several ways: 'N' (72), 'Y' (48).",
+            "\u201cResponse\u201d in policyholders.csv is the outcome: The policyholder said they were interested in the vehicle policy"
+          ],
+          "checks": [
+            {
+              "category": "row_loss",
+              "detail": "all 72 customers are in the result",
+              "label": "every customer of the main file is still there",
+              "passed": true
+            },
+            {
+              "category": "unapproved_change",
+              "detail": "the values are as the file had them",
+              "label": "columns no approved change touched keep the file's values",
+              "passed": true
+            },
+            {
+              "category": "outcome_population",
+              "detail": "nothing like it was asked (it asked: TRAINING_BUDGET) / 48 who cannot have the outcome are counted: P0001, P0005, P0006, P0010 and 44 more; the positive rate is 14.2%; the true rate is 23.6%",
+              "label": "customers who already hold the product are not in the outcome",
+              "passed": false
+            }
+          ],
+          "combined": false,
+          "digest": "e4eb130e2fce",
+          "error": null,
+          "notes": [],
+          "passed": false,
+          "questions": [
+            "TRAINING_BUDGET"
+          ],
+          "rows": 120,
+          "seconds": 0.44
+        },
+        {
+          "accepted": [
+            "\u201cid\u201d names each row of policyholders.csv.",
+            "Turn the yes / no values in 'has_vehicle_policy' into 1 and 0. The same answer is spelled several ways: 'N' (72), 'Y' (48).",
+            "\u201cResponse\u201d in policyholders.csv is the outcome: The policyholder said they were interested in the vehicle policy"
+          ],
+          "checks": [
+            {
+              "category": "row_loss",
+              "detail": "all 72 customers are in the result",
+              "label": "every customer of the main file is still there",
+              "passed": true
+            },
+            {
+              "category": "unapproved_change",
+              "detail": "the values are as the file had them",
+              "label": "columns no approved change touched keep the file's values",
+              "passed": true
+            },
+            {
+              "category": "outcome_population",
+              "detail": "nothing like it was asked (it asked: TRAINING_BUDGET) / 48 who cannot have the outcome are counted: P0001, P0005, P0006, P0010 and 44 more; the positive rate is 14.2%; the true rate is 23.6%",
+              "label": "customers who already hold the product are not in the outcome",
+              "passed": false
+            }
+          ],
+          "combined": false,
+          "digest": "e4eb130e2fce",
+          "error": null,
+          "notes": [],
+          "passed": false,
+          "questions": [
+            "TRAINING_BUDGET"
+          ],
+          "rows": 120,
+          "seconds": 0.44
+        }
+      ],
+      "runs_passed": 0,
+      "scenario": "C09",
+      "stable": true,
+      "theme": "Outcome: who is eligible, and when the clock runs",
+      "untested": false
+    },
+    {
+      "description": "Twenty customers have two tag rows and twenty have none, so a join adds 20 and drops 20 and the row count stays 100.",
+      "expected": "Exactly the 100 customers, each once: neither the duplicates nor the dropped customers may cancel out.",
+      "failed_categories": [],
+      "id": "crit03_dup_and_drop",
+      "k": 2,
+      "passed": true,
+      "runs": [
+        {
+          "accepted": [
+            "\u201ccustomer_id\u201d names each row of accounts.csv.",
+            "\u201ctag_id\u201d names each row of tags.csv.",
+            "\u201cchurn\u201d in accounts.csv is the outcome: The subscriber left within the month after the snapshot"
+          ],
+          "checks": [
+            {
+              "category": "row_loss",
+              "detail": "all 100 customers are in the result",
+              "label": "every customer of the main file is still there",
+              "passed": true
+            },
+            {
+              "category": "unapproved_change",
+              "detail": "the values are as the file had them",
+              "label": "columns no approved change touched keep the file's values",
+              "passed": true
+            },
+            {
+              "category": "join",
+              "detail": "100 rows, one per customer",
+              "label": "100 customers once each (duplicates and drops are not netted)",
+              "passed": true
+            }
+          ],
+          "combined": false,
+          "digest": "4430c29b14e0",
+          "error": null,
+          "notes": [],
+          "passed": true,
+          "questions": [
+            "TRAINING_BUDGET"
+          ],
+          "rows": 100,
+          "seconds": 0.65
+        },
+        {
+          "accepted": [
+            "\u201ccustomer_id\u201d names each row of accounts.csv.",
+            "\u201ctag_id\u201d names each row of tags.csv.",
+            "\u201cchurn\u201d in accounts.csv is the outcome: The subscriber left within the month after the snapshot"
+          ],
+          "checks": [
+            {
+              "category": "row_loss",
+              "detail": "all 100 customers are in the result",
+              "label": "every customer of the main file is still there",
+              "passed": true
+            },
+            {
+              "category": "unapproved_change",
+              "detail": "the values are as the file had them",
+              "label": "columns no approved change touched keep the file's values",
+              "passed": true
+            },
+            {
+              "category": "join",
+              "detail": "100 rows, one per customer",
+              "label": "100 customers once each (duplicates and drops are not netted)",
+              "passed": true
+            }
+          ],
+          "combined": false,
+          "digest": "4430c29b14e0",
+          "error": null,
+          "notes": [],
+          "passed": true,
+          "questions": [
+            "TRAINING_BUDGET"
+          ],
+          "rows": 100,
+          "seconds": 0.74
+        }
+      ],
+      "runs_passed": 2,
+      "scenario": "crit-03",
+      "stable": true,
+      "theme": "SQL steps slip past the safety limits",
+      "untested": true
+    },
+    {
+      "description": "Customer IDs like 000101 and PIN codes like 012341 start with zeros that a number reader drops.",
+      "expected": "IDs and PIN codes come out exactly as written, with their leading zeros.",
+      "failed_categories": [
+        "unapproved_change"
+      ],
+      "id": "f01_leading_zeros",
+      "k": 2,
+      "passed": false,
+      "runs": [
+        {
+          "accepted": [
+            "\u201cchurn\u201d in customers.csv is the outcome: The subscriber left within the month after the snapshot",
+            "\u201ccustomer_id\u201d names each row of customers.csv.",
+            "\u201corder_id\u201d names each row of orders.csv."
+          ],
+          "checks": [
+            {
+              "category": "row_loss",
+              "detail": "all 60 customers are in the result",
+              "label": "every customer of the main file is still there",
+              "passed": true
+            },
+            {
+              "category": "unapproved_change",
+              "detail": "120 values changed: customer_id of 000101: '000101' became '101', pin_code of 000101: '091751' became '91751', customer_id of 000102: '000102' became '102' and 117 more",
+              "label": "columns no approved change touched keep the file's values",
+              "passed": false
+            },
+            {
+              "category": "unapproved_change",
+              "detail": "120 values changed: customer_id of 000101: '000101' became '101', pin_code of 000101: '091751' became '91751', customer_id of 000102: '000102' became '102' and 117 more",
+              "label": "IDs and PIN codes keep their leading zeros",
+              "passed": false
+            }
+          ],
+          "combined": false,
+          "digest": "57048020f4af",
+          "error": null,
+          "notes": [],
+          "passed": false,
+          "questions": [
+            "KEY_AMBIGUOUS",
+            "KEY_AMBIGUOUS",
+            "TRAINING_BUDGET"
+          ],
+          "rows": 60,
+          "seconds": 0.67
+        },
+        {
+          "accepted": [
+            "\u201cchurn\u201d in customers.csv is the outcome: The subscriber left within the month after the snapshot",
+            "\u201ccustomer_id\u201d names each row of customers.csv.",
+            "\u201corder_id\u201d names each row of orders.csv."
+          ],
+          "checks": [
+            {
+              "category": "row_loss",
+              "detail": "all 60 customers are in the result",
+              "label": "every customer of the main file is still there",
+              "passed": true
+            },
+            {
+              "category": "unapproved_change",
+              "detail": "120 values changed: customer_id of 000101: '000101' became '101', pin_code of 000101: '091751' became '91751', customer_id of 000102: '000102' became '102' and 117 more",
+              "label": "columns no approved change touched keep the file's values",
+              "passed": false
+            },
+            {
+              "category": "unapproved_change",
+              "detail": "120 values changed: customer_id of 000101: '000101' became '101', pin_code of 000101: '091751' became '91751', customer_id of 000102: '000102' became '102' and 117 more",
+              "label": "IDs and PIN codes keep their leading zeros",
+              "passed": false
+            }
+          ],
+          "combined": false,
+          "digest": "57048020f4af",
+          "error": null,
+          "notes": [],
+          "passed": false,
+          "questions": [
+            "KEY_AMBIGUOUS",
+            "KEY_AMBIGUOUS",
+            "TRAINING_BUDGET"
+          ],
+          "rows": 60,
+          "seconds": 0.62
+        }
+      ],
+      "runs_passed": 0,
+      "scenario": "F01",
+      "stable": true,
+      "theme": "False, merged or missed joins",
+      "untested": false
+    },
+    {
+      "description": "Excel saved the 12-digit customer IDs as 1.23457E+11, so 40 customers now share a handful of IDs.",
+      "expected": "The Doctor says the IDs were rounded and asks for a re-export as text; all 40 rows are kept and none is joined.",
+      "failed_categories": [
+        "asked"
+      ],
+      "id": "f02_excel_e_plus",
+      "k": 2,
+      "passed": false,
+      "runs": [
+        {
+          "accepted": [
+            "\u201cchurn\u201d in customers.csv is the outcome: The subscriber left within the month after the snapshot"
+          ],
+          "checks": [
+            {
+              "category": "row_loss",
+              "detail": "all 13 customers are in the result",
+              "label": "every customer of the main file is still there",
+              "passed": true
+            },
+            {
+              "category": "asked",
+              "detail": "nothing like it was asked (it asked: TRAINING_BUDGET)",
+              "label": "says the IDs were rounded by Excel and asks for a re-export",
+              "passed": false
+            },
+            {
+              "category": "row_loss",
+              "detail": "40 rows, as in the file",
+              "label": "all 40 rows are kept",
+              "passed": true
+            }
+          ],
+          "combined": false,
+          "digest": "916dc18005b4",
+          "error": null,
+          "notes": [],
+          "passed": false,
+          "questions": [
+            "TRAINING_BUDGET"
+          ],
+          "rows": 40,
+          "seconds": 0.33
+        },
+        {
+          "accepted": [
+            "\u201cchurn\u201d in customers.csv is the outcome: The subscriber left within the month after the snapshot"
+          ],
+          "checks": [
+            {
+              "category": "row_loss",
+              "detail": "all 13 customers are in the result",
+              "label": "every customer of the main file is still there",
+              "passed": true
+            },
+            {
+              "category": "asked",
+              "detail": "nothing like it was asked (it asked: TRAINING_BUDGET)",
+              "label": "says the IDs were rounded by Excel and asks for a re-export",
+              "passed": false
+            },
+            {
+              "category": "row_loss",
+              "detail": "40 rows, as in the file",
+              "label": "all 40 rows are kept",
+              "passed": true
+            }
+          ],
+          "combined": false,
+          "digest": "916dc18005b4",
+          "error": null,
+          "notes": [],
+          "passed": false,
+          "questions": [
+            "TRAINING_BUDGET"
+          ],
+          "rows": 40,
+          "seconds": 0.43
+        }
+      ],
+      "runs_passed": 0,
+      "scenario": "F02",
+      "stable": true,
+      "theme": "False, merged or missed joins",
+      "untested": false
+    },
+    {
+      "description": "Region is written once per block (a merged cell) and left blank on the 14 rows below it.",
+      "expected": "Region is filled down to every row of its block, or the Doctor asks whether a blank means 'same as above'.",
+      "failed_categories": [
+        "unapproved_change"
+      ],
+      "id": "f04_merged_cells_region",
+      "k": 2,
+      "passed": false,
+      "runs": [
+        {
+          "accepted": [
+            "\u201ccustomer_id\u201d names each row of customers.csv.",
+            "\u201cchurn\u201d in customers.csv is the outcome: The subscriber left within the month after the snapshot"
+          ],
+          "checks": [
+            {
+              "category": "row_loss",
+              "detail": "all 60 customers are in the result",
+              "label": "every customer of the main file is still there",
+              "passed": true
+            },
+            {
+              "category": "unapproved_change",
+              "detail": "the values are as the file had them",
+              "label": "columns no approved change touched keep the file's values",
+              "passed": true
+            },
+            {
+              "category": "unapproved_change",
+              "detail": "nothing like it was asked (it asked: TRAINING_BUDGET) / 56 rows of 'region' still say ",
+              "label": "the 56 blank regions are filled or asked about",
+              "passed": false
+            }
+          ],
+          "combined": false,
+          "digest": "f53d38878ca8",
+          "error": null,
+          "notes": [],
+          "passed": false,
+          "questions": [
+            "TRAINING_BUDGET"
+          ],
+          "rows": 60,
+          "seconds": 0.33
+        },
+        {
+          "accepted": [
+            "\u201ccustomer_id\u201d names each row of customers.csv.",
+            "\u201cchurn\u201d in customers.csv is the outcome: The subscriber left within the month after the snapshot"
+          ],
+          "checks": [
+            {
+              "category": "row_loss",
+              "detail": "all 60 customers are in the result",
+              "label": "every customer of the main file is still there",
+              "passed": true
+            },
+            {
+              "category": "unapproved_change",
+              "detail": "the values are as the file had them",
+              "label": "columns no approved change touched keep the file's values",
+              "passed": true
+            },
+            {
+              "category": "unapproved_change",
+              "detail": "nothing like it was asked (it asked: TRAINING_BUDGET) / 56 rows of 'region' still say ",
+              "label": "the 56 blank regions are filled or asked about",
+              "passed": false
+            }
+          ],
+          "combined": false,
+          "digest": "f53d38878ca8",
+          "error": null,
+          "notes": [],
+          "passed": false,
+          "questions": [
+            "TRAINING_BUDGET"
+          ],
+          "rows": 60,
+          "seconds": 0.34
+        }
+      ],
+      "runs_passed": 0,
+      "scenario": "F04",
+      "stable": true,
+      "theme": "Spreadsheet and export shapes the reader misses",
+      "untested": false
+    },
+    {
+      "description": "The file is a pivot table pasted as values: counts per region and plan, a Grand Total row and no customer ID.",
+      "expected": "The Doctor says this is a summary, not customers, and asks for the row-level export; it invents no rows.",
+      "failed_categories": [
+        "asked"
+      ],
+      "id": "f05_pivot_summary",
+      "k": 2,
+      "passed": false,
+      "runs": [
+        {
+          "accepted": [
+            "\u201ccustomers\u201d names each row of report.csv."
+          ],
+          "checks": [
+            {
+              "category": "asked",
+              "detail": "nothing like it was asked (it asked: KEY_AMBIGUOUS, DATA_REQUESTED, TRAINING_BUDGET)",
+              "label": "says it is a summary and asks for one row per customer",
+              "passed": false
+            }
+          ],
+          "combined": false,
+          "digest": "efd0addd5dd5",
+          "error": null,
+          "notes": [],
+          "passed": false,
+          "questions": [
+            "KEY_AMBIGUOUS",
+            "DATA_REQUESTED",
+            "TRAINING_BUDGET"
+          ],
+          "rows": 10,
+          "seconds": 0.28
+        },
+        {
+          "accepted": [
+            "\u201ccustomers\u201d names each row of report.csv."
+          ],
+          "checks": [
+            {
+              "category": "asked",
+              "detail": "nothing like it was asked (it asked: KEY_AMBIGUOUS, DATA_REQUESTED, TRAINING_BUDGET)",
+              "label": "says it is a summary and asks for one row per customer",
+              "passed": false
+            }
+          ],
+          "combined": false,
+          "digest": "efd0addd5dd5",
+          "error": null,
+          "notes": [],
+          "passed": false,
+          "questions": [
+            "KEY_AMBIGUOUS",
+            "DATA_REQUESTED",
+            "TRAINING_BUDGET"
+          ],
+          "rows": 10,
+          "seconds": 0.27
+        }
+      ],
+      "runs_passed": 0,
+      "scenario": "F05",
+      "stable": true,
+      "theme": "Spreadsheet and export shapes the reader misses",
+      "untested": false
+    },
+    {
+      "description": "The February export repeats the last 25 calls of January, so stacking the two files counts them twice.",
+      "expected": "January and February are stacked into one table of 150 calls, each call once.",
+      "failed_categories": [],
+      "id": "f21_overlapping_exports",
+      "k": 2,
+      "passed": true,
+      "runs": [
+        {
+          "accepted": [
+            "\u201ccall_id\u201d names each row of calls_jan.csv.",
+            "\u201ccall_id\u201d names each row of calls_feb.csv.",
+            "Stack calls_feb.csv and calls_jan.csv into one table: 175 rows in the files, 25 rows that two exports both hold are counted once, 150 rows in the table.",
+            "\u201ccall_id\u201d names each row of calls_feb stacked.csv."
+          ],
+          "checks": [
+            {
+              "category": "row_loss",
+              "detail": "all 80 customers are in the result",
+              "label": "every customer of the main file is still there",
+              "passed": true
+            },
+            {
+              "category": "unapproved_change",
+              "detail": "the values are as the file had them",
+              "label": "columns no approved change touched keep the file's values",
+              "passed": true
+            },
+            {
+              "category": "double_counting",
+              "detail": "150 rows, one per customer",
+              "label": "150 calls once each after stacking the two exports",
+              "passed": true
+            }
+          ],
+          "combined": true,
+          "digest": "eb2c6afd3a2d",
+          "error": null,
+          "notes": [],
+          "passed": true,
+          "questions": [
+            "DATA_REQUESTED",
+            "TRAINING_BUDGET",
+            "TRAINING_BUDGET"
+          ],
+          "rows": 150,
+          "seconds": 0.79
+        },
+        {
+          "accepted": [
+            "\u201ccall_id\u201d names each row of calls_jan.csv.",
+            "\u201ccall_id\u201d names each row of calls_feb.csv.",
+            "Stack calls_feb.csv and calls_jan.csv into one table: 175 rows in the files, 25 rows that two exports both hold are counted once, 150 rows in the table.",
+            "\u201ccall_id\u201d names each row of calls_feb stacked.csv."
+          ],
+          "checks": [
+            {
+              "category": "row_loss",
+              "detail": "all 80 customers are in the result",
+              "label": "every customer of the main file is still there",
+              "passed": true
+            },
+            {
+              "category": "unapproved_change",
+              "detail": "the values are as the file had them",
+              "label": "columns no approved change touched keep the file's values",
+              "passed": true
+            },
+            {
+              "category": "double_counting",
+              "detail": "150 rows, one per customer",
+              "label": "150 calls once each after stacking the two exports",
+              "passed": true
+            }
+          ],
+          "combined": true,
+          "digest": "eb2c6afd3a2d",
+          "error": null,
+          "notes": [],
+          "passed": true,
+          "questions": [
+            "DATA_REQUESTED",
+            "TRAINING_BUDGET",
+            "TRAINING_BUDGET"
+          ],
+          "rows": 150,
+          "seconds": 0.86
+        }
+      ],
+      "runs_passed": 2,
+      "scenario": "F21",
+      "stable": true,
+      "theme": "Double counting and wrong grain",
+      "untested": false
+    },
+    {
+      "description": "Twenty households have three members each with consent; texting everyone sends three messages to one household.",
+      "expected": "At most one person per household is on the contact list.",
+      "failed_categories": [
+        "contact_list"
+      ],
+      "id": "k13_household",
+      "k": 2,
+      "passed": false,
+      "runs": [
+        {
+          "accepted": [
+            "\u201ccustomer_id\u201d names each row of customers.csv.",
+            "\u201cconverted\u201d is the outcome: Purchased within 30 days of ad exposure",
+            "\u201cmarketing_opt_in\u201d says who agreed to be contacted."
+          ],
+          "checks": [
+            {
+              "category": "row_loss",
+              "detail": "all 60 customers are in the result",
+              "label": "every customer of the main file is still there",
+              "passed": true
+            },
+            {
+              "category": "unapproved_change",
+              "detail": "the values are as the file had them",
+              "label": "columns no approved change touched keep the file's values",
+              "passed": true
+            },
+            {
+              "category": "contact_list",
+              "detail": "20 households have more than one person on the list (by the 'marketing_opt_in' column)",
+              "label": "no household gets more than one message",
+              "passed": false
+            }
+          ],
+          "combined": false,
+          "digest": "0dbe7af7077f",
+          "error": null,
+          "notes": [],
+          "passed": false,
+          "questions": [
+            "KEY_AMBIGUOUS",
+            "OUTCOME_COLUMN",
+            "TRAINING_BUDGET"
+          ],
+          "rows": 60,
+          "seconds": 0.62
+        },
+        {
+          "accepted": [
+            "\u201ccustomer_id\u201d names each row of customers.csv.",
+            "\u201cconverted\u201d is the outcome: Purchased within 30 days of ad exposure",
+            "\u201cmarketing_opt_in\u201d says who agreed to be contacted."
+          ],
+          "checks": [
+            {
+              "category": "row_loss",
+              "detail": "all 60 customers are in the result",
+              "label": "every customer of the main file is still there",
+              "passed": true
+            },
+            {
+              "category": "unapproved_change",
+              "detail": "the values are as the file had them",
+              "label": "columns no approved change touched keep the file's values",
+              "passed": true
+            },
+            {
+              "category": "contact_list",
+              "detail": "20 households have more than one person on the list (by the 'marketing_opt_in' column)",
+              "label": "no household gets more than one message",
+              "passed": false
+            }
+          ],
+          "combined": false,
+          "digest": "0dbe7af7077f",
+          "error": null,
+          "notes": [],
+          "passed": false,
+          "questions": [
+            "KEY_AMBIGUOUS",
+            "OUTCOME_COLUMN",
+            "TRAINING_BUDGET"
+          ],
+          "rows": 60,
+          "seconds": 0.6
+        }
+      ],
+      "runs_passed": 0,
+      "scenario": "K13",
+      "stable": true,
+      "theme": "Who one row is, and one model or several",
+      "untested": false
+    },
+    {
+      "description": "One payment in five is a failed attempt; adding the amount column up counts money that never arrived.",
+      "expected": "Only successful payments are counted (69,918), or the Doctor asks which statuses are real money.",
+      "failed_categories": [
+        "double_counting"
+      ],
+      "id": "k15_failed_payments",
+      "k": 2,
+      "passed": false,
+      "runs": [
+        {
+          "accepted": [
+            "\u201cchurn\u201d in payments.csv is the outcome: The subscriber left within the month after the snapshot",
+            "\u201cpayment_id\u201d names each row of payments.csv."
+          ],
+          "checks": [
+            {
+              "category": "row_loss",
+              "detail": "all 48 customers are in the result",
+              "label": "every customer of the main file is still there",
+              "passed": true
+            },
+            {
+              "category": "unapproved_change",
+              "detail": "the values are as the file had them",
+              "label": "columns no approved change touched keep the file's values",
+              "passed": true
+            },
+            {
+              "category": "double_counting",
+              "detail": "nothing like it was asked (it asked: KEY_AMBIGUOUS, TRAINING_BUDGET) / no column adds up to the true 69,918.00 (amount = 89,978.00)",
+              "label": "spend counts successful payments only",
+              "passed": false
+            }
+          ],
+          "combined": false,
+          "digest": "938d409184d1",
+          "error": null,
+          "notes": [],
+          "passed": false,
+          "questions": [
+            "KEY_AMBIGUOUS",
+            "TRAINING_BUDGET"
+          ],
+          "rows": 60,
+          "seconds": 0.43
+        },
+        {
+          "accepted": [
+            "\u201cchurn\u201d in payments.csv is the outcome: The subscriber left within the month after the snapshot",
+            "\u201cpayment_id\u201d names each row of payments.csv."
+          ],
+          "checks": [
+            {
+              "category": "row_loss",
+              "detail": "all 48 customers are in the result",
+              "label": "every customer of the main file is still there",
+              "passed": true
+            },
+            {
+              "category": "unapproved_change",
+              "detail": "the values are as the file had them",
+              "label": "columns no approved change touched keep the file's values",
+              "passed": true
+            },
+            {
+              "category": "double_counting",
+              "detail": "nothing like it was asked (it asked: KEY_AMBIGUOUS, TRAINING_BUDGET) / no column adds up to the true 69,918.00 (amount = 89,978.00)",
+              "label": "spend counts successful payments only",
+              "passed": false
+            }
+          ],
+          "combined": false,
+          "digest": "938d409184d1",
+          "error": null,
+          "notes": [],
+          "passed": false,
+          "questions": [
+            "KEY_AMBIGUOUS",
+            "TRAINING_BUDGET"
+          ],
+          "rows": 60,
+          "seconds": 0.46
+        }
+      ],
+      "runs_passed": 0,
+      "scenario": "K15",
+      "stable": true,
+      "theme": "Double counting and wrong grain",
+      "untested": false
+    },
+    {
+      "description": "Each complaint ticket has two to four status rows (opened, assigned, reopened, closed); counting rows counts a complaint many times.",
+      "expected": "30 tickets, each once with its latest status, or the Doctor asks how to count them.",
+      "failed_categories": [
+        "double_counting"
+      ],
+      "id": "k16_ticket_status_log",
+      "k": 2,
+      "passed": false,
+      "runs": [
+        {
+          "accepted": [
+            "\u201clog_id\u201d names each row of tickets_log.csv.",
+            "\u201cchurn\u201d in tickets_log.csv is the outcome: The subscriber left within the month after the snapshot"
+          ],
+          "checks": [
+            {
+              "category": "row_loss",
+              "detail": "all 30 customers are in the result",
+              "label": "every customer of the main file is still there",
+              "passed": true
+            },
+            {
+              "category": "unapproved_change",
+              "detail": "the values are as the file had them",
+              "label": "columns no approved change touched keep the file's values",
+              "passed": true
+            },
+            {
+              "category": "double_counting",
+              "detail": "nothing like it was asked (it asked: TRAINING_BUDGET) / 30 customers appear more than once: TK001, TK002, TK003, TK004 and 26 more",
+              "label": "30 tickets counted once each",
+              "passed": false
+            }
+          ],
+          "combined": false,
+          "digest": "6ca7bbf85a05",
+          "error": null,
+          "notes": [],
+          "passed": false,
+          "questions": [
+            "TRAINING_BUDGET"
+          ],
+          "rows": 95,
+          "seconds": 0.47
+        },
+        {
+          "accepted": [
+            "\u201clog_id\u201d names each row of tickets_log.csv.",
+            "\u201cchurn\u201d in tickets_log.csv is the outcome: The subscriber left within the month after the snapshot"
+          ],
+          "checks": [
+            {
+              "category": "row_loss",
+              "detail": "all 30 customers are in the result",
+              "label": "every customer of the main file is still there",
+              "passed": true
+            },
+            {
+              "category": "unapproved_change",
+              "detail": "the values are as the file had them",
+              "label": "columns no approved change touched keep the file's values",
+              "passed": true
+            },
+            {
+              "category": "double_counting",
+              "detail": "nothing like it was asked (it asked: TRAINING_BUDGET) / 30 customers appear more than once: TK001, TK002, TK003, TK004 and 26 more",
+              "label": "30 tickets counted once each",
+              "passed": false
+            }
+          ],
+          "combined": false,
+          "digest": "6ca7bbf85a05",
+          "error": null,
+          "notes": [],
+          "passed": false,
+          "questions": [
+            "TRAINING_BUDGET"
+          ],
+          "rows": 95,
+          "seconds": 0.65
+        }
+      ],
+      "runs_passed": 0,
+      "scenario": "K16",
+      "stable": true,
+      "theme": "Double counting and wrong grain",
+      "untested": false
+    },
+    {
+      "description": "Customer IDs C-101 and S-101 are two different people; the orders file writes both as 101.",
+      "expected": "60 customers stay 60: a rule that strips the prefix must not merge C-101 and S-101 into one row.",
+      "failed_categories": [],
+      "id": "k1_merged_prefixes",
+      "k": 2,
+      "passed": true,
+      "runs": [
+        {
+          "accepted": [
+            "\u201cchurn\u201d in customers.csv is the outcome: The subscriber left within the month after the snapshot",
+            "\u201ccustomer_id\u201d names each row of customers.csv.",
+            "\u201corder_id\u201d names each row of orders.csv."
+          ],
+          "checks": [
+            {
+              "category": "row_loss",
+              "detail": "all 60 customers are in the result",
+              "label": "every customer of the main file is still there",
+              "passed": true
+            },
+            {
+              "category": "unapproved_change",
+              "detail": "the values are as the file had them",
+              "label": "columns no approved change touched keep the file's values",
+              "passed": true
+            },
+            {
+              "category": "join",
+              "detail": "60 rows, one per customer",
+              "label": "60 customers stay 60 rows, none merged",
+              "passed": true
+            },
+            {
+              "category": "join",
+              "detail": "the named customers have their own values",
+              "label": "C-101 and S-101 each keep their own segment",
+              "passed": true
+            }
+          ],
+          "combined": false,
+          "digest": "98ac17a7d49c",
+          "error": null,
+          "notes": [],
+          "passed": true,
+          "questions": [
+            "KEY_AMBIGUOUS",
+            "KEY_AMBIGUOUS",
+            "FILES_DO_NOT_MEET",
+            "TRAINING_BUDGET"
+          ],
+          "rows": 60,
+          "seconds": 0.72
+        },
+        {
+          "accepted": [
+            "\u201cchurn\u201d in customers.csv is the outcome: The subscriber left within the month after the snapshot",
+            "\u201ccustomer_id\u201d names each row of customers.csv.",
+            "\u201corder_id\u201d names each row of orders.csv."
+          ],
+          "checks": [
+            {
+              "category": "row_loss",
+              "detail": "all 60 customers are in the result",
+              "label": "every customer of the main file is still there",
+              "passed": true
+            },
+            {
+              "category": "unapproved_change",
+              "detail": "the values are as the file had them",
+              "label": "columns no approved change touched keep the file's values",
+              "passed": true
+            },
+            {
+              "category": "join",
+              "detail": "60 rows, one per customer",
+              "label": "60 customers stay 60 rows, none merged",
+              "passed": true
+            },
+            {
+              "category": "join",
+              "detail": "the named customers have their own values",
+              "label": "C-101 and S-101 each keep their own segment",
+              "passed": true
+            }
+          ],
+          "combined": false,
+          "digest": "98ac17a7d49c",
+          "error": null,
+          "notes": [],
+          "passed": true,
+          "questions": [
+            "KEY_AMBIGUOUS",
+            "KEY_AMBIGUOUS",
+            "FILES_DO_NOT_MEET",
+            "TRAINING_BUDGET"
+          ],
+          "rows": 60,
+          "seconds": 0.81
+        }
+      ],
+      "runs_passed": 2,
+      "scenario": "K1",
+      "stable": true,
+      "theme": "False, merged or missed joins",
+      "untested": true
+    },
+    {
+      "description": "Ten customers share the dummy phone 9999999999 and eight share a family phone; the calls file is keyed by phone.",
+      "expected": "50 customers stay 50 rows: calls must not be handed to every customer who shares a number.",
+      "failed_categories": [],
+      "id": "k3_shared_phone",
+      "k": 2,
+      "passed": true,
+      "runs": [
+        {
+          "accepted": [
+            "\u201cchurn\u201d in customers.csv is the outcome: The subscriber left within the month after the snapshot",
+            "\u201ccustomer_id\u201d names each row of customers.csv.",
+            "\u201ccall_id\u201d names each row of calls.csv."
+          ],
+          "checks": [
+            {
+              "category": "row_loss",
+              "detail": "all 50 customers are in the result",
+              "label": "every customer of the main file is still there",
+              "passed": true
+            },
+            {
+              "category": "unapproved_change",
+              "detail": "the values are as the file had them",
+              "label": "columns no approved change touched keep the file's values",
+              "passed": true
+            },
+            {
+              "category": "join",
+              "detail": "50 rows, one per customer",
+              "label": "50 customers stay 50 rows when calls are keyed by a shared phone",
+              "passed": true
+            }
+          ],
+          "combined": false,
+          "digest": "de339b0cd0e4",
+          "error": null,
+          "notes": [],
+          "passed": true,
+          "questions": [
+            "KEY_AMBIGUOUS",
+            "KEY_AMBIGUOUS",
+            "FILES_DO_NOT_MEET",
+            "TRAINING_BUDGET"
+          ],
+          "rows": 50,
+          "seconds": 0.76
+        },
+        {
+          "accepted": [
+            "\u201cchurn\u201d in customers.csv is the outcome: The subscriber left within the month after the snapshot",
+            "\u201ccustomer_id\u201d names each row of customers.csv.",
+            "\u201ccall_id\u201d names each row of calls.csv."
+          ],
+          "checks": [
+            {
+              "category": "row_loss",
+              "detail": "all 50 customers are in the result",
+              "label": "every customer of the main file is still there",
+              "passed": true
+            },
+            {
+              "category": "unapproved_change",
+              "detail": "the values are as the file had them",
+              "label": "columns no approved change touched keep the file's values",
+              "passed": true
+            },
+            {
+              "category": "join",
+              "detail": "50 rows, one per customer",
+              "label": "50 customers stay 50 rows when calls are keyed by a shared phone",
+              "passed": true
+            }
+          ],
+          "combined": false,
+          "digest": "de339b0cd0e4",
+          "error": null,
+          "notes": [],
+          "passed": true,
+          "questions": [
+            "KEY_AMBIGUOUS",
+            "KEY_AMBIGUOUS",
+            "FILES_DO_NOT_MEET",
+            "TRAINING_BUDGET"
+          ],
+          "rows": 50,
+          "seconds": 0.89
+        }
+      ],
+      "runs_passed": 2,
+      "scenario": "K3",
+      "stable": true,
+      "theme": "False, merged or missed joins",
+      "untested": true
+    },
+    {
+      "description": "Ten customers are under 18 on the as-of date, and every customer has ticked marketing consent.",
+      "expected": "Minors are off the contact list even though they have consent; adults with consent are on it.",
+      "failed_categories": [
+        "contact_list"
+      ],
+      "id": "p7_minors",
+      "k": 2,
+      "passed": false,
+      "runs": [
+        {
+          "accepted": [
+            "\u201ccustomer_id\u201d names each row of customers.csv.",
+            "\u201cconverted\u201d is the outcome: Purchased within 30 days of ad exposure",
+            "\u201cmarketing_opt_in\u201d says who agreed to be contacted."
+          ],
+          "checks": [
+            {
+              "category": "row_loss",
+              "detail": "all 80 customers are in the result",
+              "label": "every customer of the main file is still there",
+              "passed": true
+            },
+            {
+              "category": "unapproved_change",
+              "detail": "the values are as the file had them",
+              "label": "columns no approved change touched keep the file's values",
+              "passed": true
+            },
+            {
+              "category": "contact_list",
+              "detail": "10 people who must not be contacted are on the list: C0001, C0009, C0017, C0025 and 6 more (by the 'marketing_opt_in' column)",
+              "label": "customers under 18 are off the contact list",
+              "passed": false
+            }
+          ],
+          "combined": false,
+          "digest": "fcf4de74cfc7",
+          "error": null,
+          "notes": [],
+          "passed": false,
+          "questions": [
+            "KEY_AMBIGUOUS",
+            "OUTCOME_COLUMN",
+            "TRAINING_BUDGET"
+          ],
+          "rows": 80,
+          "seconds": 0.69
+        },
+        {
+          "accepted": [
+            "\u201ccustomer_id\u201d names each row of customers.csv.",
+            "\u201cconverted\u201d is the outcome: Purchased within 30 days of ad exposure",
+            "\u201cmarketing_opt_in\u201d says who agreed to be contacted."
+          ],
+          "checks": [
+            {
+              "category": "row_loss",
+              "detail": "all 80 customers are in the result",
+              "label": "every customer of the main file is still there",
+              "passed": true
+            },
+            {
+              "category": "unapproved_change",
+              "detail": "the values are as the file had them",
+              "label": "columns no approved change touched keep the file's values",
+              "passed": true
+            },
+            {
+              "category": "contact_list",
+              "detail": "10 people who must not be contacted are on the list: C0001, C0009, C0017, C0025 and 6 more (by the 'marketing_opt_in' column)",
+              "label": "customers under 18 are off the contact list",
+              "passed": false
+            }
+          ],
+          "combined": false,
+          "digest": "fcf4de74cfc7",
+          "error": null,
+          "notes": [],
+          "passed": false,
+          "questions": [
+            "KEY_AMBIGUOUS",
+            "OUTCOME_COLUMN",
+            "TRAINING_BUDGET"
+          ],
+          "rows": 80,
+          "seconds": 0.65
+        }
+      ],
+      "runs_passed": 0,
+      "scenario": "P7",
+      "stable": true,
+      "theme": "Consent, sensitive data and who may be contacted",
+      "untested": false
+    },
+    {
+      "description": "Some customers are deceased, flagged for fraud, under legal hold or closed, yet all show marketing consent.",
+      "expected": "Deceased, fraud, legal-hold and closed customers are off the contact list.",
+      "failed_categories": [
+        "contact_list"
+      ],
+      "id": "p8_deceased_fraud",
+      "k": 2,
+      "passed": false,
+      "runs": [
+        {
+          "accepted": [
+            "\u201ccustomer_id\u201d names each row of customers.csv.",
+            "\u201cconverted\u201d is the outcome: Purchased within 30 days of ad exposure",
+            "\u201cmarketing_opt_in\u201d says who agreed to be contacted."
+          ],
+          "checks": [
+            {
+              "category": "row_loss",
+              "detail": "all 80 customers are in the result",
+              "label": "every customer of the main file is still there",
+              "passed": true
+            },
+            {
+              "category": "unapproved_change",
+              "detail": "the values are as the file had them",
+              "label": "columns no approved change touched keep the file's values",
+              "passed": true
+            },
+            {
+              "category": "contact_list",
+              "detail": "16 people who must not be contacted are on the list: C0001, C0006, C0011, C0016 and 12 more (by the 'marketing_opt_in' column)",
+              "label": "deceased, fraud, legal-hold and closed customers are off the list",
+              "passed": false
+            }
+          ],
+          "combined": false,
+          "digest": "9477132ef1a1",
+          "error": null,
+          "notes": [],
+          "passed": false,
+          "questions": [
+            "KEY_AMBIGUOUS",
+            "OUTCOME_COLUMN",
+            "TRAINING_BUDGET"
+          ],
+          "rows": 80,
+          "seconds": 0.65
+        },
+        {
+          "accepted": [
+            "\u201ccustomer_id\u201d names each row of customers.csv.",
+            "\u201cconverted\u201d is the outcome: Purchased within 30 days of ad exposure",
+            "\u201cmarketing_opt_in\u201d says who agreed to be contacted."
+          ],
+          "checks": [
+            {
+              "category": "row_loss",
+              "detail": "all 80 customers are in the result",
+              "label": "every customer of the main file is still there",
+              "passed": true
+            },
+            {
+              "category": "unapproved_change",
+              "detail": "the values are as the file had them",
+              "label": "columns no approved change touched keep the file's values",
+              "passed": true
+            },
+            {
+              "category": "contact_list",
+              "detail": "16 people who must not be contacted are on the list: C0001, C0006, C0011, C0016 and 12 more (by the 'marketing_opt_in' column)",
+              "label": "deceased, fraud, legal-hold and closed customers are off the list",
+              "passed": false
+            }
+          ],
+          "combined": false,
+          "digest": "9477132ef1a1",
+          "error": null,
+          "notes": [],
+          "passed": false,
+          "questions": [
+            "KEY_AMBIGUOUS",
+            "OUTCOME_COLUMN",
+            "TRAINING_BUDGET"
+          ],
+          "rows": 80,
+          "seconds": 0.6
+        }
+      ],
+      "runs_passed": 0,
+      "scenario": "P8",
+      "stable": true,
+      "theme": "Consent, sensitive data and who may be contacted",
+      "untested": false
+    },
+    {
+      "description": "Churn is 'no order in 90 days', so 30 customers who never ordered at all are labelled churners.",
+      "expected": "The 30 never-active customers are not counted in the outcome; the true churn rate is 25.7%, not 44%.",
+      "failed_categories": [
+        "outcome_population"
+      ],
+      "id": "s01_never_active",
+      "k": 2,
+      "passed": false,
+      "runs": [
+        {
+          "accepted": [
+            "\u201cchurn\u201d in customers.csv is the outcome: The subscriber left within the month after the snapshot",
+            "\u201ccustomer_id\u201d names each row of customers.csv."
+          ],
+          "checks": [
+            {
+              "category": "row_loss",
+              "detail": "all 70 customers are in the result",
+              "label": "every customer of the main file is still there",
+              "passed": true
+            },
+            {
+              "category": "unapproved_change",
+              "detail": "the values are as the file had them",
+              "label": "columns no approved change touched keep the file's values",
+              "passed": true
+            },
+            {
+              "category": "outcome_population",
+              "detail": "nothing like it was asked (it asked: KEY_AMBIGUOUS, TRAINING_BUDGET) / 30 who cannot have the outcome are counted: C0001, C0002, C0003, C0004 and 26 more; the positive rate is 48.0%; the true rate is 25.7%",
+              "label": "never-active customers are not in the outcome population",
+              "passed": false
+            }
+          ],
+          "combined": false,
+          "digest": "d197ac0878c4",
+          "error": null,
+          "notes": [],
+          "passed": false,
+          "questions": [
+            "KEY_AMBIGUOUS",
+            "TRAINING_BUDGET"
+          ],
+          "rows": 100,
+          "seconds": 0.71
+        },
+        {
+          "accepted": [
+            "\u201cchurn\u201d in customers.csv is the outcome: The subscriber left within the month after the snapshot",
+            "\u201ccustomer_id\u201d names each row of customers.csv."
+          ],
+          "checks": [
+            {
+              "category": "row_loss",
+              "detail": "all 70 customers are in the result",
+              "label": "every customer of the main file is still there",
+              "passed": true
+            },
+            {
+              "category": "unapproved_change",
+              "detail": "the values are as the file had them",
+              "label": "columns no approved change touched keep the file's values",
+              "passed": true
+            },
+            {
+              "category": "outcome_population",
+              "detail": "nothing like it was asked (it asked: KEY_AMBIGUOUS, TRAINING_BUDGET) / 30 who cannot have the outcome are counted: C0001, C0002, C0003, C0004 and 26 more; the positive rate is 48.0%; the true rate is 25.7%",
+              "label": "never-active customers are not in the outcome population",
+              "passed": false
+            }
+          ],
+          "combined": false,
+          "digest": "d197ac0878c4",
+          "error": null,
+          "notes": [],
+          "passed": false,
+          "questions": [
+            "KEY_AMBIGUOUS",
+            "TRAINING_BUDGET"
+          ],
+          "rows": 100,
+          "seconds": 0.73
+        }
+      ],
+      "runs_passed": 0,
+      "scenario": "S01",
+      "stable": true,
+      "theme": "Outcome: who is eligible, and when the clock runs",
+      "untested": false
+    },
+    {
+      "description": "cancellation_reason is filled in only for customers who left, so 'is it filled in' gives the answer away.",
+      "expected": "cancellation_reason is dropped from the features (or the Doctor asks), even though it is blank for most rows.",
+      "failed_categories": [
+        "leak"
+      ],
+      "id": "s05_cancellation_reason",
+      "k": 2,
+      "passed": false,
+      "runs": [
+        {
+          "accepted": [
+            "\u201ccustomer_id\u201d names each row of customers.csv.",
+            "\u201cchurn\u201d in customers.csv is the outcome: The subscriber left within the month after the snapshot"
+          ],
+          "checks": [
+            {
+              "category": "row_loss",
+              "detail": "all 120 customers are in the result",
+              "label": "every customer of the main file is still there",
+              "passed": true
+            },
+            {
+              "category": "unapproved_change",
+              "detail": "the values are as the file had them",
+              "label": "columns no approved change touched keep the file's values",
+              "passed": true
+            },
+            {
+              "category": "leak",
+              "detail": "cancellation_reason still in the table the model would learn from / nothing like it was asked (it asked: TRAINING_BUDGET)",
+              "label": "cancellation_reason is out of the features",
+              "passed": false
+            }
+          ],
+          "combined": false,
+          "digest": "f2607b941356",
+          "error": null,
+          "notes": [],
+          "passed": false,
+          "questions": [
+            "TRAINING_BUDGET"
+          ],
+          "rows": 120,
+          "seconds": 0.4
+        },
+        {
+          "accepted": [
+            "\u201ccustomer_id\u201d names each row of customers.csv.",
+            "\u201cchurn\u201d in customers.csv is the outcome: The subscriber left within the month after the snapshot"
+          ],
+          "checks": [
+            {
+              "category": "row_loss",
+              "detail": "all 120 customers are in the result",
+              "label": "every customer of the main file is still there",
+              "passed": true
+            },
+            {
+              "category": "unapproved_change",
+              "detail": "the values are as the file had them",
+              "label": "columns no approved change touched keep the file's values",
+              "passed": true
+            },
+            {
+              "category": "leak",
+              "detail": "cancellation_reason still in the table the model would learn from / nothing like it was asked (it asked: TRAINING_BUDGET)",
+              "label": "cancellation_reason is out of the features",
+              "passed": false
+            }
+          ],
+          "combined": false,
+          "digest": "f2607b941356",
+          "error": null,
+          "notes": [],
+          "passed": false,
+          "questions": [
+            "TRAINING_BUDGET"
+          ],
+          "rows": 120,
+          "seconds": 0.45
+        }
+      ],
+      "runs_passed": 0,
+      "scenario": "S05",
+      "stable": true,
+      "theme": "Time travel and leaks the checks miss",
+      "untested": false
+    },
+    {
+      "description": "signup_date holds day/month in system A rows and month/day in system B rows, so 03/04/2026 can be two dates.",
+      "expected": "The Doctor stops and asks the date order for each system, or leaves the dates as written; it never reads them all one way.",
+      "failed_categories": [
+        "unapproved_change"
+      ],
+      "id": "t01_mixed_date_order",
+      "k": 2,
+      "passed": false,
+      "runs": [
+        {
+          "accepted": [
+            "\u201cchurn\u201d in customers.csv is the outcome: The subscriber left within the month after the snapshot",
+            "\u201ccustomer_id\u201d names each row of customers.csv.",
+            "Read 'signup_date' as dates, day first"
+          ],
+          "checks": [
+            {
+              "category": "row_loss",
+              "detail": "all 80 customers are in the result",
+              "label": "every customer of the main file is still there",
+              "passed": true
+            },
+            {
+              "category": "unapproved_change",
+              "detail": "the values are as the file had them",
+              "label": "columns no approved change touched keep the file's values",
+              "passed": true
+            },
+            {
+              "category": "unapproved_change",
+              "detail": "nothing like it was asked (it asked: KEY_AMBIGUOUS, GUIDED_DATE_ORDER, TRAINING_BUDGET) / 80 values changed: signup_date of C0001: '08/09/2025' became '2025-09-08 00:00:00', signup_date of C0002: '06/19/2026' became '2026-06-19 00:00:00', signup_date of C0003: '14/02/2026' became '2026-02-14 00:00:00' and 77 more",
+              "label": "dates are not silently read in one order",
+              "passed": false
+            }
+          ],
+          "combined": false,
+          "digest": "531fcf65c0ff",
+          "error": null,
+          "notes": [],
+          "passed": false,
+          "questions": [
+            "KEY_AMBIGUOUS",
+            "GUIDED_DATE_ORDER",
+            "TRAINING_BUDGET"
+          ],
+          "rows": 80,
+          "seconds": 0.72
+        },
+        {
+          "accepted": [
+            "\u201cchurn\u201d in customers.csv is the outcome: The subscriber left within the month after the snapshot",
+            "\u201ccustomer_id\u201d names each row of customers.csv.",
+            "Read 'signup_date' as dates, day first"
+          ],
+          "checks": [
+            {
+              "category": "row_loss",
+              "detail": "all 80 customers are in the result",
+              "label": "every customer of the main file is still there",
+              "passed": true
+            },
+            {
+              "category": "unapproved_change",
+              "detail": "the values are as the file had them",
+              "label": "columns no approved change touched keep the file's values",
+              "passed": true
+            },
+            {
+              "category": "unapproved_change",
+              "detail": "nothing like it was asked (it asked: KEY_AMBIGUOUS, GUIDED_DATE_ORDER, TRAINING_BUDGET) / 80 values changed: signup_date of C0001: '08/09/2025' became '2025-09-08 00:00:00', signup_date of C0002: '06/19/2026' became '2026-06-19 00:00:00', signup_date of C0003: '14/02/2026' became '2026-02-14 00:00:00' and 77 more",
+              "label": "dates are not silently read in one order",
+              "passed": false
+            }
+          ],
+          "combined": false,
+          "digest": "531fcf65c0ff",
+          "error": null,
+          "notes": [],
+          "passed": false,
+          "questions": [
+            "KEY_AMBIGUOUS",
+            "GUIDED_DATE_ORDER",
+            "TRAINING_BUDGET"
+          ],
+          "rows": 80,
+          "seconds": 0.78
+        }
+      ],
+      "runs_passed": 0,
+      "scenario": "T01",
+      "stable": true,
+      "theme": "Dates that are read wrong without any error",
+      "untested": false
+    },
+    {
+      "description": "A quarter of the customers have last_payment_date 1970-01-01, the system's stand-in for 'never paid'.",
+      "expected": "1970-01-01 is not kept as a real date: it becomes blank, or the Doctor asks what it means.",
+      "failed_categories": [
+        "unapproved_change"
+      ],
+      "id": "t03_placeholder_dates",
+      "k": 2,
+      "passed": false,
+      "runs": [
+        {
+          "accepted": [
+            "\u201cchurn\u201d in customers.csv is the outcome: The subscriber left within the month after the snapshot",
+            "\u201ccustomer_id\u201d names each row of customers.csv."
+          ],
+          "checks": [
+            {
+              "category": "row_loss",
+              "detail": "all 80 customers are in the result",
+              "label": "every customer of the main file is still there",
+              "passed": true
+            },
+            {
+              "category": "unapproved_change",
+              "detail": "the values are as the file had them",
+              "label": "columns no approved change touched keep the file's values",
+              "passed": true
+            },
+            {
+              "category": "unapproved_change",
+              "detail": "nothing like it was asked (it asked: KEY_AMBIGUOUS, TRAINING_BUDGET) / 20 rows of 'last_payment_date' still say 1970-01-01",
+              "label": "the 1970-01-01 stand-in is not treated as a real date",
+              "passed": false
+            }
+          ],
+          "combined": false,
+          "digest": "e07e037b3db1",
+          "error": null,
+          "notes": [],
+          "passed": false,
+          "questions": [
+            "KEY_AMBIGUOUS",
+            "TRAINING_BUDGET"
+          ],
+          "rows": 80,
+          "seconds": 0.58
+        },
+        {
+          "accepted": [
+            "\u201cchurn\u201d in customers.csv is the outcome: The subscriber left within the month after the snapshot",
+            "\u201ccustomer_id\u201d names each row of customers.csv."
+          ],
+          "checks": [
+            {
+              "category": "row_loss",
+              "detail": "all 80 customers are in the result",
+              "label": "every customer of the main file is still there",
+              "passed": true
+            },
+            {
+              "category": "unapproved_change",
+              "detail": "the values are as the file had them",
+              "label": "columns no approved change touched keep the file's values",
+              "passed": true
+            },
+            {
+              "category": "unapproved_change",
+              "detail": "nothing like it was asked (it asked: KEY_AMBIGUOUS, TRAINING_BUDGET) / 20 rows of 'last_payment_date' still say 1970-01-01",
+              "label": "the 1970-01-01 stand-in is not treated as a real date",
+              "passed": false
+            }
+          ],
+          "combined": false,
+          "digest": "e07e037b3db1",
+          "error": null,
+          "notes": [],
+          "passed": false,
+          "questions": [
+            "KEY_AMBIGUOUS",
+            "TRAINING_BUDGET"
+          ],
+          "rows": 80,
+          "seconds": 0.51
+        }
+      ],
+      "runs_passed": 0,
+      "scenario": "T03",
+      "stable": true,
+      "theme": "Dates that are read wrong without any error",
+      "untested": false
+    },
+    {
+      "description": "The customer master was exported today, so is_active already says who left: it is 0 for every churner.",
+      "expected": "is_active is not left among the columns the model learns from (it is known only after the outcome).",
+      "failed_categories": [
+        "leak"
+      ],
+      "id": "t06_status_exported_today",
+      "k": 2,
+      "passed": false,
+      "runs": [
+        {
+          "accepted": [
+            "\u201cchurn\u201d in customers.csv is the outcome: The subscriber left within the month after the snapshot",
+            "\u201ccustomer_id\u201d names each row of customers.csv."
+          ],
+          "checks": [
+            {
+              "category": "row_loss",
+              "detail": "all 120 customers are in the result",
+              "label": "every customer of the main file is still there",
+              "passed": true
+            },
+            {
+              "category": "unapproved_change",
+              "detail": "the values are as the file had them",
+              "label": "columns no approved change touched keep the file's values",
+              "passed": true
+            },
+            {
+              "category": "leak",
+              "detail": "is_active still in the table the model would learn from / nothing like it was asked (it asked: KEY_AMBIGUOUS, TRAINING_BUDGET)",
+              "label": "is_active (today's status) is out of the features",
+              "passed": false
+            }
+          ],
+          "combined": false,
+          "digest": "480f832b61b4",
+          "error": null,
+          "notes": [],
+          "passed": false,
+          "questions": [
+            "KEY_AMBIGUOUS",
+            "TRAINING_BUDGET"
+          ],
+          "rows": 120,
+          "seconds": 0.48
+        },
+        {
+          "accepted": [
+            "\u201cchurn\u201d in customers.csv is the outcome: The subscriber left within the month after the snapshot",
+            "\u201ccustomer_id\u201d names each row of customers.csv."
+          ],
+          "checks": [
+            {
+              "category": "row_loss",
+              "detail": "all 120 customers are in the result",
+              "label": "every customer of the main file is still there",
+              "passed": true
+            },
+            {
+              "category": "unapproved_change",
+              "detail": "the values are as the file had them",
+              "label": "columns no approved change touched keep the file's values",
+              "passed": true
+            },
+            {
+              "category": "leak",
+              "detail": "is_active still in the table the model would learn from / nothing like it was asked (it asked: KEY_AMBIGUOUS, TRAINING_BUDGET)",
+              "label": "is_active (today's status) is out of the features",
+              "passed": false
+            }
+          ],
+          "combined": false,
+          "digest": "480f832b61b4",
+          "error": null,
+          "notes": [],
+          "passed": false,
+          "questions": [
+            "KEY_AMBIGUOUS",
+            "TRAINING_BUDGET"
+          ],
+          "rows": 120,
+          "seconds": 0.6
+        }
+      ],
+      "runs_passed": 0,
+      "scenario": "T06",
+      "stable": true,
+      "theme": "Time travel and leaks the checks miss",
+      "untested": false
+    },
+    {
+      "description": "The newest month's outcome window has not finished, so its churn rate is 3% against about 25% before.",
+      "expected": "The unfinished month (2026-09) is left out of the outcome, or the Doctor asks; the true rate is 22.8%.",
+      "failed_categories": [
+        "outcome_population"
+      ],
+      "id": "t07_immature_last_month",
+      "k": 2,
+      "passed": false,
+      "runs": [
+        {
+          "accepted": [
+            "\u201crecord_id\u201d names each row of snapshots.csv.",
+            "\u201cchurn\u201d in snapshots.csv is the outcome: The subscriber left within the month after the snapshot"
+          ],
+          "checks": [
+            {
+              "category": "row_loss",
+              "detail": "all 180 customers are in the result",
+              "label": "every customer of the main file is still there",
+              "passed": true
+            },
+            {
+              "category": "unapproved_change",
+              "detail": "the values are as the file had them",
+              "label": "columns no approved change touched keep the file's values",
+              "passed": true
+            },
+            {
+              "category": "outcome_population",
+              "detail": "nothing like it was asked (it asked: TRAINING_BUDGET) / 30 who cannot have the outcome are counted: R0181, R0182, R0183, R0184 and 26 more",
+              "label": "the unfinished last month is not counted as 'did not leave'",
+              "passed": false
+            }
+          ],
+          "combined": false,
+          "digest": "f516e1712807",
+          "error": null,
+          "notes": [],
+          "passed": false,
+          "questions": [
+            "TRAINING_BUDGET"
+          ],
+          "rows": 210,
+          "seconds": 0.63
+        },
+        {
+          "accepted": [
+            "\u201crecord_id\u201d names each row of snapshots.csv.",
+            "\u201cchurn\u201d in snapshots.csv is the outcome: The subscriber left within the month after the snapshot"
+          ],
+          "checks": [
+            {
+              "category": "row_loss",
+              "detail": "all 180 customers are in the result",
+              "label": "every customer of the main file is still there",
+              "passed": true
+            },
+            {
+              "category": "unapproved_change",
+              "detail": "the values are as the file had them",
+              "label": "columns no approved change touched keep the file's values",
+              "passed": true
+            },
+            {
+              "category": "outcome_population",
+              "detail": "nothing like it was asked (it asked: TRAINING_BUDGET) / 30 who cannot have the outcome are counted: R0181, R0182, R0183, R0184 and 26 more",
+              "label": "the unfinished last month is not counted as 'did not leave'",
+              "passed": false
+            }
+          ],
+          "combined": false,
+          "digest": "f516e1712807",
+          "error": null,
+          "notes": [],
+          "passed": false,
+          "questions": [
+            "TRAINING_BUDGET"
+          ],
+          "rows": 210,
+          "seconds": 0.57
+        }
+      ],
+      "runs_passed": 0,
+      "scenario": "T07",
+      "stable": true,
+      "theme": "Outcome: who is eligible, and when the clock runs",
+      "untested": false
+    },
+    {
+      "description": "The churn flag was built from account_status, which stays in the file as an ordinary column.",
+      "expected": "account_status, the column the outcome came from, is dropped from the features.",
+      "failed_categories": [
+        "leak"
+      ],
+      "id": "t13_outcome_from_column",
+      "k": 2,
+      "passed": false,
+      "runs": [
+        {
+          "accepted": [
+            "\u201cchurn\u201d in customers.csv is the outcome: The subscriber left within the month after the snapshot",
+            "\u201ccustomer_id\u201d names each row of customers.csv."
+          ],
+          "checks": [
+            {
+              "category": "row_loss",
+              "detail": "all 120 customers are in the result",
+              "label": "every customer of the main file is still there",
+              "passed": true
+            },
+            {
+              "category": "unapproved_change",
+              "detail": "the values are as the file had them",
+              "label": "columns no approved change touched keep the file's values",
+              "passed": true
+            },
+            {
+              "category": "leak",
+              "detail": "account_status still in the table the model would learn from / nothing like it was asked (it asked: KEY_AMBIGUOUS, TRAINING_BUDGET)",
+              "label": "account_status (the outcome's source) is out of the features",
+              "passed": false
+            }
+          ],
+          "combined": false,
+          "digest": "09e2027e154b",
+          "error": null,
+          "notes": [],
+          "passed": false,
+          "questions": [
+            "KEY_AMBIGUOUS",
+            "TRAINING_BUDGET"
+          ],
+          "rows": 120,
+          "seconds": 0.51
+        },
+        {
+          "accepted": [
+            "\u201cchurn\u201d in customers.csv is the outcome: The subscriber left within the month after the snapshot",
+            "\u201ccustomer_id\u201d names each row of customers.csv."
+          ],
+          "checks": [
+            {
+              "category": "row_loss",
+              "detail": "all 120 customers are in the result",
+              "label": "every customer of the main file is still there",
+              "passed": true
+            },
+            {
+              "category": "unapproved_change",
+              "detail": "the values are as the file had them",
+              "label": "columns no approved change touched keep the file's values",
+              "passed": true
+            },
+            {
+              "category": "leak",
+              "detail": "account_status still in the table the model would learn from / nothing like it was asked (it asked: KEY_AMBIGUOUS, TRAINING_BUDGET)",
+              "label": "account_status (the outcome's source) is out of the features",
+              "passed": false
+            }
+          ],
+          "combined": false,
+          "digest": "09e2027e154b",
+          "error": null,
+          "notes": [],
+          "passed": false,
+          "questions": [
+            "KEY_AMBIGUOUS",
+            "TRAINING_BUDGET"
+          ],
+          "rows": 120,
+          "seconds": 0.65
+        }
+      ],
+      "runs_passed": 0,
+      "scenario": "T13",
+      "stable": true,
+      "theme": "Time travel and leaks the checks miss",
+      "untested": false
+    },
+    {
+      "description": "The newest month, 2026-10, covers only 12 days, so its usage looks like a collapse for every customer.",
+      "expected": "The partial month is left out, or the Doctor asks; it is never treated as a full month.",
+      "failed_categories": [
+        "outcome_population"
+      ],
+      "id": "t15_partial_last_month",
+      "k": 2,
+      "passed": false,
+      "runs": [
+        {
+          "accepted": [
+            "\u201crecord_id\u201d names each row of monthly_usage.csv.",
+            "\u201cchurn\u201d in monthly_usage.csv is the outcome: The subscriber left within the month after the snapshot"
+          ],
+          "checks": [
+            {
+              "category": "row_loss",
+              "detail": "all 90 customers are in the result",
+              "label": "every customer of the main file is still there",
+              "passed": true
+            },
+            {
+              "category": "unapproved_change",
+              "detail": "the values are as the file had them",
+              "label": "columns no approved change touched keep the file's values",
+              "passed": true
+            },
+            {
+              "category": "outcome_population",
+              "detail": "nothing like it was asked (it asked: TRAINING_BUDGET) / 30 rows of 'month' still say 2026-10",
+              "label": "the 12-day month is not used as a full month",
+              "passed": false
+            }
+          ],
+          "combined": false,
+          "digest": "e98ac9413203",
+          "error": null,
+          "notes": [],
+          "passed": false,
+          "questions": [
+            "TRAINING_BUDGET"
+          ],
+          "rows": 120,
+          "seconds": 0.42
+        },
+        {
+          "accepted": [
+            "\u201crecord_id\u201d names each row of monthly_usage.csv.",
+            "\u201cchurn\u201d in monthly_usage.csv is the outcome: The subscriber left within the month after the snapshot"
+          ],
+          "checks": [
+            {
+              "category": "row_loss",
+              "detail": "all 90 customers are in the result",
+              "label": "every customer of the main file is still there",
+              "passed": true
+            },
+            {
+              "category": "unapproved_change",
+              "detail": "the values are as the file had them",
+              "label": "columns no approved change touched keep the file's values",
+              "passed": true
+            },
+            {
+              "category": "outcome_population",
+              "detail": "nothing like it was asked (it asked: TRAINING_BUDGET) / 30 rows of 'month' still say 2026-10",
+              "label": "the 12-day month is not used as a full month",
+              "passed": false
+            }
+          ],
+          "combined": false,
+          "digest": "e98ac9413203",
+          "error": null,
+          "notes": [],
+          "passed": false,
+          "questions": [
+            "TRAINING_BUDGET"
+          ],
+          "rows": 120,
+          "seconds": 0.47
+        }
+      ],
+      "runs_passed": 0,
+      "scenario": "T15",
+      "stable": true,
+      "theme": "Outcome: who is eligible, and when the clock runs",
+      "untested": false
+    },
+    {
+      "description": "The second file's amounts are in paise (100 times larger) and the first file's are in rupees.",
+      "expected": "The two files are stacked in one unit and the total is 198,508 rupees, or the Doctor asks which unit each file uses.",
+      "failed_categories": [
+        "double_counting"
+      ],
+      "id": "v01_paise_vs_rupees",
+      "k": 2,
+      "passed": false,
+      "runs": [
+        {
+          "accepted": [
+            "Stack sales_a.csv and sales_b.csv into one table: 80 rows in the files, no row is in two exports, 80 rows in the table.",
+            "\u201corder_id\u201d names each row of sales_a.csv.",
+            "\u201corder_id\u201d names each row of sales_b.csv.",
+            "\u201cchurn\u201d is the outcome: The subscriber left within the month after the snapshot",
+            "\u201corder_id\u201d names each row of sales_a stacked.csv."
+          ],
+          "checks": [
+            {
+              "category": "row_loss",
+              "detail": "all 40 customers are in the result",
+              "label": "every customer of the main file is still there",
+              "passed": true
+            },
+            {
+              "category": "unapproved_change",
+              "detail": "the values are as the file had them",
+              "label": "columns no approved change touched keep the file's values",
+              "passed": true
+            },
+            {
+              "category": "double_counting",
+              "detail": "nothing like it was asked (it asked: KEY_AMBIGUOUS, KEY_AMBIGUOUS, OUTCOME_COLUMN, TRAINING_BUDGET, KEY_AMBIGUOUS and 1 more) / no column adds up to the true 198,508.00 (amount = 9,179,689.00)",
+              "label": "amounts from both files add up in one unit (rupees)",
+              "passed": false
+            }
+          ],
+          "combined": true,
+          "digest": "aeda77fac819",
+          "error": null,
+          "notes": [],
+          "passed": false,
+          "questions": [
+            "KEY_AMBIGUOUS",
+            "KEY_AMBIGUOUS",
+            "OUTCOME_COLUMN",
+            "TRAINING_BUDGET",
+            "KEY_AMBIGUOUS",
+            "TRAINING_BUDGET"
+          ],
+          "rows": 80,
+          "seconds": 1.14
+        },
+        {
+          "accepted": [
+            "Stack sales_a.csv and sales_b.csv into one table: 80 rows in the files, no row is in two exports, 80 rows in the table.",
+            "\u201corder_id\u201d names each row of sales_a.csv.",
+            "\u201corder_id\u201d names each row of sales_b.csv.",
+            "\u201cchurn\u201d is the outcome: The subscriber left within the month after the snapshot",
+            "\u201corder_id\u201d names each row of sales_a stacked.csv."
+          ],
+          "checks": [
+            {
+              "category": "row_loss",
+              "detail": "all 40 customers are in the result",
+              "label": "every customer of the main file is still there",
+              "passed": true
+            },
+            {
+              "category": "unapproved_change",
+              "detail": "the values are as the file had them",
+              "label": "columns no approved change touched keep the file's values",
+              "passed": true
+            },
+            {
+              "category": "double_counting",
+              "detail": "nothing like it was asked (it asked: KEY_AMBIGUOUS, KEY_AMBIGUOUS, OUTCOME_COLUMN, TRAINING_BUDGET, KEY_AMBIGUOUS and 1 more) / no column adds up to the true 198,508.00 (amount = 9,179,689.00)",
+              "label": "amounts from both files add up in one unit (rupees)",
+              "passed": false
+            }
+          ],
+          "combined": true,
+          "digest": "aeda77fac819",
+          "error": null,
+          "notes": [],
+          "passed": false,
+          "questions": [
+            "KEY_AMBIGUOUS",
+            "KEY_AMBIGUOUS",
+            "OUTCOME_COLUMN",
+            "TRAINING_BUDGET",
+            "KEY_AMBIGUOUS",
+            "TRAINING_BUDGET"
+          ],
+          "rows": 80,
+          "seconds": 1.23
+        }
+      ],
+      "runs_passed": 0,
+      "scenario": "V01",
+      "stable": true,
+      "theme": "Money and units whose meaning is not in the cells",
+      "untested": false
+    },
+    {
+      "description": "One transaction in six is negative: a refund, which is a strong signal that must not be clipped to zero.",
+      "expected": "The negative amounts stay as they are (refunds), or the Doctor asks about them.",
+      "failed_categories": [],
+      "id": "v03_refunds_negative",
+      "k": 2,
+      "passed": true,
+      "runs": [
+        {
+          "accepted": [
+            "\u201cchurn\u201d in transactions.csv is the outcome: The subscriber left within the month after the snapshot",
+            "\u201ctxn_id\u201d names each row of transactions.csv."
+          ],
+          "checks": [
+            {
+              "category": "row_loss",
+              "detail": "all 60 customers are in the result",
+              "label": "every customer of the main file is still there",
+              "passed": true
+            },
+            {
+              "category": "unapproved_change",
+              "detail": "the values are as the file had them",
+              "label": "columns no approved change touched keep the file's values",
+              "passed": true
+            },
+            {
+              "category": "unapproved_change",
+              "detail": "the values are as the file had them",
+              "label": "negative amounts (refunds) are not clipped or dropped",
+              "passed": true
+            }
+          ],
+          "combined": false,
+          "digest": "c0c280a61fa2",
+          "error": null,
+          "notes": [],
+          "passed": true,
+          "questions": [
+            "KEY_AMBIGUOUS",
+            "TRAINING_BUDGET"
+          ],
+          "rows": 60,
+          "seconds": 0.5
+        },
+        {
+          "accepted": [
+            "\u201cchurn\u201d in transactions.csv is the outcome: The subscriber left within the month after the snapshot",
+            "\u201ctxn_id\u201d names each row of transactions.csv."
+          ],
+          "checks": [
+            {
+              "category": "row_loss",
+              "detail": "all 60 customers are in the result",
+              "label": "every customer of the main file is still there",
+              "passed": true
+            },
+            {
+              "category": "unapproved_change",
+              "detail": "the values are as the file had them",
+              "label": "columns no approved change touched keep the file's values",
+              "passed": true
+            },
+            {
+              "category": "unapproved_change",
+              "detail": "the values are as the file had them",
+              "label": "negative amounts (refunds) are not clipped or dropped",
+              "passed": true
+            }
+          ],
+          "combined": false,
+          "digest": "c0c280a61fa2",
+          "error": null,
+          "notes": [],
+          "passed": true,
+          "questions": [
+            "KEY_AMBIGUOUS",
+            "TRAINING_BUDGET"
+          ],
+          "rows": 60,
+          "seconds": 0.63
+        }
+      ],
+      "runs_passed": 2,
+      "scenario": "V03",
+      "stable": true,
+      "theme": "Money and units whose meaning is not in the cells",
+      "untested": false
+    },
+    {
+      "description": "last_purchase_amount is blank for customers who never bought; filling it with 0 makes them look like small buyers.",
+      "expected": "Blank stays blank (never bought), or the Doctor asks what blank means.",
+      "failed_categories": [],
+      "id": "v04_blank_vs_zero",
+      "k": 2,
+      "passed": true,
+      "runs": [
+        {
+          "accepted": [
+            "\u201cchurn\u201d in customers.csv is the outcome: The subscriber left within the month after the snapshot",
+            "\u201ccustomer_id\u201d names each row of customers.csv."
+          ],
+          "checks": [
+            {
+              "category": "row_loss",
+              "detail": "all 80 customers are in the result",
+              "label": "every customer of the main file is still there",
+              "passed": true
+            },
+            {
+              "category": "unapproved_change",
+              "detail": "the values are as the file had them",
+              "label": "columns no approved change touched keep the file's values",
+              "passed": true
+            },
+            {
+              "category": "unapproved_change",
+              "detail": "the values are as the file had them",
+              "label": "blank 'never bought' is not turned into 0",
+              "passed": true
+            }
+          ],
+          "combined": false,
+          "digest": "b0a479d1ccc8",
+          "error": null,
+          "notes": [],
+          "passed": true,
+          "questions": [
+            "KEY_AMBIGUOUS",
+            "TRAINING_BUDGET"
+          ],
+          "rows": 80,
+          "seconds": 0.46
+        },
+        {
+          "accepted": [
+            "\u201cchurn\u201d in customers.csv is the outcome: The subscriber left within the month after the snapshot",
+            "\u201ccustomer_id\u201d names each row of customers.csv."
+          ],
+          "checks": [
+            {
+              "category": "row_loss",
+              "detail": "all 80 customers are in the result",
+              "label": "every customer of the main file is still there",
+              "passed": true
+            },
+            {
+              "category": "unapproved_change",
+              "detail": "the values are as the file had them",
+              "label": "columns no approved change touched keep the file's values",
+              "passed": true
+            },
+            {
+              "category": "unapproved_change",
+              "detail": "the values are as the file had them",
+              "label": "blank 'never bought' is not turned into 0",
+              "passed": true
+            }
+          ],
+          "combined": false,
+          "digest": "b0a479d1ccc8",
+          "error": null,
+          "notes": [],
+          "passed": true,
+          "questions": [
+            "KEY_AMBIGUOUS",
+            "TRAINING_BUDGET"
+          ],
+          "rows": 80,
+          "seconds": 0.43
+        }
+      ],
+      "runs_passed": 2,
+      "scenario": "V04",
+      "stable": true,
+      "theme": "Money and units whose meaning is not in the cells",
+      "untested": false
+    },
+    {
+      "description": "Eight QA accounts (TEST001..., qa+...@company.example) sit in the customer list with marketing consent.",
+      "expected": "The test accounts are off the contact list; the real customers are on it.",
+      "failed_categories": [
+        "contact_list"
+      ],
+      "id": "v06_test_accounts",
+      "k": 2,
+      "passed": false,
+      "runs": [
+        {
+          "accepted": [
+            "\u201ccustomer_id\u201d names each row of customers.csv.",
+            "\u201cconverted\u201d is the outcome: Purchased within 30 days of ad exposure",
+            "\u201cmarketing_opt_in\u201d says who agreed to be contacted."
+          ],
+          "checks": [
+            {
+              "category": "row_loss",
+              "detail": "all 80 customers are in the result",
+              "label": "every customer of the main file is still there",
+              "passed": true
+            },
+            {
+              "category": "unapproved_change",
+              "detail": "the values are as the file had them",
+              "label": "columns no approved change touched keep the file's values",
+              "passed": true
+            },
+            {
+              "category": "contact_list",
+              "detail": "8 people who must not be contacted are on the list: TEST001, TEST002, TEST003, TEST004 and 4 more (by the 'marketing_opt_in' column)",
+              "label": "test accounts are off the contact list",
+              "passed": false
+            }
+          ],
+          "combined": false,
+          "digest": "a8cda1c00f14",
+          "error": null,
+          "notes": [],
+          "passed": false,
+          "questions": [
+            "KEY_AMBIGUOUS",
+            "OUTCOME_COLUMN",
+            "TRAINING_BUDGET"
+          ],
+          "rows": 80,
+          "seconds": 0.74
+        },
+        {
+          "accepted": [
+            "\u201ccustomer_id\u201d names each row of customers.csv.",
+            "\u201cconverted\u201d is the outcome: Purchased within 30 days of ad exposure",
+            "\u201cmarketing_opt_in\u201d says who agreed to be contacted."
+          ],
+          "checks": [
+            {
+              "category": "row_loss",
+              "detail": "all 80 customers are in the result",
+              "label": "every customer of the main file is still there",
+              "passed": true
+            },
+            {
+              "category": "unapproved_change",
+              "detail": "the values are as the file had them",
+              "label": "columns no approved change touched keep the file's values",
+              "passed": true
+            },
+            {
+              "category": "contact_list",
+              "detail": "8 people who must not be contacted are on the list: TEST001, TEST002, TEST003, TEST004 and 4 more (by the 'marketing_opt_in' column)",
+              "label": "test accounts are off the contact list",
+              "passed": false
+            }
+          ],
+          "combined": false,
+          "digest": "a8cda1c00f14",
+          "error": null,
+          "notes": [],
+          "passed": false,
+          "questions": [
+            "KEY_AMBIGUOUS",
+            "OUTCOME_COLUMN",
+            "TRAINING_BUDGET"
+          ],
+          "rows": 80,
+          "seconds": 0.65
+        }
+      ],
+      "runs_passed": 0,
+      "scenario": "V06",
+      "stable": true,
+      "theme": "Test, staff and extreme accounts",
+      "untested": false
+    },
+    {
+      "description": "Consent is written Y, yes, Haan or a tick for agreed, N, nahi or No for refused, and left blank when unknown.",
+      "expected": "Y/yes/Haan/tick customers are contactable; N/No/nahi and blank (unknown) customers are not.",
+      "failed_categories": [
+        "contact_list"
+      ],
+      "id": "v13_consent_spellings",
+      "k": 2,
+      "passed": false,
+      "runs": [
+        {
+          "accepted": [
+            "\u201ccustomer_id\u201d names each row of customers.csv.",
+            "\u201cconverted\u201d is the outcome: Purchased within 30 days of ad exposure",
+            "\u201cmarketing_opt_in\u201d says who agreed to be contacted."
+          ],
+          "checks": [
+            {
+              "category": "row_loss",
+              "detail": "all 90 customers are in the result",
+              "label": "every customer of the main file is still there",
+              "passed": true
+            },
+            {
+              "category": "unapproved_change",
+              "detail": "the values are as the file had them",
+              "label": "columns no approved change touched keep the file's values",
+              "passed": true
+            },
+            {
+              "category": "contact_list",
+              "detail": "18 people who may be contacted are left off: C0004, C0006, C0014, C0016 and 14 more (by the 'marketing_opt_in' column)",
+              "label": "every spelling of yes is on the list; refused and unknown are off it",
+              "passed": false
+            }
+          ],
+          "combined": false,
+          "digest": "1cde67c5145f",
+          "error": null,
+          "notes": [],
+          "passed": false,
+          "questions": [
+            "KEY_AMBIGUOUS",
+            "OUTCOME_COLUMN",
+            "TRAINING_BUDGET"
+          ],
+          "rows": 90,
+          "seconds": 0.56
+        },
+        {
+          "accepted": [
+            "\u201ccustomer_id\u201d names each row of customers.csv.",
+            "\u201cconverted\u201d is the outcome: Purchased within 30 days of ad exposure",
+            "\u201cmarketing_opt_in\u201d says who agreed to be contacted."
+          ],
+          "checks": [
+            {
+              "category": "row_loss",
+              "detail": "all 90 customers are in the result",
+              "label": "every customer of the main file is still there",
+              "passed": true
+            },
+            {
+              "category": "unapproved_change",
+              "detail": "the values are as the file had them",
+              "label": "columns no approved change touched keep the file's values",
+              "passed": true
+            },
+            {
+              "category": "contact_list",
+              "detail": "18 people who may be contacted are left off: C0004, C0006, C0014, C0016 and 14 more (by the 'marketing_opt_in' column)",
+              "label": "every spelling of yes is on the list; refused and unknown are off it",
+              "passed": false
+            }
+          ],
+          "combined": false,
+          "digest": "1cde67c5145f",
+          "error": null,
+          "notes": [],
+          "passed": false,
+          "questions": [
+            "KEY_AMBIGUOUS",
+            "OUTCOME_COLUMN",
+            "TRAINING_BUDGET"
+          ],
+          "rows": 90,
+          "seconds": 0.78
+        }
+      ],
+      "runs_passed": 0,
+      "scenario": "V13",
+      "stable": true,
+      "theme": "Consent, sensitive data and who may be contacted",
+      "untested": false
+    },
+    {
+      "description": "The order total is written on every line item of the order, so adding the column up counts each order 2 to 4 times.",
+      "expected": "The order total is counted once per order (120,964), or the Doctor asks which level the total is on.",
+      "failed_categories": [
+        "double_counting"
+      ],
+      "id": "v19_order_total_repeated",
+      "k": 2,
+      "passed": false,
+      "runs": [
+        {
+          "accepted": [
+            "\u201cline_id\u201d names each row of order_lines.csv.",
+            "\u201cchurn\u201d in order_lines.csv is the outcome: The subscriber left within the month after the snapshot"
+          ],
+          "checks": [
+            {
+              "category": "row_loss",
+              "detail": "all 40 customers are in the result",
+              "label": "every customer of the main file is still there",
+              "passed": true
+            },
+            {
+              "category": "unapproved_change",
+              "detail": "the values are as the file had them",
+              "label": "columns no approved change touched keep the file's values",
+              "passed": true
+            },
+            {
+              "category": "double_counting",
+              "detail": "nothing like it was asked (it asked: TRAINING_BUDGET) / no column adds up to the true 120,964.00 (order_total = 377,802.00)",
+              "label": "order totals add up to the true spend, not a repeated one",
+              "passed": false
+            }
+          ],
+          "combined": false,
+          "digest": "d7470aed6a82",
+          "error": null,
+          "notes": [],
+          "passed": false,
+          "questions": [
+            "TRAINING_BUDGET"
+          ],
+          "rows": 124,
+          "seconds": 0.48
+        },
+        {
+          "accepted": [
+            "\u201cline_id\u201d names each row of order_lines.csv.",
+            "\u201cchurn\u201d in order_lines.csv is the outcome: The subscriber left within the month after the snapshot"
+          ],
+          "checks": [
+            {
+              "category": "row_loss",
+              "detail": "all 40 customers are in the result",
+              "label": "every customer of the main file is still there",
+              "passed": true
+            },
+            {
+              "category": "unapproved_change",
+              "detail": "the values are as the file had them",
+              "label": "columns no approved change touched keep the file's values",
+              "passed": true
+            },
+            {
+              "category": "double_counting",
+              "detail": "nothing like it was asked (it asked: TRAINING_BUDGET) / no column adds up to the true 120,964.00 (order_total = 377,802.00)",
+              "label": "order totals add up to the true spend, not a repeated one",
+              "passed": false
+            }
+          ],
+          "combined": false,
+          "digest": "d7470aed6a82",
+          "error": null,
+          "notes": [],
+          "passed": false,
+          "questions": [
+            "TRAINING_BUDGET"
+          ],
+          "rows": 124,
+          "seconds": 0.46
+        }
+      ],
+      "runs_passed": 0,
+      "scenario": "V19",
+      "stable": true,
+      "theme": "Double counting and wrong grain",
+      "untested": false
+    }
+  ],
+  "unstable": 0,
+  "untested": 3,
+  "version": 0
+}

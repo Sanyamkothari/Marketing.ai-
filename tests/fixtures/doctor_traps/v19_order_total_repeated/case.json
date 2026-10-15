@@ -1,0 +1,133 @@
+{
+ "id": "v19_order_total_repeated",
+ "scenario": "V19",
+ "theme": "Double counting and wrong grain",
+ "description": "The order total is written on every line item of the order, so adding the column up counts each order 2 to 4 times.",
+ "expected": "The order total is counted once per order (120,964), or the Doctor asks which level the total is on.",
+ "goal": "telco-churn",
+ "files": {
+  "order_lines": "order_lines.csv"
+ },
+ "primary": [
+  "order_lines"
+ ],
+ "key": "line_id",
+ "answers": {},
+ "rows_may_drop": [
+  "L2",
+  "L4",
+  "L5",
+  "L6",
+  "L8",
+  "L10",
+  "L12",
+  "L14",
+  "L15",
+  "L16",
+  "L18",
+  "L19",
+  "L20",
+  "L22",
+  "L24",
+  "L25",
+  "L27",
+  "L28",
+  "L29",
+  "L31",
+  "L32",
+  "L34",
+  "L35",
+  "L36",
+  "L38",
+  "L39",
+  "L41",
+  "L43",
+  "L45",
+  "L46",
+  "L48",
+  "L49",
+  "L51",
+  "L52",
+  "L54",
+  "L56",
+  "L57",
+  "L59",
+  "L60",
+  "L62",
+  "L63",
+  "L64",
+  "L66",
+  "L67",
+  "L69",
+  "L70",
+  "L71",
+  "L73",
+  "L75",
+  "L76",
+  "L78",
+  "L79",
+  "L80",
+  "L82",
+  "L83",
+  "L85",
+  "L86",
+  "L88",
+  "L89",
+  "L90",
+  "L92",
+  "L93",
+  "L94",
+  "L96",
+  "L98",
+  "L99",
+  "L100",
+  "L102",
+  "L103",
+  "L105",
+  "L106",
+  "L107",
+  "L109",
+  "L110",
+  "L111",
+  "L113",
+  "L115",
+  "L116",
+  "L117",
+  "L119",
+  "L120",
+  "L122",
+  "L123",
+  "L124"
+ ],
+ "checks": [
+  {
+   "category": "double_counting",
+   "kind": "any_of",
+   "label": "order totals add up to the true spend, not a repeated one",
+   "checks": [
+    {
+     "kind": "asked",
+     "text": [
+      "order total",
+      "(every|each) line item",
+      "once per order",
+      "repeated on (every|each) line"
+     ]
+    },
+    {
+     "kind": "column_total",
+     "columns": [
+      "order_total"
+     ],
+     "expected_total": 120964
+    }
+   ]
+  }
+ ],
+ "ideal": {
+  "asks": [
+   "The order total is repeated on every line item. Count it once per order?"
+  ],
+  "file": "ideal.csv"
+ }
+}

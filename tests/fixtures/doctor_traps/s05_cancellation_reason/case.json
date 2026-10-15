@@ -1,0 +1,47 @@
+{
+ "id": "s05_cancellation_reason",
+ "scenario": "S05",
+ "theme": "Time travel and leaks the checks miss",
+ "description": "cancellation_reason is filled in only for customers who left, so 'is it filled in' gives the answer away.",
+ "expected": "cancellation_reason is dropped from the features (or the Doctor asks), even though it is blank for most rows.",
+ "goal": "telco-churn",
+ "files": {
+  "customers": "customers.csv"
+ },
+ "primary": [
+  "customers"
+ ],
+ "key": "customer_id",
+ "answers": {},
+ "rows_may_drop": [],
+ "checks": [
+  {
+   "category": "leak",
+   "kind": "any_of",
+   "label": "cancellation_reason is out of the features",
+   "checks": [
+    {
+     "kind": "columns_absent",
+     "columns": [
+      "cancellation_reason"
+     ]
+    },
+    {
+     "kind": "asked",
+     "text": [
+      "cancellation_reason.*(left|churn|leak|only)",
+      "only for customers who left",
+      "filled in only",
+      "leak"
+     ]
+    }
+   ]
+  }
+ ],
+ "ideal": {
+  "touched": [
+   "cancellation_reason"
+  ],
+  "file": "ideal.csv"
+ }
+}

@@ -1,0 +1,51 @@
+{
+ "id": "f04_merged_cells_region",
+ "scenario": "F04",
+ "theme": "Spreadsheet and export shapes the reader misses",
+ "description": "Region is written once per block (a merged cell) and left blank on the 14 rows below it.",
+ "expected": "Region is filled down to every row of its block, or the Doctor asks whether a blank means 'same as above'.",
+ "goal": "telco-churn",
+ "files": {
+  "customers": "customers.csv"
+ },
+ "primary": [
+  "customers"
+ ],
+ "key": "customer_id",
+ "answers": {},
+ "rows_may_drop": [],
+ "checks": [
+  {
+   "category": "unapproved_change",
+   "kind": "any_of",
+   "label": "the 56 blank regions are filled or asked about",
+   "checks": [
+    {
+     "kind": "asked",
+     "text": [
+      "same as (the row )?above",
+      "merged cells?",
+      "fill(ed)? down",
+      "blank region"
+     ]
+    },
+    {
+     "kind": "no_value",
+     "column": "region",
+     "values": [
+      ""
+     ]
+    }
+   ]
+  }
+ ],
+ "ideal": {
+  "touched": [
+   "region"
+  ],
+  "asks": [
+   "Does a blank region mean 'same as the row above'?"
+  ],
+  "file": "ideal.csv"
+ }
+}

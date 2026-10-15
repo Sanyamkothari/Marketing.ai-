@@ -1,0 +1,29 @@
+{
+ "id": "k3_shared_phone",
+ "scenario": "K3",
+ "theme": "False, merged or missed joins",
+ "description": "Ten customers share the dummy phone 9999999999 and eight share a family phone; the calls file is keyed by phone.",
+ "expected": "50 customers stay 50 rows: calls must not be handed to every customer who shares a number.",
+ "goal": "telco-churn",
+ "files": {
+  "customers": "customers.csv",
+  "calls": "calls.csv"
+ },
+ "primary": [
+  "customers"
+ ],
+ "key": "customer_id",
+ "answers": {},
+ "rows_may_drop": [],
+ "checks": [
+  {
+   "category": "join",
+   "kind": "one_row_per_key",
+   "expected_rows": 50,
+   "label": "50 customers stay 50 rows when calls are keyed by a shared phone"
+  }
+ ],
+ "ideal": {
+  "file": "ideal.csv"
+ }
+}

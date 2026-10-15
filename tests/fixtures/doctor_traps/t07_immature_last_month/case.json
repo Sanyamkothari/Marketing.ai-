@@ -1,0 +1,92 @@
+{
+ "id": "t07_immature_last_month",
+ "scenario": "T07",
+ "theme": "Outcome: who is eligible, and when the clock runs",
+ "description": "The newest month's outcome window has not finished, so its churn rate is 3% against about 25% before.",
+ "expected": "The unfinished month (2026-09) is left out of the outcome, or the Doctor asks; the true rate is 22.8%.",
+ "goal": "telco-churn",
+ "files": {
+  "snapshots": "snapshots.csv"
+ },
+ "primary": [
+  "snapshots"
+ ],
+ "key": "record_id",
+ "answers": {},
+ "rows_may_drop": [
+  "R0181",
+  "R0182",
+  "R0183",
+  "R0184",
+  "R0185",
+  "R0186",
+  "R0187",
+  "R0188",
+  "R0189",
+  "R0190",
+  "R0191",
+  "R0192",
+  "R0193",
+  "R0194",
+  "R0195",
+  "R0196",
+  "R0197",
+  "R0198",
+  "R0199",
+  "R0200",
+  "R0201",
+  "R0202",
+  "R0203",
+  "R0204",
+  "R0205",
+  "R0206",
+  "R0207",
+  "R0208",
+  "R0209",
+  "R0210"
+ ],
+ "checks": [
+  {
+   "category": "outcome_population",
+   "kind": "any_of",
+   "label": "the unfinished last month is not counted as 'did not leave'",
+   "checks": [
+    {
+     "kind": "asked",
+     "text": [
+      "not finished",
+      "window (has not|is not|isn't) (finished|over|closed)",
+      "latest month",
+      "most recent month",
+      "mature",
+      "incomplete month",
+      "still running"
+     ]
+    },
+    {
+     "kind": "outcome_population",
+     "exclude_where": [
+      {
+       "column": "snapshot_month",
+       "values": [
+        "2026-09"
+       ]
+      }
+     ],
+     "positive": [
+      "1"
+     ],
+     "expected_rate": 0.22777777777777777,
+     "tolerance": 0.03
+    }
+   ]
+  }
+ ],
+ "ideal": {
+  "asks": [
+   "The newest month is not finished yet. Leave it out?"
+  ],
+  "outcome_column": "churn",
+  "file": "ideal.csv"
+ }
+}

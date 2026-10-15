@@ -1,0 +1,113 @@
+{
+ "id": "s01_never_active",
+ "scenario": "S01",
+ "theme": "Outcome: who is eligible, and when the clock runs",
+ "description": "Churn is 'no order in 90 days', so 30 customers who never ordered at all are labelled churners.",
+ "expected": "The 30 never-active customers are not counted in the outcome; the true churn rate is 25.7%, not 44%.",
+ "goal": "telco-churn",
+ "files": {
+  "customers": "customers.csv"
+ },
+ "primary": [
+  "customers"
+ ],
+ "key": "customer_id",
+ "answers": {},
+ "rows_may_drop": [
+  "C0001",
+  "C0002",
+  "C0003",
+  "C0004",
+  "C0005",
+  "C0006",
+  "C0007",
+  "C0008",
+  "C0009",
+  "C0010",
+  "C0011",
+  "C0012",
+  "C0013",
+  "C0014",
+  "C0015",
+  "C0016",
+  "C0017",
+  "C0018",
+  "C0019",
+  "C0020",
+  "C0021",
+  "C0022",
+  "C0023",
+  "C0024",
+  "C0025",
+  "C0026",
+  "C0027",
+  "C0028",
+  "C0029",
+  "C0030"
+ ],
+ "checks": [
+  {
+   "category": "outcome_population",
+   "kind": "any_of",
+   "label": "never-active customers are not in the outcome population",
+   "checks": [
+    {
+     "kind": "asked",
+     "text": [
+      "never (active|ordered|bought|used)",
+      "no orders",
+      "who counts",
+      "not active"
+     ]
+    },
+    {
+     "kind": "outcome_population",
+     "exclude_keys": [
+      "C0001",
+      "C0002",
+      "C0003",
+      "C0004",
+      "C0005",
+      "C0006",
+      "C0007",
+      "C0008",
+      "C0009",
+      "C0010",
+      "C0011",
+      "C0012",
+      "C0013",
+      "C0014",
+      "C0015",
+      "C0016",
+      "C0017",
+      "C0018",
+      "C0019",
+      "C0020",
+      "C0021",
+      "C0022",
+      "C0023",
+      "C0024",
+      "C0025",
+      "C0026",
+      "C0027",
+      "C0028",
+      "C0029",
+      "C0030"
+     ],
+     "positive": [
+      "1"
+     ],
+     "expected_rate": 0.2571428571428571,
+     "tolerance": 0.02
+    }
+   ]
+  }
+ ],
+ "ideal": {
+  "asks": [
+   "30 customers never ordered. Leave them out of churn?"
+  ],
+  "outcome_column": "churn",
+  "file": "ideal.csv"
+ }
+}

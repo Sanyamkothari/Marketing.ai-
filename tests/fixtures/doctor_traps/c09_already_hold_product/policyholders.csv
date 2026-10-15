@@ -1,0 +1,121 @@
+id,age,vehicle_age,has_vehicle_policy,Response
+P0001,46,old,Y,0
+P0002,25,new,N,1
+P0003,50,old,N,0
+P0004,61,old,N,1
+P0005,25,1-2 years,Y,0
+P0006,64,1-2 years,Y,0
+P0007,64,old,N,1
+P0008,32,old,N,0
+P0009,57,old,N,0
+P0010,66,old,Y,0
+P0011,45,old,Y,0
+P0012,35,old,N,1
+P0013,67,1-2 years,N,0
+P0014,21,new,N,0
+P0015,42,1-2 years,Y,0
+P0016,32,1-2 years,Y,0
+P0017,29,new,N,0
+P0018,53,1-2 years,N,0
+P0019,53,new,N,0
+P0020,28,1-2 years,Y,0
+P0021,66,1-2 years,Y,0
+P0022,27,old,N,0
+P0023,26,old,N,1
+P0024,64,old,N,0
+P0025,67,1-2 years,Y,0
+P0026,57,new,Y,0
+P0027,65,1-2 years,N,0
+P0028,50,new,N,0
+P0029,41,new,N,1
+P0030,60,new,Y,0
+P0031,55,new,Y,0
+P0032,58,new,N,1
+P0033,40,old,N,0
+P0034,41,1-2 years,N,1
+P0035,26,1-2 years,Y,0
+P0036,60,new,Y,0
+P0037,30,new,N,0
+P0038,47,1-2 years,N,1
+P0039,45,new,N,0
+P0040,33,1-2 years,Y,0
+P0041,29,old,Y,0
+P0042,54,1-2 years,N,0
+P0043,60,old,N,1
+P0044,61,1-2 years,N,0
+P0045,25,new,Y,0
+P0046,30,1-2 years,Y,0
+P0047,26,old,N,0
+P0048,48,old,N,1
+P0049,68,1-2 years,N,0
+P0050,29,old,Y,0
+P0051,42,1-2 years,Y,0
+P0052,33,1-2 years,N,1
+P0053,49,old,N,1
+P0054,35,1-2 years,N,0
+P0055,54,new,Y,0
+P0056,23,1-2 years,Y,0
+P0057,45,new,N,0
+P0058,65,1-2 years,N,0
+P0059,38,old,N,0
+P0060,49,old,Y,0
+P0061,32,new,Y,0
+P0062,35,new,N,0
+P0063,66,old,N,0
+P0064,62,old,N,0
+P0065,32,old,Y,0
+P0066,36,new,Y,0
+P0067,48,old,N,0
+P0068,70,new,N,0
+P0069,40,1-2 years,N,0
+P0070,36,1-2 years,Y,0
+P0071,22,old,Y,0
+P0072,32,new,N,0
+P0073,52,1-2 years,N,0
+P0074,37,old,N,0
+P0075,39,new,Y,0
+P0076,56,new,Y,0
+P0077,42,new,N,0
+P0078,49,old,N,0
+P0079,42,1-2 years,N,0
+P0080,51,new,Y,0
+P0081,48,1-2 years,Y,0
+P0082,30,new,N,1
+P0083,40,1-2 years,N,0
+P0084,67,1-2 years,N,1
+P0085,59,new,Y,0
+P0086,49,1-2 years,Y,0
+P0087,23,old,N,0
+P0088,21,old,N,0
+P0089,37,old,N,0
+P0090,66,old,Y,0
+P0091,68,1-2 years,Y,0
+P0092,23,old,N,0
+P0093,33,1-2 years,N,1
+P0094,57,1-2 years,N,0
+P0095,60,old,Y,0
+P0096,44,old,Y,0
+P0097,66,old,N,0
+P0098,39,1-2 years,N,0
+P0099,62,new,N,0
+P0100,70,1-2 years,Y,0
+P0101,69,old,Y,0
+P0102,68,old,N,0
+P0103,36,old,N,1
+P0104,32,old,N,0
+P0105,24,old,Y,0
+P0106,30,old,Y,0
+P0107,65,new,N,0
+P0108,31,new,N,0
+P0109,41,1-2 years,N,0
+P0110,63,new,Y,0
+P0111,57,new,Y,0
+P0112,38,old,N,0
+P0113,48,new,N,0
+P0114,34,old,N,0
+P0115,65,old,Y,0
+P0116,68,old,Y,0
+P0117,30,new,N,0
+P0118,28,1-2 years,N,0
+P0119,64,old,N,0
+P0120,65,old,Y,0

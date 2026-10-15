@@ -1,0 +1,30 @@
+{
+ "id": "f21_overlapping_exports",
+ "scenario": "F21",
+ "theme": "Double counting and wrong grain",
+ "description": "The February export repeats the last 25 calls of January, so stacking the two files counts them twice.",
+ "expected": "January and February are stacked into one table of 150 calls, each call once.",
+ "goal": "telco-churn",
+ "files": {
+  "calls_jan": "calls_jan.csv",
+  "calls_feb": "calls_feb.csv"
+ },
+ "primary": [
+  "calls_jan",
+  "calls_feb"
+ ],
+ "key": "call_id",
+ "answers": {},
+ "rows_may_drop": [],
+ "checks": [
+  {
+   "category": "double_counting",
+   "kind": "one_row_per_key",
+   "expected_rows": 150,
+   "label": "150 calls once each after stacking the two exports"
+  }
+ ],
+ "ideal": {
+  "file": "ideal.csv"
+ }
+}

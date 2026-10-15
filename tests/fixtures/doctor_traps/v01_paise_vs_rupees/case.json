@@ -1,0 +1,53 @@
+{
+ "id": "v01_paise_vs_rupees",
+ "scenario": "V01",
+ "theme": "Money and units whose meaning is not in the cells",
+ "description": "The second file's amounts are in paise (100 times larger) and the first file's are in rupees.",
+ "expected": "The two files are stacked in one unit and the total is 198,508 rupees, or the Doctor asks which unit each file uses.",
+ "goal": "telco-churn",
+ "files": {
+  "sales_a": "sales_a.csv",
+  "sales_b": "sales_b.csv"
+ },
+ "primary": [
+  "sales_a",
+  "sales_b"
+ ],
+ "key": "order_id",
+ "answers": {},
+ "rows_may_drop": [],
+ "checks": [
+  {
+   "category": "double_counting",
+   "kind": "any_of",
+   "label": "amounts from both files add up in one unit (rupees)",
+   "checks": [
+    {
+     "kind": "asked",
+     "text": [
+      "paise",
+      "rupee",
+      "different (units?|scales?)",
+      "100 times"
+     ]
+    },
+    {
+     "kind": "column_total",
+     "columns": [
+      "amount"
+     ],
+     "expected_total": 198508
+    }
+   ]
+  }
+ ],
+ "ideal": {
+  "touched": [
+   "amount"
+  ],
+  "asks": [
+   "The second file looks like paise. Convert to rupees?"
+  ],
+  "file": "ideal.csv"
+ }
+}

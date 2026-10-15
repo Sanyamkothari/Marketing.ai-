@@ -1,0 +1,32 @@
+{
+ "id": "f01_leading_zeros",
+ "scenario": "F01",
+ "theme": "False, merged or missed joins",
+ "description": "Customer IDs like 000101 and PIN codes like 012341 start with zeros that a number reader drops.",
+ "expected": "IDs and PIN codes come out exactly as written, with their leading zeros.",
+ "goal": "telco-churn",
+ "files": {
+  "customers": "customers.csv",
+  "orders": "orders.csv"
+ },
+ "primary": [
+  "customers"
+ ],
+ "key": "customer_id",
+ "answers": {},
+ "rows_may_drop": [],
+ "checks": [
+  {
+   "category": "unapproved_change",
+   "kind": "values_unchanged",
+   "columns": [
+    "customer_id",
+    "pin_code"
+   ],
+   "label": "IDs and PIN codes keep their leading zeros"
+  }
+ ],
+ "ideal": {
+  "file": "ideal.csv"
+ }
+}

@@ -1,0 +1,80 @@
+{
+ "id": "t15_partial_last_month",
+ "scenario": "T15",
+ "theme": "Outcome: who is eligible, and when the clock runs",
+ "description": "The newest month, 2026-10, covers only 12 days, so its usage looks like a collapse for every customer.",
+ "expected": "The partial month is left out, or the Doctor asks; it is never treated as a full month.",
+ "goal": "telco-churn",
+ "files": {
+  "monthly_usage": "monthly_usage.csv"
+ },
+ "primary": [
+  "monthly_usage"
+ ],
+ "key": "record_id",
+ "answers": {},
+ "rows_may_drop": [
+  "U0091",
+  "U0092",
+  "U0093",
+  "U0094",
+  "U0095",
+  "U0096",
+  "U0097",
+  "U0098",
+  "U0099",
+  "U0100",
+  "U0101",
+  "U0102",
+  "U0103",
+  "U0104",
+  "U0105",
+  "U0106",
+  "U0107",
+  "U0108",
+  "U0109",
+  "U0110",
+  "U0111",
+  "U0112",
+  "U0113",
+  "U0114",
+  "U0115",
+  "U0116",
+  "U0117",
+  "U0118",
+  "U0119",
+  "U0120"
+ ],
+ "checks": [
+  {
+   "category": "outcome_population",
+   "kind": "any_of",
+   "label": "the 12-day month is not used as a full month",
+   "checks": [
+    {
+     "kind": "asked",
+     "text": [
+      "partial",
+      "12 days",
+      "incomplete month",
+      "not finished",
+      "full month"
+     ]
+    },
+    {
+     "kind": "no_value",
+     "column": "month",
+     "values": [
+      "2026-10"
+     ]
+    }
+   ]
+  }
+ ],
+ "ideal": {
+  "asks": [
+   "The last month has only 12 days. Leave it out?"
+  ],
+  "file": "ideal.csv"
+ }
+}
