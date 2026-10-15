@@ -373,7 +373,8 @@ test("campaign results: a mature report shows lift with its interval and the p-v
   // "Not part of the test" is explained by a line that adds up; the zero row is hidden.
   assert.match(text(html), /Of 1,043 customers on this campaign's list: 900 contacted, 100 held back and measured as this campaign's comparison group, 40 not part of the test \(opted out or not selected\), 3 with no row in the outcomes file\./);
   assert.ok(!text(html).includes("Not yet known (outcome period still running)"));
-  assert.match(html, /<a class="btn primary" href="#\/pilot\/value\/r-score">See the value in rupees/);
+  // The value view (`#/pilot/value/<run>`) is frozen for v1 (plan stage 0): the measured page no longer links to it.
+  assert.ok(!html.includes("See the value in rupees") && !html.includes("#/pilot/"), "no link to the frozen value view");
   assert.match(html, /<summary>Measure again with a new outcomes file<\/summary>/);
   // The campaign page is under Results (the top bar marks Results): the breadcrumb starts there, not
   // at Home › Campaigns (docs/UI_AUDIT.md §8.4 item 12).
@@ -450,9 +451,9 @@ test("campaign results of a churn campaign speak of customers kept, in the value
 test("campaign verdicts: worked, did harm, and the direction of an outcome to prevent", () => {
   const worked = views.campaignVerdict(null, roiOf(true, { value: 280.86, low: 167.8, high: 373.7 }));
   assert.equal(worked.tone, "ok");
-  assert.equal(worked.title, "The campaign worked: about 281 extra customers responded because of it (likely 168 to 374).");
+  assert.equal(worked.title, "About 281 extra customers responded because of the campaign (likely 168 to 374).");
   const kept = views.campaignVerdict(null, roiOf(false, { value: -120, low: -250, high: -10 }));
-  assert.equal(kept.title, "The campaign worked: it kept about 120 customers (likely 10 to 250).");
+  assert.equal(kept.title, "The campaign kept about 120 customers (likely 10 to 250).");
   const harm = views.campaignVerdict(null, roiOf(false, { value: 40, low: 10, high: 70 }));
   assert.equal(harm.tone, "bad");
   assert.equal(harm.title, "The campaign did harm: about 40 more customers were lost than without it (likely −70 to −10).");

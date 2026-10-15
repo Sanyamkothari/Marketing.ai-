@@ -910,8 +910,15 @@ def test_a_mature_campaign_shows_the_lift_with_its_interval(journey: Journey) ->
     report = screen.extra["report"]
     assert report["status"] == "mature" and report["causal"] is True
     lift = report["absolute_lift"]
-    # A verdict first, in the value view's words: a win-back outcome is one to have more of.
-    assert "The campaign" in screen.text or "We cannot yet tell" in screen.text, screen.text
+    # A verdict first, in the value view's words: a win-back outcome is one to have more of. Stage 0 of the v1 plan
+    # reworded "The campaign worked: about N extra customers ..." to the measured difference alone.
+    verdicts = (
+        "extra customers responded because of the campaign",
+        "The campaign did harm",
+        "We cannot yet tell",
+    )
+    assert any(v in screen.text for v in verdicts), screen.text
+    assert "The campaign worked" not in screen.text
     inc = report["incremental_conversions"]
     tile = screen.tiles["Extra customers because of the campaign"]
     assert close(numbers(tile)[0], inc["value"], 0), screen.tiles

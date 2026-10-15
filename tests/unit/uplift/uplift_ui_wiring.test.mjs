@@ -185,13 +185,13 @@ test("an unknown uplift URL renders a calm not-found card with one way back, not
   assert.ok(!app.innerHTML.includes("‹&nbsp; Uplift modelling"), "no hard-coded back link");
 });
 
-test("a campaign that is not there says so and leads back to all campaigns", async () => {
+test("a campaign that is not there says so and leads back to all contact lists", async () => {
   const app = fakeApp();
   const parts = ["campaign", "win-back", "r_missing"];
   window.location.hash = `#/${parts.join("/")}`;
   await router.resolveRoute(parts).render(app, parts);
   assert.match(app.innerHTML, /This campaign could not be found/);
-  assert.match(app.innerHTML, /href="#\/monitoring\/runs">Back to all campaigns/);
+  assert.match(app.innerHTML, /href="#\/monitoring\/runs">Back to all contact lists/);
 });
 
 test("a server fault renders a plain sentence with Try again, the code under Details", async () => {

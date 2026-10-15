@@ -17,7 +17,7 @@ A sidebar on the left has five places. Below 900 pixels wide it folds behind a *
 | **Overview** | See what needs your attention, the value your campaigns have proven so far and your live campaigns. Start a campaign with **+ New campaign**. On your first visit a short **Getting started** list ticks itself off as you connect your data, start a campaign and add its results. |
 | **Campaigns** | See every campaign with its goal, status, how many customers it reached and its result. Open one to download its contact list or add its results. |
 | **Data** | See where your customer data comes from, whether each source is ready to use, and when it last brought in data. **Check my data** looks at your files before you use them. |
-| **Reports** | Read what your campaigns proved, in a form you can share or print. |
+| **Reports** | Check a campaign another tool ran, and read your models' reports. |
 | **Settings** | Your team and roles, the AI service, privacy and consent, costs, and the tools you use less often. |
 
 At the top right:
@@ -65,7 +65,8 @@ Each campaign has its own page with these tabs.
 
 - **Overview**: where the campaign stands and the next step, the number of customers contacted, the comparison
   group and the expected value, and what was sent. The one main button changes with the stage: **Download
-  contact list**, then **Add results**, then **Open the full report**. **Refresh the list** makes a new contact
+  contact list**, then **Add results**; once the campaign is measured there is none, and its result is on the
+  **Results** tab. **Refresh the list** makes a new contact
   list from the same customers with the current model, after you confirm; the campaign keeps the list it sent.
 - **Audience**: the contact list, with each customer's priority, offer, channel and top reason, a search by
   customer id and 25 rows at a time. **Why these customers?** counts the strongest reasons across the list.
@@ -83,7 +84,7 @@ the Overview tells you.
 2. Under **Add results**, choose a CSV or Parquet file with one row per customer: the customer id and what happened.
 3. Choose **Add results**. Once your file is in, choose **Read the result**.
 
-The tab then shows the result and **Open the full report** (the Value Proof Pack). An early look before the results
+The tab then shows the result. An early look before the results
 date is shown as an early look; the result becomes final on the date.
 
 Every result carries one of three labels, and the label tells you how far to trust the number.
@@ -99,15 +100,13 @@ and offers.
 
 ## Reports
 
-**Reports** has three tabs for everyone:
+**Reports** has one tab for everyone:
 
-- **Value proof**: one Value Proof Pack for each measured campaign, with what it changed, what it cost and
-  what it can claim.
-- **Programme summary**: the value of all your campaigns together, and how it is counted.
 - **Check a past campaign**: for a campaign another tool sent. Upload its customers and results in three short
-  steps to get the same kind of report.
+  steps to get a report on it.
 
-With technical details on, a fourth tab, **Model reports**, appears.
+With technical details on, a second tab, **Model reports**, appears. The Value Proof Packs and the Programme
+summary are not on Reports in this version: they are listed under **Settings**, in **Advanced tools**.
 
 ## Your data
 
