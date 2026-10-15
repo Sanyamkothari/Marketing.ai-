@@ -95,6 +95,8 @@ __all__ = [
     "fingerprint_columns",
     "infer_column_type",
     "ingest_detail",
+    "is_key_like_name",
+    "is_leading_zero_cell",
     "key_like_columns",
     "leading_zero_columns",
     "primary_key_candidates",
@@ -382,6 +384,16 @@ _KEY_LIKE_RE: Final[re.Pattern[str]] = re.compile(
 """A column named like a key: `id`, `customer_id`, `Customer ID`, `customerId`, `promo_code`, `phone`, `zip`.
 
 The name ends in the word, so `paid` and `valid` are not keys. `pin` is left to M241's India-ID detection."""
+
+
+def is_leading_zero_cell(cell: str) -> bool:
+    """True for a digit string that starts with a zero (`007`, `000101`): an ID, postcode or phone, never a number."""
+    return _LEADING_ZERO_RE.match(cell.strip()) is not None
+
+
+def is_key_like_name(name: str) -> bool:
+    """True when a column's name says it holds an ID, a code, an account, a phone or a postcode."""
+    return _KEY_LIKE_RE.search(name.strip()) is not None
 
 
 def key_like_columns(head_text: str, delimiter: str) -> tuple[str, ...]:

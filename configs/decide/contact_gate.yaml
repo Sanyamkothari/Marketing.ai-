@@ -16,7 +16,7 @@ minimum_age: 18
 age_columns: [age, customer_age, cust_age, age_years, age_in_years, applicant_age]
 birth_date_columns: [dob, birth_date, birthdate, date_of_birth]
 status_columns: [status, customer_status, account_status, lifecycle_status, legal_status]
-dnd_columns: [dnd, ndnc, do_not_disturb, do_not_call, do_not_contact, dnc]
+dnd_columns: [dnd, ndnc, do_not_disturb, do_not_call, do_not_contact, dnc, opt_out, opted_out, optout, unsubscribed]
 consent_columns: [consent, marketing_consent, opt_in, optin]
 
 # Statuses that always take a customer off the list (whole value, any case).

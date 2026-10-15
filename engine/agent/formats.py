@@ -45,6 +45,7 @@ import pandas as pd
 from engine.agent.egress import assert_clean
 from engine.agent.untrusted import quoted
 from engine.pii import REDACTION_MARKER_PATTERN
+from engine.stages import ingest
 
 __all__ = [
     "BOOLEAN_FALSE",
@@ -130,6 +131,8 @@ def currency_codes(text: str) -> frozenset[str]:
     return frozenset(CURRENCY_CODES[match.group(0).casefold()] for match in _CURRENCY_RE.finditer(text))
 
 
+_PIN_NAME_RE: Final[re.Pattern[str]] = re.compile(r"(?i)(?:^|[^a-z0-9])pin(?:code)?$")
+"""`pin`, `pincode`: ingest's ID-name rule leaves them out (`pin_code` and `PIN Code` it has)."""
 _PLAIN_NUMBER_RE: Final[re.Pattern[str]] = re.compile(r"^[+-]?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?$")
 _PLAIN_COMMA_RE: Final[re.Pattern[str]] = re.compile(r"^[+-]?(\d+(,\d*)?|,\d+)([eE][+-]?\d+)?$")
 _GROUPED_RE: Final[dict[str, re.Pattern[str]]] = {
@@ -487,6 +490,10 @@ def _number_issue(name: str, present: pd.Series[Any]) -> FormatIssue | None:
     if present.empty:
         return None
     cells = present.astype(str)
+    named_id = ingest.is_key_like_name(name) or _PIN_NAME_RE.search(name.strip()) is not None
+    if named_id or any(map(ingest.is_leading_zero_cell, cells)):
+        # An ID, PIN, phone or postcode is a label: reading it as a number drops its leading zeros.
+        return None
     numeric = _numeric_cells(present, np.arange(len(present)))
     decimal = _decimal_style(cells[~numeric])
     if decimal is None:

@@ -35,6 +35,7 @@ from engine.utils.time import utc_now
 if TYPE_CHECKING:
     from pathlib import Path
 
+    from engine.agent.advisor import Advice
     from engine.agent.contracts import Proposal, Question
     from engine.config import UseCaseConfig
     from engine.doctor.case import Case, CaseItem
@@ -115,17 +116,20 @@ def _clean(
         asks.append(_mixed_ask(finding, upload_id, len(frame)))
 
     # 2. The Indian-format checks, then 3. the advisor on the columns they did not take.
-    indian = [
+    locale = [
         proposal
         for proposal in (
             *propose_indian_numbers(frame, primary_key=key, target=outcome),
             *propose_indian_booleans(frame, primary_key=key, target=outcome),
         )
-        if proposal.step is not None and proposal.column not in mixed
+        if proposal.column not in mixed
     ]
+    indian = [proposal for proposal in locale if proposal.step is not None]
     never = _never_ticked(config, root)
     for found in indian:
         items.append(_indian_item(found, upload_id, never, now))
+    # A finding with no fix (an unknown spelling, only one side seen) is never dropped: the person sees it.
+    items.extend(_locale_flag(found, upload_id, now) for found in locale if found.step is None)
     if config is not None:
         # The Indian checks' columns: the advisor's number or yes/no fix (or question) there is the same problem.
         taken = {found.column for found in indian}
@@ -178,6 +182,29 @@ def _fix_item(
     )
 
 
+def _locale_flag(found: LocaleStepProposal, upload_id: str, now: datetime) -> CaseItem:
+    """A locale finding with no step: a flag on the approval page, so a column left unread is not left unsaid."""
+    from engine.doctor.detect_time_keys import CHECK_KIND
+    from engine.doctor.visit import _item
+
+    payload: dict[str, JsonValue] = {
+        "upload_id": upload_id,
+        "code": "LOCALE_UNREAD",
+        "level": "flag",
+        "column": found.column,
+        "numbers": {"non_empty": found.non_empty, "unknown": found.unknown_words},
+    }
+    return _item(
+        CHECK_KIND,
+        payload,
+        title=f"'{found.column}' is left as it is: {found.reason}.",
+        upload_id=upload_id,
+        confidence=AgentConfidence.CHECK,
+        evidence=(),
+        now=now,
+    )
+
+
 def _indian_item(
     found: LocaleStepProposal, upload_id: str, never: frozenset[RecipeStepKind], now: datetime
 ) -> CaseItem:
@@ -207,7 +234,7 @@ def _advised(
     never: frozenset[RecipeStepKind],
     now: datetime,
 ) -> tuple[list[CaseItem], list[Ask]]:
-    """Guided setup's format fixes for the file: its `find_format_issues` proposals and questions, nothing else."""
+    """Guided setup's format fixes for the file (its `find_format_issues` proposals and questions) and its leak finds."""
     from engine.agent.advisor import advise
     from engine.agent.tools import AgentContext
 
@@ -246,7 +273,42 @@ def _advised(
         for question in advice.questions
         if question.answer is None and cited & set(question.evidence_ids)
     ]
+    # A column an open question quotes (day or month first) is not read yet, so its leak look is not trusted yet.
+    skip = {key, outcome, *(a.column for a in asks)}
+    skip.update(name for name in map(str, loaded.frame.columns) if any(f"'{name}'" in a.text for a in asks))
+    items.extend(_leak_items(advice, loaded.upload_id, skip, never, now))
     return items, asks
+
+
+def _leak_items(
+    advice: Advice, upload_id: str, skip: set[str | None], never: frozenset[RecipeStepKind], now: datetime
+) -> list[CaseItem]:
+    """A column the advisor suspects holds the answer: a proposal to remove it. Never a sure fix: the person decides.
+
+    An ID-named column (`customer_id` repeated over monthly rows) is not proposed: removing it loses who the row is
+    about; the first look still lists it among the columns that may hold the answer.
+    """
+    from engine.doctor.first_look import advised_leaks
+    from engine.stages.ingest import is_key_like_name
+
+    return [
+        _fix_item(
+            RecipeStep(
+                order=1,
+                kind=RecipeStepKind.DROP_COLUMN,
+                column=column,
+                reason=f"'{column}' may already hold the answer, so a model would learn from it what it cannot know.",
+            ),
+            title=f"Remove '{column}': it looks like it gives away the outcome (it tells yes from no almost by itself).",
+            upload_id=upload_id,
+            sure=False,
+            never=never,
+            now=now,
+            counts={},
+        )
+        for column in advised_leaks(advice)
+        if column not in skip and not is_key_like_name(column)
+    ]
 
 
 def _option_effect(option_id: str, proposal: Proposal | None, upload_id: str) -> OptionEffect:

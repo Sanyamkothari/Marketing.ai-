@@ -1336,6 +1336,21 @@ def _key_of(case: Case, upload_id: str) -> str | None:
     return None
 
 
+_ID_NAMED: Final[re.Pattern[str]] = re.compile(
+    r"(^|[_\s-])id$|^id[_\s-]|_key$|(customer|cust|client|member|account)[_\s-]?(id|no|num|number|code|ref)$",
+    re.I,
+)
+"""A column named like the ID of a person or an account: `customer_id`, `Customer ID`, `account_no`, `member_code`."""
+
+
+def _id_named(unique: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Of the columns with a different value on every row, the ID-named ones when there are any: a spend or a
+    score that happens to be unique does not compete with `customer_id`. Two ID-named columns still compete.
+    """
+    named = [key for key in unique if _ID_NAMED.search(str(key["column"]).strip())]
+    return named or unique
+
+
 def _base_rules(run: _Run, case: Case, step: _Step) -> None:
     """What does not depend on a goal: which column names each row of each file (the key)."""
     now = run.deps.clock()
@@ -1353,6 +1368,7 @@ def _base_rules(run: _Run, case: Case, step: _Step) -> None:
             and float(key.get("rows_per_key") or 99.0) <= _UNIQUE
             and float(key.get("null_rate") or 0.0) < 0.05
         ]
+        unique = _id_named(unique)
         name = loaded.file_name or "this file"
         if len(unique) == 1:
             column = str(unique[0]["column"])

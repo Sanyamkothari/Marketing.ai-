@@ -272,9 +272,9 @@ def _required_columns(config: UseCaseConfig, *, mode: BriefMode) -> tuple[BriefC
             )
         )
     if config.actions.contacts_customers and suppression.suppress_opted_out:
-        consent = _names(
-            suppression.opt_out_column, config.governance.consent_column, hints.consent, hints.opt_out
-        )
+        # `hints.opt_out` names (opted_out, do_not_contact) say "do NOT contact": read as consent they would flip
+        # the list, so they are left to the contact gate, which reads them as do-not-disturb.
+        consent = _names(suppression.opt_out_column, config.governance.consent_column, hints.consent)
         configured = suppression.opt_out_column is not None or config.governance.consent_column is not None
         columns.append(
             BriefColumn(
