@@ -234,9 +234,10 @@ def _outcome_meanings(loaded: LoadedFile, outcome: str) -> tuple[int, int, pd.Se
 
 _NOT_AS_OF: Final[frozenset[str]] = frozenset(
     {"birth", "dob", "born", "signup", "joined", "registered", "registration", "created", "activation"}
-    | {"expiry", "expires", "expiration", "due", "renewal", "valid", "start", "starts"}
+    | {"first", "last", "expiry", "expires", "expiration", "due", "renewal", "valid"}
 )
-"""Dates that say when the customer began or when something is due, not how far the data reaches."""
+"""Dates that say when the customer began, last did something, or when something is due: one per customer, not
+how far the data reaches (leaving out the newest `last_order_date` rows would drop the most active customers)."""
 _PERIOD_WORDS: Final[frozenset[str]] = frozenset({"month", "period", "snapshot"})
 """A column named for the month or period a row belongs to (`2026-09`) says when it happened, too."""
 _DAYS_COVERED: Final[re.Pattern[str]] = re.compile(

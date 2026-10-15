@@ -699,20 +699,17 @@ _BLOCK_BLANK_SHARE: Final[float] = 0.2
 _BLOCK_RUN: Final[float] = 5.0
 """Blanks that come in runs this long, after a value, are a merged cell; a few scattered blanks are not."""
 _UNIT_GAP: Final[float] = 50.0
-_MAX_UNIT_COLUMNS: Final[int] = 2
 
 
 def summary_check(frame: pd.DataFrame) -> Check | None:
-    """A stop when the table is a summary, not customers: a 'Total' row, or counts per group with no ID that is
-    different on every row. Totals cannot be turned back into people."""
+    """A stop when the table is a summary, not customers: a 'Total' row, or counts per group with no ID column and
+    no text column that is different on every row. Totals cannot be turned back into people."""
     if len(frame) < 2:
         return None
     text = [c for c in frame.columns if not pd.api.types.is_numeric_dtype(frame[c])]
     total_rows = int(sum(_cells(frame[c]).str.match(_TOTAL_ROW).sum() for c in text))
-    one_each = any(
-        frame[c].notna().all() and frame[c].is_unique
-        for c in frame.columns
-        if c in text or ID_NAME.search(str(c))
+    one_each = any(ID_NAME.search(str(c)) for c in frame.columns) or any(
+        frame[c].notna().all() and frame[c].is_unique for c in text
     )
     counts = [str(c) for c in frame.columns if _COUNT_NAME.match(str(c).strip())]
     if not total_rows and (one_each or not counts or not text):
@@ -734,7 +731,9 @@ def summary_check(frame: pd.DataFrame) -> Check | None:
 
 def block_blank_checks(frame: pd.DataFrame) -> list[Check]:
     """A text column filled once and then blank for a run of rows (a merged cell in Excel): at least a fifth of the
-    rows blank, the first row filled and the blanks in runs of five or more on average. Rows must be in file order.
+    rows blank, the first row filled, the blanks in runs of five or more on average, and each filled value different
+    from the one before it (a sparse column such as a cancellation reason repeats its values). Dates are left out
+    (an end date is blank while still open). Rows must be in file order.
     """
     found: list[Check] = []
     for name in frame.columns:
@@ -745,6 +744,9 @@ def block_blank_checks(frame: pd.DataFrame) -> list[Check]:
         runs = int((blank & ~blank.shift(fill_value=False)).sum())
         share = int(blank.sum()) / len(series)
         if blank.iloc[0] or not runs or share < _BLOCK_BLANK_SHARE or blank.sum() / runs < _BLOCK_RUN:
+            continue
+        filled = series[~blank].astype(str).str.strip()
+        if (filled == filled.shift()).any() or read_dates(series) is not None:
             continue
         column = str(name)
         found.append(
@@ -762,7 +764,8 @@ def block_blank_checks(frame: pd.DataFrame) -> list[Check]:
 
 def unit_scale_checks(files: Sequence[tuple[str, pd.DataFrame]]) -> list[Check]:
     """For files about to be stacked: a number column in two files whose medians are 50 times apart or more (rupees
-    in one, paise in the other). IDs, and columns with zeros as their middle, are not compared."""
+    in one, paise in the other), largest gap first. IDs, and columns with zeros as their middle, are not compared.
+    """
     medians: dict[str, dict[str, float]] = {}
     for name, frame in files:
         for column in frame.columns:
@@ -789,4 +792,4 @@ def unit_scale_checks(files: Sequence[tuple[str, pd.DataFrame]]) -> list[Check]:
                     {"gap": round(gap, 1), "larger": big, "smaller": small},
                 )
             )
-    return sorted(found, key=lambda c: -float(c.numbers["gap"]))[:_MAX_UNIT_COLUMNS]
+    return sorted(found, key=lambda c: -float(c.numbers["gap"]))

@@ -283,9 +283,10 @@ def _unit_ask(stack: FileStack, loaded: dict[str, LoadedFile]) -> Ask | None:
     if not gaps:
         return None
     column, numbers = gaps[0].column or "", gaps[0].numbers
+    others = ", ".join(f"'{c.column}'" for c in gaps[1:])
     hint = (
-        f"about {numbers['gap']:,.0f} times larger in {numbers['larger']} than in {numbers['smaller']}, "
-        "as if the files use different units (for example rupees and paise)"
+        f"two units: they are about {numbers['gap']:,.0f} times larger in {numbers['larger']} than in "
+        f"{numbers['smaller']} (for example paise and rupees)" + (f"; {others} too" if others else "")
     )
     ask = build_ask(
         "Q6",

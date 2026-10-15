@@ -441,10 +441,13 @@ def test_the_date_that_says_how_far_the_data_reaches_is_not_a_birth_or_signup_da
             "date_of_birth": ["1990-01-01"] * 3,
             "signup_date": ["2024-01-01"] * 3,
             "last_order_date": ["2026-01-01"] * 3,
+            "month_start": ["2026-01-01"] * 3,
         }
     )
     case = SimpleNamespace(items=())
-    assert _date_column(case, frame, "u") == "last_order_date"  # type: ignore[arg-type]
+    # A last-order date is one per customer: its newest rows are the most active customers, not unfinished data.
+    assert _date_column(case, frame, "u") == "month_start"  # type: ignore[arg-type]
+    assert _date_column(case, frame.drop(columns="month_start"), "u") is None  # type: ignore[arg-type]
 
 
 # ---------------------------------------------------------------------------
@@ -462,15 +465,23 @@ def test_a_pivot_table_is_a_summary_and_a_customer_table_is_not() -> None:
     )
     assert summary_check(pivot) is not None and summary_check(pivot).level == "stop"  # type: ignore[union-attr]
     assert summary_check(counts_only) is not None
+    visits = pd.DataFrame({"customer_id": ["a", "a", "b"], "day": ["d1", "d2", "d1"], "count": [3, 1, 2]})
     assert summary_check(people) is None
+    assert summary_check(visits) is None  # counts per customer and day: an ID column, so rows, not a summary
 
 
 def test_a_value_written_once_per_block_is_found_but_scattered_blanks_are_not() -> None:
     block = pd.DataFrame({"region": (["North"] + [""] * 14 + ["East"] + [""] * 14), "n": range(30)})
     scattered = pd.DataFrame({"reason": ["moved", "", "", "price", "", "moved", "", "", "", "price"] * 3})
     leading = pd.DataFrame({"last_order": [""] * 12 + ["2026-01-01"] * 8})
+    # Sparse, but a reason repeats from one filled row to the next: not a merged cell; nor is an end date.
+    sparse = pd.DataFrame(
+        {"reason": [v for r in ["price", "price", "moved", "moved"] for v in [r] + [""] * 9]}
+    )
+    ended = pd.DataFrame({"end_date": [v for d in range(1, 4) for v in [f"2026-01-0{d}"] + [""] * 9]})
     assert [c.column for c in block_blank_checks(block)] == ["region"]
     assert block_blank_checks(scattered) == [] and block_blank_checks(leading) == []
+    assert block_blank_checks(sparse) == [] and block_blank_checks(ended) == []
 
 
 def test_the_same_amount_column_a_hundred_times_larger_in_one_file_is_a_unit_question() -> None:
