@@ -17,6 +17,7 @@ means adding its canary calls (the design §5.4).
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
@@ -36,6 +37,7 @@ from engine.doctor.case import CaseFile, CaseStore
 from engine.doctor.case_files import CaseFiles
 from engine.doctor.diagnose import LoadedFile
 from engine.doctor.memory import remember
+from engine.doctor.prescription import slot_name
 from engine.doctor.readiness import CheckReadinessArgs, ReadinessInputs
 from engine.doctor.registry import DataToolContext, data_registry
 from engine.stages import ingest
@@ -103,6 +105,10 @@ def _edits(columns: Sequence[str]) -> list[dict[str, Any]]:
 
 CHAT_ONLY = frozenset({"propose_setting", "propose_step"})
 """Made inside a chat turn: their canary is a whole chat session (`test_the_chat_suggestions_pass_the_canary`)."""
+
+_SQL_CUSTOMERS = slot_name(Path(f"customers of {NAME} {EMAIL}.csv").stem)
+_SQL_EVENTS = slot_name(Path(f"bills {PHONE}.csv").stem)
+"""The table names the SQL step gives the canary's two files (`engine.doctor.prescription.slot_name`)."""
 
 SPECS: dict[str, Calls | None] = {
     **{name: _look(name) for name in TOOLS},
@@ -216,6 +222,21 @@ SPECS: dict[str, Calls | None] = {
     "propose_time_settings": lambda columns: [{}, {"window_days": 30}]
     + [{"as_of_column": column} for column in columns]
     + [{"outcome_column": column} for column in columns],
+    # The SQL step reads tables named after their files, and the canary's file names carry planted secrets.
+    "propose_sql_step": lambda _columns: [
+        {
+            "description": "Every customer row",
+            "sql": f"SELECT * FROM t_{_SQL_CUSTOMERS}",
+            "output_name": "customers_copy",
+            "upload_ids": [CUSTOMERS],
+        },
+        {
+            "description": "Bills per customer",
+            "sql": f"SELECT customer_id, COUNT(*) AS bills FROM t_{_SQL_EVENTS} GROUP BY customer_id",
+            "output_name": "bill_counts",
+            "upload_ids": [EVENTS],
+        },
+    ],
 }
 
 _IDS: dict[str, Any] = {}
@@ -486,7 +507,9 @@ def test_every_registered_tool_passes_the_canary(mode: str, tmp_path: Path) -> N
             continue
         for given in calls([c for c in columns if c in ctx.frame.columns]):
             try:
-                result: dict[str, Any] = data_registry().call(tool.name, given, case).output
+                # A tool only the rules and the AI may call (the SQL step) runs as the rules do.
+                caller = case if case.caller in tool.callers else replace(case, caller="rules")
+                result: dict[str, Any] = data_registry().call(tool.name, given, caller).output
                 answered[tool.name] = answered.get(tool.name, 0) + 1
             except AgentToolError as exc:  # a refusal is fed back to the model; it must be clean too
                 result = {"error": exc.code, "message": exc.message}
