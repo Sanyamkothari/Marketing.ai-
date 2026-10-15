@@ -1723,6 +1723,9 @@ AGENT_VALIDATION_CODES: Final[frozenset[str]] = frozenset(
         # this code (`engine.agent.currency_steps`), and the person is asked which rows are in which currency.
         # Kept in this literal, not the PLAN-O block: see the note there.
         "CURRENCY_MIXED",
+        # A replay of an approved recipe that the guards stop (customers lost or doubled, an empty result): the rows
+        # are not prepared. `engine.agent.dataset_recipe.run_replay`.
+        "RECIPE_GUARD_STOP",
     }
 )
 """Plan G's three codes (DEC-1006, DEC-1013): a scoring file the model's saved preparation recipe cannot

@@ -96,6 +96,13 @@ export const confirmItem = (c, itemId, sentence) =>
 export const approveCase = (c, sentence) =>
   call(one(c.case_id, "/approval"), { method: "POST", body: { version: c.version, sentence, op_id: opId() } });
 
+/** Say yes to one stop of the plan, by its `key` (`view.ledger.findings[].key`), with a reason that is logged. */
+export const acknowledgeStop = (c, key, reason = "") =>
+  call(one(c.case_id, "/acknowledgements"), {
+    method: "POST",
+    body: { version: c.version, key, reason, op_id: opId() },
+  });
+
 /** Revoke a remembered answer: its question is asked again here, and next time. */
 export const revokeStanding = (c, answerId) =>
   call(one(c.case_id, `/standing-answers/${enc(answerId)}/revoke`), {

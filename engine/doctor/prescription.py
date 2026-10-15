@@ -520,6 +520,7 @@ def _recipe(
     config: UseCaseConfig | None,
     approved_by: str | None,
     created_at: datetime,
+    acknowledged_stops: tuple[str, ...] | None = None,
 ) -> DataRecipe | None:
     from engine.agent.advisor import ordered_steps
     from engine.agent.config import AgentConfig, AgentLevel
@@ -544,6 +545,7 @@ def _recipe(
         approved_by=approved_by,
         levels=levels,
         max_failure_pct=agent.max_conversion_failure_pct,
+        acknowledged_stops=acknowledged_stops,
         created_at=created_at,
     )
 
@@ -822,6 +824,7 @@ def prescription_from_case(
     its recipe, so a model trained on it carries one recipe and scores exactly as a Guided-setup model does.
     """
     from engine import __version__
+    from engine.doctor.plan_check import acknowledged_codes
     from engine.doctor.visit import active_section
 
     briefs = dict(briefs or {})
@@ -831,6 +834,7 @@ def prescription_from_case(
     created_at = max((a.approved_at for a in case.approvals), default=case.updated_at)
     approver = case.approvals[-1].approved_by if case.approvals else None
     build = _build(approved)
+    acked = acknowledged_codes(case.visit)
     keys = {
         item.upload_id: column
         for item in approved
@@ -876,6 +880,7 @@ def prescription_from_case(
             config=config,
             approved_by=approver,
             created_at=created_at,
+            acknowledged_stops=acked,
         )
         frame, contract = _learn(
             _frames(files, upload_ids), recipe, primary_key=key, target=target, guards=guards
@@ -903,6 +908,7 @@ def prescription_from_case(
         config=config,
         approved_by=approver,
         created_at=created_at,
+        acknowledged_stops=acked,
     )
     goals = tuple(
         _section(

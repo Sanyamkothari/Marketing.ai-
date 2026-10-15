@@ -49,7 +49,8 @@ from engine.campaign_run import (
 from engine.config import PrimaryKey, RunMode, StrictBase, resolve_config
 from engine.contracts import ModelStatus
 from engine.decide.treat_list import TreatListError, ensure_treat_list
-from engine.doctor.case import CASE_ID_PATTERN
+from engine.doctor.case import CASE_ID_PATTERN, DEFAULT_CLIENT_ID, CaseError, CaseStore
+from engine.doctor.visit import is_approved
 from engine.measurement.cycle import MEASURE_NOT_OFFERED, CycleError, open_campaign
 from engine.utils.logging import get_logger, log_failure
 from engine.utils.time import utc_now
@@ -317,6 +318,22 @@ def _actions(app: FastAPI) -> StepActions:
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
+def _require_approved_case(storage: StorageDep, body: CampaignRunRequest) -> None:
+    """Nothing is published to training from a Data Doctor case its person has not approved as it stands."""
+    if body.case_id is None or not body.case_id.startswith("case_"):  # guided_/doctor_ are read-only adapters
+        return
+    try:
+        case = CaseStore(storage).get(body.client_id or DEFAULT_CLIENT_ID, body.case_id)
+    except CaseError as exc:
+        raise http_error(404 if exc.code == "CASE_NOT_FOUND" else 409, exc.code, exc.message) from exc
+    if not is_approved(case):
+        raise http_error(
+            409,
+            "CASE_NOT_APPROVED",
+            "This Data Doctor check has not been approved as it stands. Approve it first, then start the campaign.",
+        )
+
+
 @router.post(
     "/campaign-runs",
     response_model=CampaignRunView,
@@ -332,6 +349,7 @@ def create_campaign_run(
     from api.access import require_roles_for_run_overrides
 
     own = use_case_config(body.use_case, root)  # 404 for a planned or unknown id
+    _require_approved_case(storage, body)
     resolved = resolve_config(body.use_case, overrides_for(body.overrides, body.speed), root=root)
     require_roles_for_run_overrides(request, use_case=own, resolved=resolved.config)
     if body.model_version_id is None:

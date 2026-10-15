@@ -278,6 +278,10 @@ codes:
     title: Some values could not be read
     meaning: A saved preparation step could not turn too many of this column's values into numbers, dates or yes / no, so the file looks different from the one the model learnt from.
     fix: Check how the column is written in this file; Guided setup shows the values it could not read.
+  RECIPE_GUARD_STOP:
+    title: The saved steps would harm this file
+    meaning: Run on this file, the preparation steps saved with the model lose or double customers, or leave nothing, so the rows were not prepared and nothing was scored.
+    fix: Open the Data Doctor check for this data to look at the counts, or change the plan.
   RECIPE_STEP_INVALID:
     title: A saved preparation step no longer applies
     meaning: One of the steps saved with the model cannot run on this file, or the file it was prepared from is gone. A model keeps the preparation rules it was approved with; only a model approved before those rules were saved with it is also stopped when this use case no longer allows one of its steps.

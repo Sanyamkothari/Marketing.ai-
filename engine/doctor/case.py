@@ -246,6 +246,8 @@ class TimelineKind(StrEnum):
     DOUBT = "doubt.raised"
     DATA_REQUESTED = "data.requested"
     CONFIRMED = "approval.confirmed"
+    STOP_ACKNOWLEDGED = "stop.acknowledged"
+    """A person said yes to one stop the guards found in the plan (its key and their reason are in the details)."""
     STANDING_UNFIT = "standing_answer.unfit"
     """A standing answer was not applied: the same button now makes another change, so the question is asked."""
 
