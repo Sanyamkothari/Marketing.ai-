@@ -224,3 +224,35 @@ def test_no_product_ai_error_has_its_own_code(no_product_ai: Path) -> None:
     with pytest.raises(EvalError) as raised:
         bench.choose_model("product", record=False)
     assert raised.value.code == "EVAL_NO_PRODUCT_AI"
+
+
+def test_no_product_ai_stops_before_the_other_parts_run(
+    no_product_ai: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def must_not_run(*a: Any, **k: Any) -> Any:
+        raise AssertionError("the tools part ran although no Product AI was connected")
+
+    monkeypatch.setattr(bench, "evaluate_tools", must_not_run)
+    argv = ["--model", "product", "--parts", "tools,ai", "--out", str(no_product_ai)]
+    assert bench.main(argv) == 2
+
+
+def test_turns_the_ai_did_not_answer_fail_the_gate() -> None:
+    checks = bench.safety_checks(_report(), _ai(unanswered=2, turns=10))
+    assert checks[0].status == "fail" and "did not answer 2 of 10" in checks[0].detail
+    assert bench.gate_exit_code(checks, failures=[], live=True) == 1
+    run = bench.AiRun(
+        case="messy",
+        by_tool={},
+        unacceptable={},
+        harms=[],
+        leaks=0,
+        pii_checked=True,
+        calls=1,
+        input_tokens=1,
+        output_tokens=1,
+        cost_usd=0.0,
+        unanswered=1,
+    )
+    result = bench.case_pass_k([run], k=1)
+    assert not result["passed"] and "did not answer 1 turn" in result["problems"][0]
