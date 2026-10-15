@@ -205,6 +205,7 @@ def _connect() -> Any:
             "autoinstall_known_extensions": False,
             "memory_limit": MEMORY_LIMIT,
             "threads": 1,
+            "python_enable_replacements": False,
         },
     )
 
@@ -271,6 +272,12 @@ def check_sql(sql: str, tables: Collection[str], *, as_of: date | None = None) -
     con = _connect()
     try:
         raw = con.execute("SELECT json_serialize_sql(?)", [sql]).fetchone()[0]
+        built_in = {
+            str(row[0]).lower()
+            for row in con.execute(
+                "SELECT view_name FROM duckdb_views() UNION SELECT table_name FROM duckdb_tables()"
+            ).fetchall()
+        }
     except duckdb.Error as exc:
         raise SqlStepError("SQL_NOT_VALID", f"The query is not valid SQL: {_first_line(exc)}") from exc
     finally:
@@ -286,6 +293,12 @@ def check_sql(sql: str, tables: Collection[str], *, as_of: date | None = None) -
         for node in _walk(tree)
         for entry in (node.get("cte_map") or {}).get("map", [])
     }
+    if ctes & built_in:
+        # A WITH name is seen only inside its own query; outside it the same name would read a built-in table.
+        raise SqlStepError(
+            "SQL_TABLE_NOT_ALLOWED",
+            f"A WITH table may not be called '{sorted(ctes & built_in)[0]}', the name of a built-in table.",
+        )
     for node in _walk(tree):
         _check_node(node, allowed | ctes)
 
@@ -300,6 +313,10 @@ def _check_node(node: dict[str, Any], allowed: set[str]) -> None:
         names = node.get("column_names") or []
         if len(names) == 1 and str(names[0]).lower() in _CLOCK_WORDS:
             raise _clock_refusal(str(names[0]))
+    elif kind == "SHOW_REF" and not node.get("query"):
+        raise SqlStepError(
+            "SQL_TABLE_NOT_ALLOWED", "A query may read only the tables of this case, not the list of tables."
+        )
     elif kind == "TABLE_FUNCTION":
         raise SqlStepError(
             "SQL_READS_OUTSIDE",
@@ -331,6 +348,12 @@ def _first_line(exc: Exception) -> str:
     """The first line of an error with any quoted value taken out: an error may quote a cell."""
     line = str(exc).strip().splitlines()[0] if str(exc).strip() else type(exc).__name__
     return re.sub(r"'[^']*'", "'…'", line)[:240]
+
+
+def _error_kind(exc: Exception) -> str:
+    """Only the kind of a run error ("Conversion Error"): its text may repeat a cell, quoted any way or not at all."""
+    kind = str(exc).split(":", 1)[0].strip()
+    return kind if re.fullmatch(r"[A-Za-z ]{1,40} Error", kind) else "an error"
 
 
 # ---------------------------------------------------------------------------
@@ -405,7 +428,7 @@ def run_sql(
                     "SQL_TIMEOUT", f"The query took longer than {timeout:g} seconds and was stopped."
                 ) from exc
             raise SqlStepError(
-                "SQL_FAILED", f"The query could not run on these tables: {_first_line(exc)}"
+                "SQL_FAILED", f"The query could not run on these tables ({_error_kind(exc)})."
             ) from exc
     finally:
         timer.cancel()

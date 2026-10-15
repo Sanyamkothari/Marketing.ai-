@@ -155,6 +155,9 @@ def test_the_step_is_replayed_on_next_months_files() -> None:
         ("SELECT current_date", "SQL_NOT_REPEATABLE"),
         ("SELECT * FROM t_customers LIMIT 2", "SQL_NOT_REPEATABLE"),
         ("SELECT * FROM t_customers TABLESAMPLE 10%", "SQL_NOT_REPEATABLE"),
+        ("SELECT * FROM (WITH pg_settings AS (SELECT 1) SELECT 1) s, pg_settings", "SQL_TABLE_NOT_ALLOWED"),
+        ("SELECT * FROM t_customers, (SHOW ALL TABLES)", "SQL_TABLE_NOT_ALLOWED"),
+        ("SELECT * FROM (DESCRIBE pg_settings)", "SQL_TABLE_NOT_ALLOWED"),
     ],
 )
 def test_forbidden_queries_are_refused_before_anything_runs(sql: str, code: str) -> None:
@@ -257,11 +260,20 @@ def test_a_missing_table_stops_a_replay_with_its_own_code() -> None:
     assert caught.value.code == "SQL_INPUT_MISSING"
 
 
-def test_a_failing_query_does_not_repeat_a_cell_value() -> None:
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT CAST(name AS INTEGER) FROM t_f",
+        "SELECT CAST(name AS DECIMAL(10, 2)) FROM t_f",
+        "SELECT strptime(name, '%Y') FROM t_f",
+        "SELECT error(name) FROM t_f",
+    ],
+)
+def test_a_failing_query_does_not_repeat_a_cell_value(sql: str) -> None:
     frame = pd.DataFrame({"name": ["Asha Rao"]})
     with pytest.raises(SqlStepError) as caught:
-        run_sql("SELECT CAST(name AS INTEGER) FROM t_f", {"f": frame}, output_name="x")
-    assert caught.value.code == "SQL_FAILED" and "Asha" not in caught.value.message
+        run_sql(sql, {"f": frame}, output_name="x")
+    assert caught.value.code == "SQL_FAILED" and "Asha" not in str(caught.value)
 
 
 def test_table_names_are_safe_aliases() -> None:
