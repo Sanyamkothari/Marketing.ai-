@@ -90,6 +90,11 @@ STEPS: Final[tuple[tuple[str, str], ...]] = (
     ("campaign", "Preparing your campaign"),
 )
 _WEIGHT: Final[dict[str, int]] = {"train": 70, "score": 20, "list": 5, "campaign": 5}
+_ENDED: Final[dict[RunState, str]] = {
+    RunState.DONE: "done",
+    RunState.FAILED: "failed",
+    RunState.CANCELLED: "cancelled",
+}
 _LATER_SECONDS: Final[dict[str, int]] = {"score": 60, "list": 20, "campaign": 10}
 """Rough seconds the steps after the running one still need, for the overall time left."""
 
@@ -453,17 +458,29 @@ class CampaignRunRunner:
         record = self._record(run_id)
         if record is None:
             return "gone"
-        if record.state is RunState.DONE:
-            return "done"
-        if record.state is RunState.FAILED:
-            return "failed"
-        if record.state is RunState.CANCELLED:
-            return "cancelled"
+        if record.state in _ENDED:
+            return _ENDED[record.state]
         if not isinstance(self._jobs, ReconcilingJobRunner):
             try:
-                self._jobs.status(run_id)
+                job = self._jobs.status(run_id)
             except KeyError:
                 return "gone"
+            if job.state in _ENDED:
+                # The job ended but its record did not say so (it broke before the pipeline could write it).
+                # Read again in case the record was written between the two reads, else record the failure.
+                again = self._record(run_id)
+                if again is not None and again.state in _ENDED:
+                    return _ENDED[again.state]
+                fail_run(
+                    self._storage,
+                    run_id,
+                    RunError(
+                        code="RUN_FAILED",
+                        message="The work stopped early. The server log has the details.",
+                        stage=None,
+                    ),
+                )
+                return "failed"
         return "running"
 
     # -- how far it is ------------------------------------------------------------------------------
