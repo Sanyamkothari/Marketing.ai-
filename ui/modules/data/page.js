@@ -3,7 +3,8 @@
 //   #/data          Sources: the saved connections and the uploaded files in one list, each with its health and when
 //                   it was last refreshed or uploaded. A connection keeps Test, Edit and Delete, and "+ Add a source"
 //                   opens the kinds of source to set up.
-//   #/data/check    Check my data: what Data Doctor does, with the way in to it.
+//   #/data/check    Check my data: what Data Doctor does, with the way in to it. With `data_doctor.unified` on, the
+//                   Data Doctor screen itself (`#/data/check/pick` opens it on "Pick from a connection").
 //
 // Nothing here is new engine behaviour. The list, the test and the delete are the Connections module's own calls
 // (`../connections/api.js`) and its own badge and test report (`statusBadge`, `stepsHtml`); the set-up and edit forms
@@ -335,6 +336,7 @@ function draw() {
     const main = app.querySelector("[data-dds-main]");
     const aside = app.querySelector("[data-dds-aside]");
     if (main) mountDataDoctor({ main, aside }, { place: "data", pick: view.pick });
+    view.pick = false; // `#/data/check/pick` opens the picker once, not on every redraw
   }
   revealSelectedTab(app);
   document.title = `${tab === "check" ? "Check my data" : "Data"} · Marketing AI`;

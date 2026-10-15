@@ -341,17 +341,7 @@ async function renderNow() {
     }
     if (parts[0] && (parts[0] !== "uc" || !parts[1])) {
       // An address nothing owns says so, rather than drawing Home as if it were the page asked for.
-      paint(
-        screen(
-          `<h1 class="h1">Page not found</h1>`,
-          noticeCard({
-            title: "That page does not exist",
-            text: "The address may be old or mistyped.",
-            action: { label: "Go to Home", href: "#/" },
-            attrs: "data-not-found",
-          }),
-        ),
-      );
+      paint(screen(`<h1 class="h1">Page not found</h1>`, notFound("page")));
       document.title = "Page not found · Marketing AI";
       return;
     }
