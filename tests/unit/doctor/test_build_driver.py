@@ -247,11 +247,11 @@ def test_the_strangers_rows_are_counted_and_kept_as_written() -> None:
     assert list(log[:2]) == ["C-001", "C-002"] and list(log[-2:]) == ["513", "514"]
 
 
-def test_an_id_two_customers_share_under_the_rule_is_never_given_to_one() -> None:
-    listed = pd.DataFrame({"customer_id": ["C-007", "C-0007", *[f"C-{n:03d}" for n in range(10, 60)]]})
-    log = pd.DataFrame(
-        {"customer_id": ["7", *[str(n) for n in range(10, 60)]], "event_date": ["2025-01-05"] * 51}
-    )
+def _plan_with_shared_ids(
+    listed_ids: list[str], log_ids: list[str]
+) -> tuple[BuildPlan, dict[str, pd.DataFrame]]:
+    listed = pd.DataFrame({"customer_id": listed_ids})
+    log = pd.DataFrame({"customer_id": log_ids, "event_date": ["2025-01-05"] * len(log_ids)})
     files = (
         file("c", "c.csv", listed, "entity", id_column="customer_id"),
         file("e", "e.csv", log, "bills", id_column="customer_id", date_columns=("event_date",)),
@@ -260,13 +260,36 @@ def test_an_id_two_customers_share_under_the_rule_is_never_given_to_one() -> Non
     plan = plan_build(
         Diagnosis(files=files, use_cases=(), links=(), stacks=()), frames_, use_case="rca", label_spec=None
     )
+    return plan, frames_
+
+
+def test_an_id_two_customers_share_under_the_rule_is_never_given_to_one() -> None:
+    """Two list IDs that differ only by capitals meet one written ID once the rule folds capitals: the row is
+    counted as ambiguous and left as written, never handed to one of the two."""
+    plan, frames_ = _plan_with_shared_ids(
+        ["c-007", "C-007", *[f"C-{n:03d}" for n in range(10, 60)]],
+        [" c-007", *[f" c-{n:03d}" for n in range(10, 60)]],
+    )
     (event,) = plan.events
     assert event.rows_dropped == 1
     port = RecordingBuilder()
     result = drive_builder(plan, frames_, port, approval_for(plan, user_id="u", at=NOW))
     (matched,) = result.match_receipts
     assert matched.rows_ambiguous == 1 and matched.rows_matched == 50
-    assert port.data["s2"]["customer_id"].iloc[0] == "7", "left as written: it names no one customer"
+    assert port.data["s2"]["customer_id"].iloc[0] == " c-007", "left as written: it names no one customer"
+
+
+def test_a_prefix_or_zeros_rule_that_would_make_two_customers_one_is_never_planned() -> None:
+    """G4: C-007 and C-0007 are two customers on the list; a rule stripping zeros or the prefix would make them
+    one, so no such rule is proposed and the log that needed it is left out, not joined on a merged ID."""
+    plan, _ = _plan_with_shared_ids(
+        ["C-007", "C-0007", *[f"C-{n:03d}" for n in range(10, 60)]],
+        ["7", *[str(n) for n in range(10, 60)]],
+    )
+    assert plan.events == ()
+    (left,) = plan.left_out
+    assert (left.upload_id, left.code) == ("e", "JOIN_KEYS_DO_NOT_MEET")
+    assert not plan.entity.key_rule.zeros and plan.entity.key_rule.prefix is None
 
 
 def test_next_months_files_replay_the_approved_rules_and_keep_the_lists_ids() -> None:
