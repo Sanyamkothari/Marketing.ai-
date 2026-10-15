@@ -1,0 +1,205 @@
+{
+  "summary": "Build one Plan J milestone in a worktree: builder, two adversarial Opus reviewers, repair (milestone given in args)",
+  "agentCount": 3,
+  "logs": [],
+  "result": {
+    "final": {
+      "worktree_path": "/home/user/Marketing.ai-/.claude/worktrees/wf_460f299d-daa-1",
+      "branch": "worktree-wf_460f299d-daa-1",
+      "commit": "117a65f17c2f3dc1140f1598ba445b7df420aa47",
+      "tests_run": "Targeted suites only, run from the worktree root with /home/user/Marketing.ai-/.venv/bin/python -m pytest -p no:randomly:\n(1) tests/unit/doctor, tests/unit/agentic/test_ledger.py, tests/unit/agentic/test_workspace_chains.py, tests/integration/test_api_data_protocol.py and tests/integration/test_api_case_visit.py: 981 passed, exit 0.\n(2) tests/integration/agent, tests/integration/test_api_doctor.py and tests/integration/test_api_intake.py (these cover the api/routes/agent.py changes): 136 passed, 3 skipped, exit 0.\n(3) tests/unit/agentic: 254 passed, exit 0.\nThe summary is saved, untracked, in .m246_tests.log in the worktree.\n\nChecked against the unchanged code (engine/ and api/ stashed). These new or extended tests FAIL there:\n- test_ledger_entries_verify_and_without_the_ledger_the_timeline_holds_the_same_record (now also checks signatures)\n- test_an_approval_another_writer_got_in_before_writes_no_ledger_entry\n- test_a_retried_approval_whose_write_failed_finds_its_ledger_entry_instead_of_adding_one\n- test_a_refused_answer_is_not_remembered_for_the_client\n- test_a_refused_revoke_leaves_the_standing_answer_standing\n- test_a_standing_answer_is_not_applied_when_the_same_button_now_makes_another_change\n- test_the_person_who_answered_an_items_question_cannot_confirm_it_after_someone_else_reticks_it\n- test_the_signed_kinds_are_approvals_test_plans_and_evidence_labels\n- the integration test test_guided_setup_keeps_nothing_of_an_approval_whose_ledger_entry_cannot_be_written\nThe three new Guided-setup separation tests in test_plan_g_approval.py cannot run on the old code at all: it has no record_proposers or read_proposers, so the module fails at import.\n\nLint on every changed file: ruff check clean, black --check clean, and mypy --strict clean on the 9 changed source modules.",
+      "lint_clean": true,
+      "files_changed": [
+        "api/main.py",
+        "api/routes/agent.py",
+        "api/routes/case_visit.py",
+        "api/routes/data_protocol.py",
+        "docs/AGENTS.md",
+        "docs/DATA_DOCTOR.md",
+        "engine/agent/edits.py",
+        "engine/agent/loop.py",
+        "engine/agentic/ledger.py",
+        "engine/doctor/case.py",
+        "engine/doctor/patterns.py",
+        "engine/doctor/plan_g_approval.py",
+        "engine/doctor/policy.py",
+        "engine/doctor/protocol.py",
+        "engine/doctor/standing.py",
+        "engine/doctor/visit.py",
+        "tests/integration/test_api_data_protocol.py",
+        "tests/unit/agentic/test_ledger.py",
+        "tests/unit/doctor/test_plan_g_approval.py",
+        "tests/unit/doctor/test_protocol.py",
+        "tests/unit/doctor/test_protocol_visit.py"
+      ],
+      "new_codes": [
+        {
+          "code": "APPROVAL_CONFIRMATION_MISSING",
+          "help_title": "A change needs its own yes first",
+          "help_text": "Some changes alter what your data means: consent, keeping personal data, the outcome, leaving rows out, converting currency, or loosening a safeguard. Each of these needs its own yes before the whole preparation can be approved. Open the change, read its sentence and confirm it. Someone with the right role does this (an Approver for consent, personal data and safeguards). Then approve again."
+        },
+        {
+          "code": "DOUBT_UNGROUNDED",
+          "help_title": "A doubt stated a number nothing measured",
+          "help_text": "When Data Doctor is unsure, it says why, what it would do and what changes if not. Every number it gives must come from something it measured. One of its checks gave a number no measurement holds, so the visit stopped instead of showing it. Nothing was changed. Try again; if this keeps happening, report it to whoever looks after your Data Doctor setup."
+        },
+        {
+          "code": "STANDING_ANSWER_NOT_FOUND",
+          "help_title": "No such remembered answer",
+          "help_text": "That remembered answer does not exist for this client. It may belong to another client, or the link may be out of date. Open Settings, then Remembered answers, to see this client's answers and revoke any of them there."
+        },
+        {
+          "code": "DATA_REQUESTED",
+          "help_title": "More data is needed",
+          "help_text": "Data Doctor needs data the file does not have, for example a column saying whether each customer converted, or the date of each customer's last order. The request says what to ask for, from whom, why your goal needs it, and which columns the file should have, one row per customer. Add it and upload again, or answer \"I cannot get it\", which keeps things as they are."
+        },
+        {
+          "code": "DIFFERENT_FILE_REQUESTED",
+          "help_title": "A different file is needed",
+          "help_text": "This file cannot be made usable for your goal by any change Data Doctor could make: for example, it holds one row per order when one row per customer is needed. The request says which file to ask for, from whom and why. Upload that file, or answer \"I cannot get it\", which keeps things as they are."
+        }
+      ],
+      "dec_text": "- **DEC-1816 — M246: the protocol. Data Doctor asks one clear question only when the answer matters. It remembers answers for each client and applies them visibly and revocably. It asks for an explicit yes, with the exact sentence, for what changes meaning, from the right role and, when the use case asks, from someone other than whoever proposed or answered it. It states doubts in three parts and grounds every number. It asks for more data or a different file. Every decision is recorded with its user id, in Plan K's signed ledger when `agentic.enabled` is on and on the case timeline always. All of this is behind `data_doctor.unified`.** *Context:* the plan's M246 (scope: questions with the impact rule and \"I don't know\", the APPROVE-class list, three-part doubts, exact-text consent, the user id on every decision, ledger kinds and body keys, receipts, separation of duties, the question budget, the AI change-share guard), plus M233's cross-branch request (2) to wire the approval-time facts into Guided setup's Approve. Built in a worktree on top of M233 and M235, reviewed for correctness and safety, and repaired. *Decision:*\n  - **(a) One module holds the rules.** `engine/doctor/protocol.py` is pure functions: `settle`, `question_budget`, `approve_class_of`/`role_for`, `confirmation_refusal`, `express_doubt`/`ungrounded_in`, `request_data`, `decision_body`/`approval_digest` and `ledger_port`. The visit and Guided setup's Approve call it. Nothing in it needs an AI service.\n  - **(b) The impact rule (the design §6.5).** Values that prove the answer: AUTO, ticked and shown. Options that differ on at most 0.5% of rows and move the yes share by at most 0.5 points: a stated assumption, ticked, kept as answered by the rules (`assumed: true`, `answered_by: agent:data-doctor`), and changed by answering the question. Anything else: one question with `why`, each option's measured effect, and \"I don't know\", which maps to the safe choice and never to a guess. An unmeasured option counts as material. A meaning-bearing question recommends nothing.\n  - **(c) The budget (§6.3).** At most `ceil(2.5 x ambiguities)` questions per file, capped at 10. Past the budget, a non-blocking question that has a safe choice becomes a stated assumption of that choice; a blocking question is still asked. Assumptions and standing answers are not counted in `counters.questions_per_file`. A question once asked is never asked again, in any mode.\n  - **(d) Detectors plug in.** `VisitDeps.detectors` (`DetectorPort`) runs in TREAT after the rules and returns asks, doubts, requests and evidence. M245 fills it in; empty means none.\n  - **(e) Standing answers (§7.2, O12).** An answer to a question in `STANDING_CODES` is written to `cases/<client>/standing_answers.json`: detector, column fingerprint, value signature, label, who and when. Never for \"I don't know\", never for an APPROVE-class effect, never across clients. TREAT applies it as a pre-ticked item (\"Using your answer from 12 Oct: ...\"), records a `StandingAnswerUse`, and counts the use once per case. Revoking it in a case, or under Settings (`POST /clients/{client}/standing-answers/{id}/revoke`), asks the question again.\n  - **(f) APPROVE-class items (§6.6).** Consent, suppression, `pii_keep` and thresholds need an Approver. The outcome definition, currency conversion, splitting a file, `remove_rows`, and joins, stacks or `keep_latest_per_id` that leave out more than 2% of rows need an Analyst. `acknowledgement` needs an Analyst, or an Approver with `approval_required`. Each needs its own yes (`visit.confirm`, `POST /cases/{id}/confirmations`) with the item's exact sentence. `visit.approve` is refused while one lacks its yes (`APPROVAL_CONFIRMATION_MISSING`), and a sentence sent with Approve must match word for word (`APPROVAL_SENTENCE_CHANGED`: nothing recorded, the new sentence returned). A yes covers the item as it reads now.\n  - **(g) Guided setup's Approve with the switch on** (M233's request (2), `engine/doctor/plan_g_approval.py`). The preview records what it showed (`agent/preview_shown.json`). Approve checks M238's reshape guards (`RESHAPE_GUARD_MISSING`), and for APPROVE-class steps the role and the exact sentence (`GET .../approval` shows it; `POST .../approve` sends it). It lists accepted AI steps that carry O10's `AI_STEP_CHANGES_MANY`.\n  - **(h) Doubts and requests (§6.7, §6.8).** A doubt is because / would do / if not. Every number in it must appear in a cited tool result; otherwise it is `DOUBT_UNGROUNDED` and the visit stops with nothing written. A request for more data or a different file becomes one non-blocking question (`DATA_REQUESTED`, `DIFFERENT_FILE_REQUESTED`): \"I will add it\" or \"I cannot get it\" (the safe choice). The goal rules ask for a missing outcome column this way.\n  - **(i) The record (O9).** `decision_body` carries ids and digests only: `case_id`, `upload_id`, `payload_digest` (the items' digests and the sentence read), the prescription or recipe hash, `decided_by`, `proposed_by`, `proposal_kind`, `approval_id`, `case_version`, and `identity_verified: false` with sign-in off. With `agentic.enabled` on it is a Plan K ledger entry, `data.decision` (an item's yes) or `data.prescription.approved` (the approval). The receipt is `ledger:<hash>`, else `timeline:<approval id>`. The timeline event holds the same body either way.\n  - **(j) New patterns only with permission ([REQ] 11).** An AI fix is never ticked for the person. An approved AI pattern is counted once per place (`doctor_patterns/approved.json`). Approved 3 or more times in 2 or more places, it becomes a candidate rule for the product team (`GET /data-doctor/candidate-rules`, Admin). Nothing changes a rule by itself.\n  - **(k) The record is made only for a write that goes ahead, and once** (review). The ledger entry is appended inside the case's write (`_Step.within`), under the case lock, after the version check and before the commit. A write that loses the version check writes no entry. `ledger_port` is idempotent: an entry with the same kind, actor and body, which names the approval and the case version, is returned rather than written again. So a retry after a failed commit or a crash finds its entry.\n  - **(l) Data Doctor's approvals are signed** (review). `data.prescription.approved` and `data.decision` join `SIGNED_KINDS`, and `test_ledger.py`'s list grows by the two kinds. `BODY_KEYS` gains `case_id`, `upload_id`, `prescription_hash`, `recipe_hash`, `approval_id` and `case_version`.\n  - **(m) Client-wide effects follow the case** (review). A standing answer is remembered only after the case holds the answer (`_Step.after`), so a refused or conflicting answer is never remembered. A case's revoke runs inside the case's write, so a refused revoke changes nothing for the client.\n  - **(n) A standing answer keeps its meaning** (review). It stores `meaning_of` the chosen option: the change's kind and payload without file, case or evidence ids. It is applied only when the option with the same label still has that meaning. Otherwise the question is asked again, its `why` says the earlier answer was not used, and a `standing_answer.unfit` event names the answer.\n  - **(o) Separation of duties covers everyone who proposed or answered** (review). In a case, `confirm` refuses (`POLICY_ROLE_SEPARATION`) both the person who answered the question an item came from and the person who ticked it last. In Guided setup with the switch on, the decide, answer and edit routes record who ticked, answered or added each suggestion (`agent/proposed_by.json`, user ids only, nothing with sign-in off). With `approval_required` on, an APPROVE-class step is refused to all of them. A step a person ticked that no record names is refused until it is ticked again. The local operator is exempt, as everywhere.\n  - **(p) Guided setup records first** (review). The approval's ledger entry is written right after the checks pass, before the client's memory of the recipe (Plan L) and before the session is saved as applied. A ledger failure refuses the approval and keeps nothing. Approved patterns are counted after the save, and a count never fails an approval.\n  - **(q) Codes.** New: `APPROVAL_CONFIRMATION_MISSING`, `DOUBT_UNGROUNDED`, `STANDING_ANSWER_NOT_FOUND`, `DATA_REQUESTED` and `DIFFERENT_FILE_REQUESTED`, for `PLAN_O_CODES` and help entries at integration. Reused: `APPROVAL_SENTENCE_CHANGED`, `TOOL_ROLE_REQUIRED`, `POLICY_ROLE_SEPARATION`, `RESHAPE_GUARD_MISSING`, `AI_STEP_CHANGES_TOO_MANY` (the plan's `AI_STEP_CHANGE_TOO_LARGE`, DEC-1808 (g)), `AI_STEP_CHANGES_MANY`, `LEDGER_CHAIN_BROKEN`.\n  - **(r) Additive.** With `data_doctor.unified` off, the agent gates return nothing new, no route is mounted, the new case fields are left out of dumps, and Guided setup's Approve, decide, answer and edit behave exactly as before.\n  *Consequences:* M247 shows the questions, the confirmations, the doubts and the remembered answers. M245's detectors plug into `VisitDeps.detectors`. The four ASK tools of the catalogue (#70, #74, #75, #76) are these functions but are not yet model-callable (M247/M248). Tests: `tests/unit/doctor/test_protocol.py`, `tests/unit/doctor/test_protocol_visit.py`, `tests/unit/doctor/test_plan_g_approval.py`, `tests/integration/test_api_data_protocol.py`, `tests/unit/agentic/test_ledger.py`.",
+      "readme_note": "M246 | The protocol: one clear question only when it matters (with \"I don't know\"); answers remembered per client and reused visibly and revocably, only while they still mean the same; an explicit yes with the exact sentence and the right role for what changes meaning, with separation of duties in cases and Guided setup; grounded three-part doubts; requests for more data or a different file; every decision signed into the ledger (agentic on) or kept on the timeline (DEC-1816) | done",
+      "cross_branch": [
+        "To M245 (detectors): implement DetectorPort `(case, files, brief) -> Detected(asks, doubts, requests, evidence)` and pass it in VisitDeps.detectors. Set Ask.value_signature, column and upload_id so standing answers can match. Give an option's OptionEffect payload only what the change means; file-specific ids (upload_id, evidence ids) are dropped before a standing answer's meaning is compared (standing.meaning_of). Ground every number in a doubt in an evidence result you return, or the visit stops with DOUBT_UNGROUNDED.",
+        "To M247 (the screen): show question.why. It now starts with 'Your answer from <date> (...) was not used ...' when a standing answer no longer fits; timeline kind standing_answer.unfit. Show POLICY_ROLE_SEPARATION from POST /uploads/{id}/agent-session/approve and /apply. Its reason may say who chose the step was not recorded: untick and tick it again. CaseApproval.receipt_id is ledger:<hash> or timeline:<approval id>.",
+        "To the integrator: add the five new codes to PLAN_O_CODES with their help entries (configs/pilot/help.yaml), add the README row, and insert DEC-1816. tests/unit/agentic/test_ledger.py::test_the_signed_kinds_are_approvals_test_plans_and_evidence_labels now lists data.prescription.approved and data.decision. Signing is required for them, so an agentic deployment needs its signer, which ledger_port already gets from signer_for_data_dir.",
+        "To M233 (policy owner): confirmation_refusal now accepts several proposers (str | Sequence[str] | None) and refuses when the approver is any of them. data.approve_class itself is unchanged.",
+        "Guided setup (Plan G routes): with data_doctor.unified on, the decisions, answers and edits routes write uploads/<id>/agent/proposed_by.json beside the session. It holds user ids only, like preview_shown.json, and must be deleted with the upload by retention and erasure. Erasure should treat it like the session's other agent/ files that hold user ids."
+      ],
+      "test_files": [
+        "tests/unit/doctor/test_protocol.py",
+        "tests/unit/doctor/test_protocol_visit.py",
+        "tests/unit/doctor/test_plan_g_approval.py",
+        "tests/integration/test_api_data_protocol.py",
+        "tests/unit/agentic/test_ledger.py"
+      ],
+      "notes": "I fixed all five majors from the review. There were no blockers, and I rejected none of the reviewer's points.\n\n1. **Ledger writes now happen inside the case write.** `_Step.within` runs inside `CaseStore.update`'s change callback, under the lock and after the version check, and merges in the approval together with its receipt. `approve` and `confirm` use it through `_recorded`. `ledger_port` is now idempotent: if an entry with the same kind, actor and body already exists, it returns that entry's hash. The body now carries `approval_id` and `case_version`, so a retry finds its first entry and two different decisions never share a body.\n   - `_remember_answer` now returns an after-write effect, so an answer is only remembered once the case write succeeds.\n   - `revoke_standing` checks that the answer exists while building the step, and revokes it inside the case write.\n2. **Guided setup records the approval first.** `_record_approval` (ledger only) now runs right after `check_plan` passes, before `_remember` and `_save`. Pattern counting moved to `_count_patterns`, after the save; it logs a failure instead of failing the approval.\n3. **Separation of duties.**\n   - In Guided setup, `record_proposers` and `read_proposers` keep `agent/proposed_by.json`. The decide, answer and edit routes write it when Data Doctor is on, comparing the session before and after; a suggestion counts as the person's if it is now accepted and was not accepted, or was different, before. `approval_of` takes `proposers`, and `approval_refusal` checks every proposer. Under `approval_required` it fails closed: a person-ticked step with no record is refused with POLICY_ROLE_SEPARATION.\n   - In cases, `confirm` uses `_proposers`: whoever answered the originating question (matched by the `<question_id>:` prefix) plus `decided_by`.\n   - `confirmation_refusal` now accepts a sequence of proposers. `proposed_by` in the body is comma-joined, because timeline details must be single values.\n4. **Standing answers check meaning.** `StandingAnswer.meaning` stores `meaning_of(kind, payload)`, with upload, evidence, item, question and case ids removed recursively. `_standing` applies an answer only when the meaning matches. Otherwise the question is asked again, its `why` explains the earlier answer was not used, and a new `TimelineKind.STANDING_UNFIT` event is written.\n5. **Signing.** Both new kinds are in `SIGNED_KINDS`. I updated `test_ledger.py`'s exact-set test to list them; this extends the test rather than loosening it, and it is the change the reviewer asked for. The case ledger test now asserts every entry carries a signature and that the chain verifies.\n\n**Test changes and decisions you should know about:**\n- Two existing M246 tests in `test_plan_g_approval.py` called `approval_refusal` with no proposer record and `approval_required=True`, which the new fail-closed rule refuses. They now pass explicit proposers (one is recorded with `record_proposers`) and keep their original assertions.\n- The integration test now passes `meaning=` to `remember()`.\n\n**Known limits (documented in AGENTS.md §18.9):**\n- If an approval's ledger entry is written and the case write then fails, and nobody ever retries, a signed entry for an unstored approval remains.\n- If the process dies between the case write and the after-effect, the answer is in the case but not remembered for the client.\n- The idempotency check reads all ledger entries of one kind. These are few, one per human approval.\n- A Guided setup re-approval with an identical body would reuse the first entry.\n\nDocs updated: AGENTS.md §16.6, §18.3, §18.4, §18.5, §18.7 and §18.9, and DATA_DOCTOR.md §20. As instructed, I did not edit DECISIONS.md, README.md, `help.yaml`, `codes.py`, `check_readme.py` or CROSS_BRANCH_REQUESTS.md. Nothing was pushed."
+    },
+    "reviews": [
+      {
+        "lens": "Correctness and safety: approvals (exact sentence, role, separation of duties), standing answers, candidate rules, crash and reload, switch-off parity, codes and help text, forbidden docs, lint",
+        "issues": [
+          {
+            "severity": "major",
+            "where": "engine/doctor/visit.py approve() and confirm() build() -> _record(); also _remember_answer() in answer() and store.revoke in revoke_standing()",
+            "problem": "The Plan K ledger entry is appended inside build(). build() runs before _write(), and _write() calls CaseStore.update, which checks the version again under the case lock and can raise CASE_VERSION_CONFLICT. If another writer gets in between, or the process dies after the append, the ledger holds a data.prescription.approved or data.decision receipt for an approval the case never stored. A retry with the same op_id then appends a second entry, because _seen() is still false. The docstring says 'no approval is stored without its record', but the reverse failure (a signed record with no approval) is the one that happens here. The same ordering means a refused answer() still writes a client-wide standing answer, which later cases apply as 'Using your answer from ...'.",
+            "fix": "Append to the ledger inside the `change` callback that CaseStore.update runs under the lock, after its version check. Make the entry idempotent: put the approval_id, the case version and the op_id in the body (or look up the case and approval id before appending), so a retry finds the entry instead of writing a new one. Move _remember_answer into an `after` effect (step.after), so it runs only once the case write has succeeded. Use the same ordering for StandingAnswerStore.revoke in revoke_standing."
+          },
+          {
+            "severity": "major",
+            "where": "api/routes/agent.py _apply_agent_session (Plan O block: _remember(...) is called before _record_approval(...))",
+            "problem": "With Data Doctor on and agentic.enabled on, the Plan L memory of the approved recipe (_remember) and the derived upload are written before the approval's ledger entry. If the ledger append fails (LEDGER_CHAIN_BROKEN, or another AgenticError), the route refuses and the session is not saved as APPLIED, but the client's memory already holds the recipe. That recipe is offered and replayed on the next file of the same shape, even though no approval was recorded. This contradicts the comment 'no approval without its record'.",
+            "fix": "Call _record_approval immediately after check_plan passes and before _remember (and before anything else that persists the approval's effects). Only remember the recipe once the record exists."
+          },
+          {
+            "severity": "major",
+            "where": "engine/doctor/plan_g_approval.py approval_refusal() (proposed_by=None); engine/doctor/visit.py confirm() (proposed_by from item.decided_by only)",
+            "problem": "Separation of duties (O17, [REQ] 9) has two gaps. (1) In Guided setup's Approve with the switch on, every APPROVE-class step (remove_rows, keep_latest_per_id) is checked with proposed_by=None. With governance.approval_required on, the person who accepted a remove_rows step can approve it themselves. The docs admit this ('enforced in cases only'), but this is the path M233's cross-branch request asked to wire. (2) In cases, confirm() treats only item.decided_by as the proposer. Suppose A answers the outcome question that creates a define_outcome item, then B unticks it, which sets decided_by=B. A can now confirm the item A answered. The design says an item 'proposed or answered by one person' must be approved by another.",
+            "fix": "(1) When data_doctor.unified is on, record the user id of whoever accepted or answered each proposal in a sidecar beside the session (as preview_shown.json does), via the decide and answer routes. Pass it as proposed_by in approval_refusal. Until that exists, refuse APPROVE-class steps under approval_required with POLICY_ROLE_SEPARATION rather than allow them. (2) In confirm(), also take the answered_by of the originating question (the item_id prefix before ':') and refuse when the approver is either that person or decided_by."
+          },
+          {
+            "severity": "major",
+            "where": "engine/doctor/visit.py _standing() (matches the option by o.label == answer.option_label); engine/doctor/standing.py find()",
+            "problem": "A standing answer is reapplied by matching the detector, the column fingerprint, the value signature and the option's button label. The current option's effect is applied without comparing it to what the person approved; StandingAnswer.effect_digest is stored but never checked. If a detector words options generically, or the option behind the same label now carries different parameters (another target spelling, another unit factor or format), the item is pre-ticked as 'Using your answer from ...' for a change the person never chose. That is a remembered answer applied to a different meaning. The raw payload digest cannot match across files because the payload includes upload_id, so the builder dropped the check entirely.",
+            "fix": "Store a meaning digest with the standing answer: payload_digest of the effect's kind and payload, with file-specific ids removed (upload_id, evidence ids). In _standing, apply the answer only when the current option's meaning digest equals the stored one. Otherwise leave the question open and say the earlier answer no longer fits. Add a test where the label is the same but the parameters differ, and check that the question is asked."
+          },
+          {
+            "severity": "major",
+            "where": "engine/agentic/ledger.py SIGNED_KINDS",
+            "problem": "data.prescription.approved and data.decision were added as ledger kinds but not to SIGNED_KINDS. Design §6.6 and decision O9 require APPROVE-class decisions in 'Plan K's signed ledger', and Plan K signs every other approval kind (proposal.approved, copy_template.approved). As written, Data Doctor approvals are hash-chained but unsigned, so the M246 acceptance 'ledger entries verify' holds only for chain integrity and not for the signature an approval needs.",
+            "fix": "Add DATA_PRESCRIPTION_APPROVED and DATA_DECISION to SIGNED_KINDS. ledger_port already passes signer_for_data_dir(...). Extend tests/unit/doctor/test_protocol_visit.py (or the API test) to append through a real DecisionLedger and assert that verify_entries passes and that the entry carries a signature."
+          }
+        ],
+        "verdict": "Needs fixes before integration: no blockers, five majors. The parts that pass: switch-off parity (the loop and edits gates return () when off, the routes mount only when data_doctor.unified is on, and the new case fields are left out of dumps while unset); never asking a question twice; \"I don't know\" mapping to the safe choice; the 10-question cap; doubts refused when a number is ungrounded; APPROVE-class items needing their own yes with role and exact sentence; repeated approvals only flagging a CANDIDATE rule, never promoting one; no forbidden shared docs edited; ruff, black and mypy clean on the changed files; and the saved log, which reads 507 passed. The fixes needed: (1) ledger and standing-answer writes happen before the version-checked case write, so an approval can be recorded but never stored, or recorded twice on retry; (2) Guided setup remembers the recipe before writing the approval's ledger entry; (3) separation of duties is not enforced in Guided setup, and in cases it can be bypassed once someone else re-ticks the item; (4) a standing answer is reapplied by button label without checking that the option still does the same thing; (5) the new approval kinds are written to the ledger unsigned. New codes (APPROVAL_CONFIRMATION_MISSING, DOUBT_UNGROUNDED, STANDING_ANSWER_NOT_FOUND, DATA_REQUESTED, DIFFERENT_FILE_REQUESTED) are not yet in PLAN_O_CODES or help.yaml. That follows the convention of leaving them to the integrator, so the integrator must take the help text from the builder's result."
+      }
+    ]
+  },
+  "workflowProgress": [
+    {
+      "type": "workflow_phase",
+      "index": 1,
+      "title": "Build"
+    },
+    {
+      "type": "workflow_phase",
+      "index": 2,
+      "title": "Review"
+    },
+    {
+      "type": "workflow_phase",
+      "index": 3,
+      "title": "Repair"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 1,
+      "label": "build:M246",
+      "phaseIndex": 1,
+      "phaseTitle": "Build",
+      "agentId": "a2c02c4be8bb8e0b4",
+      "isolation": "worktree",
+      "model": "claude-opus-5-5",
+      "state": "done",
+      "startedAt": 1791805774087,
+      "queuedAt": 1791805772946,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "lastToolSummary": "/home/user/Marketing.ai-/.claude/worktrees/wf_460f299d-daa-1",
+      "promptPreview": "You are a staff engineer building Marketing AI.\nFIRST, from your worktree root, run these merges in order:\n`git fetch origin integrate-plan-o-1 && git merge --no-ff origin/integrate-plan-o-1`\nthen `git merge --no-ff worktree-wf_8b7cd1c8-f8d-1`\nthen `git merge --no-ff worktree-wf_2a2db905-102-1`.\nThey bring in Plan O wave 1 integrated, M233 the policy (DEC-1803) and M235 the visit and goal brief (D…",
+      "promptFramed": true,
+      "lastProgressAt": 1791808378160,
+      "tokens": 508395,
+      "toolCalls": 200,
+      "durationMs": 2604072,
+      "resultPreview": "{\"worktree_path\":\"/home/user/Marketing.ai-/.claude/worktrees/wf_460f299d-daa-1\",\"branch\":\"worktree-wf_460f299d-daa-1\",\"commit\":\"08d4b93\",\"tests_run\":\"Targeted set only, -n 3, -m \\\"not slow\\\", saved to /home/user/Marketing.ai-/.claude/worktrees/wf_460f299d-daa-1/.m246_tests.log. Summary: \\\"507 passed, 2 warnings in 153.59s (0:02:33)\\\".\\n\\nFiles run: the 4 new M246 files (tests/unit/doctor/test_prot…"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 2,
+      "label": "review:M246:review",
+      "phaseIndex": 2,
+      "phaseTitle": "Review",
+      "agentId": "a2af7520bb02cdb8e",
+      "model": "claude-opus-5-5",
+      "state": "done",
+      "startedAt": 1791808381038,
+      "queuedAt": 1791808381006,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "lastToolSummary": "Correctness and safety: approvals (exact sentence, role, se…",
+      "promptPreview": "You are an adversarial reviewer. Lens: CORRECTNESS AND SAFETY in one pass: nothing that changes meaning is applied without the person's approval; approvals check the exact sentence, the role and separation of duties; remembered answers are visible and revocable, and are never applied silently to a different meaning; a new pattern needs permission, and repeated approvals only become a CANDIDATE rul…",
+      "promptFramed": true,
+      "lastProgressAt": 1791808652883,
+      "tokens": 172168,
+      "toolCalls": 36,
+      "durationMs": 271844,
+      "resultPreview": "{\"lens\":\"Correctness and safety: approvals (exact sentence, role, separation of duties), standing answers, candidate rules, crash and reload, switch-off parity, codes and help text, forbidden docs, lint\",\"issues\":[{\"severity\":\"major\",\"where\":\"engine/doctor/visit.py approve() and confirm() build() -> _record(); also _remember_answer() in answer() and store.revoke in revoke_standing()\",\"problem\":\"Th…"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 3,
+      "label": "repair:M246",
+      "phaseIndex": 3,
+      "phaseTitle": "Repair",
+      "agentId": "a000da27a4405af29",
+      "model": "claude-opus-5-5",
+      "state": "done",
+      "startedAt": 1791808654737,
+      "queuedAt": 1791808654732,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "lastToolSummary": "/home/user/Marketing.ai-/.claude/worktrees/wf_460f299d-daa-1",
+      "promptPreview": "You built M246. Work ONLY in your existing worktree /home/user/Marketing.ai-/.claude/worktrees/wf_460f299d-daa-1 (cd there; branch worktree-wf_460f299d-daa-1). \nRULES: You work in an isolated git worktree of /home/user/Marketing.ai-. Run commands from your worktree root: /home/user/Marketing.ai-/.venv/bin/python -m pytest <paths> (pytest pythonpath=[\".\"] imports your worktree's code), /home/user/M…",
+      "promptFramed": true,
+      "lastProgressAt": 1791811050197,
+      "tokens": 241369,
+      "toolCalls": 82,
+      "durationMs": 2395459,
+      "resultPreview": "{\"worktree_path\":\"/home/user/Marketing.ai-/.claude/worktrees/wf_460f299d-daa-1\",\"branch\":\"worktree-wf_460f299d-daa-1\",\"commit\":\"117a65f17c2f3dc1140f1598ba445b7df420aa47\",\"tests_run\":\"Targeted suites only, run from the worktree root with /home/user/Marketing.ai-/.venv/bin/python -m pytest -p no:randomly:\\n(1) tests/unit/doctor, tests/unit/agentic/test_ledger.py, tests/unit/agentic/test_workspace_ch…"
+    }
+  ],
+  "totalTokens": 921932,
+  "totalToolCalls": 318
+}

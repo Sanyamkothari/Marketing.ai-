@@ -1,3 +1,5 @@
+> Retired on 15 Oct 2026 — no new entries. See the v1 plan.
+
 # Marketing AI — Parallel Work Protocol
 
 **Applies to:** every agent working on a phase branch (Phase 2, Phase 3a, Phase 4a)

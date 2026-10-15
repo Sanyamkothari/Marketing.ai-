@@ -1,0 +1,188 @@
+{
+  "summary": "Build one Plan J milestone in a worktree: builder, two adversarial Opus reviewers, repair (milestone given in args)",
+  "agentCount": 3,
+  "logs": [],
+  "result": {
+    "final": {
+      "worktree_path": "/home/user/Marketing.ai-/.claude/worktrees/wf_1d475faa-3a4-1",
+      "branch": "worktree-wf_1d475faa-3a4-1",
+      "commit": "a85f82b",
+      "tests_run": "I ran the targeted suites for the review fixes from the worktree root with pytest -n 2: tests/unit/doctor (whole directory), tests/integration/agent, tests/integration/test_api_case_visit.py, test_api_data_protocol.py, test_prescription_runs.py, test_readiness_agrees_with_runs.py, test_runs_from_dataset.py, tests/integration/production/test_scheduling_flow.py, tests/unit/production/test_firing.py, test_firing_model_approval.py, test_scheduling_review.py, tests/unit/decide/test_scheduled_catalogue_stamp.py, test_scheduled_run_cost.py, tests/unit/agent/test_text_columns_replay.py and tests/unit/measurement/test_cycle_schedules.py. Result: 1381 passed, 3 skipped (jsdom not installed), 1 failed. The failure is tests/integration/agent/test_hardening.py::test_a_viewer_can_read_a_session_but_not_chat_decide_or_approve, which asserts 14 == 12 on the policy count. The reviewer confirmed it was already failing on the base and is fixed on origin/main in c1db36f, so it is not from M243.\n\nAfter the last lint fix I re-ran tests/integration/test_prescription_runs.py and tests/unit/doctor/test_prescription.py: 45 passed. tests/unit/test_docs_honesty.py and tests/unit/test_usability_kit_docs.py also pass.\n\nI ran the new tests against unchanged code by stashing api/ and engine/. All 8 new integration acceptance tests failed:\n- The outcome test failed with 409 TARGET_NOT_BINARY: training on the raw \"Active/Churned/Suspended\" words.\n- The dataset outcome test failed with AttributeError: there are no prepared training rows.\n- The spec-binding test failed because bound() has no `spec`.\n- The champion-fallback test failed because no prescription_ref.json was written.\n- The no-recipe contract tests for the dataset and the upload returned 202 where 409 was expected.\n- The switch-off test failed because the file was read.\n- The Guided money basis test (switch on) found no money_basis.json.\n\nThe new unit test test_next_months_file_added_to_a_prescribed_case_is_bound_to_its_prescription failed on the unchanged engine/doctor/visit.py (no binding).",
+      "lint_clean": true,
+      "files_changed": [
+        "api/routes/agent.py",
+        "api/routes/agent_recipes.py",
+        "api/routes/case_visit.py",
+        "api/routes/run_prescriptions.py",
+        "api/routes/runs.py",
+        "docs/AGENTS.md",
+        "docs/DATA_DOCTOR.md",
+        "engine/agent/dataset_recipe.py",
+        "engine/doctor/prescription.py",
+        "engine/doctor/prescription_contract.py",
+        "engine/doctor/prescription_replay.py",
+        "engine/doctor/prescription_runs.py",
+        "engine/doctor/visit.py",
+        "engine/scheduling/firing.py",
+        "tests/integration/test_prescription_runs.py",
+        "tests/unit/doctor/prescription_support.py",
+        "tests/unit/doctor/test_evals.py",
+        "tests/unit/doctor/test_prescription.py"
+      ],
+      "new_codes": [
+        {
+          "code": "PRESCRIPTION_DRIFT",
+          "help_title": "The data changed since the preparation was approved",
+          "help_text": "Data Doctor replays the preparation you approved on every new file, both for training and for scoring. This file no longer matches it. A column may be gone or now hold another kind of value, a column whose values were all known may hold a new one, a yes/no column may use a spelling with no meaning yet, or a step of the preparation can no longer run. Nothing was trained or scored, and nothing was learnt again. Answer the question shown, for example say what the new value means or which column it is called now. You can also fix the file and send it again. If the change is meant to stay, open the case and approve the preparation again."
+        },
+        {
+          "code": "PRESCRIPTION_NOT_FOUND",
+          "help_title": "The approved preparation could not be found",
+          "help_text": "This file, dataset or model points to an approved preparation (a prescription) that is missing, or that no longer matches its own fingerprint. Data Doctor does not guess a preparation, so nothing was run. Open the Data Doctor case the data came from and approve its preparation again. If you do not need the preparation, ask an Admin to remove the link."
+        }
+      ],
+      "dec_text": "DEC-1813 (Plan O M243): the prescription. It is one saved unit, replayed at training and at scoring. It is behind `data_doctor.unified`, which is off by default; with the switch off, every run is byte-identical.\n\n(a) One prescription per approval (`engine/doctor/prescription.py`, design §9.1). It holds: the file slots (each with an `IntakeDecision`, a `DataRecipe` and a column contract), M237's `BuildRecord`, the locale (M241's `LocaleProfile`, and M242's `MoneyBasis` with every unit and frozen rate), the post-build recipe, the final contract, and one `GoalSection` per goal. A goal section holds M239's outcome by `definition_hash` with its approval, the roles, the settings, the brief's split and time settings, and the acknowledgements. Provenance (who and when) sits apart.\n\n(b) One canonical hash (`engine.agentic.canonical.digest`) over the logic of the replayed parts only. It never covers reasons, wording, recipe ids, upload ids, file names, brief hashes, item digests, approvers or times. It is checked on load.\n\n(c) Storage is content-addressed at `cases/<client>/<case>/prescriptions/<hash>.json` and written once. A missing or mismatched prescription is `PRESCRIPTION_NOT_FOUND`.\n\n(d) A `DataRecipe` reads as a one-part prescription (`one_part`). Guided setup's M246 record carries that hash. Scoring with a single-file recipe is byte-identical, with the switch on or off.\n\n(e) The column contract (`prescription_contract.py`) holds the role, type group, empty share, distinct band, p1/p50/p99, and the common values with their shares. A common value is listed only when at least 10 rows share it, and never for the ID. It also holds `complete` (every common value listed, at most 50), `closed` (every value listed, at most 20) and the outcome rate. It holds counts only, never a cell value.\n\n(f) What stops and what warns. These stop: MISSING_COLUMN, MEANING_CHANGED (the type group changed) and NEW_VALUE (a new value in a closed column), all as `PRESCRIPTION_DRIFT`. These are warnings, each with a question: NEW_COLUMN, NEW_CATEGORY, VALUE_DRIFT (the median moved outside p1-p99, the empty share moved more than 10 points, or the outcome rate moved). At scoring the outcome column is not read.\n\n(g) Replay order (`prescription_replay.py`, design §9.3): intake, locale, currency, each slot's recipe, each slot's contract, the build (`replay_build`), the outcome (training only), the post-build recipe, then the final contract.\n\n(h) It stops and asks; it never re-learns. A stop raises `PRESCRIPTION_DRIFT`, `CURRENCY_FOREIGN`, `CURRENCY_MIXED`, or the step's own `RECIPE_*`, `BUILD_*` or `OUTCOME_*` code, with one question. A step that fails on a column the contract knows is `PRESCRIPTION_DRIFT` (`step_drift`). A breach that breaks nothing is a warning with a question.\n\n(i) A `map_boolean` step's frozen spellings are checked before it runs. A spelling it has no meaning for is NEW_VALUE, never a quiet failure under the limit.\n\n(j) `convert_currency` replays with its frozen rate, date and source. It is never proposed again and no rate is ever fetched.\n\n(k) Building it from a case: `prescription_from_case` reads the payloads of the approved items (`step` with `stage: post_build`, the role columns, `path`/`value`, `definition`/`approval`, `build_record`/`dataset_id`, `approved_rate`). It makes one slot per build source (stacked exports are one slot). With one file and no build, post-build steps join that file's recipe.\n\n(l) PRESCRIBE: `CasePrescriber` is `VisitDeps.prescribe`. It writes the prescription and binds the case's files. Its `digest` fills `prescription_hash` in M246's `decision_body`. A part that cannot be made is a `CaseError` with that part's code.\n\n(m) Training on a built dataset uses its prescription (closes [INV] §8). The `dataset_key_conflict` check runs first. The post-build recipe runs with the full future-data check (`leak_check=\"full\"`).\n\n(n) Training on an upload uses its file slot's prepared copy, after the raw-file checks (`check_files`: intake, locale, currency).\n\n(o) Scoring checks the file against the prescription of the model's training run. Every prepared run keeps `runs/<id>/prescription_ref.json`, M242's `save_money_basis`, and `prescription_check.json` when there are warnings. In `POST /runs` a stop is a 409 in the M1 envelope; in a scheduled firing it is a `FiringError` with the code.\n\n(p) Everything sits behind `data_doctor.unified`. With the switch off nothing is written, bound or read, and runs are byte-identical.\n\nReview fixes:\n\n(q) Training replays steps 6-8 in production, not only in the library (`replay_after_build`). That means the approved outcome from a column's values (1 for yes, 0 for no; left-out and empty rows removed and counted), then the post-build recipe, then the final contract, on every row.\n- A dataset's training rows are written by `store_prepared_rows` at `datasets/<id>/prepared_rx_<16 hex>.parquet`. That key is built from the prescription, the goal and the recipe identity, so it is never a scoring replay's file. The run carries the post-build recipe alone, so scoring never replays the outcome.\n- An upload's training copy is written by `write_derived_upload(..., then=...)`, or by `write_derived_rows` when the file has no slot recipe or is already prepared by it. It keeps the slot recipe for scoring.\n- The goal section a run follows is the use case's own section, else the active one (`training_goal`).\n- A build's source uploads get their slot recipe and contract only; steps 6-8 run on the built dataset.\n- PRESCRIBE learns the final contract after the active section's outcome and the post-build recipe, which is the order a training replay checks it in.\n\n(r) Datasets built after PRESCRIBE follow it. PRESCRIBE also binds the onboarding spec that built the approved dataset, at `cases/<client>/prescribed_specs/<spec_id>.json` (only an id that is plain text is bound). `dataset_for_training` falls back to the binding of `manifest.spec_id` when the dataset itself is unbound, so a scheduled retrain's fresh build trains under the prescription and its model gets `prescription_ref.json`.\n\n(s) Files that come after PRESCRIBE follow it.\n- `visit.add_files` binds new case files to the case's latest stored prescription (`bind_case_uploads`). Nothing is bound when no prescription is stored, for example under M235's default digest.\n- An unbound training upload follows the prescription that the use case's champion training run carries.\n\n(t) The contract is checked at training even when no recipe changes the rows. For a dataset, the built rows (capped) are checked against the final contract. For an upload, the rows as they are are checked against the slot contract. Both stop with `PRESCRIPTION_DRIFT`, as at scoring.\n\n(u) `prescribed_training` and `prescribed_scoring` check the switch before anything is read. The training upload and its intake report are read lazily, once, and only after the switch and a binding are confirmed.\n\n(v) With the switch on, a run prepared by a recipe under no stored prescription gets `money_basis.json` from `recipe_money_basis` (`POST /runs` and `start_dataset_run`). The recipe may be Guided setup's, or a model's recipe at scoring.\n- Units come from `parse_number`'s `unit`.\n- Each `convert_currency` step's frozen rate, date, source and rows make an `ApprovedRate`. Its approver is the recipe's (`approved_by`, else `guided_setup`), approved at `created_at`, and its sentence is the step's reason.\n- When a conversion cannot be read, no basis is written; a report never shows a rate nobody approved.\n\n(w) For an upload, every check (raw-file checks, slot contract, outcome, post-build recipe, final contract) runs before the prepared copy is written. A stopped training run leaves nothing behind.",
+      "readme_note": "M243 | The prescription | done (DEC-1813, behind data_doctor.unified). Each approval is saved as one prescription with one hash: the intake decisions, each file's recipe and column contract, the build, the locale and money basis, the post-build recipe, the outcome, and the goal sections. It is replayed at training (outcome and post-build recipe included, for files and built datasets, scheduled retrains of the same spec, and next month's file) and at scoring. It stops and asks on any drift (PRESCRIPTION_DRIFT, CURRENCY_FOREIGN, CURRENCY_MIXED). Prepared runs keep the reference and the money basis. With the switch off, runs are byte-identical.",
+      "cross_branch": [
+        "M243 -> integrator: please add PRESCRIPTION_DRIFT and PRESCRIPTION_NOT_FOUND (engine.doctor.prescription.PRESCRIPTION_CODES) to PLAN_O_CODES, with the help entries in new_codes.",
+        "M243 -> M245 (detectors): `replay_prescription` and `check_files` are ready for the FOLLOW_UP to INTAKE turn. Each stop or warning is a DriftFinding with one Question (`question_id` `drift-<detector>-<slot>-<column>`). Turn them into case questions and standing answers. A file added to the case (`visit.add_files`) is now bound to the case's latest stored prescription.",
+        "M243 -> M247 (screen): show `runs/<id>/prescription_check.json` (the warnings, each with its question) and a 409 PRESCRIPTION_DRIFT / CURRENCY_* from POST /runs (message = summary + question, path = column). Training now also stops on OUTCOME_VALUE_NOT_MAPPED and OUTCOME_CANNOT_MEASURE when next month's outcome column holds a value the approved map does not place. Show those with the outcome question.",
+        "M243 -> M235/M237/M239/M242 visit adapters: write the item payloads the prescription reads: `step` (+ `stage: post_build`), `build_record` + `dataset_id`, `definition` (+ `approval`), `approved_rate`. Today's visit writes roles, settings and steps.",
+        "M243 -> retention/erasure owners: a new binding key `cases/<client>/prescribed_specs/<spec_id>.json` (client, case and hash only; no value, no user id) lives beside the client's cases. Client erasure removes it with `cases/<client>/`. Case listing ignores it because it has no case.json.",
+        "M243 -> anyone calling these API helpers: `api.routes.agent_recipes.write_derived_upload` gained an optional `then=` (the rows to store after the recipe; the stored recipe is unchanged), and `write_derived_rows` is new. `engine.agent.dataset_recipe.store_prepared_rows` / `StoredRows` were split out of `prepare_dataset`, with behaviour unchanged. `api.routes.run_prescriptions.prescribed_training` now takes `manifest=` and `registry=`; `attach` takes `config=`, `recipe=` and `upload_id=`.",
+        "M243 -> M246 / Plan K: switch-on runs that a Guided-setup recipe prepared (no stored prescription) now get `money_basis.json` built from the recipe's frozen convert_currency rate. The rate's approver is `recipe.approved_by`, or `guided_setup` when sign-in was off."
+      ],
+      "test_files": [
+        "tests/integration/test_prescription_runs.py",
+        "tests/unit/doctor/test_prescription.py",
+        "tests/unit/doctor/prescription_support.py",
+        "tests/unit/doctor/test_evals.py"
+      ],
+      "notes": "I fixed all five reviewer issues (1 blocker, 4 major) in commit a85f82b, on top of 2e47fb8. The new tests are listed by name in tests_run and are under (q)-(w) in tests/integration/test_prescription_runs.py and tests/unit/doctor/test_prescription.py.\n\n1. Blocker (approved outcome never applied at training). `dataset_for_training` and the upload branch of `prescribed_training` now run `replay_after_build`, a wrapper over `replay_on_prepared` that returns the outcome receipt, the post-build receipt and the warnings. So training applies the column_values outcome, then the post-build recipe, then the final contract.\n   - A dataset's training rows go to `datasets/<id>/prepared_rx_<hash16>.parquet`, so a scoring replay never overwrites them.\n   - The run carries only the post-build recipe, as you asked.\n   - For an upload, the copy is the slot recipe, then the slot contract, then steps 6-8. It keeps the slot recipe for scoring.\n   - Side fix: PRESCRIBE used to learn the final contract on built rows before the outcome. A training replay checks after the outcome, so the outcome column would have read as a type change (MEANING_CHANGED). `prescription_from_case` now applies the active section's outcome before learning the contract.\n\n2. Major (later files and datasets unbound).\n   - PRESCRIBE also binds the onboarding spec. `dataset_for_training` falls back to `manifest.spec_id` when the dataset itself is unbound.\n   - `visit.add_files` binds new case files to the latest stored prescription.\n   - For an upload sent straight to POST /runs, an unbound file falls back to the prescription carried by the use case's champion run. I went beyond the minimum fix here because nothing else makes \"next month's file\" work for an upload outside a case. The cost: with the switch on, any training upload for a use case whose champion was trained under a prescription now gets that prescription's checks, and stops and asks on drift. Tell me if you would rather limit this to case-bound files.\n\n3. Major (contract skipped at training when no recipe ran). It is now checked in every case. For a dataset, the capped built rows are checked; the firing passes its `capped` rows. For an upload, the rows as they are are checked against the slot contract.\n\n4. Major (switch off read the upload again). The switch is checked first in `prescribed_training` and `prescribed_scoring`. The file and its intake report are read lazily, once, and only after the switch and a binding are confirmed. A test counts reads to prove nothing is read.\n\n5. Major (no money basis for Guided-prepared runs). `recipe_money_basis` and `attach_recipe_basis` cover POST /runs and `start_dataset_run`. Guided recipes carry no `ApprovedRate` record, so each convert_currency step's frozen params become the rate. The approver is the recipe's, or \"guided_setup\" when sign-in was off. If a rate cannot be read, no basis is written.\n\nChoices to check:\n- On a prescription with a build, a source upload trained on by itself gets only its slot recipe and slot contract; steps 6-8 run on the built dataset.\n- Upload contract checks now run on the in-memory prepared rows (the first profile_row_cap rows), before anything is written, so a stopped run leaves nothing behind. Before, they ran on a parquet re-read after writing; the result is the same.\n- `prepare_dataset` behaves exactly as before; I only split out `store_prepared_rows`.\n\nNo reviewer item was rejected. I did not edit docs/DECISIONS.md, README.md, scripts/check_readme.py, configs/pilot/help.yaml, engine/decide/codes.py or docs/CROSS_BRANCH_REQUESTS.md. I did update docs/DATA_DOCTOR.md §25 and docs/AGENTS.md §22. ruff, black --check and mypy --strict are clean on every changed source and test file. `.m243_tests.log` is an untracked leftover from the first pass and was not committed."
+    },
+    "reviews": [
+      {
+        "lens": "CORRECTNESS AND SAFETY (byte-identical replay, stop-and-ask on drift, frozen rates and outcomes, canonical hashes, no cell values or PII, switch-off identity, codes, docs, lint)",
+        "issues": [
+          {
+            "severity": "blocker",
+            "where": "api/routes/run_prescriptions.py prescribed_training; engine/doctor/prescription_runs.py dataset_for_training/upload_for_training; engine/scheduling/firing.py _prescribed (the approved outcome is never applied outside tests)",
+            "problem": "No production code calls the full replay. `replay_prescription` and `replay_on_prepared` have no caller in engine/ or api/; only the unit tests use them. POST /runs and the scheduled firings do a smaller replay that leaves out the outcome part. Training with an M239 `column_values` outcome (for example Active->no, Churned->yes, Suspended->left out) therefore trains on the raw outcome column. `apply_outcome_values` is never called, so excluded rows stay in and text values reach validate_for_training. Worse, numeric codes would be learnt as they are, with no error. This breaks the requirement that 'frozen outcome definitions are used exactly' and the design §9.3 row 'Training from a built dataset: ... outcome, post-build recipe'. `test_next_months_training_file_replays_every_part` passes only because it calls `replay_prescription` directly on in-memory frames.",
+            "fix": "Route training through `replay_on_prepared(prescription, frame, mode='train', config=config)`, in `prescribed_training` for both branches and in `dataset_for_training`, which the firing uses. That runs the outcome, then the post-build recipe, then the contract. Write the resulting frame as the training copy: the derived upload for a file, the prepared dataset parquet for a dataset. Keep `prescription.post_build` as the recipe attached to the run, so scoring still replays only that recipe. Add an integration test: POST /runs on a bound upload whose prescription has a column_values outcome must train on 0/1 values with the excluded rows removed."
+          },
+          {
+            "severity": "major",
+            "where": "engine/doctor/prescription.py CasePrescriber.__call__ (bind_upload/bind_dataset); engine/doctor/prescription_runs.py bound()/dataset_for_training",
+            "problem": "Only the exact upload ids and dataset id that existed at PRESCRIBE are bound to the prescription. Any later artefact goes unbound: a scheduled firing whose schedule has an onboarding_spec_id makes a fresh build with a new dataset_id (`_training_dataset` -> `_build`), and next month's upload gets a new upload id. For an unbound artefact `dataset_for_training` and `upload_for_training` return None, and the run trains as if there were no prescription: no post-build recipe, no contract check, no currency or locale check. The new model also has no `prescription_ref.json`, so `check_for_scoring` returns None for every later scoring of that model. The prescription is dropped silently on the first scheduled retrain, which contradicts 'including scheduled firings' and 'next month's training file replays every part'.",
+            "fix": "Also bind the dataset's onboarding spec at PRESCRIBE: write `prescription_ref.json` under the spec, or keyed by `DatasetManifest.spec_id`. In `dataset_for_training`, fall back to the ref bound to `manifest.spec_id` when the dataset id itself is not bound; the firing already has the manifest. For uploads, bind new uploads that are added to the case or are named by the case's file slot, or carry the ref on the run and let the next training on the same use case or case resolve it. Add an integration test: a scheduled TRAIN firing on a spec-built dataset (fresh id) must train with the post-build recipe and write `prescription_ref.json`."
+          },
+          {
+            "severity": "major",
+            "where": "engine/doctor/prescription_runs.py dataset_for_training (the `prescription.contract is not None and prepared is not None` guard); api/routes/run_prescriptions.py prescribed_training (the `recipe is None or already.prepares_like(recipe)` early return)",
+            "problem": "At training the frozen contract is checked only when a recipe actually prepared the rows. Three cases skip the contract check entirely, even though PRESCRIBE learns a contract for them (`_learn` returns a contract when the recipe is None): a bound dataset with no post-build recipe, a bound upload whose file slot has no recipe, and an upload whose recipe was already applied. So at training a column that is gone, a type change or a new value in a closed column does not stop. The same files are stopped at scoring, where `check_for_scoring` always checks the contract.",
+            "fix": "In `dataset_for_training`, when the recipe is None, read the built frame capped at profile_row_cap (the firing already has `capped`) and run `check_contract` on it. In `prescribed_training`, call `check_prepared(found.part, frame, mode='train')` in the no-recipe and already-prepared branches before returning. Raise PRESCRIPTION_DRIFT on any stop, as the other branches do."
+          },
+          {
+            "severity": "major",
+            "where": "api/routes/run_prescriptions.py prescribed_training, upload branch (`frame = ingest.read_upload(...)` before `upload_for_training`)",
+            "problem": "With `data_doctor.unified` off, every POST /runs TRAIN on an upload now reads the file one extra time, up to profile_row_cap rows (2M by default). The switch is only checked afterwards, inside `upload_for_training`. This contradicts the module's own contract ('each a no-op - returning None before anything is read - while data_doctor.unified is off') and doubles the read cost of the default path. An IngestError raised at that point also now comes from the new code path rather than the old one.",
+            "fix": "Check `prescription_runs._on(config)` and `bound(storage, upload_id=upload.upload_id)` before reading anything. Pass the frame lazily, as `prescribed_scoring` already does with `raw`: a callable that `upload_for_training` invokes only after the switch and the binding are confirmed."
+          },
+          {
+            "severity": "major",
+            "where": "api/routes/runs.py (attach_prescription only when `prescribed` is not None); engine/scheduling/firing.py",
+            "problem": "The cross-branch request asks for `save_money_basis` whenever a prepared run is created with the switch on. It is written only for runs bound to a stored prescription. With the switch on, a run prepared by a Guided-setup recipe gets no `money_basis.json`, even when that recipe holds `convert_currency` or `parse_number` with `unit`. M243 itself treats that recipe as a one-part prescription: `_one_part_hash` is recorded in the M246 approval body. Reports for those runs cannot print each money column's unit or its frozen rate.",
+            "fix": "When the switch is on and `prescribed` is None, but the run carries a recipe (`attach_recipe_to_run` / `attach_dataset_recipe`) with money steps, build the basis the same way `_money` does (`money_basis(recipe.steps, workspace_currency=workspace_currency_for(config.data_doctor, None).code, rates=..., units={})`) and call `save_money_basis(storage, run_id, basis)`. Do the same in `start_dataset_run`. Add a test that a switch-on Guided prepared run with `convert_currency` gets `money_basis.json`."
+          }
+        ],
+        "verdict": "Not ready to merge. The prescription itself is mostly right: the hash is canonical, the store checks the hash on load, the contract follows the small-group rule, and the replay library stops on a changed column, a new value, a new currency or another locale. But production training uses a smaller replay than the library and the tests. (1) The approved M239 outcome is never applied at training. (2) Files and datasets made after PRESCRIBE are never bound, so scheduled retrains and next month's file silently lose the prescription. (3) The contract is checked at training only when a recipe ran. Smaller problems: with the switch off, POST /runs reads every training upload one extra time, and save_money_basis is skipped for switch-on runs prepared by a Guided-setup recipe. Checked and fine: switch-off output is otherwise byte-identical (the visit routes and the Guided record are gated); round-tripping prepared data through parquet keeps the contract's type groups; black and ruff pass and mypy is clean on the new modules; no forbidden doc was edited. test_prescription.py passes when I re-run it (23 tests). The one failure in .m243_tests.log (test_hardening's policy count, 14 vs 12) is not from M243: it was already on the base and is fixed on origin/main in c1db36f."
+      }
+    ]
+  },
+  "workflowProgress": [
+    {
+      "type": "workflow_phase",
+      "index": 1,
+      "title": "Build"
+    },
+    {
+      "type": "workflow_phase",
+      "index": 2,
+      "title": "Review"
+    },
+    {
+      "type": "workflow_phase",
+      "index": 3,
+      "title": "Repair"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 1,
+      "label": "build:M243",
+      "phaseIndex": 1,
+      "phaseTitle": "Build",
+      "agentId": "a5e5409c09d17b02d",
+      "isolation": "worktree",
+      "model": "claude-opus-5-5",
+      "state": "done",
+      "startedAt": 1791812991326,
+      "queuedAt": 1791812990263,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "lastToolSummary": "/home/user/Marketing.ai-/.claude/worktrees/wf_1d475faa-3a4-1",
+      "promptPreview": "You are a staff engineer building Marketing AI.\nFIRST, from your worktree root, run:\n`git fetch origin integrate-plan-o-2 m239-outcomes && git merge --no-ff origin/integrate-plan-o-2 && git merge --no-ff origin/m239-outcomes`\nResolve conflicts by keeping every side. integrate-plan-o-2 is Plan O wave 1 plus M233, M235, M236, M242, M246, M248 and fixes, integrated. M239 is the outcome tools (DEC-180…",
+      "promptFramed": true,
+      "lastProgressAt": 1791818131769,
+      "tokens": 552206,
+      "toolCalls": 258,
+      "durationMs": 5140442,
+      "resultPreview": "{\"worktree_path\":\"/home/user/Marketing.ai-/.claude/worktrees/wf_1d475faa-3a4-1\",\"branch\":\"worktree-wf_1d475faa-3a4-1\",\"commit\":\"2e47fb8\",\"tests_run\":\"Final log /home/user/Marketing.ai-/.claude/worktrees/wf_1d475faa-3a4-1/.m243_tests.log (-n 3). It covers the new tests/unit/doctor/test_prescription.py and tests/integration/test_prescription_runs.py, plus every test directory and file of the modules…"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 2,
+      "label": "review:M243:review",
+      "phaseIndex": 2,
+      "phaseTitle": "Review",
+      "agentId": "a3a088c2dbc9f33d2",
+      "model": "claude-opus-5-5",
+      "state": "done",
+      "startedAt": 1791818135016,
+      "queuedAt": 1791818134992,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "lastToolSummary": "CORRECTNESS AND SAFETY (byte-identical replay, stop-and-ask…",
+      "promptPreview": "You are an adversarial reviewer. Lens: CORRECTNESS AND SAFETY in one pass: the same prescription gives byte-identical prepared data at training and at scoring; a replay never silently re-learns or re-maps (a drift in columns, values, currency or locale stops and asks); frozen rates and outcome definitions are used exactly; hashes are stable and canonical; nothing in it holds a cell value or PII; w…",
+      "promptFramed": true,
+      "lastProgressAt": 1791818486896,
+      "tokens": 178533,
+      "toolCalls": 49,
+      "durationMs": 351880,
+      "resultPreview": "{\"lens\":\"CORRECTNESS AND SAFETY (byte-identical replay, stop-and-ask on drift, frozen rates and outcomes, canonical hashes, no cell values or PII, switch-off identity, codes, docs, lint)\",\"issues\":[{\"severity\":\"blocker\",\"where\":\"api/routes/run_prescriptions.py prescribed_training; engine/doctor/prescription_runs.py dataset_for_training/upload_for_training; engine/scheduling/firing.py _prescribed (…"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 3,
+      "label": "repair:M243",
+      "phaseIndex": 3,
+      "phaseTitle": "Repair",
+      "agentId": "a03f6511ceed5f0ba",
+      "model": "claude-opus-5-5",
+      "state": "done",
+      "startedAt": 1791818488779,
+      "queuedAt": 1791818488772,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "lastToolSummary": "/home/user/Marketing.ai-/.claude/worktrees/wf_1d475faa-3a4-1",
+      "promptPreview": "You built M243. Work ONLY in your existing worktree /home/user/Marketing.ai-/.claude/worktrees/wf_1d475faa-3a4-1 (cd there; branch worktree-wf_1d475faa-3a4-1). \nRULES: You work in an isolated git worktree of /home/user/Marketing.ai-. Run commands from your worktree root: /home/user/Marketing.ai-/.venv/bin/python -m pytest <paths> (pytest pythonpath=[\".\"] imports your worktree's code), /home/user/M…",
+      "promptFramed": true,
+      "lastProgressAt": 1791821217812,
+      "tokens": 289640,
+      "toolCalls": 91,
+      "durationMs": 2729032,
+      "resultPreview": "{\"worktree_path\":\"/home/user/Marketing.ai-/.claude/worktrees/wf_1d475faa-3a4-1\",\"branch\":\"worktree-wf_1d475faa-3a4-1\",\"commit\":\"a85f82b\",\"tests_run\":\"I ran the targeted suites for the review fixes from the worktree root with pytest -n 2: tests/unit/doctor (whole directory), tests/integration/agent, tests/integration/test_api_case_visit.py, test_api_data_protocol.py, test_prescription_runs.py, test…"
+    }
+  ],
+  "totalTokens": 1020379,
+  "totalToolCalls": 398
+}

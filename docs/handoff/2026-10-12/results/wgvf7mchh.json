@@ -1,0 +1,180 @@
+{
+  "summary": "Build one Plan J milestone in a worktree: builder, two adversarial Opus reviewers, repair (milestone given in args)",
+  "agentCount": 3,
+  "logs": [],
+  "result": {
+    "final": {
+      "worktree_path": "/home/user/Marketing.ai-/.claude/worktrees/wf_72216512-af1-1",
+      "branch": "worktree-wf_72216512-af1-1",
+      "commit": "bcbd3cdabcfb1304904e5e0fc0338cea866a35d3",
+      "tests_run": "Targeted suites only, run from the worktree with -n 2: tests/unit/doctor, tests/unit/connections, tests/integration/test_api_connection.py, tests/integration/test_api_connection_security.py, tests/integration/connections, tests/unit/agent, tests/integration/agent, tests/integration/test_api_doctor.py, and tests/integration/ai_service/test_ai_service_api.py::test_only_four_network_calls_run_at_once_the_rest_are_429. Result: 2693 passed, 5 skipped (no live PostgreSQL, jsdom not installed), 0 failed. The log is in /home/user/Marketing.ai-/.claude/worktrees/wf_72216512-af1-1/.m236_tests.log (not committed). I also ran the five new tests against unchanged code: I stashed engine/doctor/tools_wrappers.py and api/routes/connections.py, and all five failed: test_the_connection_tools_share_the_routes_cap_on_calls_at_once[preview_connection], test_the_connection_tools_share_the_routes_cap_on_calls_at_once[propose_import], test_the_connection_routes_and_the_tools_hold_one_gate, test_second_opinion_is_off_with_agentic_enabled_off_as_the_assist_route, test_second_opinion_refuses_an_applied_session_as_the_assist_route. All five pass with the fix. The full suite was not run, as the rules require.",
+      "lint_clean": true,
+      "files_changed": [
+        "api/routes/connections.py",
+        "configs/agentic/policy.yaml",
+        "configs/prompts/data_explain.v1.md",
+        "docs/AGENTS.md",
+        "docs/DATA_DOCTOR.md",
+        "docs/plans/DATA_DOCTOR_AGENT_DESIGN.md",
+        "engine/connections/limits.py",
+        "engine/doctor/catalogue.py",
+        "engine/doctor/explain.py",
+        "engine/doctor/policy.py",
+        "engine/doctor/registry.py",
+        "engine/doctor/tools.py",
+        "engine/doctor/tools_files.py",
+        "engine/doctor/tools_formats.py",
+        "engine/doctor/tools_wave_one.py",
+        "engine/doctor/tools_wrappers.py",
+        "engine/generative/contracts.py",
+        "tests/unit/doctor/test_explain.py",
+        "tests/unit/doctor/test_plan_o_wave_one.py",
+        "tests/unit/doctor/test_policy_runtime.py",
+        "tests/unit/doctor/test_registry.py",
+        "tests/unit/doctor/test_registry_canary.py",
+        "tests/unit/doctor/test_tools_wrappers.py",
+        "tests/unit/generative/test_prompts.py"
+      ],
+      "new_codes": [
+        {
+          "code": "CONNECTION_BUSY",
+          "help_title": "Too many connection calls at once",
+          "help_text": "meaning: At most four calls to a client's systems (a test, a listing or a preview of a saved connection) run at once. This counts the Connections screen and Data Doctor's preview_connection and propose_import together. All four slots were taken, so this call was not made. fix: Wait a few seconds and try again. Nothing was read or changed."
+        },
+        {
+          "code": "AGENT_SESSION_APPLIED",
+          "help_title": "This setup was already approved",
+          "help_text": "meaning: The Guided-setup session was approved and its recipe ran. Neither a second opinion nor any other change can be added to it. fix: Start a new Guided setup on the file to change the setup."
+        },
+        {
+          "code": "CONNECTION_NEEDS_ADDON",
+          "help_title": "This connection needs an add-on",
+          "help_text": "meaning: The saved connection's kind (for example Snowflake, BigQuery or Azure Blob Storage) needs an optional add-on that is not installed on this server, so its tables cannot be previewed or imported. fix: Ask whoever runs Marketing AI to install it, for example pip install 'marketing-ai[snowflake]'."
+        }
+      ],
+      "dec_text": "DEC-1806 - Plan O M236: the remaining wrapper tools and `explain`.\n(a) engine/doctor/tools_wrappers.py registers fourteen wrappers in Data Doctor's registry, behind data_doctor.unified (off by default): #3 propose_intake, #6 preview_connection, #7 propose_import, #8 check_refresh, #9 preflight, #31 second_opinion, #41 propose_role, #42 propose_key, #43 propose_mapping, #65 find_personal_data, #66 check_leaks, #68 check_uplift_data, #73 read_run_checks, #76 request_approval. Each wrapper's output is the wrapped function's output, so it cannot disagree with the screen that calls the function directly. Tests compare them on fixtures. Where the function's result carries a call time or a server path, the wrapper leaves that one field out or replaces it.\n(b) Every PROPOSE wrapper lands pending, with source, ticked and confidence. M233's policy reads them (policy._read_pending) under the default-deny rule sets data.propose_role, data.propose_key, data.propose_mapping, data.propose_intake, data.propose_import and data.second_opinion (data.never_ticked). A rules item starts ticked only when the rules are sure. An AI item never starts ticked. propose_role, propose_mapping and propose_import are always `check`. Nothing applies anything: the import route runs an import, and the mapping route saves a mapping, after the person decides.\n(c) The tools serve the rules and the screen. No tool lists \"ai\" as a caller. Every tool is session-only, so each needs an Analyst, and a Viewer may call none of them.\n(d) #39 explain (engine/doctor/explain.py) is Plan K's claims verifier with four data claim types: count, share, rate_by_group and changed. It answers only from results the server recorded, named by content-hash evidence id. The model sees refs, claim types and keys, never a number, a cell or a column name, and the renderer fills every number. One failed sentence is dropped. More than one failure, or an answer that does not parse, is replaced by the rules' narrative, which is also the explanation when no AI service is connected.\n(e) DataToolContext gains optional fields: connections, client_store, meter, guardrails, evidence, narrator. Catalogue rows #82 read_workbook_sheets and #83 find_excel_serial_dates are registered. find_excel_serial_dates declares step_kinds=(parse_date,) and is decided by data.excel_serial_dates. M233's request (1), that DataTool passes step_kinds, is merged. build_dataset reads each file's role from propose_role through the registry.\n(f) The wrappers keep the checks of the routes they wrap. second_opinion is unavailable while agentic.enabled is off, and a direct run is 404 AGENTIC_DISABLED before any AI call, as POST /uploads/{id}/agent-session/assist answers (DEC-1409 (g)). An approved session is 409 AGENT_SESSION_APPLIED. The saved transcript is capped with engine.agent.egress.cap_sent. The AI's usage stays on the caller's meter, and the caller that supplied ctx.meter records meter.usage(), as the route writes llm_usage.json.\n(g) The connection routes' concurrency gates move from api/routes/connections.py to engine/connections/limits.py (CALLS: four at once, IMPORTS: two, bounded_call, ConnectionBusyError). The routes keep _CALLS and _IMPORTS as the same objects, and their behaviour is unchanged. preview_connection and propose_import take a slot of the same CALLS gate, so the registry cannot run more live queries against a client's systems than the routes can. A full gate is 429 CONNECTION_BUSY straight away, never queued.",
+      "readme_note": "M236 (Plan O, DEC-1806): Data Doctor's registry gains fourteen tools that wrap existing product functions, plus `explain`, behind data_doctor.unified (off by default). Every proposal lands pending. explain answers only from results the server recorded, and code fills every number. second_opinion keeps its route's agentic.enabled switch. The connection tools share the Connections screen's four-calls-at-once limit (engine/connections/limits.py).",
+      "cross_branch": [
+        "Plan H (connections), from Plan O M236: the concurrency gates of api/routes/connections.py (_CALLS, _IMPORTS and the busy refusal) now live in engine/connections/limits.py (CALLS, IMPORTS, bounded_call, ConnectionBusyError, BUSY_MESSAGE, RETRY_AFTER_SECONDS). The route's _CALLS and _IMPORTS are the same objects, and its behaviour, 429 CONNECTION_BUSY with Retry-After: 5, is unchanged. Data Doctor's preview_connection and propose_import take slots from the same CALLS gate. A new caller that talks to a client's systems should use limits.bounded_call rather than a gate of its own.",
+        "Plan G / Plan K (agent), from Plan O M236: Data Doctor's second_opinion tool wraps engine.agent.assist.assist_session. It applies the assist route's agentic.enabled switch, its AGENT_SESSION_APPLIED refusal and its cap_sent transcript cap in the wrapper, because assist_session itself checks none of them. If assist_session gains those checks, the wrapper's copies can go. The caller that supplies the meter records meter.usage() in llm_usage.json.",
+        "Plan O M235/M246 (visit), from M236: before the AI is offered any M236 tool, add their output field names to engine.agent.egress.RESULT_KEYS. second_opinion is offered only with agentic.enabled on."
+      ],
+      "test_files": [
+        "tests/unit/doctor/test_tools_wrappers.py",
+        "tests/unit/doctor/test_explain.py",
+        "tests/unit/doctor/test_registry.py",
+        "tests/unit/doctor/test_registry_canary.py",
+        "tests/unit/doctor/test_policy_runtime.py",
+        "tests/unit/doctor/test_plan_o_wave_one.py",
+        "tests/unit/generative/test_prompts.py"
+      ],
+      "notes": "Both majors are fixed in commit bcbd3cd. The first M236 commit is a419743.\n\nMajor 1, second_opinion:\n- It is now unavailable while agentic.enabled is off (available=_agentic_on, which treats AgenticError as off).\n- A direct run also raises AGENTIC_DISABLED (404) before any AI call.\n- An applied session is refused with AGENT_SESSION_APPLIED (409).\n- The saved transcript is capped with cap_sent.\n- Meter usage: the docstring and docs/AGENTS.md now say the caller that supplied ctx.meter records meter.usage(). The wrapper does not write llm_usage.json itself, because a caller that already records usage would then count it twice.\n- test_second_opinion_is_assist_session_and_ticks_nothing now runs under a configuration root with agentic.enabled on (tests/unit/agent/helpers.header_help_root). It also asserts the saved transcript is capped.\n- In tests/unit/doctor/test_registry.py, test_a_viewer_calling_a_propose_tool_is_refused_on_that_call now gives its context config_root=header_help_root(). The test checks a Viewer is refused on every PROPOSE tool, so second_opinion has to exist there to be refused with TOOL_ROLE_REQUIRED. The assertions are unchanged, so the test is not loosened.\n\nMajor 2, connection concurrency cap:\n- I took the reviewer's preferred option: the gates now live in a new module, engine/connections/limits.py (CALLS, IMPORTS, bounded_call, ConnectionBusyError).\n- api/routes/connections.py uses that module. _CALLS and _IMPORTS are kept as aliases of the same objects, and the 429 response with Retry-After: 5 is unchanged.\n- preview_connection and propose_import now run conn.preview under limits.CALLS. A full gate raises DataToolError CONNECTION_BUSY (429), and the connector is not called.\n- This edits files owned by Plan H. Plans J and L already edited engine/connections and this route, and the change is announced in cross_branch.\n- DataToolError has no headers field, so the tools' CONNECTION_BUSY carries no Retry-After. The message says to try again in a few seconds.\n- ruff N818 required the Error suffix, hence ConnectionBusyError.\n\nAlso:\n- In docs/AGENTS.md §17.1, the #6 and #31 rows now describe the gate and the route checks.\n- None of the forbidden shared files were edited.\n- ruff, black --check and mypy --strict pass on every changed Python file.\n- No review issue was rejected.\n\nOn new_codes: CONNECTION_BUSY, AGENT_SESSION_APPLIED and CONNECTION_NEEDS_ADDON are existing route codes, now also raised by Data Doctor tools. None of the three has an entry in configs/pilot/help.yaml, so I have given help text for each. AGENTIC_DISABLED already has an entry."
+    },
+    "reviews": [
+      {
+        "lens": "Correctness and compatibility (M236 wrappers and explain, commit a419743 vs e0bb26f)",
+        "issues": [
+          {
+            "severity": "major",
+            "where": "engine/doctor/tools_wrappers.py:731-770 (_second_opinion)",
+            "problem": "The second_opinion wrapper skips three checks that the route it wraps (api/routes/agent.py:900-948, POST /uploads/{id}/agent-session/assist) makes. (1) The route refuses with 404 AGENTIC_DISABLED when agentic.enabled is off (DEC-1409 (g); decision O4 keeps the AI second opinion behind that switch). The wrapper never calls agentic_enabled(), so the AI service is called with agentic.enabled false. The builder's own test_second_opinion_is_assist_session_and_ticks_nothing proves this: it runs against the default configs/agentic/agentic.yaml (enabled: false) and gets llm_calls > 0. (2) The route refuses an applied session with 409 AGENT_SESSION_APPLIED. assist_session does not check this, so the wrapper adds questions to an applied session and saves it. (3) The route caps the transcript with egress.cap_sent before saving. The wrapper saves the transcript uncapped. The route also records meter usage in llm_usage.json; the wrapper drops it.",
+            "fix": "Make the tool unavailable when the switch is off: available=lambda ctx: _agentic_on(ctx.root()), where _agentic_on wraps engine.agentic.config.agentic_enabled and treats AgenticError as False. In _second_opinion, raise DataToolError('AGENT_SESSION_APPLIED', 'This setup was already approved. Start again to change it.', status=409) when session.status is SessionStatus.APPLIED. Before save(), set the transcript to engine.agent.egress.cap_sent(...). Either record meter.usage() as the route does or say in the docstring that the caller must. Add tests: agentic.enabled false makes second_opinion unavailable or refused; an applied session is refused."
+          },
+          {
+            "severity": "major",
+            "where": "engine/doctor/tools_wrappers.py:440-475 (_connector_call/_preview), 505-530 (_propose_import)",
+            "problem": "preview_connection and propose_import call conn.preview(...) directly. They bypass the connection routes' concurrency cap, _bounded(_CALLS, ...) in api/routes/connections.py:416 and 533-543: at most 4 connector calls at once, and anything beyond that gets an immediate 429 CONNECTION_BUSY with Retry-After. Through the registry, any number of live database or S3 preview queries can run at the same time against a client's systems. That breaks the 'wrappers keep the routes' caps' requirement, and the wrappers no longer match the route's behaviour under load.",
+            "fix": "Run both connector calls under the same semaphore. Either import _CALLS from api.routes.connections, or better, move _CALLS and a non-blocking acquire helper into engine/connections (for example engine.connections.limits.bounded_call) and use it from both the route and the wrappers. When the gate is busy, raise DataToolError('CONNECTION_BUSY', 'Other connection calls are running. Try again in a few seconds.', status=429). Add a test that holds the semaphore and expects CONNECTION_BUSY from preview_connection and from propose_import."
+          }
+        ],
+        "verdict": "Two majors, both in the wrappers. second_opinion calls the AI service while agentic.enabled is off, and preview_connection and propose_import skip the connection routes' concurrency cap. Everything else checked out. Every new proposing tool has a default-deny rule set in policy.yaml data: and an entry in OUTPUT_READERS: propose_role, propose_key, propose_mapping, propose_intake, propose_import, second_opinion, and find_excel_serial_dates via data.excel_serial_dates. M233's request (1), passing step_kinds to DataTool, is merged. explain answers only from server-recorded evidence ids, and code fills every number. No tool lists \"ai\" as a caller. The new contracts only add fields and enum members, with defaults. No forbidden shared docs and no marker-block files were edited. ruff, black --check and mypy --strict pass on the changed files. Saved log /home/user/Marketing.ai-/.claude/worktrees/wf_72216512-af1-1/.m236_tests.log: 1630 passed, 3 warnings."
+      }
+    ]
+  },
+  "workflowProgress": [
+    {
+      "type": "workflow_phase",
+      "index": 1,
+      "title": "Build"
+    },
+    {
+      "type": "workflow_phase",
+      "index": 2,
+      "title": "Review"
+    },
+    {
+      "type": "workflow_phase",
+      "index": 3,
+      "title": "Repair"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 1,
+      "label": "build:M236",
+      "phaseIndex": 1,
+      "phaseTitle": "Build",
+      "agentId": "a268cba39339d3481",
+      "isolation": "worktree",
+      "model": "claude-opus-5-5",
+      "state": "done",
+      "startedAt": 1791805773802,
+      "queuedAt": 1791805772850,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "lastToolSummary": "/home/user/Marketing.ai-/.claude/worktrees/wf_72216512-af1-1",
+      "promptPreview": "You are a staff engineer building Marketing AI.\nFIRST, from your worktree root, run:\n`git fetch origin integrate-plan-o-1 && git merge --no-ff origin/integrate-plan-o-1`\nthen `git merge --no-ff worktree-wf_8b7cd1c8-f8d-1`.\nThe first is Plan O wave 1 integrated. The second is M233's default-deny policy (DEC-1803): every proposing tool needs a rule set in configs/agentic/policy.yaml `data:` plus an …",
+      "promptFramed": true,
+      "lastProgressAt": 1791808696267,
+      "tokens": 511127,
+      "toolCalls": 215,
+      "durationMs": 2922464,
+      "resultPreview": "{\"worktree_path\":\"/home/user/Marketing.ai-/.claude/worktrees/wf_72216512-af1-1\",\"branch\":\"worktree-wf_72216512-af1-1\",\"commit\":\"a419743\",\"tests_run\":\"Final run saved to /home/user/Marketing.ai-/.claude/worktrees/wf_72216512-af1-1/.m236_tests.log (left untracked). Command: pytest tests/unit/doctor tests/unit/generative tests/unit/agentic/test_policy.py tests/unit/agentic/test_claims.py -n 3. Summar…"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 2,
+      "label": "review:M236:review",
+      "phaseIndex": 2,
+      "phaseTitle": "Review",
+      "agentId": "a1b27ff70f4a7a92d",
+      "model": "claude-opus-5-5",
+      "state": "done",
+      "startedAt": 1791808699074,
+      "queuedAt": 1791808699030,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "lastToolSummary": "Correctness and compatibility (M236 wrappers and explain, c…",
+      "promptPreview": "You are an adversarial reviewer. Lens: CORRECTNESS AND COMPATIBILITY in one pass: every new proposing tool has a default-deny rule set and an OUTPUT_READERS entry (M233); `explain` answers from real evidence ids and never invents a number; the wrappers keep the routes' caps and roles; the AI never gets an APPLY; with the switch off, behaviour is byte-identical; additive contracts; codes come with …",
+      "promptFramed": true,
+      "lastProgressAt": 1791808964782,
+      "tokens": 168912,
+      "toolCalls": 51,
+      "durationMs": 265708,
+      "resultPreview": "{\"lens\":\"Correctness and compatibility (M236 wrappers and explain, commit a419743 vs e0bb26f)\",\"issues\":[{\"severity\":\"major\",\"where\":\"engine/doctor/tools_wrappers.py:731-770 (_second_opinion)\",\"problem\":\"The second_opinion wrapper skips three checks that the route it wraps (api/routes/agent.py:900-948, POST /uploads/{id}/agent-session/assist) makes. (1) The route refuses with 404 AGENTIC_DISABLED …"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 3,
+      "label": "repair:M236",
+      "phaseIndex": 3,
+      "phaseTitle": "Repair",
+      "agentId": "ae09db87f81c656f2",
+      "model": "claude-opus-5-5",
+      "state": "done",
+      "startedAt": 1791808966779,
+      "queuedAt": 1791808966774,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "lastToolSummary": "/home/user/Marketing.ai-/.claude/worktrees/wf_72216512-af1-1",
+      "promptPreview": "You built M236. Work ONLY in your existing worktree /home/user/Marketing.ai-/.claude/worktrees/wf_72216512-af1-1 (cd there; branch worktree-wf_72216512-af1-1). \nRULES: You work in an isolated git worktree of /home/user/Marketing.ai-. Run commands from your worktree root: /home/user/Marketing.ai-/.venv/bin/python -m pytest <paths> (pytest pythonpath=[\".\"] imports your worktree's code), /home/user/M…",
+      "promptFramed": true,
+      "lastProgressAt": 1791810450139,
+      "tokens": 134107,
+      "toolCalls": 46,
+      "durationMs": 1483359,
+      "resultPreview": "{\"worktree_path\":\"/home/user/Marketing.ai-/.claude/worktrees/wf_72216512-af1-1\",\"branch\":\"worktree-wf_72216512-af1-1\",\"commit\":\"bcbd3cdabcfb1304904e5e0fc0338cea866a35d3\",\"tests_run\":\"Targeted suites only, run from the worktree with -n 2: tests/unit/doctor, tests/unit/connections, tests/integration/test_api_connection.py, tests/integration/test_api_connection_security.py, tests/integration/connecti…"
+    }
+  ],
+  "totalTokens": 814146,
+  "totalToolCalls": 312
+}

@@ -1,3 +1,5 @@
+> Retired on 15 Oct 2026 — no new entries. See the v1 plan.
+
 # Cross-branch requests
 
 One entry per thing a branch needs from outside its own ownership map
