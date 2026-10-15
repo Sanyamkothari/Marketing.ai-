@@ -269,6 +269,14 @@ def test_test_accounts_are_found_by_id_or_email_and_real_look_alikes_stay(rules:
         {
             "customer_id": ["TEST001", "C1", "dummy", "C2", "C3", "C4"],
             "email": ["a@x.com", "qa+1@acme.example", "b@x.com", "test@acme.in", "c3@mail.example", None],
+            "ab_test_id": [
+                "test",
+                "control",
+                "test",
+                "control",
+                "test",
+                "control",
+            ],  # an experiment arm, no account
         }
     )
     reasons, verdict = gate_customers(frame, rules, ContactRules(), as_of=DAY)
@@ -283,7 +291,7 @@ def test_a_file_without_test_accounts_names_no_test_column(rules: GateRules) -> 
 
 
 def test_the_best_ranked_member_of_a_household_stays_and_ties_go_to_the_first() -> None:
-    homes = pd.Series(["H1", "H1", "H1", "H2", "", "H2", None])
+    homes = pd.Series(["H1", "H1", "H1", "H2", "NA", "H2", "NA"])  # `NA` names no household
     score = pd.Series([0.2, 0.9, 0.5, 0.1, 0.4, 0.1, 0.3])
     assert same_household(homes, [True] * 7, score).tolist() == [True, False, True, False, False, True, False]
     # With no score the first listed stays; someone already off the list never keeps the household for the rest.

@@ -290,6 +290,12 @@ def household_column(source: pd.DataFrame, rules: GateRules, overrides: ContactR
     return None
 
 
+_NO_HOUSEHOLD: Final[frozenset[str]] = frozenset(
+    {"", "na", "n a", "nan", "null", "none", "nil", "unknown", "0"}
+)
+"""Household cells that name no household (as `_cell` reads them): their customers are never grouped."""
+
+
 def same_household(households: pd.Series[Any], staying: Any, score: pd.Series[Any] | None = None) -> Any:
     """Per customer: True when the customer is taken off because someone better ranked in the household stays.
 
@@ -298,7 +304,7 @@ def same_household(households: pd.Series[Any], staying: Any, score: pd.Series[An
     n = len(households.index)
     ranked = pd.Series(np.zeros(n) if score is None else pd.to_numeric(score, errors="coerce").to_numpy())
     table = pd.DataFrame({"home": households.map(_cell).to_numpy(), "score": ranked.to_numpy()})
-    table = table[np.asarray(staying, dtype=bool) & (table["home"] != "")]
+    table = table[np.asarray(staying, dtype=bool) & ~table["home"].isin(_NO_HOUSEHOLD)]
     best = table.sort_values("score", ascending=False, kind="stable", na_position="last")
     out = np.zeros(n, dtype=bool)
     out[best.index[best["home"].duplicated()]] = True
@@ -353,7 +359,9 @@ def gate_customers(
 
     # The columns that held a test account are named on the list; a file with none says nothing.
     tests = {
-        name: _looks_like_test(source[name], rules) for name, _ in _named(source, rules.test_account_columns)
+        str(name): _looks_like_test(source[name], rules)
+        for name in source.columns
+        if _norm(name) in rules.test_account_columns  # whole names only: `ab_test_id` holds no account
     }
     if key is not None:  # the key may be a column the file does not hold as such
         tests["the customer ID"] = _looks_like_test(key.reset_index(drop=True), rules)
@@ -521,6 +529,11 @@ def contact_gate_for_run(
     aligned = best.reindex(pd.Index(row_keys)).fillna(len(_ORDER)).astype(int).to_numpy()
     verdict.reason = np.array([_ORDER[r] if r < len(_ORDER) else None for r in aligned], dtype=object)
     home = household_column(source, rules, overrides)
+    if overrides.household_column and home != overrides.household_column:
+        verdict.notes.append(
+            f"The household column '{overrides.household_column}' is not in the customer file, so "
+            + (f"'{home}' was used instead." if home else "households were not checked.")
+        )
     if home is not None:  # after the other reasons, so the person kept is one who may be contacted
         by_customer = (
             source[home].reset_index(drop=True).groupby(source_keys.reset_index(drop=True).to_numpy()).first()
