@@ -1,0 +1,46 @@
+{
+ "id": "k16_ticket_status_log",
+ "scenario": "K16",
+ "theme": "Double counting and wrong grain",
+ "description": "Each complaint ticket has two to four status rows (opened, assigned, reopened, closed); counting rows counts a complaint many times.",
+ "expected": "30 tickets, each once with its latest status, or the Doctor asks how to count them.",
+ "goal": "telco-churn",
+ "files": {
+  "tickets_log": "tickets_log.csv"
+ },
+ "primary": [
+  "tickets_log"
+ ],
+ "key": "ticket_id",
+ "answers": {},
+ "rows_may_drop": [],
+ "checks": [
+  {
+   "category": "double_counting",
+   "kind": "any_of",
+   "label": "30 tickets counted once each",
+   "checks": [
+    {
+     "kind": "asked",
+     "text": [
+      "ticket",
+      "status",
+      "latest",
+      "history",
+      "repeated"
+     ]
+    },
+    {
+     "kind": "one_row_per_key",
+     "expected_rows": 30
+    }
+   ]
+  }
+ ],
+ "ideal": {
+  "asks": [
+   "Each ticket has several status rows. Count the latest one per ticket?"
+  ],
+  "file": "ideal.csv"
+ }
+}

@@ -1,0 +1,39 @@
+{
+ "id": "c01_selection_not_random",
+ "scenario": "C01",
+ "theme": "Campaign history: selection read as cause",
+ "description": "Staff texted only high-balance customers (12% bought against 3% of the rest); there is no random control group.",
+ "expected": "The Doctor asks whether anyone was held out at random; without that it never calls the gap an effect of the text.",
+ "goal": "targeted-advertisement",
+ "files": {
+  "campaign_history": "campaign_history.csv"
+ },
+ "primary": [
+  "campaign_history"
+ ],
+ "key": "customer_id",
+ "answers": {},
+ "rows_may_drop": [],
+ "checks": [
+  {
+   "category": "asked",
+   "kind": "asked",
+   "label": "asks whether a random group was left uncontacted",
+   "text": [
+    "random",
+    "holdout",
+    "hold-out",
+    "control group",
+    "chosen by",
+    "who was contacted",
+    "selected"
+   ]
+  }
+ ],
+ "ideal": {
+  "asks": [
+   "Was a random group deliberately not contacted?"
+  ],
+  "file": "ideal.csv"
+ }
+}

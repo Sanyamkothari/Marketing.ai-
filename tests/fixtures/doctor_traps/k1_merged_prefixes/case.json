@@ -1,0 +1,46 @@
+{
+ "id": "k1_merged_prefixes",
+ "scenario": "K1",
+ "theme": "False, merged or missed joins",
+ "description": "Customer IDs C-101 and S-101 are two different people; the orders file writes both as 101.",
+ "expected": "60 customers stay 60: a rule that strips the prefix must not merge C-101 and S-101 into one row.",
+ "goal": "telco-churn",
+ "files": {
+  "customers": "customers.csv",
+  "orders": "orders.csv"
+ },
+ "primary": [
+  "customers"
+ ],
+ "key": "customer_id",
+ "answers": {},
+ "rows_may_drop": [],
+ "checks": [
+  {
+   "category": "join",
+   "kind": "one_row_per_key",
+   "expected_rows": 60,
+   "label": "60 customers stay 60 rows, none merged"
+  },
+  {
+   "category": "join",
+   "kind": "cells",
+   "label": "C-101 and S-101 each keep their own segment",
+   "cells": [
+    {
+     "key": "C-101",
+     "column": "segment",
+     "equals": "retail"
+    },
+    {
+     "key": "S-101",
+     "column": "segment",
+     "equals": "business"
+    }
+   ]
+  }
+ ],
+ "ideal": {
+  "file": "ideal.csv"
+ }
+}

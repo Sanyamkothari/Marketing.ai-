@@ -1,0 +1,49 @@
+{
+ "id": "t03_placeholder_dates",
+ "scenario": "T03",
+ "theme": "Dates that are read wrong without any error",
+ "description": "A quarter of the customers have last_payment_date 1970-01-01, the system's stand-in for 'never paid'.",
+ "expected": "1970-01-01 is not kept as a real date: it becomes blank, or the Doctor asks what it means.",
+ "goal": "telco-churn",
+ "files": {
+  "customers": "customers.csv"
+ },
+ "primary": [
+  "customers"
+ ],
+ "key": "customer_id",
+ "answers": {},
+ "rows_may_drop": [],
+ "checks": [
+  {
+   "category": "unapproved_change",
+   "kind": "any_of",
+   "label": "the 1970-01-01 stand-in is not treated as a real date",
+   "checks": [
+    {
+     "kind": "asked",
+     "text": [
+      "1970",
+      "placeholder",
+      "never paid",
+      "not a real date",
+      "stand-in"
+     ]
+    },
+    {
+     "kind": "no_value",
+     "column": "last_payment_date",
+     "values": [
+      "1970-01-01"
+     ]
+    }
+   ]
+  }
+ ],
+ "ideal": {
+  "touched": [
+   "last_payment_date"
+  ],
+  "file": "ideal.csv"
+ }
+}

@@ -1,0 +1,44 @@
+{
+ "id": "v04_blank_vs_zero",
+ "scenario": "V04",
+ "theme": "Money and units whose meaning is not in the cells",
+ "description": "last_purchase_amount is blank for customers who never bought; filling it with 0 makes them look like small buyers.",
+ "expected": "Blank stays blank (never bought), or the Doctor asks what blank means.",
+ "goal": "telco-churn",
+ "files": {
+  "customers": "customers.csv"
+ },
+ "primary": [
+  "customers"
+ ],
+ "key": "customer_id",
+ "answers": {},
+ "rows_may_drop": [],
+ "checks": [
+  {
+   "category": "unapproved_change",
+   "kind": "any_of",
+   "label": "blank 'never bought' is not turned into 0",
+   "checks": [
+    {
+     "kind": "asked",
+     "text": [
+      "blank",
+      "never bought",
+      "means zero",
+      "missing"
+     ]
+    },
+    {
+     "kind": "values_unchanged",
+     "columns": [
+      "last_purchase_amount"
+     ]
+    }
+   ]
+  }
+ ],
+ "ideal": {
+  "file": "ideal.csv"
+ }
+}

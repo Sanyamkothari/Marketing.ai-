@@ -1,0 +1,42 @@
+{
+ "id": "f05_pivot_summary",
+ "scenario": "F05",
+ "theme": "Spreadsheet and export shapes the reader misses",
+ "description": "The file is a pivot table pasted as values: counts per region and plan, a Grand Total row and no customer ID.",
+ "expected": "The Doctor says this is a summary, not customers, and asks for the row-level export; it invents no rows.",
+ "goal": "telco-churn",
+ "files": {
+  "report": "report.csv"
+ },
+ "primary": [
+  "report"
+ ],
+ "key": "region",
+ "answers": {},
+ "rows_may_drop": [],
+ "checks": [
+  {
+   "category": "asked",
+   "kind": "asked",
+   "label": "says it is a summary and asks for one row per customer",
+   "text": [
+    "summary",
+    "pivot",
+    "row-level",
+    "grand total",
+    "not customers",
+    "totals, not"
+   ]
+  }
+ ],
+ "ideal": {
+  "asks": [
+   "This is a summary report, not one row per customer. Please send the row-level export."
+  ],
+  "no_universal": [
+   "row_loss",
+   "unapproved_change"
+  ],
+  "file": "ideal.csv"
+ }
+}

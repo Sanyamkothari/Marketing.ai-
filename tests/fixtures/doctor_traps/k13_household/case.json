@@ -1,0 +1,32 @@
+{
+ "id": "k13_household",
+ "scenario": "K13",
+ "theme": "Who one row is, and one model or several",
+ "description": "Twenty households have three members each with consent; texting everyone sends three messages to one household.",
+ "expected": "At most one person per household is on the contact list.",
+ "goal": "targeted-advertisement",
+ "files": {
+  "customers": "customers.csv"
+ },
+ "primary": [
+  "customers"
+ ],
+ "key": "customer_id",
+ "answers": {},
+ "rows_may_drop": [],
+ "checks": [
+  {
+   "category": "contact_list",
+   "kind": "contact_list",
+   "max_one_per": "household_id",
+   "label": "no household gets more than one message"
+  }
+ ],
+ "ideal": {
+  "consent_column": "contactable",
+  "touched": [
+   "contactable"
+  ],
+  "file": "ideal.csv"
+ }
+}

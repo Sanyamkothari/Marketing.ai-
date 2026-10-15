@@ -1,0 +1,47 @@
+{
+ "id": "f02_excel_e_plus",
+ "scenario": "F02",
+ "theme": "False, merged or missed joins",
+ "description": "Excel saved the 12-digit customer IDs as 1.23457E+11, so 40 customers now share a handful of IDs.",
+ "expected": "The Doctor says the IDs were rounded and asks for a re-export as text; all 40 rows are kept and none is joined.",
+ "goal": "telco-churn",
+ "files": {
+  "customers": "customers.csv"
+ },
+ "primary": [
+  "customers"
+ ],
+ "key": "customer_id",
+ "answers": {},
+ "rows_may_drop": [],
+ "checks": [
+  {
+   "category": "asked",
+   "kind": "asked",
+   "label": "says the IDs were rounded by Excel and asks for a re-export",
+   "text": [
+    "rounded",
+    "E\\+",
+    "scientific",
+    "excel",
+    "re-?export",
+    "as text"
+   ]
+  },
+  {
+   "category": "row_loss",
+   "kind": "row_count",
+   "rows": 40,
+   "label": "all 40 rows are kept"
+  }
+ ],
+ "ideal": {
+  "asks": [
+   "These IDs were rounded when the file was saved in Excel. Please re-export with the column as text."
+  ],
+  "no_universal": [
+   "unapproved_change"
+  ],
+  "file": "ideal.csv"
+ }
+}

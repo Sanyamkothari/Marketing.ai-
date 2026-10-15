@@ -1,0 +1,11 @@
+region,plan,customers,total_spend
+North,basic,112,72416
+North,standard,449,67385
+North,premium,788,89221
+South,basic,496,55660
+South,standard,871,26959
+South,premium,723,10781
+East,basic,741,28939
+East,standard,578,58293
+East,premium,573,36190
+Grand Total,,5331,445844

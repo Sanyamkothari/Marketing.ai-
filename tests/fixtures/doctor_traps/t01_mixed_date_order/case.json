@@ -1,0 +1,48 @@
+{
+ "id": "t01_mixed_date_order",
+ "scenario": "T01",
+ "theme": "Dates that are read wrong without any error",
+ "description": "signup_date holds day/month in system A rows and month/day in system B rows, so 03/04/2026 can be two dates.",
+ "expected": "The Doctor stops and asks the date order for each system, or leaves the dates as written; it never reads them all one way.",
+ "goal": "telco-churn",
+ "files": {
+  "customers": "customers.csv"
+ },
+ "primary": [
+  "customers"
+ ],
+ "key": "customer_id",
+ "answers": {},
+ "rows_may_drop": [],
+ "checks": [
+  {
+   "category": "unapproved_change",
+   "kind": "any_of",
+   "label": "dates are not silently read in one order",
+   "checks": [
+    {
+     "kind": "asked",
+     "text": [
+      "both orders",
+      "both day",
+      "mixed",
+      "two date orders",
+      "some rows are day"
+     ]
+    },
+    {
+     "kind": "values_unchanged",
+     "columns": [
+      "signup_date"
+     ]
+    }
+   ]
+  }
+ ],
+ "ideal": {
+  "asks": [
+   "Dates are written day first in some rows and month first in others. Which is which?"
+  ],
+  "file": "ideal.csv"
+ }
+}

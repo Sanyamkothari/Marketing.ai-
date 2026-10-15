@@ -1,0 +1,29 @@
+{
+ "id": "crit03_dup_and_drop",
+ "scenario": "crit-03",
+ "theme": "SQL steps slip past the safety limits",
+ "description": "Twenty customers have two tag rows and twenty have none, so a join adds 20 and drops 20 and the row count stays 100.",
+ "expected": "Exactly the 100 customers, each once: neither the duplicates nor the dropped customers may cancel out.",
+ "goal": "telco-churn",
+ "files": {
+  "accounts": "accounts.csv",
+  "tags": "tags.csv"
+ },
+ "primary": [
+  "accounts"
+ ],
+ "key": "customer_id",
+ "answers": {},
+ "rows_may_drop": [],
+ "checks": [
+  {
+   "category": "join",
+   "kind": "one_row_per_key",
+   "expected_rows": 100,
+   "label": "100 customers once each (duplicates and drops are not netted)"
+  }
+ ],
+ "ideal": {
+  "file": "ideal.csv"
+ }
+}

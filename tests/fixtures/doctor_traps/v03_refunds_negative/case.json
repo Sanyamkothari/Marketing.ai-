@@ -1,0 +1,42 @@
+{
+ "id": "v03_refunds_negative",
+ "scenario": "V03",
+ "theme": "Money and units whose meaning is not in the cells",
+ "description": "One transaction in six is negative: a refund, which is a strong signal that must not be clipped to zero.",
+ "expected": "The negative amounts stay as they are (refunds), or the Doctor asks about them.",
+ "goal": "telco-churn",
+ "files": {
+  "transactions": "transactions.csv"
+ },
+ "primary": [
+  "transactions"
+ ],
+ "key": "txn_id",
+ "answers": {},
+ "rows_may_drop": [],
+ "checks": [
+  {
+   "category": "unapproved_change",
+   "kind": "any_of",
+   "label": "negative amounts (refunds) are not clipped or dropped",
+   "checks": [
+    {
+     "kind": "asked",
+     "text": [
+      "refund",
+      "negative"
+     ]
+    },
+    {
+     "kind": "values_unchanged",
+     "columns": [
+      "amount"
+     ]
+    }
+   ]
+  }
+ ],
+ "ideal": {
+  "file": "ideal.csv"
+ }
+}

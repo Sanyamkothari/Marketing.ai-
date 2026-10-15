@@ -1,0 +1,61 @@
+{
+ "id": "k15_failed_payments",
+ "scenario": "K15",
+ "theme": "Double counting and wrong grain",
+ "description": "One payment in five is a failed attempt; adding the amount column up counts money that never arrived.",
+ "expected": "Only successful payments are counted (69,918), or the Doctor asks which statuses are real money.",
+ "goal": "telco-churn",
+ "files": {
+  "payments": "payments.csv"
+ },
+ "primary": [
+  "payments"
+ ],
+ "key": "payment_id",
+ "answers": {},
+ "rows_may_drop": [
+  "P000",
+  "P005",
+  "P010",
+  "P015",
+  "P020",
+  "P025",
+  "P030",
+  "P035",
+  "P040",
+  "P045",
+  "P050",
+  "P055"
+ ],
+ "checks": [
+  {
+   "category": "double_counting",
+   "kind": "any_of",
+   "label": "spend counts successful payments only",
+   "checks": [
+    {
+     "kind": "asked",
+     "text": [
+      "failed",
+      "status",
+      "real money",
+      "successful"
+     ]
+    },
+    {
+     "kind": "column_total",
+     "columns": [
+      "amount"
+     ],
+     "expected_total": 69918
+    }
+   ]
+  }
+ ],
+ "ideal": {
+  "asks": [
+   "Which payment statuses are real money? Failed attempts are not."
+  ],
+  "file": "ideal.csv"
+ }
+}
