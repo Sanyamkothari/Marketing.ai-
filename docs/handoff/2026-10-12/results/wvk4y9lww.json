@@ -1,0 +1,207 @@
+{
+  "summary": "Build one Plan J milestone in a worktree: builder, two adversarial Opus reviewers, repair (milestone given in args)",
+  "agentCount": 3,
+  "logs": [],
+  "result": {
+    "final": {
+      "worktree_path": "/home/user/Marketing.ai-/.claude/worktrees/wf_be82585d-9fd-1",
+      "branch": "worktree-wf_be82585d-9fd-1",
+      "commit": "f31ea7c06a1fbc48ece7b136b025da44462b2fc5",
+      "tests_run": "Review-fix round, run from the worktree root. (1) Targeted unit tests: tests/unit/agent, tests/unit/doctor, tests/unit/pilot, tests/unit/test_one_check_contract.py, tests/unit/measurement/test_codes.py (-n 2). Everything passed except tests/unit/pilot/test_help.py::test_every_check_code_the_engine_can_raise_has_an_entry, which fails as expected: CURRENCY_MIXED is now in CHECK_CODES, and its configs/pilot/help.yaml entry is returned below because I may not edit that file. (2) Integration: tests/integration/agent and tests/integration/pilot (-n 2). Everything passed except tests/integration/pilot/test_pilot_api.py::test_help_carries_every_check_code_and_the_glossary, the same missing help entry. (3) I added the help entries returned below to configs/pilot/help.yaml and all six M242 codes to PLAN_O_CODES, temporarily and not committed. With them, tests/unit/pilot/test_help.py, tests/unit/doctor/test_plan_o_setup.py and test_help_carries_every_check_code_and_the_glossary all passed. Both files were then restored byte for byte. (4) tests/unit/test_generated_files.py, tests/unit/test_shared_file_markers.py and the five currency test files: all passed after black. (5) Fail-before check: with engine/ and api/ stashed back to commit 6e8c490 (the reviewed M242 commit), 9 new tests fail. They are test_a_dollar_in_a_rupee_column_is_a_409_that_asks_which_rows_are_which (409 came back as RECIPE_STEP_INVALID), test_rupee_inputs_stay_rupees_beside_a_dollar_basis, test_rupee_inputs_stay_rupees_beside_a_dollar_column, test_the_document_blocks_only_gain_the_currency_notes, test_an_amount_outcome_is_never_relabelled_by_another_column, test_the_proof_pack_notes_a_dollar_column_apart_and_keeps_rupees, test_a_marked_conversion_never_leaves_a_euro_to_be_read_as_rupees, test_a_row_the_column_does_not_choose_still_showing_dollars_stops and test_the_partial_guard_is_the_steps_own. test_a_later_conversion_may_take_the_rows_an_earlier_one_left passes before and after: it is a guard that the fix does not break a USD-then-EUR recipe. The log is in .m242_review_fail_before.log (untracked). The full suite was not run, as the protocol says.",
+      "lint_clean": true,
+      "files_changed": [
+        "api/routes/agent_recipes.py",
+        "api/routes/pilot.py",
+        "docs/AGENTS.md",
+        "docs/API.md",
+        "docs/DATA_DOCTOR.md",
+        "engine/agent/contracts.py",
+        "engine/agent/currency_steps.py",
+        "engine/agent/formats.py",
+        "engine/agent/recipe.py",
+        "engine/contracts.py",
+        "engine/doctor/config.py",
+        "engine/doctor/currency.py",
+        "engine/doctor/indian_values.py",
+        "engine/doctor/locale.py",
+        "engine/doctor/tools_currency.py",
+        "engine/pilot/proof.py",
+        "engine/pilot/roi.py",
+        "ui/format.js",
+        "tests/integration/agent/test_currency_recipe_api.py",
+        "tests/integration/pilot/test_currency_reports_api.py",
+        "tests/unit/agent/test_currency_steps.py",
+        "tests/unit/doctor/test_currency.py",
+        "tests/unit/doctor/test_currency_reports.py",
+        "tests/unit/doctor/test_tools_currency.py",
+        "tests/unit/ux/test_workspace_currency_js.py",
+        "tests/unit/ux/workspace_currency.test.mjs"
+      ],
+      "new_codes": [
+        {
+          "code": "CURRENCY_FOREIGN",
+          "help_title": "This file's money is in another currency",
+          "help_text": "meaning: A money column is written in a currency other than the one this workspace reports in, for example US dollars in a rupee workspace. Nothing is converted on its own. fix: Choose to report the column in its own currency, or give a rate, its date and where it comes from to convert it; an Analyst approves the rate."
+        },
+        {
+          "code": "CURRENCY_MIXED",
+          "help_title": "One money column holds amounts in two currencies",
+          "help_text": "meaning: Some amounts in this column are written in one currency and some in another, for example a $12 in a column of rupees. Amounts in different currencies are never added together, so nothing is built from the column until you say which rows are in which currency. fix: Say which rows are in which currency, or convert them at a rate you give; amounts in different currencies are never added together."
+        },
+        {
+          "code": "CURRENCY_UNSTATED",
+          "help_title": "A money column names no currency",
+          "help_text": "meaning: The amounts in this column carry no currency sign, code or header word, and the client has not confirmed one. The currency is never assumed. fix: Say which currency the column is in. Once you confirm it for the client, it is not asked again."
+        },
+        {
+          "code": "CURRENCY_RATE_INVALID",
+          "help_title": "The exchange rate cannot be used",
+          "help_text": "meaning: The rate given to convert a money column is missing a part or does not make sense, for example a rate of zero, a date in the future, or no source. fix: Give a rate above zero, the date it applies to (not after today) and where it comes from, such as \"RBI reference rate, 10 Oct 2026\"."
+        },
+        {
+          "code": "CURRENCY_RATE_UNAPPROVED",
+          "help_title": "A currency conversion has not been approved",
+          "help_text": "meaning: A conversion of a money column has no approved rate, so no report may use it. Rates are never looked up by the product. fix: Ask an Analyst to approve the conversion by sending back the exact sentence it shows."
+        },
+        {
+          "code": "APPROVAL_SENTENCE_CHANGED",
+          "help_title": "The approval does not match the sentence shown",
+          "help_text": "meaning: An approval must send back exactly the sentence that was shown. This one differs, so nothing was approved. fix: Read the sentence again and send it back unchanged to approve it. (M239 makes this code general. If M239 already adds it to PLAN_O_CODES and help.yaml, keep a single entry.)"
+        }
+      ],
+      "dec_text": "DEC-1812 - Plan O M242: currency. Money keeps its unit, a foreign currency is asked about, and mixed currencies stop.\n(a) Workspace currency: data_doctor.workspace_currency, default INR, is left out of a dump when it is INR. A client's confirmed locale profile (M241) overrides it for that client (workspace_currency_for). It is read only while data_doctor.unified is on.\n(b) check_currency reads each money column's signs, codes and header words and records counts only. CURRENCY_FOREIGN (ask) is a currency other than the workspace's. CURRENCY_MIXED (stop) is two currencies in one column, or one value that names two. CURRENCY_UNSTATED (ask) is a money column with no sign, code or header word; it is asked once per client and never assumed.\n(c) Recipe. parse_number gains an optional `unit` (an ISO code). A value that names another currency stops the run with CURRENCY_MIXED. Without `unit` nothing changes. A new step kind, convert_currency, carries a frozen {from, to, rate, rate_date, source} and an optional rows rule: all (the default), marked (by sign), or {column, values}. Products are exact (Decimal). The step sits in phase 1, before the parse_number that reads the rest. check_recipe refuses a column converted to two currencies, converted from one currency twice, read in a `unit` other than the one it was converted to, or converted by sign after it was already turned into numbers. Review fix: a partial conversion (rows other than \"all\") guards itself. A row it leaves as written that names a currency other than `to`, or other than one that a later convert_currency on the same column takes, stops with CURRENCY_MIXED. This holds whether or not the later parse_number names a `unit`, so '€5' is never read as 5 rupees. Review fix: CURRENCY_MIXED is registered beside Plan G's recipe codes in AGENT_VALIDATION_CODES and has its own suggestion in recipe_failure_report. POST /runs, scoring preparation and a scheduled firing therefore return it as a 409 check that asks which rows are which, instead of RECIPE_STEP_INVALID with retrain advice.\n(d) A rate comes only from a person. It carries its date and the person's own source, and the product never fetches a rate: currency modules have no network code. CURRENCY_RATE_INVALID refuses a bad code, the same currency twice, a rate that is not positive or is above 1,000,000, a date that is not a date or is in the future, and an empty source.\n(e) Approval is APPROVE-class (Analyst). The person sends back the exact sentence they were shown (APPROVAL_SENTENCE_CHANGED otherwise). Who approved, and when, is recorded in ApprovedRate.\n(f) The answer to a mixed column is answer_mixed: a column that says which rows are which, or the signs on every row. It becomes one conversion per foreign currency, each with its own approved rate.\n(g) MoneyBasis is stored beside the run (runs/<run_id>/money_basis.json), and only the Data Doctor flow writes it. It records each money column's unit and every rate used. A conversion with no approval is refused (CURRENCY_RATE_UNAPPROVED). add_amounts refuses amounts in two currencies with CURRENCY_MIXED.\n(h) Reports. The value view (GET /pilot/roi/{run_id}) and the Value Proof Pack (GET /pilot/proof/{campaign_id}) show, under \"Currency\", each money column's unit and every rate used, with its date, source and approver. Review fix: a report's own amounts are never relabelled. Gross value, costs, net value, \"Your inputs\", the per-unit wording and the footer are the person's value inputs times measured counts, so they stay in RoiInputs.currency (rupees). When a money column of the file is in another currency, one line says the two are shown apart and nothing is converted or added across currencies (ReportMoney.lines_beside). The continuous outcome's average is never labelled with another column's currency. Widening RoiInputs.currency so the inputs themselves can be in another currency is left to a later milestone; it would be additive, with INR as the default. With no basis, or with a rupee basis that converted nothing, both documents are byte-identical.\n(i) ui/format.js: setWorkspaceCurrency, getWorkspaceCurrency and currencyName. money() defaults to the workspace currency, which is INR unless set. A figure with format \"money\" carries its currency. No currency sign is typed in by hand.\n(j) Switch-off and INR byte-identity. With data_doctor.unified off, no basis is written and every report, recipe, hash and digest is as before. Saved recipes keep their order, hash and behaviour.\n(k) M232 registry tools (engine/doctor/tools_currency.py): check_currency, report_in_currency, and convert_currency (person_only, APPROVE-class; its proposal needs the exact sentence).",
+      "readme_note": "M242 (Plan O, DEC-1812) Currency: money keeps its unit (parse_number `unit`). A foreign currency is asked about (CURRENCY_FOREIGN): report it as written, or convert it at a dated rate a person gives and an Analyst approves; a rate is never fetched. Mixed currencies stop (CURRENCY_MIXED, a 409 that asks which rows are which), and partial conversions guard themselves. The value view and the proof pack list each money column's unit and every rate, its date, source and approver, under \"Currency\", and keep writing amounts from the rupee value inputs in rupees. The workspace currency is data_doctor.workspace_currency (INR) or the client's confirmed profile. Switch off: byte-identical.",
+      "cross_branch": [
+        "M242 to integrator: engine/contracts.py now has CURRENCY_MIXED inside AGENT_VALIDATION_CODES, marked '# PLAN-O (M242): move into the PLAN-O block at integration'. Move it into the PLAN-O block (or a Plan O check-code hook) as Plan O's shared-file convention decides. In the same merge add the CURRENCY_MIXED entry to configs/pilot/help.yaml. Without it, tests/unit/pilot/test_help.py::test_every_check_code_the_engine_can_raise_has_an_entry and tests/integration/pilot/test_pilot_api.py::test_help_carries_every_check_code_and_the_glossary fail. I checked that both pass with the entry given in new_codes.",
+        "M242 to integrator: add CURRENCY_FOREIGN, CURRENCY_MIXED, CURRENCY_UNSTATED, CURRENCY_RATE_INVALID, CURRENCY_RATE_UNAPPROVED and APPROVAL_SENTENCE_CHANGED to engine/doctor/codes.py PLAN_O_CODES, together with their configs/pilot/help.yaml entries from new_codes. I checked locally that the help tests and test_plan_o_setup pass with them.",
+        "M242 to M239: APPROVAL_SENTENCE_CHANGED is raised by M242's rate approval. If M239 defines the general constant and help entry, keep one registration and one help entry. engine/doctor/currency.py can then import M239's constant.",
+        "M242 to M243 (prescription): MoneyBasis.basis_hash covers the units and rates of the money columns, not who approved them. It is the field to record for currency drift.",
+        "M242 to M232 (tool registry), M241 (locale profile), the advisor and the chat: convert_currency is not in CHAT_STEP_KINDS or PERSON_STEP_KINDS. Rates reach a recipe only through propose_conversion and approve_conversion. A partial convert_currency (rows 'marked' or by column) now stops with CURRENCY_MIXED when a row it leaves names a currency other than `to` (or one a later conversion of the column takes). So no step that comes after it, including a parse_number without `unit`, can read foreign money as the column's currency.",
+        "M242 to anyone widening the value inputs: RoiInputs.currency stays Literal['INR']. Reports keep writing input-derived amounts in that currency and only note a foreign money column apart (ReportMoney.lines_beside). To value in another currency, widen RoiInputs.currency additively with INR as the default. Then either print both currencies labelled apart, or ask with CURRENCY_FOREIGN; never relabel."
+      ],
+      "test_files": [
+        "tests/unit/agent/test_currency_steps.py",
+        "tests/unit/doctor/test_currency.py",
+        "tests/unit/doctor/test_currency_reports.py",
+        "tests/unit/doctor/test_tools_currency.py",
+        "tests/unit/ux/test_workspace_currency_js.py",
+        "tests/unit/ux/workspace_currency.test.mjs",
+        "tests/integration/pilot/test_currency_reports_api.py",
+        "tests/integration/agent/test_currency_recipe_api.py"
+      ],
+      "notes": "The reviewers' 1 blocker and 2 major issues are fixed in commit f31ea7c on top of 6e8c490. It was never pushed.\n\nBLOCKER, rupee inputs relabelled as dollars: fixed. engine/pilot/roi.py is back to its pre-M242 body. The only addition is the \"Currency\" block, built from ReportMoney.lines_beside(view.inputs.currency). Gross value, costs, net value, \"Your inputs\", the per-unit wording, the footer and the continuous outcome's \"Average amount\" are always formatted in RoiInputs.currency (INR) with format_inr, and are never relabelled. When a money column is in a currency other than the inputs', one extra line says the inputs are in rupees, the file's amounts are in, for example, US dollars, and the two are shown apart: nothing is converted or added across currencies. proof_document uses the same lines_beside('INR'), so the value view and the proof pack now agree. ReportMoney gains `currencies` (every reported currency of the basis) and `lines_beside`. `format` and `name` stay, for report_in and tests. The integration test was rewritten as test_rupee_inputs_stay_rupees_beside_a_dollar_basis: it asserts that ₹1,200 to ₹3,600 and 'Value in rupees' stay beside the USD basis note and the apart line, and that no '$' appears. The unit tests now assert that blocks are only added (heading and bullets), never changed, and that the footer is identical. I did not widen RoiInputs.currency (one of the reviewer's two options); it is noted for a later milestone in DEC (h) and in cross_branch.\n\nMAJOR, partial conversion followed by a parse_number without a unit: fixed in the step itself. convert_currency gains `target` and `pending`, and run_recipe passes the step's `to` plus the `from` of every later convert_currency on the same column. With rows other than 'all', any row left as written whose text names a currency outside {to} ∪ pending raises CURRENCY_MIXED, with masked examples. The reviewer's exact reproduction (['$12.10','₹100','1,000','€5'], marked USD→INR, then parse_number {}) now stops at step 1. A second test covers a row the selector column does not choose that still shows '$'. A positive guard keeps a USD-then-EUR pair of marked conversions working: [1005.51, 100.0, 1000.0, 450.0]. I chose the self-guarding fix over the check_recipe refusal: it covers recipes from the advisor, the chat and M241 alike, and it leaves valid recipes valid.\n\nMAJOR, CURRENCY_MIXED rewritten to RECIPE_STEP_INVALID: fixed. _SUGGESTIONS in api/routes/agent_recipes.py has a CURRENCY_MIXED entry: 'Say which rows are in which currency, or convert them at a rate you give; amounts in different currencies are never added together.' CURRENCY_MIXED is added to AGENT_VALIDATION_CODES in engine/contracts.py with the reviewer's '# PLAN-O (M242): move into the PLAN-O block at integration' comment. It is placed inside the frozenset literal, not at the end of the file, because CHECK_CODES is the union computed at import time; a later rebinding would not register it. The tables stay disjoint. The new integration test tests/integration/agent/test_currency_recipe_api.py scores a file whose 'monthly_bill' holds '$12' in a few rows, with a parse_number {unit: INR} recipe. It gets a 409 whose check has code CURRENCY_MIXED, column monthly_bill, '$12' in the message and the new suggestion, with no 'Retrain'.\n\nKnown branch-local failures: registering CURRENCY_MIXED in CHECK_CODES makes tests/unit/pilot/test_help.py::test_every_check_code_the_engine_can_raise_has_an_entry and tests/integration/pilot/test_pilot_api.py::test_help_carries_every_check_code_and_the_glossary fail until configs/pilot/help.yaml gets the CURRENCY_MIXED entry. I may not edit that file. The entry is in new_codes, and I checked both tests pass with it (temporary edit, reverted).\n\nAlso fixed: a name clash I introduced while fixing, a second `_plural` in engine/doctor/currency.py; the new helper is `_money_words`. Docs updated: docs/DATA_DOCTOR.md (reports keep rupee inputs in rupees, the 409 code) and docs/AGENTS.md (partial-conversion guard, the 409 code and its suggestion). The module docstring of engine/doctor/currency.py is corrected too. ruff, black --check and mypy --strict are clean on every changed file. No minor issues were raised, so none were rejected. Untracked logs, not committed: .m242_fail_before.log, .m242_tests.log, .m242_review_fail_before.log."
+    },
+    "reviews": [
+      {
+        "lens": "CORRECTNESS AND COMPATIBILITY: currencies never added, mixed stops and asks, person-given dated approved rate never fetched, rate and unit shown wherever money is reported, confirmed currency never changed silently, switch-off byte-identity, additive contracts, codes with help, no forbidden docs, lint",
+        "issues": [
+          {
+            "severity": "blocker",
+            "where": "engine/pilot/roi.py roi_document (fmt/name/one switched to money.format when money is not None), api/routes/pilot.py read_roi; asserted by tests/integration/pilot/test_currency_reports_api.py::test_a_run_reported_in_dollars_prints_dollars",
+            "problem": "The value view changes the currency label of amounts that are in rupees. RoiInputs.currency is still Literal[\"INR\"], and value_per_outcome, offer_cost and contact_cost are described and entered as rupees. Gross value, net value and the costs are those rupee inputs multiplied by measured counts. Yet when a run's MoneyBasis says a feature column such as bill_amount is USD, every one of these figures is printed with '$', under 'Value in US dollars' and 'Net value per US dollar spent'. No conversion and no rate is involved. The new test enshrines this: it saves value_per_outcome=40 (rupees), then asserts '$1,200 to $3,600' and that no ₹ appears. The currency of a feature column has nothing to do with the currency of the person's value inputs. This is a silent change of currency on the page clients see, and it breaks the rule that a different currency is either reported as written or converted at an approved rate. The proof pack for the same campaign still prints ₹ (proof_document only adds notes), so two reports disagree. The continuous-outcome 'Average amount (US dollars)' label has the same flaw: check_currency never reads the outcome column (target is skipped), so the outcome's currency is inferred from other columns.",
+            "fix": "Format the input-derived figures (gross value, costs, net value, 'Your inputs', the per-unit wording, the footer) in RoiInputs.currency, which is always INR today, and never in money.currency. Keep the 'Currency' notes block, which correctly states the units and rates of the columns. If the value view should be in the basis currency, the inputs need their own currency: widen RoiInputs.currency additively, with INR as the default. When inputs.currency differs from basis.report_currency, either print both labelled apart or ask (CURRENCY_FOREIGN). Never relabel. Drop the money-based label on the outcome average unless the outcome column's unit is actually recorded. Rewrite the integration test to assert that ₹ inputs stay ₹ beside a USD basis note."
+          },
+          {
+            "severity": "major",
+            "where": "engine/agent/recipe.py _check_currency; engine/agent/currency_steps.py convert_currency (rows='marked' or rows by column)",
+            "problem": "The recipe contract claims 'one currency per money column at the end of the recipe', but it only holds when the following parse_number carries `unit`. Reproduced on this branch: amount=['$12.10','₹100','1,000','€5'] with convert_currency{from USD,to INR,rows:'marked'} followed by parse_number with params {} gives [1005.51, 100.0, 1000.0, 5.0]. The €5 is silently read as 5 rupees, and any later combine_rows sum or report adds euros to rupees. The same happens with rows={column,values}: an unchosen row still showing '$' is read as rupees. Only parse_number{unit:'INR'} stops this (CURRENCY_MIXED). Nothing requires that unit. A recipe can get a unit-less parse_number on the same column from the advisor, the chat (PARSE_NUMBER is in CHAT_STEP_KINDS) or M241's Indian-values proposal, and check_recipe has no duplicate-step check.",
+            "fix": "Make the partial conversion self-guarding. Pass params['to'] into convert_currency, and when rows != 'all', raise CURRENCY_MIXED for any row left unconverted whose value names a currency other than `to`. Alternatively, in _check_currency, refuse (RECIPE_STEP_INVALID) a column that has a convert_currency step with rows != 'all' unless a later parse_number on that column names unit == to. Add the reproduction above as a test."
+          },
+          {
+            "severity": "major",
+            "where": "api/routes/agent_recipes.py recipe_failure_report (_SUGGESTIONS), engine/contracts.py AGENT_VALIDATION_CODES; raised from engine/agent/recipe.py _check_unit/_convert",
+            "problem": "CURRENCY_MIXED, the STOP that must ask which rows are which, is raised as a RecipeError code. recipe_failure_report rewrites any code it does not know to RECIPE_STEP_INVALID, with the suggestion 'Retrain the model with Guided setup, so its preparation steps are saved again.' So the planned case of next month's file with a '$12' in a rupee column comes back from POST /runs, scoring preparation and scheduled firing as RECIPE_STEP_INVALID with retrain advice. The person is never told the column mixes currencies or what to answer, and the code the help entry describes never reaches them.",
+            "fix": "Add CURRENCY_MIXED to _SUGGESTIONS with plain help, for example: 'Say which rows are in which currency, or convert them at a rate you give; amounts in different currencies are never added together.' Register CURRENCY_MIXED in the agent check-code table: add it at the end of engine/contracts.py with the '# PLAN-O (M242): move into the PLAN-O block at integration' comment, so the ValidationCheck code is a registered one. Add a test that a parse_number{unit:'INR'} recipe on a file containing '$12' gives a 409 whose check code is CURRENCY_MIXED."
+          }
+        ],
+        "verdict": "Not ready to merge: 1 blocker and 2 majors. The builder's log is consistent: 2,371 of 2,372 passed, and the one failure, a load flake in test_pilot_acceptance, passed when re-run on its own. My re-run of the currency test files on this branch also passed, and ruff, black and mypy --strict are clean on the changed files. With the switch off, parse_number, recipes and digests are unchanged. The new `unit` and convert_currency step only add to the contracts, workspace_currency is left out of dumps when it is INR, ui/format.js still defaults to INR, no rate is ever fetched, approvals record who approved, the date and the exact sentence, and no forbidden shared docs were edited. The blocker: the value view prints the person's rupee inputs with a '$' sign whenever a feature column is in dollars, a silent change of currency that a new test asserts. The two majors: a partial conversion followed by a parse_number without a unit silently reads leftover foreign amounts as the target currency (€5 becomes 5 rupees), and on the run and scoring paths CURRENCY_MIXED is rewritten to RECIPE_STEP_INVALID with 'retrain the model' advice, so the person is never asked which rows are which."
+      }
+    ]
+  },
+  "workflowProgress": [
+    {
+      "type": "workflow_phase",
+      "index": 1,
+      "title": "Build"
+    },
+    {
+      "type": "workflow_phase",
+      "index": 2,
+      "title": "Review"
+    },
+    {
+      "type": "workflow_phase",
+      "index": 3,
+      "title": "Repair"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 1,
+      "label": "build:M242",
+      "phaseIndex": 1,
+      "phaseTitle": "Build",
+      "agentId": "a5b3f39e1508754ae",
+      "isolation": "worktree",
+      "model": "claude-opus-5-5",
+      "state": "done",
+      "startedAt": 1791800671257,
+      "queuedAt": 1791800670007,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "lastToolSummary": "/home/user/Marketing.ai-/.claude/worktrees/wf_be82585d-9fd-1",
+      "promptPreview": "You are a staff engineer building Marketing AI.\nFIRST, from your worktree root, run `git merge --no-ff worktree-wf_0468827f-ac4-1` (M241: the locale profile, with money_units, workspace_currency and unconfirmed_money_units; tip e396edd). Then read /tmp/claude-0/-home-user-Marketing-ai-/4c38d8e2-bdd7-5efa-8e1d-c0118c2d39a3/scratchpad/plan_o_common.md completely, and build milestone M242 (Currency) …",
+      "promptFramed": true,
+      "lastProgressAt": 1791804893685,
+      "tokens": 410406,
+      "toolCalls": 198,
+      "durationMs": 4222423,
+      "resultPreview": "{\"worktree_path\":\"/home/user/Marketing.ai-/.claude/worktrees/wf_be82585d-9fd-1\",\"branch\":\"worktree-wf_be82585d-9fd-1\",\"commit\":\"6e8c490\",\"tests_run\":\"I merged M241 first (worktree-wf_0468827f-ac4-1, merge a52f725). Then I ran the targeted tests with -n 3. The log is <worktree>/.m242_tests.log. The paths were tests/unit/doctor, tests/unit/agent, tests/unit/pilot, tests/unit/ux, tests/unit/test_docs…"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 2,
+      "label": "review:M242:review",
+      "phaseIndex": 2,
+      "phaseTitle": "Review",
+      "agentId": "a5ad293b8e932e582",
+      "model": "claude-opus-5-5",
+      "state": "done",
+      "startedAt": 1791804898749,
+      "queuedAt": 1791804898700,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "lastToolSummary": "CORRECTNESS AND COMPATIBILITY: currencies never added, mixe…",
+      "promptPreview": "You are an adversarial reviewer. Lens: CORRECTNESS AND COMPATIBILITY in one pass: amounts in different currencies are never added; mixed columns stop and ask; a conversion needs a person-given dated rate recorded with who approved it, and it is never fetched; the rate and currency are shown wherever money is reported; a confirmed currency is never changed silently; with the switch off, parse_numbe…",
+      "promptFramed": true,
+      "lastProgressAt": 1791805118735,
+      "tokens": 135639,
+      "toolCalls": 28,
+      "durationMs": 219985,
+      "resultPreview": "{\"lens\":\"CORRECTNESS AND COMPATIBILITY: currencies never added, mixed stops and asks, person-given dated approved rate never fetched, rate and unit shown wherever money is reported, confirmed currency never changed silently, switch-off byte-identity, additive contracts, codes with help, no forbidden docs, lint\",\"issues\":[{\"severity\":\"blocker\",\"where\":\"engine/pilot/roi.py roi_document (fmt/name/one…"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 3,
+      "label": "repair:M242",
+      "phaseIndex": 3,
+      "phaseTitle": "Repair",
+      "agentId": "a73895066025e1c55",
+      "model": "claude-opus-5-5",
+      "state": "done",
+      "startedAt": 1791805120836,
+      "queuedAt": 1791805120831,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "lastToolSummary": "/home/user/Marketing.ai-/.claude/worktrees/wf_be82585d-9fd-1",
+      "promptPreview": "You built M242. Work ONLY in your existing worktree /home/user/Marketing.ai-/.claude/worktrees/wf_be82585d-9fd-1 (cd there; branch worktree-wf_be82585d-9fd-1). \nRULES: You work in an isolated git worktree of /home/user/Marketing.ai-. Run commands from your worktree root: /home/user/Marketing.ai-/.venv/bin/python -m pytest <paths> (pytest pythonpath=[\".\"] imports your worktree's code), /home/user/M…",
+      "promptFramed": true,
+      "lastProgressAt": 1791807151631,
+      "tokens": 171146,
+      "toolCalls": 66,
+      "durationMs": 2030794,
+      "resultPreview": "{\"worktree_path\":\"/home/user/Marketing.ai-/.claude/worktrees/wf_be82585d-9fd-1\",\"branch\":\"worktree-wf_be82585d-9fd-1\",\"commit\":\"f31ea7c06a1fbc48ece7b136b025da44462b2fc5\",\"tests_run\":\"Review-fix round, run from the worktree root. (1) Targeted unit tests: tests/unit/agent, tests/unit/doctor, tests/unit/pilot, tests/unit/test_one_check_contract.py, tests/unit/measurement/test_codes.py (-n 2). Everyth…"
+    }
+  ],
+  "totalTokens": 717191,
+  "totalToolCalls": 292
+}

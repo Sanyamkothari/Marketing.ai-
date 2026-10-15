@@ -83,7 +83,8 @@ When the terminal shows `Uvicorn running on http://127.0.0.1:8000`, open
 ## 3. Signing in
 
 With `make demo`, **sign-in is off**: you are the "local operator" with every role, so you can see
-every screen. This is the quickest way to look around.
+every screen. This is the quickest way to look around. The demo shows the new look, with the menu down the
+left-hand side.
 
 To show what each role may do (for example, that the person who trained a model cannot approve
 it), start the demo with sign-in on instead:
@@ -117,7 +118,7 @@ These ten steps show the whole product in about fifteen minutes.
 3. **See the trained model.** Under **Previous runs**, open the training run, then its **Model**
    page: how good the model is in plain words, compared with a simple yardstick, and which customer
    facts matter most. The technical figures are under **Technical details**.
-4. **See who to contact.** Open the scoring run (**Campaigns** in the top bar lists them): every
+4. **See who to contact.** Open the scoring run (**Campaigns** in the menu lists them): every
    customer gets a risk band, an action and a reason in plain words. **Download contact list (CSV)**.
 5. **See whether the campaign worked.** Open its **Campaign results** step: contacted customers
    compared with a randomly held-back control group, in customers kept.

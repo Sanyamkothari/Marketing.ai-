@@ -1,0 +1,15 @@
+MILESTONE M192 — FIND THE AI SERVICE IN ONE CLICK (Plan M, DEC-1622). Approved by the user 12 Oct ("i am not able to find where to configure my llm api keys in this new ui" → "yes").
+Build ON TOP of main after M185–M188 are merged (Settings was restyled by M188: ui/modules/simple/pages.js settingsHtml; Data page ui/modules/data/page.js). Use M185 helpers (pageHeader, button, statusChip, card, icon).
+Problem today: Settings → "AI service" links to #/connections (the general Connections page), not the key form; Data page says "The AI service has its own place under Settings" (a loop); the two slots are named product/deliverable (engineering words). The key forms exist: ui/modules/connections/ai.js at #/connections/ai/product and #/connections/ai/deliverable (GET /ai-service → { slots: { product, deliverable }, providers }).
+1. New page #/settings/ai ("AI service"): breadcrumb Settings › AI service. Two cards side by side (stacked on phone):
+   - "AI that helps your team" (product slot): one sentence (Guided setup / Data Doctor chat and suggestions), status chip Connected · <provider label> / Not connected (statusChip health), button Connect / Change → #/connections/ai/product.
+   - "AI that writes for your customers" (deliverable slot): one sentence (campaign messages, root-cause notes), same status + button → #/connections/ai/deliverable.
+   - A short note: "You can use the same key for both." Data from GET /ai-service only; nothing invented; a failed load is an error card with Retry.
+   - Shown only when can("GET","/ai-service"); Connect buttons only when can("PUT","/ai-service/{slot}") (else "Ask an admin to connect it").
+2. Settings → "AI service" row links to #/settings/ai (text: "Connect the AI that helps your team and the AI that writes for your customers.").
+3. Data page note links to #/settings/ai ("Connect an AI service in Settings › AI service.").
+4. Where a feature answers 409 AI_NOT_CONNECTED in the campaigns layout (find the UI places that render that code, e.g. Guided setup assist, generative copy, root cause), show "No AI service is connected. Connect one in Settings › AI service." with a link to #/settings/ai (only when the person can PUT; otherwise "Ask an admin…").
+5. Words: add the new visible strings to the visible-text check baselines/glossary rules as the project requires (plain words; no "product slot"/"deliverable" on these screens; technical names allowed only behind the technical switch).
+6. The key forms' breadcrumbs: when reached from #/settings/ai, the back link goes to Settings › AI service (keep Connections crumb working if that is simpler; do not break existing tests).
+Tests: jsdom for the new page (both slots connected / not connected / no permission / load error), the Settings link, the Data note link, the AI_NOT_CONNECTED message link; route registered in router (ui/modules/router.js PLAN-M block); visible-text, accessibility, keyboard, UI sweep stay green; screenshot desktop + phone.
+No API/engine change. Additive. DEC-1622. Never use git stash.
