@@ -73,10 +73,31 @@ HINGLISH_TRUE: Final[frozenset[str]] = frozenset(
         "ji han",
         "jee haan",
         "ji ha",
+        "✓",  # tick and check marks
+        "✔",
+        "✅",
+        "☑",
+        "√",
     }
 )
 HINGLISH_FALSE: Final[frozenset[str]] = frozenset(
-    {"nahi", "nahin", "nahee", "nahi ji", "nahin ji", "ji nahi", "ji nahin", "jee nahi", "nai", "naa"}
+    {
+        "nahi",
+        "nahin",
+        "nahee",
+        "nahi ji",
+        "nahin ji",
+        "ji nahi",
+        "ji nahin",
+        "jee nahi",
+        "nai",
+        "naa",
+        "✗",
+        "✘",
+        "❌",
+        "✖",
+        "×",
+    }
 )
 DEVANAGARI_TRUE: Final[frozenset[str]] = frozenset(
     {"हाँ", "हां", "हा", "जी हाँ", "जी हां", "हाँ जी", "हां जी"}
