@@ -148,7 +148,9 @@ class FirstLook(StrictBase):
     file_name: str
     rows: int = Field(description="Rows counted (the rows the diagnosis read).")
     file_rows: int = Field(description="Rows the file has.")
-    sampled: bool = Field(description="True when `rows` is fewer than `file_rows`: the first rows were read.")
+    sampled: bool = Field(
+        description="True when `rows` is fewer than `file_rows`: a random sample of the file was read."
+    )
     summary: str = Field(description="One plain sentence.")
     outcome_column: str | None = None
     positive_label: str | None = None

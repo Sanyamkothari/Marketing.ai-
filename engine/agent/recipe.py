@@ -51,11 +51,20 @@ from engine.agent.formats import (
     parse_excel_serial_dates,
     parse_numbers,
 )
-from engine.agent.key_steps import normalise_keys, rule_from_params
+from engine.agent.key_steps import KeyMergeError, normalise_keys, rule_from_params
 from engine.agent.latest import KeepLatestError, KeepLatestSpec, keep_latest_per_id
 from engine.agent.placeholders import MAX_PLACEHOLDER_VALUES, set_missing
 from engine.agent.reshape import CombineError, CombineSpec, LeakCheck, combine_rows
-from engine.agent.sql_step import THIS_TABLE, SqlStepError, aliases_of, check_sql, run_sql, sql_params
+from engine.agent.sql_step import (
+    THIS_TABLE,
+    SqlStepError,
+    aliases_of,
+    check_sql,
+    future_rows_moved,
+    resolve_as_of_rule,
+    run_sql,
+    sql_params,
+)
 from engine.agent.unpivot import UnpivotError, UnpivotSpec, unpivot
 from engine.agent.value_steps import (
     MAX_CORRECTIONS,
@@ -361,6 +370,8 @@ def _check_sql_step(step: RecipeStep) -> None:
         params = sql_params(_params(step))
         if step.column != params.output_name:
             raise SqlStepError("SQL_NOT_VALID", "A query step's column is the name of the table it makes.")
+        if params.as_of_rule is not None and params.as_of_rule.table not in params.inputs:
+            raise SqlStepError("SQL_NOT_VALID", "The as-of date rule reads a table the query does not read.")
         check_sql(params.sql, aliases_of(params.inputs), as_of=params.as_of or date.min)
     except SqlStepError as exc:
         raise RecipeError(exc.code, exc.message, order=step.order) from exc
@@ -771,6 +782,21 @@ def _convert(frame: pd.DataFrame, step: RecipeStep, pending: frozenset[str]) -> 
         raise RecipeError(exc.code, exc.message, column=step.column, order=step.order) from exc
 
 
+def _normalise(step: RecipeStep, series: pd.Series[Any], params: Mapping[str, Any]) -> ParseOutcome:
+    """The `normalise_key` step, refused when it would make different IDs the same ID (G4)."""
+    try:
+        return normalise_keys(series, rule_from_params(dict(params)))
+    except KeyMergeError as exc:
+        shown = f" (for example {exc.examples[0]} and {exc.examples[1]})" if exc.examples else ""
+        raise RecipeError(
+            "KEY_RULE_MERGES_IDS",
+            f"Tidying the IDs in '{step.column}' this way would make {exc.merged:,} different IDs the same "
+            f"ID{shown}. Customers would be mixed up, so it is not done.",
+            column=step.column,
+            order=step.order,
+        ) from exc
+
+
 def _apply(
     frame: pd.DataFrame,
     step: RecipeStep,
@@ -828,7 +854,7 @@ def _apply(
             _series(series), minimum=params.get("minimum"), maximum=params.get("maximum")
         ),
         RecipeStepKind.FILL_MISSING: lambda: fill_missing(_series(series), value=params["value"]),
-        RecipeStepKind.NORMALISE_KEY: lambda: normalise_keys(_series(series), rule_from_params(params)),
+        RecipeStepKind.NORMALISE_KEY: lambda: _normalise(step, _series(series), params),
         RecipeStepKind.CONVERT_CURRENCY: lambda: _convert(frame, step, pending),
     }
     return runners[step.kind]()
@@ -876,8 +902,13 @@ def _run_sql_step(
     *,
     primary_key: str | None,
     target: str | None,
+    leak_check: LeakCheck | None = None,
 ) -> tuple[pd.DataFrame, StepReceipt]:
-    """The table a `sql_query` step makes, and its receipt (rows read from each table, rows written)."""
+    """The table a `sql_query` step makes, and its receipt (rows read from each table, rows written).
+
+    The as-of date is the run's own, else the step's rule worked out on this run's files, else the date frozen in
+    the step. On a training file (`leak_check` full) the table is built again without the rows dated after it and
+    must not change (the future-data check of onboarding ruling R1, for a table made by a query)."""
     params = sql_params(_params(step))
     read: dict[str, pd.DataFrame] = {}
     for name in params.inputs:
@@ -891,9 +922,40 @@ def _run_sql_step(
             )
         read[name] = frame
     try:
-        run = run_sql(params.sql, read, output_name=params.output_name, as_of=as_of or params.as_of)
+        used = as_of
+        rule = params.as_of_rule
+        if used is None and rule is not None:
+            source = read.get(rule.table)
+            if source is None or rule.column not in source.columns:
+                raise SqlStepError(
+                    "SQL_INPUT_MISSING",
+                    f"The as-of date reads '{rule.column}' of '{rule.table}', which is not there.",
+                )
+            used = resolve_as_of_rule(rule, source[rule.column])
+        used = used or params.as_of
+        run = run_sql(params.sql, read, output_name=params.output_name, as_of=used)
+        # A query that builds the outcome from later rows (`reads_future`) is let off for the outcome column only:
+        # every other column must still be what was known on the as-of date.
+        moved = (
+            future_rows_moved(
+                params.sql,
+                read,
+                output_name=params.output_name,
+                as_of=used,
+                ignore=(target,) if params.reads_future and target else (),
+            )
+            if leak_check == "full" and used is not None
+            else None
+        )
     except SqlStepError as exc:
         raise RecipeError(exc.code, exc.message, order=step.order) from exc
+    if moved:
+        raise RecipeError(
+            "FUTURE_EVENTS_LEAKED",
+            f"The query's table changed in {moved:,} rows when the rows dated after {used} were left out of "
+            "its inputs, so it uses what was not known on that date and could contain the answer.",
+            order=step.order,
+        )
     for role in (primary_key, target):
         if role and role not in run.frame.columns:
             raise RecipeError(
@@ -1028,7 +1090,7 @@ def run_recipe(
             continue
         if step.kind is RecipeStepKind.SQL_QUERY:
             work, sql_receipt = _run_sql_step(
-                step, work, tables, as_of, primary_key=primary_key, target=target
+                step, work, tables, as_of, primary_key=primary_key, target=target, leak_check=leak_check
             )
             receipts.append(sql_receipt)
             continue

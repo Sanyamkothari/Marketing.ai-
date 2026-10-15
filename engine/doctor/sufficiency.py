@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Sequence
+from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final, Literal
 
@@ -208,9 +209,9 @@ def _shortfalls(
         resolve_positive_label,
     )
 
-    params = params_from_config(config, target=outcome, row_count=counted)
+    params = replace(params_from_config(config, target=outcome, row_count=counted), allow_rarer_label=False)
     entity = _entity(config)
-    tail = f" Counted on the first {counted:,} of its {whole:,} rows." if whole > counted else ""
+    tail = f" Counted on a random sample of {counted:,} of its {whole:,} rows." if whole > counted else ""
     found: list[Shortfall] = []
     counts: _Counts | None = None
     try:

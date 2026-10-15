@@ -156,7 +156,7 @@ def test_counting_the_first_rows_of_a_longer_file_says_so(config_root: Path) -> 
     )
     (short,) = steps.shortfalls
     assert (short.rows_counted, short.file_rows) == (1500, 250_000)
-    assert "Counted on the first 1,500 of its 250,000 rows." in short.sentence
+    assert "Counted on a random sample of 1,500 of its 250,000 rows." in short.sentence
 
 
 def test_a_file_with_enough_has_no_shortfall(config_root: Path) -> None:

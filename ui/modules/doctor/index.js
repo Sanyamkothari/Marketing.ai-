@@ -178,7 +178,7 @@ export function firstLookHtml(look) {
     look.label,
   )}</p><p>${esc(look.summary)}</p>`;
   const sampled = look.sampled
-    ? `<div class="fhint">Counted on the first ${esc(fmtInt(look.rows))} of ${esc(fmtInt(look.file_rows))} rows.</div>`
+    ? `<div class="fhint">Counted on a random sample of ${esc(fmtInt(look.rows))} of ${esc(fmtInt(look.file_rows))} rows.</div>`
     : "";
   const shown = look.kind === "recency" ? [look.recency, look.frequency].filter(Boolean) : look.columns || [];
   const other = shown.some((column) => column.groups.some((g) => g.group === "(other)"))

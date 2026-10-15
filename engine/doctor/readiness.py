@@ -684,6 +684,8 @@ def _acknowledgements(
 
 
 def _roles(inputs: ReadinessInputs) -> ReadinessRoles:
+    from dataclasses import replace
+
     from engine.stages import validate
     from engine.uplift.data import detect_treatment_column
 
@@ -699,7 +701,7 @@ def _roles(inputs: ReadinessInputs) -> ReadinessRoles:
         and inputs.target in inputs.frame.columns
         and config.problem_type is ProblemType.BINARY_CLASSIFICATION
     ):
-        params = validate.params_from_config(config, target=inputs.target)
+        params = replace(validate.params_from_config(config, target=inputs.target), allow_rarer_label=False)
         label, _p, _n = validate.resolve_positive_label(inputs.frame, params)
         if label is not None:
             if config.target.positive_label is not None and label_key(label) == label_key(

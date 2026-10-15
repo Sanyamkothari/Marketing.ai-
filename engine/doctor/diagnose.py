@@ -26,8 +26,8 @@ tool on the same rows, with the advisor's leak findings left out. Only the chose
 from __future__ import annotations
 
 import re
-from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Final
 
@@ -42,6 +42,7 @@ if TYPE_CHECKING:
 
     from engine.config import RoleCatalogue, UseCaseConfig
     from engine.contracts import DatasetProfile
+    from engine.stages.ingest import ColumnStats
 
 __all__ = ["ADVISE_ROWS", "LoadedFile", "Offer", "diagnose_file", "outcome_columns", "readiness"]
 
@@ -69,6 +70,10 @@ class LoadedFile:
     frame: pd.DataFrame
     profile: DatasetProfile
     notes: tuple[str, ...] = ()
+    exact: Mapping[str, ColumnStats] = field(default_factory=dict)
+    """Exact counts and the whole value list of the key, consent and outcome columns, over every row of the file."""
+    file_rows: int | None = None
+    """The file's rows when `frame` is a random sample of them; None when `frame` is the whole file."""
 
 
 @dataclass(frozen=True)

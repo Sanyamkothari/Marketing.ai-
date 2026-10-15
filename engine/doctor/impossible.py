@@ -33,7 +33,7 @@ import pandas as pd
 from pydantic import Field
 
 from engine.agent.contracts import ProposalSource, RecipeStepKind
-from engine.agent.formats import MAX_EXAMPLES, date_order, masked_cut, parse_dates
+from engine.agent.formats import MAX_EXAMPLES, date_order, masked_cut, order_unsettled, parse_dates
 from engine.agent.value_steps import MAX_MISSING_WORDS
 from engine.config import StrictBase
 from engine.doctor.row_contracts import Doubt, StepProposal
@@ -238,7 +238,10 @@ def _as_dates(series: pd.Series[Any]) -> tuple[pd.Series[Any], pd.Series[Any]] |
     distinct = pd.Series(spellings, dtype=object)
     if not distinct.str.contains(r"\d{2}", regex=True).all():
         return None
-    parsed_once = parse_dates(distinct, dayfirst=bool(date_order(distinct))).values
+    order = date_order(distinct)
+    if order_unsettled(distinct):
+        return None  # 03/04/2026 is March or April, or the column holds both orders: never read month first by default
+    parsed_once = parse_dates(distinct, dayfirst=bool(order)).values
     parsed = pd.Series(parsed_once.to_numpy()[codes], index=text.index)
     if parsed.notna().sum() < _MIN_SHARE * len(text):
         return None

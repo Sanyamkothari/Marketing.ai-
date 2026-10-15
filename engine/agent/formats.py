@@ -57,12 +57,14 @@ __all__ = [
     "ParseOutcome",
     "currency_codes",
     "date_order",
+    "date_order_conflict",
     "decimal_evidence",
     "find_excel_serial_dates",
     "find_format_issues",
     "map_booleans",
     "masked_cut",
     "normalise_texts",
+    "order_unsettled",
     "parse_dates",
     "parse_excel_serial_dates",
     "parse_numbers",
@@ -527,8 +529,8 @@ def _style_of(text: str) -> str | None:
     return None
 
 
-def date_order(cells: pd.Series[Any]) -> bool | None:
-    """Whether numeric day/month dates put the day first: True, False, or None when every value fits both."""
+def _order_proofs(cells: pd.Series[Any]) -> tuple[bool, bool]:
+    """`(some value can only be day first, some value can only be month first)`."""
     day_first = month_first = False
     for text in dict.fromkeys(str(value) for value in cells):  # each spelling once; the answer is an OR
         match = _NUMERIC_DAY_MONTH.match(text.strip())
@@ -539,11 +541,36 @@ def date_order(cells: pd.Series[Any]) -> bool | None:
             day_first = True
         elif second > 12 >= first:
             month_first = True
+    return day_first, month_first
+
+
+def date_order(cells: pd.Series[Any]) -> bool | None:
+    """Whether numeric day/month dates put the day first: True, False, or None.
+
+    None means the values do not settle it: every value fits both orders, or the column holds both (`25/03/2024`
+    and `03/25/2024`). A caller never reads a None as "month first": it asks (`date_order_conflict` tells the two
+    apart)."""
+    day_first, month_first = _order_proofs(cells)
     if day_first and not month_first:
         return True
     if month_first and not day_first:
         return False
     return None
+
+
+def order_unsettled(cells: pd.Series[Any]) -> bool:
+    """True when the cells hold numeric day/month dates and their values do not say which comes first: reading
+    them needs an answer, never a default."""
+    return date_order(cells) is None and bool(
+        pd.Series(cells, dtype=object).astype(str).str.match(_NUMERIC_DAY_MONTH).any()
+    )
+
+
+def date_order_conflict(cells: pd.Series[Any]) -> bool:
+    """True when some dates can only be day first and others only month first: two systems wrote one column, and
+    no single order reads it."""
+    day_first, month_first = _order_proofs(cells)
+    return day_first and month_first
 
 
 def _one_datetime(text: str, dayfirst: bool) -> pd.Timestamp | None:
@@ -761,12 +788,15 @@ def _date_issue(name: str, cells: pd.Series[Any]) -> FormatIssue | None:
     convertible = len(cells) - parsed.failed
     if convertible / len(cells) < MIN_CONVERT_SHARE:
         return None
+    conflict = date_order_conflict(cells)
     ambiguous_order = order is None and bool(cells.str.match(_NUMERIC_DAY_MONTH).any())
     if len(styles) < 2 and not ambiguous_order and order is None:
         return None
     examples = _distinct_examples(cells)
     notes = [f"{count} values in {style} style" for style, count in styles.most_common()]
-    if ambiguous_order:
+    if conflict:
+        notes.append("some dates can only be day first and others only month first")
+    elif ambiguous_order:
         notes.append("day and month order cannot be told from the values")
     return FormatIssue(
         column=name,
@@ -776,7 +806,7 @@ def _date_issue(name: str, cells: pd.Series[Any]) -> FormatIssue | None:
         failed=parsed.failed,
         examples=examples,
         failed_examples=parsed.failed_examples,
-        params={"dayfirst": order},
+        params={"dayfirst": order, "order_conflict": conflict},
         notes=tuple(notes),
         example_cells=(*examples, *parsed.failed_examples),
     )

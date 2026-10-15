@@ -843,6 +843,26 @@ def _format_proposals(
             )
         elif kind == "mixed_dates":
             dayfirst = params.get("dayfirst")
+            if params.get("order_conflict"):
+                builder.ask(
+                    f"In '{display_name(column)}' ({_examples(issue)}) some dates are written day first and "
+                    "others month first, so no single order reads the column. What would you like to do?",
+                    [
+                        QuestionOption(
+                            option_id="leave-as-text",
+                            label="Leave it as text",
+                            effect="The dates are not used until the column is written one way.",
+                        ),
+                        QuestionOption(
+                            option_id="export-again",
+                            label="I will export it again with the year first",
+                            effect="Nothing changes now; add the new file when you have it (2024-03-25).",
+                        ),
+                    ],
+                    [evidence],
+                    examples=_cells(issue),
+                )
+                continue
             if dayfirst is None:
                 sample = _examples(issue)
                 builder.ask(
