@@ -55,6 +55,7 @@ __all__ = [
     "PERSONAL_DATA",
     "SAFE_KEYS",
     "SAFE_LITERALS",
+    "SHAPE_ONLY",
     "STATE_TOOL",
     "TEXT_KEYS",
     "THIRD_PARTY_FREE_BACKENDS",
@@ -562,15 +563,30 @@ PERSONAL_DATA: Final[str] = "[personal data]"
 """What a value of a column the profile marks as personal data becomes."""
 HIDDEN_BY_SETTINGS: Final[str] = "[hidden by your settings]"
 """What a value of a column named in `agent.always_hide_columns` becomes."""
+SHAPE_ONLY: Final[str] = "[shape only]"
+"""Marks a long free-text column (G16): the model sees each cell's shape, whatever the data-access mode, never the text."""
 EGRESS_LATE_MASK: Final[str] = "EGRESS_LATE_MASK"
 """The turn-log code for a prompt that `assert_clean` had to mask before sending."""
 
 _PII_KINDS: Final[frozenset[str]] = frozenset(
-    {"email", "phone", "pan", "aadhaar", "name", "address", "ssn", "passport", "gstin", "epic"}
+    {
+        "email",
+        "phone",
+        "pan",
+        "aadhaar",
+        "name",
+        "address",
+        "ssn",
+        "passport",
+        "gstin",
+        "epic",
+        "sensitive",  # religion, caste, health ... (`engine.privacy.sensitive`)
+    }
 )
 SAFE_LITERALS: Final[frozenset[str]] = _PII_KINDS | {
     PERSONAL_DATA,
     HIDDEN_BY_SETTINGS,
+    SHAPE_ONLY,
     "[REDACTED]",
     "(empty)",
     "(other)",
@@ -1173,6 +1189,7 @@ class Egress:
     personal: frozenset[str] = frozenset()
     always_hide: frozenset[str] = frozenset()
     known_text: frozenset[str] = frozenset()
+    shape_only: frozenset[str] = frozenset()
     aliases: Mapping[str, str] = field(default_factory=dict)
     _exact: dict[str, str] = field(default_factory=dict, init=False, repr=False, compare=False)
     _folded: dict[str, str | None] = field(default_factory=dict, init=False, repr=False, compare=False)
@@ -1189,6 +1206,7 @@ class Egress:
         always_hide: Iterable[str] = (),
         mode: DataAccess = DataAccess.MASKED_DATA,
         known_text: Iterable[str] = (),
+        shape_only: Iterable[str] = (),
     ) -> Egress:
         names = tuple(str(column) for column in columns)
         return cls(
@@ -1197,6 +1215,7 @@ class Egress:
             personal=frozenset(str(name).casefold() for name in personal_columns),
             always_hide=frozenset(str(name).casefold() for name in always_hide),
             known_text=frozenset(known_text),
+            shape_only=frozenset(str(name).casefold() for name in shape_only),
             aliases=alias_table(names),
         )
 
@@ -1245,6 +1264,8 @@ class Egress:
             return HIDDEN_BY_SETTINGS
         if folded in self.personal or shown in self.personal:
             return PERSONAL_DATA
+        if folded in self.shape_only or shown in self.shape_only:
+            return SHAPE_ONLY
         return None
 
     def apply_aliases(self, text: str) -> str:
@@ -1321,9 +1342,9 @@ class Egress:
 
     def _example(self, cell: str, hide: str | None) -> str:
         """One quoted cell as the model may read it: the hidden marker, its shape, or the cell masked."""
-        if hide is not None:
+        if hide is not None and hide != SHAPE_ONLY:
             return hide
-        if self.mode is DataAccess.SUMMARIES_ONLY:
+        if hide == SHAPE_ONLY or self.mode is DataAccess.SUMMARIES_ONLY:
             return shape_of(_normalise(cell))
         return mask_value(cell)
 
@@ -1343,7 +1364,7 @@ class Egress:
         inner = match.group(1)
         if self._known(inner) is not None or inner in self.known_text or inner in SAFE_LITERALS:
             return match.group(0)
-        if hide is not None:
+        if hide is not None and hide != SHAPE_ONLY:
             return f"'{hide}'"
         return f"'{shape_of(inner)}'"
 
@@ -1479,6 +1500,8 @@ class Egress:
             return self.text(value, examples=key in extra)
         if key in ID_KEYS and key != "name" and ID_LABEL.fullmatch(value) and scrub(value) == value:
             return value
+        if hidden == SHAPE_ONLY:
+            return mask_value(self.apply_aliases(value), DataAccess.SUMMARIES_ONLY)
         if hidden is not None:
             return hidden
         return mask_value(self.apply_aliases(value), self.mode)

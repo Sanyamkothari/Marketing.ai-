@@ -615,8 +615,8 @@ class DroppedColumn(Artefact):
     """One column removed before training, and why."""
 
     name: str = Field(description="Name of the dropped column.")
-    reason: Literal["user_excluded", "constant", "high_null", "id_like", "pii", "leakage"] = Field(
-        description="Why the column was dropped."
+    reason: Literal["user_excluded", "constant", "high_null", "id_like", "pii", "leakage", "sensitive"] = (
+        Field(description="Why the column was dropped.")
     )
     detail: str = Field(default="", description="One line of extra context, for example the null rate.")
 

@@ -1,0 +1,30 @@
+# The contact-list gate (`engine/decide/contact_gate.py`): who is taken off the list before it is sent.
+#
+# It reads the customer file the run scored, finds the columns below BY NAME (whole words, any case) and applies
+# one rule for each. Every customer taken off is counted under one reason, and the list's summary says so
+# ("excluded: 12 because they are under 18"). Edit the lists here, not the code.
+#
+# An unknown answer is never a yes: a blank "do not disturb" or consent cell takes the customer off the list,
+# unless the run's `contact_rules.json` says a blank means OK.
+
+minimum_age: 18
+
+# Columns by name.
+age_columns: [age, customer_age, age_years]
+birth_date_columns: [dob, birth_date, birthdate, date_of_birth]
+status_columns: [status, customer_status, account_status, lifecycle_status, legal_status]
+dnd_columns: [dnd, ndnc, do_not_disturb, do_not_call, do_not_contact, dnc]
+consent_columns: [consent, marketing_consent, opt_in, optin]
+
+# Statuses that always take a customer off the list (whole value, any case).
+blocked_statuses: [deceased, dead, death, fraud, fraudulent, suspected fraud, legal, litigation, court case, do not contact]
+
+# What the do-not-disturb and consent cells may say (any case). Anything else is "unknown".
+dnd_yes: ["y", "yes", "true", "1", "dnd", "registered", "blocked"]
+dnd_no: ["n", "no", "false", "0", "ndnd", "not registered", "clear"]
+dnd_partial: [partial, dnd-partial, dnd partial]
+consent_yes: ["y", "yes", "true", "1", "agreed", "opted in", "granted"]
+consent_no: ["n", "no", "false", "0", "refused", "opted out", "withdrawn"]
+
+# A DND scrub older than this many days earns a warning on the list.
+dnd_scrub_max_days: 30

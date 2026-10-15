@@ -1,0 +1,32 @@
+# Words that mark a column as sensitive (religion, caste, health, disability, pharmacy-like categories) or as
+# long free text. `engine/privacy/sensitive.py` reads this file; edit the lists here, not the code.
+#
+# A column is sensitive when a whole word of its NAME is in `names`, or when at least `value_share` of its
+# non-blank values contain a phrase from `values` (a column of ordinary short categories only). Matching is on
+# whole words, lower-case, ignoring punctuation. Gender, PIN code and surname are NOT listed: they are not
+# sensitive in themselves, they can stand in for something that is (the fairness report looks at them).
+#
+# Such a column is left out of the features and out of what the AI sees, unless the person allows it. The
+# question offers: fairness report only (recommended) / remove / use.
+value_share: 0.2
+max_distinct: 100
+
+names:
+  religion: [religion, religious, faith, denomination]
+  caste: [caste, jati, subcaste, tribe, scst]
+  health: [health, medical, medication, diagnosis, disease, illness, hiv, diabetic, diabetes, cancer, pregnancy, pregnant]
+  disability: [disability, disabled, handicap, handicapped]
+  pharmacy: [pharmacy, pharma, chemist, drugstore]
+  ethnicity: [ethnicity, race, orientation]
+
+values:
+  religion: [hindu, muslim, christian, sikh, jain, buddhist, parsi]
+  caste: [scheduled caste, scheduled tribe, obc, brahmin, dalit]
+  health: [diabetes, hypertension, cancer, hiv, asthma, dialysis]
+  disability: [disabled, blind, deaf]
+  pharmacy: [pharmacy, chemist, drugstore, medical store]
+
+# Long free text: shown to the AI by its shape only.
+long_text:
+  names: [notes, note, remarks, remark, comments, comment, feedback]
+  median_length: 40

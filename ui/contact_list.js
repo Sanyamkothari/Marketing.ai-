@@ -56,6 +56,25 @@ const SUPPRESSION_WORDS = {
  * not say how many of the customers worth contacting each one removed.
  */
 export function contactListSentence({ scoring = null, treat = null, policy = null } = {}) {
+  const sentence = contactListLead({ scoring, treat, policy });
+  const taken = takenOffLines(treat);
+  return taken ? (sentence ? `${sentence} ${taken}` : taken) : sentence;
+}
+
+/**
+ * What the contact-list check took off the list, one plain sentence each ("12 excluded because they are under 18."),
+ * from the treat list summary's `contact_exclusion_lines`, which our code worded from its own counts. "" when the
+ * check read nothing.
+ */
+export function takenOffLines(treat) {
+  const lines = treat && Array.isArray(treat.contact_exclusion_lines) ? treat.contact_exclusion_lines : [];
+  return lines
+    .filter((line) => typeof line === "string" && line.trim())
+    .map((line) => (/[.!?]$/.test(line) ? line : `${line}.`))
+    .join(" ");
+}
+
+function contactListLead({ scoring = null, treat = null, policy = null } = {}) {
   const worth = worthContacting(scoring, policy);
   const treated = treat && count(treat.treat_rows) ? treat.treat_rows : null;
   if (worth === null && treated === null) return "";

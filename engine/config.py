@@ -615,6 +615,10 @@ class PrepareConfig(_Base):
     pii_handling: PiiHandling = PiiHandling.REDACT
     deduplicate: bool = True
     exclude_columns: tuple[str, ...] = ()
+    # Columns about religion, caste, health, disability and the like are left out of the features unless the person
+    # allowed them (`engine.privacy.sensitive`). Left out of a dump while empty, so a run's config is byte for byte
+    # what it was before the setting existed.
+    allow_sensitive_columns: tuple[str, ...] = Field(default=(), exclude_if=lambda value: not value)
 
     @field_validator("exclude_columns")
     @classmethod

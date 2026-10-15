@@ -27,6 +27,14 @@ from engine.agentic.canonical import canonical_bytes, sha256_hex
 from engine.config import AggFunction
 from engine.doctor.build_driver import BuildDriveError, BuildPlan, plan_build, prepare_sources
 from engine.doctor.stack_files import StackError, StackSpec, run_stack
+from engine.privacy.working_key import (
+    WorkingKeyError,
+    key_vault,
+    new_salt,
+    pii_key_kind,
+    refuse_aadhaar,
+    working_key,
+)
 
 if TYPE_CHECKING:
     from engine.doctor.case import CaseItem
@@ -50,6 +58,9 @@ class Combined:
     file_name: str
     upload_ids: tuple[str, ...]
     summary: str
+    key_vault: pd.DataFrame | None = None
+    """When the customers' key is personal data (a phone, a PAN), the table holds salted hashes of it and this holds
+    the lookup back to the real value, for the contact-list export only (`engine.privacy.working_key`)."""
 
 
 def plan_of(diagnosis: Diagnosis, frames: Mapping[str, pd.DataFrame]) -> BuildPlan:
@@ -73,9 +84,17 @@ def upload_ids_of(item: CaseItem) -> tuple[str, ...]:
 
 
 def combine_item(
-    item: CaseItem, diagnosis: Diagnosis, frames: Mapping[str, pd.DataFrame], names: Mapping[str, str]
+    item: CaseItem,
+    diagnosis: Diagnosis,
+    frames: Mapping[str, pd.DataFrame],
+    names: Mapping[str, str],
+    *,
+    key_salt: str | None = None,
 ) -> Combined:
-    """The table the approved `item` makes from `frames` (the whole files, by upload id); `names` are file names."""
+    """The table the approved `item` makes from `frames` (the whole files, by upload id); `names` are file names.
+
+    `key_salt` is the case's salt for a key that is personal data (G24); without one a fresh salt is drawn.
+    """
     ids = upload_ids_of(item)
     missing = [u for u in ids if u not in frames]
     if not ids or missing:
@@ -96,37 +115,54 @@ def combine_item(
                 "COMBINE_CHANGED",
                 "The files no longer fit together the way you approved. Untick the change to go on.",
             )
-        table = _one_row_per_customer(
-            plan, {s.source_name: [frames[u] for u in s.upload_ids] for s in (plan.entity, *plan.events)}
+        table, vault = _one_row_per_customer(
+            plan,
+            {s.source_name: [frames[u] for u in s.upload_ids] for s in (plan.entity, *plan.events)},
+            key_salt or new_salt(),
         )
-    except (BuildDriveError, StackError) as exc:
+    except (BuildDriveError, StackError, WorkingKeyError) as exc:
         raise AgentToolError(exc.code, exc.message) from exc
     except ValidationError as exc:
         raise AgentToolError(
             "COMBINE_FAILED", "This change can no longer be read. Untick it to go on."
         ) from exc
     logs = ", ".join(dict.fromkeys(Path(names.get(u, "")).stem for s in plan.events for u in s.upload_ids))
-    return Combined(table, f"{stem} with {logs}.csv", ids, f"{len(table):,} customers")
+    return Combined(table, f"{stem} with {logs}.csv", ids, f"{len(table):,} customers", key_vault=vault)
 
 
 def _name(frame: pd.DataFrame, column: str) -> Any:
     return next(c for c in frame.columns if str(c) == column)
 
 
-def _one_row_per_customer(plan: BuildPlan, files: Mapping[str, Sequence[pd.DataFrame]]) -> pd.DataFrame:
+def _one_row_per_customer(
+    plan: BuildPlan, files: Mapping[str, Sequence[pd.DataFrame]], salt: str
+) -> tuple[pd.DataFrame, pd.DataFrame | None]:
+    """The table with one row per customer, and the key vault when the key is personal data (phone, PAN, e-mail).
+
+    The customers and their logs meet on salted hashes of such a key, and the table keeps the hashes (G24). An
+    Aadhaar number is refused: it is never stored.
+    """
     (entity, base), *logs = prepare_sources(plan, files).sources
-    keys = base[_name(base, entity.key_column)]
+    key_column = _name(base, entity.key_column)
+    keys = base[key_column]
     if keys.isna().any() or keys.duplicated().any():
         raise AgentToolError(
             "COMBINE_KEY_REPEATS", f"{entity.source_name} does not have one row per customer."
         )
-    text = keys.astype(str)
+    kind = pii_key_kind(keys, str(key_column))
+    refuse_aadhaar(kind)
+    hashed = kind is not None
+
+    def written(values: pd.Series[Any]) -> pd.Series[Any]:
+        return working_key(values, salt) if hashed else values.astype(str)
+
+    text = written(keys)
     by_role: dict[str, list[pd.DataFrame]] = {}
     for source, frame in logs:
         if source.date_column is None:
             continue
         when = pd.to_datetime(frame[_name(frame, source.date_column)], errors="coerce", utc=True)
-        who = frame[_name(frame, source.key_column)].astype(str)
+        who = written(frame[_name(frame, source.key_column)])
         by_role.setdefault(source.role, []).append(pd.DataFrame({"who": who, "when": when}))
     events = {role: pd.concat(parts, ignore_index=True).dropna() for role, parts in by_role.items()}
     ends = [e["when"].max() for e in events.values() if len(e)]
@@ -145,4 +181,8 @@ def _one_row_per_customer(plan: BuildPlan, files: Mapping[str, Sequence[pd.DataF
         elif feature.function is AggFunction.DAYS_SINCE_LAST:
             last = text.map(log.groupby("who")["when"].max())
             table[name] = (today - last).dt.days.astype("Int64")
-    return table
+    if not hashed:
+        return table, None
+    vault = key_vault(keys, text)
+    table[key_column] = text
+    return table, vault

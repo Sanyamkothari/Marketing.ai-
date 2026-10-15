@@ -33,6 +33,7 @@ from engine.doctor.contracts import Diagnosis, FileStack
 from engine.doctor.protocol import Ask, AskOption
 from engine.doctor.stack_files import StackError, StackProposal, plan_stack
 from engine.doctor.visit_contracts import OptionEffect
+from engine.privacy.working_key import WorkingKeyError, pii_key_kind, refuse_aadhaar
 from engine.utils.logging import get_logger
 from engine.utils.time import utc_now
 
@@ -128,6 +129,19 @@ def _join(
     entity = plan.entity
     keys = loaded[entity.upload_ids[0]].frame
     column = next(c for c in keys.columns if str(c) == entity.key_column)
+    try:
+        refuse_aadhaar(pii_key_kind(keys[column], str(column)))
+    except WorkingKeyError as exc:  # an Aadhaar number is never stored: the person picks another ID
+        asks.append(
+            _ask(
+                exc.code,
+                entity.upload_ids[0],
+                f"{exc.message} What would you like to do?",
+                "An Aadhaar number is never stored.",
+                loaded,
+            )
+        )
+        return None, asks, set()
     missing = int(keys[column].isna().sum())
     repeated = int(keys[column].dropna().duplicated().sum())
     if repeated or missing:

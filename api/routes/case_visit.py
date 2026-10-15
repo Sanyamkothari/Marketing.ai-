@@ -307,6 +307,7 @@ def _deps(storage: Storage, root: Path, request: Request, principal: Principal |
     from engine.doctor.cleaning import cleaning_detector
     from engine.doctor.combining import combining_detector
     from engine.doctor.prescription import CasePrescriber
+    from engine.doctor.sensitive_ask import sensitive_detector
     from engine.doctor.time_settings import time_settings_detector
     from engine.stages.ingest import profile_row_cap
 
@@ -337,6 +338,7 @@ def _deps(storage: Storage, root: Path, request: Request, principal: Principal |
         detectors=(
             cleaning_detector(offers, config_root=root),
             combining_detector(),
+            sensitive_detector(),
             time_settings_detector(storage, config_root=root),
         ),
     )

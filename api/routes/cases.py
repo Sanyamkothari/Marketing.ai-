@@ -134,7 +134,8 @@ class CaseTimeline(StrictBase):
 
 
 def _error(exc: CaseError) -> Exception:
-    return http_error(404 if exc.code == "CASE_NOT_FOUND" else 409, exc.code, exc.message)
+    status = {"CASE_NOT_FOUND": 404, "CASE_CLIENT_REQUIRED": 422}.get(exc.code, 409)
+    return http_error(status, exc.code, exc.message)
 
 
 def _unmappable() -> CaseError:

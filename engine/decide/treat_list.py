@@ -97,7 +97,7 @@ from engine.stages.actions import (
     SUPPRESSED_REASON_COLUMN,
 )
 from engine.stages.export import SCORES_CSV, SCORES_PARQUET
-from engine.storage import Storage, StorageError, run_key
+from engine.storage import Storage, StorageError, run_key, upload_key
 from engine.uplift.actions import NET_VALUE_COLUMN, TREAT_ACTION
 from engine.utils.logging import get_logger
 from engine.utils.time import utc_now
@@ -243,6 +243,25 @@ class TreatListSummary(Artefact):
     expected_gross_value_note: str | None = Field(
         default=None,
         description="Says the figure is not incremental when it is filled, or why it is not filled.",
+    )
+    contact_exclusions: dict[str, int] | None = Field(
+        default=None,
+        description=(
+            "G14: customers the contact-list gate took off the list, counted under the first reason that applies "
+            "(minor, dnd, dnd_unknown, consent_unknown, no_consent, blocked_status, suppression_list). Absent when "
+            "the gate found nothing in the customer file to check."
+        ),
+        exclude_if=lambda value: value is None,
+    )
+    contact_exclusion_lines: list[str] | None = Field(
+        default=None,
+        description="G14: the same in plain sentences for the list page: 'N excluded because ...'.",
+        exclude_if=lambda value: value is None,
+    )
+    contact_gate_columns: dict[str, str] | None = Field(
+        default=None,
+        description="G14: the customer column each rule read, by reason.",
+        exclude_if=lambda value: value is None,
     )
     created_at: datetime = Field(description="UTC time the treat list was built.")
     catalogue_sha256: str | None = Field(
@@ -660,6 +679,15 @@ def build_treat_list(storage: Storage, run_id: str, *, config_root: Path | None 
     flags = _read_flags(storage, run_id, primary_key, row_keys)
     suppression = scores[SUPPRESSED_REASON_COLUMN].astype("object")
     suppression = suppression.where(suppression.notna() & (suppression != ""), None)
+    # 1b. The contact-list gate (G14): minors, do-not-disturb, unknown consent, statuses and a suppression list, read
+    # from the customer file. Whoever it takes off is suppressed with the reason, so every step below leaves them out.
+    gate = _contact_gate(storage, record, config, scores, row_keys, config_root)
+    gate_counts: dict[str, int] = {}
+    if gate is not None:
+        fresh = pd.Series(gate.reason, dtype="object")
+        newly = suppression.isna() & fresh.notna()
+        suppression = suppression.where(~newly, fresh)
+        gate_counts = {str(reason): int(n) for reason, n in fresh[newly].value_counts().items()}
     suppressed = suppression.notna().to_numpy(dtype=bool)
     control = scores[CONTROL_GROUP_COLUMN].astype(bool).to_numpy(dtype=bool)
     holdout_true = flags.holdout.fillna(False).to_numpy(dtype=bool)
@@ -877,7 +905,7 @@ def build_treat_list(storage: Storage, run_id: str, *, config_root: Path | None 
     )
     table = _table(out, is_uplift, key_cols, variants=variants is not None)
     storage.write_bytes(run_key(run_id, TREAT_LIST_PARQUET), _parquet_bytes(table))
-    storage.write_bytes(run_key(run_id, TREAT_LIST_CSV), _csv_bytes(table))
+    storage.write_bytes(run_key(run_id, TREAT_LIST_CSV), _csv_bytes(_with_real_keys(storage, record, table)))
 
     summary = TreatListSummary(
         run_id=run_id,
@@ -918,6 +946,7 @@ def build_treat_list(storage: Storage, run_id: str, *, config_root: Path | None 
         campaign_scope_proposal_id=None if scope is None else scope.proposal_id,
         campaign_scope_ranked_by=ranked_by,
         campaign_scope_withheld=scope_withheld,
+        **_gate_summary(gate, gate_counts),
     )
     storage.write_model(run_key(run_id, TREAT_LIST_SUMMARY_FILENAME), summary)
     _LOGGER.info(
@@ -929,6 +958,94 @@ def build_treat_list(storage: Storage, run_id: str, *, config_root: Path | None 
         summary.explore_rows,
     )
     return summary
+
+
+def _contact_gate(
+    storage: Storage,
+    record: RunRecord,
+    config: UseCaseConfig,
+    scores: pd.DataFrame,
+    row_keys: pd.Series[Any],
+    config_root: Path | None,
+) -> Any:
+    """G14: the contact-list gate's verdict for the scored customers, or None when it has nothing to read.
+
+    It reads the customer file the run scored. A file that is no longer stored, or that has no key to join on, leaves
+    the list as the scoring run made it (the gate says so only when the person gave it rules or a suppression list).
+    """
+    from engine.decide.contact_gate import (
+        CONTACT_RULES_FILENAME,
+        SUPPRESSION_LIST_FILENAME,
+        contact_gate_for_run,
+    )
+
+    asked = storage.exists(run_key(record.run_id, CONTACT_RULES_FILENAME)) or storage.exists(
+        run_key(record.run_id, SUPPRESSION_LIST_FILENAME)
+    )
+    try:
+        source = _read_source(storage, record)
+        source_keys = _join_keys(source, record.primary_key)
+        verdict = contact_gate_for_run(
+            storage,
+            record,
+            source,
+            row_keys,
+            source_keys,
+            handled_columns=(config.governance.consent_column, config.actions.suppression.opt_out_column),
+            config_root=config_root,
+        )
+    except (StorageError, ValueError, KeyError, OSError) as exc:
+        _LOGGER.warning(
+            "treat list %s: the contact-list gate could not read the customer file: %s", record.run_id, exc
+        )
+        if not asked:
+            return None
+        verdict = _unchecked(len(scores.index))
+    return verdict
+
+
+def _unchecked(n: int) -> Any:
+    from engine.decide.contact_gate import Verdict
+
+    return Verdict(
+        reason=np.full(n, None, dtype=object),
+        notes=[
+            "The customer file is no longer stored, so the list was not checked for minors, "
+            "do-not-disturb, consent, statuses or your suppression list."
+        ],
+    )
+
+
+def _with_real_keys(storage: Storage, record: RunRecord, table: pa.Table) -> pa.Table:
+    """The list for the contact-list download, with the real key beside the working one (G24).
+
+    When the customers' key is personal data (a phone, a PAN), the run's table holds salted hashes and the real values
+    wait in the upload's `key_vault`. They are added to the download only, as `contact_key`; the parquet file and the
+    summary never hold them. A run with no vault, or a composite key, is returned as it is.
+    """
+    from engine.privacy.working_key import KEY_VAULT_FILENAME, attach_real_keys
+
+    if record.upload_id is None or isinstance(record.primary_key, (list, tuple)):
+        return table
+    key = upload_key(record.upload_id, KEY_VAULT_FILENAME)
+    if not storage.exists(key) or str(record.primary_key) not in table.column_names:
+        return table
+    vault = pd.read_parquet(io.BytesIO(storage.read_bytes(key)))
+    frame = attach_real_keys(table.to_pandas(), vault, str(record.primary_key))
+    return pa.Table.from_pandas(frame, preserve_index=False)
+
+
+def _gate_summary(gate: Any, counts: dict[str, int]) -> dict[str, Any]:
+    """The summary fields for what the gate took off the list (empty when it read nothing)."""
+    if gate is None or not (gate.columns or gate.notes):
+        return {}
+    from engine.decide.contact_gate import exclusion_lines
+
+    return {
+        "contact_exclusions": counts,
+        "contact_exclusion_lines": exclusion_lines(counts, gate),
+        "contact_gate_columns": dict(gate.columns) or None,
+    }
 
 
 def _join_keys(frame: pd.DataFrame, primary_key: Any) -> pd.Series[Any]:
@@ -1139,10 +1256,8 @@ def _expected_gross_value(
     return pd.Series(gross, dtype="float64").round(_RUPEE_DECIMALS), _GROSS_NOT_INCREMENTAL_NOTE
 
 
-def _uploaded_values(
-    storage: Storage, record: RunRecord, row_keys: pd.Series[Any], column: str
-) -> np.ndarray:
-    """The uploaded `column` per scored customer, joined on every key column (NaN where absent)."""
+def _read_source(storage: Storage, record: RunRecord) -> pd.DataFrame:
+    """The customer file the run read, in full. `StorageError` when it is no longer stored."""
     from engine.onboarding.datasets import run_source_key
     from engine.stages.ingest import read_upload
 
@@ -1151,12 +1266,18 @@ def _uploaded_values(
     if key is None:
         raise StorageError("KEY_NOT_FOUND", "the uploaded file is no longer stored")
     if key.endswith(".parquet"):
-        source = pd.read_parquet(io.BytesIO(storage.read_bytes(key)))
-    else:
-        rows = read_upload(storage, key, file_format="csv", keep_all_rows=True).all_rows
-        if rows is None:
-            raise ValueError("the uploaded file could not be read in full")
-        source = rows
+        return pd.read_parquet(io.BytesIO(storage.read_bytes(key)))
+    rows = read_upload(storage, key, file_format="csv", keep_all_rows=True).all_rows
+    if rows is None:
+        raise ValueError("the uploaded file could not be read in full")
+    return rows
+
+
+def _uploaded_values(
+    storage: Storage, record: RunRecord, row_keys: pd.Series[Any], column: str
+) -> np.ndarray:
+    """The uploaded `column` per scored customer, joined on every key column (NaN where absent)."""
+    source = _read_source(storage, record)
     if column not in source.columns:
         raise KeyError(f"the uploaded file has no {column!r} column")
     lookup_keys = pd.Index(_join_keys(source, record.primary_key))
