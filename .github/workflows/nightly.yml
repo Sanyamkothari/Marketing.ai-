@@ -47,10 +47,11 @@ jobs:
   test-all:
     name: full suite (includes @slow)
     runs-on: ubuntu-latest
-    # The slow suite trains real models and takes ~15 minutes; 60 leaves room for a cold cache (the
-    # AutoGluon install) and a slow runner, while still killing a training run that has hung rather
-    # than letting it hold a runner for six hours.
-    timeout-minutes: 60
+    # The slow suite trains real models and takes ~15 minutes, and the whole fast suite (frozen tests
+    # included) runs here too; 120 leaves room for a cold cache (the AutoGluon install) and a slow
+    # runner, while still killing a training run that has hung rather than letting it hold a runner
+    # for six hours.
+    timeout-minutes: 120
 
     steps:
       - uses: actions/checkout@v5
@@ -82,12 +83,38 @@ jobs:
       - name: make setup
         run: make setup
 
-      # `make test-all` is everything ci.yml runs, plus the @slow AutoGluon train and score
-      # integration tests - minus @bedrock and @aws, the two markers that spend money. Adding AWS
-      # credentials to this job therefore does not start billing anyone; running a paid suite here
-      # would need an explicit `pytest -m bedrock` step, which is the point.
+      # Node and the jsdom suites' packages: the tests of frozen features (@frozen, left out of
+      # ci.yml's `make test`) and `make prototype-test` below drive them.
+      - name: Set up node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: tests/**/package-lock.json
+
+      - name: npm ci in every jsdom suite
+        run: |
+          locks=$(find tests -name package-lock.json -not -path '*/node_modules/*' | sort)
+          test -n "$locks" || { echo "no package-lock.json under tests/"; exit 1; }
+          for lock in $locks; do
+            (cd "$(dirname "$lock")" && npm ci --no-audit --no-fund) || exit 1
+          done
+
+      # `make test-all` is everything ci.yml runs, plus the @frozen tests (features the v1 plan froze)
+      # and the @slow AutoGluon train and score integration tests - minus @bedrock and @aws, the two
+      # markers that spend money. Adding AWS credentials to this job therefore does not start billing
+      # anyone; running a paid suite here would need an explicit `pytest -m bedrock` step, which is
+      # the point. The frozen tests run only here, so it uses every core like ci.yml and a missing
+      # node or jsdom fails rather than skips.
       - name: make test-all
         run: make test-all
+        env:
+          PYTEST_ADDOPTS: -n auto --dist loadgroup
+          REQUIRE_JSDOM: "1"
+
+      # Moved here from ci.yml: the prototype is not part of v1, so a push does not wait for it.
+      - name: make prototype-test
+        run: make prototype-test
 
   # --- Plan A M39: the public dataset library -------------------------------------------------
   # `library/tests` trains a real model on each committed `sample.csv` (`strategy: fast`, a one-minute

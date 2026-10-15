@@ -156,7 +156,8 @@ def test_ci_runs_the_jsdom_suites_rather_than_skipping_them(
     workflows: dict[str, dict[str, object]], repo_root: Path
 ) -> None:
     """M56 (DEC-877): node is set up, every jsdom suite under tests/ has a lockfile for `npm ci`, the
-    skip is a failure, the prototype suite has its step, and the report is read for skips."""
+    skip is a failure, the report is read for skips, and the prototype suite has its step in the
+    nightly (moved off every push with the tests of frozen features)."""
     jobs = workflows["ci"]["jobs"]
     assert isinstance(jobs, dict)
     job = jobs["lint-test"]
@@ -167,8 +168,10 @@ def test_ci_runs_the_jsdom_suites_rather_than_skipping_them(
     assert node and str(node[0]["with"]["node-version"]) == "22"
     runs = [str(step.get("run", "")) for step in steps]
     assert any("npm ci" in run and "package-lock.json" in run for run in runs)
-    assert any("make prototype-test" in run for run in runs)
     assert any("scripts.check_no_skips" in run for run in runs)
+    nightly = workflows["nightly"]["jobs"]
+    assert isinstance(nightly, dict)
+    assert any("make prototype-test" in str(step.get("run", "")) for step in nightly["test-all"]["steps"])
     for package in (repo_root / "tests").rglob("package.json"):
         if "node_modules" not in package.parts:
             assert (
