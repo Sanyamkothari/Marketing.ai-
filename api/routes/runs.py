@@ -409,11 +409,41 @@ def create_run_endpoint(
     response: Response,
     request: Request,
 ) -> RunCreatedResponse | JSONResponse:
-    """Validate synchronously; `409` with the full report, or `202` with a run that is already pollable.
+    """Validate synchronously; `409` with the full report, or `202` with a run that is already pollable."""
+    started = start_run(
+        body,
+        root=root,
+        storage=storage,
+        registry=registry,
+        jobs=jobs,
+        settings=settings,
+        request=request,
+        user_id=requested_by(request),
+    )
+    if isinstance(started, RunCreatedResponse):
+        response.headers["Location"] = f"/runs/{started.run_id}"
+    return started
+
+
+def start_run(
+    body: RunRequest,
+    *,
+    root: Path,
+    storage: Storage,
+    registry: ModelRegistry,
+    jobs: JobRunner,
+    settings: Settings,
+    request: Request,
+    user_id: str | None,
+    enforce_roles: bool = True,
+) -> RunCreatedResponse | JSONResponse:
+    """The body of `POST /runs`, callable without a route: the campaign run starts its train and score runs here.
 
     The run directory, including `job_spec.json`, is complete before anything is submitted: the spec
     is what a remote runner ships to a container, so writing it after the submit would be a race
-    against a job that has already started looking for it (DEC-324).
+    against a job that has already started looking for it (DEC-324). `user_id` is who the run is
+    recorded as requested by. `enforce_roles=False` is for a caller that already checked the
+    overrides against the person's roles when it took the request (the campaign run).
     """
     own = use_case_config(body.use_case, root)  # 404 for a planned or unknown id, before anything is read
     resolved = resolve_config(body.use_case, body.overrides, root=root)
@@ -422,7 +452,8 @@ def create_run_endpoint(
     # here: api.access imports api.routes.uploads, whose package imports this module.
     from api.access import require_roles_for_run_overrides
 
-    require_roles_for_run_overrides(request, use_case=own, resolved=config)
+    if enforce_roles:
+        require_roles_for_run_overrides(request, use_case=own, resolved=config)
     _refuse_uplift_training(body.mode, resolved)
     catalog = get_catalog(root)
 
@@ -583,7 +614,7 @@ def create_run_endpoint(
         target=target,
         model_choice=body.model_choice or catalog.automl_choice.value,
         model_version_id=body.model_version_id if version is None else version.model_id,
-        requested_by=requested_by(request),
+        requested_by=user_id,
         # Plan J M95: an upload marked synthetic, or a dataset built from the seeded demo's raw tables.
         synthetic=(upload is not None and upload.synthetic)
         or (dataset is not None and is_demo_client(storage, dataset.manifest.client_id)),
@@ -616,7 +647,6 @@ def create_run_endpoint(
     if config.governance.max_run_cost_usd is not None and settings.job_backend == "sagemaker":
         # Plan J M108 (DEC-1318): watch the running cost of a capped run that the cloud bills for.
         _watch_cost(request, storage, jobs, record.run_id, settings=settings, root=root)
-    response.headers["Location"] = f"/runs/{record.run_id}"
     return RunCreatedResponse(run_id=record.run_id)
 
 
