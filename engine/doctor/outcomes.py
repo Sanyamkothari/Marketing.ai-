@@ -678,7 +678,7 @@ def offer_outcome(
     for file in (entity, chosen.file):
         if len(file.frame) < file.diagnosis.rows:
             notes.append(
-                f"Counted on the first {len(file.frame):,} of {file.diagnosis.rows:,} rows of "
+                f"Counted on a random sample of {len(file.frame):,} of {file.diagnosis.rows:,} rows of "
                 f"{file.diagnosis.file_name}."
             )
     if chosen.unreadable:

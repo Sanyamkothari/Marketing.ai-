@@ -1061,7 +1061,7 @@ def propose_event_outcome(
     for file in (entity, chosen.file):
         if len(file.frame) < file.diagnosis.rows:
             notes.append(
-                f"Counted on the first {len(file.frame):,} of {file.diagnosis.rows:,} rows of {file.diagnosis.file_name}."
+                f"Counted on a random sample of {len(file.frame):,} of {file.diagnosis.rows:,} rows of {file.diagnosis.file_name}."
             )
     entity_rule = chosen.rules.entity if chosen.rules is not None else None
     if chosen.rules is not None:
@@ -1122,7 +1122,7 @@ def propose_event_outcome(
             )
         if len(match.frame) < moved.rows:
             notes.append(
-                f"Counted on the first {len(match.frame):,} of {moved.rows:,} rows of {moved.file_name}."
+                f"Counted on a random sample of {len(match.frame):,} of {moved.rows:,} rows of {moved.file_name}."
             )
         excluded_tables[pair.role] = excluded_table
         exclude_roles.append(pair.role)

@@ -693,11 +693,13 @@ def _simulate_prepare(state: _State) -> None:
 
 
 def _positive_key(rows: pd.DataFrame, state: _State) -> str | None:
-    """The positive outcome value, chosen the way `TARGET_TOO_FEW_POSITIVES` chooses it
-    (`validate.resolve_positive_label`: configured, else a known word, else the rarer value)."""
+    """The positive outcome value: the configured one, else a known word. Never the rarer value: which value is
+    the outcome is stated, not guessed (`validate.resolve_positive_label` with `allow_rarer=False`)."""
+    from dataclasses import replace
+
     from engine.stages import validate
 
-    params = validate.params_from_config(state.config, target=state.target)
+    params = replace(validate.params_from_config(state.config, target=state.target), allow_rarer_label=False)
     label, _positives, _negatives = validate.resolve_positive_label(rows, params)
     return None if label is None else label_key(label)
 

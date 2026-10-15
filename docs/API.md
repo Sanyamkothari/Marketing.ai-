@@ -2209,7 +2209,7 @@ Engine constants. The catalog is never merged into a use case and never overrida
 | `catalog.automl_choice.label` | str (prototype AUTO) |
 | `catalog.column_name_patterns` | case-insensitive regexes used by ingest/profile detection (M2) |
 | `catalog.column_name_patterns.time_like` | plan §4.2 verbatim |
-| `catalog.column_name_patterns.leakage` | plan §6.3 LEAKAGE_SUSPECTED name patterns churn*, converted*, outcome*, checked on every column |
+| `catalog.column_name_patterns.leakage` | plan §6.3 LEAKAGE_SUSPECTED name patterns churn*, converted*, outcome*, plus words that name something recorded after an outcome; checked on every column |
 | `catalog.column_name_patterns.leakage_after_target` | plan §6.3 "*_date after target": checked only on columns placed after the target column in the header (DEC-037) |
 
 ## Merge and override rules

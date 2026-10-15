@@ -226,8 +226,8 @@ def _goal_error(exc: ConfigError) -> Exception:
 def _load_files(storage: Storage, upload_ids: Sequence[str], cap_of: int) -> tuple[LoadedFile, ...]:
     """The case's files as the Doctor's diagnosis reads them: rows capped, the profile, the intake notes."""
     from engine.doctor.diagnose import ADVISE_ROWS
+    from engine.doctor.sample_rows import doctor_rows
     from engine.intake.contracts import IntakeReport
-    from engine.stages import ingest
 
     if not upload_ids:
         return ()
@@ -236,15 +236,29 @@ def _load_files(storage: Storage, upload_ids: Sequence[str], cap_of: int) -> tup
     for upload_id in upload_ids:
         record = load_upload(storage, upload_id)
         profile = load_upload_profile(storage, upload_id)
-        frame = ingest.read_upload(
-            storage, record.source_key, file_format=record.file_format, max_rows=cap, row_cap=cap
-        ).frame
+        # The whole file when it fits, else a random sample of the whole file (never its first rows), with IDs as
+        # text and exact counts for the key, consent and outcome columns.
+        frame, exact, file_rows = doctor_rows(
+            storage,
+            source_key=record.source_key,
+            file_format=record.file_format,
+            upload_id=upload_id,
+            row_count=profile.row_count,
+            columns=[str(c.name) for c in profile.columns],
+            cap=cap,
+        )
         notes: tuple[str, ...] = ()
         if record.intake_key is not None and storage.exists(record.intake_key):
             notes = storage.read_model(record.intake_key, IntakeReport).notes
         loaded.append(
             LoadedFile(
-                upload_id=upload_id, file_name=record.file_name, frame=frame, profile=profile, notes=notes
+                upload_id=upload_id,
+                file_name=record.file_name,
+                frame=frame,
+                profile=profile,
+                notes=notes,
+                exact=exact,
+                file_rows=file_rows,
             )
         )
     return tuple(loaded)
@@ -306,6 +320,7 @@ def _deps(storage: Storage, root: Path, request: Request, principal: Principal |
     from api.routes.doctor import offers as doctor_offers
     from engine.doctor.cleaning import cleaning_detector
     from engine.doctor.combining import combining_detector
+    from engine.doctor.detect_time_keys import time_keys_detector
     from engine.doctor.prescription import CasePrescriber
     from engine.doctor.time_settings import time_settings_detector
     from engine.stages.ingest import profile_row_cap
@@ -337,6 +352,8 @@ def _deps(storage: Storage, root: Path, request: Request, principal: Principal |
         detectors=(
             cleaning_detector(offers, config_root=root),
             combining_detector(),
+            # Keys, dates and the newest rows: rounded IDs, stand-ins, dates in two orders, a thin last month.
+            time_keys_detector(),
             time_settings_detector(storage, config_root=root),
         ),
     )

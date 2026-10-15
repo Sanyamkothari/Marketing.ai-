@@ -44,11 +44,13 @@ __all__ = [
     "MAX_PREFIX_CHARS",
     "PHONE_SHARE",
     "KeyColumn",
+    "KeyMergeError",
     "KeyRule",
     "KeyRuleProposal",
     "KeysLike",
     "factorize_exact",
     "fit_rule",
+    "hard_merges",
     "key_coverage",
     "key_text",
     "normalise_key_value",
@@ -542,6 +544,10 @@ class KeyColumn:
             else (np.zeros(len(self.codes), dtype=bool))
         )
 
+    def merged_by(self, rule: KeyRule) -> int:
+        """How many distinct IDs `rule` writes the same as another ID (distinct before minus distinct after)."""
+        return len(self.texts) - len(factorize_exact(self.written(rule)[0])[1])
+
     def failed_rows(self, rule: KeyRule) -> int:
         return int(self.counts[self.written(rule)[1]].sum())
 
@@ -625,10 +631,44 @@ def _prefix_of(column: KeyColumn) -> str | None:
     return prefix if int(weights.max()) / column.rows >= KEY_PREFIX_SHARE else None
 
 
+class KeyMergeError(ValueError):
+    """A rule that would make different IDs one: `merged` IDs vanish into others, `examples` are two of them."""
+
+    def __init__(self, merged: int, examples: tuple[str, ...]) -> None:
+        super().__init__(f"{merged} different IDs would become the same ID")
+        self.merged = merged
+        self.examples = examples
+
+
+def hard_merges(keys: KeysLike, rule: KeyRule) -> int:
+    """How many distinct IDs the rule's prefix or zeros strip makes the same as another (`C-123` and `S-123` both
+    becoming `123`). Spaces and capitals are not counted: `c-77` and `C-77` are one customer written twice, and
+    `merged_by` counts them for the page. 0 when the rule has neither a prefix nor zeros."""
+    column = KeyColumn.of(keys)
+    if rule.prefix is None and not rule.zeros:
+        return 0
+    soft = rule.model_copy(update={"prefix": None, "zeros": False})
+    return column.merged_by(rule) - column.merged_by(soft)
+
+
+def _merge_examples(column: KeyColumn, rule: KeyRule) -> tuple[str, ...]:
+    written = column.written(rule)[0]
+    seen: dict[str, str] = {}
+    for before, after in zip(column.texts, written, strict=True):
+        other = seen.setdefault(str(after), str(before))
+        if other != str(before):
+            return (masked_cut(other, 30), masked_cut(str(before), 30))
+    return ()
+
+
 def normalise_keys(series: pd.Series[Any], rule: KeyRule) -> ParseOutcome:
     """The column with every ID written by `rule`, once per distinct value; `changed` counts cells whose text
-    changed, `failed` the non-empty cells the phone rule could not read (kept as written)."""
+    changed, `failed` the non-empty cells the phone rule could not read (kept as written). A rule whose prefix or
+    zeros make different IDs the same raises `KeyMergeError`: IDs are never merged by a tidy-up."""
     column = KeyColumn(series)
+    merged = hard_merges(column, rule)
+    if merged:
+        raise KeyMergeError(merged, _merge_examples(column, rule))
     written, failed = column.written(rule)
     changed_ids = (written != column.texts) & ~failed
     examples = tuple(masked_cut(str(value), 60) for value in list(dict.fromkeys(written[failed]))[:_EXAMPLES])
@@ -671,6 +711,10 @@ class KeyRuleProposal:
     """Share of `keys` found in `base` as written."""
     fixed_coverage: float
     """The same share with both rules applied."""
+    merged: int = 0
+    """Distinct IDs of the measured side the rule writes the same as another (capitals, spaces); shown, not hidden."""
+    merged_base: int = 0
+    """The same for the base side."""
 
     @property
     def needed(self) -> bool:
@@ -726,11 +770,16 @@ def propose_key_rules(keys: KeysLike, base: KeysLike) -> KeyRuleProposal:
         return KeyRuleProposal(identity, identity, written, written)
     best = KeyRuleProposal(identity, identity, written, written)
     for base_rule, rule in _candidates(mine, theirs):
+        if hard_merges(mine, rule) or hard_merges(theirs, base_rule):
+            continue  # a rule that makes two customers one is never proposed
         fixed = mine.share_in(rule, theirs, base_rule)
+        found = KeyRuleProposal(
+            base_rule, rule, written, fixed, mine.merged_by(rule), theirs.merged_by(base_rule)
+        )
         if fixed >= KEY_JOIN_OK:
-            return KeyRuleProposal(base_rule, rule, written, fixed)
+            return found
         if fixed > best.fixed_coverage:
-            best = KeyRuleProposal(base_rule, rule, written, fixed)
+            best = found
     return best
 
 
@@ -755,8 +804,12 @@ def fit_rule(keys: KeysLike, base: KeysLike, base_rule: KeyRule) -> KeyRulePropo
         if marker in seen:
             continue
         seen.add(marker)
+        if hard_merges(mine, rule) or hard_merges(theirs, base_rule):
+            continue
         fixed = mine.share_in(rule, theirs, base_rule)
-        found = KeyRuleProposal(base_rule, rule, written, fixed)
+        found = KeyRuleProposal(
+            base_rule, rule, written, fixed, mine.merged_by(rule), theirs.merged_by(base_rule)
+        )
         if found.meets:
             return found
         if fixed > best.fixed_coverage:

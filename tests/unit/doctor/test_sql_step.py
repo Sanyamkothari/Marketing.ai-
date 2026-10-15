@@ -185,7 +185,7 @@ def test_limit_with_an_order_by_is_allowed() -> None:
 
 
 def test_the_date_comes_in_as_a_parameter() -> None:
-    sql = "SELECT customer_id, date_diff('day', DATE '2026-01-01', $as_of) AS days FROM t_this ORDER BY 1"
+    sql = "SELECT customer_id, date_diff('day', date_trunc('year', $as_of), $as_of) AS days FROM t_this ORDER BY 1"
     step = query(sql, inputs=("this",))
     with pytest.raises(RecipeError) as caught:
         run_recipe(

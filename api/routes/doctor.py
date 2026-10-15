@@ -67,10 +67,10 @@ from engine.doctor.outcomes import (
     offer_outcome,
 )
 from engine.doctor.renames import ColumnRename, RenamedCopyRequest
+from engine.doctor.sample_rows import doctor_rows
 from engine.intake.config import load_intake_config
 from engine.intake.contracts import IntakeReport
 from engine.intake.run import received_format_for
-from engine.stages import ingest
 from engine.storage import Storage, upload_key
 from engine.utils.ids import new_upload_id
 from engine.utils.time import utc_now
@@ -153,14 +153,27 @@ measured on fewer rows than a file has says so (`sampled`, the outcome's note)."
 def _load(storage: Storage, upload_id: str, cap: int) -> LoadedFile:
     record = load_upload(storage, upload_id)
     profile = load_upload_profile(storage, upload_id)
-    frame = ingest.read_upload(
-        storage, record.source_key, file_format=record.file_format, max_rows=cap, row_cap=cap
-    ).frame
+    # The whole file when it fits, else a random sample of the whole file (never its first rows).
+    frame, exact, file_rows = doctor_rows(
+        storage,
+        source_key=record.source_key,
+        file_format=record.file_format,
+        upload_id=upload_id,
+        row_count=profile.row_count,
+        columns=[str(c.name) for c in profile.columns],
+        cap=cap,
+    )
     notes: tuple[str, ...] = ()
     if record.intake_key is not None and storage.exists(record.intake_key):
         notes = storage.read_model(record.intake_key, IntakeReport).notes
     return LoadedFile(
-        upload_id=upload_id, file_name=record.file_name, frame=frame, profile=profile, notes=notes
+        upload_id=upload_id,
+        file_name=record.file_name,
+        frame=frame,
+        profile=profile,
+        notes=notes,
+        exact=exact,
+        file_rows=file_rows,
     )
 
 

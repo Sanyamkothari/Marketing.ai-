@@ -84,6 +84,7 @@ __all__ = [
     "IngestError",
     "PiiDetector",
     "ReadResult",
+    "SampleResult",
     "canonical_chunk_bytes",
     "dataset_fingerprint",
     "detect_encoding",
@@ -100,6 +101,7 @@ __all__ = [
     "profile_column",
     "profile_dataset",
     "profile_row_cap",
+    "read_sample",
     "read_table",
     "read_upload",
     "schema_digest_line",
@@ -494,6 +496,7 @@ def _read_csv(
     keep_all_rows: bool,
     keep_leading_zeros: bool = False,
     text_columns: tuple[str, ...] = (),
+    sampler: _Sampler | None = None,
 ) -> ReadResult:
     size = storage.size_bytes(key)
     with storage.open_read(key) as handle:
@@ -521,6 +524,7 @@ def _read_csv(
                 chunk_rows=chunk_rows,
                 keep_all_rows=keep_all_rows,
                 text_dtypes=text_dtypes,
+                sampler=sampler,
             )
         except UnicodeDecodeError:
             _LOG.info("ingest.encoding_retry encoding=%s", encoding)
@@ -544,6 +548,7 @@ def _read_csv_once(
     chunk_rows: int,
     keep_all_rows: bool,
     text_dtypes: dict[str, type[str]] | None = None,
+    sampler: _Sampler | None = None,
 ) -> ReadResult:
     """One decoded pass. Raises `UnicodeDecodeError` so the caller can try the next codec."""
     import pandas as pd
@@ -585,7 +590,9 @@ def _read_csv_once(
                     digest.update(chunk)
                 if keep_all_rows:
                     every.append(chunk)
-                if rows_kept < cap:
+                if sampler is not None:
+                    sampler.update(chunk)
+                elif rows_kept < cap:
                     take = chunk if rows_kept + len(chunk) <= cap else chunk.iloc[: cap - rows_kept]
                     kept.append(take)
                     rows_kept += len(take)
@@ -602,6 +609,9 @@ def _read_csv_once(
         raise IngestError("UPLOAD_NO_ROWS", "The file has a header row but no data rows.")
     frame = kept[0] if len(kept) == 1 else pd.concat(kept, ignore_index=True) if kept else empty
     frame = frame.reset_index(drop=True)
+    if sampler is not None:
+        frame = sampler.frame(empty)
+        rows_kept = len(frame)
     if bounded:
         row_count = max(_estimate_rows(head_text, delimiter, size=size, encoding=encoding), rows_kept)
     if row_count == 0:
@@ -712,6 +722,114 @@ def _parquet_frame(
 def read_table(storage: Storage, key: str, *, max_rows: int | None = None) -> pd.DataFrame:
     """Read a CSV (sniffed delimiter, BOM tolerated) or Parquet upload into a data frame."""
     return read_upload(storage, key, max_rows=max_rows).frame
+
+
+# ---------------------------------------------------------------------------
+# A random sample of the whole file (Data Doctor's checks)
+# ---------------------------------------------------------------------------
+_PRIORITY: Final[str] = "__sample_priority__"
+_POSITION: Final[str] = "__sample_position__"
+
+
+class _Sampler:
+    """A uniform random sample of `rows` rows from chunks, in file order, and exact facts for chosen columns.
+
+    Each row draws a random number once; the rows with the smallest numbers are kept, so every row of the file had
+    the same chance and the same file and seed always give the same rows. A file sorted by date or by outcome is
+    not read as only its first rows."""
+
+    def __init__(self, rows: int, seed: int, exact_columns: Sequence[str]) -> None:
+        import numpy as np
+
+        self.rows = max(1, rows)
+        self._rng = np.random.default_rng(seed)
+        self._seen = 0
+        self._kept: pd.DataFrame | None = None
+        self.stats = {name: _StatsAccumulator(name) for name in dict.fromkeys(exact_columns)}
+
+    def update(self, chunk: pd.DataFrame) -> None:
+        import numpy as np
+        import pandas as pd
+
+        for name, accumulator in self.stats.items():
+            if name in chunk.columns:
+                accumulator.update(chunk[name])
+        block = chunk.copy()
+        block[_PRIORITY] = self._rng.random(len(chunk))
+        block[_POSITION] = np.arange(self._seen, self._seen + len(chunk))
+        self._seen += len(chunk)
+        merged = block if self._kept is None else pd.concat([self._kept, block], ignore_index=True)
+        self._kept = merged.nsmallest(self.rows, _PRIORITY) if len(merged) > self.rows else merged
+
+    def frame(self, empty: pd.DataFrame | None) -> pd.DataFrame:
+        if self._kept is None:
+            assert empty is not None
+            return empty
+        ordered = self._kept.sort_values(_POSITION)
+        return ordered.drop(columns=[_PRIORITY, _POSITION]).reset_index(drop=True)
+
+
+@dataclass(frozen=True)
+class SampleResult:
+    """A random sample of the whole file, its exact row count, and exact facts for the columns asked for."""
+
+    frame: pd.DataFrame
+    row_count: int
+    sampled: bool
+    """True when the file has more rows than the sample."""
+    exact: dict[str, ColumnStats]
+    """Row, blank and distinct counts and the whole value list (while short) of each column asked for."""
+    text_columns: tuple[str, ...] = ()
+
+
+def read_sample(
+    storage: Storage,
+    key: str,
+    *,
+    rows: int,
+    seed: int,
+    file_format: Literal["csv", "parquet"] | None = None,
+    exact_columns: Sequence[str] = (),
+) -> SampleResult:
+    """A uniform random sample of `rows` rows of the whole file, in file order, in one pass.
+
+    IDs are read as text (`keep_leading_zeros`), so `0000123` stays `0000123`. `exact_columns` get exact counts and
+    full value lists over every row of the file, not only the sampled ones (keys, consent, the outcome)."""
+    resolved = file_format if file_format is not None else file_format_for(key)
+    sampler = _Sampler(rows, seed, exact_columns)
+    if resolved == "parquet":
+        parquet_file = _open_parquet(storage, key)
+        count = int(parquet_file.metadata.num_rows)
+        if count == 0:
+            raise IngestError("UPLOAD_NO_ROWS", "The file has a header row but no data rows.")
+        empty: pd.DataFrame | None = None
+        for batch in parquet_file.iter_batches(batch_size=CHUNK_ROWS):
+            chunk = batch.to_pandas()
+            empty = chunk.iloc[0:0] if empty is None else empty
+            sampler.update(chunk)
+        return SampleResult(
+            frame=sampler.frame(empty),
+            row_count=count,
+            sampled=count > rows,
+            exact={name: acc.finish() for name, acc in sampler.stats.items()},
+        )
+    read = _read_csv(
+        storage,
+        key,
+        max_rows=None,
+        row_cap=rows,
+        chunk_rows=CHUNK_ROWS,
+        keep_all_rows=False,
+        keep_leading_zeros=True,
+        sampler=sampler,
+    )
+    return SampleResult(
+        frame=read.frame,
+        row_count=read.row_count,
+        sampled=read.row_count > len(read.frame),
+        exact={name: acc.finish() for name, acc in sampler.stats.items()},
+        text_columns=read.text_columns,
+    )
 
 
 # ---------------------------------------------------------------------------

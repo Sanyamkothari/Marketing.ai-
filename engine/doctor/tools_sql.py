@@ -21,7 +21,15 @@ from pydantic import BaseModel, ConfigDict, Field
 from api.access_policy import RoutePolicy
 from engine.access.roles import Role
 from engine.agent.contracts import RecipeStep, RecipeStepKind
-from engine.agent.sql_step import MAX_INPUTS, MAX_SQL_CHARS, SqlStepError, run_sql, sql_params
+from engine.agent.sql_step import (
+    MAX_INPUTS,
+    MAX_SQL_CHARS,
+    AsOfRule,
+    SqlStepError,
+    resolve_as_of_rule,
+    run_sql,
+    sql_params,
+)
 from engine.config import StrictBase
 from engine.doctor.prescription import slot_name
 from engine.doctor.registry import (
@@ -57,6 +65,18 @@ class ProposeSqlStepArgs(BaseModel):
     )
     as_of: date | None = Field(
         default=None, description="The date `$as_of` stands for, when the query uses it."
+    )
+    as_of_rule: Literal["latest_date_in_file", "last_complete_month_end"] | None = Field(
+        default=None,
+        description="Keep the as-of date as a rule worked out again on every file, read from `as_of_upload_id`'s "
+        "`as_of_column`; `as_of` is then the date it gives now.",
+    )
+    as_of_upload_id: str | None = Field(default=None, description="The file whose dates the rule reads.")
+    as_of_column: str | None = Field(
+        default=None, max_length=128, description="The date column the rule reads."
+    )
+    reads_future: bool = Field(
+        default=False, description="True only for a query that builds the outcome from rows after `$as_of`."
     )
 
 
@@ -117,6 +137,20 @@ def _names(ctx: DataToolContext, upload_ids: tuple[str, ...]) -> dict[str, tuple
     return out
 
 
+def _as_of_rule(
+    given: ProposeSqlStepArgs, named: dict[str, tuple[str, pd.DataFrame, str]]
+) -> tuple[date, dict[str, Any]]:
+    """The rule as the step keeps it, and the date it gives on these files now."""
+    table = next((n for n, (upload_id, _, _) in named.items() if upload_id == given.as_of_upload_id), None)
+    if table is None or given.as_of_column is None or given.as_of_rule is None:
+        raise SqlStepError("SQL_NOT_VALID", "An as-of date rule names the file and the date column it reads.")
+    frame = named[table][1]
+    if given.as_of_column not in frame.columns:
+        raise SqlStepError("SQL_NOT_VALID", f"There is no column '{given.as_of_column}' in that file.")
+    rule = AsOfRule(rule=given.as_of_rule, table=table, column=given.as_of_column)
+    return resolve_as_of_rule(rule, frame[given.as_of_column]), rule.model_dump(mode="json")
+
+
 def _propose(given: ProposeSqlStepArgs, ctx: DataToolContext) -> SqlStepProposal:
     named = _names(ctx, given.upload_ids)
     params: dict[str, Any] = {
@@ -125,12 +159,18 @@ def _propose(given: ProposeSqlStepArgs, ctx: DataToolContext) -> SqlStepProposal
         "output_name": given.output_name,
         "description": given.description,
     }
-    if given.as_of is not None:
-        params["as_of"] = given.as_of.isoformat()
+    as_of = given.as_of
     try:
-        sql_params(params)
         tried = {name: frame.head(DRY_RUN_ROWS) for name, (_, frame, _) in named.items()}
-        run = run_sql(given.sql, tried, output_name=given.output_name, as_of=given.as_of)
+        if given.as_of_rule is not None:
+            as_of, rule = _as_of_rule(given, named)
+            params["as_of_rule"] = rule
+        if as_of is not None:
+            params["as_of"] = as_of.isoformat()
+        if given.reads_future:
+            params["reads_future"] = True
+        sql_params(params)
+        run = run_sql(given.sql, tried, output_name=given.output_name, as_of=as_of)
     except SqlStepError as exc:
         raise DataToolError(exc.code, exc.message, status=422) from exc
     inputs = tuple(

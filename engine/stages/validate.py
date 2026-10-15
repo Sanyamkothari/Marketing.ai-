@@ -57,6 +57,8 @@ __all__ = [
     "BASELINE_MAX_CATEGORIES",
     "BASELINE_MAX_FEATURES",
     "BASELINE_MIN_CLASS_ROWS",
+    "BLANK_LEAK_MIN_GROUP",
+    "BLANK_LEAK_WARN_AUC",
     "CHECKS_BY_CODE",
     "CHECK_ORDER",
     "CHECK_REGISTRY",
@@ -77,6 +79,7 @@ __all__ = [
     "SEVERITY_RANK",
     "TIME_LIKE_PATTERN",
     "VALUE_COUNTS_MAX_DISTINCT",
+    "BlankLeak",
     "CheckFn",
     "CheckParams",
     "CheckResult",
@@ -84,6 +87,7 @@ __all__ = [
     "ColumnStatsLike",
     "FrameFacts",
     "baseline_auc",
+    "blank_leak",
     "candidate_columns",
     "check",
     "check_consent_column_missing",
@@ -140,7 +144,10 @@ logger = get_logger(__name__)
 # ---------------------------------------------------------------------------
 #: Catalog defaults, repeated here so `CheckParams()` needs no config and no catalog read.
 TIME_LIKE_PATTERN: Final[str] = "date|time|month|week|day|_ts$|_at$"
-LEAKAGE_PATTERN: Final[str] = r"^(churn|converted|outcome)"
+LEAKAGE_PATTERN: Final[str] = (
+    r"^(churn|converted|outcome)"
+    r"|(reason|cancel|closure|refund|termination|exit|attrition|retention|risk|propensity|likelihood)"
+)
 LEAKAGE_AFTER_TARGET_PATTERN: Final[str] = r"_date$"
 ID_LIKE_PATTERN: Final[str] = r"(^id$|_id$|^id_|_key$|customer|cust)"
 
@@ -311,6 +318,8 @@ class CheckParams:
     entity: str = "customer"
     problem_type: ProblemType = ProblemType.BINARY_CLASSIFICATION
     positive_label: str | int | bool | None = None
+    allow_rarer_label: bool = True
+    """False in Data Doctor: no positive label is ever chosen by being the rarer value."""
     min_rows: int = 1_000
     min_positive: int = 200
     imbalance_warn_min_rate: float = 0.01
@@ -713,11 +722,18 @@ def resolve_positive_label(
     frame: pd.DataFrame,
     params: CheckParams,
     facts: FrameFacts | None = None,
+    *,
+    allow_rarer: bool | None = None,
 ) -> tuple[str | None, int, int]:
     """`(label, positives, negatives)` for a two-valued target (DEC-056).
 
     `(None, 0, 0)` when the target is absent, constant or has more than two values; the caller then
     emits TARGET_MISSING / TARGET_CONSTANT / TARGET_NOT_BINARY instead.
+
+    The label is the configured one, else a known word (`yes`, `churned`, ...), else - only while
+    `allow_rarer` (default: `params.allow_rarer_label`) - the rarer value. Data Doctor sets it False: which value is the outcome is
+    never a guess about which value is rare, so with neither a configured label nor a known word it has no
+    positive label (`(None, 0, 0)`) and asks.
     """
     resolved = facts_for(frame, params) if facts is None else facts
     target = params.target
@@ -733,6 +749,8 @@ def resolve_positive_label(
         label = next((value for value in values if value.strip().lower() == wanted), None)
     if label is None:
         label = next((value for value in values if value.strip().lower() in POSITIVE_TOKENS), None)
+    if label is None and not (params.allow_rarer_label if allow_rarer is None else allow_rarer):
+        return (None, 0, 0)
     if label is None:
         low, high = values
         tie = counts[low] == counts[high]
@@ -1726,6 +1744,47 @@ def _leakage_feature(
     return None
 
 
+@dataclass(frozen=True)
+class BlankLeak:
+    """How well "is this cell filled in" predicts the outcome (G7)."""
+
+    auc: float
+    filled_share: float
+    positive_rate_filled: float
+    positive_rate_blank: float
+
+
+BLANK_LEAK_MIN_GROUP: Final[int] = 20
+"""Rows the filled group and the blank group must each have for the blank check to say anything."""
+BLANK_LEAK_WARN_AUC: Final[float] = 0.90
+
+
+def blank_leak(series: pd.Series, y: pd.Series) -> BlankLeak | None:
+    """Score of "is blank" against the outcome, and the outcome rate among filled and among blank rows.
+
+    A cancellation reason is filled only for the customers who left: the column's values may be too many to
+    score, but whether it is filled in separates the two groups almost perfectly. `None` when either group is
+    too small to say anything.
+    """
+    import pandas as pd
+
+    empty = series.isna()
+    if series.dtype == object or pd.api.types.is_string_dtype(series):
+        empty = empty | series.astype("string").str.strip().eq("").fillna(False)
+    filled = ~empty
+    if int(filled.sum()) < BLANK_LEAK_MIN_GROUP or int(empty.sum()) < BLANK_LEAK_MIN_GROUP:
+        return None
+    auc = single_feature_auc(empty.astype("int64"), y)
+    if auc is None:
+        return None
+    return BlankLeak(
+        auc=auc,
+        filled_share=float(filled.mean()),
+        positive_rate_filled=float(y[filled].mean()),
+        positive_rate_blank=float(y[empty].mean()),
+    )
+
+
 def _boolean_token(value: object) -> float | None:
     token = _norm(value)
     if token in _BOOL_TRUE_TOKENS:
@@ -1878,6 +1937,16 @@ def check_leakage_suspected(frame: pd.DataFrame, params: CheckParams) -> CheckRe
             if auc is not None and auc > params.leakage_auc_threshold:
                 scored[name] = auc
 
+    blanks: dict[str, BlankLeak] = {}
+    if len(work) >= LEAKAGE_MIN_ROWS:
+        y_blank = _binary_target(work, target, label)
+        for name in candidates:
+            if name in scored:
+                continue
+            found = blank_leak(work[name], y_blank)
+            if found is not None and found.auc >= BLANK_LEAK_WARN_AUC:
+                blanks[name] = found
+
     findings: list[ValidationCheck] = []
     for name in candidates:
         if name in scored:
@@ -1892,6 +1961,17 @@ def check_leakage_suspected(frame: pd.DataFrame, params: CheckParams) -> CheckRe
                     target_position=target_position,
                     column_position=positions[name],
                     severity=Severity.ERROR,
+                )
+            )
+        elif name in blanks:
+            findings.append(
+                _blank_leak_finding(
+                    params,
+                    name,
+                    blanks[name],
+                    sampled_rows=len(work),
+                    target_position=target_position,
+                    column_position=positions[name],
                 )
             )
         elif name in named:
@@ -1937,6 +2017,44 @@ def check_leakage_suspected(frame: pd.DataFrame, params: CheckParams) -> CheckRe
                 )
             )
     return CheckResult(code=code, findings=tuple(findings))
+
+
+def _blank_leak_finding(
+    params: CheckParams,
+    name: str,
+    found: BlankLeak,
+    *,
+    sampled_rows: int,
+    target_position: int,
+    column_position: int,
+) -> ValidationCheck:
+    severe = found.auc > params.leakage_auc_threshold
+    return _finding(
+        "LEAKAGE_SUSPECTED",
+        Severity.ERROR if severe else Severity.WARNING,
+        f"Whether '{name}' is filled in gives the answer away: the outcome is {found.positive_rate_filled:.0%} "
+        f"among customers who have a value and {found.positive_rate_blank:.0%} among those who do not. "
+        "Exclude it?",
+        f"If '{name}' is only filled in after the outcome (a cancellation reason, a refund), exclude it. If it "
+        "is genuinely known before, confirm and the run continues.",
+        column=name,
+        details={
+            "reason": "blank_pattern",
+            "auc": round(found.auc, 4),
+            "threshold": params.leakage_auc_threshold,
+            "pattern": None,
+            "filled_share": round(found.filled_share, 4),
+            "positive_rate_filled": round(found.positive_rate_filled, 4),
+            "positive_rate_blank": round(found.positive_rate_blank, 4),
+            "sampled_rows": sampled_rows,
+            "target_position": target_position,
+            "column_position": column_position,
+            "override_path": "prepare.exclude_columns",
+            "override_value": [*params.excluded_columns, name],
+            "acknowledge": f"LEAKAGE_SUSPECTED:{name}",
+        },
+        acknowledgeable=True,
+    )
 
 
 def _leakage_finding(

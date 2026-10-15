@@ -99,7 +99,7 @@ def _names(ids: tuple[str, ...], loaded: dict[str, LoadedFile]) -> str:
 def _sampled(diagnosis: Diagnosis, loaded: dict[str, LoadedFile], ids: tuple[str, ...]) -> str:
     rows = {d.upload_id: d.rows for d in diagnosis.files}
     read = [len(loaded[u].frame) for u in ids if len(loaded[u].frame) < rows.get(u, 0)]
-    return f" Counted on the first {max(read):,} rows of each long file." if read else ""
+    return f" Counted on a random sample of {max(read):,} rows of each long file." if read else ""
 
 
 # ---------------------------------------------------------------------------

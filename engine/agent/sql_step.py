@@ -14,7 +14,9 @@ safe is here, in code, and holds whoever wrote it (a rule, the AI or a person):
 * **Bounded.** A timer interrupts a query that runs past its time limit (`SQL_TIMEOUT`).
 * **Repeatable.** The same query on the same tables gives the same rows: `random()`, `uuid()`, sampling and
   `now()` / `current_date` are refused, and a `LIMIT` needs an `ORDER BY`. A date the query needs comes in as
-  the parameter `$as_of`.
+  the parameter `$as_of`: a date typed into the query (`DATE '2026-01-01'`, `'2026-01-01'`) is refused unless it
+  is the as-of date itself, so next month's files are never filtered by last month's date. The as-of date may be
+  kept as a rule ("the latest date in the file", "the last complete month-end") and worked out again on each file.
 * **Counted.** The input frames are never changed. The receipt says how many rows each table had and how many
   rows and columns came out; the query's own words are kept for the step's detail only.
 
@@ -27,10 +29,11 @@ from __future__ import annotations
 import json
 import re
 import threading
+from collections import Counter
 from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date
-from typing import Any, Final
+from typing import Any, Final, Literal
 
 import pandas as pd
 from pydantic import Field, ValidationError
@@ -38,13 +41,17 @@ from pydantic import Field, ValidationError
 from engine.config import StrictBase
 
 __all__ = [
+    "AS_OF_RULES",
     "SQL_CODES",
     "THIS_TABLE",
+    "AsOfRule",
     "SqlReceipt",
     "SqlRun",
     "SqlStepError",
     "SqlStepParams",
     "check_sql",
+    "future_rows_moved",
+    "resolve_as_of_rule",
     "run_sql",
     "sql_params",
     "table_alias",
@@ -68,6 +75,7 @@ SQL_CODES: Final[frozenset[str]] = frozenset(
         "SQL_TABLE_NOT_ALLOWED",
         "SQL_NOT_REPEATABLE",
         "SQL_NEEDS_AS_OF",
+        "SQL_FIXED_DATE",
         "SQL_INPUT_MISSING",
         "SQL_TIMEOUT",
         "SQL_FAILED",
@@ -138,6 +146,11 @@ _NOT_REPEATABLE: Final[frozenset[str]] = frozenset(
 _CLOCK_WORDS: Final[frozenset[str]] = frozenset(
     {"current_date", "current_time", "current_timestamp", "localtime", "localtimestamp"}
 )
+_DATE_TEXT: Final[re.Pattern[str]] = re.compile(
+    r"^\s*(\d{4}[-/.]\d{1,2}[-/.]\d{1,2}|\d{1,2}[-/.]\d{1,2}[-/.]\d{4})([ T]\d{1,2}:\d{2}(:\d{2}(\.\d+)?)?)?\s*$"
+)
+"""A string literal that is nothing but a date (a time of day may follow): `'2026-01-01'`, `'01/02/2026 09:30'`."""
+_MAKE_DATE: Final[frozenset[str]] = frozenset({"make_date", "make_timestamp", "make_timestamptz"})
 _PARAMETER: Final[re.Pattern[str]] = re.compile(r"\$([A-Za-z_][A-Za-z0-9_]*)")
 _QUOTED: Final[re.Pattern[str]] = re.compile(r"'(?:[^']|'')*'|\"(?:[^\"]|\"\")*\"|--[^\n]*|/\*.*?\*/", re.S)
 _ALIAS_CHARS: Final[re.Pattern[str]] = re.compile(r"[^a-z0-9_]+")
@@ -151,6 +164,17 @@ class SqlStepError(Exception):
         super().__init__(f"{code}: {message}")
         self.code = code
         self.message = message
+
+
+AS_OF_RULES: Final[tuple[str, ...]] = ("latest_date_in_file", "last_complete_month_end")
+
+
+class AsOfRule(StrictBase):
+    """The as-of date as a rule, not a date: next month's file gives next month's date."""
+
+    rule: Literal["latest_date_in_file", "last_complete_month_end"]
+    table: str = Field(description="The input table whose dates the rule reads (`this` = the one prepared).")
+    column: str = Field(min_length=1, max_length=128)
 
 
 class SqlStepParams(StrictBase):
@@ -168,6 +192,16 @@ class SqlStepParams(StrictBase):
     description: str = Field(min_length=1, max_length=300, description="What it does, in plain words.")
     as_of: date | None = Field(
         default=None, description="The date `$as_of` stands for; a run may give its own."
+    )
+    as_of_rule: AsOfRule | None = Field(
+        default=None,
+        description="How `$as_of` is worked out on each file, when no run gives one; `as_of` is what it was when "
+        "the step was written.",
+    )
+    reads_future: bool = Field(
+        default=False,
+        description="The query reads rows dated after `$as_of` on purpose (it builds the outcome); the "
+        "future-rows check is not run on it.",
     )
 
 
@@ -300,10 +334,43 @@ def check_sql(sql: str, tables: Collection[str], *, as_of: date | None = None) -
             f"A WITH table may not be called '{sorted(ctes & built_in)[0]}', the name of a built-in table.",
         )
     for node in _walk(tree):
-        _check_node(node, allowed | ctes)
+        _check_node(node, allowed | ctes, as_of)
 
 
-def _check_node(node: dict[str, Any], allowed: set[str]) -> None:
+def _fixed_date_refusal(shown: str) -> SqlStepError:
+    return SqlStepError(
+        "SQL_FIXED_DATE",
+        f"The query has a date typed into it ({shown}). Use $as_of instead, so next month's files are not "
+        "cut at this month's date.",
+    )
+
+
+def _literal_date(text: str) -> date | None:
+    """The day a date-only string literal names (`2026-01-31`, `2026-01-31 00:00:00`), else None."""
+    day = text.strip()[:10]
+    try:
+        return date.fromisoformat(day)
+    except ValueError:
+        return None
+
+
+def _check_dates(node: dict[str, Any], as_of: date | None) -> None:
+    """A date typed into the query is refused unless it is the as-of date itself (G10)."""
+    if node.get("class") == "CONSTANT":
+        value = node.get("value") or {}
+        kind = (value.get("type") or {}).get("id")
+        text = value.get("value")
+        typed = kind == "VARCHAR" and isinstance(text, str) and _DATE_TEXT.match(text)
+        if typed and (as_of is None or _literal_date(str(text)) != as_of):
+            raise _fixed_date_refusal(str(text).strip()[:19])
+    elif node.get("class") == "FUNCTION" and str(node.get("function_name", "")).lower() in _MAKE_DATE:
+        children = node.get("children") or []
+        if children and all(isinstance(c, dict) and c.get("class") == "CONSTANT" for c in children):
+            raise _fixed_date_refusal(f"{node.get('function_name')} of fixed numbers")
+
+
+def _check_node(node: dict[str, Any], allowed: set[str], as_of: date | None = None) -> None:
+    _check_dates(node, as_of)
     if node.get("class") == "FUNCTION":
         refusal = _function_refusal(str(node.get("function_name", "")), len(node.get("children") or []))
         if refusal is not None:
@@ -451,3 +518,84 @@ def run_sql(
 def aliases_of(inputs: Sequence[str]) -> list[str]:
     """The `t_<name>` of each input, in order."""
     return [table_alias(name) for name in inputs]
+
+
+# ---------------------------------------------------------------------------
+# The as-of date as a rule, and the future-rows check
+# ---------------------------------------------------------------------------
+def _day_values(series: pd.Series[Any]) -> pd.Series[Any]:
+    """A column as days, read only the one unambiguous way (year first); anything else is not a date here."""
+    if pd.api.types.is_datetime64_any_dtype(series):
+        stamps = pd.to_datetime(series, errors="coerce")
+    elif pd.api.types.is_numeric_dtype(series) or pd.api.types.is_bool_dtype(series):
+        return pd.Series(pd.NaT, index=series.index, dtype="datetime64[ns]")
+    else:
+        text = series.dropna().astype(str).str.strip()
+        stamps = pd.to_datetime(text.where(text.str.match(r"^\d{4}-\d{2}-\d{2}")), errors="coerce")
+        stamps = stamps.reindex(series.index)
+    if getattr(stamps.dt, "tz", None) is not None:
+        stamps = stamps.dt.tz_localize(None)
+    return stamps
+
+
+def resolve_as_of_rule(rule: AsOfRule, series: pd.Series[Any]) -> date:
+    """The date `rule` gives on this file's `series`: its latest date, or the last month-end the file covers in
+    full (the latest date's own month-end when the latest date is one, else the month-end before it)."""
+    days = _day_values(series).dropna()
+    if days.empty:
+        raise SqlStepError(
+            "SQL_NEEDS_AS_OF",
+            f"The as-of date is 'the {rule.rule.replace('_', ' ')}' of '{rule.column}', and that column has no "
+            "dates written year first (2026-01-31).",
+        )
+    latest = days.max().normalize()
+    if rule.rule == "latest_date_in_file":
+        found: date = latest.date()
+        return found
+    month_end = latest + pd.offsets.MonthEnd(0)
+    last_full = month_end if latest == month_end else latest - pd.offsets.MonthBegin(1) - pd.Timedelta(days=1)
+    result: date = last_full.date()
+    return result
+
+
+def _event_column(frame: pd.DataFrame) -> str | None:
+    """The column that dates each row of an event table: the first column that reads as dates on almost every row."""
+    for name in frame.columns:
+        if not re.search(r"date|time|_at$|_ts$|day|month", str(name), re.I):
+            continue
+        days = _day_values(frame[name])
+        if len(frame) and days.notna().sum() / len(frame) >= 0.95:
+            return str(name)
+    return None
+
+
+def future_rows_moved(
+    sql: str, tables: Mapping[str, pd.DataFrame], *, output_name: str, as_of: date
+) -> int | None:
+    """How many rows of the query's table change when every row dated after `as_of` is taken out of its inputs.
+
+    A table made of what was known on the as-of date does not move: the rows that came later were never in it. Each
+    input that has a date column (`_event_column`) is cut at `as_of`; the query runs again; the two tables are
+    compared row by row. None when no input holds a row dated after `as_of` (nothing to test). Our code runs both
+    queries, so the answer is not the writer's word.
+    """
+    cut: dict[str, pd.DataFrame] = {}
+    later = False
+    for name, frame in tables.items():
+        column = _event_column(frame)
+        if column is None:
+            cut[name] = frame
+            continue
+        days = _day_values(frame[column])
+        after = days.dt.normalize() > pd.Timestamp(as_of)
+        later = later or bool(after.any())
+        cut[name] = frame[~after.to_numpy()]
+    if not later:
+        return None
+    whole = run_sql(sql, tables, output_name=output_name, as_of=as_of).frame
+    part = run_sql(sql, cut, output_name=output_name, as_of=as_of).frame
+    if list(whole.columns) != list(part.columns):
+        return len(whole)
+    left = Counter(whole.astype(str).itertuples(index=False, name=None))
+    right = Counter(part.astype(str).itertuples(index=False, name=None))
+    return max(sum((left - right).values()), sum((right - left).values()))
