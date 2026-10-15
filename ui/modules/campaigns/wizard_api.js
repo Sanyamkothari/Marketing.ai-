@@ -79,7 +79,8 @@ export const restartCampaignRun = (id, { confirmCost = false } = {}) =>
  * What the Review page's plain summary needs besides the list's own numbers: the Data Doctor case the file came
  * from (read off the campaign run that made this contact list) and the first customers of the list, best first.
  * Never rejects: a part that cannot be read is `{ error }` (or `{ denied: true }` for the names without the Analyst
- * role) and the summary says so in words. A list made without a campaign run has no case.
+ * role) and the summary says so in words. A list made without a campaign run has no case, and its first customers
+ * are pointed to on the full results page (`{ elsewhere: true }`).
  */
 export async function getResultsSummary(scoreRunId, { canSeeNames = true } = {}) {
   let found = null;
@@ -89,7 +90,8 @@ export async function getResultsSummary(scoreRunId, { canSeeNames = true } = {})
   } catch (error) {
     return { caseId: null, top: { error } };
   }
-  if (!found) return { caseId: null, top: null };
+  // A list made before campaign runs (or by hand) has no run to read its first customers through: say where they are.
+  if (!found) return { caseId: null, top: { elsewhere: true } };
   const record = found.record;
   const caseId = record.case_id || null;
   if (!canSeeNames) return { caseId, top: { denied: true } };

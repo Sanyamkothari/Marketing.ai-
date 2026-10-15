@@ -85,6 +85,8 @@ test("when the names cannot be shown the page says why, in words, instead of lea
   draw(V.reviewHtml({ campaign, list, preview: null, cost: null, compliance: null, resultsOn: null, model }));
   assert.equal($("[data-cw-sum-names]"), null, "a list made without a campaign run has no names to show, and no gap");
   assert.ok($("[data-cw-sum-contact]"));
+  draw(review({ summary: { top: { elsewhere: true }, caseId: null } }));
+  assert.match(text($("[data-cw-sum-names]")), /on the full results page/, "a list no campaign run made says where its customers are");
 });
 
 test("how well it did on customers it had not seen: the Model page's sentence; a missing record is said, not skipped", () => {

@@ -103,3 +103,13 @@ def test_the_results_summary_in_jsdom() -> None:
     )
     assert result.returncode == 0, result.stdout[-8000:] + result.stderr[-3000:]
     assert "# fail 0" in result.stdout
+
+
+def test_a_case_id_that_is_not_one_is_refused(served: tuple[TestClient, CampaignRunStore]) -> None:
+    """The case id becomes a link on the summary, so only a real case id's shape is kept."""
+    client, _store = served
+    answer = client.post(
+        "/campaign-runs", json={"use_case": "telco-churn", "upload_id": "u_1", "case_id": "<b>x</b>"}
+    )
+    assert answer.status_code == 422
+    assert "case_id" in answer.text

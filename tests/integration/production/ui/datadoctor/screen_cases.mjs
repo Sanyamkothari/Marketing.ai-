@@ -389,6 +389,7 @@ test("ready on the Data page: one sentence with the time, Change picks another, 
     primary_key: s.view.start.primary_key,
     target: s.view.start.outcome,
     speed: "thorough",
+    case_id: CASE,
   });
 });
 

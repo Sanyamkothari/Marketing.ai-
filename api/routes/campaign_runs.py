@@ -49,6 +49,7 @@ from engine.campaign_run import (
 from engine.config import PrimaryKey, RunMode, StrictBase, resolve_config
 from engine.contracts import ModelStatus
 from engine.decide.treat_list import TreatListError, ensure_treat_list
+from engine.doctor.case import CASE_ID_PATTERN
 from engine.measurement.cycle import MEASURE_NOT_OFFERED, CycleError, open_campaign
 from engine.utils.logging import get_logger, log_failure
 from engine.utils.time import utc_now
@@ -119,7 +120,9 @@ class CampaignRunRequest(StrictBase):
     upload_id: str | None = None
     dataset_id: str | None = None
     client_id: str | None = None
-    case_id: str | None = None  # the Data Doctor case the prepared file came from
+    case_id: str | None = Field(
+        default=None, pattern=CASE_ID_PATTERN, description="The Data Doctor case the prepared file came from."
+    )
     primary_key: PrimaryKey | None = None
     target: str | None = None
     speed: Speed = Speed.BALANCED

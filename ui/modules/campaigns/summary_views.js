@@ -18,11 +18,14 @@ const h3 = (text) => `<h3 class="cw-h3 cw-sum-h">${esc(text)}</h3>`;
 /**
  * The first customers as a small table, best first. A column that no row fills (offer, channel, reason) is left out.
  * `top` is the server's answer `{ customers, unavailable }`, `{ error }` when it could not be read, or `{ denied }`
- * for a person whose role does not allow the names.
+ * for a person whose role does not allow the names, or `{ elsewhere: true }` for a list no campaign run made.
  */
 function customersPart(top) {
   const title = h3("The best customers first");
   if (!top) return "";
+  if (top.elsewhere) {
+    return `${title}${p('This list\'s first customers are on the full results page: open "Show technical details", then "Open the full results page".', "data-cw-sum-names", "cw-note")}`;
+  }
   if (top.denied) return `${title}${p("Showing the customers by name needs the Analyst role.", "data-cw-sum-names", "cw-note")}`;
   if (top.error) return `${title}${p("The first customers could not be loaded just now. Reload the page to try again.", "data-cw-sum-names", "cw-note")}`;
   const rows = top.customers || [];
