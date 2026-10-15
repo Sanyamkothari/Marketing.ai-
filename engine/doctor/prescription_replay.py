@@ -47,6 +47,7 @@ from engine.doctor.prescription import (
     IntakeDecision,
     Prescription,
     PrescriptionError,
+    case_tables,
     slot_name,
 )
 from engine.doctor.prescription_contract import (
@@ -355,6 +356,7 @@ def run_part_recipe(
     contract: DataContract | None = None,
     slot: str | None = None,
     part: PartName = "recipe",
+    tables: Mapping[str, pd.DataFrame] | None = None,
 ) -> Any:
     """One recipe, exactly as a saved recipe runs today (`run_saved_recipe`), with the levels and limit it was
     approved with. A step that fails on a column the contract knows is `PRESCRIPTION_DRIFT` (the column changed);
@@ -366,7 +368,9 @@ def run_part_recipe(
     _check_spellings(recipe, frame, slot=slot)
     try:
         if config is not None:
-            return run_saved_recipe(frame, recipe, config, upload_id=upload_id, leak_check=leak_check)
+            return run_saved_recipe(
+                frame, recipe, config, upload_id=upload_id, leak_check=leak_check, tables=tables
+            )
         agent = AgentConfig()
         return run_recipe(
             consistent_types(frame),
@@ -382,6 +386,7 @@ def run_part_recipe(
             ),
             snapshot_column=recipe.snapshot_column,
             leak_check=leak_check,
+            tables=tables,
         )
     except RecipeError as exc:
         raise step_drift(exc, contract, part=part, slot=slot) from exc
@@ -431,6 +436,7 @@ def replay_on_prepared(
     config: UseCaseConfig | None = None,
     upload_id: str = "prescription",
     trail: _Trail | None = None,
+    tables: Mapping[str, pd.DataFrame] | None = None,
 ) -> tuple[pd.DataFrame, OutcomeReceipt | None, tuple[DriftFinding, ...]]:
     """Steps 6-8 on a prepared file (the built dataset, or the one prepared file): the outcome (training only), the
     post-build recipe, the contract. Raises on a stop; returns the rows, the outcome's receipt and the warnings.
@@ -473,6 +479,7 @@ def replay_on_prepared(
             leak_check=_leak(mode),
             contract=prescription.contract,
             part="post_build",
+            tables=tables,
         )
         own.recipes.append(run.receipt)
         frame = run.frame
@@ -632,10 +639,20 @@ def replay_prescription(
         trail.add("build", "skipped", detail="no build in the prescription")
         if len(frames) == 1:
             final = next(iter(frames.values()))
+        elif prescription.post_build is not None and any(
+            step.kind is RecipeStepKind.SQL_QUERY for step in prescription.post_build.steps
+        ):
+            final = next(iter(frames.values()))  # the first file is `this`; a query reads the others by name
     outcome_receipt: OutcomeReceipt | None = None
     if final is not None:
         final, outcome_receipt, _ = replay_on_prepared(
-            prescription, final, mode=mode, goal_id=goal_id, config=config, trail=trail
+            prescription,
+            final,
+            mode=mode,
+            goal_id=goal_id,
+            config=config,
+            trail=trail,
+            tables=case_tables(frames, prescription.files),
         )
     receipt = ReplayReceipt(
         prescription_hash=prescription.prescription_hash,

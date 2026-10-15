@@ -1077,7 +1077,13 @@ HANDLER_CHECKED: Final[frozenset[str]] = frozenset({"data.setting", "data.recipe
 `edits.add_edit`): the registry adds no second reading of their output."""
 
 FILES_KINDS: Final[frozenset[str]] = frozenset(
-    {"data.join_files", "data.stack_files", "data.build_dataset", "data.normalise_key"}
+    {
+        "data.join_files",
+        "data.stack_files",
+        "data.build_dataset",
+        "data.normalise_key",
+        "data.propose_sql_step",
+    }
 )
 """Kinds over several files (M237): each file has its own ID column, which `normalise_key` writes by design, so
 no single file's ID is protected for them; the outcome still is."""
@@ -1236,6 +1242,21 @@ def _read_join(kind: str, output: Mapping[str, Any]) -> list[DataProposal]:
     ]
 
 
+def _read_sql(kind: str, output: Mapping[str, Any]) -> list[DataProposal]:
+    """A query's table: who wrote it, never ticked, the first file's rows before and the new table's after."""
+    return [
+        DataProposal(
+            kind=kind,
+            source=_source(output),
+            ticked=bool(output["ticked"]),
+            confidence="sure" if output["confidence"] == "sure" else "check",
+            rows_in=int(output["rows_in"]),
+            rows_out=int(output["rows_out"]),
+            sentence=_sentence(output, "sentence"),
+        )
+    ]
+
+
 def _read_stack(kind: str, output: Mapping[str, Any]) -> list[DataProposal]:
     receipt = output.get("receipt")
     rows_in = None if receipt is None else int(receipt["rows_in"])
@@ -1330,6 +1351,7 @@ OUTPUT_READERS: Final[Mapping[str, _Reader]] = {
     "data.indian_booleans": _read_locale,
     "data.join_files": _read_join,
     "data.stack_files": _read_stack,
+    "data.propose_sql_step": _read_sql,
     "data.build_dataset": _read_build,
     "data.normalise_key": _read_normalise_key,
     "data.convert_currency": _read_convert,

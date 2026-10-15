@@ -142,6 +142,9 @@ class RecipeStepKind(StrEnum):
     # source, frozen in the step. Row-wise: a row's output depends on its own cells and the frozen rate only.
     # Never proposed by the AI or the chat, and never fetched: the rate is the person's.
     CONVERT_CURRENCY = "convert_currency"
+    # One read-only SQL query over the case's tables, run in a sandbox (`engine.agent.sql_step`): the table it
+    # returns replaces the one being prepared. Its output depends only on the tables it reads and the frozen query.
+    SQL_QUERY = "sql_query"
 
 
 class ProposalSource(StrEnum):
@@ -238,6 +241,8 @@ class RecipeStep(StrictBase):
             raise ValueError("a normalise_key step rewrites the IDs of its own column")
         if self.kind is RecipeStepKind.CONVERT_CURRENCY and self.new_column is not None:
             raise ValueError("a convert_currency step rewrites the amounts of its own column")
+        if self.kind is RecipeStepKind.SQL_QUERY and self.new_column is not None:
+            raise ValueError("a sql_query step names its table in params.output_name")
         return self
 
 
@@ -371,7 +376,8 @@ class StepReceipt(StrictBase):
         description=(
             "`keep_latest_per_id` only (Plan O M238): why rows were left out, as counts in plain words - "
             "identical copies, rows dated after the snapshot, IDs with no row on or before it, and IDs "
-            "settled by file order; null for every other step."
+            "settled by file order; `sql_query`: the rows read from each table and the rows written; "
+            "null for every other step."
         ),
     )
 

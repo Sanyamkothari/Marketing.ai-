@@ -130,6 +130,7 @@ NEVER_TICKED_STEPS: Final[frozenset[RecipeStepKind]] = frozenset(
         RecipeStepKind.SET_MISSING,
         RecipeStepKind.VALID_RANGE,  # Plan L M153 (DEC-1531): a range is a question
         RecipeStepKind.KEEP_LATEST_PER_ID,  # Plan O M238 (DEC-1808, decision O3): reshape is never ticked
+        RecipeStepKind.SQL_QUERY,  # a query makes a new table: only the person ticks it
     }
 )
 """Steps only the person may tick, whatever `agent.tick_uncertain` says: emptying a value is right only
