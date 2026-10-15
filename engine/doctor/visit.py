@@ -935,8 +935,9 @@ def _treat(run: _Run, case: Case) -> _Step:
             goal.goal_id if goal is not None else None,
             brief.brief_hash if brief is not None else None,
         )  # the AI review's inputs: not the answers or the ticks, so neither pays for another review
-        reviewed = _detect(run, case, brief, step, review_inputs=review)
+        _detect(run, case, brief, step)
         _standing(run, case, step)
+        reviewed = visit.done.get("agent") != review and _review(run, case, brief, step)
         step.visit["done"] = {**visit.done, "treat": inputs, **({"agent": review} if reviewed else {})}
     asked = {question.question_id for question in case.questions}
     blocking = [
@@ -1791,34 +1792,17 @@ def _add_request(step: _Step, request: DataRequest) -> None:
     step.questions.append(request_data(request))
 
 
-def _detect(run: _Run, case: Case, brief: GoalBrief | None, step: _Step, *, review_inputs: str = "") -> bool:
-    """The detectors' findings (M245 fills the port): asks settled by the protocol, grounded doubts, requests.
-
-    Then, once per `review_inputs` and only when nothing blocking is open or has just been asked, the AI review
-    (`deps.agent`): its questions go through the same protocol, its fixes land pending. True when the review ran
-    (it made a call), so TREAT remembers it and a tick, an answer or a resume never pays for another."""
-    if not run.deps.detectors and run.deps.agent is None:
-        return False
+def _detect(run: _Run, case: Case, brief: GoalBrief | None, step: _Step) -> None:
+    """The detectors' findings (M245 fills the port): asks settled by the protocol, grounded doubts, requests."""
+    if not run.deps.detectors:
+        return
     files = run.files(case)
     names = sorted({str(c) for loaded in files for c in loaded.frame.columns})
     asks: list[Ask] = []
-
-    def take(found: Detected, *, by_ai: bool = False) -> None:
+    for detector in run.deps.detectors:
+        found = detector(case, files, brief)
         step.evidence.extend(found.evidence)
-        step.items.extend(
-            (
-                item.model_copy(
-                    update={
-                        "source": ProposalSource.AI,
-                        "state": ProposalState.PENDING,
-                        "confidence": AgentConfidence.CHECK,
-                    }
-                )
-                if by_ai
-                else item
-            )  # the AI never ticks: whatever the review returns lands pending, `check`
-            for item in found.items
-        )
+        step.items.extend(found.items)
         outputs = {result.evidence_id: result.output for result in found.evidence}
         for doubt in found.doubts:
             _ground(case, doubt, outputs, names)
@@ -1826,36 +1810,43 @@ def _detect(run: _Run, case: Case, brief: GoalBrief | None, step: _Step, *, revi
         for request in found.requests:
             _add_request(step, request)
         asks.extend(found.asks)
+    _settle_asks(run, case, step, asks)
 
-    for detector in run.deps.detectors:
-        take(detector(case, files, brief))
-    ran = False
+
+def _review(run: _Run, case: Case, brief: GoalBrief | None, step: _Step) -> bool:
+    """The AI review (`deps.agent`), after the rules, the detectors and the standing answers, and only when
+    nothing blocking is open or has just been asked. Its questions go through the same protocol; its items land
+    pending, `check`, whatever the port returns. True when it made a call, so TREAT remembers it."""
     agent = run.deps.agent
-    if agent is not None and (case.visit or CaseVisit()).done.get("agent") != review_inputs:
-        blocked = (
-            open_blocking(case)
-            or any(a.blocking for a in asks)
-            or any(
-                q.blocking and q.answer is None and _in_section(q.goal_id, case) for q, _e in step.questions
+    if agent is None or open_blocking(case):
+        return False
+    if any(q.blocking and q.answer is None and _in_section(q.goal_id, case) for q, _e in step.questions):
+        return False
+    found = agent(case, run.files(case), brief)
+    step.evidence.extend(found.evidence)
+    step.items.extend(
+        item.model_copy(
+            update={
+                "source": ProposalSource.AI,
+                "state": ProposalState.PENDING,
+                "confidence": AgentConfidence.CHECK,
+            }
+        )
+        for item in found.items
+    )
+    step.model_calls += found.model_calls
+    step.tokens += found.tokens
+    _settle_asks(run, case, step, found.asks)
+    if found.model_calls and found.summary:
+        entry = CaseChatEntry(role="agent", text=found.summary, at=run.deps.clock(), sent=found.sent)
+        step.updates["chat"] = (*case.chat, entry)
+        step.events.append(
+            EventDraft(
+                kind=TimelineKind.CHAT,
+                details={"role": "agent", "ai": True, "proposals": len(found.items), "review": True},
             )
         )
-        if not blocked:
-            found = agent(case, files, brief)
-            take(found, by_ai=True)
-            step.model_calls += found.model_calls
-            step.tokens += found.tokens
-            ran = found.model_calls > 0
-            if ran and found.summary:
-                entry = CaseChatEntry(role="agent", text=found.summary, at=run.deps.clock(), sent=found.sent)
-                step.updates["chat"] = (*case.chat, entry)
-                step.events.append(
-                    EventDraft(
-                        kind=TimelineKind.CHAT,
-                        details={"role": "agent", "ai": True, "proposals": len(found.items), "review": True},
-                    )
-                )
-    _settle_asks(run, case, step, asks)
-    return ran
+    return found.model_calls > 0
 
 
 def _settle_asks(run: _Run, case: Case, step: _Step, asks: Sequence[Ask]) -> None:

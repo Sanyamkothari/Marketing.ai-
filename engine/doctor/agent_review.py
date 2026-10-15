@@ -121,11 +121,10 @@ def lazy_review(build: Callable[[], DetectorPort | None]) -> DetectorPort:
 
 @dataclass
 class _Sql:
-    """One query the model proposed: the registry's answer, and whether its own checks still fail."""
+    """One query the model proposed: the registry's answer to its latest try, and the findings to show."""
 
     result: DataToolResult
     findings: tuple[Finding, ...] = ()
-    failed: bool = False
 
 
 @dataclass
@@ -469,13 +468,15 @@ class _Review:
         changed = turn.book.declare(order, expectations)
         proposal = SqlStepProposal.model_validate(result.output)
         outcome = turn.book.check(order, proposal.receipt)
-        findings = (*proposal.findings, *changed, *outcome.findings)
-        turn.queries[name] = _Sql(result, tuple(findings), failed=bool(outcome.failures))
+        prior = turn.queries[name].findings if name in turn.queries else ()
+        rewrites = [f for f in prior if f.code.startswith("EXPECTATION_CHANGED")]  # a rewrite stays flagged
+        findings = (*proposal.findings, *rewrites, *changed, *outcome.findings)
+        turn.queries[name] = _Sql(result, tuple(findings))
         if outcome.must_ask:
             turn.closed.add(name)
         shown = {
             "evidence_id": result.evidence_id,
-            "file": "F1",
+            "file": names[first],
             "tool": "propose_sql",
             "result": self.gates[first].prepare(
                 {
@@ -497,6 +498,7 @@ class _Review:
         turn = self.turn
         index = self._index(action, args)
         ctx = self.ctxs[index]
+        args = dict(self.gates[index].unalias_args(args))
         values, choices = args.get("values"), args.get("choices")
         evidence = args.get("evidence_ids")
         known = {r.evidence_id for r in turn.looks}

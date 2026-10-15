@@ -200,6 +200,16 @@ def test_a_query_that_passes_on_the_retry_is_flagged_for_the_changed_checks_not_
     assert not any(level == "stop" and code == "EXPECTATION_FAILED" for level, code in codes)
 
 
+def test_a_rewritten_check_stays_flagged_when_the_query_is_sent_again(
+    world: World, storage: LocalStorage
+) -> None:
+    passing = {"rows_out_equals": 1_200}
+    client = Script([_sql({"rows_out_equals": 5}), _sql(passing), _sql(passing)])
+    found, _ = _run(world, storage, client)
+    codes = {f["code"] for f in found.items[0].payload["findings"]}
+    assert "EXPECTATION_CHANGED_AFTER_FAILURE" in codes, "a later clean try does not wash out the rewrite"
+
+
 def test_a_fourth_blocking_question_is_dropped(world: World, storage: LocalStorage) -> None:
     columns = ["customer_id", "account_no", "age", "visits_90d"]
     client = Script([_ask(c) for c in columns])
