@@ -326,6 +326,7 @@ async function renderNow() {
     // A phase branch registers whole screens of its own through `modules/router.js`; nothing is
     // registered on this branch, so this resolves to null and the Phase 1 routing below runs.
     const claimed = resolveRoute(parts);
+    claimedHash = claimed ? window.location.hash : null;
     if (claimed) {
       active = null;
       await claimed.render(app, parts);
@@ -366,6 +367,9 @@ async function renderNow() {
 
 let rendering = null;
 let renderAgain = false;
+// The route a phase module last drew (or is drawing): a module that only registers something, late,
+// cannot change that page, so it does not draw it again (its requests would all be sent twice).
+let claimedHash = null;
 
 /**
  * Draw the current route - one draw at a time, and once more if anything asked meanwhile.
@@ -401,7 +405,11 @@ function render() {
 window.addEventListener("hashchange", render);
 // A phase module that registers after the first paint - or whose state the current screen shows,
 // like the client picked in the top bar - asks for the current route to be drawn again.
-window.addEventListener(MODULES_CHANGED, render);
+window.addEventListener(MODULES_CHANGED, (event) => {
+  const registrationOnly = event.detail && event.detail.registration;
+  if (registrationOnly && claimedHash !== null && claimedHash === window.location.hash) return;
+  render();
+});
 // "Try again" on any screen's error (`errorBox(error, { retry: true })`) draws the route again.
 document.addEventListener("click", (event) => {
   const target = event.target;
@@ -411,4 +419,11 @@ document.addEventListener("click", (event) => {
     render();
   }
 });
-render();
+// The first draw waits for the module scripts (index.html loads them after this file). Drawn sooner,
+// a module's route has no owner yet, so the page would fetch the Home screen's data and then draw again.
+if (document.readyState === "complete") {
+  render();
+} else {
+  loading();
+  window.addEventListener("load", render, { once: true });
+}

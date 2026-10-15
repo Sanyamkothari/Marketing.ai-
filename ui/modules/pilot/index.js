@@ -33,6 +33,8 @@ import { maybeStartTour, startTour } from "./tour.js";
 
 let demo = null;
 let demoLoading = false;
+let demoReady = Promise.resolve(); // the read in flight, so a page opened on a Pilot route is drawn once
+let pilotDrawn = false;
 let helpLoaded = false;
 let helpLoading = false;
 
@@ -51,12 +53,13 @@ const tourEntry = () => `<button type="button" data-pe-tour-start>Take the tour<
 function loadDemo() {
   if (demoLoading) return;
   demoLoading = true;
-  getDemo()
+  demoReady = getDemo()
     .then((payload) => {
       demo = payload;
       refreshTopBar();
-      // Reports and Build data show the sample data's own rows: draw them again now it is known.
-      if (/^#\/pilot(\/|$)/.test(window.location.hash)) announceModulesChanged();
+      // Reports and Build data show the sample data's own rows: if a page was drawn without them,
+      // draw it again now they are known.
+      if (pilotDrawn && /^#\/pilot(\/|$)/.test(window.location.hash)) announceModulesChanged();
       if (demo && demo.demo_mode && demo.seeded) maybeStartTour(demo);
     })
     .catch(() => {
@@ -87,7 +90,11 @@ function loadHelp() {
 registerModule({
   name: "pilot",
   routes: ["pilot"],
-  render: (app, parts) => renderPilot(app, parts, demo),
+  render: async (app, parts) => {
+    await demoReady;
+    pilotDrawn = true;
+    return renderPilot(app, parts, demo);
+  },
 });
 
 registerNavSlot("demo", { html: demoChip });

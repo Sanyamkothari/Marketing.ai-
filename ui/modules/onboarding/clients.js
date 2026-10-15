@@ -30,7 +30,7 @@
 // each rather than bound per paint. A change of client is a change to what the current screen shows -
 // the Setup form's raw-tables panel belongs to one client - so it asks the router to repaint.
 
-import { announceModulesChanged } from "../router.js";
+import { announceModulesChanged, refreshTopBar } from "../router.js";
 import { createClient, ensureDefaultClient, listClients } from "./api.js";
 import { errorBox, esc, toggletip } from "../../dom.js";
 
@@ -148,7 +148,10 @@ async function load() {
     state.error = error;
   }
   state.loading = false;
-  announceModulesChanged();
+  // Only a per-client screen is drawn from the client list; on any other the bar alone shows it, so
+  // the page's requests are not sent again for it.
+  if (perClientRoute(window.location.hash)) announceModulesChanged();
+  else refreshTopBar();
 }
 
 function select(clientId) {

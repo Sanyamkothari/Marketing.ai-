@@ -87,19 +87,40 @@ export const MODULES_CHANGED = MODULES_EVENT;
 
 const extensions = { setupSource: null, headerTool: null };
 let announcing = false;
+let onlyRegistrations = true;
 
-/** One `MODULES_CHANGED` per task, however many registrations it carried: a module that registers
- * a setup source and a header tool together is one change to the screen, not two repaints. */
-export function announceModulesChanged() {
+function announceChange(registration) {
+  if (!registration) onlyRegistrations = false;
   if (announcing) return;
   announcing = true;
-  queueMicrotask(() => {
+  const announceNow = () => {
+    const detail = { registration: onlyRegistrations };
     announcing = false;
-    window.dispatchEvent(new Event(MODULES_CHANGED));
-  });
+    onlyRegistrations = true;
+    window.dispatchEvent(new window.CustomEvent(MODULES_CHANGED, { detail }));
+  };
+  // While the page is loading, the module scripts each register in a task of their own, so a
+  // microtask would still give one repaint per module - and every repaint re-runs the route's
+  // fetches. `load` fires after the last module script has run: wait for it and announce once.
+  if (document.readyState !== "complete") {
+    window.addEventListener("load", () => queueMicrotask(announceNow), { once: true });
+  } else {
+    queueMicrotask(announceNow);
+  }
 }
 
-const announce = announceModulesChanged;
+/** One `MODULES_CHANGED` per task, however many changes it carried: a module that registers
+ * a setup source and a header tool together is one change to the screen, not two repaints. */
+export function announceModulesChanged() {
+  announceChange(false);
+}
+
+/** The same, for a change that is only a registration. `app.js` does not redraw a route a module
+ * has already drawn for one (a registration cannot change what that page fetched), so a late
+ * registration does not re-run the page's requests. */
+export function announceRegistration() {
+  announceChange(true);
+}
 
 /**
  * A second way to fill Setup Step 1 (the first is uploading a prepared file). `source` is
@@ -113,7 +134,7 @@ export function registerSetupSource(source) {
   }
   if (extensions.setupSource) throw new Error(`A setup source ("${extensions.setupSource.name}") is already registered`);
   extensions.setupSource = source;
-  announce();
+  announceRegistration();
 }
 
 /** The registered setup source, or `null` - in which case Step 1 is the upload control alone. */
@@ -132,7 +153,7 @@ export function registerHeaderTool(tool) {
   if (extensions.headerTool) throw new Error(`A header tool ("${extensions.headerTool.name}") is already registered`);
   extensions.headerTool = tool;
   setHeaderTool(tool);
-  announce();
+  announceRegistration();
 }
 
 /** The header tool's markup, or `""` when none is registered. */
@@ -189,7 +210,7 @@ export function registerSetupMode(mode) {
   }
   if (setupModeList.some((m) => m.name === name)) throw new Error(`A setup mode named "${name}" is already registered`);
   setupModeList.push({ name, label, applies, mount });
-  announceModulesChanged();
+  announceRegistration();
 }
 
 /** The registered setup modes that apply to `uc`, in registration order; `[]` for none. */
@@ -217,7 +238,7 @@ export function registerRunPanel(panel) {
   }
   if (runPanelList.some((p) => p.name === name)) throw new Error(`A run panel named "${name}" is already registered`);
   runPanelList.push({ name, applies, html });
-  announceModulesChanged();
+  announceRegistration();
 }
 
 /** The markup of every run panel that applies to this run, in registration order; `""` for none. */
@@ -255,7 +276,7 @@ export function registerResultLink(entry) {
   }
   if (resultLinkList.some((e) => e.name === name)) throw new Error(`A result link named "${name}" is already registered`);
   resultLinkList.push({ name, applies, link });
-  announceModulesChanged();
+  announceRegistration();
 }
 
 /** The links that apply to this run, as one quiet row (`nav.uc-links`); `""` for none. */
@@ -303,7 +324,7 @@ export function registerUploadSource(source) {
   }
   if (uploadSourceList.some((s) => s.name === name)) throw new Error(`An upload source named "${name}" is already registered`);
   uploadSourceList.push({ name, entry, panel });
-  announceModulesChanged();
+  announceRegistration();
 }
 
 /** Every registered upload source, in registration order; `[]` for none (Step 1 is the file control). */
@@ -326,7 +347,7 @@ export function registerPagePanel(panel) {
   }
   if (pagePanelList.some((p) => p.name === name)) throw new Error(`A page panel named "${name}" is already registered`);
   pagePanelList.push({ name, applies, html });
-  announceModulesChanged();
+  announceRegistration();
 }
 
 /** The markup of every page panel that applies to this page of this run, in registration order; `""` for none. */
@@ -399,7 +420,7 @@ export function registerRunAction(action) {
   }
   if (runActions.some((a) => a.name === name)) throw new Error(`A run action named "${name}" is already registered`);
   runActions.push({ name, applies, html });
-  announceModulesChanged();
+  announceRegistration();
 }
 
 /** The markup of every run action that applies to this run, in registration order; `""` for none. */
@@ -441,7 +462,7 @@ export function registerResultsList(entry) {
   }
   if (resultsListEntries.some((e) => e.name === name)) throw new Error(`A results list named "${name}" is already registered`);
   resultsListEntries.push({ name, load, html });
-  announceModulesChanged();
+  announceRegistration();
 }
 
 /** The markup of every registered results list, loaded now, in registration order; `[]` for none. */
@@ -470,7 +491,7 @@ export function registerUploadNotes(provider) {
     throw new Error("registerUploadNotes needs { accept, html(intake, options), bind(root, handlers) }");
   }
   uploadNotesProvider = { accept, html, bind };
-  announceModulesChanged();
+  announceRegistration();
 }
 
 /** The file types an upload control accepts. */
