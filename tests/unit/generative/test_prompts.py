@@ -91,6 +91,8 @@ VALUES: dict[str, object] = {
     "payload": '{"header_candidates": []}',
     # Plan O M236: Data Doctor's claim-checked explanation (data_explain, DEC-1806)
     "facts": '[{"ref": "f1", "type": "count", "about": "rows"}]',
+    # The Data Doctor agent (data_doctor_agent)
+    "questions": ["Q1 main customer ID (blocking): values choices, file"],
 }
 """One plausible value per variable any shipped prompt declares, so the sweep can render them all."""
 

@@ -155,6 +155,8 @@ class GenerativePurpose(StrEnum):
     AGENT_NARRATIVE = "agent_narrative"
     # Plan O M236 (DEC-1806): Data Doctor's `explain` - a claim-checked explanation of data evidence.
     DATA_EXPLAIN = "data_explain"
+    # The Data Doctor agent: explores every table, plans typed steps and sandboxed queries, asks at most a few questions.
+    DOCTOR_AGENT = "data_doctor_agent"
 
 
 class GuardrailOutcome(StrEnum):
