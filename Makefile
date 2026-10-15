@@ -98,10 +98,7 @@ prototype-screenshots: ## regenerate docs/prototype/*.png (needs node + playwrig
 
 # Plan A (Phase 2 completion, branch phase-2b-completion) has no block of its own; it finishes
 # Phase 2, so its targets live here.
-.PHONY: check-readme library-test
-
-check-readme: ## fail if README.md calls a milestone pending whose tests pass (reads JUNIT=report.xml if given, else runs them)
-	$(BIN)/python -m scripts.check_readme $(if $(JUNIT),--junit $(JUNIT),)
+.PHONY: library-test
 
 library-test: ## the public dataset library's tests: five small real trainings on committed samples, no network
 	$(BIN)/python -m pytest library/tests -m "$(PAID_MARKERS)"

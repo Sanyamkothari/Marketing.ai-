@@ -209,3 +209,13 @@ def test_the_approved_join_is_refused_when_the_files_no_longer_fit_as_approved(t
             {u: f.frame for u, f in files.items()},
             {u: f.file_name for u, f in files.items()},
         )
+
+
+def test_stacked_exports_in_different_units_stop_with_a_blocking_question(tmp_path: Path) -> None:
+    paise = _export(200, 400).assign(amount=lambda f: f["amount"] * 100)
+    day = _Day(tmp_path, {"up-jan": ("orders_jan.csv", _export(0, 200)), "up-feb": ("orders_feb.csv", paise)})
+    case = day.open()
+    (ask,) = [q for q in case.questions if q.code == "Q06_UNIT_SCALE"]
+    assert ask.blocking and ask.column == "amount"
+    assert "times larger in orders_feb.csv than in orders_jan.csv" in ask.text
+    assert _one(case, "stack_files"), "the stack is still offered; the answer comes before the approval"

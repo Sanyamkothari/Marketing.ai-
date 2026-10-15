@@ -644,3 +644,18 @@ def test_converse_is_plan_gs_chat_turn_and_its_suggestions_land_pending(
     known = {e.evidence_id for e in case.evidence}
     assert set(item.evidence_ids) <= known, "the suggestion cites the case's own evidence, by content hash"
     assert case.state is VisitState.APPROVE
+
+
+# ---------------------------------------------------------------------------
+# C1: a unique spend or score does not compete with the ID-named column for "names each row"
+# ---------------------------------------------------------------------------
+def test_an_id_named_column_narrows_the_key_candidates() -> None:
+    unique = [{"column": "spend"}, {"column": "customer_id"}, {"column": "score"}]
+    assert visit._id_named(unique) == [{"column": "customer_id"}]
+
+
+def test_two_id_named_columns_still_compete_and_none_leaves_all() -> None:
+    two = [{"column": "customer_id"}, {"column": "account_no"}, {"column": "spend"}]
+    assert [k["column"] for k in visit._id_named(two)] == ["customer_id", "account_no"]
+    plain = [{"column": "spend"}, {"column": "score"}]
+    assert visit._id_named(plain) == plain
