@@ -50,6 +50,7 @@ def _code(response: Any) -> str:
 def test_with_the_switch_off_there_is_no_path(config_root: Path, data_dir: Path) -> None:
     with TestClient(create_app(config_root=config_root, data_dir=data_dir)) as off:
         assert off.get("/clients/default/standing-answers").status_code == 404
+        assert off.get("/clients/default/facts").status_code == 404
         assert off.get("/uploads/up_1/agent-session/approval").status_code == 404
         assert off.post("/uploads/up_1/agent-session/approve", json={"sentence": "x"}).status_code in {
             404,

@@ -9,11 +9,13 @@ default - none of these paths exists and docs/API.md is unchanged.
 | `POST /uploads/{upload_id}/agent-session/approve` | Analyst | Approve with the sentence read: `POST .../apply` with M233's approval-time facts checked against it. |
 | `GET /clients/{client_id}/standing-answers` | Analyst | The client's remembered answers (Settings), revoked ones too. |
 | `POST /clients/{client_id}/standing-answers/{answer_id}/revoke` | Analyst | Revoke one: it is asked again next time. |
+| `GET /clients/{client_id}/facts` | Viewer | What the client told Data Doctor about their business (customers, outcome rate, ID length, financial year, time zone, currency). |
+| `PUT /clients/{client_id}/facts` | Analyst | State or take back facts; each records who and when, and a changed fact keeps the old one in its history. |
 | `GET /data-doctor/candidate-rules` | Admin | AI-proposed patterns people approved often enough to become a rule (for the product team). |
 
 Refusals: `409 APPROVAL_SENTENCE_CHANGED` (the sentence is no longer the one shown; nothing is recorded),
 `409 RESHAPE_GUARD_MISSING` (a change to the rows without its question, its preview or its future-data check),
-`403 TOOL_ROLE_REQUIRED`, `404 STANDING_ANSWER_NOT_FOUND`, and every refusal of `POST .../apply`.
+`403 TOOL_ROLE_REQUIRED`, `404 STANDING_ANSWER_NOT_FOUND`, `422 FACT_INVALID` (a fact that makes no sense, with a sentence), and every refusal of `POST .../apply`.
 """
 
 from __future__ import annotations
@@ -34,6 +36,7 @@ from api.schemas import ErrorResponse, ValidationErrorResponse
 from engine.access.roles import Role
 from engine.config import RunMode, StrictBase
 from engine.doctor.case import CLIENT_ID_PATTERN
+from engine.doctor.facts import ClientFact, FactError, FactInput, FactStore
 from engine.doctor.patterns import ApprovedPattern, candidate_rules
 from engine.doctor.protocol import ProtocolError
 from engine.doctor.standing import StandingAnswer, StandingAnswerStore
@@ -64,6 +67,12 @@ POLICIES: Final[dict[tuple[str, str], RoutePolicy]] = {
     ),
     ("POST", "/clients/{client_id}/standing-answers/{answer_id}/revoke"): RoutePolicy(
         role=Role.ANALYST, action="doctor.standing_revoke", purpose="revoke a remembered answer"
+    ),
+    ("GET", "/clients/{client_id}/facts"): RoutePolicy(
+        role=Role.VIEWER, action="doctor.facts_read", purpose="see what Data Doctor was told about a client"
+    ),
+    ("PUT", "/clients/{client_id}/facts"): RoutePolicy(
+        role=Role.ANALYST, action="doctor.facts_write", purpose="tell Data Doctor facts about a client"
     ),
     ("GET", "/data-doctor/candidate-rules"): RoutePolicy(
         role=Role.ADMIN, action="doctor.candidate_rules_read", purpose="see patterns to promote into rules"
@@ -197,6 +206,40 @@ def revoke_standing_answer(
         raise http_error(exc.status, exc.code, exc.message) from exc
     set_audit_context(request, object_id=answer_id, object_type="standing_answer")
     return answer
+
+
+class FactsRequest(StrictBase):
+    facts: tuple[FactInput, ...] = Field(
+        min_length=1, max_length=20, description="The facts to state or revoke."
+    )
+
+
+@router.get(
+    "/clients/{client_id}/facts",
+    response_model=tuple[ClientFact, ...],
+    summary="What Data Doctor was told about a client's business",
+)
+def read_facts(
+    client_id: ClientId, storage: StorageDep, include_revoked: bool = False
+) -> tuple[ClientFact, ...]:
+    return FactStore(storage).list(client_id, include_revoked=include_revoked)
+
+
+@router.put(
+    "/clients/{client_id}/facts",
+    response_model=tuple[ClientFact, ...],
+    responses={422: {"model": ErrorResponse}},
+    summary="Tell Data Doctor facts about a client's business, or take them back",
+)
+def put_facts(
+    client_id: ClientId, body: FactsRequest, storage: StorageDep, principal: PrincipalDep, request: Request
+) -> tuple[ClientFact, ...]:
+    try:
+        facts = FactStore(storage).put(client_id, body.facts, actor=principal.user_id)
+    except FactError as exc:
+        raise http_error(422, "FACT_INVALID", str(exc)) from exc
+    set_audit_context(request, object_id=client_id, object_type="client")
+    return facts
 
 
 @router.get(
