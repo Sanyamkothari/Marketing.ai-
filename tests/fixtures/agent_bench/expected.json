@@ -485,7 +485,6 @@
     "proposals": [
       "role primary_key=custid (sure)",
       "role target=conv_30d (check)",
-      "recipe_step parse_number:pincode (sure)",
       "setting model_search.time_limit_minutes=10 (sure)"
     ],
     "questions": [
@@ -817,7 +816,6 @@
     "proposals": [
       "role primary_key=retailer_id (sure)",
       "role target=reorder_flag (check)",
-      "recipe_step parse_number:pin (sure)",
       "setting model_search.time_limit_minutes=10 (sure)"
     ],
     "questions": [],

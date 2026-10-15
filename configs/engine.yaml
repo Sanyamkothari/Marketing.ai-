@@ -52,7 +52,7 @@ catalog:
 
   column_name_patterns:                 # case-insensitive regexes used by ingest/profile detection (M2)
     time_like: "date|time|month|week|day|_ts$|_at$"                  # plan §4.2 verbatim
-    leakage:              "^(churn|converted|outcome)|(reason|cancel|closure|refund|termination|exit|attrition|retention|risk|propensity|likelihood)"   # plan §6.3 LEAKAGE_SUSPECTED name patterns churn*, converted*, outcome*, plus words that name something recorded after an outcome; checked on every column
+    leakage:              "^(churn|converted|outcome)|(^|_)(cancel(l?ed|l?ation)?|closure|closed_reason|refund(ed|s)?|termination|terminated|attrition|retention|retained|propensity|likelihood|churn_risk|exited|exit_(date|reason)|(cancel|churn|exit|closure|leave)_reason)(_|$)"   # plan §6.3 LEAKAGE_SUSPECTED name patterns churn*, converted*, outcome*, plus words that name something recorded after an outcome; checked on every column
     leakage_after_target: "_date$"                       # plan §6.3 "*_date after target": checked only on columns placed after the target column in the header (DEC-037)
 
 # ---------------------------------------------------------------------------

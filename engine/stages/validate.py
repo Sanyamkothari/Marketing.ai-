@@ -146,7 +146,8 @@ logger = get_logger(__name__)
 TIME_LIKE_PATTERN: Final[str] = "date|time|month|week|day|_ts$|_at$"
 LEAKAGE_PATTERN: Final[str] = (
     r"^(churn|converted|outcome)"
-    r"|(reason|cancel|closure|refund|termination|exit|attrition|retention|risk|propensity|likelihood)"
+    r"|(^|_)(cancel(l?ed|l?ation)?|closure|closed_reason|refund(ed|s)?|termination|terminated|attrition|retention"
+    r"|retained|propensity|likelihood|churn_risk|exited|exit_(date|reason)|(cancel|churn|exit|closure|leave)_reason)(_|$)"
 )
 LEAKAGE_AFTER_TARGET_PATTERN: Final[str] = r"_date$"
 ID_LIKE_PATTERN: Final[str] = r"(^id$|_id$|^id_|_key$|customer|cust)"

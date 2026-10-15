@@ -87,7 +87,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 120,
-          "seconds": 2.39
+          "seconds": 2.59
         },
         {
           "accepted": [
@@ -128,7 +128,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 120,
-          "seconds": 0.55
+          "seconds": 0.65
         }
       ],
       "runs_passed": 2,
@@ -182,7 +182,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 0.68
+          "seconds": 0.63
         },
         {
           "accepted": [
@@ -221,7 +221,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 0.64
+          "seconds": 0.58
         }
       ],
       "runs_passed": 2,
@@ -275,7 +275,7 @@
             "Q23_WHO_CAN_RESPOND"
           ],
           "rows": 120,
-          "seconds": 0.66
+          "seconds": 0.62
         },
         {
           "accepted": [
@@ -314,7 +314,7 @@
             "Q23_WHO_CAN_RESPOND"
           ],
           "rows": 120,
-          "seconds": 0.59
+          "seconds": 0.61
         }
       ],
       "runs_passed": 2,
@@ -370,7 +370,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 100,
-          "seconds": 1.04
+          "seconds": 1.16
         },
         {
           "accepted": [
@@ -411,7 +411,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 100,
-          "seconds": 0.8
+          "seconds": 0.83
         }
       ],
       "runs_passed": 2,
@@ -466,7 +466,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 60,
-          "seconds": 0.65
+          "seconds": 0.68
         },
         {
           "accepted": [
@@ -506,7 +506,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 60,
-          "seconds": 0.62
+          "seconds": 0.71
         }
       ],
       "runs_passed": 2,
@@ -560,7 +560,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 40,
-          "seconds": 0.42
+          "seconds": 1.52
         },
         {
           "accepted": [
@@ -599,7 +599,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 40,
-          "seconds": 0.5
+          "seconds": 0.45
         }
       ],
       "runs_passed": 2,
@@ -652,7 +652,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 60,
-          "seconds": 0.41
+          "seconds": 0.46
         },
         {
           "accepted": [
@@ -690,7 +690,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 60,
-          "seconds": 0.39
+          "seconds": 0.49
         }
       ],
       "runs_passed": 2,
@@ -733,7 +733,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 10,
-          "seconds": 0.28
+          "seconds": 0.36
         },
         {
           "accepted": [
@@ -761,7 +761,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 10,
-          "seconds": 0.28
+          "seconds": 0.39
         }
       ],
       "runs_passed": 2,
@@ -819,7 +819,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 150,
-          "seconds": 1.07
+          "seconds": 1.19
         },
         {
           "accepted": [
@@ -862,7 +862,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 150,
-          "seconds": 1.02
+          "seconds": 1.12
         }
       ],
       "runs_passed": 2,
@@ -916,7 +916,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 60,
-          "seconds": 0.55
+          "seconds": 0.63
         },
         {
           "accepted": [
@@ -1046,7 +1046,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 60,
-          "seconds": 0.65
+          "seconds": 0.7
         }
       ],
       "runs_passed": 2,
@@ -1101,7 +1101,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 95,
-          "seconds": 0.81
+          "seconds": 0.89
         },
         {
           "accepted": [
@@ -1141,7 +1141,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 95,
-          "seconds": 0.85
+          "seconds": 0.77
         }
       ],
       "runs_passed": 2,
@@ -1256,7 +1256,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 60,
-          "seconds": 0.9
+          "seconds": 0.95
         }
       ],
       "runs_passed": 2,
@@ -1317,7 +1317,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 50,
-          "seconds": 0.89
+          "seconds": 0.88
         },
         {
           "accepted": [
@@ -1363,7 +1363,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 50,
-          "seconds": 0.88
+          "seconds": 0.91
         }
       ],
       "runs_passed": 2,
@@ -1417,7 +1417,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 0.57
+          "seconds": 0.61
         },
         {
           "accepted": [
@@ -1456,7 +1456,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 0.56
+          "seconds": 0.72
         }
       ],
       "runs_passed": 2,
@@ -1510,7 +1510,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 0.78
+          "seconds": 0.62
         },
         {
           "accepted": [
@@ -1549,7 +1549,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 0.58
+          "seconds": 0.66
         }
       ],
       "runs_passed": 2,
@@ -1603,7 +1603,7 @@
             "Q23_WHO_CAN_RESPOND"
           ],
           "rows": 100,
-          "seconds": 0.72
+          "seconds": 0.94
         },
         {
           "accepted": [
@@ -1642,7 +1642,7 @@
             "Q23_WHO_CAN_RESPOND"
           ],
           "rows": 100,
-          "seconds": 0.8
+          "seconds": 0.99
         }
       ],
       "runs_passed": 2,
@@ -1695,7 +1695,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 120,
-          "seconds": 0.6
+          "seconds": 0.75
         },
         {
           "accepted": [
@@ -1733,7 +1733,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 120,
-          "seconds": 0.85
+          "seconds": 0.63
         }
       ],
       "runs_passed": 2,
@@ -1787,7 +1787,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 0.67
+          "seconds": 0.76
         },
         {
           "accepted": [
@@ -1826,7 +1826,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 0.69
+          "seconds": 0.71
         }
       ],
       "runs_passed": 2,
@@ -1880,7 +1880,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 0.63
+          "seconds": 0.85
         },
         {
           "accepted": [
@@ -1919,7 +1919,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 0.64
+          "seconds": 0.68
         }
       ],
       "runs_passed": 2,
@@ -1972,7 +1972,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 120,
-          "seconds": 0.74
+          "seconds": 0.58
         },
         {
           "accepted": [
@@ -2010,7 +2010,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 120,
-          "seconds": 0.54
+          "seconds": 0.61
         }
       ],
       "runs_passed": 2,
@@ -2064,7 +2064,7 @@
             "THIN_LAST_PERIOD"
           ],
           "rows": 210,
-          "seconds": 0.96
+          "seconds": 1.12
         },
         {
           "accepted": [
@@ -2103,7 +2103,7 @@
             "THIN_LAST_PERIOD"
           ],
           "rows": 210,
-          "seconds": 0.94
+          "seconds": 1.43
         }
       ],
       "runs_passed": 2,
@@ -2156,7 +2156,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 120,
-          "seconds": 0.76
+          "seconds": 0.77
         },
         {
           "accepted": [
@@ -2194,7 +2194,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 120,
-          "seconds": 0.6
+          "seconds": 0.66
         }
       ],
       "runs_passed": 2,
@@ -2248,7 +2248,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 120,
-          "seconds": 0.63
+          "seconds": 0.68
         },
         {
           "accepted": [
@@ -2287,7 +2287,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 120,
-          "seconds": 0.72
+          "seconds": 0.82
         }
       ],
       "runs_passed": 2,
@@ -2346,7 +2346,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 1.29
+          "seconds": 1.11
         },
         {
           "accepted": [
@@ -2390,7 +2390,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 1.21
+          "seconds": 1.09
         }
       ],
       "runs_passed": 2,
@@ -2442,7 +2442,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 60,
-          "seconds": 0.45
+          "seconds": 0.66
         },
         {
           "accepted": [
@@ -2479,7 +2479,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 60,
-          "seconds": 0.53
+          "seconds": 0.48
         }
       ],
       "runs_passed": 2,
@@ -2531,7 +2531,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 0.5
+          "seconds": 0.55
         },
         {
           "accepted": [
@@ -2568,7 +2568,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 0.48
+          "seconds": 0.55
         }
       ],
       "runs_passed": 2,
@@ -2623,7 +2623,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 0.61
+          "seconds": 0.83
         },
         {
           "accepted": [
@@ -2758,7 +2758,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 90,
-          "seconds": 0.63
+          "seconds": 0.67
         }
       ],
       "runs_passed": 2,
@@ -2811,7 +2811,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 124,
-          "seconds": 0.86
+          "seconds": 0.9
         },
         {
           "accepted": [
@@ -2849,7 +2849,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 124,
-          "seconds": 0.82
+          "seconds": 0.83
         }
       ],
       "runs_passed": 2,
