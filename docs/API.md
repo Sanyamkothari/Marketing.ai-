@@ -416,6 +416,7 @@ A fully merged, validated use case. This is what the whole engine consumes.
 | `pii_handling` | PiiHandling ("redact" \| "drop_columns" \| "keep") | no |  |
 | `deduplicate` | boolean | no |  |
 | `exclude_columns` | list[string] | no |  |
+| `allow_sensitive_columns` | list[string] | no |  |
 
 #### SplitConfig
 
@@ -1144,7 +1145,7 @@ One column removed before training, and why.
 |---|---|---|---|
 | `schema_version` | integer | no | Version of the contract the file was written with. |
 | `name` | string | yes | Name of the dropped column. |
-| `reason` | "user_excluded" \| "constant" \| "high_null" \| "id_like" \| "pii" \| "leakage" | yes | Why the column was dropped. |
+| `reason` | "user_excluded" \| "constant" \| "high_null" \| "id_like" \| "pii" \| "leakage" \| "sensitive" | yes | Why the column was dropped. |
 | `detail` | string | no | One line of extra context, for example the null rate. |
 
 #### RowRemoval

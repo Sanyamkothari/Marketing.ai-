@@ -206,7 +206,9 @@ def test_a_name_in_a_long_free_text_column_reaches_the_model_as_a_shape_only(mas
     for sentence in ("delivery to", "Please email", "Logged in from", "Great service", "No comment", "Ring "):
         assert sentence not in masked.prompts, sentence
     assert "Baker" not in masked.prompts
-    assert f"{NAME} <[REDACTED:email]>" in masked.prompts  # the short `region_contact` column: the limit that remains
+    assert (
+        f"{NAME} <[REDACTED:email]>" in masked.prompts
+    )  # the short `region_contact` column: the limit that remains
 
 
 def test_summaries_only_prompts_hold_only_shapes_for_cell_text(summaries: Run) -> None:

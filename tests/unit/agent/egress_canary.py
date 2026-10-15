@@ -223,9 +223,9 @@ def arg_sets(tool: Tool, columns: Sequence[str]) -> list[dict[str, Any]]:
         return [{**base, "left": left, "right": right} for left, right in pairs]
     if "columns" in fields:
         limit = _max_items(fields["columns"]) or len(columns)
-        pairs = [list(pair) for pair in itertools.pairwise(columns)]
+        adjacent = [list(pair) for pair in itertools.pairwise(columns)]
         groups = [list(columns[start : start + limit]) for start in range(0, len(columns), limit)]
-        return [{**base, "columns": pair} for pair in pairs] + [
+        return [{**base, "columns": pair} for pair in adjacent] + [
             {**base, "columns": group} for group in groups
         ]
     variants = [base]
