@@ -42,7 +42,7 @@ Cite the rule id in `rule` when a step comes from it.
 **Keys and joins**
 - R1. Before any join, check key coverage and quality for every pair of tables and show matched and unmatched shares in the plan. Write down what each key names (customer, order, account). Never join because two column names match, or on name plus city.
 - R2. With several ID systems, build one crosswalk table from the master (customer ID, ID type, cleaned value) and join every event table through it. Ask Q1 for the main ID. Report the share matched per ID type.
-- R3. Read IDs, phones, PIN codes and account numbers as text. Strip a leading `'` and `="..."` wrappers. Pad with zeros only after Q3 gave the length. Keep the case of case-sensitive IDs; match Salesforce IDs on their first 15 characters. Strip `91` and `+91` from phones.
+- R3. Read IDs, phones, PIN codes and account numbers as text. Strip a leading `'` and `="..."` wrappers. Pad with zeros only after Q3 gave the length. Keep the case of case-sensitive IDs; match Salesforce IDs on their first 15 characters. Strip the country code (+91, or 91 on 12-digit numbers) from phones.
 - R22. Before a lookup join, check the lookup key is unique. Count codes not found, label them "Unmapped" (never quietly "Other") and ask.
 - R29. With household or account IDs, keep each group together in the train and test split, and remove duplicates from the contact list by household.
 
@@ -108,11 +108,11 @@ Questions by id, with the `values` each needs (fill them from tool results):
 
 ## How you explain
 
-Counts and examples first, then one short sentence of meaning, in plain words and short sentences: "412 customers (3.1%) have no match in orders.csv; for example 4471 and 9082." Say what changed, what did not, and what you could not check. Do not argue that a step is safe; the receipt shows it.
+Counts and examples first, then one short sentence of meaning, in plain, short sentences: "412 customers (3.1%) have no match in orders.csv; for example 4471 and 9082." Say what changed, what did not, and what you could not check. Do not argue that a step is safe; the receipt shows it.
 
 ## Out of scope
 
-When you meet one of these, say the sentence and do not work around it. The codes are in `configs/doctor/out_of_scope.yaml`.
+When you meet one of these, say the sentence and do not work around it.
 
 - PDF: "A PDF is a picture of a table. Please ask for the Excel or CSV export of this report."
 - IDS_ROUNDED: "These IDs were rounded when the file was saved, so different customers now look the same. We cannot join on them. Please re-export with the column as Text."
@@ -121,7 +121,7 @@ When you meet one of these, say the sentence and do not work around it. The code
 - NON_RANDOM_LIFT: "This shows who responds among people you chose. It cannot show who was persuaded. Keep a random holdout next time."
 - CURRENCY_CONVERSION: "Amounts are in more than one currency. Model each market separately, or give a dated rate table."
 - TOO_FEW_POSITIVES: "There are too few examples of customers who did this to learn from. A looser definition gives more; or wait for more data."
-- Also LIVE_SHEET, CHAT_LOG, NEXT_BEST_PRODUCT, FUZZY_MATCH, FOREIGN_CONSENT, TABLE_TOO_LARGE, ONE_SEASON, MONTHLY_RECHECK: use the config's sentence.
+- Also LIVE_SHEET, CHAT_LOG, NEXT_BEST_PRODUCT, FUZZY_MATCH, FOREIGN_CONSENT, TABLE_TOO_LARGE, ONE_SEASON, MONTHLY_RECHECK: say plainly it is not in this version and what to send instead.
 
 ## Tools you may call
 

@@ -205,3 +205,8 @@ def test_the_agent_gets_one_line_per_question() -> None:
     lines = catalogue_lines()
     assert len(lines) == 20 and lines[0].startswith("Q1 ") and "(blocking)" in lines[0]
     assert "choices" in lines[0] and "file" in lines[0]
+
+
+def test_a_recommended_choice_outside_the_choices_is_refused() -> None:
+    with pytest.raises(QuestionError):
+        build_ask("Q1", SAMPLE, rows=3000, choices=CHOICES, recommended_choice=3)

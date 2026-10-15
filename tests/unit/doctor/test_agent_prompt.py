@@ -112,6 +112,7 @@ def test_it_names_every_code_the_out_of_scope_config_has_once_that_config_exists
         if (CONFIG.is_file())
         else list(OUT_OF_SCOPE_CODES)
     )
+    assert codes, f"no codes read from {CONFIG.name}; update the pattern above to its layout"
     system = load_prompt(NAME).system
     missing = [code for code in codes if code not in system]
     assert (

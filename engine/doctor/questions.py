@@ -462,6 +462,10 @@ def build_ask(
     and is the safe choice.
     """
     spec = question(qid)
+    if recommended_choice is not None and not 0 <= recommended_choice < len(choices):
+        raise QuestionError(
+            f"{qid}: recommended_choice {recommended_choice} is not one of the {len(choices)} choices"
+        )
     shown = _rendered(spec, values, choices)
     labels = [label for _, label, _ in shown]
     count = len(labels)
