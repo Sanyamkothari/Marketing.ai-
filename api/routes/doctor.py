@@ -49,6 +49,7 @@ from engine.config import (
     UseCaseStatus,
     get_roles,
     list_industries,
+    list_use_case_ids,
     load_industry,
 )
 from engine.doctor.contracts import Diagnosis, DiagnosisRequest, HandoffRequest
@@ -111,24 +112,34 @@ register(
 )
 
 
+SKIPPED_USE_CASES: Final[frozenset[str]] = frozenset({"telco-churn"})
+"""Trainable use cases the suggestions leave out (the owners took Telco Churn off the list)."""
+
+
 def offers(root_path: Path) -> tuple[Offer, ...]:
-    """The trainable use cases Home lists (the default journey's available cards), in Home's order."""
+    """The trainable use cases the files are checked against: Home's, in Home's order, then every other
+    shipped one that learns from a yes/no column (not Telco Churn, not the uplift-only ones)."""
     industries = list_industries(root_path)
     chosen = DEFAULT_INDUSTRY if DEFAULT_INDUSTRY in industries else (industries[0] if industries else None)
-    if chosen is None:
-        return ()
+    refs = (
+        [(stage.name, ref) for stage, ref in load_industry(chosen, root_path).all_refs()]
+        if chosen is not None
+        else []
+    )
+    candidates = [(stage, ref.id) for stage, ref in refs if ref.status is UseCaseStatus.AVAILABLE]
+    candidates += [("", use_case_id) for use_case_id in list_use_case_ids(root_path)]
     found: list[Offer] = []
-    seen: set[str] = set()
-    for stage, ref in load_industry(chosen, root_path).all_refs():
-        if ref.status is not UseCaseStatus.AVAILABLE or ref.id in seen:
+    seen: set[str] = set(SKIPPED_USE_CASES)
+    for stage, use_case_id in candidates:
+        if use_case_id in seen:
             continue
         try:
-            config = use_case_config(ref.id, root_path)
+            config = use_case_config(use_case_id, root_path)
         except ConfigError:
             continue
-        if config.trainable_in_phase_1 and config.target.column:
-            seen.add(ref.id)
-            found.append(Offer(config=config, stage=stage.name))
+        if config.trainable_in_phase_1 and config.target.column and config.uplift.treatment_column is None:
+            seen.add(use_case_id)
+            found.append(Offer(config=config, stage=stage or config.lifecycle_stage))
     return tuple(found)
 
 

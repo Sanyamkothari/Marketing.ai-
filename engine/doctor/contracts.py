@@ -26,11 +26,13 @@ __all__ = [
     "FileLink",
     "FileStack",
     "HandoffRequest",
+    "ReadinessReason",
     "ReadinessStatus",
     "UseCaseReadiness",
 ]
 
 ReadinessStatus = Literal["ready", "check", "missing", "too_small"]
+ReadinessReason = Literal["NO_OUTCOME", "GUESSED_COLUMN", "TWO_COLUMNS", "NOT_ENOUGH", "STOPPED"]
 
 
 class FileDiagnosis(StrictBase):
@@ -98,6 +100,25 @@ class UseCaseReadiness(StrictBase):
             "When the use case is not ready: what is short and by how much, what can be done now and what "
             "to collect from whom (`engine.doctor.sufficiency`). Null when it is ready."
         ),
+    )
+
+    # Added, defaulted fields: why this use case is where it is in the list, so a person can compare.
+    reason_code: ReadinessReason | None = Field(
+        default=None,
+        description=(
+            "Why it is not plainly ready: `NO_OUTCOME` (no file names the outcome), `GUESSED_COLUMN` (one "
+            "column might be it: a question), `TWO_COLUMNS` (several might be it: a question), "
+            "`NOT_ENOUGH` (too little history), `STOPPED` (Guided setup cannot use the file). Null otherwise."
+        ),
+    )
+    customers: int | None = Field(default=None, description="Rows (customers) in the file to start from.")
+    yes_count: int | None = Field(default=None, description="How many of them are a 'yes', when it is known.")
+    why: str = Field(default="", description="One plain line: what the file shows for this use case.")
+    first_fix: str | None = Field(
+        default=None, description="The first thing to do when it is not ready, in plain words."
+    )
+    candidate_columns: tuple[str, ...] = Field(
+        default=(), description="For a question: the columns that might name the outcome."
     )
 
     # DEC-1596: an added, defaulted field - what the file already says about the outcome, with no AI.
