@@ -91,7 +91,10 @@ registerModule({
   name: "pilot",
   routes: ["pilot"],
   render: async (app, parts) => {
+    const hash = window.location.hash;
     await demoReady;
+    // Moved on while the sample data was being read: the page now showing is not ours to draw over.
+    if (window.location.hash !== hash) return;
     pilotDrawn = true;
     return renderPilot(app, parts, demo);
   },

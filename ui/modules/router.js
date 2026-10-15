@@ -93,8 +93,8 @@ function announceChange(registration) {
   if (!registration) onlyRegistrations = false;
   if (announcing) return;
   announcing = true;
-  const announceNow = () => {
-    const detail = { registration: onlyRegistrations };
+  const announceNow = (beforeLoad) => {
+    const detail = { registration: onlyRegistrations, beforeLoad };
     announcing = false;
     onlyRegistrations = true;
     window.dispatchEvent(new window.CustomEvent(MODULES_CHANGED, { detail }));
@@ -102,10 +102,12 @@ function announceChange(registration) {
   // While the page is loading, the module scripts each register in a task of their own, so a
   // microtask would still give one repaint per module - and every repaint re-runs the route's
   // fetches. `load` fires after the last module script has run: wait for it and announce once.
+  // `app.js` draws the first screen on `load` as well, so that screen already shows these changes:
+  // `beforeLoad` tells it so (the top bar still repaints on the announcement).
   if (document.readyState !== "complete") {
-    window.addEventListener("load", () => queueMicrotask(announceNow), { once: true });
+    window.addEventListener("load", () => queueMicrotask(() => announceNow(true)), { once: true });
   } else {
-    queueMicrotask(announceNow);
+    queueMicrotask(() => announceNow(false));
   }
 }
 

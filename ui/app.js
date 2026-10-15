@@ -406,8 +406,10 @@ window.addEventListener("hashchange", render);
 // A phase module that registers after the first paint - or whose state the current screen shows,
 // like the client picked in the top bar - asks for the current route to be drawn again.
 window.addEventListener(MODULES_CHANGED, (event) => {
-  const registrationOnly = event.detail && event.detail.registration;
-  if (registrationOnly && claimedHash !== null && claimedHash === window.location.hash) return;
+  const detail = event.detail || {};
+  // Announced while the page was loading: the first draw (on `load`, below) already has the change.
+  if (detail.beforeLoad) return;
+  if (detail.registration && claimedHash !== null && claimedHash === window.location.hash) return;
   render();
 });
 // "Try again" on any screen's error (`errorBox(error, { retry: true })`) draws the route again.

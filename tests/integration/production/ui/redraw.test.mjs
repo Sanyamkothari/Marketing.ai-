@@ -48,3 +48,13 @@ test("many registrations in a task are one announcement", async () => {
   w.removeEventListener(router.MODULES_CHANGED, listener);
   assert.equal(heard, 1);
 });
+
+test("a change announced while the page was loading does not draw the page again", async () => {
+  // `app.js` draws the first screen on `load`, after every change made while loading: the router's
+  // announcement of those changes (`beforeLoad`) is for the top bar, not for another draw.
+  await settle(10);
+  const before = audits();
+  w.dispatchEvent(new w.CustomEvent(router.MODULES_CHANGED, { detail: { registration: false, beforeLoad: true } }));
+  await settle(10);
+  assert.equal(audits(), before);
+});
