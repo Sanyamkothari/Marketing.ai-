@@ -24,8 +24,11 @@ import { aiServiceStatus, AI_SERVICE_EVENT } from "../../availability.js";
 import { button, emptyState } from "../../components.js";
 import { canAccess } from "../router.js";
 import { createConnectionPicker } from "../connections/picker.js";
+import { postCampaignRun } from "../campaigns/wizard_api.js";
+import { DEFAULT_SPEED, SPEEDS, runHref, startSentenceHtml } from "../campaigns/run_rules.js";
 import { TABLE_FILE_TYPES } from "../intake/notes.js";
 import { injectAgentStyles } from "../agent/styles.js";
+import { plain } from "../agent/sent.js";
 import {
   addFile,
   answerQuestion,
@@ -84,6 +87,9 @@ function fresh() {
     draft: "",
     ai: null, // true | false | null (not known)
     started: null, // the case whose hand-off was started from here
+    speed: DEFAULT_SPEED, // how long the model may learn: quick | balanced | thorough
+    speedOpen: false, // the three choices are shown ("Change")
+    startInfo: null, // { uploadId, rows } of the file the campaign starts from, for the sentence above Start
     changing: new Set(), // answered questions whose answers are shown again ("Change answer")
     read: new Set(), // changes needing their own yes whose "I have read this sentence" is ticked
   };
@@ -174,21 +180,61 @@ function expertHtml(entry) {
   return `<div class="dds-actions" data-dds-expert-row>${open}<span class="dds-why">Set this up by hand. Changes made there are not part of the Data Doctor's record.</span></div>`;
 }
 
-/** Ready for the goal: one action on - start the list (wizard, setup) or continue in the wizard (Data page). */
+/** The three ways to train, shown after "Change" on the sentence above Start. */
+function speedsHtml(entry) {
+  const chosen = entry.state.speed;
+  const items = SPEEDS.map((speed) =>
+    button({
+      label: `${speed.name}: about ${speed.minutes} minutes${speed.recommended ? " (recommended)" : ""}`,
+      kind: chosen === speed.id ? "primary" : "secondary",
+      size: "sm",
+      attrs: `data-dds-speed="${speed.id}" aria-pressed="${chosen === speed.id}"`,
+    }),
+  ).join("");
+  return `<div class="dds-actions" role="group" aria-label="How long to learn" data-dds-speeds>${items}</div>`;
+}
+
+/** The sentence above Start: what is learned from, how many customers, how long it takes, and "Change". */
+function startSentence(entry) {
+  const { state: s, host } = entry;
+  const files = s.screen.case.files || [];
+  const startId = s.screen.view.start.upload_id;
+  const file = files.find((f) => f.upload_id === startId) || files[0];
+  const rows = s.startInfo && s.startInfo.uploadId === startId ? s.startInfo.rows : null;
+  const reuse = Boolean(host.modelVersionId); // a goal that has a model uses it: nothing to learn, no time to choose
+  const change = reuse
+    ? ""
+    : ` ${button({ label: "Change", kind: "tertiary", size: "sm", attrs: `data-dds-speed-open aria-expanded="${s.speedOpen}"` })}`;
+  const sentence = startSentenceHtml({ table: file ? plain(file.file_name) : "", customers: rows, speed: s.speed, reuse });
+  return `<p class="dds-why" data-dds-start-sentence>${sentence}${change}</p>${
+    s.speedOpen && !reuse ? speedsHtml(entry) : ""
+  }<p class="dds-why" data-dds-start-leave>You can close this page.</p>`;
+}
+
+/** Ready for the goal: one action on - start the campaign (Data page, wizard) or fill the goal's setup (setup). */
 function continueHtml(entry) {
   const { state: s, host } = entry;
   const view = s.screen && s.screen.view;
   if (!view || !["ready", "ready_with_warnings"].includes(view.verdict.key) || !view.start) return "";
-  const label = host.approved ? "Continue with this data" : "Continue to the campaign";
+  // Here the campaign starts (the wizard's own start, or the Data page's); else the goal's setup or the wizard goes on.
+  const starts =
+    host.place !== "setup" && (host.approved ? true : view.start.target === "runs" && canAccess("POST", "/campaign-runs"));
+  const label = starts ? "Start the campaign" : host.approved ? "Continue with this data" : "Continue to the campaign";
   const left = leftOutOf(s.screen).length;
   const without = left
     ? `<p class="dds-why" data-dds-continue-without>${esc(
         `Continuing uses the data without the ${left === 1 ? "change" : `${left} changes`} left out above. Someone can still agree to ${left === 1 ? "it" : "them"} first.`,
       )}</p>`
     : "";
-  return `<section class="card dds-continue" data-dds-ready><p class="dds-why">The data is ready for this goal. Approved, checked and saved with this check.</p>${without}<div class="dds-actions">${button(
-    { label, kind: "primary", attrs: "data-dds-continue", disabled: Boolean(s.busy), busy: s.busy === "continue" },
-  )}</div></section>`;
+  return `<section class="card dds-continue" data-dds-ready><p class="dds-why">The data is ready for this goal. Approved, checked and saved with this check.</p>${without}${
+    starts ? startSentence(entry) : ""
+  }<div class="dds-actions">${button({
+    label,
+    kind: "primary",
+    attrs: "data-dds-continue",
+    disabled: Boolean(s.busy),
+    busy: s.busy === "continue",
+  })}</div></section>`;
 }
 
 function asideHtml(entry) {
@@ -229,6 +275,21 @@ async function refresh(entry) {
   }
   s.screen = await getScreen(s.caseId);
   if (s.ai === null) await readAi(entry); // not known yet: ask again (the answer is shared for a few seconds)
+  await readStartInfo(entry);
+}
+
+/** How many customers the file the campaign starts from holds, for the sentence above Start (no sentence without). */
+async function readStartInfo(entry) {
+  const s = entry.state;
+  const start = s.screen && s.screen.view && s.screen.view.start;
+  if (!start || entry.host.place === "setup" || (s.startInfo && s.startInfo.uploadId === start.upload_id)) return;
+  s.startInfo = { uploadId: start.upload_id, rows: null };
+  try {
+    const profile = await getProfile(start.upload_id);
+    s.startInfo.rows = Number.isFinite(profile && profile.row_count) ? profile.row_count : null;
+  } catch {
+    // the sentence leaves the number out
+  }
 }
 
 /** Run one change, then draw the case as the server has it now. A stale version reloads and says so. */
@@ -335,15 +396,23 @@ async function pickFromConnection(entry) {
   s.picker.start();
 }
 
-/** The hand-off: start the list with the prepared file (wizard, setup), or continue in the wizard (Data page). */
+/**
+ * The hand-off. Wizard and goal setup get the prepared file and the chosen learning time from `host.approved` (the
+ * wizard starts the campaign run, setup fills its form). On the Data page the campaign run starts from here, and the
+ * person lands on its progress page: they can close the browser.
+ */
 async function proceed(entry) {
   const s = entry.state;
   const view = s.screen && s.screen.view;
   if (!view || !view.start) return;
   const start = view.start;
   if (!entry.host.approved) {
-    rememberCase(start.goal_id, s.caseId);
-    window.location.hash = wizardHref(start.goal_id);
+    if (start.target !== "runs" || !canAccess("POST", "/campaign-runs")) {
+      rememberCase(start.goal_id, s.caseId);
+      window.location.hash = wizardHref(start.goal_id);
+      return;
+    }
+    await startCampaignRun(entry, start);
     return;
   }
   s.busy = "continue";
@@ -366,7 +435,32 @@ async function proceed(entry) {
     primaryKey: start.primary_key,
     target: start.outcome,
     overrides: {},
+    speed: s.speed,
   });
+}
+
+/** `POST /campaign-runs` with the prepared file, the goal and the learning time; then its progress page. */
+async function startCampaignRun(entry, start) {
+  const s = entry.state;
+  s.busy = "continue";
+  s.error = null;
+  draw(entry);
+  try {
+    const created = await postCampaignRun({
+      use_case: start.goal_id,
+      upload_id: start.upload_id,
+      primary_key: start.primary_key,
+      target: start.outcome,
+      speed: s.speed,
+    });
+    s.started = s.caseId;
+    s.busy = "";
+    window.location.hash = runHref(created.record.campaign_run_id);
+  } catch (error) {
+    s.error = error;
+    s.busy = "";
+    draw(entry);
+  }
 }
 
 async function approve(entry) {
@@ -430,6 +524,13 @@ function bind(entry) {
     else if (d.ddsRevoke) act(entry, "revoke", () => revokeStanding(theCase(entry), d.ddsRevoke), { announce: "Answer revoked" });
     else if (d.ddsGoal) pickGoal(entry, d.ddsGoal);
     else if (target.hasAttribute("data-dds-continue")) proceed(entry);
+    else if (d.ddsSpeed) {
+      entry.state.speed = d.ddsSpeed;
+      draw(entry);
+    } else if (target.hasAttribute("data-dds-speed-open")) {
+      entry.state.speedOpen = !entry.state.speedOpen;
+      draw(entry);
+    }
     else if (target.hasAttribute("data-dds-pick-connection")) pickFromConnection(entry);
     else if (target.hasAttribute("data-dds-expert") && entry.host.manual) entry.host.manual();
     else if (target.hasAttribute("data-dds-new")) {

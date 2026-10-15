@@ -14,6 +14,7 @@
 import { skeleton } from "../../dom.js";
 import { announceRegistration, phaseModules, registerModule } from "../router.js";
 import { getOverview } from "./api.js";
+import { getCampaignRuns } from "../campaigns/wizard_api.js";
 import { DEFAULT_PLACES, injectStyles, overviewHtml } from "./page.js";
 
 export const ROUTES = ["overview"];
@@ -53,7 +54,7 @@ export function placesNow() {
 }
 
 let paintSeq = 0;
-let shown = null; // the last answer drawn, so "Hide this list" repaints without asking again
+let shown = null; // the last answer drawn ({ overview, runs }), so "Hide this list" repaints without asking again
 const wired = new WeakSet();
 
 function paintInto(app, state) {
@@ -68,7 +69,7 @@ function wire(app) {
     const target = event.target && typeof event.target.closest === "function" ? event.target.closest("[data-checklist-hide]") : null;
     if (!target || !shown || hashParts()[0] !== "overview") return;
     hideChecklist();
-    paintInto(app, { overview: shown });
+    paintInto(app, shown);
     document.title = "Overview · Marketing AI";
   });
 }
@@ -79,8 +80,10 @@ async function renderOverview(app) {
   if (!app.querySelector('[data-module="overview"]')) app.innerHTML = skeleton("page", { title: "Overview" });
   let state;
   try {
-    state = { overview: await getOverview() };
-    shown = state.overview;
+    // The campaign runs are a nicety: the page draws without them when they cannot be read.
+    const [overview, runs] = await Promise.all([getOverview(), getCampaignRuns().catch(() => null)]);
+    state = { overview, runs: (runs && runs.campaign_runs) || [] };
+    shown = state;
   } catch (error) {
     shown = null;
     state = { error };

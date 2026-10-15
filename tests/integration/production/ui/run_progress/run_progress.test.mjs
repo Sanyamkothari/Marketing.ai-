@@ -13,7 +13,7 @@ installPage(() => null);
 const { etaText, runProgress } = await import("../../../../../ui/run_progress.js");
 const { runningCard } = await import("../../../../../ui/usecase.js");
 const { upliftScreenHtml } = await import("../../../../../ui/modules/uplift/views.js");
-const { progressHtml } = await import("../../../../../ui/modules/campaigns/wizard_views.js");
+const { runPageHtml } = await import("../../../../../ui/modules/campaigns/run_views.js");
 const { findNeverShown } = await import("../../../../../ui/labels.js");
 
 const mid = fixture("status_mid"); // three quarters through the train stage's time budget
@@ -95,14 +95,19 @@ test("the uplift workbench's running screen uses the same reading", () => {
   assert.match(upliftRunning(legacy), /<span class="run-pct">50%<\/span>/);
 });
 
-test("the wizard's learning step uses the same reading, and its stage share without an estimate", () => {
-  const html = progressHtml({ learning: true, share: 0.5, progress: runProgress(mid) });
-  assert.match(html, new RegExp(`class="run-meter cw-meter"[^>]*aria-valuenow="${mid.estimated_pct}"`));
-  assert.match(text(html), new RegExp(midEta));
-  assert.match(progressHtml({ learning: true, share: 0.5, progress: runProgress(overrun) }), /Finishing up…/);
-  const old = progressHtml({ learning: true, share: 0.5, progress: runProgress(legacy) });
-  assert.match(old, /aria-valuenow="50"/);
-  assert.ok(!old.includes("data-run-eta"));
+const running = (pct, eta) =>
+  runPageHtml({
+    record: { state: "running", use_case_id: "win-back-campaign", steps: [{ key: "train", title: "Learning from your customers", state: "running" }] },
+    pct,
+    eta_seconds: eta,
+    summary: "Learning from your customers.",
+  });
+
+test("the campaign progress page uses the same bar and time-left line", () => {
+  const html = running(75, 300);
+  assert.match(html, /class="run-meter cw-meter"[^>]*aria-valuenow="75"/);
+  assert.match(text(html), new RegExp(etaText(300)));
+  assert.ok(!running(75, null).includes("data-run-eta"), "no time left, no line");
 });
 
 test("every new word passes the visible-text check (no engine words)", () => {
@@ -110,7 +115,7 @@ test("every new word passes the visible-text check (no engine words)", () => {
     // The stage rows are drawn from the stub stages' own detail lines, which this milestone does not change
     // (the uplift screen's rows have their own test); what is checked here is what the progress adds.
     const bare = { ...status, stages: [] };
-    for (const html of [card(status), upliftRunning(bare), progressHtml({ learning: true, progress: runProgress(status) })]) {
+    for (const html of [card(status), upliftRunning(bare), running(status.estimated_pct, status.eta_seconds)]) {
       assert.deepEqual(findNeverShown(text(html.replace(/ title="[^"]*"/g, ""))), {});
     }
   }

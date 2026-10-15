@@ -237,7 +237,7 @@ test("in the wizard, Approve does not start the list while a change is left out;
   await settle(3);
   assert.deepEqual(started, [], "the run did not start on Approve");
   const button = $("[data-dds-continue]");
-  assert.equal(button.textContent.trim(), "Continue with this data");
+  assert.equal(button.textContent.trim(), "Start the campaign");
   assert.match($("[data-dds-continue-without]").textContent, /Continuing uses the data without the change left out above\./);
   const head = $('[data-dds-header] [data-dds-left-out="head"]');
   assert.ok(head && head.textContent.includes("says who agreed to be contacted"), "the verdict says what is left out");
@@ -246,6 +246,7 @@ test("in the wizard, Approve does not start the list while a change is left out;
   const s = screen("ready");
   assert.equal(started[0].target, s.view.start.outcome);
   assert.equal(started[0].upload.upload_id, s.view.start.upload_id);
+  assert.equal(started[0].speed, "balanced", "the training time the person left as it is reaches the start");
 });
 
 test("Ready, with notes always shows a plain note", async () => {
@@ -361,14 +362,34 @@ test("the checklist: found by our checks, ticked as the case says; unticking sen
   assert.deepEqual([posts("decisions")[0].body.item_id, posts("decisions")[0].body.accept], [item.item_id, false]);
 });
 
-test("ready on the Data page continues in the wizard on the same case", async () => {
-  await show("ready");
+test("ready on the Data page: one sentence with the time, Change picks another, and Start runs the campaign on the server", async () => {
+  const s = await show("ready");
   assert.equal($("[data-dds-verdict]").dataset.ddsVerdict, "ready");
+  const sentence = $("[data-dds-start-sentence]").textContent;
+  assert.match(sentence, /^We will learn from .+, 1,200 customers, and build your contact list\. Balanced: about 15 minutes\./);
+  assert.match($("[data-dds-start-leave]").textContent, /You can close this page\./);
+  assert.ok(!$("[data-dds-speeds]"), "the choices wait behind Change");
+  $("[data-dds-speed-open]").click();
+  await settle(1);
+  assert.deepEqual(
+    $$("[data-dds-speed]").map((b) => b.textContent.trim()),
+    ["Quick: about 5 minutes", "Balanced: about 15 minutes (recommended)", "Thorough: about 40 minutes"],
+  );
+  $('[data-dds-speed="thorough"]').click();
+  await settle(1);
+  assert.match($("[data-dds-start-sentence]").textContent, /Thorough: about 40 minutes\./);
   const button = $("[data-dds-continue]");
-  assert.equal(button.textContent.trim(), "Continue to the campaign");
+  assert.equal(button.textContent.trim(), "Start the campaign");
   button.click();
-  await settle(3);
-  assert.equal(window.location.hash, `#/campaigns/new/customers/${GOAL}`);
+  await until(() => window.location.hash === "#/campaigns/run/cr_dds", 3000, "the campaign's progress page");
+  const sent = world.posted.find((p) => p.path === "/campaign-runs");
+  assert.deepEqual(sent.body, {
+    use_case: s.view.start.goal_id,
+    upload_id: s.view.start.upload_id,
+    primary_key: s.view.start.primary_key,
+    target: s.view.start.outcome,
+    speed: "thorough",
+  });
 });
 
 test("not ready says so, and starts nothing", async () => {

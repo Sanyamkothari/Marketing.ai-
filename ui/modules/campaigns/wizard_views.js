@@ -25,7 +25,6 @@ import {
   stepper,
   tagChip,
 } from "../../components.js";
-import { progressMeterHtml, progressNoteHtml } from "../../run_progress.js"; // Plan M M189 (DEC-1619)
 import {
   SHARED_STEPS,
   STEPS,
@@ -210,24 +209,9 @@ export function customersLead(first) {
     : "Choose the file of customers for this campaign. It is checked and prepared the way you approved before.";
 }
 
-/** The validation report a refused start carries (`409` with `validation`): its own messages, read-only. */
-function checksHtml(report) {
-  const items = (report.checks || [])
-    .filter((c) => c.severity === "error")
-    .map((c) => `<li>${esc(c.message)}${c.suggestion ? ` <span class="cw-note">${esc(c.suggestion)}</span>` : ""}</li>`)
-    .join("");
-  return problemBox(
-    `<p class="cw-p">The file cannot be used as it is. Change your answers above and approve again.</p>${
-      items ? `<ul class="cw-list">${items}</ul>` : ""
-    }`,
-    'role="alert" data-cw-checks',
-    "critical",
-  );
-}
-
 /**
  * Step 2 before anything has started: the lead, the two places Guided setup (Plan G/L, unchanged) mounts
- * into, and the last refusal - a validation report, a cost the server wants confirmed, or an error. The card is
+ * into, and the last refusal. The card is
  * a calm frame around Guided setup: the goal's icon and name, one sentence, then Guided setup as it is.
  */
 export function customersHtml({ uc, first, canStart = true, hasGuided = true, problem = null, busy = "" }) {
@@ -249,16 +233,7 @@ export function customersHtml({ uc, first, canStart = true, hasGuided = true, pr
       tone: "info",
     });
   }
-  let trouble = "";
-  if (problem && problem.validation) trouble = checksHtml(problem.validation);
-  else if (problem && problem.confirm) {
-    trouble = problemBox(
-      `${p(problem.confirm)}${actions(
-        act({ label: "Start it anyway", kind: "secondary", attrs: "data-cw-confirm-cost", disabled: Boolean(busy) }),
-      )}`,
-      'role="alert" data-cw-cost-confirm',
-    );
-  } else if (problem && problem.error) trouble = errorBox(problem.error);
+  const trouble = problem && problem.error ? errorBox(problem.error) : "";
   const working = busy ? `<p class="loading" role="status" data-cw-busy>${esc(busy)}</p>` : "";
   return card(
     `Customers for "${name}"`,
@@ -266,63 +241,6 @@ export function customersHtml({ uc, first, canStart = true, hasGuided = true, pr
     `data-cw-customers="${esc(first ? "first" : "again")}"`,
     { lead: goalIcon(uc && uc.id) },
   );
-}
-
-/**
- * Step 2 while the list is being prepared: one sentence and how far it has got. `progress` is
- * `runProgress(status)` (Plan M M189, DEC-1619): when the status carries the time-weighted estimate the bar
- * shows it, with the time left or "Finishing up…"; otherwise `share` (the stages done, 0 to 1) as before.
- */
-export function progressHtml({ learning, share = null, progress = null }) {
-  const reading =
-    progress && progress.estimated
-      ? progress
-      : { pct: share === null ? null : Math.round(share * 100), estimated: false, finishing: false, eta: "" };
-  const meter = `${progressMeterHtml(reading, "cw-meter")}${progressNoteHtml(reading)}`;
-  const text = learning
-    ? "Marketing AI is learning from your customers' history, then it builds the contact list. This takes a few minutes. You can leave this page and come back: the campaign carries on."
-    : "Marketing AI is building the contact list from your customers. This usually takes under a minute.";
-  return card(
-    learning ? "Learning from your customers" : "Building the contact list",
-    `${p(text)}${meter}`,
-    `data-cw-working="${learning ? "learning" : "list"}" role="status"`,
-    { lead: icon("clock", { size: 20 }) },
-  );
-}
-
-/**
- * Step 2 when the new model waits for an approval and this person does not have the Approver role: the
- * campaign waits, and the notice says where an Approver will find it (the bell, `#/approvals`). A person with
- * that role is not held here: their list is built straight away and they approve the new model on the Review
- * screen, in the same click as the plan (M181 part C, DEC-1611; `reviewHtml`).
- */
-export function waitingHtml({ own = false } = {}) {
-  const who = own
-    ? "Marketing AI has learned from your customers. You started this learning, so another person with the Approver role must approve what it learned before the contact list is built. The campaign waits until then and carries on here."
-    : "Marketing AI has learned from your customers. Before it builds the contact list, someone with the Approver role must approve what it learned. The campaign waits until then and carries on here.";
-  return noticeHtml({
-    title: "Waiting for an approval",
-    text: [who, "An Approver finds it under Waiting for approval. Come back to this page once it is approved."],
-    action: { label: "Open Waiting for approval", href: "#/approvals" },
-    attrs: 'data-cw-waiting="wait"',
-    tone: "warning",
-  });
-}
-
-/** Step 2 when the work stopped: what happened, and starting again. The engine's own words are technical. */
-export function stoppedHtml({ ucId, detail, reason }) {
-  const run = detail && detail.run;
-  const tech = techDetails([
-    ["Reference", run && run.run_id],
-    ["What the system said", run && run.error && (run.error.message || run.error.code)],
-  ]);
-  return `${noticeHtml({
-    title: "The contact list could not be prepared",
-    text: [reason, "Start again with the same or another file. Nothing was sent to any customer."],
-    action: { label: "Start again", href: stepHref("customers", ucId), attrs: "data-cw-restart" },
-    attrs: "data-cw-stopped",
-    tone: "critical",
-  })}${tech ? `<div class="cw-tech">${tech}</div>` : ""}`;
 }
 
 // --- Step 3: Audience -----------------------------------------------------------------------------------

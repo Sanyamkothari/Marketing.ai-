@@ -3,41 +3,36 @@
 //
 //   #/campaigns/new                              1 Goal
 //   #/campaigns/new/customers/<goal>              2 Customers: Guided setup (Plan G/L), unchanged
-//   #/campaigns/new/customers/<goal>/<run>        2 ... while the list is being prepared, or waiting
 //   #/campaigns/new/review/<campaign>             3 Audience and 4 Review on one screen (a Draft campaign),
 //                                                   then "Approve and download"
 //   #/campaigns/new/audience/<campaign>           (the address of step 3 before M181 part C: opens Review)
 //   #/campaigns/new/send/<campaign>               5 Send: the campaign is Live; the download (again)
 //
-// Under the hood, existing routes only (Plan M M7): the first campaign of a goal learns from the approved
-// file (`POST /runs`, train) and then builds the list from the same customers (`POST /uploads` and
-// `POST /runs`, score); a later one builds the list with the current model. A finished list becomes a campaign
-// record (`POST /campaigns`). "Approve and download" registers its test plan (`POST /campaigns/{id}/plan`) with
-// the planner's own numbers and, only once the server has accepted it, downloads the list's served file - so
-// the plan is fixed before any download - then shows Send.
+// Under the hood: "Start" asks the server to run the whole campaign (`POST /campaign-runs`: learn from the file, build
+// the list from the same customers, record the campaign) and moves to its progress page (`./run_page.js`), so the
+// work goes on when the tab closes. Nothing is chained in the browser. A goal that already has a model skips the
+// learning. The finished campaign comes back here, to Review: "Approve and download" registers its test plan
+// (`POST /campaigns/{id}/plan`) with the planner's own numbers and, only once the server has accepted it, downloads
+// the list's served file - so the plan is fixed before any download - then shows Send.
 //
-// A new model waiting for an approval (M181 part C, DEC-1611): for a person with the Approver role the list is
-// built with it straight away, and the Review screen's one button says it approves the new model too: it
-// calls the approvals page's own route (`POST /models/{id}/approve`) first, then the plan, then the download,
-// each only once the one before it worked. Anyone else is held on step 2, as before, with the way to the
-// approvals page, and so is the Approver who started the learning while sign-in is on (the server refuses the
-// trainer's own approval, separation of duties); nothing is built for them before another Approver has approved.
+// A new model waiting for an approval (M181 part C, DEC-1611): the campaign run builds the list with the model it
+// just learned even while it waits. For a person with the Approver role the Review screen's one button says it
+// approves the new model too: it calls the approvals page's own route (`POST /models/{id}/approve`) first, then
+// the plan, then the download, each only once the one before it worked. The server refuses the trainer's own
+// approval while sign-in is on (separation of duties); another Approver then approves it.
 // A list built with a model that is not approved (yet) is held wherever it could be sent from: Review, Send and
 // the campaign's own page (`listModelState`) offer no plan and no download until it is. They fail closed: when
 // the registry cannot be read, nothing is offered and the page asks again.
 //
 // The step a URL asks for is checked against the server: a campaign with a test plan opens on Send, one
-// without on its Draft screen (Review). The only thing kept in the browser is the file chosen for a first campaign,
-// so the list can be built from it once the learning is done; after a refresh the person chooses it again.
+// without on its Draft screen (Review).
 
 import { canAccess, setActiveNav, setupModes } from "../router.js";
 import { ApiError } from "../../api.js";
-import { COST_NEEDS_CONFIRMATION } from "../../cost.js";
 import { errorBox } from "../../dom.js";
 import { campaignStep } from "../measure/rule.js";
 import {
   getCampaign,
-  getCampaignsOfRun,
   getComplianceSummary,
   getCostEstimate,
   getIndustries,
@@ -49,10 +44,8 @@ import {
   getTreatListSummary,
   getUseCase,
   postApprove,
-  postCampaign,
+  postCampaignRun,
   postPlan,
-  postRun,
-  postUpload,
   treatListUrl,
 } from "./wizard_api.js";
 import { getUpliftArtefact } from "../uplift/api.js";
@@ -66,9 +59,7 @@ import {
   listModelState,
   parseRoute,
   planBody,
-  progressOf,
   resultsDate,
-  runState,
   stepForCampaign,
   stepHref,
   versionById,
@@ -78,19 +69,14 @@ import {
   customersHtml,
   goalHtml,
   loadingHtml,
-  noticeHtml,
   pageHtml,
-  progressHtml,
   reviewHtml,
   sendHtml,
-  stoppedHtml,
-  waitingHtml,
 } from "./wizard_views.js";
+import { DEFAULT_SPEED, runHref } from "./run_rules.js";
 import { injectWizardStyles } from "./wizard_styles.js";
-import { runProgress } from "../../run_progress.js"; // Plan M M189 (DEC-1619)
 
-/** How often a list being prepared is asked about, and a model waiting for an approval. */
-export const POLL_MS = 2000;
+/** How often a model waiting for an approval is asked about. */
 export const WAIT_POLL_MS = 15000;
 
 const ui = {
@@ -99,30 +85,23 @@ const ui = {
   parts: null,
   timer: null,
   screen: null, // { step, body() , after?() } - redrawn in place for a local change (busy, error)
-  captured: new Map(), // goal id -> the File chosen in Guided setup, for a first campaign's list
   started: null, // the upload id the last start used, so Guided setup knows its approval was taken
-  lastStart: null, // { uc, current, fill } of the last start, for "Start it anyway"
   customers: { problem: null, busy: "" },
   // The Review screen's one button: `busy` is its label while its calls are on their way (else ""), `own` says
   // the server refused this person's approval of the new model because they started the learning.
   review: { busy: "", error: null, own: false },
   justDownloaded: null, // the Send address "Approve and download" went to after starting the download
-  advancing: new Set(), // run ids already being taken to their next step
-  listOf: new Map(), // learning run id -> the list run started from it, for a person who left and came back
   chosenGoal: null, // the goal card last chosen: drawn chosen when the person comes back to step 1 (M187)
 };
 
 /** Whether work started under `token` is still the page's: no newer draw, and the same route on screen. */
 const ours = (token) => token === ui.seq && onRoute();
 
-/** Whether the page still shows this run's progress (the person may have gone elsewhere meanwhile). */
-const stillOn = (runId) => parseRoute(hashParts()).runId === runId;
-
 const hashParts = () => window.location.hash.replace(/^#\/?/, "").split("/").filter(Boolean);
 
 /**
  * Whether the page still shows the route the wizard's current work was started for. The person may have left
- * (the progress card says they can): a poll or an answer still on its way then draws nothing over the page they
+ * (a Review waiting for an approval polls): a poll or an answer still on its way then draws nothing over the page they
  * went to. `ui.parts` is the route `renderWizard` last drew; `ui.seq` alone does not know about other modules.
  */
 const onRoute = () => {
@@ -130,8 +109,8 @@ const onRoute = () => {
   return isWizardRoute(now) && Boolean(ui.parts) && now.join("/") === ui.parts.join("/");
 };
 
-/** May this person start a campaign: start a list (`POST /runs`) and record the campaign (`POST /campaigns`). */
-const canStart = () => canAccess("POST", "/runs") && canAccess("POST", "/campaigns");
+/** May this person start a campaign (`POST /campaign-runs`). */
+const canStart = () => canAccess("POST", "/campaign-runs");
 
 function go(hash, { replace = false } = {}) {
   if (replace) window.location.replace(hash);
@@ -229,16 +208,14 @@ async function customersStep(token, route) {
     go(`#/uc/${encodeURIComponent(uc.id)}`, { replace: true });
     return;
   }
-  const models = await getModels(uc.id);
-  const model = currentModel(models);
-  if (!route.runId) {
-    showCustomers(token, uc, model);
+  // An address from when the browser chained the steps (`.../customers/<goal>/<run>`) opens the step afresh.
+  if (route.runId) {
+    go(stepHref("customers", uc.id), { replace: true });
     return;
   }
-  const detail = await getRun(route.runId);
-  // Nothing more is started or redrawn for a route the person has left (the next steps post and navigate).
+  const models = await getModels(uc.id);
   if (!ours(token)) return;
-  await onRun(token, uc, models, detail);
+  showCustomers(token, uc, currentModel(models));
 }
 
 function showCustomers(token, uc, current) {
@@ -260,25 +237,13 @@ function showCustomers(token, uc, current) {
       if (!allowed || !mode) return;
       const main = app.querySelector("[data-cw-guided-main]");
       const aside = app.querySelector("[data-cw-guided-aside]");
-      const wrap = app.querySelector("[data-cw-guided]");
-      if (!main || !wrap) return;
-      // The file chosen in Guided setup is kept for a first campaign: once the model has learned from it, the
-      // list is built from the same customers without asking again. Read from the change event as it bubbles;
-      // Guided setup itself is not touched.
-      wrap.addEventListener(
-        "change",
-        (event) => {
-          const input = event.target;
-          if (input && input.type === "file" && input.files && input.files[0]) ui.captured.set(uc.id, input.files[0]);
-        },
-        true,
-      );
+      if (!main) return;
       mode.mount(
         { main, aside },
         {
           uc,
           mode: current ? "score" : "train",
-          mayRun: canAccess("POST", "/runs"),
+          mayRun: canAccess("POST", "/campaign-runs"),
           firstStep: 1,
           modelVersionId: current ? current.model_id : null,
           holds: (uploadId) => ui.started === uploadId,
@@ -290,168 +255,32 @@ function showCustomers(token, uc, current) {
   );
 }
 
-/** Approve in Guided setup: start the list - learning first on a goal's first campaign. */
-async function start({ uc, current, fill }, { confirmCost = false } = {}) {
+/**
+ * Approve in Guided setup or the Data Doctor: ask the server to run the campaign and go to its progress page.
+ * The learning time the person chose (`fill.speed`) goes with it; a goal that has a model skips the learning.
+ */
+async function start({ uc, current, fill }) {
   const here = window.location.hash;
-  ui.lastStart = { uc, current, fill };
   ui.started = fill.upload.upload_id;
-  ui.customers = { problem: null, busy: current ? "Starting the contact list…" : "Starting…" };
+  ui.customers = { problem: null, busy: "Starting…" };
   draw();
   const body = {
     use_case: uc.id,
-    mode: current ? "score" : "train",
     upload_id: fill.upload.upload_id,
     primary_key: fill.primaryKey,
+    speed: fill.speed || DEFAULT_SPEED,
     overrides: fill.overrides || {},
   };
   if (current) body.model_version_id = current.model_id;
   else body.target = fill.target;
-  if (confirmCost) body.confirm_cost = true;
   try {
-    const created = await postRun(body);
+    const created = await postCampaignRun(body);
     ui.customers = { problem: null, busy: "" };
-    if (window.location.hash === here) go(stepHref("customers", uc.id, created.run_id));
+    if (window.location.hash === here) go(runHref(created.record.campaign_run_id));
   } catch (error) {
     ui.started = null; // Guided setup then offers "Use the prepared file", which starts again
-    ui.customers = { problem: refusal(error), busy: "" };
+    ui.customers = { problem: { error }, busy: "" };
     if (window.location.hash === here) draw();
-  }
-}
-
-/** A refused start as the screen shows it: the checks' report, a cost to confirm, or the error. */
-function refusal(error) {
-  if (error instanceof ApiError && error.status === 409 && error.body && error.body.validation) {
-    return { validation: error.body.validation };
-  }
-  if (error instanceof ApiError && error.code === COST_NEEDS_CONFIRMATION) return { confirm: error.message };
-  return { error };
-}
-
-/** A list being prepared, or prepared: show how far it got, or take it to its next step. */
-async function onRun(token, uc, models, detail) {
-  const run = detail.run;
-  const state = runState(detail);
-  const learning = run.mode === "train";
-  if (state === "pending" || state === "running") {
-    // Plan M M189 (DEC-1619): the time-weighted estimate and the time left when the status carries them.
-    const progress = runProgress(detail.status);
-    show(token, "customers", () => progressHtml({ learning, share: progressOf(detail), progress }));
-    later(token, POLL_MS);
-    return;
-  }
-  if (state !== "done") {
-    const reason =
-      state === "cancelled"
-        ? "The work was cancelled before the list was ready."
-        : "The work stopped before the list was ready.";
-    show(token, "customers", () => stoppedHtml({ ucId: uc.id, detail, reason }));
-    return;
-  }
-  if (learning) {
-    await afterLearning(token, uc, models, detail);
-    return;
-  }
-  await toCampaign(token, uc, detail);
-}
-
-/**
- * Whether the signed-in person started this learning: the server then refuses their own approval of what it
- * learned (separation of duties, DEC-862: only between signed-in people, from the run's `requested_by`).
- * `GET /auth/me` failing is not a guess either way: it reaches the error screen, with "Try again".
- */
-async function startedByMe(detail) {
-  const me = await getMe();
-  const principal = me && me.principal;
-  const by = detail && detail.run && detail.run.requested_by;
-  return Boolean(principal && principal.kind === "user" && by && by === principal.user_id);
-}
-
-/**
- * The model learned: use it when it is the current one. A new model waiting for an approval is used straight
- * away by a person with the Approver role who did not start the learning: they approve it on the Review screen
- * together with the plan (M181 part C). Anyone else waits here, as before, until another Approver has approved
- * it, and nothing is built for them. A new model that can no longer be approved (another one became current
- * while it waited, `superseded`) is passed over for the current one, as a version that was never promoted is.
- */
-async function afterLearning(token, uc, models, detail) {
-  const version = versionById(models, detail.run.model_version_id);
-  const status = version && version.status;
-  const current = currentModel(models);
-  const waiting = listModelState(models, detail.run.model_version_id) === "pending";
-  if (waiting) {
-    const mayApprove = canAccess("POST", "/models/{model_id}/approve");
-    const own = mayApprove && (await startedByMe(detail));
-    if (!ours(token)) return;
-    if (!mayApprove || own) {
-      show(token, "customers", () => waitingHtml({ own }));
-      later(token, WAIT_POLL_MS); // an Approver elsewhere may approve it
-      return;
-    }
-  }
-  const model = status === "champion" || waiting ? version : current;
-  if (!model) {
-    show(token, "customers", () =>
-      stoppedHtml({ ucId: uc.id, detail, reason: "Nothing was learned that the contact list can use." }),
-    );
-    return;
-  }
-  const made = ui.listOf.get(detail.run.run_id);
-  if (made) {
-    // The list was already started from this learning (the person left and came back): show that one.
-    go(stepHref("customers", uc.id, made), { replace: true });
-    return;
-  }
-  const file = ui.captured.get(uc.id);
-  if (!file) {
-    // After a refresh, or a file picked from a connection: the customers are chosen once more, for the list.
-    go(stepHref("customers", uc.id), { replace: true });
-    return;
-  }
-  const key = detail.run.run_id;
-  if (ui.advancing.has(key)) return;
-  ui.advancing.add(key);
-  show(token, "customers", () => progressHtml({ learning: false, share: null }));
-  try {
-    const upload = await postUpload(file, uc.id, "score");
-    const created = await postRun({
-      use_case: uc.id,
-      mode: "score",
-      upload_id: upload.upload_id,
-      primary_key: detail.run.primary_key,
-      model_version_id: model.model_id,
-      // The settings the person accepted in Guided setup for the learning (the consent column, the value
-      // column, the checks they acknowledged): the list is built with the same ones. The run record keeps
-      // them, so this holds after a refresh too.
-      overrides: detail.run.overrides || {},
-    });
-    ui.captured.delete(uc.id);
-    ui.listOf.set(key, created.run_id);
-    if (stillOn(detail.run.run_id)) go(stepHref("customers", uc.id, created.run_id), { replace: true });
-  } catch (error) {
-    ui.advancing.delete(key);
-    show(token, "customers", () =>
-      noticeHtml({
-        title: "The contact list could not be started",
-        text: ["Choose the file of customers once more; it is checked against what Marketing AI learned."],
-        action: { label: "Choose the customers", href: stepHref("customers", uc.id) },
-        attrs: "data-cw-list-refused",
-      }) + errorBox(error),
-    );
-  }
-}
-
-/** The list is ready: the campaign record made from it (once, even across a refresh), then Review. */
-async function toCampaign(token, uc, detail) {
-  const runId = detail.run.run_id;
-  if (ui.advancing.has(runId)) return;
-  ui.advancing.add(runId);
-  try {
-    const existing = await getCampaignsOfRun(runId);
-    let campaign = ((existing && existing.campaigns) || [])[0] || null;
-    if (!campaign) campaign = (await postCampaign({ run_id: runId })).campaign;
-    if (stillOn(runId)) go(stepHref("review", campaign.campaign_id), { replace: true });
-  } finally {
-    ui.advancing.delete(runId);
   }
 }
 
@@ -661,7 +490,7 @@ async function approve({ campaign, detail, preview, model, runId }) {
   }
 }
 
-// --- delegated events: the goal cards and "Start it anyway" -------------------------------------------------
+// --- delegated events: the goal cards -------------------------------------------------
 
 document.addEventListener("click", (event) => {
   const target = event.target;
@@ -674,9 +503,5 @@ document.addEventListener("click", (event) => {
     goal.classList.add("is-selected");
     ui.chosenGoal = chosen;
     go(stepHref("customers", chosen));
-    return;
-  }
-  if (target.closest("[data-cw-confirm-cost]") && ui.lastStart) {
-    start(ui.lastStart, { confirmCost: true });
   }
 });

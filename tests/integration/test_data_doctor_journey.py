@@ -8,7 +8,7 @@ service connected. Chromium opens the Data page's "Check my data" (no goal), and
                     -> the "New campaign" wizard's Customers step, on the SAME case, nothing asked again
                     -> [3] Approve (the sentence shown is the one recorded, naming the goal by its name)
                     -> the consent change ("who agreed to be contacted") was never agreed, so it is listed as left
-                       out, and the list starts only on a separate choice: "Continue with this data"
+                       out, and the campaign starts only on a separate choice: "Start the campaign"
 
 The clicks from the file to Approve are pinned (`CLICKS_PINNED`): a change that adds one fails here. Continuing
 without a change left out is a choice of its own after Approve (`CHOICES_AFTER_APPROVE`), never part of Approve. The test then
@@ -217,15 +217,14 @@ def test_data_page_to_the_campaign_on_one_case_nothing_asked_twice(
             ), "Approve started nothing"
             assert wizard.locator('[data-dds-header] [data-dds-left-out="head"]').count() == 1
             assert wizard.locator("[data-dds-continue-without]").count() == 1
-            assert proceed.inner_text().strip() == "Continue with this data"
+            assert proceed.inner_text().strip() == "Start the campaign"
             shoot("05_wizard_approved")
             choices = [proceed]
             proceed.click()  # the person's own choice to continue without the consent change
-            page.wait_for_function(
-                f"location.hash.startsWith('#/campaigns/new/customers/{GOAL}/')", timeout=WAIT_MS
-            )
-            run_id = page.evaluate("location.hash").rsplit("/", 1)[-1]
-            shoot("06_wizard_started")
+            page.wait_for_function("location.hash.startsWith('#/campaigns/run/')", timeout=WAIT_MS)
+            campaign_run_id = page.evaluate("location.hash").rsplit("/", 1)[-1]
+            run_id = _get(server, f"/campaign-runs/{campaign_run_id}")["record"]["train_run_id"]
+            shoot("06_campaign_run_started")
 
             phone = browser.new_page(viewport=PHONE)
             phone.on("pageerror", lambda error: errors.append(str(error)))

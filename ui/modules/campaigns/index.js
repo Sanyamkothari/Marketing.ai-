@@ -7,6 +7,7 @@
 //
 //   #/campaigns                       the list (it used to redirect to Results)
 //   #/campaigns/new[/<step>]          M177's wizard (`./wizard_index.js`, M177's entry point), loaded when asked for
+//   #/campaigns/run/<id>              the progress page of a campaign run started on the server (`./run_page.js`)
 //   #/campaigns/<id>/<tab>            the campaign page, one of the four tabs
 //   #/campaigns/<id>                  in the campaigns layout (M174's `ui.layout`), a redirect to .../overview;
 //                                     in the classic layout it stays Plan J's page, exactly as before
@@ -49,6 +50,7 @@ import {
 } from "./api.js";
 import { getModels } from "../../api.js";
 import { resetRunResultsLines } from "./links.js";
+import { renderRun } from "./run_page.js";
 import { listHeld, listModelState } from "./wizard_rules.js";
 import { outcomesPayload, refreshRequest } from "./requests.js";
 import { campaignStatus, goalName, GOAL_NAMES, shortName } from "./status.js";
@@ -65,6 +67,7 @@ export { outcomesPayload, refreshRequest };
 
 export const ROUTE = "campaigns";
 export const WIZARD = "new";
+export const RUN = "run";
 
 const hashParts = () => window.location.hash.replace(/^#\/?/, "").split("/").filter(Boolean);
 const enc = encodeURIComponent;
@@ -350,7 +353,7 @@ async function renderCampaign(app, id, tab) {
  */
 export function ownsHash(parts) {
   if (!Array.isArray(parts) || parts[0] !== ROUTE) return false;
-  return parts.length === 1 || parts[1] === WIZARD || TABS.includes(parts[2]);
+  return parts.length === 1 || parts[1] === WIZARD || parts[1] === RUN || TABS.includes(parts[2]);
 }
 
 /**
@@ -365,6 +368,11 @@ export async function campaignsRoute(app, parts) {
   }
   if (parts[1] === WIZARD) {
     await renderNew(app, parts);
+    return true;
+  }
+  if (parts[1] === RUN && parts[2]) {
+    setActiveNav("campaigns");
+    await renderRun(app, decodeURIComponent(parts[2]));
     return true;
   }
   const id = decodeURIComponent(parts[1]);

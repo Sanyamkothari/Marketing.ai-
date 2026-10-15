@@ -5,7 +5,7 @@ decisions once the file is chosen. This module starts the real app under uvicorn
 of `test_acceptance.py`, with its one-minute model search, the only change to the product's defaults), opens
 `#/campaigns/new` in Chromium - the address "+ New campaign" opens - and walks it as a marketer would:
 
-    Goal -> choose the file -> [1] Approve (Guided setup)
+    Goal -> choose the file -> [1] Approve (Guided setup) -> the campaign is prepared on the server
          -> [2] Approve the new model and this plan, then download (Audience and Review, one screen)
 
 It is a goal's first campaign, so the wizard learns from the file and then builds the list from the same
@@ -161,7 +161,10 @@ def test_new_campaign_to_a_downloaded_contact_list_within_five_decisions(
             page.locator("#ag-approve:not([disabled])").wait_for(timeout=180_000)
 
             decide("#ag-approve")  # 1
-            # The model learns and the list is built with it; Audience and Review on one screen.
+            # The server learns, builds the list and records the campaign on its own; its progress page then leads
+            # to Audience and Review on one screen (following the link is not a decision).
+            page.locator("[data-run-ready]").wait_for(timeout=WAIT_MS)
+            page.locator("[data-run-ready]").click()
             page.locator("[data-cw-review] [data-cw-approve]").wait_for(timeout=WAIT_MS)
             size = page.locator("[data-cw-test-size]").inner_text()
             assert re.fullmatch(r"Enough to see a \d+\.\d-point change\.", size), size

@@ -140,39 +140,11 @@ test("Customers: a calm card around Guided setup, with the goal's icon", () => {
   assert.ok(card.querySelector(".cw-card-head .cw-card-icon svg[aria-hidden=true]"));
   assert.equal(text(card.querySelector(".cw-card-head h2")), 'Customers for "Win back lapsed customers"');
   assert.ok(card.querySelector("[data-cw-guided] [data-cw-guided-main]"), "Guided setup's place is unchanged");
-  draw(
-    V.customersHtml({
-      uc: { id: "win-back-campaign" },
-      first: false,
-      problem: { validation: { checks: [{ severity: "error", message: "No key column." }] } },
-    }),
-  );
-  const checks = $("[data-cw-checks]");
-  assert.ok(checks.classList.contains("tone-critical"));
-  assert.equal(checks.getAttribute("role"), "alert");
-  // a critical problem's icon is the critical one, named "Problem" (M187 review), never colour alone
-  assert.equal(checks.querySelector(".cw-problem-icon svg").getAttribute("aria-label"), "Problem");
-  assert.ok(checks.querySelector(".cw-problem-icon svg").innerHTML.includes("m15 9-6 6"), "the cross in a circle");
-  draw(V.customersHtml({ uc: { id: "win-back-campaign" }, first: false, problem: { confirm: "This costs more." } }));
-  const cost = $("[data-cw-cost-confirm]");
-  assert.ok(cost.classList.contains("tone-warning"));
-  assert.equal(cost.querySelector(".cw-problem-icon svg").getAttribute("aria-label"), "Warning");
 });
 
 test("notices are the design system's attention items, the action a primary button", () => {
-  draw(V.waitingHtml());
-  const wait = $("[data-cw-waiting=wait]");
-  assert.ok(wait.querySelector(".attn.tone-warning .attn-icon svg[role=img][aria-label=Warning]"));
-  assert.equal(text(wait.querySelector(".attn-title")), "Waiting for an approval");
-  assert.equal(wait.querySelector(".attn-action a.btn.primary").getAttribute("href"), "#/approvals");
-  draw(V.stoppedHtml({ ucId: "u", detail: null, reason: "It stopped." }));
-  assert.ok($("[data-cw-stopped] .attn.tone-critical"));
-  assert.ok($("[data-cw-stopped] .attn-action a.btn.primary[data-cw-restart]"));
   draw(V.goalHtml({ canStart: false }));
   assert.ok($("[data-cw-no-role] .attn.tone-info"));
-  draw(V.progressHtml({ learning: true, share: 0.4 }));
-  assert.ok($("[data-cw-working=learning] .cw-card-icon svg"));
-  assert.equal($("[role=progressbar]").getAttribute("aria-valuenow"), "40");
 });
 
 test("Review: a summary of three tiles - contacted, comparison group, expected value with its range bar", () => {
