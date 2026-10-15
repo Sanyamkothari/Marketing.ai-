@@ -32,7 +32,7 @@ ledger (`data.prescription.approved`, `data.decision`).
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime
 from pathlib import Path
 from typing import Annotated, Any, Final
@@ -53,7 +53,7 @@ from engine.doctor.case import CLIENT_ID_PATTERN, DEFAULT_CLIENT_ID, Case, CaseE
 from engine.doctor.diagnose import LoadedFile
 from engine.doctor.goal_brief import GOAL_ID_PATTERN, BriefMode, GoalBrief, load_goal_brief
 from engine.doctor.protocol import LedgerPort
-from engine.doctor.visit import ConversePort, VisitDeps
+from engine.doctor.visit import ConversePort, DetectorPort, VisitDeps
 from engine.storage import Storage
 
 __all__ = ["POLICIES", "ledger_for", "router"]
@@ -271,10 +271,11 @@ def _load_files(storage: Storage, upload_ids: Sequence[str], cap_of: int) -> tup
     return tuple(loaded)
 
 
-def _converse(
-    storage: Storage, root: Path, request: Request, principal: Principal, offers: Sequence[Any]
-) -> ConversePort | None:
-    """Plan G's chat turn when an AI service is connected; None (the chat says it needs one) otherwise."""
+def _ai_parts(
+    storage: Storage, root: Path, request: Request, offers: Sequence[Any]
+) -> tuple[Any, Any, Callable[[Case, tuple[LoadedFile, ...]], Any]] | None:
+    """What every Doctor AI call shares: the guarded meter (the case's spending limit and the client's consent),
+    the guardrails, and each file's context. None when no AI service is connected."""
     from api.routes.ai_service import resolve_slot
     from engine.agent.tools import AgentContext
     from engine.config import RunMode, load_use_case
@@ -315,8 +316,34 @@ def _converse(
             frame=chosen.frame,
         )
 
+    return meter, guardrails, context_for
+
+
+def _converse(
+    storage: Storage, root: Path, request: Request, principal: Principal, offers: Sequence[Any]
+) -> ConversePort | None:
+    """Plan G's chat turn when an AI service is connected; None (the chat says it needs one) otherwise."""
+    parts = _ai_parts(storage, root, request, offers)
+    if parts is None:
+        return None
+    meter, guardrails, context_for = parts
     return doctor_visit.plan_g_converse(
         context_for, meter=meter, guardrails=guardrails, principal=principal, config_root=root, guard=meter
+    )
+
+
+def _review(
+    storage: Storage, root: Path, request: Request, principal: Principal, offers: Sequence[Any]
+) -> DetectorPort | None:
+    """The AI review (one more check after the rules' pass) when an AI service is connected; None otherwise."""
+    from engine.doctor.agent_review import agent_review
+
+    parts = _ai_parts(storage, root, request, offers)
+    if parts is None:
+        return None
+    meter, guardrails, context_for = parts
+    return agent_review(
+        context_for, meter=meter, guardrails=guardrails, principal=principal, config_root=root
     )
 
 
@@ -325,6 +352,7 @@ def _deps(storage: Storage, root: Path, request: Request, principal: Principal |
     CONVERSE (the process died during the AI call) is answered by the AI service, not told there is none."""
     from api.routes.case_combine import case_combiner
     from api.routes.doctor import offers as doctor_offers
+    from engine.doctor.agent_review import lazy_review
     from engine.doctor.cleaning import cleaning_detector
     from engine.doctor.combining import combining_detector
     from engine.doctor.detect_time_keys import time_keys_detector
@@ -353,6 +381,13 @@ def _deps(storage: Storage, root: Path, request: Request, principal: Principal |
             None
             if principal is None
             else doctor_visit.lazy_converse(lambda: _converse(storage, root, request, principal, offers))
+        ),
+        # The AI review: one more check after the rules; it runs only with an AI service, the client's yes and
+        # spending left, otherwise it finds nothing and the rules stand alone.
+        agent=(
+            None
+            if principal is None
+            else lazy_review(lambda: _review(storage, root, request, principal, offers))
         ),
         ledger=ledger_for(request, root),
         # Plan O M244 (DEC-1814): the time settings - the training budget's three choices and the data time

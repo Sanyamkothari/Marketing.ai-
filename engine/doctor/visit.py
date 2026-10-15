@@ -304,6 +304,12 @@ class Detected:
     evidence: tuple[DataToolResult, ...] = ()
     items: tuple[CaseItem, ...] = ()
     """Proposals the detector makes outright (the cleaning fixes): pending, or ticked when the values prove them."""
+    model_calls: int = 0
+    tokens: int = 0
+    """What an AI detector (the review) used; counted on the case, so the spending limit holds across visits."""
+    summary: str = ""
+    sent: tuple[dict[str, JsonValue], ...] = ()
+    """The review's plain-language summary for the chat, and what it sent to the AI service."""
 
 
 class DetectorPort(Protocol):
@@ -339,6 +345,9 @@ class VisitDeps:
     # Plan O M246 (DEC-1816): the protocol's ports.
     detectors: Sequence[DetectorPort] = ()
     """The design §7.1's detectors, run in TREAT after the rules; empty: none (M245 adds them)."""
+    agent: DetectorPort | None = None
+    """The AI review: one more check, run once after the rules' pass, when nothing blocking is open. It decides
+    for itself that it may not run (no AI service, no consent, no spending left) and then finds nothing."""
     ledger: LedgerPort | None = None
     """Plan K's ledger when `agentic.enabled` is on; None: the case timeline alone holds the record."""
     protocol: ProtocolSettings = DEFAULT_SETTINGS
@@ -921,9 +930,15 @@ def _treat(run: _Run, case: Case) -> _Step:
             _generic_rules(run, case, step)
         else:
             _goal_rules(run, case, brief, step)
+        review = _digest(
+            [(f.upload_id, f.fingerprint) for f in case.files],
+            goal.goal_id if goal is not None else None,
+            brief.brief_hash if brief is not None else None,
+        )  # the AI review's inputs: not the answers or the ticks, so neither pays for another review
         _detect(run, case, brief, step)
         _standing(run, case, step)
-        step.visit["done"] = {**visit.done, "treat": inputs}
+        reviewed = visit.done.get("agent") != review and _review(run, case, brief, step)
+        step.visit["done"] = {**visit.done, "treat": inputs, **({"agent": review} if reviewed else {})}
     asked = {question.question_id for question in case.questions}
     blocking = [
         q
@@ -1796,6 +1811,42 @@ def _detect(run: _Run, case: Case, brief: GoalBrief | None, step: _Step) -> None
             _add_request(step, request)
         asks.extend(found.asks)
     _settle_asks(run, case, step, asks)
+
+
+def _review(run: _Run, case: Case, brief: GoalBrief | None, step: _Step) -> bool:
+    """The AI review (`deps.agent`), after the rules, the detectors and the standing answers, and only when
+    nothing blocking is open or has just been asked. Its questions go through the same protocol; its items land
+    pending, `check`, whatever the port returns. True when it made a call, so TREAT remembers it."""
+    agent = run.deps.agent
+    if agent is None or open_blocking(case):
+        return False
+    if any(q.blocking and q.answer is None and _in_section(q.goal_id, case) for q, _e in step.questions):
+        return False
+    found = agent(case, run.files(case), brief)
+    step.evidence.extend(found.evidence)
+    step.items.extend(
+        item.model_copy(
+            update={
+                "source": ProposalSource.AI,
+                "state": ProposalState.PENDING,
+                "confidence": AgentConfidence.CHECK,
+            }
+        )
+        for item in found.items
+    )
+    step.model_calls += found.model_calls
+    step.tokens += found.tokens
+    _settle_asks(run, case, step, found.asks)
+    if found.model_calls and found.summary:
+        entry = CaseChatEntry(role="agent", text=found.summary, at=run.deps.clock(), sent=found.sent)
+        step.updates["chat"] = (*case.chat, entry)
+        step.events.append(
+            EventDraft(
+                kind=TimelineKind.CHAT,
+                details={"role": "agent", "ai": True, "proposals": len(found.items), "review": True},
+            )
+        )
+    return found.model_calls > 0
 
 
 def _settle_asks(run: _Run, case: Case, step: _Step, asks: Sequence[Ask]) -> None:
