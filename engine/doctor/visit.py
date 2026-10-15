@@ -1148,9 +1148,13 @@ def _verify(run: _Run, case: Case) -> _Step:
 
 def _hand_off(run: _Run, case: Case) -> _Step:
     """HAND_OFF: where the prepared data goes. The default records it and starts nothing."""
+    from engine.doctor.fingerprint import record_fingerprint
+
     brief = stored_brief(run.deps.storage, case)
     port = run.deps.hand_off
     record = port(case, brief) if port is not None else _default_hand_off(case, brief)
+    # What the client's data looked like when it was approved: next visit's files are compared with it.
+    record_fingerprint(run.deps.storage, case, run.files(case), brief, at=run.deps.clock())
     return _Step(
         to=VisitState.FOLLOW_UP,
         visit={"hand_off": record},

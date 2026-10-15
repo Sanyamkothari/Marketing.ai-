@@ -306,6 +306,7 @@ def _deps(storage: Storage, root: Path, request: Request, principal: Principal |
     from api.routes.doctor import offers as doctor_offers
     from engine.doctor.cleaning import cleaning_detector
     from engine.doctor.combining import combining_detector
+    from engine.doctor.fingerprint import fingerprint_detector
     from engine.doctor.prescription import CasePrescriber
     from engine.doctor.time_settings import time_settings_detector
     from engine.stages.ingest import profile_row_cap
@@ -338,6 +339,8 @@ def _deps(storage: Storage, root: Path, request: Request, principal: Principal |
             cleaning_detector(offers, config_root=root),
             combining_detector(),
             time_settings_detector(storage, config_root=root),
+            # Today's file against what the client told us and what it looked like last time.
+            fingerprint_detector(storage),
         ),
     )
 
