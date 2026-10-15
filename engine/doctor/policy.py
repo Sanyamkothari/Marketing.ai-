@@ -352,6 +352,8 @@ class StepEffect:
     failed: int
     out_of: int
     rows_tried: int
+    measured: bool = True
+    """False for a step whose effect could not be measured (a query that makes a new table): never read as 0%."""
 
 
 @dataclass(frozen=True)
@@ -709,6 +711,13 @@ def change_share(subject: DataProposal, ctx: DataPolicyContext, rules: DataRuleS
     from engine.doctor.change_share import ChangeShareLimits, change_share_verdict
 
     settings = ctx.policy.change_share
+    if not subject.effect.measured:
+        from engine.doctor.change_share import unmeasured_verdict
+
+        said = unmeasured_verdict(
+            "This step makes a new table, so the share of values it changes was not measured."
+        )
+        return _allow(CHANGE_SHARE, warning="STEP_NOT_MEASURED", message=said.message)
     counted, _ = _share(subject.effect, subject.steps[0].kind, settings)
     verdict = change_share_verdict(
         changed=counted,
@@ -961,9 +970,11 @@ def effect_of(step: RecipeStep, sample: Any, *, changed: int, failed: int) -> St
     O10 is about the values of the column a step rewrites: a step that rewrites none of them
     (:func:`keeps_its_values`) changes none, whatever the receipt counts.
     """
+    rows = len(sample)
+    if step.kind is RecipeStepKind.SQL_QUERY:  # no single column to count in: needs a yes, never 0%
+        return StepEffect(changed=0, failed=0, out_of=0, rows_tried=rows, measured=False)
     if keeps_its_values(step):
         changed, failed = 0, 0
-    rows = len(sample)
     if step.kind in ROW_RESHAPE_STEP_KINDS or step.kind in (
         RecipeStepKind.REMOVE_ROWS,
         RecipeStepKind.FILL_MISSING,

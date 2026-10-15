@@ -26,13 +26,24 @@ from engine.agent.tools import AgentToolError
 from engine.agentic.canonical import canonical_bytes, sha256_hex
 from engine.config import AggFunction
 from engine.doctor.build_driver import BuildDriveError, BuildPlan, plan_build, prepare_sources
+from engine.doctor.guards import Finding, Receipt, build_ledger, make_receipt, plan_findings, receipt_findings
 from engine.doctor.stack_files import StackError, StackSpec, run_stack
 
 if TYPE_CHECKING:
     from engine.doctor.case import CaseItem
     from engine.doctor.contracts import Diagnosis
 
-__all__ = ["JOIN_KIND", "STACK_KIND", "Combined", "combine_item", "plan_of", "rules_digest", "upload_ids_of"]
+__all__ = [
+    "JOIN_KIND",
+    "STACK_KIND",
+    "Combined",
+    "combine_item",
+    "guard_join",
+    "guard_stack",
+    "plan_of",
+    "rules_digest",
+    "upload_ids_of",
+]
 
 JOIN_KIND: Final[str] = "build_dataset"
 STACK_KIND: Final[str] = "stack_files"
@@ -50,6 +61,41 @@ class Combined:
     file_name: str
     upload_ids: tuple[str, ...]
     summary: str
+    receipt: Receipt | None = None
+    findings: tuple[Finding, ...] = ()
+
+
+def guard_join(
+    plan: BuildPlan, files: Mapping[str, Sequence[pd.DataFrame]], table: pd.DataFrame
+) -> tuple[Receipt, tuple[Finding, ...]]:
+    """The receipt and findings for a join: the customer list and each log read, the table made, counted by code."""
+    prepared = prepare_sources(plan, files).sources
+    (entity, base), *logs = prepared
+    inputs: dict[str, pd.DataFrame] = {entity.source_name: base}
+    inputs.update({source.source_name: frame for source, frame in logs})
+    receipt = make_receipt(1, JOIN_KIND, inputs, table, key=entity.key_column)
+    return receipt, tuple(receipt_findings(receipt) + plan_findings(build_ledger([receipt])))
+
+
+def guard_stack(
+    frames: Sequence[pd.DataFrame], table: pd.DataFrame, key: str | None
+) -> tuple[Receipt, tuple[Finding, ...]]:
+    """The receipt and findings for a stack: every file read, the table made. A customer may be on many rows."""
+    inputs = {f"file {i}": frame for i, frame in enumerate(frames, 1)}
+    receipt = make_receipt(1, STACK_KIND, inputs, table, key=key, stacking=True)
+    return receipt, tuple(receipt_findings(receipt, one_row_per_key=False))
+
+
+def _stopped(findings: Sequence[Finding]) -> None:
+    stops = [f for f in findings if f.level == "stop" and f.code in _AUTOMATIC]
+    if stops:
+        raise AgentToolError("COMBINE_GUARD_STOP", f"{stops[0].message} Untick the change to go on.")
+
+
+_AUTOMATIC: Final[frozenset[str]] = frozenset(
+    {"STEP_ZERO_ROWS", "STEP_EMPTY_COLUMN", "JOIN_REPEATS_CUSTOMERS"}
+)
+"""The stops that need no question: the table would be empty, hold an empty column, or count customers twice."""
 
 
 def plan_of(diagnosis: Diagnosis, frames: Mapping[str, pd.DataFrame]) -> BuildPlan:
@@ -88,17 +134,23 @@ def combine_item(
                 raise AgentToolError(
                     "COMBINE_FILES_MISSING", "A file of this change is no longer in the case."
                 )
-            run = run_stack([frames[f.upload_id] for f in spec.files], spec)
-            return Combined(run.frame, f"{stem} stacked.csv", ids, f"{len(run.frame):,} rows")
+            stacked = [frames[f.upload_id] for f in spec.files]
+            run = run_stack(stacked, spec)
+            receipt, findings = guard_stack(stacked, run.frame, spec.key_column)
+            _stopped(findings)
+            return Combined(
+                run.frame, f"{stem} stacked.csv", ids, f"{len(run.frame):,} rows", receipt, findings
+            )
         plan = plan_of(diagnosis, {u: frames[u] for u in ids})
         if rules_digest(plan) != item.payload.get("rules"):
             raise AgentToolError(
                 "COMBINE_CHANGED",
                 "The files no longer fit together the way you approved. Untick the change to go on.",
             )
-        table = _one_row_per_customer(
-            plan, {s.source_name: [frames[u] for u in s.upload_ids] for s in (plan.entity, *plan.events)}
-        )
+        files = {s.source_name: [frames[u] for u in s.upload_ids] for s in (plan.entity, *plan.events)}
+        table = _one_row_per_customer(plan, files)
+        receipt, findings = guard_join(plan, files, table)
+        _stopped(findings)
     except (BuildDriveError, StackError) as exc:
         raise AgentToolError(exc.code, exc.message) from exc
     except ValidationError as exc:
@@ -106,7 +158,7 @@ def combine_item(
             "COMBINE_FAILED", "This change can no longer be read. Untick it to go on."
         ) from exc
     logs = ", ".join(dict.fromkeys(Path(names.get(u, "")).stem for s in plan.events for u in s.upload_ids))
-    return Combined(table, f"{stem} with {logs}.csv", ids, f"{len(table):,} customers")
+    return Combined(table, f"{stem} with {logs}.csv", ids, f"{len(table):,} customers", receipt, findings)
 
 
 def _name(frame: pd.DataFrame, column: str) -> Any:

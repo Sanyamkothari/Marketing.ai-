@@ -27,11 +27,20 @@ from typing import TYPE_CHECKING, Final
 from pydantic import JsonValue, ValidationError
 
 from engine.agent.contracts import AgentConfidence
+from engine.agent.tools import AgentToolError
 from engine.doctor.build_driver import BuildDriveError, BuildPlan, prepare_sources
-from engine.doctor.combine_run import JOIN_KIND, STACK_KIND, plan_of, rules_digest
+from engine.doctor.combine_run import (
+    JOIN_KIND,
+    STACK_KIND,
+    _one_row_per_customer,
+    guard_join,
+    guard_stack,
+    plan_of,
+    rules_digest,
+)
 from engine.doctor.contracts import Diagnosis, FileStack
 from engine.doctor.protocol import Ask, AskOption
-from engine.doctor.stack_files import StackError, StackProposal, plan_stack
+from engine.doctor.stack_files import StackError, StackProposal, plan_stack, run_stack
 from engine.doctor.visit_contracts import OptionEffect
 from engine.utils.logging import get_logger
 from engine.utils.time import utc_now
@@ -220,6 +229,13 @@ def _join_item(
         "log_rows": rows,
         "log_rows_left_out": left_out,
     }
+    try:  # what the combined table would look like, counted by code on the rows the visit read
+        receipt, findings = guard_join(plan, files, _one_row_per_customer(plan, files))
+        payload["receipt"] = receipt.model_dump(mode="json")
+        payload["findings"] = [f.model_dump(mode="json") for f in findings]
+        payload["needs_yes"] = any(f.level == "stop" for f in findings)
+    except (AgentToolError, BuildDriveError):  # no dates in the logs: no receipt, the join is still offered
+        pass
     # No `rows_in` / `rows_out`: a join always needs its own yes, however few rows it leaves out.
     return _item(
         JOIN_KIND,
@@ -273,6 +289,16 @@ def _stack(
             "rows_out": receipt.rows_out,
             "duplicates_removed": receipt.duplicates_removed,
         }
+        try:
+            stacked = [frames[f.upload_id] for f in proposal.spec.files]
+            seen, findings = guard_stack(
+                stacked, run_stack(stacked, proposal.spec).frame, proposal.spec.key_column
+            )
+            payload["receipt"] = seen.model_dump(mode="json")
+            payload["findings"] = [f.model_dump(mode="json") for f in findings]
+            payload["needs_yes"] = any(f.level == "stop" for f in findings)
+        except StackError:  # the stack cannot be built on these rows: no receipt
+            pass
         return title, payload
 
     proposal = propose(None)

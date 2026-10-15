@@ -16,13 +16,19 @@ column's non-empty values for a value step, of the column's rows for a step that
 it is computed by
 running the step itself on a copy (`measure_step`), never estimated.
 
+A step that makes a new table (`sql_query`) has no single column: each output column that has the name of an input
+column is compared with it customer by customer (`engine.doctor.guards.cell_change`). A step that keeps the
+customers but changes what a row is (combine, latest row, unpivot) is measured by the customers it loses. A step
+that cannot be measured (no ID to line the rows up by) is `NotMeasurableError`, and :func:`unmeasured_verdict` makes it
+"needs a yes" - it is never counted as 0%.
+
 This module has no state and reads no configuration: the limits are passed in (`ChangeShareLimits`), defaulting
 to the decision's 30% and 60%, so M233's policy and a use case's settings can carry them later.
 """
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Final, Literal
 
@@ -31,27 +37,28 @@ import pandas as pd
 from engine.agent.config import AgentLevel
 from engine.agent.contracts import ProposalSource, RecipeStep, RecipeStepKind
 from engine.agent.recipe import run_recipe
+from engine.doctor.guards import NotMeasurableError, cell_change, infer_key, make_receipt
 
 __all__ = [
     "CHANGE_SHARE_CODES",
     "DEFAULT_LIMITS",
     "ChangeShareLimits",
     "ChangeShareVerdict",
+    "NotMeasurableError",
     "change_share_verdict",
     "measure_step",
+    "unmeasured_verdict",
 ]
 
 CHANGE_SHARE_CODES: Final[frozenset[str]] = frozenset({"AI_STEP_CHANGES_MANY", "AI_STEP_CHANGES_TOO_MANY"})
 
-_ROW_STEPS: Final[frozenset[RecipeStepKind]] = frozenset(
-    {
-        RecipeStepKind.REMOVE_ROWS,
-        RecipeStepKind.KEEP_LATEST_PER_ID,
-        RecipeStepKind.COMBINE_ROWS,
-        RecipeStepKind.UNPIVOT,
-    }
+_ROW_STEPS: Final[frozenset[RecipeStepKind]] = frozenset({RecipeStepKind.REMOVE_ROWS})
+"""Steps whose change is counted in rows: every row they leave out is a changed row."""
+
+_RESHAPE_STEPS: Final[frozenset[RecipeStepKind]] = frozenset(
+    {RecipeStepKind.KEEP_LATEST_PER_ID, RecipeStepKind.COMBINE_ROWS, RecipeStepKind.UNPIVOT}
 )
-"""Steps whose change is counted in rows, not in one column's values."""
+"""Steps that change what a row is: measured by the customers they keep, not by how many rows they make."""
 
 _FILLS_EMPTY_STEPS: Final[frozenset[RecipeStepKind]] = frozenset({RecipeStepKind.FILL_MISSING})
 """Value steps that write into empty cells: their share is measured against every row of the column."""
@@ -116,6 +123,18 @@ def change_share_verdict(
     )
 
 
+def unmeasured_verdict(reason: str) -> ChangeShareVerdict:
+    """The verdict for a step whose effect could not be measured: it needs a person's yes, whoever proposed it."""
+    return ChangeShareVerdict(
+        "warn",
+        0.0,
+        0,
+        0,
+        "STEP_NOT_MEASURED",
+        f"{reason} The step needs your yes: check the before and after before you tick it.",
+    )
+
+
 def measure_step(
     frame: pd.DataFrame,
     step: RecipeStep,
@@ -123,11 +142,13 @@ def measure_step(
     primary_key: str | None,
     target: str | None,
     snapshot_column: str | None = None,
+    tables: Mapping[str, pd.DataFrame] | None = None,
 ) -> tuple[int, int]:
     """(changed, out of): what `step` does to `frame`, by running it alone on a copy.
 
     Run with every level and no failure limit: the guard measures, it does not decide whether the step may run
-    (`check_recipe` and Approve still do). Raises `RecipeError` when the step cannot run on this file at all.
+    (`check_recipe` and Approve still do). Raises `RecipeError` when the step cannot run on this file at all, and
+    :class:`NotMeasurableError` when the step makes a new table and the customers cannot be lined up.
     """
     alone = step.model_copy(update={"order": 1})
     levels: Sequence[AgentLevel] = tuple(AgentLevel)
@@ -140,8 +161,18 @@ def measure_step(
         levels=levels,
         max_failure_pct=100.0,
         snapshot_column=snapshot_column,
+        tables=tables,
     )
     receipt = run.receipt.steps[0]
+    if step.kind is RecipeStepKind.SQL_QUERY:
+        return cell_change(frame, run.frame, key=primary_key or infer_key(frame, run.frame))
+    if step.kind in _RESHAPE_STEPS:
+        counted = make_receipt(1, step.kind.value, {"this": frame}, run.frame, key=primary_key or step.column)
+        if counted.keys_in is None:
+            raise NotMeasurableError(
+                "The ID column is not in the result, so the customers it keeps could not be counted."
+            )
+        return counted.keys_lost, counted.keys_in
     if step.kind in _ROW_STEPS:
         # Rows left out, combined away or added: every row a step removes or creates is a changed row.
         return abs(len(frame) - len(run.frame)), len(frame)
