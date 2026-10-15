@@ -17,8 +17,8 @@ means adding its canary calls (the design §5.4).
 from __future__ import annotations
 
 import json
-from dataclasses import replace
 from collections.abc import Callable, Sequence
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
