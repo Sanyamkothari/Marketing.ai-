@@ -2,15 +2,15 @@
   "bench": "doctor_trap_bench",
   "by_category": {
     "asked": {
-      "failed": 2,
+      "failed": 0,
       "graded": 3
     },
     "contact_list": {
-      "failed": 3,
+      "failed": 0,
       "graded": 6
     },
     "double_counting": {
-      "failed": 4,
+      "failed": 0,
       "graded": 5
     },
     "join": {
@@ -22,7 +22,7 @@
       "graded": 3
     },
     "outcome_population": {
-      "failed": 4,
+      "failed": 0,
       "graded": 4
     },
     "row_loss": {
@@ -30,30 +30,29 @@
       "graded": 30
     },
     "unapproved_change": {
-      "failed": 1,
+      "failed": 0,
       "graded": 34
     }
   },
   "cases": 30,
-  "failed": 14,
+  "failed": 0,
   "k": 2,
   "model": "rules",
-  "passed": 16,
+  "passed": 30,
   "results": [
     {
       "description": "Staff texted only high-balance customers (12% bought against 3% of the rest); there is no random control group.",
       "expected": "The Doctor asks whether anyone was held out at random; without that it never calls the gap an effect of the text.",
-      "failed_categories": [
-        "asked"
-      ],
+      "failed_categories": [],
       "id": "c01_selection_not_random",
       "k": 2,
-      "passed": false,
+      "passed": true,
       "runs": [
         {
           "accepted": [
             "\u201ccustomer_id\u201d names each row of campaign_history.csv.",
             "Turn the yes / no values in 'contacted' into 1 and 0. The same answer is spelled several ways: 'N' (72), 'Y' (48).",
+            "No random holdout is recorded in campaign_history.csv: results say who responds among those contacted, never extra sales caused by the campaign (no lift claims) until a random group left out is confirmed.",
             "'customer_id': 100.0% of 120 values are different from each other; the most common appears 1 times.",
             "\u201cconverted\u201d is the outcome: Purchased within 30 days of ad exposure"
           ],
@@ -72,27 +71,29 @@
             },
             {
               "category": "asked",
-              "detail": "nothing like it was asked (it asked: OUTCOME_COLUMN, TRAINING_BUDGET)",
+              "detail": "asked: Q13 HOLDOUT In the past campaign recorded in \u201ccontacted\u201d, was a random group deliberately ",
               "label": "asks whether a random group was left uncontacted",
-              "passed": false
+              "passed": true
             }
           ],
           "combined": false,
-          "digest": "03dd2c18c4ff",
+          "digest": "bd1694ad4348",
           "error": null,
           "notes": [],
-          "passed": false,
+          "passed": true,
           "questions": [
+            "Q13_HOLDOUT",
             "OUTCOME_COLUMN",
             "TRAINING_BUDGET"
           ],
           "rows": 120,
-          "seconds": 2.26
+          "seconds": 2.39
         },
         {
           "accepted": [
             "\u201ccustomer_id\u201d names each row of campaign_history.csv.",
             "Turn the yes / no values in 'contacted' into 1 and 0. The same answer is spelled several ways: 'N' (72), 'Y' (48).",
+            "No random holdout is recorded in campaign_history.csv: results say who responds among those contacted, never extra sales caused by the campaign (no lift claims) until a random group left out is confirmed.",
             "'customer_id': 100.0% of 120 values are different from each other; the most common appears 1 times.",
             "\u201cconverted\u201d is the outcome: Purchased within 30 days of ad exposure"
           ],
@@ -111,25 +112,26 @@
             },
             {
               "category": "asked",
-              "detail": "nothing like it was asked (it asked: OUTCOME_COLUMN, TRAINING_BUDGET)",
+              "detail": "asked: Q13 HOLDOUT In the past campaign recorded in \u201ccontacted\u201d, was a random group deliberately ",
               "label": "asks whether a random group was left uncontacted",
-              "passed": false
+              "passed": true
             }
           ],
           "combined": false,
-          "digest": "03dd2c18c4ff",
+          "digest": "bd1694ad4348",
           "error": null,
           "notes": [],
-          "passed": false,
+          "passed": true,
           "questions": [
+            "Q13_HOLDOUT",
             "OUTCOME_COLUMN",
             "TRAINING_BUDGET"
           ],
           "rows": 120,
-          "seconds": 0.54
+          "seconds": 0.55
         }
       ],
-      "runs_passed": 0,
+      "runs_passed": 2,
       "scenario": "C01",
       "stable": true,
       "theme": "Campaign history: selection read as cause",
@@ -180,7 +182,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 0.67
+          "seconds": 0.68
         },
         {
           "accepted": [
@@ -219,7 +221,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 0.63
+          "seconds": 0.64
         }
       ],
       "runs_passed": 2,
@@ -231,12 +233,10 @@
     {
       "description": "Two in five policyholders already hold the vehicle policy being cross-sold, so they can never 'buy' it.",
       "expected": "Existing holders are not counted in the outcome; the true response rate among the others is 23.6%.",
-      "failed_categories": [
-        "outcome_population"
-      ],
+      "failed_categories": [],
       "id": "c09_already_hold_product",
       "k": 2,
-      "passed": false,
+      "passed": true,
       "runs": [
         {
           "accepted": [
@@ -260,21 +260,22 @@
             },
             {
               "category": "outcome_population",
-              "detail": "nothing like it was asked (it asked: TRAINING_BUDGET) / 48 who cannot have the outcome are counted: P0001, P0005, P0006, P0010 and 44 more; the positive rate is 14.2%; the true rate is 23.6%",
+              "detail": "asked: Q23 WHO CAN RESPOND 48 customers in policyholders.csv already hold the product. 0 of them ",
               "label": "customers who already hold the product are not in the outcome",
-              "passed": false
+              "passed": true
             }
           ],
           "combined": false,
-          "digest": "47a48d7273cb",
+          "digest": "579723ed8921",
           "error": null,
           "notes": [],
-          "passed": false,
+          "passed": true,
           "questions": [
-            "TRAINING_BUDGET"
+            "TRAINING_BUDGET",
+            "Q23_WHO_CAN_RESPOND"
           ],
           "rows": 120,
-          "seconds": 0.69
+          "seconds": 0.66
         },
         {
           "accepted": [
@@ -298,24 +299,25 @@
             },
             {
               "category": "outcome_population",
-              "detail": "nothing like it was asked (it asked: TRAINING_BUDGET) / 48 who cannot have the outcome are counted: P0001, P0005, P0006, P0010 and 44 more; the positive rate is 14.2%; the true rate is 23.6%",
+              "detail": "asked: Q23 WHO CAN RESPOND 48 customers in policyholders.csv already hold the product. 0 of them ",
               "label": "customers who already hold the product are not in the outcome",
-              "passed": false
+              "passed": true
             }
           ],
           "combined": false,
-          "digest": "47a48d7273cb",
+          "digest": "579723ed8921",
           "error": null,
           "notes": [],
-          "passed": false,
+          "passed": true,
           "questions": [
-            "TRAINING_BUDGET"
+            "TRAINING_BUDGET",
+            "Q23_WHO_CAN_RESPOND"
           ],
           "rows": 120,
-          "seconds": 0.76
+          "seconds": 0.59
         }
       ],
-      "runs_passed": 0,
+      "runs_passed": 2,
       "scenario": "C09",
       "stable": true,
       "theme": "Outcome: who is eligible, and when the clock runs",
@@ -368,7 +370,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 100,
-          "seconds": 1.13
+          "seconds": 1.04
         },
         {
           "accepted": [
@@ -409,7 +411,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 100,
-          "seconds": 0.93
+          "seconds": 0.8
         }
       ],
       "runs_passed": 2,
@@ -464,7 +466,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 60,
-          "seconds": 0.64
+          "seconds": 0.65
         },
         {
           "accepted": [
@@ -504,7 +506,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 60,
-          "seconds": 0.64
+          "seconds": 0.62
         }
       ],
       "runs_passed": 2,
@@ -558,7 +560,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 40,
-          "seconds": 0.4
+          "seconds": 0.42
         },
         {
           "accepted": [
@@ -597,7 +599,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 40,
-          "seconds": 0.52
+          "seconds": 0.5
         }
       ],
       "runs_passed": 2,
@@ -609,12 +611,10 @@
     {
       "description": "Region is written once per block (a merged cell) and left blank on the 14 rows below it.",
       "expected": "Region is filled down to every row of its block, or the Doctor asks whether a blank means 'same as above'.",
-      "failed_categories": [
-        "unapproved_change"
-      ],
+      "failed_categories": [],
       "id": "f04_merged_cells_region",
       "k": 2,
-      "passed": false,
+      "passed": true,
       "runs": [
         {
           "accepted": [
@@ -637,21 +637,22 @@
             },
             {
               "category": "unapproved_change",
-              "detail": "nothing like it was asked (it asked: TRAINING_BUDGET) / 56 rows of 'region' still say ",
+              "detail": "asked: BLOCK BLANKS 'region' is filled on 4 rows and blank on the 56 rows below them, the way mer",
               "label": "the 56 blank regions are filled or asked about",
-              "passed": false
+              "passed": true
             }
           ],
           "combined": false,
-          "digest": "65ce6abc39fe",
+          "digest": "1fdd1f561be5",
           "error": null,
           "notes": [],
-          "passed": false,
+          "passed": true,
           "questions": [
+            "BLOCK_BLANKS",
             "TRAINING_BUDGET"
           ],
           "rows": 60,
-          "seconds": 0.44
+          "seconds": 0.41
         },
         {
           "accepted": [
@@ -674,24 +675,25 @@
             },
             {
               "category": "unapproved_change",
-              "detail": "nothing like it was asked (it asked: TRAINING_BUDGET) / 56 rows of 'region' still say ",
+              "detail": "asked: BLOCK BLANKS 'region' is filled on 4 rows and blank on the 56 rows below them, the way mer",
               "label": "the 56 blank regions are filled or asked about",
-              "passed": false
+              "passed": true
             }
           ],
           "combined": false,
-          "digest": "65ce6abc39fe",
+          "digest": "1fdd1f561be5",
           "error": null,
           "notes": [],
-          "passed": false,
+          "passed": true,
           "questions": [
+            "BLOCK_BLANKS",
             "TRAINING_BUDGET"
           ],
           "rows": 60,
-          "seconds": 0.41
+          "seconds": 0.39
         }
       ],
-      "runs_passed": 0,
+      "runs_passed": 2,
       "scenario": "F04",
       "stable": true,
       "theme": "Spreadsheet and export shapes the reader misses",
@@ -700,59 +702,61 @@
     {
       "description": "The file is a pivot table pasted as values: counts per region and plan, a Grand Total row and no customer ID.",
       "expected": "The Doctor says this is a summary, not customers, and asks for the row-level export; it invents no rows.",
-      "failed_categories": [
-        "asked"
-      ],
+      "failed_categories": [],
       "id": "f05_pivot_summary",
       "k": 2,
-      "passed": false,
+      "passed": true,
       "runs": [
         {
           "accepted": [
+            "This looks like a summary report (a pivot table or totals), not one row per customer: it has a 'Total' row. Totals cannot be turned back into customers, so no customers are made up from it.",
             "\u201ccustomers\u201d names each row of report.csv.",
             "'customers': 100.0% of 10 values are different from each other; the most common appears 1 times."
           ],
           "checks": [
             {
               "category": "asked",
-              "detail": "nothing like it was asked (it asked: KEY_AMBIGUOUS, DATA_REQUESTED, TRAINING_BUDGET)",
+              "detail": "asked: DIFFERENT FILE REQUESTED This file cannot be used as it is. Ask whoever exported the file ",
               "label": "says it is a summary and asks for one row per customer",
-              "passed": false
+              "passed": true
             }
           ],
           "combined": false,
-          "digest": "0a5df03f58a1",
+          "digest": "c4c1602afab1",
           "error": null,
           "notes": [],
-          "passed": false,
+          "passed": true,
           "questions": [
             "KEY_AMBIGUOUS",
+            "DIFFERENT_FILE_REQUESTED",
             "DATA_REQUESTED",
             "TRAINING_BUDGET"
           ],
           "rows": 10,
-          "seconds": 0.29
+          "seconds": 0.28
         },
         {
           "accepted": [
+            "This looks like a summary report (a pivot table or totals), not one row per customer: it has a 'Total' row. Totals cannot be turned back into customers, so no customers are made up from it.",
             "\u201ccustomers\u201d names each row of report.csv.",
             "'customers': 100.0% of 10 values are different from each other; the most common appears 1 times."
           ],
           "checks": [
             {
               "category": "asked",
-              "detail": "nothing like it was asked (it asked: KEY_AMBIGUOUS, DATA_REQUESTED, TRAINING_BUDGET)",
+              "detail": "asked: DIFFERENT FILE REQUESTED This file cannot be used as it is. Ask whoever exported the file ",
               "label": "says it is a summary and asks for one row per customer",
-              "passed": false
+              "passed": true
             }
           ],
           "combined": false,
-          "digest": "0a5df03f58a1",
+          "digest": "c4c1602afab1",
           "error": null,
           "notes": [],
-          "passed": false,
+          "passed": true,
           "questions": [
             "KEY_AMBIGUOUS",
+            "DIFFERENT_FILE_REQUESTED",
             "DATA_REQUESTED",
             "TRAINING_BUDGET"
           ],
@@ -760,7 +764,7 @@
           "seconds": 0.28
         }
       ],
-      "runs_passed": 0,
+      "runs_passed": 2,
       "scenario": "F05",
       "stable": true,
       "theme": "Spreadsheet and export shapes the reader misses",
@@ -815,7 +819,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 150,
-          "seconds": 1.17
+          "seconds": 1.07
         },
         {
           "accepted": [
@@ -858,7 +862,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 150,
-          "seconds": 1.06
+          "seconds": 1.02
         }
       ],
       "runs_passed": 2,
@@ -870,12 +874,10 @@
     {
       "description": "Twenty households have three members each with consent; texting everyone sends three messages to one household.",
       "expected": "At most one person per household is on the contact list.",
-      "failed_categories": [
-        "contact_list"
-      ],
+      "failed_categories": [],
       "id": "k13_household",
       "k": 2,
-      "passed": false,
+      "passed": true,
       "runs": [
         {
           "accepted": [
@@ -899,22 +901,22 @@
             },
             {
               "category": "contact_list",
-              "detail": "20 households have more than one person on the list (by the 'marketing_opt_in' column and the contact-list gate)",
+              "detail": "the list leaves out everyone it must (by the 'marketing_opt_in' column and the contact-list gate)",
               "label": "no household gets more than one message",
-              "passed": false
+              "passed": true
             }
           ],
           "combined": false,
           "digest": "1ffe2fd809c8",
           "error": null,
           "notes": [],
-          "passed": false,
+          "passed": true,
           "questions": [
             "OUTCOME_COLUMN",
             "TRAINING_BUDGET"
           ],
           "rows": 60,
-          "seconds": 0.64
+          "seconds": 0.55
         },
         {
           "accepted": [
@@ -938,25 +940,25 @@
             },
             {
               "category": "contact_list",
-              "detail": "20 households have more than one person on the list (by the 'marketing_opt_in' column and the contact-list gate)",
+              "detail": "the list leaves out everyone it must (by the 'marketing_opt_in' column and the contact-list gate)",
               "label": "no household gets more than one message",
-              "passed": false
+              "passed": true
             }
           ],
           "combined": false,
           "digest": "1ffe2fd809c8",
           "error": null,
           "notes": [],
-          "passed": false,
+          "passed": true,
           "questions": [
             "OUTCOME_COLUMN",
             "TRAINING_BUDGET"
           ],
           "rows": 60,
-          "seconds": 0.63
+          "seconds": 0.6
         }
       ],
-      "runs_passed": 0,
+      "runs_passed": 2,
       "scenario": "K13",
       "stable": true,
       "theme": "Who one row is, and one model or several",
@@ -965,12 +967,10 @@
     {
       "description": "One payment in five is a failed attempt; adding the amount column up counts money that never arrived.",
       "expected": "Only successful payments are counted (69,918), or the Doctor asks which statuses are real money.",
-      "failed_categories": [
-        "double_counting"
-      ],
+      "failed_categories": [],
       "id": "k15_failed_payments",
       "k": 2,
-      "passed": false,
+      "passed": true,
       "runs": [
         {
           "accepted": [
@@ -993,21 +993,22 @@
             },
             {
               "category": "double_counting",
-              "detail": "nothing like it was asked (it asked: TRAINING_BUDGET) / no column adds up to the true 69,918.00 (amount = 89,978.00)",
+              "detail": "asked: Q22 REAL MONEY Which values of \u201cstatus\u201d in payments.csv are real money? 12 of 60 rows say ",
               "label": "spend counts successful payments only",
-              "passed": false
+              "passed": true
             }
           ],
           "combined": false,
-          "digest": "86237ef1bfd9",
+          "digest": "8cfd56aa376a",
           "error": null,
           "notes": [],
-          "passed": false,
+          "passed": true,
           "questions": [
+            "Q22_REAL_MONEY",
             "TRAINING_BUDGET"
           ],
           "rows": 60,
-          "seconds": 0.54
+          "seconds": 0.53
         },
         {
           "accepted": [
@@ -1030,24 +1031,25 @@
             },
             {
               "category": "double_counting",
-              "detail": "nothing like it was asked (it asked: TRAINING_BUDGET) / no column adds up to the true 69,918.00 (amount = 89,978.00)",
+              "detail": "asked: Q22 REAL MONEY Which values of \u201cstatus\u201d in payments.csv are real money? 12 of 60 rows say ",
               "label": "spend counts successful payments only",
-              "passed": false
+              "passed": true
             }
           ],
           "combined": false,
-          "digest": "86237ef1bfd9",
+          "digest": "8cfd56aa376a",
           "error": null,
           "notes": [],
-          "passed": false,
+          "passed": true,
           "questions": [
+            "Q22_REAL_MONEY",
             "TRAINING_BUDGET"
           ],
           "rows": 60,
           "seconds": 0.65
         }
       ],
-      "runs_passed": 0,
+      "runs_passed": 2,
       "scenario": "K15",
       "stable": true,
       "theme": "Double counting and wrong grain",
@@ -1056,12 +1058,10 @@
     {
       "description": "Each complaint ticket has two to four status rows (opened, assigned, reopened, closed); counting rows counts a complaint many times.",
       "expected": "30 tickets, each once with its latest status, or the Doctor asks how to count them.",
-      "failed_categories": [
-        "double_counting"
-      ],
+      "failed_categories": [],
       "id": "k16_ticket_status_log",
       "k": 2,
-      "passed": false,
+      "passed": true,
       "runs": [
         {
           "accepted": [
@@ -1085,22 +1085,23 @@
             },
             {
               "category": "double_counting",
-              "detail": "nothing like it was asked (it asked: THIN_LAST_PERIOD, TRAINING_BUDGET) / 30 customers appear more than once: TK001, TK002, TK003, TK004 and 26 more",
+              "detail": "asked: Q21 ONE ROW Each \u201cticket_id\u201d in tickets_log.csv has several rows. The status changes from ",
               "label": "30 tickets counted once each",
-              "passed": false
+              "passed": true
             }
           ],
           "combined": false,
-          "digest": "ed8a07a4a531",
+          "digest": "45e30b224931",
           "error": null,
           "notes": [],
-          "passed": false,
+          "passed": true,
           "questions": [
             "THIN_LAST_PERIOD",
+            "Q21_ONE_ROW",
             "TRAINING_BUDGET"
           ],
           "rows": 95,
-          "seconds": 0.66
+          "seconds": 0.81
         },
         {
           "accepted": [
@@ -1124,25 +1125,26 @@
             },
             {
               "category": "double_counting",
-              "detail": "nothing like it was asked (it asked: THIN_LAST_PERIOD, TRAINING_BUDGET) / 30 customers appear more than once: TK001, TK002, TK003, TK004 and 26 more",
+              "detail": "asked: Q21 ONE ROW Each \u201cticket_id\u201d in tickets_log.csv has several rows. The status changes from ",
               "label": "30 tickets counted once each",
-              "passed": false
+              "passed": true
             }
           ],
           "combined": false,
-          "digest": "ed8a07a4a531",
+          "digest": "45e30b224931",
           "error": null,
           "notes": [],
-          "passed": false,
+          "passed": true,
           "questions": [
             "THIN_LAST_PERIOD",
+            "Q21_ONE_ROW",
             "TRAINING_BUDGET"
           ],
           "rows": 95,
-          "seconds": 0.7
+          "seconds": 0.85
         }
       ],
-      "runs_passed": 0,
+      "runs_passed": 2,
       "scenario": "K16",
       "stable": true,
       "theme": "Double counting and wrong grain",
@@ -1204,7 +1206,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 60,
-          "seconds": 0.79
+          "seconds": 0.78
         },
         {
           "accepted": [
@@ -1254,7 +1256,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 60,
-          "seconds": 0.97
+          "seconds": 0.9
         }
       ],
       "runs_passed": 2,
@@ -1315,7 +1317,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 50,
-          "seconds": 0.86
+          "seconds": 0.89
         },
         {
           "accepted": [
@@ -1361,7 +1363,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 50,
-          "seconds": 0.8
+          "seconds": 0.88
         }
       ],
       "runs_passed": 2,
@@ -1381,7 +1383,6 @@
         {
           "accepted": [
             "\u201ccustomer_id\u201d names each row of customers.csv.",
-            "The newest month is only partly in the file: 23 of 31 days (up to 2017-08-23). Counting it as a full month would make everything look lower. 2 rows are dated after 2017-07-31.",
             "'customer_id': 100.0% of 80 values are different from each other; the most common appears 1 times.",
             "\u201cconverted\u201d is the outcome: Purchased within 30 days of ad exposure",
             "\u201cmarketing_opt_in\u201d says who agreed to be contacted."
@@ -1407,22 +1408,20 @@
             }
           ],
           "combined": false,
-          "digest": "c7edb03ed4df",
+          "digest": "5b31385fff54",
           "error": null,
           "notes": [],
           "passed": true,
           "questions": [
-            "THIN_LAST_PERIOD",
             "OUTCOME_COLUMN",
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 0.6
+          "seconds": 0.57
         },
         {
           "accepted": [
             "\u201ccustomer_id\u201d names each row of customers.csv.",
-            "The newest month is only partly in the file: 23 of 31 days (up to 2017-08-23). Counting it as a full month would make everything look lower. 2 rows are dated after 2017-07-31.",
             "'customer_id': 100.0% of 80 values are different from each other; the most common appears 1 times.",
             "\u201cconverted\u201d is the outcome: Purchased within 30 days of ad exposure",
             "\u201cmarketing_opt_in\u201d says who agreed to be contacted."
@@ -1448,17 +1447,16 @@
             }
           ],
           "combined": false,
-          "digest": "c7edb03ed4df",
+          "digest": "5b31385fff54",
           "error": null,
           "notes": [],
           "passed": true,
           "questions": [
-            "THIN_LAST_PERIOD",
             "OUTCOME_COLUMN",
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 0.67
+          "seconds": 0.56
         }
       ],
       "runs_passed": 2,
@@ -1470,12 +1468,10 @@
     {
       "description": "Some customers are deceased, flagged for fraud, under legal hold or closed, yet all show marketing consent.",
       "expected": "Deceased, fraud, legal-hold and closed customers are off the contact list.",
-      "failed_categories": [
-        "contact_list"
-      ],
+      "failed_categories": [],
       "id": "p8_deceased_fraud",
       "k": 2,
-      "passed": false,
+      "passed": true,
       "runs": [
         {
           "accepted": [
@@ -1499,22 +1495,22 @@
             },
             {
               "category": "contact_list",
-              "detail": "8 people who must not be contacted are on the list: C0011, C0016, C0031, C0036 and 4 more (by the 'marketing_opt_in' column and the contact-list gate)",
+              "detail": "the list leaves out everyone it must (by the 'marketing_opt_in' column and the contact-list gate)",
               "label": "deceased, fraud, legal-hold and closed customers are off the list",
-              "passed": false
+              "passed": true
             }
           ],
           "combined": false,
           "digest": "4373007ae56b",
           "error": null,
           "notes": [],
-          "passed": false,
+          "passed": true,
           "questions": [
             "OUTCOME_COLUMN",
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 0.82
+          "seconds": 0.78
         },
         {
           "accepted": [
@@ -1538,25 +1534,25 @@
             },
             {
               "category": "contact_list",
-              "detail": "8 people who must not be contacted are on the list: C0011, C0016, C0031, C0036 and 4 more (by the 'marketing_opt_in' column and the contact-list gate)",
+              "detail": "the list leaves out everyone it must (by the 'marketing_opt_in' column and the contact-list gate)",
               "label": "deceased, fraud, legal-hold and closed customers are off the list",
-              "passed": false
+              "passed": true
             }
           ],
           "combined": false,
           "digest": "4373007ae56b",
           "error": null,
           "notes": [],
-          "passed": false,
+          "passed": true,
           "questions": [
             "OUTCOME_COLUMN",
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 0.57
+          "seconds": 0.58
         }
       ],
-      "runs_passed": 0,
+      "runs_passed": 2,
       "scenario": "P8",
       "stable": true,
       "theme": "Consent, sensitive data and who may be contacted",
@@ -1565,18 +1561,15 @@
     {
       "description": "Churn is 'no order in 90 days', so 30 customers who never ordered at all are labelled churners.",
       "expected": "The 30 never-active customers are not counted in the outcome; the true churn rate is 25.7%, not 44%.",
-      "failed_categories": [
-        "outcome_population"
-      ],
+      "failed_categories": [],
       "id": "s01_never_active",
       "k": 2,
-      "passed": false,
+      "passed": true,
       "runs": [
         {
           "accepted": [
             "\u201ccustomer_id\u201d names each row of customers.csv.",
             "1 of 70 rows have 'signup_date' later than 'last_order_date', which should come the other way round.",
-            "The newest month is only partly in the file: 11 of 30 days (up to 2026-04-11). Counting it as a full month would make everything look lower. 11 rows are dated after 2026-03-31.",
             "\u201cchurn\u201d in customers.csv is the outcome: The subscriber left within the month after the snapshot",
             "'customer_id': 100.0% of 100 values are different from each other; the most common appears 1 times."
           ],
@@ -1595,28 +1588,27 @@
             },
             {
               "category": "outcome_population",
-              "detail": "nothing like it was asked (it asked: THIN_LAST_PERIOD, TRAINING_BUDGET) / 30 who cannot have the outcome are counted: C0001, C0002, C0003, C0004 and 26 more; the positive rate is 48.0%; the true rate is 25.7%",
+              "detail": "asked: Q23 WHO CAN RESPOND 30 customers in customers.csv were never active. 30 of them are marked",
               "label": "never-active customers are not in the outcome population",
-              "passed": false
+              "passed": true
             }
           ],
           "combined": false,
-          "digest": "e9084a835048",
+          "digest": "88abbfc23cdb",
           "error": null,
           "notes": [],
-          "passed": false,
+          "passed": true,
           "questions": [
-            "THIN_LAST_PERIOD",
-            "TRAINING_BUDGET"
+            "TRAINING_BUDGET",
+            "Q23_WHO_CAN_RESPOND"
           ],
           "rows": 100,
-          "seconds": 1.28
+          "seconds": 0.72
         },
         {
           "accepted": [
             "\u201ccustomer_id\u201d names each row of customers.csv.",
             "1 of 70 rows have 'signup_date' later than 'last_order_date', which should come the other way round.",
-            "The newest month is only partly in the file: 11 of 30 days (up to 2026-04-11). Counting it as a full month would make everything look lower. 11 rows are dated after 2026-03-31.",
             "\u201cchurn\u201d in customers.csv is the outcome: The subscriber left within the month after the snapshot",
             "'customer_id': 100.0% of 100 values are different from each other; the most common appears 1 times."
           ],
@@ -1635,25 +1627,25 @@
             },
             {
               "category": "outcome_population",
-              "detail": "nothing like it was asked (it asked: THIN_LAST_PERIOD, TRAINING_BUDGET) / 30 who cannot have the outcome are counted: C0001, C0002, C0003, C0004 and 26 more; the positive rate is 48.0%; the true rate is 25.7%",
+              "detail": "asked: Q23 WHO CAN RESPOND 30 customers in customers.csv were never active. 30 of them are marked",
               "label": "never-active customers are not in the outcome population",
-              "passed": false
+              "passed": true
             }
           ],
           "combined": false,
-          "digest": "e9084a835048",
+          "digest": "88abbfc23cdb",
           "error": null,
           "notes": [],
-          "passed": false,
+          "passed": true,
           "questions": [
-            "THIN_LAST_PERIOD",
-            "TRAINING_BUDGET"
+            "TRAINING_BUDGET",
+            "Q23_WHO_CAN_RESPOND"
           ],
           "rows": 100,
-          "seconds": 0.87
+          "seconds": 0.8
         }
       ],
-      "runs_passed": 0,
+      "runs_passed": 2,
       "scenario": "S01",
       "stable": true,
       "theme": "Outcome: who is eligible, and when the clock runs",
@@ -1703,7 +1695,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 120,
-          "seconds": 0.61
+          "seconds": 0.6
         },
         {
           "accepted": [
@@ -1741,7 +1733,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 120,
-          "seconds": 0.73
+          "seconds": 0.85
         }
       ],
       "runs_passed": 2,
@@ -1834,7 +1826,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 0.71
+          "seconds": 0.69
         }
       ],
       "runs_passed": 2,
@@ -1855,8 +1847,6 @@
           "accepted": [
             "\u201ccustomer_id\u201d names each row of customers.csv.",
             "Remove 'last_payment_date': it looks like it gives away the outcome (it tells yes from no almost by itself).",
-            "20 rows (25%) of 'last_payment_date' are 1970-01-01, which is usually a blank written as a date.",
-            "The newest month is only partly in the file: 22 of 30 days (up to 2026-09-22). Counting it as a full month would make everything look lower. 8 rows are dated after 2026-08-31.",
             "\u201cchurn\u201d in customers.csv is the outcome: The subscriber left within the month after the snapshot",
             "'customer_id': 100.0% of 80 values are different from each other; the most common appears 1 times."
           ],
@@ -1875,29 +1865,27 @@
             },
             {
               "category": "unapproved_change",
-              "detail": "'last_payment_date' is not in the result",
+              "detail": "asked: DATE PLACEHOLDER 20 rows (25%) of 'last_payment_date' are 1970-01-01, which is usually a b",
               "label": "the 1970-01-01 stand-in is not treated as a real date",
               "passed": true
             }
           ],
           "combined": false,
-          "digest": "bff27db00cd7",
+          "digest": "53164934a72c",
           "error": null,
           "notes": [],
           "passed": true,
           "questions": [
-            "THIN_LAST_PERIOD",
+            "DATE_PLACEHOLDER",
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 0.81
+          "seconds": 0.63
         },
         {
           "accepted": [
             "\u201ccustomer_id\u201d names each row of customers.csv.",
             "Remove 'last_payment_date': it looks like it gives away the outcome (it tells yes from no almost by itself).",
-            "20 rows (25%) of 'last_payment_date' are 1970-01-01, which is usually a blank written as a date.",
-            "The newest month is only partly in the file: 22 of 30 days (up to 2026-09-22). Counting it as a full month would make everything look lower. 8 rows are dated after 2026-08-31.",
             "\u201cchurn\u201d in customers.csv is the outcome: The subscriber left within the month after the snapshot",
             "'customer_id': 100.0% of 80 values are different from each other; the most common appears 1 times."
           ],
@@ -1916,22 +1904,22 @@
             },
             {
               "category": "unapproved_change",
-              "detail": "'last_payment_date' is not in the result",
+              "detail": "asked: DATE PLACEHOLDER 20 rows (25%) of 'last_payment_date' are 1970-01-01, which is usually a b",
               "label": "the 1970-01-01 stand-in is not treated as a real date",
               "passed": true
             }
           ],
           "combined": false,
-          "digest": "bff27db00cd7",
+          "digest": "53164934a72c",
           "error": null,
           "notes": [],
           "passed": true,
           "questions": [
-            "THIN_LAST_PERIOD",
+            "DATE_PLACEHOLDER",
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 0.75
+          "seconds": 0.64
         }
       ],
       "runs_passed": 2,
@@ -1984,7 +1972,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 120,
-          "seconds": 0.58
+          "seconds": 0.74
         },
         {
           "accepted": [
@@ -2022,7 +2010,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 120,
-          "seconds": 0.56
+          "seconds": 0.54
         }
       ],
       "runs_passed": 2,
@@ -2034,18 +2022,17 @@
     {
       "description": "The newest month's outcome window has not finished, so its churn rate is 3% against about 25% before.",
       "expected": "The unfinished month (2026-09) is left out of the outcome, or the Doctor asks; the true rate is 22.8%.",
-      "failed_categories": [
-        "outcome_population"
-      ],
+      "failed_categories": [],
       "id": "t07_immature_last_month",
       "k": 2,
-      "passed": false,
+      "passed": true,
       "runs": [
         {
           "accepted": [
             "\u201crecord_id\u201d names each row of snapshots.csv.",
             "\u201cchurn\u201d in snapshots.csv is the outcome: The subscriber left within the month after the snapshot",
-            "'record_id': 100.0% of 210 values are different from each other; the most common appears 1 times."
+            "'record_id': 100.0% of 210 values are different from each other; the most common appears 1 times.",
+            "The newest month is not finished: its outcome rate is 3.3%, against 20.0% in the months before, so its outcomes are probably not final yet. 30 rows are dated after 2026-08-31."
           ],
           "checks": [
             {
@@ -2062,27 +2049,29 @@
             },
             {
               "category": "outcome_population",
-              "detail": "nothing like it was asked (it asked: TRAINING_BUDGET) / 30 who cannot have the outcome are counted: R0181, R0182, R0183, R0184 and 26 more",
+              "detail": "asked: THIN LAST PERIOD The newest rows of 'snapshot_month' look unfinished. The newest month is ",
               "label": "the unfinished last month is not counted as 'did not leave'",
-              "passed": false
+              "passed": true
             }
           ],
           "combined": false,
-          "digest": "2044e49ac9a4",
+          "digest": "5405cb293329",
           "error": null,
           "notes": [],
-          "passed": false,
+          "passed": true,
           "questions": [
-            "TRAINING_BUDGET"
+            "TRAINING_BUDGET",
+            "THIN_LAST_PERIOD"
           ],
           "rows": 210,
-          "seconds": 1.3
+          "seconds": 0.96
         },
         {
           "accepted": [
             "\u201crecord_id\u201d names each row of snapshots.csv.",
             "\u201cchurn\u201d in snapshots.csv is the outcome: The subscriber left within the month after the snapshot",
-            "'record_id': 100.0% of 210 values are different from each other; the most common appears 1 times."
+            "'record_id': 100.0% of 210 values are different from each other; the most common appears 1 times.",
+            "The newest month is not finished: its outcome rate is 3.3%, against 20.0% in the months before, so its outcomes are probably not final yet. 30 rows are dated after 2026-08-31."
           ],
           "checks": [
             {
@@ -2099,24 +2088,25 @@
             },
             {
               "category": "outcome_population",
-              "detail": "nothing like it was asked (it asked: TRAINING_BUDGET) / 30 who cannot have the outcome are counted: R0181, R0182, R0183, R0184 and 26 more",
+              "detail": "asked: THIN LAST PERIOD The newest rows of 'snapshot_month' look unfinished. The newest month is ",
               "label": "the unfinished last month is not counted as 'did not leave'",
-              "passed": false
+              "passed": true
             }
           ],
           "combined": false,
-          "digest": "2044e49ac9a4",
+          "digest": "5405cb293329",
           "error": null,
           "notes": [],
-          "passed": false,
+          "passed": true,
           "questions": [
-            "TRAINING_BUDGET"
+            "TRAINING_BUDGET",
+            "THIN_LAST_PERIOD"
           ],
           "rows": 210,
-          "seconds": 0.97
+          "seconds": 0.94
         }
       ],
-      "runs_passed": 0,
+      "runs_passed": 2,
       "scenario": "T07",
       "stable": true,
       "theme": "Outcome: who is eligible, and when the clock runs",
@@ -2166,7 +2156,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 120,
-          "seconds": 0.6
+          "seconds": 0.76
         },
         {
           "accepted": [
@@ -2204,7 +2194,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 120,
-          "seconds": 0.66
+          "seconds": 0.6
         }
       ],
       "runs_passed": 2,
@@ -2216,16 +2206,15 @@
     {
       "description": "The newest month, 2026-10, covers only 12 days, so its usage looks like a collapse for every customer.",
       "expected": "The partial month is left out, or the Doctor asks; it is never treated as a full month.",
-      "failed_categories": [
-        "outcome_population"
-      ],
+      "failed_categories": [],
       "id": "t15_partial_last_month",
       "k": 2,
-      "passed": false,
+      "passed": true,
       "runs": [
         {
           "accepted": [
             "\u201crecord_id\u201d names each row of monthly_usage.csv.",
+            "The newest month is only partly in the file: 12 of 31 days (up to 2026-10). Counting it as a full month would make everything look lower. 30 rows are dated after 2026-09-30.",
             "\u201cchurn\u201d in monthly_usage.csv is the outcome: The subscriber left within the month after the snapshot",
             "'record_id': 100.0% of 120 values are different from each other; the most common appears 1 times."
           ],
@@ -2244,25 +2233,27 @@
             },
             {
               "category": "outcome_population",
-              "detail": "nothing like it was asked (it asked: TRAINING_BUDGET) / 30 rows of 'month' still say 2026-10",
+              "detail": "asked: THIN LAST PERIOD The newest rows of 'month' look unfinished. The newest month is only part",
               "label": "the 12-day month is not used as a full month",
-              "passed": false
+              "passed": true
             }
           ],
           "combined": false,
-          "digest": "574d56585737",
+          "digest": "aa0373d9ecbc",
           "error": null,
           "notes": [],
-          "passed": false,
+          "passed": true,
           "questions": [
+            "THIN_LAST_PERIOD",
             "TRAINING_BUDGET"
           ],
           "rows": 120,
-          "seconds": 0.68
+          "seconds": 0.63
         },
         {
           "accepted": [
             "\u201crecord_id\u201d names each row of monthly_usage.csv.",
+            "The newest month is only partly in the file: 12 of 31 days (up to 2026-10). Counting it as a full month would make everything look lower. 30 rows are dated after 2026-09-30.",
             "\u201cchurn\u201d in monthly_usage.csv is the outcome: The subscriber left within the month after the snapshot",
             "'record_id': 100.0% of 120 values are different from each other; the most common appears 1 times."
           ],
@@ -2281,24 +2272,25 @@
             },
             {
               "category": "outcome_population",
-              "detail": "nothing like it was asked (it asked: TRAINING_BUDGET) / 30 rows of 'month' still say 2026-10",
+              "detail": "asked: THIN LAST PERIOD The newest rows of 'month' look unfinished. The newest month is only part",
               "label": "the 12-day month is not used as a full month",
-              "passed": false
+              "passed": true
             }
           ],
           "combined": false,
-          "digest": "574d56585737",
+          "digest": "aa0373d9ecbc",
           "error": null,
           "notes": [],
-          "passed": false,
+          "passed": true,
           "questions": [
+            "THIN_LAST_PERIOD",
             "TRAINING_BUDGET"
           ],
           "rows": 120,
-          "seconds": 0.65
+          "seconds": 0.72
         }
       ],
-      "runs_passed": 0,
+      "runs_passed": 2,
       "scenario": "T15",
       "stable": true,
       "theme": "Outcome: who is eligible, and when the clock runs",
@@ -2307,12 +2299,10 @@
     {
       "description": "The second file's amounts are in paise (100 times larger) and the first file's are in rupees.",
       "expected": "The two files are stacked in one unit and the total is 198,508 rupees, or the Doctor asks which unit each file uses.",
-      "failed_categories": [
-        "double_counting"
-      ],
+      "failed_categories": [],
       "id": "v01_paise_vs_rupees",
       "k": 2,
-      "passed": false,
+      "passed": true,
       "runs": [
         {
           "accepted": [
@@ -2339,23 +2329,24 @@
             },
             {
               "category": "double_counting",
-              "detail": "nothing like it was asked (it asked: OUTCOME_COLUMN, TRAINING_BUDGET, TRAINING_BUDGET) / no column adds up to the true 198,508.00 (amount = 9,179,689.00)",
+              "detail": "asked: Q06 UNIT SCALE What unit is amount in? Its values look like two units: they are about 73 t",
               "label": "amounts from both files add up in one unit (rupees)",
-              "passed": false
+              "passed": true
             }
           ],
           "combined": true,
-          "digest": "2261beefe6fc",
+          "digest": "106cd0354862",
           "error": null,
           "notes": [],
-          "passed": false,
+          "passed": true,
           "questions": [
+            "Q06_UNIT_SCALE",
             "OUTCOME_COLUMN",
             "TRAINING_BUDGET",
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 1.09
+          "seconds": 1.29
         },
         {
           "accepted": [
@@ -2382,26 +2373,27 @@
             },
             {
               "category": "double_counting",
-              "detail": "nothing like it was asked (it asked: OUTCOME_COLUMN, TRAINING_BUDGET, TRAINING_BUDGET) / no column adds up to the true 198,508.00 (amount = 9,179,689.00)",
+              "detail": "asked: Q06 UNIT SCALE What unit is amount in? Its values look like two units: they are about 73 t",
               "label": "amounts from both files add up in one unit (rupees)",
-              "passed": false
+              "passed": true
             }
           ],
           "combined": true,
-          "digest": "2261beefe6fc",
+          "digest": "106cd0354862",
           "error": null,
           "notes": [],
-          "passed": false,
+          "passed": true,
           "questions": [
+            "Q06_UNIT_SCALE",
             "OUTCOME_COLUMN",
             "TRAINING_BUDGET",
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 0.93
+          "seconds": 1.21
         }
       ],
-      "runs_passed": 0,
+      "runs_passed": 2,
       "scenario": "V01",
       "stable": true,
       "theme": "Money and units whose meaning is not in the cells",
@@ -2450,7 +2442,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 60,
-          "seconds": 0.43
+          "seconds": 0.45
         },
         {
           "accepted": [
@@ -2487,7 +2479,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 60,
-          "seconds": 0.58
+          "seconds": 0.53
         }
       ],
       "runs_passed": 2,
@@ -2539,7 +2531,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 0.57
+          "seconds": 0.5
         },
         {
           "accepted": [
@@ -2576,7 +2568,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 0.58
+          "seconds": 0.48
         }
       ],
       "runs_passed": 2,
@@ -2588,12 +2580,10 @@
     {
       "description": "Eight QA accounts (TEST001..., qa+...@company.example) sit in the customer list with marketing consent.",
       "expected": "The test accounts are off the contact list; the real customers are on it.",
-      "failed_categories": [
-        "contact_list"
-      ],
+      "failed_categories": [],
       "id": "v06_test_accounts",
       "k": 2,
-      "passed": false,
+      "passed": true,
       "runs": [
         {
           "accepted": [
@@ -2618,22 +2608,22 @@
             },
             {
               "category": "contact_list",
-              "detail": "8 people who must not be contacted are on the list: TEST001, TEST002, TEST003, TEST004 and 4 more (by the 'marketing_opt_in' column and the contact-list gate)",
+              "detail": "the list leaves out everyone it must (by the 'marketing_opt_in' column and the contact-list gate)",
               "label": "test accounts are off the contact list",
-              "passed": false
+              "passed": true
             }
           ],
           "combined": false,
           "digest": "30eee875dc22",
           "error": null,
           "notes": [],
-          "passed": false,
+          "passed": true,
           "questions": [
             "OUTCOME_COLUMN",
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 0.64
+          "seconds": 0.61
         },
         {
           "accepted": [
@@ -2658,25 +2648,25 @@
             },
             {
               "category": "contact_list",
-              "detail": "8 people who must not be contacted are on the list: TEST001, TEST002, TEST003, TEST004 and 4 more (by the 'marketing_opt_in' column and the contact-list gate)",
+              "detail": "the list leaves out everyone it must (by the 'marketing_opt_in' column and the contact-list gate)",
               "label": "test accounts are off the contact list",
-              "passed": false
+              "passed": true
             }
           ],
           "combined": false,
           "digest": "30eee875dc22",
           "error": null,
           "notes": [],
-          "passed": false,
+          "passed": true,
           "questions": [
             "OUTCOME_COLUMN",
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 0.61
+          "seconds": 0.64
         }
       ],
-      "runs_passed": 0,
+      "runs_passed": 2,
       "scenario": "V06",
       "stable": true,
       "theme": "Test, staff and extreme accounts",
@@ -2728,7 +2718,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 90,
-          "seconds": 0.77
+          "seconds": 0.76
         },
         {
           "accepted": [
@@ -2768,7 +2758,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 90,
-          "seconds": 0.64
+          "seconds": 0.63
         }
       ],
       "runs_passed": 2,
@@ -2780,12 +2770,10 @@
     {
       "description": "The order total is written on every line item of the order, so adding the column up counts each order 2 to 4 times.",
       "expected": "The order total is counted once per order (120,964), or the Doctor asks which level the total is on.",
-      "failed_categories": [
-        "double_counting"
-      ],
+      "failed_categories": [],
       "id": "v19_order_total_repeated",
       "k": 2,
-      "passed": false,
+      "passed": true,
       "runs": [
         {
           "accepted": [
@@ -2808,21 +2796,22 @@
             },
             {
               "category": "double_counting",
-              "detail": "nothing like it was asked (it asked: TRAINING_BUDGET) / no column adds up to the true 120,964.00 (order_total = 377,802.00)",
+              "detail": "asked: Q21 ONE ROW Each \u201corder_id\u201d in order_lines.csv has several rows. The order total is the sa",
               "label": "order totals add up to the true spend, not a repeated one",
-              "passed": false
+              "passed": true
             }
           ],
           "combined": false,
-          "digest": "da0271ce62b5",
+          "digest": "3c6fa9217dd8",
           "error": null,
           "notes": [],
-          "passed": false,
+          "passed": true,
           "questions": [
+            "Q21_ONE_ROW",
             "TRAINING_BUDGET"
           ],
           "rows": 124,
-          "seconds": 0.64
+          "seconds": 0.86
         },
         {
           "accepted": [
@@ -2845,24 +2834,25 @@
             },
             {
               "category": "double_counting",
-              "detail": "nothing like it was asked (it asked: TRAINING_BUDGET) / no column adds up to the true 120,964.00 (order_total = 377,802.00)",
+              "detail": "asked: Q21 ONE ROW Each \u201corder_id\u201d in order_lines.csv has several rows. The order total is the sa",
               "label": "order totals add up to the true spend, not a repeated one",
-              "passed": false
+              "passed": true
             }
           ],
           "combined": false,
-          "digest": "da0271ce62b5",
+          "digest": "3c6fa9217dd8",
           "error": null,
           "notes": [],
-          "passed": false,
+          "passed": true,
           "questions": [
+            "Q21_ONE_ROW",
             "TRAINING_BUDGET"
           ],
           "rows": 124,
-          "seconds": 0.61
+          "seconds": 0.82
         }
       ],
-      "runs_passed": 0,
+      "runs_passed": 2,
       "scenario": "V19",
       "stable": true,
       "theme": "Double counting and wrong grain",

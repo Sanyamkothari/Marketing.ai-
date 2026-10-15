@@ -2,7 +2,7 @@
 
 30 planted traps, each run 2 times with no AI (the rules path). A trap passes only if every run passes every check. The result data is graded, never the Doctor's words.
 
-**Passed 16 of 30; failed 14; runs that disagreed with each other: 0.**
+**Passed 30 of 30; failed 0; runs that disagreed with each other: 0.**
 
 4 of the passes are untested: the case has several files but nothing was joined or stacked, so its join traps were never sprung.
 
@@ -13,48 +13,48 @@ Many traps fail today. That is expected: the bench measures, it does not have to
 | Check | Graded | Failed |
 |---|---|---|
 | No silent row loss | 30 | 0 |
-| No unapproved change | 34 | 1 |
+| No unapproved change | 34 | 0 |
 | Correct join (keys not merged, one row per customer) | 4 | 0 |
-| No double counting (totals) | 5 | 4 |
+| No double counting (totals) | 5 | 0 |
 | No leak column kept | 3 | 0 |
-| Outcome population correct | 4 | 4 |
-| Contact-list exclusions applied | 6 | 3 |
-| Asked the right question | 3 | 2 |
+| Outcome population correct | 4 | 0 |
+| Contact-list exclusions applied | 6 | 0 |
+| Asked the right question | 3 | 0 |
 
 ## The traps
 
 | Trap | Scenario | Result | What went wrong |
 |---|---|---|---|
-| c01_selection_not_random | C01 | FAIL | nothing like it was asked (it asked: OUTCOME_COLUMN, TRAINING_BUDGET) |
+| c01_selection_not_random | C01 | pass |  |
 | c06_dnd_direction | C06 | pass |  |
-| c09_already_hold_product | C09 | FAIL | nothing like it was asked (it asked: TRAINING_BUDGET) / 48 who cannot have the outcome are counted: P0001, P0005, P0006, P0010 and 44 more; the positive rate is |
+| c09_already_hold_product | C09 | pass |  |
 | crit03_dup_and_drop | crit-03 | pass, untested | nothing was joined or stacked |
 | f01_leading_zeros | F01 | pass, untested | nothing was joined or stacked |
 | f02_excel_e_plus | F02 | pass |  |
-| f04_merged_cells_region | F04 | FAIL | nothing like it was asked (it asked: TRAINING_BUDGET) / 56 rows of 'region' still say  |
-| f05_pivot_summary | F05 | FAIL | nothing like it was asked (it asked: KEY_AMBIGUOUS, DATA_REQUESTED, TRAINING_BUDGET) |
+| f04_merged_cells_region | F04 | pass |  |
+| f05_pivot_summary | F05 | pass |  |
 | f21_overlapping_exports | F21 | pass |  |
-| k13_household | K13 | FAIL | 20 households have more than one person on the list (by the 'marketing_opt_in' column and the contact-list gate) |
-| k15_failed_payments | K15 | FAIL | nothing like it was asked (it asked: TRAINING_BUDGET) / no column adds up to the true 69,918.00 (amount = 89,978.00) |
-| k16_ticket_status_log | K16 | FAIL | nothing like it was asked (it asked: THIN_LAST_PERIOD, TRAINING_BUDGET) / 30 customers appear more than once: TK001, TK002, TK003, TK004 and 26 more |
+| k13_household | K13 | pass |  |
+| k15_failed_payments | K15 | pass |  |
+| k16_ticket_status_log | K16 | pass |  |
 | k1_merged_prefixes | K1 | pass, untested | nothing was joined or stacked |
 | k3_shared_phone | K3 | pass, untested | nothing was joined or stacked |
 | p7_minors | P7 | pass |  |
-| p8_deceased_fraud | P8 | FAIL | 8 people who must not be contacted are on the list: C0011, C0016, C0031, C0036 and 4 more (by the 'marketing_opt_in' column and the contact-list gate) |
-| s01_never_active | S01 | FAIL | nothing like it was asked (it asked: THIN_LAST_PERIOD, TRAINING_BUDGET) / 30 who cannot have the outcome are counted: C0001, C0002, C0003, C0004 and 26 more; th |
+| p8_deceased_fraud | P8 | pass |  |
+| s01_never_active | S01 | pass |  |
 | s05_cancellation_reason | S05 | pass |  |
 | t01_mixed_date_order | T01 | pass |  |
 | t03_placeholder_dates | T03 | pass |  |
 | t06_status_exported_today | T06 | pass |  |
-| t07_immature_last_month | T07 | FAIL | nothing like it was asked (it asked: TRAINING_BUDGET) / 30 who cannot have the outcome are counted: R0181, R0182, R0183, R0184 and 26 more |
+| t07_immature_last_month | T07 | pass |  |
 | t13_outcome_from_column | T13 | pass |  |
-| t15_partial_last_month | T15 | FAIL | nothing like it was asked (it asked: TRAINING_BUDGET) / 30 rows of 'month' still say 2026-10 |
-| v01_paise_vs_rupees | V01 | FAIL | nothing like it was asked (it asked: OUTCOME_COLUMN, TRAINING_BUDGET, TRAINING_BUDGET) / no column adds up to the true 198,508.00 (amount = 9,179,689.00) |
+| t15_partial_last_month | T15 | pass |  |
+| v01_paise_vs_rupees | V01 | pass |  |
 | v03_refunds_negative | V03 | pass |  |
 | v04_blank_vs_zero | V04 | pass |  |
-| v06_test_accounts | V06 | FAIL | 8 people who must not be contacted are on the list: TEST001, TEST002, TEST003, TEST004 and 4 more (by the 'marketing_opt_in' column and the contact-list gate) |
+| v06_test_accounts | V06 | pass |  |
 | v13_consent_spellings | V13 | pass |  |
-| v19_order_total_repeated | V19 | FAIL | nothing like it was asked (it asked: TRAINING_BUDGET) / no column adds up to the true 120,964.00 (order_total = 377,802.00) |
+| v19_order_total_repeated | V19 | pass |  |
 
 ## Each trap
 
@@ -66,7 +66,7 @@ Expected: The Doctor asks whether anyone was held out at random; without that it
 
 - pass: every customer of the main file is still there. all 120 customers are in the result
 - pass: columns no approved change touched keep the file's values. the values are as the file had them
-- FAIL: asks whether a random group was left uncontacted. nothing like it was asked (it asked: OUTCOME_COLUMN, TRAINING_BUDGET)
+- pass: asks whether a random group was left uncontacted. asked: Q13 HOLDOUT In the past campaign recorded in “contacted”, was a random group deliberately 
 
 ### c06_dnd_direction (C06, Consent, sensitive data and who may be contacted)
 
@@ -86,7 +86,7 @@ Expected: Existing holders are not counted in the outcome; the true response rat
 
 - pass: every customer of the main file is still there. all 72 customers are in the result
 - pass: columns no approved change touched keep the file's values. the values are as the file had them
-- FAIL: customers who already hold the product are not in the outcome. nothing like it was asked (it asked: TRAINING_BUDGET) / 48 who cannot have the outcome are counted: P0001, P0005, P0006, P0010 and 44 more; the positive rate is 14.2%; the true rate is 23.6%
+- pass: customers who already hold the product are not in the outcome. asked: Q23 WHO CAN RESPOND 48 customers in policyholders.csv already hold the product. 0 of them 
 
 ### crit03_dup_and_drop (crit-03, SQL steps slip past the safety limits)
 
@@ -126,7 +126,7 @@ Expected: Region is filled down to every row of its block, or the Doctor asks wh
 
 - pass: every customer of the main file is still there. all 60 customers are in the result
 - pass: columns no approved change touched keep the file's values. the values are as the file had them
-- FAIL: the 56 blank regions are filled or asked about. nothing like it was asked (it asked: TRAINING_BUDGET) / 56 rows of 'region' still say 
+- pass: the 56 blank regions are filled or asked about. asked: BLOCK BLANKS 'region' is filled on 4 rows and blank on the 56 rows below them, the way mer
 
 ### f05_pivot_summary (F05, Spreadsheet and export shapes the reader misses)
 
@@ -134,7 +134,7 @@ The file is a pivot table pasted as values: counts per region and plan, a Grand 
 
 Expected: The Doctor says this is a summary, not customers, and asks for the row-level export; it invents no rows.
 
-- FAIL: says it is a summary and asks for one row per customer. nothing like it was asked (it asked: KEY_AMBIGUOUS, DATA_REQUESTED, TRAINING_BUDGET)
+- pass: says it is a summary and asks for one row per customer. asked: DIFFERENT FILE REQUESTED This file cannot be used as it is. Ask whoever exported the file 
 
 ### f21_overlapping_exports (F21, Double counting and wrong grain)
 
@@ -154,7 +154,7 @@ Expected: At most one person per household is on the contact list.
 
 - pass: every customer of the main file is still there. all 60 customers are in the result
 - pass: columns no approved change touched keep the file's values. the values are as the file had them
-- FAIL: no household gets more than one message. 20 households have more than one person on the list (by the 'marketing_opt_in' column and the contact-list gate)
+- pass: no household gets more than one message. the list leaves out everyone it must (by the 'marketing_opt_in' column and the contact-list gate)
 
 ### k15_failed_payments (K15, Double counting and wrong grain)
 
@@ -164,7 +164,7 @@ Expected: Only successful payments are counted (69,918), or the Doctor asks whic
 
 - pass: every customer of the main file is still there. all 48 customers are in the result
 - pass: columns no approved change touched keep the file's values. the values are as the file had them
-- FAIL: spend counts successful payments only. nothing like it was asked (it asked: TRAINING_BUDGET) / no column adds up to the true 69,918.00 (amount = 89,978.00)
+- pass: spend counts successful payments only. asked: Q22 REAL MONEY Which values of “status” in payments.csv are real money? 12 of 60 rows say 
 
 ### k16_ticket_status_log (K16, Double counting and wrong grain)
 
@@ -174,7 +174,7 @@ Expected: 30 tickets, each once with its latest status, or the Doctor asks how t
 
 - pass: every customer of the main file is still there. all 30 customers are in the result
 - pass: columns no approved change touched keep the file's values. the values are as the file had them
-- FAIL: 30 tickets counted once each. nothing like it was asked (it asked: THIN_LAST_PERIOD, TRAINING_BUDGET) / 30 customers appear more than once: TK001, TK002, TK003, TK004 and 26 more
+- pass: 30 tickets counted once each. asked: Q21 ONE ROW Each “ticket_id” in tickets_log.csv has several rows. The status changes from 
 
 ### k1_merged_prefixes (K1, False, merged or missed joins)
 
@@ -215,7 +215,7 @@ Expected: Deceased, fraud, legal-hold and closed customers are off the contact l
 
 - pass: every customer of the main file is still there. all 80 customers are in the result
 - pass: columns no approved change touched keep the file's values. the values are as the file had them
-- FAIL: deceased, fraud, legal-hold and closed customers are off the list. 8 people who must not be contacted are on the list: C0011, C0016, C0031, C0036 and 4 more (by the 'marketing_opt_in' column and the contact-list gate)
+- pass: deceased, fraud, legal-hold and closed customers are off the list. the list leaves out everyone it must (by the 'marketing_opt_in' column and the contact-list gate)
 
 ### s01_never_active (S01, Outcome: who is eligible, and when the clock runs)
 
@@ -225,7 +225,7 @@ Expected: The 30 never-active customers are not counted in the outcome; the true
 
 - pass: every customer of the main file is still there. all 70 customers are in the result
 - pass: columns no approved change touched keep the file's values. the values are as the file had them
-- FAIL: never-active customers are not in the outcome population. nothing like it was asked (it asked: THIN_LAST_PERIOD, TRAINING_BUDGET) / 30 who cannot have the outcome are counted: C0001, C0002, C0003, C0004 and 26 more; the positive rate is 48.0%; the true rate is 25.7%
+- pass: never-active customers are not in the outcome population. asked: Q23 WHO CAN RESPOND 30 customers in customers.csv were never active. 30 of them are marked
 
 ### s05_cancellation_reason (S05, Time travel and leaks the checks miss)
 
@@ -255,7 +255,7 @@ Expected: 1970-01-01 is not kept as a real date: it becomes blank, or the Doctor
 
 - pass: every customer of the main file is still there. all 80 customers are in the result
 - pass: columns no approved change touched keep the file's values. the values are as the file had them
-- pass: the 1970-01-01 stand-in is not treated as a real date. 'last_payment_date' is not in the result
+- pass: the 1970-01-01 stand-in is not treated as a real date. asked: DATE PLACEHOLDER 20 rows (25%) of 'last_payment_date' are 1970-01-01, which is usually a b
 
 ### t06_status_exported_today (T06, Time travel and leaks the checks miss)
 
@@ -275,7 +275,7 @@ Expected: The unfinished month (2026-09) is left out of the outcome, or the Doct
 
 - pass: every customer of the main file is still there. all 180 customers are in the result
 - pass: columns no approved change touched keep the file's values. the values are as the file had them
-- FAIL: the unfinished last month is not counted as 'did not leave'. nothing like it was asked (it asked: TRAINING_BUDGET) / 30 who cannot have the outcome are counted: R0181, R0182, R0183, R0184 and 26 more
+- pass: the unfinished last month is not counted as 'did not leave'. asked: THIN LAST PERIOD The newest rows of 'snapshot_month' look unfinished. The newest month is 
 
 ### t13_outcome_from_column (T13, Time travel and leaks the checks miss)
 
@@ -295,7 +295,7 @@ Expected: The partial month is left out, or the Doctor asks; it is never treated
 
 - pass: every customer of the main file is still there. all 90 customers are in the result
 - pass: columns no approved change touched keep the file's values. the values are as the file had them
-- FAIL: the 12-day month is not used as a full month. nothing like it was asked (it asked: TRAINING_BUDGET) / 30 rows of 'month' still say 2026-10
+- pass: the 12-day month is not used as a full month. asked: THIN LAST PERIOD The newest rows of 'month' look unfinished. The newest month is only part
 
 ### v01_paise_vs_rupees (V01, Money and units whose meaning is not in the cells)
 
@@ -305,7 +305,7 @@ Expected: The two files are stacked in one unit and the total is 198,508 rupees,
 
 - pass: every customer of the main file is still there. all 40 customers are in the result
 - pass: columns no approved change touched keep the file's values. the values are as the file had them
-- FAIL: amounts from both files add up in one unit (rupees). nothing like it was asked (it asked: OUTCOME_COLUMN, TRAINING_BUDGET, TRAINING_BUDGET) / no column adds up to the true 198,508.00 (amount = 9,179,689.00)
+- pass: amounts from both files add up in one unit (rupees). asked: Q06 UNIT SCALE What unit is amount in? Its values look like two units: they are about 73 t
 
 ### v03_refunds_negative (V03, Money and units whose meaning is not in the cells)
 
@@ -335,7 +335,7 @@ Expected: The test accounts are off the contact list; the real customers are on 
 
 - pass: every customer of the main file is still there. all 80 customers are in the result
 - pass: columns no approved change touched keep the file's values. the values are as the file had them
-- FAIL: test accounts are off the contact list. 8 people who must not be contacted are on the list: TEST001, TEST002, TEST003, TEST004 and 4 more (by the 'marketing_opt_in' column and the contact-list gate)
+- pass: test accounts are off the contact list. the list leaves out everyone it must (by the 'marketing_opt_in' column and the contact-list gate)
 
 ### v13_consent_spellings (V13, Consent, sensitive data and who may be contacted)
 
@@ -355,5 +355,5 @@ Expected: The order total is counted once per order (120,964), or the Doctor ask
 
 - pass: every customer of the main file is still there. all 40 customers are in the result
 - pass: columns no approved change touched keep the file's values. the values are as the file had them
-- FAIL: order totals add up to the true spend, not a repeated one. nothing like it was asked (it asked: TRAINING_BUDGET) / no column adds up to the true 120,964.00 (order_total = 377,802.00)
+- pass: order totals add up to the true spend, not a repeated one. asked: Q21 ONE ROW Each “order_id” in order_lines.csv has several rows. The order total is the sa
 
