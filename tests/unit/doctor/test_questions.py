@@ -37,6 +37,11 @@ SAMPLE: dict[str, object] = {
     "campaign": "Diwali SMS",
     "client": "Acme Retail",
     "question": "Which column is the main customer ID in customers.csv?",
+    "id": "order_id",
+    "detail": "The order total is the same on every row.",
+    "reason": "were never active",
+    "positives": 30,
+    "outcome": "churn",
 }
 CHOICES = ("customer_id", "account_no", "phone")
 
@@ -45,10 +50,10 @@ def _ask(qid: str) -> Ask:
     return build_ask(qid, SAMPLE, rows=3000, choices=CHOICES, recommended_choice=1)
 
 
-def test_the_catalogue_holds_q1_to_q20() -> None:
-    assert list(CATALOGUE) == [f"Q{n}" for n in range(1, 21)]
+def test_the_catalogue_holds_q1_to_q23() -> None:
+    assert list(CATALOGUE) == [f"Q{n}" for n in range(1, 24)]
     codes = [spec.code for spec in CATALOGUE.values()]
-    assert len(set(codes)) == 20
+    assert len(set(codes)) == 23
 
 
 @pytest.mark.parametrize("qid", list(CATALOGUE))
@@ -203,7 +208,7 @@ def test_consent_is_never_assumed_yes_while_waiting() -> None:
 
 def test_the_agent_gets_one_line_per_question() -> None:
     lines = catalogue_lines()
-    assert len(lines) == 20 and lines[0].startswith("Q1 ") and "(blocking)" in lines[0]
+    assert len(lines) == 23 and lines[0].startswith("Q1 ") and "(blocking)" in lines[0]
     assert "choices" in lines[0] and "file" in lines[0]
 
 

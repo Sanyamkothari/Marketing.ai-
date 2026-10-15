@@ -16,7 +16,7 @@ from typing import Any, Final, cast
 from pydantic import JsonValue
 
 from engine.agent.config import AgentConfig, AgentLevel
-from engine.agent.contracts import ProposalState, RecipeStep, RecipeStepKind
+from engine.agent.contracts import ROW_RESHAPE_STEP_KINDS, ProposalState, RecipeStep, RecipeStepKind
 from engine.agent.dataset_recipe import consistent_types
 from engine.agent.recipe import STEP_PHASE, RecipeError
 from engine.agent.sql_step import SqlStepError
@@ -126,7 +126,10 @@ def check_plan(
         columns = {str(c) for c in frame.columns}
         agent = AgentConfig()
         levels = tuple(agent.levels)
-        if any(s.kind is RecipeStepKind.SQL_QUERY for s in ordered) and AgentLevel.RESHAPE not in levels:
+        reshaping = any(
+            s.kind is RecipeStepKind.SQL_QUERY or s.kind in ROW_RESHAPE_STEP_KINDS for s in ordered
+        )
+        if reshaping and AgentLevel.RESHAPE not in levels:
             levels = (*levels, AgentLevel.RESHAPE)
         try:
             guarded = run_guarded(

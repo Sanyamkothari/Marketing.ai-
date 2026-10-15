@@ -364,6 +364,7 @@ def _deps(storage: Storage, root: Path, request: Request, principal: Principal |
     from api.routes.case_combine import case_combiner
     from api.routes.doctor import offers as doctor_offers
     from engine.doctor.agent_review import lazy_review
+    from engine.doctor.checks_grain import grain_detector
     from engine.doctor.cleaning import cleaning_detector
     from engine.doctor.combining import combining_detector
     from engine.doctor.detect_time_keys import time_keys_detector
@@ -409,6 +410,8 @@ def _deps(storage: Storage, root: Path, request: Request, principal: Principal |
             combining_detector(),
             # Keys, dates and the newest rows: rounded IDs, stand-ins, dates in two orders, a thin last month.
             time_keys_detector(),
+            # What one row is, which rows are real money, was anyone held out, who can have the outcome.
+            grain_detector(config_root=root),
             sensitive_detector(),
             time_settings_detector(storage, config_root=root),
             # Today's file against what the client told us and what it looked like last time.

@@ -372,9 +372,47 @@ CATALOGUE: Final[Mapping[str, QuestionSpec]] = {
             roles=(EXPORTER, CRM_ADMIN),
             safe_default="treat the file as a possible extract and not compare totals with the whole business",
         ),
+        QuestionSpec(
+            qid="Q21",
+            code="Q21_ONE_ROW",
+            topic="what one row is",
+            text="Each “{id}” in {file} has several rows. {detail} What is one row?",
+            why="Adding up or counting repeated rows counts the same order, ticket or customer more than once.",
+            options=(_CHOICE,),
+            recommend_from_data=True,
+            roles=(CRM_ADMIN, FINANCE),
+            safe_default="leave the rows as they are and warn that totals may count the same thing twice",
+        ),
+        QuestionSpec(
+            qid="Q22",
+            code="Q22_REAL_MONEY",
+            topic="which statuses are real money",
+            text="Which values of “{column}” in {file} are real money? {detail}",
+            why="A failed, declined or refunded row is not money received, but adding the amounts up counts it.",
+            options=(_CHOICE,),
+            recommend_from_data=True,
+            roles=(FINANCE, CRM_ADMIN),
+            safe_default="count every row and warn that the total includes failed or refunded money",
+        ),
+        QuestionSpec(
+            qid="Q23",
+            code="Q23_WHO_CAN_RESPOND",
+            topic="who can have the outcome",
+            text="{count} customers in {file} {reason}. {positives} of them are marked as a yes in “{outcome}”. "
+            "Leave them out of the outcome?",
+            why="Customers who cannot have the outcome make the yes rate look different from the real one.",
+            options=(
+                OptionSpec("Yes, leave them out of the outcome"),
+                OptionSpec("No, keep them as they are"),
+            ),
+            recommended=0,
+            roles=(CAMPAIGN_MANAGER,),
+            safe_default="keep them and show how many of them there are",
+        ),
     )
 }
-"""Q1 to Q20 of the scenario study. "I don't know" is added to each at build time."""
+"""Q1 to Q20 of the scenario study, and Q21 to Q23 (what one row is, which statuses are real money, who can have the
+outcome) that its themes 3 and 5 need. "I don't know" is added to each at build time."""
 
 _FORMATTER: Final[string.Formatter] = string.Formatter()
 

@@ -319,6 +319,7 @@ def ship(trap: TrapCase) -> Shipped:
     """One run: the case through the unified visit with no AI, then the approved changes applied to the files."""
     from engine.config import load_use_case
     from engine.doctor.case import Case, CaseFile, CaseItem, CaseStore
+    from engine.doctor.checks_grain import grain_detector
     from engine.doctor.cleaning import cleaning_detector
     from engine.doctor.combine_run import combine_item, upload_ids_of
     from engine.doctor.combining import combining_detector
@@ -373,6 +374,7 @@ def ship(trap: TrapCase) -> Shipped:
                 cleaning_detector((Offer(config=config, stage="Retain"),)),
                 combining_detector(),
                 time_keys_detector(),
+                grain_detector(),
                 sensitive_detector(),
                 time_settings_detector(storage),
             ),
