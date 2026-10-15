@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final
 
 import pandas as pd
+from pydantic import ValidationError
 
 from engine.agent.tools import AgentToolError
 from engine.agentic.canonical import canonical_bytes, sha256_hex
@@ -82,7 +83,11 @@ def combine_item(
     stem = Path(names.get(ids[0], "table")).stem
     try:
         if item.kind == STACK_KIND:
-            spec = StackSpec.model_validate(item.payload["spec"])
+            spec = StackSpec.model_validate(item.payload.get("spec"))
+            if not {f.upload_id for f in spec.files} <= set(ids):
+                raise AgentToolError(
+                    "COMBINE_FILES_MISSING", "A file of this change is no longer in the case."
+                )
             run = run_stack([frames[f.upload_id] for f in spec.files], spec)
             return Combined(run.frame, f"{stem} stacked.csv", ids, f"{len(run.frame):,} rows")
         plan = plan_of(diagnosis, {u: frames[u] for u in ids})
@@ -96,6 +101,10 @@ def combine_item(
         )
     except (BuildDriveError, StackError) as exc:
         raise AgentToolError(exc.code, exc.message) from exc
+    except ValidationError as exc:
+        raise AgentToolError(
+            "COMBINE_FAILED", "This change can no longer be read. Untick it to go on."
+        ) from exc
     logs = ", ".join(dict.fromkeys(Path(names.get(u, "")).stem for s in plan.events for u in s.upload_ids))
     return Combined(table, f"{stem} with {logs}.csv", ids, f"{len(table):,} customers")
 

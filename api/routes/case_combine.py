@@ -9,8 +9,10 @@ from __future__ import annotations
 from pathlib import Path
 
 import pandas as pd
+from fastapi import HTTPException
 
 from api.routes.uploads import finish_upload, load_upload
+from engine.agent.tools import AgentToolError
 from engine.config import load_use_case
 from engine.doctor.case import Case, CaseFile, CaseItem
 from engine.doctor.combine_run import combine_item, upload_ids_of
@@ -18,7 +20,7 @@ from engine.doctor.contracts import Diagnosis
 from engine.doctor.visit import CombinePort
 from engine.intake.config import load_intake_config
 from engine.stages import ingest
-from engine.storage import Storage, upload_key
+from engine.storage import Storage, StorageError, upload_key
 from engine.utils.ids import new_upload_id
 from engine.utils.time import utc_now
 
@@ -29,6 +31,15 @@ def case_combiner(storage: Storage, root: Path) -> CombinePort:
     """The visit's `CombinePort` over the uploads in `storage`."""
 
     def combine(case: Case, item: CaseItem, actor: str) -> CaseFile:
+        try:
+            return _combine(case, item, actor)
+        except (HTTPException, StorageError, ingest.IngestError) as exc:  # the visit stops and says why
+            raise AgentToolError(
+                "COMBINE_FAILED",
+                "The combined table could not be made from the files. Untick the change to go on.",
+            ) from exc
+
+    def _combine(case: Case, item: CaseItem, actor: str) -> CaseFile:
         ids = upload_ids_of(item)
         records = {upload_id: load_upload(storage, upload_id) for upload_id in ids}
         frames: dict[str, pd.DataFrame] = {}

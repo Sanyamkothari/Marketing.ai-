@@ -128,14 +128,20 @@ def _join(
     entity = plan.entity
     keys = loaded[entity.upload_ids[0]].frame
     column = next(c for c in keys.columns if str(c) == entity.key_column)
-    repeated = int(keys[column].duplicated().sum())
-    if repeated or keys[column].isna().any():
+    missing = int(keys[column].isna().sum())
+    repeated = int(keys[column].dropna().duplicated().sum())
+    if repeated or missing:
+        problem = (
+            f"{repeated:,} rows for customers who are already on another row"
+            if repeated
+            else f"{missing:,} rows with no customer ID"
+        )
         asks.append(
             _ask(
                 "CUSTOMER_REPEATS",
                 entity.upload_ids[0],
-                f"{entity.source_name} has {repeated:,} rows for customers who are already on another row, so "
-                "it cannot be combined into one row per customer. What would you like to do?",
+                f"{entity.source_name} has {problem}, so it cannot be combined into one row per customer. "
+                "What would you like to do?",
                 "A table with one row per customer needs each customer once.",
                 loaded,
             )
@@ -202,6 +208,9 @@ def _join_item(
     ]
     if rules:
         title += f" To match the IDs: {'; '.join(rules)}. {lists} keeps its own IDs."
+    twice = sum(r.duplicates_removed for r in plan.stack_receipts)
+    if twice:
+        title += f" {twice:,} rows that two exports both hold are counted once."
     title += _sampled(diagnosis, loaded, ids)
     payload: dict[str, JsonValue] = {
         "upload_ids": list(ids),

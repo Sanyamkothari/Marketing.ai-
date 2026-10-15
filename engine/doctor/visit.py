@@ -1028,7 +1028,7 @@ def _combine(run: _Run, case: Case) -> _Step | None:
     events: list[EventDraft] = []
     for item in todo:
         sources = set(upload_ids_of(item))
-        if not sources <= {f.upload_id for f in files}:
+        if not sources or not sources <= {f.upload_id for f in files}:
             continue  # an earlier change already took one of its files
         made = port(case, item, run.actor)
         files = [f for f in files if f.upload_id not in sources] + [made]

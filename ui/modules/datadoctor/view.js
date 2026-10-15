@@ -458,7 +458,7 @@ const itemAccepted = (c, itemId) => (c.items || []).some((i) => i.item_id === it
 
 // --- goals ----------------------------------------------------------------------------------------------------
 
-/** With no goal yet: the goals, best fit first, and "Choose this goal". The verdict is the readiness check's, once one is chosen. */
+/** With no goal yet: the goals, best fit first, and "Choose this goal". The only verdict is the readiness check's, once a goal is chosen. */
 export function goalsHtml(screen, { busy = false, level = 3 } = {}) {
   const { case: c, view } = screen;
   if (view.mode !== "generic") return "";
@@ -478,7 +478,7 @@ export function goalsHtml(screen, { busy = false, level = 3 } = {}) {
       })}</li>`;
     })
     .join("");
-  return `<section class="dds-group" data-dds-goals aria-labelledby="dds-g-goals"><h${level} id="dds-g-goals" class="dds-group-t">What this data can be used for</h${level}><p class="dds-why">Best fit first. Choose a goal and Data Doctor checks the data against it: that check is the one verdict. Nothing you answered is asked again.</p><ul class="dds-items">${rows}</ul></section>`;
+  return `<section class="dds-group" data-dds-goals aria-labelledby="dds-g-goals"><h${level} id="dds-g-goals" class="dds-group-t">What this data can be used for</h${level}><p class="dds-why">Best fit first. Choose a goal and Data Doctor checks whether your data is ready for it. Nothing you answered is asked again.</p><ul class="dds-items">${rows}</ul></section>`;
 }
 
 // --- adding a file --------------------------------------------------------------------------------------------
