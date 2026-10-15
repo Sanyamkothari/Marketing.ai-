@@ -195,6 +195,38 @@ def test_refusals_answer_their_codes(client: TestClient) -> None:
     assert missing.status_code == 404 and _code(missing) == "CASE_NOT_FOUND"
 
 
+def test_a_step_can_be_parked_for_someone_who_would_know_and_resumed(client: TestClient) -> None:
+    case = client.post("/cases", json={"upload_ids": [_upload(client)]}).json()
+    case_id = case["case_id"]
+    case = _answer_open(client, client.post(f"/cases/{case_id}/visit", json={}).json())
+    item = next(i for i in case["items"] if i["state"] == "accepted")
+
+    def decide(body: dict[str, Any]) -> Any:
+        return client.post(f"/cases/{case_id}/decisions", json=body)
+
+    parked = decide(
+        {"version": case["version"], "item_id": item["item_id"], "accept": False, "park_for": "finance"}
+    )
+    assert parked.status_code == 200, parked.text
+    held = next(i for i in parked.json()["items"] if i["item_id"] == item["item_id"])
+    assert (
+        held["state"] == "rejected" and held["parked_for"] == "finance"
+    ), "left out, and waiting for finance"
+    version = parked.json()["version"]
+    ticked = decide({"version": version, "item_id": item["item_id"], "accept": True, "park_for": "finance"})
+    assert (
+        ticked.status_code == 422 and _code(ticked) == "VISIT_UNKNOWN_CHOICE"
+    ), "a ticked step is not parked"
+    stranger = decide(
+        {"version": version, "item_id": item["item_id"], "accept": False, "park_for": "the intern"}
+    )
+    assert stranger.status_code == 422 and _code(stranger) == "VISIT_UNKNOWN_CHOICE"
+    resumed = decide({"version": version, "item_id": item["item_id"], "accept": False})
+    assert resumed.status_code == 200, resumed.text
+    again = next(i for i in resumed.json()["items"] if i["item_id"] == item["item_id"])
+    assert again["state"] == "rejected" and "parked_for" not in again, "any later decision resumes it"
+
+
 def test_the_goal_brief_route(client: TestClient) -> None:
     found = client.get(f"/goal-briefs/{GOAL}")
     assert found.status_code == 200 and found.json()["brief_hash"] == load_goal_brief(GOAL).brief_hash

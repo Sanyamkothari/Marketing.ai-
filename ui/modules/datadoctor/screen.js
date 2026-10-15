@@ -45,21 +45,19 @@ import {
   sendChat,
   getAiStatus,
   giveAiConsent,
+  parkItem,
 } from "./api.js";
 import { injectDataDoctorStyles } from "./styles.js";
+import { sectionOf } from "./plan.js";
+import { checksHtml, funnelHtml, planHtml, planModel, queueHtml } from "./plan_view.js";
 import {
-  activeSection,
-  approvalHtml,
   approveHtml,
   chatHtml,
-  checklistHtml,
   doubtHtml,
   goalsHtml,
   headerHtml,
   leftOutOf,
   missingHtml,
-  questionHtml,
-  questionsOf,
   requestHtml,
   requestsOf,
   standingHtml,
@@ -95,6 +93,8 @@ function fresh() {
     startInfo: null, // { uploadId, rows } of the file the campaign starts from, for the sentence above Start
     changing: new Set(), // answered questions whose answers are shown again ("Change answer")
     read: new Set(), // changes needing their own yes whose "I have read this sentence" is ticked
+    checked: new Map(), // plan sections the person has checked ("I have checked this section") -> what they held then
+    knowing: new Map(), // "I don't know" panels open: "q:<question>" / "i:<item>" -> who would know (or null)
   };
 }
 
@@ -128,37 +128,41 @@ function mainHtml(entry) {
   const c = screen.case;
   const view = screen.view;
   const busy = Boolean(s.busy);
-  const standing = view.standing || [];
-  const remembered = new Map((view.remembered || []).map((r) => [r.question_id, r]));
-  const questions = questionsOf(c)
-    .map((q) =>
-      questionHtml(q, c, { busy, standing, changing: s.changing.has(q.question_id), remembered: remembered.get(q.question_id) || null }),
-    )
-    .join("");
-  const items = new Map((c.items || []).map((i) => [i.item_id, i]));
-  const approvals = (view.approve_class || [])
-    .map((a) => approvalHtml(a, items.get(a.item_id), c, { busy, read: s.read.has(a.item_id) }))
-    .join("");
+  const ctx = { busy, changing: s.changing, knowing: s.knowing, read: s.read, checked: s.checked };
+  const model = planModel(screen, ctx);
+  const queue = queueHtml(c, view, ctx);
+  const checks = checksHtml(model.findings, {
+    used: queue.asking + model.unconfirmed,
+    ledger: model.ledger,
+    items: model.items,
+    level: sub,
+  });
   const doubts = (c.doubts || []).map((d) => doubtHtml(d, c)).join("");
   const goalIds = view.goal_id ? [view.goal_id] : view.missing_for || [];
   const kit = dataRequestUrl(goalIds.slice(0, 4));
   const requests = `${requestsOf(c)
     .map((q) => requestHtml(q, c, { kitHref: kit, busy }))
     .join("")}${view.mode === "generic" ? missingHtml(view, kit, c) : ""}`;
-  const checklist = `${checklistHtml(screen, { busy, level: sub })}${standingHtml(view, { busy, level: sub })}`;
+  const earlier = standingHtml(view, { busy, level: sub });
   const proceed = continueHtml(entry);
   const more = c.files && c.files.length && !c.read_only ? `<div class="dds-more" data-dds-more>${intakeHtml(entry, { first: false })}</div>` : "";
   return `<div class="dds" data-dds data-dds-place="${esc(host.place)}" data-dds-case="${esc(c.case_id)}"><section class="card" data-dds-header>${headerHtml(
     screen,
     { level },
-  )}</section>${notice}${err}${proceed}${section("Questions", questions, "data-dds-questions", sub)}${section(
-    "Needs your own yes",
-    approvals,
-    "data-dds-approvals",
+  )}</section>${notice}${err}${proceed}${funnelHtml(model.items, model.ledger, { level: sub })}${checks}${section(
+    "Questions",
+    queue.html,
+    "data-dds-questions",
     sub,
-  )}${section("Not sure", doubts, "data-dds-doubts", sub)}${section("More data", requests, "data-dds-requests", sub)}${
-    checklist ? `<section class="card dds-card" data-dds-checklist>${checklist}</section>` : ""
-  }${goalsHtml(screen, { busy, level: sub })}${approveHtml(screen, { busy: s.busy, level: sub })}${
+  )}${planHtml(screen, model, ctx, { level: sub })}${section("Not sure", doubts, "data-dds-doubts", sub)}${section(
+    "More data",
+    requests,
+    "data-dds-requests",
+    sub,
+  )}${earlier ? `<section class="card dds-card" data-dds-checklist>${earlier}</section>` : ""}${goalsHtml(screen, {
+    busy,
+    level: sub,
+  })}${approveHtml(screen, { busy: s.busy, level: sub, gate: model.gate })}${
     !(c.files || []).length ? intakeHtml(entry, { first: true }) : more
   }${timelineHtml(screen, { level: sub })}${technicalHtml(screen)}${expertHtml(entry)}${
     host.place === "data" ? `<div class="dds-actions">${button({ label: "Start a new check", kind: "tertiary", attrs: "data-dds-new" })}</div>` : ""
@@ -260,10 +264,15 @@ function asideHtml(entry) {
 
 function draw(entry) {
   const openTimeline = Boolean(entry.main.querySelector("details[data-dds-timeline][open]"));
+  // Folded parts (sure fixes, questions that can wait, more notes) stay open across a repaint.
+  const kept = new Set([...entry.main.querySelectorAll("details[data-dds-keep][open]")].map((el) => el.getAttribute("data-dds-keep")));
   entry.main.innerHTML = mainHtml(entry);
   if (openTimeline) {
     const timeline = entry.main.querySelector("details[data-dds-timeline]");
     if (timeline) timeline.open = true;
+  }
+  for (const el of entry.main.querySelectorAll("details[data-dds-keep]")) {
+    if (kept.has(el.getAttribute("data-dds-keep"))) el.open = true;
   }
   entry.aside.innerHTML = asideHtml(entry);
   entry.aside.hidden = !entry.state.screen;
@@ -504,17 +513,42 @@ function bind(entry) {
     const target = event.target && event.target.closest ? event.target.closest("button, a") : null;
     if (!target || target.disabled) return;
     const d = target.dataset;
-    if (d.ddsAnswer && d.ddsQ) {
+    if (target.hasAttribute("data-dds-dont-know") && d.ddsQ) {
+      // "I don't know" first asks who would know; the safe choice is one click further, never a guess.
+      openWho(entry, `q:${d.ddsQ}`, `[data-dds-who-pick]`);
+    } else if (d.ddsAnswer && d.ddsQ) {
       act(
         entry,
         "answer",
         async () => {
           await answerQuestion(theCase(entry), d.ddsQ, d.ddsAnswer);
           entry.state.changing.delete(d.ddsQ);
+          entry.state.knowing.delete(`q:${d.ddsQ}`);
         },
         { announce: "Answer saved" },
       );
-    } else if (d.ddsChange) toggleChange(entry, d.ddsChange);
+    } else if (d.ddsItemDk) openWho(entry, `i:${d.ddsItemDk}`, `[data-dds-who-pick]`);
+    else if (d.ddsWhoPick) {
+      entry.state.knowing.set(d.ddsWhoFor, d.ddsWhoPick);
+      draw(entry);
+      focusOn(entry, `[data-dds-who-pick="${d.ddsWhoPick}"]`, d.ddsWhoFor);
+    } else if (d.ddsWhoClose) {
+      entry.state.knowing.delete(d.ddsWhoClose);
+      draw(entry);
+    } else if (d.ddsCopy) copyMessage(entry, d.ddsCopy);
+    else if (d.ddsPark) {
+      act(
+        entry,
+        "park",
+        async () => {
+          await parkItem(theCase(entry), d.ddsPark, d.ddsParkRole);
+          entry.state.knowing.delete(`i:${d.ddsPark}`);
+        },
+        { announce: "Step parked until they answer" },
+      );
+    } else if (d.ddsResume) act(entry, "resume", () => decideItem(theCase(entry), d.ddsResume, false), { announce: "Step is open again" });
+    else if (d.ddsGoto) goTo(entry, d.ddsGoto);
+    else if (d.ddsChange) toggleChange(entry, d.ddsChange);
     else if (d.ddsAgree) {
       const found = entry.state.screen.view.approve_class.find((a) => a.item_id === d.ddsAgree);
       if (found && entry.state.read.has(found.item_id)) {
@@ -550,7 +584,15 @@ function bind(entry) {
     const input = event.target;
     if (!input) return;
     if (input.matches && input.matches("input[data-dds-tick]")) {
+      const ticked = (entry.state.screen.case.items || []).find((i) => i.item_id === input.dataset.ddsTick);
+      if (ticked) entry.state.checked.delete(sectionOf(ticked)); // what changed there is looked at again
       act(entry, "tick", () => decideItem(theCase(entry), input.dataset.ddsTick, input.checked));
+    } else if (input.matches && input.matches("input[data-dds-sec-ok]")) {
+      const id = input.dataset.ddsSecOk;
+      if (input.checked) entry.state.checked.set(id, input.dataset.ddsSecSig || "");
+      else entry.state.checked.delete(id);
+      draw(entry);
+      focusOn(entry, `input[data-dds-sec-ok="${id}"]`);
     } else if (input.matches && input.matches("input[data-dds-read]")) {
       // "I have read this sentence": kept for the next drawing, and turns its "I agree" on or off in place, so
       // the focus stays on the box.
@@ -583,6 +625,48 @@ function bind(entry) {
       entry.state.draft = "";
     });
   });
+}
+
+/** Open the "Who would know?" panel of a question ("q:<id>") or a step ("i:<id>"), and move to its first choice. */
+function openWho(entry, key, firstControl) {
+  if (!entry.state.knowing.has(key)) entry.state.knowing.set(key, null);
+  draw(entry);
+  focusOn(entry, firstControl, key);
+}
+
+/** Put the focus back on a control after a repaint (inside one panel when `key` is given). */
+function focusOn(entry, selector, key = null) {
+  const root = key ? [...entry.main.querySelectorAll("[data-dds-who]")].find((el) => el.dataset.ddsWho === key) : entry.main;
+  const found = root && root.querySelector(selector);
+  if (found && typeof found.focus === "function") found.focus();
+}
+
+/** Copy the ready message of a panel. The text is in a box a person can also select by hand. */
+async function copyMessage(entry, key) {
+  const panel = [...entry.main.querySelectorAll("[data-dds-who]")].find((el) => el.dataset.ddsWho === key);
+  const box = panel && panel.querySelector("[data-dds-who-message]");
+  if (!box) return;
+  try {
+    await navigator.clipboard.writeText(box.value);
+    announceStatus("Message copied");
+  } catch {
+    box.focus();
+    box.select();
+    announceStatus("Message selected. Copy it with your keyboard.");
+  }
+}
+
+/** Bring a step of the plan into view: its section opens its folded part first. */
+function goTo(entry, itemId) {
+  const found = [...entry.main.querySelectorAll("[data-dds-item], [data-dds-approval]")].find(
+    (el) => el.dataset.ddsItem === itemId || el.dataset.ddsApproval === itemId,
+  );
+  if (!found) return;
+  const fold = found.closest("details");
+  if (fold) fold.open = true;
+  if (typeof found.scrollIntoView === "function") found.scrollIntoView({ block: "center" });
+  const control = found.querySelector("input, button, a");
+  if (control) control.focus();
 }
 
 /** "Change answer": show an answered question's answers again (or hide them), keeping the focus on the control. */

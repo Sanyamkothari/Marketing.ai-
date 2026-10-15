@@ -39,6 +39,14 @@ function readIt(itemId) {
   box.checked = true;
   box.dispatchEvent(new window.Event("change", { bubbles: true }));
 }
+/** Tick "I have checked this section" in every section that asks for it. */
+function checkSections() {
+  const next = () => $$("input[data-dds-sec-ok]").find((b) => !b.checked);
+  for (let box = next(); box; box = next()) {
+    box.checked = true;
+    box.dispatchEvent(new window.Event("change", { bubbles: true })); // the screen draws again: look the next one up
+  }
+}
 const agreeOf = (itemId) => $$("[data-dds-agree]").find((b) => b.dataset.ddsAgree === itemId);
 
 // --- questions -----------------------------------------------------------------------------------------------
@@ -58,6 +66,11 @@ test("a question: its text, why it is asked, each answer with what it changes, a
   assert.equal(dontKnow.dataset.ddsAnswer, "c1", "I don't know is the safe choice, never a guess");
   assert.match(dontKnow.closest("li").textContent, /safe choice: Leave them as written/);
   dontKnow.click();
+  await settle(1);
+  assert.equal(posts("answers").length, 0, "I don't know first asks who would know; nothing is guessed");
+  const safe = $(`[data-dds-question="${q.question_id}"] [data-dds-who] [data-dds-answer="c1"]`);
+  assert.match(safe.textContent, /Use the safe choice for now: Leave them as written/);
+  safe.click();
   await until(() => posts("answers").length === 1, 2000, "the answer");
   const sent = posts("answers")[0].body;
   assert.deepEqual(
@@ -225,13 +238,17 @@ test("Approve lists every change left out until someone agrees, in plain words",
   assert.equal(row.textContent, consent.sentence);
   assert.ok(row.textContent.includes("says who agreed to be contacted"));
   assert.match($("[data-dds-left-out-choice]").textContent, /After you approve, you choose whether to continue without it\./);
-  assert.equal($("[data-dds-approve-button]").disabled, false, "Approve itself is not blocked by a change left out");
+  assert.equal($("[data-dds-approve-button]").disabled, true, "the final yes waits for each section to be checked");
+  assert.match($("[data-dds-approve-hold]").textContent, /Check each section above first/);
+  checkSections();
+  assert.equal($("[data-dds-approve-button]").disabled, false, "a change left out does not block Approve once the sections are checked");
 });
 
 test("in the wizard, Approve does not start the list while a change is left out; continuing is its own choice", async () => {
   const started = [];
   await show("not_ready", { host: { place: "wizard", goalId: GOAL, approved: (fill) => started.push(fill) } });
   world.next.approval = "ready";
+  checkSections();
   $("[data-dds-approve-button]").click();
   await until(() => $("[data-dds-continue]"), 3000, "the case approved and ready");
   await settle(3);
@@ -349,10 +366,13 @@ test("a remembered answer is shown with its date and a Revoke that asks the ques
 
 // --- verdicts, the checklist and the hand-off ----------------------------------------------------------------
 
-test("the checklist: found by our checks, ticked as the case says; unticking sends the decision", async () => {
+test("the plan: sure fixes sit folded in their section, ticked as the case says; unticking sends the decision", async () => {
   const s = await show("approve");
-  const group = $('[data-dds-group="rules"]');
-  assert.ok(group.textContent.includes("Found by our checks"));
+  const section = $('[data-dds-plan-section="read"]');
+  assert.ok(section.querySelector("h3, h4, h5").textContent.includes("Read the file"));
+  const fold = section.querySelector("details[data-dds-sure]");
+  assert.ok(fold && !fold.open, "a sure fix is folded away");
+  assert.match(fold.querySelector("summary").textContent, /1 sure fix/);
   const item = s.case.items.find((i) => i.kind === "key");
   const box = $(`input[data-dds-tick="${item.item_id}"]`);
   assert.equal(box.checked, true);
