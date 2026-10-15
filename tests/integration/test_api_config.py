@@ -488,6 +488,11 @@ def test_openapi_builds_and_documents_every_route(client: TestClient) -> None:
         # Plan J M94: the campaign record, its one measurement path and its test plan (DEC-1304)
         "/campaigns",
         "/campaigns/{campaign_id}",
+        # v1: the Campaign Run - Start runs learn, score and list on the server
+        "/campaign-runs",
+        "/campaign-runs/{campaign_run_id}",
+        "/campaign-runs/{campaign_run_id}/cancel",
+        "/campaign-runs/{campaign_run_id}/restart",
         "/campaigns/{campaign_id}/outcomes",
         "/campaigns/{campaign_id}/measure",
         "/campaigns/{campaign_id}/plan",

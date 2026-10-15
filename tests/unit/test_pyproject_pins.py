@@ -202,6 +202,7 @@ def test_pytest_finds_the_packages_without_an_editable_install(pyproject: dict[s
         "docker",
         "aws",
         "statistical",  # Plan J M90 (DEC-1300 (e)): collected only with MARKETING_AI_STATISTICAL=1
+        "frozen",  # v1: tests of frozen features, run nightly rather than on every push
     }
     assert "-rs" in ini["addopts"], "a skip must always print its reason (DEC-344)"
 

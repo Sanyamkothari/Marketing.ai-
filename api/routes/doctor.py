@@ -24,6 +24,7 @@ import secrets
 from pathlib import Path
 from typing import Final
 
+import yaml
 from fastapi import APIRouter, Request, Response
 
 from api.access import set_audit_context
@@ -113,8 +114,17 @@ register(
 )
 
 
-SKIPPED_USE_CASES: Final[frozenset[str]] = frozenset({"telco-churn"})
-"""Trainable use cases the suggestions leave out (the owners took Telco Churn off the list)."""
+SUGGESTIONS_PATH: Final[str] = "doctor/suggestions.yaml"
+"""Under the configuration root: the trainable use cases the suggestions leave out (`skip:`)."""
+
+
+def skipped_use_cases(root_path: Path) -> frozenset[str]:
+    """The use cases the owners took off the suggestions, read from configuration (the code names none)."""
+    path = root_path / SUGGESTIONS_PATH
+    if not path.exists():
+        return frozenset()
+    document = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    return frozenset(str(item) for item in document.get("skip") or ())
 
 
 def offers(root_path: Path) -> tuple[Offer, ...]:
@@ -130,7 +140,7 @@ def offers(root_path: Path) -> tuple[Offer, ...]:
     candidates = [(stage, ref.id) for stage, ref in refs if ref.status is UseCaseStatus.AVAILABLE]
     candidates += [("", use_case_id) for use_case_id in list_use_case_ids(root_path)]
     found: list[Offer] = []
-    seen: set[str] = set(SKIPPED_USE_CASES)
+    seen: set[str] = set(skipped_use_cases(root_path))
     for stage, use_case_id in candidates:
         if use_case_id in seen:
             continue

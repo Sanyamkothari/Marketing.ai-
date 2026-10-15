@@ -186,6 +186,8 @@ def verdict(use_case: str, status: str, upload_id: str | None) -> UseCaseReadine
         status=status,  # type: ignore[arg-type]
         upload_id=upload_id,
         summary=f"{use_case} summary.",
+        # A verdict that can power a goal names the column it learns from; only those are offered instead.
+        outcome_column="outcome" if status in {"ready", "check"} else None,
     )
 
 

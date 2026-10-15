@@ -10,7 +10,8 @@ import { CUSTOM, installShellPage, loadModules, me, untilStable, visit, withoutB
 import { settle } from "../harness.mjs";
 
 const world = { me: me("custom_classic"), approvals: null };
-const { w, state } = installShellPage({ hash: "#/__start", world });
+// Starts on Home: an unknown address now draws "Page not found", whose title is not the one tested first.
+const { w, state } = installShellPage({ hash: "#/", world });
 // The page's <title>, as ui/index.html has one (the harness page has none).
 const title = document.createElement("title");
 title.textContent = "Marketing AI · Minfy";
