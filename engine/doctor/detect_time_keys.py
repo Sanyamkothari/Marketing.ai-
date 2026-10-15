@@ -6,7 +6,8 @@ the visit read (the whole file, or a random sample of it) and gives back, by how
 * **stop** - a data request (IDs Excel rounded off: the digits are gone, send the file again) or a blocking
   question (dates written in two orders; an outcome that looks the wrong way round), or, for a step that cannot
   run, an item that says so;
-* **flag** - an item on the approval page, never ticked: a placeholder date, a repeated ID, rows two files share;
+* **flag** - an item on the approval page, never ticked: a repeated ID, rows two files share (a placeholder date, a
+  value written once per block of rows and a unit that differs between stacked files are questions, with a ready answer);
 * **note** - an item in the log: the ID report, a date that means "still open".
 
 At most `MAX_QUESTIONS` findings interrupt the person; the rest go on the approval page. A thin or unfinished
@@ -27,7 +28,9 @@ from pydantic import JsonValue
 
 from engine.agent.contracts import AgentConfidence, ProposalState, RecipeStepKind
 from engine.doctor.checks_time_keys import (
+    ID_NAME,
     Check,
+    block_blank_checks,
     date_checks,
     date_order_checks,
     file_checks,
@@ -35,6 +38,7 @@ from engine.doctor.checks_time_keys import (
     key_rule_checks,
     outcome_direction,
     read_dates,
+    summary_check,
     tail_checks,
 )
 from engine.doctor.protocol import Ask, AskOption, DataRequest
@@ -58,13 +62,6 @@ MAX_QUESTIONS: Final[int] = 3
 """Findings that may interrupt the person with a question; the rest wait on the approval page. A stop (a blocking
 question) is always asked, whatever the count."""
 MAX_KEY_COLUMNS: Final[int] = 4
-_ID_NAME: Final[re.Pattern[str]] = re.compile(
-    r"(^id$|_id$|^id_|_key$|(customer|cust|client|member|account)[_ ]?(no|num|number|code|ref)$"
-    r"|phone|mobile|email|^pan$)",
-    re.I,
-)
-"""Columns checked as IDs besides the file's own key: named like an ID, not merely like a customer
-(`customer_segment` is not an ID)."""
 
 
 def time_keys_detector(*, clock: Callable[[], datetime] = utc_now) -> DetectorPort:
@@ -122,7 +119,7 @@ def _file(
 
     # Keys: the report, rounded digits, stand-ins, lost zeros.
     names = [str(c) for c in frame.columns]
-    key_columns = list(dict.fromkeys([*([key] if key else []), *(n for n in names if _ID_NAME.search(n))]))
+    key_columns = list(dict.fromkeys([*([key] if key else []), *(n for n in names if ID_NAME.search(n))]))
     for column in key_columns[:MAX_KEY_COLUMNS]:
         report = key_quality(
             frame[column], column, expect_unique=column == key, exact=loaded.exact.get(column)
@@ -148,8 +145,22 @@ def _file(
             found.append((upload_id, direction))
             asks.append((0, _wrong_way_ask(direction, upload_id, rows)))
 
+    # A summary, not customers; a value written once per block of rows.
+    summary = summary_check(frame)
+    if summary is not None:
+        found.append((upload_id, summary))
+        requests.append(_summary_request(upload_id))
+    if rows == len(frame):  # the blocks are only seen in the file's own order, not in a random sample
+        for check in block_blank_checks(frame):
+            found.append((upload_id, check))
+            asks.append((2, _block_ask(check, upload_id, rows)))
+
     # Dates.
-    found.extend((upload_id, check) for check in date_checks(frame, now.date()))
+    for check in date_checks(frame, now.date()):
+        found.append((upload_id, check))
+        ask = _placeholder_ask(check, frame, upload_id, rows) if check.code == "DATE_PLACEHOLDER" else None
+        if ask is not None:
+            asks.append((2, ask))
     if brief is None:  # with a goal, Guided setup's date question already asks for the day/month order
         for check in date_order_checks(frame):
             found.append((upload_id, check))
@@ -161,7 +172,7 @@ def _file(
         dates = read_dates(frame[date_column])
         if dates is not None:
             yes = meaning[2] if meaning is not None else None
-            tails = tail_checks(dates, yes)
+            tails = tail_checks(dates, yes, _days_covered(frame))
             found.extend((upload_id, check) for check in tails)
             keep = min(
                 (c for c in tails if c.as_of is not None), key=lambda c: c.as_of or now.date(), default=None
@@ -221,10 +232,29 @@ def _outcome_meanings(loaded: LoadedFile, outcome: str) -> tuple[int, int, pd.Se
     return yes, no, per_row.astype(bool)
 
 
+_NOT_AS_OF: Final[frozenset[str]] = frozenset(
+    {"birth", "dob", "born", "signup", "joined", "registered", "registration", "created", "activation"}
+    | {"first", "last", "expiry", "expires", "expiration", "due", "renewal", "valid"}
+)
+"""Dates that say when the customer began, last did something, or when something is due: one per customer, not
+how far the data reaches (leaving out the newest `last_order_date` rows would drop the most active customers)."""
+_PERIOD_WORDS: Final[frozenset[str]] = frozenset({"month", "period", "snapshot"})
+"""A column named for the month or period a row belongs to (`2026-09`) says when it happened, too."""
+_DAYS_COVERED: Final[re.Pattern[str]] = re.compile(
+    r"^(days?[_ ]?(covered|observed|of[_ ]data)|covered[_ ]days)$", re.I
+)
+
+
+def _days_covered(frame: pd.DataFrame) -> pd.Series[Any] | None:
+    """The column that says how many days each row covers (`days_covered`), if the file has one."""
+    return next((frame[c] for c in frame.columns if _DAYS_COVERED.match(str(c).strip())), None)
+
+
 def _date_column(case: Case, frame: pd.DataFrame, upload_id: str) -> str | None:
     """The date that says when each row happened: the accepted as-of column, else the first date column with a
-    date on nearly every row."""
+    date on nearly every row that is not a birth, sign-up, expiry or due date."""
     from engine.agent.formats import looks_like_date_name
+    from engine.doctor.impossible import column_words
 
     for item in case.items:
         if (
@@ -236,7 +266,8 @@ def _date_column(case: Case, frame: pd.DataFrame, upload_id: str) -> str | None:
             if isinstance(column, str) and column in frame.columns:
                 return column
     for name in frame.columns:
-        if looks_like_date_name(str(name)):
+        words = column_words(str(name))
+        if (looks_like_date_name(str(name)) or words & _PERIOD_WORDS) and not words & _NOT_AS_OF:
             values = read_dates(frame[name])
             if values is not None and values.notna().mean() >= 0.95:
                 return str(name)
@@ -379,4 +410,81 @@ def _tail_ask(check: Check, column: str, upload_id: str, rows: int) -> Ask:
         upload_id=upload_id,
         column=column,
         recommended="leave_out",
+    )
+
+
+def _summary_request(upload_id: str) -> DataRequest:
+    from engine.pilot.data_request import render_request_message
+
+    return DataRequest(
+        kind="different_file",
+        what="the row-level export (one row per customer, order or event), not the summary",
+        why=render_request_message("SUMMARY_NOT_ROWS"),
+        per="one row per customer",
+        ask_whom="whoever exported the file",
+        upload_id=upload_id,
+    )
+
+
+def _placeholder_ask(check: Check, frame: pd.DataFrame, upload_id: str, rows: int) -> Ask | None:
+    """A date that stands in for a blank (1970-01-01): treat it as blank, or keep it. None when the column is not
+    text or has too many spellings for one step; the check then stays on the approval page as a flag."""
+    from engine.agent.contracts import RecipeStep
+    from engine.agent.value_steps import MAX_MISSING_WORDS
+
+    column = check.column or ""
+    day = str(check.numbers.get("date", ""))
+    dates = read_dates(frame[column])
+    if dates is None or pd.api.types.is_numeric_dtype(frame[column]):
+        return None
+    cells = frame[column].dropna().astype(str).str.strip()
+    spellings = list(dict.fromkeys(cells[dates.reindex(cells.index).dt.strftime("%Y-%m-%d") == day]))
+    if not spellings or len(spellings) > MAX_MISSING_WORDS:
+        return None
+    count = int(check.numbers.get("rows", 0))
+    step = RecipeStep(
+        order=1, kind=RecipeStepKind.SET_MISSING_TEXT, column=column, params={"values": spellings}
+    ).model_dump(mode="json")
+    blank = OptionEffect(
+        option_id="blank",
+        kind="recipe_step",
+        title=f"Treat {day} in '{column}' as blank ({count:,} rows).",
+        payload={"upload_id": upload_id, "path": None, "value": None, "step": step},
+    )
+    return Ask(
+        code=check.code,
+        subject={"upload_id": upload_id, "column": column},
+        text=f"{check.text} Treat {day} as blank?",
+        why="A system writes this date when nothing was entered. Kept as a real date, it looks like a real "
+        "event in the past.",
+        options=(
+            AskOption(label="Treat it as blank", effect=blank, rows_changed=count),
+            AskOption(label="Keep it as a real date", effect=OptionEffect(option_id="keep"), rows_changed=0),
+        ),
+        rows=rows,
+        upload_id=upload_id,
+        column=column,
+        recommended="blank",
+    )
+
+
+def _block_ask(check: Check, upload_id: str, rows: int) -> Ask:
+    column = check.column or ""
+    return Ask(
+        code=check.code,
+        subject={"upload_id": upload_id, "column": column},
+        text=check.text,
+        why="If a blank means 'same as above', every blank row has a value that is not written; if it means "
+        "'not known', filling it would invent one.",
+        options=(
+            AskOption(
+                label="Yes: I will send the file with it filled in on every row",
+                effect=OptionEffect(option_id="send_filled"),
+            ),
+            AskOption(label="No: leave the blanks as blank", effect=OptionEffect(option_id="leave")),
+        ),
+        rows=rows,
+        upload_id=upload_id,
+        column=column,
+        recommended="send_filled",
     )

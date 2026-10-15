@@ -20,6 +20,9 @@ the combine steps; they take frames and series and return values, and touch noth
 | Day and month order written both ways | :func:`date_order_checks` |
 | Unfinished last period, thin tail, immature outcomes | :func:`tail_checks` |
 | Repeated header rows, duplicate rows, files that share rows | :func:`file_checks` |
+| A summary table instead of customers | :func:`summary_check` |
+| A value written once per block, blank below it (merged cells) | :func:`block_blank_checks` |
+| The same amount column in another unit in a file being stacked | :func:`unit_scale_checks` |
 """
 
 from __future__ import annotations
@@ -41,9 +44,11 @@ if TYPE_CHECKING:
     from engine.agent.key_steps import KeyRule
 
 __all__ = [
+    "ID_NAME",
     "PLACEHOLDER_DATES",
     "Check",
     "Level",
+    "block_blank_checks",
     "date_checks",
     "date_order_checks",
     "file_checks",
@@ -51,7 +56,9 @@ __all__ = [
     "key_rule_checks",
     "outcome_direction",
     "read_dates",
+    "summary_check",
     "tail_checks",
+    "unit_scale_checks",
 ]
 
 Level = Literal["stop", "flag", "note"]
@@ -92,6 +99,13 @@ _PLACEHOLDER_DIGITS: Final[re.Pattern[str]] = re.compile(r"^(0+|1+|9+|1234567890
 """All zeros, ones or nines: a stand-in only when more than one row holds it (`1` and `99` are real IDs too)."""
 _SHORT_SHARE: Final[float] = 0.01
 _TOP: Final[int] = 5
+ID_NAME: Final[re.Pattern[str]] = re.compile(
+    r"(^id$|_id$|^id_|_key$|(customer|cust|client|member|account)[_ ]?(no|num|number|code|ref)$"
+    r"|phone|mobile|email|^pan$)",
+    re.I,
+)
+"""Columns checked as IDs besides the file's own key: named like an ID, not merely like a customer
+(`customer_segment` is not an ID)."""
 
 
 def _rounded_digits(series: pd.Series[Any]) -> int:
@@ -485,35 +499,52 @@ _MIN_MEDIAN: Final[int] = 5
 _IMMATURE: Final[float] = 0.5
 
 
-def tail_checks(dates: pd.Series[Any], yes: pd.Series[Any] | None = None) -> list[Check]:
+def tail_checks(
+    dates: pd.Series[Any], yes: pd.Series[Any] | None = None, covered: pd.Series[Any] | None = None
+) -> list[Check]:
     """Whether the newest rows are a finished picture. Each finding proposes the date to treat as the as-of date
     (`Check.as_of`: the last date worth keeping) and the rows after it.
 
-    * the last calendar month covers less than 90% of its days;
+    * the last calendar month covers less than 90% of its days (for dates on every day; for one row per month,
+      `covered` says how many days each row covers, e.g. a `days_covered` column);
     * the file's final days hold under 60% of the rows the same weekday had on average over the 4 weeks before;
     * the newest month's outcome rate is under half the earlier months' median (outcomes not final yet).
     """
     days = dates.dropna().dt.normalize()
-    if days.nunique() < 14:
+    monthly = days.nunique() >= 2 and bool(
+        (days.dt.day == 1).all()
+    )  # months written as 2026-09 read as the 1st
+    if days.nunique() < 14 and not monthly:
         return []
     last = days.max()
     found: list[Check] = []
     month_start = last.replace(day=1)
     in_month = (last + pd.offsets.MonthEnd(0) - month_start).days + 1
-    covered = (last - month_start).days + 1
-    if covered / in_month < _COVERED and last != last + pd.offsets.MonthEnd(0):
+    if monthly:
+        in_last = (
+            pd.to_numeric(covered, errors="coerce")[dates.dt.normalize() == last]
+            if covered is not None
+            else None
+        )
+        got = float(in_last.median()) if in_last is not None and in_last.notna().any() else None
+        shown = last.strftime("%Y-%m")
+    else:
+        got = float((last - month_start).days + 1) if last != last + pd.offsets.MonthEnd(0) else None
+        shown = last.date().isoformat()
+    if got is not None and got / in_month < _COVERED:
+        covered_days = int(got)
         keep = (month_start - pd.Timedelta(days=1)).date()
         after = int((days > pd.Timestamp(keep)).sum())
         found.append(
             Check(
                 "PARTIAL_LAST_MONTH",
                 "flag",
-                f"The newest month is only partly in the file: {covered} of {in_month} days "
-                f"(up to {last.date().isoformat()}). Counting it as a full month would make everything look "
+                f"The newest month is only partly in the file: {covered_days} of {in_month} days "
+                f"(up to {shown}). Counting it as a full month would make everything look "
                 f"lower. {after:,} rows are dated after {keep.isoformat()}.",
                 None,
                 {
-                    "days_covered": covered,
+                    "days_covered": covered_days,
                     "days_in_month": in_month,
                     "rows_after": after,
                     "latest": last.date().isoformat(),
@@ -521,7 +552,7 @@ def tail_checks(dates: pd.Series[Any], yes: pd.Series[Any] | None = None) -> lis
                 keep,
             )
         )
-    thin = _thin_tail(days)
+    thin = None if monthly else _thin_tail(days)
     if thin is not None:
         keep_day, run, after = thin
         found.append(
@@ -544,9 +575,9 @@ def tail_checks(dates: pd.Series[Any], yes: pd.Series[Any] | None = None) -> lis
                 Check(
                     "IMMATURE_PERIOD",
                     "flag",
-                    f"The newest month's outcome rate is {newest:.1%}, against {older:.1%} in the months before: "
-                    f"their outcomes are probably not final yet. {after:,} rows are dated after "
-                    f"{keep_day.isoformat()}.",
+                    f"The newest month is not finished: its outcome rate is {newest:.1%}, against {older:.1%} in "
+                    f"the months before, so its outcomes are probably not final yet. {after:,} rows are dated "
+                    f"after {keep_day.isoformat()}.",
                     None,
                     {"newest_rate": round(newest, 4), "earlier_rate": round(older, 4), "rows_after": after},
                     keep_day,
@@ -654,3 +685,111 @@ def _shared_rows(name_a: str, a: pd.DataFrame, name_b: str, b: pd.DataFrame) -> 
             {"rows": shared, "files": [name_a, name_b]},
         )
     ]
+
+
+# ---------------------------------------------------------------------------
+# A summary, merged cells, and another unit (F05, F04, V01)
+# ---------------------------------------------------------------------------
+_TOTAL_ROW: Final[re.Pattern[str]] = re.compile(r"^(grand\s+|sub[\s-]?)?totals?$", re.I)
+_COUNT_NAME: Final[re.Pattern[str]] = re.compile(
+    r"^(count|counts|n|num|number|customers|members|accounts|users|(customer|member|user)_?(count|total))$",
+    re.I,
+)
+_BLOCK_BLANK_SHARE: Final[float] = 0.2
+_BLOCK_RUN: Final[float] = 5.0
+"""Blanks that come in runs this long, after a value, are a merged cell; a few scattered blanks are not."""
+_UNIT_GAP: Final[float] = 50.0
+
+
+def summary_check(frame: pd.DataFrame) -> Check | None:
+    """A stop when the table is a summary, not customers: a 'Total' row, or counts per group with no ID column and
+    no text column that is different on every row. Totals cannot be turned back into people."""
+    if len(frame) < 2:
+        return None
+    text = [c for c in frame.columns if not pd.api.types.is_numeric_dtype(frame[c])]
+    total_rows = int(sum(_cells(frame[c]).str.match(_TOTAL_ROW).sum() for c in text))
+    one_each = any(ID_NAME.search(str(c)) for c in frame.columns) or any(
+        frame[c].notna().all() and frame[c].is_unique for c in text
+    )
+    counts = [str(c) for c in frame.columns if _COUNT_NAME.match(str(c).strip())]
+    if not total_rows and (one_each or not counts or not text):
+        return None
+    why = (
+        "a 'Total' row"
+        if total_rows
+        else f"counts per group ('{counts[0]}') and no ID that is different on every row"
+    )
+    return Check(
+        "SUMMARY_NOT_ROWS",
+        "stop",
+        f"This looks like a summary report (a pivot table or totals), not one row per customer: it has {why}. "
+        "Totals cannot be turned back into customers, so no customers are made up from it.",
+        None,
+        {"total_rows": total_rows, "count_columns": counts, "rows": len(frame)},
+    )
+
+
+def block_blank_checks(frame: pd.DataFrame) -> list[Check]:
+    """A text column filled once and then blank for a run of rows (a merged cell in Excel): at least a fifth of the
+    rows blank, the first row filled, the blanks in runs of five or more on average, and each filled value different
+    from the one before it (a sparse column such as a cancellation reason repeats its values). Dates are left out
+    (an end date is blank while still open). Rows must be in file order.
+    """
+    found: list[Check] = []
+    for name in frame.columns:
+        series = frame[name]
+        if pd.api.types.is_numeric_dtype(series) or ID_NAME.search(str(name)) or len(series) < 10:
+            continue
+        blank = series.isna() | (series.astype(str).str.strip() == "")
+        runs = int((blank & ~blank.shift(fill_value=False)).sum())
+        share = int(blank.sum()) / len(series)
+        if blank.iloc[0] or not runs or share < _BLOCK_BLANK_SHARE or blank.sum() / runs < _BLOCK_RUN:
+            continue
+        filled = series[~blank].astype(str).str.strip()
+        if (filled == filled.shift()).any() or read_dates(series) is not None:
+            continue
+        column = str(name)
+        found.append(
+            Check(
+                "BLOCK_BLANKS",
+                "flag",
+                f"'{column}' is filled on {int((~blank).sum()):,} rows and blank on the {int(blank.sum()):,} rows "
+                "below them, the way merged cells in Excel come out. Does a blank mean the same as the row above?",
+                column,
+                {"blank": int(blank.sum()), "filled": int((~blank).sum()), "rows": len(series)},
+            )
+        )
+    return found
+
+
+def unit_scale_checks(files: Sequence[tuple[str, pd.DataFrame]]) -> list[Check]:
+    """For files about to be stacked: a number column in two files whose medians are 50 times apart or more (rupees
+    in one, paise in the other), largest gap first. IDs, and columns with zeros as their middle, are not compared.
+    """
+    medians: dict[str, dict[str, float]] = {}
+    for name, frame in files:
+        for column in frame.columns:
+            if ID_NAME.search(str(column)) or not pd.api.types.is_numeric_dtype(frame[column]):
+                continue
+            middle = float(pd.to_numeric(frame[column], errors="coerce").abs().median())
+            if middle > 0:
+                medians.setdefault(str(column), {})[name] = middle
+    found: list[Check] = []
+    for column, by_file in medians.items():
+        if len(by_file) < 2:
+            continue
+        small, big = min(by_file, key=lambda n: by_file[n]), max(by_file, key=lambda n: by_file[n])
+        gap = by_file[big] / by_file[small]
+        if gap >= _UNIT_GAP:
+            found.append(
+                Check(
+                    "UNIT_SCALE_DIFFERS",
+                    "stop",
+                    f"'{column}' is about {gap:,.0f} times larger in {big} (typically {by_file[big]:,.0f}) than in "
+                    f"{small} (typically {by_file[small]:,.0f}), as if the files use different units "
+                    "(for example paise and rupees).",
+                    column,
+                    {"gap": round(gap, 1), "larger": big, "smaller": small},
+                )
+            )
+    return sorted(found, key=lambda c: -float(c.numbers["gap"]))
