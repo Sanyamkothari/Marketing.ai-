@@ -1494,8 +1494,70 @@ CASES: tuple[Callable[[], Trap], ...] = (
 )
 
 
+_STOPS = {"PLAN_LOSES_TOO_MUCH": "acknowledge", "PLAN_MOVES_OUTCOME_RATE": "acknowledge"}
+_CONSENT = [{"kind": "consent_column", "title": "says who agreed to be contacted"}]
+_LEAK = ["it looks like it gives away the outcome"]
+
+_AD = {"OUTCOME_COLUMN": "converted"}  # the ad campaigns' outcome: the one column that says who bought
+_IF_LEAK_UNTICKED = (
+    "The person would have to tick the plan's suggestion \"Remove '<column>': it looks like it gives away the "
+    'outcome". It is shown but not pre-ticked, and the column stays among the features, so the model learns from '
+    "something known only after the outcome. The product should PRE-TICK it, not ask: the leakage check found it "
+    "and the suggestion already explains it, the person's list and totals do not depend on a feature column, and "
+    "the plan screen lists it, so the approval still names it and one click unticks it. A leak the person had to "
+    "find and tick is the failure the owner described: an excellent test score, then a near-random live campaign."
+)
+_IF_STACK_UNTICKED = (
+    'The person would have to tick the plan\'s suggestion "Stack <file> and <file> into one table". It is shown '
+    "but not pre-ticked, so each file is used alone and the other one's customers are not counted. The product "
+    "should PRE-TICK it, not ask: the files have the same columns, it has already measured the repeated rows, and "
+    "the suggestion states the rows before and after; the approval still names it and one click unticks it."
+)
+
+PERSON: dict[str, dict[str, Any]] = {
+    "c01_selection_not_random": {"answers": _AD},
+    "c06_dnd_direction": {"answers": _AD},
+    "c09_already_hold_product": {"answers": _STOPS},
+    "crit03_dup_and_drop": {"answers": _STOPS},
+    "f01_leading_zeros": {"answers": {"KEY_AMBIGUOUS": "order_id"}},
+    "f05_pivot_summary": {"answers": {"KEY_AMBIGUOUS": "I don't know"}},
+    "k13_household": {"answers": _AD, "tick": _CONSENT},
+    "k15_failed_payments": {"answers": _STOPS},
+    "k16_ticket_status_log": {"answers": _STOPS},
+    "k1_merged_prefixes": {"answers": _STOPS},
+    "k3_shared_phone": {"answers": _STOPS},
+    "p7_minors": {"answers": _AD},
+    "p8_deceased_fraud": {"answers": _AD, "tick": _CONSENT},
+    "s01_never_active": {"answers": _STOPS},
+    "t01_mixed_date_order": {
+        "answers": {"GUIDED_FORMAT": "I will export", "DATE_ORDER_BOTH": "I will send"},
+        "should_see": ["written day first"],
+    },
+    "t03_placeholder_dates": {"should_see": ["1970-01-01"]},
+    "t07_immature_last_month": {"answers": _STOPS},
+    "t15_partial_last_month": {"answers": _STOPS},
+    "v01_paise_vs_rupees": {
+        "answers": {"OUTCOME_COLUMN": "churn (sales_a"},
+        "if_fails": _IF_STACK_UNTICKED
+        + " Until it is, the paise-against-rupees trap is never sprung (untested).",
+    },
+    "f21_overlapping_exports": {"if_fails": _IF_STACK_UNTICKED},
+    "v06_test_accounts": {"answers": _AD, "tick": _CONSENT, "should_see": ["stand-in rather than a real ID"]},
+    "v13_consent_spellings": {"answers": _AD, "tick": _CONSENT},
+    "s05_cancellation_reason": {"should_see": _LEAK, "if_fails": _IF_LEAK_UNTICKED},
+    "t06_status_exported_today": {"should_see": _LEAK, "if_fails": _IF_LEAK_UNTICKED},
+    "t13_outcome_from_column": {"should_see": _LEAK, "if_fails": _IF_LEAK_UNTICKED},
+}
+"""What a careful person who knows their business does beyond the defaults (the bench's person-like driver):
+`answers` = a business fact only the person knows, or a stop they say yes to (`acknowledge`); `tick` = a suggestion
+such a person ticks that the product leaves unticked; `should_see` = a question or flag the product ought to show;
+`if_fails` = why the case fails for a careful person and what the product should do (written by hand)."""
+
+
 def render(trap: Trap) -> dict[str, str]:
     """The files of one case: file name -> text."""
+    person = dict(PERSON.get(trap.case_id, {}))
+    answers = {**trap.answers, **person.pop("answers", {})}
     files = {f"{name}.csv": csv_text(rows) for name, rows in trap.tables.items()}
     doc: dict[str, Any] = {
         "id": trap.case_id,
@@ -1507,11 +1569,13 @@ def render(trap: Trap) -> dict[str, str]:
         "files": {name: f"{name}.csv" for name in trap.tables},
         "primary": trap.primary,
         "key": trap.key,
-        "answers": trap.answers,
+        "answers": answers,
         "rows_may_drop": trap.rows_may_drop,
         "checks": trap.checks,
         "ideal": dict(trap.ideal, **({"file": "ideal.csv"} if trap.ideal_rows is not None else {})),
     }
+    if person:
+        doc["person"] = person
     files["case.json"] = json.dumps(doc, indent=1, sort_keys=False, ensure_ascii=False) + "\n"
     if trap.ideal_rows is not None:
         files["ideal.csv"] = csv_text(trap.ideal_rows)

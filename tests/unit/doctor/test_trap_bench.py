@@ -16,9 +16,11 @@ case, k = 2) is `slow`.
 from __future__ import annotations
 
 import ast
+import dataclasses
 import json
 import re
 from pathlib import Path
+from types import SimpleNamespace
 
 import pandas as pd
 import pytest
@@ -147,6 +149,79 @@ def test_smoke_two_cases_through_the_visit_report_and_agree_with_themselves(tmp_
     md, js = bench.write_report(report, tmp_path / "bench")
     assert "c06_dnd_direction" in md.read_text(encoding="utf-8")
     assert json.loads(js.read_text(encoding="utf-8"))["bench"] == "doctor_trap_bench"
+
+
+def _question(**kwargs: object) -> SimpleNamespace:
+    options = [
+        SimpleNamespace(option_id="a", label="First thing"),
+        SimpleNamespace(option_id="b", label="Second thing"),
+        SimpleNamespace(option_id="c", label="I don't know"),
+    ]
+    return SimpleNamespace(code="Q", options=options, recommended=None, blocking=False, **kwargs)
+
+
+def test_a_careful_person_follows_the_key_then_the_recommendation_and_never_guesses_on_an_optional_question() -> (
+    None
+):
+    case = CASES[0]
+    keyed = dataclasses.replace(case, answers={"Q": "Second"})
+    unknown = dataclasses.replace(case, answers={"Q": "I don't know"})
+    blank = dataclasses.replace(case, answers={})
+    option, why = bench._person_choice(keyed, _question()) or (None, "")
+    assert option is not None and option.option_id == "b" and why == "answer key"
+    option, why = bench._person_choice(unknown, _question()) or (None, "")
+    assert option is not None and option.option_id == "c" and why == "dont_know"
+    recommended = _question()
+    recommended.recommended = "b"
+    option, why = bench._person_choice(blank, recommended) or (None, "")
+    assert option is not None and option.option_id == "b" and why == "recommended"
+    assert (
+        bench._person_choice(blank, _question()) is None
+    )  # an optional question nobody can answer stays open
+    blocking = _question()
+    blocking.blocking = True
+    option, why = bench._person_choice(blank, blocking) or (None, "")
+    assert (
+        option is not None and option.option_id == "a" and why.startswith("first offered")
+    )  # counted as a guess
+
+
+def test_a_person_ticks_only_what_the_answer_key_names() -> None:
+    case = dataclasses.replace(
+        CASES[0], person={"tick": [{"kind": "consent_column", "title": "says who agreed"}]}
+    )
+    consent = SimpleNamespace(
+        kind="consent_column", title="“marketing_opt_in” says who agreed to be contacted."
+    )
+    leak = SimpleNamespace(kind="recipe_step", title="Remove 'x': it looks like it gives away the outcome")
+    assert bench._ticks(case, consent) and not bench._ticks(case, leak)
+    assert not bench._ticks(dataclasses.replace(case, person={}), consent)
+
+
+def test_tick_all_flatters_a_leak_the_product_leaves_unticked_and_the_person_does_not() -> None:
+    """The old driver drops the leak column by ticking it; a person who ticks nothing keeps it (and the report says
+    so on both numbers)."""
+    case = next(c for c in CASES if c.case_id == "s05_cancellation_reason")
+    person = bench.run_bench([case], 1)
+    ticked = bench.run_bench([case], 1, driver="tick-all")
+    assert person["driver"] == "person" and person["failed"] == 1 and person["shown_right"] == 1
+    assert ticked["driver"] == "tick-all" and ticked["passed"] == 1
+    assert person["results"][0][
+        "if_fails"
+    ], "a trap that fails for a careful person says what the product should do"
+    with pytest.raises(bench.BenchError, match="no driver"):
+        bench.run_bench([case], 1, driver="nobody")
+
+
+def test_the_report_carries_both_numbers(tmp_path: Path) -> None:
+    case = next(c for c in CASES if c.case_id == "s05_cancellation_reason")
+    both = bench.run_both([case], 1)
+    text = bench.write_report(both, tmp_path / "both")[0].read_text(encoding="utf-8")
+    assert "Person-like (the number to track): passed 0 of 1" in text
+    assert "Tick-all (the old driver, flatters the product): passed 1 of 1" in text
+    assert "Why each trap fails for the person-like driver" in text and "PRE-TICK" in text
+    alone = bench.render_markdown(bench.run_bench([case], 1, driver="tick-all"))
+    assert "Driver tick-all: passed 1 of 1" in alone and "Person-like (the number to track)" not in alone
 
 
 @pytest.mark.slow

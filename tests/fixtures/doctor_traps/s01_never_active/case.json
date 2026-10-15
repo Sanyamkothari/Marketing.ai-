@@ -12,7 +12,10 @@
   "customers"
  ],
  "key": "customer_id",
- "answers": {},
+ "answers": {
+  "PLAN_LOSES_TOO_MUCH": "acknowledge",
+  "PLAN_MOVES_OUTCOME_RATE": "acknowledge"
+ },
  "rows_may_drop": [
   "C0001",
   "C0002",

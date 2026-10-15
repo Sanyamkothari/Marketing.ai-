@@ -12,7 +12,9 @@
   "report"
  ],
  "key": "region",
- "answers": {},
+ "answers": {
+  "KEY_AMBIGUOUS": "I don't know"
+ },
  "rows_may_drop": [],
  "checks": [
   {

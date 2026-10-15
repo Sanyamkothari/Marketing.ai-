@@ -43,5 +43,11 @@
    "account_status"
   ],
   "file": "ideal.csv"
+ },
+ "person": {
+  "should_see": [
+   "it looks like it gives away the outcome"
+  ],
+  "if_fails": "The person would have to tick the plan's suggestion \"Remove '<column>': it looks like it gives away the outcome\". It is shown but not pre-ticked, and the column stays among the features, so the model learns from something known only after the outcome. The product should PRE-TICK it, not ask: the leakage check found it and the suggestion already explains it, the person's list and totals do not depend on a feature column, and the plan screen lists it, so the approval still names it and one click unticks it. A leak the person had to find and tick is the failure the owner described: an excellent test score, then a near-random live campaign."
  }
 }

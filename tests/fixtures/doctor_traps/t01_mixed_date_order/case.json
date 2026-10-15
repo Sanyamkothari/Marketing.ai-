@@ -12,7 +12,10 @@
   "customers"
  ],
  "key": "customer_id",
- "answers": {},
+ "answers": {
+  "GUIDED_FORMAT": "I will export",
+  "DATE_ORDER_BOTH": "I will send"
+ },
  "rows_may_drop": [],
  "checks": [
   {
@@ -44,5 +47,10 @@
    "Dates are written day first in some rows and month first in others. Which is which?"
   ],
   "file": "ideal.csv"
+ },
+ "person": {
+  "should_see": [
+   "written day first"
+  ]
  }
 }

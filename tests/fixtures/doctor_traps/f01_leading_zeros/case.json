@@ -13,7 +13,9 @@
   "customers"
  ],
  "key": "customer_id",
- "answers": {},
+ "answers": {
+  "KEY_AMBIGUOUS": "order_id"
+ },
  "rows_may_drop": [],
  "checks": [
   {

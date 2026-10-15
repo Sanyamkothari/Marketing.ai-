@@ -12,7 +12,9 @@
   "campaign_history"
  ],
  "key": "customer_id",
- "answers": {},
+ "answers": {
+  "OUTCOME_COLUMN": "converted"
+ },
  "rows_may_drop": [],
  "checks": [
   {
