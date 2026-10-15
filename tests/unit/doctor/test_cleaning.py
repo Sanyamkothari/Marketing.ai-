@@ -1,0 +1,82 @@
+"""The Data Doctor cleans with no AI: a small messy file gets its fixes as items with counts after TREAT, and a
+column of rupees and dollars stops with a question instead of being merged."""
+
+from __future__ import annotations
+
+import numpy as np
+import pandas as pd
+
+from engine.agent.contracts import ProposalState, RecipeStep, RecipeStepKind
+from engine.config import load_use_case
+from engine.doctor import visit
+from engine.doctor.case import Case
+from engine.doctor.cleaning import cleaning_detector
+from engine.doctor.diagnose import Offer
+from engine.doctor.prescription import prescription_from_case
+from engine.storage import LocalStorage
+from tests.unit.doctor import visit_support as vs
+
+ROWS = 600
+
+
+def _messy() -> pd.DataFrame:
+    rng = np.random.default_rng(3)
+    return pd.DataFrame(
+        {
+            "customer_id": [f"C{1000 + i}" for i in range(ROWS)],
+            "spend": [f"₹{1200 + 3 * i:,}" for i in range(ROWS)],
+            "joined": [f"{1 + i % 28:02d}/{1 + i % 12:02d}/2025" for i in range(ROWS)],
+            "opted_in": rng.choice(["haan", "nahi"], ROWS),
+            "deal_size": ["2 lakh" if i % 3 == 0 else str(50_000 + i) for i in range(ROWS)],
+            "price": ["₹500" if i % 2 else "$20" for i in range(ROWS)],
+            "converted": rng.integers(0, 2, ROWS),
+        }
+    )
+
+
+def _treat(tmp_path: object) -> tuple[Case, vs.World, LocalStorage]:
+    config = load_use_case(vs.GOAL_A)
+    w = vs.World(
+        files={vs.FIRST: vs.loaded(vs.FIRST, "messy.csv", _messy(), config)},
+        offers=(Offer(config=config, stage="Acquire"),),
+    )
+    storage = LocalStorage(tmp_path)  # type: ignore[arg-type]
+    deps = vs.deps_for(storage, w, detectors=(cleaning_detector(w.offers),))
+    case = vs.open_case(storage, w)
+    return visit.resume(vs.CLIENT, case.case_id, deps, actor=vs.ANALYST), w, storage
+
+
+def _fixes(case: Case) -> dict[tuple[str, RecipeStepKind], tuple[ProposalState, str]]:
+    found = {}
+    for item in case.items:
+        step = item.payload.get("step")
+        if item.kind == "recipe_step" and isinstance(step, dict):
+            parsed = RecipeStep.model_validate(step)
+            found[(parsed.column, parsed.kind)] = (item.state, item.title)
+    return found
+
+
+def test_treat_proposes_the_fixes_with_counts_and_stops_on_two_currencies(tmp_path: object) -> None:
+    case, w, storage = _treat(tmp_path)
+    fixes = _fixes(case)
+
+    # Money as text and day/month dates: Guided setup's fixes, sure, so ticked.
+    state, title = fixes[("spend", RecipeStepKind.PARSE_NUMBER)]
+    assert state is ProposalState.ACCEPTED and f"{ROWS} of {ROWS}" in title
+    assert fixes[("joined", RecipeStepKind.PARSE_DATE)][0] is ProposalState.ACCEPTED
+    # haan / nahi and lakh: the Indian checks, one fix per column and kind (never a second one from the advisor).
+    state, title = fixes[("opted_in", RecipeStepKind.MAP_BOOLEAN)]
+    assert state is ProposalState.ACCEPTED and f"{ROWS:,} of {ROWS:,} values read" in title
+    assert f"{ROWS:,} of {ROWS:,} values read" in fixes[("deal_size", RecipeStepKind.PARSE_NUMBER)][1]
+    assert len(fixes) == len([i for i in case.items if i.kind == "recipe_step"])
+
+    # Rupees and dollars in one column: a blocking question, no fix on it, nothing merged.
+    assert not [key for key in fixes if key[0] == "price"]
+    stop = next(q for q in case.questions if q.code == "CURRENCY_MIXED")
+    assert stop.blocking and stop.answer is None and "price" in stop.text
+    assert case.state.value == "ask"
+
+    # The ticked fixes are what the prescription applies on approval (the prescription reads the items' steps).
+    prescription = prescription_from_case(case, storage=storage, files=tuple(w.files.values()))
+    applied = {(step.column, step.kind) for recipe in prescription.recipes() for step in recipe.steps}
+    assert applied == {key for key, (state, _) in fixes.items() if state is ProposalState.ACCEPTED}
