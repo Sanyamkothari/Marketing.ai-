@@ -323,7 +323,11 @@ def _treat_list(world: World, run: Scored, *, config_root: Path | None = None) -
     root = run.config_root if config_root is None else config_root
     summary = build_treat_list(world.storage, run.run_id, config_root=root)
     text = world.storage.read_bytes(run_key(run.run_id, TREAT_LIST_CSV)).decode("utf-8")
-    return pd.read_csv(io.StringIO(text), dtype=str, keep_default_na=False), summary
+    out = pd.read_csv(io.StringIO(text), dtype=str, keep_default_na=False)
+    # The contact list is ranked best first; put it back in the scores' order so the tests compare row by row.
+    scored = _scores(world, run.run_id)[PRIMARY_KEY]
+    assert sorted(out[PRIMARY_KEY]) == sorted(scored)
+    return out.set_index(PRIMARY_KEY, drop=False).loc[scored].reset_index(drop=True), summary
 
 
 @dataclass(frozen=True)

@@ -41,7 +41,14 @@ def test_the_treat_list_of_a_real_propensity_run(scored: Flow) -> None:
     out = pd.read_csv(io.StringIO(text), dtype=str, keep_default_na=False)
     scores = scored.scores()
     assert len(out.index) == len(scores.index) == summary.total_rows
-    assert list(out["customer_id"]) == [str(v) for v in scores["customer_id"]]
+    # Ranked best first, not in the scores' order: the same customers, put back in the scores' order below.
+    assert sorted(out["customer_id"]) == sorted(str(v) for v in scores["customer_id"])
+    assert out["score"].astype(float).is_monotonic_decreasing
+    out = (
+        out.set_index("customer_id", drop=False)
+        .loc[[str(v) for v in scores["customer_id"]]]
+        .reset_index(drop=True)
+    )
 
     # No holdout assignment on a default run: unknown, not false, and a plain note.
     assert (out["holdout"] == "").all() and summary.holdout_rows is None and summary.holdout_note

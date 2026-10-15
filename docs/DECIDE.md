@@ -263,11 +263,18 @@ for the hand-off, and the Output page labels them differently: **Download contac
   `model_version`, `band` (propensity) or `segment` (uplift), `treat`, `holdout`, `explore`,
   `suppression_reason`, `offer`, `channel`, `contactable_channels`, `runner_up_offer`,
   `runner_up_net_value`, `offer_reason` (Plan J M100 part B, §14; empty on a run of one offer), `control_group`
-  (below), `net_value`, `expected_gross_value`, `reason_1`, `reason_2`, `reason_3`. The M100 columns and
-  `control_group` sit before `net_value`, so every column before them keeps its position from the start and the
-  last five keep theirs from the end
+  (below), `score`, `net_value`, `expected_gross_value`, `reason_1`, `reason_2`, `reason_3`. The M100 columns,
+  `control_group` and `score` sit before `net_value`, so every column before them keeps its position from the
+  start and the last five keep theirs from the end
   (the reasons are always the last three columns). In the parquet the flags are booleans; in the CSV they are `1` and `0`, and **empty when
   unknown**. Rupee columns are written to the paisa.
+* **`score` and the order of the rows.** `score` is the model's own number for the customer: the likelihood
+  (`actions.score_field`) on a propensity run, the predicted uplift on an uplift run; empty where the scores hold
+  none. The rows are sorted best first, highest `score` on top, a customer with no score last, a tie broken by
+  customer id (lowest first; a number when every id is one, else text), whether or not a contact budget is set.
+  The order is the file's, not the scores': `scores.csv` and `scores.parquet` stay in the uploaded file's order
+  (the other stages read them by key), and carry the score under its own name (`actions.score_field`). A treat
+  list written before this column existed has neither the column nor the order until it is built again.
 * **`control_group` is the run's own control group (DEC-1311 (al)).** `1` for a customer the run kept back as its
   control (Phase 1's actions stage: the per-run draw, or the eligible members of a persistent hold-out), `0` for
   every other; a treat list written before the column existed has no such column; arbitration reads it from the

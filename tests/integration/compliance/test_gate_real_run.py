@@ -180,7 +180,11 @@ def _build(gated: Gated, name: str, variant: str) -> Built:
         storage = LocalStorage(data_dir)
         summary = build_treat_list(storage, RUN_GATE, config_root=gated.world.roots[variant])
     text = storage.read_bytes(run_key(RUN_GATE, TREAT_LIST_CSV)).decode("utf-8")
-    return Built(data_dir, pd.read_csv(io.StringIO(text), dtype=str, keep_default_na=False), summary)
+    out = pd.read_csv(io.StringIO(text), dtype=str, keep_default_na=False)
+    # The list is ranked best first; the tests compare it with the run's other files in the scores' order.
+    scored = pd.read_parquet(io.BytesIO(storage.read_bytes(run_key(RUN_GATE, "scores.parquet"))))
+    out = out.set_index(PRIMARY_KEY, drop=False).loc[scored[PRIMARY_KEY].astype(str)].reset_index(drop=True)
+    return Built(data_dir, out, summary)
 
 
 @pytest.fixture(scope="module")
@@ -425,4 +429,6 @@ def test_the_treat_list_route_gates_a_list_built_before_the_gate_was_turned_on(
             assert summary.status_code == 200 and summary.json()["compliance_rule_version"]
     sent = served[served["treat"] == "1"]
     assert set(sent[PRIMARY_KEY]) == set(on.out.loc[on.out["treat"] == "1", PRIMARY_KEY])
-    assert (served["channel"].to_numpy() == on.out["channel"].to_numpy()).all()
+    # (the served list is ranked best first; `on.out` is in the scores' order)
+    by_customer = on.out.set_index(PRIMARY_KEY)["channel"]
+    assert (served["channel"].to_numpy() == by_customer.loc[served[PRIMARY_KEY]].to_numpy()).all()

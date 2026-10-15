@@ -107,10 +107,12 @@ def test_the_treat_list_flags_the_runs_control_group_and_leaves_holdout_as_it_wa
         assert run.control <= set(frame.loc[frame["holdout"].astype(bool), "customer_id"])
     else:  # no assignment file: holdout stays unknown (null), not false
         assert frame["holdout"].isna().all()
-    # The column sits between offer_reason and net_value: no other column moves from the start or the end.
+    # The column sits after offer_reason, then come the score (the contact list's ranking column) and net_value:
+    # no other column moves from the start or the end.
     columns = list(frame.columns)
     assert columns[columns.index("offer_reason") + 1] == "control_group"
-    assert columns[columns.index("control_group") + 1] == "net_value"
+    assert columns[columns.index("control_group") + 1] == "score"
+    assert columns[columns.index("score") + 1] == "net_value"
 
 
 # ---------------------------------------------------------------------------

@@ -106,6 +106,7 @@ __all__ = [
     "EXPECTED_GROSS_VALUE_COLUMN",
     "REASON_COLUMNS",
     "RUPEE_DECIMALS",
+    "SCORE_COLUMN",
     "SEGMENT_COLUMN",
     "TREAT_LIST_CSV",
     "TREAT_LIST_PARQUET",
@@ -161,6 +162,9 @@ _NOT_SCORED: Final[str] = "RUN_NOT_SCORED"
 SEGMENT_COLUMN: Final[str] = "segment"
 """The uplift treat list's group column (the propensity one has `band`). Public since M101."""
 _SEGMENT_COLUMN: Final[str] = SEGMENT_COLUMN
+SCORE_COLUMN: Final[str] = "score"
+"""The model's score for each customer in the contact list: the likelihood on a propensity run, the predicted
+uplift on an uplift run. The rows are sorted by it, highest first."""
 _UPLIFT_COLUMN: Final[str] = "uplift"
 """An uplift run's predicted uplift column (`engine.uplift.flow.UPLIFT_COLUMN`); ranks an approved number of contacts
 when the list holds no net value (Plan M M184)."""
@@ -852,6 +856,7 @@ def build_treat_list(storage: Storage, run_id: str, *, config_root: Path | None 
     # 7. Assemble, then write.
     out = _assemble(
         scores=scores,
+        score=_score_values(scores, config, is_uplift),
         key_cols=key_cols,
         record=record,
         is_uplift=is_uplift,
@@ -1745,6 +1750,7 @@ def _channel_rows(channel: pd.Series[Any], treat: np.ndarray) -> dict[str, int] 
 def _assemble(
     *,
     scores: pd.DataFrame,
+    score: pd.Series[Any],
     key_cols: tuple[str, ...],
     record: RunRecord,
     is_uplift: bool,
@@ -1791,11 +1797,42 @@ def _assemble(
         # Plan K M140 (DEC-1407): only on a run with variant arms, before net_value for the same reason.
         data[VARIANT_ARM_COLUMN] = variants[0].astype("object")
         data[VARIANT_TEMPLATE_COLUMN] = variants[1].astype("object")
+    # The model's score, after the columns above and before net_value, so no earlier column moves from the start
+    # and net_value, expected_gross_value and the reasons keep their places from the end.
+    data[SCORE_COLUMN] = score
     data["net_value"] = net_value
     data[EXPECTED_GROSS_VALUE_COLUMN] = gross_value
     for name in REASON_COLUMNS:
         data[name] = reasons[name].astype("object")
-    return pd.DataFrame(data)
+    return _best_first(pd.DataFrame(data), key_cols)
+
+
+def _score_values(scores: pd.DataFrame, config: UseCaseConfig, is_uplift: bool) -> pd.Series[Any]:
+    """The score of every row as a number: the run's `actions.score_field` (an uplift run's is its predicted
+    uplift); null where the scores hold none."""
+    field = _UPLIFT_COLUMN if is_uplift and _UPLIFT_COLUMN in scores.columns else config.actions.score_field
+    if field not in scores.columns:
+        return pd.Series(np.full(len(scores.index), np.nan), index=scores.index, dtype="float64")
+    return pd.to_numeric(scores[field], errors="coerce").astype("float64")
+
+
+def _best_first(frame: pd.DataFrame, key_cols: tuple[str, ...]) -> pd.DataFrame:
+    """The list sorted best first: highest score on top, a customer with no score last, ties by customer id.
+
+    The id is compared as a number when every value of that key column is one, else as text, so a tie
+    never depends on the order of the uploaded file.
+    """
+    order: list[np.ndarray[Any, Any]] = []
+    for name in reversed(key_cols):
+        text = frame[name].astype("object")
+        number = pd.to_numeric(text, errors="coerce")
+        if bool(number.notna().all()):
+            order.append(number.to_numpy(dtype=np.float64))
+        else:
+            order.append(pd.factorize(text.fillna(""), sort=True)[0])
+    score = frame[SCORE_COLUMN].to_numpy(dtype=np.float64)
+    order.append(np.where(np.isnan(score), np.inf, -score))
+    return frame.iloc[np.lexsort(order)].reset_index(drop=True)
 
 
 def _schema(is_uplift: bool, key_cols: tuple[str, ...], *, variants: bool = False) -> pa.Schema:
@@ -1820,6 +1857,7 @@ def _schema(is_uplift: bool, key_cols: tuple[str, ...], *, variants: bool = Fals
             if variants
             else []
         ),
+        pa.field(SCORE_COLUMN, pa.float64()),
         pa.field("net_value", pa.float64()),
         pa.field(EXPECTED_GROSS_VALUE_COLUMN, pa.float64()),
         *[pa.field(name, pa.string()) for name in REASON_COLUMNS],

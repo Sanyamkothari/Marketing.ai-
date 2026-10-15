@@ -85,7 +85,13 @@ def test_each_band_is_sent_on_its_planned_channels_only(channel_run: tuple[Flow,
         keep_default_na=False,
     )
     scores = pd.read_parquet(io.BytesIO(flow.storage.read_bytes(flow.key("scores.parquet"))))
-    assert list(out[PRIMARY_KEY]) == [str(value) for value in scores[PRIMARY_KEY]]
+    # The contact list is ranked best first, so put it back in the scores' order to compare row by row.
+    assert sorted(out[PRIMARY_KEY]) == sorted(str(value) for value in scores[PRIMARY_KEY])
+    out = (
+        out.set_index(PRIMARY_KEY, drop=False)
+        .loc[[str(value) for value in scores[PRIMARY_KEY]]]
+        .reset_index(drop=True)
+    )
     uploaded = flow.uploaded.astype({PRIMARY_KEY: str}).set_index(PRIMARY_KEY).loc[out[PRIMARY_KEY]]
     sms_ok = (uploaded["sms_opt_in"] == "yes").to_numpy()
     email_ok = (uploaded["email_opt_in"] == "true").to_numpy()
