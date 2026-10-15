@@ -111,8 +111,8 @@ The demo opens with a short guided tour. The Help menu is hidden for now (DEC-11
 offered only when the demo opens.
 These ten steps show the whole product in about fifteen minutes.
 
-1. **Home.** The use cases for a telecom business, laid out along the customer lifecycle. The top
-   bar has the six areas of the product and the client you are working on (**Demo Company**).
+1. **Overview.** The use cases for a telecom business, laid out along the customer lifecycle. The menu
+   down the left has the five places of the product: Overview, Campaigns, Data, Reports and Settings.
 2. **Open Telco Customer Churn.** This is the demo's main use case: which subscribers are likely to
    leave in the next 60 days.
 3. **See the trained model.** Under **Previous runs**, open the training run, then its **Model**

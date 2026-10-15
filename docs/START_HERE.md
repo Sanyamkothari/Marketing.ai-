@@ -24,7 +24,9 @@ Sign-in is off by default, so it is a single-user tool: whoever opens the page c
 
 ## 🧭 The four pages
 
-The bar at the top has four places. That is all you need.
+`make run` shows the new look: a menu down the left with five places. Home is now **Overview**,
+Connections is **Data** (your AI service is under **Settings**), Results is **Campaigns**, and **Reports** is the fifth.
+The table below names the older look's four places, in a bar at the top. That is all you need.
 
 | Page | What it is for |
 |---|---|
