@@ -87,7 +87,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 120,
-          "seconds": 2.41
+          "seconds": 2.26
         },
         {
           "accepted": [
@@ -180,7 +180,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 0.64
+          "seconds": 0.67
         },
         {
           "accepted": [
@@ -219,7 +219,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 0.6
+          "seconds": 0.63
         }
       ],
       "runs_passed": 2,
@@ -274,7 +274,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 120,
-          "seconds": 0.62
+          "seconds": 0.69
         },
         {
           "accepted": [
@@ -312,7 +312,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 120,
-          "seconds": 0.57
+          "seconds": 0.76
         }
       ],
       "runs_passed": 0,
@@ -368,7 +368,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 100,
-          "seconds": 0.98
+          "seconds": 1.13
         },
         {
           "accepted": [
@@ -409,7 +409,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 100,
-          "seconds": 0.79
+          "seconds": 0.93
         }
       ],
       "runs_passed": 2,
@@ -464,7 +464,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 60,
-          "seconds": 0.66
+          "seconds": 0.64
         },
         {
           "accepted": [
@@ -504,7 +504,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 60,
-          "seconds": 0.66
+          "seconds": 0.64
         }
       ],
       "runs_passed": 2,
@@ -558,7 +558,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 40,
-          "seconds": 0.42
+          "seconds": 0.4
         },
         {
           "accepted": [
@@ -597,7 +597,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 40,
-          "seconds": 0.67
+          "seconds": 0.52
         }
       ],
       "runs_passed": 2,
@@ -651,7 +651,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 60,
-          "seconds": 0.48
+          "seconds": 0.44
         },
         {
           "accepted": [
@@ -688,7 +688,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 60,
-          "seconds": 0.42
+          "seconds": 0.41
         }
       ],
       "runs_passed": 0,
@@ -731,7 +731,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 10,
-          "seconds": 0.25
+          "seconds": 0.29
         },
         {
           "accepted": [
@@ -815,7 +815,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 150,
-          "seconds": 1.28
+          "seconds": 1.17
         },
         {
           "accepted": [
@@ -858,7 +858,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 150,
-          "seconds": 1.17
+          "seconds": 1.06
         }
       ],
       "runs_passed": 2,
@@ -953,7 +953,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 60,
-          "seconds": 0.6
+          "seconds": 0.63
         }
       ],
       "runs_passed": 0,
@@ -1007,7 +1007,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 60,
-          "seconds": 0.57
+          "seconds": 0.54
         },
         {
           "accepted": [
@@ -1044,7 +1044,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 60,
-          "seconds": 0.55
+          "seconds": 0.65
         }
       ],
       "runs_passed": 0,
@@ -1100,7 +1100,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 95,
-          "seconds": 0.85
+          "seconds": 0.66
         },
         {
           "accepted": [
@@ -1254,7 +1254,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 60,
-          "seconds": 0.81
+          "seconds": 0.97
         }
       ],
       "runs_passed": 2,
@@ -1315,7 +1315,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 50,
-          "seconds": 0.99
+          "seconds": 0.86
         },
         {
           "accepted": [
@@ -1361,7 +1361,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 50,
-          "seconds": 0.82
+          "seconds": 0.8
         }
       ],
       "runs_passed": 2,
@@ -1417,7 +1417,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 0.7
+          "seconds": 0.6
         },
         {
           "accepted": [
@@ -1458,7 +1458,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 0.69
+          "seconds": 0.67
         }
       ],
       "runs_passed": 2,
@@ -1514,7 +1514,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 0.61
+          "seconds": 0.82
         },
         {
           "accepted": [
@@ -1553,7 +1553,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 0.49
+          "seconds": 0.57
         }
       ],
       "runs_passed": 0,
@@ -1610,7 +1610,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 100,
-          "seconds": 1.08
+          "seconds": 1.28
         },
         {
           "accepted": [
@@ -1650,7 +1650,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 100,
-          "seconds": 0.98
+          "seconds": 0.87
         }
       ],
       "runs_passed": 0,
@@ -1741,7 +1741,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 120,
-          "seconds": 0.62
+          "seconds": 0.73
         }
       ],
       "runs_passed": 2,
@@ -1795,7 +1795,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 0.79
+          "seconds": 0.67
         },
         {
           "accepted": [
@@ -1834,7 +1834,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 0.77
+          "seconds": 0.71
         }
       ],
       "runs_passed": 2,
@@ -1890,7 +1890,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 0.66
+          "seconds": 0.81
         },
         {
           "accepted": [
@@ -1931,7 +1931,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 0.77
+          "seconds": 0.75
         }
       ],
       "runs_passed": 2,
@@ -1984,7 +1984,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 120,
-          "seconds": 0.59
+          "seconds": 0.58
         },
         {
           "accepted": [
@@ -2022,7 +2022,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 120,
-          "seconds": 0.67
+          "seconds": 0.56
         }
       ],
       "runs_passed": 2,
@@ -2076,7 +2076,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 210,
-          "seconds": 0.94
+          "seconds": 1.3
         },
         {
           "accepted": [
@@ -2113,7 +2113,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 210,
-          "seconds": 1.01
+          "seconds": 0.97
         }
       ],
       "runs_passed": 0,
@@ -2166,7 +2166,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 120,
-          "seconds": 0.59
+          "seconds": 0.6
         },
         {
           "accepted": [
@@ -2226,7 +2226,6 @@
         {
           "accepted": [
             "\u201crecord_id\u201d names each row of monthly_usage.csv.",
-            "Remove 'customer_id': it looks like it gives away the outcome (it tells yes from no almost by itself).",
             "\u201cchurn\u201d in monthly_usage.csv is the outcome: The subscriber left within the month after the snapshot",
             "'record_id': 100.0% of 120 values are different from each other; the most common appears 1 times."
           ],
@@ -2251,7 +2250,7 @@
             }
           ],
           "combined": false,
-          "digest": "3b96c534ba8a",
+          "digest": "574d56585737",
           "error": null,
           "notes": [],
           "passed": false,
@@ -2259,12 +2258,11 @@
             "TRAINING_BUDGET"
           ],
           "rows": 120,
-          "seconds": 0.81
+          "seconds": 0.68
         },
         {
           "accepted": [
             "\u201crecord_id\u201d names each row of monthly_usage.csv.",
-            "Remove 'customer_id': it looks like it gives away the outcome (it tells yes from no almost by itself).",
             "\u201cchurn\u201d in monthly_usage.csv is the outcome: The subscriber left within the month after the snapshot",
             "'record_id': 100.0% of 120 values are different from each other; the most common appears 1 times."
           ],
@@ -2289,7 +2287,7 @@
             }
           ],
           "combined": false,
-          "digest": "3b96c534ba8a",
+          "digest": "574d56585737",
           "error": null,
           "notes": [],
           "passed": false,
@@ -2297,7 +2295,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 120,
-          "seconds": 0.72
+          "seconds": 0.65
         }
       ],
       "runs_passed": 0,
@@ -2357,7 +2355,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 0.98
+          "seconds": 1.09
         },
         {
           "accepted": [
@@ -2400,7 +2398,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 0.99
+          "seconds": 0.93
         }
       ],
       "runs_passed": 0,
@@ -2452,7 +2450,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 60,
-          "seconds": 0.38
+          "seconds": 0.43
         },
         {
           "accepted": [
@@ -2489,7 +2487,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 60,
-          "seconds": 0.33
+          "seconds": 0.58
         }
       ],
       "runs_passed": 2,
@@ -2541,7 +2539,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 0.46
+          "seconds": 0.57
         },
         {
           "accepted": [
@@ -2578,7 +2576,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 0.49
+          "seconds": 0.58
         }
       ],
       "runs_passed": 2,
@@ -2635,7 +2633,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 0.77
+          "seconds": 0.64
         },
         {
           "accepted": [
@@ -2675,7 +2673,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 0.64
+          "seconds": 0.61
         }
       ],
       "runs_passed": 0,
@@ -2730,7 +2728,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 90,
-          "seconds": 0.69
+          "seconds": 0.77
         },
         {
           "accepted": [
@@ -2770,7 +2768,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 90,
-          "seconds": 0.67
+          "seconds": 0.64
         }
       ],
       "runs_passed": 2,
@@ -2824,7 +2822,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 124,
-          "seconds": 0.61
+          "seconds": 0.64
         },
         {
           "accepted": [
@@ -2861,7 +2859,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 124,
-          "seconds": 0.56
+          "seconds": 0.61
         }
       ],
       "runs_passed": 0,

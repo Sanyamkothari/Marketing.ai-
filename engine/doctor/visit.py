@@ -1344,11 +1344,11 @@ _ID_NAMED: Final[re.Pattern[str]] = re.compile(
 
 
 def _id_named(unique: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Of the columns with a different value on every row, the ID-named one when it is the only one: a spend or a
+    """Of the columns with a different value on every row, the ID-named ones when there are any: a spend or a
     score that happens to be unique does not compete with `customer_id`. Two ID-named columns still compete.
     """
     named = [key for key in unique if _ID_NAMED.search(str(key["column"]).strip())]
-    return named if len(named) == 1 else unique
+    return named or unique
 
 
 def _base_rules(run: _Run, case: Case, step: _Step) -> None:

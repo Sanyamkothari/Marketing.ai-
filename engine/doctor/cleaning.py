@@ -283,8 +283,13 @@ def _advised(
 def _leak_items(
     advice: Advice, upload_id: str, skip: set[str | None], never: frozenset[RecipeStepKind], now: datetime
 ) -> list[CaseItem]:
-    """A column the advisor suspects holds the answer: a proposal to remove it. Never a sure fix: the person decides."""
+    """A column the advisor suspects holds the answer: a proposal to remove it. Never a sure fix: the person decides.
+
+    An ID-named column (`customer_id` repeated over monthly rows) is not proposed: removing it loses who the row is
+    about; the first look still lists it among the columns that may hold the answer.
+    """
     from engine.doctor.first_look import advised_leaks
+    from engine.stages.ingest import is_key_like_name
 
     return [
         _fix_item(
@@ -302,7 +307,7 @@ def _leak_items(
             counts={},
         )
         for column in advised_leaks(advice)
-        if column not in skip
+        if column not in skip and not is_key_like_name(column)
     ]
 
 
