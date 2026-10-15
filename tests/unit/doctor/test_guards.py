@@ -103,6 +103,42 @@ def test_a_stack_may_repeat_a_customer_and_its_totals_are_of_all_files() -> None
     assert guards.receipt_findings(receipt, one_row_per_key=False) == []
 
 
+def test_an_id_a_join_turns_into_a_float_is_still_the_same_customer() -> None:
+    before = pd.DataFrame({"id": [1, 2, 3], "y": [0, 1, 0]})
+    after = pd.DataFrame({"id": [1.0, 2.0, 3.0], "y": [0, 1, 0]})
+    receipt = make_receipt(1, "sql_query", {"a": before}, after, key="id", target="y")
+    assert (receipt.keys_lost, receipt.keys_new) == (0, 0)
+    assert cell_change(before, after, key="id") == (0, 3)
+
+
+def test_one_empty_id_does_not_switch_off_the_join_stop() -> None:
+    before = pd.DataFrame({"id": [1, 2, None], "spend": [1.0, 2.0, 3.0]})
+    after = pd.DataFrame({"id": [1, 1, 2, None], "spend": [1.0, 1.0, 2.0, 3.0]})
+    receipt = make_receipt(1, "sql_query", {"a": before}, after, key="id")
+    assert receipt.one_row_per_key and "JOIN_REPEATS_CUSTOMERS" in {
+        f.code for f in guards.receipt_findings(receipt) if f.level == "stop"
+    }
+
+
+def test_a_filter_on_a_table_of_events_is_not_flagged_for_repeats() -> None:
+    events = pd.DataFrame({"id": [1, 1, 2, 2, 3], "spend": [1.0, 2.0, 3.0, 4.0, 5.0]})
+    kept = make_receipt(1, "remove_rows", {"this": events}, events.head(4), key="id")
+    assert kept.extra_rows_in == 2 and {f.code for f in guards.receipt_findings(kept)} == {
+        "STEP_LOSES_CUSTOMERS",
+        "STEP_TOTALS_CHANGED",
+    }
+    assert next(f for f in guards.receipt_findings(kept) if f.code == "STEP_TOTALS_CHANGED").level == "note"
+    doubled = make_receipt(1, "sql_query", {"this": events}, pd.concat([events, events]), key="id")
+    assert "STEP_REPEATS_CUSTOMERS" in {f.code for f in guards.receipt_findings(doubled) if f.level == "flag"}
+
+
+def test_a_count_outcome_has_no_rate_to_watch() -> None:
+    frame = pd.DataFrame({"id": [1, 2, 3], "y": [0, 1, 5]})
+    assert (
+        make_receipt(1, "remove_rows", {"this": frame}, frame.head(2), key="id", target="y").rate_in is None
+    )
+
+
 def test_a_step_with_no_id_to_count_by_needs_a_yes() -> None:
     receipt = make_receipt(1, "sql_query", {"a": pd.DataFrame({"x": [1, 2]})}, pd.DataFrame({"z": [1]}))
     assert receipt.keys_in is None and receipt.lost == 1
@@ -143,26 +179,25 @@ def drop_batch(k: int) -> RecipeStep:
 
 
 def test_25_small_drops_add_up_and_trip_the_plan_gate_naming_the_steps() -> None:
-    n = 5_000  # 25 batches of 200 customers = 4% each of nothing, 1% of the original... here 4%/step is too big
+    n = 5_000  # 25 steps, each drops 50 customers (1%): none alone is a stop, together they lose 25%
     frame = pd.DataFrame(
         {
             "id": range(n),
-            "batch": [i // 200 if i < 5_000 else 99 for i in range(n)],
-            "y": [1 if (i // 200) % 5 == 0 else 0 for i in range(n)],
+            "batch": [i // 50 if i < 1_250 else 99 for i in range(n)],
+            "y": [i % 2 for i in range(n)],
         }
     )
-    frame = frame.assign(batch=[b if b < 25 else 99 for b in frame["batch"]])
-    # each step drops 200 of 5,000 (4%), none alone is over 5%; together they lose 100% of what they touch
-    steps = [drop_batch(k) for k in range(5)]  # 5 steps x 4% = 20%
+    steps = [drop_batch(k) for k in range(25)]
     result = run_guarded(frame, steps, primary_key="id", target="y", **RUN)
-    assert all(r.keys_lost == 200 for r in result.receipts)
+    assert len(result.receipts) == 25 and all(r.keys_lost == 50 for r in result.receipts)
     assert all(f.level != "stop" for f in result.findings if f.order is not None)
     ledger = result.ledger
-    assert ledger is not None and (ledger.lost_total, ledger.start, ledger.end) == (1_000, 5_000, 4_000)
-    assert ledger.lost_pct == pytest.approx(20.0) and ledger.unit == "customers"
+    assert ledger is not None and (ledger.lost_total, ledger.start, ledger.end) == (1_250, 5_000, 3_750)
+    assert ledger.lost_pct == pytest.approx(25.0) and ledger.unit == "customers"
+    assert ledger.steps[-1].rows_after == 3_750 and ledger.lost_by_outcome == {"0": 625, "1": 625}
+    assert codes(result, "stop") == ["PLAN_LOSES_TOO_MUCH"]  # the outcome rate stays at 50%
     gate = next(f for f in result.findings if f.code == "PLAN_LOSES_TOO_MUCH")
-    assert gate.level == "stop" and "step 1" in gate.message and "1,000" in gate.message
-    assert ledger.lost_by_outcome == {"1": 200 * 5 - 0} or ledger.lost_by_outcome["1"] >= 200
+    assert "step 1" in gate.message and "1,250" in gate.message
 
 
 def test_the_outcome_rate_moving_more_than_a_point_trips_the_gate_even_with_small_loss() -> None:

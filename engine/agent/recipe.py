@@ -957,9 +957,10 @@ def run_recipe(
     seen: tuple[RecipeStep, pd.DataFrame] | None = None
     for step in steps:
         if observe is not None:
+            snapshot = work.copy()  # what the last step made is what this one reads: one copy serves both
             if seen is not None:
-                observe(seen[0], seen[1], work.copy())
-            seen = (step, work.copy())
+                observe(seen[0], seen[1], snapshot)
+            seen = (step, snapshot)
         if step.kind is RecipeStepKind.DROP_COLUMN:
             absent = step.column not in work.columns
             receipts.append(

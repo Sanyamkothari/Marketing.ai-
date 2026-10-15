@@ -738,6 +738,7 @@ def _learn(
                 max_failure_pct=recipe.max_failure_pct or 0.0,
                 snapshot_column=recipe.snapshot_column,
                 tables=tables,
+                twice=guards is not None,  # the second run only pays off when someone reads the findings
             )
         except RecipeError:
             return None, None

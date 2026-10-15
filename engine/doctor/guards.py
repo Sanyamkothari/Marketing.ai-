@@ -77,6 +77,11 @@ RETRY_CAP: Final[int] = 2
 MAX_STOPS_SHOWN: Final[int] = 5
 MAX_TOTAL_COLUMNS: Final[int] = 25
 _TOP_STEPS: Final[int] = 3
+_KEEPS_TOTALS: Final[frozenset[str]] = frozenset(
+    {RecipeStepKind.SQL_QUERY.value, RecipeStepKind.COMBINE_ROWS.value, "build_dataset", "stack_files"}
+)
+"""Steps that re-arrange rows, so a total that moves is news. A step whose job is to change values (a fill, a
+cap) or to leave rows out moves totals by design: that is a note, not something on the approval page."""
 _TOLERANCE: Final[float] = 1e-9
 
 
@@ -167,8 +172,9 @@ class Receipt(StrictBase):
     extra_rows: int = Field(default=0, description="Rows beyond one per customer in the result.")
     keys_new: int = Field(default=0, description="Customers in the result and not in the first table.")
     one_row_per_key: bool | None = Field(
-        default=None, description="Whether the first table had one row per customer."
+        default=None, description="Whether the first table had one row per customer (rows with no ID aside)."
     )
+    extra_rows_in: int = Field(default=0, description="Rows beyond one per customer in the first table.")
     totals: tuple[ColumnTotal, ...] = ()
     empty_columns: tuple[str, ...] = Field(
         default=(), description="Columns that came out with no value at all."
@@ -213,9 +219,17 @@ def frame_hash(frame: pd.DataFrame) -> str:
     return sha256_hex(head + values)
 
 
+def _key_values(series: pd.Series[Any]) -> pd.Series[Any]:
+    """The IDs as text, empty ones left out, index kept. A whole-number float ID reads as the integer (a join
+    that turns 7 into 7.0 does not lose and re-add every customer)."""
+    values = series.dropna()
+    if pdt.is_float_dtype(values) and bool(((values == values.round()) & (values.abs() < 2**53)).all()):
+        values = values.astype("int64")
+    return values.astype(str).str.strip()
+
+
 def _key_text(frame: pd.DataFrame, key: str) -> pd.Series[Any]:
-    column = next(c for c in frame.columns if str(c) == key)
-    return frame[column].dropna().astype(str).str.strip()
+    return _key_values(frame[next(c for c in frame.columns if str(c) == key)])
 
 
 def infer_key(before: pd.DataFrame, after: pd.DataFrame) -> str | None:
@@ -274,8 +288,8 @@ def _positive(series: pd.Series[Any], positive: object | None) -> pd.Series[Any]
         return series.astype(str).str.strip().str.lower() == str(positive).strip().lower()
     if pdt.is_bool_dtype(series):
         return series.fillna(False).astype(bool)
-    if pdt.is_numeric_dtype(series):
-        return series == 1
+    if pdt.is_numeric_dtype(series) and bool(series.dropna().isin([0, 1]).all()):
+        return series == 1  # a 0/1 outcome; a count or an amount has no "positive" to count
     return None
 
 
@@ -332,6 +346,7 @@ def make_receipt(
     seen = set(base_keys)
     made = set(out_keys)
     counts = out_keys.value_counts()
+    extra_in = len(base_keys) - len(seen)
     lost = seen - made
     receipt.update(
         key=key,
@@ -341,7 +356,8 @@ def make_receipt(
         keys_repeated=int((counts > 1).sum()),
         extra_rows=int((counts - 1).clip(lower=0).sum()),
         keys_new=len(made - seen),
-        one_row_per_key=bool(len(base_keys) == len(seen) and len(base_keys) == len(base_frames[0])),
+        one_row_per_key=extra_in == 0,
+        extra_rows_in=extra_in,
         lost_by_outcome=_lost_by_outcome(base_frames[0], key, lost, target),
     )
     return Receipt(**receipt)
@@ -352,7 +368,8 @@ def _has(frame: pd.DataFrame, key: str | None) -> bool:
 
 
 def _was_empty(frames: Sequence[pd.DataFrame], column: str) -> bool:
-    """Whether the column was already empty (or absent from every input), so an empty result is not the step's."""
+    """Whether the column was already empty in the inputs, so an empty result is not the step's doing. A column
+    no input has is not: a new column that comes out empty is the step's."""
     found = [f[c] for f in frames for c in f.columns if str(c) == column]
     return bool(found) and all(s.isna().all() for s in found)
 
@@ -361,9 +378,11 @@ def _lost_by_outcome(base: pd.DataFrame, key: str, lost: set[str], target: str |
     column = next((c for c in base.columns if str(c) == target), None) if target else None
     if column is None or not lost:
         return {}
-    kcol = next(c for c in base.columns if str(c) == key)
-    rows = base[base[kcol].astype(str).str.strip().isin(lost)].drop_duplicates(subset=[kcol])
-    counts = rows[column].map(lambda v: "(blank)" if pd.isna(v) else str(v)).value_counts()
+    flat = base.reset_index(drop=True)
+    ids = _key_text(flat, key)
+    picked = ids[ids.isin(lost)]
+    picked = picked[~picked.duplicated()]  # one row per lost customer
+    counts = flat.loc[picked.index, column].map(lambda v: "(blank)" if pd.isna(v) else str(v)).value_counts()
     return {str(k): int(v) for k, v in counts.head(10).items()}
 
 
@@ -415,7 +434,7 @@ def receipt_findings(receipt: Receipt, *, one_row_per_key: bool = True) -> list[
         shown = "; ".join(f"{t.column} {t.before:,.2f} to {t.after:,.2f}" for t in moved[:5])
         found.append(
             Finding(
-                level="flag",
+                level="flag" if receipt.kind in _KEEPS_TOTALS else "note",
                 code="STEP_TOTALS_CHANGED",
                 order=n,
                 count=len(moved),
@@ -440,14 +459,15 @@ def _key_findings(receipt: Receipt, *, one_row_per_key: bool) -> list[Finding]:
                 "Anything added up after this would count them twice.",
             )
         )
-    elif receipt.keys_repeated and one_row_per_key:
+    elif receipt.extra_rows > receipt.extra_rows_in and one_row_per_key:
         found.append(
             Finding(
                 level="flag",
                 code="STEP_REPEATS_CUSTOMERS",
                 order=n,
                 count=receipt.keys_repeated,
-                message=f"{receipt.keys_repeated:,} customers are on more than one row after step {n}.",
+                message=f"Step {n} adds rows for customers already in the table: {receipt.extra_rows_in:,} "
+                f"extra rows before, {receipt.extra_rows:,} after.",
             )
         )
     if receipt.keys_lost:
@@ -495,8 +515,8 @@ def cell_change(before: pd.DataFrame, after: pd.DataFrame, *, key: str | None) -
     shared = [c for c in before.columns if str(c) != key and any(str(a) == str(c) for a in after.columns)]
     if not shared:
         raise NotMeasurableError("No column keeps its name, so there is nothing to compare.")
-    left = before.assign(**{"__k": before[kb].astype(str).str.strip()}).set_index("__k")
-    right = after.assign(**{"__k": after[ka].astype(str).str.strip()})
+    left = before.assign(**{"__k": _key_values(before[kb])}).set_index("__k")
+    right = after.assign(**{"__k": _key_values(after[ka])}).dropna(subset=["__k"])
     right = right[right["__k"].isin(left.index)]
     changed = out_of = 0
     for column in shared:
@@ -516,6 +536,7 @@ class LedgerStep(StrictBase):
     order: int
     kind: str
     units_after: int
+    rows_after: int
     lost: int
     rate_after: float | None = None
 
@@ -551,6 +572,7 @@ def build_ledger(receipts: Sequence[Receipt]) -> Ledger | None:
             order=r.order,
             kind=r.kind,
             units_after=(r.keys_out if counted and r.keys_out is not None else r.rows_out),
+            rows_after=r.rows_out,
             lost=r.lost,
             rate_after=r.rate_out,
         )
