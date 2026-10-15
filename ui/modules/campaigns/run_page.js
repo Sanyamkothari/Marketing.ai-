@@ -6,7 +6,7 @@
 import { canAccess } from "../router.js";
 import { errorBox } from "../../dom.js";
 import { getCampaignRun, restartCampaignRun } from "./wizard_api.js";
-import { runHref } from "./run_rules.js";
+import { needsCostYes, runHref } from "./run_rules.js";
 import { injectRunStyles, runPageHtml } from "./run_views.js";
 import { injectWizardStyles } from "./wizard_styles.js";
 
@@ -66,7 +66,7 @@ async function restart() {
   draw();
   try {
     const created = await restartCampaignRun(run.campaign_run_id, {
-      confirmCost: Boolean(run.error && run.error.code === "COST_NEEDS_CONFIRMATION"),
+      confirmCost: needsCostYes(run),
     });
     ui.busy = false;
     window.location.hash = runHref(created.record.campaign_run_id);

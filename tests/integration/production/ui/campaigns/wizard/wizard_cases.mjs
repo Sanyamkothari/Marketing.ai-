@@ -398,7 +398,7 @@ test("the progress page: a run the server restarted under says so and Restart st
 });
 
 test("the progress page: a start that needs a cost confirmed offers 'Start it anyway', which confirms it", async () => {
-  const error = { code: "COST_NEEDS_CONFIRMATION", message: "This could cost more than the cap.", step: "train" };
+  const error = { code: "RUN_COST_NEEDS_CONFIRMATION", message: "This could cost more than the cap.", step: "train" };
   world.campaignRuns.cr_7 = crView("cr_7", "failed", { at: 0, error });
   await open("#/campaigns/run/cr_7");
   await until(() => $("[data-run-restart]"), 3000, "the button");

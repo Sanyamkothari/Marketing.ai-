@@ -216,8 +216,10 @@ function continueHtml(entry) {
   const { state: s, host } = entry;
   const view = s.screen && s.screen.view;
   if (!view || !["ready", "ready_with_warnings"].includes(view.verdict.key) || !view.start) return "";
-  const starts = host.place !== "setup";
-  const label = starts ? "Start the campaign" : "Continue with this data";
+  // Here the campaign starts (the wizard's own start, or the Data page's); else the goal's setup or the wizard goes on.
+  const starts =
+    host.place !== "setup" && (host.approved ? true : view.start.target === "runs" && canAccess("POST", "/campaign-runs"));
+  const label = starts ? "Start the campaign" : host.approved ? "Continue with this data" : "Continue to the campaign";
   const left = leftOutOf(s.screen).length;
   const without = left
     ? `<p class="dds-why" data-dds-continue-without>${esc(

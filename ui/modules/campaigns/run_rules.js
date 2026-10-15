@@ -1,6 +1,7 @@
 // What a person chooses when they start a campaign, and how a campaign run is told back to them. Pure: no DOM,
 // no fetch. The minutes are the server's (`SPEED_MINUTES` in `engine/campaign_run.py`).
 
+import { COST_NEEDS_CONFIRMATION } from "../../cost.js";
 import { esc, fmtInt } from "../../dom.js";
 import { userText } from "../../labels.js";
 
@@ -40,9 +41,12 @@ export const RUN_WORDS = Object.freeze({
   cancelled: "Cancelled",
 });
 
+/** Whether a run stopped only because its cost needs the person's yes. */
+export const needsCostYes = (record) => Boolean(record.error && record.error.code === COST_NEEDS_CONFIRMATION);
+
 /** The label of the button that starts a run that did not finish again. */
 export function restartLabel(record) {
-  if (record.error && record.error.code === "COST_NEEDS_CONFIRMATION") return "Start it anyway";
+  if (needsCostYes(record)) return "Start it anyway";
   return record.state === "stopped" ? "Restart" : record.state === "cancelled" ? "Start again" : "Try again";
 }
 
