@@ -102,7 +102,7 @@ test("the funnel: rows and customers in and out, the yes share before and after,
   assert.ok(document.activeElement.closest('[data-dds-item="sql.spend"]'), "Biggest losses takes you to the step");
 });
 
-test("with no ledger the funnel stays out, and a step's own row counts still show", async () => {
+test("with no ledger the funnel draws only each step's own losses, never a total chained across steps", async () => {
   await show("approve");
   assert.ok(!$("[data-dds-funnel]") && !$("[data-dds-checks]"));
   await show("approve", {
@@ -111,8 +111,9 @@ test("with no ledger the funnel stays out, and a step's own row counts still sho
       return s;
     },
   });
-  assert.match($("[data-dds-funnel-row=rows]").textContent, /1,200 in, 1,100 out \(100 fewer, 8\.3%\)/);
-  assert.ok(!$("[data-dds-funnel-row=customers]"), "only what was counted is drawn");
+  assert.ok(!$("[data-dds-funnel-row]"), "only what was counted is drawn");
+  assert.match($("[data-dds-funnel] [data-dds-goto]").textContent, /Add each customer's total spend: 100 rows/);
+  assert.match($('[data-dds-step-receipt="sql.spend"]').textContent, /1,200 in, 1,100 out/, "the step's own counts still show");
 });
 
 // --- three things to check --------------------------------------------------------------------------------------
@@ -251,7 +252,7 @@ test("at most three blocking questions at once; the rest can wait, each with its
   const waiting = [...later.querySelectorAll("[data-dds-question]")];
   assert.equal(waiting.length, 3);
   for (const card of waiting) {
-    assert.match(card.querySelector("[data-dds-default]").textContent, /If you leave it, Data Doctor takes the safe choice/);
+    assert.match(card.querySelector("[data-dds-default]").textContent, /The safe choice, if you don't know/);
   }
   assert.ok($$("[data-dds-question]").some((c) => later.contains(c) && c.dataset.ddsCode === "UNKNOWN_BOOLEAN"), "a question that is not blocking waits too");
 });

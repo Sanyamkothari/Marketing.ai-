@@ -7,6 +7,7 @@ import {
   BLOCKING_AT_ONCE,
   INTERRUPTION_BUDGET,
   SECTIONS,
+  alertOf,
   findingsOf,
   leadOf,
   maskCell,
@@ -15,6 +16,7 @@ import {
   readyToApprove,
   receiptOf,
   sectionOf,
+  signatureOf,
   withinBudget,
 } from "../../../../../ui/modules/datadoctor/plan.js";
 import { WHO, messageFor } from "../../../../../ui/modules/datadoctor/who.js";
@@ -92,9 +94,23 @@ test("a step that leaves nothing is a stop; lost and counted-twice customers are
   assert.equal(found[0].level, "stop");
   assert.deepEqual(found.slice(1).map((f) => f.kind).sort(), ["customers_duplicated", "customers_lost"], "4 lost and 4 doubled never cancel out");
   const plan = planOf(items, new Set(), ledger);
-  const gate = readyToApprove(plan, new Set(), found, items);
+  const gate = readyToApprove(plan, new Map(), found, items);
   assert.equal(gate.ok, false);
   assert.equal(gate.stops.length, 1, "a stop on a step still ticked holds the final yes");
+  const lowered = { steps: [{ item_id: "none", rows_in: 10, rows_out: 0, level: "note" }] };
+  assert.equal(alertOf(step("none", "sql_query", { payload: { alert_level: "note" } }), lowered), "stop", "nothing can lower a stop");
+});
+
+test("a stop that names no step holds the final yes; a check given to a section lapses when the section changes", () => {
+  const items = [step("a", "parse_date", { confidence: "check" })];
+  const plan = planOf(items, new Set(), null);
+  const checked = new Map([["fix", signatureOf(plan[0])]]);
+  assert.equal(readyToApprove(plan, checked, [], items).ok, true);
+  const global = [{ level: "stop", kind: "guard", count: 0, items: [] }];
+  assert.equal(readyToApprove(plan, checked, global, items).ok, false, "a stop on the whole plan is never skipped");
+  const grown = [...items, step("b", "parse_number")];
+  const later = planOf(grown, new Set(), null);
+  assert.deepEqual(readyToApprove(later, checked, [], grown).unchecked.map((s) => s.id), ["fix"], "a new change asks for a new look");
 });
 
 test("at most five things interrupt: stops always, flags while the budget lasts, the rest are notes", () => {
@@ -123,6 +139,9 @@ test("personal details are hidden in sample rows, by column name, by the ledger'
   assert.equal(maskCell("city", "Pune", ["city"]), "hidden");
   assert.equal(maskCell("segment", "Gold"), "Gold");
   assert.equal(maskCell("spend", 120.5), "120.5");
+  assert.equal(maskCell("signup", "2024-01-31"), "2024-01-31", "a date is not a phone number");
+  assert.equal(maskCell("signup", "2024-01-31 10:15:00"), "2024-01-31 10:15:00");
+  assert.equal(maskCell("ref", "+91 98765 43210"), "hidden");
 });
 
 test("a receipt falls back to the row counts the case holds, and says nothing it was not given", () => {

@@ -125,14 +125,16 @@ export function receiptOf(item, ledger) {
 
 const PERSONAL_NAME = /(e-?mail|phone|mobile|msisdn|name|address|dob|birth|aadhaar|aadhar|passport|\bpan\b|card)/i;
 const EMAIL = /[^\s@]+@[^\s@]+\.[^\s@]+/;
-const PHONE_LIKE = /\d[\d\s\-()+]{7,}\d/;
+// A run of at least nine digits (a phone or card number); a date such as 2024-01-31 has eight and stays readable.
+const phoneLike = (text) =>
+  (text.match(/\+?\d[\d\s\-().]{7,}\d/g) || []).some((m) => m.replace(/\D/g, "").length >= 9 && !/^\d{4}-\d{2}-\d{2}/.test(m));
 export const HIDDEN = "hidden";
 
 /** A cell for a sample row: hidden when its column is personal (by its name or the ledger's list) or it looks like one. */
 export function maskCell(column, value, personal = []) {
   if (value === null || value === undefined || value === "") return "";
   const text = String(value);
-  if (personal.includes(column) || PERSONAL_NAME.test(column) || EMAIL.test(text) || PHONE_LIKE.test(text)) return HIDDEN;
+  if (personal.includes(column) || PERSONAL_NAME.test(column) || EMAIL.test(text) || phoneLike(text)) return HIDDEN;
   return text.length > 40 ? `${text.slice(0, 37)}...` : text;
 }
 
@@ -195,15 +197,18 @@ function add(found, f) {
   if (f.itemId && !same.items.includes(f.itemId)) same.items.push(f.itemId);
 }
 
-/** The level of the worst alert on one item (ledger row, payload, then what its counts say), or null. */
+/** The worst alert on one item, from the ledger row, the payload and what its counts say; or null. No source can
+ * lower another: a step that leaves nothing is a stop whatever else is said about it. */
 export function alertOf(item, ledger) {
   const r = receiptOf(item, ledger);
   const p = payloadOf(item);
-  if (r && r.level) return r.level;
-  if (["stop", "flag", "note"].includes(p.alert_level)) return p.alert_level;
-  if (r && r.rowsIn > 0 && r.rowsOut === 0) return "stop"; // a step that leaves nothing stops the plan
-  if (r && (r.lost > 0 || r.duplicated > 0)) return "flag";
-  return null;
+  const said = [
+    r && r.level,
+    LEVELS.includes(p.alert_level) ? p.alert_level : null,
+    r && r.rowsIn > 0 && r.rowsOut === 0 ? "stop" : null, // a step that leaves nothing stops the plan
+    r && (r.lost > 0 || r.duplicated > 0) ? "flag" : null,
+  ].filter(Boolean);
+  return LEVELS.find((l) => said.includes(l)) || null;
 }
 
 /**
@@ -295,11 +300,20 @@ export function planOf(items, approveIds, ledger, confirmedIds = new Set()) {
   }).filter((s) => s.items.length);
 }
 
-/** Whether the final yes is ready: every section with something to look at has been checked, and no stop is left. */
+/** What a section held when it was checked: any change to its items (a new one, a tick, a park) asks for a new look. */
+export const signatureOf = (sec) => sec.items.map((i) => `${i.item_id}:${i.state}:${i.parked_for || ""}`).join("|");
+
+/** Whether a section counts as checked: `checked` maps a section id to the signature it had when it was checked. */
+export const isChecked = (sec, checked) => checked.get(sec.id) === signatureOf(sec);
+
+/**
+ * Whether the final yes is ready: every section with something to look at has been checked as it is now, and no stop
+ * is left. A stop holds when its step is still ticked, or when it names no step at all (a check on the whole plan).
+ */
 export function readyToApprove(plan, checked, findings, items) {
-  const unchecked = plan.filter((s) => (s.pending.length || s.waiting.length) && !checked.has(s.id));
+  const unchecked = plan.filter((s) => (s.pending.length || s.waiting.length) && !isChecked(s, checked));
   const open = new Set(items.filter((i) => i.state === "accepted").map((i) => i.item_id));
-  const stops = findings.filter((f) => f.level === "stop" && f.items.some((id) => open.has(id)));
+  const stops = findings.filter((f) => f.level === "stop" && (!f.items.length || f.items.some((id) => open.has(id))));
   return { unchecked, stops, ok: !unchecked.length && !stops.length };
 }
 

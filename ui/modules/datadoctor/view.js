@@ -279,8 +279,8 @@ export function questionHtml(
   const later =
     deferred && open
       ? `<p class="dds-state" data-dds-default>${icon("clock", { size: 14 })}<span>${esc(
-          q.blocking ? "Asked after the ones above." : "This can wait.",
-        )} ${esc(fallback && fallback !== DONT_KNOW ? `If you leave it, Data Doctor takes the safe choice: ${fallback}.` : "If you leave it, Data Doctor takes the safe choice.")}</span></p>`
+          q.blocking ? "Asked once the ones above are answered." : "This can wait.",
+        )} ${esc(fallback && fallback !== DONT_KNOW ? `The safe choice, if you don't know: ${fallback}.` : "The safe choice, if you don't know, is among its answers.")}</span></p>`
       : "";
   return `<article class="dds-card dds-q${open ? " is-open" : ""}" data-dds-question="${id}" data-dds-code="${esc(q.code)}" aria-labelledby="ddsq-${id}"><p class="dds-card-t" id="ddsq-${id}">${userTextIn(q.text, names)}</p>${tag ? `<p class="dds-tag-row">${tag}</p>` : ""}${why}${later}${state}${memory}${change}${
     showOptions ? `<ul class="dds-opts" id="${esc(optsId)}" aria-label="Answers">${options}${dontKnow}</ul>` : ""
@@ -418,7 +418,8 @@ export function approveHtml(screen, { busy = false, level = 3, gate = null } = {
     unchecked.length
       ? `Check each section above first: ${unchecked.map((s) => s.title).join(", ")}.`
       : "",
-    stops.length ? "A step stops the plan. Untick it, park it or fix it first." : "",
+    stops.some((f) => f.items.length) ? "A step stops the plan. Untick it, park it or fix it first." : "",
+    stops.some((f) => !f.items.length) ? "A safety check stops the whole plan. It cannot be approved as it is." : "",
   ].filter(Boolean);
   return `<section class="dds-approve card" data-dds-approve aria-labelledby="dds-approve-t"><h${level} id="dds-approve-t" class="dds-group-t">Approve the changes</h${level}><p class="dds-why">One final yes, after you have checked each section. You approve this sentence, word for word. Your files are not changed.</p><blockquote class="dds-sentence" id="dds-approve-sentence" data-dds-approve-sentence>${esc(
     view.approval_sentence,

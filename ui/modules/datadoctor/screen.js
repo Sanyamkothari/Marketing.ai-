@@ -93,7 +93,7 @@ function fresh() {
     startInfo: null, // { uploadId, rows } of the file the campaign starts from, for the sentence above Start
     changing: new Set(), // answered questions whose answers are shown again ("Change answer")
     read: new Set(), // changes needing their own yes whose "I have read this sentence" is ticked
-    checked: new Set(), // plan sections the person has checked ("I have checked this section")
+    checked: new Map(), // plan sections the person has checked ("I have checked this section") -> what they held then
     knowing: new Map(), // "I don't know" panels open: "q:<question>" / "i:<item>" -> who would know (or null)
   };
 }
@@ -587,7 +587,7 @@ function bind(entry) {
       act(entry, "tick", () => decideItem(theCase(entry), input.dataset.ddsTick, input.checked));
     } else if (input.matches && input.matches("input[data-dds-sec-ok]")) {
       const id = input.dataset.ddsSecOk;
-      if (input.checked) entry.state.checked.add(id);
+      if (input.checked) entry.state.checked.set(id, input.dataset.ddsSecSig || "");
       else entry.state.checked.delete(id);
       draw(entry);
       focusOn(entry, `input[data-dds-sec-ok="${id}"]`);

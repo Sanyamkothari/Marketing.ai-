@@ -1017,7 +1017,9 @@ The approval view leads with what our code counted, never with what the AI wrote
   `park_for`): it is left out until it is resumed. A question takes its safe choice for now.
 
 The numbers come from the plan ledger. Until the engine sends it, the screen draws what the case already holds (a
-step's `rows_in` / `rows_out`) and the parts that need the ledger stay out. The field names it reads are listed at the
+step's `rows_in` / `rows_out`, each on its own step and never chained into a whole-plan total) and the parts that need
+the ledger stay out. A check given to a section lapses when anything in it changes, and a stop that names no step holds
+the final yes. The field names it reads are listed at the
 top of `ui/modules/datadoctor/plan.js` (`view.ledger`, `item.payload.receipt`).
 
 ### For developers

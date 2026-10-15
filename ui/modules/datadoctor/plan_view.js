@@ -20,6 +20,7 @@ import {
   alertOf,
   columnsOfRows,
   findingsOf,
+  isChecked,
   kindOf,
   leadOf,
   ledgerOf,
@@ -28,6 +29,7 @@ import {
   queueOf,
   readyToApprove,
   receiptOf,
+  signatureOf,
   withinBudget,
 } from "./plan.js";
 import { WHO, messageFor, whoOf } from "./who.js";
@@ -75,17 +77,19 @@ export function samplesHtml(rows, { personal = [], caption = "" } = {}) {
 
 const finite = (v) => Number.isFinite(v);
 
-/** What the funnel draws: the ledger's totals, else the row counts the plan's steps already hold; null for nothing. */
+/**
+ * What the funnel draws: the ledger's totals, and each step's own losses; null for nothing. With no ledger only the
+ * steps' losses are drawn: the steps read different files (a query is tried on the first rows), so their counts are
+ * never chained into a whole-plan total here.
+ */
 export function funnelOf(items, ledger) {
   const live = items.filter((i) => i.state !== "rejected");
   const steps = live
     .map((item) => ({ item, r: receiptOf(item, ledger) }))
     .filter(({ r }) => r && finite(r.rowsIn) && finite(r.rowsOut));
-  const rowsIn = ledger && finite(ledger.rows_in) ? ledger.rows_in : steps.length ? steps[0].r.rowsIn : null;
-  const rowsOut = ledger && finite(ledger.rows_out) ? ledger.rows_out : steps.length ? steps[steps.length - 1].r.rowsOut : null;
   const out = {
-    rowsIn,
-    rowsOut,
+    rowsIn: ledger && finite(ledger.rows_in) ? ledger.rows_in : null,
+    rowsOut: ledger && finite(ledger.rows_out) ? ledger.rows_out : null,
     customersIn: ledger && finite(ledger.customers_in) ? ledger.customers_in : null,
     customersOut: ledger && finite(ledger.customers_out) ? ledger.customers_out : null,
     rateIn: ledger && finite(ledger.positive_rate_in) ? ledger.positive_rate_in : null,
@@ -97,7 +101,7 @@ export function funnelOf(items, ledger) {
       .slice(0, 3),
   };
   const any = [out.rowsIn, out.rowsOut, out.customersIn, out.customersOut, out.rateIn, out.rateOut].some(finite);
-  return any ? out : null;
+  return any || out.losses.length ? out : null;
 }
 
 function barRow(label, inN, outN, kind) {
@@ -156,9 +160,11 @@ function findingHtml(f, ledger, items) {
 export function checksHtml(findings, { used = 0, ledger = null, items = [], level = 3 } = {}) {
   if (!findings.length) return "";
   const { asking, folded } = withinBudget(findings, used);
-  const top = asking.slice(0, 3);
-  const more = [...asking.slice(3), ...folded];
-  const title = `${top.length} ${top.length === 1 ? "thing" : "things"} to check`;
+  // Three at the top, but a stop is never folded away under the notes.
+  const shown = Math.max(3, asking.filter((f) => f.level === "stop").length);
+  const top = asking.slice(0, shown);
+  const more = [...asking.slice(shown), ...folded];
+  const title = top.length ? `${top.length} ${top.length === 1 ? "thing" : "things"} to check` : "Nothing urgent to check";
   const rest = more.length
     ? `<details class="dds-more-notes" data-dds-more-notes data-dds-keep="more-notes"><summary>${esc(plural(more.length, "more note", "more notes"))}</summary><ul class="dds-check-list">${more
         .map((f) => findingHtml(f, ledger, items))
@@ -402,7 +408,7 @@ function sectionHtml(sec, screen, ctx, level) {
     : "";
   const needsCheck = sec.pending.length || sec.waiting.length;
   const check = needsCheck
-    ? `<label class="dds-tick dds-sec-check"><input type="checkbox" data-dds-sec-ok="${sec.id}"${ctx.checked.has(sec.id) ? " checked" : ""}${
+    ? `<label class="dds-tick dds-sec-check"><input type="checkbox" data-dds-sec-ok="${sec.id}" data-dds-sec-sig="${esc(signatureOf(sec))}"${isChecked(sec, ctx.checked) ? " checked" : ""}${
         ctx.busy ? " disabled" : ""
       }><span class="dds-item-body"><span class="dds-item-t">I have checked this section</span></span></label>`
     : "";
