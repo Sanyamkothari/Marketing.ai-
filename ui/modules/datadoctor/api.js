@@ -78,6 +78,13 @@ export const decideItem = (c, itemId, accept) =>
     body: { version: c.version, item_id: itemId, accept, op_id: opId() },
   });
 
+/** Park a step for the one who would know (`crm_admin`, `database_admin`, `compliance`, `finance`, `campaign_manager`): it is left out until resumed. */
+export const parkItem = (c, itemId, role) =>
+  call(one(c.case_id, "/decisions"), {
+    method: "POST",
+    body: { version: c.version, item_id: itemId, accept: false, park_for: role, op_id: opId() },
+  });
+
 /** The own yes of one change that needs it, with its sentence word for word. */
 export const confirmItem = (c, itemId, sentence) =>
   call(one(c.case_id, "/confirmations"), {

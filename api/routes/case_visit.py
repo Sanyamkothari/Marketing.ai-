@@ -8,7 +8,7 @@ off - the default - none of these paths exists and docs/API.md is unchanged.
 | `POST /cases/{case_id}/visit` | Analyst | Continues the visit from the last state written, to its next rest. |
 | `POST /cases/{case_id}/goal` | Analyst | Chooses, switches or clears (`null`) the goal; nothing decided is asked again. |
 | `POST /cases/{case_id}/answers` | Analyst | Answers a question with one of its options. |
-| `POST /cases/{case_id}/decisions` | Analyst | Ticks or unticks a suggestion of the active section. |
+| `POST /cases/{case_id}/decisions` | Analyst | Ticks or unticks a suggestion of the active section; unticked with `park_for`, it waits for the one who would know and is left out until resumed. |
 | `POST /cases/{case_id}/approval` | Analyst | Approves what the preview showed; recorded with the user id and the sentence shown. |
 | `POST /cases/{case_id}/chat` | Analyst | Writes to Data Doctor; with no AI service the reply says so and nothing else changes. |
 | `POST /cases/{case_id}/confirmations` | Analyst | Plan O M246: the own yes of one APPROVE-class item, with the exact sentence read (the item's role is checked). |
@@ -146,6 +146,13 @@ class AnswerRequest(_Change):
 class DecisionRequest(_Change):
     item_id: str = Field(min_length=1, max_length=128)
     accept: bool = Field(description="True ticks it; false unticks it.")
+    park_for: str | None = Field(
+        default=None,
+        max_length=32,
+        description="With `accept` false: park the step for the one who would know (`crm_admin`, `database_admin`, "
+        "`compliance`, `finance` or `campaign_manager`). It is left out until resumed; any later tick or untick "
+        "resumes it.",
+    )
 
 
 class ApprovalRequest(_Change):
@@ -440,6 +447,7 @@ def decide_item(
             expected_version=body.version,
             actor=principal.user_id,
             op_id=body.op_id,
+            park_for=body.park_for,
         )
     except CaseError as exc:
         raise _error(exc) from exc

@@ -96,6 +96,7 @@ __all__ = [
     "CLIENT_ID_PATTERN",
     "DEFAULT_CLIENT_ID",
     "LOCK_FILENAME",
+    "PARK_ROLES",
     "TIMELINE_FILENAME",
     "Case",
     "CaseApproval",
@@ -303,6 +304,16 @@ class CaseGoal(StrictBase):
     set_by: str = Field(description="Who set it (user id).")
 
 
+PARK_ROLES: Final[tuple[str, ...]] = (
+    "crm_admin",
+    "database_admin",
+    "compliance",
+    "finance",
+    "campaign_manager",
+)
+"""Who a step can be parked for ("Who would know?"): a step waits for one of these, and is left out meanwhile."""
+
+
 class CaseItem(StrictBase):
     """Every proposal: a step, a setting, a role, a mapping, a build, an outcome definition."""
 
@@ -336,6 +347,12 @@ class CaseItem(StrictBase):
         default=None,
         exclude_if=lambda value: value is None,
         description="Plan O M246: the client's standing answer that added it, pre-ticked and revocable.",
+    )
+    parked_for: str | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+        description="Waiting for someone who would know (one of `PARK_ROLES`): the step is left out until it is "
+        "resumed. Unticked or ticked again, it is no longer parked.",
     )
 
 

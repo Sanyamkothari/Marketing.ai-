@@ -14,7 +14,7 @@
 //   approvals   the exact sentence, why it needs its own yes, who must agree, "I agree to this sentence"
 //   doubts      I am not sure because / Here is what I would do / Here is what changes if not
 //   requests    what to ask the data team for, the file wanted, and the list to send them
-//   checklist   found by our checks (ticked), suggested by the AI (never ticked), your edits, earlier answers
+//   earlier answers   (the plan itself, in sections, is `plan_view.js`)
 //   approve     the sentence approved, word for word, and Approve
 //   goals       with no goal yet: what this data can be used for, and "Choose this goal"
 //   chat        the chat, "What the AI looked at" under each reply (`../agent/sent.js`, as built), or the way
@@ -133,7 +133,7 @@ function measured(option) {
   return parts.join(" · ");
 }
 
-const userTextIn = (text, names) => {
+export const userTextIn = (text, names) => {
   // A server sentence with the person's column and file names in it: the names are marked as their own text.
   let html = esc(plain(text));
   for (const name of names.filter(Boolean).sort((a, b) => b.length - a.length)) {
@@ -143,7 +143,7 @@ const userTextIn = (text, names) => {
   return html;
 };
 
-const namesOf = (c) => [
+export const namesOf = (c) => [
   ...(c.files || []).map((f) => f.file_name),
   ...(c.questions || []).map((q) => q.column),
   ...(c.items || []).map((i) => i.payload && i.payload.column),
@@ -198,7 +198,11 @@ export function leftOutHtml(screen, { where = "head" } = {}) {
 
 // --- questions ------------------------------------------------------------------------------------------------
 
-export function questionHtml(q, c, { busy = false, standing = [], changing = false, remembered = null } = {}) {
+export function questionHtml(
+  q,
+  c,
+  { busy = false, standing = [], changing = false, remembered = null, deferred = false, extra = "" } = {},
+) {
   const names = namesOf(c);
   const open = isOpen(q);
   const id = esc(q.question_id);
@@ -270,14 +274,22 @@ export function questionHtml(q, c, { busy = false, standing = [], changing = fal
       })}</div>`
     : "";
   const showOptions = open || q.assumed || changing;
-  return `<article class="dds-card dds-q${open ? " is-open" : ""}" data-dds-question="${id}" data-dds-code="${esc(q.code)}" aria-labelledby="ddsq-${id}"><p class="dds-card-t" id="ddsq-${id}">${userTextIn(q.text, names)}</p>${tag ? `<p class="dds-tag-row">${tag}</p>` : ""}${why}${state}${memory}${change}${
+  // A question that can wait says what happens if it is left: its own safe choice, never a guess.
+  const fallback = dk ? dk.option.label : "";
+  const later =
+    deferred && open
+      ? `<p class="dds-state" data-dds-default>${icon("clock", { size: 14 })}<span>${esc(
+          q.blocking ? "Asked after the ones above." : "This can wait.",
+        )} ${esc(fallback && fallback !== DONT_KNOW ? `If you leave it, Data Doctor takes the safe choice: ${fallback}.` : "If you leave it, Data Doctor takes the safe choice.")}</span></p>`
+      : "";
+  return `<article class="dds-card dds-q${open ? " is-open" : ""}" data-dds-question="${id}" data-dds-code="${esc(q.code)}" aria-labelledby="ddsq-${id}"><p class="dds-card-t" id="ddsq-${id}">${userTextIn(q.text, names)}</p>${tag ? `<p class="dds-tag-row">${tag}</p>` : ""}${why}${later}${state}${memory}${change}${
     showOptions ? `<ul class="dds-opts" id="${esc(optsId)}" aria-label="Answers">${options}${dontKnow}</ul>` : ""
-  }</article>`;
+  }${extra}</article>`;
 }
 
 // --- approvals (APPROVE-class) ----------------------------------------------------------------------------------
 
-export function approvalHtml(entry, item, c, { busy = false, read = false } = {}) {
+export function approvalHtml(entry, item, c, { busy = false, read = false, extra = "" } = {}) {
   const names = namesOf(c);
   const who = ROLE_WORDS[entry.role] || ROLE_WORDS.analyst;
   const whoText = entry.separate ? `${who}, other than whoever suggested or answered it` : who;
@@ -311,7 +323,7 @@ export function approvalHtml(entry, item, c, { busy = false, read = false } = {}
     names,
   )}</blockquote><p class="dds-why"><span class="dds-label">Why:</span> ${esc(entry.why.charAt(0).toUpperCase() + entry.why.slice(1))}.</p><p class="dds-why"><span class="dds-label">Who must agree:</span> ${esc(
     whoText,
-  )}.</p>${pending && !done ? `<p class="dds-why">Until someone agrees, this change is left out.</p>` : ""}${action}</article>`;
+  )}.</p>${pending && !done ? `<p class="dds-why">Until someone agrees, this change is left out.</p>` : ""}${extra}${action}</article>`;
 }
 
 // --- doubts ---------------------------------------------------------------------------------------------------
@@ -365,48 +377,7 @@ export function missingHtml(view, kitHref, c = {}) {
   )}</span></p><p class="dds-why"><a href="${esc(kitHref)}" data-dds-request-kit download>Download the list to send your data team</a></p></article>`;
 }
 
-// --- the checklist --------------------------------------------------------------------------------------------
-
-/** The checklist's groups (the design §13.2), by who suggested the change. */
-export function groupsOf(c, view) {
-  const { items } = activeSection(c);
-  const special = new Set((view.approve_class || []).map((a) => a.item_id));
-  const rest = items.filter((i) => !special.has(i.item_id) && !i.standing_answer_id);
-  return [
-    { id: "rules", title: "Found by our checks", items: rest.filter((i) => i.source === "rules") },
-    { id: "ai", title: "Suggested by the AI (never ticked for you)", items: rest.filter((i) => i.source === "ai") },
-    { id: "person", title: "Your edits", items: rest.filter((i) => i.source === "person") },
-  ].filter((g) => g.items.length);
-}
-
-export function itemHtml(item, c, { busy = false } = {}) {
-  const names = namesOf(c);
-  const id = esc(item.item_id);
-  const on = item.state === "accepted";
-  const sure = item.confidence === "sure" ? "Sure" : "Please check";
-  const assumption = item.assumption
-    ? `<span class="dds-item-sub" data-dds-assumption>${esc(`Assumed: ${plain(item.assumption)}`)}</span>`
-    : "";
-  return `<li class="dds-item" data-dds-item="${id}"><label class="dds-tick"><input type="checkbox" data-dds-tick="${id}"${on ? " checked" : ""}${
-    busy ? " disabled" : ""
-  }><span class="dds-item-body"><span class="dds-item-t">${userTextIn(item.title || item.kind, names)}</span><span class="dds-item-sub">${esc(
-    sure,
-  )}</span>${assumption}</span></label></li>`;
-}
-
-export function checklistHtml(screen, { busy = false, level = 3 } = {}) {
-  const { case: c, view } = screen;
-  return groupsOf(c, view)
-    .map(
-      (g) =>
-        `<section class="dds-group" data-dds-group="${g.id}" aria-labelledby="dds-g-${g.id}"><h${level} id="dds-g-${g.id}" class="dds-group-t">${esc(
-          g.title,
-        )} <span class="ds-count">${count(g.items.length)}</span></h${level}><ul class="dds-items">${g.items
-          .map((i) => itemHtml(i, c, { busy }))
-          .join("")}</ul></section>`,
-    )
-    .join("");
-}
+// --- remembered answers ---------------------------------------------------------------------------------------
 
 /** The answers remembered from before, used here: each with its date and Revoke (the design §7.2). */
 export function standingHtml(view, { busy = false, level = 3 } = {}) {
@@ -435,21 +406,31 @@ export function standingHtml(view, { busy = false, level = 3 } = {}) {
 
 // --- Approve --------------------------------------------------------------------------------------------------
 
-export function approveHtml(screen, { busy = false, level = 3 } = {}) {
+export function approveHtml(screen, { busy = false, level = 3, gate = null } = {}) {
   const { view } = screen;
   if (!view.approval_sentence) return "";
   const waiting = (view.approve_class || []).filter((a) => !a.confirmed && itemAccepted(screen.case, a.item_id)).length;
   const left = leftOutOf(screen).length;
-  return `<section class="dds-approve card" data-dds-approve aria-labelledby="dds-approve-t"><h${level} id="dds-approve-t" class="dds-group-t">Approve the changes</h${level}><p class="dds-why">You approve this sentence, word for word. Your files are not changed.</p><blockquote class="dds-sentence" id="dds-approve-sentence" data-dds-approve-sentence>${esc(
+  // The section-by-section check (`plan.js` `readyToApprove`): one final yes, once each open section was looked at.
+  const unchecked = gate ? gate.unchecked : [];
+  const stops = gate ? gate.stops : [];
+  const hold = [
+    unchecked.length
+      ? `Check each section above first: ${unchecked.map((s) => s.title).join(", ")}.`
+      : "",
+    stops.length ? "A step stops the plan. Untick it, park it or fix it first." : "",
+  ].filter(Boolean);
+  return `<section class="dds-approve card" data-dds-approve aria-labelledby="dds-approve-t"><h${level} id="dds-approve-t" class="dds-group-t">Approve the changes</h${level}><p class="dds-why">One final yes, after you have checked each section. You approve this sentence, word for word. Your files are not changed.</p><blockquote class="dds-sentence" id="dds-approve-sentence" data-dds-approve-sentence>${esc(
     view.approval_sentence,
-  )}</blockquote>${waiting ? `<p class="dds-why">${esc(`First give your own yes to ${plural(waiting, "change", "changes")} above.`)}</p>` : ""}${leftOutHtml(
-    screen,
-    { where: "approve" },
-  )}${left ? `<p class="dds-why" data-dds-left-out-choice>${esc(`After you approve, you choose whether to continue without ${left === 1 ? "it" : "them"}.`)}</p>` : ""}<div class="dds-actions">${button({
+  )}</blockquote>${waiting ? `<p class="dds-why">${esc(`First give your own yes to ${plural(waiting, "change", "changes")} above.`)}</p>` : ""}${hold
+    .map((h) => `<p class="dds-why" data-dds-approve-hold>${esc(h)}</p>`)
+    .join("")}${leftOutHtml(screen, { where: "approve" })}${
+    left ? `<p class="dds-why" data-dds-left-out-choice>${esc(`After you approve, you choose whether to continue without ${left === 1 ? "it" : "them"}.`)}</p>` : ""
+  }<div class="dds-actions">${button({
     label: "Approve",
     kind: "primary",
     attrs: `data-dds-approve-button aria-describedby="dds-approve-sentence"`,
-    disabled: busy || waiting > 0,
+    disabled: busy || waiting > 0 || hold.length > 0,
     busy: busy === "approve",
   })}</div></section>`;
 }

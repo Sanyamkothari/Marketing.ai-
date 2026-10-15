@@ -63,6 +63,7 @@ from engine.agent.contracts import AgentConfidence, ProposalSource, ProposalStat
 from engine.agent.tools import TOOLS, AgentToolError
 from engine.config import ConfigError
 from engine.doctor.case import (
+    PARK_ROLES,
     Case,
     CaseApproval,
     CaseChatEntry,
@@ -2225,8 +2226,12 @@ def decide(
     expected_version: int,
     actor: str,
     op_id: str | None = None,
+    park_for: str | None = None,
 ) -> Case:
-    """Tick or untick an item of the active section; the visit goes back to TREAT and previews again."""
+    """Tick or untick an item of the active section; the visit goes back to TREAT and previews again.
+
+    `park_for` (one of `PARK_ROLES`) leaves the item out and notes who would know ("waiting for the CRM admin");
+    any later tick or untick resumes it."""
     run = _Run(deps, actor)
     now = deps.clock()
 
@@ -2234,8 +2239,12 @@ def decide(
         item = next((i for i in case.items if i.item_id == item_id), None)
         if item is None or not _in_section(item.goal_id, case):
             raise _unknown("There is no such suggestion in this case (or its goal is set aside).")
+        if park_for is not None and (accept or park_for not in PARK_ROLES):
+            raise _unknown("A step can be parked only unticked, for one of the people who would know.")
         state = ProposalState.ACCEPTED if accept else ProposalState.REJECTED
-        decided = item.model_copy(update={"state": state, "decided_by": actor, "decided_at": now})
+        decided = item.model_copy(
+            update={"state": state, "decided_by": actor, "decided_at": now, "parked_for": park_for}
+        )
         return _Step(
             to=VisitState.TREAT if case.state in _AFTER_RECALL else case.state,
             updates={"items": [decided if i.item_id == item_id else i for i in case.items]},
@@ -2244,7 +2253,7 @@ def decide(
                     kind=TimelineKind.ITEM_DECIDED,
                     upload_id=item.upload_id,
                     item_id=item_id,
-                    details={"state": state.value},
+                    details={"state": state.value, **({"parked_for": park_for} if park_for else {})},
                 )
             ],
         )

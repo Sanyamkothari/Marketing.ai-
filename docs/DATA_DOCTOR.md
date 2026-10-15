@@ -996,9 +996,33 @@ A few things keep you from agreeing to something by accident, and let you take a
   An answer that is remembered for your next files says "Remembered for next time" with its date, and Revoke there
   stops it being used next time (this check keeps the answer).
 
+### The plan screen, evidence first
+
+The approval view leads with what our code counted, never with what the AI wrote:
+
+- **A funnel** at the top: rows and customers in and out, the yes share before and after, and the biggest losses
+  (each one takes you to its step).
+- **"3 things to check"**, riskiest first: merged IDs, columns left out because they are only known after the outcome,
+  customers kept off the contact list, and the safety checks' stops and flags. Each leads with a count and a few sample
+  rows (personal details hidden). An AI suggestion is never quoted as evidence.
+- **At most three blocking questions** at once. The rest wait, each with the safe choice it would take. At most five
+  things interrupt: stops always, flags while the budget lasts, the rest are notes.
+- **The plan in sections** (Read the file, Fix values, Combine, Outcome, Exclusions, Privacy), one sentence and one
+  count each. Only changes that need a yes are open; sure fixes are folded away and can still be unticked. Check each
+  section, then give one final yes. A step shows what our code counted for it (rows and customers in and out, customers
+  lost and customers counted twice told apart, totals, a few rows before and after); a query is shown only behind
+  "Show the query".
+- **"I don't know"** asks who would know (CRM admin, database admin, compliance, finance, campaign manager) and gives a
+  message ready to copy. A step can be parked for them (`POST /cases/{case_id}/decisions` with `accept: false` and
+  `park_for`): it is left out until it is resumed. A question takes its safe choice for now.
+
+The numbers come from the plan ledger. Until the engine sends it, the screen draws what the case already holds (a
+step's `rows_in` / `rows_out`) and the parts that need the ledger stay out. The field names it reads are listed at the
+top of `ui/modules/datadoctor/plan.js` (`view.ledger`, `item.payload.receipt`).
+
 ### For developers
 
-`ui/modules/datadoctor/` (`screen.js` the component, `view.js` its markup, `switch.js` the switch read from
+`ui/modules/datadoctor/` (`screen.js` the component, `view.js` its markup, `plan.js` / `plan_view.js` / `who.js` the plan screen, `switch.js` the switch read from
 `GET /auth/me` `data_doctor`), mounted by `ui/modules/data/page.js` and, through Guided setup's own mount
 (`ui/modules/agent/guided.js` `mountGuided`), by the wizard and a goal's setup. The server side is
 `engine/doctor/screen.py` (the verdict with `note` under `ready_with_warnings`, the approval sentence, APPROVE-class

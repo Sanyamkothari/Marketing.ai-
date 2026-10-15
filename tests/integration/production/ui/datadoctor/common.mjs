@@ -29,6 +29,7 @@ export function makeWorld({ at = "question", me = "me_on", ai = null } = {}) {
     ai: ai || fx("ai_service"),
     posted: [],
     next: {},
+    patch: null, // (screen) => screen: changes the screen answer on its way out (fields the API sends later)
     cases: null, // the answer of GET /data-doctor/cases; default: the one case
     uploads: 0,
   };
@@ -52,7 +53,7 @@ export function serverFor(world) {
       const goal = (c.goals || []).find((g) => g.active);
       return ok({ cases: [{ case_id: CASE, title: c.title, goal_id: goal ? goal.goal_id : null, state: c.state, files: [], updated_at: c.updated_at }] });
     }
-    if (method === "GET" && p === `/cases/${CASE}/screen`) return ok(screen(world.at));
+    if (method === "GET" && p === `/cases/${CASE}/screen`) return ok(world.patch ? world.patch(screen(world.at)) : screen(world.at));
     if (method === "GET" && /^\/uploads\/[^/]+\/profile$/.test(p)) return ok({ rows: 1200, row_count: 1200, columns: [] });
     if (method === "POST" && p === "/campaign-runs") {
       world.posted.push({ path: p, body: request.body });
