@@ -973,6 +973,7 @@ def _contact_gate(
     It reads the customer file the run scored. A file that is no longer stored, or that has no key to join on, leaves
     the list as the scoring run made it (the gate says so only when the person gave it rules or a suppression list).
     """
+    from engine.decide.channel_columns import channel_columns
     from engine.decide.contact_gate import (
         CONTACT_RULES_FILENAME,
         SUPPRESSION_LIST_FILENAME,
@@ -991,7 +992,14 @@ def _contact_gate(
             source,
             row_keys,
             source_keys,
-            handled_columns=(config.governance.consent_column, config.actions.suppression.opt_out_column),
+            # The per-channel consent and contactable columns are the use case's own consent rules (a "no" on SMS is
+            # not a "no" on e-mail): the channel step decides each customer's channel from them, so the gate must not
+            # read one of them as an all-channel consent and take a customer who agreed on another channel off.
+            handled_columns=(
+                config.governance.consent_column,
+                config.actions.suppression.opt_out_column,
+                *channel_columns(config),
+            ),
             config_root=config_root,
             real_keys=_real_key_lookup(storage, record),
             scores=_household_ranking(config, scores),
