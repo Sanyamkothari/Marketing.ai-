@@ -13,7 +13,7 @@
 import { accessStatus } from "../../chrome.js";
 import { skeleton } from "../../dom.js";
 import {
-  announceModulesChanged,
+  announceRegistration,
   canAccess,
   registerModule,
   registerNavSlot,
@@ -152,4 +152,4 @@ registerResultLink({
 
 injectStyles();
 // A deep link to one of these pages was resolved by `app.js` before this module existed: draw it now.
-if (ROUTES.includes(hashParts()[0])) announceModulesChanged();
+if (ROUTES.includes(hashParts()[0])) announceRegistration();

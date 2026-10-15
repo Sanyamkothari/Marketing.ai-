@@ -309,5 +309,7 @@ if (app && ours()) {
   });
   guard.observe(app, { childList: true });
   setTimeout(() => guard.disconnect(), 10000);
-  rerouteIfOurs();
+  // While the page is still loading `app.js` has not drawn yet and will draw this route itself on
+  // `load`; asking now as well would draw it, and fetch for it, twice.
+  if (document.readyState === "complete") rerouteIfOurs();
 }

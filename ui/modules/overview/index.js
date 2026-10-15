@@ -12,7 +12,7 @@
 // merges M177 with it (DEC-1605).
 
 import { skeleton } from "../../dom.js";
-import { announceModulesChanged, phaseModules, registerModule } from "../router.js";
+import { announceRegistration, phaseModules, registerModule } from "../router.js";
 import { getOverview } from "./api.js";
 import { DEFAULT_PLACES, injectStyles, overviewHtml } from "./page.js";
 
@@ -101,4 +101,4 @@ registerModule({
 });
 
 // A deep link to this page was resolved by `app.js` before this module existed: draw it now.
-if (ROUTES.includes(hashParts()[0])) announceModulesChanged();
+if (ROUTES.includes(hashParts()[0])) announceRegistration();

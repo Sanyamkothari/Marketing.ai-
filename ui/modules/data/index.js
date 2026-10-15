@@ -4,7 +4,7 @@
 // It registers a route that nothing links to yet: the sidebar that does (M174) and the redirect from `#/connections`
 // are owned elsewhere. `#/connections`, `#/connections/<id>` and `#/doctor` keep working unchanged.
 
-import { announceModulesChanged, registerModule } from "../router.js";
+import { announceRegistration, registerModule } from "../router.js";
 import { renderData } from "./page.js";
 
 registerModule({
@@ -15,4 +15,4 @@ registerModule({
 
 // `app.js` draws the first screen before this module is loaded: a page opened straight at `#/data` is drawn again
 // now that the route has an owner.
-announceModulesChanged();
+announceRegistration();
