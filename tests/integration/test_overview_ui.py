@@ -287,11 +287,11 @@ def test_the_keyboard_reaches_the_new_campaign_button_and_a_card_action(browser:
     for _ in range(60):
         page.keyboard.press("Tab")
         label = page.evaluate(
-            "(() => { const e = document.activeElement; return e && e.closest('[data-module=\"overview\"]') ? (e.hasAttribute('data-new-campaign') ? 'new' : e.hasAttribute('data-card-action') ? 'card' : e.hasAttribute('data-how-counted') ? 'how' : '') : ''; })()"
+            "(() => { const e = document.activeElement; return e && e.closest('[data-module=\"overview\"]') ? (e.hasAttribute('data-new-campaign') ? 'new' : e.hasAttribute('data-card-action') ? 'card' : '') : ''; })()"
         )
         if label:
             reached.add(label)
             outline = page.evaluate("getComputedStyle(document.activeElement).outlineStyle")
             assert outline != "none", "focus is visible"
-    assert {"new", "card", "how"} <= reached
+    assert {"new", "card"} <= reached  # the "How this is counted" link went with the frozen Programme summary
     page.context.close()

@@ -189,7 +189,7 @@ async function renderMonitoring(app, parts) {
     await screen(app, missedHtml, () => {}, loadMissed, "Missed schedules");
   } else if (section === "runs") {
     if (id) await screen(app, () => runOutcomesHtml(id), bindRunOutcomes, () => loadRunOutcomes(id), "Outcomes");
-    else await screen(app, runsHtml, () => {}, loadRuns, "Scoring runs");
+    else await screen(app, runsHtml, () => {}, loadRuns, "Contact lists");
   } else {
     failure(app, noScreen(parts));
   }
@@ -269,7 +269,7 @@ export function forYouItems() {
   if (roles.includes("approver")) return [{ text: "No models are waiting for your approval", href: "#/approvals" }];
   if (roles.includes("analyst")) return [];
   if (roles.includes("admin")) return [{ text: "Manage who can sign in", href: "#/admin/users" }];
-  return [{ text: "See the latest campaigns and their results", href: "#/monitoring/runs" }];
+  return [{ text: "See the latest contact lists and their results", href: "#/monitoring/runs" }];
 }
 
 registerForYou(forYouItems);

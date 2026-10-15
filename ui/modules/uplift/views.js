@@ -1852,7 +1852,6 @@ export function campaignPageHtml(uc, run, c) {
   const measured = report && report.status !== "immature";
   const actions = measured
     ? headActions({
-        primary: { label: "See the value in rupees", href: routes.value(run.run_id) },
         related: { label: "Who was contacted", href: isUpliftRun(run) ? routes.output(uc.id, run.run_id) : routes.phase1Output(uc.id, run.run_id) },
       })
     : "";

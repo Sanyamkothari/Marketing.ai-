@@ -356,11 +356,8 @@ export function primaryAction(model) {
     case "waiting":
       return { label: "Add results", href: campaignTabHref(id, "results"), attrs: 'data-primary="results"' };
     case "measured":
-      return {
-        label: "Open the full report",
-        href: `#/pilot/proof/${encodeURIComponent(id)}`,
-        attrs: 'data-primary="report"',
-      };
+      // No button: the Value Proof Pack it used to open is frozen (v1 plan, stage 0), and the Results tab is beside it.
+      return null;
     default:
       return null;
   }
@@ -368,19 +365,16 @@ export function primaryAction(model) {
 
 /**
  * The view's ONE primary action, in the page header: the Overview's by status; on Audience the download (unless the
- * list is held); on Results the full report once measured (before that the form's "Add results" is the primary);
- * none on Technical details.
+ * list is held); none on Results (the Value Proof Pack's "Open the full report" is frozen, v1 plan stage 0) or on
+ * Technical details.
  */
 export function tabPrimary(model) {
-  const { tab, campaign, contactListHref } = model;
+  const { tab, contactListHref } = model;
   if (tab === "overview") return primaryAction(model);
   if (tab === "audience") {
     return contactListHref && !model.listHold
       ? { label: "Download contact list", href: contactListHref, attrs: 'download data-download="contact-list"' }
       : null;
-  }
-  if (tab === "results" && model.status.key === "measured") {
-    return { label: "Open the full report", href: `#/pilot/proof/${encodeURIComponent(campaign.campaign_id)}`, attrs: "data-open-report" };
   }
   return null;
 }

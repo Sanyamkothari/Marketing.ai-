@@ -6,7 +6,7 @@
 // and draws what comes back (`page.js`). It reads no layout setting, so it merges in any order with M174.
 //
 // Where its links lead is resolved when the page is drawn: `#/data` and `#/reports` (M179, M178) when a module has
-// claimed them, else the screens that do the same job today (`#/connections`, `#/pilot`). "+ New campaign" and the
+// claimed them, else the screens that do the same job today (`#/connections`, `#/results`). "+ New campaign" and the
 // checklist's "Start your first campaign" lead to `#/campaigns/new`, the wizard of M177: until M177 is merged that
 // address reaches Plan J's campaign page, which answers "not found". The page does not hide this; the integrator
 // merges M177 with it (DEC-1605).
@@ -48,7 +48,7 @@ export function placesNow() {
   return {
     ...DEFAULT_PLACES,
     data: claimed("data") ? DEFAULT_PLACES.data : "#/connections",
-    reports: claimed("reports") ? DEFAULT_PLACES.reports : "#/pilot",
+    reports: claimed("reports") ? DEFAULT_PLACES.reports : "#/results",
   };
 }
 

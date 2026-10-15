@@ -147,10 +147,10 @@ for (const [name, id] of [
         assert.equal($('[data-ds-tabs] [aria-selected="true"]').getAttribute("data-tab"), "overview");
         // M186: the status chip sits in the header beside the name (it was in "Where it stands")
         assert.equal(text("#app .head [data-status]"), "Measured");
-        assert.equal(text("[data-next-step]"), "Measured on 11 Oct 2026. The full report is ready.");
-        assert.equal(primaries().length, 1);
-        assert.equal(primaries()[0].textContent, "Open the full report");
-        assert.equal(primaries()[0].getAttribute("href"), `#/pilot/proof/${id}`);
+        assert.equal(text("[data-next-step]"), "Measured on 11 Oct 2026. Read the result on the Results tab.");
+        // The Value Proof Pack is frozen for v1 (plan stage 0): a measured campaign has no primary button, the tab is beside it.
+        assert.equal(primaries().length, 0);
+        assert.equal($('a[href^="#/pilot/"]'), null, "no link to a pilot page");
         assert.ok($("[data-refresh-ask]"), "Refresh the list is a secondary action");
         // M186: stat tiles (components.js statTile): the number as the value, what it counts in the caption
         assert.equal(text("[data-tile-contacted] .stat-value"), "12,862");
@@ -219,14 +219,14 @@ for (const [name, id] of [
         for (const li of reasons) assert.match(li.textContent, /^Their .+ for [\d,]+ of 126 customers \(\d+\.\d%\)$/);
     });
 
-    test(`${name}: Results shows the Proof Pack's headline, the evidence in words and the full report one click away`, async () => {
+    test(`${name}: Results shows the Proof Pack's headline, the evidence in words, and no link to the frozen full report`, async () => {
         await visit(`#/campaigns/${id}/results`);
         assert.equal(text("[data-headline]"), proof(id).headline);
         assert.equal(text("[data-evidence] [data-status]"), "Proven"); // M186: the evidence status chip (was `.chip`)
         assert.equal($("[data-evidence] [data-status]").dataset.tone, "good");
         assert.ok(!/Causal/.test(text("[data-results-measured]")), "the technical label is not shown");
-        assert.equal(primaries().length, 1);
-        assert.equal(primaries()[0].getAttribute("href"), `#/pilot/proof/${id}`);
+        assert.equal(primaries().length, 0, "no 'Open the full report': the Value Proof Pack is frozen");
+        assert.equal($('a[href^="#/pilot/"]'), null, "no link to a pilot page");
         assert.equal($("[data-results-form]"), null, "a measured campaign offers no upload");
     });
 

@@ -23,8 +23,9 @@ const { programmeKpis } = await import("../../../../../ui/modules/reports/progra
 const proofRows = () => $$("[data-proofs] tbody tr");
 const proofsReady = () => proofRows().length > 0 || $("[data-proofs-empty]");
 
+// Value proof is frozen for v1 (plan stage 0): no tab and not the default, so these look contracts open it by address.
 test("the header is the look's: one H1, one sentence and the one primary action inside it", async () => {
-  await open(w, "#/reports", proofsReady);
+  await open(w, "#/reports/value-proof", proofsReady);
   const header = $("main > .page-header");
   assert.ok(header, "components.js pageHeader");
   assert.equal(header.querySelectorAll("h1").length, 1);
@@ -41,9 +42,9 @@ test("the tabs are underline tabs with the tab roles, not pills", async () => {
   assert.ok(list && list.classList.contains("ds-tabs"), "components.js tabs");
   assert.equal(list.getAttribute("aria-label"), "Reports");
   const tabs = [...list.querySelectorAll('[role="tab"]')];
-  assert.deepEqual(tabs.map(text), ["Value proof", "Programme summary", "Check a past campaign", "Model reports"]);
-  assert.deepEqual(tabs.map((t) => t.getAttribute("aria-selected")), ["true", "false", "false", "false"]);
-  assert.deepEqual(tabs.map((t) => t.getAttribute("tabindex")), ["0", "-1", "-1", "-1"], "a roving tabindex");
+  assert.deepEqual(tabs.map(text), ["Value proof", "Check a past campaign", "Model reports"], "the open frozen tab, then the two tabs");
+  assert.deepEqual(tabs.map((t) => t.getAttribute("aria-selected")), ["true", "false", "false"]);
+  assert.deepEqual(tabs.map((t) => t.getAttribute("tabindex")), ["0", "-1", "-1"], "a roving tabindex");
   assert.ok(tabs.every((t) => t.getAttribute("href")?.startsWith("#/reports/")), "each tab is still a route");
   assert.equal($(".tabs-bar .tab, nav.tabs a.tab"), null, "no pill tabs");
   assert.equal($('[data-reports-tab="models"]').hasAttribute("data-technical"), true, "the technical tab stays marked for the switch");
@@ -138,7 +139,7 @@ test("a pack with no net value draws its sentence as plain text, never an empty 
 
 test("no pack yet: an empty state with a 40px icon, one sentence and one action", async () => {
   overlay["GET /pilot/proof"] = { status: 200, body: { proofs: [] } };
-  await open(w, "#/reports", () => $("[data-proofs-empty]"));
+  await open(w, "#/reports/value-proof", () => $("[data-proofs-empty]"));
   const empty = $("[data-proofs-empty] .empty-state");
   assert.ok(empty && empty.querySelector(".es-icon svg"), "an icon");
   assert.equal(empty.querySelectorAll("a.btn, button.btn").length, 1, "one action");
@@ -156,7 +157,7 @@ test("the header holds a slot for the newest pack while the list loads, so nothi
   };
   w.location.hash = "#/__between";
   await settle(3);
-  w.location.hash = "#/reports";
+  w.location.hash = "#/reports/value-proof";
   await settle(3);
   const slot = $("[data-reports-header] .ph-actions [data-reports-slot]");
   assert.ok(slot, "a slot in the header's action place while the list loads");

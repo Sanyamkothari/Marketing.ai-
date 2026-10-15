@@ -46,10 +46,13 @@ test("the advanced tools are folded away: uplift, the data kit, raw tables, Mode
       "Check a past campaign",
       // Plan M M178: Reports' way in while the classic layout has no sidebar
       "Reports",
+      // Stage 0 freeze: the proof pages are listed here and nowhere on the main path
+      "Value Proof Packs",
+      "Programme summary",
       // Plan M M175 and M179: the Overview's and the Data page's ways in, the same way
       "Overview",
       "Data",
-      "Campaigns waiting for results",
+      "Contact lists waiting for results",
       "Document assistant",
     ],
   );
@@ -61,6 +64,8 @@ test("the advanced tools are folded away: uplift, the data kit, raw tables, Mode
     "#/doctor",
     "#/audit",
     "#/reports",
+    "#/reports/value-proof",
+    "#/reports/programme",
     "#/overview",
     "#/data",
     "#/monitoring/runs",

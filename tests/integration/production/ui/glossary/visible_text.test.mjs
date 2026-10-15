@@ -113,7 +113,7 @@ export const PAGES = [
   { id: "proof-pack-spend", hash: `#/pilot/proof/${C_SPEND}`, expect: /Value Proof Pack/ },
   { id: "reports", hash: "#/pilot", expect: /What the models found/ },
   // Plan M, M178: the new Reports page, one entry per tab, each with an EMPTY allow-list (a new page shows no never-shown word).
-  { id: "reports-value-proof", hash: "#/reports", expect: /Value Proof Packs/, selector: "[data-proofs]" },
+  { id: "reports-value-proof", hash: "#/reports/value-proof", expect: /Value Proof Packs/, selector: "[data-proofs]" },
   { id: "reports-programme", hash: "#/reports/programme", expect: /Value proven to date/, selector: "[data-proven]" },
   { id: "reports-check", hash: "#/reports/check", expect: /Who was in which group/, selector: "[data-rp-check-form]" },
   { id: "reports-models", hash: "#/reports/models", expect: /Model reports/, selector: "[data-models-part]" },
@@ -161,7 +161,7 @@ export const PAGES = [
   ].flatMap(([name, id]) => [
     { id: `campaign-${name}-overview`, hash: `#/campaigns/${id}/overview`, expect: /Where it stands/, selector: "[data-overview]" },
     { id: `campaign-${name}-audience`, hash: `#/campaigns/${id}/audience`, expect: /to contact, out of/, selector: "[data-audience-search]" },
-    { id: `campaign-${name}-results`, hash: `#/campaigns/${id}/results`, expect: /Open the full report/, selector: "[data-results-measured]" },
+    { id: `campaign-${name}-results`, hash: `#/campaigns/${id}/results`, expect: /Proven/, selector: "[data-results-measured]" },
     { id: `campaign-${name}-technical`, hash: `#/campaigns/${id}/technical`, expect: /Choose the best e-mail/, selector: "[data-technical-tab]" },
   ]),
   // Plan M M174 (DEC-1604): the campaigns layout's shell - sidebar, bell, Help - around a page with an empty allow-list.
@@ -456,7 +456,7 @@ test("the Users page's data-user (a user id on our own forms and buttons) does n
   holder.remove();
 });
 
-test("with the switch off the run page's model report and Model health links are hidden; the campaign value report stays (M180)", async () => {
+test("with the switch off the run page's model report and Model health links are hidden (M180); the frozen campaign value report has no link", async () => {
   await visit(`#/uc/${UC}/run/${TRAIN_RISK}`);
   const report = $(`a.uc-link[href="#/pilot/view/results/${UC}"]`);
   assert.ok(report, "a finished training run links to its model results report");
@@ -474,13 +474,9 @@ test("with the switch off the run page's model report and Model health links are
     // Between hidden blocks no lone arrow is left over.
     const arrows = [...document.querySelectorAll(".flow > .arrow")].filter((a) => !hiddenOnScreen(a));
     assert.deepEqual(arrows.length, 0, "no arrow is left between hidden blocks");
-    // A scoring run's "Campaign value report" is for marketers: it stays.
+    // A scoring run's "Campaign value report" is frozen for v1 (plan stage 0): the run page does not link to it.
     await visit(`#/uc/${UC}/run/${SCORE_RISK}`);
-    const value = $('a.uc-link[href^="#/pilot/value/"]');
-    if (value) {
-      assert.equal(value.hasAttribute("data-technical"), false);
-      assert.equal(hiddenOnScreen(value), false, "the campaign value report link stays on screen");
-    }
+    assert.equal($('a.uc-link[href^="#/pilot/value/"]'), null, "no link to the campaign value report");
   } finally {
     await technical.setShowTechnical(true);
   }

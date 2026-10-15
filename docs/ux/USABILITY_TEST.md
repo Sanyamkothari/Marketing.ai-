@@ -100,7 +100,7 @@ display at least 1440 pixels wide. Close the server when the session ends and st
 - [ ] The left sidebar shows five places and the bell and Help at the top right. If the top bar shows Home, Connections,
       Results and Settings instead, the layout is `classic`: the setting was not picked up. Stop and fix it.
 - [ ] There is no "Sample data" notice in the top bar (if there is, demo mode is on: restart without `MARKETING_AI_DEMO_MODE`).
-- [ ] The answer key (section 7.3) is filled in from **this** store's Reports page, before the participant arrives.
+- [ ] The answer key (section 7.3) is filled in from **this** store's campaigns, before the participant arrives.
 - [ ] The downloads folder is empty, and the browser asks where to save (or saves to a folder you can see).
 - [ ] The recorder is running and the timer is reset.
 - [ ] The task cards (section 5) are printed. The participant sees only the cards.
@@ -212,7 +212,7 @@ manager. Then mark it right or wrong against the answer key.
 
 ### 7.3 Answer key (fill in before the first session, from the seeded store)
 
-Open Reports and the measured campaigns on the store you are serving, and write what a correct answer is. Do this once
+Open the measured campaigns (Campaigns, then each one's Results tab) on the store you are serving, and write what a correct answer is. Do this once
 per store; stores seeded from the same file give the same figures.
 
 | Item | Value (copy from the screen, with the units) |
@@ -366,15 +366,14 @@ no click at all; it is not one campaign's figure, so it is not counted as the an
 
 | Path | Clicks | What is on the screen at the end |
 |---|---|---|
-| Overview, **Reports** in the sidebar | **1** | Each campaign's Value Proof Pack row: what it earned (the pack's headline) and what it can claim ("Proven") |
-| Overview, **Campaigns** in the sidebar, the campaign, its **Results** tab | **3** | The campaign's result sentence, the evidence label in words ("Proven") and the link to the full report |
+| Overview, **Campaigns** in the sidebar, the campaign, its **Results** tab | **3** | The campaign's result sentence and the evidence label in words ("Proven") |
 
-- **Pinned: 1 click by Reports, 3 by the campaign page.** Write the first (Overview, Reports) into the observer's sheet
-  (section 7.4) as the reference path for Task 2; a participant who looks for the campaign itself takes the second, and
-  neither is an error.
-- The amounts on screen are checked to equal the API's own: the Reports rows against `GET /pilot/proof`, the Results tab
-  against `GET /pilot/proof/{campaign}`, and each Reports row's evidence label (Proven, Estimated, Not yet proven)
-  against that pack's own `claim`. On the committed sample the figures are not the validated ones (the answer key in
+- **Pinned: 3 clicks by the campaign page.** Write it (Overview, Campaigns, the campaign, Results) into the observer's
+  sheet (section 7.4) as the reference path for Task 2. The Value Proof Packs table that used to be one click away under
+  Reports is frozen for v1 (plan stage 0): Reports now opens on "Check a past campaign" and lists no pack, so it is not
+  a path to this answer (a test checks that).
+- The amounts on screen are checked to equal the API's own: the Results tab against `GET /pilot/proof/{campaign}`.
+  On the committed sample the figures are not the validated ones (the answer key in
   section 7.3 says which file the store was made from).
 - Plan M section 0 sets no click target for this task; the pin is the shortest path found.
 

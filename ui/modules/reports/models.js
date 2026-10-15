@@ -1,13 +1,13 @@
 // "Model reports": today's Reports hub (`#/pilot`, ui/modules/pilot/screen.js) in one closed section (Plan M, M178).
-// They are technical: the results report of each approved model, each scored campaign's value in rupees, and the
-// data readiness reports. Until M180's switch decides who sees them, the section is closed and marked
-// `data-technical`, as is the tab that leads to it. The Value Proof Packs, which were the hub's third list, are the
-// first tab; every link here is the one the hub offered (the report pages themselves are unchanged).
+// They are technical: the results report of each approved model and the data readiness reports. Until M180's switch
+// decides who sees them, the section is closed and marked `data-technical`, as is the tab that leads to it. Every
+// link here is the one the hub offered (the report pages themselves are unchanged). The hub's other two lists, each
+// campaign's value in rupees and the Value Proof Packs, are frozen for v1 (plan stage 0): no link to them here.
 
 import { button, emptyState, statusChip } from "../../components.js";
 import { dataTable, esc, fmtDate, fmtInt, present, sortNote } from "../../dom.js";
 import { goalName } from "../../labels.js";
-import { getDemo, getIndustries, listDatasets, listModels, listScoringRuns, readinessUrl, resultsUrl, roiUrl } from "./api.js";
+import { getDemo, getIndustries, listDatasets, listModels, readinessUrl, resultsUrl } from "./api.js";
 
 const cell = (text) => (present(text) ? esc(text) : "—");
 
@@ -36,12 +36,6 @@ function namesOf(industries) {
     for (const stage of industry.stages || []) for (const u of stage.use_cases || []) names.set(u.id, u.name);
   }
   return (id) => goalName(id, names.get(id));
-}
-
-function campaignTitle(demo, runId) {
-  const m = demo && demo.manifest;
-  const campaign = m && Array.isArray(m.campaigns) ? m.campaigns.find((c) => c.score_run_id === runId) : null;
-  return campaign ? campaign.title : null;
 }
 
 const unavailable = `<p class="rp-note">This list could not be loaded.</p>`;
@@ -73,27 +67,6 @@ function resultsPart(models, name) {
   );
 }
 
-function valuePart(runs, name, demo) {
-  if (runs.error) return unavailable;
-  const scored = ((runs.value && runs.value.runs) || [])
-    .filter((r) => r.state === "done")
-    .sort((a, b) => String(b.finished_at || b.created_at).localeCompare(String(a.finished_at || a.created_at)));
-  if (!scored.length) {
-    return emptyState({
-      title: "No campaign has been scored yet",
-      text: "Once a campaign's results are in, its value in rupees appears here.",
-    });
-  }
-  return dataTable(
-    [{ label: "Campaign" }, { label: "Scored on" }, { label: "Report", num: true }],
-    scored.map((r) => [
-      `<span class="rp-name">${esc(campaignTitle(demo, r.run_id) || goalName(r.use_case_id, r.use_case_name || name(r.use_case_id)))}</span>`,
-      esc(fmtDate(r.finished_at || r.created_at)),
-      reportActions(`#/pilot/value/${encodeURIComponent(r.run_id)}`, "Value in rupees", roiUrl(r.run_id, "pdf")),
-    ]),
-  );
-}
-
 function readinessPart(datasets, name, demo) {
   if (datasets.error) return unavailable;
   const rows = [];
@@ -121,24 +94,22 @@ function readinessPart(datasets, name, demo) {
 }
 
 /** The closed "Model reports" section, drawn from the answers of `loadModelReports`. */
-export function modelReportsHtml({ models, runs, datasets, industries, demo }) {
+export function modelReportsHtml({ models, datasets, industries, demo }) {
   const name = namesOf(industries && industries.value);
   const d = demo && demo.value;
   return `<details class="tech rp-models" data-technical data-rp-models><summary>Model reports</summary>
     ${section("results", `Model results${sortNote("newest first")}`, resultsPart(models, name))}
-    ${section("value", `Campaign value${sortNote("newest first")}`, valuePart(runs, name, d))}
     ${section("readiness", `Data readiness${sortNote("newest first")}`, readinessPart(datasets, name, d))}
   </details>`;
 }
 
 /** Ask for everything the section lists; one failed list does not stop the others. */
 export async function loadModelReports() {
-  const [models, runs, datasets, industries, demo] = await Promise.all([
+  const [models, datasets, industries, demo] = await Promise.all([
     settle(listModels()),
-    settle(listScoringRuns()),
     settle(listDatasets()),
     settle(getIndustries()),
     settle(getDemo()),
   ]);
-  return { models, runs, datasets, industries, demo };
+  return { models, datasets, industries, demo };
 }

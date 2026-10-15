@@ -1,6 +1,8 @@
 /* Plan M, M178 (DEC-1608): Reports, `#/reports[/<tab>]`, in jsdom - the page as ui/index.html loads it, against the
    API answers recorded from the validated Hillstrom demo.
 
+   Stage 0 of the v1 plan froze Value proof and Programme summary: they have no tab and are not the default (Check a
+   past campaign is), but both still draw at their own address, and Settings, Advanced lists them.
    Value proof: the Value Proof Packs with the server's headline, a short name, what the result can claim in words
    (Proven / Estimated / Not yet proven) and the old pack and PDF links. Programme summary: the block Results
    draws, drawn here too from the same source. Check a past campaign: the audit form in three steps (the equality of its request with the old
@@ -21,16 +23,24 @@ const { w, overlay } = await installReports({ hash: "#/reports" });
 const proofRows = () => $$('[data-proofs] tbody tr');
 const proofsReady = () => proofRows().length > 0 || $("[data-proofs-empty]");
 
-test("the page has one H1, one sentence, four tabs and one primary button", async () => {
-  await open(w, "#/reports", proofsReady);
+test("the page has one H1, one sentence and two tabs: Value proof and Programme summary are frozen, with no tab", async () => {
+  await open(w, "#/reports", () => $("[data-rp-check-form]"));
   assert.equal($$("h1").length, 1);
   assert.equal(text($("h1")), "Reports");
   assert.equal($$(".page-header .desc").length, 1);
-  assert.deepEqual($$("[data-reports-tab]").map((a) => text(a)), ["Value proof", "Programme summary", "Check a past campaign", "Model reports"]);
-  assert.equal($$("main .btn.primary").length, 1, "one primary button on the page");
-  assert.equal(text($("main .btn.primary")), "Open the newest Value Proof Pack");
+  assert.deepEqual($$("[data-reports-tab]").map((a) => text(a)), ["Check a past campaign", "Model reports"]);
+  assert.equal($("a[href^='#/pilot/proof']"), null, "no link to a Value Proof Pack");
+  assert.equal($("[data-reports-tab][aria-current]").dataset.reportsTab, "check", "Check a past campaign is the default");
+  assert.equal($("[data-reports-page]").dataset.tab, "check");
+});
+
+test("value proof is frozen: no tab, but its address still draws, with its tab shown while it is open", async () => {
+  await open(w, "#/reports/value-proof", proofsReady);
+  assert.deepEqual($$("[data-reports-tab]").map((a) => text(a)), ["Value proof", "Check a past campaign", "Model reports"]);
   assert.equal($("[data-reports-tab][aria-current]").dataset.reportsTab, "value-proof");
   assert.equal($("[data-reports-page]").dataset.tab, "value-proof");
+  assert.equal($$("main .btn.primary").length, 1, "one primary button on the page");
+  assert.equal(text($("main .btn.primary")), "Open the newest Value Proof Pack");
 });
 
 test("value proof: a short name, the server's one line, what it can claim in words, Open and PDF", () => {
@@ -76,7 +86,7 @@ test("value proof: the three claims and a refused pack, in words and never as th
 
 test("value proof: no pack yet is one calm sentence and a way to check a past campaign", async () => {
   overlay["GET /pilot/proof"] = { status: 200, body: { proofs: [] } };
-  await open(w, "#/reports", () => $("[data-proofs-empty]"));
+  await open(w, "#/reports/value-proof", () => $("[data-proofs-empty]"));
   assert.match(text($("[data-proofs-empty]")), /No Value Proof Pack yet/);
   assert.equal($("[data-proofs-empty] a").getAttribute("href"), "#/reports/check");
   assert.equal($("main .btn.primary"), null, "nothing to open, so no primary button");
@@ -85,7 +95,7 @@ test("value proof: no pack yet is one calm sentence and a way to check a past ca
 
 test("value proof: a list the API refuses is an error with a retry, not a blank page", async () => {
   overlay["GET /pilot/proof"] = { status: 403, body: { detail: { code: "ROLE_REQUIRED", message: "Ask an administrator." } } };
-  await open(w, "#/reports", () => $("[data-reports-body] [role=alert], [data-reports-body] .apierr"));
+  await open(w, "#/reports/value-proof", () => $("[data-reports-body] [role=alert], [data-reports-body] .apierr"));
   assert.match(text($("[data-reports-body]")), /administrator|Retry|wrong/i);
   delete overlay["GET /pilot/proof"];
 });
@@ -146,10 +156,10 @@ test("programme summary: a summary that cannot be read is an error with a retry,
   delete overlay["GET /campaigns/summary"];
 });
 
-test("a malformed escape in the tab lands on Value proof instead of throwing", async () => {
+test("a malformed escape in the tab lands on the default tab instead of throwing", async () => {
   for (const hash of ["#/reports/%", "#/reports/%E0", "#/reports/%E0%A4%A"]) {
     await open(w, hash, () => $("[data-reports-page]"));
-    assert.equal($("[data-reports-page]").dataset.tab, "value-proof", hash);
+    assert.equal($("[data-reports-page]").dataset.tab, "check", hash);
   }
 });
 
@@ -159,17 +169,16 @@ test("the classic top bar marks Results on #/reports", async () => {
   assert.ok(on.includes("Results"), `marked: ${JSON.stringify(on)}`);
 });
 
-test("model reports: a closed technical section holding today's three lists", async () => {
-  await open(w, "#/reports/models", () => $("[data-rp-models]") && $$("[data-models-part]").length === 3 && !$("[data-models-part] .skel"));
+test("model reports: a closed technical section holding today's lists, without the frozen campaign value", async () => {
+  await open(w, "#/reports/models", () => $("[data-rp-models]") && $$("[data-models-part]").length === 2 && !$("[data-models-part] .skel"));
   const section = $("[data-rp-models]");
   assert.equal(section.tagName, "DETAILS");
   assert.equal(section.hasAttribute("open"), false, "closed until M180's switch");
   assert.ok(section.hasAttribute("data-technical") && section.classList.contains("tech"));
   assert.ok($('[data-reports-tab="models"]').hasAttribute("data-technical"), "the tab is marked for the switch too");
-  assert.deepEqual($$("[data-models-part]").map((p) => p.dataset.modelsPart), ["results", "value", "readiness"]);
-  // The recording has an approved model and two scored campaigns.
+  assert.deepEqual($$("[data-models-part]").map((p) => p.dataset.modelsPart), ["results", "readiness"]);
   assert.ok($$('[data-models-part="results"] tbody tr').length >= 1);
-  assert.equal($$('[data-models-part="value"] tbody tr').length, 2);
+  assert.equal($("a[href^='#/pilot/value/']"), null, "each campaign's value in rupees is frozen: no link to it");
 });
 
 test("check a past campaign: three steps and one primary button", async () => {
@@ -193,7 +202,7 @@ test("the tab names the plan's words and the old ones", async () => {
     ["#/reports/summary", "programme"],
     ["#/reports/audit", "check"],
     ["#/reports/pilot", "models"],
-    ["#/reports/no-such-tab", "value-proof"],
+    ["#/reports/no-such-tab", "check"],
   ]) {
     await open(w, hash, () => $("[data-reports-page]"));
     assert.equal($("[data-reports-page]").dataset.tab, tab, hash);
@@ -219,6 +228,8 @@ test("every report reachable from today's #/pilot (and its Build data page) is r
   for (const h of hrefs()) today.add(h);
   assert.ok([...today].some((h) => h.startsWith("#/pilot/view/results/")), "today: a model results report");
   assert.ok([...today].some((h) => h.startsWith("#/pilot/value/")), "today: a campaign value report");
+  // Frozen for v1 (plan stage 0): the campaign value reports are still on the old hub but deliberately not on Reports.
+  for (const h of [...today]) if (h.startsWith("#/pilot/value/") || /\/pilot\/roi\//.test(h)) today.delete(h);
   assert.ok([...today].some((h) => h.startsWith("#/pilot/proof/")), "today: a Value Proof Pack");
   assert.ok([...today].some((h) => h.startsWith("#/pilot/view/readiness/")), "today: a readiness report");
   assert.ok([...today].some((h) => /format=pdf$/.test(h)), "today: PDFs");
@@ -226,7 +237,7 @@ test("every report reachable from today's #/pilot (and its Build data page) is r
   const here = new Set();
   await open(w, "#/reports/value-proof", proofsReady);
   for (const h of hrefs()) here.add(h);
-  await open(w, "#/reports/models", () => $$('[data-models-part] tbody tr').length >= 4);
+  await open(w, "#/reports/models", () => $$('[data-models-part] tbody tr').length >= 2);
   for (const h of hrefs()) here.add(h);
   const missing = [...today].filter((h) => !here.has(h));
   assert.deepEqual(missing, [], "a report reachable today that Reports does not link");

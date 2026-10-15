@@ -1,5 +1,5 @@
-// Campaigns (Phase 4b M49 outcomes): every scored customer list, and what really happened to the
-// customers on it - how the campaign did against its control group, and how the model did compared
+// Contact lists (Phase 4b M49 outcomes; named "Campaigns" until v1 stage 0, when `#/campaigns` took that name): every
+// scored customer list, and what really happened to the customers on it - how the campaign did against its control group, and how the model did compared
 // with its test score.
 //
 // Two screens. `#/monitoring/runs` lists the scoring runs (Phase 1's `GET /runs?mode=score`), newest
@@ -189,10 +189,10 @@ export async function loadRunOutcomes(runId) {
   }
 }
 
-/** Results › Campaigns › …, with no Model health tabs: a campaign is not a monitoring job. The top
+/** Results › Contact lists › …, with no Model health tabs: a campaign is not a monitoring job. The top
  * bar marks Results for these screens (Plan H M82), so the breadcrumb starts there. */
 function campaignScreen(title, desc, readRoute, body, { crumb = null, actions = "" } = {}) {
-  const trail = crumb ? [RESULTS_CRUMB, { label: "Campaigns", href: "#/monitoring/runs" }] : [RESULTS_CRUMB];
+  const trail = crumb ? [RESULTS_CRUMB, { label: "Contact lists", href: "#/monitoring/runs" }] : [RESULTS_CRUMB];
   const refused = reasonFor(readRoute[0], readRoute[1]);
   const head = screenHead({ trail, title, crumb, desc, actions: refused ? "" : actions });
   if (refused) return `<main class="screen pb-screen">${head}${refusal(refused)}</main>`;
@@ -232,7 +232,7 @@ function runRow(run) {
 }
 
 function runsCard() {
-  const title = (n) => `<h3>Campaigns${n === null ? "" : ` · ${esc(n)}`} <span class="sort-note">(newest first)</span></h3>`;
+  const title = (n) => `<h3>Contact lists${n === null ? "" : ` · ${esc(n)}`} <span class="sort-note">(newest first)</span></h3>`;
   if (state.runsError) return `<section class="card">${title(null)}<div class="card-body">${errorBox(state.runsError, { retry: true })}</div></section>`;
   if (!state.runs) return `<section class="card">${title(null)}<p class="loading pb-pad">Loading…</p></section>`;
   if (!state.runs.length) {
@@ -255,7 +255,7 @@ function runsCard() {
 
 export const runsHtml = () =>
   campaignScreen(
-    "Campaigns",
+    "Contact lists",
     "Every list of customers a model ranked. Add what happened to them afterwards to see how the campaign and the model did.",
     ["GET", "/runs"],
     runsCard,
@@ -453,7 +453,7 @@ export function runOutcomesHtml(runId) {
     () => {
       if (state.runError && state.runId === runId) {
         return Number(state.runError.status) === 404
-          ? notFound("run", { href: "#/monitoring/runs", label: "Campaigns" }, state.runError)
+          ? notFound("run", { href: "#/monitoring/runs", label: "Contact lists" }, state.runError)
           : errorBox(state.runError, { retry: true });
       }
       if (!run) return `<p class="loading">Loading…</p>`;

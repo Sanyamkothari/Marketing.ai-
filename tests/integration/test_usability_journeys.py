@@ -23,10 +23,10 @@ in Chromium, against the real app in the `campaigns` layout on the validated Hil
   byte for byte, and the same file "Download again" on the Send step points at.
 
 * **Task 2, "Show what last month's campaign earned".** From the Overview, the shortest real path to a measured
-  campaign's earned value AND how sure the product is (the evidence label): the sidebar's Reports (one click: the
-  Value Proof Packs table has each campaign's headline and what it can claim), and, for a person who looks for the
-  campaign itself, Campaigns, the campaign, its Results tab. Both are pinned, and the figures on screen are the API's
-  (`GET /pilot/proof`, `GET /pilot/proof/{id}`). The Overview's own "Value proven to date" tile is the programme
+  campaign's earned value AND how sure the product is (the evidence label): Campaigns, the campaign, its Results tab,
+  with the figures on screen the API's (`GET /pilot/proof/{id}`). Stage 0 of the v1 plan froze the Value Proof Packs
+  table, which used to be one click away under the sidebar's Reports: that click is still pinned, now as a check that
+  Reports lists no pack and links to none (the packs stay open by address and under Settings, Advanced). The Overview's own "Value proven to date" tile is the programme
   total, not one campaign's figure, so it is compared with `GET /overview` and is not counted as an answer to the task.
 
 Each count is what the screens take TODAY. A change that adds a click fails here; one that removes a click updates the
@@ -117,14 +117,6 @@ TASK2_CAMPAIGN_CLICKS: Final[tuple[str, ...]] = (
     "campaigns list: the campaign",
     "campaign page: Results tab",
 )
-EVIDENCE_ON_SCREEN: Final[dict[str, tuple[str, str]]] = {
-    "proven": ("proven", "Proven"),
-    "stated_random": ("estimated", "Estimated"),
-    "descriptive": ("not-proven", "Not yet proven"),
-}
-"""The pack's claim (`GET /pilot/proof/{id}?format=json`) and the evidence label a person reads for it
-(`ui/labels.js`: evidenceProven, evidenceEstimated, evidenceNotProven), written out so the screen's own rule is
-not what the test copies."""
 TASK2_REPORTS_PINNED: Final[int] = 1
 TASK2_CAMPAIGN_PAGE_PINNED: Final[int] = 3
 
@@ -517,9 +509,9 @@ class Task2:
     proofs: list[dict[str, Any]]
     overview: dict[str, Any]
     reports_walk: Walk
-    reports_rows: dict[str, str]
-    reports_claims: dict[str, str]
-    reports_words: dict[str, str]
+    reports_tabs: list[str]
+    reports_pack_links: int
+    reports_proofs_card: int
     reports_problems: list[str]
     campaign_walk: Walk
     campaign_headline: str
@@ -547,15 +539,11 @@ def task2(pristine_store: Path, workdir: Path, playwright_driver: Any) -> Iterat
             tile = page.locator("[data-value-amount]").inner_text()  # on screen with no click at all
             tile_title = page.locator("[data-value-amount]").get_attribute("title") or ""
             reports.click(TASK2_REPORTS_CLICKS[0], "nav.sh-side a[href='#/reports']")
-            page.locator("[data-proofs]").wait_for(timeout=PAGE_TIMEOUT_MS)
-            rows: dict[str, str] = {}
-            claims: dict[str, str] = {}
-            words: dict[str, str] = {}
-            for proof in proofs:
-                row = page.locator("tr", has=page.locator(f'[data-proof-campaign="{proof["campaign_id"]}"]'))
-                rows[proof["campaign_id"]] = row.inner_text()
-                claims[proof["campaign_id"]] = row.locator("[data-claim]").get_attribute("data-claim") or ""
-                words[proof["campaign_id"]] = row.locator("[data-claim]").inner_text()
+            page.locator("[data-reports-page]").wait_for(timeout=PAGE_TIMEOUT_MS)
+            page.locator("[data-rp-check-form]").wait_for(timeout=PAGE_TIMEOUT_MS)
+            tabs = page.locator("[data-reports-tab]").all_inner_texts()
+            pack_links = page.locator('a[href^="#/pilot/proof"]').count()
+            proofs_card = page.locator("[data-proofs]").count()
             page.screenshot(path=str(workdir / "task2_reports.png"), full_page=True)
         finally:
             browser.close()
@@ -585,9 +573,9 @@ def task2(pristine_store: Path, workdir: Path, playwright_driver: Any) -> Iterat
             proofs=proofs,
             overview=overview,
             reports_walk=reports,
-            reports_rows=rows,
-            reports_claims=claims,
-            reports_words=words,
+            reports_tabs=tabs,
+            reports_pack_links=pack_links,
+            reports_proofs_card=proofs_card,
             reports_problems=problems,
             campaign_walk=by_page,
             campaign_headline=headline,
@@ -599,23 +587,16 @@ def task2(pristine_store: Path, workdir: Path, playwright_driver: Any) -> Iterat
         )
 
 
-def test_task_2_by_reports_is_one_click_and_shows_each_campaigns_value_and_how_sure(task2: Task2) -> None:
+def test_task_2_reports_no_longer_lists_the_value_proof_packs(task2: Task2) -> None:
+    """Frozen for v1 (plan stage 0): one click on Reports lands on Check a past campaign, with no Value Proof Pack
+    table, no link to a pack and no Value proof or Programme summary tab; the contradiction with the pilot value
+    page ("The campaign worked" beside "Nothing is proven yet") cannot be reached by clicking."""
     walk = task2.reports_walk
     assert tuple(walk.clicks) == TASK2_REPORTS_CLICKS, walk.clicks
     assert len(walk.clicks) == TASK2_REPORTS_PINNED, walk.clicks
-    for proof in task2.proofs:
-        text = task2.reports_rows[proof["campaign_id"]]
-        # M188 (DEC-1618): the row draws the net value on its own line, under a range bar, so the row's text has a line
-        # break where the headline has a space. The words and figures are the API's, unchanged and in the same order;
-        # only the whitespace between them is compared loosely.
-        assert " ".join(proof["headline"].split()) in " ".join(
-            text.split()
-        ), f"the row shows the API's headline for {proof['campaign_id']}: {text!r}"
-        # the row's evidence label is the one the API's own `claim` for this campaign maps to (all three values)
-        claim = str(_get(task2.base, f"/pilot/proof/{proof['campaign_id']}?format=json")["claim"])
-        key, word = EVIDENCE_ON_SCREEN[claim]
-        assert task2.reports_claims[proof["campaign_id"]] == key, (claim, text)
-        assert task2.reports_words[proof["campaign_id"]] == word, (claim, text)
+    assert task2.reports_tabs == ["Check a past campaign", "Model reports"], task2.reports_tabs
+    assert task2.reports_pack_links == 0
+    assert task2.reports_proofs_card == 0
     assert task2.reports_problems == [], task2.reports_problems
 
 

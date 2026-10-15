@@ -205,8 +205,7 @@ test("adding results on the Results tab sends exactly what gave today's report, 
     assert.equal(proof.status, 200);
     assert.equal(text("[data-headline]"), proof.body.headline);
     assert.equal(text("[data-evidence] [data-status]"), "Proven"); // M186: the evidence status chip (was `.chip`)
-    assert.equal(primaries().length, 1);
-    assert.equal(primaries()[0].getAttribute("href"), `#/pilot/proof/${ids.due}`);
+    assert.equal(primaries().length, 0, "no link to the frozen Value Proof Pack");
     await open(`#/campaigns/${ids.due}/overview`);
     assert.equal(text("#app .head [data-status]"), "Measured");
 });

@@ -1,10 +1,10 @@
 // Reports (Plan M, M178, DEC-1608): `#/reports[/<tab>]`, one place for everything that shows what campaigns earned.
 //
-//   Value proof            the Value Proof Packs (GET /pilot/proof), each with its claim in words
-//   Programme summary      the value proven to date and its rules (GET /campaigns/summary, GET /campaigns for the
-//                          campaigns' short names), the block Results also draws
 //   Check a past campaign  today's audit form, in three steps (POST /uploads, /campaigns/audit, /campaigns/programme)
 //   Model reports          today's `#/pilot` lists, in a closed technical section
+//   Value proof            the Value Proof Packs (GET /pilot/proof), each with its claim in words        } frozen for v1
+//   Programme summary      the value proven to date and its rules (GET /campaigns/summary, GET /campaigns  } (plan stage 0):
+//                          for the campaigns' short names), the block Results also draws                  } no tab, by address
 //
 // It adds a route and takes nothing away: `#/results`, `#/audit` and `#/pilot` still draw what they drew, and every
 // report they reach is reachable here. The module imports nothing of the layout switch (`ui/layout.js`), so it works

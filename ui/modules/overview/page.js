@@ -104,12 +104,10 @@ export function showable(sentence) {
   return Object.keys(findNeverShown(plain)).length ? "" : plain;
 }
 
-/** The ONE action of a card: `{ label, href }`, chosen from what the card is about. */
+/** The ONE action of a card: `{ label, href }`, chosen from what the card is about. (A backfire card opens its campaign
+ * too: the Value Proof Pack it used to open is frozen, v1 plan stage 0.) */
 export function cardAction(card, places = DEFAULT_PLACES) {
   if (card.kind === "challenger_ready") return { label: `Review the ${term("newCandidate").toLowerCase()}`, href: places.approvals };
-  if (card.kind === "backfire" && card.campaign_id) {
-    return { label: "Open the Value Proof Pack", href: `#/pilot/proof/${encodeURIComponent(card.campaign_id)}` };
-  }
   if (card.campaign_id) return { label: "Open the campaign", href: campaignHref(card.campaign_id) };
   if (card.use_case_id) return { label: `Open the ${term("goal").toLowerCase()}`, href: `#/uc/${encodeURIComponent(card.use_case_id)}` };
   return { label: "See all results", href: places.results };
@@ -193,7 +191,6 @@ export function unitText(headline) {
  */
 function valueHtml(overview, places) {
   const headline = overview.headline;
-  const link = `<a class="ov-link" href="${esc(places.reports)}" data-how-counted>How this is counted${icon("arrowRight", { size: 14 })}</a>`;
   let body;
   if (!overview.summary_checked) {
     body = `<div class="ov-value-body"><p class="ov-note ovp-inline">This figure is not shown because it could not be checked against its records.</p></div>`;
@@ -205,7 +202,7 @@ function valueHtml(overview, places) {
       ? emptyState({
           icon: "report",
           title: "None of your measured campaigns is counted as proven yet",
-          text: "How this is counted explains why.",
+          text: "A campaign is counted once its result is final and it is not set apart.",
           attrs: "data-value-empty",
         })
       : emptyState({
@@ -234,7 +231,6 @@ function valueHtml(overview, places) {
   return `<section class="card ov-value" data-value aria-labelledby="ov-h-value">${sectionHead(
     "ov-h-value",
     "Value proven to date",
-    link,
   )}${body}</section>`;
 }
 

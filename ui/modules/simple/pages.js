@@ -4,8 +4,8 @@
 // (trained a model or scored a file), how it ended, its key outcome and a link to the run itself,
 // where the campaign results, the report, Model health and the Schedule are one click away. When
 // models wait for approval (`GET /approvals`), one calm notice says how many, with one way to them.
-// Plan J M104: the Value Proof Packs that are ready (`GET /pilot/proof`) follow, each with the server's own
-// sentence and a link to the pack.
+// Plan J M104's Value Proof Packs list is frozen (v1 plan, stage 0): `proofsCardHtml` is kept but Results no longer
+// draws it or links to a pack; the packs stay open by address and are listed under Settings, Advanced.
 // Plan J M105: what needs attention and the value proven to date (`GET /campaigns/summary`) come first, drawn only
 // from the server's answer: a card appears only when the server sent it, and no number is made here.
 //
@@ -117,6 +117,7 @@ function approvalsNotice(waiting) {
  * Plan J M104: the Value Proof Packs that are ready, from `GET /pilot/proof` (`proofs`): each campaign's
  * name, the pack's one-sentence result and what its numbers can claim, all in the server's words, with a
  * link to the pack. Nothing is drawn when no pack is ready or the list could not be read.
+ * Frozen (v1 plan, stage 0): no page draws this today; it is kept for when the packs come back.
  */
 export function proofsCardHtml(proofs, names = {}) {
   const ready = ((proofs && proofs.proofs) || []).filter((entry) => entry.status === "ready");
@@ -158,10 +159,6 @@ export function summaryCardHtml(summary, names = {}) {
             .filter((fact) => text(fact.value))
             .map((fact) => `<li>${esc(fact.label)}: <strong>${esc(text(fact.value))}</strong></li>`)
             .join("");
-          const pack =
-            card.kind === "backfire" && card.campaign_id
-              ? ` <a href="#/pilot/proof/${esc(encodeURIComponent(card.campaign_id))}" data-card-pack>Open the Value Proof Pack</a>`
-              : "";
           return `<li class="sp-entry sp-card ${esc(card.severity || "info")}" data-card="${esc(card.code)}"${
             card.campaign_id ? ` data-card-campaign="${esc(card.campaign_id)}"` : ""
           }${
@@ -171,7 +168,7 @@ export function summaryCardHtml(summary, names = {}) {
             who ? `<span class="sp-text">${campaignCell(names, card.campaign_id, who)}</span>` : ""
           }<span class="sp-text">${esc(plainText(card.text))}</span>${
             facts ? `<ul class="sp-facts">${facts}</ul>` : ""
-          }<span class="sp-text"><em>${esc(plainText(card.next_step))}</em>${pack}</span></li>`;
+          }<span class="sp-text"><em>${esc(plainText(card.next_step))}</em></span></li>`;
         })
         .join("")}</ul></section>`
     : "";
@@ -257,7 +254,6 @@ export function summaryCardHtml(summary, names = {}) {
  * `waiting` how many models wait for approval (null or 0: no notice). `lists` are the drawn results
  * lists other modules register beside the runs (Plan J M94: campaigns; `registerResultsList`).
  * `auditHref` (Plan J M103) is where "Audit a campaign" goes, for a person who may audit one; null: no link.
- * `proofs` (Plan J M104) is `GET /pilot/proof`'s answer, or null: the ready Value Proof Packs.
  * `summary` (Plan J M105) is `GET /campaigns/summary`'s answer, or null: what needs attention and the value proven.
  */
 export function resultsHtml({
@@ -266,7 +262,6 @@ export function resultsHtml({
   waiting = null,
   lists = [],
   auditHref = null,
-  proofs = null,
   summary = null,
   campaigns = null,
 } = {}) {
@@ -275,7 +270,6 @@ export function resultsHtml({
     `${crumbs([{ label: "Results" }])}<h1 class="h1">Results</h1><p class="desc">Every model and contact list, newest first. Open one to see who to contact, why, and what to do next.</p>${headActions(
       {
         secondary: auditHref ? [{ label: "Audit a campaign", href: auditHref, attrs: "data-audit-link" }] : [],
-        related: { label: "All reports", href: "#/pilot" },
       },
     )}`,
   );
@@ -323,7 +317,7 @@ export function resultsHtml({
     })}${more}</section>`;
   }
   const beside = [].concat(lists || []).filter(Boolean).join("");
-  return `<main class="screen sp" data-module="simple">${head}${approvalsNotice(waiting)}${summaryCardHtml(summary, names)}${body}${beside}${proofsCardHtml(proofs, names)}</main>`;
+  return `<main class="screen sp" data-module="simple">${head}${approvalsNotice(waiting)}${summaryCardHtml(summary, names)}${body}${beside}</main>`;
 }
 
 // --- Settings ------------------------------------------------------------------------------------
@@ -409,7 +403,14 @@ export function settingsHtml({ can = () => true, status = null, version = null }
     // Plan M M178 (DEC-1608): Reports (`#/reports`) is in the campaigns layout's sidebar (M174); in the classic
     // layout this is its way in, so no registered route is an orphan (the M173 crawler).
     can("GET", "/pilot/proof")
-      ? entry({ label: "Reports", href: "#/reports", text: "Value Proof Packs, the value proven to date and a check of a past campaign, on one page." })
+      ? entry({ label: "Reports", href: "#/reports", text: "A check of a past campaign, and the reports of your models, on one page." })
+      : "",
+    // Frozen for v1 (stage 0): the proof and pilot pages are listed here and nowhere on the main path.
+    can("GET", "/pilot/proof")
+      ? entry({ label: "Value Proof Packs", href: "#/reports/value-proof", text: "A page per measured campaign: what it shows and what it can claim." })
+      : "",
+    can("GET", "/pilot/proof")
+      ? entry({ label: "Programme summary", href: "#/reports/programme", text: "The value proven to date, and the rules it is counted by." })
       : "",
     // Plan M M175 (DEC-1605) and M179 (DEC-1609): the Overview and the Data page are in the campaigns layout's sidebar
     // (M174); in the classic layout these are their ways in, as for Reports above.
@@ -420,7 +421,7 @@ export function settingsHtml({ can = () => true, status = null, version = null }
       ? entry({ label: "Data", href: "#/data", text: "Where your customer data comes from: your files and saved connections, and a check of your data." })
       : "",
     can("GET", "/runs/{run_id}/outcomes")
-      ? entry({ label: "Campaigns waiting for results", href: "#/monitoring/runs", text: "Every contact list you made, and where to add what happened to those customers." })
+      ? entry({ label: "Contact lists waiting for results", href: "#/monitoring/runs", text: "Every contact list you made, and where to add what happened to those customers." })
       : "",
     entry({
       label: "Document assistant",
