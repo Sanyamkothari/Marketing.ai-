@@ -5,9 +5,9 @@ the number of rows and customers, each column's type, missing share and distinct
 few categories, the outcome rate, the newest date and the shape of the IDs. No customer values are kept: only counts,
 shares, a hash of the most common values and, for a column with a few categories, those categories.
 
-At the start of a visit (and again before approval, because the visit's detectors run each time the case is read)
-`fingerprint_detector` compares the current file with that fingerprint and with the client's facts
-(`engine.doctor.facts`) and reports what moved, in plain sentences with both numbers:
+Each time the visit treats the case (a new file, a goal chosen, an answer changed: always before approval)
+`fingerprint_detector` compares the case's newest file with the last fingerprint of an earlier file and with the
+client's facts (`engine.doctor.facts`) and reports what moved, in plain sentences with both numbers:
 
 * **stop** - the file is far from what the person said or from last time (customers off by more than twice the
   tolerance, the outcome rate off by more than the factor squared, the key or outcome column gone, a file older than
@@ -139,24 +139,36 @@ class FingerprintStore:
     def __init__(self, storage: Storage) -> None:
         self._storage = storage
 
-    def _read(self, client_id: str) -> Fingerprints:
+    def _read(self, client_id: str, *, strict: bool = False) -> Fingerprints:
+        """Unreadable: logged, and an empty memory for a read; `strict` (a write) raises, so history is never lost."""
         key = fingerprints_key(client_id)
         try:
             if not self._storage.exists(key):
                 return Fingerprints(client_id=client_id)
             return self._storage.read_model(key, Fingerprints)
-        except (StorageError, ValueError):
+        except (StorageError, ValueError) as exc:
+            _LOG.warning("doctor.fingerprints_unreadable client=%s error=%s", client_id, type(exc).__name__)
+            if strict:
+                raise
             return Fingerprints(client_id=client_id)
 
-    def last(self, client_id: str, goal_id: str | None) -> Fingerprint | None:
+    def uploads(self, client_id: str) -> frozenset[str]:
+        """The uploads that already have a fingerprint (any goal)."""
+        if re.fullmatch(CLIENT_ID_PATTERN, client_id) is None:
+            return frozenset()
+        return frozenset(p.upload_id for p in self._read(client_id).prints)
+
+    def last(self, client_id: str, goal_id: str | None, *, besides: str | None = None) -> Fingerprint | None:
+        """The newest fingerprint for this goal, never the one of upload `besides` (a file is not compared with
+        itself)."""
         if re.fullmatch(CLIENT_ID_PATTERN, client_id) is None:
             return None
-        mine = [p for p in self._read(client_id).prints if p.goal_id == goal_id]
+        mine = [p for p in self._read(client_id).prints if p.goal_id == goal_id and p.upload_id != besides]
         return mine[-1] if mine else None
 
     def save(self, client_id: str, print_: Fingerprint) -> None:
         with _LOCK:
-            document = self._read(client_id)
+            document = self._read(client_id, strict=True)
             same = [
                 p for p in document.prints if p.goal_id == print_.goal_id and p.upload_id != print_.upload_id
             ]
@@ -187,6 +199,15 @@ def _describe_shape(shape: str, say: _Say) -> str:
         word = {"9": "digit", "A": "capital letter", "a": "lowercase letter"}.get(char, f"“{char}”")
         parts.append(f"{say.count(n)} {word}{'' if n == 1 else 's'}")
     return " + ".join(parts) if parts else "empty"
+
+
+def _id_text(series: pd.Series) -> pd.Series:
+    """IDs as text; whole numbers read as floats (a column with gaps) lose their `.0`."""
+    values = series.dropna()
+    if pd.api.types.is_float_dtype(values) and bool((values % 1 == 0).all()):
+        values = values.astype("int64")
+    text = values.astype(str).str.strip()
+    return text[text != ""]
 
 
 def _positive_rate(series: pd.Series, positive: object) -> float | None:
@@ -238,8 +259,7 @@ def fingerprint_file(
     share = 0.0
     lengths: dict[str, float] = {}
     if key is not None:
-        ids = frame[key].dropna().astype(str).str.strip()
-        ids = ids[ids != ""]
+        ids = _id_text(frame[key])
         if not capped:
             customers = int(ids.nunique())
         elif len(ids) and ids.nunique() == len(ids):
@@ -568,8 +588,12 @@ def _decided(case: Case, kind: str, upload_id: str, goal_id: str | None = None) 
     return None
 
 
-def _main_file(case: Case, files: Sequence[LoadedFile], prev: Fingerprint | None) -> LoadedFile | None:
-    """The file that carries the case: the one that looks most like last time's, else the one with the outcome."""
+def _main_file(
+    case: Case, files: Sequence[LoadedFile], prev: Fingerprint | None, seen: frozenset[str] = frozenset()
+) -> LoadedFile | None:
+    """The file that carries the case: the one that looks most like last time's, else the one with the outcome.
+    A file not fingerprinted yet comes first (next month's file sits in the case beside last month's)."""
+    files = [f for f in files if f.upload_id not in seen] or list(files)
     if not files:
         return None
     if prev is not None:
@@ -608,10 +632,13 @@ def fingerprint_detector(storage: Storage, *, clock: Callable[[], datetime] = ut
         from engine.doctor.visit import Detected
 
         goal = brief.goal_id if brief is not None else None
-        prev = FingerprintStore(storage).last(case.client_id, goal)
+        store = FingerprintStore(storage)
         facts = FactStore(storage).list(case.client_id)
-        loaded = _main_file(case, files, prev)
-        if loaded is None or (prev is None and not facts):
+        loaded = _main_file(case, files, store.last(case.client_id, goal), store.uploads(case.client_id))
+        if loaded is None:
+            return Detected()
+        prev = store.last(case.client_id, goal, besides=loaded.upload_id)
+        if prev is None and not facts:
             return Detected()
         now = _current(case, loaded, brief, clock())
         findings = compare(now, prev, facts)
@@ -698,14 +725,14 @@ def record_fingerprint(
     """After approval: keep what this client's data looked like. Best effort, logged when it cannot be saved."""
     store = FingerprintStore(storage)
     goal = brief.goal_id if brief is not None else None
-    loaded = _main_file(case, files, store.last(case.client_id, goal))
-    if loaded is None:
-        return None
     approver = case.approvals[-1].approved_by if case.approvals else ""
     try:
+        loaded = _main_file(case, files, store.last(case.client_id, goal), store.uploads(case.client_id))
+        if loaded is None:
+            return None
         print_ = _current(case, loaded, brief, at, approver)
         store.save(case.client_id, print_)
-    except (StorageError, ValueError, KeyError) as exc:
+    except Exception as exc:  # the hand-off goes on; its timeline event says nothing was remembered
         _LOG.warning("doctor.fingerprint_not_saved case=%s error=%s", case.case_id, type(exc).__name__)
         return None
     return print_

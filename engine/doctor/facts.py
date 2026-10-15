@@ -26,6 +26,7 @@ from pydantic import AwareDatetime, Field, model_validator
 from engine.config import StrictBase
 from engine.doctor.case import CASE_PREFIX, CLIENT_ID_PATTERN
 from engine.storage import Storage, StorageError
+from engine.utils.logging import get_logger
 from engine.utils.time import utc_now
 
 __all__ = [
@@ -57,6 +58,7 @@ _MONTHS: Final[tuple[str, ...]] = (
     "december",
 )
 _LOCK: Final = threading.Lock()
+_LOG = get_logger(__name__)
 
 
 class FactKind(StrEnum):
@@ -178,13 +180,17 @@ class FactStore:
     def __init__(self, storage: Storage) -> None:
         self._storage = storage
 
-    def _read(self, client_id: str) -> ClientFacts:
+    def _read(self, client_id: str, *, strict: bool = False) -> ClientFacts:
+        """Unreadable: logged, and no facts for a read; `strict` (a write) raises, so the history is never lost."""
         key = facts_key(client_id)
         try:
             if not self._storage.exists(key):
                 return ClientFacts(client_id=client_id)
             return self._storage.read_model(key, ClientFacts)
-        except (StorageError, ValueError):
+        except (StorageError, ValueError) as exc:
+            _LOG.warning("doctor.facts_unreadable client=%s error=%s", client_id, type(exc).__name__)
+            if strict:
+                raise
             return ClientFacts(client_id=client_id)
 
     def list(self, client_id: str, *, include_revoked: bool = False) -> tuple[ClientFact, ...]:
@@ -206,7 +212,7 @@ class FactStore:
         for entry in inputs:
             prepared.append((entry, None if entry.revoke else normalise(entry.kind, entry.value)))
         with _LOCK:
-            document = self._read(client_id)
+            document = self._read(client_id, strict=True)
             facts = list(document.facts)
             for entry, value in prepared:
                 fact_id = entry.kind.value + (f":{entry.goal_id}" if entry.goal_id else "")

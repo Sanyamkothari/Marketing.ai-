@@ -44,9 +44,10 @@ def _print(frame: pd.DataFrame, **kw: object) -> Fingerprint:
 
 
 def _detect(storage: LocalStorage, frame: pd.DataFrame):
-    w = vs.World(files={vs.FIRST: _file(frame)}, offers=())
+    today = _file(frame, vs.SECOND)  # a later upload than the one `_print` fingerprints
+    w = vs.World(files={vs.FIRST: today, vs.SECOND: today}, offers=())
     case = vs.open_case(storage, w)
-    return fingerprint_detector(storage)(case, (w.files[vs.FIRST],), None), case
+    return fingerprint_detector(storage)(case, (today,), None), case
 
 
 def test_facts_round_trip_with_who_and_when_and_can_be_taken_back(storage: LocalStorage) -> None:
@@ -167,11 +168,9 @@ def test_a_category_move_a_new_id_format_and_an_old_file_are_flagged() -> None:
 
 
 def test_the_id_length_fact_flags_ids_of_another_length() -> None:
-    now = _print(vs.customers(300))  # C100000: 7 characters
-    facts = FactStore(LocalStorage(Path("/nonexistent-never-written")))  # not used: build the fact by hand
-    del facts
     from engine.doctor.facts import ClientFact
 
+    now = _print(vs.customers(300))  # C100000: 7 characters
     fact = ClientFact(fact_id="id_length", kind=FactKind.ID_LENGTH, value=8, set_by="u", set_at=utc_now())
     (finding,) = compare(now, None, [fact])
     assert finding.level == "stop" and "8 characters" in finding.text and "0%" in finding.text
@@ -187,3 +186,25 @@ def test_approval_saves_a_fingerprint_that_next_months_file_is_compared_with(sto
     assert last.customers == 1_200 and last.key_column == "customer_id" and last.outcome_column == "converted"
     assert last.outcome_rate is not None and 0.4 < last.outcome_rate < 0.6 and last.date_last == "2026-09-30"
     assert not any("C1" in str(v) for v in last.model_dump().values())  # no customer value is kept
+
+
+def test_next_months_file_is_compared_with_last_months_never_with_itself(storage: LocalStorage) -> None:
+    oct_ = vs.customers(300)
+    nov = oct_.assign(snapshot_date="2026-10-31")
+    nov["customer_id"] = nov["customer_id"].str.replace("C", "C0", regex=False)
+    FingerprintStore(storage).save("default", _print(oct_))  # last month's file, approved
+    w = vs.World(files={vs.FIRST: _file(oct_), vs.SECOND: _file(nov, vs.SECOND)}, offers=())
+    case = vs.open_case(storage, w)
+    # Only last month's file: it is not compared with its own fingerprint ("the same newest date").
+    alone = fingerprint_detector(storage)(case, (w.files[vs.FIRST],), None)
+    assert not alone.asks and not alone.doubts
+    # Next month's file beside it: the new one is the one compared.
+    both = fingerprint_detector(storage)(case, (w.files[vs.FIRST], w.files[vs.SECOND]), None)
+    assert [d.because.split(" ")[0] for d in both.doubts] == ["IDs"]  # the ID format moved; nothing else
+    assert both.evidence[0].input["upload_id"] == vs.SECOND
+
+
+def test_whole_number_ids_read_as_decimals_keep_their_length() -> None:
+    frame = vs.customers(10).assign(customer_id=[12345678.0] * 9 + [None])
+    print_ = _print(frame)
+    assert print_.key_lengths == {"8": 1.0} and print_.key_pattern == "9{8}"
