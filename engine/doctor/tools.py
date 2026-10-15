@@ -106,6 +106,9 @@ use case's `profile_row_cap`. A test keeps the two equal."""
 DATA_REQUEST_MAX_USE_CASES: Final[int] = 4
 """`data_request` names at most this many use cases: the four whose requests are longest fit its budget (a test
 checks it). The route serves any number; the tool asks for a narrower request."""
+DATA_REQUEST_MAX_MESSAGES: Final[int] = 2
+"""`data_request` attaches at most this many forwardable messages: with the four widest use cases, the two longest
+still fit its 16 KB (a test checks it; four did not). One question or stop needs one or two."""
 _USE_CASE_ID: Final[str] = r"^[a-z0-9][a-z0-9-]{0,63}$"
 
 # ---------------------------------------------------------------------------
@@ -342,9 +345,9 @@ class DataRequestArgs(_Args):
     )
     messages: tuple[Annotated[str, Field(pattern=r"^[A-Z][A-Z_]{1,40}$")], ...] = Field(
         default=(),
-        max_length=4,
+        max_length=DATA_REQUEST_MAX_MESSAGES,
         description=(
-            "Selectors of short, forwardable requests to attach, for example IDS_ROUNDED, "
+            "Up to 2 selectors of short, forwardable requests to attach, for example IDS_ROUNDED, "
             "SUMMARY_NOT_ROWS, PDF, HISTORY_NEEDED or CONSENT_SOURCE."
         ),
     )

@@ -16,7 +16,7 @@ messages:
     message: >-
       When this file was saved, Excel rounded the ID (or phone) column, so different customers now
       show the same digits and the original numbers cannot be recovered. Please export it again with
-      that column formatted as Text before saving, or send the .xlsx file as it is. Check that the
+      that column formatted as Text before saving, or send the original .xlsx file as it is. Check that the
       IDs do not look like 1.23457E+11.
   SUMMARY_NOT_ROWS:
     id: D2
@@ -61,8 +61,8 @@ messages:
     title: Consent and do-not-contact lists
     message: >-
       Before we make a contact list we need to know who must not be contacted. Please send a fresh
-      do-not-disturb (DND) scrub, the system that records consent, and your suppression list and list
-      of people who asked to be erased. Tell us the date of each list and what the consent was given
+      do-not-disturb (DND) scrub, your consent records and the system they come from, your suppression
+      list, and the list of people who asked to be erased. Tell us the date of each list and what the consent was given
       for.
   PRODUCT_MASTER:
     id: D8
