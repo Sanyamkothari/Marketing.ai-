@@ -54,10 +54,9 @@
     {
      "kind": "asked",
      "text": [
-      "never",
+      "never (active|ordered|bought|used)",
       "no orders",
       "who counts",
-      "never bought",
       "not active"
      ]
     },

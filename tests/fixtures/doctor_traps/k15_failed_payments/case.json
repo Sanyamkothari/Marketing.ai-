@@ -36,8 +36,7 @@
     {
      "kind": "asked",
      "text": [
-      "failed",
-      "status",
+      "failed (payments?|attempts?)",
       "real money",
       "successful"
      ]

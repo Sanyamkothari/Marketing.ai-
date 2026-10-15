@@ -55,11 +55,11 @@
      "kind": "asked",
      "text": [
       "not finished",
-      "window",
+      "window (has not|is not|isn't) (finished|over|closed)",
       "latest month",
-      "most recent",
+      "most recent month",
       "mature",
-      "incomplete",
+      "incomplete month",
       "still running"
      ]
     },

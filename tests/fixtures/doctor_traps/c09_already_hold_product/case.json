@@ -76,7 +76,7 @@
       "already has",
       "already own",
       "existing holder",
-      "has_vehicle_policy"
+      "has_vehicle_policy.*(outcome|leave|exclude|already)"
      ]
     },
     {

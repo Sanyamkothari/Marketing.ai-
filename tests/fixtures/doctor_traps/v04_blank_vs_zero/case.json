@@ -23,10 +23,10 @@
     {
      "kind": "asked",
      "text": [
-      "blank",
+      "blank (means?|for)",
       "never bought",
       "means zero",
-      "missing"
+      "last_purchase_amount.*(blank|missing|zero)"
      ]
     },
     {

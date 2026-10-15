@@ -108,6 +108,23 @@ def test_the_checks_have_teeth_one_by_one() -> None:
     assert bench.check_row_count(grader, {"rows": len(frame) + 1}).passed
 
 
+def test_a_dropped_column_or_a_recoded_rule_column_does_not_hide_a_trap() -> None:
+    """Removing a column nobody approved is caught; recoding Y/N to 1/0 does not hide who cannot have the outcome."""
+    case = next(c for c in CASES if c.case_id == "c09_already_hold_product")
+    grader = bench.Grader(case, bench.untouched_shipped(case))
+    frame = grader.final()
+    assert frame is not None
+    grader.shipped.final = frame.drop(columns=["age"])
+    assert not bench.check_untouched_columns(grader, {}).passed
+    grader.shipped.final = frame.assign(
+        has_vehicle_policy=frame["has_vehicle_policy"].map({"Y": "1", "N": "0"})
+    )
+    grader.shipped.outcome_column = "Response"
+    rule = {"exclude_where": [{"column": "has_vehicle_policy", "values": ["Y"]}]}
+    verdict = bench.check_outcome_population(grader, rule)
+    assert not verdict.passed and "cannot have the outcome" in verdict.detail
+
+
 def test_a_case_file_that_cannot_be_read_is_refused(tmp_path: Path) -> None:
     (tmp_path / "bad").mkdir()
     (tmp_path / "bad" / "case.json").write_text(json.dumps({"id": "x"}), encoding="utf-8")

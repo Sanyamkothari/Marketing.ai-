@@ -24,10 +24,9 @@
      "kind": "asked",
      "text": [
       "same as (the row )?above",
-      "merged",
-      "fill",
-      "blank region",
-      "region"
+      "merged cells?",
+      "fill(ed)? down",
+      "blank region"
      ]
     },
     {

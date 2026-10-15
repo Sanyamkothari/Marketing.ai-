@@ -109,11 +109,9 @@
      "kind": "asked",
      "text": [
       "order total",
-      "every line",
-      "each line",
-      "line item",
+      "(every|each) line item",
       "once per order",
-      "repeated"
+      "repeated on (every|each) line"
      ]
     },
     {

@@ -23,8 +23,7 @@
     "rounded",
     "E\\+",
     "scientific",
-    "excel",
-    "re-?export",
+    "re-?export.*as text",
     "as text"
    ]
   },

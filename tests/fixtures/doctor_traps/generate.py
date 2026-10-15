@@ -241,7 +241,7 @@ def f02_excel_e_plus() -> Trap:
                 "category": "asked",
                 "kind": "asked",
                 "label": "says the IDs were rounded by Excel and asks for a re-export",
-                "text": ["rounded", "E\\+", "scientific", "excel", "re-?export", "as text"],
+                "text": ["rounded", "E\\+", "scientific", "re-?export.*as text", "as text"],
             },
             {"category": "row_loss", "kind": "row_count", "rows": 40, "label": "all 40 rows are kept"},
         ],
@@ -341,11 +341,9 @@ def v19_order_total_repeated() -> Trap:
                         "kind": "asked",
                         "text": [
                             "order total",
-                            "every line",
-                            "each line",
-                            "line item",
+                            "(every|each) line item",
                             "once per order",
-                            "repeated",
+                            "repeated on (every|each) line",
                         ],
                     },
                     {"kind": "column_total", "columns": ["order_total"], "expected_total": true_total},
@@ -434,7 +432,7 @@ def k15_failed_payments() -> Trap:
                 "kind": "any_of",
                 "label": "spend counts successful payments only",
                 "checks": [
-                    {"kind": "asked", "text": ["failed", "status", "real money", "successful"]},
+                    {"kind": "asked", "text": ["failed (payments?|attempts?)", "real money", "successful"]},
                     {"kind": "column_total", "columns": ["amount"], "expected_total": real},
                 ],
             }
@@ -478,7 +476,7 @@ def k16_ticket_status_log() -> Trap:
                 "kind": "any_of",
                 "label": "30 tickets counted once each",
                 "checks": [
-                    {"kind": "asked", "text": ["ticket", "status", "latest", "history", "repeated"]},
+                    {"kind": "asked", "text": ["latest (status|one)", "status (history|rows)", "per ticket"]},
                     {"kind": "one_row_per_key", "expected_rows": 30},
                 ],
             }
@@ -513,7 +511,15 @@ def t06_status_exported_today() -> Trap:
                 "label": "is_active (today's status) is out of the features",
                 "checks": [
                     {"kind": "columns_absent", "columns": ["is_active"]},
-                    {"kind": "asked", "text": ["is_active", "after the outcome", "known only after", "leak"]},
+                    {
+                        "kind": "asked",
+                        "text": [
+                            "is_active.*(today|export|after)",
+                            "after the outcome",
+                            "known only after",
+                            "leak",
+                        ],
+                    },
                 ],
             }
         ],
@@ -549,7 +555,7 @@ def s05_cancellation_reason() -> Trap:
                     {
                         "kind": "asked",
                         "text": [
-                            "cancellation_reason",
+                            "cancellation_reason.*(left|churn|leak|only)",
                             "only for customers who left",
                             "filled in only",
                             "leak",
@@ -587,7 +593,12 @@ def t13_outcome_from_column() -> Trap:
                     {"kind": "columns_absent", "columns": ["account_status"]},
                     {
                         "kind": "asked",
-                        "text": ["account_status", "built from", "same as the outcome", "leak"],
+                        "text": [
+                            "account_status.*(outcome|churn|built|same)",
+                            "built from",
+                            "same as the outcome",
+                            "leak",
+                        ],
                     },
                 ],
             }
@@ -649,7 +660,12 @@ def s01_never_active() -> Trap:
                 "checks": [
                     {
                         "kind": "asked",
-                        "text": ["never", "no orders", "who counts", "never bought", "not active"],
+                        "text": [
+                            "never (active|ordered|bought|used)",
+                            "no orders",
+                            "who counts",
+                            "not active",
+                        ],
                     },
                     {
                         "kind": "outcome_population",
@@ -705,11 +721,11 @@ def t07_immature_last_month() -> Trap:
                         "kind": "asked",
                         "text": [
                             "not finished",
-                            "window",
+                            "window (has not|is not|isn't) (finished|over|closed)",
                             "latest month",
-                            "most recent",
+                            "most recent month",
                             "mature",
-                            "incomplete",
+                            "incomplete month",
                             "still running",
                         ],
                     },
@@ -768,7 +784,7 @@ def c09_already_hold_product() -> Trap:
                             "already has",
                             "already own",
                             "existing holder",
-                            "has_vehicle_policy",
+                            "has_vehicle_policy.*(outcome|leave|exclude|already)",
                         ],
                     },
                     {
@@ -912,10 +928,9 @@ def t15_partial_last_month() -> Trap:
                         "text": [
                             "partial",
                             "12 days",
-                            "incomplete",
+                            "incomplete month",
                             "not finished",
                             "full month",
-                            "last month",
                         ],
                     },
                     {"kind": "no_value", "column": "month", "values": ["2026-10"]},
@@ -968,7 +983,7 @@ def v01_paise_vs_rupees() -> Trap:
                 "kind": "any_of",
                 "label": "amounts from both files add up in one unit (rupees)",
                 "checks": [
-                    {"kind": "asked", "text": ["paise", "rupee", "\\bunits?\\b", "\\bscale\\b", "100 times"]},
+                    {"kind": "asked", "text": ["paise", "rupee", "different (units?|scales?)", "100 times"]},
                     {"kind": "column_total", "columns": ["amount"], "expected_total": total},
                 ],
             }
@@ -1033,7 +1048,15 @@ def v04_blank_vs_zero() -> Trap:
                 "kind": "any_of",
                 "label": "blank 'never bought' is not turned into 0",
                 "checks": [
-                    {"kind": "asked", "text": ["blank", "never bought", "means zero", "missing"]},
+                    {
+                        "kind": "asked",
+                        "text": [
+                            "blank (means?|for)",
+                            "never bought",
+                            "means zero",
+                            "last_purchase_amount.*(blank|missing|zero)",
+                        ],
+                    },
                     {"kind": "values_unchanged", "columns": ["last_purchase_amount"]},
                 ],
             }
@@ -1326,7 +1349,12 @@ def f04_merged_cells_region() -> Trap:
                 "checks": [
                     {
                         "kind": "asked",
-                        "text": ["same as (the row )?above", "merged", "fill", "blank region", "region"],
+                        "text": [
+                            "same as (the row )?above",
+                            "merged cells?",
+                            "fill(ed)? down",
+                            "blank region",
+                        ],
                     },
                     {"kind": "no_value", "column": "region", "values": [""]},
                 ],
@@ -1423,7 +1451,7 @@ def c01_selection_not_random() -> Trap:
                     "control group",
                     "chosen by",
                     "who was contacted",
-                    "selected",
+                    "selected (at random|for contact)",
                 ],
             }
         ],

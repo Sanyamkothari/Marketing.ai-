@@ -29,7 +29,7 @@
     {
      "kind": "asked",
      "text": [
-      "cancellation_reason",
+      "cancellation_reason.*(left|churn|leak|only)",
       "only for customers who left",
       "filled in only",
       "leak"

@@ -29,7 +29,7 @@
     {
      "kind": "asked",
      "text": [
-      "account_status",
+      "account_status.*(outcome|churn|built|same)",
       "built from",
       "same as the outcome",
       "leak"

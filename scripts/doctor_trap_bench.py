@@ -587,13 +587,22 @@ def check_untouched_columns(g: Grader, args: Mapping[str, Any]) -> Verdict:
     truth = g.truth()
     if not truth:
         return Verdict(True, "no rows")
-    columns = [
-        c
-        for c in truth[0]
-        if c not in g.shipped.touched and c in frame.columns and c not in args.get("except", ())
-    ]
+    columns = [c for c in truth[0] if c not in g.shipped.touched and c not in args.get("except", ())]
+    gone = [c for c in columns if c not in frame.columns]
+    if gone:  # a column nobody approved removing is a silent change too
+        return Verdict(False, f"{_sample(gone)} left the table, and no approved change touched it")
     if g.case.key in g.shipped.touched:
-        return Verdict(True, "the ID column was changed by an approved change; rows cannot be lined up")
+        if len(frame) != len(truth):
+            return Verdict(True, "the ID column was changed by an approved change; rows cannot be lined up")
+        changed = [  # same rows, ID rewritten: line them up by position instead
+            f"{c} of row {i + 1}: '{row[c]}' became '{_text(frame.iloc[i][c])}'"
+            for i, row in enumerate(truth)
+            for c in columns
+            if c != g.case.key and _text(frame.iloc[i][c]) != row[c].strip()
+        ]
+        if changed:
+            return Verdict(False, f"{len(changed)} values changed: {_sample(changed, 3)}")
+        return Verdict(True, "the values are as the file had them (rows lined up by position)")
     return check_values_unchanged(g, {"columns": columns})
 
 
@@ -682,19 +691,19 @@ def check_outcome_population(g: Grader, args: Mapping[str, Any]) -> Verdict:
     key = g.key_in_final()
     if column not in frame.columns:
         return Verdict(False, f"no outcome column was chosen or it is not in the result ({column!r})")
-    rows = frame[frame[column].notna()]
+    if key is None:
+        return Verdict(False, f"the result has no '{g.case.key}' column to find the customers by")
+    # Who cannot have the outcome is read from the file as written, by key, so recoding the column the rule
+    # looks at (Y/N turned into 1/0, or the column dropped) cannot hide them.
+    excluded = {_canon(k) for k in args.get("exclude_keys", ())}
     for rule in args.get("exclude_where", ()):
-        if rule["column"] in rows.columns:
-            rows = rows[[_text(v) not in {str(x) for x in rule["values"]} for v in rows[rule["column"]]]]
+        values = {str(x) for x in rule["values"]}
+        excluded |= {_canon(r[g.case.key]) for r in g.truth() if r.get(rule["column"], "").strip() in values}
+    counted = {_canon(v) for v, o in zip(frame[key], frame[column], strict=True) if _text(o) != ""}
     problems: list[str] = []
-    in_population = {_canon(v) for v in rows[key]} if key else set()
-    leaked = sorted(in_population & {_canon(k) for k in args.get("exclude_keys", ())})
+    leaked = sorted(counted & excluded)
     if leaked:
-        problems.append(f"{len(leaked)} customers who cannot have the outcome are counted: {_sample(leaked)}")
-    if "exclude_where" in args:
-        before = frame[frame[column].notna()]
-        if len(rows) != len(before):
-            problems.append(f"{len(before) - len(rows)} rows that cannot have the outcome are counted")
+        problems.append(f"{len(leaked)} who cannot have the outcome are counted: {_sample(leaked)}")
     if "expected_rate" in args:
         positive = {str(v) for v in args["positive"]}
         rate = sum(_text(v) in positive for v in frame[column] if _text(v) != "") / max(
@@ -706,7 +715,7 @@ def check_outcome_population(g: Grader, args: Mapping[str, Any]) -> Verdict:
             )
     if problems:
         return Verdict(False, "; ".join(problems))
-    return Verdict(True, f"{len(rows)} customers counted, none who cannot have the outcome")
+    return Verdict(True, f"{len(counted)} counted, none who cannot have the outcome")
 
 
 def check_contact_list(g: Grader, args: Mapping[str, Any]) -> Verdict:
@@ -738,7 +747,9 @@ def check_contact_list(g: Grader, args: Mapping[str, Any]) -> Verdict:
     if missed:
         problems.append(f"{len(missed)} people who may be contacted are left off: {_sample(missed)}")
     group = args.get("max_one_per")
-    if group and group in frame.columns:
+    if group and group not in frame.columns:
+        problems.append(f"the '{group}' column is gone, so one person per {group} cannot be kept")
+    elif group:
         listed = frame[contactable.to_numpy()]
         shared = [v for v, n in Counter(_text(x) for x in listed[group]).items() if n > 1 and v]
         if shared:
@@ -876,7 +887,13 @@ def result_digest(shipped: Shipped) -> str:
 
 
 def run_case(case: TrapCase, k: int = DEFAULT_K) -> dict[str, Any]:
-    """The case k times; it passes only if every run passes every check."""
+    """The case k times; it passes only if every run passes every check.
+
+    A case of several files that passes although no run joined or stacked them is marked `untested`: its join
+    traps were never sprung, so the pass says nothing about how a join would go.
+    """
+    from engine.doctor.combine_run import JOIN_KIND, STACK_KIND
+
     runs: list[dict[str, Any]] = []
     for _ in range(k):
         started = time.perf_counter()
@@ -891,11 +908,13 @@ def run_case(case: TrapCase, k: int = DEFAULT_K) -> dict[str, Any]:
                 "rows": None if shipped.final is None else len(shipped.final),
                 "questions": [q["code"] for q in shipped.questions],
                 "accepted": [str(a["title"]) for a in shipped.accepted],
+                "combined": any(a["kind"] in {JOIN_KIND, STACK_KIND} for a in shipped.accepted),
                 "notes": shipped.notes,
                 "seconds": round(time.perf_counter() - started, 2),
             }
         )
     failed = sorted({c["category"] for r in runs for c in r["checks"] if not c["passed"]})
+    passed = all(r["passed"] for r in runs)
     return {
         "id": case.case_id,
         "scenario": case.scenario,
@@ -903,7 +922,8 @@ def run_case(case: TrapCase, k: int = DEFAULT_K) -> dict[str, Any]:
         "description": case.description,
         "expected": case.expected,
         "k": k,
-        "passed": all(r["passed"] for r in runs),
+        "passed": passed,
+        "untested": passed and len(case.files) > 1 and not any(r["combined"] for r in runs),
         "runs_passed": sum(1 for r in runs if r["passed"]),
         "stable": len({r["digest"] for r in runs}) == 1,
         "failed_categories": failed,
@@ -930,6 +950,7 @@ def run_bench(cases: Sequence[TrapCase], k: int = DEFAULT_K, *, model: str = "ru
         "passed": sum(1 for r in results if r["passed"]),
         "failed": sum(1 for r in results if not r["passed"]),
         "unstable": sum(1 for r in results if not r["stable"]),
+        "untested": sum(1 for r in results if r["untested"]),
         "by_category": by_category,
         "results": results,
     }
@@ -944,6 +965,9 @@ def render_markdown(report: Mapping[str, Any]) -> str:
         "",
         f"**Passed {report['passed']} of {report['cases']}; failed {report['failed']}; "
         f"runs that disagreed with each other: {report['unstable']}.**",
+        "",
+        f"{report['untested']} of the passes are untested: the case has several files but nothing was joined or "
+        "stacked, so its join traps were never sprung.",
         "",
         "Many traps fail today. That is expected: the bench measures, it does not have to pass.",
         "",
@@ -960,7 +984,9 @@ def render_markdown(report: Mapping[str, Any]) -> str:
         first = next((c for run in r["runs"] for c in run["checks"] if not c["passed"]), None)
         error = next((run["error"] for run in r["runs"] if run["error"]), None)
         why = "" if r["passed"] else (error or (first["detail"] if first else ""))
-        mark = "pass" if r["passed"] else "FAIL"
+        if r["untested"]:
+            why = "nothing was joined or stacked"
+        mark = "FAIL" if not r["passed"] else ("pass, untested" if r["untested"] else "pass")
         lines.append(f"| {r['id']} | {r['scenario']} | {mark} | {why.replace('|', '/')[:160]} |")
     lines += ["", "## Each trap", ""]
     for r in report["results"]:

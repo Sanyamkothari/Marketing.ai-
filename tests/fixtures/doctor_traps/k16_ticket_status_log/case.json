@@ -23,11 +23,9 @@
     {
      "kind": "asked",
      "text": [
-      "ticket",
-      "status",
-      "latest",
-      "history",
-      "repeated"
+      "latest (status|one)",
+      "status (history|rows)",
+      "per ticket"
      ]
     },
     {

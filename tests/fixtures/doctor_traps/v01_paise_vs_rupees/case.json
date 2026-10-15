@@ -27,8 +27,7 @@
      "text": [
       "paise",
       "rupee",
-      "\\bunits?\\b",
-      "\\bscale\\b",
+      "different (units?|scales?)",
       "100 times"
      ]
     },

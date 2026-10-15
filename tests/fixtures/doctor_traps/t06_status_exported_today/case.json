@@ -29,7 +29,7 @@
     {
      "kind": "asked",
      "text": [
-      "is_active",
+      "is_active.*(today|export|after)",
       "after the outcome",
       "known only after",
       "leak"

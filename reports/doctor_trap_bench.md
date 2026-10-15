@@ -4,6 +4,8 @@
 
 **Passed 6 of 30; failed 24; runs that disagreed with each other: 0.**
 
+3 of the passes are untested: the case has several files but nothing was joined or stacked, so its join traps were never sprung.
+
 Many traps fail today. That is expected: the bench measures, it does not have to pass.
 
 ## What was graded
@@ -25,8 +27,8 @@ Many traps fail today. That is expected: the bench measures, it does not have to
 |---|---|---|---|
 | c01_selection_not_random | C01 | FAIL | nothing like it was asked (it asked: KEY_AMBIGUOUS, OUTCOME_COLUMN, TRAINING_BUDGET) |
 | c06_dnd_direction | C06 | FAIL | 27 people who must not be contacted are on the list: C0001, C0004, C0007, C0010 and 23 more; 53 people who may be contacted are left off: C0002, C0003, C0005, C |
-| c09_already_hold_product | C09 | FAIL | nothing like it was asked (it asked: TRAINING_BUDGET) / the positive rate is 14.2%; the true rate is 23.6% |
-| crit03_dup_and_drop | crit-03 | pass |  |
+| c09_already_hold_product | C09 | FAIL | nothing like it was asked (it asked: TRAINING_BUDGET) / 48 who cannot have the outcome are counted: P0001, P0005, P0006, P0010 and 44 more; the positive rate is |
+| crit03_dup_and_drop | crit-03 | pass, untested | nothing was joined or stacked |
 | f01_leading_zeros | F01 | FAIL | 120 values changed: customer_id of 000101: '000101' became '101', pin_code of 000101: '091751' became '91751', customer_id of 000102: '000102' became '102' and  |
 | f02_excel_e_plus | F02 | FAIL | nothing like it was asked (it asked: TRAINING_BUDGET) |
 | f04_merged_cells_region | F04 | FAIL | nothing like it was asked (it asked: TRAINING_BUDGET) / 56 rows of 'region' still say  |
@@ -35,16 +37,16 @@ Many traps fail today. That is expected: the bench measures, it does not have to
 | k13_household | K13 | FAIL | 20 households have more than one person on the list (by the 'marketing_opt_in' column) |
 | k15_failed_payments | K15 | FAIL | nothing like it was asked (it asked: KEY_AMBIGUOUS, TRAINING_BUDGET) / no column adds up to the true 69,918.00 (amount = 89,978.00) |
 | k16_ticket_status_log | K16 | FAIL | nothing like it was asked (it asked: TRAINING_BUDGET) / 30 customers appear more than once: TK001, TK002, TK003, TK004 and 26 more |
-| k1_merged_prefixes | K1 | pass |  |
-| k3_shared_phone | K3 | pass |  |
+| k1_merged_prefixes | K1 | pass, untested | nothing was joined or stacked |
+| k3_shared_phone | K3 | pass, untested | nothing was joined or stacked |
 | p7_minors | P7 | FAIL | 10 people who must not be contacted are on the list: C0001, C0009, C0017, C0025 and 6 more (by the 'marketing_opt_in' column) |
 | p8_deceased_fraud | P8 | FAIL | 16 people who must not be contacted are on the list: C0001, C0006, C0011, C0016 and 12 more (by the 'marketing_opt_in' column) |
-| s01_never_active | S01 | FAIL | nothing like it was asked (it asked: KEY_AMBIGUOUS, TRAINING_BUDGET) / 30 customers who cannot have the outcome are counted: C0001, C0002, C0003, C0004 and 26 m |
+| s01_never_active | S01 | FAIL | nothing like it was asked (it asked: KEY_AMBIGUOUS, TRAINING_BUDGET) / 30 who cannot have the outcome are counted: C0001, C0002, C0003, C0004 and 26 more; the p |
 | s05_cancellation_reason | S05 | FAIL | cancellation_reason still in the table the model would learn from / nothing like it was asked (it asked: TRAINING_BUDGET) |
 | t01_mixed_date_order | T01 | FAIL | nothing like it was asked (it asked: KEY_AMBIGUOUS, GUIDED_DATE_ORDER, TRAINING_BUDGET) / 80 values changed: signup_date of C0001: '08/09/2025' became '2025-09- |
 | t03_placeholder_dates | T03 | FAIL | nothing like it was asked (it asked: KEY_AMBIGUOUS, TRAINING_BUDGET) / 20 rows of 'last_payment_date' still say 1970-01-01 |
 | t06_status_exported_today | T06 | FAIL | is_active still in the table the model would learn from / nothing like it was asked (it asked: KEY_AMBIGUOUS, TRAINING_BUDGET) |
-| t07_immature_last_month | T07 | FAIL | nothing like it was asked (it asked: TRAINING_BUDGET) / 30 rows that cannot have the outcome are counted |
+| t07_immature_last_month | T07 | FAIL | nothing like it was asked (it asked: TRAINING_BUDGET) / 30 who cannot have the outcome are counted: R0181, R0182, R0183, R0184 and 26 more |
 | t13_outcome_from_column | T13 | FAIL | account_status still in the table the model would learn from / nothing like it was asked (it asked: KEY_AMBIGUOUS, TRAINING_BUDGET) |
 | t15_partial_last_month | T15 | FAIL | nothing like it was asked (it asked: TRAINING_BUDGET) / 30 rows of 'month' still say 2026-10 |
 | v01_paise_vs_rupees | V01 | FAIL | nothing like it was asked (it asked: KEY_AMBIGUOUS, KEY_AMBIGUOUS, OUTCOME_COLUMN, TRAINING_BUDGET, KEY_AMBIGUOUS and 1 more) / no column adds up to the true 19 |
@@ -84,7 +86,7 @@ Expected: Existing holders are not counted in the outcome; the true response rat
 
 - pass: every customer of the main file is still there. all 72 customers are in the result
 - pass: columns no approved change touched keep the file's values. the values are as the file had them
-- FAIL: customers who already hold the product are not in the outcome. nothing like it was asked (it asked: TRAINING_BUDGET) / the positive rate is 14.2%; the true rate is 23.6%
+- FAIL: customers who already hold the product are not in the outcome. nothing like it was asked (it asked: TRAINING_BUDGET) / 48 who cannot have the outcome are counted: P0001, P0005, P0006, P0010 and 44 more; the positive rate is 14.2%; the true rate is 23.6%
 
 ### crit03_dup_and_drop (crit-03, SQL steps slip past the safety limits)
 
@@ -223,7 +225,7 @@ Expected: The 30 never-active customers are not counted in the outcome; the true
 
 - pass: every customer of the main file is still there. all 70 customers are in the result
 - pass: columns no approved change touched keep the file's values. the values are as the file had them
-- FAIL: never-active customers are not in the outcome population. nothing like it was asked (it asked: KEY_AMBIGUOUS, TRAINING_BUDGET) / 30 customers who cannot have the outcome are counted: C0001, C0002, C0003, C0004 and 26 more; the positive rate is 48.0%; the true rate is 25.7%
+- FAIL: never-active customers are not in the outcome population. nothing like it was asked (it asked: KEY_AMBIGUOUS, TRAINING_BUDGET) / 30 who cannot have the outcome are counted: C0001, C0002, C0003, C0004 and 26 more; the positive rate is 48.0%; the true rate is 25.7%
 
 ### s05_cancellation_reason (S05, Time travel and leaks the checks miss)
 
@@ -273,7 +275,7 @@ Expected: The unfinished month (2026-09) is left out of the outcome, or the Doct
 
 - pass: every customer of the main file is still there. all 180 customers are in the result
 - pass: columns no approved change touched keep the file's values. the values are as the file had them
-- FAIL: the unfinished last month is not counted as 'did not leave'. nothing like it was asked (it asked: TRAINING_BUDGET) / 30 rows that cannot have the outcome are counted
+- FAIL: the unfinished last month is not counted as 'did not leave'. nothing like it was asked (it asked: TRAINING_BUDGET) / 30 who cannot have the outcome are counted: R0181, R0182, R0183, R0184 and 26 more
 
 ### t13_outcome_from_column (T13, Time travel and leaks the checks miss)
 

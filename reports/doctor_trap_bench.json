@@ -76,6 +76,7 @@
               "passed": false
             }
           ],
+          "combined": false,
           "digest": "92ac1926c90f",
           "error": null,
           "notes": [],
@@ -86,7 +87,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 120,
-          "seconds": 3.13
+          "seconds": 2.38
         },
         {
           "accepted": [
@@ -114,6 +115,7 @@
               "passed": false
             }
           ],
+          "combined": false,
           "digest": "92ac1926c90f",
           "error": null,
           "notes": [],
@@ -124,13 +126,14 @@
             "TRAINING_BUDGET"
           ],
           "rows": 120,
-          "seconds": 0.54
+          "seconds": 0.67
         }
       ],
       "runs_passed": 0,
       "scenario": "C01",
       "stable": true,
-      "theme": "Campaign history: selection read as cause"
+      "theme": "Campaign history: selection read as cause",
+      "untested": false
     },
     {
       "description": "do_not_contact = Y means the customer must NOT be contacted; read as a consent flag, Y means 'may contact'.",
@@ -169,6 +172,7 @@
               "passed": false
             }
           ],
+          "combined": false,
           "digest": "01117dff9fa7",
           "error": null,
           "notes": [],
@@ -179,7 +183,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 0.66
+          "seconds": 0.72
         },
         {
           "accepted": [
@@ -208,6 +212,7 @@
               "passed": false
             }
           ],
+          "combined": false,
           "digest": "01117dff9fa7",
           "error": null,
           "notes": [],
@@ -218,13 +223,14 @@
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 0.59
+          "seconds": 0.62
         }
       ],
       "runs_passed": 0,
       "scenario": "C06",
       "stable": true,
-      "theme": "Consent, sensitive data and who may be contacted"
+      "theme": "Consent, sensitive data and who may be contacted",
+      "untested": false
     },
     {
       "description": "Two in five policyholders already hold the vehicle policy being cross-sold, so they can never 'buy' it.",
@@ -257,11 +263,12 @@
             },
             {
               "category": "outcome_population",
-              "detail": "nothing like it was asked (it asked: TRAINING_BUDGET) / the positive rate is 14.2%; the true rate is 23.6%",
+              "detail": "nothing like it was asked (it asked: TRAINING_BUDGET) / 48 who cannot have the outcome are counted: P0001, P0005, P0006, P0010 and 44 more; the positive rate is 14.2%; the true rate is 23.6%",
               "label": "customers who already hold the product are not in the outcome",
               "passed": false
             }
           ],
+          "combined": false,
           "digest": "e4eb130e2fce",
           "error": null,
           "notes": [],
@@ -270,7 +277,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 120,
-          "seconds": 0.37
+          "seconds": 0.44
         },
         {
           "accepted": [
@@ -293,11 +300,12 @@
             },
             {
               "category": "outcome_population",
-              "detail": "nothing like it was asked (it asked: TRAINING_BUDGET) / the positive rate is 14.2%; the true rate is 23.6%",
+              "detail": "nothing like it was asked (it asked: TRAINING_BUDGET) / 48 who cannot have the outcome are counted: P0001, P0005, P0006, P0010 and 44 more; the positive rate is 14.2%; the true rate is 23.6%",
               "label": "customers who already hold the product are not in the outcome",
               "passed": false
             }
           ],
+          "combined": false,
           "digest": "e4eb130e2fce",
           "error": null,
           "notes": [],
@@ -306,13 +314,14 @@
             "TRAINING_BUDGET"
           ],
           "rows": 120,
-          "seconds": 0.42
+          "seconds": 0.44
         }
       ],
       "runs_passed": 0,
       "scenario": "C09",
       "stable": true,
-      "theme": "Outcome: who is eligible, and when the clock runs"
+      "theme": "Outcome: who is eligible, and when the clock runs",
+      "untested": false
     },
     {
       "description": "Twenty customers have two tag rows and twenty have none, so a join adds 20 and drops 20 and the row count stays 100.",
@@ -348,6 +357,7 @@
               "passed": true
             }
           ],
+          "combined": false,
           "digest": "4430c29b14e0",
           "error": null,
           "notes": [],
@@ -356,7 +366,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 100,
-          "seconds": 0.64
+          "seconds": 0.65
         },
         {
           "accepted": [
@@ -384,6 +394,7 @@
               "passed": true
             }
           ],
+          "combined": false,
           "digest": "4430c29b14e0",
           "error": null,
           "notes": [],
@@ -392,13 +403,14 @@
             "TRAINING_BUDGET"
           ],
           "rows": 100,
-          "seconds": 0.71
+          "seconds": 0.74
         }
       ],
       "runs_passed": 2,
       "scenario": "crit-03",
       "stable": true,
-      "theme": "SQL steps slip past the safety limits"
+      "theme": "SQL steps slip past the safety limits",
+      "untested": true
     },
     {
       "description": "Customer IDs like 000101 and PIN codes like 012341 start with zeros that a number reader drops.",
@@ -436,6 +448,7 @@
               "passed": false
             }
           ],
+          "combined": false,
           "digest": "57048020f4af",
           "error": null,
           "notes": [],
@@ -446,7 +459,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 60,
-          "seconds": 0.56
+          "seconds": 0.67
         },
         {
           "accepted": [
@@ -474,6 +487,7 @@
               "passed": false
             }
           ],
+          "combined": false,
           "digest": "57048020f4af",
           "error": null,
           "notes": [],
@@ -484,13 +498,14 @@
             "TRAINING_BUDGET"
           ],
           "rows": 60,
-          "seconds": 0.56
+          "seconds": 0.62
         }
       ],
       "runs_passed": 0,
       "scenario": "F01",
       "stable": true,
-      "theme": "False, merged or missed joins"
+      "theme": "False, merged or missed joins",
+      "untested": false
     },
     {
       "description": "Excel saved the 12-digit customer IDs as 1.23457E+11, so 40 customers now share a handful of IDs.",
@@ -526,6 +541,7 @@
               "passed": true
             }
           ],
+          "combined": false,
           "digest": "916dc18005b4",
           "error": null,
           "notes": [],
@@ -534,7 +550,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 40,
-          "seconds": 0.31
+          "seconds": 0.33
         },
         {
           "accepted": [
@@ -560,6 +576,7 @@
               "passed": true
             }
           ],
+          "combined": false,
           "digest": "916dc18005b4",
           "error": null,
           "notes": [],
@@ -568,13 +585,14 @@
             "TRAINING_BUDGET"
           ],
           "rows": 40,
-          "seconds": 0.44
+          "seconds": 0.43
         }
       ],
       "runs_passed": 0,
       "scenario": "F02",
       "stable": true,
-      "theme": "False, merged or missed joins"
+      "theme": "False, merged or missed joins",
+      "untested": false
     },
     {
       "description": "Region is written once per block (a merged cell) and left blank on the 14 rows below it.",
@@ -611,6 +629,7 @@
               "passed": false
             }
           ],
+          "combined": false,
           "digest": "f53d38878ca8",
           "error": null,
           "notes": [],
@@ -619,7 +638,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 60,
-          "seconds": 0.35
+          "seconds": 0.33
         },
         {
           "accepted": [
@@ -646,6 +665,7 @@
               "passed": false
             }
           ],
+          "combined": false,
           "digest": "f53d38878ca8",
           "error": null,
           "notes": [],
@@ -654,13 +674,14 @@
             "TRAINING_BUDGET"
           ],
           "rows": 60,
-          "seconds": 0.33
+          "seconds": 0.34
         }
       ],
       "runs_passed": 0,
       "scenario": "F04",
       "stable": true,
-      "theme": "Spreadsheet and export shapes the reader misses"
+      "theme": "Spreadsheet and export shapes the reader misses",
+      "untested": false
     },
     {
       "description": "The file is a pivot table pasted as values: counts per region and plan, a Grand Total row and no customer ID.",
@@ -684,6 +705,7 @@
               "passed": false
             }
           ],
+          "combined": false,
           "digest": "efd0addd5dd5",
           "error": null,
           "notes": [],
@@ -694,7 +716,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 10,
-          "seconds": 0.24
+          "seconds": 0.28
         },
         {
           "accepted": [
@@ -708,6 +730,7 @@
               "passed": false
             }
           ],
+          "combined": false,
           "digest": "efd0addd5dd5",
           "error": null,
           "notes": [],
@@ -718,13 +741,14 @@
             "TRAINING_BUDGET"
           ],
           "rows": 10,
-          "seconds": 0.24
+          "seconds": 0.27
         }
       ],
       "runs_passed": 0,
       "scenario": "F05",
       "stable": true,
-      "theme": "Spreadsheet and export shapes the reader misses"
+      "theme": "Spreadsheet and export shapes the reader misses",
+      "untested": false
     },
     {
       "description": "The February export repeats the last 25 calls of January, so stacking the two files counts them twice.",
@@ -761,6 +785,7 @@
               "passed": true
             }
           ],
+          "combined": true,
           "digest": "eb2c6afd3a2d",
           "error": null,
           "notes": [],
@@ -771,7 +796,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 150,
-          "seconds": 0.74
+          "seconds": 0.79
         },
         {
           "accepted": [
@@ -800,6 +825,7 @@
               "passed": true
             }
           ],
+          "combined": true,
           "digest": "eb2c6afd3a2d",
           "error": null,
           "notes": [],
@@ -810,13 +836,14 @@
             "TRAINING_BUDGET"
           ],
           "rows": 150,
-          "seconds": 0.81
+          "seconds": 0.86
         }
       ],
       "runs_passed": 2,
       "scenario": "F21",
       "stable": true,
-      "theme": "Double counting and wrong grain"
+      "theme": "Double counting and wrong grain",
+      "untested": false
     },
     {
       "description": "Twenty households have three members each with consent; texting everyone sends three messages to one household.",
@@ -854,6 +881,7 @@
               "passed": false
             }
           ],
+          "combined": false,
           "digest": "0dbe7af7077f",
           "error": null,
           "notes": [],
@@ -864,7 +892,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 60,
-          "seconds": 0.57
+          "seconds": 0.62
         },
         {
           "accepted": [
@@ -892,6 +920,7 @@
               "passed": false
             }
           ],
+          "combined": false,
           "digest": "0dbe7af7077f",
           "error": null,
           "notes": [],
@@ -908,7 +937,8 @@
       "runs_passed": 0,
       "scenario": "K13",
       "stable": true,
-      "theme": "Who one row is, and one model or several"
+      "theme": "Who one row is, and one model or several",
+      "untested": false
     },
     {
       "description": "One payment in five is a failed attempt; adding the amount column up counts money that never arrived.",
@@ -945,6 +975,7 @@
               "passed": false
             }
           ],
+          "combined": false,
           "digest": "938d409184d1",
           "error": null,
           "notes": [],
@@ -954,7 +985,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 60,
-          "seconds": 0.47
+          "seconds": 0.43
         },
         {
           "accepted": [
@@ -981,6 +1012,7 @@
               "passed": false
             }
           ],
+          "combined": false,
           "digest": "938d409184d1",
           "error": null,
           "notes": [],
@@ -990,13 +1022,14 @@
             "TRAINING_BUDGET"
           ],
           "rows": 60,
-          "seconds": 0.49
+          "seconds": 0.46
         }
       ],
       "runs_passed": 0,
       "scenario": "K15",
       "stable": true,
-      "theme": "Double counting and wrong grain"
+      "theme": "Double counting and wrong grain",
+      "untested": false
     },
     {
       "description": "Each complaint ticket has two to four status rows (opened, assigned, reopened, closed); counting rows counts a complaint many times.",
@@ -1033,6 +1066,7 @@
               "passed": false
             }
           ],
+          "combined": false,
           "digest": "6ca7bbf85a05",
           "error": null,
           "notes": [],
@@ -1068,6 +1102,7 @@
               "passed": false
             }
           ],
+          "combined": false,
           "digest": "6ca7bbf85a05",
           "error": null,
           "notes": [],
@@ -1076,13 +1111,14 @@
             "TRAINING_BUDGET"
           ],
           "rows": 95,
-          "seconds": 0.57
+          "seconds": 0.65
         }
       ],
       "runs_passed": 0,
       "scenario": "K16",
       "stable": true,
-      "theme": "Double counting and wrong grain"
+      "theme": "Double counting and wrong grain",
+      "untested": false
     },
     {
       "description": "Customer IDs C-101 and S-101 are two different people; the orders file writes both as 101.",
@@ -1124,6 +1160,7 @@
               "passed": true
             }
           ],
+          "combined": false,
           "digest": "98ac17a7d49c",
           "error": null,
           "notes": [],
@@ -1135,7 +1172,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 60,
-          "seconds": 0.73
+          "seconds": 0.72
         },
         {
           "accepted": [
@@ -1169,6 +1206,7 @@
               "passed": true
             }
           ],
+          "combined": false,
           "digest": "98ac17a7d49c",
           "error": null,
           "notes": [],
@@ -1180,13 +1218,14 @@
             "TRAINING_BUDGET"
           ],
           "rows": 60,
-          "seconds": 0.67
+          "seconds": 0.81
         }
       ],
       "runs_passed": 2,
       "scenario": "K1",
       "stable": true,
-      "theme": "False, merged or missed joins"
+      "theme": "False, merged or missed joins",
+      "untested": true
     },
     {
       "description": "Ten customers share the dummy phone 9999999999 and eight share a family phone; the calls file is keyed by phone.",
@@ -1222,6 +1261,7 @@
               "passed": true
             }
           ],
+          "combined": false,
           "digest": "de339b0cd0e4",
           "error": null,
           "notes": [],
@@ -1233,7 +1273,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 50,
-          "seconds": 0.69
+          "seconds": 0.76
         },
         {
           "accepted": [
@@ -1261,6 +1301,7 @@
               "passed": true
             }
           ],
+          "combined": false,
           "digest": "de339b0cd0e4",
           "error": null,
           "notes": [],
@@ -1272,13 +1313,14 @@
             "TRAINING_BUDGET"
           ],
           "rows": 50,
-          "seconds": 0.77
+          "seconds": 0.89
         }
       ],
       "runs_passed": 2,
       "scenario": "K3",
       "stable": true,
-      "theme": "False, merged or missed joins"
+      "theme": "False, merged or missed joins",
+      "untested": true
     },
     {
       "description": "Ten customers are under 18 on the as-of date, and every customer has ticked marketing consent.",
@@ -1316,6 +1358,7 @@
               "passed": false
             }
           ],
+          "combined": false,
           "digest": "fcf4de74cfc7",
           "error": null,
           "notes": [],
@@ -1326,7 +1369,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 0.58
+          "seconds": 0.69
         },
         {
           "accepted": [
@@ -1354,6 +1397,7 @@
               "passed": false
             }
           ],
+          "combined": false,
           "digest": "fcf4de74cfc7",
           "error": null,
           "notes": [],
@@ -1364,13 +1408,14 @@
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 0.56
+          "seconds": 0.65
         }
       ],
       "runs_passed": 0,
       "scenario": "P7",
       "stable": true,
-      "theme": "Consent, sensitive data and who may be contacted"
+      "theme": "Consent, sensitive data and who may be contacted",
+      "untested": false
     },
     {
       "description": "Some customers are deceased, flagged for fraud, under legal hold or closed, yet all show marketing consent.",
@@ -1408,6 +1453,7 @@
               "passed": false
             }
           ],
+          "combined": false,
           "digest": "9477132ef1a1",
           "error": null,
           "notes": [],
@@ -1418,7 +1464,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 0.58
+          "seconds": 0.65
         },
         {
           "accepted": [
@@ -1446,6 +1492,7 @@
               "passed": false
             }
           ],
+          "combined": false,
           "digest": "9477132ef1a1",
           "error": null,
           "notes": [],
@@ -1456,13 +1503,14 @@
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 0.61
+          "seconds": 0.6
         }
       ],
       "runs_passed": 0,
       "scenario": "P8",
       "stable": true,
-      "theme": "Consent, sensitive data and who may be contacted"
+      "theme": "Consent, sensitive data and who may be contacted",
+      "untested": false
     },
     {
       "description": "Churn is 'no order in 90 days', so 30 customers who never ordered at all are labelled churners.",
@@ -1494,11 +1542,12 @@
             },
             {
               "category": "outcome_population",
-              "detail": "nothing like it was asked (it asked: KEY_AMBIGUOUS, TRAINING_BUDGET) / 30 customers who cannot have the outcome are counted: C0001, C0002, C0003, C0004 and 26 more; the positive rate is 48.0%; the true rate is 25.7%",
+              "detail": "nothing like it was asked (it asked: KEY_AMBIGUOUS, TRAINING_BUDGET) / 30 who cannot have the outcome are counted: C0001, C0002, C0003, C0004 and 26 more; the positive rate is 48.0%; the true rate is 25.7%",
               "label": "never-active customers are not in the outcome population",
               "passed": false
             }
           ],
+          "combined": false,
           "digest": "d197ac0878c4",
           "error": null,
           "notes": [],
@@ -1508,7 +1557,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 100,
-          "seconds": 0.55
+          "seconds": 0.71
         },
         {
           "accepted": [
@@ -1530,11 +1579,12 @@
             },
             {
               "category": "outcome_population",
-              "detail": "nothing like it was asked (it asked: KEY_AMBIGUOUS, TRAINING_BUDGET) / 30 customers who cannot have the outcome are counted: C0001, C0002, C0003, C0004 and 26 more; the positive rate is 48.0%; the true rate is 25.7%",
+              "detail": "nothing like it was asked (it asked: KEY_AMBIGUOUS, TRAINING_BUDGET) / 30 who cannot have the outcome are counted: C0001, C0002, C0003, C0004 and 26 more; the positive rate is 48.0%; the true rate is 25.7%",
               "label": "never-active customers are not in the outcome population",
               "passed": false
             }
           ],
+          "combined": false,
           "digest": "d197ac0878c4",
           "error": null,
           "notes": [],
@@ -1544,13 +1594,14 @@
             "TRAINING_BUDGET"
           ],
           "rows": 100,
-          "seconds": 0.71
+          "seconds": 0.73
         }
       ],
       "runs_passed": 0,
       "scenario": "S01",
       "stable": true,
-      "theme": "Outcome: who is eligible, and when the clock runs"
+      "theme": "Outcome: who is eligible, and when the clock runs",
+      "untested": false
     },
     {
       "description": "cancellation_reason is filled in only for customers who left, so 'is it filled in' gives the answer away.",
@@ -1587,6 +1638,7 @@
               "passed": false
             }
           ],
+          "combined": false,
           "digest": "f2607b941356",
           "error": null,
           "notes": [],
@@ -1595,7 +1647,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 120,
-          "seconds": 0.39
+          "seconds": 0.4
         },
         {
           "accepted": [
@@ -1622,6 +1674,7 @@
               "passed": false
             }
           ],
+          "combined": false,
           "digest": "f2607b941356",
           "error": null,
           "notes": [],
@@ -1630,13 +1683,14 @@
             "TRAINING_BUDGET"
           ],
           "rows": 120,
-          "seconds": 0.36
+          "seconds": 0.45
         }
       ],
       "runs_passed": 0,
       "scenario": "S05",
       "stable": true,
-      "theme": "Time travel and leaks the checks miss"
+      "theme": "Time travel and leaks the checks miss",
+      "untested": false
     },
     {
       "description": "signup_date holds day/month in system A rows and month/day in system B rows, so 03/04/2026 can be two dates.",
@@ -1674,6 +1728,7 @@
               "passed": false
             }
           ],
+          "combined": false,
           "digest": "531fcf65c0ff",
           "error": null,
           "notes": [],
@@ -1684,7 +1739,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 0.61
+          "seconds": 0.72
         },
         {
           "accepted": [
@@ -1712,6 +1767,7 @@
               "passed": false
             }
           ],
+          "combined": false,
           "digest": "531fcf65c0ff",
           "error": null,
           "notes": [],
@@ -1722,13 +1778,14 @@
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 0.74
+          "seconds": 0.78
         }
       ],
       "runs_passed": 0,
       "scenario": "T01",
       "stable": true,
-      "theme": "Dates that are read wrong without any error"
+      "theme": "Dates that are read wrong without any error",
+      "untested": false
     },
     {
       "description": "A quarter of the customers have last_payment_date 1970-01-01, the system's stand-in for 'never paid'.",
@@ -1765,6 +1822,7 @@
               "passed": false
             }
           ],
+          "combined": false,
           "digest": "e07e037b3db1",
           "error": null,
           "notes": [],
@@ -1774,7 +1832,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 0.53
+          "seconds": 0.58
         },
         {
           "accepted": [
@@ -1801,6 +1859,7 @@
               "passed": false
             }
           ],
+          "combined": false,
           "digest": "e07e037b3db1",
           "error": null,
           "notes": [],
@@ -1810,13 +1869,14 @@
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 0.52
+          "seconds": 0.51
         }
       ],
       "runs_passed": 0,
       "scenario": "T03",
       "stable": true,
-      "theme": "Dates that are read wrong without any error"
+      "theme": "Dates that are read wrong without any error",
+      "untested": false
     },
     {
       "description": "The customer master was exported today, so is_active already says who left: it is 0 for every churner.",
@@ -1853,6 +1913,7 @@
               "passed": false
             }
           ],
+          "combined": false,
           "digest": "480f832b61b4",
           "error": null,
           "notes": [],
@@ -1862,7 +1923,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 120,
-          "seconds": 0.56
+          "seconds": 0.48
         },
         {
           "accepted": [
@@ -1889,6 +1950,7 @@
               "passed": false
             }
           ],
+          "combined": false,
           "digest": "480f832b61b4",
           "error": null,
           "notes": [],
@@ -1898,13 +1960,14 @@
             "TRAINING_BUDGET"
           ],
           "rows": 120,
-          "seconds": 0.63
+          "seconds": 0.6
         }
       ],
       "runs_passed": 0,
       "scenario": "T06",
       "stable": true,
-      "theme": "Time travel and leaks the checks miss"
+      "theme": "Time travel and leaks the checks miss",
+      "untested": false
     },
     {
       "description": "The newest month's outcome window has not finished, so its churn rate is 3% against about 25% before.",
@@ -1936,11 +1999,12 @@
             },
             {
               "category": "outcome_population",
-              "detail": "nothing like it was asked (it asked: TRAINING_BUDGET) / 30 rows that cannot have the outcome are counted",
+              "detail": "nothing like it was asked (it asked: TRAINING_BUDGET) / 30 who cannot have the outcome are counted: R0181, R0182, R0183, R0184 and 26 more",
               "label": "the unfinished last month is not counted as 'did not leave'",
               "passed": false
             }
           ],
+          "combined": false,
           "digest": "f516e1712807",
           "error": null,
           "notes": [],
@@ -1971,11 +2035,12 @@
             },
             {
               "category": "outcome_population",
-              "detail": "nothing like it was asked (it asked: TRAINING_BUDGET) / 30 rows that cannot have the outcome are counted",
+              "detail": "nothing like it was asked (it asked: TRAINING_BUDGET) / 30 who cannot have the outcome are counted: R0181, R0182, R0183, R0184 and 26 more",
               "label": "the unfinished last month is not counted as 'did not leave'",
               "passed": false
             }
           ],
+          "combined": false,
           "digest": "f516e1712807",
           "error": null,
           "notes": [],
@@ -1984,13 +2049,14 @@
             "TRAINING_BUDGET"
           ],
           "rows": 210,
-          "seconds": 0.6
+          "seconds": 0.57
         }
       ],
       "runs_passed": 0,
       "scenario": "T07",
       "stable": true,
-      "theme": "Outcome: who is eligible, and when the clock runs"
+      "theme": "Outcome: who is eligible, and when the clock runs",
+      "untested": false
     },
     {
       "description": "The churn flag was built from account_status, which stays in the file as an ordinary column.",
@@ -2027,6 +2093,7 @@
               "passed": false
             }
           ],
+          "combined": false,
           "digest": "09e2027e154b",
           "error": null,
           "notes": [],
@@ -2063,6 +2130,7 @@
               "passed": false
             }
           ],
+          "combined": false,
           "digest": "09e2027e154b",
           "error": null,
           "notes": [],
@@ -2072,13 +2140,14 @@
             "TRAINING_BUDGET"
           ],
           "rows": 120,
-          "seconds": 0.58
+          "seconds": 0.65
         }
       ],
       "runs_passed": 0,
       "scenario": "T13",
       "stable": true,
-      "theme": "Time travel and leaks the checks miss"
+      "theme": "Time travel and leaks the checks miss",
+      "untested": false
     },
     {
       "description": "The newest month, 2026-10, covers only 12 days, so its usage looks like a collapse for every customer.",
@@ -2115,6 +2184,7 @@
               "passed": false
             }
           ],
+          "combined": false,
           "digest": "e98ac9413203",
           "error": null,
           "notes": [],
@@ -2123,7 +2193,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 120,
-          "seconds": 0.43
+          "seconds": 0.42
         },
         {
           "accepted": [
@@ -2150,6 +2220,7 @@
               "passed": false
             }
           ],
+          "combined": false,
           "digest": "e98ac9413203",
           "error": null,
           "notes": [],
@@ -2158,13 +2229,14 @@
             "TRAINING_BUDGET"
           ],
           "rows": 120,
-          "seconds": 0.55
+          "seconds": 0.47
         }
       ],
       "runs_passed": 0,
       "scenario": "T15",
       "stable": true,
-      "theme": "Outcome: who is eligible, and when the clock runs"
+      "theme": "Outcome: who is eligible, and when the clock runs",
+      "untested": false
     },
     {
       "description": "The second file's amounts are in paise (100 times larger) and the first file's are in rupees.",
@@ -2204,6 +2276,7 @@
               "passed": false
             }
           ],
+          "combined": true,
           "digest": "aeda77fac819",
           "error": null,
           "notes": [],
@@ -2217,7 +2290,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 1.15
+          "seconds": 1.14
         },
         {
           "accepted": [
@@ -2247,6 +2320,7 @@
               "passed": false
             }
           ],
+          "combined": true,
           "digest": "aeda77fac819",
           "error": null,
           "notes": [],
@@ -2260,13 +2334,14 @@
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 1.03
+          "seconds": 1.23
         }
       ],
       "runs_passed": 0,
       "scenario": "V01",
       "stable": true,
-      "theme": "Money and units whose meaning is not in the cells"
+      "theme": "Money and units whose meaning is not in the cells",
+      "untested": false
     },
     {
       "description": "One transaction in six is negative: a refund, which is a strong signal that must not be clipped to zero.",
@@ -2301,6 +2376,7 @@
               "passed": true
             }
           ],
+          "combined": false,
           "digest": "c0c280a61fa2",
           "error": null,
           "notes": [],
@@ -2310,7 +2386,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 60,
-          "seconds": 0.39
+          "seconds": 0.5
         },
         {
           "accepted": [
@@ -2337,6 +2413,7 @@
               "passed": true
             }
           ],
+          "combined": false,
           "digest": "c0c280a61fa2",
           "error": null,
           "notes": [],
@@ -2346,13 +2423,14 @@
             "TRAINING_BUDGET"
           ],
           "rows": 60,
-          "seconds": 0.5
+          "seconds": 0.63
         }
       ],
       "runs_passed": 2,
       "scenario": "V03",
       "stable": true,
-      "theme": "Money and units whose meaning is not in the cells"
+      "theme": "Money and units whose meaning is not in the cells",
+      "untested": false
     },
     {
       "description": "last_purchase_amount is blank for customers who never bought; filling it with 0 makes them look like small buyers.",
@@ -2387,6 +2465,7 @@
               "passed": true
             }
           ],
+          "combined": false,
           "digest": "b0a479d1ccc8",
           "error": null,
           "notes": [],
@@ -2396,7 +2475,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 0.41
+          "seconds": 0.46
         },
         {
           "accepted": [
@@ -2423,6 +2502,7 @@
               "passed": true
             }
           ],
+          "combined": false,
           "digest": "b0a479d1ccc8",
           "error": null,
           "notes": [],
@@ -2432,13 +2512,14 @@
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 0.39
+          "seconds": 0.43
         }
       ],
       "runs_passed": 2,
       "scenario": "V04",
       "stable": true,
-      "theme": "Money and units whose meaning is not in the cells"
+      "theme": "Money and units whose meaning is not in the cells",
+      "untested": false
     },
     {
       "description": "Eight QA accounts (TEST001..., qa+...@company.example) sit in the customer list with marketing consent.",
@@ -2476,6 +2557,7 @@
               "passed": false
             }
           ],
+          "combined": false,
           "digest": "a8cda1c00f14",
           "error": null,
           "notes": [],
@@ -2486,7 +2568,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 0.58
+          "seconds": 0.74
         },
         {
           "accepted": [
@@ -2514,6 +2596,7 @@
               "passed": false
             }
           ],
+          "combined": false,
           "digest": "a8cda1c00f14",
           "error": null,
           "notes": [],
@@ -2524,13 +2607,14 @@
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 0.6
+          "seconds": 0.65
         }
       ],
       "runs_passed": 0,
       "scenario": "V06",
       "stable": true,
-      "theme": "Test, staff and extreme accounts"
+      "theme": "Test, staff and extreme accounts",
+      "untested": false
     },
     {
       "description": "Consent is written Y, yes, Haan or a tick for agreed, N, nahi or No for refused, and left blank when unknown.",
@@ -2568,6 +2652,7 @@
               "passed": false
             }
           ],
+          "combined": false,
           "digest": "1cde67c5145f",
           "error": null,
           "notes": [],
@@ -2578,7 +2663,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 90,
-          "seconds": 0.55
+          "seconds": 0.56
         },
         {
           "accepted": [
@@ -2606,6 +2691,7 @@
               "passed": false
             }
           ],
+          "combined": false,
           "digest": "1cde67c5145f",
           "error": null,
           "notes": [],
@@ -2616,13 +2702,14 @@
             "TRAINING_BUDGET"
           ],
           "rows": 90,
-          "seconds": 0.59
+          "seconds": 0.78
         }
       ],
       "runs_passed": 0,
       "scenario": "V13",
       "stable": true,
-      "theme": "Consent, sensitive data and who may be contacted"
+      "theme": "Consent, sensitive data and who may be contacted",
+      "untested": false
     },
     {
       "description": "The order total is written on every line item of the order, so adding the column up counts each order 2 to 4 times.",
@@ -2659,6 +2746,7 @@
               "passed": false
             }
           ],
+          "combined": false,
           "digest": "d7470aed6a82",
           "error": null,
           "notes": [],
@@ -2667,7 +2755,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 124,
-          "seconds": 0.49
+          "seconds": 0.48
         },
         {
           "accepted": [
@@ -2694,6 +2782,7 @@
               "passed": false
             }
           ],
+          "combined": false,
           "digest": "d7470aed6a82",
           "error": null,
           "notes": [],
@@ -2702,15 +2791,17 @@
             "TRAINING_BUDGET"
           ],
           "rows": 124,
-          "seconds": 0.47
+          "seconds": 0.46
         }
       ],
       "runs_passed": 0,
       "scenario": "V19",
       "stable": true,
-      "theme": "Double counting and wrong grain"
+      "theme": "Double counting and wrong grain",
+      "untested": false
     }
   ],
   "unstable": 0,
+  "untested": 3,
   "version": 0
 }
