@@ -2,7 +2,7 @@
 
 30 planted traps, each run 2 times with no AI (the rules path). A trap passes only if every run passes every check. The result data is graded, never the Doctor's words.
 
-**Passed 6 of 30; failed 24; runs that disagreed with each other: 0.**
+**Passed 9 of 30; failed 21; runs that disagreed with each other: 0.**
 
 3 of the passes are untested: the case has several files but nothing was joined or stacked, so its join traps were never sprung.
 
@@ -13,38 +13,38 @@ Many traps fail today. That is expected: the bench measures, it does not have to
 | Check | Graded | Failed |
 |---|---|---|
 | No silent row loss | 30 | 0 |
-| No unapproved change | 34 | 5 |
+| No unapproved change | 34 | 3 |
 | Correct join (keys not merged, one row per customer) | 4 | 0 |
 | No double counting (totals) | 5 | 4 |
 | No leak column kept | 3 | 3 |
 | Outcome population correct | 4 | 4 |
-| Contact-list exclusions applied | 6 | 6 |
-| Asked the right question | 3 | 3 |
+| Contact-list exclusions applied | 6 | 5 |
+| Asked the right question | 3 | 2 |
 
 ## The traps
 
 | Trap | Scenario | Result | What went wrong |
 |---|---|---|---|
 | c01_selection_not_random | C01 | FAIL | nothing like it was asked (it asked: KEY_AMBIGUOUS, OUTCOME_COLUMN, TRAINING_BUDGET) |
-| c06_dnd_direction | C06 | FAIL | 27 people who must not be contacted are on the list: C0001, C0004, C0007, C0010 and 23 more; 53 people who may be contacted are left off: C0002, C0003, C0005, C |
+| c06_dnd_direction | C06 | FAIL | 53 people who may be contacted are left off: C0002, C0003, C0005, C0006 and 49 more (by the 'do_not_contact' column and the contact-list gate) |
 | c09_already_hold_product | C09 | FAIL | nothing like it was asked (it asked: TRAINING_BUDGET) / 48 who cannot have the outcome are counted: P0001, P0005, P0006, P0010 and 44 more; the positive rate is |
 | crit03_dup_and_drop | crit-03 | pass, untested | nothing was joined or stacked |
-| f01_leading_zeros | F01 | FAIL | 120 values changed: customer_id of 000101: '000101' became '101', pin_code of 000101: '091751' became '91751', customer_id of 000102: '000102' became '102' and  |
-| f02_excel_e_plus | F02 | FAIL | nothing like it was asked (it asked: TRAINING_BUDGET) |
+| f01_leading_zeros | F01 | FAIL | 60 values changed: pin_code of 000101: '091751' became '91751', pin_code of 000102: '074361' became '74361', pin_code of 000103: '038161' became '38161' and 57  |
+| f02_excel_e_plus | F02 | pass |  |
 | f04_merged_cells_region | F04 | FAIL | nothing like it was asked (it asked: TRAINING_BUDGET) / 56 rows of 'region' still say  |
 | f05_pivot_summary | F05 | FAIL | nothing like it was asked (it asked: KEY_AMBIGUOUS, DATA_REQUESTED, TRAINING_BUDGET) |
 | f21_overlapping_exports | F21 | pass |  |
-| k13_household | K13 | FAIL | 20 households have more than one person on the list (by the 'marketing_opt_in' column) |
+| k13_household | K13 | FAIL | 20 households have more than one person on the list (by the 'marketing_opt_in' column and the contact-list gate) |
 | k15_failed_payments | K15 | FAIL | nothing like it was asked (it asked: KEY_AMBIGUOUS, TRAINING_BUDGET) / no column adds up to the true 69,918.00 (amount = 89,978.00) |
-| k16_ticket_status_log | K16 | FAIL | nothing like it was asked (it asked: TRAINING_BUDGET) / 30 customers appear more than once: TK001, TK002, TK003, TK004 and 26 more |
+| k16_ticket_status_log | K16 | FAIL | nothing like it was asked (it asked: THIN_LAST_PERIOD, TRAINING_BUDGET) / 30 customers appear more than once: TK001, TK002, TK003, TK004 and 26 more |
 | k1_merged_prefixes | K1 | pass, untested | nothing was joined or stacked |
 | k3_shared_phone | K3 | pass, untested | nothing was joined or stacked |
-| p7_minors | P7 | FAIL | 10 people who must not be contacted are on the list: C0001, C0009, C0017, C0025 and 6 more (by the 'marketing_opt_in' column) |
-| p8_deceased_fraud | P8 | FAIL | 16 people who must not be contacted are on the list: C0001, C0006, C0011, C0016 and 12 more (by the 'marketing_opt_in' column) |
-| s01_never_active | S01 | FAIL | nothing like it was asked (it asked: KEY_AMBIGUOUS, TRAINING_BUDGET) / 30 who cannot have the outcome are counted: C0001, C0002, C0003, C0004 and 26 more; the p |
+| p7_minors | P7 | pass |  |
+| p8_deceased_fraud | P8 | FAIL | 8 people who must not be contacted are on the list: C0011, C0016, C0031, C0036 and 4 more (by the 'marketing_opt_in' column and the contact-list gate) |
+| s01_never_active | S01 | FAIL | nothing like it was asked (it asked: KEY_AMBIGUOUS, THIN_LAST_PERIOD, TRAINING_BUDGET) / 30 who cannot have the outcome are counted: C0001, C0002, C0003, C0004  |
 | s05_cancellation_reason | S05 | FAIL | cancellation_reason still in the table the model would learn from / nothing like it was asked (it asked: TRAINING_BUDGET) |
-| t01_mixed_date_order | T01 | FAIL | nothing like it was asked (it asked: KEY_AMBIGUOUS, GUIDED_DATE_ORDER, TRAINING_BUDGET) / 80 values changed: signup_date of C0001: '08/09/2025' became '2025-09- |
-| t03_placeholder_dates | T03 | FAIL | nothing like it was asked (it asked: KEY_AMBIGUOUS, TRAINING_BUDGET) / 20 rows of 'last_payment_date' still say 1970-01-01 |
+| t01_mixed_date_order | T01 | pass |  |
+| t03_placeholder_dates | T03 | FAIL | nothing like it was asked (it asked: KEY_AMBIGUOUS, THIN_LAST_PERIOD, TRAINING_BUDGET) / 20 rows of 'last_payment_date' still say 1970-01-01 |
 | t06_status_exported_today | T06 | FAIL | is_active still in the table the model would learn from / nothing like it was asked (it asked: KEY_AMBIGUOUS, TRAINING_BUDGET) |
 | t07_immature_last_month | T07 | FAIL | nothing like it was asked (it asked: TRAINING_BUDGET) / 30 who cannot have the outcome are counted: R0181, R0182, R0183, R0184 and 26 more |
 | t13_outcome_from_column | T13 | FAIL | account_status still in the table the model would learn from / nothing like it was asked (it asked: KEY_AMBIGUOUS, TRAINING_BUDGET) |
@@ -52,8 +52,8 @@ Many traps fail today. That is expected: the bench measures, it does not have to
 | v01_paise_vs_rupees | V01 | FAIL | nothing like it was asked (it asked: KEY_AMBIGUOUS, KEY_AMBIGUOUS, OUTCOME_COLUMN, TRAINING_BUDGET, KEY_AMBIGUOUS and 1 more) / no column adds up to the true 19 |
 | v03_refunds_negative | V03 | pass |  |
 | v04_blank_vs_zero | V04 | pass |  |
-| v06_test_accounts | V06 | FAIL | 8 people who must not be contacted are on the list: TEST001, TEST002, TEST003, TEST004 and 4 more (by the 'marketing_opt_in' column) |
-| v13_consent_spellings | V13 | FAIL | 18 people who may be contacted are left off: C0004, C0006, C0014, C0016 and 14 more (by the 'marketing_opt_in' column) |
+| v06_test_accounts | V06 | FAIL | 8 people who must not be contacted are on the list: TEST001, TEST002, TEST003, TEST004 and 4 more (by the 'marketing_opt_in' column and the contact-list gate) |
+| v13_consent_spellings | V13 | FAIL | 18 people who may be contacted are left off: C0004, C0006, C0014, C0016 and 14 more (by the 'marketing_opt_in' column and the contact-list gate) |
 | v19_order_total_repeated | V19 | FAIL | nothing like it was asked (it asked: TRAINING_BUDGET) / no column adds up to the true 120,964.00 (order_total = 377,802.00) |
 
 ## Each trap
@@ -76,7 +76,7 @@ Expected: Everyone with do_not_contact = Y is off the contact list; everyone wit
 
 - pass: every customer of the main file is still there. all 80 customers are in the result
 - pass: columns no approved change touched keep the file's values. the values are as the file had them
-- FAIL: do-not-contact customers are off the list (the flag points the right way). 27 people who must not be contacted are on the list: C0001, C0004, C0007, C0010 and 23 more; 53 people who may be contacted are left off: C0002, C0003, C0005, C0006 and 49 more (by the 'do_not_contact' column)
+- FAIL: do-not-contact customers are off the list (the flag points the right way). 53 people who may be contacted are left off: C0002, C0003, C0005, C0006 and 49 more (by the 'do_not_contact' column and the contact-list gate)
 
 ### c09_already_hold_product (C09, Outcome: who is eligible, and when the clock runs)
 
@@ -105,8 +105,8 @@ Customer IDs like 000101 and PIN codes like 012341 start with zeros that a numbe
 Expected: IDs and PIN codes come out exactly as written, with their leading zeros.
 
 - pass: every customer of the main file is still there. all 60 customers are in the result
-- FAIL: columns no approved change touched keep the file's values. 120 values changed: customer_id of 000101: '000101' became '101', pin_code of 000101: '091751' became '91751', customer_id of 000102: '000102' became '102' and 117 more
-- FAIL: IDs and PIN codes keep their leading zeros. 120 values changed: customer_id of 000101: '000101' became '101', pin_code of 000101: '091751' became '91751', customer_id of 000102: '000102' became '102' and 117 more
+- pass: columns no approved change touched keep the file's values. the values are as the file had them (rows lined up by position)
+- FAIL: IDs and PIN codes keep their leading zeros. 60 values changed: pin_code of 000101: '091751' became '91751', pin_code of 000102: '074361' became '74361', pin_code of 000103: '038161' became '38161' and 57 more
 
 ### f02_excel_e_plus (F02, False, merged or missed joins)
 
@@ -115,7 +115,7 @@ Excel saved the 12-digit customer IDs as 1.23457E+11, so 40 customers now share 
 Expected: The Doctor says the IDs were rounded and asks for a re-export as text; all 40 rows are kept and none is joined.
 
 - pass: every customer of the main file is still there. all 13 customers are in the result
-- FAIL: says the IDs were rounded by Excel and asks for a re-export. nothing like it was asked (it asked: TRAINING_BUDGET)
+- pass: says the IDs were rounded by Excel and asks for a re-export. asked: DIFFERENT FILE REQUESTED This file cannot be used as it is. Ask whoever exported the file 
 - pass: all 40 rows are kept. 40 rows, as in the file
 
 ### f04_merged_cells_region (F04, Spreadsheet and export shapes the reader misses)
@@ -154,7 +154,7 @@ Expected: At most one person per household is on the contact list.
 
 - pass: every customer of the main file is still there. all 60 customers are in the result
 - pass: columns no approved change touched keep the file's values. the values are as the file had them
-- FAIL: no household gets more than one message. 20 households have more than one person on the list (by the 'marketing_opt_in' column)
+- FAIL: no household gets more than one message. 20 households have more than one person on the list (by the 'marketing_opt_in' column and the contact-list gate)
 
 ### k15_failed_payments (K15, Double counting and wrong grain)
 
@@ -174,7 +174,7 @@ Expected: 30 tickets, each once with its latest status, or the Doctor asks how t
 
 - pass: every customer of the main file is still there. all 30 customers are in the result
 - pass: columns no approved change touched keep the file's values. the values are as the file had them
-- FAIL: 30 tickets counted once each. nothing like it was asked (it asked: TRAINING_BUDGET) / 30 customers appear more than once: TK001, TK002, TK003, TK004 and 26 more
+- FAIL: 30 tickets counted once each. nothing like it was asked (it asked: THIN_LAST_PERIOD, TRAINING_BUDGET) / 30 customers appear more than once: TK001, TK002, TK003, TK004 and 26 more
 
 ### k1_merged_prefixes (K1, False, merged or missed joins)
 
@@ -183,7 +183,7 @@ Customer IDs C-101 and S-101 are two different people; the orders file writes bo
 Expected: 60 customers stay 60: a rule that strips the prefix must not merge C-101 and S-101 into one row.
 
 - pass: every customer of the main file is still there. all 60 customers are in the result
-- pass: columns no approved change touched keep the file's values. the values are as the file had them
+- pass: columns no approved change touched keep the file's values. the values are as the file had them (rows lined up by position)
 - pass: 60 customers stay 60 rows, none merged. 60 rows, one per customer
 - pass: C-101 and S-101 each keep their own segment. the named customers have their own values
 
@@ -205,7 +205,7 @@ Expected: Minors are off the contact list even though they have consent; adults 
 
 - pass: every customer of the main file is still there. all 80 customers are in the result
 - pass: columns no approved change touched keep the file's values. the values are as the file had them
-- FAIL: customers under 18 are off the contact list. 10 people who must not be contacted are on the list: C0001, C0009, C0017, C0025 and 6 more (by the 'marketing_opt_in' column)
+- pass: customers under 18 are off the contact list. the list leaves out everyone it must (by the 'marketing_opt_in' column and the contact-list gate)
 
 ### p8_deceased_fraud (P8, Consent, sensitive data and who may be contacted)
 
@@ -215,7 +215,7 @@ Expected: Deceased, fraud, legal-hold and closed customers are off the contact l
 
 - pass: every customer of the main file is still there. all 80 customers are in the result
 - pass: columns no approved change touched keep the file's values. the values are as the file had them
-- FAIL: deceased, fraud, legal-hold and closed customers are off the list. 16 people who must not be contacted are on the list: C0001, C0006, C0011, C0016 and 12 more (by the 'marketing_opt_in' column)
+- FAIL: deceased, fraud, legal-hold and closed customers are off the list. 8 people who must not be contacted are on the list: C0011, C0016, C0031, C0036 and 4 more (by the 'marketing_opt_in' column and the contact-list gate)
 
 ### s01_never_active (S01, Outcome: who is eligible, and when the clock runs)
 
@@ -225,7 +225,7 @@ Expected: The 30 never-active customers are not counted in the outcome; the true
 
 - pass: every customer of the main file is still there. all 70 customers are in the result
 - pass: columns no approved change touched keep the file's values. the values are as the file had them
-- FAIL: never-active customers are not in the outcome population. nothing like it was asked (it asked: KEY_AMBIGUOUS, TRAINING_BUDGET) / 30 who cannot have the outcome are counted: C0001, C0002, C0003, C0004 and 26 more; the positive rate is 48.0%; the true rate is 25.7%
+- FAIL: never-active customers are not in the outcome population. nothing like it was asked (it asked: KEY_AMBIGUOUS, THIN_LAST_PERIOD, TRAINING_BUDGET) / 30 who cannot have the outcome are counted: C0001, C0002, C0003, C0004 and 26 more; the positive rate is 48.0%; the true rate is 25.7%
 
 ### s05_cancellation_reason (S05, Time travel and leaks the checks miss)
 
@@ -245,7 +245,7 @@ Expected: The Doctor stops and asks the date order for each system, or leaves th
 
 - pass: every customer of the main file is still there. all 80 customers are in the result
 - pass: columns no approved change touched keep the file's values. the values are as the file had them
-- FAIL: dates are not silently read in one order. nothing like it was asked (it asked: KEY_AMBIGUOUS, GUIDED_DATE_ORDER, TRAINING_BUDGET) / 80 values changed: signup_date of C0001: '08/09/2025' became '2025-09-08 00:00:00', signup_date of C0002: '06/19/2026' became '2026-06-19 00:00:00', signup_date of C0003: '14/02/2026' became '2026-02-14 00:00:00' and 77 more
+- pass: dates are not silently read in one order. the values are as the file had them
 
 ### t03_placeholder_dates (T03, Dates that are read wrong without any error)
 
@@ -255,7 +255,7 @@ Expected: 1970-01-01 is not kept as a real date: it becomes blank, or the Doctor
 
 - pass: every customer of the main file is still there. all 80 customers are in the result
 - pass: columns no approved change touched keep the file's values. the values are as the file had them
-- FAIL: the 1970-01-01 stand-in is not treated as a real date. nothing like it was asked (it asked: KEY_AMBIGUOUS, TRAINING_BUDGET) / 20 rows of 'last_payment_date' still say 1970-01-01
+- FAIL: the 1970-01-01 stand-in is not treated as a real date. nothing like it was asked (it asked: KEY_AMBIGUOUS, THIN_LAST_PERIOD, TRAINING_BUDGET) / 20 rows of 'last_payment_date' still say 1970-01-01
 
 ### t06_status_exported_today (T06, Time travel and leaks the checks miss)
 
@@ -335,7 +335,7 @@ Expected: The test accounts are off the contact list; the real customers are on 
 
 - pass: every customer of the main file is still there. all 80 customers are in the result
 - pass: columns no approved change touched keep the file's values. the values are as the file had them
-- FAIL: test accounts are off the contact list. 8 people who must not be contacted are on the list: TEST001, TEST002, TEST003, TEST004 and 4 more (by the 'marketing_opt_in' column)
+- FAIL: test accounts are off the contact list. 8 people who must not be contacted are on the list: TEST001, TEST002, TEST003, TEST004 and 4 more (by the 'marketing_opt_in' column and the contact-list gate)
 
 ### v13_consent_spellings (V13, Consent, sensitive data and who may be contacted)
 
@@ -345,7 +345,7 @@ Expected: Y/yes/Haan/tick customers are contactable; N/No/nahi and blank (unknow
 
 - pass: every customer of the main file is still there. all 90 customers are in the result
 - pass: columns no approved change touched keep the file's values. the values are as the file had them
-- FAIL: every spelling of yes is on the list; refused and unknown are off it. 18 people who may be contacted are left off: C0004, C0006, C0014, C0016 and 14 more (by the 'marketing_opt_in' column)
+- FAIL: every spelling of yes is on the list; refused and unknown are off it. 18 people who may be contacted are left off: C0004, C0006, C0014, C0016 and 14 more (by the 'marketing_opt_in' column and the contact-list gate)
 
 ### v19_order_total_repeated (V19, Double counting and wrong grain)
 

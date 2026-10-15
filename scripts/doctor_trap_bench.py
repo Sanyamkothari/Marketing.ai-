@@ -202,7 +202,9 @@ class _World:
 
         key = upload_key(upload_id, "source.csv")
         self.storage.write_bytes(key, data)
-        read = ingest.read_upload(self.storage, key, file_format="csv", row_cap=ROW_CAP, keep_all_rows=True)
+        read = ingest.read_upload(
+            self.storage, key, file_format="csv", row_cap=ROW_CAP, keep_all_rows=True, keep_leading_zeros=True
+        )
         profile = ingest.profile_dataset(
             read.frame,
             self.config,
@@ -319,9 +321,11 @@ def ship(trap: TrapCase) -> Shipped:
     from engine.doctor.combine_run import combine_item, upload_ids_of
     from engine.doctor.combining import combining_detector
     from engine.doctor.contracts import Diagnosis
+    from engine.doctor.detect_time_keys import time_keys_detector
     from engine.doctor.diagnose import LoadedFile, Offer
     from engine.doctor.goal_brief import GoalBrief
     from engine.doctor.prescription import CasePrescriber
+    from engine.doctor.sensitive_ask import sensitive_detector
     from engine.doctor.time_settings import time_settings_detector
     from engine.doctor.visit import VerifyResult, VisitDeps, stored_brief
     from engine.storage import LocalStorage
@@ -366,6 +370,8 @@ def ship(trap: TrapCase) -> Shipped:
             detectors=(
                 cleaning_detector((Offer(config=config, stage="Retain"),)),
                 combining_detector(),
+                time_keys_detector(),
+                sensitive_detector(),
                 time_settings_detector(storage),
             ),
         )
@@ -732,10 +738,24 @@ def check_contact_list(g: Grader, args: Mapping[str, Any]) -> Verdict:
     column = g.shipped.consent_column
     if column is not None and column in frame.columns:
         contactable = _truthy(frame[column])
-        how = f"by the '{column}' column"
+        how = f"by the '{column}' column and the contact-list gate"
     else:
         contactable = pd.Series(True, index=frame.index)
         how = "with no consent rule: everyone is contacted"
+    # The product's contact-list gate (G14, `engine.decide.contact_gate`) also reads the customer file: minors,
+    # deceased/fraud/legal statuses, do-not-disturb columns. It is applied on top of the consent rule; consent
+    # itself is graded by the rule above alone (the gate's own consent reading is skipped), as before.
+    from engine.decide.contact_gate import ContactRules, gate_customers, load_gate_rules
+    from engine.utils.time import utc_now
+
+    reasons, _verdict = gate_customers(
+        frame,
+        load_gate_rules(),
+        ContactRules(),
+        as_of=utc_now().date(),
+        skip_consent=[str(c) for c in frame.columns],
+    )
+    contactable = contactable & reasons.isna().to_numpy()
     contacted = {_canon(k) for k in frame[key][contactable.to_numpy()]}
     problems: list[str] = []
     wrongly = sorted(contacted & {_canon(k) for k in args.get("must_exclude", ())})

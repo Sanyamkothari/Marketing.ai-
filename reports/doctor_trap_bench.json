@@ -2,11 +2,11 @@
   "bench": "doctor_trap_bench",
   "by_category": {
     "asked": {
-      "failed": 3,
+      "failed": 2,
       "graded": 3
     },
     "contact_list": {
-      "failed": 6,
+      "failed": 5,
       "graded": 6
     },
     "double_counting": {
@@ -30,15 +30,15 @@
       "graded": 30
     },
     "unapproved_change": {
-      "failed": 5,
+      "failed": 3,
       "graded": 34
     }
   },
   "cases": 30,
-  "failed": 24,
+  "failed": 21,
   "k": 2,
   "model": "rules",
-  "passed": 6,
+  "passed": 9,
   "results": [
     {
       "description": "Staff texted only high-balance customers (12% bought against 3% of the rest); there is no random control group.",
@@ -54,6 +54,7 @@
           "accepted": [
             "Turn the yes / no values in 'contacted' into 1 and 0. The same answer is spelled several ways: 'N' (72), 'Y' (48).",
             "\u201ccustomer_id\u201d names each row of campaign_history.csv.",
+            "'customer_id': 100.0% of 120 values are different from each other; the most common appears 1 times.",
             "\u201cconverted\u201d is the outcome: Purchased within 30 days of ad exposure"
           ],
           "checks": [
@@ -77,7 +78,7 @@
             }
           ],
           "combined": false,
-          "digest": "92ac1926c90f",
+          "digest": "05663bde371e",
           "error": null,
           "notes": [],
           "passed": false,
@@ -87,12 +88,13 @@
             "TRAINING_BUDGET"
           ],
           "rows": 120,
-          "seconds": 2.38
+          "seconds": 2.41
         },
         {
           "accepted": [
             "Turn the yes / no values in 'contacted' into 1 and 0. The same answer is spelled several ways: 'N' (72), 'Y' (48).",
             "\u201ccustomer_id\u201d names each row of campaign_history.csv.",
+            "'customer_id': 100.0% of 120 values are different from each other; the most common appears 1 times.",
             "\u201cconverted\u201d is the outcome: Purchased within 30 days of ad exposure"
           ],
           "checks": [
@@ -116,7 +118,7 @@
             }
           ],
           "combined": false,
-          "digest": "92ac1926c90f",
+          "digest": "05663bde371e",
           "error": null,
           "notes": [],
           "passed": false,
@@ -126,7 +128,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 120,
-          "seconds": 0.67
+          "seconds": 0.6
         }
       ],
       "runs_passed": 0,
@@ -149,6 +151,7 @@
           "accepted": [
             "Turn the yes / no values in 'do_not_contact' into 1 and 0. The same answer is spelled several ways: 'N' (53), 'Y' (27).",
             "\u201ccustomer_id\u201d names each row of customers.csv.",
+            "'customer_id': 100.0% of 80 values are different from each other; the most common appears 1 times.",
             "\u201cconverted\u201d is the outcome: Purchased within 30 days of ad exposure",
             "\u201cdo_not_contact\u201d says who agreed to be contacted."
           ],
@@ -167,13 +170,13 @@
             },
             {
               "category": "contact_list",
-              "detail": "27 people who must not be contacted are on the list: C0001, C0004, C0007, C0010 and 23 more; 53 people who may be contacted are left off: C0002, C0003, C0005, C0006 and 49 more (by the 'do_not_contact' column)",
+              "detail": "53 people who may be contacted are left off: C0002, C0003, C0005, C0006 and 49 more (by the 'do_not_contact' column and the contact-list gate)",
               "label": "do-not-contact customers are off the list (the flag points the right way)",
               "passed": false
             }
           ],
           "combined": false,
-          "digest": "01117dff9fa7",
+          "digest": "e201c4019217",
           "error": null,
           "notes": [],
           "passed": false,
@@ -183,12 +186,13 @@
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 0.72
+          "seconds": 0.78
         },
         {
           "accepted": [
             "Turn the yes / no values in 'do_not_contact' into 1 and 0. The same answer is spelled several ways: 'N' (53), 'Y' (27).",
             "\u201ccustomer_id\u201d names each row of customers.csv.",
+            "'customer_id': 100.0% of 80 values are different from each other; the most common appears 1 times.",
             "\u201cconverted\u201d is the outcome: Purchased within 30 days of ad exposure",
             "\u201cdo_not_contact\u201d says who agreed to be contacted."
           ],
@@ -207,13 +211,13 @@
             },
             {
               "category": "contact_list",
-              "detail": "27 people who must not be contacted are on the list: C0001, C0004, C0007, C0010 and 23 more; 53 people who may be contacted are left off: C0002, C0003, C0005, C0006 and 49 more (by the 'do_not_contact' column)",
+              "detail": "53 people who may be contacted are left off: C0002, C0003, C0005, C0006 and 49 more (by the 'do_not_contact' column and the contact-list gate)",
               "label": "do-not-contact customers are off the list (the flag points the right way)",
               "passed": false
             }
           ],
           "combined": false,
-          "digest": "01117dff9fa7",
+          "digest": "e201c4019217",
           "error": null,
           "notes": [],
           "passed": false,
@@ -223,7 +227,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 0.62
+          "seconds": 0.76
         }
       ],
       "runs_passed": 0,
@@ -246,7 +250,8 @@
           "accepted": [
             "\u201cid\u201d names each row of policyholders.csv.",
             "Turn the yes / no values in 'has_vehicle_policy' into 1 and 0. The same answer is spelled several ways: 'N' (72), 'Y' (48).",
-            "\u201cResponse\u201d in policyholders.csv is the outcome: The policyholder said they were interested in the vehicle policy"
+            "\u201cResponse\u201d in policyholders.csv is the outcome: The policyholder said they were interested in the vehicle policy",
+            "'id': 100.0% of 120 values are different from each other; the most common appears 1 times."
           ],
           "checks": [
             {
@@ -269,7 +274,7 @@
             }
           ],
           "combined": false,
-          "digest": "e4eb130e2fce",
+          "digest": "47a48d7273cb",
           "error": null,
           "notes": [],
           "passed": false,
@@ -277,13 +282,14 @@
             "TRAINING_BUDGET"
           ],
           "rows": 120,
-          "seconds": 0.44
+          "seconds": 0.61
         },
         {
           "accepted": [
             "\u201cid\u201d names each row of policyholders.csv.",
             "Turn the yes / no values in 'has_vehicle_policy' into 1 and 0. The same answer is spelled several ways: 'N' (72), 'Y' (48).",
-            "\u201cResponse\u201d in policyholders.csv is the outcome: The policyholder said they were interested in the vehicle policy"
+            "\u201cResponse\u201d in policyholders.csv is the outcome: The policyholder said they were interested in the vehicle policy",
+            "'id': 100.0% of 120 values are different from each other; the most common appears 1 times."
           ],
           "checks": [
             {
@@ -306,7 +312,7 @@
             }
           ],
           "combined": false,
-          "digest": "e4eb130e2fce",
+          "digest": "47a48d7273cb",
           "error": null,
           "notes": [],
           "passed": false,
@@ -314,7 +320,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 120,
-          "seconds": 0.44
+          "seconds": 0.58
         }
       ],
       "runs_passed": 0,
@@ -335,7 +341,10 @@
           "accepted": [
             "\u201ccustomer_id\u201d names each row of accounts.csv.",
             "\u201ctag_id\u201d names each row of tags.csv.",
-            "\u201cchurn\u201d in accounts.csv is the outcome: The subscriber left within the month after the snapshot"
+            "The newest month is only partly in the file: 22 of 31 days (up to 2026-03-22). Counting it as a full month would make everything look lower. 22 rows are dated after 2026-02-28.",
+            "\u201cchurn\u201d in accounts.csv is the outcome: The subscriber left within the month after the snapshot",
+            "'customer_id': 100.0% of 100 values are different from each other; the most common appears 1 times.",
+            "'tag_id': 100.0% of 110 values are different from each other; the most common appears 1 times."
           ],
           "checks": [
             {
@@ -358,21 +367,25 @@
             }
           ],
           "combined": false,
-          "digest": "4430c29b14e0",
+          "digest": "90abf559daa4",
           "error": null,
           "notes": [],
           "passed": true,
           "questions": [
+            "THIN_LAST_PERIOD",
             "TRAINING_BUDGET"
           ],
           "rows": 100,
-          "seconds": 0.65
+          "seconds": 1.01
         },
         {
           "accepted": [
             "\u201ccustomer_id\u201d names each row of accounts.csv.",
             "\u201ctag_id\u201d names each row of tags.csv.",
-            "\u201cchurn\u201d in accounts.csv is the outcome: The subscriber left within the month after the snapshot"
+            "The newest month is only partly in the file: 22 of 31 days (up to 2026-03-22). Counting it as a full month would make everything look lower. 22 rows are dated after 2026-02-28.",
+            "\u201cchurn\u201d in accounts.csv is the outcome: The subscriber left within the month after the snapshot",
+            "'customer_id': 100.0% of 100 values are different from each other; the most common appears 1 times.",
+            "'tag_id': 100.0% of 110 values are different from each other; the most common appears 1 times."
           ],
           "checks": [
             {
@@ -395,15 +408,16 @@
             }
           ],
           "combined": false,
-          "digest": "4430c29b14e0",
+          "digest": "90abf559daa4",
           "error": null,
           "notes": [],
           "passed": true,
           "questions": [
+            "THIN_LAST_PERIOD",
             "TRAINING_BUDGET"
           ],
           "rows": 100,
-          "seconds": 0.74
+          "seconds": 0.94
         }
       ],
       "runs_passed": 2,
@@ -424,9 +438,13 @@
       "runs": [
         {
           "accepted": [
+            "Turn 'pin_code' into numbers. It is stored as text ('091751', '074361', '038161'), so the model cannot use it as a number; 60 of 60 values convert.",
             "\u201cchurn\u201d in customers.csv is the outcome: The subscriber left within the month after the snapshot",
             "\u201ccustomer_id\u201d names each row of customers.csv.",
-            "\u201corder_id\u201d names each row of orders.csv."
+            "'customer_id': 100.0% of 60 values are different from each other; the most common appears 1 times.",
+            "\u201corder_id\u201d names each row of orders.csv.",
+            "Turn 'customer_id' into numbers. It is stored as text ('000101', '000102', '000103'), so the model cannot use it as a number; 60 of 60 values convert.",
+            "'order_id': 100.0% of 60 values are different from each other; the most common appears 1 times."
           ],
           "checks": [
             {
@@ -437,19 +455,19 @@
             },
             {
               "category": "unapproved_change",
-              "detail": "120 values changed: customer_id of 000101: '000101' became '101', pin_code of 000101: '091751' became '91751', customer_id of 000102: '000102' became '102' and 117 more",
+              "detail": "the values are as the file had them (rows lined up by position)",
               "label": "columns no approved change touched keep the file's values",
-              "passed": false
+              "passed": true
             },
             {
               "category": "unapproved_change",
-              "detail": "120 values changed: customer_id of 000101: '000101' became '101', pin_code of 000101: '091751' became '91751', customer_id of 000102: '000102' became '102' and 117 more",
+              "detail": "60 values changed: pin_code of 000101: '091751' became '91751', pin_code of 000102: '074361' became '74361', pin_code of 000103: '038161' became '38161' and 57 more",
               "label": "IDs and PIN codes keep their leading zeros",
               "passed": false
             }
           ],
           "combined": false,
-          "digest": "57048020f4af",
+          "digest": "889cc9663157",
           "error": null,
           "notes": [],
           "passed": false,
@@ -459,13 +477,17 @@
             "TRAINING_BUDGET"
           ],
           "rows": 60,
-          "seconds": 0.67
+          "seconds": 0.96
         },
         {
           "accepted": [
+            "Turn 'pin_code' into numbers. It is stored as text ('091751', '074361', '038161'), so the model cannot use it as a number; 60 of 60 values convert.",
             "\u201cchurn\u201d in customers.csv is the outcome: The subscriber left within the month after the snapshot",
             "\u201ccustomer_id\u201d names each row of customers.csv.",
-            "\u201corder_id\u201d names each row of orders.csv."
+            "'customer_id': 100.0% of 60 values are different from each other; the most common appears 1 times.",
+            "\u201corder_id\u201d names each row of orders.csv.",
+            "Turn 'customer_id' into numbers. It is stored as text ('000101', '000102', '000103'), so the model cannot use it as a number; 60 of 60 values convert.",
+            "'order_id': 100.0% of 60 values are different from each other; the most common appears 1 times."
           ],
           "checks": [
             {
@@ -476,19 +498,19 @@
             },
             {
               "category": "unapproved_change",
-              "detail": "120 values changed: customer_id of 000101: '000101' became '101', pin_code of 000101: '091751' became '91751', customer_id of 000102: '000102' became '102' and 117 more",
+              "detail": "the values are as the file had them (rows lined up by position)",
               "label": "columns no approved change touched keep the file's values",
-              "passed": false
+              "passed": true
             },
             {
               "category": "unapproved_change",
-              "detail": "120 values changed: customer_id of 000101: '000101' became '101', pin_code of 000101: '091751' became '91751', customer_id of 000102: '000102' became '102' and 117 more",
+              "detail": "60 values changed: pin_code of 000101: '091751' became '91751', pin_code of 000102: '074361' became '74361', pin_code of 000103: '038161' became '38161' and 57 more",
               "label": "IDs and PIN codes keep their leading zeros",
               "passed": false
             }
           ],
           "combined": false,
-          "digest": "57048020f4af",
+          "digest": "889cc9663157",
           "error": null,
           "notes": [],
           "passed": false,
@@ -498,7 +520,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 60,
-          "seconds": 0.62
+          "seconds": 0.95
         }
       ],
       "runs_passed": 0,
@@ -510,15 +532,17 @@
     {
       "description": "Excel saved the 12-digit customer IDs as 1.23457E+11, so 40 customers now share a handful of IDs.",
       "expected": "The Doctor says the IDs were rounded and asks for a re-export as text; all 40 rows are kept and none is joined.",
-      "failed_categories": [
-        "asked"
-      ],
+      "failed_categories": [],
       "id": "f02_excel_e_plus",
       "k": 2,
-      "passed": false,
+      "passed": true,
       "runs": [
         {
           "accepted": [
+            "Turn 'customer_id' into numbers. It is stored as text ('1.23456E+11', '1.23457E+11', '1.23458E+11'), so the model cannot use it as a number; 40 of 40 values convert.",
+            "40 of 40 values in 'customer_id' have been rounded off by Excel (written like 1.23457E+11). The missing digits cannot be recovered, so nothing is matched on this column. Save the column as Text, or send the .xlsx file.",
+            "'customer_id': 32.5% of 40 values are different from each other; the most common appears 4 times.",
+            "5 rows of customers.csv are exact copies of another row (12%). Nothing is removed without a yes, and spend or counts would be inflated if they stay.",
             "\u201cchurn\u201d in customers.csv is the outcome: The subscriber left within the month after the snapshot"
           ],
           "checks": [
@@ -530,9 +554,9 @@
             },
             {
               "category": "asked",
-              "detail": "nothing like it was asked (it asked: TRAINING_BUDGET)",
+              "detail": "asked: DIFFERENT FILE REQUESTED This file cannot be used as it is. Ask whoever exported the file ",
               "label": "says the IDs were rounded by Excel and asks for a re-export",
-              "passed": false
+              "passed": true
             },
             {
               "category": "row_loss",
@@ -542,18 +566,23 @@
             }
           ],
           "combined": false,
-          "digest": "916dc18005b4",
+          "digest": "7fea13c87eaa",
           "error": null,
           "notes": [],
-          "passed": false,
+          "passed": true,
           "questions": [
+            "DIFFERENT_FILE_REQUESTED",
             "TRAINING_BUDGET"
           ],
           "rows": 40,
-          "seconds": 0.33
+          "seconds": 0.61
         },
         {
           "accepted": [
+            "Turn 'customer_id' into numbers. It is stored as text ('1.23456E+11', '1.23457E+11', '1.23458E+11'), so the model cannot use it as a number; 40 of 40 values convert.",
+            "40 of 40 values in 'customer_id' have been rounded off by Excel (written like 1.23457E+11). The missing digits cannot be recovered, so nothing is matched on this column. Save the column as Text, or send the .xlsx file.",
+            "'customer_id': 32.5% of 40 values are different from each other; the most common appears 4 times.",
+            "5 rows of customers.csv are exact copies of another row (12%). Nothing is removed without a yes, and spend or counts would be inflated if they stay.",
             "\u201cchurn\u201d in customers.csv is the outcome: The subscriber left within the month after the snapshot"
           ],
           "checks": [
@@ -565,9 +594,9 @@
             },
             {
               "category": "asked",
-              "detail": "nothing like it was asked (it asked: TRAINING_BUDGET)",
+              "detail": "asked: DIFFERENT FILE REQUESTED This file cannot be used as it is. Ask whoever exported the file ",
               "label": "says the IDs were rounded by Excel and asks for a re-export",
-              "passed": false
+              "passed": true
             },
             {
               "category": "row_loss",
@@ -577,18 +606,19 @@
             }
           ],
           "combined": false,
-          "digest": "916dc18005b4",
+          "digest": "7fea13c87eaa",
           "error": null,
           "notes": [],
-          "passed": false,
+          "passed": true,
           "questions": [
+            "DIFFERENT_FILE_REQUESTED",
             "TRAINING_BUDGET"
           ],
           "rows": 40,
-          "seconds": 0.43
+          "seconds": 0.42
         }
       ],
-      "runs_passed": 0,
+      "runs_passed": 2,
       "scenario": "F02",
       "stable": true,
       "theme": "False, merged or missed joins",
@@ -607,7 +637,8 @@
         {
           "accepted": [
             "\u201ccustomer_id\u201d names each row of customers.csv.",
-            "\u201cchurn\u201d in customers.csv is the outcome: The subscriber left within the month after the snapshot"
+            "\u201cchurn\u201d in customers.csv is the outcome: The subscriber left within the month after the snapshot",
+            "'customer_id': 100.0% of 60 values are different from each other; the most common appears 1 times."
           ],
           "checks": [
             {
@@ -630,7 +661,7 @@
             }
           ],
           "combined": false,
-          "digest": "f53d38878ca8",
+          "digest": "65ce6abc39fe",
           "error": null,
           "notes": [],
           "passed": false,
@@ -638,12 +669,13 @@
             "TRAINING_BUDGET"
           ],
           "rows": 60,
-          "seconds": 0.33
+          "seconds": 0.44
         },
         {
           "accepted": [
             "\u201ccustomer_id\u201d names each row of customers.csv.",
-            "\u201cchurn\u201d in customers.csv is the outcome: The subscriber left within the month after the snapshot"
+            "\u201cchurn\u201d in customers.csv is the outcome: The subscriber left within the month after the snapshot",
+            "'customer_id': 100.0% of 60 values are different from each other; the most common appears 1 times."
           ],
           "checks": [
             {
@@ -666,7 +698,7 @@
             }
           ],
           "combined": false,
-          "digest": "f53d38878ca8",
+          "digest": "65ce6abc39fe",
           "error": null,
           "notes": [],
           "passed": false,
@@ -674,7 +706,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 60,
-          "seconds": 0.34
+          "seconds": 0.47
         }
       ],
       "runs_passed": 0,
@@ -695,7 +727,8 @@
       "runs": [
         {
           "accepted": [
-            "\u201ccustomers\u201d names each row of report.csv."
+            "\u201ccustomers\u201d names each row of report.csv.",
+            "'customers': 100.0% of 10 values are different from each other; the most common appears 1 times."
           ],
           "checks": [
             {
@@ -706,7 +739,7 @@
             }
           ],
           "combined": false,
-          "digest": "efd0addd5dd5",
+          "digest": "0a5df03f58a1",
           "error": null,
           "notes": [],
           "passed": false,
@@ -716,11 +749,12 @@
             "TRAINING_BUDGET"
           ],
           "rows": 10,
-          "seconds": 0.28
+          "seconds": 0.31
         },
         {
           "accepted": [
-            "\u201ccustomers\u201d names each row of report.csv."
+            "\u201ccustomers\u201d names each row of report.csv.",
+            "'customers': 100.0% of 10 values are different from each other; the most common appears 1 times."
           ],
           "checks": [
             {
@@ -731,7 +765,7 @@
             }
           ],
           "combined": false,
-          "digest": "efd0addd5dd5",
+          "digest": "0a5df03f58a1",
           "error": null,
           "notes": [],
           "passed": false,
@@ -741,7 +775,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 10,
-          "seconds": 0.27
+          "seconds": 0.45
         }
       ],
       "runs_passed": 0,
@@ -763,6 +797,9 @@
             "\u201ccall_id\u201d names each row of calls_jan.csv.",
             "\u201ccall_id\u201d names each row of calls_feb.csv.",
             "Stack calls_feb.csv and calls_jan.csv into one table: 175 rows in the files, 25 rows that two exports both hold are counted once, 150 rows in the table.",
+            "25 rows appear in both calls_jan.csv and calls_feb.csv (31% of the smaller one): the two exports overlap, and anything added up across both would count them twice.",
+            "'call_id': 100.0% of 80 values are different from each other; the most common appears 1 times.",
+            "'call_id': 100.0% of 95 values are different from each other; the most common appears 1 times.",
             "\u201ccall_id\u201d names each row of calls_feb stacked.csv."
           ],
           "checks": [
@@ -786,7 +823,7 @@
             }
           ],
           "combined": true,
-          "digest": "eb2c6afd3a2d",
+          "digest": "fe15f0b93a9b",
           "error": null,
           "notes": [],
           "passed": true,
@@ -796,13 +833,16 @@
             "TRAINING_BUDGET"
           ],
           "rows": 150,
-          "seconds": 0.79
+          "seconds": 1.0
         },
         {
           "accepted": [
             "\u201ccall_id\u201d names each row of calls_jan.csv.",
             "\u201ccall_id\u201d names each row of calls_feb.csv.",
             "Stack calls_feb.csv and calls_jan.csv into one table: 175 rows in the files, 25 rows that two exports both hold are counted once, 150 rows in the table.",
+            "25 rows appear in both calls_jan.csv and calls_feb.csv (31% of the smaller one): the two exports overlap, and anything added up across both would count them twice.",
+            "'call_id': 100.0% of 80 values are different from each other; the most common appears 1 times.",
+            "'call_id': 100.0% of 95 values are different from each other; the most common appears 1 times.",
             "\u201ccall_id\u201d names each row of calls_feb stacked.csv."
           ],
           "checks": [
@@ -826,7 +866,7 @@
             }
           ],
           "combined": true,
-          "digest": "eb2c6afd3a2d",
+          "digest": "fe15f0b93a9b",
           "error": null,
           "notes": [],
           "passed": true,
@@ -836,7 +876,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 150,
-          "seconds": 0.86
+          "seconds": 0.99
         }
       ],
       "runs_passed": 2,
@@ -858,6 +898,7 @@
         {
           "accepted": [
             "\u201ccustomer_id\u201d names each row of customers.csv.",
+            "'customer_id': 100.0% of 60 values are different from each other; the most common appears 1 times.",
             "\u201cconverted\u201d is the outcome: Purchased within 30 days of ad exposure",
             "\u201cmarketing_opt_in\u201d says who agreed to be contacted."
           ],
@@ -876,13 +917,13 @@
             },
             {
               "category": "contact_list",
-              "detail": "20 households have more than one person on the list (by the 'marketing_opt_in' column)",
+              "detail": "20 households have more than one person on the list (by the 'marketing_opt_in' column and the contact-list gate)",
               "label": "no household gets more than one message",
               "passed": false
             }
           ],
           "combined": false,
-          "digest": "0dbe7af7077f",
+          "digest": "485237203eb7",
           "error": null,
           "notes": [],
           "passed": false,
@@ -892,11 +933,12 @@
             "TRAINING_BUDGET"
           ],
           "rows": 60,
-          "seconds": 0.62
+          "seconds": 0.68
         },
         {
           "accepted": [
             "\u201ccustomer_id\u201d names each row of customers.csv.",
+            "'customer_id': 100.0% of 60 values are different from each other; the most common appears 1 times.",
             "\u201cconverted\u201d is the outcome: Purchased within 30 days of ad exposure",
             "\u201cmarketing_opt_in\u201d says who agreed to be contacted."
           ],
@@ -915,13 +957,13 @@
             },
             {
               "category": "contact_list",
-              "detail": "20 households have more than one person on the list (by the 'marketing_opt_in' column)",
+              "detail": "20 households have more than one person on the list (by the 'marketing_opt_in' column and the contact-list gate)",
               "label": "no household gets more than one message",
               "passed": false
             }
           ],
           "combined": false,
-          "digest": "0dbe7af7077f",
+          "digest": "485237203eb7",
           "error": null,
           "notes": [],
           "passed": false,
@@ -931,7 +973,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 60,
-          "seconds": 0.6
+          "seconds": 0.73
         }
       ],
       "runs_passed": 0,
@@ -953,7 +995,8 @@
         {
           "accepted": [
             "\u201cchurn\u201d in payments.csv is the outcome: The subscriber left within the month after the snapshot",
-            "\u201cpayment_id\u201d names each row of payments.csv."
+            "\u201cpayment_id\u201d names each row of payments.csv.",
+            "'payment_id': 100.0% of 60 values are different from each other; the most common appears 1 times."
           ],
           "checks": [
             {
@@ -976,7 +1019,7 @@
             }
           ],
           "combined": false,
-          "digest": "938d409184d1",
+          "digest": "078938bcc2de",
           "error": null,
           "notes": [],
           "passed": false,
@@ -985,12 +1028,13 @@
             "TRAINING_BUDGET"
           ],
           "rows": 60,
-          "seconds": 0.43
+          "seconds": 0.71
         },
         {
           "accepted": [
             "\u201cchurn\u201d in payments.csv is the outcome: The subscriber left within the month after the snapshot",
-            "\u201cpayment_id\u201d names each row of payments.csv."
+            "\u201cpayment_id\u201d names each row of payments.csv.",
+            "'payment_id': 100.0% of 60 values are different from each other; the most common appears 1 times."
           ],
           "checks": [
             {
@@ -1013,7 +1057,7 @@
             }
           ],
           "combined": false,
-          "digest": "938d409184d1",
+          "digest": "078938bcc2de",
           "error": null,
           "notes": [],
           "passed": false,
@@ -1022,7 +1066,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 60,
-          "seconds": 0.46
+          "seconds": 0.64
         }
       ],
       "runs_passed": 0,
@@ -1044,7 +1088,9 @@
         {
           "accepted": [
             "\u201clog_id\u201d names each row of tickets_log.csv.",
-            "\u201cchurn\u201d in tickets_log.csv is the outcome: The subscriber left within the month after the snapshot"
+            "The newest month is only partly in the file: 3 of 28 days (up to 2026-02-03). Counting it as a full month would make everything look lower. 5 rows are dated after 2026-01-31.",
+            "\u201cchurn\u201d in tickets_log.csv is the outcome: The subscriber left within the month after the snapshot",
+            "'log_id': 100.0% of 95 values are different from each other; the most common appears 1 times."
           ],
           "checks": [
             {
@@ -1061,57 +1107,61 @@
             },
             {
               "category": "double_counting",
-              "detail": "nothing like it was asked (it asked: TRAINING_BUDGET) / 30 customers appear more than once: TK001, TK002, TK003, TK004 and 26 more",
+              "detail": "nothing like it was asked (it asked: THIN_LAST_PERIOD, TRAINING_BUDGET) / 30 customers appear more than once: TK001, TK002, TK003, TK004 and 26 more",
               "label": "30 tickets counted once each",
               "passed": false
             }
           ],
           "combined": false,
-          "digest": "6ca7bbf85a05",
+          "digest": "ed8a07a4a531",
           "error": null,
           "notes": [],
           "passed": false,
           "questions": [
-            "TRAINING_BUDGET"
-          ],
-          "rows": 95,
-          "seconds": 0.47
-        },
-        {
-          "accepted": [
-            "\u201clog_id\u201d names each row of tickets_log.csv.",
-            "\u201cchurn\u201d in tickets_log.csv is the outcome: The subscriber left within the month after the snapshot"
-          ],
-          "checks": [
-            {
-              "category": "row_loss",
-              "detail": "all 30 customers are in the result",
-              "label": "every customer of the main file is still there",
-              "passed": true
-            },
-            {
-              "category": "unapproved_change",
-              "detail": "the values are as the file had them",
-              "label": "columns no approved change touched keep the file's values",
-              "passed": true
-            },
-            {
-              "category": "double_counting",
-              "detail": "nothing like it was asked (it asked: TRAINING_BUDGET) / 30 customers appear more than once: TK001, TK002, TK003, TK004 and 26 more",
-              "label": "30 tickets counted once each",
-              "passed": false
-            }
-          ],
-          "combined": false,
-          "digest": "6ca7bbf85a05",
-          "error": null,
-          "notes": [],
-          "passed": false,
-          "questions": [
+            "THIN_LAST_PERIOD",
             "TRAINING_BUDGET"
           ],
           "rows": 95,
           "seconds": 0.65
+        },
+        {
+          "accepted": [
+            "\u201clog_id\u201d names each row of tickets_log.csv.",
+            "The newest month is only partly in the file: 3 of 28 days (up to 2026-02-03). Counting it as a full month would make everything look lower. 5 rows are dated after 2026-01-31.",
+            "\u201cchurn\u201d in tickets_log.csv is the outcome: The subscriber left within the month after the snapshot",
+            "'log_id': 100.0% of 95 values are different from each other; the most common appears 1 times."
+          ],
+          "checks": [
+            {
+              "category": "row_loss",
+              "detail": "all 30 customers are in the result",
+              "label": "every customer of the main file is still there",
+              "passed": true
+            },
+            {
+              "category": "unapproved_change",
+              "detail": "the values are as the file had them",
+              "label": "columns no approved change touched keep the file's values",
+              "passed": true
+            },
+            {
+              "category": "double_counting",
+              "detail": "nothing like it was asked (it asked: THIN_LAST_PERIOD, TRAINING_BUDGET) / 30 customers appear more than once: TK001, TK002, TK003, TK004 and 26 more",
+              "label": "30 tickets counted once each",
+              "passed": false
+            }
+          ],
+          "combined": false,
+          "digest": "ed8a07a4a531",
+          "error": null,
+          "notes": [],
+          "passed": false,
+          "questions": [
+            "THIN_LAST_PERIOD",
+            "TRAINING_BUDGET"
+          ],
+          "rows": 95,
+          "seconds": 0.81
         }
       ],
       "runs_passed": 0,
@@ -1130,9 +1180,15 @@
       "runs": [
         {
           "accepted": [
+            "Turn 'customer_id' into numbers. It is stored as text ('101', '102', '103'), so the model cannot use it as a number; 60 of 60 values convert.",
+            "'customer_id': 50.0% of 60 values are different from each other; the most common appears 2 times.",
+            "2 rows (3%) of 'customer_id' hold a stand-in rather than a real ID (111). Rows sharing one would be matched to each other.",
+            "The newest month is only partly in the file: 18 of 31 days (up to 2026-05-18). Counting it as a full month would make everything look lower. 29 rows are dated after 2026-04-30.",
             "\u201cchurn\u201d in customers.csv is the outcome: The subscriber left within the month after the snapshot",
             "\u201ccustomer_id\u201d names each row of customers.csv.",
-            "\u201corder_id\u201d names each row of orders.csv."
+            "'customer_id': 100.0% of 60 values are different from each other; the most common appears 1 times.",
+            "\u201corder_id\u201d names each row of orders.csv.",
+            "'order_id': 100.0% of 60 values are different from each other; the most common appears 1 times."
           ],
           "checks": [
             {
@@ -1143,7 +1199,7 @@
             },
             {
               "category": "unapproved_change",
-              "detail": "the values are as the file had them",
+              "detail": "the values are as the file had them (rows lined up by position)",
               "label": "columns no approved change touched keep the file's values",
               "passed": true
             },
@@ -1161,7 +1217,7 @@
             }
           ],
           "combined": false,
-          "digest": "98ac17a7d49c",
+          "digest": "b503ea1a1485",
           "error": null,
           "notes": [],
           "passed": true,
@@ -1169,16 +1225,23 @@
             "KEY_AMBIGUOUS",
             "KEY_AMBIGUOUS",
             "FILES_DO_NOT_MEET",
+            "THIN_LAST_PERIOD",
             "TRAINING_BUDGET"
           ],
           "rows": 60,
-          "seconds": 0.72
+          "seconds": 0.95
         },
         {
           "accepted": [
+            "Turn 'customer_id' into numbers. It is stored as text ('101', '102', '103'), so the model cannot use it as a number; 60 of 60 values convert.",
+            "'customer_id': 50.0% of 60 values are different from each other; the most common appears 2 times.",
+            "2 rows (3%) of 'customer_id' hold a stand-in rather than a real ID (111). Rows sharing one would be matched to each other.",
+            "The newest month is only partly in the file: 18 of 31 days (up to 2026-05-18). Counting it as a full month would make everything look lower. 29 rows are dated after 2026-04-30.",
             "\u201cchurn\u201d in customers.csv is the outcome: The subscriber left within the month after the snapshot",
             "\u201ccustomer_id\u201d names each row of customers.csv.",
-            "\u201corder_id\u201d names each row of orders.csv."
+            "'customer_id': 100.0% of 60 values are different from each other; the most common appears 1 times.",
+            "\u201corder_id\u201d names each row of orders.csv.",
+            "'order_id': 100.0% of 60 values are different from each other; the most common appears 1 times."
           ],
           "checks": [
             {
@@ -1189,7 +1252,7 @@
             },
             {
               "category": "unapproved_change",
-              "detail": "the values are as the file had them",
+              "detail": "the values are as the file had them (rows lined up by position)",
               "label": "columns no approved change touched keep the file's values",
               "passed": true
             },
@@ -1207,7 +1270,7 @@
             }
           ],
           "combined": false,
-          "digest": "98ac17a7d49c",
+          "digest": "b503ea1a1485",
           "error": null,
           "notes": [],
           "passed": true,
@@ -1215,10 +1278,11 @@
             "KEY_AMBIGUOUS",
             "KEY_AMBIGUOUS",
             "FILES_DO_NOT_MEET",
+            "THIN_LAST_PERIOD",
             "TRAINING_BUDGET"
           ],
           "rows": 60,
-          "seconds": 0.81
+          "seconds": 1.14
         }
       ],
       "runs_passed": 2,
@@ -1237,9 +1301,16 @@
       "runs": [
         {
           "accepted": [
+            "'phone': 68.0% of 50 values are different from each other; the most common appears 10 times.",
+            "10 rows (20%) of 'phone' hold a stand-in rather than a real ID ([REDACTED:phone]). Rows sharing one would be matched to each other.",
+            "'phone': 68.0% of 50 values are different from each other; the most common appears 10 times.",
+            "10 rows (20%) of 'phone' hold a stand-in rather than a real ID ([REDACTED:phone]). Rows sharing one would be matched to each other.",
+            "The newest month is only partly in the file: 19 of 28 days (up to 2026-02-19). Counting it as a full month would make everything look lower. 19 rows are dated after 2026-01-31.",
             "\u201cchurn\u201d in customers.csv is the outcome: The subscriber left within the month after the snapshot",
             "\u201ccustomer_id\u201d names each row of customers.csv.",
-            "\u201ccall_id\u201d names each row of calls.csv."
+            "'customer_id': 100.0% of 50 values are different from each other; the most common appears 1 times.",
+            "\u201ccall_id\u201d names each row of calls.csv.",
+            "'call_id': 100.0% of 50 values are different from each other; the most common appears 1 times."
           ],
           "checks": [
             {
@@ -1262,7 +1333,7 @@
             }
           ],
           "combined": false,
-          "digest": "de339b0cd0e4",
+          "digest": "a42513db02c9",
           "error": null,
           "notes": [],
           "passed": true,
@@ -1270,16 +1341,24 @@
             "KEY_AMBIGUOUS",
             "KEY_AMBIGUOUS",
             "FILES_DO_NOT_MEET",
+            "THIN_LAST_PERIOD",
             "TRAINING_BUDGET"
           ],
           "rows": 50,
-          "seconds": 0.76
+          "seconds": 1.07
         },
         {
           "accepted": [
+            "'phone': 68.0% of 50 values are different from each other; the most common appears 10 times.",
+            "10 rows (20%) of 'phone' hold a stand-in rather than a real ID ([REDACTED:phone]). Rows sharing one would be matched to each other.",
+            "'phone': 68.0% of 50 values are different from each other; the most common appears 10 times.",
+            "10 rows (20%) of 'phone' hold a stand-in rather than a real ID ([REDACTED:phone]). Rows sharing one would be matched to each other.",
+            "The newest month is only partly in the file: 19 of 28 days (up to 2026-02-19). Counting it as a full month would make everything look lower. 19 rows are dated after 2026-01-31.",
             "\u201cchurn\u201d in customers.csv is the outcome: The subscriber left within the month after the snapshot",
             "\u201ccustomer_id\u201d names each row of customers.csv.",
-            "\u201ccall_id\u201d names each row of calls.csv."
+            "'customer_id': 100.0% of 50 values are different from each other; the most common appears 1 times.",
+            "\u201ccall_id\u201d names each row of calls.csv.",
+            "'call_id': 100.0% of 50 values are different from each other; the most common appears 1 times."
           ],
           "checks": [
             {
@@ -1302,7 +1381,7 @@
             }
           ],
           "combined": false,
-          "digest": "de339b0cd0e4",
+          "digest": "a42513db02c9",
           "error": null,
           "notes": [],
           "passed": true,
@@ -1310,10 +1389,11 @@
             "KEY_AMBIGUOUS",
             "KEY_AMBIGUOUS",
             "FILES_DO_NOT_MEET",
+            "THIN_LAST_PERIOD",
             "TRAINING_BUDGET"
           ],
           "rows": 50,
-          "seconds": 0.89
+          "seconds": 1.05
         }
       ],
       "runs_passed": 2,
@@ -1325,16 +1405,16 @@
     {
       "description": "Ten customers are under 18 on the as-of date, and every customer has ticked marketing consent.",
       "expected": "Minors are off the contact list even though they have consent; adults with consent are on it.",
-      "failed_categories": [
-        "contact_list"
-      ],
+      "failed_categories": [],
       "id": "p7_minors",
       "k": 2,
-      "passed": false,
+      "passed": true,
       "runs": [
         {
           "accepted": [
+            "The newest month is only partly in the file: 23 of 31 days (up to 2017-08-23). Counting it as a full month would make everything look lower. 2 rows are dated after 2017-07-31.",
             "\u201ccustomer_id\u201d names each row of customers.csv.",
+            "'customer_id': 100.0% of 80 values are different from each other; the most common appears 1 times.",
             "\u201cconverted\u201d is the outcome: Purchased within 30 days of ad exposure",
             "\u201cmarketing_opt_in\u201d says who agreed to be contacted."
           ],
@@ -1353,27 +1433,30 @@
             },
             {
               "category": "contact_list",
-              "detail": "10 people who must not be contacted are on the list: C0001, C0009, C0017, C0025 and 6 more (by the 'marketing_opt_in' column)",
+              "detail": "the list leaves out everyone it must (by the 'marketing_opt_in' column and the contact-list gate)",
               "label": "customers under 18 are off the contact list",
-              "passed": false
+              "passed": true
             }
           ],
           "combined": false,
-          "digest": "fcf4de74cfc7",
+          "digest": "ee11eb565b77",
           "error": null,
           "notes": [],
-          "passed": false,
+          "passed": true,
           "questions": [
             "KEY_AMBIGUOUS",
+            "THIN_LAST_PERIOD",
             "OUTCOME_COLUMN",
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 0.69
+          "seconds": 0.81
         },
         {
           "accepted": [
+            "The newest month is only partly in the file: 23 of 31 days (up to 2017-08-23). Counting it as a full month would make everything look lower. 2 rows are dated after 2017-07-31.",
             "\u201ccustomer_id\u201d names each row of customers.csv.",
+            "'customer_id': 100.0% of 80 values are different from each other; the most common appears 1 times.",
             "\u201cconverted\u201d is the outcome: Purchased within 30 days of ad exposure",
             "\u201cmarketing_opt_in\u201d says who agreed to be contacted."
           ],
@@ -1392,26 +1475,27 @@
             },
             {
               "category": "contact_list",
-              "detail": "10 people who must not be contacted are on the list: C0001, C0009, C0017, C0025 and 6 more (by the 'marketing_opt_in' column)",
+              "detail": "the list leaves out everyone it must (by the 'marketing_opt_in' column and the contact-list gate)",
               "label": "customers under 18 are off the contact list",
-              "passed": false
+              "passed": true
             }
           ],
           "combined": false,
-          "digest": "fcf4de74cfc7",
+          "digest": "ee11eb565b77",
           "error": null,
           "notes": [],
-          "passed": false,
+          "passed": true,
           "questions": [
             "KEY_AMBIGUOUS",
+            "THIN_LAST_PERIOD",
             "OUTCOME_COLUMN",
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 0.65
+          "seconds": 0.76
         }
       ],
-      "runs_passed": 0,
+      "runs_passed": 2,
       "scenario": "P7",
       "stable": true,
       "theme": "Consent, sensitive data and who may be contacted",
@@ -1430,6 +1514,7 @@
         {
           "accepted": [
             "\u201ccustomer_id\u201d names each row of customers.csv.",
+            "'customer_id': 100.0% of 80 values are different from each other; the most common appears 1 times.",
             "\u201cconverted\u201d is the outcome: Purchased within 30 days of ad exposure",
             "\u201cmarketing_opt_in\u201d says who agreed to be contacted."
           ],
@@ -1448,13 +1533,13 @@
             },
             {
               "category": "contact_list",
-              "detail": "16 people who must not be contacted are on the list: C0001, C0006, C0011, C0016 and 12 more (by the 'marketing_opt_in' column)",
+              "detail": "8 people who must not be contacted are on the list: C0011, C0016, C0031, C0036 and 4 more (by the 'marketing_opt_in' column and the contact-list gate)",
               "label": "deceased, fraud, legal-hold and closed customers are off the list",
               "passed": false
             }
           ],
           "combined": false,
-          "digest": "9477132ef1a1",
+          "digest": "4e45aba97f81",
           "error": null,
           "notes": [],
           "passed": false,
@@ -1469,6 +1554,7 @@
         {
           "accepted": [
             "\u201ccustomer_id\u201d names each row of customers.csv.",
+            "'customer_id': 100.0% of 80 values are different from each other; the most common appears 1 times.",
             "\u201cconverted\u201d is the outcome: Purchased within 30 days of ad exposure",
             "\u201cmarketing_opt_in\u201d says who agreed to be contacted."
           ],
@@ -1487,13 +1573,13 @@
             },
             {
               "category": "contact_list",
-              "detail": "16 people who must not be contacted are on the list: C0001, C0006, C0011, C0016 and 12 more (by the 'marketing_opt_in' column)",
+              "detail": "8 people who must not be contacted are on the list: C0011, C0016, C0031, C0036 and 4 more (by the 'marketing_opt_in' column and the contact-list gate)",
               "label": "deceased, fraud, legal-hold and closed customers are off the list",
               "passed": false
             }
           ],
           "combined": false,
-          "digest": "9477132ef1a1",
+          "digest": "4e45aba97f81",
           "error": null,
           "notes": [],
           "passed": false,
@@ -1503,7 +1589,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 0.6
+          "seconds": 0.71
         }
       ],
       "runs_passed": 0,
@@ -1524,8 +1610,11 @@
       "runs": [
         {
           "accepted": [
+            "1 of 70 rows have 'signup_date' later than 'last_order_date', which should come the other way round.",
+            "The newest month is only partly in the file: 11 of 30 days (up to 2026-04-11). Counting it as a full month would make everything look lower. 11 rows are dated after 2026-03-31.",
             "\u201cchurn\u201d in customers.csv is the outcome: The subscriber left within the month after the snapshot",
-            "\u201ccustomer_id\u201d names each row of customers.csv."
+            "\u201ccustomer_id\u201d names each row of customers.csv.",
+            "'customer_id': 100.0% of 100 values are different from each other; the most common appears 1 times."
           ],
           "checks": [
             {
@@ -1542,18 +1631,19 @@
             },
             {
               "category": "outcome_population",
-              "detail": "nothing like it was asked (it asked: KEY_AMBIGUOUS, TRAINING_BUDGET) / 30 who cannot have the outcome are counted: C0001, C0002, C0003, C0004 and 26 more; the positive rate is 48.0%; the true rate is 25.7%",
+              "detail": "nothing like it was asked (it asked: KEY_AMBIGUOUS, THIN_LAST_PERIOD, TRAINING_BUDGET) / 30 who cannot have the outcome are counted: C0001, C0002, C0003, C0004 and 26 more; the positive rate is 48.0%; the true rate is 25.7%",
               "label": "never-active customers are not in the outcome population",
               "passed": false
             }
           ],
           "combined": false,
-          "digest": "d197ac0878c4",
+          "digest": "973125a27366",
           "error": null,
           "notes": [],
           "passed": false,
           "questions": [
             "KEY_AMBIGUOUS",
+            "THIN_LAST_PERIOD",
             "TRAINING_BUDGET"
           ],
           "rows": 100,
@@ -1561,8 +1651,11 @@
         },
         {
           "accepted": [
+            "1 of 70 rows have 'signup_date' later than 'last_order_date', which should come the other way round.",
+            "The newest month is only partly in the file: 11 of 30 days (up to 2026-04-11). Counting it as a full month would make everything look lower. 11 rows are dated after 2026-03-31.",
             "\u201cchurn\u201d in customers.csv is the outcome: The subscriber left within the month after the snapshot",
-            "\u201ccustomer_id\u201d names each row of customers.csv."
+            "\u201ccustomer_id\u201d names each row of customers.csv.",
+            "'customer_id': 100.0% of 100 values are different from each other; the most common appears 1 times."
           ],
           "checks": [
             {
@@ -1579,22 +1672,23 @@
             },
             {
               "category": "outcome_population",
-              "detail": "nothing like it was asked (it asked: KEY_AMBIGUOUS, TRAINING_BUDGET) / 30 who cannot have the outcome are counted: C0001, C0002, C0003, C0004 and 26 more; the positive rate is 48.0%; the true rate is 25.7%",
+              "detail": "nothing like it was asked (it asked: KEY_AMBIGUOUS, THIN_LAST_PERIOD, TRAINING_BUDGET) / 30 who cannot have the outcome are counted: C0001, C0002, C0003, C0004 and 26 more; the positive rate is 48.0%; the true rate is 25.7%",
               "label": "never-active customers are not in the outcome population",
               "passed": false
             }
           ],
           "combined": false,
-          "digest": "d197ac0878c4",
+          "digest": "973125a27366",
           "error": null,
           "notes": [],
           "passed": false,
           "questions": [
             "KEY_AMBIGUOUS",
+            "THIN_LAST_PERIOD",
             "TRAINING_BUDGET"
           ],
           "rows": 100,
-          "seconds": 0.73
+          "seconds": 0.83
         }
       ],
       "runs_passed": 0,
@@ -1616,7 +1710,8 @@
         {
           "accepted": [
             "\u201ccustomer_id\u201d names each row of customers.csv.",
-            "\u201cchurn\u201d in customers.csv is the outcome: The subscriber left within the month after the snapshot"
+            "\u201cchurn\u201d in customers.csv is the outcome: The subscriber left within the month after the snapshot",
+            "'customer_id': 100.0% of 120 values are different from each other; the most common appears 1 times."
           ],
           "checks": [
             {
@@ -1639,7 +1734,7 @@
             }
           ],
           "combined": false,
-          "digest": "f2607b941356",
+          "digest": "d4b7fc303424",
           "error": null,
           "notes": [],
           "passed": false,
@@ -1647,12 +1742,13 @@
             "TRAINING_BUDGET"
           ],
           "rows": 120,
-          "seconds": 0.4
+          "seconds": 0.85
         },
         {
           "accepted": [
             "\u201ccustomer_id\u201d names each row of customers.csv.",
-            "\u201cchurn\u201d in customers.csv is the outcome: The subscriber left within the month after the snapshot"
+            "\u201cchurn\u201d in customers.csv is the outcome: The subscriber left within the month after the snapshot",
+            "'customer_id': 100.0% of 120 values are different from each other; the most common appears 1 times."
           ],
           "checks": [
             {
@@ -1675,7 +1771,7 @@
             }
           ],
           "combined": false,
-          "digest": "f2607b941356",
+          "digest": "d4b7fc303424",
           "error": null,
           "notes": [],
           "passed": false,
@@ -1683,7 +1779,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 120,
-          "seconds": 0.45
+          "seconds": 0.58
         }
       ],
       "runs_passed": 0,
@@ -1695,18 +1791,16 @@
     {
       "description": "signup_date holds day/month in system A rows and month/day in system B rows, so 03/04/2026 can be two dates.",
       "expected": "The Doctor stops and asks the date order for each system, or leaves the dates as written; it never reads them all one way.",
-      "failed_categories": [
-        "unapproved_change"
-      ],
+      "failed_categories": [],
       "id": "t01_mixed_date_order",
       "k": 2,
-      "passed": false,
+      "passed": true,
       "runs": [
         {
           "accepted": [
             "\u201cchurn\u201d in customers.csv is the outcome: The subscriber left within the month after the snapshot",
             "\u201ccustomer_id\u201d names each row of customers.csv.",
-            "Read 'signup_date' as dates, day first"
+            "'customer_id': 100.0% of 80 values are different from each other; the most common appears 1 times."
           ],
           "checks": [
             {
@@ -1723,29 +1817,30 @@
             },
             {
               "category": "unapproved_change",
-              "detail": "nothing like it was asked (it asked: KEY_AMBIGUOUS, GUIDED_DATE_ORDER, TRAINING_BUDGET) / 80 values changed: signup_date of C0001: '08/09/2025' became '2025-09-08 00:00:00', signup_date of C0002: '06/19/2026' became '2026-06-19 00:00:00', signup_date of C0003: '14/02/2026' became '2026-02-14 00:00:00' and 77 more",
+              "detail": "the values are as the file had them",
               "label": "dates are not silently read in one order",
-              "passed": false
+              "passed": true
             }
           ],
           "combined": false,
-          "digest": "531fcf65c0ff",
+          "digest": "089c96c767ae",
           "error": null,
           "notes": [],
-          "passed": false,
+          "passed": true,
           "questions": [
             "KEY_AMBIGUOUS",
-            "GUIDED_DATE_ORDER",
+            "GUIDED_FORMAT",
+            "DATE_ORDER_BOTH",
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 0.72
+          "seconds": 0.89
         },
         {
           "accepted": [
             "\u201cchurn\u201d in customers.csv is the outcome: The subscriber left within the month after the snapshot",
             "\u201ccustomer_id\u201d names each row of customers.csv.",
-            "Read 'signup_date' as dates, day first"
+            "'customer_id': 100.0% of 80 values are different from each other; the most common appears 1 times."
           ],
           "checks": [
             {
@@ -1762,26 +1857,27 @@
             },
             {
               "category": "unapproved_change",
-              "detail": "nothing like it was asked (it asked: KEY_AMBIGUOUS, GUIDED_DATE_ORDER, TRAINING_BUDGET) / 80 values changed: signup_date of C0001: '08/09/2025' became '2025-09-08 00:00:00', signup_date of C0002: '06/19/2026' became '2026-06-19 00:00:00', signup_date of C0003: '14/02/2026' became '2026-02-14 00:00:00' and 77 more",
+              "detail": "the values are as the file had them",
               "label": "dates are not silently read in one order",
-              "passed": false
+              "passed": true
             }
           ],
           "combined": false,
-          "digest": "531fcf65c0ff",
+          "digest": "089c96c767ae",
           "error": null,
           "notes": [],
-          "passed": false,
+          "passed": true,
           "questions": [
             "KEY_AMBIGUOUS",
-            "GUIDED_DATE_ORDER",
+            "GUIDED_FORMAT",
+            "DATE_ORDER_BOTH",
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 0.78
+          "seconds": 0.83
         }
       ],
-      "runs_passed": 0,
+      "runs_passed": 2,
       "scenario": "T01",
       "stable": true,
       "theme": "Dates that are read wrong without any error",
@@ -1799,8 +1895,11 @@
       "runs": [
         {
           "accepted": [
+            "20 rows (25%) of 'last_payment_date' are 1970-01-01, which is usually a blank written as a date.",
+            "The newest month is only partly in the file: 22 of 30 days (up to 2026-09-22). Counting it as a full month would make everything look lower. 8 rows are dated after 2026-08-31.",
             "\u201cchurn\u201d in customers.csv is the outcome: The subscriber left within the month after the snapshot",
-            "\u201ccustomer_id\u201d names each row of customers.csv."
+            "\u201ccustomer_id\u201d names each row of customers.csv.",
+            "'customer_id': 100.0% of 80 values are different from each other; the most common appears 1 times."
           ],
           "checks": [
             {
@@ -1817,27 +1916,31 @@
             },
             {
               "category": "unapproved_change",
-              "detail": "nothing like it was asked (it asked: KEY_AMBIGUOUS, TRAINING_BUDGET) / 20 rows of 'last_payment_date' still say 1970-01-01",
+              "detail": "nothing like it was asked (it asked: KEY_AMBIGUOUS, THIN_LAST_PERIOD, TRAINING_BUDGET) / 20 rows of 'last_payment_date' still say 1970-01-01",
               "label": "the 1970-01-01 stand-in is not treated as a real date",
               "passed": false
             }
           ],
           "combined": false,
-          "digest": "e07e037b3db1",
+          "digest": "2e3513f3e91d",
           "error": null,
           "notes": [],
           "passed": false,
           "questions": [
             "KEY_AMBIGUOUS",
+            "THIN_LAST_PERIOD",
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 0.58
+          "seconds": 0.76
         },
         {
           "accepted": [
+            "20 rows (25%) of 'last_payment_date' are 1970-01-01, which is usually a blank written as a date.",
+            "The newest month is only partly in the file: 22 of 30 days (up to 2026-09-22). Counting it as a full month would make everything look lower. 8 rows are dated after 2026-08-31.",
             "\u201cchurn\u201d in customers.csv is the outcome: The subscriber left within the month after the snapshot",
-            "\u201ccustomer_id\u201d names each row of customers.csv."
+            "\u201ccustomer_id\u201d names each row of customers.csv.",
+            "'customer_id': 100.0% of 80 values are different from each other; the most common appears 1 times."
           ],
           "checks": [
             {
@@ -1854,22 +1957,23 @@
             },
             {
               "category": "unapproved_change",
-              "detail": "nothing like it was asked (it asked: KEY_AMBIGUOUS, TRAINING_BUDGET) / 20 rows of 'last_payment_date' still say 1970-01-01",
+              "detail": "nothing like it was asked (it asked: KEY_AMBIGUOUS, THIN_LAST_PERIOD, TRAINING_BUDGET) / 20 rows of 'last_payment_date' still say 1970-01-01",
               "label": "the 1970-01-01 stand-in is not treated as a real date",
               "passed": false
             }
           ],
           "combined": false,
-          "digest": "e07e037b3db1",
+          "digest": "2e3513f3e91d",
           "error": null,
           "notes": [],
           "passed": false,
           "questions": [
             "KEY_AMBIGUOUS",
+            "THIN_LAST_PERIOD",
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 0.51
+          "seconds": 0.65
         }
       ],
       "runs_passed": 0,
@@ -1891,7 +1995,8 @@
         {
           "accepted": [
             "\u201cchurn\u201d in customers.csv is the outcome: The subscriber left within the month after the snapshot",
-            "\u201ccustomer_id\u201d names each row of customers.csv."
+            "\u201ccustomer_id\u201d names each row of customers.csv.",
+            "'customer_id': 100.0% of 120 values are different from each other; the most common appears 1 times."
           ],
           "checks": [
             {
@@ -1914,7 +2019,7 @@
             }
           ],
           "combined": false,
-          "digest": "480f832b61b4",
+          "digest": "ac81a6ebc041",
           "error": null,
           "notes": [],
           "passed": false,
@@ -1923,12 +2028,13 @@
             "TRAINING_BUDGET"
           ],
           "rows": 120,
-          "seconds": 0.48
+          "seconds": 0.58
         },
         {
           "accepted": [
             "\u201cchurn\u201d in customers.csv is the outcome: The subscriber left within the month after the snapshot",
-            "\u201ccustomer_id\u201d names each row of customers.csv."
+            "\u201ccustomer_id\u201d names each row of customers.csv.",
+            "'customer_id': 100.0% of 120 values are different from each other; the most common appears 1 times."
           ],
           "checks": [
             {
@@ -1951,7 +2057,7 @@
             }
           ],
           "combined": false,
-          "digest": "480f832b61b4",
+          "digest": "ac81a6ebc041",
           "error": null,
           "notes": [],
           "passed": false,
@@ -1960,7 +2066,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 120,
-          "seconds": 0.6
+          "seconds": 0.57
         }
       ],
       "runs_passed": 0,
@@ -1982,7 +2088,8 @@
         {
           "accepted": [
             "\u201crecord_id\u201d names each row of snapshots.csv.",
-            "\u201cchurn\u201d in snapshots.csv is the outcome: The subscriber left within the month after the snapshot"
+            "\u201cchurn\u201d in snapshots.csv is the outcome: The subscriber left within the month after the snapshot",
+            "'record_id': 100.0% of 210 values are different from each other; the most common appears 1 times."
           ],
           "checks": [
             {
@@ -2005,7 +2112,7 @@
             }
           ],
           "combined": false,
-          "digest": "f516e1712807",
+          "digest": "2044e49ac9a4",
           "error": null,
           "notes": [],
           "passed": false,
@@ -2013,12 +2120,13 @@
             "TRAINING_BUDGET"
           ],
           "rows": 210,
-          "seconds": 0.63
+          "seconds": 0.87
         },
         {
           "accepted": [
             "\u201crecord_id\u201d names each row of snapshots.csv.",
-            "\u201cchurn\u201d in snapshots.csv is the outcome: The subscriber left within the month after the snapshot"
+            "\u201cchurn\u201d in snapshots.csv is the outcome: The subscriber left within the month after the snapshot",
+            "'record_id': 100.0% of 210 values are different from each other; the most common appears 1 times."
           ],
           "checks": [
             {
@@ -2041,7 +2149,7 @@
             }
           ],
           "combined": false,
-          "digest": "f516e1712807",
+          "digest": "2044e49ac9a4",
           "error": null,
           "notes": [],
           "passed": false,
@@ -2049,7 +2157,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 210,
-          "seconds": 0.57
+          "seconds": 0.79
         }
       ],
       "runs_passed": 0,
@@ -2071,7 +2179,8 @@
         {
           "accepted": [
             "\u201cchurn\u201d in customers.csv is the outcome: The subscriber left within the month after the snapshot",
-            "\u201ccustomer_id\u201d names each row of customers.csv."
+            "\u201ccustomer_id\u201d names each row of customers.csv.",
+            "'customer_id': 100.0% of 120 values are different from each other; the most common appears 1 times."
           ],
           "checks": [
             {
@@ -2094,7 +2203,7 @@
             }
           ],
           "combined": false,
-          "digest": "09e2027e154b",
+          "digest": "927f3b0f5381",
           "error": null,
           "notes": [],
           "passed": false,
@@ -2103,12 +2212,13 @@
             "TRAINING_BUDGET"
           ],
           "rows": 120,
-          "seconds": 0.51
+          "seconds": 0.58
         },
         {
           "accepted": [
             "\u201cchurn\u201d in customers.csv is the outcome: The subscriber left within the month after the snapshot",
-            "\u201ccustomer_id\u201d names each row of customers.csv."
+            "\u201ccustomer_id\u201d names each row of customers.csv.",
+            "'customer_id': 100.0% of 120 values are different from each other; the most common appears 1 times."
           ],
           "checks": [
             {
@@ -2131,7 +2241,7 @@
             }
           ],
           "combined": false,
-          "digest": "09e2027e154b",
+          "digest": "927f3b0f5381",
           "error": null,
           "notes": [],
           "passed": false,
@@ -2140,7 +2250,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 120,
-          "seconds": 0.65
+          "seconds": 0.54
         }
       ],
       "runs_passed": 0,
@@ -2162,7 +2272,8 @@
         {
           "accepted": [
             "\u201crecord_id\u201d names each row of monthly_usage.csv.",
-            "\u201cchurn\u201d in monthly_usage.csv is the outcome: The subscriber left within the month after the snapshot"
+            "\u201cchurn\u201d in monthly_usage.csv is the outcome: The subscriber left within the month after the snapshot",
+            "'record_id': 100.0% of 120 values are different from each other; the most common appears 1 times."
           ],
           "checks": [
             {
@@ -2185,7 +2296,7 @@
             }
           ],
           "combined": false,
-          "digest": "e98ac9413203",
+          "digest": "574d56585737",
           "error": null,
           "notes": [],
           "passed": false,
@@ -2193,12 +2304,13 @@
             "TRAINING_BUDGET"
           ],
           "rows": 120,
-          "seconds": 0.42
+          "seconds": 0.66
         },
         {
           "accepted": [
             "\u201crecord_id\u201d names each row of monthly_usage.csv.",
-            "\u201cchurn\u201d in monthly_usage.csv is the outcome: The subscriber left within the month after the snapshot"
+            "\u201cchurn\u201d in monthly_usage.csv is the outcome: The subscriber left within the month after the snapshot",
+            "'record_id': 100.0% of 120 values are different from each other; the most common appears 1 times."
           ],
           "checks": [
             {
@@ -2221,7 +2333,7 @@
             }
           ],
           "combined": false,
-          "digest": "e98ac9413203",
+          "digest": "574d56585737",
           "error": null,
           "notes": [],
           "passed": false,
@@ -2229,7 +2341,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 120,
-          "seconds": 0.47
+          "seconds": 0.75
         }
       ],
       "runs_passed": 0,
@@ -2252,9 +2364,12 @@
           "accepted": [
             "Stack sales_a.csv and sales_b.csv into one table: 80 rows in the files, no row is in two exports, 80 rows in the table.",
             "\u201corder_id\u201d names each row of sales_a.csv.",
+            "'order_id': 100.0% of 40 values are different from each other; the most common appears 1 times.",
             "\u201corder_id\u201d names each row of sales_b.csv.",
+            "'order_id': 100.0% of 40 values are different from each other; the most common appears 1 times.",
             "\u201cchurn\u201d is the outcome: The subscriber left within the month after the snapshot",
-            "\u201corder_id\u201d names each row of sales_a stacked.csv."
+            "\u201corder_id\u201d names each row of sales_a stacked.csv.",
+            "'order_id': 100.0% of 80 values are different from each other; the most common appears 1 times."
           ],
           "checks": [
             {
@@ -2277,7 +2392,7 @@
             }
           ],
           "combined": true,
-          "digest": "aeda77fac819",
+          "digest": "2d9d6075ca8e",
           "error": null,
           "notes": [],
           "passed": false,
@@ -2290,15 +2405,18 @@
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 1.14
+          "seconds": 1.37
         },
         {
           "accepted": [
             "Stack sales_a.csv and sales_b.csv into one table: 80 rows in the files, no row is in two exports, 80 rows in the table.",
             "\u201corder_id\u201d names each row of sales_a.csv.",
+            "'order_id': 100.0% of 40 values are different from each other; the most common appears 1 times.",
             "\u201corder_id\u201d names each row of sales_b.csv.",
+            "'order_id': 100.0% of 40 values are different from each other; the most common appears 1 times.",
             "\u201cchurn\u201d is the outcome: The subscriber left within the month after the snapshot",
-            "\u201corder_id\u201d names each row of sales_a stacked.csv."
+            "\u201corder_id\u201d names each row of sales_a stacked.csv.",
+            "'order_id': 100.0% of 80 values are different from each other; the most common appears 1 times."
           ],
           "checks": [
             {
@@ -2321,7 +2439,7 @@
             }
           ],
           "combined": true,
-          "digest": "aeda77fac819",
+          "digest": "2d9d6075ca8e",
           "error": null,
           "notes": [],
           "passed": false,
@@ -2334,7 +2452,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 1.23
+          "seconds": 1.52
         }
       ],
       "runs_passed": 0,
@@ -2354,7 +2472,8 @@
         {
           "accepted": [
             "\u201cchurn\u201d in transactions.csv is the outcome: The subscriber left within the month after the snapshot",
-            "\u201ctxn_id\u201d names each row of transactions.csv."
+            "\u201ctxn_id\u201d names each row of transactions.csv.",
+            "'txn_id': 100.0% of 60 values are different from each other; the most common appears 1 times."
           ],
           "checks": [
             {
@@ -2377,7 +2496,7 @@
             }
           ],
           "combined": false,
-          "digest": "c0c280a61fa2",
+          "digest": "8ad778a29bb4",
           "error": null,
           "notes": [],
           "passed": true,
@@ -2386,12 +2505,13 @@
             "TRAINING_BUDGET"
           ],
           "rows": 60,
-          "seconds": 0.5
+          "seconds": 0.42
         },
         {
           "accepted": [
             "\u201cchurn\u201d in transactions.csv is the outcome: The subscriber left within the month after the snapshot",
-            "\u201ctxn_id\u201d names each row of transactions.csv."
+            "\u201ctxn_id\u201d names each row of transactions.csv.",
+            "'txn_id': 100.0% of 60 values are different from each other; the most common appears 1 times."
           ],
           "checks": [
             {
@@ -2414,7 +2534,7 @@
             }
           ],
           "combined": false,
-          "digest": "c0c280a61fa2",
+          "digest": "8ad778a29bb4",
           "error": null,
           "notes": [],
           "passed": true,
@@ -2423,7 +2543,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 60,
-          "seconds": 0.63
+          "seconds": 0.39
         }
       ],
       "runs_passed": 2,
@@ -2443,7 +2563,8 @@
         {
           "accepted": [
             "\u201cchurn\u201d in customers.csv is the outcome: The subscriber left within the month after the snapshot",
-            "\u201ccustomer_id\u201d names each row of customers.csv."
+            "\u201ccustomer_id\u201d names each row of customers.csv.",
+            "'customer_id': 100.0% of 80 values are different from each other; the most common appears 1 times."
           ],
           "checks": [
             {
@@ -2466,7 +2587,7 @@
             }
           ],
           "combined": false,
-          "digest": "b0a479d1ccc8",
+          "digest": "ed7f5a7a1fb8",
           "error": null,
           "notes": [],
           "passed": true,
@@ -2475,12 +2596,13 @@
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 0.46
+          "seconds": 0.6
         },
         {
           "accepted": [
             "\u201cchurn\u201d in customers.csv is the outcome: The subscriber left within the month after the snapshot",
-            "\u201ccustomer_id\u201d names each row of customers.csv."
+            "\u201ccustomer_id\u201d names each row of customers.csv.",
+            "'customer_id': 100.0% of 80 values are different from each other; the most common appears 1 times."
           ],
           "checks": [
             {
@@ -2503,7 +2625,7 @@
             }
           ],
           "combined": false,
-          "digest": "b0a479d1ccc8",
+          "digest": "ed7f5a7a1fb8",
           "error": null,
           "notes": [],
           "passed": true,
@@ -2512,7 +2634,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 0.43
+          "seconds": 0.57
         }
       ],
       "runs_passed": 2,
@@ -2533,6 +2655,8 @@
       "runs": [
         {
           "accepted": [
+            "'customer_id': 100.0% of 80 values are different from each other; the most common appears 1 times.",
+            "8 rows (10%) of 'customer_id' hold a stand-in rather than a real ID (TEST001, TEST002, TEST003). Rows sharing one would be matched to each other.",
             "\u201ccustomer_id\u201d names each row of customers.csv.",
             "\u201cconverted\u201d is the outcome: Purchased within 30 days of ad exposure",
             "\u201cmarketing_opt_in\u201d says who agreed to be contacted."
@@ -2552,13 +2676,13 @@
             },
             {
               "category": "contact_list",
-              "detail": "8 people who must not be contacted are on the list: TEST001, TEST002, TEST003, TEST004 and 4 more (by the 'marketing_opt_in' column)",
+              "detail": "8 people who must not be contacted are on the list: TEST001, TEST002, TEST003, TEST004 and 4 more (by the 'marketing_opt_in' column and the contact-list gate)",
               "label": "test accounts are off the contact list",
               "passed": false
             }
           ],
           "combined": false,
-          "digest": "a8cda1c00f14",
+          "digest": "ae9555a1c5d6",
           "error": null,
           "notes": [],
           "passed": false,
@@ -2568,10 +2692,12 @@
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 0.74
+          "seconds": 0.71
         },
         {
           "accepted": [
+            "'customer_id': 100.0% of 80 values are different from each other; the most common appears 1 times.",
+            "8 rows (10%) of 'customer_id' hold a stand-in rather than a real ID (TEST001, TEST002, TEST003). Rows sharing one would be matched to each other.",
             "\u201ccustomer_id\u201d names each row of customers.csv.",
             "\u201cconverted\u201d is the outcome: Purchased within 30 days of ad exposure",
             "\u201cmarketing_opt_in\u201d says who agreed to be contacted."
@@ -2591,13 +2717,13 @@
             },
             {
               "category": "contact_list",
-              "detail": "8 people who must not be contacted are on the list: TEST001, TEST002, TEST003, TEST004 and 4 more (by the 'marketing_opt_in' column)",
+              "detail": "8 people who must not be contacted are on the list: TEST001, TEST002, TEST003, TEST004 and 4 more (by the 'marketing_opt_in' column and the contact-list gate)",
               "label": "test accounts are off the contact list",
               "passed": false
             }
           ],
           "combined": false,
-          "digest": "a8cda1c00f14",
+          "digest": "ae9555a1c5d6",
           "error": null,
           "notes": [],
           "passed": false,
@@ -2607,7 +2733,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 0.65
+          "seconds": 0.67
         }
       ],
       "runs_passed": 0,
@@ -2629,6 +2755,7 @@
         {
           "accepted": [
             "\u201ccustomer_id\u201d names each row of customers.csv.",
+            "'customer_id': 100.0% of 90 values are different from each other; the most common appears 1 times.",
             "\u201cconverted\u201d is the outcome: Purchased within 30 days of ad exposure",
             "\u201cmarketing_opt_in\u201d says who agreed to be contacted."
           ],
@@ -2647,13 +2774,13 @@
             },
             {
               "category": "contact_list",
-              "detail": "18 people who may be contacted are left off: C0004, C0006, C0014, C0016 and 14 more (by the 'marketing_opt_in' column)",
+              "detail": "18 people who may be contacted are left off: C0004, C0006, C0014, C0016 and 14 more (by the 'marketing_opt_in' column and the contact-list gate)",
               "label": "every spelling of yes is on the list; refused and unknown are off it",
               "passed": false
             }
           ],
           "combined": false,
-          "digest": "1cde67c5145f",
+          "digest": "cff2d6628e40",
           "error": null,
           "notes": [],
           "passed": false,
@@ -2663,11 +2790,12 @@
             "TRAINING_BUDGET"
           ],
           "rows": 90,
-          "seconds": 0.56
+          "seconds": 0.61
         },
         {
           "accepted": [
             "\u201ccustomer_id\u201d names each row of customers.csv.",
+            "'customer_id': 100.0% of 90 values are different from each other; the most common appears 1 times.",
             "\u201cconverted\u201d is the outcome: Purchased within 30 days of ad exposure",
             "\u201cmarketing_opt_in\u201d says who agreed to be contacted."
           ],
@@ -2686,13 +2814,13 @@
             },
             {
               "category": "contact_list",
-              "detail": "18 people who may be contacted are left off: C0004, C0006, C0014, C0016 and 14 more (by the 'marketing_opt_in' column)",
+              "detail": "18 people who may be contacted are left off: C0004, C0006, C0014, C0016 and 14 more (by the 'marketing_opt_in' column and the contact-list gate)",
               "label": "every spelling of yes is on the list; refused and unknown are off it",
               "passed": false
             }
           ],
           "combined": false,
-          "digest": "1cde67c5145f",
+          "digest": "cff2d6628e40",
           "error": null,
           "notes": [],
           "passed": false,
@@ -2702,7 +2830,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 90,
-          "seconds": 0.78
+          "seconds": 0.73
         }
       ],
       "runs_passed": 0,
@@ -2724,7 +2852,8 @@
         {
           "accepted": [
             "\u201cline_id\u201d names each row of order_lines.csv.",
-            "\u201cchurn\u201d in order_lines.csv is the outcome: The subscriber left within the month after the snapshot"
+            "\u201cchurn\u201d in order_lines.csv is the outcome: The subscriber left within the month after the snapshot",
+            "'line_id': 100.0% of 124 values are different from each other; the most common appears 1 times."
           ],
           "checks": [
             {
@@ -2747,7 +2876,7 @@
             }
           ],
           "combined": false,
-          "digest": "d7470aed6a82",
+          "digest": "da0271ce62b5",
           "error": null,
           "notes": [],
           "passed": false,
@@ -2755,12 +2884,13 @@
             "TRAINING_BUDGET"
           ],
           "rows": 124,
-          "seconds": 0.48
+          "seconds": 0.66
         },
         {
           "accepted": [
             "\u201cline_id\u201d names each row of order_lines.csv.",
-            "\u201cchurn\u201d in order_lines.csv is the outcome: The subscriber left within the month after the snapshot"
+            "\u201cchurn\u201d in order_lines.csv is the outcome: The subscriber left within the month after the snapshot",
+            "'line_id': 100.0% of 124 values are different from each other; the most common appears 1 times."
           ],
           "checks": [
             {
@@ -2783,7 +2913,7 @@
             }
           ],
           "combined": false,
-          "digest": "d7470aed6a82",
+          "digest": "da0271ce62b5",
           "error": null,
           "notes": [],
           "passed": false,
@@ -2791,7 +2921,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 124,
-          "seconds": 0.46
+          "seconds": 0.71
         }
       ],
       "runs_passed": 0,
