@@ -53,7 +53,7 @@ from engine.doctor.registry import (
 )
 from engine.doctor.sufficiency import NextSteps
 from engine.onboarding.specs import KeyCandidate, RoleCandidate, TimeCandidate
-from engine.pilot.data_request import DataRequest
+from engine.pilot.data_request import DataRequest, RequestMessage
 
 if TYPE_CHECKING:
     from engine.doctor.diagnose import LoadedFile
@@ -339,6 +339,14 @@ class DataRequestArgs(_Args):
         min_length=1,
         max_length=DATA_REQUEST_MAX_USE_CASES,
         description="Up to 4 configured use cases to ask data for; the file's own use case when omitted.",
+    )
+    messages: tuple[Annotated[str, Field(pattern=r"^[A-Z][A-Z_]{1,40}$")], ...] = Field(
+        default=(),
+        max_length=4,
+        description=(
+            "Selectors of short, forwardable requests to attach, for example IDS_ROUNDED, "
+            "SUMMARY_NOT_ROWS, PDF, HISTORY_NEEDED or CONSENT_SOURCE."
+        ),
     )
 
 
@@ -680,6 +688,23 @@ def _enough_data(parsed: OutcomeArgs, ctx: DataToolContext) -> NextSteps:
     )
 
 
+def _request_messages(selectors: tuple[str, ...], ctx: DataToolContext) -> tuple[RequestMessage, ...]:
+    """The forwardable messages named by `selectors`; a selector that is not configured is refused."""
+    from engine.pilot.data_request import load_request_messages, render_request_message
+
+    known = load_request_messages(ctx.root())
+    unknown = [selector for selector in dict.fromkeys(selectors) if selector not in known]
+    if unknown:
+        raise DataToolError(
+            "TOOL_INPUT_INVALID", f"Unknown request message: {', '.join(unknown)[:200]}.", status=422
+        )
+    # Blanks the Doctor cannot know (a date range) read `[from date]`: the person fills them in before forwarding.
+    return tuple(
+        known[selector].model_copy(update={"message": render_request_message(selector, ctx.root())})
+        for selector in dict.fromkeys(selectors)
+    )
+
+
 def _data_request(parsed: DataRequestArgs, ctx: DataToolContext) -> DataRequest:
     """The data request kit, for configured use cases only: as `GET /pilot/data-request` checks them
     (`api.routes.pilot._use_cases`), an id that is not configured is refused, here with no server path."""
@@ -694,8 +719,9 @@ def _data_request(parsed: DataRequestArgs, ctx: DataToolContext) -> DataRequest:
             raise DataToolError(
                 "TOOL_INPUT_INVALID", f"Unknown use case: {', '.join(unknown)[:200]}.", status=422
             )
+    attached = _request_messages(parsed.messages, ctx)
     try:
-        return build_data_request(ids, ctx.root())
+        return build_data_request(ids, ctx.root()).model_copy(update={"messages": attached})
     except ConfigError as exc:  # a use case that does not load: say which, never where it lives
         raise DataToolError(
             "TOOL_INPUT_INVALID", "A use case named here could not be read.", status=422

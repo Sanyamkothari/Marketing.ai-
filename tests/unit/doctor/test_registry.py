@@ -531,6 +531,22 @@ def test_data_request_takes_configured_use_cases_only(agent: AgentContext) -> No
     assert made.output
 
 
+def test_data_request_attaches_forwardable_messages_by_selector(agent: AgentContext) -> None:
+    ctx = DataToolContext(agent=agent, principal=VIEWER, caller="person")
+    made = data_registry().call("data_request", {"messages": ["IDS_ROUNDED", "CHURN_LIST_COMPLETE"]}, ctx)
+    sent = {m["selector"]: m for m in made.output["messages"]}
+    assert list(sent) == ["IDS_ROUNDED", "CHURN_LIST_COMPLETE"]
+    assert sent["IDS_ROUNDED"]["id"] == "D1"
+    assert (
+        "[from date]" in sent["CHURN_LIST_COMPLETE"]["message"]
+    ), "a blank the Doctor cannot know is left to fill in"
+    assert not data_registry().call("data_request", {}, ctx).output["messages"]
+    for bad in (["NO_SUCH_MESSAGE"], ["lower"], ["A_" * 30]):
+        with pytest.raises(DataToolError) as refused:
+            data_registry().call("data_request", {"messages": bad}, ctx)
+        assert refused.value.code == "TOOL_INPUT_INVALID", bad
+
+
 def test_the_longest_data_requests_fit_its_budget() -> None:
     """The four use cases whose requests are longest, asked together, fit `data_request`'s 16 KB."""
     from engine.config import list_use_case_ids

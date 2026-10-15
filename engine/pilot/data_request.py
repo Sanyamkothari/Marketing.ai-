@@ -19,6 +19,10 @@ the request cannot ask for less than a build needs, or for a column no feature r
   recommendation adds the longest feature window and the snapshots a year of monthly learning
   needs, and says why.
 * **What not to send.** One line per kind `engine.pii` detects, from `configs/pilot/data_request.yaml`.
+* **Messages for one problem.** `configs/pilot/data_request_messages.yaml` holds a short, forwardable
+  request for each way a file can be unusable (IDs rounded by Excel, a summary instead of rows, a PDF, no
+  history, no consent source, ...). The Doctor attaches one by its selector (`IDS_ROUNDED`, `PDF`, ...)
+  to a question or a stop; `render_request_message` fills its blanks.
 * **Send what you have** (DEC-1598). `formats` keeps only what still matters once Data Doctor reads the
   file (the same column names every month, one ID across files, a date on every event, what cannot be
   read at all); `not_needed` says plainly what no longer does (Excel, titles, totals, `-` for empty).
@@ -57,17 +61,23 @@ __all__ = [
     "DATA_REQUEST_FILENAME",
     "DataRequest",
     "DataRequestWording",
+    "RequestMessage",
     "RequestedColumn",
     "RequestedTable",
     "build_data_request",
+    "load_request_messages",
     "load_wording",
     "render_markdown",
+    "render_request_message",
     "render_role_template",
     "template_filename",
 ]
 
 DATA_REQUEST_FILENAME: Final[str] = "pilot/data_request.yaml"
 """The wording file, relative to the configuration root."""
+
+MESSAGES_FILENAME: Final[str] = "pilot/data_request_messages.yaml"
+"""The short requests for one problem each, relative to the configuration root."""
 
 Need = Literal["required", "recommended", "optional"]
 ColumnNeed = Literal["required", "needed", "useful"]
@@ -161,6 +171,21 @@ class UseCaseLine(_Strict):
     history_recommended_days: int
 
 
+class RequestMessage(_Strict):
+    """One short message the person can forward to whoever holds the data."""
+
+    selector: str = ""
+    id: str
+    title: str
+    message: str
+    defaults: dict[str, str] = {}
+
+
+class _MessageFile(_Strict):
+    schema_version: Literal[1]
+    messages: dict[str, RequestMessage]
+
+
 class DataRequest(_Strict):
     use_cases: tuple[UseCaseLine, ...]
     tables: tuple[RequestedTable, ...]
@@ -175,6 +200,8 @@ class DataRequest(_Strict):
     preflight: tuple[str, ...]
     not_needed: tuple[str, ...] = ()
     """What the client need not fix before sending (Data Doctor reads it, DEC-1598); `formats` is what still matters."""
+    messages: tuple[RequestMessage, ...] = ()
+    """Short requests the Doctor attached by selector (see `load_request_messages`); empty unless asked for."""
 
 
 @lru_cache(maxsize=8)
@@ -186,6 +213,37 @@ def _wording(path: Path, mtime_ns: int) -> DataRequestWording:
 def load_wording(root: Path | None = None) -> DataRequestWording:
     path = config_root(root) / DATA_REQUEST_FILENAME
     return _wording(path, path.stat().st_mtime_ns)
+
+
+@lru_cache(maxsize=8)
+def _messages(path: Path, mtime_ns: int) -> dict[str, RequestMessage]:
+    del mtime_ns
+    loaded = _MessageFile.model_validate(load_yaml(path))
+    return {key: message.model_copy(update={"selector": key}) for key, message in loaded.messages.items()}
+
+
+def load_request_messages(root: Path | None = None) -> dict[str, RequestMessage]:
+    """Every forwardable message by selector (`IDS_ROUNDED`, `PDF`, ...), in file order."""
+    path = config_root(root) / MESSAGES_FILENAME
+    return dict(_messages(path, path.stat().st_mtime_ns))
+
+
+class _Blanks(dict[str, str]):
+    """Shows `[name]` for a blank nobody filled, so a forwarded message never carries a raw `{name}`."""
+
+    def __missing__(self, key: str) -> str:
+        return f"[{key.replace('_', ' ')}]"
+
+
+def render_request_message(selector: str, root: Path | None = None, **values: object) -> str:
+    """The text of message `selector` with its blanks filled from `values`, else the message's defaults.
+
+    Raises `KeyError` for a selector that is not in the file.
+    """
+    message = load_request_messages(root)[selector]
+    filled = _Blanks(message.defaults)
+    filled.update({key: str(value) for key, value in values.items()})
+    return message.message.format_map(filled)
 
 
 # ---------------------------------------------------------------------------
