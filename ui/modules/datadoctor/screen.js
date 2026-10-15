@@ -43,6 +43,8 @@ import {
   resumeVisit,
   revokeStanding,
   sendChat,
+  getAiStatus,
+  giveAiConsent,
 } from "./api.js";
 import { injectDataDoctorStyles } from "./styles.js";
 import {
@@ -86,6 +88,7 @@ function fresh() {
     notice: "",
     draft: "",
     ai: null, // true | false | null (not known)
+    use: null, // the Doctor's AI on this case: { consent, spent, ... } (`GET /cases/{id}/ai`), null while not known
     started: null, // the case whose hand-off was started from here
     speed: DEFAULT_SPEED, // how long the model may learn: quick | balanced | thorough
     speedOpen: false, // the three choices are shown ("Change")
@@ -250,6 +253,8 @@ function asideHtml(entry) {
     canConnect: canAccess("PUT", "/ai-service/{slot}"),
     openSent,
     level: levelOf(host) + 1,
+    use: s.use,
+    canConsent: canAccess("POST", "/cases/{case_id}/ai-consent"),
   });
 }
 
@@ -274,6 +279,7 @@ async function refresh(entry) {
     return;
   }
   s.screen = await getScreen(s.caseId);
+  s.use = await getAiStatus(s.caseId).catch(() => null);
   if (s.ai === null) await readAi(entry); // not known yet: ask again (the answer is shared for a few seconds)
   await readStartInfo(entry);
 }
@@ -554,6 +560,12 @@ function bind(entry) {
       if (agree) agree.disabled = Boolean(entry.state.busy) || !input.checked;
     } else if (input.type === "file" && input.files && input.files[0]) {
       upload(entry, input.files[0]);
+    }
+  });
+  entry.aside.addEventListener("click", (event) => {
+    const target = event.target && event.target.closest ? event.target.closest("button") : null;
+    if (target && !target.disabled && target.hasAttribute("data-dds-ai-consent")) {
+      act(entry, "consent", () => giveAiConsent(entry.state.caseId), { announce: "The Doctor's AI may now read masked summaries" });
     }
   });
   entry.aside.addEventListener("input", (event) => {

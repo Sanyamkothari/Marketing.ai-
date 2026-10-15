@@ -116,6 +116,7 @@ from engine.utils.time import utc_now
 if TYPE_CHECKING:
     from engine.access.roles import Principal
     from engine.agent.tools import AgentContext
+    from engine.doctor.ai_guard import AiGuard
     from engine.doctor.diagnose import LoadedFile, Offer
     from engine.generative.guardrails import Guardrails
     from engine.storage import Storage
@@ -217,6 +218,7 @@ class ConverseResult:
     sent: tuple[dict[str, JsonValue], ...] = ()
     model_calls: int = 0
     cost_usd: float = 0.0
+    tokens: int = 0
     ai: bool = True
     """False: no AI service answered (the reply is :data:`AI_NEEDED_REPLY`); the timeline records which."""
 
@@ -482,6 +484,7 @@ class _Step:
     doubts: list[CaseDoubt] = field(default_factory=list)
     model_calls: int = 0
     cost_usd: float = 0.0
+    tokens: int = 0
     after: list[Callable[[Case], None]] = field(default_factory=list)
     """Plan O M246: side effects once the step is written (a standing answer's use or memory); each is
     idempotent, and none may fail the step."""
@@ -633,6 +636,7 @@ def _write(run: _Run, case: Case, step: _Step, *, op_id: str | None = None) -> C
             update={
                 "tool_calls": current.counters.tool_calls + run.tool_calls,
                 "model_calls": current.counters.model_calls + step.model_calls,
+                "tokens": current.counters.tokens + step.tokens,
                 "cost_usd": current.counters.cost_usd + step.cost_usd,
                 "questions_per_file": asked_per_file,
             }
@@ -973,6 +977,7 @@ def _converse(run: _Run, case: Case) -> _Step:
         ],
         model_calls=result.model_calls,
         cost_usd=result.cost_usd,
+        tokens=result.tokens,
     )
 
 
@@ -1630,8 +1635,12 @@ def plan_g_converse(
     guardrails: Guardrails,
     principal: Principal | None = None,
     config_root: Path | None = None,
+    guard: AiGuard | None = None,
 ) -> ConversePort:
     """CONVERSE as Plan G's `chat_turn` (the design §3.4): the same tools, egress gate, guardrails and budgets.
+
+    With a `guard` (which is then also the `meter`), the AI is asked only when the client has allowed it and the
+    case has spending left; otherwise the reply says so and the visit goes on with its rules.
 
     `context_for` gives the file the chat is about (Plan G's chat reads one file). The turn runs on a session
     opened for it, holding the case's chat so far; its pending proposals become the case's items (`ai`, `check`,
@@ -1642,9 +1651,20 @@ def plan_g_converse(
         from engine.agent.contracts import ChatMessage, ChatRole
         from engine.agent.loop import chat_turn
         from engine.agent.session import start_session
+        from engine.doctor.ai_guard import AI_LIMIT_REPLY, AI_NO_CONSENT_REPLY, file_overviews
         from engine.doctor.registry import evidence_id_of
 
+        if guard is not None:
+            allowed = guard.ask(case)
+            if allowed != "ok":
+                return ConverseResult(
+                    reply=AI_NO_CONSENT_REPLY if allowed == "no_consent" else AI_LIMIT_REPLY, ai=False
+                )
         ctx = context_for(case, files)
+        # Every other file of the case is looked at too, each through its own egress gate.
+        others = file_overviews([context_for(case, (f,)) for f in files if f.upload_id != ctx.upload_id])
+        tokens_before = 0 if guard is None else guard.tokens_used()
+        calls_before = 0 if guard is None else guard.calls_used()
         session = start_session(ctx, session_id=f"dd-{case.case_id}"[:64])
         history = tuple(
             ChatMessage(
@@ -1663,6 +1683,7 @@ def plan_g_converse(
             guardrails=guardrails,
             config_root=config_root,
             principal=principal,
+            case_files=others,
         )
         evidence = {result.evidence_id: result for result in turn.tool_results}
         hashed = {key: evidence_id_of(result) for key, result in evidence.items()}
@@ -1701,12 +1722,14 @@ def plan_g_converse(
             )
             for result in turn.tool_results
         )
+        out_of_money = guard is not None and turn.blocked_by == "unavailable" and guard.spent()
         return ConverseResult(
-            reply=turn.reply.text,
+            reply=AI_LIMIT_REPLY if out_of_money else turn.reply.text,
             items=items,
             evidence=results,
             sent=tuple(item.model_dump(mode="json") for item in turn.reply.sent),
-            model_calls=turn.llm_calls,
+            model_calls=turn.llm_calls if guard is None else guard.calls_used() - calls_before,
+            tokens=0 if guard is None else guard.tokens_used() - tokens_before,
         )
 
     return converse

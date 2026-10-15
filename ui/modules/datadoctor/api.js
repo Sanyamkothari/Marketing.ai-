@@ -100,6 +100,12 @@ export const revokeStanding = (c, answerId) =>
 export const sendChat = (c, message) =>
   call(one(c.case_id, "/chat"), { method: "POST", body: { version: c.version, message, op_id: opId() } });
 
+/** Whether the client let the Doctor's AI read masked summaries, and what this case has used of its AI limit. */
+export const getAiStatus = (caseId) => call(one(caseId, "/ai"));
+
+/** Say once, for this client, that the Doctor's AI may read masked summaries of its data. */
+export const giveAiConsent = (caseId) => call(one(caseId, "/ai-consent"), { method: "POST", body: {} });
+
 /** The list of what to ask the data team for, for these goals (the data request kit, `GET /pilot/data-request`). */
 export const dataRequestUrl = (goalIds = []) =>
   `${API_BASE}/pilot/data-request${goalIds.length ? `?${goalIds.map((g) => `use_case=${enc(g)}`).join("&")}` : ""}`;

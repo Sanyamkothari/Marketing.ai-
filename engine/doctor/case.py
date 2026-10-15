@@ -502,6 +502,7 @@ class CaseCounters(StrictBase):
     """What the case cost and how much it asked."""
 
     model_calls: int = Field(default=0, ge=0, description="AI service calls.")
+    tokens: int = Field(default=0, ge=0, description="AI tokens used (read plus written).")
     tool_calls: int = Field(default=0, ge=0, description="Tool calls.")
     cost_usd: float = Field(default=0.0, ge=0.0, description="Estimated AI cost.")
     questions_per_file: dict[str, int] = Field(

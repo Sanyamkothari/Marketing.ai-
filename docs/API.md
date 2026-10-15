@@ -642,6 +642,7 @@ How the target is derived (plan section 5.2).  `agent_editable` is `False` and c
 | `unified` | boolean | no | Plan O (DEC-1800): when true, Guided setup and the Doctor page are the one Data Doctor agent. Off until the parity checklist is met (M249); while off, nothing changes. |
 | `workspace_currency` | string | no | Plan O M242 (DEC-1812): the currency this workspace's reports use, as a code (INR, USD, EUR). A client's confirmed locale profile overrides it for that client. Read only while `unified` is on; INR, the default, is left out of a dump so nothing moves. |
 | `time_settings` | TimeSettingsConfig | no | Plan O M244 (DEC-1814): the training budget's diminishing-returns step and the ratios of its three choices. Read only while `unified` is on; the defaults are left out of a dump so nothing moves. |
+| `ai_limits` | AiLimitsConfig | no | The most tokens and calls the Doctor's AI may use on one case. Read only while `unified` is on; the defaults are left out of a dump so nothing moves. |
 
 #### ThresholdConfig
 
@@ -950,6 +951,15 @@ Extra column-name hints the helper uses on top of the use case's own detection h
 | `quick_ratio` | number | no | Quick's time limit as a share of Balanced's. |
 | `thorough_ratio` | number | no | Thorough's time limit as a multiple of Balanced's. |
 | `sure_min_runs` | integer | no | Balanced is pre-selected (`sure`) only when at least this many past runs were close in size. |
+
+#### AiLimitsConfig
+
+`data_doctor.ai_limits`: what the Doctor's AI may spend on one case. When either is used up the Doctor says so and carries on with its rules alone.
+
+| Field | Type | Required | Meaning |
+|---|---|---|---|
+| `max_tokens_per_case` | integer | no | Tokens (read plus written) the AI may use on one case. |
+| `max_calls_per_case` | integer | no | Calls to the AI service the Doctor may make on one case. |
 
 #### ChannelSuppressionConfig
 
@@ -2170,6 +2180,9 @@ Keys of the default document that no advanced-settings field renders, with their
 | `agent.always_hide_columns` | list[str]; columns (case-insensitive) whose values the chat model never sees, whatever the profile says |
 | `data_doctor` | Plan O (DEC-1800). The one Data Doctor agent; not overridable per run |
 | `data_doctor.unified` | bool; true = Guided setup and the Doctor page are one Data Doctor. Off until M249's parity checklist is met; while off nothing changes |
+| `data_doctor.ai_limits` | the most the Doctor's AI may use on one case; when used up the Doctor carries on with its rules alone |
+| `data_doctor.ai_limits.max_tokens_per_case` | int >= 1; tokens read plus written |
+| `data_doctor.ai_limits.max_calls_per_case` | int >= 1; calls to the AI service |
 
 ### Catalog keys
 
