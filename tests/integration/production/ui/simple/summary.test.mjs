@@ -45,7 +45,7 @@ async function open(hash, ready) {
   await settle(6);
 }
 
-test("Results shows the server's cards, each with its words, its figures and the way to the pack", async () => {
+test("Results shows the server's cards, each with its words and its figures", async () => {
   await open("#/results", () => $("[data-attention]"));
   const cards = $$("[data-attention] [data-card]");
   assert.deepEqual(
@@ -58,10 +58,7 @@ test("Results shows the server's cards, each with its words, its figures and the
   // Plan M M172: the server's sentences in the glossary's words (`plainText`); their figures as sent.
   for (const part of [card.title, card.text, card.next_step, card.campaign_name.text]) assert.ok(shownText.includes(plainText(part)), part);
   for (const fact of card.facts) assert.ok(shownText.includes(fact.value.text), "a figure the server sent");
-  assert.equal(
-    cards[0].querySelector("[data-card-pack]").getAttribute("href"),
-    `#/pilot/proof/${card.campaign_id}`,
-  );
+  assert.equal(cards[0].querySelector("[data-card-pack]"), null, "no way to the frozen Value Proof Pack");
 });
 
 test("the total is labelled exactly as the server labelled it, with each campaign's lower bound", async () => {

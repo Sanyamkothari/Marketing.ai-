@@ -153,8 +153,8 @@ export function nextStep({ status, campaign, plan = null, report = null }, fmtDa
       return due ? `Next step: add results. They were due on ${fmtDay(due)}.` : "Next step: add results.";
     case "measured":
       return campaign && campaign.measured_at
-        ? `Measured on ${fmtDay(isoDay(campaign.measured_at))}. The full report is ready.`
-        : "Measured. The full report is ready.";
+        ? `Measured on ${fmtDay(isoDay(campaign.measured_at))}. Read the result on the Results tab.`
+        : "Measured. Read the result on the Results tab.";
     default:
       return "";
   }

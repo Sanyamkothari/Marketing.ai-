@@ -25,7 +25,6 @@ import {
   getAiServiceState,
   getAllRuns,
   getCampaigns,
-  getProofs,
   getSummary,
   waitingForApproval,
 } from "./api.js";
@@ -51,20 +50,19 @@ function painter(app, parts) {
 async function renderResults(app, parts) {
   const paint = painter(app, parts);
   if (!app.querySelector('[data-module="simple"]')) paint(skeleton("list", { title: "Results" }));
-  const [answer, waiting, lists, proofs, summary, campaigns] = await Promise.all([
+  const [answer, waiting, lists, summary, campaigns] = await Promise.all([
     getAllRuns().then(
       (body) => ({ runs: (body && body.runs) || [] }),
       (error) => ({ error }),
     ),
     waitingForApproval(),
     resultsListsHtml(), // Plan J M94: the campaigns beside the runs
-    getProofs(), // Plan J M104: the Value Proof Packs that are ready
     getSummary(), // Plan J M105: what needs attention and the value proven to date
     getCampaigns(), // Plan M M172: the campaigns' short names (goal and month)
   ]);
   // Plan J M103: a person who may audit a campaign another tool ran gets the way to it, beside the runs.
   const auditHref = canAccess("POST", "/campaigns/audit") ? "#/audit" : null;
-  paint(resultsHtml({ ...answer, waiting, lists, auditHref, proofs, summary, campaigns }));
+  paint(resultsHtml({ ...answer, waiting, lists, auditHref, summary, campaigns }));
   document.title = "Results · Marketing AI";
 }
 
@@ -140,14 +138,13 @@ registerResultLink({
   link: () => ({ label: "Schedule", href: "#/monitoring/schedules" }),
 });
 
+// The campaign value report (`#/pilot/value/<run>`) is frozen (v1 plan, stage 0): a scored run gets no link to it, so
+// no page says "The campaign worked" while Reports and the Overview say nothing is proven. The address still opens.
 registerResultLink({
   name: "report",
-  applies: (uc, run) => finished(run) && Boolean(uc && uc.id) && uc.ai_type !== "generative",
-  link: (uc, run) =>
-    run.mode === "score"
-      ? { label: "Campaign value report", href: `#/pilot/value/${encodeURIComponent(run.run_id)}` }
-      : // Plan M M180 (DEC-1610): the model results report is technical; the campaign value report is not.
-        { label: "Results report", href: `#/pilot/view/results/${encodeURIComponent(uc.id)}`, technical: true },
+  applies: (uc, run) => finished(run) && run.mode !== "score" && Boolean(uc && uc.id) && uc.ai_type !== "generative",
+  // Plan M M180 (DEC-1610): the model results report is technical.
+  link: (uc) => ({ label: "Results report", href: `#/pilot/view/results/${encodeURIComponent(uc.id)}`, technical: true }),
 });
 
 injectStyles();

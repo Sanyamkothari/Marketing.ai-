@@ -265,7 +265,13 @@ def samples(e: Entities) -> dict[str, list[str]]:
         # Plan M M179 (DEC-1609): the Data page, one page per tab.
         "data": ["#/data", "#/data/check"],
         # Plan M M178 (DEC-1608): Reports, one page per tab (the Model reports tab draws the #/pilot lists).
-        "reports": ["#/reports", "#/reports/programme", "#/reports/check", "#/reports/models"],
+        "reports": [
+            "#/reports",
+            "#/reports/value-proof",  # frozen for v1 (stage 0): no tab, still drawn by address
+            "#/reports/programme",
+            "#/reports/check",
+            "#/reports/models",
+        ],
         "cost": ["#/cost"],
         "doctor": ["#/doctor"],
         "generative": ["#/generative/assistant/ai-onboarding-assistant", "#/generative/connection"],
@@ -492,7 +498,7 @@ def test_the_help_menu_works_from_the_keyboard_and_the_tour_starts_without_demo_
     # Take the tour: it starts on the real pages, and each of its first steps finds its own elements.
     page.keyboard.press("Enter")
     page.locator("#pe-tour").wait_for(timeout=PAGE_TIMEOUT_MS)
-    assert "Step 1 of 6" in page.inner_text("#pe-tour")
+    assert "Step 1 of 5" in page.inner_text("#pe-tour")
     for index, (title, hash_) in enumerate(
         [("Home", "#/"), ("Connections", "#/connections"), ("Results", "#/results")]
     ):
@@ -501,7 +507,7 @@ def test_the_help_menu_works_from_the_keyboard_and_the_tour_starts_without_demo_
             timeout=PAGE_TIMEOUT_MS,
         )
         page.wait_for_function(f"location.hash === {json.dumps(hash_)}", timeout=PAGE_TIMEOUT_MS)
-        assert f"Step {index + 1} of 6" in page.inner_text("#pe-tour")
+        assert f"Step {index + 1} of 5" in page.inner_text("#pe-tour")
         page.wait_for_selector(".pe-target", timeout=PAGE_TIMEOUT_MS)
         page.locator("#pe-tour [data-pe-tour='next']").click()
     page.keyboard.press("Escape")

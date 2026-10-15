@@ -1,21 +1,25 @@
 // The Reports page (Plan M, M178; its look, M188, DEC-1618): one H1, one sentence, four underline tabs. Pure builders;
 // `index.js` loads and binds. The header and the tabs are the look's components (`ui/components.js`: `pageHeader`, `tabs`).
 //
-//   #/reports                 Value proof (the default)
-//   #/reports/value-proof     the Value Proof Packs
-//   #/reports/programme       the value proven to date, with its rules
+//   #/reports                 Check a past campaign (the default)
 //   #/reports/check           check a past campaign (today's audit form, in three steps)
 //   #/reports/models          model reports (technical: a closed section until M180's switch)
+//   #/reports/value-proof     the Value Proof Packs       frozen for v1 (plan stage 0): open by address, no tab,
+//   #/reports/programme       the value proven to date    listed only under Settings, Advanced
 
 import { pageHeader, tabs } from "../../components.js";
 import { esc } from "../../dom.js";
 
+// `frozen` tabs still draw at their address but have no tab in the strip (unless one is open) and are not the default:
+// the Value Proof Packs and the Programme summary were what said "Nothing is proven yet" beside the pilot value page.
 export const TABS = [
-  { id: "value-proof", label: "Value proof" },
-  { id: "programme", label: "Programme summary" },
+  { id: "value-proof", label: "Value proof", frozen: true },
+  { id: "programme", label: "Programme summary", frozen: true },
   { id: "check", label: "Check a past campaign" },
   { id: "models", label: "Model reports", technical: true },
 ];
+
+export const DEFAULT_TAB = "check";
 
 /** Other spellings of a tab, so a link written from the old names or the plan's words still lands. */
 const ALIASES = {
@@ -34,7 +38,7 @@ const ALIASES = {
   pilot: "models",
 };
 
-/** The tab a hash segment names; the first tab for none or an unknown one. */
+/** The tab a hash segment names; the default tab (Check a past campaign) for none or an unknown one. */
 export function tabOf(segment) {
   let raw = String(segment || "");
   try {
@@ -44,7 +48,7 @@ export function tabOf(segment) {
   }
   raw = raw.toLowerCase();
   const id = ALIASES[raw] || raw;
-  return TABS.some((t) => t.id === id) ? id : TABS[0].id;
+  return TABS.some((t) => t.id === id) ? id : DEFAULT_TAB;
 }
 
 export const tabHref = (id) => `#/reports/${id}`;
@@ -53,7 +57,7 @@ export const tabHref = (id) => `#/reports/${id}`;
 export function reportsHeaderHtml({ primary = null } = {}) {
   return pageHeader({
     title: "Reports",
-    subtitle: "What your campaigns proved, ready to read, share or print.",
+    subtitle: "Check a campaign another tool ran, and read your models' reports.",
     primary,
     attrs: "data-reports-header",
   });
@@ -64,7 +68,7 @@ export function reportsTabsHtml(tab) {
   return tabs({
     label: "Reports",
     current: tab,
-    items: TABS.map((t) => ({
+    items: TABS.filter((t) => !t.frozen || t.id === tab).map((t) => ({
       id: t.id,
       label: t.label,
       href: tabHref(t.id),

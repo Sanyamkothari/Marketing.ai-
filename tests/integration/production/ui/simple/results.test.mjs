@@ -105,6 +105,8 @@ test("a finished run's results link Model health, the Schedule and its report", 
     ["Schedule", "#/monitoring/schedules"],
     ["Results report", `#/pilot/view/results/${uc.id}`],
   ]);
-  assert.deepEqual(links(score).at(-1), ["Campaign value report", `#/pilot/value/${score.run_id}`]);
+  // The campaign value report is frozen for v1 (stage 0): a scored run has no link to it.
+  assert.ok(!links(score).some(([, href]) => href.startsWith("#/pilot/")), "no link to a pilot page from a scored run");
+  assert.deepEqual(links(score).at(-1), ["Schedule", "#/monitoring/schedules"]);
   assert.deepEqual(links({ ...train, state: "failed" }), [], "nothing for a run that did not finish");
 });

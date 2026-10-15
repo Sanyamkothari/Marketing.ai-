@@ -25,6 +25,7 @@ const ACTIVE_NAV = "#pb-bar .topnav .tn-item.on";
  * them. Every step is `optional`: when none of its elements is on the page (a role that may not open
  * it, a page that has not drawn) the tour moves on after a moment instead of pointing at nothing.
  */
+// The pilot Reports page (`#/pilot`) is frozen for v1 (plan stage 0): neither tour visits it.
 export function generalSteps() {
   return [
     {
@@ -46,13 +47,6 @@ export function generalSteps() {
       text: "Every list you have made and every campaign you have measured, newest first. Open one to see who to contact and what it was worth.",
       hash: "#/results",
       targets: ["[data-module='simple'] .card", "[data-module='simple']"],
-      optional: true,
-    },
-    {
-      title: "Reports",
-      text: "Model results and each campaign's value in rupees, ready to share as a page or a PDF.",
-      hash: "#/pilot",
-      targets: ["[data-pe-reports]"],
       optional: true,
     },
     {
@@ -107,12 +101,6 @@ export function tourSteps(demo) {
       text: "After the outcome period, the customers you contacted are compared with the comparison group: whether the campaign made a measurable difference, with a range.",
       hash: m ? `#/campaign/${uc}/${encodeURIComponent(m.score_run_id)}` : null,
       targets: ["[data-verdict]", ".kpis", "main.screen .card"],
-    },
-    {
-      title: "Reports",
-      text: "Model results and each campaign's value in rupees, ready to share as a page or a PDF.",
-      hash: "#/pilot",
-      targets: ["[data-pe-reports]"],
     },
   ];
 }

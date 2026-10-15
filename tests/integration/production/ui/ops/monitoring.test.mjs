@@ -235,7 +235,7 @@ test("alerts open on the open ones; acknowledging says who, and the list re-read
   assert.equal(last("GET", "/monitoring/alerts").query.unacknowledged_only, undefined, "false is left out");
 });
 
-test("the Campaigns list links each run to its Campaign results page and reads Measured once it was measured", async () => {
+test("the Contact lists page links each run to its Campaign results page and reads Measured once it was measured", async () => {
   const run = fixture("run").run;
   const row = () => $(`tr[data-run="${ids.run_id}"]`);
   const campaignReads = () => calls.filter((c) => c.method === "GET" && /\/campaign-results$/.test(c.path));
@@ -270,13 +270,13 @@ test("the Campaigns list links each run to its Campaign results page and reads M
 
 test("a finished scoring run: no outcomes yet, then an upload measures it against the test score", async () => {
   w.location.hash = "#/monitoring/runs";
-  await until(() => heading() === "Campaigns" && /^Campaigns ·/.test(cardTitles()), 3000, "the scored lists");
-  assert.deepEqual(crumbTrail(), [RESULTS, ["Campaigns", null]], "under Results, where the bar marks it");
+  await until(() => heading() === "Contact lists" && /^Contact lists ·/.test(cardTitles()), 3000, "the scored lists");
+  assert.deepEqual(crumbTrail(), [RESULTS, ["Contact lists", null]], "under Results, where the bar marks it");
   assert.ok($(`a[href="#/monitoring/runs/${ids.run_id}"]`));
   assert.deepEqual(last("GET", "/runs").query, { mode: "score", limit: "100" });
   w.location.hash = `#/monitoring/runs/${ids.run_id}`;
   await until(() => $("#pb-outcomes"), 3000, "the upload form");
-  assert.deepEqual(crumbTrail().slice(0, 2), [RESULTS, ["Campaigns", "#/monitoring/runs"]]);
+  assert.deepEqual(crumbTrail().slice(0, 2), [RESULTS, ["Contact lists", "#/monitoring/runs"]]);
   assert.match(text(), /No outcomes have been added for this list yet\./);
   assert.equal($$(".apierr").length, 0, "a report not written yet is not an error");
 
@@ -365,7 +365,7 @@ const NOTHING = { run_id: ids.run_id, status: "not_measured", source: null, camp
 // The same answer the value view gives for a run whose outcomes WERE recorded but have no matched control rows.
 const NOT_PRICED = { ...NOTHING, results_available_on: inDays(-30) };
 
-test("the Campaigns list asks neither for outcomes nor for campaign results of a run the value view says is still maturing", async () => {
+test("the Contact lists page asks neither for outcomes nor for campaign results of a run the value view says is still maturing", async () => {
   roi = NOTHING;
   w.location.hash = "#/monitoring/alerts";
   await until(() => heading() === "Alerts", 3000, "another screen");

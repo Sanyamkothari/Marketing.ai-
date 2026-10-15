@@ -4,7 +4,7 @@
    tests/fixtures/build_overview_fixture.py) and against answers shaped for the cases the demo does not have.
 
    What a person sees, in order: needs your attention (each card with ONE action), the value proven to date (a floor,
-   rupees rounded, with "How this is counted"), live campaigns (short name, status, next step), the one primary
+   rupees rounded; its "How this is counted" link led to the frozen Programme summary and is gone), live campaigns (short name, status, next step), the one primary
    button, and the first-visit checklist (ticked from real state, hidden once done or dismissed). No engine word
    outside technical details, with an EMPTY allow-list. */
 import { test } from "node:test";
@@ -184,9 +184,9 @@ test("the demo: value proven to date is the server's rupee floor, with one sente
   assert.equal(amount.getAttribute("title"), demo.headline.total.text, "the exact figure is in the tooltip");
   assert.match(value.querySelector("[data-value-meaning]").textContent, /^A floor, not a forecast:/);
   assert.match(value.querySelector("[data-value-meaning]").textContent, /Based on 1 measured campaign\./);
-  const link = value.querySelector("[data-how-counted]");
-  assert.equal(link.textContent, "How this is counted");
-  assert.match(link.getAttribute("href"), /^#\/(reports|pilot)$/, "Reports (M178), or today's reports hub until it has merged");
+  // Stage 0 freeze: the Programme summary it linked to is off the main path, so the card links nowhere.
+  assert.equal(value.querySelector("[data-how-counted]"), null, "no link to the frozen Programme summary");
+  assert.equal(value.querySelectorAll("a").length, 0);
 });
 
 test("the demo: nothing is live, so the list says so and points to all campaigns", async () => {
@@ -216,7 +216,7 @@ test("a busy day: five cards with one action each, five live rows, and how many 
     cards.map((c) => [c.dataset.card, c.querySelector("[data-card-action]").getAttribute("href"), c.querySelector("[data-card-action]").textContent.trim()]),
     [
       ["CAMPAIGN_NO_CONTROL", "#/campaigns/c_1/overview", "Open the campaign"],
-      ["GROUP_BACKFIRED", "#/pilot/proof/c_2", "Open the Value Proof Pack"],
+      ["GROUP_BACKFIRED", "#/campaigns/c_2/overview", "Open the campaign"],
       ["CHALLENGER_READY", "#/approvals", "Review the new candidate"],
       ["DRIFT_DRIFTED", "#/uc/win-back-campaign", "Open the goal"],
       ["EFFECT_FADING", "#/results", "See all results"],
@@ -460,7 +460,6 @@ test("M186: a top-level place has no breadcrumb; the hero figure is the floor, w
   assert.ok(hero, "the value proven to date is the page's hero figure");
   assert.match(hero.textContent, /₹81,034/);
   assert.equal($("[data-value] [data-value-range]"), null, "a floor has no upper end in GET /overview: no bar is invented");
-  assert.ok($("[data-value] .ovp-head [data-how-counted]"), "How this is counted sits in the card's head");
 });
 
 test("M186: each card is an attention item: the tone's icon names it, the campaign is the person's own text, one action apart", async () => {

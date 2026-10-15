@@ -371,7 +371,8 @@ def page(server: str) -> Iterator[Any]:
         playwright.stop()
 
 
-def test_the_tour_walks_the_six_screens(page: Any, server: str, manifest: DemoManifest) -> None:
+def test_the_tour_walks_the_five_screens(page: Any, server: str, manifest: DemoManifest) -> None:
+    # Five, not six: the pilot Reports page (`#/pilot`) is frozen for v1 (plan stage 0) and the tour no longer visits it.
     page.goto(f"{server}/ui/#/")
     tour = page.locator("#pe-tour")
     tour.wait_for(timeout=30_000)
@@ -381,10 +382,9 @@ def test_the_tour_walks_the_six_screens(page: Any, server: str, manifest: DemoMa
         f"#/uc/{manifest.use_case_id}/run/{manifest.train_run_id}",
         f"#/uc/{manifest.use_case_id}/output/{manifest.score_run_id}",
         f"#/campaign/{manifest.use_case_id}/{manifest.score_run_id}",
-        "#/pilot",
     ]
     for index, hash_ in enumerate(expected):
-        assert f"Step {index + 1} of 6" in (tour.text_content() or "")
+        assert f"Step {index + 1} of 5" in (tour.text_content() or "")
         page.wait_for_function(f"window.location.hash === {json.dumps(hash_)}")
         tour.locator("[data-pe-tour='next']").click()
     assert page.locator("#pe-tour").count() == 0

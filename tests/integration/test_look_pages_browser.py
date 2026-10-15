@@ -42,6 +42,8 @@ DRAWN_JS: Final[str] = (
 )
 PAGES: Final[tuple[tuple[str, str], ...]] = (
     ("reports", "#/reports"),
+    # Frozen for v1 (plan stage 0): no tab for these two, still drawn by address.
+    ("reports-value-proof", "#/reports/value-proof"),
     ("reports-programme", "#/reports/programme"),
     ("reports-check", "#/reports/check"),
     ("reports-models", "#/reports/models"),
@@ -125,14 +127,14 @@ def test_no_page_scrolls_sideways_at_390_px_or_draws_nothing(
 def test_the_primary_action_is_right_of_the_title_on_a_desktop_and_below_the_text_on_a_phone(
     browser: Any, base: str
 ) -> None:
-    desktop = _open(browser, base, "#/reports", 1440)
+    desktop = _open(browser, base, "#/reports/value-proof", 1440)
     try:
         h1, action = _box(desktop, "main h1"), _box(desktop, ".page-header .ph-actions .btn.primary")
         assert action["x"] > h1["r"] + 100, "on the right of the title"
         assert action["y"] < h1["b"] + 40, "level with the title, not under the tabs"
     finally:
         desktop.context.close()
-    phone = _open(browser, base, "#/reports", 390, 844)
+    phone = _open(browser, base, "#/reports/value-proof", 390, 844)
     try:
         desc, action = _box(phone, ".page-header .desc"), _box(phone, ".page-header .ph-actions .btn.primary")
         assert action["y"] >= desc["b"], "below the text on a phone"
@@ -142,7 +144,7 @@ def test_the_primary_action_is_right_of_the_title_on_a_desktop_and_below_the_tex
 
 
 def test_the_tabs_are_underlines_not_pills(browser: Any, base: str) -> None:
-    page = _open(browser, base, "#/reports", 1440)
+    page = _open(browser, base, "#/reports/value-proof", 1440)
     try:
         selected = '[role="tab"][aria-selected="true"]'
         other = '[role="tab"][aria-selected="false"]'
@@ -158,7 +160,7 @@ def test_the_tabs_are_underlines_not_pills(browser: Any, base: str) -> None:
 def test_a_status_chip_is_24px_with_its_icon_and_a_value_range_bar_is_drawn_inside_its_row(
     browser: Any, base: str
 ) -> None:
-    page = _open(browser, base, "#/reports", 1440)
+    page = _open(browser, base, "#/reports/value-proof", 1440)
     try:
         chip = _box(page, "[data-claim] .badge")
         assert 24 <= chip["h"] <= 26, f"a 24px chip, not {chip['h']}"
@@ -241,7 +243,7 @@ def _is_greenish(rgb: str) -> bool:
 def test_a_brand_colour_reaches_every_new_brand_coloured_thing_of_these_pages(
     browser: Any, base: str
 ) -> None:
-    reports = _open(browser, base, "#/reports", 1440)
+    reports = _open(browser, base, "#/reports/value-proof", 1440)
     try:
         _recolour(reports)
         assert (
@@ -310,7 +312,7 @@ def _small_targets(page: Any, selector: str) -> list[str]:
 
 def test_on_a_phone_every_row_action_is_a_40px_target(browser: Any, base: str) -> None:
     """M188 review 2: the small (32px and 24px) buttons of a row grow to 40px on a phone."""
-    reports = _open(browser, base, "#/reports", 390, 844)
+    reports = _open(browser, base, "#/reports/value-proof", 390, 844)
     try:
         assert _small_targets(reports, "[data-proofs] .rp-acts .btn") == []
     finally:

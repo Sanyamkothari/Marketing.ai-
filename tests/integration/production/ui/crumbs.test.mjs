@@ -56,7 +56,7 @@ const CASES = [
   // Results
   ["#/pilot", [RESULTS, ["Reports", null]]],
   ["#/pilot/value/r-missing", [RESULTS, ["Value in rupees", null]]],
-  ["#/monitoring/runs", [RESULTS, ["Campaigns", null]]],
+  ["#/monitoring/runs", [RESULTS, ["Contact lists", null]]],
   ["#/approvals", [RESULTS, ["Waiting for approval", null]]],
   ["#/campaign/targeted-advertisement/r-missing", [RESULTS, ["Not found", null]]],
   // Connections

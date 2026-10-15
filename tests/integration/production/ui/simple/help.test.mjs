@@ -78,13 +78,12 @@ test("the tour starts from the Help menu outside demo mode, on the real pages, e
     ["Home", "#/"],
     ["Connections", "#/connections"],
     ["Results", "#/results"],
-    ["Reports", "#/pilot"],
-    ["Settings", "#/settings"],
+    ["Settings", "#/settings"], // the pilot Reports page is frozen for v1 (stage 0): the tour skips it
     ["Help", null],
   ];
   assert.equal($("#tn-help").hidden, true, "starting the tour closes the menu");
   for (const [index, [title, hash]] of steps.entries()) {
-    await until(() => card() && card().textContent.includes(`Step ${index + 1} of 6`), 3000, `step ${index + 1}`);
+    await until(() => card() && card().textContent.includes(`Step ${index + 1} of 5`), 3000, `step ${index + 1}`);
     assert.equal(card().querySelector("h2").textContent, title);
     if (hash) assert.equal(w.location.hash, hash);
     await until(() => $(".pe-target"), 3000, `the elements of "${title}" to be found`);
@@ -98,7 +97,7 @@ test("the tour starts from the Help menu outside demo mode, on the real pages, e
 test("a step whose elements are not on the page is skipped, and Back skips the same way", async () => {
   await go("#/");
   TOUR_TIMING.skipAfterMs = 700; // long enough for a page to draw, short enough to wait for a missing element
-  hidden = (el) => el.matches("[data-pe-reports]"); // the Reports page draws, but its element is not there
+  hidden = (el) => el.matches("[data-settings-main], [data-settings-advanced]"); // Settings draws, but its elements are not there
   w.document.querySelector("#pb-bar .tb-help-btn").click();
   $("[data-pe-tour-start]").click();
   await until(() => $("#pe-tour"), 2000, "the tour card");
@@ -111,10 +110,10 @@ test("a step whose elements are not on the page is skipped, and Back skips the s
   next();
   await until(() => title() === "Results", 2000, "Results");
   next();
-  await until(() => title() === "Reports", 2000, "Reports is shown first");
-  await until(() => title() === "Settings", 3000, "Reports is skipped after a moment: no element of its page");
+  await until(() => title() === "Settings", 2000, "Settings is shown first");
+  await until(() => title() === "Help", 3000, "Settings is skipped after a moment: no element of its page");
   back();
-  await until(() => title() === "Reports", 2000, "back to Reports");
+  await until(() => title() === "Settings", 2000, "back to Settings");
   await until(() => title() === "Results", 3000, "going back skips it too");
   hidden = () => false;
   TOUR_TIMING.skipAfterMs = 120;
@@ -162,16 +161,16 @@ test("on a phone the bar hides its tools: the Help step points at the Menu butto
   $("[data-pe-tour-start]").click();
   hidden = (el) => el.matches(".tb-help-btn"); // display:none at narrow width until the panel is open
   const card = () => $("#pe-tour");
-  for (let i = 1; i <= 5; i++) {
-    await until(() => card() && card().textContent.includes(`Step ${i} of 6`) && $(".pe-target"), 3000, `step ${i}`);
+  for (let i = 1; i <= 4; i++) {
+    await until(() => card() && card().textContent.includes(`Step ${i} of 5`) && $(".pe-target"), 3000, `step ${i}`);
     card().querySelector("[data-pe-tour='next']").click();
   }
   TOUR_TIMING.skipAfterMs = 120;
-  await until(() => card() && card().textContent.includes("Step 6 of 6") && $(".pe-target"), 3000, "the Help step, on the Menu button");
+  await until(() => card() && card().textContent.includes("Step 5 of 5") && $(".pe-target"), 3000, "the Help step, on the Menu button");
   assert.ok($(".pe-target").matches("[data-tb-menu]"));
   await new Promise((r) => setTimeout(r, 600));
   assert.ok(card(), "still open after the skip delay");
-  assert.match(card().textContent, /Step 6 of 6/);
+  assert.match(card().textContent, /Step 5 of 5/);
   hidden = () => false;
   key(w.document, "Escape");
 });
@@ -182,7 +181,7 @@ test("the tour offers itself from the menu every time, however often it was seen
   w.document.querySelector("#pb-bar .tb-help-btn").click();
   $("[data-pe-tour-start]").click();
   await until(() => $("#pe-tour"), 2000, "the tour card");
-  assert.match($("#pe-tour").textContent, /Step 1 of 6/);
+  assert.match($("#pe-tour").textContent, /Step 1 of 5/);
   key(w.document, "Escape");
 });
 

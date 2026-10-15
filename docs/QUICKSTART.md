@@ -121,8 +121,9 @@ These ten steps show the whole product in about fifteen minutes.
    customer gets a risk band, an action and a reason in plain words. **Download contact list (CSV)**.
 5. **See whether the campaign worked.** Open its **Campaign results** step: contacted customers
    compared with a randomly held-back control group, in customers kept.
-6. **See the value in rupees.** Under **Reports**, open the churn campaign's **value view**. The
-   value is always a range, because the measurement has one.
+6. **See the value in rupees.** The **value view** is set aside in this version and no page links to
+   it: open `#/pilot/value/<scoring run id>` by its address. The value is always a range, because the
+   measurement has one.
 7. **Build a dataset from raw tables.** Under **Build data**, see what a client is asked to send,
    and open the **data readiness report**. The demo also holds a broken extract with one planted
    problem (duplicate customer IDs); its readiness report shows how a problem is explained.

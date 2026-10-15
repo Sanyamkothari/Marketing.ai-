@@ -173,16 +173,15 @@ test("the campaign page: the name, its status chip and the view's one primary ac
   assert.deepEqual(primaryOf({ tab: "results" }), [["body", "Add results"]], "the form's own button");
   assert.deepEqual(primaryOf({ tab: "technical" }), []);
   const done = { ...measured };
-  assert.deepEqual(primaryOf({ campaign: done, view: { campaign: done, plan }, status: STATUS.measured, proof, tab: "results" }), [
-    ["head", "Open the full report"],
-  ]);
+  // The Value Proof Pack's "Open the full report" is frozen for v1 (plan stage 0): a measured Results tab has no primary.
+  assert.deepEqual(primaryOf({ campaign: done, view: { campaign: done, plan }, status: STATUS.measured, proof, tab: "results" }), []);
   assert.deepEqual(primaryOf({ listHold: "unknown", tab: "audience" }), [], "a held list offers no download");
 });
 
 test("the campaign page: where it stands, a KPI row of stat tiles with the net value's range, and what was sent as a definition list", () => {
   const done = { ...measured };
   draw(views.campaignPageHtml(pageModel({ campaign: done, view: { campaign: done, plan }, status: STATUS.measured, proof })));
-  assert.equal($("[data-overview] [data-next-step]").textContent, "Measured on 13 Nov 2026. The full report is ready.");
+  assert.equal($("[data-overview] [data-next-step]").textContent, "Measured on 13 Nov 2026. Read the result on the Results tab.");
   assert.ok($("[data-overview] .cp-stand-icon.tone-good svg"), "the status's own icon and tone");
   assert.ok($("[data-overview] [data-refresh-ask].btn.secondary"), "Refresh the list stays a secondary action");
   const tiles = $$("[data-kpis] > .stat");

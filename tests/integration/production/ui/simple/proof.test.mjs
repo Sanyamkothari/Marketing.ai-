@@ -1,8 +1,8 @@
 /* Plan J M104: the Value Proof Pack on screen, against the real app's answers (`test_simple_ui.py` builds a
    real measured campaign with a planted harmful band and captures its pack, its page, the approval of its one
    suggestion and a refusal). What a person sees:
-   * Results lists the ready packs, each with the server's own sentence and a link to it;
-   * the Reports hub lists them too, with the page and its PDF;
+   * Results no longer lists the ready packs (v1 plan, stage 0: packs are frozen and off the main path), but a pack
+     still opens by address, and the Reports hub (`#/pilot`, also by address) still lists them with the page and its PDF;
    * a pack's page shows the server's report, the suggestion to leave the harmed band out next cycle and, while
      sign-in is off, the button to approve it; approving posts the group the server named and redraws;
    * a campaign without a final result shows the server's reason and the day, never a number. */
@@ -10,7 +10,6 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { $, $$, settle, until } from "../harness.mjs";
 import { fixture, installWholePage } from "./fake.mjs";
-import { plainText } from "../../../../../ui/labels.js";
 
 const proofs = fixture("proofs");
 const [entry] = proofs.proofs;
@@ -36,16 +35,11 @@ async function open(hash, ready) {
   await settle(6);
 }
 
-test("Results lists the ready packs in the server's words, each a link to its pack", async () => {
-  await open("#/results", () => $("[data-proofs]"));
-  const link = $(`[data-proofs] a[data-proof="${entry.campaign_id}"]`);
-  assert.ok(link, "the pack is listed");
-  assert.equal(link.getAttribute("href"), `#/pilot/proof/${entry.campaign_id}`);
-  assert.equal(text(link), entry.name);
-  const row = text(link.closest("tr"));
-  assert.ok(row.includes(entry.headline), "the pack's own sentence");
-  // Plan M M172: the claim in the glossary's words ("Causal" reads "Proven"), its meaning unchanged.
-  assert.ok(row.includes(plainText(entry.claim_label)), "what its numbers can claim");
+test("Results does not list the packs or link to them: they are frozen for v1", async () => {
+  await open("#/results", () => $("[data-results], [data-results-empty]"));
+  assert.equal($("[data-proofs]"), null, "no Value Proof Packs card");
+  assert.equal($('a[href^="#/pilot/proof"]'), null, "no link to a pack");
+  assert.equal($('a[href="#/pilot"]'), null, "no link to the pilot Reports hub");
 });
 
 test("the Reports hub lists the pack with its page and its PDF", async () => {

@@ -216,7 +216,7 @@ test("the tile of what the campaign changed is the benefit line, wherever the pa
   assert.equal(text(dash.querySelector(".v")), "—");
 });
 
-test("Campaigns waiting for results: each list by its short campaign name", async () => {
+test("Contact lists waiting for results: each list by its short campaign name", async () => {
   await visit("#/monitoring/runs");
   const first = $$("[data-run] td:first-child").map((td) => text(td));
   assert.ok(first.length >= 2);

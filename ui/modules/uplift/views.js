@@ -1609,12 +1609,14 @@ export function campaignVerdict(report, roi) {
     const hasRange = present(b.low) && present(b.high);
     const range = hasRange ? `${fmtCount(b.low)} to ${fmtCount(b.high)}` : "";
     const likely = hasRange ? ` (likely ${range})` : "";
+    // Stage 0 of the v1 plan: the measured difference, not "The campaign worked", which read as a claim of proven
+    // value beside Reports and the Overview saying nothing is proven yet.
     if (hasRange && b.low > 0) {
       return {
         tone: "ok",
         title: good
-          ? `The campaign worked: about ${n} extra customers responded because of it${likely}.`
-          : `The campaign worked: it kept about ${n} customers${likely}.`,
+          ? `About ${n} extra customers responded because of the campaign${likely}.`
+          : `The campaign kept about ${n} customers${likely}.`,
       };
     }
     if (hasRange && b.high < 0) {
@@ -1852,7 +1854,6 @@ export function campaignPageHtml(uc, run, c) {
   const measured = report && report.status !== "immature";
   const actions = measured
     ? headActions({
-        primary: { label: "See the value in rupees", href: routes.value(run.run_id) },
         related: { label: "Who was contacted", href: isUpliftRun(run) ? routes.output(uc.id, run.run_id) : routes.phase1Output(uc.id, run.run_id) },
       })
     : "";

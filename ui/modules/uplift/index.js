@@ -8,7 +8,7 @@
 //   * From a finished scoring run (`#/uc/<id>/run/<run>`) of a use case object without its config:
 //     the "Campaign results" flow block, the router's run-action seam (`runActionsHtml(uc, run)`),
 //     because any scoring run with a control group can be measured - not only uplift ones.
-//   * From Campaigns (`#/monitoring/runs`) and the value view (`#/pilot/value/<run>`), which link here.
+//   * From Contact lists (`#/monitoring/runs`) and the value view (`#/pilot/value/<run>`, frozen), which link here.
 //   * Directly, by URL:
 //       #/uplift                          every use case, one row each, with its uplift status
 //       #/uplift/<uc>                     Setup: upload, treatment column, Run (train or score)
@@ -98,7 +98,7 @@ const loading = (kind, title) =>
 
 /**
  * A screen that could not be drawn. A campaign or run that is not there gets one calm card with one
- * way back (all campaigns; the use case's uplift Setup; the uplift list); anything else a plain
+ * way back (all contact lists; the use case's uplift Setup; the uplift list); anything else a plain
  * sentence, "Try again" and the code under Details.
  */
 function failure(app, error, parts) {
@@ -106,7 +106,7 @@ function failure(app, error, parts) {
   const [root, ucId] = parts.map(safeDecode);
   const campaign = root === "campaign";
   const back = campaign
-    ? { href: routes.campaigns(), label: "all campaigns" }
+    ? { href: routes.campaigns(), label: "all contact lists" }
     : ucId && !/USE_CASE/.test(api.code)
       ? { href: routes.setup(ucId), label: "uplift Setup" }
       : { href: routes.index(), label: INDEX_LABEL };
