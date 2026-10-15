@@ -34,7 +34,7 @@ from __future__ import annotations
 import hashlib
 import json
 import numbers
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Final
 
@@ -144,8 +144,11 @@ def run_saved_recipe(
     upload_id: str,
     derived_upload_id: str | None = None,
     leak_check: LeakCheck | None = None,
+    tables: Mapping[str, Any] | None = None,
 ) -> RecipeRun:
-    """Run a saved recipe on `frame` under the levels and limit it was approved with. Raises `RecipeError`."""
+    """Run a saved recipe on `frame` under the levels and limit it was approved with. Raises `RecipeError`.
+
+    `tables` are the other tables a `sql_query` step may read (see `run_recipe`)."""
     levels, limit = recipe_levels(recipe, config)
     return run_recipe(
         consistent_types(frame),
@@ -158,6 +161,7 @@ def run_saved_recipe(
         snapshot_column=recipe.snapshot_column,
         derived_upload_id=derived_upload_id,
         leak_check=leak_check,
+        tables=tables,
     )
 
 

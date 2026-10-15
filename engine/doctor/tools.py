@@ -957,3 +957,7 @@ def register_all(registry: DataToolRegistry) -> None:
     from engine.doctor.tools_time import register_time_tools
 
     register_time_tools(registry)
+    # The Data Doctor's own SQL step (#84): a sandboxed query, for the rules and the AI.
+    from engine.doctor.tools_sql import register_sql_tools
+
+    register_sql_tools(registry)

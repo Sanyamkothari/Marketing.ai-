@@ -26,9 +26,9 @@ from __future__ import annotations
 
 import ast
 import math
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any, Final
 
 import pandas as pd
@@ -55,6 +55,7 @@ from engine.agent.key_steps import normalise_keys, rule_from_params
 from engine.agent.latest import KeepLatestError, KeepLatestSpec, keep_latest_per_id
 from engine.agent.placeholders import MAX_PLACEHOLDER_VALUES, set_missing
 from engine.agent.reshape import CombineError, CombineSpec, LeakCheck, combine_rows
+from engine.agent.sql_step import THIS_TABLE, SqlStepError, aliases_of, check_sql, run_sql, sql_params
 from engine.agent.unpivot import UnpivotError, UnpivotSpec, unpivot
 from engine.agent.value_steps import (
     MAX_CORRECTIONS,
@@ -117,6 +118,8 @@ STEP_PHASE: Final[dict[RecipeStepKind, int]] = {
     RecipeStepKind.DERIVE: 5,
     RecipeStepKind.DROP_COLUMN: 6,
     RecipeStepKind.RENAME_COLUMN: 6,
+    # A query reads the tables as the steps above left them and makes the table the file becomes, so it is last.
+    RecipeStepKind.SQL_QUERY: 7,
 }
 """Parse and tidy, then empty placeholder codes, then combine rows, then derive, then drop (Plan G §6.3,
 M76, DEC-1220). Placeholders come after parsing, so a code written as text (`"99"`) is already a number,
@@ -129,6 +132,7 @@ _LEVEL_OF: Final[dict[RecipeStepKind, AgentLevel]] = {
     RecipeStepKind.KEEP_LATEST_PER_ID: AgentLevel.RESHAPE,
     RecipeStepKind.SPLIT_COLUMN: AgentLevel.DERIVE,
     RecipeStepKind.REMOVE_ROWS: AgentLevel.DERIVE,
+    RecipeStepKind.SQL_QUERY: AgentLevel.RESHAPE,
 }
 """The level a step kind needs; every kind not listed is `clean`."""
 
@@ -239,6 +243,9 @@ def check_recipe(
                 f"This use case's helper may not use {step.kind.value} steps.",
                 order=step.order,
             )
+        if step.kind is RecipeStepKind.SQL_QUERY:
+            _check_sql_step(step)
+            continue
         if step.kind is RecipeStepKind.KEEP_LATEST_PER_ID:
             if combined:
                 raise RecipeError(
@@ -346,6 +353,17 @@ def check_recipe(
                 )
             available.append(step.new_column)
     _check_currency(steps)
+
+
+def _check_sql_step(step: RecipeStep) -> None:
+    """A `sql_query` step's parameters and query, refused before anything runs (`engine.agent.sql_step`)."""
+    try:
+        params = sql_params(_params(step))
+        if step.column != params.output_name:
+            raise SqlStepError("SQL_NOT_VALID", "A query step's column is the name of the table it makes.")
+        check_sql(params.sql, aliases_of(params.inputs), as_of=params.as_of or date.min)
+    except SqlStepError as exc:
+        raise RecipeError(exc.code, exc.message, order=step.order) from exc
 
 
 def _rows_column(step: RecipeStep) -> str | None:
@@ -850,6 +868,52 @@ def _derive(
     return ParseOutcome(values=values, changed=int(values.notna().sum()), failed=0, failed_examples=())
 
 
+def _run_sql_step(
+    step: RecipeStep,
+    work: pd.DataFrame,
+    tables: Mapping[str, pd.DataFrame] | None,
+    as_of: date | None,
+    *,
+    primary_key: str | None,
+    target: str | None,
+) -> tuple[pd.DataFrame, StepReceipt]:
+    """The table a `sql_query` step makes, and its receipt (rows read from each table, rows written)."""
+    params = sql_params(_params(step))
+    read: dict[str, pd.DataFrame] = {}
+    for name in params.inputs:
+        frame = work if name == THIS_TABLE else (tables or {}).get(name)
+        if frame is None:
+            raise RecipeError(
+                "SQL_INPUT_MISSING",
+                f"The query reads the table '{name}', which this run does not have.",
+                column=name,
+                order=step.order,
+            )
+        read[name] = frame
+    try:
+        run = run_sql(params.sql, read, output_name=params.output_name, as_of=as_of or params.as_of)
+    except SqlStepError as exc:
+        raise RecipeError(exc.code, exc.message, order=step.order) from exc
+    for role in (primary_key, target):
+        if role and role not in run.frame.columns:
+            raise RecipeError(
+                "RECIPE_STEP_INVALID",
+                f"The query's table has no column '{role}': the ID and the outcome column stay in the table.",
+                column=role,
+                order=step.order,
+            )
+    receipt = StepReceipt(
+        order=step.order,
+        kind=step.kind,
+        column=step.column,
+        rows=sum(run.receipt.rows_in.values()),
+        changed=run.receipt.rows_out,
+        failed=0,
+        note=run.receipt.sentence,
+    )
+    return run.frame, receipt
+
+
 def run_recipe(
     frame: pd.DataFrame,
     steps: Sequence[RecipeStep],
@@ -863,8 +927,13 @@ def run_recipe(
     derived_upload_id: str | None = None,
     leak_check: LeakCheck | None = None,
     clock: Callable[[], datetime] = utc_now,
+    tables: Mapping[str, pd.DataFrame] | None = None,
+    as_of: date | None = None,
 ) -> RecipeRun:
     """Check, then run, `steps` on a copy of `frame`. Raises `RecipeError` instead of guessing.
+
+    `tables` are the other tables of the case (name -> frame) a `sql_query` step may read besides `frame`
+    (which it reads as `this`); `as_of` is the date it gets as `$as_of`, else the one frozen in the step.
 
     `leak_check` is the future-data check a `combine_rows` step runs after combining: `full` on a
     training file (the recipe's first build, onboarding ruling R1), `narrow` on a scoring file, and
@@ -946,6 +1015,12 @@ def run_recipe(
                 )
             )
             work = rows.frame
+            continue
+        if step.kind is RecipeStepKind.SQL_QUERY:
+            work, sql_receipt = _run_sql_step(
+                step, work, tables, as_of, primary_key=primary_key, target=target
+            )
+            receipts.append(sql_receipt)
             continue
         if step.kind is RecipeStepKind.KEEP_LATEST_PER_ID:
             try:

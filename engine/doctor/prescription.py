@@ -55,7 +55,7 @@ from typing import TYPE_CHECKING, Any, Final
 import pandas as pd
 from pydantic import AwareDatetime, Field, JsonValue, ValidationError, model_validator
 
-from engine.agent.contracts import DataRecipe, ProposalState, RecipeStep, recipe_hash
+from engine.agent.contracts import DataRecipe, ProposalState, RecipeStep, RecipeStepKind, recipe_hash
 from engine.agentic.canonical import digest
 from engine.config import StrictBase
 from engine.contracts import Artefact
@@ -96,6 +96,7 @@ __all__ = [
     "PrescriptionError",
     "Provenance",
     "SettingChoice",
+    "case_tables",
     "load_prescription",
     "make_prescription",
     "one_part",
@@ -520,13 +521,16 @@ def _recipe(
     created_at: datetime,
 ) -> DataRecipe | None:
     from engine.agent.advisor import ordered_steps
-    from engine.agent.config import AgentConfig
+    from engine.agent.config import AgentConfig, AgentLevel
 
     ordered = ordered_steps(_unique_steps(steps))
     if not ordered:
         return None
     hash_ = recipe_hash(ordered)
     agent = AgentConfig() if config is None else config.agent
+    levels = tuple(agent.levels)
+    if any(s.kind is RecipeStepKind.SQL_QUERY for s in ordered) and AgentLevel.RESHAPE not in levels:
+        levels = (*levels, AgentLevel.RESHAPE)  # a query makes a new table: the reshape level
     return DataRecipe(
         recipe_id=f"rc-{hashlib.sha256(hash_.encode()).hexdigest()[:16]}",
         use_case_id=use_case_id,
@@ -537,7 +541,7 @@ def _recipe(
         target=target if target != primary_key else None,
         snapshot_column=snapshot_column,
         approved_by=approved_by,
-        levels=tuple(agent.levels),
+        levels=levels,
         max_failure_pct=agent.max_conversion_failure_pct,
         created_at=created_at,
     )
@@ -545,6 +549,19 @@ def _recipe(
 
 def slot_name(text: str) -> str:
     return (_SLOT.sub("_", text).strip("_") or "file")[:128]
+
+
+def case_tables(frames: Mapping[str, pd.DataFrame], parts: Sequence[FilePart]) -> dict[str, pd.DataFrame]:
+    """The prepared files a `sql_query` step may read: each under its slot's name, and under the name of each
+    file it was approved on (a query names a table by its file's name, and next month's file fills the slot).
+    """
+    tables = dict(frames)
+    for part in parts:
+        frame = frames.get(part.slot)
+        if frame is not None:
+            for name in part.file_names:
+                tables.setdefault(slot_name(Path(name).stem), frame)
+    return tables
 
 
 def _slots(case: Case, build: BuildRecord | None) -> list[tuple[str, tuple[str, ...]]]:
@@ -688,7 +705,12 @@ def _frames(files: Sequence[LoadedFile], upload_ids: Sequence[str]) -> pd.DataFr
 
 
 def _learn(
-    frame: pd.DataFrame | None, recipe: DataRecipe | None, *, primary_key: str | None, target: str | None
+    frame: pd.DataFrame | None,
+    recipe: DataRecipe | None,
+    *,
+    primary_key: str | None,
+    target: str | None,
+    tables: Mapping[str, pd.DataFrame] | None = None,
 ) -> tuple[pd.DataFrame | None, DataContract | None]:
     """The prepared sample and its contract; none when the approved recipe cannot run on the sample."""
     from engine.agent.dataset_recipe import consistent_types
@@ -708,6 +730,7 @@ def _learn(
                 levels=recipe.levels or (),
                 max_failure_pct=recipe.max_failure_pct or 0.0,
                 snapshot_column=recipe.snapshot_column,
+                tables=tables,
             ).frame
         except RecipeError:
             return None, None
@@ -823,6 +846,7 @@ def prescription_from_case(
     fingerprints = {f.upload_id: f.fingerprint for f in case.files}
     parts: list[FilePart] = []
     prepared: list[pd.DataFrame] = []
+    prepared_by_slot: dict[str, pd.DataFrame] = {}
     for slot, upload_ids in slots:
         first = upload_ids[0]
         key = next((keys[u] for u in upload_ids if u in keys), None)
@@ -841,6 +865,7 @@ def prescription_from_case(
         frame, contract = _learn(_frames(files, upload_ids), recipe, primary_key=key, target=target)
         if frame is not None:
             prepared.append(frame)
+            prepared_by_slot[slot] = frame
         parts.append(
             FilePart(
                 slot=slot,
@@ -876,7 +901,13 @@ def prescription_from_case(
     if build is not None and built is not None:
         # Learnt in the order a training replay checks it: the outcome, then the post-build recipe.
         rows = _with_outcome(built.frame, next((g for g in goals if g.active), None))
-        _, final = _learn(rows, post_build, primary_key=built.primary_key, target=built.target)
+        _, final = _learn(
+            rows,
+            post_build,
+            primary_key=built.primary_key,
+            target=built.target,
+            tables=case_tables(prepared_by_slot, parts),
+        )
     profile: LocaleProfile | None = None
     if case.locale_profile is not None:
         try:

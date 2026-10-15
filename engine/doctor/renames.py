@@ -427,6 +427,8 @@ def recipe_columns(steps: Iterable[Any]) -> tuple[frozenset[str], frozenset[str]
     reads: set[str] = set()
     months: set[str] = set()
     for step in steps:
+        if step.kind is RecipeStepKind.SQL_QUERY:
+            continue  # its `column` is the table it makes, not a column of the file
         params = dict(step.params)
         reads.add(str(step.column))
         if isinstance(params.get("key_column"), str):

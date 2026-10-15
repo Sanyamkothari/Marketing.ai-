@@ -140,6 +140,8 @@ CATALOGUE: Final[tuple[CatalogueRow, ...]] = (
     # M. Added in Plan O M236 (DEC-1806): M240's two tools, built in wave 1 (§A reading, §E fixing)
     _R(82, "read_workbook_sheets", "read", "rules", "new"),
     _R(83, "find_excel_serial_dates", "read", "rules", "new"),
+    # N. The Data Doctor's own SQL step (sandboxed, read-only)
+    _R(84, "propose_sql_step", "propose", "rules + ai", "new"),
 )
 """The design §5.5, row by row."""
 
