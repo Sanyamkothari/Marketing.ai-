@@ -29,11 +29,12 @@ from api.deps import (
 )
 from api.routes.campaigns import default_outcome_window, get_campaign_store
 from api.routes.doctor import clone_upload
-from api.routes.runs import _refuse_uplift_training, load_run, requested_by, start_run
+from api.routes.runs import _refuse_uplift_training, load_run, read_artefact, requested_by, start_run
 from api.routes.schedules import app_request
 from api.routes.uploads import http_error, load_upload, use_case_config
 from api.schemas import ErrorResponse, RunCreatedResponse, RunRequest
 from engine.access.roles import Role
+from engine.campaign_results import TopCustomer, top_customers
 from engine.campaign_run import (
     PREFIX,
     CampaignRun,
@@ -48,6 +49,7 @@ from engine.campaign_run import (
 from engine.config import PrimaryKey, RunMode, StrictBase, resolve_config
 from engine.contracts import ModelStatus
 from engine.decide.treat_list import TreatListError, ensure_treat_list
+from engine.doctor.case import CASE_ID_PATTERN
 from engine.measurement.cycle import MEASURE_NOT_OFFERED, CycleError, open_campaign
 from engine.utils.logging import get_logger, log_failure
 from engine.utils.time import utc_now
@@ -76,6 +78,14 @@ POLICIES: Final[dict[tuple[str, str], RoutePolicy]] = {
         object_type="campaign_run",
         object_param="campaign_run_id",
         purpose="see a campaign run",
+    ),
+    ("GET", "/campaign-runs/{campaign_run_id}/top-customers"): RoutePolicy(
+        role=Role.ANALYST,
+        action="campaign_runs.top_customers",
+        object_type="campaign_run",
+        object_param="campaign_run_id",
+        audit_reads=True,
+        purpose="see the first customers of a campaign run's contact list",
     ),
     ("POST", "/campaign-runs/{campaign_run_id}/restart"): RoutePolicy(
         role=Role.ANALYST,
@@ -110,6 +120,9 @@ class CampaignRunRequest(StrictBase):
     upload_id: str | None = None
     dataset_id: str | None = None
     client_id: str | None = None
+    case_id: str | None = Field(
+        default=None, pattern=CASE_ID_PATTERN, description="The Data Doctor case the prepared file came from."
+    )
     primary_key: PrimaryKey | None = None
     target: str | None = None
     speed: Speed = Speed.BALANCED
@@ -137,6 +150,14 @@ class RestartRequest(StrictBase):
 
 class CampaignRunListResponse(StrictBase):
     campaign_runs: tuple[CampaignRunView, ...]
+
+
+class TopCustomersResponse(StrictBase):
+    """The first customers of the contact list, best first; or, with none, why they cannot be shown."""
+
+    campaign_run_id: str
+    customers: tuple[TopCustomer, ...] = ()
+    unavailable: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -331,6 +352,7 @@ def create_campaign_run(
         upload_id=body.upload_id,
         dataset_id=body.dataset_id,
         client_id=body.client_id,
+        case_id=body.case_id,
         primary_key=body.primary_key,
         target=body.target,
         speed=body.speed,
@@ -355,10 +377,15 @@ def list_campaign_runs(
     request: Request,
     state: Annotated[CampaignRunState | None, Query(description="Keep only runs in this state.")] = None,
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
+    score_run_id: Annotated[
+        str | None, Query(description="Keep only the run that made this contact list.")
+    ] = None,
 ) -> CampaignRunListResponse:
     runner = get_runner(request.app)
     return CampaignRunListResponse(
-        campaign_runs=tuple(runner.view(run) for run in runner.store.list(state=state, limit=limit))
+        campaign_runs=tuple(
+            runner.view(run) for run in runner.store.list(state=state, limit=limit, score_run_id=score_run_id)
+        )
     )
 
 
@@ -380,6 +407,46 @@ def _read(request: Request, campaign_run_id: str, *, advance: bool) -> CampaignR
 def read_campaign_run(campaign_run_id: str, request: Request) -> CampaignRunView:
     """Reading also moves the run on, so a run is never stuck because nothing else was watching it."""
     return _read(request, campaign_run_id, advance=True)
+
+
+@router.get(
+    "/campaign-runs/{campaign_run_id}/top-customers",
+    response_model=TopCustomersResponse,
+    responses=_ERRORS,
+    summary="The first customers of a finished campaign run's contact list, best first",
+)
+def read_top_customers(
+    campaign_run_id: str,
+    request: Request,
+    storage: StorageDep,
+    limit: Annotated[int, Query(ge=1, le=50)] = 10,
+) -> TopCustomersResponse:
+    """Read through the contact list's own download route, so its role and model-approval rules apply unchanged.
+
+    A list that is not finished, or is held (for example its new model still waits for approval), answers with an
+    empty list and the reason in plain words, never an error: the summary then says why it shows no names.
+    """
+    run = get_runner(request.app).store.get(campaign_run_id)
+    if run is None:
+        raise http_error(404, "CAMPAIGN_RUN_NOT_FOUND", f"No campaign run with id {campaign_run_id!r}.")
+    if run.score_run_id is None:
+        return TopCustomersResponse(
+            campaign_run_id=campaign_run_id, unavailable="The contact list is not built yet."
+        )
+    try:
+        csv_bytes = read_artefact(run.score_run_id, "treat_list.csv", storage, request).body
+    except HTTPException as exc:
+        if exc.status_code == 401:
+            raise
+        detail: Any = exc.detail
+        message = detail.get("message") if isinstance(detail, dict) else None
+        return TopCustomersResponse(
+            campaign_run_id=campaign_run_id,
+            unavailable=str(message or "The contact list cannot be shown right now."),
+        )
+    return TopCustomersResponse(
+        campaign_run_id=campaign_run_id, customers=tuple(top_customers(bytes(csv_bytes), limit))
+    )
 
 
 @router.post(
@@ -411,6 +478,7 @@ def restart_campaign_run(
             upload_id=old.upload_id,
             dataset_id=old.dataset_id,
             client_id=old.client_id,
+            case_id=old.case_id,
             primary_key=old.primary_key,
             target=old.target,
             speed=old.speed,

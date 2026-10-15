@@ -335,7 +335,7 @@ function draw() {
   if (tab === "check" && view.doctor) {
     const main = app.querySelector("[data-dds-main]");
     const aside = app.querySelector("[data-dds-aside]");
-    if (main) mountDataDoctor({ main, aside }, { place: "data", pick: view.pick });
+    if (main) mountDataDoctor({ main, aside }, { place: "data", pick: view.pick, caseId: view.caseId });
     view.pick = false; // `#/data/check/pick` opens the picker once, not on every redraw
   }
   revealSelectedTab(app);
@@ -427,7 +427,9 @@ export const tabOf = (parts) => (parts[1] === "check" ? "check" : "sources");
 /** `registerModule`'s render for `#/data[/<tab>]`: paint a skeleton, load, draw. */
 export async function renderData(app, parts) {
   const tab = tabOf(parts);
-  view = { app, tab, hash: window.location.hash, doctor: false, pick: parts[2] === "pick" };
+  // `#/data/check/case/<id>` opens the Data Doctor on that case ("What the Doctor did" from a finished campaign).
+  const caseId = parts[2] === "case" && parts[3] ? decodeURIComponent(parts[3]) : null;
+  view = { app, tab, hash: window.location.hash, doctor: false, pick: parts[2] === "pick", caseId };
   injectDataStyles();
   if (tab === "check") {
     // Plan O M247: only this tab waits for `/auth/me` (the call the app already made at start-up).

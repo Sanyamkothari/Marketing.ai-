@@ -75,6 +75,33 @@ export const getCampaignRuns = () => request("/campaign-runs");
 export const restartCampaignRun = (id, { confirmCost = false } = {}) =>
   request(`${runsPath(id)}/restart`, post({ confirm_cost: confirmCost }));
 
+/**
+ * What the Review page's plain summary needs besides the list's own numbers: the Data Doctor case the file came
+ * from (read off the campaign run that made this contact list) and the first customers of the list, best first.
+ * Never rejects: a part that cannot be read is `{ error }` (or `{ denied: true }` for the names without the Analyst
+ * role) and the summary says so in words. A list made without a campaign run has no case, and its first customers
+ * are pointed to on the full results page (`{ elsewhere: true }`).
+ */
+export async function getResultsSummary(scoreRunId, { canSeeNames = true } = {}) {
+  let found = null;
+  try {
+    const listed = await request(`/campaign-runs?score_run_id=${encodeURIComponent(scoreRunId)}&limit=1`);
+    found = ((listed && listed.campaign_runs) || [])[0] || null;
+  } catch (error) {
+    return { caseId: null, top: { error } };
+  }
+  // A list made before campaign runs (or by hand) has no run to read its first customers through: say where they are.
+  if (!found) return { caseId: null, top: { elsewhere: true } };
+  const record = found.record;
+  const caseId = record.case_id || null;
+  if (!canSeeNames) return { caseId, top: { denied: true } };
+  try {
+    return { caseId, top: await request(`${runsPath(record.campaign_run_id)}/top-customers?limit=10`) };
+  } catch (error) {
+    return { caseId, top: { error } };
+  }
+}
+
 /** A scoring run's summary (`scoring_summary.json`): its priorities, counts and average likelihood. */
 export const getScoringSummary = (runId) => request(`${runPath(runId)}/artefacts/scoring_summary.json`);
 

@@ -5,6 +5,7 @@ import { button, icon, pageHeader } from "../../components.js";
 import { crumbs, errorBox, esc } from "../../dom.js";
 import { etaText, progressMeterHtml, progressNoteHtml } from "../../run_progress.js";
 import { RUN_WORDS, readyHref, restartLabel } from "./run_rules.js";
+import { doctorHref } from "./summary_rules.js";
 import { goalName } from "./status.js";
 
 const STEP_ICONS = { done: "check", running: "clock", failed: "critical", skipped: "check", pending: "" };
@@ -56,13 +57,18 @@ export function runPageHtml(view, { canRestart = true, busy = false, error = nul
     const campaign = run.campaign_id
       ? button({ label: "See the campaign", href: `#/campaigns/${encodeURIComponent(run.campaign_id)}/overview`, kind: "secondary", attrs: "data-run-campaign" })
       : "";
+    const doctor = run.case_id
+      ? button({ label: "What the Doctor did", href: doctorHref(run.case_id), kind: "tertiary", attrs: "data-run-doctor" })
+      : "";
     body = `<p class="cw-p" data-run-summary>The contact list is built. ${
-      run.campaign_id ? "Look it over, then approve it and download it." : "Open it to see who was picked."
+      run.campaign_id
+        ? "Your results are ready: how many customers to contact, the best of them first, and how well the model did. Look them over, then approve and download."
+        : "Open it to see who was picked."
     }</p>${stepsHtml(run.steps)}<div class="cw-actions">${button({
       label: run.campaign_id ? "Review and download the list" : "See the contact list",
       href,
       attrs: "data-run-ready",
-    })}${campaign}</div>`;
+    })}${campaign}${doctor}</div>`;
   } else if (run.state === "running") {
     const eta = view.eta_seconds === null || view.eta_seconds === undefined ? "" : etaText(view.eta_seconds);
     const reading = { pct: view.pct, estimated: true, finishing: false, eta };

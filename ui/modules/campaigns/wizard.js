@@ -39,6 +39,7 @@ import {
   getMe,
   getModels,
   getPlanPreview,
+  getResultsSummary,
   getRun,
   getScoringSummary,
   getTreatListSummary,
@@ -271,6 +272,7 @@ async function start({ uc, current, fill }) {
     speed: fill.speed || DEFAULT_SPEED,
     overrides: fill.overrides || {},
   };
+  if (fill.caseId) body.case_id = fill.caseId; // so the results can link back to "What the Doctor did"
   if (current) body.model_version_id = current.model_id;
   else body.target = fill.target;
   try {
@@ -323,11 +325,12 @@ async function campaignStepScreen(token, route) {
     if (held === "unknown" || held === "pending") later(token, WAIT_POLL_MS);
     return;
   }
-  const [detail, scoring, list, registry] = await Promise.all([
+  const [detail, scoring, list, registry, summary] = await Promise.all([
     getRun(runId),
     getScoringSummary(runId),
     getTreatListSummary(runId),
     registryOf(campaign.use_case_id),
+    getResultsSummary(runId, { canSeeNames: canAccess("GET", "/campaign-runs/{campaign_run_id}/top-customers") }),
   ]);
   const preview = await getPlanPreview(campaign.campaign_id, baseRateOf(detail.run, scoring)).catch(() => null);
   const [cost, compliance, policy] = await Promise.all([
@@ -364,6 +367,7 @@ async function campaignStepScreen(token, route) {
         resultsOn: resultsDate(campaign),
         canApprove: canAccess("POST", "/campaigns/{campaign_id}/plan"),
         model,
+        summary,
         busy: ui.review.busy,
         error: ui.review.error,
       }),
