@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from datetime import date
+from types import SimpleNamespace
 from typing import Any
 
 import numpy as np
@@ -26,13 +27,16 @@ from engine.config import load_use_case
 from engine.doctor import visit
 from engine.doctor.checks_time_keys import (
     Check,
+    block_blank_checks,
     date_checks,
     date_order_checks,
     file_checks,
     key_quality,
     key_rule_checks,
     outcome_direction,
+    summary_check,
     tail_checks,
+    unit_scale_checks,
 )
 from engine.doctor.detect_time_keys import CHECK_KIND, MAX_QUESTIONS, time_keys_detector
 from engine.doctor.diagnose import Offer
@@ -404,6 +408,81 @@ def test_a_newest_month_with_far_fewer_yes_is_not_final_yet() -> None:
     assert "IMMATURE_PERIOD" not in codes(tail_checks(days, pd.Series(rows % 5 == 0)))
 
 
+def _one_row_per_month(
+    last_rate: float, covered: int | None = None
+) -> tuple[pd.Series, pd.Series, pd.Series]:
+    months = pd.Series(pd.to_datetime([f"2026-{m:02d}-01" for m in range(3, 10) for _ in range(40)]))
+    rate = np.where(months == months.max(), last_rate, 0.25)
+    yes = pd.Series(np.arange(len(months)) % 40 < rate * 40)  # the first rows of each month of 40 are "yes"
+    days = pd.Series(np.where(months == months.max(), covered or 30, 30))
+    return months, yes, days
+
+
+def test_a_file_with_one_date_per_month_still_gets_the_newest_month_checked() -> None:
+    months, yes, _ = _one_row_per_month(0.03)
+    found = tail_checks(months, yes)
+    assert codes(found) == {"IMMATURE_PERIOD"}  # not "partly in the file": every date is a 1st
+    assert found[0].as_of == date(2026, 8, 31) and found[0].numbers["rows_after"] == 40
+    assert tail_checks(months, _one_row_per_month(0.25)[1]) == []
+
+
+def test_a_days_covered_column_says_the_newest_month_is_partial() -> None:
+    months, _, days = _one_row_per_month(0.25, covered=12)
+    partial = next(c for c in tail_checks(months, None, days) if c.code == "PARTIAL_LAST_MONTH")
+    assert partial.numbers["days_covered"] == 12 and partial.as_of == date(2026, 8, 31)
+    assert tail_checks(months, None, _one_row_per_month(0.25)[2]) == []
+
+
+def test_the_date_that_says_how_far_the_data_reaches_is_not_a_birth_or_signup_date() -> None:
+    from engine.doctor.detect_time_keys import _date_column
+
+    frame = pd.DataFrame(
+        {
+            "date_of_birth": ["1990-01-01"] * 3,
+            "signup_date": ["2024-01-01"] * 3,
+            "last_order_date": ["2026-01-01"] * 3,
+        }
+    )
+    case = SimpleNamespace(items=())
+    assert _date_column(case, frame, "u") == "last_order_date"  # type: ignore[arg-type]
+
+
+# ---------------------------------------------------------------------------
+# A summary, merged cells, another unit
+# ---------------------------------------------------------------------------
+def test_a_pivot_table_is_a_summary_and_a_customer_table_is_not() -> None:
+    pivot = pd.DataFrame(
+        {"region": ["N", "S", "Grand Total"], "customers": [5, 7, 12], "total_spend": [10, 20, 30]}
+    )
+    counts_only = pd.DataFrame(
+        {"region": ["N", "N", "S", "S"], "plan": list("abab"), "customers": [1, 2, 3, 4]}
+    )
+    people = pd.DataFrame(
+        {"customer_id": ["a", "b", "c"], "region": ["N", "N", "S"], "total_spend": [1, 2, 3]}
+    )
+    assert summary_check(pivot) is not None and summary_check(pivot).level == "stop"  # type: ignore[union-attr]
+    assert summary_check(counts_only) is not None
+    assert summary_check(people) is None
+
+
+def test_a_value_written_once_per_block_is_found_but_scattered_blanks_are_not() -> None:
+    block = pd.DataFrame({"region": (["North"] + [""] * 14 + ["East"] + [""] * 14), "n": range(30)})
+    scattered = pd.DataFrame({"reason": ["moved", "", "", "price", "", "moved", "", "", "", "price"] * 3})
+    leading = pd.DataFrame({"last_order": [""] * 12 + ["2026-01-01"] * 8})
+    assert [c.column for c in block_blank_checks(block)] == ["region"]
+    assert block_blank_checks(scattered) == [] and block_blank_checks(leading) == []
+
+
+def test_the_same_amount_column_a_hundred_times_larger_in_one_file_is_a_unit_question() -> None:
+    rupees = pd.DataFrame({"order_id": range(50), "amount": np.arange(50) * 10 + 500})
+    paise = pd.DataFrame({"order_id": range(50, 100), "amount": (np.arange(50) * 10 + 500) * 100})
+    found = unit_scale_checks([("a.csv", rupees), ("b.csv", paise)])
+    assert [(c.column, c.numbers["larger"]) for c in found] == [
+        ("amount", "b.csv")
+    ]  # the ID column is not compared
+    assert unit_scale_checks([("a.csv", rupees), ("c.csv", rupees.copy())]) == []
+
+
 # ---------------------------------------------------------------------------
 # G12: rows that repeat, files that overlap
 # ---------------------------------------------------------------------------
@@ -488,11 +567,15 @@ def test_the_detector_stops_on_rounded_ids_and_mixed_dates_and_flags_the_rest(tm
     storage = LocalStorage(tmp_path)
     case = vs.open_case(storage, w)
     found = time_keys_detector()(case, tuple(w.files.values()), None)
-    assert {a.code for a in found.asks} == {"DATE_ORDER_BOTH"}
-    assert all(a.blocking for a in found.asks)
+    assert {a.code for a in found.asks} == {"DATE_ORDER_BOTH", "DATE_PLACEHOLDER"}
+    assert {a.code for a in found.asks if a.blocking} == {"DATE_ORDER_BOTH"}
+    # The stand-in date is a question with a ready answer: treat 1970-01-01 as blank (a set_missing_text step).
+    stand_in = next(a for a in found.asks if a.code == "DATE_PLACEHOLDER")
+    step: Any = stand_in.options[0].effect.payload["step"]
+    assert stand_in.recommended == "blank" and step["kind"] == "set_missing_text"
     assert [r.kind for r in found.requests] == ["different_file"] and "mobile" in found.requests[0].what
     flags = {i.payload["code"] for i in found.items}
-    assert {"DATE_PLACEHOLDER", "KEY_DIGITS_ROUNDED"} <= flags
+    assert "KEY_DIGITS_ROUNDED" in flags and "DATE_PLACEHOLDER" not in flags
     assert all(i.kind == CHECK_KIND and i.state.value == "pending" for i in found.items)
     # The outcome is mostly "yes" for a churn column, but it is only asked once the outcome column is chosen.
     assert "OUTCOME_WRONG_WAY_ROUND" not in {a.code for a in found.asks}

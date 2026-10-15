@@ -21,6 +21,7 @@ once the item is approved.
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import replace
 from datetime import datetime
 from typing import TYPE_CHECKING, Final
 
@@ -29,6 +30,7 @@ from pydantic import JsonValue, ValidationError
 from engine.agent.contracts import AgentConfidence
 from engine.agent.tools import AgentToolError
 from engine.doctor.build_driver import BuildDriveError, BuildPlan, prepare_sources
+from engine.doctor.checks_time_keys import unit_scale_checks
 from engine.doctor.combine_run import (
     JOIN_KIND,
     STACK_KIND,
@@ -41,6 +43,7 @@ from engine.doctor.combine_run import (
 )
 from engine.doctor.contracts import Diagnosis, FileStack
 from engine.doctor.protocol import Ask, AskOption
+from engine.doctor.questions import build_ask
 from engine.doctor.stack_files import StackError, StackProposal, plan_stack, run_stack
 from engine.doctor.visit_contracts import OptionEffect
 from engine.privacy.working_key import WorkingKeyError, new_salt, pii_key_kind, refuse_aadhaar
@@ -271,6 +274,34 @@ def _join_item(
 # ---------------------------------------------------------------------------
 # A stack: the same report for different months
 # ---------------------------------------------------------------------------
+def _unit_ask(stack: FileStack, loaded: dict[str, LoadedFile]) -> Ask | None:
+    """Q6, blocking, when a number column is far larger in one stacked file than in another (rupees and paise): the
+    stack would add up amounts in two units. The stack is still offered; the answer comes before the approval.
+    """
+    named = [(loaded[u].file_name or u, loaded[u].frame) for u in stack.upload_ids]
+    gaps = unit_scale_checks(named)
+    if not gaps:
+        return None
+    column, numbers = gaps[0].column or "", gaps[0].numbers
+    hint = (
+        f"about {numbers['gap']:,.0f} times larger in {numbers['larger']} than in {numbers['smaller']}, "
+        "as if the files use different units (for example rupees and paise)"
+    )
+    ask = build_ask(
+        "Q6",
+        {"column": column, "hint": hint},
+        rows=sum(len(frame) for _, frame in named),
+        choices=(
+            "The files use different units: I will send them in one unit",
+            "All the files use the same unit",
+        ),
+        recommended_choice=0,
+        upload_id=stack.upload_ids[0],
+        column=column,
+    )
+    return replace(ask, blocking=True)
+
+
 def _stack(
     stack: FileStack, diagnosis: Diagnosis, loaded: dict[str, LoadedFile], now: datetime
 ) -> tuple[CaseItem | None, Ask | None]:
@@ -334,7 +365,7 @@ def _stack(
             evidence=(),
             now=now,
         )
-        return item, None
+        return item, _unit_ask(stack, loaded)
     # Two exports give the same customer and day different values: one question, with each answer's item.
     assert proposal.question is not None
     options: list[AskOption] = []
