@@ -86,6 +86,7 @@ from engine.doctor.case import (
     payload_digest,
 )
 from engine.doctor.goal_brief import GOAL_BRIEF_TOOL, GoalBrief, load_goal_brief, register_goal_brief_tool
+from engine.doctor.plan_check import check_plan, open_stops, plan_digest
 from engine.doctor.protocol import (
     DATA_DECISION,
     DATA_PRESCRIPTION_APPROVED,
@@ -110,7 +111,14 @@ from engine.doctor.registry import (
     DataToolResult,
     Exposure,
 )
-from engine.doctor.visit_contracts import CaseVisit, HandOffRecord, OptionEffect, VisitStop, WaitingFor
+from engine.doctor.visit_contracts import (
+    Acknowledgement,
+    CaseVisit,
+    HandOffRecord,
+    OptionEffect,
+    VisitStop,
+    WaitingFor,
+)
 from engine.utils.logging import get_logger
 from engine.utils.time import utc_now
 
@@ -137,6 +145,7 @@ __all__ = [
     "VerifyPort",
     "VerifyResult",
     "VisitDeps",
+    "acknowledge_stop",
     "active_goal",
     "active_section",
     "add_files",
@@ -149,6 +158,7 @@ __all__ = [
     "confirm",
     "confirmed",
     "decide",
+    "is_approved",
     "item_proposers",
     "lazy_converse",
     "mode_of",
@@ -384,6 +394,17 @@ def active_section(case: Case) -> tuple[tuple[CaseItem, ...], tuple[CaseQuestion
         tuple(item for item in case.items if _in_section(item.goal_id, case)),
         tuple(question for question in case.questions if _in_section(question.goal_id, case)),
     )
+
+
+_APPROVED_STATES: Final[frozenset[VisitState]] = frozenset(
+    {VisitState.PRESCRIBE, VisitState.VERIFY, VisitState.HAND_OFF, VisitState.FOLLOW_UP}
+)
+
+
+def is_approved(case: Case) -> bool:
+    """Whether the person approved the plan as it stands: the visit is past APPROVE and an approval of the whole
+    plan (not just one change's own yes) is recorded. Any later change takes the visit back before APPROVE."""
+    return case.state in _APPROVED_STATES and any(not a.approve_class for a in case.approvals)
 
 
 def open_blocking(case: Case) -> tuple[CaseQuestion, ...]:
@@ -986,8 +1007,15 @@ def _preview(run: _Run, case: Case) -> _Step:
     """PREVIEW: what would change, tried on at most 1,000 rows per file. No AI."""
     files = run.files(case)
     summary = run.deps.preview(case, files) if run.deps.preview is not None else _count_preview(case, files)
+    items, _ = active_section(case)
+    check = check_plan(
+        files, case.files, items
+    )  # counted once here, for this plan; read by the screen and Approve
+    visit = case.visit or CaseVisit()
+    same_plan = visit.plan_check is not None and visit.plan_check.digest == check.digest
     return _Step(
         to=VisitState.APPROVE,
+        visit={"plan_check": check, "acknowledged": visit.acknowledged if same_plan else ()},
         events=[
             EventDraft(
                 kind=TimelineKind.PREVIEW,
@@ -996,6 +1024,7 @@ def _preview(run: _Run, case: Case) -> _Step:
                     "rows_tried": summary.rows_tried,
                     "ticked": summary.items_ticked,
                     "pending": summary.items_pending,
+                    "stops": sum(1 for f in check.findings if f.level == "stop"),
                     **dict(summary.details),
                 },
             )
@@ -2302,13 +2331,26 @@ def approve(
                 f"{len(missing)} change{'s' if len(missing) != 1 else ''} need{'' if len(missing) != 1 else 's'} "
                 f"their own yes first: “{missing[0].title}”.",
             )
+        items, _ = active_section(case)
+        visit = case.visit or CaseVisit()
+        check, said = visit.plan_check, visit.acknowledged
+        if check is None or check.digest != plan_digest(
+            case.files, items
+        ):  # never trust counts for another plan
+            check, said = check_plan(run.files(case), case.files, items), ()
+        stops = open_stops(check, said)
+        if stops:
+            raise CaseError(
+                "APPROVAL_STOP_OPEN",
+                f"{len(stops)} safety check{'s' if len(stops) != 1 else ''} stop{'' if len(stops) != 1 else 's'} "
+                f"this plan: {stops[0].text} Say yes to each one, or change the plan.",
+            )
         text = approval_sentence(case, goal_name=approval_goal_name(run.deps.storage, case))
         if sentence is not None and sentence != text:
             raise CaseError(
                 "APPROVAL_SENTENCE_CHANGED",
                 f"What would be approved has changed since you read it. It now reads: “{text}”",
             )
-        items, _ = active_section(case)
         goal = active_goal(case)
         accepted = [i for i in items if i.state is ProposalState.ACCEPTED]
         brief = stored_brief(run.deps.storage, case)
@@ -2350,6 +2392,7 @@ def approve(
             after.append(count_patterns)
         return _Step(
             to=VisitState.PRESCRIBE,
+            visit={"plan_check": check, "acknowledged": said},
             within=_recorded(deps, DATA_PRESCRIPTION_APPROVED, actor, body, approval),
             events=[
                 EventDraft(
@@ -2364,6 +2407,49 @@ def approve(
                 )
             ],
             after=after,
+        )
+
+    return _person_step(run, client_id, case_id, expected_version, op_id, build)
+
+
+def acknowledge_stop(
+    client_id: str,
+    case_id: str,
+    key: str,
+    deps: VisitDeps,
+    *,
+    expected_version: int,
+    actor: str,
+    reason: str = "",
+    op_id: str | None = None,
+) -> Case:
+    """The person's explicit yes to one stop of the plan, by its key (`view.ledger.findings[].key`), with a reason.
+
+    Only while the visit waits for approval, only for a stop of the plan as it stands, and it holds for that plan
+    alone: any change to the plan counts the checks again and the yes is gone (:func:`_preview`)."""
+    run = _Run(deps, actor)
+    now = deps.clock()
+
+    def build(case: Case) -> _Step:
+        if case.state is not VisitState.APPROVE:
+            raise _not_waiting("There is nothing waiting for approval now.")
+        items, _ = active_section(case)
+        visit = case.visit or CaseVisit()
+        check = visit.plan_check
+        if check is None or check.digest != plan_digest(case.files, items):
+            raise _unknown("The plan changed since its checks were counted. Look at the checks again.")
+        if not any(f.key == key and f.level == "stop" for f in check.findings):
+            raise _unknown("There is no such stop in the plan now.")
+        said = Acknowledgement(key=key, by=actor, at=now, reason=reason.strip()[:500])
+        return _Step(
+            to=case.state,
+            visit={"acknowledged": (*(a for a in visit.acknowledged if a.key != key), said)},
+            events=[
+                EventDraft(
+                    kind=TimelineKind.STOP_ACKNOWLEDGED,
+                    details={"finding": key, "reason": said.reason},
+                )
+            ],
         )
 
     return _person_step(run, client_id, case_id, expected_version, op_id, build)

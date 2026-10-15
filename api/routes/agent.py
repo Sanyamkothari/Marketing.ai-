@@ -533,7 +533,8 @@ def _load_context(
     frame = read_frame(storage, source.source_key, source.file_format, profile_row_cap(config))
     if recipe is not None:
         try:
-            frame = run_saved_recipe(frame, recipe, config, upload_id=upload_id).frame
+            # A preview of what the recipe would do: it shows, it never stops (`guarded=False`).
+            frame = run_saved_recipe(frame, recipe, config, upload_id=upload_id, guarded=False).frame
         except RecipeError as exc:
             recipe_error = exc
         else:

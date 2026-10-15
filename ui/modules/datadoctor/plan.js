@@ -20,7 +20,8 @@
 //               personal_columns?: [name],                       // columns whose cells must be hidden
 //               samples?: { before: [row], after: [row] } }],    // a few rows, each row { column: value }
 //     findings: [{ level: "stop"|"flag"|"note", kind: "merged_ids"|"dropped_leak"|"contact_exclusion"|"guard"|...,
-//                  count?, text?, columns?: [name], samples?: [row], item_id? }],
+//                  count?, text?, columns?: [name], samples?: [row], item_id?,
+//                  key? }],   // a stop's `key` is what a person's yes is sent with (`acknowledgeStop`); once given it is a flag
 //   }
 //
 // Items may also carry (item.payload): `ids_merged`, `leak_suspect`, `contact_excluded`, `section`, `alert_level`.
@@ -223,6 +224,7 @@ export function findingsOf(items, ledger, approveIds = new Set()) {
     add(found, {
       level: f.level,
       kind: f.kind || "guard",
+      key: typeof f.key === "string" ? f.key : null,
       count: num(f.count) ?? 0,
       text: typeof f.text === "string" ? f.text : "",
       columns: Array.isArray(f.columns) ? f.columns : [],

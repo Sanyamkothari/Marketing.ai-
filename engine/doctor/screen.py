@@ -32,7 +32,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
-from typing import Final, Literal
+from typing import Any, Final, Literal
 
 from pydantic import Field
 
@@ -40,6 +40,7 @@ from engine.access.roles import Principal
 from engine.agent.contracts import ProposalState
 from engine.config import ConfigError, StrictBase
 from engine.doctor.case import Case, CaseStore, TimelineEvent
+from engine.doctor.plan_check import ledger_view, plan_digest
 from engine.doctor.protocol import (
     DEFAULT_SETTINGS,
     approve_class_of,
@@ -179,6 +180,13 @@ class CaseScreenView(StrictBase):
     remembered: tuple[ScreenRemembered, ...] = Field(
         default=(), description="Answers given here that are remembered for next time, by question."
     )
+    ledger: dict[str, Any] | None = Field(
+        default=None,
+        description="The guards' count of the accepted steps on the case's sample (`engine.doctor.plan_check`): "
+        "rows and customers in and out, the outcome rate before and after, a receipt per step (`steps[].item_id`) "
+        "and the findings (`level` stop, flag or note, each with its `key`). None until the plan is counted. The "
+        "plan screen reads these names; a stop is lowered to a flag once a person said yes to it.",
+    )
     start: ScreenStart | None = None
     missing_for: tuple[str, ...] = Field(
         default=(), description="Goals the files are missing something for (no goal chosen yet)."
@@ -270,6 +278,7 @@ def screen_view(
         verdict=_verdict(storage, case, approve_class),
         approval_sentence=sentence,
         approve_class=approve_class,
+        ledger=_ledger(case),
         standing=_standing(storage, case),
         remembered=_remembered(storage, case),
         start=_start(case, visit.hand_off if visit is not None else None),
@@ -280,6 +289,16 @@ def screen_view(
 # ---------------------------------------------------------------------------
 # The parts
 # ---------------------------------------------------------------------------
+def _ledger(case: Case) -> dict[str, Any] | None:
+    """The plan's count for the plan as it stands now; None when the plan changed since it was counted."""
+    visit = case.visit
+    if visit is None or visit.plan_check is None:
+        return None
+    if visit.plan_check.digest != plan_digest(case.files, active_section(case)[0]):
+        return None
+    return ledger_view(visit.plan_check, visit.acknowledged)
+
+
 def _approval_required(case: Case, config_root: Path | None) -> bool:
     """The active goal's `governance.approval_required` (separation of duties); False with no goal."""
     from engine.config import load_use_case

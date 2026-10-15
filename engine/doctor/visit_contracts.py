@@ -15,11 +15,20 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import Field, JsonValue
+from pydantic import AwareDatetime, Field, JsonValue
 
 from engine.config import StrictBase
 
-__all__ = ["CaseVisit", "HandOffRecord", "OptionEffect", "VisitStop", "WaitingFor"]
+__all__ = [
+    "Acknowledgement",
+    "CaseVisit",
+    "HandOffRecord",
+    "OptionEffect",
+    "PlanCheck",
+    "PlanFinding",
+    "VisitStop",
+    "WaitingFor",
+]
 
 WaitingFor = Literal["files", "answer", "approval", "next_file"]
 """What the visit waits for: files to start, an answer (ASK), an approval (APPROVE), next month's file (FOLLOW_UP)."""
@@ -52,6 +61,37 @@ class HandOffRecord(StrictBase):
     run_id: str | None = Field(default=None, description="The run started, when the hand-off started one.")
 
 
+class PlanFinding(StrictBase):
+    """One thing the guards found when the accepted steps ran on the case's sample (`engine.doctor.plan_check`)."""
+
+    key: str = Field(
+        description="What a person's yes is tied to: this finding, at this step, with this count."
+    )
+    level: Literal["stop", "flag", "note"]
+    code: str
+    text: str = Field(description="Plain words with counts; never a cell value.")
+    item_id: str | None = Field(default=None, description="The step it is about; none for the whole plan.")
+
+
+class PlanCheck(StrictBase):
+    """What our code counted when the plan was built: stored once per plan, read by the screen and by Approve."""
+
+    digest: str = Field(description="The plan it was counted for (`plan_check.plan_digest`).")
+    ledger: dict[str, JsonValue] = Field(
+        default_factory=dict, description="The screen's ledger (rows, customers, rates, per-step receipts)."
+    )
+    findings: tuple[PlanFinding, ...] = ()
+
+
+class Acknowledgement(StrictBase):
+    """A person's explicit yes to one stop, by its key; it holds only for the plan it was given on."""
+
+    key: str
+    by: str = Field(description="The user id.")
+    at: AwareDatetime
+    reason: str = Field(default="", description="Why, in the person's words (logged).")
+
+
 class CaseVisit(StrictBase):
     """`case.visit`: everything the visit needs to resume, beyond `case.state`."""
 
@@ -80,3 +120,9 @@ class CaseVisit(StrictBase):
     )
     hand_off: HandOffRecord | None = Field(default=None, description="The last hand-off.")
     stopped: VisitStop | None = Field(default=None, description="Why the last attempt stopped, if it did.")
+    plan_check: PlanCheck | None = Field(
+        default=None, description="The guards' count of the accepted steps on the sample, made in PREVIEW."
+    )
+    acknowledged: tuple[Acknowledgement, ...] = Field(
+        default=(), description="Stops a person said yes to, for the plan in `plan_check` only."
+    )

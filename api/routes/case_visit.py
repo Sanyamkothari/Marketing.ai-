@@ -10,6 +10,7 @@ off - the default - none of these paths exists and docs/API.md is unchanged.
 | `POST /cases/{case_id}/answers` | Analyst | Answers a question with one of its options. |
 | `POST /cases/{case_id}/decisions` | Analyst | Ticks or unticks a suggestion of the active section; unticked with `park_for`, it waits for the one who would know and is left out until resumed. |
 | `POST /cases/{case_id}/approval` | Analyst | Approves what the preview showed; recorded with the user id and the sentence shown. |
+| `POST /cases/{case_id}/acknowledgements` | Analyst | Says yes to one stop of the plan, by its `key` (`view.ledger.findings[].key`), with an optional reason; Approve is refused while a stop has no yes, and a changed plan takes the yes away. |
 | `POST /cases/{case_id}/chat` | Analyst | Writes to Data Doctor; with no AI service the reply says so and nothing else changes. |
 | `POST /cases/{case_id}/confirmations` | Analyst | Plan O M246: the own yes of one APPROVE-class item, with the exact sentence read (the item's role is checked). |
 | `POST /cases/{case_id}/standing-answers/{answer_id}/revoke` | Analyst | Plan O M246: revokes a standing answer; its question is asked again. |
@@ -76,6 +77,9 @@ POLICIES: Final[dict[tuple[str, str], RoutePolicy]] = {
     ),
     ("POST", "/cases/{case_id}/approval"): _policy("cases.approve", "approve Data Doctor's changes"),
     ("POST", "/cases/{case_id}/chat"): _policy("cases.chat", "write to Data Doctor"),
+    ("POST", "/cases/{case_id}/acknowledgements"): _policy(
+        "cases.acknowledge", "say yes to one safety stop of Data Doctor's plan"
+    ),
     # Plan O M246 (DEC-1816): the protocol's actions on a case. The item's own role is checked by the protocol.
     ("POST", "/cases/{case_id}/confirmations"): _policy(
         "cases.confirm", "give the own yes to one of Data Doctor's changes"
@@ -168,6 +172,13 @@ class ConfirmationRequest(_Change):
 
     item_id: str = Field(min_length=1, max_length=128)
     sentence: str = Field(min_length=1, max_length=4_000, description="The item's sentence, word for word.")
+
+
+class AcknowledgementRequest(_Change):
+    """The explicit yes to one stop of the plan, by its key."""
+
+    key: str = Field(pattern=r"^[a-f0-9]{16}$", description="`view.ledger.findings[].key` of a stop.")
+    reason: str = Field(default="", max_length=500, description="Why, in the person's words; it is logged.")
 
 
 class ChatRequest(_Change):
@@ -496,6 +507,37 @@ def approve_changes(
             actor=principal.user_id,
             op_id=body.op_id,
             sentence=body.sentence,
+        )
+    except CaseError as exc:
+        raise _error(exc) from exc
+    return _done(request, case)
+
+
+@router.post(
+    "/cases/{case_id}/acknowledgements",
+    response_model=Case,
+    responses=_ERRORS,
+    summary="Say yes to one stop of the plan",
+)
+def acknowledge_stop(
+    case_id: str,
+    body: AcknowledgementRequest,
+    request: Request,
+    storage: StorageDep,
+    root: ConfigRootDep,
+    principal: PrincipalDep,
+) -> Case:
+    """A stop the guards found is lifted only by this explicit yes, logged with who and why; approval follows."""
+    try:
+        case = doctor_visit.acknowledge_stop(
+            body.client_id,
+            case_id,
+            body.key,
+            _deps(storage, root, request, principal),
+            expected_version=body.version,
+            actor=principal.user_id,
+            reason=body.reason,
+            op_id=body.op_id,
         )
     except CaseError as exc:
         raise _error(exc) from exc

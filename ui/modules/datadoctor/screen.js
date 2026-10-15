@@ -30,6 +30,7 @@ import { TABLE_FILE_TYPES } from "../intake/notes.js";
 import { injectAgentStyles } from "../agent/styles.js";
 import { plain } from "../agent/sent.js";
 import {
+  acknowledgeStop,
   addFile,
   answerQuestion,
   approveCase,
@@ -547,6 +548,7 @@ function bind(entry) {
         { announce: "Step parked until they answer" },
       );
     } else if (d.ddsResume) act(entry, "resume", () => decideItem(theCase(entry), d.ddsResume, false), { announce: "Step is open again" });
+    else if (d.ddsAck) act(entry, "ack", () => acknowledgeStop(theCase(entry), d.ddsAck), { announce: "Noted: you said yes to this" });
     else if (d.ddsGoto) goTo(entry, d.ddsGoto);
     else if (d.ddsChange) toggleChange(entry, d.ddsChange);
     else if (d.ddsAgree) {

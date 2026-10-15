@@ -362,8 +362,7 @@ def run_part_recipe(
     approved with. A step that fails on a column the contract knows is `PRESCRIPTION_DRIFT` (the column changed);
     otherwise the step's own code."""
     from engine.agent.config import AgentConfig
-    from engine.agent.dataset_recipe import consistent_types, run_saved_recipe
-    from engine.agent.recipe import run_recipe
+    from engine.agent.dataset_recipe import run_replay, run_saved_recipe
 
     _check_spellings(recipe, frame, slot=slot)
     try:
@@ -372,19 +371,16 @@ def run_part_recipe(
                 frame, recipe, config, upload_id=upload_id, leak_check=leak_check, tables=tables
             )
         agent = AgentConfig()
-        return run_recipe(
-            consistent_types(frame),
-            recipe.steps,
-            upload_id=upload_id,
-            primary_key=recipe.primary_key,
-            target=recipe.target,
+        return run_replay(  # under the guards: a stop raises RECIPE_GUARD_STOP, never a silent score
+            frame,
+            recipe,
             levels=recipe.levels if recipe.levels is not None else tuple(agent.levels),
             max_failure_pct=(
                 recipe.max_failure_pct
                 if recipe.max_failure_pct is not None
                 else agent.max_conversion_failure_pct
             ),
-            snapshot_column=recipe.snapshot_column,
+            upload_id=upload_id,
             leak_check=leak_check,
             tables=tables,
         )

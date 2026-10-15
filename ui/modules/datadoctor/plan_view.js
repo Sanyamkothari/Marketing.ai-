@@ -152,9 +152,13 @@ function findingHtml(f, ledger, items) {
     if (r) personal.push(...r.personal);
   }
   const goto = f.items && f.items.length ? `<button type="button" class="btn tertiary sm" data-dds-goto="${esc(f.items[0])}"><span>Go to it</span></button>` : "";
+  const ack =
+    f.level === "stop" && f.key
+      ? `<button type="button" class="btn secondary sm" data-dds-ack="${esc(f.key)}"><span>Yes, go on anyway</span></button>`
+      : "";
   return `<li class="dds-check" data-dds-check data-dds-level="${esc(f.level)}" data-dds-check-kind="${esc(f.kind)}">${levelChip(f.level)}<span class="dds-check-lead">${esc(
     leadOf(f),
-  )}</span>${cols}${samplesHtml(f.samples || [], { personal })}${goto}</li>`;
+  )}</span>${cols}${samplesHtml(f.samples || [], { personal })}${goto}${ack}</li>`;
 }
 
 export function checksHtml(findings, { used = 0, ledger = null, items = [], level = 3 } = {}) {
