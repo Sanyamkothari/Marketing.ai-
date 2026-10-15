@@ -33,6 +33,7 @@ from engine.doctor.combine_run import (
     JOIN_KIND,
     STACK_KIND,
     _one_row_per_customer,
+    _real_keys,
     guard_join,
     guard_stack,
     plan_of,
@@ -42,6 +43,7 @@ from engine.doctor.contracts import Diagnosis, FileStack
 from engine.doctor.protocol import Ask, AskOption
 from engine.doctor.stack_files import StackError, StackProposal, plan_stack, run_stack
 from engine.doctor.visit_contracts import OptionEffect
+from engine.privacy.working_key import WorkingKeyError, new_salt, pii_key_kind, refuse_aadhaar
 from engine.utils.logging import get_logger
 from engine.utils.time import utc_now
 
@@ -137,6 +139,19 @@ def _join(
     entity = plan.entity
     keys = loaded[entity.upload_ids[0]].frame
     column = next(c for c in keys.columns if str(c) == entity.key_column)
+    try:
+        refuse_aadhaar(pii_key_kind(keys[column], str(column)))
+    except WorkingKeyError as exc:  # an Aadhaar number is never stored: the person picks another ID
+        asks.append(
+            _ask(
+                exc.code,
+                entity.upload_ids[0],
+                f"{exc.message} What would you like to do?",
+                "An Aadhaar number is never stored.",
+                loaded,
+            )
+        )
+        return None, asks, set()
     missing = int(keys[column].isna().sum())
     repeated = int(keys[column].dropna().duplicated().sum())
     if repeated or missing:
@@ -230,11 +245,16 @@ def _join_item(
         "log_rows_left_out": left_out,
     }
     try:  # what the combined table would look like, counted by code on the rows the visit read
-        receipt, findings = guard_join(plan, files, _one_row_per_customer(plan, files))
+        table, vault = _one_row_per_customer(plan, files, new_salt())
+        receipt, findings = guard_join(plan, files, _real_keys(table, vault))
         payload["receipt"] = receipt.model_dump(mode="json")
         payload["findings"] = [f.model_dump(mode="json") for f in findings]
         payload["needs_yes"] = any(f.level == "stop" for f in findings)
-    except (AgentToolError, BuildDriveError):  # no dates in the logs: no receipt, the join is still offered
+    except (
+        AgentToolError,
+        BuildDriveError,
+        WorkingKeyError,
+    ):  # no dates in the logs: no receipt, the join is still offered
         pass
     # No `rows_in` / `rows_out`: a join always needs its own yes, however few rows it leaves out.
     return _item(

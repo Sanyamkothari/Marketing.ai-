@@ -174,6 +174,7 @@ def file_overviews(contexts: Sequence[AgentContext]) -> list[tuple[dict[str, Any
             columns,
             personal_columns=[column.name for column in ctx.profile.columns if column.pii_kinds],
             always_hide=agent.always_hide_columns,
+            shape_only=ctx.long_text,
             mode=agent.ai_data_access,
         )
         profile: dict[str, Any] = dict(call_tool(ctx, "get_profile", {}, evidence_id=f"f{number}").result)

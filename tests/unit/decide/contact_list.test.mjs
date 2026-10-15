@@ -207,3 +207,25 @@ test("markup put inside Technical details is drawn as given, with no `$` pattern
   assert.match(html, /^<details class="tech" data-technical-details><summary>Technical details<\/summary><dl class="tech-list">.*<\/dl><p>Fee rose.*<\/p><\/details>$/);
   assert.equal(techDetails([], "Technical details", ""), "");
 });
+
+test("what the contact-list check took off is said on the list, one plain sentence each", () => {
+  const checked = {
+    ...treat,
+    contact_exclusion_lines: [
+      "12 excluded because they are under 18",
+      "3 excluded because their do-not-disturb answer is blank or unclear",
+    ],
+  };
+  const sentence = cl.contactListSentence({ scoring, treat: checked });
+  assert.ok(
+    sentence.endsWith("12 excluded because they are under 18. 3 excluded because their do-not-disturb answer is blank or unclear."),
+    sentence,
+  );
+  assert.equal(cl.takenOffLines(treat), "");
+  assert.equal(cl.takenOffLines(null), "");
+  // With nothing else to say, the exclusions are still shown.
+  assert.equal(
+    cl.contactListSentence({ treat: { contact_exclusion_lines: ["2 excluded because they are under 18"] } }),
+    "2 excluded because they are under 18.",
+  );
+});

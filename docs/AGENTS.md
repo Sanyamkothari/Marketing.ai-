@@ -563,9 +563,16 @@ secrets from each scanner's alphabet and checks none survives `mask_value`; a te
 raw cell under a new key is masked by default, and one that returns a dict keyed by cells is caught (every dict key of
 every tool result is a column or a field name in `RESULT_KEYS`).
 
+**Long free text and sensitive columns (G15, G16).** A column named notes, remarks, comments or feedback, or whose
+median value is longer than 40 characters, is shown to the model by its **shape** only (`Aaaa aaa 99`), in
+`masked_data` mode too (`AgentContext.long_text`, `Egress.build(shape_only=...)`). A column about religion, caste,
+health, disability or a pharmacy-like category (word lists in `configs/doctor/sensitive_words.yaml`) counts as personal
+data for the chat and the edits, and is left out of the features, unless `prepare.allow_sensitive_columns` names it
+(the answer "Use it" to the Doctor's question).
+
 **What masking still cannot guarantee.** In `masked_data` mode a person's **name inside a sentence**, or a
-**street address**, in a column that neither the profile nor the settings marked, is shown to the model: the
-canary asserts this on purpose (`test_masked_data_cannot_hide_a_name_in_a_sentence`). So are other
+**street address**, in a short column that neither the profile nor the settings marked, is shown to the model (a long
+free-text column is shape only, above). So are other
 countries' ID formats no scanner knows (a MAC address, a driving-licence or national-ID number, a UK NI
 number), a name written as a column header in ordinary words (`Jane Roe`), and obfuscated values
 (`jane dot roe at example dot test`). UPI ids (`name@bank`), dotless and internationalised addresses, a PAN
@@ -712,8 +719,8 @@ distinct value; the preview runs on 1,000 rows (or entities). Reproduce with
 - **Column names** that are not ordinary words (an e-mail as a header, a long number, a year or another
   number, a URL, more than 64 characters) are shown to the model as an alias `column_<n>` (§7.7); a header that *is* ordinary words -
   including a person's name - is shown as it is, because nothing can tell it from a real header.
-- **A name in a sentence, an address, or an ID format no scanner knows** in a column nobody marked reaches the
-  AI service in `masked_data` mode (§7.7). Use `agent.always_hide_columns` for the free-text columns or
+- **A name in a sentence, an address, or an ID format no scanner knows** in a short column nobody marked reaches the
+  AI service in `masked_data` mode (§7.7); long free-text columns are shape only. Use `agent.always_hide_columns` for the free-text columns or
   `agent.ai_data_access: summaries_only`. Obfuscated values (`jane dot roe at example dot test`), MAC
   addresses and other national ID formats are not recognised either. UPI ids and other `name@host` identifiers
   are masked (they are shaped like an address); an eight-digit identifier (`REF-72304995`) is read as a phone

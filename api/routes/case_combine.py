@@ -6,6 +6,8 @@ read, the table is written as a new upload read like any other file, and the fil
 
 from __future__ import annotations
 
+import io
+import json
 from pathlib import Path
 
 import pandas as pd
@@ -14,17 +16,32 @@ from fastapi import HTTPException
 from api.routes.uploads import finish_upload, load_upload
 from engine.agent.tools import AgentToolError
 from engine.config import load_use_case
-from engine.doctor.case import Case, CaseFile, CaseItem
+from engine.doctor.case import Case, CaseFile, CaseItem, case_dir
 from engine.doctor.combine_run import combine_item, upload_ids_of
 from engine.doctor.contracts import Diagnosis
 from engine.doctor.visit import CombinePort
 from engine.intake.config import load_intake_config
+from engine.privacy.working_key import KEY_VAULT_FILENAME, new_salt
 from engine.stages import ingest
 from engine.storage import Storage, StorageError, upload_key
 from engine.utils.ids import new_upload_id
 from engine.utils.time import utc_now
 
 __all__ = ["case_combiner"]
+
+
+def _case_salt(storage: Storage, case: Case) -> str:
+    """The case's salt for hashing a key that is personal data: made once, kept beside the case, the same every time."""
+    key = f"{case_dir(case.client_id, case.case_id)}key_salt.json"
+    try:
+        stored = json.loads(storage.read_bytes(key))
+        if isinstance(stored, dict) and isinstance(stored.get("salt"), str):
+            return str(stored["salt"])
+    except (StorageError, ValueError):
+        pass
+    salt = new_salt()
+    storage.write_bytes(key, json.dumps({"salt": salt}).encode("utf-8"))
+    return salt
 
 
 def case_combiner(storage: Storage, root: Path) -> CombinePort:
@@ -53,6 +70,7 @@ def case_combiner(storage: Storage, root: Path) -> CombinePort:
             Diagnosis.model_validate(case.diagnosis),
             frames,
             {upload_id: record.file_name for upload_id, record in records.items()},
+            key_salt=_case_salt(storage, case),
         )
         first = records[ids[0]]
         data = made.frame.to_csv(index=False).encode("utf-8")
@@ -70,6 +88,12 @@ def case_combiner(storage: Storage, root: Path) -> CombinePort:
             mode=first.mode,
             intake=load_intake_config(root),
         )
+        if made.key_vault is not None:
+            # The customers' key is personal data: the table holds hashes, and the real values wait here for the
+            # contact-list export (G24).
+            buffer = io.BytesIO()
+            made.key_vault.to_parquet(buffer, index=False)
+            storage.write_bytes(upload_key(upload_id, KEY_VAULT_FILENAME), buffer.getvalue())
         record = load_upload(storage, upload_id)
         return CaseFile(
             upload_id=upload_id,

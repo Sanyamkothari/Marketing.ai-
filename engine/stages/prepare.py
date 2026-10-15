@@ -632,6 +632,15 @@ def _column_decisions(
             )
             handled.add(name)
 
+    # Religion, caste, health, disability and pharmacy-like columns are not features unless the person allowed them.
+    # A reserved column (the fairness column among them) never reaches here, so "fairness report only" keeps it.
+    from engine.privacy.sensitive import find_sensitive
+
+    allowed = set(config.prepare.allow_sensitive_columns)
+    for found in find_sensitive(frame, skip=(*reserved, *handled, *allowed)):
+        dropped.append(DroppedColumn(name=found.column, reason="sensitive", detail=found.reason()))
+        handled.add(found.column)
+
     redacted: list[str] = []
     for name, detector in pii.items():
         if name in handled:

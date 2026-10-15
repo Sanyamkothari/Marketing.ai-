@@ -4,7 +4,7 @@ chat sessions through the real `chat_turn`, and a search of every prompt and eve
 What it proves: no value a pattern can recognise reaches any prompt, any stored `ChatMessage` or any
 `sent` preview, in either mode, for every tool in the registry - and a tool nobody has written yet
 is masked too. What it cannot prove: that a name inside a sentence in a column nobody marked is
-hidden in `masked_data` mode (`test_masked_data_cannot_hide_a_name_in_a_sentence` says so on purpose).
+hidden in `masked_data` mode (a long free-text column is shape only, G16: `test_a_name_in_a_long_free_text_column_reaches_the_model_as_a_shape_only`).
 """
 
 from __future__ import annotations
@@ -196,12 +196,17 @@ def test_names_and_addresses_stay_out_in_summaries_only(summaries: Run) -> None:
     assert leaks(stored_text(summaries.session), CELL_WORDS, exact=True) == []
 
 
-def test_masked_data_cannot_hide_a_name_in_a_sentence(masked: Run) -> None:
-    """The honest limit (docs/AGENTS.md §7.7): no pattern knows a name, so `masked_data` shows it.
+def test_a_name_in_a_long_free_text_column_reaches_the_model_as_a_shape_only(masked: Run) -> None:
+    """G16: `notes` and `feedback` are long free text (named so, or longer than 40 characters), so even in `masked_data`
+    mode the model is shown each cell's shape, never the sentence a name sits in.
 
-    This test exists so the documentation stays true: if it starts failing, masking got better and
-    the note can be shortened. `always_hide_columns` and `summaries_only` are the two ways to keep it out."""
-    assert NAME in masked.prompts and "Baker" in masked.prompts
+    The honest limit of docs/AGENTS.md §7.7 is now the short free-text column nobody named: no pattern knows a name,
+    so `masked_data` still shows it there. `always_hide_columns` and `summaries_only` keep that out too."""
+    assert masked.ctx.long_text >= {"notes", "feedback"}
+    for sentence in ("delivery to", "Please email", "Logged in from", "Great service", "No comment", "Ring "):
+        assert sentence not in masked.prompts, sentence
+    assert "Baker" not in masked.prompts
+    assert f"{NAME} <[REDACTED:email]>" in masked.prompts  # the short `region_contact` column: the limit that remains
 
 
 def test_summaries_only_prompts_hold_only_shapes_for_cell_text(summaries: Run) -> None:

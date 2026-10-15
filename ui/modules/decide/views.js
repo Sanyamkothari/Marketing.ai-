@@ -162,7 +162,12 @@ export function treatListCardHtml(summary, { error = null } = {}) {
     `<div class="dc-kv"><span class="dc-k">${esc(label)}</span><span class="dc-v">${esc(value)}</span></div>`;
   const netValue = money(summary.net_value_total);
   const grossValue = money(summary.expected_gross_value_total);
-  const notes = [summary.holdout_note, summary.net_value_note, summary.expected_gross_value_note].filter(Boolean);
+  const notes = [
+    ...(Array.isArray(summary.contact_exclusion_lines) ? summary.contact_exclusion_lines : []),
+    summary.holdout_note,
+    summary.net_value_note,
+    summary.expected_gross_value_note,
+  ].filter(Boolean);
   const notesHtml = notes.length
     ? `<div class="dc-note" data-treat-list-notes>${notes.map((n) => `<p>${esc(n)}</p>`).join("")}</div>`
     : "";

@@ -323,6 +323,7 @@ def _deps(storage: Storage, root: Path, request: Request, principal: Principal |
     from engine.doctor.detect_time_keys import time_keys_detector
     from engine.doctor.fingerprint import fingerprint_detector
     from engine.doctor.prescription import CasePrescriber
+    from engine.doctor.sensitive_ask import sensitive_detector
     from engine.doctor.time_settings import time_settings_detector
     from engine.stages.ingest import profile_row_cap
 
@@ -355,6 +356,7 @@ def _deps(storage: Storage, root: Path, request: Request, principal: Principal |
             combining_detector(),
             # Keys, dates and the newest rows: rounded IDs, stand-ins, dates in two orders, a thin last month.
             time_keys_detector(),
+            sensitive_detector(),
             time_settings_detector(storage, config_root=root),
             # Today's file against what the client told us and what it looked like last time.
             fingerprint_detector(storage),

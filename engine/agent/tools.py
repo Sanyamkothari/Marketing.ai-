@@ -31,7 +31,7 @@ import json
 import math
 import re
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
 from pathlib import Path
@@ -154,11 +154,46 @@ class AgentContext:
     target: str | None = None
     schema: FeatureSchema | None = None
     clock: Callable[[], datetime] = utc_now
+    long_text: frozenset[str] = field(default=frozenset(), init=False, repr=False, compare=False)
+    """G16: the file's long free-text columns (named notes, remarks, comments, or longer than 40 characters at the
+    median), found by `engine.privacy.sensitive`. The AI is shown their shape only (`Egress.build(shape_only=...)`)."""
     run_history: Storage | None = None
     """The deployment's store, for Plan O M244's training budget only (DEC-1814): the advisor reads this
     deployment's past runs from it and keeps the three choices it offered beside the file, so the run that takes
     one is promised exactly what was shown. None (every context but Guided setup's): the library's runs are the
     prior and nothing is kept. Read only while `data_doctor.unified` is on; no tool reads it."""
+
+    def __post_init__(self) -> None:
+        """A column about religion, caste, health and the like counts as personal data; long free text is shape only.
+
+        Every place that decides what the AI may see, or what it may change, reads the profile's `pii_kinds`; marking
+        the column there (found by `engine.privacy.sensitive`, our code) puts it behind all of them at once. A
+        sensitive column the use case allows (`prepare.allow_sensitive_columns`) is left as it was. Long free-text
+        columns are listed in `long_text` for the egress gate, which shows only their shape.
+        """
+        from engine.privacy.sensitive import find_long_text, find_sensitive
+
+        skip = {c for c in (self.target, self.config.target.column) if c}
+        marks: dict[str, str] = {
+            found.column: "sensitive"
+            for found in find_sensitive(
+                self.frame, skip={*skip, *self.config.prepare.allow_sensitive_columns}
+            )
+        }
+        object.__setattr__(
+            self, "long_text", frozenset(found.column for found in find_long_text(self.frame, skip=skip))
+        )
+        if not marks:
+            return
+        columns = tuple(
+            (
+                c.model_copy(update={"pii_kinds": (*c.pii_kinds, marks[c.name])})
+                if c.name in marks and marks[c.name] not in c.pii_kinds
+                else c
+            )
+            for c in self.profile.columns
+        )
+        object.__setattr__(self, "profile", self.profile.model_copy(update={"columns": columns}))
 
     def resolve(self, name: str) -> str:
         """The file's column `name` means: exact, or the one column whose shown (cleaned, cut) name it is."""

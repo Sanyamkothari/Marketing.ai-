@@ -162,7 +162,7 @@ _POLL_SECONDS: Final[float] = 0.02
 
 class CaseError(Exception):
     """A refusal with a stable code: `CASE_NOT_FOUND` (404), `CASE_VERSION_CONFLICT`, `CASE_READ_ONLY` and
-    `CASE_UNREADABLE` (409)."""
+    `CASE_UNREADABLE` (409), `CASE_CLIENT_REQUIRED` (422)."""
 
     def __init__(self, code: str, message: str) -> None:
         super().__init__(message)
@@ -793,7 +793,13 @@ class CaseStore:
         title: str = "",
         files: Sequence[CaseFile] = (),
     ) -> Case:
-        """A new case at version 1, its `case.created` event and one `file.added` per file."""
+        """A new case at version 1, its `case.created` event and one `file.added` per file.
+
+        The client is mandatory (G20): a case with no client, or one whose id is not a client id, is refused
+        (`CASE_CLIENT_REQUIRED`) before anything is written, so no case can exist outside a client's own folder.
+        """
+        if not isinstance(client_id, str) or not _valid_id(CLIENT_ID_PATTERN, client_id):
+            raise CaseError("CASE_CLIENT_REQUIRED", "A case belongs to a client. Say which client it is for.")
         now = self._clock()
         case_id = new_case_id()
         drafts: list[EventDraft] = [EventDraft(kind=TimelineKind.CASE_CREATED, details={"files": len(files)})]

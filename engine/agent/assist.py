@@ -176,6 +176,7 @@ def _gate(ctx: AgentContext) -> Egress:
         tuple(str(c) for c in ctx.frame.columns),
         personal_columns=[column.name for column in ctx.profile.columns if column.pii_kinds],
         always_hide=agent.always_hide_columns,
+        shape_only=ctx.long_text,
         mode=agent.ai_data_access,
     )
 

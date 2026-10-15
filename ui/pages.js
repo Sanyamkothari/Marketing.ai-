@@ -521,6 +521,7 @@ const DROP_WORDS = {
   id_like: "Looks like an ID",
   pii: "Personal details",
   leakage: "Gives the answer away",
+  sensitive: "Sensitive details (religion, health and the like)",
 };
 const REMOVAL_WORDS = {
   duplicate: "Exact duplicates",
