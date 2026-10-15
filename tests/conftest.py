@@ -71,15 +71,16 @@ FROZEN_PATHS: tuple[str, ...] = (
     "tests/unit/measurement/test_cycle_schedules",
     "tests/integration/production/test_schedul",
     "tests/integration/production/test_scheduling",
-    # AWS extras
-    "tests/unit/test_aws_",
+    # AWS extras (not `test_aws_connection`: engine/llm.py reaches the pilot's AI through it)
+    "tests/unit/test_aws_bootstrap",
+    "tests/unit/test_aws_secrets",
     "tests/unit/test_s3_",
     "tests/unit/test_sagemaker_",
     "tests/integration/test_jobs_as_sagemaker",
-    # privacy / DPDP screens
-    "tests/unit/production/test_privacy",
+    # privacy / DPDP screens and erasure (not the privacy config and consent gating the engine reads,
+    # nor `test_case_privacy`, which erases from the Doctor's cases)
+    "tests/unit/production/test_privacy_api_contract",
     "tests/unit/production/test_erasure",
-    "tests/unit/production/test_case_privacy",
     "tests/integration/production/test_privacy",
 )
 

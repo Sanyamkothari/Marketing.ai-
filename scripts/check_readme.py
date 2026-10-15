@@ -1018,7 +1018,7 @@ tests cannot see (M7's laptop measurement)."""
 MILESTONE_ID: Final[re.Pattern[str]] = re.compile(r"^M\d+[a-z]?$")
 FENCE: Final[re.Pattern[str]] = re.compile(r"^\s*(```|~~~)")
 SEPARATOR_CELL: Final[re.Pattern[str]] = re.compile(r"^:?-{3,}:?$")
-PAID_MARKERS: Final[str] = "not slow and not bedrock and not aws"
+PAID_MARKERS: Final[str] = "not slow and not frozen and not bedrock and not aws"
 """What the fallback run selects: the fast suite's filter, the same as `make test`'s."""
 
 

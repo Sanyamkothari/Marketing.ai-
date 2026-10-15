@@ -9,8 +9,9 @@
 # pull request rather than being discovered later by a reader of a stale file.
 #
 # The @slow AutoGluon integration tests are deliberately NOT run here — that is the second half of
-# plan §10's sentence. `make test` is `pytest -m "not slow and not frozen"`; the full suite runs in nightly.yml, so
-# a pull request waits minutes rather than a quarter of an hour.
+# plan §10's sentence. `make test` is `pytest -m "not slow and not frozen"` (@frozen: features the
+# v1 plan froze); the full suite runs in nightly.yml, so a pull request waits minutes rather than a
+# quarter of an hour.
 
 name: CI
 
