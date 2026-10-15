@@ -78,6 +78,7 @@ __all__ = [
     "LeftOutFile",
     "ListKeys",
     "PlannedSource",
+    "PreparedSources",
     "RoleProposer",
     "RoleSuggestion",
     "approval_for",
@@ -85,6 +86,7 @@ __all__ = [
     "drive_builder",
     "mapping_columns",
     "plan_build",
+    "prepare_sources",
     "replay_build",
 ]
 
@@ -774,19 +776,21 @@ def _matched(
     return out, step_receipt, on_list.receipt(source.source_name, keys, column, met)
 
 
-def _run_plan(
-    plan: BuildPlan,
-    approval: BuildApproval,
-    files: Mapping[str, Sequence[pd.DataFrame]],
-    port: BuilderPort,
-    *,
-    mode: str,
-    build: bool,
-    clock: Any,
-) -> BuildDriveResult:
-    """Prepare each planned source from `files` (by source name), then make the Manual setup calls."""
-    source_ids: dict[str, str] = {}
-    mapping_ids: list[str] = []
+@dataclass(frozen=True)
+class PreparedSources:
+    """The plan's sources read from their files, before any builder call: the customer list as written and each
+    log stacked and written with the list's IDs, with the receipts of those steps."""
+
+    sources: tuple[tuple[PlannedSource, pd.DataFrame], ...]
+    stack_receipts: tuple[StackReceipt, ...]
+    key_receipts: tuple[RecipeReceipt, ...]
+    match_receipts: tuple[KeyMatchReceipt, ...]
+
+
+def prepare_sources(
+    plan: BuildPlan, files: Mapping[str, Sequence[pd.DataFrame]], *, clock: Any = None
+) -> PreparedSources:
+    """Prepare each planned source from `files` (by source name): stack, then match each log's IDs to the list."""
     stack_receipts: list[StackReceipt] = []
     key_receipts: list[RecipeReceipt] = []
     match_receipts: list[KeyMatchReceipt] = []
@@ -810,7 +814,24 @@ def _run_plan(
         if match_receipt is not None:
             match_receipts.append(match_receipt)
         prepared.append((source, frame))
-    for source, frame in prepared:
+    return PreparedSources(tuple(prepared), tuple(stack_receipts), tuple(key_receipts), tuple(match_receipts))
+
+
+def _run_plan(
+    plan: BuildPlan,
+    approval: BuildApproval,
+    files: Mapping[str, Sequence[pd.DataFrame]],
+    port: BuilderPort,
+    *,
+    mode: str,
+    build: bool,
+    clock: Any,
+) -> BuildDriveResult:
+    """Prepare each planned source from `files` (by source name), then make the Manual setup calls."""
+    source_ids: dict[str, str] = {}
+    mapping_ids: list[str] = []
+    ready = prepare_sources(plan, files, clock=clock)
+    for source, frame in ready.sources:
         data = frame.to_csv(index=False).encode("utf-8")
         source_id = port.add_source(file_name=source.source_name, data=data, role=source.role)
         source_ids[source.source_name] = source_id
@@ -861,9 +882,9 @@ def _run_plan(
         mapping_ids=tuple(mapping_ids),
         spec_id=spec_id,
         dataset_id=dataset_id,
-        stack_receipts=tuple(stack_receipts),
-        key_receipts=tuple(key_receipts),
-        match_receipts=tuple(match_receipts),
+        stack_receipts=ready.stack_receipts,
+        key_receipts=ready.key_receipts,
+        match_receipts=ready.match_receipts,
         record_key=record_key,
     )
 

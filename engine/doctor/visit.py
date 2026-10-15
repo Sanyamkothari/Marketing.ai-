@@ -123,6 +123,7 @@ if TYPE_CHECKING:
 __all__ = [
     "AI_NEEDED_REPLY",
     "VISIT_CODES",
+    "CombinePort",
     "ConversePort",
     "ConverseResult",
     "Detected",
@@ -282,6 +283,13 @@ class HandOffPort(Protocol):
     def __call__(self, case: Case, brief: GoalBrief | None) -> HandOffRecord: ...
 
 
+class CombinePort(Protocol):
+    """Builds the table an approved join or stack makes from the whole files, keeps it as a new upload and returns
+    it as the case's file. The files it was made from are not touched."""
+
+    def __call__(self, case: Case, item: CaseItem, actor: str) -> CaseFile: ...
+
+
 @dataclass(frozen=True)
 class Detected:
     """Plan O M246 (DEC-1816): what a detector found - ambiguities to settle (AUTO, an assumption, or one
@@ -320,6 +328,8 @@ class VisitDeps:
     prescribe: PrescribePort | None = None
     verify: VerifyPort | None = None
     hand_off: HandOffPort | None = None
+    combine: CombinePort | None = None
+    """None: an approved join or stack builds nothing (the files stay as they are)."""
     clock: Callable[[], datetime] = utc_now
     store: CaseStore | None = None
     """None: a `CaseStore` over `storage` with `clock`."""
@@ -1002,8 +1012,47 @@ def _approve_wait(_run: _Run, _case: Case) -> None:
     return
 
 
+def _combine(run: _Run, case: Case) -> _Step | None:
+    """The approved joins and stacks, built: each one's files give way to the one table it makes, and the visit
+    reads that table from INTAKE, so what is approved next is the table that goes on."""
+    from engine.doctor.combine_run import JOIN_KIND, STACK_KIND, upload_ids_of
+
+    port = run.deps.combine
+    done = (case.visit or CaseVisit()).combined
+    items, _ = active_section(case)
+    todo = [i for i in items if i.kind in {JOIN_KIND, STACK_KIND} and i.state is ProposalState.ACCEPTED]
+    todo = [i for i in todo if i.item_id not in done]
+    if port is None or not todo:
+        return None
+    files = list(case.files)
+    events: list[EventDraft] = []
+    for item in todo:
+        sources = set(upload_ids_of(item))
+        if not sources <= {f.upload_id for f in files}:
+            continue  # an earlier change already took one of its files
+        made = port(case, item, run.actor)
+        files = [f for f in files if f.upload_id not in sources] + [made]
+        events.append(
+            EventDraft(
+                kind=TimelineKind.FILE_ADDED,
+                upload_id=made.upload_id,
+                item_id=item.item_id,
+                details={"combined": len(sources)},
+            )
+        )
+    return _Step(
+        to=VisitState.INTAKE,
+        updates={"files": tuple(files)},
+        visit={"combined": (*done, *(i.item_id for i in todo))},
+        events=events,
+    )
+
+
 def _prescribe(run: _Run, case: Case) -> _Step:
     """PRESCRIBE: the approved items, the answers and the brief, hashed (M243 writes the prescription)."""
+    combined = _combine(run, case)
+    if combined is not None:
+        return combined
     brief = stored_brief(run.deps.storage, case)
     hash_ = (
         run.deps.prescribe(case, brief)

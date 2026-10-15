@@ -75,5 +75,8 @@ class CaseVisit(StrictBase):
     data_request: str | None = Field(
         default=None, description="Evidence id of the data request for those goals, when there is one."
     )
+    combined: tuple[str, ...] = Field(
+        default=(), description="The approved joins and stacks already built, by item id."
+    )
     hand_off: HandOffRecord | None = Field(default=None, description="The last hand-off.")
     stopped: VisitStop | None = Field(default=None, description="Why the last attempt stopped, if it did.")

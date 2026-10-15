@@ -266,8 +266,10 @@ def _converse(
 def _deps(storage: Storage, root: Path, request: Request, principal: Principal | None) -> VisitDeps:
     """Every visit route carries the CONVERSE port, connected only when a chat turn runs: a visit resumed in
     CONVERSE (the process died during the AI call) is answered by the AI service, not told there is none."""
+    from api.routes.case_combine import case_combiner
     from api.routes.doctor import offers as doctor_offers
     from engine.doctor.cleaning import cleaning_detector
+    from engine.doctor.combining import combining_detector
     from engine.doctor.prescription import CasePrescriber
     from engine.doctor.time_settings import time_settings_detector
     from engine.stages.ingest import profile_row_cap
@@ -283,6 +285,8 @@ def _deps(storage: Storage, root: Path, request: Request, principal: Principal |
         load_files=load_files,
         # Plan O M243 (DEC-1813): PRESCRIBE writes `prescriptions/<hash>.json` and binds the case's files to it.
         prescribe=CasePrescriber(storage, load_files=load_files, config_root=root),
+        # Several files: an approved join or stack is built from the whole files as a new upload of the case.
+        combine=case_combiner(storage, root),
         offers=offers,
         config_root=root,
         converse=(
@@ -296,6 +300,7 @@ def _deps(storage: Storage, root: Path, request: Request, principal: Principal |
         # The cleaning (Guided setup's format fixes, the Indian-format checks, the mixed-currency stop), no AI.
         detectors=(
             cleaning_detector(offers, config_root=root),
+            combining_detector(),
             time_settings_detector(storage, config_root=root),
         ),
     )

@@ -50,14 +50,6 @@ export const VERDICTS = Object.freeze({
   choose_goal: { status: "needs_addon", word: "Choose a goal" },
 });
 
-/** What a goal's status in "what this data can be used for" means, in plain words. */
-export const POWER = Object.freeze({
-  ready: { status: "read", word: "Ready to use" },
-  check: { status: "needs_attention", word: "Usable after a quick check" },
-  too_small: { status: "needs_attention", word: "Not enough data yet" },
-  missing: { status: "failed", word: "Something is missing" },
-});
-
 /** What a timeline event says. Events not listed (the visit's own steps, the evidence it stored) are technical. */
 export const EVENT_WORDS = Object.freeze({
   "case.created": "Check started",
@@ -466,7 +458,7 @@ const itemAccepted = (c, itemId) => (c.items || []).some((i) => i.item_id === it
 
 // --- goals ----------------------------------------------------------------------------------------------------
 
-/** With no goal yet: what each goal's status is, and "Choose this goal". */
+/** With no goal yet: the goals, best fit first, and "Choose this goal". The verdict is the readiness check's, once one is chosen. */
 export function goalsHtml(screen, { busy = false, level = 3 } = {}) {
   const { case: c, view } = screen;
   if (view.mode !== "generic") return "";
@@ -477,13 +469,8 @@ export function goalsHtml(screen, { busy = false, level = 3 } = {}) {
     .slice()
     .sort((a, b) => (order[a.status] ?? 9) - (order[b.status] ?? 9))
     .map((u) => {
-      const p = POWER[u.status] || { status: "needs_addon", word: "Not checked" };
       const name = goalName(u.use_case_id, u.name);
-      return `<li class="dds-goal" data-dds-goal-row="${esc(u.use_case_id)}"><span class="dds-item-body"><span class="dds-item-t">${esc(name)}</span>${statusChip(
-        "health",
-        p.status,
-        { word: p.word },
-      )}</span>${button({
+      return `<li class="dds-goal" data-dds-goal-row="${esc(u.use_case_id)}"><span class="dds-item-body"><span class="dds-item-t">${esc(name)}</span></span>${button({
         label: "Choose this goal",
         kind: "secondary",
         attrs: `data-dds-goal="${esc(u.use_case_id)}" aria-label="Choose the goal: ${esc(name)}"`,
@@ -491,7 +478,7 @@ export function goalsHtml(screen, { busy = false, level = 3 } = {}) {
       })}</li>`;
     })
     .join("");
-  return `<section class="dds-group" data-dds-goals aria-labelledby="dds-g-goals"><h${level} id="dds-g-goals" class="dds-group-t">What this data can be used for</h${level}><p class="dds-why">Choose a goal to check the data against it. Nothing you answered is asked again.</p><ul class="dds-items">${rows}</ul></section>`;
+  return `<section class="dds-group" data-dds-goals aria-labelledby="dds-g-goals"><h${level} id="dds-g-goals" class="dds-group-t">What this data can be used for</h${level}><p class="dds-why">Best fit first. Choose a goal and Data Doctor checks the data against it: that check is the one verdict. Nothing you answered is asked again.</p><ul class="dds-items">${rows}</ul></section>`;
 }
 
 // --- adding a file --------------------------------------------------------------------------------------------
