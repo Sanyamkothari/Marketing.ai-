@@ -520,7 +520,7 @@ def _recipe(
     config: UseCaseConfig | None,
     approved_by: str | None,
     created_at: datetime,
-    acknowledged_stops: tuple[str, ...] = (),
+    acknowledged_stops: tuple[str, ...] | None = None,
 ) -> DataRecipe | None:
     from engine.agent.advisor import ordered_steps
     from engine.agent.config import AgentConfig, AgentLevel

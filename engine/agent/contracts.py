@@ -306,11 +306,12 @@ class DataRecipe(Artefact):
             "recipe that recorded none, which reads the file as it always did."
         ),
     )
-    acknowledged_stops: tuple[str, ...] = Field(
-        default=(),
+    acknowledged_stops: tuple[str, ...] | None = Field(
+        default=None,
         description=(
-            "Codes of the guards' stops a person said yes to when they approved this recipe (Data Doctor). A replay "
-            "stops on any other stop the guards find; empty on a recipe approved without one."
+            "Data Doctor: the codes of the guards' stops a person said yes to when they approved this recipe; a "
+            "replay stops on any other stop the guards find. Null on a recipe approved without the guards (Guided "
+            "setup, or saved before them), which replays unguarded, as it was approved."
         ),
     )
     created_at: AwareDatetime = Field(description="When it was approved.")

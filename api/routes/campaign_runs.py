@@ -320,7 +320,7 @@ def _actions(app: FastAPI) -> StepActions:
 # ---------------------------------------------------------------------------
 def _require_approved_case(storage: StorageDep, body: CampaignRunRequest) -> None:
     """Nothing is published to training from a Data Doctor case its person has not approved as it stands."""
-    if body.case_id is None or body.case_id.startswith("guided_"):  # a Guided-setup session is approved there
+    if body.case_id is None or not body.case_id.startswith("case_"):  # guided_/doctor_ are read-only adapters
         return
     try:
         case = CaseStore(storage).get(body.client_id or DEFAULT_CLIENT_ID, body.case_id)

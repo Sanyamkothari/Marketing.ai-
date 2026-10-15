@@ -253,7 +253,7 @@ def test_a_plan_with_no_steps_has_nothing_to_stop(tmp_path: Path) -> None:
 
 
 # ---- the replay (next month, scoring) ---------------------------------------------------------------------------
-def _recipe(*, acknowledged: tuple[str, ...] = ()) -> DataRecipe:
+def _recipe(*, acknowledged: tuple[str, ...] | None = ()) -> DataRecipe:
     steps = (STEP,)
     return DataRecipe(
         recipe_id="rc-0000000000000001",
@@ -282,7 +282,15 @@ def test_a_replay_stops_on_a_stop_instead_of_scoring_silently() -> None:
 
 def test_a_replay_goes_on_where_the_person_said_yes_to_that_kind_of_stop() -> None:
     config = load_use_case(GOAL_A)
-    first = run_saved_recipe(_new_month(), _recipe(), config, upload_id="up-next", guarded=False)
+    first = run_saved_recipe(_new_month(), _recipe(acknowledged=None), config, upload_id="up-next")
     codes = ("PLAN_LOSES_TOO_MUCH", "PLAN_MOVES_OUTCOME_RATE")
     again = run_saved_recipe(_new_month(), _recipe(acknowledged=codes), config, upload_id="up-next")
     assert len(again.frame) == len(first.frame) < 400
+
+
+def test_a_recipe_approved_without_the_guards_replays_as_it_was_approved() -> None:
+    """Guided setup never counted its intended losses, so a replay cannot tell them from new ones: it is not stopped."""
+    run = run_saved_recipe(
+        _new_month(), _recipe(acknowledged=None), load_use_case(GOAL_A), upload_id="up-next"
+    )
+    assert 0 < len(run.frame) < 400

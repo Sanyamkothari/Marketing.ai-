@@ -1008,9 +1008,7 @@ def _preview(run: _Run, case: Case) -> _Step:
     files = run.files(case)
     summary = run.deps.preview(case, files) if run.deps.preview is not None else _count_preview(case, files)
     items, _ = active_section(case)
-    check = check_plan(
-        files, case.files, items
-    )  # counted once here, for this plan; read by the screen and Approve
+    check = check_plan(files, case.files, items)  # counted once per plan; the screen and Approve read it
     visit = case.visit or CaseVisit()
     same_plan = visit.plan_check is not None and visit.plan_check.digest == check.digest
     return _Step(
@@ -2334,9 +2332,7 @@ def approve(
         items, _ = active_section(case)
         visit = case.visit or CaseVisit()
         check, said = visit.plan_check, visit.acknowledged
-        if check is None or check.digest != plan_digest(
-            case.files, items
-        ):  # never trust counts for another plan
+        if check is None or check.digest != plan_digest(case.files, items):  # never another plan's counts
             check, said = check_plan(run.files(case), case.files, items), ()
         stops = open_stops(check, said)
         if stops:

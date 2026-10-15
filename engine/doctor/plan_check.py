@@ -188,10 +188,12 @@ def open_stops(check: PlanCheck | None, acknowledged: Sequence[Acknowledgement])
     return [f for f in check.findings if f.level == "stop" and f.key not in said]
 
 
-def acknowledged_codes(visit: CaseVisit | None) -> tuple[str, ...]:
-    """The kinds of stop a person said yes to for the plan as counted: what an approved recipe may replay with."""
+def acknowledged_codes(visit: CaseVisit | None) -> tuple[str, ...] | None:
+    """The kinds of stop a person said yes to for the plan as counted: what an approved recipe may replay with.
+    None when the plan was never counted (approved before the guards), so its recipe replays as it always did.
+    """
     if visit is None or visit.plan_check is None:
-        return ()
+        return None
     said = {a.key for a in visit.acknowledged}
     return tuple(sorted({f.code for f in visit.plan_check.findings if f.level == "stop" and f.key in said}))
 
