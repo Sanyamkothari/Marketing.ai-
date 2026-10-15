@@ -398,6 +398,9 @@ def test_a_zip_with_only_text_files_still_counts_them_as_tables(storage: LocalSt
         ("c.zip", zipped({"c.csv": CSV}), "csv", "zip"),
         ("c.zip", zipped({"c.jsonl": b'{"a": 1}\n'}), "jsonl", "zip"),
     ],
+    # Named ids: the gzip and zip bytes carry the time they were made, so ids built from them differ
+    # between xdist workers that collect a second apart, and xdist then refuses to run at all.
+    ids=["json", "jsonl", "csv-gz", "json-gz", "csv-zip", "jsonl-zip"],
 )
 def test_the_report_names_the_kind_of_table_and_the_container_it_arrived_in(
     storage: LocalStorage, name: str, data: bytes, source_format: str, container: str
