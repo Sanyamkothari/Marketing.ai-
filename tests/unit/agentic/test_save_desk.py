@@ -465,6 +465,7 @@ def _large_treat_list(storage: LocalStorage, run_id: str, rows: int) -> None:
             "runner_up_net_value": np.nan,
             "offer_reason": None,
             "control_group": False,
+            "score": 0.5,
             "net_value": 1.5,
             "expected_gross_value": np.nan,
             "reason_1": "age up",

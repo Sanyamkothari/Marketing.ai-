@@ -64,6 +64,7 @@ from engine.contracts import Artefact
 from engine.decide.treat_list import (
     EXPECTED_GROSS_VALUE_COLUMN,
     REASON_COLUMNS,
+    SCORE_COLUMN,
     SEGMENT_COLUMN,
     table_csv_bytes,
 )
@@ -158,7 +159,12 @@ _STRING_COLUMNS: Final[tuple[str, ...]] = (
     "offer_reason",
     *REASON_COLUMNS,
 )
-_FLOAT_COLUMNS: Final[tuple[str, ...]] = ("net_value", EXPECTED_GROSS_VALUE_COLUMN, "runner_up_net_value")
+_FLOAT_COLUMNS: Final[tuple[str, ...]] = (
+    SCORE_COLUMN,
+    "net_value",
+    EXPECTED_GROSS_VALUE_COLUMN,
+    "runner_up_net_value",
+)
 _OFFER_DETAIL_COLUMNS: Final[tuple[str, ...]] = ("runner_up_offer", "runner_up_net_value", "offer_reason")
 """M100's columns that describe the offer chosen: they go with the offer when the action is not taken."""
 _REQUIRED_COLUMNS: Final[tuple[str, ...]] = ("use_case", "treat")
@@ -943,6 +949,7 @@ def _output_columns(frame: pd.DataFrame, key_cols: tuple[str, ...]) -> list[str]
         "runner_up_net_value",
         "offer_reason",
         CONTROL_GROUP_COLUMN,
+        SCORE_COLUMN,
         "net_value",
         EXPECTED_GROSS_VALUE_COLUMN,
         *REASON_COLUMNS,
@@ -974,6 +981,7 @@ def winning_keys(arbitrated: pd.DataFrame, key_cols: tuple[str, ...], use_case: 
 def arbitrated_table(df: pd.DataFrame, key_cols: tuple[str, ...]) -> pa.Table:
     """Build the PyArrow table of an arbitrated treat list: booleans (null where unknown), floats, strings."""
     float_columns = {
+        SCORE_COLUMN,
         "net_value",
         EXPECTED_GROSS_VALUE_COLUMN,
         "runner_up_net_value",

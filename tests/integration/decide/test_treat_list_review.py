@@ -111,7 +111,8 @@ def test_a_customer_the_assignment_does_not_cover_is_null_not_true(tmp_path: Pat
     assert len(missing) == 3
     assert (out.loc[missing, "holdout"] == "").all() and (out.loc[missing, "explore"] == "").all()
     covered = run.assignment.set_index("customer_id")
-    assert (out.drop(index=missing)["holdout"] == _flag(covered[HOLDOUT_MEMBER_COLUMN])).all()
+    # (the list is ranked best first, so line it up with the assignment by customer)
+    assert (out.loc[covered.index, "holdout"] == _flag(covered[HOLDOUT_MEMBER_COLUMN])).all()
     assert summary.holdout_rows == int(covered[HOLDOUT_MEMBER_COLUMN].sum())
     assert summary.holdout_note is not None and "3 of 40" in summary.holdout_note
     frame = pd.read_parquet(io.BytesIO(storage.read_bytes(run_key(run.run_id, TREAT_LIST_PARQUET))))

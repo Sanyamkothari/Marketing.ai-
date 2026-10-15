@@ -166,7 +166,8 @@ def test_a_sure_thing_is_flagged_likely_to_stay_anyway_and_never_given_an_offer(
     desk: tuple[World, pd.DataFrame],
 ) -> None:
     world, treat = desk
-    sure = _first(treat, treat["segment"] == "sure_thing", 5)
+    # The list is ranked best first, so the first sure things could be control customers (kept back, no advice).
+    sure = _first(treat, (treat["segment"] == "sure_thing") & (treat["control_group"] == "0"), 5)
     others = _first(treat, (treat["segment"] != "sure_thing") & (treat["control_group"] == "0"), 5)
     with world.client() as client:
         for key in sure:

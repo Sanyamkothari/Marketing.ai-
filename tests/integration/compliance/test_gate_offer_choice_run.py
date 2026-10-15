@@ -94,6 +94,9 @@ def _build(app: App, run_id: str, root: Path) -> Built:
     summary = build_treat_list(storage, run_id, config_root=root)
     text = storage.read_bytes(run_key(run_id, TREAT_LIST_CSV)).decode("utf-8")
     out = pd.read_csv(io.StringIO(text), dtype=str, keep_default_na=False).set_index("customer_id")
+    # The list is ranked best first; the tests compare it with the run's other files in the scores' order.
+    scored = pd.read_parquet(io.BytesIO(storage.read_bytes(run_key(run_id, "scores.parquet"))))
+    out = out.loc[scored["customer_id"].astype(str)]
     decisions = pd.read_parquet(
         io.BytesIO(storage.read_bytes(run_key(run_id, "compliance_decisions.parquet")))
     )

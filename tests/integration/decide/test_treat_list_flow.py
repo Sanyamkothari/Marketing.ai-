@@ -86,6 +86,8 @@ def test_parity_with_holdout_assignment_when_present(tmp_path: Path) -> None:
     assert summary.holdout_rows == int(run.assignment[HOLDOUT_MEMBER_COLUMN].sum())
 
     df = pd.read_parquet(tmp_path / "runs" / run.run_id / TREAT_LIST_PARQUET)
+    # The treat list is ranked best first; the assignment is in the scores' order, so put the list back in it.
+    df = df.set_index("customer_id", drop=False).loc[run.scores["customer_id"]].reset_index(drop=True)
     # Check parity with holdout_assignment.parquet, row for row (the file is in the scores' order here)
     assert (df["holdout"].to_numpy() == run.assignment[HOLDOUT_MEMBER_COLUMN].to_numpy()).all()
     assert (df["treat"].to_numpy() == run.assignment["treated"].to_numpy()).all()
@@ -99,11 +101,54 @@ def test_the_treat_list_rows_are_the_scores_rows_and_the_csv_matches_the_parquet
     csv = pd.read_csv(
         io.BytesIO(storage.read_bytes(run_key(run.run_id, TREAT_LIST_CSV))), dtype=str, keep_default_na=False
     )
-    assert list(parquet["customer_id"]) == list(run.scores["customer_id"]) == list(csv["customer_id"])
+    # The same customers as the scores, ranked best first (not in the scores' order).
+    assert list(parquet["customer_id"]) == list(csv["customer_id"])
+    assert sorted(parquet["customer_id"]) == sorted(run.scores["customer_id"])
     assert list(parquet.columns) == list(csv.columns)
     assert (csv["treat"] == parquet["treat"].map({True: "1", False: "0"})).all()
     assert (csv["holdout"] == parquet["holdout"].map({True: "1", False: "0"})).all()
     assert (parquet["suppression_reason"].isna() == (csv["suppression_reason"] == "")).all()
+
+
+@pytest.mark.parametrize(
+    ("kind", "composite", "score_column"),
+    [
+        ("propensity", False, "winback_prob"),
+        ("uplift", False, "uplift"),
+        ("propensity", True, "winback_prob"),
+    ],
+)
+def test_the_contact_list_has_a_score_and_is_ranked_best_first(
+    tmp_path: Path, kind: str, composite: bool, score_column: str
+) -> None:
+    """The file a marketer downloads carries the model's score and is sorted by it, highest first; a tie is
+    broken by customer id, so the order never depends on the order of the uploaded file."""
+    storage = LocalStorage(tmp_path)
+    run = write_run(
+        storage, "r_20261001_0b000007", kind=kind, rows=80, holdout=True, value=True, composite=composite  # type: ignore[arg-type]
+    )
+    ensure_treat_list(storage, run.run_id)
+    csv = pd.read_csv(
+        io.BytesIO(storage.read_bytes(run_key(run.run_id, TREAT_LIST_CSV))), dtype=str, keep_default_na=False
+    )
+
+    assert "score" in csv.columns
+    assert list(csv.columns[-6:-3]) == ["score", "net_value", "expected_gross_value"]
+    scores = csv["score"].astype(float)
+    assert len(csv.index) == len(run.scores.index)
+    assert scores.is_monotonic_decreasing
+    assert scores.nunique() > 3  # a real spread, so the ordering above means something
+    # Ties go by customer id (and snapshot date), lowest first.
+    keys = ["customer_id", "snapshot_date"] if composite else ["customer_id"]
+    expected = csv.assign(_s=scores).sort_values(["_s", *keys], ascending=[False, *[True] * len(keys)])
+    assert list(expected.index) == list(csv.index)
+    # Each customer's score is the run's own score for them, not a recomputed one.
+    by_key = run.scores.assign(**{k: run.scores[k].astype(str) for k in keys}).set_index(keys)[score_column]
+    got = csv.set_index(keys)["score"].astype(float)
+    assert (got.sort_index().to_numpy() == by_key.reindex(got.sort_index().index).to_numpy()).all()
+    parquet = pd.read_parquet(io.BytesIO(storage.read_bytes(run_key(run.run_id, TREAT_LIST_PARQUET))))
+    assert list(parquet["customer_id"]) == list(csv["customer_id"])
+    assert parquet["score"].is_monotonic_decreasing
 
 
 def test_row_level_treat_list_downloads_gated_and_audited(tmp_path: Path) -> None:

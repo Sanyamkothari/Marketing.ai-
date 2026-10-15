@@ -68,7 +68,10 @@ def test_the_golden_rows_follow_from_the_artefacts_they_came_from(name: str, tmp
     storage, written, summary = _build(name, tmp_path)
     csv = _csv(storage, written.run_id).set_index("customer_id")
     scores = written.scores.set_index("customer_id")
-    assert list(csv.index) == list(scores.index), "one row per scored row, in the scores' order"
+    assert sorted(csv.index) == sorted(scores.index), "one row per scored row"
+    # ...ranked best first: the highest score on top.
+    assert csv["score"].astype(float).is_monotonic_decreasing
+    csv = csv.loc[scores.index]  # the checks below compare row by row, in the scores' order
 
     suppressed = scores["suppressed_reason"].notna()
     control = scores["control_group"].astype(bool)
@@ -124,6 +127,7 @@ def test_propensity_with_value_fills_gross_value_and_leaves_net_value_null(tmp_p
         dtype={"customer_id": str},
     ).set_index("customer_id")
     scores = written.scores.set_index("customer_id")
+    csv = csv.loc[scores.index]  # the list is ranked best first; the checks below run in the scores' order
     expected = expected_gross_values(
         scores[written.config.actions.score_field].to_numpy(dtype=float),
         pd.to_numeric(upload.reindex(scores.index)[VALUE_COLUMN], errors="coerce").to_numpy(dtype=float),
@@ -147,8 +151,10 @@ def test_propensity_with_value_fills_gross_value_and_leaves_net_value_null(tmp_p
 
 def test_uplift_with_value_reads_m97s_net_value_column(tmp_path: Path) -> None:
     storage, written, summary = _build("uplift_value_holdout", tmp_path)
-    csv = _csv(storage, written.run_id).set_index("customer_id")
     scores = written.scores.set_index("customer_id")
+    csv = (
+        _csv(storage, written.run_id).set_index("customer_id").loc[scores.index]
+    )  # ranked; back to the scores' order
     assert "net_value" in scores.columns, "M97 wrote it into the scores"
     got = pd.to_numeric(csv["net_value"].replace("", np.nan)).to_numpy(dtype=float)
     assert np.allclose(got, np.round(scores["net_value"].to_numpy(dtype=float), 2), equal_nan=True)

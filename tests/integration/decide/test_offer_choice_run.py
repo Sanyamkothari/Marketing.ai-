@@ -186,13 +186,10 @@ def _score(app: App, campaign: OfferPopulation, train: RunRecord, run_id: str, *
     text = run_artefact(app, run_id, "treat_list.csv").decode("utf-8")
     treat = pd.read_csv(io.StringIO(text), dtype=str, keep_default_na=False)
     summary = json.loads(run_artefact(app, run_id, "offer_choice.json"))
-    return Scored(
-        run_id,
-        record,
-        scores.astype({"customer_id": str}).set_index("customer_id"),
-        treat.set_index("customer_id"),
-        summary,
-    )
+    scores = scores.astype({"customer_id": str}).set_index("customer_id")
+    # The contact list is ranked best first; the tests below compare it with the scores row by row, so it is
+    # read back in the scores' order.
+    return Scored(run_id, record, scores, treat.set_index("customer_id").loc[scores.index], summary)
 
 
 def score_twice(app: App, prefix: str) -> Runs:
