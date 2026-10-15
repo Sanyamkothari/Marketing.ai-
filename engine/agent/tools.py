@@ -154,9 +154,11 @@ class AgentContext:
     target: str | None = None
     schema: FeatureSchema | None = None
     clock: Callable[[], datetime] = utc_now
-    long_text: frozenset[str] = field(default=frozenset(), init=False, repr=False, compare=False)
+    long_text: frozenset[str] = field(default=frozenset(), repr=False, compare=False)
     """G16: the file's long free-text columns (named notes, remarks, comments, or longer than 40 characters at the
-    median), found by `engine.privacy.sensitive`. The AI is shown their shape only (`Egress.build(shape_only=...)`)."""
+    median), found by `engine.privacy.sensitive`. The AI is shown their shape only (`Egress.build(shape_only=...)`).
+    It is a field so a context can be rebuilt from its own `__dict__`, but it is always worked out again from `frame`
+    in `__post_init__`: a value passed in is never trusted, so a rebuilt context cannot show raw text a new frame holds."""
     run_history: Storage | None = None
     """The deployment's store, for Plan O M244's training budget only (DEC-1814): the advisor reads this
     deployment's past runs from it and keeps the three choices it offered beside the file, so the run that takes

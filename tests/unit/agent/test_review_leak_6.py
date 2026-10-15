@@ -24,14 +24,23 @@ TOKEN = (
     "zk_live_51HxAbCdEf123456789012345"  # secret-scan: allow (a fake key the masking tests plant on purpose)
 )
 FILLER = "Customer wrote a long note about the order:"  # 43 characters
-NOTES = [f"{FILLER} {TOKEN} thanks", f"{FILLER} 4111 1111 1111 1111", "short note", "another short note"]
+# Mostly short, so the column's median stays under 40 characters and it is not "long free text" (G16 shows
+# those by shape only); the two long cells are what a look tool cuts.
+NOTES = [
+    f"{FILLER} {TOKEN} thanks",
+    f"{FILLER} 4111 1111 1111 1111",
+    "short note",
+    "another short note",
+    "ok",
+    "fine",
+]
 
 
 def test_a_cell_is_masked_whole_before_a_tool_cuts_it() -> None:
     frame = pd.DataFrame(
         {
             "customer_id": [f"C{i:05d}" for i in range(ROWS)],
-            "note": [NOTES[i % len(NOTES)] for i in range(ROWS)],
+            "memo": [NOTES[i % len(NOTES)] for i in range(ROWS)],
             "converted_30d": [1 if (i * 7) % 10 < 3 else 0 for i in range(ROWS)],
         }
     )
