@@ -53,6 +53,16 @@ AI_NO_CONSENT_REPLY: Final[str] = (
     "Allow it once for this client and I can use it."
 )
 CONSENT_FILENAME: Final[str] = "ai_consent.json"
+MAX_OVERVIEW_CHARS: Final[int] = 20_000
+"""The most the other files' overviews take of a chat prompt; files past it are left out, so a case with many wide
+files still leaves room for the chat (the prompt's own limit is `engine.agent.loop.MAX_PROMPT_CHARS`)."""
+_OVERVIEW_COLUMN_KEYS: Final[tuple[str, ...]] = (
+    "name",
+    "type",
+    "null_rate",
+    "looks_like_id",
+    "personal_data",
+)
 
 
 def consent_key(client_id: str) -> str:
@@ -148,13 +158,15 @@ def file_overviews(contexts: Sequence[AgentContext]) -> list[tuple[dict[str, Any
     """An overview of each file, made safe for a prompt by that file's own gate, with the note of what it sent.
 
     One gate per file: its own columns, its own personal-data columns, the use case's settings. The overview is
-    the chat's `get_profile` result, so it holds counts, types and roles, and no cell.
+    a short form of the chat's `get_profile` result, so it holds counts, types and roles, and no cell. Files past
+    :data:`MAX_OVERVIEW_CHARS` are left out.
     """
     from engine.agent.egress import Egress, sent_item
     from engine.agent.tools import call_tool
     from engine.agent.untrusted import for_prompt
 
     found: list[tuple[dict[str, Any], SentItem]] = []
+    room = MAX_OVERVIEW_CHARS
     for number, ctx in enumerate(contexts, start=1):
         agent = ctx.config.agent
         columns = tuple(str(c) for c in ctx.frame.columns)
@@ -164,13 +176,16 @@ def file_overviews(contexts: Sequence[AgentContext]) -> list[tuple[dict[str, Any
             always_hide=agent.always_hide_columns,
             mode=agent.ai_data_access,
         )
-        profile = call_tool(ctx, "get_profile", {}, evidence_id=f"f{number}")
+        profile: dict[str, Any] = dict(call_tool(ctx, "get_profile", {}, evidence_id=f"f{number}").result)
+        short = {
+            **{key: profile[key] for key in ("file_name", "rows", "columns_total", "primary_key_candidates")},
+            "columns": [{key: c[key] for key in _OVERVIEW_COLUMN_KEYS} for c in profile["columns"]],
+        }
         names = {column: gate.label(column) for column in columns}
-        overview = for_prompt(gate.prepare(profile.result), names)
-        found.append(
-            (
-                {"file": number, **overview},
-                sent_item(gate, "get_profile", {}, json.dumps(overview, ensure_ascii=False)),
-            )
-        )
+        overview = for_prompt(gate.prepare(short), names)
+        text = json.dumps(overview, ensure_ascii=False)
+        room -= len(text)
+        if room < 0:
+            break
+        found.append(({"file": number, **overview}, sent_item(gate, "get_profile", {}, text)))
     return found

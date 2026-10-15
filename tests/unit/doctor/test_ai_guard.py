@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -12,8 +13,10 @@ from engine.doctor import visit
 from engine.doctor.ai_guard import (
     AI_LIMIT_REPLY,
     AI_NO_CONSENT_REPLY,
+    MAX_OVERVIEW_CHARS,
     AiConsentStore,
     AiGuard,
+    file_overviews,
 )
 from engine.doctor.case import Case, CaseCounters
 from engine.doctor.config import AiLimitsConfig
@@ -81,7 +84,7 @@ def test_consent_is_kept_once_with_who_and_when(storage: LocalStorage) -> None:
 @pytest.mark.parametrize("used", [{"model_calls": 3}, {"tokens": 1_000}])
 def test_a_spent_case_makes_no_further_call_and_says_so(storage: LocalStorage, used: dict[str, int]) -> None:
     client = ToolingClient([])
-    case = open_case(storage, vs.world()).model_copy(update={"counters": CaseCounters(**used)})
+    case = open_case(storage, vs.world()).model_copy(update={"counters": CaseCounters.model_validate(used)})
     result = _converse(_guard(client, calls=3, tokens=1_000))(case, "Hello", _files())
     assert not client.calls
     assert result.reply == AI_LIMIT_REPLY and result.ai is False
@@ -109,3 +112,25 @@ def test_every_file_goes_through_its_own_gate(storage: LocalStorage) -> None:
     assert "other_files" in sent, "the second file was shown to the AI"
     assert EMAIL not in sent and "example.org" not in sent, "...masked"
     assert any("get_profile" in str(item) for item in result.sent), "and the screen can say what was sent"
+
+
+def test_many_wide_files_leave_room_for_the_chat() -> None:
+    config = load_use_case(GOAL_A)
+    wide = vs.customers(rows=50, seed=5)
+    for i in range(60):
+        wide[f"extra_measure_number_{i}"] = range(len(wide))
+    file = vs.loaded("up-w", "wide.csv", wide, config)
+    contexts = [
+        AgentContext(
+            use_case_id=GOAL_A,
+            config=config,
+            config_root=None,
+            upload_id=file.upload_id,
+            mode=RunMode.TRAIN,
+            profile=file.profile,
+            frame=file.frame,
+        )
+    ] * 40
+    found = file_overviews(contexts)
+    assert 0 < len(found) < 40, "files past the limit are left out"
+    assert sum(len(json.dumps(overview)) for overview, _sent in found) <= MAX_OVERVIEW_CHARS + 40 * 20
