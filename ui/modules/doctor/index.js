@@ -24,6 +24,7 @@ import { barTrack, crumbs, errorBox, esc, fmtInt, pageHead } from "../../dom.js"
 import { registerForYou } from "../../overview.js";
 import { TABLE_FILE_TYPES, intakeNotesHtml } from "../intake/notes.js";
 import { registerModule } from "../router.js";
+import { dataDoctorOn, dataDoctorOnNow } from "../datadoctor/switch.js";
 import { handOff } from "./handoff.js";
 
 const CSS = `
@@ -526,9 +527,17 @@ registerModule({
   name: "doctor",
   routes: ["doctor"],
   render: async (app) => {
+    // With the one Data Doctor on, this page is only its old address (Data › Data Doctor is the place).
+    if (await dataDoctorOn()) {
+      window.location.replace("#/data/check");
+      return;
+    }
     mounted = app;
     paint();
   },
 });
 
-registerForYou(() => ({ text: "Not sure where to start? Bring your data to Data Doctor", href: "#/doctor" }));
+registerForYou(() => ({
+  text: "Not sure where to start? Bring your data to Data Doctor",
+  href: dataDoctorOnNow() ? "#/data/check" : "#/doctor",
+}));

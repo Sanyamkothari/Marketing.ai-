@@ -23,6 +23,7 @@ import { announceStatus, errorBox, esc } from "../../dom.js";
 import { aiServiceStatus, AI_SERVICE_EVENT } from "../../availability.js";
 import { button, emptyState } from "../../components.js";
 import { canAccess } from "../router.js";
+import { createConnectionPicker } from "../connections/picker.js";
 import { TABLE_FILE_TYPES } from "../intake/notes.js";
 import { injectAgentStyles } from "../agent/styles.js";
 import {
@@ -101,7 +102,6 @@ function mainHtml(entry) {
   const { state: s, host } = entry;
   const level = levelOf(host);
   const sub = level + 1;
-  const accept = TABLE_FILE_TYPES;
   const err = s.error ? errorBox(s.error) : "";
   const notice = s.notice ? `<p class="dds-why" role="status" data-dds-notice>${esc(s.notice)}</p>` : "";
   if (s.loading && !s.screen) {
@@ -113,7 +113,7 @@ function mainHtml(entry) {
       icon: "data",
       title,
       text: "Data Doctor reads your file, asks only what it cannot tell, and gets it ready. It never changes your file.",
-    })}<div class="card-body">${uploadHtml({ accept, busy: s.uploadNote, first: true, quiet: true })}</div></section>${err}</div>`;
+    })}<div class="card-body">${intakeHtml(entry, { first: true, quiet: true })}</div></section>${err}</div>`;
   }
   const screen = s.screen;
   const c = screen.case;
@@ -138,7 +138,7 @@ function mainHtml(entry) {
     .join("")}${view.mode === "generic" ? missingHtml(view, kit, c) : ""}`;
   const checklist = `${checklistHtml(screen, { busy, level: sub })}${standingHtml(view, { busy, level: sub })}`;
   const proceed = continueHtml(entry);
-  const more = c.files && c.files.length && !c.read_only ? `<div class="dds-more" data-dds-more>${uploadHtml({ accept, busy: s.uploadNote, first: false })}</div>` : "";
+  const more = c.files && c.files.length && !c.read_only ? `<div class="dds-more" data-dds-more>${intakeHtml(entry, { first: false })}</div>` : "";
   return `<div class="dds" data-dds data-dds-place="${esc(host.place)}" data-dds-case="${esc(c.case_id)}"><section class="card" data-dds-header>${headerHtml(
     screen,
     { level },
@@ -150,10 +150,28 @@ function mainHtml(entry) {
   )}${section("Not sure", doubts, "data-dds-doubts", sub)}${section("More data", requests, "data-dds-requests", sub)}${
     checklist ? `<section class="card dds-card" data-dds-checklist>${checklist}</section>` : ""
   }${goalsHtml(screen, { busy, level: sub })}${approveHtml(screen, { busy: s.busy, level: sub })}${
-    !(c.files || []).length ? uploadHtml({ accept, busy: s.uploadNote, first: true }) : more
-  }${timelineHtml(screen, { level: sub })}${technicalHtml(screen)}${
+    !(c.files || []).length ? intakeHtml(entry, { first: true }) : more
+  }${timelineHtml(screen, { level: sub })}${technicalHtml(screen)}${expertHtml(entry)}${
     host.place === "data" ? `<div class="dds-actions">${button({ label: "Start a new check", kind: "tertiary", attrs: "data-dds-new" })}</div>` : ""
   }</div>`;
+}
+
+/** A file from this computer, or - once picked - the connection picker in its place ("Pick from a connection"). */
+function intakeHtml(entry, options) {
+  const s = entry.state;
+  if (s.picker) return `<section class="card dds-card" data-dds-picker>${s.picker.html()}</section>`;
+  return uploadHtml({ accept: TABLE_FILE_TYPES, busy: s.uploadNote, pick: true, ...options });
+}
+
+/** "Expert view": the way from the Doctor to Manual setup for this goal (its own record is not kept there). */
+function expertHtml(entry) {
+  const { state: s, host } = entry;
+  const goal = (s.screen && s.screen.view && s.screen.view.goal_id) || host.goalId;
+  if (!goal) return "";
+  const open = host.manual
+    ? button({ label: "Expert view", kind: "tertiary", attrs: "data-dds-expert" })
+    : button({ label: "Expert view", kind: "tertiary", href: `#/uc/${encodeURIComponent(goal)}/manual`, attrs: "data-dds-expert" });
+  return `<div class="dds-actions" data-dds-expert-row>${open}<span class="dds-why">Set this up by hand. Changes made there are not part of the Data Doctor's record.</span></div>`;
 }
 
 /** Ready for the goal: one action on - start the list (wizard, setup) or continue in the wizard (Data page). */
@@ -198,6 +216,7 @@ function draw(entry) {
   }
   entry.aside.innerHTML = asideHtml(entry);
   entry.aside.hidden = !entry.state.screen;
+  if (entry.state.picker) entry.state.picker.bind(entry.main);
 }
 
 // --- behaviour -------------------------------------------------------------------------------------------------
@@ -259,17 +278,18 @@ async function uploadGoal(host) {
   throw new ApiError(0, "DOCTOR_NO_USE_CASES", "There is no goal to read the file for.", null);
 }
 
-async function upload(entry, file) {
+/** Put a file the server now holds (uploaded, or imported from a connection) into the open case, or a new one. */
+async function bringIn(entry, name, getUpload) {
   const s = entry.state;
   const host = entry.host;
-  s.uploadNote = `Reading ${file.name}…`;
+  s.uploadNote = `Reading ${name}…`;
   await act(
     entry,
     "upload",
     async () => {
-      const answer = await postUpload(file, await uploadGoal(host), host.mode || "train");
+      const answer = await getUpload();
       if (!s.caseId) {
-        const made = await createCase([answer.upload_id], file.name);
+        const made = await createCase([answer.upload_id], name);
         s.caseId = made.case_id;
         let c = await resumeVisit(made.case_id);
         if (host.goalId) c = await chooseGoal(c, host.goalId);
@@ -282,6 +302,37 @@ async function upload(entry, file) {
   );
   s.uploadNote = "";
   draw(entry);
+}
+
+const upload = (entry, file) =>
+  bringIn(entry, file.name, async () => postUpload(file, await uploadGoal(entry.host), entry.host.mode || "train"));
+
+/** "Pick from a connection": the picker's import answers what `POST /uploads` does, so it carries on as a file does. */
+async function pickFromConnection(entry) {
+  const s = entry.state;
+  if (s.picker) return;
+  try {
+    const useCaseId = await uploadGoal(entry.host);
+    s.picker = createConnectionPicker({
+      useCaseId,
+      mode: entry.host.mode || "train",
+      redraw: () => draw(entry),
+      onCancel: () => {
+        s.picker = null;
+        draw(entry);
+      },
+      onImported: (imported, label) => {
+        s.picker = null;
+        bringIn(entry, label, async () => imported);
+      },
+    });
+  } catch (error) {
+    s.error = error;
+    draw(entry);
+    return;
+  }
+  draw(entry);
+  s.picker.start();
 }
 
 /** The hand-off: start the list with the prepared file (wizard, setup), or continue in the wizard (Data page). */
@@ -379,6 +430,8 @@ function bind(entry) {
     else if (d.ddsRevoke) act(entry, "revoke", () => revokeStanding(theCase(entry), d.ddsRevoke), { announce: "Answer revoked" });
     else if (d.ddsGoal) pickGoal(entry, d.ddsGoal);
     else if (target.hasAttribute("data-dds-continue")) proceed(entry);
+    else if (target.hasAttribute("data-dds-pick-connection")) pickFromConnection(entry);
+    else if (target.hasAttribute("data-dds-expert") && entry.host.manual) entry.host.manual();
     else if (target.hasAttribute("data-dds-new")) {
       entry.state = { ...fresh(), loading: false, ai: entry.state.ai };
       draw(entry);
@@ -493,6 +546,7 @@ export function mountDataDoctor(slots, host) {
   if (slots.aside) slots.aside.replaceChildren(entry.aside);
   else entry.main.appendChild(entry.aside);
   if (isNew || reopen) open(entry);
+  if (full.pick) pickFromConnection(entry);
   return entry;
 }
 

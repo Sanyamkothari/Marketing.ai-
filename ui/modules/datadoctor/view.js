@@ -496,7 +496,7 @@ export function goalsHtml(screen, { busy = false, level = 3 } = {}) {
 
 // --- adding a file --------------------------------------------------------------------------------------------
 
-export function uploadHtml({ accept = "", busy = "", first = true, quiet = false } = {}) {
+export function uploadHtml({ accept = "", busy = "", first = true, quiet = false, pick = false } = {}) {
   const label = first ? "Choose a file" : "Add another file";
   const text = quiet
     ? ""
@@ -506,8 +506,10 @@ export function uploadHtml({ accept = "", busy = "", first = true, quiet = false
   return `<div class="dds-upload" data-dds-upload>${text ? `<p class="dds-why">${esc(text)}</p>` : ""}<label class="btn ${first ? "primary" : "secondary"} dds-file-label" for="dds-file">${icon(
     "upload",
   )}<span>${esc(label)}</span></label><input type="file" id="dds-file" class="dds-file" accept="${esc(accept)}"${busy ? " disabled" : ""}>${
-    busy ? `<p class="loading" role="status" data-dds-busy>${esc(busy)}</p>` : ""
-  }</div>`;
+    pick && !busy
+      ? ` ${button({ label: "Pick from a connection", kind: "secondary", attrs: "data-dds-pick-connection" })}`
+      : ""
+  }${busy ? `<p class="loading" role="status" data-dds-busy>${esc(busy)}</p>` : ""}</div>`;
 }
 
 // --- the chat -------------------------------------------------------------------------------------------------

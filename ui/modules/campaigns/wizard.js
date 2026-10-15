@@ -283,7 +283,7 @@ function showCustomers(token, uc, current) {
           modelVersionId: current ? current.model_id : null,
           holds: (uploadId) => ui.started === uploadId,
           approved: (fill) => start({ uc, current, fill }),
-          manual: () => go(`#/uc/${encodeURIComponent(uc.id)}`),
+          manual: () => go(`#/uc/${encodeURIComponent(uc.id)}/manual`),
         },
       );
     },

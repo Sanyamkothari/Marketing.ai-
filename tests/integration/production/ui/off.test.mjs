@@ -59,3 +59,11 @@ test("the sign-in route says there is nothing to sign in to", async () => {
   assert.match($("#app").textContent, /Sign-in is turned off on this installation/);
   assert.equal($("#pb-signin"), null);
 });
+
+test("an address nothing owns says the page was not found, with the way Home, instead of drawing Home", async () => {
+  w.location.hash = "#/no-such-page";
+  await until(() => $("[data-not-found]"), 2000, "the not-found card");
+  assert.equal($("h1").textContent, "Page not found");
+  assert.equal($("[data-not-found] a").getAttribute("href"), "#/");
+  assert.equal($("[data-goals]"), null, "not Home");
+});

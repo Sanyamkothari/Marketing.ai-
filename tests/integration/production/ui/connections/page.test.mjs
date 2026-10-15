@@ -202,3 +202,9 @@ test("Delete asks first, then removes the card", async () => {
   assert.deepEqual(sent.deletes, [ids.s3]);
   assert.ok(!calls.some((c) => JSON.stringify(c).includes("typed-secret") && c.method === "GET"), "no secret in a URL");
 });
+
+test("#/connections/new with no kind shows the kinds to choose from, not 'could not be found'", async () => {
+  await show("#/connections/new");
+  assert.equal($("[data-not-found]"), null);
+  assert.ok($(`[data-cn-kind="${kinds.kinds.find((k) => k.creatable).kind}"]`), "the catalogue is there to choose from");
+});

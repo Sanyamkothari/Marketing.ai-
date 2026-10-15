@@ -183,7 +183,7 @@ async function showOverview(industryId) {
   paint(overviewHtml(await allIndustries(), industryId), () => bindOverview(app));
 }
 
-async function showUseCase(id, runId) {
+async function showUseCase(id, runId, { manual = false } = {}) {
   loading("form");
   const uc = await useCase(id);
   // A use case that is only AI-written text (the assistant) has nothing to show while no AI service is
@@ -208,6 +208,7 @@ async function showUseCase(id, runId) {
   if (runId) {
     await controller.loadRun(runId);
   }
+  if (manual) controller.state.setupTab = "manual";
   paint(useCaseHtml(uc, controller.state), () => controller.bind(app));
   if (controller.state.view === "running") controller.poll();
   return uc;
@@ -338,7 +339,13 @@ async function renderNow() {
       window.location.replace("#/");
       return;
     }
-    if (parts[0] !== "uc" || !parts[1]) {
+    if (parts[0] && (parts[0] !== "uc" || !parts[1])) {
+      // An address nothing owns says so, rather than drawing Home as if it were the page asked for.
+      paint(screen(`<h1 class="h1">Page not found</h1>`, notFound("page")));
+      document.title = "Page not found · Marketing AI";
+      return;
+    }
+    if (!parts[0]) {
       await showOverview(null);
       document.title = "Marketing AI · Minfy";
       return;
@@ -352,7 +359,8 @@ async function renderNow() {
       document.title = `${PAGE_TITLES[parts[2]]} · ${uc.name} · Marketing AI`;
       return;
     } else {
-      uc = await showUseCase(id, null);
+      // `#/uc/<goal>/manual` opens the Setup page on Manual setup (the Data Doctor's "Expert view" link).
+      uc = await showUseCase(id, null, { manual: parts[2] === "manual" });
     }
     document.title = `${uc.name} · Marketing AI`;
   } catch (error) {

@@ -1128,6 +1128,7 @@ function mountDoctorInstead(slots, host) {
     uc: host.uc,
     mode: host.mode,
     approved: host.mayRun === false ? null : host.approved,
+    manual: host.manual, // "Expert view" opens Manual setup in place
   });
 }
 

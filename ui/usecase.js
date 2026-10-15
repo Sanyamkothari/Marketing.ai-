@@ -918,7 +918,10 @@ function setupHtml(uc, s) {
         s,
       )}</div></div>`;
     }
-    return `${strip}<div class="setup-grid">${setupForm(uc, s)}${runsCard(uc, s)}</div>`;
+    const note = modes.map((m) => (m.manualNote ? m.manualNote() : "")).find(Boolean);
+    return `${strip}${
+      note ? `<p class="note" role="note" data-manual-note>${esc(note)}</p>` : ""
+    }<div class="setup-grid">${setupForm(uc, s)}${runsCard(uc, s)}</div>`;
   }
   if (mayRun(s)) return `<div class="setup-grid">${setupForm(uc, s)}${runsCard(uc, s)}</div>`;
   // A role that may not start runs: what it can do first, the (gated) form folded away below.
