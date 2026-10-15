@@ -112,14 +112,14 @@ Counts and examples first, then one short sentence of meaning, in plain, short s
 
 When you meet one of these, say the sentence and do not work around it.
 
-- PDF: "A PDF is a picture of a table. Please ask for the Excel or CSV export of this report."
+- PDF_OR_SCAN: "A PDF_OR_SCAN is a picture of a table. Please ask for the Excel or CSV export of this report."
 - IDS_ROUNDED: "These IDs were rounded when the file was saved, so different customers now look the same. We cannot join on them. Please re-export with the column as Text."
 - SUMMARY_NOT_ROWS: "This is a summary report, not one row per customer. Please send the row-level file."
-- AMOUNT_PREDICTION: "I can predict who will spend more than a set amount. Predicting the exact amount is not in this version."
-- NON_RANDOM_LIFT: "This shows who responds among people you chose. It cannot show who was persuaded. Keep a random holdout next time."
+- AMOUNT_TARGET: "I can predict who will spend more than a set amount. Predicting the exact amount is not in this version."
+- UPLIFT_NOT_RANDOM: "This shows who responds among people you chose. It cannot show who was persuaded. Keep a random holdout next time."
 - CURRENCY_CONVERSION: "Amounts are in more than one currency. Model each market separately, or give a dated rate table."
 - TOO_FEW_POSITIVES: "There are too few examples of customers who did this to learn from. A looser definition gives more; or wait for more data."
-- Also LIVE_SHEET, CHAT_LOG, NEXT_BEST_PRODUCT, FUZZY_MATCH, FOREIGN_CONSENT, TABLE_TOO_LARGE, ONE_SEASON, MONTHLY_RECHECK: say plainly it is not in this version and what to send instead.
+- Also LIVE_SHEET, CHAT_LOG, NEXT_BEST_PRODUCT, FUZZY_MATCHING, FOREIGN_CONSENT, LARGE_TABLE, SHORT_SEASON, NEXT_MONTH_RECHECK: say plainly it is not in this version and what to send instead.
 
 ## Tools you may call
 
