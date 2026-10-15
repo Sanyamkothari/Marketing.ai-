@@ -1,0 +1,103 @@
+# configs/pilot/data_request_messages.yaml
+# Short, ready-to-forward requests for one specific problem with a file (the "D" list in
+# docs/DATA_DOCTOR_SCENARIOS.md). The data request kit (data_request.yaml) says what we need in
+# general; these say what to send when Data Doctor has stopped on, or asked about, one file.
+# `engine/pilot/data_request.py` loads them; the `data_request` tool and the rules attach one by its
+# `selector`. Each `message` is written for the person who will forward it, so it stands on its own:
+# no mention of the platform's inner workings, no word engine/pilot/plain.py calls jargon.
+# `{placeholders}` are filled by the caller (render_request_message); a message with none needs nothing.
+
+schema_version: 1
+
+messages:
+  IDS_ROUNDED:
+    id: D1
+    title: IDs were rounded when the file was saved
+    message: >-
+      When this file was saved, Excel rounded the ID (or phone) column, so different customers now
+      show the same digits and the original numbers cannot be recovered. Please export it again with
+      that column formatted as Text before saving, or send the original .xlsx file as it is. Check that the
+      IDs do not look like 1.23457E+11.
+  SUMMARY_NOT_ROWS:
+    id: D2
+    title: A row-level export is needed, not a summary
+    message: >-
+      The file we received is a summary (totals or a pivot table), not one row per customer, order or
+      event. We cannot work back from totals to people. Please send the row-level export that the
+      summary was built from.
+  PDF:
+    id: D3
+    title: A file we can read
+    message: >-
+      We cannot read this kind of file reliably. A PDF or a photo is a picture of a table, and reading
+      numbers from a picture can get digits wrong without anyone noticing. Please send the table
+      itself. In Excel, choose File, then Save As, then Excel Workbook (.xlsx) or CSV UTF-8. If the
+      data lives in Google Sheets, choose File, then Download, then .xlsx, and tell us the date the
+      copy was taken. We never ask for a password: please remove it before sending.
+  HISTORY_NEEDED:
+    id: D4
+    title: Plan, tier or status history with dates
+    message: >-
+      The file shows each customer's plan, tier or status as it is today, so it already reflects what
+      happened afterwards. To learn from the past we need either the history of that field with the
+      date each value started, or the date each customer left or changed. Please send whichever your
+      system keeps.
+  CHURN_LIST_COMPLETE:
+    id: D5
+    title: Is this list of leavers complete?
+    message: >-
+      Please confirm that this list covers ALL customers who left between {from_date} and {to_date},
+      in every channel and region. If some are missing, please send them too: a partial list would
+      make the leavers look rarer than they are, and the results would be wrong.
+  ID_MAPPING:
+    id: D6
+    title: Old-to-new customer ID mapping
+    message: >-
+      Some IDs in these files do not match the customer file, and it looks as if the numbering changed
+      (a system move or merged customers). Please send the table that maps each old ID to the new one,
+      or the merge log from your CRM, so customers are not lost or mixed up.
+  CONSENT_SOURCE:
+    id: D7
+    title: Consent and do-not-contact lists
+    message: >-
+      Before we make a contact list we need to know who must not be contacted. Please send a fresh
+      do-not-disturb (DND) scrub, your consent records and the system they come from, your suppression
+      list, and the list of people who asked to be erased. Tell us the date of each list and what the consent was given
+      for.
+  PRODUCT_MASTER:
+    id: D8
+    title: Product list and code meanings
+    message: >-
+      Some values in the file are codes, or there are many individual products. Please send the
+      product list with each product's category and whether it is discontinued, and the code
+      dictionaries (for example plan, branch and state codes) with the meaning of each code.
+  MORE_HISTORY:
+    id: D9
+    title: A longer history
+    message: >-
+      We need at least 12 months of history, and more if possible, ideally including the same season
+      last year. With less, we cannot tell a normal month from a festival or sale month, and the
+      scores may be too high or too low. Please send the longer extract.
+  RANDOM_GROUP:
+    id: D10
+    title: Keep a random group out of your next campaign
+    message: >-
+      To learn whether a campaign changes what people do, rather than only who responds, please keep a
+      random {share} of the customers you would normally contact out of your next campaign, and tell
+      us who they were. We will work out the right size for your list.
+    defaults: {share: "5 to 10%"}
+  EXCHANGE_RATES:
+    id: D11
+    title: Exchange rates
+    message: >-
+      The amounts are in more than one currency. We do not convert currencies on our own. Please send
+      a table of exchange rates with three columns: date, currency and rate. Otherwise we will treat
+      each market separately.
+  FEED_DELAY:
+    id: D12
+    title: How late does this data arrive, and is it complete?
+    message: >-
+      The last days in this file look thinner than the days before, as if some data was still
+      arriving, or only part of it was pulled. Please tell us how many days this feed usually lags
+      behind, and send a full extract rather than a partial one. If a table is too large to copy
+      whole, please ask IT for a view with the last 18 months.

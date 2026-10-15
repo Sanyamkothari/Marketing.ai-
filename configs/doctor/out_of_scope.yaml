@@ -1,0 +1,60 @@
+# configs/doctor/out_of_scope.yaml
+# The exact sentences Data Doctor says when a situation is outside this version of the product
+# (docs/DATA_DOCTOR_SCENARIOS.md, section 4). The agent and the rules fetch them by code through
+# `engine.doctor.out_of_scope.out_of_scope`, so the same situation always gets the same words.
+# `{placeholders}` are filled by the caller. `request` is the selector of the data request message
+# in configs/pilot/data_request_messages.yaml to offer with the sentence, when there is one.
+
+schema_version: 1
+
+sentences:
+  PDF_OR_SCAN:
+    situation: A PDF, a scan or a photo of a register
+    say: "A PDF is a picture of a table. Please ask for the Excel or CSV export of this report."
+    request: PDF
+  IDS_ROUNDED:
+    situation: IDs already rounded by Excel (for example 1.23E+11)
+    say: "These IDs were rounded when the file was saved, so different customers now look the same. We cannot join on them. Please re-export with the column as Text."
+    request: IDS_ROUNDED
+  LIVE_SHEET:
+    situation: A link to a live Google Sheet or another online source
+    say: "Download it as .xlsx (File > Download). Which date is this copy from?"
+    request: PDF
+  CHAT_LOG:
+    situation: A chat-log text export
+    say: "This is a chat log, not a customer table. Send the delivery report export instead."
+  AMOUNT_TARGET:
+    situation: Predicting an amount (lifetime value, spend in the next 90 days)
+    say: "I can predict who will spend more than {amount}. Predicting the exact amount is not in this version."
+  NEXT_BEST_PRODUCT:
+    situation: Next best product across many products
+    say: "Pick one product to predict. We can repeat this for others."
+  UPLIFT_NOT_RANDOM:
+    situation: Measuring the effect of a past campaign that was not random
+    say: "This shows who responds among people you chose. It cannot show who was persuaded. Keep a random group out of the next campaign."
+    request: RANDOM_GROUP
+  CURRENCY_CONVERSION:
+    situation: Automatic currency conversion
+    say: "Amounts are in {currencies}. Model each market separately, or give a dated rate table."
+    request: EXCHANGE_RATES
+  FUZZY_MATCHING:
+    situation: Matching people by similar names
+    say: "These may be duplicates; we kept them separate."
+  FOREIGN_CONSENT:
+    situation: Consent rules outside India
+    say: "Only Indian consent rules are checked. Customers in other countries are excluded from the list until you confirm their consent."
+    request: CONSENT_SOURCE
+  LARGE_TABLE:
+    situation: A very large table, or a pull without filters
+    say: "This table is too large to copy whole. Please ask IT for a view with the last 18 months."
+    request: FEED_DELAY
+  SHORT_SEASON:
+    situation: Less than 13 months of history
+    say: "Your data covers one festive season only. Scores may be too high in a normal month."
+    request: MORE_HISTORY
+  TOO_FEW_POSITIVES:
+    situation: Too few examples of the outcome (fewer than about 50)
+    say: "There are only {count} examples of customers who {outcome}. We need about {needed}. A looser definition gives {looser_count}; or wait until {date}."
+  NEXT_MONTH_RECHECK:
+    situation: Automatic re-checks of next month's file
+    say: "Bring next month's file and we will reuse your answers. Check the changes we list."

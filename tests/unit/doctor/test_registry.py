@@ -531,18 +531,39 @@ def test_data_request_takes_configured_use_cases_only(agent: AgentContext) -> No
     assert made.output
 
 
+def test_data_request_attaches_forwardable_messages_by_selector(agent: AgentContext) -> None:
+    ctx = DataToolContext(agent=agent, principal=VIEWER, caller="person")
+    made = data_registry().call("data_request", {"messages": ["IDS_ROUNDED", "CHURN_LIST_COMPLETE"]}, ctx)
+    sent = {m["selector"]: m for m in made.output["messages"]}
+    assert list(sent) == ["IDS_ROUNDED", "CHURN_LIST_COMPLETE"]
+    assert sent["IDS_ROUNDED"]["id"] == "D1"
+    assert (
+        "[from date]" in sent["CHURN_LIST_COMPLETE"]["message"]
+    ), "a blank the Doctor cannot know is left to fill in"
+    assert not data_registry().call("data_request", {}, ctx).output["messages"]
+    for bad in (["NO_SUCH_MESSAGE"], ["lower"], ["A_" * 30], ["PDF", "D_TWO", "D_THREE"]):
+        with pytest.raises(DataToolError) as refused:
+            data_registry().call("data_request", {"messages": bad}, ctx)
+        assert refused.value.code == "TOOL_INPUT_INVALID", bad
+
+
 def test_the_longest_data_requests_fit_its_budget() -> None:
-    """The four use cases whose requests are longest, asked together, fit `data_request`'s 16 KB."""
+    """The four use cases whose requests are longest, asked together with the longest forwardable messages the
+    tool attaches, fit `data_request`'s 16 KB."""
     from engine.config import list_use_case_ids
-    from engine.pilot.data_request import build_data_request
+    from engine.pilot.data_request import build_data_request, load_request_messages
 
     def size(ids: tuple[str, ...]) -> int:
         return len(json.dumps(build_data_request(ids).model_dump(mode="json")).encode())
 
     longest = sorted(list_use_case_ids(), key=lambda u: size((u,)), reverse=True)
     widest = tuple(longest[: tools_module.DATA_REQUEST_MAX_USE_CASES])
+    messages = load_request_messages()
+    wordiest = sorted(messages, key=lambda key: len(messages[key].message), reverse=True)
+    attached = wordiest[: tools_module.DATA_REQUEST_MAX_MESSAGES]
     ctx = DataToolContext(principal=VIEWER, caller="person")
-    assert data_registry().call("data_request", {"use_case_ids": list(widest)}, ctx).output
+    args = {"use_case_ids": list(widest), "messages": attached}
+    assert data_registry().call("data_request", args, ctx).output
 
 
 def test_an_edit_made_through_the_registry_is_saved(agent: AgentContext) -> None:
