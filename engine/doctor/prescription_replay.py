@@ -592,9 +592,6 @@ def replay_prescription(
                 leak_check=_leak(mode),
                 contract=part.contract,
                 slot=part.slot,
-                tables=case_tables(
-                    {f.slot: f.frame for f in files}, prescription.files
-                ),  # a query names its file
             )
             trail.recipes.append(run.receipt)
             trail.add("recipe", "replayed", slot=part.slot, rows_in=len(frame), rows_out=len(run.frame))

@@ -26,6 +26,7 @@ import pandas as pd
 from pydantic import JsonValue
 
 from engine.agent.contracts import AgentConfidence, RecipeStep, RecipeStepKind
+from engine.agent.sql_step import THIS_TABLE, table_alias
 from engine.doctor.detect_time_keys import CHECK_KIND, _decided, _outcome_meanings
 from engine.doctor.prescription import slot_name
 from engine.doctor.protocol import Ask
@@ -49,13 +50,16 @@ _MONEY: Final[re.Pattern[str]] = re.compile(r"total|amount|revenue|bill|charge|s
 _STATUS: Final[re.Pattern[str]] = re.compile(r"status|state|stage", re.I)
 _NOT_MONEY: Final[re.Pattern[str]] = re.compile(r"fail|declin|refund|revers|chargeback|bounce", re.I)
 _TREATED: Final[re.Pattern[str]] = re.compile(
-    r"(^|_)(contacted|treated|exposed|sent|mailed|targeted|messaged|received)($|_)", re.I
+    r"(^|_)(contacted|treated|exposed|sent|mailed|targeted|messaged)($|_)", re.I
 )
 _HELD_OUT: Final[re.Pattern[str]] = re.compile(
-    r"hold.?out|control|random|(^|_)(arm|variant|group|cell)($|_)", re.I
+    r"hold.?out|control|random|(^|_)(arm|variant)($|_)|^((ab|test|treatment)_)?group$", re.I
 )
-_ACTIVITY: Final[re.Pattern[str]] = re.compile(
-    r"order|purchase|login|visit|transaction|txn|usage|active", re.I
+"""A holdout column's name ("age_group" or "cell_phone" is not one)."""
+_ACTIVITY: Final[re.Pattern[str]] = re.compile(r"order|purchase|login|visit|transaction|txn|usage", re.I)
+"""Activity history (a count or a date); a flag such as `is_active` or an amount is not."""
+_NOT_DONE: Final[str] = (
+    " This change could not be prepared here, so an answer is recorded and nothing is changed."
 )
 _HOLDS: Final[re.Pattern[str]] = re.compile(
     r"^(has|have|holds?|owns?|already)_|^existing_|_(held|owned)$", re.I
@@ -224,19 +228,19 @@ def _total_ask(f: _File, group: str, column: str, left: int) -> Ask:
     table = slot_name(Path(f.name).stem)
     sql = (
         f'SELECT * REPLACE (CASE WHEN row_number() OVER (PARTITION BY "{group}" ORDER BY "{f.key or group}") = 1 '
-        f'THEN "{column}" END AS "{column}") FROM t_{table}'
+        f'THEN "{column}" END AS "{column}") FROM {table_alias(table)}'
     )
     effect = _sql_effect(f, sql, table, f"Count the {once}")
     detail = (
         f"The {_words(column)} is the same on every row of the same {_words(group)}, so it looks like the "
         f"{_words(column)} repeated on each line item. Count it once per {_words(group)}?"
-    )
+    ) + ("" if effect else _NOT_DONE)
     return build_ask(
         "Q21",
         {"id": group, "file": f.name, "detail": detail},
         rows=f.rows,
         choices=[
-            f"Take the {once}: the later rows of a {_words(group)} are left blank",
+            f"Take the {once}: the later rows of each {_words(group)} are left blank",
             "Count every row as it is",
         ],
         recommended_choice=0,
@@ -263,11 +267,17 @@ def _sql_effect(f: _File, sql: str, table: str, title: str) -> OptionEffect | No
         _LOG.info("doctor.grain_sql_refused code=%s", exc.code)
         return None
     proposal = SqlStepProposal.model_validate(result.output)
+    # Tried on the file by its name (for the receipt); kept as a step of the file's own recipe that reads `this`,
+    # the file as the steps above left it, so an earlier approved step is never undone on replay.
+    this = sql.replace(table_alias(table), table_alias(THIS_TABLE))
+    step = {**proposal.step, "params": {**proposal.step["params"], "sql": this, "inputs": [THIS_TABLE]}}
     payload: dict[str, JsonValue] = {
+        **{k: v for k, v in proposal.payload().items() if k != "stage"},
         "upload_id": f.upload_id,
         "path": None,
         "value": None,
-        **proposal.payload(),
+        "step": step,
+        "detail": this,
     }
     return OptionEffect(option_id="x", kind="recipe_step", title=proposal.title, payload=payload)
 
@@ -275,14 +285,14 @@ def _sql_effect(f: _File, sql: str, table: str, title: str) -> OptionEffect | No
 def _log_ask(f: _File, group: str, status: str, when: str, left: int) -> Ask:
     table = slot_name(Path(f.name).stem)
     sql = (
-        f'SELECT * FROM t_{table} QUALIFY row_number() OVER (PARTITION BY "{group}" '
+        f'SELECT * FROM {table_alias(table)} QUALIFY row_number() OVER (PARTITION BY "{group}" '
         f'ORDER BY "{when}" DESC, "{f.key or group}" DESC) = 1'
     )
     effect = _sql_effect(f, sql, table, f"Keep only the latest row of each {_words(group)}")
     detail = (
         f"The {_words(status)} changes from row to row, so it looks like a status history. Count the latest "
         f"status per {_words(group)}?"
-    )
+    ) + ("" if effect else _NOT_DONE)
     return build_ask(
         "Q21",
         {"id": group, "file": f.name, "detail": detail},
@@ -386,8 +396,9 @@ def _holdout(f: _File) -> list[Ask | CaseItem]:
 # ---------------------------------------------------------------------------
 # Who can have the outcome (Q23): never active, or already holds the product
 # ---------------------------------------------------------------------------
-_Found = tuple[str, str, list[str], "pd.Series[Any]", str]
-"""The column to test, the `remove_rows` operator and values, the rows to leave out, and why."""
+_Found = tuple[str, "dict[str, Any] | None", "pd.Series[Any]", str]
+"""The column, the `remove_rows` params that leave out exactly those rows (None when no one column says it), the
+rows to leave out, and why."""
 
 
 def _eligible(f: _File) -> list[Ask | CaseItem]:
@@ -401,18 +412,19 @@ def _eligible(f: _File) -> list[Ask | CaseItem]:
         found = _holders(f.frame, columns)
     if found is None:
         return []
-    column, operator, values, mask, reason = found
+    column, params, mask, reason = found
     count, hits = int(mask.sum()), int((mask & yes).sum())
     rates = [float((yes & ~mask).sum() / max(1, (~mask).sum()) * 100), float(yes.mean() * 100)]
     if count < _MIN_SHARE * len(f.frame) or abs(rates[0] - rates[1]) < _MIN_RATE_MOVE:
         return []
-    step = _step(
-        RecipeStepKind.REMOVE_ROWS, column, {"operator": operator, "values": values}, f"Leave out: {reason}"
-    )
+    effect = None
+    if params is not None:
+        step = _step(RecipeStepKind.REMOVE_ROWS, column, params, f"Leave out: {reason}")
+        effect = _effect(f.upload_id, step, f"Leave out the {count:,} customers who {reason}.")
     said = {
         "count": f"{count:,}",
         "file": f.name,
-        "reason": reason,
+        "reason": reason + ("" if effect else "." + _NOT_DONE.rstrip(".")),
         "positives": f"{hits:,}",
         "outcome": f.outcome,
     }
@@ -423,7 +435,7 @@ def _eligible(f: _File) -> list[Ask | CaseItem]:
             rows=f.rows,
             rows_changed=[count, 0],
             label_rates=rates,
-            effects=[_effect(f.upload_id, step, f"Leave out the {count:,} customers who {reason}."), None],
+            effects=[effect, None] if effect else None,
             upload_id=f.upload_id,
             column=column,
         )
@@ -435,15 +447,17 @@ def _blank_or_zero(series: pd.Series[Any]) -> pd.Series[Any]:
 
 
 def _never_active(frame: pd.DataFrame, columns: list[str]) -> _Found | None:
-    """Rows with a blank or zero in every activity column (last order, orders count, visits...)."""
-    active = [c for c in columns if _ACTIVITY.search(c) and not _ID.search(c)]
+    """Rows with a blank or zero in every activity column (last order date, orders count, visits...)."""
+    active = [c for c in columns if _ACTIVITY.search(c) and not _ID.search(c) and not _MONEY.search(c)]
     if not active:
         return None
-    blank = {c: _blank_or_zero(frame[c]) for c in active}
-    mask = pd.concat(list(blank.values()), axis=1).all(axis=1)
-    column = min(active, key=lambda c: int(blank[c].sum()))  # the one that says it most closely
-    number = _numbers(frame[column]).notna().mean() > 0.9
-    return column, ("equals" if number else "is_empty"), (["0"] if number else []), mask, "were never active"
+    mask = pd.concat([_blank_or_zero(frame[c]) for c in active], axis=1).all(axis=1)
+    for column in active:  # a step on one column, only when it leaves out exactly the rows counted
+        if _numbers(frame[column]).eq(0).equals(mask):
+            return column, {"operator": "equals", "values": ["0"]}, mask, "were never active"
+        if (frame[column].isna() | frame[column].astype(str).str.strip().eq("")).equals(mask):
+            return column, {"operator": "is_empty", "values": []}, mask, "were never active"
+    return active[0], None, mask, "were never active"
 
 
 def _holders(frame: pd.DataFrame, columns: list[str]) -> _Found | None:
@@ -454,5 +468,5 @@ def _holders(frame: pd.DataFrame, columns: list[str]) -> _Found | None:
             values = sorted(
                 {str(v).strip() for v in frame.loc[yes, column].dropna()} | {"1"}
             )  # "1": once mapped
-            return column, "in", values, yes, "already hold the product"
+            return column, {"operator": "in", "values": values}, yes, "already hold the product"
     return None
