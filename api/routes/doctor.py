@@ -40,12 +40,13 @@ from api.routes.uploads import (
     profile_row_cap,
     use_case_config,
 )
-from api.schemas import ErrorResponse, UploadResponse
+from api.schemas import ErrorResponse, UploadRecord, UploadResponse
 from engine.access.roles import Role
 from engine.config import (
     DEFAULT_INDUSTRY,
     ConfigError,
     RunMode,
+    UseCaseConfig,
     UseCaseStatus,
     get_roles,
     list_industries,
@@ -211,6 +212,21 @@ def handoff(
         return UploadResponse(
             upload_id=record.upload_id, profile=profile, intake=_intake(storage, record.intake_key)
         )
+    upload = clone_upload(
+        storage, root, record, config, mode=record.mode if record.mode is RunMode.SCORE else RunMode.TRAIN
+    )
+    response.headers["Location"] = f"/uploads/{upload.upload_id}/profile"
+    return upload
+
+
+def clone_upload(
+    storage: Storage, root: Path, record: UploadRecord, config: UseCaseConfig, *, mode: RunMode
+) -> UploadResponse:
+    """A new upload of `config`'s use case with the bytes of `record`, read the same way, for `mode`.
+
+    The hand-off uses it to move a file to another use case; the campaign run uses it to score the same
+    customers a model learned from (a score run needs an upload of its own, made for scoring).
+    """
     previous = _intake(storage, record.intake_key)
     # The file as it arrived; an erasure deletes a kept original, and then the table read from it is used.
     kept = record.original_key is not None and storage.exists(record.original_key)
@@ -228,7 +244,7 @@ def handoff(
     with storage.open_read(source) as reader, storage.open_write(target) as writer:
         while chunk := reader.read(1 << 20):
             writer.write(chunk)
-    upload = finish_upload(
+    return finish_upload(
         storage,
         config,
         upload_id=upload_id,
@@ -236,14 +252,12 @@ def handoff(
         file_format=received,
         file_name=record.file_name,
         file_size_bytes=size,
-        mode=record.mode if record.mode is RunMode.SCORE else RunMode.TRAIN,
+        mode=mode,
         synthetic=record.synthetic,
         intake=load_intake_config(root),
         sheet=previous.sheet if previous is not None else None,
         intake_enabled=not (previous is not None and previous.turned_off),
     )
-    response.headers["Location"] = f"/uploads/{upload_id}/profile"
-    return upload
 
 
 def _intake(storage: Storage, key: str | None) -> IntakeReport | None:

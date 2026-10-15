@@ -436,5 +436,13 @@ def _install_case_screen(app: FastAPI) -> None:
 PHASE_APP_HOOKS.append(_install_case_screen)
 # ---- END PLAN-O ----
 
+# The campaign run: train, score, contact list and campaign on the server, so the browser can close. Its startup
+# hook builds nothing unless a run was ever started here.
+from api.routes.campaign_runs import install_campaign_runs  # noqa: E402
+from api.routes.campaign_runs import router as campaign_runs_router  # noqa: E402
+
+PHASE_APP_HOOKS.append(install_campaign_runs)
+PHASE_ROUTERS.append(campaign_runs_router)
+
 
 app: FastAPI = create_app()
