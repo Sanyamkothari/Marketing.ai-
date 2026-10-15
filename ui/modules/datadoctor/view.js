@@ -518,7 +518,14 @@ export function uploadHtml({ accept = "", busy = "", first = true, quiet = false
  * The chat. `ai` is the AI service's state for Data Doctor: true (connected), false (none connected: the way to
  * Settings › AI service, never Connections) or null (not known: the input is offered and the server answers).
  */
-export function chatHtml(screen, { ai = null, draft = "", busy = false, canConnect = true, openSent = new Set(), level = 3 } = {}) {
+export const AI_CONSENT_LINE = "The Doctor is working with its rules only. Its AI has not been allowed to read this client's data.";
+export const AI_CONSENT_BUTTON = "Let the Doctor's AI read masked summaries of this client's data";
+export const AI_SPENT_LINE = "The AI has used up what this check may spend on it. The Doctor goes on with its rules only.";
+
+export function chatHtml(
+  screen,
+  { ai = null, draft = "", busy = false, canConnect = true, openSent = new Set(), level = 3, use = null, canConsent = true } = {},
+) {
   const entries = (screen.case.chat || [])
     .map((m, i) =>
       m.role === "user"
@@ -543,6 +550,19 @@ export function chatHtml(screen, { ai = null, draft = "", busy = false, canConne
     return `<section class="dds-chat card" data-dds-chat aria-labelledby="dds-chat-t">${head}<div class="gchat">${entries}</div><div class="dds-nochat" role="status"><p data-ai-not-connected>${esc(
       `${AI_NOT_CONNECTED_SENTENCE} ${rest}`,
     )}</p>${go}<p class="dds-why">Everything else on this screen works without it.</p></div></section>`;
+  }
+  if (use && !use.consent) {
+    const give = canConsent
+      ? `<div class="dds-actions">${button({ label: AI_CONSENT_BUTTON, kind: "secondary", attrs: "data-dds-ai-consent", disabled: busy })}</div>`
+      : `<p class="dds-why">Ask someone who can change this check to allow it.</p>`;
+    return `<section class="dds-chat card" data-dds-chat aria-labelledby="dds-chat-t">${head}<div class="gchat">${entries}</div><div class="dds-nochat" role="status"><p data-ai-no-consent>${esc(
+      AI_CONSENT_LINE,
+    )}</p>${give}</div></section>`;
+  }
+  if (use && use.spent) {
+    return `<section class="dds-chat card" data-dds-chat aria-labelledby="dds-chat-t">${head}<div class="gchat">${entries}</div><div class="dds-nochat" role="status"><p data-ai-spent>${esc(
+      AI_SPENT_LINE,
+    )}</p></div></section>`;
   }
   const empty = entries
     ? ""

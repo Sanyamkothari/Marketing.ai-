@@ -13,6 +13,8 @@ off - the default - none of these paths exists and docs/API.md is unchanged.
 | `POST /cases/{case_id}/chat` | Analyst | Writes to Data Doctor; with no AI service the reply says so and nothing else changes. |
 | `POST /cases/{case_id}/confirmations` | Analyst | Plan O M246: the own yes of one APPROVE-class item, with the exact sentence read (the item's role is checked). |
 | `POST /cases/{case_id}/standing-answers/{answer_id}/revoke` | Analyst | Plan O M246: revokes a standing answer; its question is asked again. |
+| `GET /cases/{case_id}/ai` | Viewer | Whether the client has let the Doctor's AI read masked summaries (who and when), and what the case has used of its AI limit. |
+| `POST /cases/{case_id}/ai-consent` | Analyst | Records, once for the client, that the Doctor's AI may read masked summaries of its data. |
 | `GET /goal-briefs/{goal_id}` | Viewer | What a goal needs (the goal brief), from configuration. |
 
 Every change names the case `version` it was made against (`409 CASE_VERSION_CONFLICT` when it moved) and may carry
@@ -31,6 +33,7 @@ ledger (`data.prescription.approved`, `data.decision`).
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from datetime import datetime
 from pathlib import Path
 from typing import Annotated, Any, Final
 
@@ -79,6 +82,16 @@ POLICIES: Final[dict[tuple[str, str], RoutePolicy]] = {
     ),
     ("POST", "/cases/{case_id}/standing-answers/{answer_id}/revoke"): _policy(
         "cases.revoke_standing", "revoke a remembered answer"
+    ),
+    ("POST", "/cases/{case_id}/ai-consent"): _policy(
+        "cases.ai_consent", "let the Doctor's AI read masked summaries of a client's data"
+    ),
+    ("GET", "/cases/{case_id}/ai"): RoutePolicy(
+        role=Role.VIEWER,
+        action="cases.ai_status",
+        purpose="see whether the Doctor's AI may read a client's data and what it has used",
+        object_type="case",
+        object_param="case_id",
     ),
     ("GET", "/goal-briefs/{goal_id}"): RoutePolicy(
         role=Role.VIEWER, action="doctor.goal_brief_read", purpose="see what a goal needs"
@@ -152,6 +165,21 @@ class ConfirmationRequest(_Change):
 
 class ChatRequest(_Change):
     message: str = Field(min_length=1, max_length=4_000)
+
+
+class AiStatus(StrictBase):
+    """Answer of `GET /cases/{case_id}/ai`."""
+
+    consent: bool = Field(description="True once the client has let the Doctor's AI read masked summaries.")
+    given_by: str | None = None
+    given_at: datetime | None = None
+    tokens_used: int
+    tokens_limit: int
+    calls_used: int
+    calls_limit: int
+    spent: bool = Field(
+        description="True when the case has used up its AI limit: the Doctor uses its rules only."
+    )
 
 
 def _error(exc: CaseError) -> Exception:
@@ -229,7 +257,7 @@ def _converse(
     from api.routes.ai_service import resolve_slot
     from engine.agent.tools import AgentContext
     from engine.config import RunMode, load_use_case
-    from engine.generative.budget import Meter
+    from engine.doctor.ai_guard import AiConsentStore, AiGuard
     from engine.generative.guardrails import Guardrails, load_policy
 
     if not offers:
@@ -241,7 +269,15 @@ def _converse(
         )
     except HTTPException:
         return None
-    meter = Meter(ai.client, job_id="data-doctor", llm=ai.llm, budget=default.generative.budget)
+    # Every Doctor AI call goes through this one guard: the case's spending limit and the client's consent.
+    meter = AiGuard(
+        ai.client,
+        job_id="data-doctor",
+        llm=ai.llm,
+        budget=default.generative.budget,
+        limits=default.data_doctor.ai_limits,
+        consented=lambda client_id: AiConsentStore(storage).get(client_id) is not None,
+    )
     guardrails = Guardrails(load_policy(root), meter=meter, prompts_root=root)
 
     def context_for(case: Case, files: tuple[LoadedFile, ...]) -> AgentContext:
@@ -259,7 +295,7 @@ def _converse(
         )
 
     return doctor_visit.plan_g_converse(
-        context_for, meter=meter, guardrails=guardrails, principal=principal, config_root=root
+        context_for, meter=meter, guardrails=guardrails, principal=principal, config_root=root, guard=meter
     )
 
 
@@ -515,6 +551,72 @@ def chat_message(
     except CaseError as exc:
         raise _error(exc) from exc
     return _done(request, case)
+
+
+def _ai_status(storage: Storage, root: Path, client_id: str, case_id: str) -> AiStatus:
+    from api.routes.doctor import offers as doctor_offers
+    from engine.doctor.ai_guard import AiConsentStore
+    from engine.doctor.case import CaseStore
+    from engine.doctor.config import AiLimitsConfig
+
+    case = CaseStore(storage).get(client_id, case_id)
+    offers = doctor_offers(root)
+    limits = offers[0].config.data_doctor.ai_limits if offers else AiLimitsConfig()
+    consent = AiConsentStore(storage).get(client_id)
+    return AiStatus(
+        consent=consent is not None,
+        given_by=None if consent is None else consent.given_by,
+        given_at=None if consent is None else consent.given_at,
+        tokens_used=case.counters.tokens,
+        tokens_limit=limits.max_tokens_per_case,
+        calls_used=case.counters.model_calls,
+        calls_limit=limits.max_calls_per_case,
+        spent=case.counters.tokens >= limits.max_tokens_per_case
+        or case.counters.model_calls >= limits.max_calls_per_case,
+    )
+
+
+@router.get(
+    "/cases/{case_id}/ai", response_model=AiStatus, responses=_ERRORS, summary="The Doctor's AI on a case"
+)
+def ai_status(
+    case_id: str,
+    storage: StorageDep,
+    root: ConfigRootDep,
+    client_id: Annotated[str, Query(pattern=CLIENT_ID_PATTERN)] = DEFAULT_CLIENT_ID,
+) -> AiStatus:
+    try:
+        return _ai_status(storage, root, client_id, case_id)
+    except CaseError as exc:
+        raise _error(exc) from exc
+
+
+@router.post(
+    "/cases/{case_id}/ai-consent",
+    response_model=AiStatus,
+    responses=_ERRORS,
+    summary="Let the Doctor's AI read masked summaries of this client's data",
+)
+def give_ai_consent(
+    case_id: str,
+    body: ResumeRequest,
+    request: Request,
+    storage: StorageDep,
+    root: ConfigRootDep,
+    principal: PrincipalDep,
+) -> AiStatus:
+    from engine.doctor.ai_guard import AiConsentStore
+    from engine.utils.time import utc_now
+
+    try:
+        status = _ai_status(storage, root, body.client_id, case_id)  # also refuses a case that is not there
+    except CaseError as exc:
+        raise _error(exc) from exc
+    if not status.consent:
+        AiConsentStore(storage).give(body.client_id, actor=principal.user_id, at=utc_now())
+        status = _ai_status(storage, root, body.client_id, case_id)
+    set_audit_context(request, object_id=case_id, object_type="case")
+    return status
 
 
 @router.get(

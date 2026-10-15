@@ -23,7 +23,7 @@ from typing import Final
 
 from pydantic import BaseModel, ConfigDict, Field, StrictBool
 
-__all__ = ["DataDoctorConfig", "TimeSettingsConfig"]
+__all__ = ["AiLimitsConfig", "DataDoctorConfig", "TimeSettingsConfig"]
 
 _SETTINGS: Final[ConfigDict] = ConfigDict(
     extra="forbid",
@@ -67,6 +67,20 @@ class TimeSettingsConfig(BaseModel):
     )
 
 
+class AiLimitsConfig(BaseModel):
+    """`data_doctor.ai_limits`: what the Doctor's AI may spend on one case. When either is used up the Doctor
+    says so and carries on with its rules alone."""
+
+    model_config = _SETTINGS
+
+    max_tokens_per_case: int = Field(
+        default=600_000, ge=1, description="Tokens (read plus written) the AI may use on one case."
+    )
+    max_calls_per_case: int = Field(
+        default=60, ge=1, description="Calls to the AI service the Doctor may make on one case."
+    )
+
+
 class DataDoctorConfig(BaseModel):
     """`data_doctor:` in a use case: Plan O's one Data Doctor agent: the switch (M230) and the workspace currency (M242)."""
 
@@ -95,5 +109,13 @@ class DataDoctorConfig(BaseModel):
         description=(
             "Plan O M244 (DEC-1814): the training budget's diminishing-returns step and the ratios of its three "
             "choices. Read only while `unified` is on; the defaults are left out of a dump so nothing moves."
+        ),
+    )
+    ai_limits: AiLimitsConfig = Field(
+        default_factory=AiLimitsConfig,
+        exclude_if=lambda value: value == AiLimitsConfig(),
+        description=(
+            "The most tokens and calls the Doctor's AI may use on one case. Read only while `unified` is on; "
+            "the defaults are left out of a dump so nothing moves."
         ),
     )

@@ -56,7 +56,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -346,11 +346,13 @@ def chat_turn(
     config_root: Path | None = None,
     clock: Callable[[], datetime] = utc_now,
     principal: Principal | None = None,
+    case_files: Sequence[tuple[dict[str, Any], SentItem]] = (),
 ) -> TurnResult:
     """Answer one message. Never raises for a model's mistake; the reply says what happened.
 
     `principal` is who is asking; with `data_doctor.unified` on, the registry checks their role on every
-    tool call (Plan O M232). Unused with the switch off.
+    tool call (Plan O M232). Unused with the switch off. `case_files` are the case's other files, each already
+    made safe by its own gate (`engine.doctor.ai_guard.file_overviews`) with the note of what it sends.
     """
     agent = ctx.config.agent
     prefix = f"c{len(session.transcript) // 2 + 1}-"
@@ -397,8 +399,14 @@ def chat_turn(
         names=(*columns, *names.values()),
         guardrails=guardrails,
     )
-    state = json.dumps(
-        for_prompt(gate.prepare(_state(session, gate), extra_text_keys=STATE_TEXT_KEYS), names),
+    shown_state = for_prompt(gate.prepare(_state(session, gate), extra_text_keys=STATE_TEXT_KEYS), names)
+    state = json.dumps(shown_state, ensure_ascii=False)
+    prompt_state = json.dumps(
+        (
+            {**shown_state, "other_files": [overview for overview, _sent in case_files]}
+            if case_files
+            else shown_state
+        ),
         ensure_ascii=False,
     )
     shown_settings = [
@@ -459,7 +467,7 @@ def chat_turn(
             "knowledge": knowledge,
             "tools": _tools(ctx) if doctor is None else doctor.tools(),
             "settings": shown_settings,
-            "state": state,
+            "state": prompt_state,
             "column_choices": column_choices,
             "message": message,
             "turn_results": (
@@ -485,6 +493,7 @@ def chat_turn(
         if not state_recorded:
             state_recorded = True
             sent.append(state_item)
+            sent.extend(note for _overview, note in case_files)
         for index in included:
             item = items[index]
             if item is not None and index not in recorded:

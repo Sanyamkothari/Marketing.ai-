@@ -155,6 +155,11 @@ def test_a_chat_whose_process_died_during_the_ai_call_is_answered_by_the_ai_on_r
     case = first.post("/cases", json={"upload_ids": [_upload(first)]}).json()
     case = _answer_open(first, first.post(f"/cases/{case['case_id']}/visit", json={}).json())
     case_id = case["case_id"]
+    assert (
+        first.get(f"/cases/{case_id}/ai").json()["consent"] is False
+    ), "the AI is not asked until the client says yes"
+    given = first.post(f"/cases/{case_id}/ai-consent", json={})
+    assert given.status_code == 200 and given.json()["consent"] is True and given.json()["given_by"]
     with pytest.raises(_Killed):
         first.post(f"/cases/{case_id}/chat", json={"version": case["version"], "message": "What is here?"})
     asked = len(built)
