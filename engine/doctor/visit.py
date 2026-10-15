@@ -291,6 +291,8 @@ class Detected:
     doubts: tuple[CaseDoubt, ...] = ()
     requests: tuple[DataRequest, ...] = ()
     evidence: tuple[DataToolResult, ...] = ()
+    items: tuple[CaseItem, ...] = ()
+    """Proposals the detector makes outright (the cleaning fixes): pending, or ticked when the values prove them."""
 
 
 class DetectorPort(Protocol):
@@ -1703,6 +1705,7 @@ def _detect(run: _Run, case: Case, brief: GoalBrief | None, step: _Step) -> None
     for detector in run.deps.detectors:
         found = detector(case, files, brief)
         step.evidence.extend(found.evidence)
+        step.items.extend(found.items)
         outputs = {result.evidence_id: result.output for result in found.evidence}
         for doubt in found.doubts:
             _ground(case, doubt, outputs, names)
