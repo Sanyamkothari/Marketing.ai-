@@ -123,21 +123,21 @@ def _clean(
         )
         if proposal.step is not None and proposal.column not in mixed
     ]
-    taken = {(p.column, p.step.kind) for p in indian if p.step is not None}
     never = _never_ticked(config, root)
     for found in indian:
         items.append(_indian_item(found, upload_id, never, now))
     if config is not None:
+        # The Indian checks' columns: the advisor's number or yes/no fix (or question) there is the same problem.
+        taken = {found.column for found in indian}
         advice_items, advice_asks = _advised(loaded, config, root, key, outcome, never, now)
-        left = {column for column, _kind in taken}
         for item in advice_items:
             step = _step_of(item)
             if step is None or step.column in mixed:
                 continue
-            if (step.column, step.kind) in taken or (step.column in left and step.kind in _NUMBER_OR_YES_NO):
+            if step.column in taken and step.kind in _NUMBER_OR_YES_NO:
                 continue
             items.append(item)
-        asks.extend(a for a in advice_asks if a.column not in mixed and a.column not in left)
+        asks.extend(a for a in advice_asks if a.column not in mixed and a.column not in taken)
     return items, asks
 
 
@@ -278,10 +278,10 @@ def _guided_ask(question: Question, upload_id: str, rows: int) -> Ask:
         options=tuple(
             AskOption(
                 label=option.label,
-                effect=_option_effect(option.option_id, option.proposal, upload_id),
+                effect=_option_effect(f"c{index}", option.proposal, upload_id),
                 safe=option.proposal is None,
             )
-            for option in question.options
+            for index, option in enumerate(question.options)
         ),
         rows=rows,
         upload_id=upload_id,
@@ -295,7 +295,7 @@ def _mixed_ask(finding: CurrencyFinding, upload_id: str, rows: int) -> Ask:
     options = [
         AskOption(
             label=option.label,
-            effect=OptionEffect(option_id=f"o{index}"),
+            effect=OptionEffect(option_id=f"c{index}"),
             safe=option.key == "new_file",
         )
         for index, option in enumerate(finding.question.options)
