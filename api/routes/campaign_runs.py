@@ -77,6 +77,13 @@ POLICIES: Final[dict[tuple[str, str], RoutePolicy]] = {
         object_param="campaign_run_id",
         purpose="see a campaign run",
     ),
+    ("POST", "/campaign-runs/{campaign_run_id}/restart"): RoutePolicy(
+        role=Role.ANALYST,
+        action="campaign_runs.restart",
+        object_type="campaign_run",
+        object_param="campaign_run_id",
+        purpose="start a stopped campaign run again",
+    ),
     ("POST", "/campaign-runs/{campaign_run_id}/cancel"): RoutePolicy(
         role=Role.ANALYST,
         action="campaign_runs.cancel",
@@ -120,6 +127,12 @@ class CampaignRunRequest(StrictBase):
             primary_key=self.primary_key,
         )  # the same one-source rules as POST /runs
         return self
+
+
+class RestartRequest(StrictBase):
+    """Body of `POST /campaign-runs/{id}/restart`: only a cost the person now agrees to."""
+
+    confirm_cost: bool = False
 
 
 class CampaignRunListResponse(StrictBase):
@@ -367,6 +380,49 @@ def _read(request: Request, campaign_run_id: str, *, advance: bool) -> CampaignR
 def read_campaign_run(campaign_run_id: str, request: Request) -> CampaignRunView:
     """Reading also moves the run on, so a run is never stuck because nothing else was watching it."""
     return _read(request, campaign_run_id, advance=True)
+
+
+@router.post(
+    "/campaign-runs/{campaign_run_id}/restart",
+    response_model=CampaignRunView,
+    status_code=202,
+    responses=_ERRORS,
+    summary="Start a stopped or failed campaign run again, as a new one with the same choices",
+)
+def restart_campaign_run(
+    campaign_run_id: str,
+    request: Request,
+    response: Response,
+    root: ConfigRootDep,
+    storage: StorageDep,
+    body: RestartRequest | None = None,
+) -> CampaignRunView:
+    """A run the server restarted under, or one that needs a cost confirmed, goes on from the start."""
+    old = get_runner(request.app).store.get(campaign_run_id)
+    if old is None:
+        raise http_error(404, "CAMPAIGN_RUN_NOT_FOUND", f"No campaign run with id {campaign_run_id!r}.")
+    if old.state in (CampaignRunState.RUNNING, CampaignRunState.DONE):
+        raise http_error(
+            409, "CAMPAIGN_RUN_NOT_STOPPED", "This campaign run has not stopped, so it cannot restart."
+        )
+    return create_campaign_run(
+        CampaignRunRequest(
+            use_case=old.use_case_id,
+            upload_id=old.upload_id,
+            dataset_id=old.dataset_id,
+            client_id=old.client_id,
+            primary_key=old.primary_key,
+            target=old.target,
+            speed=old.speed,
+            overrides=old.overrides,
+            confirm_cost=old.confirm_cost or bool(body and body.confirm_cost),
+            model_version_id=old.model_version_id if old.train_run_id is None else None,
+        ),
+        request,
+        response,
+        root,
+        storage,
+    )
 
 
 @router.post(

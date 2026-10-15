@@ -34,7 +34,7 @@ export {
   treatListUrl,
 };
 
-async function request(path, options = {}) {
+export async function request(path, options = {}) {
   let response;
   try {
     response = await fetch(API_BASE + path, options);
@@ -59,12 +59,21 @@ async function request(path, options = {}) {
 
 const runPath = (id) => `/runs/${encodeURIComponent(id)}`;
 
-/** Record the campaign sent from a finished scoring run's list (`POST /campaigns`, Plan J M94). */
-export const postCampaign = (payload) =>
-  request("/campaigns", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+const post = (body) => ({ method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+const runsPath = (id) => `/campaign-runs/${encodeURIComponent(id)}`;
 
-/** The campaigns made from one scoring run (`GET /campaigns?run_id=`): a refresh finds the one it made. */
-export const getCampaignsOfRun = (runId) => request(`/campaigns?run_id=${encodeURIComponent(runId)}`);
+/** Start a campaign on the server (`POST /campaign-runs`): learn, score, build the list. It goes on without the browser. */
+export const postCampaignRun = (payload) => request("/campaign-runs", post(payload));
+
+/** Where one campaign run is (`GET /campaign-runs/{id}`): `{ record, pct, eta_seconds, summary }`. */
+export const getCampaignRun = (id) => request(runsPath(id));
+
+/** The campaign runs, newest first (`GET /campaign-runs`): `{ campaign_runs: [...] }`. */
+export const getCampaignRuns = () => request("/campaign-runs");
+
+/** Start a stopped or failed campaign run again as a new one (`POST /campaign-runs/{id}/restart`). */
+export const restartCampaignRun = (id, { confirmCost = false } = {}) =>
+  request(`${runsPath(id)}/restart`, post({ confirm_cost: confirmCost }));
 
 /** A scoring run's summary (`scoring_summary.json`): its priorities, counts and average likelihood. */
 export const getScoringSummary = (runId) => request(`${runPath(runId)}/artefacts/scoring_summary.json`);

@@ -45,6 +45,9 @@ const world = {
   view: fx("campaign_draft"),
   campaignsOfRun: fx("campaigns_of_run_empty"),
   nextRun: [],
+  campaignRuns: {}, // campaign run id -> the view GET /campaign-runs/{id} answers
+  nextCampaignRun: [], // the views POST /campaign-runs (and a restart) answer, in turn
+  campaignRunAnswer: null, // a refusal for POST /campaign-runs, when a case needs one
   posted: [],
   approveAnswer: null,
   runAnswer: null,
@@ -74,6 +77,26 @@ const server = (request) => {
       return answer;
     }
     return ok({ run_id: world.nextRun.shift() }, 202);
+  }
+  if (method === "POST" && p === "/campaign-runs") {
+    if (world.campaignRunAnswer) {
+      const answer = world.campaignRunAnswer;
+      world.campaignRunAnswer = null;
+      return answer;
+    }
+    const view = world.nextCampaignRun.shift();
+    world.campaignRuns[view.record.campaign_run_id] = view;
+    return ok(view, 202);
+  }
+  if (method === "POST" && p.startsWith("/campaign-runs/") && p.endsWith("/restart")) {
+    const view = world.nextCampaignRun.shift();
+    world.campaignRuns[view.record.campaign_run_id] = view;
+    return ok(view, 202);
+  }
+  if (method === "GET" && p.startsWith("/campaign-runs/")) {
+    world.runReads = (world.runReads || 0) + 1;
+    const view = world.campaignRuns[p.split("/")[2]];
+    return view ? ok(view) : notFound;
   }
   if (method === "POST" && p === "/uploads") return ok({ upload_id: "u_wizard_list", profile: null }, 201);
   if (method === "GET" && p.startsWith("/runs/")) {
@@ -235,7 +258,37 @@ test("a goal that contacts nobody opens its own classic page instead", async () 
   await until(() => w.location.hash === "#/uc/order-fulfillment", 3000, "the classic page");
 });
 
-test("Customers, first campaign: Guided setup mounts to learn; its Approve starts the learning on the prepared file", async () => {
+/** A campaign run as `GET /campaign-runs/{id}` answers it. */
+const STEP_TITLES = [
+  ["train", "Learning from your customers"],
+  ["score", "Scoring your customers"],
+  ["list", "Building your contact list"],
+  ["campaign", "Preparing your campaign"],
+];
+const crView = (id, state, { at = 0, error = null, campaignId = null, eta = 600, extra = {} } = {}) => ({
+  record: {
+    campaign_run_id: id,
+    state,
+    use_case_id: UC,
+    created_at: "2026-10-15T10:00:00Z",
+    updated_at: "2026-10-15T10:00:00Z",
+    steps: STEP_TITLES.map(([key, title], i) => ({
+      key,
+      title,
+      state: state === "done" || i < at ? "done" : i === at ? (state === "running" ? "running" : "failed") : "pending",
+    })),
+    campaign_id: campaignId,
+    score_run_id: campaignId ? RUN : null,
+    error,
+    ...extra,
+  },
+  pct: state === "done" ? 100 : 40,
+  eta_seconds: state === "running" ? eta : null,
+  summary: error ? error.message : state === "done" ? "Your campaign is ready." : "Learning from your customers: about 10 min left.",
+});
+const lastGet = () => world.runReads || 0;
+
+test("Customers, first campaign: Approve starts the whole campaign on the server with the chosen time, and goes to its page", async () => {
   world.models = fx("models_empty");
   guided.host = null;
   await open(`#/campaigns/new/customers/${UC}`);
@@ -245,118 +298,23 @@ test("Customers, first campaign: Guided setup mounts to learn; its Approve start
   assert.equal(guided.host.mode, "train");
   assert.equal(guided.host.modelVersionId, null);
   assert.equal(guided.host.uc.id, UC);
-  // The person chooses a file in Guided setup: the wizard keeps it for the list.
-  const input = $("#ag-file");
-  Object.defineProperty(input, "files", { value: [new w.File(["customer_id\n1\n"], "customers.csv", { type: "text/csv" })] });
-  input.dispatchEvent(new w.Event("change", { bubbles: true }));
-  world.nextRun = ["r_train"];
-  world.runs.r_train = runAs("r_train", "train", "running");
-  guided.host.approved(fill("train"));
-  await until(() => w.location.hash === `#/campaigns/new/customers/${UC}/r_train`, 3000, "the learning run in the URL");
-  assert.deepEqual(lastPost("/runs").body, {
+  world.nextCampaignRun = [crView("cr_1", "running")];
+  world.campaignRuns.cr_1 = world.nextCampaignRun[0];
+  guided.host.approved({ ...fill("train"), speed: "thorough" });
+  await until(() => w.location.hash === "#/campaigns/run/cr_1", 3000, "the progress page");
+  assert.deepEqual(lastPost("/campaign-runs").body, {
     use_case: UC,
-    mode: "train",
     upload_id: "u_prepared",
     primary_key: "customer_id",
+    speed: "thorough",
     overrides: { "evaluation.split": "random" },
     target: "reactivated_90d",
   });
+  assert.equal(lastPost("/runs"), undefined, "the browser starts no run of its own");
   assert.equal(guided.host.holds("u_prepared"), true, "Guided setup knows its approval was taken");
-  await until(() => $("[data-cw-working=learning]"), 3000, "the learning progress");
-  assert.match(text(), /learning from your customers' history/);
-  assert.ok($("[role=progressbar]"));
 });
 
-test("Customers: a new model waiting for an approval does not hold an Approver: the list is built with it straight away, nothing approved yet", async () => {
-  // M181 part C (DEC-1611): the Approver approves the new model on the Review screen, in the same click as the
-  // plan, so step 2 asks nothing of them. Before part C this screen held them on a separate "Approve and continue".
-  // The settings the person accepted in Guided setup for the learning, as the run record keeps them (expanded):
-  // the list is built with the same ones - the consent column above all, so no one who said no is contacted.
-  const accepted = { governance: { consent_column: "consent" }, validation: { acknowledged: ["V_SMALL_CLASS"] } };
-  world.runs.r_train = runAs("r_train", "train", "done", {
-    model_version_id: "m_wb_1",
-    target: "reactivated_90d",
-    overrides: accepted,
-  });
-  world.models = { versions: [version("m_wb_1", "pending_approval", "r_train")] };
-  world.nextRun = ["r_list"];
-  world.runs.r_list = runAs("r_list", "score", "running");
-  await open(`#/campaigns/new/customers/${UC}/r_train`);
-  await until(() => w.location.hash === `#/campaigns/new/customers/${UC}/r_list`, 3000, "the list being built");
-  assert.equal($("[data-cw-waiting]"), null, "no approval card on step 2");
-  assert.equal(lastPost("/models/m_wb_1/approve"), undefined, "nothing is approved before the Review screen");
-  const upload = lastPost("/uploads");
-  assert.ok(upload, "the chosen file is uploaded again, for the list");
-  assert.deepEqual(lastPost("/runs").body, {
-    use_case: UC,
-    mode: "score",
-    upload_id: "u_wizard_list",
-    primary_key: scoreRun.run.primary_key,
-    model_version_id: "m_wb_1",
-    overrides: accepted,
-  });
-  await until(() => $("[data-cw-working=list]"), 3000, "the list progress");
-  // The person goes back to the learning's address: the list already started from it is shown, not a new one.
-  const runs = world.posted.filter((x) => x.path === "/runs").length;
-  await open(`#/campaigns/new/customers/${UC}/r_train`);
-  await until(() => w.location.hash === `#/campaigns/new/customers/${UC}/r_list`, 3000, "the list already started");
-  assert.equal(world.posted.filter((x) => x.path === "/runs").length, runs, "no second list");
-});
-
-test("leaving the wizard while a list is prepared: the next poll does not draw the wizard over the other page", async () => {
-  world.runs.r_poll = runAs("r_poll", "score", "running");
-  await open(`#/campaigns/new/customers/${UC}/r_poll`);
-  await until(() => $("[data-cw-working=list]"), 3000, "the list progress");
-  w.location.hash = "#/approvals";
-  await settle(4);
-  await new Promise((resolve) => setTimeout(resolve, wizard.POLL_MS + 600));
-  await settle(4);
-  assert.equal(w.location.hash, "#/approvals");
-  assert.equal($("[data-module=campaign-wizard]"), null, "the wizard is not drawn over another page");
-});
-
-test("leaving the wizard while an answer is on its way: the late answer draws nothing", async () => {
-  world.runs.r_slow = runAs("r_slow", "score", "running");
-  slow.add("/runs/r_slow");
-  try {
-    await open(`#/campaigns/new/customers/${UC}/r_slow`);
-    w.location.hash = "#/approvals";
-    await settle(4);
-    await new Promise((resolve) => setTimeout(resolve, SLOW_MS + 300));
-    await settle(4);
-    assert.equal(w.location.hash, "#/approvals");
-    assert.equal($("[data-module=campaign-wizard]"), null, "the late answer does not draw the wizard");
-  } finally {
-    slow.clear();
-  }
-});
-
-test("Customers: someone who may not approve sees the campaign waiting, with the way to the approvals page", async () => {
-  world.models = { versions: [version("m_wb_2", "pending_approval", "r_train2")] };
-  world.runs.r_train2 = runAs("r_train2", "train", "done", { model_version_id: "m_wb_2" });
-  denied.add("POST /models/{model_id}/approve");
-  try {
-    // The file is chosen (kept for the list), so only the role decides that nothing is built.
-    guided.host = null;
-    await open(`#/campaigns/new/customers/${UC}`);
-    await until(() => guided.host, 3000, "Guided setup mounted");
-    const input = $("#ag-file");
-    Object.defineProperty(input, "files", { value: [new w.File(["customer_id\n1\n"], "customers.csv", { type: "text/csv" })] });
-    input.dispatchEvent(new w.Event("change", { bubbles: true }));
-    const runsBefore = world.posted.filter((x) => x.path === "/runs").length;
-    await open(`#/campaigns/new/customers/${UC}/r_train2`);
-    await until(() => $("[data-cw-waiting=wait]"), 3000, "the waiting notice");
-    assert.equal($("[data-cw-approve]"), null);
-    assert.equal($("[data-cw-waiting=wait] a.btn.primary").getAttribute("href"), "#/approvals");
-    assert.match(text(), /The campaign waits until then/);
-    assert.equal(primaries().length, 1);
-    assert.equal(world.posted.filter((x) => x.path === "/runs").length, runsBefore, "no list is built for them");
-  } finally {
-    denied.clear();
-  }
-});
-
-test("Customers, later campaign: the current model checks the file and builds the list - nothing learns again", async () => {
+test("Customers, later campaign: the current model is used - nothing learns again", async () => {
   world.models = { versions: [version("m_wb_1", "champion", "r_train")] };
   guided.host = null;
   await open(`#/campaigns/new/customers/${UC}`);
@@ -364,45 +322,104 @@ test("Customers, later campaign: the current model checks the file and builds th
   assert.equal($("[data-cw-customers]").getAttribute("data-cw-customers"), "again");
   assert.equal(guided.host.mode, "score");
   assert.equal(guided.host.modelVersionId, "m_wb_1");
-  world.nextRun = [RUN];
+  world.nextCampaignRun = [crView("cr_2", "running", { at: 1 })];
   guided.host.approved(fill("score"));
-  // M181 part C: the finished list opens the Review screen, which shows Audience too (it was `audience/<id>`).
-  await until(() => w.location.hash === `#/campaigns/new/review/${CID}`, 4000, "the campaign made from the list");
-  assert.deepEqual(lastPost("/runs").body, {
+  await until(() => w.location.hash === "#/campaigns/run/cr_2", 3000, "the progress page");
+  assert.deepEqual(lastPost("/campaign-runs").body, {
     use_case: UC,
-    mode: "score",
     upload_id: "u_prepared",
     primary_key: "customer_id",
+    speed: "balanced",
     overrides: { "evaluation.split": "random" },
     model_version_id: "m_wb_1",
   });
-  assert.deepEqual(lastPost("/campaigns").body, { run_id: RUN }, "the campaign record is made from the finished list");
 });
 
-test("Customers: a cost the server wants confirmed is shown in its words, and 'Start it anyway' confirms it", async () => {
+test("Customers: a start the server refuses is shown, and the step stays", async () => {
   world.models = fx("models_empty");
   guided.host = null;
   await open(`#/campaigns/new/customers/${UC}`);
   await until(() => guided.host, 3000, "Guided setup mounted");
-  world.runAnswer = {
+  world.campaignRunAnswer = {
     status: 409,
-    body: { detail: { code: "RUN_COST_NEEDS_CONFIRMATION", message: "This could cost more than the cap." } },
+    body: { detail: { code: "CAMPAIGN_RUN_ACTIVE", message: "A campaign is already being prepared from this data (cr_0)." } },
   };
   guided.host.approved(fill("train"));
-  await until(() => $("[data-cw-cost-confirm]"), 3000, "the confirmation");
-  assert.match($("[data-cw-cost-confirm]").textContent, /This could cost more than the cap\./);
-  world.nextRun = ["r_train"];
-  world.runs.r_train = runAs("r_train", "train", "running");
-  $("[data-cw-confirm-cost]").click();
-  await until(() => w.location.hash === `#/campaigns/new/customers/${UC}/r_train`, 3000, "the run started");
-  assert.equal(lastPost("/runs").body.confirm_cost, true);
+  await until(() => text().includes("already being prepared from this data"), 3000, "the refusal");
+  assert.equal(w.location.hash, `#/campaigns/new/customers/${UC}`);
+  assert.equal(guided.host.holds("u_prepared"), false, "Guided setup offers the start again");
 });
 
-test("Customers: work that stopped says so and offers to start again", async () => {
-  world.runs.r_failed = runAs("r_failed", "train", "failed");
-  await open(`#/campaigns/new/customers/${UC}/r_failed`);
-  await until(() => $("[data-cw-stopped]"), 3000, "the stopped notice");
-  assert.equal($("[data-cw-restart]").getAttribute("href"), `#/campaigns/new/customers/${UC}`);
+test("an address from when the browser chained the steps opens the Customers step afresh", async () => {
+  await open(`#/campaigns/new/customers/${UC}/r_old`);
+  await until(() => w.location.hash === `#/campaigns/new/customers/${UC}`, 3000, "the Customers step");
+});
+
+test("the progress page: steps in plain words, the time left, and that the page can be closed", async () => {
+  world.campaignRuns.cr_3 = crView("cr_3", "running", { at: 0, eta: 600 });
+  await open("#/campaigns/run/cr_3");
+  await until(() => $("[data-run-steps]"), 3000, "the steps");
+  assert.deepEqual(
+    $$("[data-run-step]").map((e) => e.getAttribute("data-state")),
+    ["running", "pending", "pending", "pending"],
+  );
+  assert.match(text(), /Learning from your customers/);
+  assert.match(text(), /About 10 minutes left/);
+  assert.match(text(), /You can close this page/);
+  assert.ok($("[role=progressbar]"));
+  assert.equal(primaries().length, 0);
+});
+
+test("the progress page: when the run is done it leads to the campaign's review, where the person approves and downloads", async () => {
+  world.campaignRuns.cr_4 = crView("cr_4", "running", { at: 3, eta: 20 });
+  await open("#/campaigns/run/cr_4");
+  await until(() => $("[data-run-steps]"), 3000, "the steps");
+  world.campaignRuns.cr_4 = crView("cr_4", "done", { campaignId: CID });
+  await until(() => $("[data-run-ready]"), 6000, "the finished page");
+  assert.equal($("h1").textContent, "Your campaign is ready");
+  assert.equal($("[data-run-ready]").getAttribute("href"), `#/campaigns/new/review/${CID}`);
+  assert.equal($("[data-run-campaign]").getAttribute("href"), `#/campaigns/${CID}/overview`);
+  assert.equal($("[data-run-restart]"), null);
+});
+
+test("the progress page: a run the server restarted under says so and Restart starts it again as a new run", async () => {
+  const error = { code: "RUN_INTERRUPTED", message: "Learning from your customers stopped because the server restarted. Start the campaign again.", step: "train" };
+  world.campaignRuns.cr_5 = crView("cr_5", "stopped", { at: 0, error });
+  await open("#/campaigns/run/cr_5");
+  await until(() => $("[data-run-restart]"), 3000, "the Restart button");
+  assert.match(text(), /stopped because the server restarted/);
+  assert.equal($("[data-run-restart]").textContent.trim(), "Restart");
+  const before = lastGet();
+  world.nextCampaignRun = [crView("cr_6", "running")];
+  $("[data-run-restart]").click();
+  await until(() => w.location.hash === "#/campaigns/run/cr_6", 3000, "the new run's page");
+  assert.deepEqual(lastPost("/campaign-runs/cr_5/restart").body, { confirm_cost: false });
+  await until(() => lastGet() > before, 3000, "the new run is read");
+});
+
+test("the progress page: a start that needs a cost confirmed offers 'Start it anyway', which confirms it", async () => {
+  const error = { code: "COST_NEEDS_CONFIRMATION", message: "This could cost more than the cap.", step: "train" };
+  world.campaignRuns.cr_7 = crView("cr_7", "failed", { at: 0, error });
+  await open("#/campaigns/run/cr_7");
+  await until(() => $("[data-run-restart]"), 3000, "the button");
+  assert.equal($("[data-run-restart]").textContent.trim(), "Start it anyway");
+  assert.match(text(), /This could cost more than the cap\./);
+  world.nextCampaignRun = [crView("cr_8", "running")];
+  $("[data-run-restart]").click();
+  await until(() => w.location.hash === "#/campaigns/run/cr_8", 3000, "the new run's page");
+  assert.deepEqual(lastPost("/campaign-runs/cr_7/restart").body, { confirm_cost: true });
+});
+
+test("leaving the progress page stops its poll", async () => {
+  world.campaignRuns.cr_9 = crView("cr_9", "running");
+  await open("#/campaigns/run/cr_9");
+  await until(() => $("[data-run-steps]"), 3000, "the steps");
+  w.location.hash = "#/approvals";
+  await settle(4);
+  const reads = lastGet();
+  await new Promise((resolve) => setTimeout(resolve, 3600));
+  assert.equal(lastGet(), reads, "no more reads once the person left");
+  assert.equal($("[data-module=campaign-run]"), null);
 });
 
 test("Audience: who is contacted by priority, the comparison group and the test size, all from the API, on the Review screen", async () => {
@@ -813,38 +830,6 @@ test("Review, first campaign: another model became current while it waited - the
   }
 });
 
-test("Customers: with sign-in on, the Approver who started the learning is held on step 2 and nothing is built; another Approver goes on", async () => {
-  const recorded = fx("me");
-  const as = (userId, username) => ({ ...recorded, principal: { ...(recorded.principal || {}), kind: "user", user_id: userId, username } });
-  world.models = { versions: [version("m_wb_3", "pending_approval", "r_train3")] };
-  world.runs.r_train3 = runAs("r_train3", "train", "done", { model_version_id: "m_wb_3", requested_by: "u_trainer" });
-  world.me = as("u_trainer", "trainer");
-  try {
-    guided.host = null;
-    await open(`#/campaigns/new/customers/${UC}`);
-    await until(() => guided.host, 3000, "Guided setup mounted");
-    const input = $("#ag-file");
-    Object.defineProperty(input, "files", { value: [new w.File(["customer_id\n1\n"], "customers.csv", { type: "text/csv" })] });
-    input.dispatchEvent(new w.Event("change", { bubbles: true }));
-    const before = world.posted.length;
-    await open(`#/campaigns/new/customers/${UC}/r_train3`);
-    await until(() => $("[data-cw-waiting=wait]"), 3000, "the waiting notice");
-    assert.match(text(), /You started this learning, so another person with the Approver role must approve what it learned/);
-    assert.equal($("[data-cw-waiting=wait] a.btn.primary").getAttribute("href"), "#/approvals");
-    assert.deepEqual(postedSince(before), [], "no upload, no list, no campaign record: no Draft from an unapproved model");
-    // Another Approver (signed in as someone else) carries on: the list is built, to be approved on Review.
-    world.me = as("u_other", "other");
-    world.nextRun = ["r_list3"];
-    world.runs.r_list3 = runAs("r_list3", "score", "running");
-    await open(`#/campaigns/new/customers/${UC}/r_train3`);
-    await until(() => w.location.hash === `#/campaigns/new/customers/${UC}/r_list3`, 3000, "the list being built");
-    assert.equal(lastPost("/runs").body.model_version_id, "m_wb_3");
-  } finally {
-    world.me = null;
-    world.models = fx("models_empty");
-  }
-});
-
 test("Send: a plan registered elsewhere for a list whose model still waits does not make it downloadable", async () => {
   const LIST_MODEL = scoreRun.run.model_version_id;
   world.view = fx("campaign_planned");
@@ -1002,16 +987,8 @@ test("a refresh resumes from the server: a planned campaign opens on Send, a Dra
   assert.equal($("[data-cw-download]"), null);
 });
 
-test("a finished list already made into a campaign is not recorded twice", async () => {
-  world.campaignsOfRun = fx("campaigns_of_run");
-  const before = world.posted.filter((x) => x.path === "/campaigns").length;
-  await open(`#/campaigns/new/customers/${UC}/${RUN}`);
-  await until(() => w.location.hash === `#/campaigns/new/review/${CID}`, 3000, "Audience and Review");
-  assert.equal(world.posted.filter((x) => x.path === "/campaigns").length, before);
-});
-
 test("someone who may not start a campaign sees why, and no goal to start", async () => {
-  denied.add("POST /campaigns");
+  denied.add("POST /campaign-runs");
   try {
     await open("#/campaigns/new");
     await until(() => $("[data-cw-no-role]"), 3000, "the role notice");

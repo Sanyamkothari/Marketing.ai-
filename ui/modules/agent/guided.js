@@ -1127,6 +1127,7 @@ function mountDoctorInstead(slots, host) {
     place: placeOf(slots),
     uc: host.uc,
     mode: host.mode,
+    modelVersionId: host.modelVersionId, // a goal that has a model uses it: no learning time to choose
     approved: host.mayRun === false ? null : host.approved,
     manual: host.manual, // "Expert view" opens Manual setup in place
   });

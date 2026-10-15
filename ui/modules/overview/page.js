@@ -25,6 +25,8 @@ import { attentionItem, button, emptyState, icon, statusChip } from "../../compo
 import { EM_DASH, errorBox, esc, fmtInt, headActions, pageHead } from "../../dom.js";
 import { day, figureHtml } from "../../format.js";
 import { findNeverShown, term, USER_TEXT_ATTRIBUTE } from "../../labels.js";
+import { goalName } from "../campaigns/status.js";
+import { readyHref, runHref } from "../campaigns/run_rules.js";
 
 /** Where the page sends a person; `places` lets the shell name a screen a branch has not merged yet. */
 export const DEFAULT_PLACES = Object.freeze({
@@ -274,6 +276,52 @@ function liveHtml(overview, places) {
   return `<section class="card ov-live" data-live aria-labelledby="ov-h-live">${sectionHead("ov-h-live", "Live campaigns")}${body}</section>`;
 }
 
+// --- campaigns being prepared, and the one that is ready ---------------------------------------------------------
+
+const RECENT_MS = 3 * 24 * 3600 * 1000;
+
+/**
+ * The campaign runs worth a line here (`GET /campaign-runs`, newest first): the ones still being prepared, the newest
+ * finished one while its campaign has not been sent yet and it is recent, and a stopped one nobody has started
+ * again (no newer run for the same goal). At most three.
+ */
+export function runsToShow(runs, overview, now = Date.now()) {
+  const sent = new Set((overview && overview.campaigns ? overview.campaigns : []).filter((c) => c.status !== "draft").map((c) => c.campaign_id));
+  const recent = (run) => now - Date.parse(run.updated_at) < RECENT_MS;
+  const seen = new Set();
+  const shown = [];
+  for (const view of runs || []) {
+    const run = view.record;
+    const newest = !seen.has(run.use_case_id);
+    seen.add(run.use_case_id);
+    const keep =
+      run.state === "running" ||
+      (newest && recent(run) && (run.state === "done" ? !sent.has(run.campaign_id) : run.state === "stopped" || run.state === "failed"));
+    if (keep) shown.push(view);
+  }
+  return shown.slice(0, 3);
+}
+
+function runsHtml(runs) {
+  if (!runs.length) return "";
+  const ready = runs.some((view) => view.record.state === "done");
+  const rows = runs
+    .map(({ record, summary }) => {
+      const done = record.state === "done";
+      const href = done ? readyHref(record) : runHref(record.campaign_run_id);
+      const label = done ? "Review and download" : record.state === "running" ? "See progress" : "Open";
+      const line = done ? "Your campaign is ready." : summary;
+      return `<li class="ovp-row" data-run-row="${esc(record.campaign_run_id)}" data-run-state="${esc(record.state)}"><div class="ovp-row-main"><span class="ov-row-name">${esc(
+        goalName(record.use_case_id),
+      )}</span><span class="ov-row-next">${esc(line)}</span></div>${button({ label, href, kind: "secondary", size: "sm", attrs: "data-run-link" })}</li>`;
+    })
+    .join("");
+  return `<section class="card ov-runs" data-runs aria-labelledby="ov-h-runs">${sectionHead(
+    "ov-h-runs",
+    ready ? "Your campaign is ready" : "Getting your campaign ready",
+  )}<ul class="ov-rows">${rows}</ul></section>`;
+}
+
 // --- 5. the first-visit checklist ------------------------------------------------------------------------------
 
 /** The three items, with whether each is done (read from the server's real state) and where it leads. */
@@ -317,9 +365,9 @@ function checklistHtml(overview, places) {
 
 /**
  * The Overview. `overview` is `GET /overview`'s answer; `error` its failure; `places` where its links lead;
- * `checklistHidden` whether the person hid the first-visit checklist.
+ * `checklistHidden` whether the person hid the first-visit checklist; `runs` the campaign runs (`GET /campaign-runs`).
  */
-export function overviewHtml({ overview = null, error = null, places = DEFAULT_PLACES, checklistHidden = false } = {}) {
+export function overviewHtml({ overview = null, error = null, places = DEFAULT_PLACES, checklistHidden = false, runs = [] } = {}) {
   // A top-level place: no breadcrumb (visual_common §3). The one primary action sits right of the title.
   const head = pageHead(
     `<h1 class="h1">Overview</h1><p class="desc">What needs your attention, what your campaigns have earned, and what to do next.</p>${headActions(
@@ -334,7 +382,7 @@ export function overviewHtml({ overview = null, error = null, places = DEFAULT_P
   } else {
     // The checklist leads while it shows (a first visit's guide); attention, value and live keep the plan's order.
     const check = showChecklist(overview.checklist, checklistHidden) ? checklistHtml(overview, places) : "";
-    body = `<div class="ov-grid ovp-grid${check ? " has-check" : ""}">${check}${attentionHtml(overview, places)}${valueHtml(
+    body = `${runsHtml(runsToShow(runs, overview))}<div class="ov-grid ovp-grid${check ? " has-check" : ""}">${check}${attentionHtml(overview, places)}${valueHtml(
       overview,
       places,
     )}${liveHtml(overview, places)}</div>`;
@@ -349,6 +397,7 @@ export function overviewHtml({ overview = null, error = null, places = DEFAULT_P
 const CSS = `
 .ovp .ovp-grid{display:grid;gap:20px;grid-template-columns:minmax(0,1fr) minmax(0,1fr);grid-template-areas:"attention attention" "value live";align-items:stretch}
 .ovp .ovp-grid.has-check{grid-template-areas:"check check" "attention attention" "value live"}
+.ovp .ov-runs{margin-bottom:20px}
 .ovp .ov-attention{grid-area:attention}.ovp .ov-value{grid-area:value;align-self:start}.ovp .ov-live{grid-area:live}.ovp .ov-checklist{grid-area:check}
 .ovp .card{overflow:hidden}
 .ovp .ovp-head{display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:56px;padding:12px 20px;border-bottom:1px solid var(--line)}

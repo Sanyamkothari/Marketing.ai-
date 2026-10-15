@@ -18,15 +18,13 @@ import { installDemoPage, loadModules } from "../../glossary/replay.mjs";
 import {
   customersHtml,
   goalHtml,
-  noticeHtml,
   pageHtml,
-  progressHtml,
   reviewHtml,
   sendHtml,
-  stoppedHtml,
-  waitingHtml,
 } from "../../../../../../ui/modules/campaigns/wizard_views.js";
 import { LIST_HOLD } from "../../../../../../ui/modules/campaigns/views.js";
+import { runPageHtml } from "../../../../../../ui/modules/campaigns/run_views.js";
+import { startSentenceHtml } from "../../../../../../ui/modules/campaigns/run_rules.js";
 
 const UC = "hillstrom-email";
 const CAMPAIGN = "c_20261011_c9276210";
@@ -116,24 +114,44 @@ test("the states no recording reaches carry no engine word either", () => {
     "goal-none": goalHtml({ goals: [], more: [] }),
     "customers-first": customersHtml({ uc, first: true }),
     "customers-again": customersHtml({ uc, first: false, busy: "Starting the contact list…" }),
-    "customers-checks": customersHtml({
-      uc,
-      first: true,
-      problem: { validation: { checks: [{ severity: "error", message: "The outcome column is empty.", suggestion: null }] } },
-    }),
-    "customers-cost": customersHtml({ uc, first: true, problem: { confirm: "This could cost more than the cap." } }),
     "customers-no-guided": customersHtml({ uc, first: true, hasGuided: false }),
     "customers-no-role": customersHtml({ uc, first: true, canStart: false }),
-    learning: progressHtml({ learning: true, share: 0.4 }),
-    list: progressHtml({ learning: false, share: null }),
-    "waiting-other": waitingHtml(),
-    "waiting-own": waitingHtml({ own: true }),
-    stopped: stoppedHtml({ ucId: UC, detail: { run: { run_id: "r_x", error: { message: "Training failed: run out of memory" } } }, reason: "The work stopped before the list was ready." }),
-    refused: noticeHtml({ title: "The contact list could not be started", text: ["Choose the file of customers once more; it is checked against what Marketing AI learned."] }),
   };
   for (const [id, body] of Object.entries(bodies)) {
     holder.innerHTML = pageHtml("customers", body);
     holder.querySelectorAll("[data-cw-guided]").forEach((el) => el.remove());
+    const v = violations(visibleText(holder), {});
+    assert.ok(v.ok, describe(id, v));
+  }
+  // The campaign progress page in each of its states, and the sentence above Start.
+  const run = (state, extra = {}, error = null) => ({
+    record: {
+      campaign_run_id: "cr_x",
+      state,
+      use_case_id: UC,
+      campaign_id: state === "done" ? CAMPAIGN : null,
+      score_run_id: null,
+      error,
+      steps: [
+        { key: "train", title: "Learning from your customers", state: state === "done" ? "done" : "running" },
+        { key: "score", title: "Scoring your customers", state: state === "done" ? "done" : "pending" },
+      ],
+      ...extra,
+    },
+    pct: 40,
+    eta_seconds: state === "running" ? 600 : null,
+    summary: error ? error.message : "Learning from your customers: about 10 min left.",
+  });
+  const stopped = { code: "RUN_INTERRUPTED", message: "Learning from your customers stopped because the server restarted. Start the campaign again." };
+  for (const [id, html] of Object.entries({
+    "run-running": runPageHtml(run("running")),
+    "run-done": runPageHtml(run("done")),
+    "run-stopped": runPageHtml(run("stopped", {}, stopped)),
+    "run-failed": runPageHtml(run("failed", {}, { code: "VALIDATION_FAILED", message: "The data did not pass the checks. Open the Data Doctor and check it again." })),
+    "start-sentence": `<p>${startSentenceHtml({ table: "customers.csv", customers: 1200, speed: "balanced" })}</p>`,
+    "start-sentence-reuse": `<p>${startSentenceHtml({ table: "customers.csv", customers: null, reuse: true })}</p>`,
+  })) {
+    holder.innerHTML = html;
     const v = violations(visibleText(holder), {});
     assert.ok(v.ok, describe(id, v));
   }

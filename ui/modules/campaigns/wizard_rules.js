@@ -134,16 +134,6 @@ export function versionById(models, modelId) {
   return found ? found.version : null;
 }
 
-/** The share of a run's stages that are done, 0 to 1, from `GET /runs/{id}`'s status; null without stages. */
-export function progressOf(detail) {
-  const stages = (detail && detail.status && detail.status.stages) || [];
-  if (!stages.length) return null;
-  return stages.filter((s) => s.state === "done" || s.state === "skipped").length / stages.length;
-}
-
-/** The run's state: "pending" | "running" | "done" | "failed" | "cancelled" (or whatever the API says). */
-export const runState = (detail) => (detail && detail.run && detail.run.state) || (detail && detail.status && detail.status.state) || "";
-
 // --- Steps 3 and 4: the audience and the test ----------------------------------------------------------
 
 /**

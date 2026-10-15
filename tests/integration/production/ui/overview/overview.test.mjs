@@ -24,12 +24,13 @@ const key = (request) => {
 };
 
 /** What `GET /overview` answers now; each test sets it. */
-const world = { overview: recorded["GET /overview"] };
+const world = { overview: recorded["GET /overview"], runs: null };
 
 const server = async (request) => {
   if (request.method === "GET" && request.path === "/overview") {
     return { status: world.overview.status, body: world.overview.body };
   }
+  if (request.method === "GET" && request.path === "/campaign-runs" && world.runs) return { status: 200, body: world.runs };
   const hit = recorded[key(request)];
   if (hit) return { status: hit.status, body: hit.body, headers: { "Content-Type": hit.content_type || "application/json" } };
   return { status: 404, body: { detail: { code: "NOT_RECORDED", message: "Not found." } } };
@@ -524,4 +525,49 @@ test("M186 review: the value card keeps its own height beside a taller live list
   const css = w.document.getElementById(page.STYLE_ID).textContent;
   assert.match(css, /\.ovp \.ov-value\{grid-area:value;align-self:start\}/);
   assert.match(css, /@media \(max-width:700px\),\(pointer:coarse\)\{[^}]*\.ovp \.btn\.sm,\.ovp \.btn\.tertiary\{min-height:40px\}/);
+});
+
+// --- campaigns started on the server ---------------------------------------------------------------------------
+
+const campaignRun = (id, state, over = {}) => ({
+  record: { campaign_run_id: id, state, use_case_id: "win-back-campaign", campaign_id: null, score_run_id: null, updated_at: new Date().toISOString(), ...over },
+  pct: 40,
+  eta_seconds: null,
+  summary: "Learning from your customers: about 10 min left.",
+});
+
+test("a campaign being prepared and one that is ready show at the top, each with one way on", async () => {
+  clear();
+  world.runs = { campaign_runs: [campaignRun("cr_2", "done", { campaign_id: "c_9" }), campaignRun("cr_1", "running")] };
+  try {
+    await visit();
+    const card = $("[data-runs]");
+    assert.equal(card.querySelector(".ov-h").textContent, "Your campaign is ready");
+    assert.equal($('[data-run-row="cr_2"] [data-run-link]').getAttribute("href"), "#/campaigns/new/review/c_9");
+    assert.match($('[data-run-row="cr_2"]').textContent, /Your campaign is ready\./);
+    assert.equal($('[data-run-row="cr_1"] [data-run-link]').getAttribute("href"), "#/campaigns/run/cr_1");
+    assert.match($('[data-run-row="cr_1"]').textContent, /Learning from your customers/);
+    assert.equal($$('[data-module="overview"] .btn.primary').length, 1, "+ New campaign stays the one primary button");
+    assert.deepEqual(findNeverShown(text()), {});
+  } finally {
+    world.runs = null;
+  }
+});
+
+test("runs worth showing: old or already-sent ones and stopped ones that were started again are left out", () => {
+  const now = Date.parse("2026-10-15T12:00:00Z");
+  const at = (days) => new Date(now - days * 86400000).toISOString();
+  const overview = { campaigns: [{ campaign_id: "c_sent", status: "live" }] };
+  const runs = [
+    campaignRun("cr_new", "running"),
+    campaignRun("cr_restarted", "running", { updated_at: at(0) }),
+    campaignRun("cr_stopped_old", "stopped", { updated_at: at(1) }), // an earlier run of the same goal: it was started again
+    campaignRun("cr_sent", "done", { campaign_id: "c_sent", use_case_id: "telco-churn", updated_at: at(1) }),
+    campaignRun("cr_ancient", "done", { campaign_id: "c_old", use_case_id: "payment-propensity", updated_at: at(9) }),
+  ];
+  runs[0].record.updated_at = at(0);
+  assert.deepEqual(
+    page.runsToShow(runs, overview, now).map((r) => r.record.campaign_run_id),
+    ["cr_new", "cr_restarted"],
+  );
 });
