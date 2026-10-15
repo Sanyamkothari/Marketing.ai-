@@ -1820,16 +1820,16 @@ def _best_first(frame: pd.DataFrame, key_cols: tuple[str, ...]) -> pd.DataFrame:
     """The list sorted best first: highest score on top, a customer with no score last, ties by customer id.
 
     The id is compared as a number when every value of that key column is one, else as text, so a tie
-    never depends on the order of the uploaded file.
+    never depends on the order of the uploaded file. Ids the number cannot tell apart (`7` and `007`, or ids
+    longer than a float holds exactly) then go by their text.
     """
     order: list[np.ndarray[Any, Any]] = []
     for name in reversed(key_cols):
         text = frame[name].astype("object")
+        order.append(pd.factorize(text.fillna(""), sort=True)[0])
         number = pd.to_numeric(text, errors="coerce")
         if bool(number.notna().all()):
             order.append(number.to_numpy(dtype=np.float64))
-        else:
-            order.append(pd.factorize(text.fillna(""), sort=True)[0])
     score = frame[SCORE_COLUMN].to_numpy(dtype=np.float64)
     order.append(np.where(np.isnan(score), np.inf, -score))
     return frame.iloc[np.lexsort(order)].reset_index(drop=True)

@@ -28,6 +28,19 @@ def test_numeric_ids_tie_break_as_numbers_not_text() -> None:
     assert list(_best_first(frame, ("customer_id",))["customer_id"]) == ["9", "10", "100"]
 
 
+def test_ids_a_number_cannot_tell_apart_tie_break_by_their_text() -> None:
+    # Twenty digits: more than a float holds exactly, so both are the same number; and 7 is 007.
+    ids = ["12345678901234567891", "12345678901234567890", "7", "007"]
+    for order in (ids, ids[::-1]):
+        frame = _frame(order, [0.5] * 4)
+        assert list(_best_first(frame, ("customer_id",))["customer_id"]) == [
+            "007",
+            "7",
+            "12345678901234567890",
+            "12345678901234567891",
+        ]
+
+
 def test_a_composite_key_breaks_a_tie_on_every_part() -> None:
     frame = pd.DataFrame(
         {
