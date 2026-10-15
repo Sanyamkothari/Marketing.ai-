@@ -32,7 +32,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Final
 
 from engine.config import RunMode
-from engine.doctor.contracts import FileDiagnosis, ReadinessStatus, UseCaseReadiness
+from engine.doctor.contracts import FileDiagnosis, ReadinessReason, ReadinessStatus, UseCaseReadiness
 from engine.doctor.first_look import FirstLook, advised_leaks, outcome_look
 from engine.doctor.sufficiency import enough_data, with_alternatives
 from engine.utils.logging import get_logger
@@ -268,10 +268,13 @@ def _facts(verdict: UseCaseReadiness, loaded: LoadedFile, config: UseCaseConfig)
     fix: str | None = None
     steps = verdict.next_steps
     if verdict.status == "check":
-        fix = (
-            f"Answer {verdict.questions} question{'s' if verdict.questions != 1 else ''} and review "
-            f"{verdict.suggestions} suggestion{'s' if verdict.suggestions != 1 else ''} in Guided setup."
-        )
+        parts = []
+        if verdict.questions:
+            parts.append(f"answer {verdict.questions} question{'s' if verdict.questions != 1 else ''}")
+        if verdict.suggestions:
+            parts.append(f"review {verdict.suggestions} suggestion{'s' if verdict.suggestions != 1 else ''}")
+        todo = " and ".join(parts) or "check the rest"
+        fix = f"Open Guided setup and {todo}."
     elif steps is not None:
         fix = (
             steps.shortfalls[0].sentence
@@ -295,7 +298,7 @@ def _asked(found: list[tuple[LoadedFile, OutcomeColumn]], offer: Offer) -> UseCa
     meaning = config.target.definition.strip().rstrip(".").lower() or f"the {config.name} outcome"
     if len(columns) == 1:
         text = f"{loaded.file_name} has a column {columns[0]}. Is it whether {meaning}?"
-        code = "GUESSED_COLUMN"
+        code: ReadinessReason = "GUESSED_COLUMN"
     else:
         shown = ", ".join(columns[:5])
         text = f"{loaded.file_name} has several columns that might be it ({shown}). Which one says whether {meaning}?"
@@ -313,7 +316,7 @@ def _asked(found: list[tuple[LoadedFile, OutcomeColumn]], offer: Offer) -> UseCa
         upload_id=loaded.upload_id,
         summary=text,
         questions=1,
-        reason_code=code,  # type: ignore[arg-type]
+        reason_code=code,
         customers=rows,
         yes_count=max(counts) if counts else None,
         why=text,
