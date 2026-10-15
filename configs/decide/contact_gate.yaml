@@ -19,8 +19,18 @@ status_columns: [status, customer_status, account_status, lifecycle_status, lega
 dnd_columns: [dnd, ndnc, do_not_disturb, do_not_call, do_not_contact, dnc, opt_out, opted_out, optout, unsubscribed]
 consent_columns: [consent, marketing_consent, opt_in, optin]
 
-# Statuses that always take a customer off the list (whole value, any case).
-blocked_statuses: [deceased, dead, death, fraud, fraudulent, suspected fraud, legal, litigation, court case, do not contact]
+# Statuses that always take a customer off the list (whole value; case, spaces and punctuation do not matter).
+blocked_statuses: [deceased, dead, death, fraud, fraudulent, suspected fraud, legal, legal hold, litigation, court case, do not contact, closed, blacklisted, written off]
+
+# Test, QA and staff accounts are not customers. A cell of an ID or e-mail column (whole column name; the key is always
+# read) that matches one of these patterns (regular expressions, any case) takes the account off the list.
+test_account_columns: [id, customer_id, cust_id, client_id, user_id, member_id, contact_id, email, email_address, email_id, e_mail, mail, contact_email]
+test_account_patterns: ['^(test|dummy|demo|sample|qa)[\W_]*\d*$', '^qa\+', '^test@', '@example\.(com|org|net)$', '@test\.']
+
+# One person per household: a column named like these that repeats (a column unique per row, such as the key, is no
+# household) keeps the best-ranked member on the list and takes the others off. A blank, `NA` or `unknown` cell is no
+# household. A run can name its own column in `contact_rules.json` (`household_column`).
+household_columns: [household_id, family_id, account_id]
 
 # What the do-not-disturb and consent cells may say (any case). Anything else is "unknown".
 dnd_yes: ["y", "yes", "true", "1", "dnd", "registered", "blocked"]

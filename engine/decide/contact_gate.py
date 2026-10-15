@@ -9,7 +9,11 @@ read from the customer file the run scored:
   the run's `contact_rules.json` says a blank means OK. "DND-Partial" counts as do not disturb unless it says otherwise.
 * **Minors.** Age on the run's date is under 18 (from an age column, or a date of birth). An age that cannot be read
   is flagged, not guessed.
-* **Statuses.** Deceased, fraud and legal (a list in `configs/decide/contact_gate.yaml`, extended by the rules).
+* **Statuses.** Deceased, fraud, legal, closed and the like (a list in `configs/decide/contact_gate.yaml`, extended by
+  the rules; case and spacing do not matter).
+* **Test accounts.** An ID or e-mail that looks like a test, QA or demo account (patterns in the same file).
+* **One person per household.** When the file has a household column, the best-ranked member stays and the others
+  are counted as "same household".
 * **Suppression list.** A file of keys (`suppression_list.parquet`, a `key` column) is matched against the customers
   by cleaned key, and the share of the list found among the customers is reported.
 
@@ -53,7 +57,9 @@ __all__ = [
     "contact_gate_for_run",
     "exclusion_lines",
     "gate_customers",
+    "household_column",
     "load_gate_rules",
+    "same_household",
     "write_contact_rules",
     "write_suppression_list",
 ]
@@ -66,13 +72,15 @@ GATE_FILENAME: Final[str] = "decide/contact_gate.yaml"
 _DEFAULT_PATH: Final[Path] = Path(__file__).resolve().parents[2] / "configs" / GATE_FILENAME
 
 REASON_TEXT: Final[dict[str, str]] = {
-    "blocked_status": "their status says deceased, fraud or a legal matter",
+    "blocked_status": "their status says deceased, fraud, closed or a legal matter",
+    "test_account": "they look like test accounts",
     "minor": "they are under 18",
     "dnd": "they are on the do-not-disturb list",
     "dnd_unknown": "their do-not-disturb answer is blank or unclear",
     "no_consent": "they did not agree to be contacted",
     "consent_unknown": "their consent is blank or unclear",
     "suppression_list": "they are on your suppression list",
+    "same_household": "someone else in their household is already on the list",
 }
 """The reasons in the order they are applied (a customer is counted under the first), with the words for each."""
 _ORDER: Final[tuple[str, ...]] = tuple(REASON_TEXT)
@@ -101,6 +109,10 @@ class ContactRules(Artefact):
     dnd_scrubbed_on: date | None = Field(
         default=None, description="When the do-not-disturb list was last checked."
     )
+    household_column: str | None = Field(
+        default=None,
+        description="The customer column that names the household; null = a column named like the yaml's list.",
+    )
 
 
 @dataclass(frozen=True)
@@ -114,6 +126,9 @@ class GateRules:
     dnd_columns: frozenset[str]
     consent_columns: frozenset[str]
     blocked_statuses: frozenset[str]
+    test_account_columns: frozenset[str]
+    test_account_pattern: re.Pattern[str] | None
+    household_columns: frozenset[str]
     dnd_yes: frozenset[str]
     dnd_no: frozenset[str]
     dnd_partial: frozenset[str]
@@ -152,6 +167,8 @@ def _load(path: str) -> GateRules:
     def names(key: str) -> frozenset[str]:
         return frozenset(_norm(v) for v in doc.get(key) or ())
 
+    patterns = [str(p) for p in doc.get("test_account_patterns") or ()]
+
     return GateRules(
         minimum_age=int(doc.get("minimum_age", 18)),
         age_columns=names("age_columns"),
@@ -160,6 +177,11 @@ def _load(path: str) -> GateRules:
         dnd_columns=names("dnd_columns"),
         consent_columns=names("consent_columns"),
         blocked_statuses=_set(doc.get("blocked_statuses") or ()),
+        test_account_columns=names("test_account_columns"),
+        test_account_pattern=(
+            re.compile("|".join(f"(?:{p})" for p in patterns), re.IGNORECASE) if patterns else None
+        ),
+        household_columns=names("household_columns"),
         dnd_yes=_set(doc.get("dnd_yes") or ()),
         dnd_no=_set(doc.get("dnd_no") or ()),
         dnd_partial=_set(doc.get("dnd_partial") or ()),
@@ -241,6 +263,54 @@ def _answer_columns(
     return used, notes
 
 
+def _is_blank(value: Any) -> bool:
+    return bool(value is None or (isinstance(value, float) and np.isnan(value)) or value is pd.NA)
+
+
+def _looks_like_test(values: pd.Series[Any], rules: GateRules) -> Any:
+    """True for each cell that matches a test-account pattern (`TEST001`, `qa+x@company.example`)."""
+    pattern = rules.test_account_pattern
+    if pattern is None:
+        return np.zeros(len(values.index), dtype=bool)
+    text = values.map(lambda v: "" if _is_blank(v) else str(v).strip())
+    return text.map(lambda t: bool(pattern.search(t))).to_numpy(dtype=bool)
+
+
+def household_column(source: pd.DataFrame, rules: GateRules, overrides: ContactRules) -> str | None:
+    """The column naming each customer's household: the run's own, else the first one named like the yaml's list.
+
+    A column that never repeats (the customer's own key) is no household, so `account_id` counts only when accounts
+    are shared between customers."""
+    if overrides.household_column in source.columns:
+        return overrides.household_column
+    for column in source.columns:
+        values = source[column].dropna()
+        if _norm(column) in rules.household_columns and values.nunique() < len(values.index):
+            return str(column)
+    return None
+
+
+_NO_HOUSEHOLD: Final[frozenset[str]] = frozenset(
+    {"", "na", "n a", "nan", "null", "none", "nil", "unknown", "0"}
+)
+"""Household cells that name no household (as `_cell` reads them): their customers are never grouped."""
+
+
+def same_household(households: pd.Series[Any], staying: Any, score: pd.Series[Any] | None = None) -> Any:
+    """Per customer: True when the customer is taken off because someone better ranked in the household stays.
+
+    `staying` marks who is still on the list; the highest `score` of each household stays (file order breaks ties
+    and ranks when there is no score). A customer with no household is never taken off."""
+    n = len(households.index)
+    ranked = pd.Series(np.zeros(n) if score is None else pd.to_numeric(score, errors="coerce").to_numpy())
+    table = pd.DataFrame({"home": households.map(_cell).to_numpy(), "score": ranked.to_numpy()})
+    table = table[np.asarray(staying, dtype=bool) & ~table["home"].isin(_NO_HOUSEHOLD)]
+    best = table.sort_values("score", ascending=False, kind="stable", na_position="last")
+    out = np.zeros(n, dtype=bool)
+    out[best.index[best["home"].duplicated()]] = True
+    return out
+
+
 def _ages(frame: pd.DataFrame, rules: GateRules, as_of: date) -> tuple[pd.Series[Any] | None, str | None]:
     """Age in years on `as_of` per row (NaN when it cannot be read), and the column it came from."""
     column = _find(frame, rules.age_columns)
@@ -286,6 +356,19 @@ def gate_customers(
         mark(source[status].map(_cell).isin(blocked), "blocked_status")
     if statuses:
         verdict.columns["blocked_status"] = ", ".join(statuses)
+
+    # The columns that held a test account are named on the list; a file with none says nothing.
+    tests = {
+        str(name): _looks_like_test(source[name], rules)
+        for name in source.columns
+        if _norm(name) in rules.test_account_columns  # whole names only: `ab_test_id` holds no account
+    }
+    if key is not None:  # the key may be a column the file does not hold as such
+        tests["the customer ID"] = _looks_like_test(key.reset_index(drop=True), rules)
+    for hit in tests.values():
+        mark(hit, "test_account")
+    if any(hit.any() for hit in tests.values()):
+        verdict.columns["test_account"] = ", ".join(name for name, hit in tests.items() if hit.any())
 
     ages, age_column = _ages(source, rules, as_of)
     if ages is not None and age_column is not None:
@@ -416,6 +499,7 @@ def contact_gate_for_run(
     as_of: date | datetime | None = None,
     config_root: Path | None = None,
     real_keys: Mapping[str, str] | None = None,
+    scores: pd.Series[Any] | None = None,
 ) -> Verdict:
     """The gate's verdict for the scored customers (`row_keys`), read from the customer file `source`.
 
@@ -423,6 +507,7 @@ def contact_gate_for_run(
     are not read twice. `source_keys` are the file's own join keys (one per source row). A customer with several rows in the file is taken
     off when any row says so. The run's date (when it was created) is the age date unless `as_of` is given.
     `real_keys` maps a hashed working key to the real one (the upload's key vault), for the suppression list only.
+    `scores` are the scored customers' ranking values (aligned to `row_keys`): the best of each household stays.
     """
     rules = load_gate_rules(config_root)
     overrides = _read_rules(storage, record.run_id)
@@ -443,4 +528,23 @@ def contact_gate_for_run(
     best = ranks.groupby(source_keys.reset_index(drop=True).to_numpy()).min()
     aligned = best.reindex(pd.Index(row_keys)).fillna(len(_ORDER)).astype(int).to_numpy()
     verdict.reason = np.array([_ORDER[r] if r < len(_ORDER) else None for r in aligned], dtype=object)
+    home = household_column(source, rules, overrides)
+    if overrides.household_column and home != overrides.household_column:
+        verdict.notes.append(
+            f"The household column '{overrides.household_column}' is not in the customer file, so "
+            + (f"'{home}' was used instead." if home else "households were not checked.")
+        )
+    if home is not None:  # after the other reasons, so the person kept is one who may be contacted
+        by_customer = (
+            source[home].reset_index(drop=True).groupby(source_keys.reset_index(drop=True).to_numpy()).first()
+        )
+        households = pd.Series(pd.Index(row_keys).map(by_customer))
+        extra = same_household(households, pd.isna(verdict.reason), scores)
+        if bool(extra.any()):
+            verdict.reason[extra] = "same_household"
+            verdict.columns["same_household"] = home
+            if scores is None:
+                verdict.notes.append(
+                    f"The run has no ranking column, so the first customer listed in each '{home}' was kept."
+                )
     return verdict

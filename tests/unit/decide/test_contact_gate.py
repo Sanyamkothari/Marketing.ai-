@@ -20,7 +20,9 @@ from engine.decide.contact_gate import (
     clean_contact_key,
     exclusion_lines,
     gate_customers,
+    household_column,
     load_gate_rules,
+    same_household,
     write_contact_rules,
     write_suppression_list,
 )
@@ -255,3 +257,67 @@ def test_a_suppression_list_of_phone_numbers_meets_a_hashed_working_key_through_
     summary = _summary(storage, run_id)
     assert (summary.contact_exclusions or {}).get("suppression_list", 0) >= 1
     assert "1 of 1 on your suppression list were found" in " ".join(summary.contact_exclusion_lines or [])
+
+
+def test_more_blocked_statuses_match_whatever_the_case_or_spacing(rules: GateRules) -> None:
+    frame = pd.DataFrame({"status": ["Legal Hold", "CLOSED", " written  off ", "Blacklisted", "Active"]})
+    assert _reasons(frame, rules) == ["blocked_status"] * 4 + [None]
+
+
+def test_test_accounts_are_found_by_id_or_email_and_real_look_alikes_stay(rules: GateRules) -> None:
+    frame = pd.DataFrame(
+        {
+            "customer_id": ["TEST001", "C1", "dummy", "C2", "C3", "C4"],
+            "email": ["a@x.com", "qa+1@acme.example", "b@x.com", "test@acme.in", "c3@mail.example", None],
+            "ab_test_id": [
+                "test",
+                "control",
+                "test",
+                "control",
+                "test",
+                "control",
+            ],  # an experiment arm, no account
+        }
+    )
+    reasons, verdict = gate_customers(frame, rules, ContactRules(), as_of=DAY)
+    assert reasons.tolist() == ["test_account", "test_account", "test_account", "test_account", None, None]
+    assert verdict.columns["test_account"] == "customer_id, email"
+    assert exclusion_lines({"test_account": 4}) == ["4 excluded because they look like test accounts"]
+
+
+def test_a_file_without_test_accounts_names_no_test_column(rules: GateRules) -> None:
+    _, verdict = gate_customers(pd.DataFrame({"customer_id": ["C1", "C2"]}), rules, ContactRules(), as_of=DAY)
+    assert "test_account" not in verdict.columns
+
+
+def test_the_best_ranked_member_of_a_household_stays_and_ties_go_to_the_first() -> None:
+    homes = pd.Series(["H1", "H1", "H1", "H2", "NA", "H2", "NA"])  # `NA` names no household
+    score = pd.Series([0.2, 0.9, 0.5, 0.1, 0.4, 0.1, 0.3])
+    assert same_household(homes, [True] * 7, score).tolist() == [True, False, True, False, False, True, False]
+    # With no score the first listed stays; someone already off the list never keeps the household for the rest.
+    unscored = same_household(homes, [False, True, True, True, True, True, True])
+    assert unscored.tolist() == [False, False, True, False, False, True, False]
+
+
+def test_a_household_column_must_repeat_and_the_run_can_name_its_own(rules: GateRules) -> None:
+    unique = pd.DataFrame({"account_id": ["A1", "A2", "A3"], "family": ["F1", "F1", "F2"]})
+    assert household_column(unique, rules, ContactRules()) is None  # account_id is the key, not a household
+    assert household_column(unique, rules, ContactRules(household_column="family")) == "family"
+    shared = pd.DataFrame({"account_id": ["A1", "A1", "A2"]})
+    assert household_column(shared, rules, ContactRules()) == "account_id"
+
+
+def test_one_person_per_household_reaches_the_contact_list_and_is_counted(tmp_path: Path) -> None:
+    storage, listed = _built(tmp_path, household_id=["H1", "H1", "H2"])
+    summary = _summary(storage)
+    counts = summary.contact_exclusions or {}
+    assert counts.get("same_household", 0) > 0
+    assert summary.contact_gate_columns == {"same_household": "household_id"}
+    assert any(
+        line.endswith("excluded because someone else in their household is already on the list")
+        for line in summary.contact_exclusion_lines or []
+    )
+    treated = listed[listed["treat"] == 1]
+    source = pd.read_csv(io.BytesIO(storage.read_bytes(upload_key("u_aaaaaaaa", "source.csv"))))
+    homes = source.set_index("customer_id")["household_id"]
+    assert homes.loc[treated["customer_id"]].is_unique
