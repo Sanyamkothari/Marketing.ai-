@@ -929,6 +929,7 @@ def run_recipe(
     clock: Callable[[], datetime] = utc_now,
     tables: Mapping[str, pd.DataFrame] | None = None,
     as_of: date | None = None,
+    observe: Callable[[RecipeStep, pd.DataFrame, pd.DataFrame], None] | None = None,
 ) -> RecipeRun:
     """Check, then run, `steps` on a copy of `frame`. Raises `RecipeError` instead of guessing.
 
@@ -939,6 +940,9 @@ def run_recipe(
     training file (the recipe's first build, onboarding ruling R1), `narrow` on a scoring file, and
     none on a preview. A `keep_latest_per_id` step runs its point-in-time check under the same value
     (Plan O M238, DEC-1808).
+
+    `observe(step, before, after)` is called after each step with copies of the table it read and the table it
+    made (`engine.doctor.guards` counts its receipts from them); it cannot change either.
     """
     check_recipe(
         steps,
@@ -950,7 +954,12 @@ def run_recipe(
     )
     work = frame.copy()
     receipts: list[StepReceipt] = []
+    seen: tuple[RecipeStep, pd.DataFrame] | None = None
     for step in steps:
+        if observe is not None:
+            if seen is not None:
+                observe(seen[0], seen[1], work.copy())
+            seen = (step, work.copy())
         if step.kind is RecipeStepKind.DROP_COLUMN:
             absent = step.column not in work.columns
             receipts.append(
@@ -1111,6 +1120,8 @@ def run_recipe(
                 examples_failed=outcome.failed_examples,
             )
         )
+    if observe is not None and seen is not None:
+        observe(seen[0], seen[1], work.copy())
     receipt = RecipeReceipt(
         recipe_hash=recipe_hash(tuple(steps)),
         upload_id=upload_id,

@@ -77,6 +77,7 @@ if TYPE_CHECKING:
     from engine.doctor.case import Case, CaseItem
     from engine.doctor.diagnose import LoadedFile
     from engine.doctor.goal_brief import GoalBrief
+    from engine.doctor.guards import GuardedRun
 
 __all__ = [
     "AGENT_VERSION",
@@ -711,29 +712,38 @@ def _learn(
     primary_key: str | None,
     target: str | None,
     tables: Mapping[str, pd.DataFrame] | None = None,
+    guards: list[GuardedRun] | None = None,
 ) -> tuple[pd.DataFrame | None, DataContract | None]:
-    """The prepared sample and its contract; none when the approved recipe cannot run on the sample."""
+    """The prepared sample and its contract; none when the approved recipe cannot run on the sample.
+
+    The recipe runs under the guards (`engine.doctor.guards`): a receipt for each step, the plan's ledger, and the
+    plan run twice. The result is added to `guards` when given; the prepared sample is the same as a plain run's.
+    """
     from engine.agent.dataset_recipe import consistent_types
-    from engine.agent.recipe import RecipeError, run_recipe
+    from engine.agent.recipe import RecipeError
+    from engine.doctor.guards import run_guarded
 
     if frame is None:
         return None, None
     prepared = frame
     if recipe is not None:
         try:
-            prepared = run_recipe(
+            guarded = run_guarded(
                 consistent_types(frame),
                 recipe.steps,
-                upload_id="prescription",
                 primary_key=recipe.primary_key,
                 target=recipe.target,
+                upload_id="prescription",
                 levels=recipe.levels or (),
                 max_failure_pct=recipe.max_failure_pct or 0.0,
                 snapshot_column=recipe.snapshot_column,
                 tables=tables,
-            ).frame
+            )
         except RecipeError:
             return None, None
+        prepared = guarded.run.frame
+        if guards is not None:
+            guards.append(guarded)
     return prepared, learn_contract(prepared, primary_key=primary_key, target=target)
 
 
@@ -794,8 +804,12 @@ def prescription_from_case(
     files: Sequence[LoadedFile] = (),
     config: UseCaseConfig | None = None,
     built: BuiltRows | None = None,
+    guards: list[GuardedRun] | None = None,
 ) -> Prescription:
     """The prescription a case's approved items make (the design §9.1), goal sections from `CaseItem.goal_id`.
+
+    When `guards` is given, each recipe's run on the sample adds its :class:`~engine.doctor.guards.GuardedRun` to it
+    (receipts, ledger and findings, counted by code) for the caller to show; the prescription itself is the same.
 
     Item payloads read: a recipe step (`step`; `stage: post_build`, or no file, puts it in the post-build recipe), a
     role (`key`, `outcome_column`, `as_of_column`, `consent_column` items' `column`), a setting (`path`, `value`), an
@@ -862,7 +876,9 @@ def prescription_from_case(
             approved_by=approver,
             created_at=created_at,
         )
-        frame, contract = _learn(_frames(files, upload_ids), recipe, primary_key=key, target=target)
+        frame, contract = _learn(
+            _frames(files, upload_ids), recipe, primary_key=key, target=target, guards=guards
+        )
         if frame is not None:
             prepared.append(frame)
             prepared_by_slot[slot] = frame
@@ -907,6 +923,7 @@ def prescription_from_case(
             primary_key=built.primary_key,
             target=built.target,
             tables=case_tables(prepared_by_slot, parts),
+            guards=guards,
         )
     profile: LocaleProfile | None = None
     if case.locale_profile is not None:

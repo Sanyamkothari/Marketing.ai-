@@ -23,6 +23,17 @@ from engine.access.roles import Role
 from engine.agent.contracts import RecipeStep, RecipeStepKind
 from engine.agent.sql_step import MAX_INPUTS, MAX_SQL_CHARS, SqlStepError, run_sql, sql_params
 from engine.config import StrictBase
+from engine.doctor.guards import (
+    Finding,
+    NotMeasurableError,
+    Receipt,
+    build_ledger,
+    cell_change,
+    infer_key,
+    make_receipt,
+    plan_findings,
+    receipt_findings,
+)
 from engine.doctor.prescription import slot_name
 from engine.doctor.registry import (
     BY_EXPOSURE,
@@ -87,6 +98,22 @@ class SqlStepProposal(StrictBase):
     columns_out: int
     columns: tuple[str, ...] = Field(description="Names of the new table's columns (the first ones).")
     sampled: bool = Field(description="True when it was tried on the first rows of a bigger file.")
+    receipt: Receipt = Field(
+        description="What the query did, counted by our code: customers kept, lost, repeated."
+    )
+    changed_cells: int | None = Field(
+        default=None, description="Cells of a column that kept its name whose value is now different."
+    )
+    compared_cells: int | None = Field(
+        default=None, description="Cells that were compared; none if not measurable."
+    )
+    findings: tuple[Finding, ...] = Field(
+        default=(), description="What the guards found: stop, flag or note."
+    )
+
+    needs_yes: bool = Field(
+        description="A stop, or a query that could not be measured: the person says yes knowing the counts."
+    )
 
     def payload(self) -> dict[str, Any]:
         """The case item's payload: the step, where it runs, the counts the 2% rule reads, and the sentence."""
@@ -96,6 +123,11 @@ class SqlStepProposal(StrictBase):
             "rows_in": self.rows_in,
             "rows_out": self.rows_out,
             "sentence": self.sentence,
+            "receipt": self.receipt.model_dump(mode="json"),
+            "findings": [f.model_dump(mode="json") for f in self.findings],
+            "changed_cells": self.changed_cells,
+            "compared_cells": self.compared_cells,
+            "needs_yes": self.needs_yes,
             "detail": str(self.step["params"]["sql"]),  # the query, shown only as detail
         }
 
@@ -133,19 +165,30 @@ def _propose(given: ProposeSqlStepArgs, ctx: DataToolContext) -> SqlStepProposal
         run = run_sql(given.sql, tried, output_name=given.output_name, as_of=given.as_of)
     except SqlStepError as exc:
         raise DataToolError(exc.code, exc.message, status=422) from exc
+    first = next(iter(tried.values()))
+    key = ctx.primary_key
+    receipt = make_receipt(1, RecipeStepKind.SQL_QUERY.value, tried, run.frame, key=key)
+    findings = receipt_findings(receipt) + plan_findings(build_ledger([receipt]))
+    changed_cells: int | None
+    compared_cells: int | None
+    try:
+        changed_cells, compared_cells = cell_change(first, run.frame, key=key or infer_key(first, run.frame))
+    except NotMeasurableError as exc:
+        changed_cells = compared_cells = None
+        findings.append(Finding(level="flag", code="STEP_NOT_MEASURED", message=f"{exc} It needs your yes."))
     inputs = tuple(
         SqlTableSummary(name=name, file_name=file_name, rows=len(frame), columns=len(frame.columns))
         for name, (_, frame, file_name) in named.items()
     )
     sampled = any(len(frame) > DRY_RUN_ROWS for _, frame, _ in named.values())
-    receipt = run.receipt
-    first = next(iter(tried.values()))
     read = ", ".join(f"{t.file_name} ({t.rows:,} rows)" for t in inputs)
     sentence = (
         f"{given.description.rstrip('.')}. Reads {read}; the new table '{given.output_name}' would have "
-        f"{receipt.rows_out:,} rows and {receipt.columns_out:,} columns"
+        f"{run.receipt.rows_out:,} rows and {run.receipt.columns_out:,} columns"
         + (f" (tried on the first {DRY_RUN_ROWS:,} rows of each file)." if sampled else ".")
     )
+    if receipt.keys_in is not None:
+        sentence += f" Customers: {receipt.keys_in:,} before, {receipt.keys_out:,} after ({receipt.keys_lost:,} lost, {receipt.keys_repeated:,} repeated)."
     step = RecipeStep(
         order=1,
         kind=RecipeStepKind.SQL_QUERY,
@@ -160,10 +203,15 @@ def _propose(given: ProposeSqlStepArgs, ctx: DataToolContext) -> SqlStepProposal
         step=step.model_dump(mode="json", exclude={"proposal_id"}),
         inputs=inputs,
         rows_in=len(first),
-        rows_out=receipt.rows_out,
-        columns_out=receipt.columns_out,
-        columns=receipt.columns[:MAX_COLUMNS_LISTED],
+        rows_out=run.receipt.rows_out,
+        columns_out=run.receipt.columns_out,
+        columns=run.receipt.columns[:MAX_COLUMNS_LISTED],
         sampled=sampled,
+        receipt=receipt,
+        changed_cells=changed_cells,
+        compared_cells=compared_cells,
+        findings=tuple(findings),
+        needs_yes=compared_cells is None or any(f.level == "stop" for f in findings),
     )
 
 
