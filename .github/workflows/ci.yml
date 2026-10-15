@@ -9,7 +9,7 @@
 # pull request rather than being discovered later by a reader of a stale file.
 #
 # The @slow AutoGluon integration tests are deliberately NOT run here — that is the second half of
-# plan §10's sentence. `make test` is `pytest -m "not slow"`; the full suite runs in nightly.yml, so
+# plan §10's sentence. `make test` is `pytest -m "not slow and not frozen"`; the full suite runs in nightly.yml, so
 # a pull request waits minutes rather than a quarter of an hour.
 
 name: CI
@@ -150,19 +150,13 @@ jobs:
           --id 'test_approvals_ui_js::test_the_approvals_screen_in_jsdom$'
           --id '^tests\.integration\.test_inactive_settings_ui::'
           --id '^tests\.integration\.test_ui_journey::'
-          --id '^tests\.unit\.uplift\.test_uplift_ui::test_(every_module_file_parses|node_suite_passes)'
-          --id '^tests\.unit\.uplift\.test_phase1_pages_uplift::test_node_suite_passes$'
           --id '\[postgres\]$'
           --id '^tests\.unit\.test_postgres_metadata::'
           --id 'test_alembic_migrations::test_the_migrations_match_the_models_on_postgres$'
           --id 'test_platform_migration::test_the_postgres_audit_table_refuses_update_delete_and_truncate$'
 
-      # The prototype's own jsdom suite (tests/prototype) is node --test only, with no pytest wrap,
-      # so it is its own step. Its harness waits for the page to settle (no file read in flight, no
-      # page timer left to fire) instead of sleeping a fixed time, which is what made uplift tests
-      # fail on a busy machine - as a shared runner is (DEC-875, DEC-876).
-      - name: make prototype-test
-        run: make prototype-test
+      # The prototype's own jsdom suite (`make prototype-test`) and the tests of frozen features
+      # (`make test` leaves out @frozen) run in nightly.yml, not on every push.
 
   # --- Phase 4a -------------------------------------------------------------
   # Two jobs the main gate cannot do. `infra` needs node and a second virtualenv; `image` needs a

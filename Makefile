@@ -49,10 +49,10 @@ endif
 # (DEC-358).
 PAID_MARKERS := not bedrock and not aws
 
-test: ## fast tests (excludes @slow and the two markers that bill a real account)
-	$(BIN)/python -m pytest -m "not slow and $(PAID_MARKERS)"
+test: ## fast tests (excludes @slow, @frozen and the two markers that bill a real account)
+	$(BIN)/python -m pytest -m "not slow and not frozen and $(PAID_MARKERS)"
 
-test-all: ## every test that costs nothing; `pytest -m bedrock` or `-m aws` opts in to the paid ones
+test-all: ## every test that costs nothing, @frozen included; `pytest -m bedrock` or `-m aws` opts in to the paid ones
 	$(BIN)/python -m pytest -m "$(PAID_MARKERS)"
 
 lint: check-generated ## ruff + black --check + mypy --strict + generated-file drift check
