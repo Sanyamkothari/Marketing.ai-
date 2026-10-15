@@ -32,6 +32,8 @@ const CSS = `
 .dt .dt-note{margin:0;font-size:var(--fs-caption);line-height:var(--lh-caption);color:var(--muted)}
 .dt .dt-foot{margin-top:var(--s5);font-size:var(--fs-small);color:var(--ink2)}
 .dt .dt-foot a{color:var(--brand-blue);font-weight:500}
+.dt .dt-ai{margin:0 0 var(--s4);font-size:var(--fs-small);color:var(--ink2)}
+.dt .dt-ai a{color:var(--brand-blue);font-weight:500}
 
 /* Check my data: a calm card, one action */
 .dt .dt-check{max-width:720px;padding:var(--s5) var(--s5) var(--s5)}

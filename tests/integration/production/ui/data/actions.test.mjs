@@ -81,6 +81,14 @@ test("the Data page's note names the place in words and links it: Settings › A
   assert.equal($("[data-dt-settings]").textContent, "Settings › AI service");
 });
 
+test("the Sources tab says in one line whether the Product AI is connected", async () => {
+  await show("#/data");
+  const line = $("[data-dt-ai]");
+  assert.equal(line.dataset.dtAi, "not-connected");
+  assert.match(line.textContent, /Product AI not connected/);
+  assert.equal(line.querySelector("a").getAttribute("href"), "#/settings/ai");
+});
+
 test("the old Connections route is still registered and still draws", async () => {
   await show("#/connections");
   assert.equal($("h1").textContent, "Connections");

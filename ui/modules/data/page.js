@@ -27,7 +27,7 @@ import { getUploads } from "./api.js";
 import { injectDataStyles } from "./styles.js";
 // Plan M M192 (DEC-1622): the note under the sources opens Settings › AI service itself, not Settings (which used to
 // send the AI service back to Connections, which the campaigns layout redirects here: a loop).
-import { AI_SETTINGS_HREF } from "../../availability.js";
+import { AI_SETTINGS_HREF, aiServiceStatus } from "../../availability.js";
 // Plan O M247 (DEC-1817): with `data_doctor.unified` on, "Check my data" is the one Data Doctor screen itself, drawn
 // in the tab (a component that draws no H1 of its own), and the header's link goes to the tab. Off: unchanged.
 import { dataDoctorOn, dataDoctorOnNow } from "../datadoctor/switch.js";
@@ -46,6 +46,7 @@ const state = {
   kinds: [],
   connections: [],
   uploads: [],
+  ai: null, // whether the Product AI is connected: true | false | null (not known)
   uploadsTotal: 0, // how many uploaded files there are in all (the list holds only the newest)
   loadError: null,
   uploadsError: null,
@@ -119,18 +120,23 @@ function header(tab) {
     title: "Data",
     subtitle,
     primary: { label: "+ Add a source", id: "dt-add", attrs: `aria-expanded="${state.chooserOpen}" aria-controls="dt-chooser"` },
-    secondary: [{ label: "Check my data", href: dataDoctorOnNow() ? `${DATA_HOME}/check` : DOCTOR_HREF, attrs: "data-dt-doctor" }],
+    secondary: [
+      dataDoctorOnNow()
+        ? { label: "Data Doctor", href: `${DATA_HOME}/check`, attrs: "data-dt-doctor" }
+        : { label: "Check my data", href: DOCTOR_HREF, attrs: "data-dt-doctor" },
+    ],
   });
 }
 
 /** The underline tabs: a link to each route; the current one is also `aria-current="page"`, as a link to a page is. */
 function tabsHtml(tab) {
+  // With the one Data Doctor on, the second tab is called what it is (the `check` id and address stay).
   return tabs({
     label: "Data sections",
     current: tab,
     items: TABS.map((t) => ({
       id: t.id,
-      label: t.label,
+      label: t.id === "check" && (view.doctor || dataDoctorOnNow()) ? "Data Doctor" : t.label,
       href: t.href,
       attrs: `data-dt-tab="${t.id}"${t.id === tab ? ' aria-current="page"' : ""}`,
     })),
@@ -236,10 +242,18 @@ function chooserHtml() {
       return `<article class="dt-kind" data-dt-kind="${esc(k.kind)}"><div class="dt-kind-h">${typeIcon("connection")}<h3>${esc(k.label)}</h3></div>${action}</article>`;
     })
     .join("");
+  // With the one Data Doctor on, a file or a pick from a connection is brought in on its tab; off, the old page.
+  const doctor = dataDoctorOnNow();
   const file = `<article class="dt-kind" data-dt-kind="file"><div class="dt-kind-h">${typeIcon("file")}<h3>A file from your computer</h3></div><p class="dt-note">CSV, Excel or Parquet. Data Doctor reads it first and says what it can be used for.</p><div class="btn-row">${button(
-    { label: "Choose a file", href: DOCTOR_HREF, kind: "secondary", size: "sm", attrs: 'data-dt-new="file"' },
+    { label: "Choose a file", href: doctor ? `${DATA_HOME}/check` : DOCTOR_HREF, kind: "secondary", size: "sm", attrs: 'data-dt-new="file"' },
   )}</div></article>`;
-  return `<section class="dt-chooser" id="dt-chooser" aria-labelledby="dt-chooser-h"${state.chooserOpen ? "" : " hidden"}><h2 id="dt-chooser-h">Add a source</h2><p>Marketing AI only reads from a source. It never changes anything there.</p><div class="dt-kinds">${cards}${file}</div></section>`;
+  const pick =
+    doctor && state.connections.some((c) => c.available)
+      ? `<article class="dt-kind" data-dt-kind="pick"><div class="dt-kind-h">${typeIcon("connection")}<h3>Pick from a connection</h3></div><p class="dt-note">Choose a file or table in a source you have set up. Data Doctor reads it first.</p><div class="btn-row">${button(
+          { label: "Pick from a connection", href: `${DATA_HOME}/check/pick`, kind: "secondary", size: "sm", attrs: 'data-dt-new="pick"' },
+        )}</div></article>`
+      : "";
+  return `<section class="dt-chooser" id="dt-chooser" aria-labelledby="dt-chooser-h"${state.chooserOpen ? "" : " hidden"}><h2 id="dt-chooser-h">Add a source</h2><p>Marketing AI only reads from a source. It never changes anything there.</p><div class="dt-kinds">${cards}${file}${pick}</div></section>`;
 }
 
 function sourcesHtml() {
@@ -277,8 +291,18 @@ function sourcesHtml() {
   const problem = state.uploadsError
     ? errorBox(state.uploadsError, { title: "The uploaded files could not be listed." })
     : "";
-  return `${chooserHtml()}<section class="dt-sec" aria-labelledby="dt-sources-h"><h2 id="dt-sources-h">Your sources</h2><p>Saved connections and uploaded files, with their health and when they last brought in data.</p>${list}${problem}</section>
+  return `${aiStatusHtml()}${chooserHtml()}<section class="dt-sec" aria-labelledby="dt-sources-h"><h2 id="dt-sources-h">Your sources</h2><p>Saved connections and uploaded files, with their health and when they last brought in data.</p>${list}${problem}</section>
     <p class="dt-foot">Connect an AI service in <a href="${AI_SETTINGS_HREF}" data-dt-settings>Settings › AI service</a>.</p>`;
+}
+
+/** One line: whether the AI that helps your team (Data Doctor's chat) is connected, and where to connect it. */
+function aiStatusHtml() {
+  if (state.ai === null) return "";
+  return `<p class="dt-ai" data-dt-ai="${state.ai ? "connected" : "not-connected"}">${
+    state.ai
+      ? "Product AI connected."
+      : `Product AI not connected. <a href="${AI_SETTINGS_HREF}" data-dt-ai-link>Connect it in Settings</a>.`
+  }</p>`;
 }
 
 // --- the Check my data tab -------------------------------------------------------------------------
@@ -310,7 +334,7 @@ function draw() {
   if (tab === "check" && view.doctor) {
     const main = app.querySelector("[data-dds-main]");
     const aside = app.querySelector("[data-dds-aside]");
-    if (main) mountDataDoctor({ main, aside }, { place: "data" });
+    if (main) mountDataDoctor({ main, aside }, { place: "data", pick: view.pick });
   }
   revealSelectedTab(app);
   document.title = `${tab === "check" ? "Check my data" : "Data"} · Marketing AI`;
@@ -401,7 +425,7 @@ export const tabOf = (parts) => (parts[1] === "check" ? "check" : "sources");
 /** `registerModule`'s render for `#/data[/<tab>]`: paint a skeleton, load, draw. */
 export async function renderData(app, parts) {
   const tab = tabOf(parts);
-  view = { app, tab, hash: window.location.hash, doctor: false };
+  view = { app, tab, hash: window.location.hash, doctor: false, pick: parts[2] === "pick" };
   injectDataStyles();
   if (tab === "check") {
     // Plan O M247: only this tab waits for `/auth/me` (the call the app already made at start-up).
@@ -416,10 +440,13 @@ export async function renderData(app, parts) {
   state.uploadsError = null;
   state.confirming = null;
   state.showAllFiles = false;
-  const [sources, files] = await Promise.allSettled([
+  const [sources, files, ai] = await Promise.allSettled([
     Promise.all([getKinds(), getConnections()]),
     getUploads(),
+    aiServiceStatus(),
   ]);
+  const product = ai.status === "fulfilled" && ai.value && ai.value.slots && ai.value.slots.product;
+  state.ai = product ? Boolean(product.connected) : null;
   if (sources.status === "fulfilled") {
     state.kinds = sources.value[0].kinds || [];
     state.connections = sources.value[1].connections || [];

@@ -203,15 +203,16 @@ const setupModeList = [];
 
 /**
  * Register a setup mode: `{ name, label, applies(uc), mount({ main, aside }, host) }`. `name` must be
- * unique; `label` is the tab's text; `applies(uc)` says whether the use case offers it.
+ * unique; `label` is the tab's text; `applies(uc)` says whether the use case offers it. `manualNote()`, if given, is a
+ * sentence shown above Manual setup while the mode is offered (or "" for none).
  */
 export function registerSetupMode(mode) {
-  const { name, label, applies, mount } = mode || {};
+  const { name, label, applies, mount, manualNote } = mode || {};
   if (!name || !label || typeof applies !== "function" || typeof mount !== "function") {
     throw new Error("registerSetupMode needs { name, label, applies(uc), mount({ main, aside }, host) }");
   }
   if (setupModeList.some((m) => m.name === name)) throw new Error(`A setup mode named "${name}" is already registered`);
-  setupModeList.push({ name, label, applies, mount });
+  setupModeList.push({ name, label, applies, mount, manualNote });
   announceRegistration();
 }
 

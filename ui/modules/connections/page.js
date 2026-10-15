@@ -428,6 +428,8 @@ function bind(app) {
 export async function renderConnections(app, parts) {
   injectConnectionStyles();
   if (parts[1] === "ai") return renderAiService(app, parts[2]); // the AI service screens load their own state
+  // `#/connections/new` with no kind is the list, whose "Add a connection" cards are the chooser of kinds.
+  if (parts[1] === "new" && !parts[2]) parts = [parts[0]];
   view = { app, parts: [...parts] };
   const editing = parts[1];
   app.innerHTML = skeleton(editing ? "form" : "list", { title: "Connections" });
