@@ -247,6 +247,7 @@ def _drive(case: TrapCase, uploads: dict[str, str], deps: Any) -> Any:
     from engine.agent.contracts import ProposalState
     from engine.doctor import visit
     from engine.doctor.case import CaseFile, CaseStore, VisitState
+    from engine.doctor.plan_check import open_stops
     from engine.doctor.protocol import item_sentence
     from engine.utils.time import utc_now
 
@@ -289,6 +290,17 @@ def _drive(case: TrapCase, uploads: dict[str, str], deps: Any) -> Any:
             )  # fmt: skip
             continue
         if now.state is VisitState.APPROVE and not approved:
+            # Approval blocks on a stop nobody said yes to. Like a person, say yes only to a stop the answer key
+            # names (`"answers": {"<stop code>": "acknowledge"}`); any other stop stays open and the visit stops.
+            state = now.visit
+            stops = open_stops(state.plan_check, state.acknowledged) if state is not None else []
+            wanted = [s for s in stops if case.answers.get(s.code, "").lower().startswith("acknowledge")]
+            if wanted:
+                current = visit.acknowledge_stop(
+                    CLIENT, now.case_id, wanted[0].key, deps, expected_version=now.version, actor=ANALYST,
+                    reason="the bench's answer key says to go on",
+                )  # fmt: skip
+                continue
             current = visit.approve(CLIENT, now.case_id, deps, expected_version=now.version, actor=ANALYST)
             approved = True
             continue
@@ -750,16 +762,28 @@ def check_contact_list(g: Grader, args: Mapping[str, Any]) -> Verdict:
     # the Doctor already turned into `contactable` would otherwise be read twice, and the V13 answer key fails).
     from datetime import date
 
-    from engine.decide.contact_gate import ContactRules, gate_customers, load_gate_rules
+    from engine.decide.contact_gate import (
+        ContactRules,
+        gate_customers,
+        household_column,
+        load_gate_rules,
+        same_household,
+    )
 
+    rules = load_gate_rules()
     reasons, _verdict = gate_customers(
         frame,
-        load_gate_rules(),
+        rules,
         ContactRules(),
         as_of=date.fromisoformat(AS_OF),
         skip_consent=[str(c) for c in frame.columns],
     )
     contactable = contactable & reasons.isna().to_numpy()
+    home = household_column(
+        frame, rules, ContactRules()
+    )  # the gate's one-person-per-household rule (no scores here)
+    if home is not None:
+        contactable = contactable & ~same_household(frame[home], contactable.to_numpy())
     contacted = {_canon(k) for k in frame[key][contactable.to_numpy()]}
     problems: list[str] = []
     wrongly = sorted(contacted & {_canon(k) for k in args.get("must_exclude", ())})

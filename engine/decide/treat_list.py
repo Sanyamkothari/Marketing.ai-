@@ -248,7 +248,7 @@ class TreatListSummary(Artefact):
         default=None,
         description=(
             "G14: customers the contact-list gate took off the list, counted under the first reason that applies "
-            "(minor, dnd, dnd_unknown, consent_unknown, no_consent, blocked_status, suppression_list). Absent when "
+            "(minor, dnd, dnd_unknown, consent_unknown, no_consent, blocked_status, test_account, suppression_list, same_household). Absent when "
             "the gate found nothing in the customer file to check."
         ),
         exclude_if=lambda value: value is None,
@@ -994,6 +994,7 @@ def _contact_gate(
             handled_columns=(config.governance.consent_column, config.actions.suppression.opt_out_column),
             config_root=config_root,
             real_keys=_real_key_lookup(storage, record),
+            scores=_household_ranking(config, scores),
         )
     except (StorageError, ValueError, KeyError, OSError) as exc:
         _LOGGER.warning(
@@ -1003,6 +1004,14 @@ def _contact_gate(
             return None
         verdict = _unchecked(len(scores.index))
     return verdict
+
+
+def _household_ranking(config: UseCaseConfig, scores: pd.DataFrame) -> pd.Series[Any] | None:
+    """The run's own ranking values (predicted uplift, else the propensity score), to keep the best of a household."""
+    for name in (_UPLIFT_COLUMN, config.actions.score_field):
+        if name in scores.columns and pd.to_numeric(scores[name], errors="coerce").notna().any():
+            return scores[name].reset_index(drop=True)
+    return None
 
 
 def _unchecked(n: int) -> Any:
