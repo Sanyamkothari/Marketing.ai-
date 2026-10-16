@@ -369,8 +369,8 @@ APPROVE_CLASS_ITEMS: Final[Mapping[str, ApproveClassRule]] = {
     "build_dataset": ApproveClassRule(Role.ANALYST, "it leaves rows out", drop_share=True),
     "keep_latest_per_id": ApproveClassRule(Role.ANALYST, "it leaves rows out", drop_share=True),
     "sql_query": ApproveClassRule(Role.ANALYST, "it makes a new table with a query", drop_share=True),
-    "split_file": ApproveClassRule(Role.ANALYST, "it chooses which customers are learnt from"),
-    "remove_rows": ApproveClassRule(Role.ANALYST, "it chooses which customers are learnt from"),
+    "split_file": ApproveClassRule(Role.ANALYST, "it changes which customers the model learns from"),
+    "remove_rows": ApproveClassRule(Role.ANALYST, "it changes which customers the model learns from"),
 }
 """The design §6.6's list, by item kind (a recipe step is read by its step kind, :func:`item_kind`)."""
 

@@ -470,16 +470,24 @@ def _current_readiness(storage: Storage, case: Case) -> tuple[str, DataReadiness
         return ref.verdict, None
 
 
+_CODE_PREFIX = re.compile(r"(^|; )(Not ready: )?[A-Z][A-Z0-9_]{2,}: ")
+
+
+def _plain(said: str) -> str:
+    """A stored reason as the person reads it: no "Not ready:" and no "CODE:" in front of any of its parts."""
+    return _CODE_PREFIX.sub(r"\1", said.removeprefix("Not ready: ")).strip()
+
+
 def _reasons(report: DataReadinessReport, *, warnings: bool = False) -> tuple[str, ...]:
     """The report's own sentences: what fails (blocking checks, then probes), or with `warnings` what warns."""
     wanted = "warn" if warnings else "fail"
     found: list[str] = []
     for requirement in report.requirements:
         if requirement.status == wanted and (warnings or requirement.blocking) and requirement.message:
-            found.append(requirement.message)
+            found.append(_plain(requirement.message))
     for probe in report.probes:
         if probe.status == wanted:
-            found.append(probe.message if warnings else (probe.fix or probe.message))
+            found.append(_plain(probe.message if warnings else (probe.fix or probe.message)))
     out: list[str] = []
     for text in found:
         if text and text not in out:
@@ -526,7 +534,7 @@ def _last_readiness_failure(storage: Storage, case: Case) -> tuple[tuple[str, ..
         if report is not None and _reasons(report):
             return _reasons(report), report.verdict_reason
     said = str(last.details.get("reason") or "")
-    plain = re.sub(r"^(Not ready: )?([A-Z][A-Z0-9_]+: )?", "", said)
+    plain = _plain(said)
     return ((plain,) if plain else ()), (said or None)
 
 
@@ -543,7 +551,7 @@ def _verdict(storage: Storage, case: Case, approve_class: tuple[ScreenApproveCla
             key="not_ready",
             title="Not ready yet",
             next="Something stopped the check. Try again, or add a different file.",
-            reasons=(visit.stopped.message,),
+            reasons=(_plain(visit.stopped.message),),
             technical=visit.stopped.code,
         )
     blocking = open_blocking(case)

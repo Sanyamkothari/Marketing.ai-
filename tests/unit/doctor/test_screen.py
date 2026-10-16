@@ -79,7 +79,7 @@ def test_approve_class_items_carry_their_role_sentence_and_whether_another_perso
     }
     consent, rows = by_kind["consent_column"], by_kind["recipe_step"]
     assert consent.role == "approver" and consent.why == "it decides who may be contacted"
-    assert rows.role == "analyst" and rows.why == "it chooses which customers are learnt from"
+    assert rows.role == "analyst" and rows.why == "it changes which customers the model learns from"
     item = next(i for i in screen.case.items if i.item_id == rows.item_id)
     assert rows.sentence == item_sentence(item.title, item.payload)
     assert not rows.confirmed and rows.separate, "targeted advertising needs a second person"
@@ -315,3 +315,11 @@ def test_ready_with_notes_always_carries_a_plain_note(storage: LocalStorage, wor
     assert (
         scenario("ready", LocalStorage(storage.root.parent / "ready"), vs.world()).view.verdict.note is None
     )
+
+
+def test_a_stored_reason_is_shown_without_its_code() -> None:
+    from engine.doctor.screen import _plain
+
+    said = "Not ready: X_CONSENT_VOCAB: 4,000 of 4,000 values are not a yes or no; A_B_C: Fix the dates."
+    assert _plain(said) == "4,000 of 4,000 values are not a yes or no; Fix the dates."
+    assert _plain("The file is empty.") == "The file is empty."

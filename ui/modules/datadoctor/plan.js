@@ -178,7 +178,7 @@ export function leadOf(f) {
     case "customers_lost":
       return `${plural(n, "customer", "customers")} lost in one step`;
     case "customers_duplicated":
-      return `${plural(n, "customer", "customers")} counted twice in one step`;
+      return `${plural(n, "customer", "customers")} appear twice after one step`;
     case "rows_left_out":
       return `${plural(n, "row", "rows")} left out${f.of ? ` of ${f.of.toLocaleString("en-US")}` : ""}`;
     default:

@@ -184,7 +184,7 @@ export function checksHtml(findings, { used = 0, ledger = null, items = [], leve
     : "";
   return `<section class="dds-checks card" data-dds-checks aria-labelledby="dds-checks-t"><h${level} id="dds-checks-t" class="dds-group-t">${esc(
     title,
-  )}</h${level}><p class="dds-why">Counted by our code, riskiest first.</p><ul class="dds-check-list">${top
+  )}</h${level}><p class="dds-why">We counted these, riskiest first.</p><ul class="dds-check-list">${top
     .map((f) => findingHtml(f, ledger, items))
     .join("")}</ul>${rest}</section>`;
 }
@@ -199,7 +199,7 @@ function queryOf(item) {
 
 const pair = (label, a, b) => (finite(a) && finite(b) ? `<div><dt>${esc(label)}</dt><dd>${esc(`${count(a)} in, ${count(b)} out`)}</dd></div>` : "");
 
-/** What our code counted for a step, the sample rows before and after, and the query only behind "Show the query". */
+/** What we counted for a step, the sample rows before and after, and the query only behind "Show the query". */
 export function receiptHtml(item, ledger) {
   const r = receiptOf(item, ledger);
   const sql = queryOf(item);
@@ -212,13 +212,13 @@ export function receiptHtml(item, ledger) {
       pair("Customers", r.customersIn, r.customersOut),
       // Lost and counted-twice are told apart and never netted off against each other.
       finite(r.lost) ? `<div data-dds-lost><dt>Customers lost</dt><dd>${esc(count(r.lost))}</dd></div>` : "",
-      finite(r.duplicated) ? `<div data-dds-duplicated><dt>Customers counted twice</dt><dd>${esc(count(r.duplicated))}</dd></div>` : "",
+      finite(r.duplicated) ? `<div data-dds-duplicated><dt>Customers that appear twice</dt><dd>${esc(count(r.duplicated))}</dd></div>` : "",
       ...r.totals.map(
         (t) => `<div data-dds-total><dt>${userText(t.column)}</dt><dd>${esc(`${t.before === null || t.before === undefined ? "none" : t.before} before, ${t.after === null || t.after === undefined ? "none" : t.after} after`)}</dd></div>`,
       ),
     ].join("");
     box = `<div class="dds-receipt-box" data-dds-step-receipt="${esc(item.item_id)}"><p class="dds-why"><span class="dds-label">${
-      r.counted ? "Counted by our code" : "Rows counted"
+      r.counted ? "We counted" : "Rows counted"
     }</span> ${level ? levelChip(level) : ""}</p>${lines ? `<dl class="dds-counts">${lines}</dl>` : ""}${
       r.before.length || r.after.length
         ? `<div class="dds-samples">${samplesHtml(r.before, { personal: r.personal, caption: "Before" })}${samplesHtml(r.after, { personal: r.personal, caption: "After" })}</div><p class="dds-why">Personal details are hidden.</p>`
@@ -324,6 +324,18 @@ export function queueHtml(c, view, ctx) {
     asking: now.length,
     limit: BLOCKING_AT_ONCE,
   };
+}
+
+/** One line at the top of the plan: what is left to do, from counts the screen already has. */
+export function todoHtml(verdictKey, asking, unchecked) {
+  if (verdictKey !== "needs_answers" && verdictKey !== "needs_approval") return "";
+  const steps = [
+    asking ? `answer ${plural(asking, "question", "questions")}` : "",
+    unchecked ? `check ${plural(unchecked, "section", "sections")}` : "",
+    "Approve",
+  ].filter(Boolean);
+  const line = steps.length > 1 ? `${steps.slice(0, -1).join(", ")}, then ${steps[steps.length - 1]}` : steps[0];
+  return `<p class="dds-todo" data-dds-todo><strong>To do:</strong> ${esc(line)}</p>`;
 }
 
 // --- the plan, section by section ---------------------------------------------------------------------------------
