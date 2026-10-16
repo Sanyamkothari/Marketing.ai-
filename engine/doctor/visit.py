@@ -1086,7 +1086,7 @@ def _combine(run: _Run, case: Case) -> _Step | None:
         if not sources or not sources <= {f.upload_id for f in files}:
             continue  # an earlier change already took one of its files
         made = port(case, item, run.actor)
-        files = [f for f in files if f.upload_id not in sources] + [made]
+        files = [f for f in files if f.upload_id not in sources and f.upload_id != made.upload_id] + [made]
         events.append(
             EventDraft(
                 kind=TimelineKind.FILE_ADDED,

@@ -69,8 +69,13 @@ def test_the_golden_rows_follow_from_the_artefacts_they_came_from(name: str, tmp
     csv = _csv(storage, written.run_id).set_index("customer_id")
     scores = written.scores.set_index("customer_id")
     assert sorted(csv.index) == sorted(scores.index), "one row per scored row"
-    # ...ranked best first: the highest score on top.
-    assert csv["score"].astype(float).is_monotonic_decreasing
+    # ...contactable customers first, then those left out by a contact rule; best score first in each group.
+    left_out = csv["suppression_reason"] != ""
+    assert not (
+        left_out.astype(int).diff().fillna(0) < 0
+    ).any(), "every left-out row comes after every contactable row"
+    assert csv.loc[~left_out, "score"].astype(float).is_monotonic_decreasing
+    assert csv.loc[left_out, "score"].astype(float).is_monotonic_decreasing
     csv = csv.loc[scores.index]  # the checks below compare row by row, in the scores' order
 
     suppressed = scores["suppressed_reason"].notna()

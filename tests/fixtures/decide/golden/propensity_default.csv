@@ -1,7 +1,6 @@
 customer_id,use_case,model_version,band,treat,holdout,explore,suppression_reason,offer,channel,contactable_channels,runner_up_offer,runner_up_net_value,offer_reason,control_group,score,net_value,expected_gross_value,reason_1,reason_2,reason_3
 C-008,win-back-campaign,m_win-back-campaign_1,High,1,,,,Send best offer,,,,,,0,0.96,,,months_since_churn = 7,A site visit count of 10 in the latest month pushes the score down,Monthly spend of 13 pushes the score up
 C-016,win-back-campaign,m_win-back-campaign_1,High,1,,,,Send best offer,,,,,,0,0.92,,,Time as a customer of 13 months pushes the score down,A recent complaint count of 16 pushes the score up,months_since_churn = 19
-C-005,win-back-campaign,m_win-back-campaign_1,High,0,,,opted_out,,,,,,,0,0.85,,,,,
 C-013,win-back-campaign,m_win-back-campaign_1,High,1,,,,Send best offer,,,,,,0,0.81,,,,,
 C-021,win-back-campaign,m_win-back-campaign_1,Medium,1,,,,Send standard offer,,,,,,0,0.77,,,,,
 C-002,win-back-campaign,m_win-back-campaign_1,Medium,1,,,,Send standard offer,,,,,,0,0.74,,,"A recent complaint count of 15 matters across customers, not measured for this customer",months_since_churn = 18,A site visit count of 21 in the latest month pushes the score up
@@ -11,7 +10,6 @@ C-007,win-back-campaign,m_win-back-campaign_1,Medium,1,,,,Send standard offer,,,
 C-015,win-back-campaign,m_win-back-campaign_1,Medium,1,,,,Send standard offer,,,,,,0,0.55,,,Monthly spend of 6 pushes the score up,"Time as a customer of 9 months matters across customers, not measured for this customer",A recent complaint count of 12 pushes the score down
 C-023,win-back-campaign,m_win-back-campaign_1,Medium,0,,,,,,,,,,1,0.51,,,months_since_churn = 12,A site visit count of 15 in the latest month pushes the score down,Monthly spend of 18 pushes the score up
 C-004,win-back-campaign,m_win-back-campaign_1,Low,0,,,,Hold,,,,,,0,0.48,,,A site visit count of 29 in the latest month pushes the score down,Monthly spend of 32 pushes the score up,"Time as a customer of 35 months matters across customers, not measured for this customer"
-C-012,win-back-campaign,m_win-back-campaign_1,Low,0,,,opted_out,,,,,,,0,0.44,,,A recent complaint count of 35 pushes the score up,months_since_churn = 38,A site visit count of 41 in the latest month pushes the score down
 C-020,win-back-campaign,m_win-back-campaign_1,Low,0,,,,Hold,,,,,,0,0.4,,,"Monthly spend of 41 matters across customers, not measured for this customer",Time as a customer of 44 months pushes the score down,A recent complaint count of 47 pushes the score up
 C-001,win-back-campaign,m_win-back-campaign_1,Low,0,,,,Hold,,,,,,0,0.37,,,Time as a customer of 8 months pushes the score down,A recent complaint count of 11 pushes the score up,months_since_churn = 14
 C-009,win-back-campaign,m_win-back-campaign_1,Low,0,,,,Hold,,,,,,0,0.33,,,A site visit count of 14 in the latest month pushes the score up,"Monthly spend of 17 matters across customers, not measured for this customer",Time as a customer of 20 months pushes the score down
@@ -21,5 +19,7 @@ C-014,win-back-campaign,m_win-back-campaign_1,Low,0,,,,Hold,,,,,,0,0.18,,,"A sit
 C-022,win-back-campaign,m_win-back-campaign_1,Low,0,,,,Hold,,,,,,0,0.14,,,A recent complaint count of 5 pushes the score down,months_since_churn = 8,"A site visit count of 11 in the latest month matters across customers, not measured for this customer"
 C-003,win-back-campaign,m_win-back-campaign_1,Low,0,,,,Hold,,,,,,0,0.11,,,months_since_churn = 22,,
 C-011,win-back-campaign,m_win-back-campaign_1,Low,0,,,,Hold,,,,,,0,0.07,,,"Time as a customer of 28 months matters across customers, not measured for this customer",,
-C-019,win-back-campaign,m_win-back-campaign_1,Low,0,,,opted_out,,,,,,,0,0.03,,,A site visit count of 34 in the latest month pushes the score down,,
 C-000,win-back-campaign,m_win-back-campaign_1,Low,0,,,,Hold,,,,,,0,0,,,Monthly spend of 1 pushes the score up,"Time as a customer of 4 months matters across customers, not measured for this customer",A recent complaint count of 7 pushes the score down
+C-005,win-back-campaign,m_win-back-campaign_1,High,0,,,opted_out,,,,,,,0,0.85,,,,,
+C-012,win-back-campaign,m_win-back-campaign_1,Low,0,,,opted_out,,,,,,,0,0.44,,,A recent complaint count of 35 pushes the score up,months_since_churn = 38,A site visit count of 41 in the latest month pushes the score down
+C-019,win-back-campaign,m_win-back-campaign_1,Low,0,,,opted_out,,,,,,,0,0.03,,,A site visit count of 34 in the latest month pushes the score down,,

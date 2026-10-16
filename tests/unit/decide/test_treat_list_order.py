@@ -55,3 +55,11 @@ def test_a_composite_key_breaks_a_tie_on_every_part() -> None:
         ("a", "2026-09-01"),
         ("b", "2026-08-01"),
     ]
+
+
+def test_customers_left_out_by_a_contact_rule_come_after_every_contactable_one() -> None:
+    frame = _frame(["a", "b", "c", "d"], [0.99, 0.5, 0.2, 0.8])
+    frame["suppression_reason"] = pd.Series(["opted_out", None, None, "opted_out"], dtype="object")
+    ranked = _best_first(frame, ("customer_id",))
+    assert list(ranked["customer_id"]) == ["b", "c", "a", "d"]
+    assert list(ranked["suppression_reason"].notna()) == [False, False, True, True]

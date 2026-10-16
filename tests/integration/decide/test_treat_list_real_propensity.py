@@ -41,9 +41,14 @@ def test_the_treat_list_of_a_real_propensity_run(scored: Flow) -> None:
     out = pd.read_csv(io.StringIO(text), dtype=str, keep_default_na=False)
     scores = scored.scores()
     assert len(out.index) == len(scores.index) == summary.total_rows
-    # Ranked best first, not in the scores' order: the same customers, put back in the scores' order below.
+    # Contactable customers first, then the left-out ones (not the scores' order); put back in the scores' order below.
     assert sorted(out["customer_id"]) == sorted(str(v) for v in scores["customer_id"])
-    assert out["score"].astype(float).is_monotonic_decreasing
+    left_out = out["suppression_reason"] != ""
+    assert not (
+        left_out.astype(int).diff().fillna(0) < 0
+    ).any(), "every left-out row comes after every contactable row"
+    assert out.loc[~left_out, "score"].astype(float).is_monotonic_decreasing
+    assert out.loc[left_out, "score"].astype(float).is_monotonic_decreasing
     out = (
         out.set_index("customer_id", drop=False)
         .loc[[str(v) for v in scores["customer_id"]]]

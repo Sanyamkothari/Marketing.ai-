@@ -231,7 +231,7 @@ def _actions(app: FastAPI) -> StepActions:
                 mode=RunMode.TRAIN,
                 upload_id=record.upload_id,
                 target=record.target,
-                overrides=overrides_for(record.overrides, record.speed),
+                overrides=overrides_for(record.overrides, record.speed, get_config_root(request)),
             ),
             record.requested_by,
         )
@@ -350,7 +350,7 @@ def create_campaign_run(
 
     own = use_case_config(body.use_case, root)  # 404 for a planned or unknown id
     _require_approved_case(storage, body)
-    resolved = resolve_config(body.use_case, overrides_for(body.overrides, body.speed), root=root)
+    resolved = resolve_config(body.use_case, overrides_for(body.overrides, body.speed, root), root=root)
     require_roles_for_run_overrides(request, use_case=own, resolved=resolved.config)
     if body.model_version_id is None:
         _refuse_uplift_training(RunMode.TRAIN, resolved)

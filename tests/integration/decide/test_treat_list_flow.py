@@ -136,11 +136,14 @@ def test_the_contact_list_has_a_score_and_is_ranked_best_first(
     assert list(csv.columns[-6:-3]) == ["score", "net_value", "expected_gross_value"]
     scores = csv["score"].astype(float)
     assert len(csv.index) == len(run.scores.index)
-    assert scores.is_monotonic_decreasing
-    assert scores.nunique() > 3  # a real spread, so the ordering above means something
-    # Ties go by customer id (and snapshot date), lowest first.
+    assert scores.nunique() > 3  # a real spread, so the ordering below means something
+    # Customers a contact rule leaves out come after the contactable ones; each group is best first and a
+    # tie goes by customer id (and snapshot date), lowest first.
     keys = ["customer_id", "snapshot_date"] if composite else ["customer_id"]
-    expected = csv.assign(_s=scores).sort_values(["_s", *keys], ascending=[False, *[True] * len(keys)])
+    left_out = csv["suppression_reason"] != ""
+    expected = csv.assign(_o=left_out, _s=scores).sort_values(
+        ["_o", "_s", *keys], ascending=[True, False, *[True] * len(keys)]
+    )
     assert list(expected.index) == list(csv.index)
     # Each customer's score is the run's own score for them, not a recomputed one.
     by_key = run.scores.assign(**{k: run.scores[k].astype(str) for k in keys}).set_index(keys)[score_column]
@@ -148,7 +151,6 @@ def test_the_contact_list_has_a_score_and_is_ranked_best_first(
     assert (got.sort_index().to_numpy() == by_key.reindex(got.sort_index().index).to_numpy()).all()
     parquet = pd.read_parquet(io.BytesIO(storage.read_bytes(run_key(run.run_id, TREAT_LIST_PARQUET))))
     assert list(parquet["customer_id"]) == list(csv["customer_id"])
-    assert parquet["score"].is_monotonic_decreasing
 
 
 def test_row_level_treat_list_downloads_gated_and_audited(tmp_path: Path) -> None:

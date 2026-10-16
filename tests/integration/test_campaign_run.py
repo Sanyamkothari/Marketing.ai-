@@ -17,7 +17,6 @@ from fastapi.testclient import TestClient
 
 from api.main import create_app
 from engine.campaign_run import (
-    SPEED_MINUTES,
     CampaignRun,
     CampaignRunRunner,
     CampaignRunState,
@@ -26,7 +25,9 @@ from engine.campaign_run import (
     StepActions,
     StepState,
     overrides_for,
+    speed_minutes,
 )
+from engine.config import DEFAULT_CONFIG_ROOT
 from engine.contracts import RunRecord, RunState, RunStatus
 from engine.jobs import NullJobRunner
 from engine.storage import LocalStorage, run_key
@@ -149,8 +150,16 @@ def test_a_run_whose_job_the_server_no_longer_knows_is_stopped_with_a_reason(
 
 
 def test_the_training_time_choice_sets_the_search_time_unless_the_person_set_one() -> None:
-    assert overrides_for({}, Speed.QUICK) == {"model_search.time_limit_minutes": SPEED_MINUTES[Speed.QUICK]}
-    assert (
-        overrides_for({}, Speed.THOROUGH)["model_search.time_limit_minutes"] > SPEED_MINUTES[Speed.BALANCED]
+    assert overrides_for({}, Speed.QUICK) == {"model_search.time_limit_minutes": speed_minutes(Speed.QUICK)}
+    assert overrides_for({}, Speed.THOROUGH)["model_search.time_limit_minutes"] > speed_minutes(
+        Speed.BALANCED
     )
     assert overrides_for(OVERRIDES, Speed.THOROUGH) == OVERRIDES
+
+
+def test_the_minutes_of_each_speed_come_from_engine_yaml(tmp_path: Path) -> None:
+    own = (DEFAULT_CONFIG_ROOT / "engine.yaml").read_text(encoding="utf-8")
+    (tmp_path / "engine.yaml").write_text(own.replace("  quick: 5\n", "  quick: 2\n"), encoding="utf-8")
+    assert speed_minutes(Speed.QUICK, tmp_path) == 2
+    assert speed_minutes(Speed.QUICK) == 5
+    assert overrides_for({}, Speed.QUICK, tmp_path) == {"model_search.time_limit_minutes": 2}
