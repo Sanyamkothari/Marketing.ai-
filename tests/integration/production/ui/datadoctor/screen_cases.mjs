@@ -457,9 +457,9 @@ test("not ready says so, and starts nothing", async () => {
   assert.equal($("[data-dds-todo]"), null, "nothing to approve, so no To do line");
 });
 
-test("with no file yet: one sentence and Choose a file", async () => {
+test("with no file yet: one sentence and Choose your files", async () => {
   await show("empty", { cases: { cases: [] } });
-  assert.ok($("[data-dds-start] label[for=dds-file]").textContent.includes("Choose a file"));
+  assert.ok($("[data-dds-start] label[for=dds-file]").textContent.includes("Choose your files"));
   assert.ok($("#dds-file").getAttribute("accept").includes(".csv"));
   assert.ok(!$("[data-dds-chat]"), "nothing to chat about before a file");
 });

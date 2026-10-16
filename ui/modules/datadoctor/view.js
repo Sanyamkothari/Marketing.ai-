@@ -487,11 +487,11 @@ export function goalsHtml(screen, { busy = false, level = 3 } = {}) {
 // --- adding a file --------------------------------------------------------------------------------------------
 
 export function uploadHtml({ accept = "", busy = "", first = true, quiet = false, pick = false } = {}) {
-  const label = first ? "Choose a file" : "Add another file";
+  const label = first ? "Choose your files" : "Add another file";
   const text = quiet
     ? ""
     : first
-    ? "Choose the file of your customers. Data Doctor reads it, asks what it cannot tell, and never changes your file."
+    ? "Choose the files of your customers, several at once if you have them. Data Doctor reads them, asks what it cannot tell, and never changes your files."
     : "Add a file with the data asked for. It joins this check, and nothing you answered is asked again.";
   return `<div class="dds-upload" data-dds-upload>${text ? `<p class="dds-why">${esc(text)}</p>` : ""}<label class="btn ${first ? "primary" : "secondary"} dds-file-label" for="dds-file">${icon(
     "upload",

@@ -25,6 +25,7 @@ import { revealSelectedTab } from "../reports/page.js";
 import { injectConnectionStyles } from "../connections/styles.js";
 import { userText } from "../../labels.js";
 import { getUploads } from "./api.js";
+import { getCases } from "../datadoctor/api.js";
 import { injectDataStyles } from "./styles.js";
 // Plan M M192 (DEC-1622): the note under the sources opens Settings › AI service itself, not Settings (which used to
 // send the AI service back to Connections, which the campaigns layout redirects here: a loop).
@@ -48,6 +49,7 @@ const state = {
   kinds: [],
   connections: [],
   uploads: [],
+  checks: [], // the Data Doctor checks (newest first): the files they hold are listed once, under the check
   ai: null, // whether the Product AI is connected: true | false | null (not known)
   uploadsTotal: 0, // how many uploaded files there are in all (the list holds only the newest)
   loadError: null,
@@ -232,6 +234,22 @@ function fileRow(u) {
   </li>`;
 }
 
+/** The uploads a Data Doctor check holds: they are listed under the check, not a second time as files. */
+const inChecks = () => new Set(state.checks.flatMap((c) => c.upload_ids || []));
+
+/** One row for a check: its files by name, and the way back into it. */
+function checkRow(c) {
+  const names = (c.files || []).map((n) => userText(n)).join(", ");
+  return `<li class="dt-row" data-dt-source="check" data-dt-id="${esc(c.case_id)}">
+    ${typeIcon("file")}<div><h3 class="dt-name">${userText(c.title || "Data check")}<span class="dt-sub">${esc(
+      `Data Doctor check · ${plural((c.files || []).length, "file", "files")}`,
+    )}: ${names}</span></h3></div>
+    <div class="dt-cell" data-dt-health><span class="dt-sub">Checked by Data Doctor</span></div>
+    <div class="dt-cell" data-dt-when>${esc(c.updated_at ? `Changed ${fmtStamp(c.updated_at)}` : "")}</div>
+    <div class="dt-actions">${button({ label: "Open the check", href: `${DATA_HOME}/check/case/${encodeURIComponent(c.case_id)}`, kind: "secondary", size: "sm", attrs: `aria-label="Open the check ${esc(c.title || "")}"` })}</div>
+  </li>`;
+}
+
 function chooserHtml() {
   const kinds = state.kinds.filter((k) => k.creatable);
   const cards = kinds
@@ -288,13 +306,16 @@ function connectHtml() {
 function sourcesHtml() {
   if (state.loadError) return errorBox(state.loadError, { retry: true });
   const connections = state.connections.map(connectionRow).join("");
-  const shown = state.showAllFiles ? state.uploads : state.uploads.slice(0, FILES_SHOWN);
-  const files = shown.map(fileRow).join("");
-  const hidden = state.uploads.length > shown.length;
+  const held = inChecks();
+  const checks = state.checks.filter((c) => (c.files || []).length).map(checkRow).join("");
+  const loose = state.uploads.filter((u) => !held.has(u.upload_id));
+  const shown = state.showAllFiles ? loose : loose.slice(0, FILES_SHOWN);
+  const files = checks + shown.map(fileRow).join("");
+  const hidden = loose.length > shown.length;
   // The list holds the newest files the API sent. When there are more files than that, the button must not say "all".
   const showAll = hidden
     ? button({
-        label: filesCut() ? `Show the newest ${fmtInt(state.uploads.length)} files` : `Show all ${fmtInt(state.uploads.length)} files`,
+        label: filesCut() ? `Show the newest ${fmtInt(loose.length)} files` : `Show all ${fmtInt(loose.length)} files`,
         kind: "tertiary",
         size: "sm",
         attrs: "data-dt-show-all",
@@ -485,11 +506,14 @@ export async function renderData(app, parts) {
   state.uploadsError = null;
   state.confirming = null;
   state.showAllFiles = false;
-  const [sources, files, ai] = await Promise.allSettled([
+  const [sources, files, ai, checks] = await Promise.allSettled([
     Promise.all([getKinds(), getConnections()]),
     getUploads(),
     aiServiceStatus(),
+    getCases(),
   ]);
+  // Without the list of checks (Data Doctor off or not answering) every file is listed on its own, as before.
+  state.checks = checks.status === "fulfilled" ? checks.value.cases || [] : [];
   const product = ai.status === "fulfilled" && ai.value && ai.value.slots && ai.value.slots.product;
   state.ai = product ? Boolean(product.connected) : null;
   if (sources.status === "fulfilled") {

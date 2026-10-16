@@ -83,6 +83,7 @@ function fresh() {
     loading: true,
     busy: "", // "" | upload | answer | tick | agree | approve | goal | revoke | chat | continue
     uploadNote: "",
+    sent: new Map(), // files already uploaded for the next check ("name|size|date" -> the upload): a retry does not send them again
     error: null,
     notice: "",
     draft: "",
@@ -377,13 +378,15 @@ async function bringIn(entry, name, getUploads) {
         if (host.goalId) c = await chooseGoal(c, host.goalId);
       } else {
         let c = theCase(entry);
-        for (const id of ids) c = await addFile(c, id);
+        const held = new Set((c.files || []).map((f) => f.upload_id));
+        for (const id of ids) if (!held.has(id)) c = await addFile(c, id);
         await resumeVisit(s.caseId);
       }
     },
     { announce: "File read" },
   );
   s.uploadNote = "";
+  if (!s.error) s.sent.clear();
   draw(entry);
 }
 
@@ -393,9 +396,19 @@ function upload(entry, files) {
   const name = list.length > 1 ? `${list[0].name} and ${list.length - 1} more` : list[0].name;
   return bringIn(entry, name, async () => {
     const goal = await uploadGoal(entry.host);
-    const read = [];
-    for (const file of list) read.push(await postUpload(file, goal, entry.host.mode || "train"));
-    return read;
+    const sent = entry.state.sent;
+    for (const file of list) {
+      const key = `${file.name}|${file.size}|${file.lastModified}`;
+      if (sent.has(key)) continue;
+      try {
+        sent.set(key, await postUpload(file, goal, entry.host.mode || "train"));
+      } catch (error) {
+        if (!(error instanceof ApiError)) throw error;
+        const done = sent.size ? ` ${sent.size === 1 ? "1 file" : `${sent.size} files`} before it went through and will not be sent again.` : "";
+        throw new ApiError(error.status, error.code, `${file.name} could not be read. ${error.message}${done} Choose ${file.name} again to go on.`, error.body);
+      }
+    }
+    return [...sent.values()];
   });
 }
 

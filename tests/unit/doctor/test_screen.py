@@ -220,6 +220,9 @@ def test_the_clients_cases_newest_first_and_by_goal(storage: LocalStorage, world
     assert [c.case_id for c in every] == [other.case_id, ready.case.case_id]
     (mine,) = case_summaries(storage, CLIENT, goal_id=GOAL_A)
     assert mine.case_id == ready.case.case_id and mine.files == ("customers_oct.csv",)
+    assert mine.upload_ids == tuple(
+        dict.fromkeys(f.upload_id for f in ready.case.files)
+    ), "the Data page groups by these"
     assert case_summaries(storage, CLIENT, goal_id="telco-churn") == ()
     assert case_summaries(storage, "c_nobody") == ()
     assert build_screen(storage, CLIENT, ready.case.case_id, config_root=None).case == ready.case
