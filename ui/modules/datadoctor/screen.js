@@ -150,7 +150,12 @@ function mainHtml(entry) {
   return `<div class="dds" data-dds data-dds-place="${esc(host.place)}" data-dds-case="${esc(c.case_id)}"><section class="card" data-dds-header>${headerHtml(
     screen,
     { level },
-  )}</section>${notice}${err}${proceed}${todoHtml(view.verdict.key, queue.asking, model.gate.unchecked.length)}${funnelHtml(model.items, model.ledger, { level: sub })}${checks}${section(
+  )}</section>${notice}${err}${proceed}${todoHtml(view.verdict.key, {
+    asking: queue.asking,
+    unchecked: model.gate.unchecked.length,
+    unconfirmed: model.unconfirmed,
+    stops: model.gate.stops.length,
+  })}${funnelHtml(model.items, model.ledger, { level: sub })}${checks}${section(
     "Questions",
     queue.html,
     "data-dds-questions",

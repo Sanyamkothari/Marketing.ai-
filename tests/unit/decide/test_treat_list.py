@@ -203,7 +203,7 @@ def test_the_arrow_reader_and_the_row_reader_agree_and_use_the_value() -> None:
     from_arrow = extract_and_map_reasons_from_parquet(_table(rows), dictionary=dictionary)
     pd.testing.assert_frame_equal(from_rows, from_arrow)
     assert from_arrow.loc[0, "reason_1"] == "Monthly spend of 1499 pushes the score down"
-    assert from_arrow.loc[3, "reason_1"] == "Not in the file x pushes the score up"
+    assert from_arrow.loc[3, "reason_1"] == "Not in the file is x, which pushes the score up"
 
     buffer = io.BytesIO()
     pq.write_table(_table(rows), buffer)  # type: ignore[no-untyped-call]

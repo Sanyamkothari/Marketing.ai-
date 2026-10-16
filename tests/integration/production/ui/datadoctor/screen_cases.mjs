@@ -91,6 +91,7 @@ test("a question that offers its own I don't know draws it once, as the last ans
   assert.ok(card.textContent.includes("Needed to go on"), "a blocking question says so");
   assert.equal($("[data-dds-verdict]").dataset.ddsVerdict, "needs_answers");
   assert.ok($("[data-dds-next]").textContent.includes("Answer 1 question below to go on."));
+  assert.equal($("[data-dds-todo]").textContent, "To do: answer 1 question, then Approve", "open questions are on the To do line");
 });
 
 test("a small choice decided for the person says what was assumed, and can be changed", async () => {
@@ -432,6 +433,7 @@ test("not ready says so, and starts nothing", async () => {
   await show("not_ready");
   assert.equal($("[data-dds-verdict]").dataset.ddsVerdict, "not_ready");
   assert.ok(!$("[data-dds-continue]"));
+  assert.equal($("[data-dds-todo]"), null, "nothing to approve, so no To do line");
 });
 
 test("with no file yet: one sentence and Choose a file", async () => {

@@ -212,6 +212,18 @@ test("the top says what to do: sections to check, then Approve, from the counts 
   assert.equal($("[data-dds-todo]").textContent, "To do: Approve");
 });
 
+test("the To do line also counts changes still waiting for their own yes, and a stop replaces Approve", async () => {
+  const { todoHtml } = await import("../../../../../ui/modules/datadoctor/plan_view.js");
+  const text = (html) => html.replace(/<[^>]+>/g, "");
+  assert.equal(text(todoHtml("needs_approval", { unchecked: 0, unconfirmed: 1 })), "To do: agree to 1 change, then Approve");
+  assert.equal(
+    text(todoHtml("needs_approval", { asking: 2, unchecked: 1, unconfirmed: 2, stops: 1 })),
+    "To do: answer 2 questions, check 1 section, agree to 2 changes, then fix the step that stops the plan",
+  );
+  assert.equal(todoHtml("ready", { unchecked: 1 }), "");
+  assert.equal(todoHtml("not_ready", {}), "");
+});
+
 test("a note (a check that changes nothing) is not counted as needing a yes", async () => {
   const note = (id) => ({ ...sqlItem({ item_id: id, kind: "data_check", state: "accepted", title: "customer_id: every value is different" }), payload: { level: "note", code: "ID_UNIQUE" } });
   const fix = { ...sqlItem({ item_id: "fix.one", title: "Read spend as a number" }), payload: { step: { kind: "parse_number" } } };

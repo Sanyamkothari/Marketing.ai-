@@ -212,10 +212,11 @@ def _shown_name(feature: str) -> str:
 def _plain_fallback(
     names: np.ndarray, directions: np.ndarray, shown: np.ndarray, blank: np.ndarray
 ) -> tuple[np.ndarray, np.ndarray]:
-    """`Name of 12 pushes the score up` for a feature with no phrase, and where a direction lets it be said."""
+    """`Name of 12 pushes the score up` (`Region is North, which pushes ...` for a non-number) for a feature with no phrase."""
     text = shown.astype(str)
     is_number = pd.Series(text).str.match(r"^-?\d[\d.,]*$").to_numpy(dtype=bool)
-    of = np.where(blank, "", np.where(is_number, " of ", " ") + text)
+    # A number reads "Name of 12 pushes ..."; a category or yes/no reads "Name is North, which pushes ...".
+    of = np.where(blank, "", np.where(is_number, " of " + text, " is " + text + ", which"))
     tail = np.select(
         [directions == "up", directions == "down", directions == "none"],
         [

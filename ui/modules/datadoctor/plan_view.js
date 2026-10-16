@@ -327,12 +327,13 @@ export function queueHtml(c, view, ctx) {
 }
 
 /** One line at the top of the plan: what is left to do, from counts the screen already has. */
-export function todoHtml(verdictKey, asking, unchecked) {
+export function todoHtml(verdictKey, { asking = 0, unchecked = 0, unconfirmed = 0, stops = 0 } = {}) {
   if (verdictKey !== "needs_answers" && verdictKey !== "needs_approval") return "";
   const steps = [
     asking ? `answer ${plural(asking, "question", "questions")}` : "",
     unchecked ? `check ${plural(unchecked, "section", "sections")}` : "",
-    "Approve",
+    unconfirmed ? `agree to ${plural(unconfirmed, "change", "changes")}` : "",
+    stops ? "fix the step that stops the plan" : "Approve",
   ].filter(Boolean);
   const line = steps.length > 1 ? `${steps.slice(0, -1).join(", ")}, then ${steps[steps.length - 1]}` : steps[0];
   return `<p class="dds-todo" data-dds-todo><strong>To do:</strong> ${esc(line)}</p>`;
