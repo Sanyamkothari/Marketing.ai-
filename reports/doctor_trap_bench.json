@@ -413,7 +413,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 120,
-          "seconds": 3.43,
+          "seconds": 2.54,
           "shown_right": true
         },
         {
@@ -487,7 +487,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 120,
-          "seconds": 1.02,
+          "seconds": 0.76,
           "shown_right": true
         }
       ],
@@ -568,7 +568,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 0.96,
+          "seconds": 0.68,
           "shown_right": null
         },
         {
@@ -631,7 +631,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 0.99,
+          "seconds": 0.73,
           "shown_right": null
         }
       ],
@@ -723,7 +723,7 @@
             "Q23_WHO_CAN_RESPOND"
           ],
           "rows": 72,
-          "seconds": 1.13,
+          "seconds": 0.84,
           "shown_right": true
         },
         {
@@ -797,7 +797,7 @@
             "Q23_WHO_CAN_RESPOND"
           ],
           "rows": 72,
-          "seconds": 1.23,
+          "seconds": 1.01,
           "shown_right": true
         }
       ],
@@ -859,11 +859,6 @@
               "did": "answered",
               "what": "TRAINING_BUDGET: Balanced (about 2 min, recommended)",
               "why": "recommended"
-            },
-            {
-              "did": "said yes to the stop",
-              "what": "PLAN_LOSES_TOO_MUCH: Together the steps lose 22 of 110 customers (20.0%), more than 5%. Most from step 1.",
-              "why": "answer key"
             }
           ],
           "combined": false,
@@ -871,11 +866,6 @@
           "error": null,
           "left_open": [],
           "left_unticked": [
-            {
-              "column": null,
-              "kind": "data_check",
-              "title": "The newest month is only partly in the file: 22 of 31 days (up to 2026-03-22). Counting it as a full month would make everything look lower. 22 rows are dated after 2026-02-28."
-            },
             {
               "column": "customer_id",
               "kind": "data_check",
@@ -894,7 +884,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 100,
-          "seconds": 1.2,
+          "seconds": 1.11,
           "shown_right": null
         },
         {
@@ -938,11 +928,6 @@
               "did": "answered",
               "what": "TRAINING_BUDGET: Balanced (about 2 min, recommended)",
               "why": "recommended"
-            },
-            {
-              "did": "said yes to the stop",
-              "what": "PLAN_LOSES_TOO_MUCH: Together the steps lose 22 of 110 customers (20.0%), more than 5%. Most from step 1.",
-              "why": "answer key"
             }
           ],
           "combined": false,
@@ -950,11 +935,6 @@
           "error": null,
           "left_open": [],
           "left_unticked": [
-            {
-              "column": null,
-              "kind": "data_check",
-              "title": "The newest month is only partly in the file: 22 of 31 days (up to 2026-03-22). Counting it as a full month would make everything look lower. 22 rows are dated after 2026-02-28."
-            },
             {
               "column": "customer_id",
               "kind": "data_check",
@@ -973,7 +953,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 100,
-          "seconds": 1.42,
+          "seconds": 1.15,
           "shown_right": null
         }
       ],
@@ -1059,7 +1039,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 60,
-          "seconds": 0.92,
+          "seconds": 0.78,
           "shown_right": null
         },
         {
@@ -1127,7 +1107,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 60,
-          "seconds": 0.97,
+          "seconds": 0.95,
           "shown_right": null
         }
       ],
@@ -1217,7 +1197,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 40,
-          "seconds": 0.5,
+          "seconds": 0.41,
           "shown_right": true
         },
         {
@@ -1289,7 +1269,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 40,
-          "seconds": 0.46,
+          "seconds": 0.39,
           "shown_right": true
         }
       ],
@@ -1369,7 +1349,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 60,
-          "seconds": 0.74,
+          "seconds": 0.57,
           "shown_right": true
         },
         {
@@ -1508,7 +1488,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 10,
-          "seconds": 0.64,
+          "seconds": 0.5,
           "shown_right": true
         },
         {
@@ -1567,7 +1547,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 10,
-          "seconds": 0.53,
+          "seconds": 0.39,
           "shown_right": true
         }
       ],
@@ -1672,7 +1652,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 150,
-          "seconds": 1.96,
+          "seconds": 1.08,
           "shown_right": null
         },
         {
@@ -1759,7 +1739,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 150,
-          "seconds": 2.01,
+          "seconds": 1.1,
           "shown_right": null
         }
       ],
@@ -1845,7 +1825,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 60,
-          "seconds": 1.0,
+          "seconds": 0.66,
           "shown_right": null
         },
         {
@@ -1913,7 +1893,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 60,
-          "seconds": 0.95,
+          "seconds": 0.72,
           "shown_right": null
         }
       ],
@@ -1974,11 +1954,6 @@
               "did": "answered",
               "what": "TRAINING_BUDGET: Balanced (about 2 min, recommended)",
               "why": "recommended"
-            },
-            {
-              "did": "said yes to the stop",
-              "what": "PLAN_LOSES_TOO_MUCH: Together the steps lose 12 of 60 customers (20.0%), more than 5%. Most from step 1. By outcome, 0: 12.",
-              "why": "answer key"
             }
           ],
           "combined": false,
@@ -1999,7 +1974,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 48,
-          "seconds": 0.9,
+          "seconds": 0.82,
           "shown_right": true
         },
         {
@@ -2042,11 +2017,6 @@
               "did": "answered",
               "what": "TRAINING_BUDGET: Balanced (about 2 min, recommended)",
               "why": "recommended"
-            },
-            {
-              "did": "said yes to the stop",
-              "what": "PLAN_LOSES_TOO_MUCH: Together the steps lose 12 of 60 customers (20.0%), more than 5%. Most from step 1. By outcome, 0: 12.",
-              "why": "answer key"
             }
           ],
           "combined": false,
@@ -2067,7 +2037,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 48,
-          "seconds": 0.99,
+          "seconds": 0.67,
           "shown_right": true
         }
       ],
@@ -2147,11 +2117,6 @@
           "left_open": [],
           "left_unticked": [
             {
-              "column": null,
-              "kind": "data_check",
-              "title": "The newest month is only partly in the file: 3 of 28 days (up to 2026-02-03). Counting it as a full month would make everything look lower. 5 rows are dated after 2026-01-31."
-            },
-            {
               "column": "log_id",
               "kind": "data_check",
               "title": "'log_id': 100.0% of 95 values are different from each other; the most common appears 1 times."
@@ -2165,7 +2130,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 30,
-          "seconds": 2.85,
+          "seconds": 2.18,
           "shown_right": true
         },
         {
@@ -2227,11 +2192,6 @@
           "left_open": [],
           "left_unticked": [
             {
-              "column": null,
-              "kind": "data_check",
-              "title": "The newest month is only partly in the file: 3 of 28 days (up to 2026-02-03). Counting it as a full month would make everything look lower. 5 rows are dated after 2026-01-31."
-            },
-            {
               "column": "log_id",
               "kind": "data_check",
               "title": "'log_id': 100.0% of 95 values are different from each other; the most common appears 1 times."
@@ -2245,7 +2205,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 30,
-          "seconds": 2.46,
+          "seconds": 2.41,
           "shown_right": true
         }
       ],
@@ -2314,11 +2274,6 @@
               "did": "answered",
               "what": "TRAINING_BUDGET: Balanced (about 2 min, recommended)",
               "why": "recommended"
-            },
-            {
-              "did": "said yes to the stop",
-              "what": "PLAN_LOSES_TOO_MUCH: Together the steps lose 29 of 60 customers (48.3%), more than 5%. Most from step 1.",
-              "why": "answer key"
             }
           ],
           "combined": false,
@@ -2343,11 +2298,6 @@
               "title": "2 rows (3%) of 'customer_id' hold a stand-in rather than a real ID (111). Rows sharing one would be matched to each other."
             },
             {
-              "column": null,
-              "kind": "data_check",
-              "title": "The newest month is only partly in the file: 18 of 31 days (up to 2026-05-18). Counting it as a full month would make everything look lower. 29 rows are dated after 2026-04-30."
-            },
-            {
               "column": "customer_id",
               "kind": "data_check",
               "title": "'customer_id': 100.0% of 60 values are different from each other; the most common appears 1 times."
@@ -2366,7 +2316,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 60,
-          "seconds": 1.22,
+          "seconds": 1.06,
           "shown_right": null
         },
         {
@@ -2417,11 +2367,6 @@
               "did": "answered",
               "what": "TRAINING_BUDGET: Balanced (about 2 min, recommended)",
               "why": "recommended"
-            },
-            {
-              "did": "said yes to the stop",
-              "what": "PLAN_LOSES_TOO_MUCH: Together the steps lose 29 of 60 customers (48.3%), more than 5%. Most from step 1.",
-              "why": "answer key"
             }
           ],
           "combined": false,
@@ -2446,11 +2391,6 @@
               "title": "2 rows (3%) of 'customer_id' hold a stand-in rather than a real ID (111). Rows sharing one would be matched to each other."
             },
             {
-              "column": null,
-              "kind": "data_check",
-              "title": "The newest month is only partly in the file: 18 of 31 days (up to 2026-05-18). Counting it as a full month would make everything look lower. 29 rows are dated after 2026-04-30."
-            },
-            {
               "column": "customer_id",
               "kind": "data_check",
               "title": "'customer_id': 100.0% of 60 values are different from each other; the most common appears 1 times."
@@ -2469,7 +2409,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 60,
-          "seconds": 1.53,
+          "seconds": 0.99,
           "shown_right": null
         }
       ],
@@ -2531,11 +2471,6 @@
               "did": "answered",
               "what": "TRAINING_BUDGET: Balanced (about 2 min, recommended)",
               "why": "recommended"
-            },
-            {
-              "did": "said yes to the stop",
-              "what": "PLAN_LOSES_TOO_MUCH: Together the steps lose 19 of 50 customers (38.0%), more than 5%. Most from step 1.",
-              "why": "answer key"
             }
           ],
           "combined": false,
@@ -2560,21 +2495,6 @@
               "title": "10 rows (20%) of 'phone' hold a stand-in rather than a real ID ([REDACTED:phone]). Rows sharing one would be matched to each other."
             },
             {
-              "column": "phone",
-              "kind": "data_check",
-              "title": "'phone': 68.0% of 50 values are different from each other; the most common appears 10 times."
-            },
-            {
-              "column": "phone",
-              "kind": "data_check",
-              "title": "10 rows (20%) of 'phone' hold a stand-in rather than a real ID ([REDACTED:phone]). Rows sharing one would be matched to each other."
-            },
-            {
-              "column": null,
-              "kind": "data_check",
-              "title": "The newest month is only partly in the file: 19 of 28 days (up to 2026-02-19). Counting it as a full month would make everything look lower. 19 rows are dated after 2026-01-31."
-            },
-            {
               "column": "customer_id",
               "kind": "data_check",
               "title": "'customer_id': 100.0% of 50 values are different from each other; the most common appears 1 times."
@@ -2593,7 +2513,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 50,
-          "seconds": 1.39,
+          "seconds": 1.14,
           "shown_right": null
         },
         {
@@ -2637,11 +2557,6 @@
               "did": "answered",
               "what": "TRAINING_BUDGET: Balanced (about 2 min, recommended)",
               "why": "recommended"
-            },
-            {
-              "did": "said yes to the stop",
-              "what": "PLAN_LOSES_TOO_MUCH: Together the steps lose 19 of 50 customers (38.0%), more than 5%. Most from step 1.",
-              "why": "answer key"
             }
           ],
           "combined": false,
@@ -2666,21 +2581,6 @@
               "title": "10 rows (20%) of 'phone' hold a stand-in rather than a real ID ([REDACTED:phone]). Rows sharing one would be matched to each other."
             },
             {
-              "column": "phone",
-              "kind": "data_check",
-              "title": "'phone': 68.0% of 50 values are different from each other; the most common appears 10 times."
-            },
-            {
-              "column": "phone",
-              "kind": "data_check",
-              "title": "10 rows (20%) of 'phone' hold a stand-in rather than a real ID ([REDACTED:phone]). Rows sharing one would be matched to each other."
-            },
-            {
-              "column": null,
-              "kind": "data_check",
-              "title": "The newest month is only partly in the file: 19 of 28 days (up to 2026-02-19). Counting it as a full month would make everything look lower. 19 rows are dated after 2026-01-31."
-            },
-            {
               "column": "customer_id",
               "kind": "data_check",
               "title": "'customer_id': 100.0% of 50 values are different from each other; the most common appears 1 times."
@@ -2699,7 +2599,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 50,
-          "seconds": 1.35,
+          "seconds": 1.0,
           "shown_right": null
         }
       ],
@@ -2784,7 +2684,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 1.16,
+          "seconds": 0.74,
           "shown_right": null
         },
         {
@@ -2851,7 +2751,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 0.87,
+          "seconds": 0.7,
           "shown_right": null
         }
       ],
@@ -2937,7 +2837,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 1.09,
+          "seconds": 0.72,
           "shown_right": null
         },
         {
@@ -3005,7 +2905,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 0.94,
+          "seconds": 0.71,
           "shown_right": null
         }
       ],
@@ -3101,7 +3001,7 @@
             "Q23_WHO_CAN_RESPOND"
           ],
           "rows": 70,
-          "seconds": 2.3,
+          "seconds": 1.12,
           "shown_right": true
         },
         {
@@ -3179,7 +3079,7 @@
             "Q23_WHO_CAN_RESPOND"
           ],
           "rows": 70,
-          "seconds": 2.77,
+          "seconds": 0.9,
           "shown_right": true
         }
       ],
@@ -3254,7 +3154,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 120,
-          "seconds": 0.75,
+          "seconds": 0.61,
           "shown_right": true
         },
         {
@@ -3311,7 +3211,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 120,
-          "seconds": 1.31,
+          "seconds": 0.66,
           "shown_right": true
         }
       ],
@@ -3397,7 +3297,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 1.19,
+          "seconds": 0.94,
           "shown_right": true
         },
         {
@@ -3465,7 +3365,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 1.07,
+          "seconds": 0.81,
           "shown_right": true
         }
       ],
@@ -3551,7 +3451,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 1.08,
+          "seconds": 0.8,
           "shown_right": true
         },
         {
@@ -3619,7 +3519,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 1.04,
+          "seconds": 0.86,
           "shown_right": true
         }
       ],
@@ -3694,7 +3594,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 120,
-          "seconds": 0.71,
+          "seconds": 0.59,
           "shown_right": true
         },
         {
@@ -3751,7 +3651,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 120,
-          "seconds": 0.83,
+          "seconds": 0.55,
           "shown_right": true
         }
       ],
@@ -3833,11 +3733,6 @@
               "column": "record_id",
               "kind": "data_check",
               "title": "'record_id': 100.0% of 210 values are different from each other; the most common appears 1 times."
-            },
-            {
-              "column": null,
-              "kind": "data_check",
-              "title": "The newest month is not finished: its outcome rate is 3.3%, against 20.0% in the months before, so its outcomes are probably not final yet. 30 rows are dated after 2026-08-31."
             }
           ],
           "notes": [],
@@ -3847,7 +3742,7 @@
             "THIN_LAST_PERIOD"
           ],
           "rows": 180,
-          "seconds": 2.88,
+          "seconds": 1.07,
           "shown_right": true
         },
         {
@@ -3911,11 +3806,6 @@
               "column": "record_id",
               "kind": "data_check",
               "title": "'record_id': 100.0% of 210 values are different from each other; the most common appears 1 times."
-            },
-            {
-              "column": null,
-              "kind": "data_check",
-              "title": "The newest month is not finished: its outcome rate is 3.3%, against 20.0% in the months before, so its outcomes are probably not final yet. 30 rows are dated after 2026-08-31."
             }
           ],
           "notes": [],
@@ -3925,7 +3815,7 @@
             "THIN_LAST_PERIOD"
           ],
           "rows": 180,
-          "seconds": 1.79,
+          "seconds": 1.15,
           "shown_right": true
         }
       ],
@@ -4000,7 +3890,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 120,
-          "seconds": 0.75,
+          "seconds": 0.61,
           "shown_right": true
         },
         {
@@ -4057,7 +3947,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 120,
-          "seconds": 0.77,
+          "seconds": 0.61,
           "shown_right": true
         }
       ],
@@ -4131,11 +4021,6 @@
           "left_open": [],
           "left_unticked": [
             {
-              "column": null,
-              "kind": "data_check",
-              "title": "The newest month is only partly in the file: 12 of 31 days (up to 2026-10). Counting it as a full month would make everything look lower. 30 rows are dated after 2026-09-30."
-            },
-            {
               "column": "record_id",
               "kind": "data_check",
               "title": "'record_id': 100.0% of 120 values are different from each other; the most common appears 1 times."
@@ -4148,7 +4033,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 90,
-          "seconds": 1.03,
+          "seconds": 0.89,
           "shown_right": true
         },
         {
@@ -4204,11 +4089,6 @@
           "left_open": [],
           "left_unticked": [
             {
-              "column": null,
-              "kind": "data_check",
-              "title": "The newest month is only partly in the file: 12 of 31 days (up to 2026-10). Counting it as a full month would make everything look lower. 30 rows are dated after 2026-09-30."
-            },
-            {
               "column": "record_id",
               "kind": "data_check",
               "title": "'record_id': 100.0% of 120 values are different from each other; the most common appears 1 times."
@@ -4221,7 +4101,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 90,
-          "seconds": 0.97,
+          "seconds": 0.94,
           "shown_right": true
         }
       ],
@@ -4303,11 +4183,6 @@
               "column": "order_id",
               "kind": "data_check",
               "title": "'order_id': 100.0% of 40 values are different from each other; the most common appears 1 times."
-            },
-            {
-              "column": "order_id",
-              "kind": "data_check",
-              "title": "'order_id': 100.0% of 40 values are different from each other; the most common appears 1 times."
             }
           ],
           "notes": [],
@@ -4318,7 +4193,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 40,
-          "seconds": 2.19,
+          "seconds": 1.16,
           "shown_right": true
         },
         {
@@ -4382,11 +4257,6 @@
               "column": "order_id",
               "kind": "data_check",
               "title": "'order_id': 100.0% of 40 values are different from each other; the most common appears 1 times."
-            },
-            {
-              "column": "order_id",
-              "kind": "data_check",
-              "title": "'order_id': 100.0% of 40 values are different from each other; the most common appears 1 times."
             }
           ],
           "notes": [],
@@ -4397,7 +4267,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 40,
-          "seconds": 1.57,
+          "seconds": 1.05,
           "shown_right": true
         }
       ],
@@ -4527,7 +4397,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 60,
-          "seconds": 0.65,
+          "seconds": 0.44,
           "shown_right": null
         }
       ],
@@ -4601,7 +4471,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 0.78,
+          "seconds": 0.48,
           "shown_right": null
         },
         {
@@ -4657,7 +4527,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 0.86,
+          "seconds": 0.51,
           "shown_right": null
         }
       ],
@@ -4748,7 +4618,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 1.08,
+          "seconds": 0.68,
           "shown_right": true
         },
         {
@@ -4821,7 +4691,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 1.16,
+          "seconds": 0.9,
           "shown_right": true
         }
       ],
@@ -4908,7 +4778,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 90,
-          "seconds": 1.23,
+          "seconds": 0.71,
           "shown_right": null
         },
         {
@@ -4977,7 +4847,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 90,
-          "seconds": 1.14,
+          "seconds": 0.73,
           "shown_right": null
         }
       ],
@@ -5058,7 +4928,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 124,
-          "seconds": 2.01,
+          "seconds": 1.55,
           "shown_right": true
         },
         {
@@ -5121,7 +4991,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 124,
-          "seconds": 2.17,
+          "seconds": 1.63,
           "shown_right": true
         }
       ],
@@ -5135,11 +5005,7 @@
   ],
   "said_yes_to_a_stop": [
     "c09_already_hold_product",
-    "crit03_dup_and_drop",
-    "k15_failed_payments",
     "k16_ticket_status_log",
-    "k1_merged_prefixes",
-    "k3_shared_phone",
     "s01_never_active",
     "t07_immature_last_month",
     "t15_partial_last_month"

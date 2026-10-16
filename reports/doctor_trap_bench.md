@@ -78,7 +78,7 @@ For each failure: the failing check, what was left unticked on the plan or unans
 ### v01_paise_vs_rupees (V01) (passes, but untested)
 
 - Left unticked: [stack_files] Stack sales_a.csv and sales_b.csv into one table: 80 rows in the files, no row is in two exports, 80 rows in the table.
-- Also 2 routine 'every value is different' flag(s) (information only).
+- Also 1 routine 'every value is different' flag(s) (information only).
 - Why and what to do: The person would have to tick the plan's suggestion "Stack <file> and <file> into one table". It is shown but not pre-ticked, so each file is used alone and the other one's customers are not counted. The product should PRE-TICK it, not ask: the files have the same columns, it has already measured the repeated rows, and the suggestion states the rows before and after; the approval still names it and one click unticks it. Until it is, the paise-against-rupees trap is never sprung (untested).
 
 
