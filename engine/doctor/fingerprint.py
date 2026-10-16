@@ -625,12 +625,16 @@ def _current(
     )
 
 
-def _same_file_kind(now: Fingerprint, prev: Fingerprint) -> bool:
-    """Whether `prev` is a print of the same kind of file: half of the smaller file's columns are in both. A file
-    that only shares its ID column with it is another table of the same client, not last month's file changed.
+def _is_sibling_print(prev: Fingerprint, loaded: LoadedFile, files: Sequence[LoadedFile]) -> bool:
+    """Whether `prev` is the print of another table of this visit (the orders log beside the customer table): some
+    other file shares more of its columns than the main file does. A lone wrong file or a renamed export is not.
     """
-    a, b = {c.name for c in now.columns}, {c.name for c in prev.columns}
-    return 2 * len(a & b) >= min(len(a), len(b))
+    names = {c.name for c in prev.columns}
+
+    def shared(f: LoadedFile) -> int:
+        return len(names & {str(c) for c in f.frame.columns})
+
+    return any(f.upload_id != loaded.upload_id and shared(f) > shared(loaded) for f in files)
 
 
 def fingerprint_detector(storage: Storage, *, clock: Callable[[], datetime] = utc_now) -> DetectorPort:
@@ -649,8 +653,8 @@ def fingerprint_detector(storage: Storage, *, clock: Callable[[], datetime] = ut
         if prev is None and not facts:
             return Detected()
         now = _current(case, loaded, brief, clock())
-        if prev is not None and not _same_file_kind(now, prev):
-            prev = None  # last time's print was of another file (an orders log, beside this customer table)
+        if prev is not None and _is_sibling_print(prev, loaded, files):
+            prev = None  # last time's print was of another file of this visit (an orders log, beside this customer table)
         findings = compare(now, prev, facts)
         if not findings:
             return Detected()

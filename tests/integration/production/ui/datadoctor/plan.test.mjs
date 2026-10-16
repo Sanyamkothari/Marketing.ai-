@@ -120,6 +120,8 @@ test("a join that folds an orders log into one row per customer is not a loss; a
   const note = item("note", "data_check", { confidence: "check", state: "pending" });
   const items = [join, note, step("a", "parse_date", { confidence: "check", state: "accepted" })];
   assert.equal(countsAsLoss(join), false, "6,029 order rows in, 4,000 customers out: no one is lost");
+  assert.equal(countsAsLoss(join, { lost: 0 }), false);
+  assert.equal(countsAsLoss(join, { lost: 12 }), true, "a join whose receipt says customers are lost is still a loss");
   assert.equal(countsAsLoss(step("q", "sql_query")), true);
   const plan = planOf(items, new Set(), null);
   const checked = new Map(plan.map((s) => [s.id, signatureOf(s)]));

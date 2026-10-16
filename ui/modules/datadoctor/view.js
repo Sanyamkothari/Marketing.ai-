@@ -429,7 +429,7 @@ export function approveHtml(screen, { busy = false, level = 3, gate = null } = {
     skipped.length
       ? `<p class="dds-why" data-dds-approve-skipped>${esc("Not ticked, so left out:")} ${skipped
           .map((i) => userTextIn(String(i.title || i.kind).replace(/[.\s]+$/, ""), names))
-          .join("; ")}. ${esc("Tick it above to include it.")}</p>`
+          .join("; ")}. ${esc(skipped.length === 1 ? "Tick it above to include it." : "Tick them above to include them.")}</p>`
       : ""
   }${waiting ? `<p class="dds-why">${esc(`First give your own yes to ${plural(waiting, "change", "changes")} above.`)}</p>` : ""}${hold
     .map((h) => `<p class="dds-why" data-dds-approve-hold>${esc(h)}</p>`)

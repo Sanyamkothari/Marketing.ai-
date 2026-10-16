@@ -217,8 +217,26 @@ def test_a_customer_table_is_not_compared_with_last_times_orders_log(storage: Lo
     FingerprintStore(storage).save(
         "default", _print(orders, outcome=None)
     )  # approved last time: the orders file
-    found, _case = _detect(storage, frame)
-    assert not found.asks and not found.doubts, "it shares only the ID column with that print"
+    today = _file(frame, vs.SECOND)
+    beside = _file(orders, vs.FIRST)  # the orders file is part of this visit too
+    w = vs.World(files={vs.FIRST: beside, vs.SECOND: today}, offers=())
+    case = vs.open_case(storage, w)
+    found = fingerprint_detector(storage)(case, (beside, today), None)
+    assert (
+        not found.asks and not found.doubts
+    ), "that print is the orders file beside it, not last time's customer file"
+
+
+def test_a_lone_wrong_file_sharing_only_the_id_with_last_times_print_still_stops(
+    storage: LocalStorage,
+) -> None:
+    frame = vs.customers(300)
+    FingerprintStore(storage).save(
+        "default", _print(frame)
+    )  # last time: the customer table, with its outcome
+    wrong = pd.DataFrame({"customer_id": frame["customer_id"], "a": 1, "b": 2})
+    found, _case = _detect(storage, wrong)
+    assert found.asks, "no other file in the visit explains it: it may be the wrong file"
 
 
 def test_whole_number_ids_read_as_decimals_keep_their_length() -> None:

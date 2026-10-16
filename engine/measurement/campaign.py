@@ -832,7 +832,7 @@ def create_arbitrated_campaign(
 
     holdout_scope, holdout_key, holdout_epoch = holdout_identity(run_holdout_spec(storage, record.run_id))
     camp_name = (
-        name or f"{record.use_case_name or record.use_case_id} (arbitrated), sent {start.day} {start:%b %Y}"
+        name or f"{record.use_case_name or record.use_case_id} (arbitrated), {start.day} {start:%b %Y}"
     )
     now = utc_now()
     cid = new_campaign_id(now)

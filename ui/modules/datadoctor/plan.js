@@ -301,8 +301,9 @@ export function needsYes(item, approveIds, ledger) {
   return level === "stop" || level === "flag";
 }
 
-/** A step that can lose customers. Building one row per customer from an orders log folds many rows into one: fewer rows, no one lost. */
-export const countsAsLoss = (item) => item.kind !== "build_dataset";
+/** A step that can lose customers. Building one row per customer from an orders log folds many rows into one: fewer rows, no one lost,
+ * unless its receipt says customers were. */
+export const countsAsLoss = (item, r = null) => item.kind !== "build_dataset" || ((r && r.lost) ?? 0) > 0;
 
 /** The notes to read, each sentence once. */
 export const notesOf = (items) => {

@@ -99,7 +99,7 @@ export function funnelOf(items, ledger) {
     rateIn: ledger && finite(ledger.positive_rate_in) ? ledger.positive_rate_in : null,
     rateOut: ledger && finite(ledger.positive_rate_out) ? ledger.positive_rate_out : null,
     losses: steps
-      .filter(({ item, r }) => r.rowsIn > r.rowsOut && countsAsLoss(item))
+      .filter(({ item, r }) => r.rowsIn > r.rowsOut && countsAsLoss(item, r))
       .map(({ item, r }) => ({ item, lost: r.rowsIn - r.rowsOut }))
       .sort((a, b) => b.lost - a.lost)
       .slice(0, 3),
