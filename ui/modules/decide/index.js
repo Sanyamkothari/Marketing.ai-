@@ -9,7 +9,7 @@
 // do them, and every event is delegated from `document`, so a repaint needs no re-binding.
 
 import { canAccess, registerModule, registerPagePanel, registerResultsList, setActiveNav } from "../router.js";
-import { errorBox, skeleton } from "../../dom.js";
+import { errorBox, safeDecode, skeleton } from "../../dom.js";
 import { getIndustries, loadContactList, postUpload } from "../../api.js"; // loadContactList: Plan M M171
 
 import {
@@ -49,7 +49,7 @@ const screen = {
 };
 
 function draw(app) {
-  if (!screen.view || hashParts()[0] !== "campaigns" || decodeURIComponent(hashParts()[1] || "") !== screen.id) return;
+  if (!screen.view || hashParts()[0] !== "campaigns" || safeDecode(hashParts()[1]) !== screen.id) return;
   if (ownsHash(hashParts())) return; // Plan M M176: the campaign's tabs are drawn by ../campaigns, not this page
   app.innerHTML = campaignPageHtml({
     view: screen.view,
@@ -86,7 +86,7 @@ async function renderCampaign(app, parts) {
   // campaign id in the classic layout, and `#/campaigns/<id>/plan`, are this page, drawn exactly as before.
   if (await campaignsRoute(app, parts)) return;
   injectStyles();
-  const id = decodeURIComponent(parts[1] || "");
+  const id = safeDecode(parts[1]);
   if (!id) {
     window.location.hash = "#/results"; // the list of campaigns is on Results
     return;

@@ -4,7 +4,7 @@
 // where "Approve and download" stays the person's own decision; a run the server restarted under shows Restart.
 
 import { canAccess } from "../router.js";
-import { errorBox } from "../../dom.js";
+import { errorBox, safeDecode } from "../../dom.js";
 import { getCampaignRun, getTreatListSummary, restartCampaignRun } from "./wizard_api.js";
 import { needsCostYes, runHref } from "./run_rules.js";
 import { injectRunStyles, runPageHtml } from "./run_views.js";
@@ -18,7 +18,7 @@ const ui = { seq: 0, timer: null, app: null, id: null, view: null, busy: false, 
 const hashParts = () => window.location.hash.replace(/^#\/?/, "").split("/").filter(Boolean);
 const onPage = (id) => {
   const p = hashParts();
-  return p[0] === "campaigns" && p[1] === "run" && decodeURIComponent(p[2] || "") === id;
+  return p[0] === "campaigns" && p[1] === "run" && safeDecode(p[2]) === id;
 };
 
 function draw() {
