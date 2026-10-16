@@ -124,7 +124,8 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     pip install --only-binary=:all: -c /app/requirements-freeze.txt -r /tmp/dev.txt
 COPY . /app/
 USER 10001
-# The same selection as `make test`: pytest keeps only the last -m, so the paid markers have to be
-# spelled out here as well rather than inherited (DEC-358). No `-q` here: pyproject's addopts has one
-# already, and a second one drops the final "N passed" summary line from the log.
-CMD ["pytest", "-m", "not slow and not bedrock and not aws"]
+# The same selection as `make test` (frozen features run in the nightly `make test-all`). pytest keeps
+# only the last -m, so the paid markers have to be spelled out here as well rather than inherited (DEC-358).
+# No `-q` here: pyproject's addopts has one already, and a second one drops the final "N passed" summary
+# line from the log.
+CMD ["pytest", "-m", "not slow and not frozen and not bedrock and not aws"]
