@@ -195,7 +195,17 @@ const crumbLink = ({ label, href }) =>
 export function crumbs(items = []) {
   const rest = items.filter((item) => item && item.label && !sameAsHome(item));
   const trail = rest.length && rest[0].place ? rest : [HOME, ...rest];
-  return `<nav class="crumbs" aria-label="Breadcrumb">${trail.map(crumbLink).join(CRUMB_SEP)}</nav>`;
+  return `<nav class="crumbs" aria-label="Breadcrumb">${trail.map(placeNamed).map(crumbLink).join(CRUMB_SEP)}</nav>`;
+}
+
+/** In the campaigns layout the sidebar has no "Home" and no "Results": the two crumbs that open them
+ * (`#/` goes to Overview, `#/results` to Campaigns) are named as the sidebar names them. */
+const SIDEBAR_NAMES = { "#/": "Overview", "#/results": "Campaigns" };
+function placeNamed(item) {
+  const campaigns = typeof document !== "undefined" &&
+    Boolean(document.documentElement) &&
+    document.documentElement.getAttribute("data-ui-layout") === "campaigns";
+  return campaigns && SIDEBAR_NAMES[item.href] ? { ...item, label: SIDEBAR_NAMES[item.href] } : item;
 }
 
 /** The breadcrumb above a use case's title: Home › the use case (Home › journey › the use case when
@@ -208,11 +218,11 @@ export function backLink(uc) {
  * one Home opens), for a caller that adds the rest. */
 export function journeyCrumb(uc) {
   const journey = journeyOf(uc);
-  return [HOME, sameAsHome(journey) ? null : journey].filter(Boolean).map(crumbLink).join(CRUMB_SEP);
+  return [HOME, sameAsHome(journey) ? null : journey].filter(Boolean).map(placeNamed).map(crumbLink).join(CRUMB_SEP);
 }
 
 /** The `{ href, label }` a "Back to ..." button on a use-case screen returns to. */
-export const journeyBack = (uc) => journeyOf(uc) || HOME;
+export const journeyBack = (uc) => placeNamed(journeyOf(uc) || HOME);
 
 // --- the page header ----------------------------------------------------------------------------------
 

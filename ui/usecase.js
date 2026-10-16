@@ -1379,7 +1379,8 @@ details.more-runs>summary{padding:12px 20px;border-top:1px solid var(--line);fon
 .runs-note{margin:0;padding:12px 20px;border-top:1px solid var(--line);font-size:12px;color:var(--muted)}
 .runrow .r3{white-space:normal;flex:none;max-width:40%}
 .runrow .r3 .r4{font-size:12px;color:var(--muted)}
-.summary.rsum{display:flex;flex-direction:column;align-items:stretch;gap:8px;padding:16px 20px;background:var(--surface)}
+.summary.rsum{display:flex;flex-direction:column;flex-wrap:nowrap;align-items:stretch;gap:8px;padding:16px 20px;background:var(--surface)}
+.rsum .btn{height:auto;min-height:40px;padding-top:10px;padding-bottom:10px;white-space:normal;line-height:1.3}
 .rsum .vline{font-size:20px;font-weight:600;line-height:1.35;color:var(--ink)}
 .rsum .vline .ok,.rsum .vline .bad,.rsum .vline .muted{font-weight:600}
 .rsum .vline .bad{color:var(--bad)}

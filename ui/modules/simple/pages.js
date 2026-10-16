@@ -343,7 +343,7 @@ const group = (title, entries, attrs = "") =>
  */
 export function settingsHtml({ can = () => true, status = null, version = null } = {}) {
   // Settings is a top-level place: no breadcrumb (visual direction 3).
-  const head = pageHeader({ title: "Settings", subtitle: "Things you set up once. Your everyday work is on Home and Results." });
+  const head = pageHeader({ title: "Settings", subtitle: "Things you set up once. Your everyday work is in the main menu." });
   const main = [
     // Plan M M192 (DEC-1622): its own page, Settings › AI service, for anyone who may read the AI service; that page
     // says who may connect one. It used to open Connections, which the campaigns layout sends to the Data page.

@@ -92,6 +92,7 @@ export const CSS = `
 .dds-funnel-losses{display:flex;flex-wrap:wrap;gap:var(--s2);align-items:center;font-size:var(--fs-small)}
 .dds-funnel-losses .btn{height:auto;white-space:normal;text-align:left;padding-block:var(--s1)}
 .dds-funnel-losses .btn,.dds-check .btn,.dds-who .btn,.dds-plan .btn.sm{min-height:40px}
+.dds-funnel-losses .btn{height:auto;white-space:normal;text-align:left;max-width:100%}
 .dds-check{display:flex;flex-direction:column;align-items:flex-start;gap:var(--s2);padding:var(--s3) var(--s4);border:1px solid var(--line);border-left-width:4px;border-radius:var(--r)}
 .dds-check[data-dds-level="stop"],.dds-item[data-dds-level="stop"]{border-left-color:var(--critical)}
 .dds-check[data-dds-level="flag"],.dds-item[data-dds-level="flag"]{border-left-color:var(--warning)}
