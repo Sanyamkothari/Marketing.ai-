@@ -63,7 +63,7 @@ from pydantic import JsonValue
 from engine.agent.contracts import AgentConfidence, ProposalSource, ProposalState
 from engine.agent.tools import TOOLS, AgentToolError
 from engine.config import ConfigError
-from engine.doctor.carry import approved_marks, carries_on, plain_fix
+from engine.doctor.carry import approved_marks, carries_on, last_month, plain_fix
 from engine.doctor.case import (
     PARK_ROLES,
     Case,
@@ -815,13 +815,16 @@ def _intake(run: _Run, case: Case) -> _Step | None:
         if f.original_upload_id in visit.taken_in and f.original_upload_id not in here
     }  # the table the approved join or stack made: its files gave way to it
     fresh = any(upload_id not in made for upload_id in new)
+    round_: dict[str, Any] = {}
+    if fresh and not case.approvals:
+        # a new case of a client whose last month's table looks like this one starts from that approval
+        found = last_month(run.deps.storage, case, list(files.values()))
+        round_ = {"approved_before": found[0] if found else (), "carry_source": found[1] if found else None}
+    elif fresh and visit.approved_before:
+        round_ = {"approved_before": (), "carry_source": None}  # a file the person never saw is another round
     return _Step(
         to=VisitState.UNDERSTAND,
-        visit={
-            "taken_in": tuple(dict.fromkeys((*visit.taken_in, *new))),
-            # a file the person never saw is another round: it gets a whole plan (engine.doctor.carry)
-            **({"approved_before": ()} if fresh and visit.approved_before else {}),
-        },
+        visit={"taken_in": tuple(dict.fromkeys((*visit.taken_in, *new))), **round_},
         events=events,
     )
 
@@ -1098,7 +1101,17 @@ def _approve_wait(run: _Run, case: Case) -> _Step | None:
     before = [a for a in case.approvals if not a.approve_class]
     visit = case.visit or CaseVisit()
     items, questions = active_section(case)
-    if not before or not visit.approved_before or visit.plan_check is None:
+    # no approval yet in this case: last month's is what it goes on from
+    by, from_ = (
+        (before[-1].approved_by, before[-1].approval_id)
+        if before
+        else (
+            (visit.carry_source.approved_by, f"{visit.carry_source.approval_id}@{visit.carry_source.case_id}")
+            if visit.carry_source is not None
+            else ("", "")
+        )
+    )
+    if not from_ or not visit.approved_before or visit.plan_check is None:
         return None
     if visit.plan_check.digest != plan_digest(case.files, items):
         return None
@@ -1112,8 +1125,8 @@ def _approve_wait(run: _Run, case: Case) -> _Step | None:
         return _approval(
             run,
             case,
-            actor=before[-1].approved_by,
-            carried_from=before[-1].approval_id,
+            actor=by,
+            carried_from=from_,
             carried_new=sum(1 for i in carry.new if plain_fix(i, settings)),
         )
     except CaseError:
@@ -2490,6 +2503,8 @@ def approve(
 
 CARRIED_ON: Final[str] = "Carried on from your earlier approval:"
 """What the sentence of an approval the visit carried on by itself starts with (`engine.doctor.carry`)."""
+CARRIED_ON_LAST_MONTH: Final[str] = "Carried on from last month's approval:"
+"""The same, when the approval is another case's (last month's)."""
 
 
 def _approval(
@@ -2526,7 +2541,8 @@ def _approval(
             "APPROVAL_SENTENCE_CHANGED",
             f"What would be approved has changed since you read it. It now reads: “{shown}”",
         )
-    text = shown if carried_from is None else f"{CARRIED_ON} {shown}"
+    lead = CARRIED_ON_LAST_MONTH if carried_from is not None and "@" in carried_from else CARRIED_ON
+    text = shown if carried_from is None else f"{lead} {shown}"
     goal = active_goal(case)
     accepted = [i for i in items if i.state is ProposalState.ACCEPTED]
     brief = stored_brief(run.deps.storage, case)
@@ -2573,6 +2589,7 @@ def _approval(
             "approved_before": tuple(
                 dict.fromkeys((*visit.approved_before, *approved_marks(items, questions)))
             ),
+            "carry_source": None,  # last month's approval only starts the case; this approval is its own now
         },
         within=_recorded(deps, DATA_PRESCRIPTION_APPROVED, actor, body, approval),
         carried=carried_from is not None,
@@ -2584,7 +2601,11 @@ def _approval(
                     "items": len(approval.item_ids),
                     "goal": goal.goal_id if goal is not None else None,
                     "receipt": "ledger" if deps.ledger is not None else "timeline",
-                    **({} if carried_from is None else {"carried": True, "new": carried_new}),
+                    **(
+                        {}
+                        if carried_from is None
+                        else {"carried": True, "new": carried_new, "last_month": "@" in carried_from}
+                    ),
                     **_timeline_body(body),
                 },
             )

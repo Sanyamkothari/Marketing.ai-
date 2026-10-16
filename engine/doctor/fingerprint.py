@@ -155,6 +155,12 @@ class FingerprintStore:
                 raise
             return Fingerprints(client_id=client_id)
 
+    def prints(self, client_id: str) -> tuple[Fingerprint, ...]:
+        """Every fingerprint kept for the client (any goal), oldest first."""
+        if re.fullmatch(CLIENT_ID_PATTERN, client_id) is None:
+            return ()
+        return self._read(client_id).prints
+
     def uploads(self, client_id: str) -> frozenset[str]:
         """The uploads that already have a fingerprint (any goal)."""
         if re.fullmatch(CLIENT_ID_PATTERN, client_id) is None:

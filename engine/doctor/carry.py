@@ -13,6 +13,12 @@ adds its checks) and comes back to APPROVE. Asking for the whole plan again feel
   flag, a change that needs its own yes, and everything about meaning (the ID, the outcome, who agreed to be
   contacted) is asked: a person's yes.
 
+* **Next month, the same.** A new case of the same client whose files look like the table approved last month
+  (:func:`last_month`, matched by columns the way the fingerprint matches last time's file) starts from that
+  approval: the steps approved then are carried again, in the name of who approved, and the Data Doctor opens only
+  what is new or changed. A step that cannot apply (its column is gone), a step a person left out, consent and
+  outcome, and anything with a stop or flag are never carried; they are asked.
+
 Nothing here writes, and nothing here holds a cell value: ids, digests, sentences the rules wrote and counts.
 """
 
@@ -20,14 +26,18 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import Any, Final
+from typing import TYPE_CHECKING, Any, Final
 
 from engine.agent.contracts import AgentConfidence, ProposalSource, ProposalState
-from engine.doctor.case import Case, CaseItem, CaseQuestion, payload_digest
+from engine.doctor.case import Case, CaseApproval, CaseItem, CaseQuestion, payload_digest
 from engine.doctor.protocol import AGENT, DEFAULT_SETTINGS, ProtocolSettings, approve_class_of
-from engine.doctor.visit_contracts import CaseVisit, PlanCheck
+from engine.doctor.visit_contracts import CarrySource, CaseVisit, PlanCheck
 
-__all__ = ["Carry", "approved_marks", "carries_on", "carry_of", "new_line", "plain_fix"]
+if TYPE_CHECKING:
+    from engine.doctor.diagnose import LoadedFile
+    from engine.storage import Storage
+
+__all__ = ["Carry", "approved_marks", "carries_on", "carry_of", "last_month", "new_line", "plain_fix"]
 
 _ALSO: Final[dict[str, str]] = {
     "consent_column": "who agreed to be contacted",
@@ -175,6 +185,74 @@ def carry_of(
     return Carry(tuple(approved), tuple(gone), tuple(new))
 
 
+_SAME_TABLE: Final[float] = 0.5
+"""Share of a file's columns that a table approved last month has: below it, the file is another kind of table."""
+
+
+def _step_column(item: CaseItem) -> str | None:
+    step = item.payload.get("step")
+    column = step.get("column") if isinstance(step, dict) else None
+    return column if isinstance(column, str) else None
+
+
+def last_month(
+    storage: Storage, case: Case, files: Sequence[LoadedFile]
+) -> tuple[tuple[str, ...], CarrySource] | None:
+    """What the client approved last month for the same kind of table as `files`: the digests (the prior
+    `approved_before`) and where they come from; None when there is nothing to go on.
+
+    Same client, another case with a person's approval, whose kept fingerprint shares at least half of the columns
+    of one of `files`. The newest such case wins."""
+    from engine.doctor.case import CaseStore
+    from engine.doctor.fingerprint import FingerprintStore
+
+    prints = FingerprintStore(storage).prints(case.client_id)
+    wanted = [cols for f in files if (cols := {str(c) for c in f.frame.columns})]
+    if not prints or not wanted:
+        return None
+    best: tuple[Case, CaseApproval] | None = None
+    for prior in CaseStore(storage).list(case.client_id):
+        approvals = [a for a in prior.approvals if not a.approve_class]
+        if (
+            prior.case_id == case.case_id
+            or not approvals
+            or not (prior.visit and prior.visit.approved_before)
+        ):
+            continue
+        uploads = {u for f in prior.files for u in (f.upload_id, f.original_upload_id) if u}
+        looks_same = any(
+            len(cols & {c.name for c in p.columns}) / len(cols) >= _SAME_TABLE
+            for p in prints
+            if p.upload_id in uploads
+            for cols in wanted
+        )
+        if looks_same and (best is None or approvals[-1].approved_at > best[1].approved_at):
+            best = (prior, approvals[-1])
+    if best is None:
+        return None
+    prior, approval = best
+    approved_before = (prior.visit or CaseVisit()).approved_before
+    have = set().union(*wanted)
+    steps = [s for i in prior.items if isinstance(s := i.payload.get("step"), dict)]
+    made = {s["new_column"] for s in steps if isinstance(s.get("new_column"), str)}
+    columns = {c for i in prior.items if i.state is ProposalState.ACCEPTED and (c := _step_column(i))}
+    declined = tuple(
+        dict.fromkeys(
+            marks(i)[0]
+            for i in prior.items
+            if i.state is ProposalState.REJECTED and i.decided_by not in {None, AGENT}
+        )
+    )
+    source = CarrySource(
+        case_id=prior.case_id,
+        approval_id=approval.approval_id,
+        approved_by=approval.approved_by,
+        missing_columns=tuple(sorted(columns - have - made)),
+        declined=declined,
+    )
+    return approved_before, source
+
+
 def plain_fix(item: CaseItem, settings: ProtocolSettings = DEFAULT_SETTINGS) -> bool:
     """A sure fix of a value the rules found and ticked, that nobody touched and that needs no yes of its own."""
     return (
@@ -211,6 +289,13 @@ def carries_on(
         return None
     if not all(plain_fix(i, settings) or _is_note(i) for i in carry.new):
         return None
+    source = (case.visit or CaseVisit()).carry_source
+    if source is not None and (
+        case.doubts  # last month's approval does not cover what moved in this month's file: a person looks
+        or source.missing_columns
+        or any(marks(i)[0] in source.declined for i in carry.new)
+    ):
+        return None
     files = {f.upload_id for f in case.files}
     touched = any(
         i.state is ProposalState.REJECTED
@@ -224,21 +309,34 @@ def carries_on(
 def new_line(case: Case, carry: Carry) -> str | None:
     """What is new and why, in one line; None when nothing is."""
     counted = [i for i in carry.new if not _is_note(i) and not i.parked_for]
+    source = (case.visit or CaseVisit()).carry_source
+    lost = (
+        "Last month's steps on "
+        + ", ".join(f"‘{c}’" for c in source.missing_columns[:3])
+        + (" and others" if len(source.missing_columns) > 3 else "")
+        + " cannot be used: this file has no such column, so they are asked again."
+        if source is not None and source.missing_columns
+        else ""
+    )
     if not counted:
-        return None
-    thing = "new thing to check" if len(counted) == 1 else "new things to check"
+        return lost or None
+
+    def things(n: int) -> str:
+        return f"{n} new thing to check" if n == 1 else f"{n} new things to check"
+
     base = [i for i in counted if i.goal_id is None]
     goal = [i for i in counted if i.goal_id is not None]
     joined = {f.upload_id for f in case.files if f.original_upload_id}
     parts: list[str] = []
     if base and any(i.upload_id in joined for i in base):
-        parts.append(f"We joined your files into one table; {len(base)} {thing}")
+        parts.append(f"We joined your files into one table; {things(len(base))}")
     elif base:
-        parts.append(f"{len(base)} {thing} since you approved")
+        parts.append(f"{things(len(base))} since {'last month' if source is not None else 'you approved'}")
     if goal:
         named = list(dict.fromkeys(_ALSO[i.kind] for i in goal if i.kind in _ALSO))
         if named:
             parts.append("For this campaign we also need: " + ", ".join(named))
         else:
-            parts.append(f"For this campaign, {len(goal)} {thing}")
-    return ". ".join(parts) + "."
+            parts.append(f"For this campaign, {things(len(goal))}")
+    line = ". ".join(parts) + "."
+    return f"{lost} {line}" if lost else line

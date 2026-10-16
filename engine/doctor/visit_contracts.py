@@ -21,6 +21,7 @@ from engine.config import StrictBase
 
 __all__ = [
     "Acknowledgement",
+    "CarrySource",
     "CaseVisit",
     "HandOffRecord",
     "OptionEffect",
@@ -92,6 +93,22 @@ class Acknowledgement(StrictBase):
     reason: str = Field(default="", description="Why, in the person's words (logged).")
 
 
+class CarrySource(StrictBase):
+    """Last month's approval a new case goes on from (`engine.doctor.carry`): who approved, which approval, and what
+    of it cannot apply to this month's files. Ids, digests and column names only."""
+
+    case_id: str = Field(description="Last month's case.")
+    approval_id: str = Field(description="Its last approval.")
+    approved_by: str = Field(description="Who gave that approval (user id).")
+    missing_columns: tuple[str, ...] = Field(
+        default=(), description="Columns last month's approved steps were about that this month's files lack."
+    )
+    declined: tuple[str, ...] = Field(
+        default=(),
+        description="Digests of the steps a person left out last month: asked again, never carried on.",
+    )
+
+
 class CaseVisit(StrictBase):
     """`case.visit`: everything the visit needs to resume, beyond `case.state`."""
 
@@ -131,5 +148,12 @@ class CaseVisit(StrictBase):
         exclude_if=lambda value: not value,
         description="What was approved in this round of the visit, as short digests of each step and each "
         "sentence (`engine.doctor.carry`): a plan that comes back to approval folds what is the same. A new "
-        "month's file starts another round.",
+        "month's file starts another round (a new case of the same client may start from last month's, "
+        "`carry_source`).",
+    )
+    carry_source: CarrySource | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+        description="Set when `approved_before` is last month's approval for the same kind of table "
+        "(`engine.doctor.carry.last_month`).",
     )
