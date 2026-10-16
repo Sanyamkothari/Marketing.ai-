@@ -62,7 +62,8 @@ class OptionSpec:
     repeat: bool = False
     optional: bool = False
     effect: str = ""
-    """What choosing it does, in a plain sentence with no numbers (`{choice}` is filled for a repeated one)."""
+    """What choosing it does, in a plain sentence (no counts: code measures those). Shown only where the option
+    carries a step; a repeated option has none (its label is already a sentence)."""
 
 
 @dataclass(frozen=True)
@@ -107,7 +108,6 @@ CATALOGUE: Final[Mapping[str, QuestionSpec]] = {
                 OptionSpec(
                     "{choice}",
                     repeat=True,
-                    effect="“{choice}” is the main customer ID, used to match customers across your files.",
                 ),
             ),
             recommend_from_data=True,
@@ -144,7 +144,7 @@ CATALOGUE: Final[Mapping[str, QuestionSpec]] = {
             topic="ID length and letter case",
             text="How many digits should the ID “{column}” have, and do upper and lower case letters differ?",
             why="The IDs in {column} come in more than one length, so zeros may have been cut off.",
-            options=(OptionSpec("{choice}", repeat=True, effect="The IDs are read as: {choice}."),),
+            options=(OptionSpec("{choice}", repeat=True),),
             roles=(CRM_ADMIN, DATABASE_ADMIN),
             safe_default="read IDs as text exactly as they are, without adding zeros",
         ),
@@ -154,9 +154,7 @@ CATALOGUE: Final[Mapping[str, QuestionSpec]] = {
             topic="which sheet or block",
             text="{file} has several {kind}. Which one holds the customer table?",
             why="Each one has its own header row, so the wrong pick reads the wrong columns.",
-            options=(
-                OptionSpec("{choice}", repeat=True, effect="The customer table is read from “{choice}”."),
-            ),
+            options=(OptionSpec("{choice}", repeat=True),),
             roles=(EXPORTER,),
             safe_default="leave the extra sheets out and say which ones",
         ),
@@ -186,7 +184,7 @@ CATALOGUE: Final[Mapping[str, QuestionSpec]] = {
             topic="unit or scale",
             text="What unit is {column} in? Its values look like {hint}.",
             why="Mixed units make amounts differ by a factor, for example 100 between rupees and paise.",
-            options=(OptionSpec("{choice}", repeat=True, effect="The amounts are read as {choice}."),),
+            options=(OptionSpec("{choice}", repeat=True),),
             recommend_from_data=True,
             roles=(FINANCE, CRM_ADMIN),
             safe_default="leave the amounts as they are and convert nothing",
@@ -197,11 +195,7 @@ CATALOGUE: Final[Mapping[str, QuestionSpec]] = {
             topic="which date says when it was known",
             text="Which date in {file} says when this was known, or when each customer's clock starts?",
             why="The wrong date lets the model see what happened after the as-of date.",
-            options=(
-                OptionSpec(
-                    "{choice}", repeat=True, effect="“{choice}” is the date each customer's clock starts."
-                ),
-            ),
+            options=(OptionSpec("{choice}", repeat=True),),
             meaning_bearing=True,
             roles=(CRM_ADMIN,),
             safe_default="leave this column out of the model",
@@ -390,9 +384,7 @@ CATALOGUE: Final[Mapping[str, QuestionSpec]] = {
             topic="who would know (follows any I don't know)",
             text="Who would know the answer to “{question}”?",
             why="A ready message is shown for whoever you pick, and the safe choice is used meanwhile.",
-            options=(
-                OptionSpec("{choice}", repeat=True, effect="Shows a message ready to send to the {choice}."),
-            ),
+            options=(OptionSpec("{choice}", repeat=True),),
             roles=(CRM_ADMIN,),
             safe_default="keep the safe choice and wait for the answer",
         ),
@@ -402,7 +394,7 @@ CATALOGUE: Final[Mapping[str, QuestionSpec]] = {
             topic="business rules that always hold",
             text="Which business rules always hold in {file}? Each shows how many rows it would remove.",
             why="A row that breaks a rule is probably a data mistake.",
-            options=(OptionSpec("{choice}", repeat=True, effect="The rule “{choice}” is applied."),),
+            options=(OptionSpec("{choice}", repeat=True),),
             meaning_bearing=True,
             roles=(CAMPAIGN_MANAGER, FINANCE),
             safe_default="apply no extra rules",
@@ -435,7 +427,7 @@ CATALOGUE: Final[Mapping[str, QuestionSpec]] = {
             "be included?",
             why="A colour often marks a status that exists nowhere else in the file.",
             options=(
-                OptionSpec("{choice}", repeat=True, effect="The colours are read as: {choice}."),
+                OptionSpec("{choice}", repeat=True),
                 OptionSpec(
                     "The colours mean nothing; include the hidden rows",
                     effect="The colours are ignored and the hidden rows are included.",
@@ -471,7 +463,7 @@ CATALOGUE: Final[Mapping[str, QuestionSpec]] = {
             topic="what one row is",
             text="Each “{id}” in {file} has several rows. {detail} What is one row?",
             why="Adding up or counting repeated rows counts the same order, ticket or customer more than once.",
-            options=(OptionSpec("{choice}", repeat=True, effect="One row is {choice}."),),
+            options=(OptionSpec("{choice}", repeat=True),),
             recommend_from_data=True,
             roles=(CRM_ADMIN, FINANCE),
             safe_default="leave the rows as they are and warn that totals may count the same thing twice",
@@ -482,7 +474,7 @@ CATALOGUE: Final[Mapping[str, QuestionSpec]] = {
             topic="which statuses are real money",
             text="Which values of “{column}” in {file} are real money? {detail}",
             why="A failed, declined or refunded row is not money received, but adding the amounts up counts it.",
-            options=(OptionSpec("{choice}", repeat=True, effect="“{choice}” rows count as real money."),),
+            options=(OptionSpec("{choice}", repeat=True),),
             recommend_from_data=True,
             roles=(FINANCE, CRM_ADMIN),
             safe_default="count every row and warn that the total includes failed or refunded money",
@@ -618,7 +610,7 @@ def build_ask(
             effect=_effect(effects[index] if effects else None, f"c{index}"),
             rows_changed=rows_changed[index] if rows_changed else None,
             label_rate=label_rates[index] if label_rates else None,
-            says=_says(shown[index], values, choices, choice_says),
+            says=_says(shown[index], values, choice_says),
         )
         for index, label in enumerate(labels)
     ]
@@ -654,7 +646,6 @@ def build_ask(
 def _says(
     shown: tuple[OptionSpec, str, int | None],
     values: Mapping[str, object],
-    choices: Sequence[str],
     choice_says: Sequence[str],
 ) -> str:
     """One answer's sentence: the checked one for its choice, else the catalogue's own ("" when it has none)."""
@@ -663,7 +654,7 @@ def _says(
         return choice_says[choice]
     if not option.effect:
         return ""
-    return _fill(option.effect, {**values, "choice": choices[choice]} if choice is not None else values)
+    return _fill(option.effect, values)
 
 
 def _effect(given: OptionEffect | None, option_id: str) -> OptionEffect:

@@ -370,13 +370,9 @@ def test_the_models_sentence_for_each_choice_is_kept_when_it_states_no_number(
     assert options[-1].says == "", "'I don't know' says nothing of its own"
 
 
-def test_a_sentence_with_a_number_or_none_is_replaced_by_what_the_catalogue_states(
+def test_a_sentence_with_a_number_or_none_is_dropped_and_the_catalogue_adds_none_of_its_own(
     world: World, storage: LocalStorage
 ) -> None:
-    own = [
-        "“customer_id” is the main customer ID, used to match customers across your files.",
-        "“account_no” is the main customer ID, used to match customers across your files.",
-    ]
     for effects in (
         None,
         ["Drops 4,000 customers.", "Joins the files on the account number."],
@@ -385,22 +381,20 @@ def test_a_sentence_with_a_number_or_none_is_replaced_by_what_the_catalogue_stat
         found, _ = _run(world, storage, Script([_ask_with(effects)]))
         says = [o.says for o in found.asks[0].options[:2]]
         if effects and len(effects) == 2:
-            assert says == [own[0], effects[1]], "only the sentence with a number is replaced"
+            assert says == ["", effects[1]], "only the sentence with a number is dropped"
         else:
-            assert says == own, effects
+            assert says == ["", ""], effects
 
 
-def test_the_question_the_screen_gets_carries_each_answers_sentence(
+def test_an_answer_with_no_step_says_so_instead_of_claiming_an_outcome(
     world: World, storage: LocalStorage
 ) -> None:
-    from engine.doctor.protocol import settle
+    from engine.doctor.protocol import NO_STEP, settle
 
     found, _ = _run(
         world, storage, Script([_ask_with(["Joins on the customer ID.", "Joins on the account number."])])
     )
     settled = settle(found.asks[0], now=datetime(2026, 1, 1, tzinfo=UTC))
     assert settled.question is not None
-    assert [o.effect for o in settled.question.options[:2]] == [
-        "Joins on the customer ID.",
-        "Joins on the account number.",
-    ]
+    # An AI-made question carries no step, so answering it changes nothing: the screen may not claim an outcome.
+    assert [o.effect for o in settled.question.options[:2]] == [NO_STEP, NO_STEP]

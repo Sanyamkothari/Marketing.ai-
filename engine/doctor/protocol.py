@@ -267,6 +267,10 @@ def _stated(option: AskOption) -> str:
     return f"Adds the step “{option.effect.title}”."
 
 
+NO_STEP: Final[str] = "Your answer is recorded; it does not change the data."
+"""What an answer that adds no step says: never a claim about an outcome that nothing performs."""
+
+
 def _case_question(ask: Ask, question_id: str, options: tuple[AskOption, ...]) -> CaseQuestion:
     recommended = None if ask.meaning_bearing else ask.recommended
     return CaseQuestion(
@@ -283,7 +287,7 @@ def _case_question(ask: Ask, question_id: str, options: tuple[AskOption, ...]) -
                 effect_digest=(
                     payload_digest(option.effect.payload) if option.effect.kind is not None else None
                 ),
-                effect=option.says or _stated(option),
+                effect=(option.says or _stated(option)) if option.effect.kind is not None else NO_STEP,
                 rows_changed=option.rows_changed,
                 label_rate=option.label_rate,
                 safe=option.safe,

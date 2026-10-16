@@ -215,3 +215,18 @@ def test_the_agent_gets_one_line_per_question() -> None:
 def test_a_recommended_choice_outside_the_choices_is_refused() -> None:
     with pytest.raises(QuestionError):
         build_ask("Q1", SAMPLE, rows=3000, choices=CHOICES, recommended_choice=3)
+
+
+@pytest.mark.parametrize("qid", list(CATALOGUE))
+def test_an_answer_claims_an_outcome_only_when_it_carries_a_step(qid: str) -> None:
+    from engine.doctor.protocol import NO_STEP, _case_question
+
+    spec = question(qid)
+    assert all(not o.effect for o in spec.options if o.repeat), "a repeated answer is already a sentence"
+    ask = _ask(qid)
+    shown = _case_question(ask, "q", ask.options).options
+    assert all(o.effect == NO_STEP for o in shown), "no step: the screen claims nothing happens"
+    step = OptionEffect(option_id="c0", kind="doctor.step", title="Fix it")
+    with_step = build_ask(qid, SAMPLE, rows=3000, choices=CHOICES, effects=[step] * (len(ask.options) - 1))
+    first = _case_question(with_step, "q", with_step.options).options[0].effect
+    assert first != NO_STEP and "{" not in first and "“customer_id” rows" not in first
