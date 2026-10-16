@@ -71,10 +71,10 @@ export function liftSentence(lift) {
   const top = Math.max(1, Math.round((100 * first.rows) / total));
   const seen = `Measured on ${count(total)} customers the model had not seen while learning.`;
   if (first.lift < 1.2) {
-    return `The ${top}% of customers the model puts first are not clearly more likely than the average customer to have the result you want, so do not rely on this list yet. ${seen}`;
+    return `The ${top}% of customers the model puts first are not clearly more likely than the average customer to have the outcome this goal looks for, so do not rely on this list yet. ${seen}`;
   }
   const rates = `${fmtPct(first.actual_rate_pct / 100, 0)} against ${fmtPct(lift.base_rate_pct / 100, 0)} for an average customer`;
-  return `The ${top}% of customers the model puts first are ${fmtNum(first.lift, 1)} times as likely as the average customer to have the result you want (${rates}). ${seen}`;
+  return `The ${top}% of customers the model puts first are ${fmtNum(first.lift, 1)} times as likely as the average customer to have the outcome this goal looks for (${rates}). ${seen}`;
 }
 
 /** The groups of `decile_lift.json` as table rows, best first: `{ group, customers, rate, times }`; empty when it is not one. */

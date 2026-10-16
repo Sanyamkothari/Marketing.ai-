@@ -59,7 +59,14 @@ test("the summary comes first: how many to contact, who was left out and why, in
   assert.match(left[0], /^600 customers: kept back on purpose as the comparison group/);
   assert.match(left[1], /^35 customers: left out by your contact rules/);
   assert.match(left[2], /^12 customers: taken off by the compliance check/);
-  assert.match(left[3], /^6,327 customers: not picked this time, because the model ranks them lower/, "the rest of the 8,214 are said, so the numbers add up");
+  assert.match(left[3], /^6,327 customers: not on the list this time \(the model ranks them lower/, "the rest of the 8,214 are said, so the numbers add up");
+});
+
+test("the list sentence tells the truth about the file: send only the customers marked to contact", () => {
+  draw(review());
+  const line = text($("[data-cw-sum-list]"));
+  assert.match(line, /Send only the customers the file marks to contact, not simply the top of it/);
+  assert.doesNotMatch(line, /come first, then the ones left out/, "held-back and withheld customers are not sorted after the contactable ones");
 });
 
 test("the first customers are a table, best first, with their likelihood, and only the columns that hold something", () => {
@@ -198,7 +205,7 @@ const importance = {
 test("how good the model is: one honest sentence a marketer understands, from the lift of customers it had not seen", () => {
   assert.equal(
     SR.liftSentence(lift),
-    "The 20% of customers the model puts first are 5 times as likely as the average customer to have the result you want (58% against 12% for an average customer). Measured on 300 customers the model had not seen while learning.",
+    "The 20% of customers the model puts first are 5 times as likely as the average customer to have the outcome this goal looks for (58% against 12% for an average customer). Measured on 300 customers the model had not seen while learning.",
   );
   draw(review({ summary: { top, caseId: "case_42", story: { lift, importance } } }));
   assert.match(text($("[data-cw-sum-model]")), /^The 20% of customers the model puts first are 5 times as likely as the average customer/);
@@ -254,7 +261,7 @@ test("the card answers in order: who to contact, why these customers, how good t
   draw(review({ summary: { top, caseId: "case_42", story: { lift, importance } } }));
   const heads = $$("[data-cw-results] .cw-sum-h").map(text);
   assert.deepEqual(heads, ["Who to contact", "Why these customers", "How good the model is", "What was done to your data"]);
-  assert.match(text($("[data-cw-sum-list]")), /the customers you can contact come first/);
+  assert.match(text($("[data-cw-sum-list]")), /Send only the customers the file marks to contact/);
   assert.deepEqual(findNeverShown(text($("[data-cw-results]"))), {}, "plain words only");
   draw(review({ summary: { top, caseId: null } }));
   assert.equal($("[data-cw-sum-data]"), null, "no plan to point to when the file did not come through the Data Doctor");

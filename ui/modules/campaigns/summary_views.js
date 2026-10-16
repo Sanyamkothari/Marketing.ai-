@@ -83,7 +83,7 @@ function whyPart(story) {
     .slice(0, SHOWN_REASONS)
     .map(li)
     .join("")}</ul>${more(`<ul class="cw-list">${rest.map(li).join("")}</ul>`)}${p(
-    "Each customer on the list also has their own three reasons, written next to them in the file.",
+    "Each customer on the list also has their own reasons (up to three), written next to them in the file.",
     "",
     "cw-note",
   )}`;
@@ -130,12 +130,12 @@ export function resultsSummaryHtml({ list = null, version = null, top = null, st
   const excluded = exclusionLines(list, comparison);
   const rest = notPickedRows(list, comparison);
   const lines = excluded.map((l) => l.text);
-  if (rest) lines.push(`${people(rest)}: not picked this time, because the model ranks them lower than the customers on the list`);
+  if (rest) lines.push(`${people(rest)}: not on the list this time (the model ranks them lower, or the plan's limits left them out)`);
   const left = lines.length ? `${p("Left out of the list", "", "cw-sum-sub")}<ul class="cw-list" data-cw-sum-excluded>${lines.map((t) => `<li>${esc(t)}</li>`).join("")}</ul>` : "";
   return `<section class="card cw-card cw-sum" data-cw-results><div class="cw-card-body"><div class="cw-card-head"><h2 class="cw-h">Your results at a glance</h2></div>${h3("Who to contact")}${
     contact
       ? `<p class="cw-sum-lead" data-cw-sum-contact>${esc(contact)}</p>${p(
-          "The list is one file, best first: the customers you can contact come first, then the ones left out, each with its reason.",
+          "The list is one file, best first. Send only the customers the file marks to contact, not simply the top of it. Every customer left out is marked, with their reason.",
           "data-cw-sum-list",
         )}`
       : p("How many customers will be contacted could not be read for this list.", "data-cw-sum-contact", "cw-note")
