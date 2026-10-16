@@ -248,3 +248,33 @@ def test_a_new_file_the_current_model_cannot_read_disables_reuse_and_is_refused(
         },
     )
     assert refused.status_code == 409 and refused.json()["detail"]["code"] == "MODEL_CANNOT_READ_FILE"
+
+
+def test_a_model_that_learned_another_outcome_than_this_months_is_not_reused(
+    client: TestClient, data_dir: Path, current_model: str
+) -> None:
+    learned = next(
+        v["version"]
+        for v in client.get("/models", params={"use_case": USE_CASE}).json()["versions"]
+        if v["version"]["model_id"] == current_model
+    )
+    target = LocalStorage(data_dir).read_model(learned["schema_key"], FeatureSchema).target
+    upload_id = _upload_train(
+        client, generate(GenerationSpec(USE_CASE, rows=1_500, variant=CLEAN, seed=20261018)), "month3.csv"
+    )
+    params = {"use_case": USE_CASE, "upload_id": upload_id}
+    same = client.get("/campaign-runs/model-offer", params={**params, "outcome": target}).json()
+    assert same["usable"] is True
+    other = client.get("/campaign-runs/model-offer", params={**params, "outcome": "churned_90d"}).json()
+    assert other["usable"] is False and "'churned_90d'" in other["reason"]
+    refused = client.post(
+        "/campaign-runs",
+        json={
+            "use_case": USE_CASE,
+            "upload_id": upload_id,
+            "primary_key": "customerID",
+            "target": "churned_90d",
+            "model_version_id": current_model,
+        },
+    )
+    assert refused.status_code == 409 and refused.json()["detail"]["code"] == "MODEL_OUTCOME_CHANGED"

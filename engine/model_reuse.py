@@ -16,9 +16,10 @@ from typing import Literal
 from engine.config import ModelReuseRules, StrictBase
 from engine.contracts import FeatureSchema, ModelVersion
 from engine.doctor.fingerprint import Fingerprint
+from engine.doctor.readiness import model_recipe
 from engine.storage import Storage
 
-__all__ = ["ModelOffer", "missing_columns", "model_offer"]
+__all__ = ["ModelOffer", "missing_columns", "model_offer", "outcome_conflict"]
 
 
 class ModelOffer(StrictBase):
@@ -33,12 +34,35 @@ class ModelOffer(StrictBase):
 
 
 def missing_columns(storage: Storage, model: ModelVersion, offered: Collection[str]) -> list[str] | None:
-    """The columns `model` needs that the file does not have; None when its schema cannot be read."""
+    """The columns `model` needs that the file does not have; None when its schema cannot be read.
+
+    A model that learned on prepared data has a recipe that makes or renames some of its columns when it scores, so
+    the file as sent cannot be compared with its columns here: the score step checks it after the recipe ran.
+    """
     try:
         schema = storage.read_model(model.schema_key, FeatureSchema)
+        if model_recipe(storage, model) is not None:
+            return []
     except Exception:  # unreadable or gone: the caller decides what that means
         return None
     return [c.name for c in schema.columns if c.required and c.name not in set(offered)]
+
+
+def outcome_conflict(storage: Storage, model: ModelVersion, outcome: str | None) -> str | None:
+    """Why `model` cannot be reused when this month's approved outcome is not the one it learned; else None.
+
+    No outcome given (nothing to compare) or a schema that cannot be read is no conflict here: `missing_columns`
+    and the score step answer for those."""
+    if outcome is None:
+        return None
+    try:
+        learned = storage.read_model(model.schema_key, FeatureSchema).target
+    except Exception:
+        return None
+    if learned == outcome:
+        return None
+    was = f"predicts '{learned}'" if learned else "was not learned for an outcome"
+    return f"Last month's model {was}; this month's outcome is '{outcome}'. Learn again."
 
 
 def _pct(rate: float) -> str:
@@ -59,8 +83,10 @@ def model_offer(
     current: Fingerprint | None,
     last: Fingerprint | None,
     rules: ModelReuseRules,
+    conflict: str | None = None,
 ) -> ModelOffer:
-    """The offer for one prepared file. `missing` is `missing_columns` of the current model (None: unreadable)."""
+    """The offer for one prepared file. `missing` is `missing_columns` of the current model (None: unreadable);
+    `conflict` is `outcome_conflict` (the model learned another outcome than this month's)."""
     if model is None:
         return ModelOffer()
     if missing is None:
@@ -74,6 +100,10 @@ def model_offer(
             reason=f"Last month's model needs {names}, which this file does not have.",
             hint="Learn again on the new data.",
         )
+    if conflict:
+        return ModelOffer(
+            model_version_id=model.model_id, reason=conflict, hint="Learn again on the new data."
+        )
     age = max(0, (now - model.created_at).days)
     why: list[str] = []
     if age > rules.max_age_days:
@@ -84,11 +114,13 @@ def model_offer(
         now_rate, was = current.outcome_rate, last.outcome_rate
         if now_rate is not None and was is not None and _moved(now_rate, was, rules.max_rate_ratio):
             why.append(f"the outcome rate moved from {_pct(was)} to {_pct(now_rate)}")
-    hint = (
-        f"Learning again fits better: {', '.join(why)}."
-        if why
-        else "This data looks like last month's, so the model you have should still fit."
-    )
+    compared = current is not None and last is not None
+    if why:
+        hint = f"Learning again fits better: {', '.join(why)}."
+    elif compared:
+        hint = "This data looks like last month's, so the model you have should still fit."
+    else:
+        hint = "Last month's model can read this file. Nothing was compared with last month's data."
     return ModelOffer(
         model_version_id=model.model_id,
         usable=True,

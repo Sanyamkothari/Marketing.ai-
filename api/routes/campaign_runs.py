@@ -54,7 +54,7 @@ from engine.doctor.fingerprint import FingerprintStore
 from engine.doctor.visit import is_approved
 from engine.measurement.cycle import MEASURE_NOT_OFFERED, CycleError, open_campaign
 from engine.model_approval import model_not_approved
-from engine.model_reuse import ModelOffer, missing_columns, model_offer
+from engine.model_reuse import ModelOffer, missing_columns, model_offer, outcome_conflict
 from engine.registry import RegistryError
 from engine.runs import RUN_CONFIG_FILENAME
 from engine.storage import Storage, StorageError, run_key
@@ -461,12 +461,18 @@ def read_model_offer(
     use_case: str,
     upload_id: str,
     client_id: str | None = None,
+    outcome: str | None = None,
 ) -> ModelOffer:
-    """The first month there is no current model, so the offer holds none and Start only learns."""
+    """The first month there is no current model, so the offer holds none and Start only learns.
+
+    `outcome` is the outcome column the person approved this month: a model that learned another is not offered.
+    """
     use_case_config(use_case, root)
     columns = [c.name for c in load_upload_profile(storage, upload_id).columns]
     model = get_registry(request).get_champion(use_case)
     newest, last = FingerprintStore(storage).newest_two(client_id or DEFAULT_CLIENT_ID, use_case)
+    if newest is None or newest.upload_id != upload_id:  # this file was not fingerprinted: nothing to compare
+        newest = last = None
     return model_offer(
         model,
         None if model is None else missing_columns(storage, model, columns),
@@ -474,6 +480,7 @@ def read_model_offer(
         current=newest,
         last=last,
         rules=load_engine_config(root).model_reuse,
+        conflict=None if model is None else outcome_conflict(storage, model, outcome),
     )
 
 
@@ -488,13 +495,16 @@ def _require_readable(request: Request, storage: StorageDep, body: CampaignRunRe
     missing = missing_columns(
         storage, version, [c.name for c in load_upload_profile(storage, body.upload_id).columns]
     )
+    if missing is None:  # the same answer as the offer: a model that cannot be checked is not reused
+        raise http_error(409, "MODEL_CANNOT_READ_FILE", "The model cannot be checked against this file.")
     if missing:
         names = ", ".join(f"'{n}'" for n in missing[:5])
         raise http_error(
-            409,
-            "MODEL_CANNOT_READ_FILE",
-            f"The model needs {names}, which this file does not have. Learn again on the new data instead.",
+            409, "MODEL_CANNOT_READ_FILE", f"The model needs {names}, which this file does not have."
         )
+    conflict = outcome_conflict(storage, version, body.target)
+    if conflict:
+        raise http_error(409, "MODEL_OUTCOME_CHANGED", conflict)
 
 
 @router.get(

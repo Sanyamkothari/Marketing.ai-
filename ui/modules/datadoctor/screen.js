@@ -91,6 +91,7 @@ function fresh() {
     started: null, // the case whose hand-off was started from here
     speed: DEFAULT_SPEED, // how long the model may learn: quick | balanced | thorough
     speedOpen: false, // the three choices are shown ("Change")
+    offerFor: null, // which file and outcome `offer` was asked for
     offer: null, // next month: the model that could be reused (`GET /campaign-runs/model-offer`), else null
     mode: null, // "reuse" | "learn" as the person picked it on Start; null follows the hint
     startInfo: null, // { uploadId, rows } of the file the campaign starts from, for the sentence above Start
@@ -220,11 +221,12 @@ function modelChoiceHtml(choice) {
       attrs: `data-dds-mode="${mode}" aria-pressed="${(choice.reuse ? "reuse" : "learn") === mode}"`,
     });
   const why = choice.reason ? `<p class="dds-why" data-dds-reuse-off>${esc(choice.reason)}</p>` : "";
+  const hint = choice.hint ? `<p class="dds-why" data-dds-offer-hint>${esc(choice.hint)}</p>` : "";
   return `<div class="dds-actions" role="group" aria-label="Which model to use" data-dds-modes>${pick(
     "reuse",
     "Use last month's model (fast)",
     !choice.canReuse,
-  )}${pick("learn", "Learn again on the new data (slower)", false)}</div>${why}<p class="dds-why" data-dds-offer-hint>${esc(choice.hint)}</p>`;
+  )}${pick("learn", "Learn again on the new data (slower)", false)}</div>${why}${hint}`;
 }
 
 /** The sentence above Start: what is learned from, how many customers, how long it takes, and "Change". */
@@ -325,12 +327,19 @@ async function refresh(entry) {
 async function readOffer(entry) {
   const s = entry.state;
   const start = s.screen && s.screen.view && s.screen.view.start;
+  if (!start || entry.host.place !== "data" || !["ready", "ready_with_warnings"].includes(s.screen.view.verdict.key)) {
+    s.offer = null;
+    s.offerFor = null;
+    return;
+  }
+  const asked = `${start.goal_id}|${start.upload_id}|${start.outcome}`; // asked again only when one of these changes
+  if (s.offerFor === asked) return;
   s.offer = null;
-  if (!start || entry.host.place !== "data" || !["ready", "ready_with_warnings"].includes(s.screen.view.verdict.key)) return;
+  s.offerFor = asked;
   try {
-    s.offer = await getModelOffer(start.goal_id, start.upload_id, s.screen.case.client_id);
+    s.offer = await getModelOffer(start.goal_id, start.upload_id, s.screen.case.client_id, start.outcome);
   } catch {
-    // no offer (the first month, or it cannot be asked): Start only learns
+    s.offerFor = null; // no offer (the first month, or it cannot be asked): Start only learns; ask again next time
   }
 }
 
@@ -518,7 +527,8 @@ async function startCampaignRun(entry, start) {
       use_case: start.goal_id,
       upload_id: start.upload_id,
       primary_key: start.primary_key,
-      ...(choice && choice.reuse ? { model_version_id: choice.modelVersionId } : { target: start.outcome, speed: s.speed }),
+      target: start.outcome, // also when reusing: the server checks the model learned this outcome
+      ...(choice && choice.reuse ? { model_version_id: choice.modelVersionId } : { speed: s.speed }),
       case_id: s.caseId,
     });
     s.started = s.caseId;

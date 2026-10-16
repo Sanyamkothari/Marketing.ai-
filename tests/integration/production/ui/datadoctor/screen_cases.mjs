@@ -469,6 +469,7 @@ test("next month, Start offers last month's model or learning again, with the hi
     use_case: s.view.start.goal_id,
     upload_id: s.view.start.upload_id,
     primary_key: s.view.start.primary_key,
+    target: s.view.start.outcome, // sent also when reusing, so the server can check the model learned it
     model_version_id: "m_last",
     case_id: CASE,
   });

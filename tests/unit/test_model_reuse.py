@@ -58,3 +58,21 @@ def test_an_old_model_a_moved_outcome_rate_or_changed_columns_suggest_learning_a
     changed = _offer(_model(), [], _print(0.1, "a", "c"), _print(0.1, "a", "b"))
     for offer, words in ((old, "60 days old"), (moved, "from 12% to 23%"), (changed, "columns changed")):
         assert offer.usable and offer.suggest == "learn" and words in offer.hint
+
+
+def test_a_model_that_learned_another_outcome_is_not_offered_for_reuse() -> None:
+    offer = model_offer(
+        _model(),
+        [],
+        now=utc_now(),
+        current=_print(0.1, "a"),
+        last=_print(0.1, "a"),
+        rules=RULES,
+        conflict="Last month's model predicts 'churned_30d'; this month's outcome is 'churned_90d'. Learn again.",
+    )
+    assert not offer.usable and offer.suggest == "learn" and offer.reason and "'churned_90d'" in offer.reason
+
+
+def test_without_a_comparison_the_hint_does_not_claim_the_data_looks_like_last_months() -> None:
+    offer = _offer(_model(), [], None, None)
+    assert offer.usable and "looks like" not in offer.hint and "Nothing was compared" in offer.hint

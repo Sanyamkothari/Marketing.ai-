@@ -68,13 +68,14 @@ export const postCampaignRun = (payload) => request("/campaign-runs", post(paylo
 
 /**
  * Next month's Start (`GET /campaign-runs/model-offer`): `{ model_version_id, usable, reason, suggest, hint }`.
- * `model_version_id` is null the first month (only learning is offered); `usable` false says why in `reason`.
+ * `model_version_id` is null the first month (only learning is offered); `usable` false says why in `reason`
+ * (columns missing, or the model learned another outcome than `outcome`, the one approved this month).
  */
-export const getModelOffer = (useCase, uploadId, clientId = null) =>
+export const getModelOffer = (useCase, uploadId, clientId = null, outcome = null) =>
   request(
     `/campaign-runs/model-offer?use_case=${encodeURIComponent(useCase)}&upload_id=${encodeURIComponent(uploadId)}${
       clientId ? `&client_id=${encodeURIComponent(clientId)}` : ""
-    }`,
+    }${outcome ? `&outcome=${encodeURIComponent(outcome)}` : ""}`,
   );
 
 /** Where one campaign run is (`GET /campaign-runs/{id}`): `{ record, pct, eta_seconds, summary }`. */
