@@ -372,6 +372,11 @@ class CaseOption(StrictBase):
     option_id: str = Field(description="Stable within the question.")
     label: str = Field(description="Button text.")
     effect_digest: str | None = Field(default=None, description="The proposal it adds; null = leave as is.")
+    effect: str = Field(
+        default="",
+        exclude_if=lambda value: not value,
+        description='What choosing it does, in a plain sentence ("Keeps the later copy of each repeated customer.").',
+    )
     # Plan O M246 (DEC-1816): what the option was measured to do, and the safe choice behind "I don't know".
     rows_changed: int | None = Field(
         default=None,

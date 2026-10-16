@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import re
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Final
@@ -99,6 +100,8 @@ MAX_BLOCKING: Final[int] = 3
 STRIKES: Final[int] = 2
 """Bad replies (malformed, unknown action, refused argument) before the review ends."""
 SUMMARY_CHARS: Final[int] = 800
+EFFECT_CHARS: Final[int] = 160
+_DIGIT: Final = re.compile(r"\d")
 SQL_ARGS: Final[frozenset[str]] = frozenset(
     {"sql", "output_name", "as_of", "as_of_rule", "as_of_column", "reads_future"}
 )
@@ -509,6 +512,7 @@ class _Review:
                 dict(values) if isinstance(values, dict) else {},
                 rows=len(ctx.frame),
                 choices=[str(c) for c in choices] if isinstance(choices, list) else (),
+                choice_says=self._says(index, args),
                 upload_id=ctx.upload_id,
                 column=ctx.resolve(str(args["column"])) if isinstance(args.get("column"), str) else None,
                 evidence_ids=tuple(_hashed(turn, cited)),
@@ -530,6 +534,21 @@ class _Review:
         turn.blocking += int(ask.blocking)
         turn.asks.append(ask)
         turn.feedback.append({"asked": ask.code})
+
+    def _says(self, index: int, args: dict[str, Any]) -> list[str]:
+        """The model's sentence for what each of its `choices` does, kept only where it is short, states no number
+        and passes the checks; any other choice gets the catalogue's own sentence (`build_ask` falls back, it never
+        invents)."""
+        given = args.get("effects")
+        if not isinstance(given, list):
+            return []
+        kept: list[str] = []
+        for item in given:
+            text = item.strip() if isinstance(item, str) else ""
+            ok = bool(text) and not _DIGIT.search(text)
+            ok = ok and self.checker.failure(text, target="doctor question", max_chars=EFFECT_CHARS) is None
+            kept.append(self.gates[index].person_text(text) if ok else "")
+        return kept
 
     def _finish(self, action: dict[str, Any]) -> str:
         text = str(action.get("text") or "").strip()

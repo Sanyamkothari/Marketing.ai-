@@ -80,6 +80,27 @@ test("a question: its text, why it is asked, each answer with what it changes, a
   assert.ok(sent.op_id, "every change carries an idempotency key");
 });
 
+test("an answer says what it does in words, then the counts code measured; an answer with no sentence shows only the counts", async () => {
+  const s = await show("question");
+  const q = {
+    question_id: "q.sentence",
+    code: "Q11_WHICH_WINS",
+    text: "Which copy wins?",
+    blocking: false,
+    options: [
+      { option_id: "c0", label: "The later one", effect: "Keeps the later copy <b>of each</b> customer.", rows_changed: 12 },
+      { option_id: "c1", label: "The earlier one", rows_changed: 0 },
+      { option_id: "c2", label: "I don't know", safe: true },
+    ],
+  };
+  const host = document.createElement("div");
+  host.innerHTML = view.questionHtml(q, s.case);
+  const [first, second] = [...host.querySelectorAll("li.dds-opt")];
+  assert.match(first.textContent, /Keeps the later copy <b>of each<\/b> customer\. · Changes 12 rows/, "escaped text, sentence first");
+  assert.equal(first.querySelector("b"), null, "the sentence is never markup");
+  assert.match(second.textContent, /Changes no rows/);
+});
+
 test("a question that offers its own I don't know draws it once, as the last answer", async () => {
   const s = await show("question");
   const q = s.case.questions.find((x) => x.code === "KEY_AMBIGUOUS");

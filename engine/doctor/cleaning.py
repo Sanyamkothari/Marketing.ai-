@@ -346,6 +346,7 @@ def _guided_ask(question: Question, upload_id: str, rows: int) -> Ask:
                 label=option.label,
                 effect=_option_effect(f"c{index}", option.proposal, upload_id),
                 safe=option.proposal is None,
+                says=option.effect,
             )
             for index, option in enumerate(question.options)
         ),

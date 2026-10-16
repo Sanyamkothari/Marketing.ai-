@@ -61,6 +61,8 @@ class OptionSpec:
     label: str
     repeat: bool = False
     optional: bool = False
+    effect: str = ""
+    """What choosing it does, in a plain sentence with no numbers (`{choice}` is filled for a repeated one)."""
 
 
 @dataclass(frozen=True)
@@ -91,8 +93,6 @@ class QuestionSpec:
         return not self.meaning_bearing and (self.recommended is not None or self.recommend_from_data)
 
 
-_CHOICE: Final[OptionSpec] = OptionSpec("{choice}", repeat=True)
-
 CATALOGUE: Final[Mapping[str, QuestionSpec]] = {
     spec.qid: spec
     for spec in (
@@ -103,7 +103,13 @@ CATALOGUE: Final[Mapping[str, QuestionSpec]] = {
             text="Which column is the main customer ID in {file}? Pick the one your campaign contacts: a "
             "person, an account or a household.",
             why="More than one column looks like an ID, and they may name different things.",
-            options=(_CHOICE,),
+            options=(
+                OptionSpec(
+                    "{choice}",
+                    repeat=True,
+                    effect="“{choice}” is the main customer ID, used to match customers across your files.",
+                ),
+            ),
             recommend_from_data=True,
             blocking=True,
             roles=(CRM_ADMIN, CAMPAIGN_MANAGER),
@@ -116,9 +122,17 @@ CATALOGUE: Final[Mapping[str, QuestionSpec]] = {
             text="{count} customers in {file} look like the same person. Merge them?",
             why="Merging joins their history; keeping them apart may count one person twice.",
             options=(
-                OptionSpec("Merge when the phone number is the same"),
-                OptionSpec("Merge when the phone number and date of birth are the same"),
-                OptionSpec("Keep them separate"),
+                OptionSpec(
+                    "Merge when the phone number is the same",
+                    effect="Customers with the same phone number become one customer.",
+                ),
+                OptionSpec(
+                    "Merge when the phone number and date of birth are the same",
+                    effect="Customers with the same phone number and date of birth become one customer.",
+                ),
+                OptionSpec(
+                    "Keep them separate", effect="Nothing is merged; look-alikes stay separate customers."
+                ),
             ),
             recommended=1,
             roles=(CRM_ADMIN,),
@@ -130,7 +144,7 @@ CATALOGUE: Final[Mapping[str, QuestionSpec]] = {
             topic="ID length and letter case",
             text="How many digits should the ID “{column}” have, and do upper and lower case letters differ?",
             why="The IDs in {column} come in more than one length, so zeros may have been cut off.",
-            options=(_CHOICE,),
+            options=(OptionSpec("{choice}", repeat=True, effect="The IDs are read as: {choice}."),),
             roles=(CRM_ADMIN, DATABASE_ADMIN),
             safe_default="read IDs as text exactly as they are, without adding zeros",
         ),
@@ -140,7 +154,9 @@ CATALOGUE: Final[Mapping[str, QuestionSpec]] = {
             topic="which sheet or block",
             text="{file} has several {kind}. Which one holds the customer table?",
             why="Each one has its own header row, so the wrong pick reads the wrong columns.",
-            options=(_CHOICE,),
+            options=(
+                OptionSpec("{choice}", repeat=True, effect="The customer table is read from “{choice}”."),
+            ),
             roles=(EXPORTER,),
             safe_default="leave the extra sheets out and say which ones",
         ),
@@ -151,10 +167,14 @@ CATALOGUE: Final[Mapping[str, QuestionSpec]] = {
             text="What does a blank mean in {columns}?",
             why="{count} customers have a blank here; zero and unknown give different results.",
             options=(
-                OptionSpec("Nothing happened (count it as 0)"),
-                OptionSpec("Not known"),
-                OptionSpec("Not applicable"),
-                OptionSpec("Not yet (it fills in later)"),
+                OptionSpec("Nothing happened (count it as 0)", effect="Blanks count as 0."),
+                OptionSpec("Not known", effect="Blanks stay empty, as unknown."),
+                OptionSpec(
+                    "Not applicable", effect="Blanks stay empty; they do not apply to these customers."
+                ),
+                OptionSpec(
+                    "Not yet (it fills in later)", effect="Blanks stay empty until the value fills in later."
+                ),
             ),
             recommended=1,
             roles=(CRM_ADMIN, DATABASE_ADMIN),
@@ -166,7 +186,7 @@ CATALOGUE: Final[Mapping[str, QuestionSpec]] = {
             topic="unit or scale",
             text="What unit is {column} in? Its values look like {hint}.",
             why="Mixed units make amounts differ by a factor, for example 100 between rupees and paise.",
-            options=(_CHOICE,),
+            options=(OptionSpec("{choice}", repeat=True, effect="The amounts are read as {choice}."),),
             recommend_from_data=True,
             roles=(FINANCE, CRM_ADMIN),
             safe_default="leave the amounts as they are and convert nothing",
@@ -177,7 +197,11 @@ CATALOGUE: Final[Mapping[str, QuestionSpec]] = {
             topic="which date says when it was known",
             text="Which date in {file} says when this was known, or when each customer's clock starts?",
             why="The wrong date lets the model see what happened after the as-of date.",
-            options=(_CHOICE,),
+            options=(
+                OptionSpec(
+                    "{choice}", repeat=True, effect="“{choice}” is the date each customer's clock starts."
+                ),
+            ),
             meaning_bearing=True,
             roles=(CRM_ADMIN,),
             safe_default="leave this column out of the model",
@@ -189,10 +213,21 @@ CATALOGUE: Final[Mapping[str, QuestionSpec]] = {
             text="What date is this data true as of?",
             why="Everything is cut at this date; a wrong one leaks the future or drops recent customers.",
             options=(
-                OptionSpec("The latest date in the file: {latest_date}"),
-                OptionSpec("The date in the file name: {name_date}", optional=True),
-                OptionSpec("Counted back from the days-since column: {back_date}", optional=True),
-                OptionSpec("I will type a date"),
+                OptionSpec(
+                    "The latest date in the file: {latest_date}",
+                    effect="The data is cut at the latest date in the file.",
+                ),
+                OptionSpec(
+                    "The date in the file name: {name_date}",
+                    optional=True,
+                    effect="The data is cut at the date in the file name.",
+                ),
+                OptionSpec(
+                    "Counted back from the days-since column: {back_date}",
+                    optional=True,
+                    effect="The data is cut at the date counted back from the days-since column.",
+                ),
+                OptionSpec("I will type a date", effect="You type the date; nothing is cut until you do."),
             ),
             blocking=True,
             meaning_bearing=True,
@@ -206,9 +241,14 @@ CATALOGUE: Final[Mapping[str, QuestionSpec]] = {
             text="Was {file} taken today, or on the as-of date {as_of}?",
             why="A file taken today holds statuses as they are now, which the model could not have known then.",
             options=(
-                OptionSpec("Today"),
-                OptionSpec("On the as-of date"),
-                OptionSpec("A history table exists"),
+                OptionSpec("Today", effect="Columns that only describe today are left out of the model."),
+                OptionSpec(
+                    "On the as-of date", effect="The file's statuses are used as they were on the as-of date."
+                ),
+                OptionSpec(
+                    "A history table exists",
+                    effect="The history table is used for statuses; add it when you have it.",
+                ),
             ),
             meaning_bearing=True,
             roles=(EXPORTER, CRM_ADMIN),
@@ -221,9 +261,12 @@ CATALOGUE: Final[Mapping[str, QuestionSpec]] = {
             text="Who counts as a customer on {as_of}?",
             why="The answer changes how many customers are scored and the share of yes outcomes.",
             options=(
-                OptionSpec("Bought in the last 12 months"),
-                OptionSpec("Any order ever"),
-                OptionSpec("Everyone in the master file"),
+                OptionSpec(
+                    "Bought in the last 12 months",
+                    effect="Customers who bought in the last 12 months are scored; the rest are left out.",
+                ),
+                OptionSpec("Any order ever", effect="Anyone with an order ever is scored."),
+                OptionSpec("Everyone in the master file", effect="Everyone in the master file is scored."),
             ),
             recommended=0,
             blocking=True,
@@ -237,11 +280,20 @@ CATALOGUE: Final[Mapping[str, QuestionSpec]] = {
             text="{count} customers appear more than once with different values in {column}. Which copy wins?",
             why="Two copies disagree, and the one kept becomes the customer's value.",
             options=(
-                OptionSpec("The later one"),
-                OptionSpec("The earlier one"),
-                OptionSpec("Yes if any copy says yes"),
-                OptionSpec("The latest by {date_column}", optional=True),
-                OptionSpec("Leave these customers out"),
+                OptionSpec("The later one", effect="Keeps the later copy of each repeated customer."),
+                OptionSpec("The earlier one", effect="Keeps the earlier copy of each repeated customer."),
+                OptionSpec(
+                    "Yes if any copy says yes", effect="A customer counts as yes if any copy says yes."
+                ),
+                OptionSpec(
+                    "The latest by {date_column}",
+                    optional=True,
+                    effect="Keeps the copy with the latest date.",
+                ),
+                OptionSpec(
+                    "Leave these customers out",
+                    effect="These customers are left out of training and testing.",
+                ),
             ),
             meaning_bearing=True,
             roles=(CRM_ADMIN,),
@@ -254,9 +306,9 @@ CATALOGUE: Final[Mapping[str, QuestionSpec]] = {
             text="In {column}, what does “{value}” mean? It appears in {count} rows.",
             why="The model learns from what you call a yes and a no.",
             options=(
-                OptionSpec("A yes (positive)"),
-                OptionSpec("A no (negative)"),
-                OptionSpec("Leave these rows out"),
+                OptionSpec("A yes (positive)", effect="These rows count as yes."),
+                OptionSpec("A no (negative)", effect="These rows count as no."),
+                OptionSpec("Leave these rows out", effect="These rows are left out of training and testing."),
             ),
             blocking=True,
             meaning_bearing=True,
@@ -270,9 +322,18 @@ CATALOGUE: Final[Mapping[str, QuestionSpec]] = {
             text="In the past campaign {campaign}, was a random group deliberately not contacted?",
             why="Only a random group left out can show extra sales caused by the campaign.",
             options=(
-                OptionSpec("Yes, a column marks them"),
-                OptionSpec("Yes, there is a separate list"),
-                OptionSpec("No"),
+                OptionSpec(
+                    "Yes, a column marks them",
+                    effect="A column in the file marks the group that was not contacted.",
+                ),
+                OptionSpec(
+                    "Yes, there is a separate list",
+                    effect="A separate list names the group that was not contacted.",
+                ),
+                OptionSpec(
+                    "No",
+                    effect="The campaign counts as having no random holdout; no extra sales are claimed.",
+                ),
             ),
             recommended=2,
             roles=(CAMPAIGN_MANAGER,),
@@ -285,10 +346,19 @@ CATALOGUE: Final[Mapping[str, QuestionSpec]] = {
             text="In {column}, what does “{value}” mean? What was the consent given for, and how old may it be?",
             why="This decides who may be contacted.",
             options=(
-                OptionSpec("They agreed to be contacted"),
-                OptionSpec("They asked NOT to be contacted"),
-                OptionSpec("Marketing messages only"),
-                OptionSpec("Service messages only"),
+                OptionSpec(
+                    "They agreed to be contacted", effect="Customers with this value may be contacted."
+                ),
+                OptionSpec(
+                    "They asked NOT to be contacted",
+                    effect="Customers with this value are kept off the contact list.",
+                ),
+                OptionSpec(
+                    "Marketing messages only", effect="Customers with this value get marketing messages only."
+                ),
+                OptionSpec(
+                    "Service messages only", effect="Customers with this value get service messages only."
+                ),
             ),
             blocking=True,
             meaning_bearing=True,
@@ -303,9 +373,12 @@ CATALOGUE: Final[Mapping[str, QuestionSpec]] = {
             text="{column} looks like {kind}. How may it be used?",
             why="Using it to choose who is contacted can treat groups unfairly.",
             options=(
-                OptionSpec("In the fairness report only"),
-                OptionSpec("Remove it"),
-                OptionSpec("Use it"),
+                OptionSpec(
+                    "In the fairness report only",
+                    effect="Used in the fairness report only, never to choose who is contacted.",
+                ),
+                OptionSpec("Remove it", effect="The column is removed; the model never sees it."),
+                OptionSpec("Use it", effect="The model may use it to choose who is contacted."),
             ),
             recommended=0,
             roles=(COMPLIANCE,),
@@ -317,7 +390,9 @@ CATALOGUE: Final[Mapping[str, QuestionSpec]] = {
             topic="who would know (follows any I don't know)",
             text="Who would know the answer to “{question}”?",
             why="A ready message is shown for whoever you pick, and the safe choice is used meanwhile.",
-            options=(_CHOICE,),
+            options=(
+                OptionSpec("{choice}", repeat=True, effect="Shows a message ready to send to the {choice}."),
+            ),
             roles=(CRM_ADMIN,),
             safe_default="keep the safe choice and wait for the answer",
         ),
@@ -327,7 +402,7 @@ CATALOGUE: Final[Mapping[str, QuestionSpec]] = {
             topic="business rules that always hold",
             text="Which business rules always hold in {file}? Each shows how many rows it would remove.",
             why="A row that breaks a rule is probably a data mistake.",
-            options=(_CHOICE,),
+            options=(OptionSpec("{choice}", repeat=True, effect="The rule “{choice}” is applied."),),
             meaning_bearing=True,
             roles=(CAMPAIGN_MANAGER, FINANCE),
             safe_default="apply no extra rules",
@@ -339,8 +414,14 @@ CATALOGUE: Final[Mapping[str, QuestionSpec]] = {
             text="Which time zone, financial-year start and date order does {client} use?",
             why="Asked once per client; it fixes day boundaries, financial years and dates like 03/04.",
             options=(
-                OptionSpec("India time (Asia/Kolkata), year starts in April, day first"),
-                OptionSpec("Something else: I will set them"),
+                OptionSpec(
+                    "India time (Asia/Kolkata), year starts in April, day first",
+                    effect="Uses India time, a year starting in April and day-first dates.",
+                ),
+                OptionSpec(
+                    "Something else: I will set them",
+                    effect="You set the time zone, year start and date order yourself.",
+                ),
             ),
             recommended=0,
             roles=(CRM_ADMIN,),
@@ -353,7 +434,13 @@ CATALOGUE: Final[Mapping[str, QuestionSpec]] = {
             text="Rows in {file} are colour-coded or hidden. What do the colours mean, and should hidden rows "
             "be included?",
             why="A colour often marks a status that exists nowhere else in the file.",
-            options=(_CHOICE, OptionSpec("The colours mean nothing; include the hidden rows")),
+            options=(
+                OptionSpec("{choice}", repeat=True, effect="The colours are read as: {choice}."),
+                OptionSpec(
+                    "The colours mean nothing; include the hidden rows",
+                    effect="The colours are ignored and the hidden rows are included.",
+                ),
+            ),
             roles=(EXPORTER,),
             safe_default="leave hidden rows out and ignore the colours",
         ),
@@ -364,9 +451,15 @@ CATALOGUE: Final[Mapping[str, QuestionSpec]] = {
             text="Is {file} all your customers, or an extract?",
             why="Totals and rates from an extract do not describe the whole business.",
             options=(
-                OptionSpec("All customers"),
-                OptionSpec("A sample"),
-                OptionSpec("One segment only"),
+                OptionSpec("All customers", effect="The file counts as all your customers."),
+                OptionSpec(
+                    "A sample",
+                    effect="The file counts as a sample, so its totals do not describe the whole business.",
+                ),
+                OptionSpec(
+                    "One segment only",
+                    effect="The file counts as one segment, so its totals are not compared with the whole business.",
+                ),
             ),
             meaning_bearing=True,
             roles=(EXPORTER, CRM_ADMIN),
@@ -378,7 +471,7 @@ CATALOGUE: Final[Mapping[str, QuestionSpec]] = {
             topic="what one row is",
             text="Each “{id}” in {file} has several rows. {detail} What is one row?",
             why="Adding up or counting repeated rows counts the same order, ticket or customer more than once.",
-            options=(_CHOICE,),
+            options=(OptionSpec("{choice}", repeat=True, effect="One row is {choice}."),),
             recommend_from_data=True,
             roles=(CRM_ADMIN, FINANCE),
             safe_default="leave the rows as they are and warn that totals may count the same thing twice",
@@ -389,7 +482,7 @@ CATALOGUE: Final[Mapping[str, QuestionSpec]] = {
             topic="which statuses are real money",
             text="Which values of “{column}” in {file} are real money? {detail}",
             why="A failed, declined or refunded row is not money received, but adding the amounts up counts it.",
-            options=(_CHOICE,),
+            options=(OptionSpec("{choice}", repeat=True, effect="“{choice}” rows count as real money."),),
             recommend_from_data=True,
             roles=(FINANCE, CRM_ADMIN),
             safe_default="count every row and warn that the total includes failed or refunded money",
@@ -402,8 +495,13 @@ CATALOGUE: Final[Mapping[str, QuestionSpec]] = {
             "Leave them out of the outcome?",
             why="Customers who cannot have the outcome make the yes rate look different from the real one.",
             options=(
-                OptionSpec("Yes, leave them out of the outcome"),
-                OptionSpec("No, keep them as they are"),
+                OptionSpec(
+                    "Yes, leave them out of the outcome",
+                    effect="These customers are left out of the outcome.",
+                ),
+                OptionSpec(
+                    "No, keep them as they are", effect="These customers stay in the outcome as they are."
+                ),
             ),
             recommended=0,
             roles=(CAMPAIGN_MANAGER,),
@@ -483,6 +581,7 @@ def build_ask(
     rows_changed: Sequence[int | None] | None = None,
     label_rates: Sequence[float | None] | None = None,
     effects: Sequence[OptionEffect | None] | None = None,
+    choice_says: Sequence[str] = (),
     upload_id: str | None = None,
     column: str | None = None,
     goal_id: str | None = None,
@@ -495,7 +594,8 @@ def build_ask(
 
     `values` fill the placeholders. `rows_changed`, `label_rates` and `effects` are aligned with the answers as
     rendered (see :func:`render_options`), without "I don't know"; `effects` carry what an answer adds, and their
-    option ids are replaced by `c0`, `c1`, ... `recommended_choice` is the index of the data's own pick among
+    option ids are replaced by `c0`, `c1`, ... `choice_says` are checked sentences of what each of `choices` does,
+    one per choice, each replacing the catalogue's own where not empty. `recommended_choice` is the index of the data's own pick among
     `choices` (only for an entry that takes its recommendation from the data). "I don't know" is last, `c<n>`,
     and is the safe choice.
     """
@@ -510,12 +610,15 @@ def build_ask(
     for name, given in (("rows_changed", rows_changed), ("label_rates", label_rates), ("effects", effects)):
         if given is not None and len(given) != count:
             raise QuestionError(f"{qid}: {name} has {len(given)} entries for {count} answers")
+    if len(choice_says) != len(choices):
+        choice_says = ()  # sentences that do not line up with the choices would sit on the wrong ones
     options = [
         AskOption(
             label=label,
             effect=_effect(effects[index] if effects else None, f"c{index}"),
             rows_changed=rows_changed[index] if rows_changed else None,
             label_rate=label_rates[index] if label_rates else None,
+            says=_says(shown[index], values, choices, choice_says),
         )
         for index, label in enumerate(labels)
     ]
@@ -546,6 +649,21 @@ def build_ask(
         value_signature=value_signature,
         evidence_ids=evidence_ids,
     )
+
+
+def _says(
+    shown: tuple[OptionSpec, str, int | None],
+    values: Mapping[str, object],
+    choices: Sequence[str],
+    choice_says: Sequence[str],
+) -> str:
+    """One answer's sentence: the checked one for its choice, else the catalogue's own ("" when it has none)."""
+    option, _, choice = shown
+    if choice is not None and choice_says and choice_says[choice]:
+        return choice_says[choice]
+    if not option.effect:
+        return ""
+    return _fill(option.effect, {**values, "choice": choices[choice]} if choice is not None else values)
 
 
 def _effect(given: OptionEffect | None, option_id: str) -> OptionEffect:
