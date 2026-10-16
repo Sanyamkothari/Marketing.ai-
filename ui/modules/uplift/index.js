@@ -26,7 +26,7 @@
 // few times per navigation). The observer adds nothing to other modules' screens.
 
 import { ApiError, getIndustries, getUseCase } from "../../api.js";
-import { RESULTS_CRUMB, SETTINGS_CRUMB, crumbs, errorBox, esc, notFound, pageHead, skeleton } from "../../dom.js";
+import { RESULTS_CRUMB, SETTINGS_CRUMB, crumbs, errorBox, esc, notFound, pageHead, safeDecode, skeleton } from "../../dom.js";
 import { journeyFor } from "../../overview.js";
 import { pagePanelsHtml, registerModule, registerRunAction, setActiveNav } from "../router.js";
 import { campaignStep } from "../measure/rule.js";
@@ -63,13 +63,6 @@ let repaints = 0;
 let activeSetup = null;
 
 const hashParts = () => window.location.hash.replace(/^#\/?/, "").split("/").filter(Boolean);
-const safeDecode = (part) => {
-  try {
-    return decodeURIComponent(part || "");
-  } catch {
-    return part;
-  }
-};
 const isOurs = (parts) => ROUTES.includes(parts[0]);
 
 async function allIndustries() {

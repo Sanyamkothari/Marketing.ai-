@@ -11,7 +11,6 @@ export const LOGO = `<svg class="logo" viewBox="0 0 2576 690" role="img" aria-la
 export const esc = (s) =>
   String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
 
-/** True only for a value the API actually sent. `0` and `false` are values; `null` is not. */
 /** `decodeURIComponent` that never throws: a hand-typed address like `#/campaigns/%` stays as typed (then is "not found"). */
 export function safeDecode(part) {
   try {
@@ -21,6 +20,7 @@ export function safeDecode(part) {
   }
 }
 
+/** True only for a value the API actually sent. `0` and `false` are values; `null` is not. */
 export const present = (v) => v !== null && v !== undefined && v !== "";
 
 /** A value, or the em dash. `fmt` only ever runs on a value that is present. */
