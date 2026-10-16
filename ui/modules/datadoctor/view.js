@@ -213,13 +213,14 @@ export function questionHtml(
     .filter((o) => !(dk && dk.own && o.option_id === dk.option.option_id))
     .map((o) => {
       const chosen = q.answer === o.option_id;
-      const effect = measured(o);
+      // What choosing it does, in words (the rules' or the AI's, checked by code), then the counts code measured.
+      const effect = [o.effect ? userTextIn(o.effect, names) : "", esc(measured(o))].filter(Boolean).join(" · ");
       return `<li class="dds-opt${chosen ? " is-chosen" : ""}">${button({
         label: o.label,
         kind: chosen ? "primary" : "secondary",
         attrs: `data-dds-answer="${esc(o.option_id)}" data-dds-q="${id}" aria-pressed="${chosen}"`,
         disabled: busy || chosen,
-      })}${effect ? `<span class="dds-effect">${esc(effect)}</span>` : ""}${o.safe ? `<span class="dds-effect">The safe choice</span>` : ""}</li>`;
+      })}${effect ? `<span class="dds-effect">${effect}</span>` : ""}${o.safe ? `<span class="dds-effect">The safe choice</span>` : ""}</li>`;
     })
     .join("");
   const dontKnow = dk

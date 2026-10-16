@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterable
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -451,3 +452,50 @@ def test_a_meaning_doubt_stops_approval_until_the_person_answers(world: World, s
         expected_version=case.version, actor=ANALYST,
     )  # fmt: skip
     assert not visit.open_blocking(answered) and answered.doubts == case.doubts
+
+
+def _ask_with(effects: list[Any] | None) -> dict[str, Any]:
+    ask = _ask("customer_id")
+    if effects is not None:
+        ask["args"]["effects"] = effects
+    return ask
+
+
+def test_the_models_sentence_for_each_choice_is_kept_when_it_states_no_number(
+    world: World, storage: LocalStorage
+) -> None:
+    said = ["Joins the files on the customer ID.", "Joins the files on the account number."]
+    found, _ = _run(world, storage, Script([_ask_with(said)]))
+    options = found.asks[0].options
+    assert [o.says for o in options[:2]] == said
+    assert options[-1].says == "", "'I don't know' says nothing of its own"
+
+
+def test_a_sentence_with_a_number_or_none_is_dropped_and_the_catalogue_adds_none_of_its_own(
+    world: World, storage: LocalStorage
+) -> None:
+    for effects in (
+        None,
+        ["Drops 4,000 customers.", "Joins the files on the account number."],
+        ["a", "b", "c"],
+    ):
+        found, _ = _run(world, storage, Script([_ask_with(effects)]))
+        says = [o.says for o in found.asks[0].options[:2]]
+        if effects and len(effects) == 2:
+            assert says == ["", effects[1]], "only the sentence with a number is dropped"
+        else:
+            assert says == ["", ""], effects
+
+
+def test_an_answer_with_no_step_says_so_instead_of_claiming_an_outcome(
+    world: World, storage: LocalStorage
+) -> None:
+    from engine.doctor.protocol import NO_STEP, settle
+
+    found, _ = _run(
+        world, storage, Script([_ask_with(["Joins on the customer ID.", "Joins on the account number."])])
+    )
+    settled = settle(found.asks[0], now=datetime(2026, 1, 1, tzinfo=UTC))
+    assert settled.question is not None
+    # An AI-made question carries no step, so answering it changes nothing: the screen may not claim an outcome.
+    assert [o.effect for o in settled.question.options[:2]] == [NO_STEP, NO_STEP]

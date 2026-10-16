@@ -340,12 +340,13 @@ def _guided_ask(question: Question, upload_id: str, rows: int) -> Ask:
         code="GUIDED_DATE_ORDER" if dates else "GUIDED_FORMAT",
         subject={"upload_id": upload_id, "column": column, "text": question.text},
         text=question.text,
-        why="; ".join(o.effect for o in question.options if o.effect),
+        why="",
         options=tuple(
             AskOption(
                 label=option.label,
                 effect=_option_effect(f"c{index}", option.proposal, upload_id),
                 safe=option.proposal is None,
+                says=option.effect,
             )
             for index, option in enumerate(question.options)
         ),
