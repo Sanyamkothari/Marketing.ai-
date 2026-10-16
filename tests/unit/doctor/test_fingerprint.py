@@ -133,7 +133,7 @@ def test_smaller_moves_are_flags_and_notes_not_stops() -> None:
     )
     flag = compare(last.model_copy(update={"customers": 650, "outcome_rate": 0.25}), last, ())
     assert {f.code: f.level for f in flag} == {"FACTS_CUSTOMER_COUNT": "flag", "FACTS_OUTCOME_RATE": "flag"}
-    note = compare(last.model_copy(update={"customers": 850, "outcome_rate": 0.16}), last, ())
+    note = compare(last.model_copy(update={"customers": 850, "outcome_rate": 0.18}), last, ())
     assert {f.code: f.level for f in note} == {"FACTS_CUSTOMER_COUNT": "note", "FACTS_OUTCOME_RATE": "note"}
     assert compare(last.model_copy(update={"customers": 1_050, "outcome_rate": 0.11}), last, ()) == []
 
@@ -284,7 +284,7 @@ def test_a_doubled_or_halved_outcome_rate_and_a_fifth_more_customers_are_flags_n
     assert {f.code: f.level for f in big} == {"FACTS_CUSTOMER_COUNT": "flag", "FACTS_OUTCOME_RATE": "flag"}
     halved = compare(last.model_copy(update={"customers": 4_000, "outcome_rate": 0.06}), last, ())
     assert [(f.code, f.level) for f in halved] == [("FACTS_OUTCOME_RATE", "flag")]
-    small = compare(last.model_copy(update={"customers": 4_300, "outcome_rate": 0.19}), last, ())
+    small = compare(last.model_copy(update={"customers": 4_500, "outcome_rate": 0.2}), last, ())
     assert {f.code: f.level for f in small} == {"FACTS_CUSTOMER_COUNT": "note", "FACTS_OUTCOME_RATE": "note"}
 
 

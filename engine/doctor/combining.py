@@ -87,6 +87,14 @@ def combining_detector(*, clock: Callable[[], datetime] = utc_now) -> DetectorPo
     return detect
 
 
+def _flagged(item: CaseItem) -> bool:
+    """The guards found a stop or a flag on this join or stack."""
+    found = item.payload.get("findings")
+    return isinstance(found, list) and any(
+        isinstance(f, dict) and f.get("level") in {"stop", "flag"} for f in found
+    )
+
+
 def _same_as_last_month(item: CaseItem, before: frozenset[str]) -> CaseItem:
     """A join of the same shape as one approved before (last month's, in a new case) that loses nobody and leaves out
     no more than the protocol allows is ticked, so it is carried like any step. A changed join, or one that needs its
@@ -102,6 +110,7 @@ def _same_as_last_month(item: CaseItem, before: frozenset[str]) -> CaseItem:
         and item.payload.get("needs_yes") is False
         and isinstance(receipt, dict)
         and receipt.get("keys_lost") == 0
+        and not _flagged(item)
         and approve_class_of(item.kind, item.payload) is None
         and marks(item)[0] in before
     ):

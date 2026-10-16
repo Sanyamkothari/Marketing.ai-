@@ -2589,7 +2589,9 @@ def _approval(
             "approved_before": tuple(
                 dict.fromkeys((*visit.approved_before, *approved_marks(items, questions)))
             ),
-            "carry_source": None,  # last month's approval only starts the case; this approval is its own now
+            # last month's approval starts the case; only a person's own approval makes it theirs. A carried one keeps the
+            # source, so the joined table (round 2) is still judged against last month's before it carries on
+            "carry_source": visit.carry_source if carried_from is not None else None,
         },
         within=_recorded(deps, DATA_PRESCRIPTION_APPROVED, actor, body, approval),
         carried=carried_from is not None,

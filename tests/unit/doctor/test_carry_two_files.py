@@ -116,3 +116,21 @@ def test_a_step_on_a_column_the_join_built_is_not_called_missing_but_a_raw_one_i
 
     assert missing(_customers()) == ()  # `orders_90d` is built by the join: it is not in the raw files
     assert missing(_customers().drop(columns=["region"])) == ("region",)
+
+
+def _more_customers(n: int) -> pd.DataFrame:
+    base = _customers()
+    more = base.iloc[[k % len(base) for k in range(n)]].copy()
+    more["customer_id"] = [f"C-{k:05d}" for k in range(1, n + 1)]
+    return more.reset_index(drop=True)
+
+
+def test_a_flag_on_the_joined_table_is_seen_by_a_person_even_after_the_join_was_carried(
+    tmp_path: Path,
+) -> None:
+    day, _first = _two_months(tmp_path)
+    # the same files, a third more customers: the join is carried, but the flag on the joined table still waits
+    case = _month_two(day, _more_customers(400), _orders(strangers=10))
+    assert case.state is not VisitState.FOLLOW_UP
+    assert any("customers" in d.because.lower() for d in case.doubts)
+    assert not any(a.text_shown.startswith("Carried on") for a in case.approvals[1:])

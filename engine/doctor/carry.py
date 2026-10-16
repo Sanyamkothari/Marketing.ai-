@@ -238,9 +238,10 @@ def last_month(
     approved_before = (prior.visit or CaseVisit()).approved_before
     have = set().union(*wanted)
     # like with like: the files are raw now, so only the steps on last month's raw files say what is missing (a
-    # step on a column the approved join built is judged on the joined table, once it is built)
-    built = {f.upload_id for f in prior.files if f.original_upload_id}
-    raw_now = not any(f.original_upload_id for f in case.files)
+    # step on a column the approved join built is not asked of raw files; the joined table is still compared with
+    # last month's once it is built, because a carried approval keeps its source)
+    built = {f.upload_id for f in prior.files if f.original_upload_id and not f.sheet}
+    raw_now = not any(f.original_upload_id and not f.sheet for f in case.files)
     asked = [i for i in prior.items if (i.upload_id in built) is not raw_now]
     steps = [s for i in asked if isinstance(s := i.payload.get("step"), dict)]
     made = {s["new_column"] for s in steps if isinstance(s.get("new_column"), str)}

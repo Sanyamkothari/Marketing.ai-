@@ -149,7 +149,7 @@ class Fingerprint(StrictBase):
     date_last: str | None = Field(default=None, description="The newest date in the file (ISO).")
     derived: bool = Field(
         default=False,
-        description="A table the Doctor made (a join, a stack, a sheet), not an upload as it came: it is compared "
+        description="A table the Doctor made (a join, a stack), not an upload as it came: it is compared "
         "only with the same kind of table.",
     )
     columns: tuple[ColumnPrint, ...] = ()
@@ -428,9 +428,9 @@ def _level(change: float, band: float, *, ratio: bool, flag: float | None = None
         return (
             "stop"
             if change > band**2
-            else "flag" if change > line else "note" if change > line**0.75 else None
+            else "flag" if change > line else "note" if change > band**0.75 else None
         )
-    return "stop" if change > 2 * band else "flag" if change > line else "note" if change > line / 3 else None
+    return "stop" if change > 2 * band else "flag" if change > line else "note" if change > band / 3 else None
 
 
 def _worst(*levels: Level | None) -> Level | None:
@@ -709,7 +709,9 @@ def _current(
         brief=brief,
         at=at,
         actor=actor,
-        derived=any(f.upload_id == loaded.upload_id and f.original_upload_id for f in case.files),
+        derived=any(
+            f.upload_id == loaded.upload_id and f.original_upload_id and not f.sheet for f in case.files
+        ),
     )
 
 
