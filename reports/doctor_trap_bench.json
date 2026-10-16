@@ -336,6 +336,7 @@
   "failed": 4,
   "guessed_answers": 0,
   "k": 2,
+  "key_over_recommendation": 0,
   "model": "rules",
   "passed": 26,
   "results": [
@@ -420,7 +421,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 120,
-          "seconds": 2.82,
+          "seconds": 2.41,
           "shown_right": true
         },
         {
@@ -494,7 +495,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 120,
-          "seconds": 0.71,
+          "seconds": 0.76,
           "shown_right": true
         }
       ],
@@ -575,7 +576,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 0.7,
+          "seconds": 0.73,
           "shown_right": null
         },
         {
@@ -638,7 +639,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 0.7,
+          "seconds": 0.68,
           "shown_right": null
         }
       ],
@@ -700,6 +701,16 @@
               "did": "answered",
               "what": "Q23_WHO_CAN_RESPOND: Yes, leave them out of the outcome",
               "why": "recommended"
+            },
+            {
+              "did": "said yes to the stop",
+              "what": "PLAN_LOSES_TOO_MUCH: Together the steps lose 48 of 120 customers (40.0%), more than 5%. Most from step 2. By outcome, 0: 48.",
+              "why": "answer key"
+            },
+            {
+              "did": "said yes to the stop",
+              "what": "PLAN_MOVES_OUTCOME_RATE: The outcome rate moves from 14.2% to 23.6% (+9.4 points), more than 1. Biggest moves: step 2.",
+              "why": "answer key"
             }
           ],
           "combined": false,
@@ -720,7 +731,7 @@
             "Q23_WHO_CAN_RESPOND"
           ],
           "rows": 72,
-          "seconds": 0.85,
+          "seconds": 0.88,
           "shown_right": true
         },
         {
@@ -764,6 +775,16 @@
               "did": "answered",
               "what": "Q23_WHO_CAN_RESPOND: Yes, leave them out of the outcome",
               "why": "recommended"
+            },
+            {
+              "did": "said yes to the stop",
+              "what": "PLAN_LOSES_TOO_MUCH: Together the steps lose 48 of 120 customers (40.0%), more than 5%. Most from step 2. By outcome, 0: 48.",
+              "why": "answer key"
+            },
+            {
+              "did": "said yes to the stop",
+              "what": "PLAN_MOVES_OUTCOME_RATE: The outcome rate moves from 14.2% to 23.6% (+9.4 points), more than 1. Biggest moves: step 2.",
+              "why": "answer key"
             }
           ],
           "combined": false,
@@ -784,7 +805,7 @@
             "Q23_WHO_CAN_RESPOND"
           ],
           "rows": 72,
-          "seconds": 1.04,
+          "seconds": 0.83,
           "shown_right": true
         }
       ],
@@ -846,6 +867,11 @@
               "did": "answered",
               "what": "TRAINING_BUDGET: Balanced (about 2 min, recommended)",
               "why": "recommended"
+            },
+            {
+              "did": "said yes to the stop",
+              "what": "PLAN_LOSES_TOO_MUCH: Together the steps lose 22 of 110 customers (20.0%), more than 5%. Most from step 1.",
+              "why": "answer key"
             }
           ],
           "combined": false,
@@ -876,7 +902,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 100,
-          "seconds": 1.13,
+          "seconds": 1.23,
           "shown_right": null
         },
         {
@@ -920,6 +946,11 @@
               "did": "answered",
               "what": "TRAINING_BUDGET: Balanced (about 2 min, recommended)",
               "why": "recommended"
+            },
+            {
+              "did": "said yes to the stop",
+              "what": "PLAN_LOSES_TOO_MUCH: Together the steps lose 22 of 110 customers (20.0%), more than 5%. Most from step 1.",
+              "why": "answer key"
             }
           ],
           "combined": false,
@@ -950,7 +981,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 100,
-          "seconds": 1.09,
+          "seconds": 1.12,
           "shown_right": null
         }
       ],
@@ -1036,7 +1067,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 60,
-          "seconds": 0.83,
+          "seconds": 0.92,
           "shown_right": null
         },
         {
@@ -1104,7 +1135,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 60,
-          "seconds": 0.95,
+          "seconds": 0.89,
           "shown_right": null
         }
       ],
@@ -1194,7 +1225,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 40,
-          "seconds": 0.42,
+          "seconds": 0.43,
           "shown_right": true
         },
         {
@@ -1266,7 +1297,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 40,
-          "seconds": 0.44,
+          "seconds": 0.46,
           "shown_right": true
         }
       ],
@@ -1346,7 +1377,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 60,
-          "seconds": 0.68,
+          "seconds": 0.67,
           "shown_right": true
         },
         {
@@ -1408,7 +1439,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 60,
-          "seconds": 0.71,
+          "seconds": 0.56,
           "shown_right": true
         }
       ],
@@ -1485,7 +1516,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 10,
-          "seconds": 0.38,
+          "seconds": 0.37,
           "shown_right": true
         },
         {
@@ -1642,7 +1673,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 0.77,
+          "seconds": 0.75,
           "shown_right": null
         },
         {
@@ -1720,7 +1751,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 0.78,
+          "seconds": 0.73,
           "shown_right": null
         }
       ],
@@ -1806,7 +1837,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 60,
-          "seconds": 0.67,
+          "seconds": 0.81,
           "shown_right": null
         },
         {
@@ -1874,7 +1905,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 60,
-          "seconds": 0.7,
+          "seconds": 0.68,
           "shown_right": null
         }
       ],
@@ -1935,6 +1966,11 @@
               "did": "answered",
               "what": "TRAINING_BUDGET: Balanced (about 2 min, recommended)",
               "why": "recommended"
+            },
+            {
+              "did": "said yes to the stop",
+              "what": "PLAN_LOSES_TOO_MUCH: Together the steps lose 12 of 60 customers (20.0%), more than 5%. Most from step 1. By outcome, 0: 12.",
+              "why": "answer key"
             }
           ],
           "combined": false,
@@ -1955,7 +1991,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 48,
-          "seconds": 0.83,
+          "seconds": 0.75,
           "shown_right": true
         },
         {
@@ -1998,6 +2034,11 @@
               "did": "answered",
               "what": "TRAINING_BUDGET: Balanced (about 2 min, recommended)",
               "why": "recommended"
+            },
+            {
+              "did": "said yes to the stop",
+              "what": "PLAN_LOSES_TOO_MUCH: Together the steps lose 12 of 60 customers (20.0%), more than 5%. Most from step 1. By outcome, 0: 12.",
+              "why": "answer key"
             }
           ],
           "combined": false,
@@ -2018,7 +2059,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 48,
-          "seconds": 0.75,
+          "seconds": 0.68,
           "shown_right": true
         }
       ],
@@ -2085,6 +2126,11 @@
               "did": "answered",
               "what": "TRAINING_BUDGET: Balanced (about 2 min, recommended)",
               "why": "recommended"
+            },
+            {
+              "did": "said yes to the stop",
+              "what": "PLAN_LOSES_TOO_MUCH: Together the steps lose 65 of 95 customers (68.4%), more than 5%. Most from step 2, step 1. By outcome, 0: 65.",
+              "why": "answer key"
             }
           ],
           "combined": false,
@@ -2111,7 +2157,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 30,
-          "seconds": 2.02,
+          "seconds": 2.21,
           "shown_right": true
         },
         {
@@ -2160,6 +2206,11 @@
               "did": "answered",
               "what": "TRAINING_BUDGET: Balanced (about 2 min, recommended)",
               "why": "recommended"
+            },
+            {
+              "did": "said yes to the stop",
+              "what": "PLAN_LOSES_TOO_MUCH: Together the steps lose 65 of 95 customers (68.4%), more than 5%. Most from step 2, step 1. By outcome, 0: 65.",
+              "why": "answer key"
             }
           ],
           "combined": false,
@@ -2186,7 +2237,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 30,
-          "seconds": 2.31,
+          "seconds": 2.13,
           "shown_right": true
         }
       ],
@@ -2255,6 +2306,11 @@
               "did": "answered",
               "what": "TRAINING_BUDGET: Balanced (about 2 min, recommended)",
               "why": "recommended"
+            },
+            {
+              "did": "said yes to the stop",
+              "what": "PLAN_LOSES_TOO_MUCH: Together the steps lose 29 of 60 customers (48.3%), more than 5%. Most from step 1.",
+              "why": "answer key"
             }
           ],
           "combined": false,
@@ -2302,7 +2358,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 60,
-          "seconds": 1.08,
+          "seconds": 0.94,
           "shown_right": null
         },
         {
@@ -2353,6 +2409,11 @@
               "did": "answered",
               "what": "TRAINING_BUDGET: Balanced (about 2 min, recommended)",
               "why": "recommended"
+            },
+            {
+              "did": "said yes to the stop",
+              "what": "PLAN_LOSES_TOO_MUCH: Together the steps lose 29 of 60 customers (48.3%), more than 5%. Most from step 1.",
+              "why": "answer key"
             }
           ],
           "combined": false,
@@ -2400,7 +2461,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 60,
-          "seconds": 1.06,
+          "seconds": 1.14,
           "shown_right": null
         }
       ],
@@ -2462,6 +2523,11 @@
               "did": "answered",
               "what": "TRAINING_BUDGET: Balanced (about 2 min, recommended)",
               "why": "recommended"
+            },
+            {
+              "did": "said yes to the stop",
+              "what": "PLAN_LOSES_TOO_MUCH: Together the steps lose 19 of 50 customers (38.0%), more than 5%. Most from step 1.",
+              "why": "answer key"
             }
           ],
           "combined": false,
@@ -2519,7 +2585,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 50,
-          "seconds": 1.05,
+          "seconds": 1.01,
           "shown_right": null
         },
         {
@@ -2563,6 +2629,11 @@
               "did": "answered",
               "what": "TRAINING_BUDGET: Balanced (about 2 min, recommended)",
               "why": "recommended"
+            },
+            {
+              "did": "said yes to the stop",
+              "what": "PLAN_LOSES_TOO_MUCH: Together the steps lose 19 of 50 customers (38.0%), more than 5%. Most from step 1.",
+              "why": "answer key"
             }
           ],
           "combined": false,
@@ -2620,7 +2691,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 50,
-          "seconds": 1.27,
+          "seconds": 0.97,
           "shown_right": null
         }
       ],
@@ -2705,7 +2776,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 0.72,
+          "seconds": 0.66,
           "shown_right": null
         },
         {
@@ -2772,7 +2843,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 0.7,
+          "seconds": 0.82,
           "shown_right": null
         }
       ],
@@ -2858,7 +2929,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 0.72,
+          "seconds": 0.65,
           "shown_right": null
         },
         {
@@ -2926,7 +2997,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 0.73,
+          "seconds": 0.76,
           "shown_right": null
         }
       ],
@@ -2987,6 +3058,16 @@
               "did": "answered",
               "what": "Q23_WHO_CAN_RESPOND: Yes, leave them out of the outcome",
               "why": "recommended"
+            },
+            {
+              "did": "said yes to the stop",
+              "what": "PLAN_LOSES_TOO_MUCH: Together the steps lose 30 of 100 customers (30.0%), more than 5%. Most from step 1. By outcome, 1: 30.",
+              "why": "answer key"
+            },
+            {
+              "did": "said yes to the stop",
+              "what": "PLAN_MOVES_OUTCOME_RATE: The outcome rate moves from 48.0% to 25.7% (-22.3 points), more than 1. Biggest moves: step 1.",
+              "why": "answer key"
             }
           ],
           "combined": false,
@@ -3012,7 +3093,7 @@
             "Q23_WHO_CAN_RESPOND"
           ],
           "rows": 70,
-          "seconds": 1.08,
+          "seconds": 0.85,
           "shown_right": true
         },
         {
@@ -3055,6 +3136,16 @@
               "did": "answered",
               "what": "Q23_WHO_CAN_RESPOND: Yes, leave them out of the outcome",
               "why": "recommended"
+            },
+            {
+              "did": "said yes to the stop",
+              "what": "PLAN_LOSES_TOO_MUCH: Together the steps lose 30 of 100 customers (30.0%), more than 5%. Most from step 1. By outcome, 1: 30.",
+              "why": "answer key"
+            },
+            {
+              "did": "said yes to the stop",
+              "what": "PLAN_MOVES_OUTCOME_RATE: The outcome rate moves from 48.0% to 25.7% (-22.3 points), more than 1. Biggest moves: step 1.",
+              "why": "answer key"
             }
           ],
           "combined": false,
@@ -3080,7 +3171,7 @@
             "Q23_WHO_CAN_RESPOND"
           ],
           "rows": 70,
-          "seconds": 0.88,
+          "seconds": 0.85,
           "shown_right": true
         }
       ],
@@ -3161,7 +3252,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 120,
-          "seconds": 0.64,
+          "seconds": 0.73,
           "shown_right": true
         },
         {
@@ -3222,7 +3313,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 120,
-          "seconds": 0.58,
+          "seconds": 0.57,
           "shown_right": true
         }
       ],
@@ -3308,7 +3399,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 0.94,
+          "seconds": 0.78,
           "shown_right": true
         },
         {
@@ -3376,7 +3467,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 0.77,
+          "seconds": 0.78,
           "shown_right": true
         }
       ],
@@ -3462,7 +3553,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 0.69,
+          "seconds": 0.86,
           "shown_right": true
         },
         {
@@ -3530,7 +3621,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 0.72,
+          "seconds": 0.7,
           "shown_right": true
         }
       ],
@@ -3611,7 +3702,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 120,
-          "seconds": 0.65,
+          "seconds": 0.48,
           "shown_right": true
         },
         {
@@ -3672,7 +3763,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 120,
-          "seconds": 0.55,
+          "seconds": 0.5,
           "shown_right": true
         }
       ],
@@ -3733,6 +3824,16 @@
               "did": "answered",
               "what": "THIN_LAST_PERIOD: Leave them out",
               "why": "recommended"
+            },
+            {
+              "did": "said yes to the stop",
+              "what": "PLAN_LOSES_TOO_MUCH: Together the steps lose 30 of 210 customers (14.3%), more than 5%. Most from step 1. By outcome, 0: 29, 1: 1.",
+              "why": "answer key"
+            },
+            {
+              "did": "said yes to the stop",
+              "what": "PLAN_MOVES_OUTCOME_RATE: The outcome rate moves from 20.0% to 22.8% (+2.8 points), more than 1. Biggest moves: step 1.",
+              "why": "answer key"
             }
           ],
           "combined": false,
@@ -3758,7 +3859,7 @@
             "THIN_LAST_PERIOD"
           ],
           "rows": 180,
-          "seconds": 1.15,
+          "seconds": 1.2,
           "shown_right": true
         },
         {
@@ -3801,6 +3902,16 @@
               "did": "answered",
               "what": "THIN_LAST_PERIOD: Leave them out",
               "why": "recommended"
+            },
+            {
+              "did": "said yes to the stop",
+              "what": "PLAN_LOSES_TOO_MUCH: Together the steps lose 30 of 210 customers (14.3%), more than 5%. Most from step 1. By outcome, 0: 29, 1: 1.",
+              "why": "answer key"
+            },
+            {
+              "did": "said yes to the stop",
+              "what": "PLAN_MOVES_OUTCOME_RATE: The outcome rate moves from 20.0% to 22.8% (+2.8 points), more than 1. Biggest moves: step 1.",
+              "why": "answer key"
             }
           ],
           "combined": false,
@@ -3826,7 +3937,7 @@
             "THIN_LAST_PERIOD"
           ],
           "rows": 180,
-          "seconds": 1.25,
+          "seconds": 0.97,
           "shown_right": true
         }
       ],
@@ -3907,7 +4018,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 120,
-          "seconds": 0.58,
+          "seconds": 0.52,
           "shown_right": true
         },
         {
@@ -3968,7 +4079,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 120,
-          "seconds": 0.66,
+          "seconds": 0.59,
           "shown_right": true
         }
       ],
@@ -4029,6 +4140,11 @@
               "did": "answered",
               "what": "TRAINING_BUDGET: Balanced (about 2 min, recommended)",
               "why": "recommended"
+            },
+            {
+              "did": "said yes to the stop",
+              "what": "PLAN_LOSES_TOO_MUCH: Together the steps lose 30 of 120 customers (25.0%), more than 5%. Most from step 1. By outcome, 0: 24, 1: 6.",
+              "why": "answer key"
             }
           ],
           "combined": false,
@@ -4054,7 +4170,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 90,
-          "seconds": 0.94,
+          "seconds": 0.97,
           "shown_right": true
         },
         {
@@ -4097,6 +4213,11 @@
               "did": "answered",
               "what": "TRAINING_BUDGET: Balanced (about 2 min, recommended)",
               "why": "recommended"
+            },
+            {
+              "did": "said yes to the stop",
+              "what": "PLAN_LOSES_TOO_MUCH: Together the steps lose 30 of 120 customers (25.0%), more than 5%. Most from step 1. By outcome, 0: 24, 1: 6.",
+              "why": "answer key"
             }
           ],
           "combined": false,
@@ -4122,7 +4243,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 90,
-          "seconds": 1.08,
+          "seconds": 0.81,
           "shown_right": true
         }
       ],
@@ -4219,7 +4340,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 40,
-          "seconds": 1.12,
+          "seconds": 1.07,
           "shown_right": true
         },
         {
@@ -4298,7 +4419,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 40,
-          "seconds": 1.08,
+          "seconds": 1.2,
           "shown_right": true
         }
       ],
@@ -4372,7 +4493,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 60,
-          "seconds": 0.56,
+          "seconds": 0.41,
           "shown_right": null
         },
         {
@@ -4428,7 +4549,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 60,
-          "seconds": 0.54,
+          "seconds": 0.41,
           "shown_right": null
         }
       ],
@@ -4502,7 +4623,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 0.54,
+          "seconds": 0.66,
           "shown_right": null
         },
         {
@@ -4558,7 +4679,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 0.64,
+          "seconds": 0.46,
           "shown_right": null
         }
       ],
@@ -4722,7 +4843,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 1.06,
+          "seconds": 0.76,
           "shown_right": true
         }
       ],
@@ -4809,7 +4930,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 90,
-          "seconds": 0.85,
+          "seconds": 0.7,
           "shown_right": null
         },
         {
@@ -4878,7 +4999,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 90,
-          "seconds": 0.78,
+          "seconds": 0.67,
           "shown_right": null
         }
       ],
@@ -4959,7 +5080,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 124,
-          "seconds": 1.63,
+          "seconds": 1.56,
           "shown_right": true
         },
         {
@@ -5022,7 +5143,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 124,
-          "seconds": 1.64,
+          "seconds": 1.44,
           "shown_right": true
         }
       ],
@@ -5033,6 +5154,17 @@
       "theme": "Double counting and wrong grain",
       "untested": false
     }
+  ],
+  "said_yes_to_a_stop": [
+    "c09_already_hold_product",
+    "crit03_dup_and_drop",
+    "k15_failed_payments",
+    "k16_ticket_status_log",
+    "k1_merged_prefixes",
+    "k3_shared_phone",
+    "s01_never_active",
+    "t07_immature_last_month",
+    "t15_partial_last_month"
   ],
   "shown_defined": 18,
   "shown_right": 18,

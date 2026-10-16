@@ -11,10 +11,11 @@ Two drivers walk the visit:
 
 * **person** (the default, the number to track) acts like a careful person who does not know the product's insides:
   it accepts what the product pre-ticks; it leaves an unticked suggestion unticked unless the case's answer key
-  (`person.tick`) says a person who knows their business would tick it; it answers every question that has a
-  recommended option with that option, and a question the product could not recommend (a business fact only the
-  person knows) with the answer key's choice (`answers`), saying "I don't know" where the key says the person would
-  not know; a blocking question with neither gets the first option offered (counted in the report as a guess);
+  (`person.tick`) says a person who knows their business would tick it; it answers a question the answer key covers
+  (`answers`: a business fact only the person knows, or "I don't know" where the person would not know) with the
+  key's choice (the report counts any key answer that overrides a recommendation), every other question that has a
+  recommended option with that option, and a blocking question with neither with the first option offered (counted
+  in the report as a guess); it says yes to a safety stop only where the key names it (listed in the report);
 * **tick-all** (`--tick-all`, the old behaviour, kept for comparison) answers only blocking questions and ticks
   every pending suggestion. It flatters the product: a leak column the product leaves unticked is dropped anyway.
 
@@ -279,7 +280,10 @@ def _person_choice(case: TrapCase, question: Any) -> tuple[Any, str] | None:
     if wanted:
         for option in question.options:
             if option.label.lower().startswith(wanted.lower()):
-                return option, ("dont_know" if wanted.lower().startswith("i don't know") else "answer key")
+                why = "dont_know" if wanted.lower().startswith("i don't know") else "answer key"
+                if question.recommended not in (None, option.option_id):
+                    why += " (over the product's recommendation)"  # counted in the report
+                return option, why
     for option in question.options:
         if option.option_id == question.recommended:
             return option, "recommended"
@@ -398,6 +402,13 @@ def _drive(
             stops = open_stops(state.plan_check, state.acknowledged) if state is not None else []
             wanted = [s for s in stops if case.answers.get(s.code, "").lower().startswith("acknowledge")]
             if wanted:
+                choices.append(
+                    {
+                        "did": "said yes to the stop",
+                        "what": f"{wanted[0].code}: {wanted[0].text}",
+                        "why": "answer key",
+                    }
+                )
                 current = visit.acknowledge_stop(
                     CLIENT, now.case_id, wanted[0].key, deps, expected_version=now.version, actor=ANALYST,
                     reason="the bench's answer key says to go on",
@@ -414,7 +425,7 @@ def _drive(
                 return now
             continue
         return now
-    return store.get(CLIENT, current.case_id)
+    raise BenchError(f"the visit did not finish in {MAX_TURNS} turns")
 
 
 def _text(value: Any) -> str:
@@ -1167,6 +1178,10 @@ def run_bench(
         by_category[key] = {"graded": len(graded), "failed": sum(1 for c in graded if not c["passed"])}
     shown = [r["shown_right"] for r in results if r["shown_right"] is not None]
     guesses = sum(1 for r in results for c in r["runs"][0]["choices"] if c["why"].startswith("first offered"))
+    overrides = sum(1 for r in results for c in r["runs"][0]["choices"] if "over the product's" in c["why"])
+    stopped = [
+        r["id"] for r in results if any(c["did"] == "said yes to the stop" for c in r["runs"][0]["choices"])
+    ]
     return {
         "bench": "doctor_trap_bench",
         "version": 1,
@@ -1181,6 +1196,8 @@ def run_bench(
         "shown_right": sum(1 for s in shown if s),
         "shown_defined": len(shown),
         "guessed_answers": guesses,
+        "key_over_recommendation": overrides,
+        "said_yes_to_a_stop": stopped,
         "by_category": by_category,
         "results": results,
     }
@@ -1281,7 +1298,12 @@ def render_markdown(report: Mapping[str, Any]) -> str:
     if driver != "tick-all":
         lines += [
             f"Blocking questions with neither a recommended option nor an answer in the key, answered with the first "
-            f"option offered (a guess): {report['guessed_answers']}.",
+            f"option offered (a guess): {report['guessed_answers']}. Answers where the key overrode the "
+            f"product's recommended option: {report.get('key_over_recommendation', 0)}.",
+            "",
+            f"Traps where the person said yes to a safety stop because the key says the loss is what they meant "
+            f"({len(report.get('said_yes_to_a_stop', []))}): {', '.join(report.get('said_yes_to_a_stop', [])) or 'none'}. "
+            "Without that yes the visit cannot be approved, so these passes rest on the key's judgement.",
             "",
         ]
     lines += [
@@ -1405,12 +1427,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--model", choices=("rules", "product"), default="rules", help="product: reserved")
     parser.add_argument("--out", type=Path, default=DEFAULT_OUT, help="report path without extension")
     parser.add_argument("--list", action="store_true", help="list the cases and stop")
-    parser.add_argument(
+    only = parser.add_mutually_exclusive_group()
+    only.add_argument(
         "--tick-all",
         action="store_true",
         help="only the old driver: answer blocking questions, tick everything",
     )
-    parser.add_argument(
+    only.add_argument(
         "--no-compare", action="store_true", help="only the person-like driver (skip the tick-all comparison)"
     )
     args = parser.parse_args(argv)
