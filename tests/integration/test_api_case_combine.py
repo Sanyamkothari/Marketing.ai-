@@ -58,7 +58,7 @@ def test_an_approved_join_becomes_the_cases_one_stored_table(client: TestClient,
     case: dict[str, Any] = client.post("/cases", json={"upload_ids": ids}).json()
     case = client.post(f"/cases/{case['case_id']}/visit", json={}).json()
     item = next(i for i in case["items"] if i["kind"] == "build_dataset")
-    assert "50 customers have no orders; they stay, with 0 orders" in item["title"]
+    assert "50 customers have no rows in orders.csv; they stay, with 0." in item["title"]
 
     ticked = client.post(  # nobody is lost: ticked like any change, no yes of its own
         f"/cases/{case['case_id']}/decisions",

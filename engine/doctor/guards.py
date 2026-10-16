@@ -248,8 +248,8 @@ def infer_key(before: pd.DataFrame, after: pd.DataFrame) -> str | None:
 
 
 _LOG_ROW_ID: Final[re.Pattern[str]] = re.compile(
-    r"^(order|tag|call|payment|pay|ticket|complaint|log|record|event|txn|transaction|invoice|bill|visit|session|"
-    r"click|message|msg|entry|snapshot|usage|claim)s?[_\s-]?(id|no|num|number|code|ref|key)$",
+    r"^(order|tag|call|payment|pay|ticket|complaint|event|txn|transaction|invoice|bill|visit|session|"
+    r"click|message|msg|claim)s?[_\s-]?(id|no|num|number|code|ref|key)$",
     re.I,
 )
 

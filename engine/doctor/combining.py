@@ -7,8 +7,8 @@ One detector (`engine.doctor.visit.DetectorPort`) reads how the case's files fit
   customer column: one `build_dataset` item, never ticked for the person, that combines them into one row per
   customer. It says in plain words how many customers were matched ("7,950 of 8,214 customers matched"), how many
   log rows belong to nobody on the list, and how the IDs are made to meet (`C-00123` against `123`). A customer with
-  no log rows stays, with 0; when nobody is lost it asks no yes of its own, otherwise (or when it cannot be counted)
-  it needs one, because it replaces the files with one table.
+  no log rows stays, with 0. It needs its own yes, because it replaces the files with one table, unless nobody is
+  lost and it leaves out no more than the protocol's 2% of the log rows (rows of people not on the list).
 * **A stack** when files are the same report for different months: one `stack_files` item. A row two exports both
   hold is counted once, and the item says how many.
 * **A question, not a proposal**, when the customer column is not clear: a log whose customers barely meet the
@@ -24,7 +24,6 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import replace
 from datetime import datetime
-from pathlib import Path
 from typing import TYPE_CHECKING, Final
 
 from pydantic import JsonValue, ValidationError
@@ -110,12 +109,6 @@ def _propose(
 def _names(ids: tuple[str, ...], loaded: dict[str, LoadedFile]) -> str:
     names = [loaded[u].file_name or u for u in ids]
     return names[0] if len(names) == 1 else f"{', '.join(names[:-1])} and {names[-1]}"
-
-
-def _log_words(ids: tuple[str, ...], loaded: dict[str, LoadedFile]) -> tuple[str, str]:
-    """What the logs hold, in the person's words from their file names: ("orders or payments", "orders and payments")."""
-    words = list(dict.fromkeys(Path(loaded[u].file_name or u).stem.replace("_", " ") for u in ids))
-    return " or ".join(words), " and ".join(words)
 
 
 def _sampled(diagnosis: Diagnosis, loaded: dict[str, LoadedFile], ids: tuple[str, ...]) -> str:
@@ -251,14 +244,14 @@ def _join_item(
         pass
     title = f"Combine {lists} with {logs_named} into one table with one row per customer:"
     if nobody_lost:  # a join onto the customer list keeps every customer; one with no log rows stays with 0
-        kind = _log_words(log_ids, loaded)
         title += (
-            f" {total - matched:,} customers have no {kind[0]}; they stay, with 0 {kind[1]}."
+            f" {total - matched:,} customers have no rows in {logs_named}; they stay, with 0."
             if total > matched
-            else f" all {total:,} customers have {kind[1]}."
+            else f" all {total:,} customers have rows in {logs_named}."
         )
-        # Every customer stays: this is no loss, so it needs no yes of its own (`protocol.approve_class_of`).
-        payload["rows_in"], payload["rows_out"] = total, total
+        # No customer is lost, but log rows of nobody on the list still are: the protocol's 2% rule on those rows
+        # decides whether this needs a yes (`protocol.approve_class_of`).
+        payload["rows_in"], payload["rows_out"] = rows, rows - left_out
     else:
         title += f" {matched:,} of {total:,} customers matched."
     if left_out:

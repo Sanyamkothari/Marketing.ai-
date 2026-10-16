@@ -15,7 +15,7 @@ Runs that disagreed with each other (person-like): 0. 5 of the passes are untest
 
 Blocking questions with neither a recommended option nor an answer in the key, answered with the first option offered (a guess): 0. Answers where the key overrode the product's recommended option: 0.
 
-Traps where the person said yes to a safety stop because the key says the loss is what they meant (3): c09_already_hold_product, s01_never_active, t07_immature_last_month. Without that yes the visit cannot be approved, so these passes rest on the key's judgement.
+Traps where the person said yes to a safety stop because the key says the loss is what they meant (5): c09_already_hold_product, k16_ticket_status_log, s01_never_active, t07_immature_last_month, t15_partial_last_month. Without that yes the visit cannot be approved, so these passes rest on the key's judgement.
 
 Many traps fail today. That is expected: the bench measures, it does not have to pass.
 
@@ -258,6 +258,7 @@ Expected: 30 tickets, each once with its latest status, or the Doctor asks how t
 - Person answered: THIN_LAST_PERIOD: Leave them out (recommended)
 - Person answered: Q21_ONE_ROW: Keep the latest status per ticket id (recommended)
 - Person answered: TRAINING_BUDGET: Balanced (about 2 min, recommended) (recommended)
+- Person said yes to the stop: PLAN_LOSES_TOO_MUCH: Together the steps lose 65 of 95 customers (68.4%), more than 5%. Most from step 2, step 1. By outcome, 0: 65. (answer key)
 
 ### k1_merged_prefixes (K1, False, merged or missed joins)
 
@@ -381,6 +382,7 @@ Expected: The unfinished month (2026-09) is left out of the outcome, or the Doct
 - pass: the unfinished last month is not counted as 'did not leave'. asked: THIN LAST PERIOD The newest rows of 'snapshot_month' look unfinished. The newest month is 
 - Person answered: TRAINING_BUDGET: Balanced (about 3 min, recommended) (recommended)
 - Person answered: THIN_LAST_PERIOD: Leave them out (recommended)
+- Person said yes to the stop: PLAN_LOSES_TOO_MUCH: Together the steps lose 30 of 210 customers (14.3%), more than 5%. Most from step 1. By outcome, 0: 29, 1: 1. (answer key)
 - Person said yes to the stop: PLAN_MOVES_OUTCOME_RATE: The outcome rate moves from 20.0% to 22.8% (+2.8 points), more than 1. Biggest moves: step 1. (answer key)
 
 ### t13_outcome_from_column (T13, Time travel and leaks the checks miss)
@@ -405,6 +407,7 @@ Expected: The partial month is left out, or the Doctor asks; it is never treated
 - pass: the 12-day month is not used as a full month. asked: THIN LAST PERIOD The newest rows of 'month' look unfinished. The newest month is only part
 - Person answered: THIN_LAST_PERIOD: Leave them out (recommended)
 - Person answered: TRAINING_BUDGET: Balanced (about 2 min, recommended) (recommended)
+- Person said yes to the stop: PLAN_LOSES_TOO_MUCH: Together the steps lose 30 of 120 customers (25.0%), more than 5%. Most from step 1. By outcome, 0: 24, 1: 6. (answer key)
 
 ### v01_paise_vs_rupees (V01, Money and units whose meaning is not in the cells)
 
