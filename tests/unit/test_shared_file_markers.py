@@ -14,7 +14,7 @@ all five had merged, so its `PLAN-E` block follows Phase 3b's (DEC-900), and Pla
 agents) started after Plan E, so its `PLAN-G` block follows Plan E's (DEC-1000). Plan J (product
 value first) was set up after Plan I, so its `PLAN-J` block follows Plan G's in the code files and Plan
 I's in `docs/DECISIONS.md`, the last block either file has (DEC-1300). Plan I and Plan D carry blocks
-of their own in `docs/DECISIONS.md` and `README.md` only; they are not in `PHASES`, so this test does
+of their own in `docs/DECISIONS.md` and the old README only (now `docs/history/README_MILESTONES.md`); they are not in `PHASES`, so this test does
 not pin them. Plan L (Data Doctor) was set up after Plan J, so its `PLAN-L` block follows Plan J's in every
 shared file (DEC-1500). Plan K (agents that check) was set up after Plan L reached `main`, so its
 `PLAN-K` block follows Plan L's in every shared file (DEC-1400). Plan M (a product a marketer
@@ -46,7 +46,7 @@ SHARED_FILES: Final[tuple[str, ...]] = (
     "ui/modules/router.js",
     "Makefile",
     "pyproject.toml",
-    "README.md",
+    "docs/history/README_MILESTONES.md",
     "docs/DECISIONS.md",
 )
 """Every file §4's table calls shared.

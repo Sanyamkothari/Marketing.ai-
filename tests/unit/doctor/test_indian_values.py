@@ -359,3 +359,19 @@ def test_a_proposed_boolean_step_runs_on_a_copy_and_replays() -> None:
     assert run.frame["consent_given"].tolist()[:4] == [1.0, 0.0, 1.0, 0.0]
     assert pd.isna(run.frame["consent_given"].iloc[4])
     assert frame["consent_given"].iloc[0] == "haan"  # the input is never modified
+
+
+@pytest.mark.parametrize(
+    ("yes", "no"),
+    [("✓", "✗"), ("✔", "✘"), ("✅", "❌"), ("☑", "✖"), ("√", "×")],
+)
+def test_tick_and_cross_marks_are_yes_and_no_when_both_are_seen(yes: str, no: str) -> None:
+    assert boolean_word_family(yes) == "hinglish" and boolean_word_family(no) == "hinglish"
+    (proposal,) = propose_indian_booleans(_flags([yes, no, yes, no, yes]), primary_key="customer_id")
+    assert proposal.step is not None and proposal.step.kind is RecipeStepKind.MAP_BOOLEAN
+    assert proposal.step.params == {"true_values": [yes], "false_values": [no]}
+
+
+def test_a_tick_alone_is_never_mapped() -> None:
+    (finding,) = propose_indian_booleans(_flags(["✓", "✓", None]))
+    assert finding.step is None and "both" in finding.reason

@@ -3,15 +3,20 @@ column of rupees and dollars stops with a question instead of being merged."""
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 import numpy as np
 import pandas as pd
+from pydantic import JsonValue
 
-from engine.agent.contracts import ProposalState, RecipeStep, RecipeStepKind
+from engine.agent.advisor import Advice
+from engine.agent.contracts import ProposalState, RecipeStep, RecipeStepKind, SessionStatus, ToolResult
 from engine.config import load_use_case
 from engine.doctor import visit
 from engine.doctor.case import Case
-from engine.doctor.cleaning import cleaning_detector
+from engine.doctor.cleaning import _leak_items, _locale_flag, cleaning_detector
 from engine.doctor.diagnose import Offer
+from engine.doctor.indian_values import LocaleStepProposal
 from engine.doctor.prescription import prescription_from_case
 from engine.storage import LocalStorage
 from tests.unit.doctor import visit_support as vs
@@ -80,3 +85,55 @@ def test_treat_proposes_the_fixes_with_counts_and_stops_on_two_currencies(tmp_pa
     prescription = prescription_from_case(case, storage=storage, files=tuple(w.files.values()))
     applied = {(step.column, step.kind) for recipe in prescription.recipes() for step in recipe.steps}
     assert applied == {key for key, (state, _) in fixes.items() if state is ProposalState.ACCEPTED}
+
+
+# ---------------------------------------------------------------------------
+# C1: leak columns become drop items; a locale finding with no step is a flag, not silence
+# ---------------------------------------------------------------------------
+NOW = datetime(2026, 10, 1, tzinfo=UTC)
+
+
+def _advice_with_leaks(*columns: str) -> Advice:
+    checks: list[JsonValue] = [{"code": "LEAKAGE_SUSPECTED", "column": c} for c in columns]
+    result = ToolResult(evidence_id="e1", tool="check_data", result={"checks": checks}, created_at=NOW)
+    return Advice(
+        status=SessionStatus.READY,
+        tool_results=(result,),
+        proposals=(),
+        questions=(),
+        assumptions=(),
+        engine_hidden=(),
+        stop_reason=None,
+        primary_key=None,
+        target=None,
+    )
+
+
+def test_a_suspected_leak_column_becomes_an_unticked_drop_item() -> None:
+    (item,) = _leak_items(_advice_with_leaks("refund_issued"), "u1", set(), frozenset(), NOW)
+    step = RecipeStep.model_validate(item.payload["step"])
+    assert (step.kind, step.column) == (RecipeStepKind.DROP_COLUMN, "refund_issued")
+    assert "Remove 'refund_issued'" in item.title and item.state is ProposalState.PENDING
+
+
+def test_an_id_named_or_skipped_leak_column_is_not_proposed_for_removal() -> None:
+    advice = _advice_with_leaks("customer_id", "converted", "refund_issued")
+    items = _leak_items(advice, "u1", {"converted"}, frozenset(), NOW)
+    assert [RecipeStep.model_validate(i.payload["step"]).column for i in items] == ["refund_issued"]
+
+
+def test_a_locale_finding_with_no_step_is_a_flag_naming_the_column() -> None:
+    found = LocaleStepProposal(
+        tool="indian_booleans",
+        column="consent",
+        step=None,
+        confidence="check",
+        non_empty=10,
+        convertible=0,
+        failed=0,
+        reason="only one side is written",
+        unknown_words=3,
+    )
+    item = _locale_flag(found, "u1", NOW)
+    assert item.payload["code"] == "LOCALE_UNREAD" and item.payload["level"] == "flag"
+    assert item.payload["column"] == "consent" and "'consent' is left as it is" in item.title

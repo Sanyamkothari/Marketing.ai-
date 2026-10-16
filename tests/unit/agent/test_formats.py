@@ -415,3 +415,26 @@ def test_category_merge_keys_are_the_spellings_the_parser_sees() -> None:
     fixed = normalise_texts(frame["city"], merge=issue.params["merge"], strip=True)
     assert fixed.values.value_counts().to_dict() == {"New Delhi": 9, "Pune": 1}
     assert find_format_issues(pd.DataFrame({"city": fixed.values})) == ()
+
+
+# ---------------------------------------------------------------------------
+# C1: an ID, PIN or leading-zero column is a label, never a number to convert
+# ---------------------------------------------------------------------------
+def _digits_as_text(name: str, values: list[str]) -> pd.DataFrame:
+    return pd.DataFrame({name: values, "other": ["a"] * len(values)})
+
+
+@pytest.mark.parametrize("name", ["customer_id", "Pincode", "PIN Code"])
+def test_a_column_named_like_an_id_or_pin_is_not_proposed_as_numbers(name: str) -> None:
+    frame = _digits_as_text(name, ["110,001", "560,034", "400,001", "700,019"] * 5)
+    assert name not in _kinds(frame)
+
+
+def test_a_column_with_leading_zeros_is_not_proposed_as_numbers() -> None:
+    frame = _digits_as_text("account", ["00123", "00456", "00789", "01234"] * 5)
+    assert "account" not in _kinds(frame)
+
+
+def test_the_same_cells_under_an_ordinary_name_are_still_numbers() -> None:
+    frame = _digits_as_text("orders", ["1,200", "3,400", "5,600", "7,800"] * 5)
+    assert _kinds(frame)["orders"] is FormatIssueKind.NUMBER_AS_TEXT

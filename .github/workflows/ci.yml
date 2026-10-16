@@ -133,12 +133,6 @@ jobs:
         env:
           PYTEST_ADDOPTS: -n auto --junitxml=${{ runner.temp }}/junit-fast.xml   # one worker per core (pytest-xdist)
 
-      # Plan A M39: a milestone the README calls "pending" whose mapped tests just passed fails the
-      # build (scripts/check_readme.py says which, and at which line). It reads the report the step
-      # above wrote rather than running anything again, so it costs a parse, not minutes.
-      - name: make check-readme
-        run: make check-readme JUNIT=${{ runner.temp }}/junit-fast.xml
-
       # M56 (DEC-878): the same report, read for skips. REQUIRE_JSDOM and MARKETING_AI_REQUIRE_POSTGRES
       # turn the skips their fixtures know about into failures; this also catches a skip added
       # later by some other route, and a suite that stopped being selected at all (each pattern
