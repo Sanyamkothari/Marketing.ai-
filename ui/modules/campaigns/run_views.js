@@ -42,7 +42,7 @@ function stepsHtml(steps) {
 }
 
 /** The page for one campaign run as `GET /campaign-runs/{id}` answered it. `error` is a refused restart. */
-export function runPageHtml(view, { canRestart = true, busy = false, error = null } = {}) {
+export function runPageHtml(view, { canRestart = true, busy = false, error = null, headline = "" } = {}) {
   const run = view.record;
   const goal = goalName(run.use_case_id);
   const title = run.state === "done" ? "Your campaign is ready" : "Getting your campaign ready";
@@ -60,9 +60,9 @@ export function runPageHtml(view, { canRestart = true, busy = false, error = nul
     const doctor = run.case_id
       ? button({ label: "What the Doctor did", href: doctorHref(run.case_id), kind: "tertiary", attrs: "data-run-doctor" })
       : "";
-    body = `<p class="cw-p" data-run-summary>The contact list is built. ${
+    body = `${headline ? `<p class="cw-sum-lead" data-run-headline>${esc(headline)}</p>` : ""}<p class="cw-p" data-run-summary>The contact list is built. ${
       run.campaign_id
-        ? "Your results are ready: how many customers to contact, the best of them first, and how well the model did. Look them over, then approve and download."
+        ? "Your results are ready: who to contact, why these customers, and how good the model is. Look them over, then approve and download."
         : "Open it to see who was picked."
     }</p>${stepsHtml(run.steps)}<div class="cw-actions">${button({
       label: run.campaign_id ? "Review and download the list" : "See the contact list",

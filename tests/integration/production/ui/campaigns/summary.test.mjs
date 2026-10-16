@@ -1,6 +1,7 @@
-/* The plain results summary a person sees first when a campaign is ready: how many customers to contact and who was
-   left out, the first customers best first, how well the model did on customers it had not seen, what is not proven
-   yet, "What the Doctor did", and everything else one click away behind "Show technical details". Drawn by the
+/* The plain results summary a person sees first when a campaign is ready, in the order a marketer asks: who to contact
+   (how many, who was left out, the first customers best first), why these customers, how good the model is (one
+   honest sentence, what is not proven yet), what was done to the data (a link to the approved plan), "See more" folds
+   for the detail, and everything else one click away behind "Show technical details". Drawn by the
    wizard's own builders in jsdom from recorded-shape answers. Run through tests/integration/test_campaign_run_results.py. */
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -54,10 +55,18 @@ test("the summary comes first: how many to contact, who was left out and why, in
   assert.equal(app.firstElementChild, $("[data-cw-results]"), "the summary is the first thing on the page");
   assert.equal(text($("[data-cw-sum-contact]")), "1,240 customers to contact of the 8,214 checked");
   const left = $$("[data-cw-sum-excluded] li").map(text);
-  assert.equal(left.length, 3, "only the reasons that hold somebody: comparison group, contact rules, compliance");
+  assert.equal(left.length, 4, "only the reasons that hold somebody: comparison group, contact rules, compliance, not picked");
   assert.match(left[0], /^600 customers: kept back on purpose as the comparison group/);
   assert.match(left[1], /^35 customers: left out by your contact rules/);
   assert.match(left[2], /^12 customers: taken off by the compliance check/);
+  assert.match(left[3], /^6,327 customers: not on the list this time \(the model ranks them lower/, "the rest of the 8,214 are said, so the numbers add up");
+});
+
+test("the list sentence tells the truth about the file: send only the customers marked to contact", () => {
+  draw(review());
+  const line = text($("[data-cw-sum-list]"));
+  assert.match(line, /Send only the customers the file marks to contact, not simply the top of it/);
+  assert.doesNotMatch(line, /come first, then the ones left out/, "held-back and withheld customers are not sorted after the contactable ones");
 });
 
 test("the first customers are a table, best first, with their likelihood, and only the columns that hold something", () => {
@@ -114,7 +123,7 @@ test("what is not proven yet is always said, with the day results can be added",
 test("What the Doctor did opens the case; it is not offered when the list has no case", () => {
   draw(review());
   assert.equal($("[data-cw-sum-doctor]").getAttribute("href"), "#/data/check/case/case_42");
-  assert.equal(text($("[data-cw-sum-doctor]")), "What the Doctor did");
+  assert.equal(text($("[data-cw-sum-doctor]")), "See the approved plan");
   draw(review({ summary: { top, caseId: null } }));
   assert.equal($("[data-cw-sum-doctor]"), null);
   assert.equal(SR.doctorHref("a b"), "#/data/check/case/a%20b");
@@ -163,8 +172,97 @@ test("the progress page, once done, leads to the summary and links to What the D
   });
   draw(RV.runPageHtml(record({ case_id: "case_42" })));
   assert.equal($("[data-run-doctor]").getAttribute("href"), "#/data/check/case/case_42");
-  assert.match(text($("[data-run-summary]")), /how many customers to contact, the best of them first, and how well the model did/);
+  assert.match(text($("[data-run-summary]")), /who to contact, why these customers, and how good the model is/);
   assert.equal($("[data-run-ready]").getAttribute("href"), "#/campaigns/new/review/c_1");
   draw(RV.runPageHtml(record({ case_id: null })));
   assert.equal($("[data-run-doctor]"), null);
+  assert.equal($("[data-run-headline]"), null, "no count is made up while the list's counts are unknown");
+  draw(RV.runPageHtml(record({ case_id: null }), { headline: SR.contactSentence(list) }));
+  assert.equal(text($("[data-run-headline]")), "1,240 customers to contact of the 8,214 checked");
+});
+
+const lift = {
+  mode: "classification",
+  base_rate_pct: 11.6667,
+  bins: [
+    { rows: 60, actual_rate_pct: 58.3333, lift: 5.0 },
+    { rows: 60, actual_rate_pct: 21.6667, lift: 1.8571 },
+    { rows: 60, actual_rate_pct: 11.6667, lift: 1.0 },
+    { rows: 60, actual_rate_pct: 1.6667, lift: 0.14 },
+    { rows: 60, actual_rate_pct: 0, lift: 0 },
+  ],
+};
+const importance = {
+  items: [
+    { feature: "plan_tier", share_pct: 47.9 },
+    { feature: "visits_last_7d", share_pct: 27.6 },
+    { feature: "ad_ctr_90d", share_pct: 16.0 },
+    { feature: "region", share_pct: 6.5 },
+    { feature: "age", share_pct: 0.0 },
+  ],
+};
+
+test("how good the model is: one honest sentence a marketer understands, from the lift of customers it had not seen", () => {
+  assert.equal(
+    SR.liftSentence(lift),
+    "The 20% of customers the model puts first are 5 times as likely as the average customer to have the outcome this goal looks for (58% against 12% for an average customer). Measured on 300 customers the model had not seen while learning.",
+  );
+  draw(review({ summary: { top, caseId: "case_42", story: { lift, importance } } }));
+  assert.match(text($("[data-cw-sum-model]")), /^The 20% of customers the model puts first are 5 times as likely as the average customer/);
+  assert.match(text($("[data-cw-sum-unproven]")), /^Not yet proven:/);
+  // the groups and the model's own measure are one click away, not in the way
+  const fold = $("[data-cw-sum-groups]").closest("details");
+  assert.equal(fold.open, false);
+  assert.equal(text(fold.querySelector("summary")), "See more");
+  assert.equal($$("[data-cw-sum-groups] tbody tr").length, 5);
+  assert.match(text(fold), /the model put a customer who has the outcome above one who does not 78% of the time/);
+  // a ranking no better than average is never sold as a result
+  const flat = { ...lift, bins: [{ rows: 60, actual_rate_pct: 12, lift: 1.02 }, ...lift.bins.slice(1)] };
+  assert.match(SR.liftSentence(flat), /not clearly more likely than the average customer .* so do not rely on this list yet/);
+  // an answer that is not a yes/no ranking falls back to the model's own sentence
+  assert.equal(SR.liftSentence({ mode: "regression", bins: lift.bins }), null);
+  assert.equal(SR.liftSentence(null), null);
+  assert.equal(SR.liftSentence({ ...lift, base_rate_pct: 0 }), null);
+  draw(review({ summary: { top, caseId: "case_42", story: { lift: null, importance: null } } }));
+  assert.match(text($("[data-cw-sum-model]")), /^On customers it had not seen while learning/);
+  assert.equal($("[data-cw-sum-groups]"), null);
+});
+
+test("the caveat says what the numbers do not prove: without a comparison group, only who responds among those contacted", () => {
+  const none = SR.notProvenText("", false);
+  assert.match(none, /No customers are kept back to compare with, so this shows who is likely to respond among the customers you contact, not how many extra sales contacting them brings\./);
+  assert.doesNotMatch(none, /extra customers this campaign brings can be measured/);
+  assert.match(SR.notProvenText("", true), /Some customers are kept back and not contacted, so the extra customers this campaign brings can be measured/);
+  draw(review({ list: { ...list, holdout_rows: null } }));
+  assert.match(text($("[data-cw-sum-unproven]")), /No customers are kept back to compare with/);
+  draw(review({ campaign: { ...campaign, counts: { holdout: 320 } }, list: { ...list, holdout_rows: null } }));
+  assert.match(text($("[data-cw-sum-unproven]")), /Some customers are kept back/, "the campaign's own comparison group counts");
+  assert.match(text($("[data-cw-sum-excluded]")), /320 customers: kept back on purpose as the comparison group/);
+  assert.equal(SR.comparisonRows(null, null), 0);
+});
+
+test("why these customers: what the model relied on most in plain words, three in view and the rest folded", () => {
+  assert.deepEqual(SR.reasonItems(importance), [
+    { name: "Plan tier", share: "48%" },
+    { name: "Visits last 7d", share: "28%" },
+    { name: "Ad ctr 90d", share: "16%" },
+    { name: "Region", share: "7%" },
+  ], "a column that counts for nothing is left out");
+  draw(review({ summary: { top, caseId: "case_42", story: { lift, importance } } }));
+  assert.deepEqual($$("[data-cw-sum-reasons] li").map((li) => text(li).replace(/ \(.*$/, "")), ["Plan tier", "Visits last 7d", "Ad ctr 90d"]);
+  assert.match(text($("[data-cw-sum-reasons] li")), /Plan tier \(48% of what it relied on\)/);
+  assert.equal($$("[data-cw-results] details[data-cw-sum-more]").length, 2, "the other reason and the groups are each behind See more");
+  draw(review());
+  assert.match(text($("[data-cw-sum-why]")), /could not be read for this list/, "a missing file is said, not skipped");
+  assert.equal(SR.columnWords("visits_last_7d"), "Visits last 7d");
+});
+
+test("the card answers in order: who to contact, why these customers, how good the model is, what was done to the data", () => {
+  draw(review({ summary: { top, caseId: "case_42", story: { lift, importance } } }));
+  const heads = $$("[data-cw-results] .cw-sum-h").map(text);
+  assert.deepEqual(heads, ["Who to contact", "Why these customers", "How good the model is", "What was done to your data"]);
+  assert.match(text($("[data-cw-sum-list]")), /Send only the customers the file marks to contact/);
+  assert.deepEqual(findNeverShown(text($("[data-cw-results]"))), {}, "plain words only");
+  draw(review({ summary: { top, caseId: null } }));
+  assert.equal($("[data-cw-sum-data]"), null, "no plan to point to when the file did not come through the Data Doctor");
 });

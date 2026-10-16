@@ -520,8 +520,8 @@ function complianceLine(checked) {
  * when the registry did not answer, which offers nothing). `busy` is the button's label while its calls are on
  * their way, else "".
  *
- * The plain summary comes first (`resultsSummaryHtml`; `summary` is `{ top, caseId }`: the first customers the server
- * gave and the Data Doctor case the file came from), then the check and approve card; the numbers and tables above
+ * The plain summary comes first (`resultsSummaryHtml`; `summary` is `{ top, caseId, story }`: the first customers the server
+ * gave, the Data Doctor case the file came from and the model's lift and importance files), then the check and approve card; the numbers and tables above
  * are folded behind "Show technical details" (`technicalBoxHtml`).
  */
 export function reviewHtml({
@@ -566,6 +566,8 @@ export function reviewHtml({
     list,
     version,
     top: summary && summary.top,
+    story: summary && summary.story,
+    campaign,
     caseId: summary && summary.caseId,
     resultsOn: resultsOn ? dayOf(resultsOn) : "",
   })}${card(

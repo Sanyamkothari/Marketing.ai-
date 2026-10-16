@@ -103,6 +103,16 @@ function tagsHtml(campaign) {
 const counts = (campaign) => (campaign && campaign.counts) || {};
 
 /**
+ * How many customers the campaign contacts: the contact list's own count when the list says it (the file a person
+ * downloads and sends), else the campaign's planned count. The two differ for a list that picks only its best
+ * customers, and the page must not give two numbers for one list.
+ */
+const contacted = (model) => {
+  const n = model.summary && model.summary.treat_rows;
+  return Number.isInteger(n) && n >= 0 ? n : counts(model.campaign).intended_treated;
+};
+
+/**
  * The net value line's label, as `engine/pilot/proof.py` writes it: "Net value", or, for a Pack whose claim is
  * `stated_random`, "If the groups were random as you said: net value" (`_conditional`). Nothing else matches.
  */
@@ -446,7 +456,7 @@ function overviewHtml(model) {
   const tiles = [
     statTile({
       label: isDraft(model) ? "To contact" : "Contacted",
-      value: count(c.intended_treated),
+      value: count(contacted(model)),
       caption: isDraft(model) ? "Customers the campaign is planned for." : "Customers sent the campaign.",
       attrs: "data-tile-contacted",
     }),
@@ -724,8 +734,8 @@ export function campaignPageHtml(model) {
     : wholeProgramme(campaign)
       ? `Every customer contacted, against the customers never contacted, from ${day(campaign.treatment_start)}.`
       : isDraft(model)
-        ? `${goal}: not sent yet, planned for ${customers(counts(campaign).intended_treated)}.`
-        : `${goal}: sent on ${day(campaign.treatment_start)} to ${customers(counts(campaign).intended_treated)}.`;
+        ? `${goal}: not sent yet, planned for ${customers(contacted(model))}.`
+        : `${goal}: sent on ${day(campaign.treatment_start)} to ${customers(contacted(model))}.`;
   const sub =
     campaign.name && campaign.name !== name
       ? `<p class="cp-sub cp-long-name" data-long-name ${USER_TEXT_ATTRIBUTE} title="${esc(campaign.name)}">${esc(campaign.name)}</p>`

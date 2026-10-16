@@ -5,6 +5,7 @@
 import {
   API_BASE,
   ApiError,
+  getArtefact,
   getCostEstimate,
   getIndustries,
   getModels,
@@ -100,6 +101,18 @@ export async function getResultsSummary(scoreRunId, { canSeeNames = true } = {})
   } catch (error) {
     return { caseId, top: { error } };
   }
+}
+
+/**
+ * What the plain summary says about the model, from the run that learned it: how much better than average its first
+ * customers did on customers it had not seen (`decile_lift.json`) and what it relied on most (`feature_importance.json`).
+ * Never rejects: a file this run did not make (or could not be read) is `null`, and the summary leaves that part out.
+ */
+export async function getModelStory(trainRunId) {
+  if (!trainRunId) return null;
+  const read = (name) => getArtefact(trainRunId, name).catch(() => null);
+  const [lift, importance] = await Promise.all([read("decile_lift.json"), read("feature_importance.json")]);
+  return { lift, importance };
 }
 
 /** A scoring run's summary (`scoring_summary.json`): its priorities, counts and average likelihood. */

@@ -5,14 +5,15 @@
 
 import { canAccess } from "../router.js";
 import { errorBox } from "../../dom.js";
-import { getCampaignRun, restartCampaignRun } from "./wizard_api.js";
+import { getCampaignRun, getTreatListSummary, restartCampaignRun } from "./wizard_api.js";
 import { needsCostYes, runHref } from "./run_rules.js";
 import { injectRunStyles, runPageHtml } from "./run_views.js";
+import { contactSentence } from "./summary_rules.js";
 import { injectWizardStyles } from "./wizard_styles.js";
 
 export const RUN_POLL_MS = 3000;
 
-const ui = { seq: 0, timer: null, app: null, id: null, view: null, busy: false, error: null };
+const ui = { seq: 0, timer: null, app: null, id: null, view: null, busy: false, error: null, headline: "", headlineOf: null };
 
 const hashParts = () => window.location.hash.replace(/^#\/?/, "").split("/").filter(Boolean);
 const onPage = (id) => {
@@ -26,7 +27,21 @@ function draw() {
     canRestart: canAccess("POST", "/campaign-runs/{campaign_run_id}/restart"),
     busy: ui.busy,
     error: ui.error,
+    headline: ui.headlineOf === ui.id ? ui.headline : "",
   });
+}
+
+/** "403 customers to contact of the 4,000 checked", once per finished run; a list that cannot be read adds nothing. */
+async function loadHeadline(run, token) {
+  if (ui.headlineOf === run.campaign_run_id || !run.score_run_id) return;
+  try {
+    const sentence = contactSentence(await getTreatListSummary(run.score_run_id));
+    if (token !== ui.seq || !onPage(ui.id) || !sentence) return;
+    Object.assign(ui, { headline: sentence, headlineOf: run.campaign_run_id });
+    draw();
+  } catch {
+    // the page is complete without it
+  }
 }
 
 async function poll(token) {
@@ -36,6 +51,7 @@ async function poll(token) {
     if (token !== ui.seq || !onPage(ui.id)) return;
     ui.view = view;
     draw();
+    if (view.record.state === "done") await loadHeadline(view.record, token);
     if (view.record.state === "running") ui.timer = setTimeout(() => poll(token), RUN_POLL_MS);
   } catch (error) {
     if (token !== ui.seq || !onPage(ui.id)) return;

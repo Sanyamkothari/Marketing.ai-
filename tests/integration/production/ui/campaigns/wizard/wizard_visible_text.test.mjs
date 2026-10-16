@@ -31,8 +31,8 @@ const CAMPAIGN = "c_20261011_c9276210";
 
 /** Answers the recording does not hold, which the wizard asks for and does without (the cost line is left out). */
 const EXPECTED_UNRECORDED = new Set([`GET /use-cases/${UC}/cost-estimate?mode=score`]);
-/** The demo's campaigns were not made by a campaign run, so Review's look-up of the run behind the list finds none. */
-const isRunLookup = (key) => key.startsWith("GET /campaign-runs?");
+/** The demo's campaigns were not made by a campaign run, so Review's look-up of the run behind the list finds none, and the demo's model has no lift or importance file (the summary leaves those parts out). */
+const isRunLookup = (key) => key.startsWith("GET /campaign-runs?") || /^GET \/runs\/[^/]+\/artefacts\/(decile_lift|feature_importance)\.json$/.test(key);
 
 const { w, state, missing } = installDemoPage({ hash: "#/__start" });
 await loadModules();
