@@ -45,7 +45,7 @@ const one = (caseId, tail = "") => `/cases/${enc(caseId)}${tail}`;
 /** `{ case, timeline, view }` (`engine/doctor/screen.py` `CaseScreen`). */
 export const getScreen = (caseId) => call(one(caseId, "/screen"));
 
-/** `{ cases: [{ case_id, title, goal_id, state, files, updated_at }] }`, newest change first. */
+/** `{ cases: [{ case_id, title, goal_id, state, files, upload_ids, updated_at }] }`, newest change first. */
 export const getCases = (goalId = null) =>
   call(`/data-doctor/cases${goalId ? `?goal_id=${enc(goalId)}` : ""}`);
 

@@ -965,7 +965,7 @@ and a goal's setup are exactly as before.*
 Data Doctor is one screen, and it is where you already are. It opens on one piece of work (a *check*) in three
 places, and it is the same check in all three:
 
-- **Data › Check my data.** Choose a file. Data Doctor reads it, asks only what it cannot tell, and says what the
+- **Data › Check my data.** Choose your files. Data Doctor reads it, asks only what it cannot tell, and says what the
   data can be used for. "Choose this goal" takes you straight into the "New campaign" wizard on the same check.
 - **The wizard's Customers step.** The check for that goal, inside the step. What you answered on the Data page
   stands: nothing is asked twice. When the data is approved and ready, the list starts, as before - unless a change

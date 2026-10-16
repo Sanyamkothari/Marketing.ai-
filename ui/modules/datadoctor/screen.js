@@ -405,7 +405,9 @@ function upload(entry, files) {
       } catch (error) {
         if (!(error instanceof ApiError)) throw error;
         const done = sent.size ? ` ${sent.size === 1 ? "1 file" : `${sent.size} files`} before it went through and will not be sent again.` : "";
-        throw new ApiError(error.status, error.code, `${file.name} could not be read. ${error.message}${done} Choose ${file.name} again to go on.`, error.body);
+        // A 4xx about the file says it could not be read; a network or sign-in problem keeps its own words.
+        const about = error.status >= 400 && error.status < 500 && ![401, 403, 429].includes(error.status) ? "could not be read." : "was not sent.";
+        throw new ApiError(error.status, error.code, `${file.name} ${about} ${error.message}${done} Choose ${file.name} again to go on.`, error.body);
       }
     }
     return [...sent.values()];

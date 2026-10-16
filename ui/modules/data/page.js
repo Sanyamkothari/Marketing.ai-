@@ -244,7 +244,7 @@ function checkRow(c) {
     ${typeIcon("file")}<div><h3 class="dt-name">${userText(c.title || "Data check")}<span class="dt-sub">${esc(
       `Data Doctor check · ${plural((c.files || []).length, "file", "files")}`,
     )}: ${names}</span></h3></div>
-    <div class="dt-cell" data-dt-health><span class="dt-sub">Checked by Data Doctor</span></div>
+    <div class="dt-cell" data-dt-health><span class="dt-sub">In a Data Doctor check</span></div>
     <div class="dt-cell" data-dt-when>${esc(c.updated_at ? `Changed ${fmtStamp(c.updated_at)}` : "")}</div>
     <div class="dt-actions">${button({ label: "Open the check", href: `${DATA_HOME}/check/case/${encodeURIComponent(c.case_id)}`, kind: "secondary", size: "sm", attrs: `aria-label="Open the check ${esc(c.title || "")}"` })}</div>
   </li>`;
@@ -510,7 +510,8 @@ export async function renderData(app, parts) {
     Promise.all([getKinds(), getConnections()]),
     getUploads(),
     aiServiceStatus(),
-    getCases(),
+    // Data Doctor off: the route is not there, and nothing is sent for it.
+    dataDoctorOn().then((on) => (on ? getCases() : { cases: [] })),
   ]);
   // Without the list of checks (Data Doctor off or not answering) every file is listed on its own, as before.
   state.checks = checks.status === "fulfilled" ? checks.value.cases || [] : [];
