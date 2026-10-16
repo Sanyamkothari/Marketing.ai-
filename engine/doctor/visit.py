@@ -11,6 +11,7 @@ TREAT -> CONVERSE (the person chats) -> TREAT (proposals land pending)
 TREAT -> GOAL_BRIEF (the person picks or changes a goal)
 TREAT -> PREVIEW (nothing blocking open) -> APPROVE (INTERRUPT)   PREVIEW/APPROVE -> TREAT (an untick or edit)
 APPROVE -> PRESCRIBE (the person approves) -> VERIFY -> HAND_OFF (ready) -> FOLLOW_UP (INTERRUPT)
+APPROVE -> PRESCRIBE by itself, when the plan comes back after an approval with only sure fixes new (carry.py)
 VERIFY -> TREAT (not ready, with the named reason)        FOLLOW_UP -> INTAKE (next month's file arrives)
 ```
 
@@ -62,6 +63,7 @@ from pydantic import JsonValue
 from engine.agent.contracts import AgentConfidence, ProposalSource, ProposalState
 from engine.agent.tools import TOOLS, AgentToolError
 from engine.config import ConfigError
+from engine.doctor.carry import approved_marks, carries_on, plain_fix
 from engine.doctor.case import (
     PARK_ROLES,
     Case,
@@ -451,7 +453,12 @@ def approval_sentence(case: Case, *, goal_name: str | None = None) -> str:
     from engine.doctor.goal_names import goal_display_name
 
     items, _ = active_section(case)
-    ticked = sum(1 for item in items if item.state is ProposalState.ACCEPTED)
+    here = {f.upload_id for f in case.files}  # a file made into another table is counted in that table
+    ticked = sum(
+        1
+        for item in items
+        if item.state is ProposalState.ACCEPTED and (item.upload_id is None or item.upload_id in here)
+    )
     goal = active_goal(case)
     what = f"{ticked} change{'s' if ticked != 1 else ''}"
     files = len(case.files)
@@ -520,6 +527,9 @@ class _Step:
     after: list[Callable[[Case], None]] = field(default_factory=list)
     """Plan O M246: side effects once the step is written (a standing answer's use or memory); each is
     idempotent, and none may fail the step."""
+    carried: bool = False
+    """An approval the visit made by itself (`engine.doctor.carry`): if its record cannot be made, the visit
+    waits for the person instead of failing whatever they just did."""
     within: Callable[[Case], dict[str, Any]] | None = None
     """Plan O M246: the step's record - Plan K's ledger entry of an approval, a standing answer's revocation - run
     inside the case's write, under its lock and after its version check, so it is made only for a write that
@@ -752,7 +762,13 @@ def _advance(run: _Run, case: Case) -> Case:
             return _stop(run, case, case.state, exc)
         if step is None:
             return case
-        case = _write(run, case, step)
+        try:
+            case = _write(run, case, step)
+        except CaseError:
+            if not step.carried:
+                raise
+            # the automatic approval could not be recorded (nothing was approved): the person's yes is asked
+            return run.store.get(case.client_id, case.case_id)
         _after(step, case)
     return case
 
@@ -792,9 +808,20 @@ def _intake(run: _Run, case: Case) -> _Step | None:
         )
         for upload_id in new
     ]
+    here = {f.upload_id for f in case.files}
+    made = {
+        f.upload_id
+        for f in case.files
+        if f.original_upload_id in visit.taken_in and f.original_upload_id not in here
+    }  # the table the approved join or stack made: its files gave way to it
+    fresh = any(upload_id not in made for upload_id in new)
     return _Step(
         to=VisitState.UNDERSTAND,
-        visit={"taken_in": tuple(dict.fromkeys((*visit.taken_in, *new)))},
+        visit={
+            "taken_in": tuple(dict.fromkeys((*visit.taken_in, *new))),
+            # a file the person never saw is another round: it gets a whole plan (engine.doctor.carry)
+            **({"approved_before": ()} if fresh and visit.approved_before else {}),
+        },
         events=events,
     )
 
@@ -1059,12 +1086,38 @@ def _count_preview(case: Case, files: tuple[LoadedFile, ...]) -> PreviewSummary:
     )
 
 
-def _approve_wait(_run: _Run, case: Case) -> _Step | None:
+def _approve_wait(run: _Run, case: Case) -> _Step | None:
     """APPROVE: waits for the person (:func:`approve`). A file added while it waits is read first: the plan the
-    person is shown must cover every file the case holds, so back to INTAKE (the same as FOLLOW_UP does)."""
+    person is shown must cover every file the case holds, so back to INTAKE (the same as FOLLOW_UP does).
+
+    One approval (`engine.doctor.carry`): when the plan comes back after the person approved, and what is new is
+    only sure fixes with no stop or flag, the visit carries on by itself, in the name of who approved before, and
+    says so on the timeline. Anything else waits for the person."""
     if _pending_files(case):
         return _Step(to=VisitState.INTAKE)
-    return None
+    before = [a for a in case.approvals if not a.approve_class]
+    visit = case.visit or CaseVisit()
+    items, questions = active_section(case)
+    if not before or not visit.approved_before or visit.plan_check is None:
+        return None
+    if visit.plan_check.digest != plan_digest(case.files, items):
+        return None
+    settings = run.deps.protocol
+    if unconfirmed(case, settings):
+        return None
+    carry = carries_on(case, items, questions, visit.plan_check, confirmed=confirmed, settings=settings)
+    if carry is None:
+        return None
+    try:
+        return _approval(
+            run,
+            case,
+            actor=before[-1].approved_by,
+            carried_from=before[-1].approval_id,
+            carried_new=sum(1 for i in carry.new if plain_fix(i, settings)),
+        )
+    except CaseError:
+        return None  # a stop, a changed sentence: the person decides
 
 
 def _combine(run: _Run, case: Case) -> _Step | None:
@@ -1187,6 +1240,9 @@ def _verify(run: _Run, case: Case) -> _Step:
     return _Step(
         to=VisitState.HAND_OFF if ready else VisitState.TREAT,
         updates=updates,
+        visit=(
+            {} if ready else {"approved_before": ()}
+        ),  # not ready: the plan comes back whole, with the reason
         events=[
             EventDraft(
                 kind=TimelineKind.READINESS,
@@ -1242,7 +1298,7 @@ def _default_hand_off(case: Case, brief: GoalBrief | None) -> HandOffRecord:
 def _follow_up(_run: _Run, case: Case) -> _Step | None:
     """FOLLOW_UP: rests until next month's file arrives; then the visit reads it from INTAKE."""
     if _pending_files(case):
-        return _Step(to=VisitState.INTAKE)
+        return _Step(to=VisitState.INTAKE, visit={"approved_before": ()})  # a new month is another round
     return None
 
 
@@ -2412,10 +2468,7 @@ def approve(
     now, word for word (`APPROVAL_SENTENCE_CHANGED`: nothing is recorded, the error carries the new one). The
     record - the items' digests and the sentence, the prescription hash - goes to Plan K's ledger as
     `data.prescription.approved` when `deps.ledger` is set (`agentic.enabled`), and to the timeline always."""
-    from engine.doctor.patterns import record_approved
-
     run = _Run(deps, actor)
-    now = deps.clock()
 
     def build(case: Case) -> _Step:
         if case.state is not VisitState.APPROVE:
@@ -2427,83 +2480,114 @@ def approve(
                 f"{len(missing)} change{'s' if len(missing) != 1 else ''} need{'' if len(missing) != 1 else 's'} "
                 f"their own yes first: “{missing[0].title}”.",
             )
-        items, _ = active_section(case)
-        visit = case.visit or CaseVisit()
-        check, said = visit.plan_check, visit.acknowledged
-        if check is None or check.digest != plan_digest(case.files, items):  # never another plan's counts
-            check, said = check_plan(run.files(case), case.files, items), ()
-        stops = open_stops(check, said)
-        if stops:
-            raise CaseError(
-                "APPROVAL_STOP_OPEN",
-                f"{len(stops)} safety check{'s' if len(stops) != 1 else ''} stop{'' if len(stops) != 1 else 's'} "
-                f"this plan: {stops[0].text} Say yes to each one, or change the plan.",
-            )
-        text = approval_sentence(case, goal_name=approval_goal_name(run.deps.storage, case))
-        if sentence is not None and sentence != text:
-            raise CaseError(
-                "APPROVAL_SENTENCE_CHANGED",
-                f"What would be approved has changed since you read it. It now reads: “{text}”",
-            )
-        goal = active_goal(case)
-        accepted = [i for i in items if i.state is ProposalState.ACCEPTED]
-        brief = stored_brief(run.deps.storage, case)
-        approval_id = f"approval.{len(case.approvals) + 1}"
-        body = decision_body(
-            case_id=case.case_id,
-            upload_id=case.files[0].upload_id if len(case.files) == 1 else None,
-            item_digests=[i.payload_digest for i in accepted],
-            text=text,
-            decided_by=actor,
-            kind="prescription",
-            prescription_hash=_record_hash(deps, case, brief),
-            approval_id=approval_id,
-            case_version=case.version,
-        )
-        approval = CaseApproval(
-            approval_id=approval_id,
-            item_ids=tuple(i.item_id for i in accepted),
-            approved_by=actor,
-            approved_at=now,
-            text_shown=text,
-            payload_digest=_str(body["payload_digest"]),
-        )
-        ai_steps = [
-            (str(step["kind"]), dict(params) if isinstance(params := step.get("params"), dict) else {})
-            for i in accepted
-            if i.source is ProposalSource.AI
-            and isinstance(step := i.payload.get("step"), dict)
-            and isinstance(step.get("kind"), str)
-        ]
-        after: list[Callable[[Case], None]] = []
-
-        def count_patterns(written: Case) -> None:
-            record_approved(
-                run.deps.storage, ai_steps, place=written.case_id, client_id=written.client_id, at=now
-            )
-
-        if ai_steps:  # [REQ] 11: an approved AI pattern counts towards a candidate rule for the product team
-            after.append(count_patterns)
-        return _Step(
-            to=VisitState.PRESCRIBE,
-            visit={"plan_check": check, "acknowledged": said},
-            within=_recorded(deps, DATA_PRESCRIPTION_APPROVED, actor, body, approval),
-            events=[
-                EventDraft(
-                    kind=TimelineKind.APPROVAL,
-                    item_id=approval.approval_id,
-                    details={
-                        "items": len(approval.item_ids),
-                        "goal": goal.goal_id if goal is not None else None,
-                        "receipt": "ledger" if deps.ledger is not None else "timeline",
-                        **_timeline_body(body),
-                    },
-                )
-            ],
-            after=after,
-        )
+        return _approval(run, case, actor=actor, sentence=sentence)
 
     return _person_step(run, client_id, case_id, expected_version, op_id, build)
+
+
+CARRIED_ON: Final[str] = "Carried on from your earlier approval:"
+"""What the sentence of an approval the visit carried on by itself starts with (`engine.doctor.carry`)."""
+
+
+def _approval(
+    run: _Run,
+    case: Case,
+    *,
+    actor: str,
+    sentence: str | None = None,
+    carried_from: str | None = None,
+    carried_new: int = 0,
+) -> _Step:
+    """The step that records an approval of the plan as it stands (:func:`approve`'s, and the carry-on's with
+    `carried_from`, the approval it goes on from, and `carried_new`, the number of new sure fixes it carries; it
+    is recorded in the name of whoever approved before, and says in its record that it was carried)."""
+    from engine.doctor.patterns import record_approved
+
+    deps = run.deps
+    now = deps.clock()
+    items, questions = active_section(case)
+    visit = case.visit or CaseVisit()
+    check, said = visit.plan_check, visit.acknowledged
+    if check is None or check.digest != plan_digest(case.files, items):  # never another plan's counts
+        check, said = check_plan(run.files(case), case.files, items), ()
+    stops = open_stops(check, said)
+    if stops:
+        raise CaseError(
+            "APPROVAL_STOP_OPEN",
+            f"{len(stops)} safety check{'s' if len(stops) != 1 else ''} stop{'' if len(stops) != 1 else 's'} "
+            f"this plan: {stops[0].text} Say yes to each one, or change the plan.",
+        )
+    shown = approval_sentence(case, goal_name=approval_goal_name(deps.storage, case))
+    if sentence is not None and sentence != shown:
+        raise CaseError(
+            "APPROVAL_SENTENCE_CHANGED",
+            f"What would be approved has changed since you read it. It now reads: “{shown}”",
+        )
+    text = shown if carried_from is None else f"{CARRIED_ON} {shown}"
+    goal = active_goal(case)
+    accepted = [i for i in items if i.state is ProposalState.ACCEPTED]
+    brief = stored_brief(run.deps.storage, case)
+    approval_id = f"approval.{len(case.approvals) + 1}"
+    body = decision_body(
+        case_id=case.case_id,
+        upload_id=case.files[0].upload_id if len(case.files) == 1 else None,
+        item_digests=[i.payload_digest for i in accepted],
+        text=text,
+        decided_by=actor,
+        kind="prescription",
+        prescription_hash=_record_hash(deps, case, brief),
+        approval_id=approval_id,
+        case_version=case.version,
+        carried_from=carried_from,
+    )
+    approval = CaseApproval(
+        approval_id=approval_id,
+        item_ids=tuple(i.item_id for i in accepted),
+        approved_by=actor,
+        approved_at=now,
+        text_shown=text,
+        payload_digest=_str(body["payload_digest"]),
+    )
+    ai_steps = [
+        (str(step["kind"]), dict(params) if isinstance(params := step.get("params"), dict) else {})
+        for i in accepted
+        if i.source is ProposalSource.AI
+        and isinstance(step := i.payload.get("step"), dict)
+        and isinstance(step.get("kind"), str)
+    ]
+    after: list[Callable[[Case], None]] = []
+
+    def count_patterns(written: Case) -> None:
+        record_approved(deps.storage, ai_steps, place=written.case_id, client_id=written.client_id, at=now)
+
+    if ai_steps:  # [REQ] 11: an approved AI pattern counts towards a candidate rule for the product team
+        after.append(count_patterns)
+    return _Step(
+        to=VisitState.PRESCRIBE,
+        visit={
+            "plan_check": check,
+            "acknowledged": said,
+            "approved_before": tuple(
+                dict.fromkeys((*visit.approved_before, *approved_marks(items, questions)))
+            ),
+        },
+        within=_recorded(deps, DATA_PRESCRIPTION_APPROVED, actor, body, approval),
+        carried=carried_from is not None,
+        events=[
+            EventDraft(
+                kind=TimelineKind.APPROVAL,
+                item_id=approval.approval_id,
+                details={
+                    "items": len(approval.item_ids),
+                    "goal": goal.goal_id if goal is not None else None,
+                    "receipt": "ledger" if deps.ledger is not None else "timeline",
+                    **({} if carried_from is None else {"carried": True, "new": carried_new}),
+                    **_timeline_body(body),
+                },
+            )
+        ],
+        after=after,
+    )
 
 
 def acknowledge_stop(

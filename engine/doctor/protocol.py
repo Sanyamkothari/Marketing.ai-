@@ -620,6 +620,7 @@ def decision_body(
     identity_verified: bool | None = None,
     approval_id: str | None = None,
     case_version: int | None = None,
+    carried_from: str | None = None,
 ) -> dict[str, Any]:
     """One decision as ledger body keys (ids and digests, never a value), and as the timeline event's details.
 
@@ -627,7 +628,8 @@ def decision_body(
     bound into the record without the record holding it. `approval_id` and `case_version` name the case's approval
     and the version it was decided on, so a retried write finds the entry its first attempt made
     (:func:`ledger_port`). `proposed_by` names everyone who proposed or answered it, comma-separated when there are
-    several (a timeline detail is one scalar).
+    several (a timeline detail is one scalar). `carried_from` marks an approval the visit made by itself, on
+    from the approval it names (`engine.doctor.carry`): the person never read its words.
     """
     proposers = [proposed_by] if isinstance(proposed_by, str) else sorted(set(proposed_by or ()))
     body: dict[str, Any] = {
@@ -647,6 +649,9 @@ def decision_body(
         body["approval_id"] = approval_id
     if case_version is not None:
         body["case_version"] = case_version
+    if carried_from is not None:
+        body["carried"] = True
+        body["carried_from"] = carried_from
     return body
 
 

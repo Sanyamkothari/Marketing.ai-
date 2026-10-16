@@ -186,6 +186,9 @@ BODY_KEYS: Final[frozenset[str]] = frozenset(
         # ... and which approval of the case at which version it is, so a retried write finds its entry.
         "approval_id",
         "case_version",
+        # ... and an approval the visit carried on by itself from an earlier one (never read by the person).
+        "carried",
+        "carried_from",
     }
 )
 """The only keys a body may hold: ids, digests, codes and labels, never a row (see the module docstring)."""
