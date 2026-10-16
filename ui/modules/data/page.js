@@ -18,7 +18,7 @@
 // This page does not import `ui/layout.js`: it draws the same in the classic and the campaigns layout.
 
 import { button, emptyState, icon, pageHeader, statusChip, tabs } from "../../components.js";
-import { announceStatus, errorBox, esc, fmtInt, fmtSize, fmtStamp, skeleton } from "../../dom.js";
+import { announceStatus, errorBox, safeDecode, esc, fmtInt, fmtSize, fmtStamp, skeleton } from "../../dom.js";
 import { deleteConnection, getConnections, getKinds, testConnection } from "../connections/api.js";
 import { stepsHtml } from "../connections/page.js";
 import { revealSelectedTab } from "../reports/page.js";
@@ -488,7 +488,7 @@ export const tabOf = (parts) => (parts[1] === "check" ? "check" : "sources");
 export async function renderData(app, parts) {
   const tab = tabOf(parts);
   // `#/data/check/case/<id>` opens the Data Doctor on that case ("What the Doctor did" from a finished campaign).
-  const caseId = parts[2] === "case" && parts[3] ? decodeURIComponent(parts[3]) : null;
+  const caseId = parts[2] === "case" && parts[3] ? safeDecode(parts[3]) : null;
   view = { app, tab, hash: window.location.hash, doctor: false, pick: parts[2] === "pick", caseId };
   injectDataStyles();
   if (tab === "check") {

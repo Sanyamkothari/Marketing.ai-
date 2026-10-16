@@ -76,3 +76,23 @@ test("a campaign without a final result shows the server's reason, never a numbe
   assert.match(page, /final result/);
   assert.equal($("iframe.pe-frame"), null);
 });
+
+test("a campaign the list says is still waiting is explained without asking for its pack (no refused request)", async () => {
+  const refused = fixture("proof_refused");
+  const id = "c_20261009_waiting1"; // in the list, but with no pack behind it: asking for the pack would answer 404
+  const listed = world.proofs;
+  world.proofs = {
+    proofs: [
+      ...listed.proofs,
+      { campaign_id: id, name: "Waiting", kind: "scored", status: "refused", code: refused.detail.code,
+        message: refused.detail.message, results_available_on: refused.results_available_on || null },
+    ],
+  };
+  try {
+    await open(`#/pilot/proof/${id}`, () => $("main .notice-card") || $("main [role='status']"));
+    assert.ok(text($("main")).includes(refused.detail.message));
+    assert.equal(calls.filter((c) => c.method === "GET" && c.path.startsWith(`/pilot/proof/${id}`)).length, 0);
+  } finally {
+    world.proofs = listed;
+  }
+});

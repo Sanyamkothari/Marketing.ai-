@@ -81,3 +81,17 @@ def test_the_classic_layout_keeps_its_own_names() -> None:
     assert shown["trail"] == [["Results", "#/results"], ["Waiting for approval", None]]
     assert shown["home"] == [["Home", "#/"], ["A goal", None]]
     assert shown["back"] == "Customer Lifecycle"
+
+
+def test_a_malformed_address_part_is_read_as_typed_not_thrown() -> None:
+    """`#/campaigns/%` made `decodeURIComponent` throw, so the page said "could not be loaded"; now it is "not found"."""
+    node = skip_without_node()
+    script = 'import { safeDecode } from "%s"; console.log(JSON.stringify([safeDecode("%%"), safeDecode("a%%20b"), safeDecode(undefined)]));'
+    done = subprocess.run(
+        [node, "--input-type=module", "-e", script % (UI / "dom.js").as_uri()],
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=60,
+    )
+    assert json.loads(done.stdout) == ["%", "a b", ""]

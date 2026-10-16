@@ -37,6 +37,7 @@ import {
   noticeCard,
   pageHead,
   present,
+  safeDecode,
   sortNote,
   techDetails,
 } from "../../dom.js";
@@ -1046,6 +1047,23 @@ async function renderProof(app, campaignId, rerender) {
   );
   document.title = "Value Proof Pack · Marketing AI";
   const { main, live } = screen;
+  // Ask the list first: a campaign with nothing to prove yet says so there, so the pack itself is not requested
+  // only to be refused (a 409 would show as an error in the browser console).
+  const listed = await settle(listProofs());
+  if (!live()) return;
+  const waiting = ((listed.value && listed.value.proofs) || []).find(
+    (entry) => entry.campaign_id === campaignId && entry.status !== "ready" && PROOF_REFUSED_TITLE[entry.code],
+  );
+  if (waiting) {
+    const when = waiting.results_available_on;
+    main.innerHTML = `${head(crumbsFor("Value Proof Pack"), "Value Proof Pack", null)}${noticeCard({
+      title: PROOF_REFUSED_TITLE[waiting.code],
+      text: `${waiting.message}${present(when) ? ` It can be read from ${fmtDate(when)}.` : ""}`,
+      action: { label: "Back to Reports", href: "#/pilot" },
+    })}`;
+    screen.commit();
+    return;
+  }
   const [proof, page, record] = await Promise.all([
     settle(getProof(campaignId)),
     settle(getReportHtml(proofUrl(campaignId, "html"))),
@@ -1124,7 +1142,7 @@ async function renderProof(app, campaignId, rerender) {
 // --- the route ---------------------------------------------------------------------------------------
 
 export async function renderPilot(app, parts, demo) {
-  const [, second, third, fourth] = parts.map((p) => decodeURIComponent(p));
+  const [, second, third, fourth] = parts.map((p) => safeDecode(p));
   try {
     if (second === "view" && (third === "readiness" || third === "results") && fourth) {
       await renderReport(app, third, fourth);

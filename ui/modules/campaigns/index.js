@@ -30,7 +30,7 @@
 // Every event is delegated from `document`, so a repaint needs no re-binding.
 
 import { COST_NEEDS_CONFIRMATION } from "../../cost.js";
-import { esc, skeleton } from "../../dom.js";
+import { esc, safeDecode, skeleton } from "../../dom.js";
 import { USER_TEXT_ATTRIBUTE } from "../../labels.js";
 import { canAccess, setActiveNav } from "../router.js";
 import {
@@ -235,7 +235,7 @@ function resetPage(id) {
 
 const currentTab = () => {
   const p = hashParts();
-  return p[0] === ROUTE && decodeURIComponent(p[1] || "") === page.id && TABS.includes(p[2]) ? p[2] : null;
+  return p[0] === ROUTE && safeDecode(p[1] || "") === page.id && TABS.includes(p[2]) ? p[2] : null;
 };
 
 const runIdOf = (campaign) => ((campaign && campaign.run_ids) || [])[0] || null;
@@ -372,10 +372,10 @@ export async function campaignsRoute(app, parts) {
   }
   if (parts[1] === RUN && parts[2]) {
     setActiveNav("campaigns");
-    await renderRun(app, decodeURIComponent(parts[2]));
+    await renderRun(app, safeDecode(parts[2]));
     return true;
   }
-  const id = decodeURIComponent(parts[1]);
+  const id = safeDecode(parts[1]);
   if (parts.length === 2) {
     if (!(await campaignLayout())) return false;
     window.location.replace(`#/campaigns/${enc(id)}/overview`);
