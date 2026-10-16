@@ -487,29 +487,35 @@ def _reasons(report: DataReadinessReport, *, warnings: bool = False) -> tuple[st
     return tuple(out[:_REASONS])
 
 
+_PASSED: Final = frozenset({"ready", "ready_with_warnings", "no_goal"})
+
+
 def _last_readiness_failure(storage: Storage, case: Case) -> tuple[tuple[str, ...], str | None] | None:
-    """Why the last readiness check said not ready, while the visit waits for approval again and no approval has come
-    since: the plan changed, so the check no longer counts for it, but the person must still be told why. None when the
-    last check passed, none ran, or an approval came after it. Plain reasons from the stored report when there is one,
-    else the sentence the visit wrote."""
+    """Why the last readiness check for the active goal did not pass, while the visit waits for approval again and no
+    approval has come since: the plan changed, so the check no longer counts for it, but the person must still be told
+    why. None when the last check passed, none ran, or an approval came after it. Plain reasons from the stored report
+    of that very check when there is one, else the sentence the visit wrote."""
+    goal = active_goal(case)
+    if goal is None:
+        return None
     try:
         events = [
             e
             for e in CaseStore(storage).timeline(case.client_id, case.case_id)
-            if e.kind is TimelineKind.READINESS
+            if e.kind is TimelineKind.READINESS and e.item_id == goal.goal_id
         ]
     except (CaseError, StorageError, ValueError):
         return None
-    if not events or events[-1].details.get("verdict") != "not_ready":
+    if not events or events[-1].details.get("verdict") in _PASSED:
         return None
     last = events[-1]
     if any(a.approved_at >= last.at for a in case.approvals if not a.approve_class):
         return None
     from engine.doctor.readiness import readiness_key
 
-    goal = active_goal(case)
-    ref = next((r for r in case.readiness if goal is not None and r.goal_id == goal.goal_id), None)
-    if ref is not None and ref.verdict == "not_ready":
+    ref = next((r for r in case.readiness if r.goal_id == goal.goal_id), None)
+    # Only the report this check made: an older check's report belongs to an older plan.
+    if ref is not None and ref.report_hash == last.details.get("report_hash"):
         try:
             key = readiness_key(
                 client_id=case.client_id, case_id=case.case_id, goal=ref.goal_id, report_hash=ref.report_hash

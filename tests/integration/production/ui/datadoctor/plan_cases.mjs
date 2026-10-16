@@ -247,7 +247,7 @@ test("a stop on a step still ticked holds the final yes, even after its section 
   assert.match($("[data-dds-approve-hold]").textContent, /A step stops the plan/);
 });
 
-test("saying yes to a stop does not un-tick the section checks", async () => {
+test("saying yes to a stop leaves the section checks as they were (the plan did not change)", async () => {
   const stop = { ...LEDGER, findings: [{ level: "stop", kind: "guard", key: "k1", count: 0, text: "A join made one customer appear on two rows.", item_id: "sql.spend" }] };
   await show("approve", { patch: withLedger({ state: "accepted" }, stop) });
   const box = () => $('input[data-dds-sec-ok="combine"]');
@@ -256,7 +256,6 @@ test("saying yes to a stop does not un-tick the section checks", async () => {
   assert.ok(box().checked);
   world.patch = (s) => {
     withLedger({ state: "accepted" }, { ...stop, findings: [{ ...stop.findings[0], level: "flag" }] })(s);
-    s.case.items.push(sqlItem({ item_id: "sql.extra", state: "accepted" })); // even if the answer holds more than before
     return s;
   };
   $("[data-dds-ack]").click();

@@ -1191,7 +1191,12 @@ def _verify(run: _Run, case: Case) -> _Step:
             EventDraft(
                 kind=TimelineKind.READINESS,
                 item_id=brief.goal_id if brief is not None else None,
-                details={"verdict": result.verdict, "reason": result.reason[:200]},
+                details={
+                    "verdict": result.verdict,
+                    "reason": result.reason[:200],
+                    # Ties this check to the stored report it made, so the screen never shows an older check's reasons.
+                    "report_hash": result.ref.report_hash if result.ref is not None else None,
+                },
             )
         ],
     )

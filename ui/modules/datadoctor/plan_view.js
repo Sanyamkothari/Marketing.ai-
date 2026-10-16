@@ -395,8 +395,9 @@ function sectionHtml(sec, screen, ctx, level) {
   const entries = new Map((view.approve_class || []).map((a) => [a.item_id, a]));
   const approvals = sec.open.filter((i) => entries.has(i.item_id));
   const ticks = sec.open.filter((i) => !entries.has(i.item_id));
+  const changes = sec.items.filter((i) => !isNote(i)).length; // a note is not a change
   const lines = [
-    plural(sec.items.filter((i) => !isNote(i)).length, "change", "changes"), // a note is not a change
+    changes ? plural(changes, "change", "changes") : "",
     sec.pending.length ? `${sec.pending.length} ${sec.pending.length === 1 ? "needs" : "need"} your yes` : "",
     sec.waiting.length ? `${sec.waiting.length} waiting for someone` : "",
   ].filter(Boolean);

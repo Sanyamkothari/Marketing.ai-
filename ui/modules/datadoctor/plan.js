@@ -283,9 +283,8 @@ export const isNote = (item) => item.kind === "data_check" && item.source === "r
 /** An item needs a yes when it is not a sure fix, was not found by the rules, needs its own yes or carries a stop or flag. */
 export function needsYes(item, approveIds, ledger) {
   if (approveIds.has(item.item_id)) return true;
-  if (isNote(item)) return false;
-  if (item.confidence !== "sure" || item.source !== "rules") return true;
   const level = alertOf(item, ledger);
+  if (!isNote(item) && (item.confidence !== "sure" || item.source !== "rules")) return true; // a note asks for a yes only when a check points at it
   return level === "stop" || level === "flag";
 }
 

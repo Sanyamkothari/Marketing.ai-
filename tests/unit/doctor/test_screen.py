@@ -8,16 +8,21 @@ with, and the client's cases by goal.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
 from engine.doctor import visit
-from engine.doctor.case import CaseError, CaseStore, VisitState
+from engine.doctor.case import Case, CaseError, CaseStore, VisitState
 from engine.doctor.goal_names import goal_display_name
 from engine.doctor.protocol import express_doubt, item_sentence
-from engine.doctor.screen import WARNINGS_NOTE, build_screen, case_summaries, screen_view
+from engine.doctor.readiness_contracts import DataReadinessReport
+from engine.doctor.screen import WARNINGS_NOTE, CaseScreen, build_screen, case_summaries, screen_view
 from engine.doctor.standing import answer_id_for
+from engine.doctor.visit import VerifyResult
 from engine.storage import LocalStorage
 from tests.unit.doctor import visit_support as vs
 from tests.unit.doctor.screen_support import MEERA, scenario
@@ -115,6 +120,56 @@ def test_a_change_after_the_check_keeps_the_last_failure_and_its_reason_on_scree
     verdict = screen_view(storage, unticked, config_root=None).verdict
     # The check no longer counts for the changed plan, but the person is still told why it failed, not "approve" bare.
     assert verdict.key == "not_ready" and verdict.reasons == ("as the test says",)
+
+
+def _unticked(storage: LocalStorage, world: World, screen: CaseScreen) -> Case:
+    key = next(i for i in screen.case.items if i.kind == "as_of_column")
+    return visit.decide(
+        CLIENT, screen.case.case_id, key.item_id, False, _deps(storage, world, _found()),
+        expected_version=screen.case.version, actor=ANALYST,
+    )  # fmt: skip
+
+
+def _approve_again(storage: LocalStorage, world: World, case: Case, verify: Any) -> Case:
+    deps = replace(_deps(storage, world, _found()), verify=verify)
+    return visit.approve(
+        CLIENT, case.case_id, deps, expected_version=case.version, actor=ANALYST,
+        sentence=visit.approval_sentence(case),
+    )  # fmt: skip
+
+
+def test_a_new_approval_that_passes_clears_the_old_failure(storage: LocalStorage, world: World) -> None:
+    screen = scenario("not_ready", storage, world)
+    world.verdict = "ready"
+    approved = _approve_again(storage, world, _unticked(storage, world, screen), world.verify)
+    assert screen_view(storage, approved, config_root=None).verdict.key != "not_ready"
+
+
+def test_a_failed_check_without_a_report_says_its_own_sentence_not_an_older_checks_reasons(
+    storage: LocalStorage, world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    screen = scenario("not_ready", storage, world)
+    old = SimpleNamespace(
+        requirements=(), probes=(SimpleNamespace(status="fail", fix="the OLD plan's reason", message="x"),),
+        verdict_reason="old",
+    )  # fmt: skip
+    real = storage.read_model
+
+    def read_model(key: str, model: Any) -> Any:
+        return old if model is DataReadinessReport else real(key, model)
+
+    monkeypatch.setattr(storage, "read_model", read_model)
+    # The first check's own report still names its reason while nothing newer has been checked.
+    assert screen_view(storage, screen.case, config_root=None).verdict.reasons == ("the OLD plan's reason",)
+
+    def no_report(case: Case, brief: Any, files: Any) -> VerifyResult:
+        return VerifyResult(
+            verdict="not_ready", reason="VISIT_NO_OUTCOME: no file has the goal's outcome yet.", ref=None
+        )
+
+    again = _approve_again(storage, world, _unticked(storage, world, screen), no_report)
+    verdict = screen_view(storage, again, config_root=None).verdict
+    assert verdict.key == "not_ready" and verdict.reasons == ("no file has the goal's outcome yet.",)
 
 
 def test_a_remembered_answer_shows_its_date_and_whether_it_was_revoked(
