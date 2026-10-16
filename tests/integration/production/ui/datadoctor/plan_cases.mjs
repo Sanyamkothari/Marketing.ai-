@@ -414,3 +414,16 @@ test("a plan that comes back after an approval says what is new, and folds what 
   await show("approve");
   assert.ok(!$("[data-dds-new-line]") && !$("[data-dds-approved]"), "before any approval nothing is folded");
 });
+
+test("steps approved last month are folded as 'Same as last month', and what cannot apply is said", async () => {
+  let ids = [];
+  await show("approve", {
+    patch: (s) => {
+      ids = s.case.items.filter((i) => i.state === "accepted" && i.kind !== "data_check").map((i) => i.item_id);
+      s.view.carried = { approved: ids, gone: [], last_month: true, line: "Last month's steps on ‘spend’ cannot be used: this file has no such column, so they are asked again." };
+      return s;
+    },
+  });
+  assert.match($("[data-dds-approved] summary").textContent, /^Same as last month: \d+ steps?$/);
+  assert.match($("[data-dds-new-line]").textContent, /‘spend’ cannot be used/);
+});

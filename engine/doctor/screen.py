@@ -182,6 +182,11 @@ class ScreenCarried(StrictBase):
     line: str | None = Field(
         default=None, description="What is new and why, in one line; none when nothing is."
     )
+    last_month: bool = Field(
+        default=False,
+        description="The approved steps are last month's, for the same kind of table (a new case of the same "
+        'client): the screen says "Same as last month" instead of "Already approved".',
+    )
 
 
 class CaseScreenView(StrictBase):
@@ -340,6 +345,7 @@ def _carried(case: Case) -> ScreenCarried | None:
         approved=tuple(i.item_id for i in carry.approved),
         gone=tuple(i.item_id for i in carry.gone),
         line=new_line(case, carry),
+        last_month=visit is not None and visit.carry_source is not None,
     )
 
 

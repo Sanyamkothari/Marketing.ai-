@@ -479,7 +479,7 @@ export function planModel(screen, ctx) {
     findings,
     unconfirmed,
     carried: carried
-      ? { line: carried.line || "", items: folded }
+      ? { line: carried.line || "", items: folded, lastMonth: carried.last_month === true }
       : null,
     gate: readyToApprove(plan, ctx.checked, findings, items, approveIds),
   };
@@ -503,9 +503,12 @@ export function newLineHtml(model) {
 function approvedHtml(screen, model, ctx) {
   const items = model.carried ? model.carried.items : [];
   if (!items.length) return "";
+  const last = model.carried.lastMonth;
   return `<details class="dds-sure dds-approved" data-dds-approved data-dds-keep="approved-before"><summary>${esc(
-    `Already approved (${count(items.length)})`,
-  )}</summary><p class="dds-why">These are the same as what you approved. Untick one to take it out.</p><ul class="dds-items">${items
+    last ? `Same as last month: ${plural(items.length, "step", "steps")}` : `Already approved (${count(items.length)})`,
+  )}</summary><p class="dds-why">${
+    last ? "You approved these last month and this file still fits them." : "These are the same as what you approved."
+  } Untick one to take it out.</p><ul class="dds-items">${items
     .map((i) => itemHtml(i, screen.case, ctx, { open: false }))
     .join("")}</ul></details>`;
 }
