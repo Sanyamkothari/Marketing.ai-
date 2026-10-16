@@ -14,6 +14,8 @@ const world = {
   uploads: fixture("uploads").uploads,
   uploadsStatus: 200,
   connectionsStatus: 200,
+  cases: [], // the Data Doctor checks (GET /data-doctor/cases)
+  doctor: false, // whether /auth/me says the Data Doctor switch is on
   total: null, // the `total` the fake API answers with; null means "every upload", like the real route
   gate: null, // a promise the connection test waits for, to answer after the person has left
 };
@@ -28,6 +30,10 @@ const server = async (request) => {
     }
     return { status: 200, body: { connections: world.connections } };
   }
+  if (method === "GET" && path === "/auth/me" && world.doctor) {
+    return { status: 200, body: { principal: "p", auth_mode: "off", permissions: [], data_doctor: true } };
+  }
+  if (method === "GET" && path === "/data-doctor/cases") return { status: 200, body: { cases: world.cases } };
   if (method === "GET" && path === "/uploads") {
     if (world.uploadsStatus !== 200) {
       return { status: world.uploadsStatus, body: { detail: { code: "INTERNAL", message: "Something went wrong." } } };
@@ -54,6 +60,7 @@ const server = async (request) => {
 
 const { w, calls } = installPage(server, { hash: "#/data" });
 const router = await import("../../../../../ui/modules/router.js");
+const session = await import("../../../../../ui/modules/production/session.js");
 await import("../../../../../ui/modules/data/index.js");
 
 const app = $("#app");
@@ -174,6 +181,28 @@ test("a name that carries markup is shown as text", async () => {
     assert.ok(row(id).querySelector(".dt-name > [data-user-text]"), `${id}: the name is marked as the person's own`);
     assert.equal(row(id).querySelector(".dt-name > [data-user-text]").children.length, 0, "and stays text");
   }
+});
+
+test("files that belong to a Data Doctor check are listed once, under the check, with a link to it", async () => {
+  const [a, b] = world.uploads;
+  world.doctor = true;
+  await session.loadMe();
+  world.cases = [
+    { case_id: "case_one", title: "a and 1 more", goal_id: null, state: "open", files: [a.file_name, b.file_name], upload_ids: [a.upload_id, b.upload_id], updated_at: a.created_at },
+  ];
+  await show("#/data");
+  assert.equal(row(a.upload_id), null, "not a second time as its own row");
+  assert.equal(row(b.upload_id), null);
+  const check = row("case_one");
+  assert.equal(check.dataset.dtSource, "check");
+  assert.ok(text(check).includes("2 files"));
+  assert.ok(text(check).includes(a.file_name));
+  assert.ok(check.querySelector("a").getAttribute("href").endsWith("#/data/check/case/case_one"));
+  assert.ok(row(world.uploads[2].upload_id), "a file outside any check stays listed");
+  assert.ok(row(ids.s3), "connections stay listed");
+  world.cases = [];
+  world.doctor = false;
+  await session.loadMe();
 });
 
 test("a connection keeps Test, Edit and Delete; a file has no action of its own", async () => {

@@ -232,6 +232,9 @@ class CaseSummary(StrictBase):
     goal_id: str | None
     state: str
     files: tuple[str, ...] = Field(description="The files' names, in order.")
+    upload_ids: tuple[str, ...] = Field(
+        default=(), description="The uploads the check holds (each file's upload and the one it came from)."
+    )
     updated_at: datetime
 
 
@@ -255,6 +258,9 @@ def case_summaries(
                 goal_id=active,
                 state=case.state.value,
                 files=tuple(f.file_name for f in case.files),
+                upload_ids=tuple(
+                    dict.fromkeys(i for f in case.files for i in (f.upload_id, f.original_upload_id) if i)
+                ),
                 updated_at=case.updated_at,
             )
         )

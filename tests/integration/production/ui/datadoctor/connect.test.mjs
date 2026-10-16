@@ -16,8 +16,18 @@ if (!process.env.DDS_FIXTURES) {
   world.cases = { cases: [] };
   const fake = serverFor(world);
   const kinds = { kinds: [{ kind: "postgres", label: "PostgreSQL", creatable: true, available: true }] };
+  const failing = { second: false, sent: [] };
   installPage(
     (request) => {
+      if (request.method === "POST" && request.path === "/uploads") {
+        failing.sent.push(request.path);
+        if (failing.second && failing.sent.length === 2) {
+          failing.second = false;
+          return { status: 422, body: { detail: { code: "UPLOAD_BAD", message: "That file has no rows." } } };
+        }
+        world.uploads += 1;
+        return { status: 201, body: { upload_id: `u_${world.uploads}`, profile: null } };
+      }
       if (request.method === "GET" && request.path === "/connections/kinds") return { status: 200, body: kinds };
       if (request.method === "GET" && request.path === "/connections") return { status: 200, body: { connections: [] } };
       if (request.method === "GET" && request.path === "/uploads") return { status: 200, body: { uploads: [], total: 0 } };
@@ -62,5 +72,30 @@ if (!process.env.DDS_FIXTURES) {
     await settle(4);
     await until(() => $("[data-dt-doctor-screen] [data-dds-place='data']"), 3000, "the Doctor screen");
     assert.ok(CASE);
+  });
+
+  test("when the second of two files fails, it is named, and a retry does not send the first again", async () => {
+    window.location.hash = "#/data";
+    await until(() => $("#dt-files"), 3000, "the Data page");
+    failing.sent.length = 0;
+    failing.second = true;
+    const made = world.posted.filter((p) => p.path === "/cases").length;
+    const mk = () => [new File(["a,b\n1,2\n"], "good.csv"), new File(["a,b\n1,2\n"], "broken.csv")];
+    const files = mk();
+    const input = $("#dt-files");
+    Object.defineProperty(input, "files", { value: files });
+    input.dispatchEvent(new window.Event("change", { bubbles: true }));
+    await until(() => /broken\.csv could not be read/.test(text($("#app"))), 4000, "the failed file named");
+    assert.match(text($("#app")), /1 file before it went through and will not be sent again/);
+    assert.equal(world.posted.filter((p) => p.path === "/cases").length, made, "no check opened with half the files");
+    assert.equal(failing.sent.length, 2);
+    // The person chooses both files again.
+    const retry = $("#dds-file");
+    Object.defineProperty(retry, "files", { value: files });
+    retry.dispatchEvent(new window.Event("change", { bubbles: true }));
+    await until(() => world.posted.filter((p) => p.path === "/cases").length > made, 4000, "the check opened");
+    assert.equal(failing.sent.length, 3, "only the failed file went up again");
+    const body = world.posted.filter((p) => p.path === "/cases").at(-1).body;
+    assert.equal(body.upload_ids.length, 2, "both files are in the one check");
   });
 }
