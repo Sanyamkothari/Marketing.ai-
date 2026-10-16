@@ -277,9 +277,13 @@ export function withinBudget(findings, used = 0, budget = INTERRUPTION_BUDGET) {
 
 // --- the whole plan -----------------------------------------------------------------------------------------------
 
+/** A note: a check our rules made that changes nothing and warns of nothing (level "note"). It needs no yes. */
+export const isNote = (item) => item.kind === "data_check" && item.source === "rules" && payloadOf(item).level === "note";
+
 /** An item needs a yes when it is not a sure fix, was not found by the rules, needs its own yes or carries a stop or flag. */
 export function needsYes(item, approveIds, ledger) {
   if (approveIds.has(item.item_id)) return true;
+  if (isNote(item)) return false;
   if (item.confidence !== "sure" || item.source !== "rules") return true;
   const level = alertOf(item, ledger);
   return level === "stop" || level === "flag";

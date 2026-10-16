@@ -103,7 +103,7 @@ def test_not_ready_is_said_and_starts_nothing(storage: LocalStorage, world: Worl
     assert screen.view.verdict.key == "not_ready" and screen.view.start is None
 
 
-def test_a_change_after_the_check_takes_the_verdict_back_to_the_visit(
+def test_a_change_after_the_check_keeps_the_last_failure_and_its_reason_on_screen(
     storage: LocalStorage, world: World
 ) -> None:
     screen = scenario("not_ready", storage, world)
@@ -112,7 +112,9 @@ def test_a_change_after_the_check_takes_the_verdict_back_to_the_visit(
         CLIENT, screen.case.case_id, key.item_id, False, _deps(storage, world, _found()),
         expected_version=screen.case.version, actor=ANALYST,
     )  # fmt: skip
-    assert screen_view(storage, unticked, config_root=None).verdict.key != "not_ready"
+    verdict = screen_view(storage, unticked, config_root=None).verdict
+    # The check no longer counts for the changed plan, but the person is still told why it failed, not "approve" bare.
+    assert verdict.key == "not_ready" and verdict.reasons == ("as the test says",)
 
 
 def test_a_remembered_answer_shows_its_date_and_whether_it_was_revoked(

@@ -198,6 +198,21 @@ test("the plan: sections with one sentence and one count, only what needs a yes 
   assert.match($("[data-dds-approve-hold]").textContent, /Check each section above first: Exclusions\./);
 });
 
+test("a note (a check that changes nothing) is not counted as needing a yes", async () => {
+  const note = (id) => ({ ...sqlItem({ item_id: id, kind: "data_check", state: "accepted", title: "customer_id: every value is different" }), payload: { level: "note", code: "ID_UNIQUE" } });
+  const fix = { ...sqlItem({ item_id: "fix.one", title: "Read spend as a number" }), payload: { step: { kind: "parse_number" } } };
+  await show("approve", {
+    patch: (s) => {
+      s.case.items.push(fix, note("n1"), note("n2"));
+      return s;
+    },
+  });
+  const sec = $('[data-dds-plan-section="fix"]');
+  const shown = sec.querySelectorAll("[data-dds-item]").length;
+  assert.match(sec.querySelector("[data-dds-sec-line]").textContent, new RegExp(`${shown - 2} changes?\\. 1 needs your yes\\.`), "the two notes are not changes");
+  assert.equal(sec.querySelector("details[data-dds-sure] summary").textContent, "1 sure fix, 2 notes");
+});
+
 test("Approve waits for each section with something to decide, then one final yes", async () => {
   await show("approve", {
     patch: (s) => {
@@ -230,6 +245,24 @@ test("a stop on a step still ticked holds the final yes, even after its section 
   box.dispatchEvent(new window.Event("change", { bubbles: true }));
   assert.ok($("[data-dds-approve-button]").disabled);
   assert.match($("[data-dds-approve-hold]").textContent, /A step stops the plan/);
+});
+
+test("saying yes to a stop does not un-tick the section checks", async () => {
+  const stop = { ...LEDGER, findings: [{ level: "stop", kind: "guard", key: "k1", count: 0, text: "A join made one customer appear on two rows.", item_id: "sql.spend" }] };
+  await show("approve", { patch: withLedger({ state: "accepted" }, stop) });
+  const box = () => $('input[data-dds-sec-ok="combine"]');
+  box().checked = true;
+  box().dispatchEvent(new window.Event("change", { bubbles: true }));
+  assert.ok(box().checked);
+  world.patch = (s) => {
+    withLedger({ state: "accepted" }, { ...stop, findings: [{ ...stop.findings[0], level: "flag" }] })(s);
+    s.case.items.push(sqlItem({ item_id: "sql.extra", state: "accepted" })); // even if the answer holds more than before
+    return s;
+  };
+  $("[data-dds-ack]").click();
+  await until(() => posts("acknowledgements").length === 1, 2000, "the yes to the stop");
+  await settle(3);
+  assert.ok(box().checked, "the section is still checked after the stop got its yes");
 });
 
 // --- the question queue --------------------------------------------------------------------------------------------

@@ -49,7 +49,7 @@ import {
   parkItem,
 } from "./api.js";
 import { injectDataDoctorStyles } from "./styles.js";
-import { sectionOf } from "./plan.js";
+import { sectionOf, signatureOf } from "./plan.js";
 import { checksHtml, funnelHtml, planHtml, planModel, queueHtml } from "./plan_view.js";
 import {
   approveHtml,
@@ -341,6 +341,18 @@ async function act(entry, busy, work, { announce = "" } = {}) {
 
 const theCase = (entry) => entry.state.screen.case;
 
+/** Say yes to a stop. It changes nothing in the plan, so the sections the person has checked stay checked. */
+async function ackStop(entry, key) {
+  const s = entry.state;
+  const was = [...s.checked.keys()];
+  await act(entry, "ack", () => acknowledgeStop(theCase(entry), key), { announce: "Noted: you said yes to this" });
+  if (s.error || !s.screen) return;
+  for (const sec of planModel(s.screen, { checked: s.checked, read: s.read }).plan) {
+    if (was.includes(sec.id)) s.checked.set(sec.id, signatureOf(sec));
+  }
+  draw(entry);
+}
+
 /** The goal an upload is read for: the host's goal, else the first goal on offer (as Data Doctor's page did). */
 async function uploadGoal(host) {
   if (host.goalId) return host.goalId;
@@ -548,7 +560,7 @@ function bind(entry) {
         { announce: "Step parked until they answer" },
       );
     } else if (d.ddsResume) act(entry, "resume", () => decideItem(theCase(entry), d.ddsResume, false), { announce: "Step is open again" });
-    else if (d.ddsAck) act(entry, "ack", () => acknowledgeStop(theCase(entry), d.ddsAck), { announce: "Noted: you said yes to this" });
+    else if (d.ddsAck) ackStop(entry, d.ddsAck);
     else if (d.ddsGoto) goTo(entry, d.ddsGoto);
     else if (d.ddsChange) toggleChange(entry, d.ddsChange);
     else if (d.ddsAgree) {
