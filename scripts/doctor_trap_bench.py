@@ -3,11 +3,23 @@
 Each case under `tests/fixtures/doctor_traps/<case>/` is a few small CSV files and a `case.json` written by a human:
 one line saying what the trap is, the scenario ID it comes from (`SCENARIOS.md`), what a correct result looks like,
 and the checks that grade it. The runner puts the files through the unified Data Doctor visit with **no AI** (the
-rules path), the way a person who clicks through the product would: it answers every question with the answer the
-case file gives, ticks every suggestion, gives each change that needs its own yes that yes, approves, and then
-applies the approved changes to the files with the product's own replay (`engine.doctor.prescription_replay`).
-What comes out is the table the next step would train or contact on. Only that table (and the questions the Doctor
-asked) is graded; the Doctor's own wording never counts as evidence.
+rules path) and approves, then applies the approved changes to the files with the product's own replay
+(`engine.doctor.prescription_replay`). What comes out is the table the next step would train or contact on. Only
+that table (and the questions the Doctor asked) is graded; the Doctor's own wording never counts as evidence.
+
+Two drivers walk the visit:
+
+* **person** (the default, the number to track) acts like a careful person who does not know the product's insides:
+  it accepts what the product pre-ticks; it leaves an unticked suggestion unticked unless the case's answer key
+  (`person.tick`) says a person who knows their business would tick it; it answers a question the answer key covers
+  (`answers`: a business fact only the person knows, or "I don't know" where the person would not know) with the
+  key's choice (the report counts any key answer that overrides a recommendation), every other question that has a
+  recommended option with that option, and a blocking question with neither with the first option offered (counted
+  in the report as a guess); it says yes to a safety stop only where the key names it (listed in the report);
+* **tick-all** (`--tick-all`, the old behaviour, kept for comparison) answers only blocking questions and ticks
+  every pending suggestion. It flatters the product: a leak column the product leaves unticked is dropped anyway.
+
+The default run also runs tick-all and the report shows both numbers.
 
 What is graded (a case lists the checks that apply; the first two apply to every case):
 
@@ -28,6 +40,8 @@ the point. The bench measures; it does not have to pass.
 
     python -m scripts.doctor_trap_bench                       # writes reports/doctor_trap_bench.{md,json}
     python -m scripts.doctor_trap_bench --cases K1,V19 -k 3
+    python -m scripts.doctor_trap_bench --tick-all            # only the old tick-everything driver
+    python -m scripts.doctor_trap_bench --no-compare          # only the person-like driver
     python -m scripts.doctor_trap_bench --list
 
 `--model product` is reserved for the run with the real AI service and is not built yet.
@@ -61,7 +75,8 @@ DEFAULT_GOAL: Final[str] = "telco-churn"
 DEFAULT_K: Final[int] = 2
 CLIENT: Final[str] = "default"
 ANALYST: Final[str] = "u-trap-bench"
-MAX_TURNS: Final[int] = 40
+DRIVERS: Final[tuple[str, ...]] = ("person", "tick-all", "blocking-only")
+MAX_TURNS: Final[int] = 80
 ROW_CAP: Final[int] = 200_000
 # The fixtures' as-of date (`generate.AS_OF`): ages are graded on it, so a minor stays a minor as the years pass.
 AS_OF: Final[str] = "2026-09-30"
@@ -109,6 +124,10 @@ class TrapCase:
     checks: tuple[dict[str, Any], ...]
     ideal: dict[str, Any]
     path: Path
+    person: dict[str, Any] = field(default_factory=dict)
+    """What a person who knows their business would do beyond the defaults: `tick` (suggestions to tick: `title`
+    regex, optional `kind`), `should_see` (patterns of a question or flag the product ought to show), `if_fails`
+    (why the case fails for that person and what the product should do)."""
 
     def raw(self, table: str) -> list[dict[str, str]]:
         """The rows of a table exactly as written, every cell a string (what the person's file says)."""
@@ -137,6 +156,7 @@ def load_case(path: Path) -> TrapCase:
             checks=tuple(dict(c) for c in doc["checks"]),
             ideal=dict(doc.get("ideal", {})),
             path=path,
+            person=dict(doc.get("person", {})),
         )
     except (OSError, KeyError, ValueError, TypeError) as exc:
         raise BenchError(f"{path.name}: the case file cannot be read ({exc!r})") from exc
@@ -178,6 +198,14 @@ class Shipped:
     notes: list[str] = field(default_factory=list)
     """Things that went wrong on the way (a refusal, a stop); never graded as evidence."""
     error: str | None = None
+    pending: list[dict[str, Any]] = field(default_factory=list)
+    """Suggestions still unticked when the visit ended: `kind`, `title`, `column`."""
+    open_questions: list[dict[str, Any]] = field(default_factory=list)
+    """Questions nobody answered: `code`, `text`, `blocking`."""
+    item_titles: list[str] = field(default_factory=list)
+    """Every suggestion or flag the person was shown, ticked or not."""
+    choices: list[dict[str, str]] = field(default_factory=list)
+    """What the driver did on the person's behalf: `did`, `what`, `why`."""
 
     def asked_text(self) -> list[str]:
         return [f"{q['code'].replace('_', ' ')} {q['text']}" for q in self.questions] + list(self.doubts)
@@ -241,8 +269,51 @@ def _answer_for(case: TrapCase, code: str) -> str | None:
     return case.answers.get(code, case.answers.get("*"))
 
 
-def _drive(case: TrapCase, uploads: dict[str, str], deps: Any) -> Any:
-    """Walk the visit like a careful person: answer, tick everything, confirm what needs its own yes, approve."""
+def _person_choice(case: TrapCase, question: Any) -> tuple[Any, str] | None:
+    """The option a careful person takes, and why; `None` = leaves the question open.
+
+    The answer key first (a business fact only the person knows: consent direction, units, which statuses are real
+    money; "I don't know" where the key says the person would not know), then the product's recommended option, then
+    - for a blocking question only, which cannot be left - the first option offered, counted as a guess.
+    """
+    wanted = _answer_for(case, question.code)
+    if wanted:
+        for option in question.options:
+            if option.label.lower().startswith(wanted.lower()):
+                why = "dont_know" if wanted.lower().startswith("i don't know") else "answer key"
+                if question.recommended not in (None, option.option_id):
+                    why += " (over the product's recommendation)"  # counted in the report
+                return option, why
+    for option in question.options:
+        if option.option_id == question.recommended:
+            return option, "recommended"
+    if question.blocking and question.options:
+        return _pick(question.options, None), "first offered (no recommendation, no key)"
+    return None
+
+
+def _ticks(case: TrapCase, item: Any) -> bool:
+    """Whether the answer key says a person who knows their business ticks this suggestion."""
+    for rule in case.person.get("tick", ()):
+        if rule.get("kind") not in (None, item.kind):
+            continue
+        if re.search(str(rule.get("title", "")), item.title, re.IGNORECASE):
+            return True
+    return False
+
+
+def _drive(
+    case: TrapCase,
+    uploads: dict[str, str],
+    deps: Any,
+    driver: str = "person",
+    log: list[dict[str, str]] | None = None,
+) -> Any:
+    """Walk the visit: answer, tick, confirm what needs its own yes, approve.
+
+    `tick-all` answers blocking questions only and ticks every pending suggestion. `person` accepts what the product
+    pre-ticked and does what `_person_choice` and the case's `person.tick` say, nothing more (see the module docs).
+    """
     from engine.access.roles import LOCAL_OPERATOR
     from engine.agent.contracts import ProposalState
     from engine.doctor import visit
@@ -251,6 +322,11 @@ def _drive(case: TrapCase, uploads: dict[str, str], deps: Any) -> Any:
     from engine.doctor.protocol import item_sentence
     from engine.utils.time import utc_now
 
+    choices = log if log is not None else []
+    person = driver in {"person", "blocking-only"}
+    optional = driver == "person"  # blocking-only: a question that does not block is left open
+    done_questions: set[str] = set()
+    done_items: set[str] = set()
     store = CaseStore(deps.storage)
     files = [
         CaseFile(upload_id=uploads[t], file_name=case.files[t], added_at=utc_now(), added_by=ANALYST)
@@ -267,15 +343,45 @@ def _drive(case: TrapCase, uploads: dict[str, str], deps: Any) -> Any:
         blocking = visit.open_blocking(now)
         if blocking:
             question = blocking[0]
-            option = _pick(question.options, _answer_for(case, question.code))
+            if person:
+                option, why = _person_choice(case, question) or (question.options[0], "first offered")
+                choices.append({"did": "answered", "what": f"{question.code}: {option.label}", "why": why})
+            else:
+                option = _pick(question.options, _answer_for(case, question.code))
+            done_questions.add(question.question_id)
             current = visit.answer(
                 CLIENT, now.case_id, question.question_id, option.option_id, deps,
                 expected_version=now.version, actor=ANALYST,
             )  # fmt: skip
             continue
-        items, _ = visit.active_section(now)
-        pending = [i for i in items if i.state is ProposalState.PENDING]
+        items, questions = visit.active_section(now)
+        if optional:
+            step = next(
+                (
+                    (q, c)
+                    for q in questions
+                    if q.answer is None and q.question_id not in done_questions
+                    for c in [_person_choice(case, q)]
+                    if c is not None
+                ),
+                None,
+            )
+            if step is not None:
+                question, (option, why) = step
+                choices.append({"did": "answered", "what": f"{question.code}: {option.label}", "why": why})
+                done_questions.add(question.question_id)
+                current = visit.answer(
+                    CLIENT, now.case_id, question.question_id, option.option_id, deps,
+                    expected_version=now.version, actor=ANALYST,
+                )  # fmt: skip
+                continue
+        pending = [i for i in items if i.state is ProposalState.PENDING and i.item_id not in done_items]
+        if person:
+            pending = [i for i in pending if _ticks(case, i)]
         if pending:
+            if person:
+                choices.append({"did": "ticked", "what": pending[0].title[:120], "why": "answer key"})
+            done_items.add(pending[0].item_id)
             current = visit.decide(
                 CLIENT, now.case_id, pending[0].item_id, True, deps,
                 expected_version=now.version, actor=ANALYST,
@@ -296,6 +402,13 @@ def _drive(case: TrapCase, uploads: dict[str, str], deps: Any) -> Any:
             stops = open_stops(state.plan_check, state.acknowledged) if state is not None else []
             wanted = [s for s in stops if case.answers.get(s.code, "").lower().startswith("acknowledge")]
             if wanted:
+                choices.append(
+                    {
+                        "did": "said yes to the stop",
+                        "what": f"{wanted[0].code}: {wanted[0].text}",
+                        "why": "answer key",
+                    }
+                )
                 current = visit.acknowledge_stop(
                     CLIENT, now.case_id, wanted[0].key, deps, expected_version=now.version, actor=ANALYST,
                     reason="the bench's answer key says to go on",
@@ -312,7 +425,7 @@ def _drive(case: TrapCase, uploads: dict[str, str], deps: Any) -> Any:
                 return now
             continue
         return now
-    return store.get(CLIENT, current.case_id)
+    raise BenchError(f"the visit did not finish in {MAX_TURNS} turns")
 
 
 def _text(value: Any) -> str:
@@ -327,8 +440,9 @@ def _text(value: Any) -> str:
     return str(value).strip()
 
 
-def ship(trap: TrapCase) -> Shipped:
-    """One run: the case through the unified visit with no AI, then the approved changes applied to the files."""
+def ship(trap: TrapCase, driver: str = "person") -> Shipped:
+    """One run: the case through the unified visit with no AI (walked by `driver`), then the approved changes
+    applied to the files."""
     from engine.config import load_use_case
     from engine.doctor.case import Case, CaseFile, CaseItem, CaseStore
     from engine.doctor.checks_grain import grain_detector
@@ -392,7 +506,7 @@ def ship(trap: TrapCase) -> Shipped:
             ),
         )
         try:
-            done = _drive(trap, uploads, deps)
+            done = _drive(trap, uploads, deps, driver, shipped.choices)
         except Exception as exc:  # a refusal or a crash is the Doctor's result, not the bench's
             shipped.error = f"the visit stopped: {type(exc).__name__}: {exc}"
             found = CaseStore(storage).list(CLIENT)
@@ -412,7 +526,16 @@ def _collect(shipped: Shipped, done: Any) -> None:
 
     shipped.questions = [{"code": q.code, "text": q.text} for q in done.questions]
     shipped.doubts = [f"{d.because} {d.would_do}" for d in done.doubts]
+    shipped.open_questions = [
+        {"code": q.code, "text": q.text, "blocking": q.blocking} for q in done.questions if q.answer is None
+    ]
+    shipped.item_titles = [i.title for i in done.items]
     for item in done.items:
+        if item.state is ProposalState.PENDING:
+            col = item.payload.get("column")
+            shipped.pending.append(
+                {"kind": item.kind, "title": item.title, "column": col if isinstance(col, str) else None}
+            )
         if item.state is not ProposalState.ACCEPTED:
             continue
         step = item.payload.get("step")
@@ -429,6 +552,12 @@ def _collect(shipped: Shipped, done: Any) -> None:
         for name in (step.get("column"), step.get("new_column")):
             if isinstance(name, str):
                 shipped.touched |= {name}
+        params = step.get("params")
+        sql = params.get("sql") if isinstance(params, dict) else None
+        if step.get("kind") == "sql_query" and isinstance(sql, str):
+            # An approved SQL step (a person's answer such as "once per order id") names the table in `column`; the
+            # columns it reads or rewrites are the quoted identifiers in its text.
+            shipped.touched |= frozenset(re.findall(r'"([^"]+)"', sql))
         if item.kind == "key" and isinstance(column, str):
             shipped.key_column = column
         elif item.kind == "outcome_column" and isinstance(column, str):
@@ -477,6 +606,8 @@ def _apply(
 class Verdict:
     passed: bool
     detail: str
+    asked_only: bool = False
+    """Passed only because the question was asked: the data alternative of an `any_of` did not hold."""
 
 
 @dataclass
@@ -825,9 +956,12 @@ def check_asked(g: Grader, args: Mapping[str, Any]) -> Verdict:
 
 def check_any_of(g: Grader, args: Mapping[str, Any]) -> Verdict:
     """Pass if any one of the listed checks passes (for example: asked, or left the values alone)."""
-    verdicts = [run_check(g, dict(c)) for c in args["checks"]]
+    specs = [dict(c) for c in args["checks"]]
+    verdicts = [run_check(g, c) for c in specs]
     if any(v.passed for v in verdicts):
-        return next(v for v in verdicts if v.passed)
+        first = next(v for v in verdicts if v.passed)
+        data_held = any(v.passed and c.get("kind") != "asked" for c, v in zip(specs, verdicts, strict=True))
+        return Verdict(True, first.detail, asked_only=not data_held)
     return Verdict(False, " / ".join(v.detail for v in verdicts))
 
 
@@ -887,6 +1021,7 @@ def grade(case: TrapCase, shipped: Shipped) -> list[dict[str, Any]]:
                 "label": spec.get("label", spec["kind"]),
                 "passed": verdict.passed,
                 "detail": verdict.detail,
+                "asked_only": verdict.asked_only,
             }
         )
     return out
@@ -936,7 +1071,44 @@ def result_digest(shipped: Shipped) -> str:
     return h.hexdigest()[:12]
 
 
-def run_case(case: TrapCase, k: int = DEFAULT_K) -> dict[str, Any]:
+def _asked_specs(case: TrapCase) -> list[dict[str, Any]]:
+    """The question-or-flag patterns a case expects the person to be shown: its bare `asked` checks, those inside an
+    `any_of` when the ideal Doctor asks something (`ideal.asks`), and the `person.should_see` patterns."""
+    found: list[dict[str, Any]] = []
+    optional = bool(case.ideal.get("asks"))
+
+    def walk(spec: Mapping[str, Any], nested: bool = False) -> None:
+        if spec.get("kind") == "asked" and (optional or not nested):
+            found.append(dict(spec))
+        for inner in spec.get("checks", ()) if spec.get("kind") == "any_of" else ():
+            walk(inner, True)
+
+    for spec in case.checks:
+        walk(spec)
+    should = [str(p) for p in case.person.get("should_see", ())]
+    if should:
+        found.append({"kind": "asked", "text": should})
+    return found
+
+
+def shown_right(case: TrapCase, shipped: Shipped) -> bool | None:
+    """Whether the person was SHOWN the right question or flag: a question, a doubt, or any suggestion or flag on the
+    plan, ticked or not (unlike the `asked` check, which counts questions and doubts only). `None` = the case has no
+    question or flag it expects. Whether the data came out right is a different matter (the checks)."""
+    specs = _asked_specs(case)
+    if not specs:
+        return None
+    heard = shipped.asked_text() + shipped.item_titles
+    codes = {q["code"] for q in shipped.questions}
+    for spec in specs:
+        if {str(c) for c in spec.get("codes", ())} & codes:
+            return True
+        if any(re.search(str(p), line, re.IGNORECASE) for p in spec.get("text", ()) for line in heard):
+            return True
+    return False
+
+
+def run_case(case: TrapCase, k: int = DEFAULT_K, driver: str = "person") -> dict[str, Any]:
     """The case k times; it passes only if every run passes every check.
 
     A case of several files that passes although no run joined or stacked them is marked `untested`: its join
@@ -947,7 +1119,7 @@ def run_case(case: TrapCase, k: int = DEFAULT_K) -> dict[str, Any]:
     runs: list[dict[str, Any]] = []
     for _ in range(k):
         started = time.perf_counter()
-        shipped = ship(case)
+        shipped = ship(case, driver)
         checks = grade(case, shipped)
         runs.append(
             {
@@ -961,10 +1133,15 @@ def run_case(case: TrapCase, k: int = DEFAULT_K) -> dict[str, Any]:
                 "combined": any(a["kind"] in {JOIN_KIND, STACK_KIND} for a in shipped.accepted),
                 "notes": shipped.notes,
                 "seconds": round(time.perf_counter() - started, 2),
+                "shown_right": shown_right(case, shipped),
+                "choices": shipped.choices,
+                "left_unticked": shipped.pending,
+                "left_open": shipped.open_questions,
             }
         )
     failed = sorted({c["category"] for r in runs for c in r["checks"] if not c["passed"]})
     passed = all(r["passed"] for r in runs)
+    shown = [r["shown_right"] for r in runs]
     return {
         "id": case.case_id,
         "scenario": case.scenario,
@@ -974,54 +1151,165 @@ def run_case(case: TrapCase, k: int = DEFAULT_K) -> dict[str, Any]:
         "k": k,
         "passed": passed,
         "untested": passed and len(case.files) > 1 and not any(r["combined"] for r in runs),
+        "asked_only": passed and any(c["asked_only"] for r in runs for c in r["checks"]),
         "runs_passed": sum(1 for r in runs if r["passed"]),
         "stable": len({r["digest"] for r in runs}) == 1,
         "failed_categories": failed,
+        "shown_right": None if None in shown else all(shown),
+        "if_fails": str(case.person.get("if_fails", "")),
         "runs": runs,
     }
 
 
-def run_bench(cases: Sequence[TrapCase], k: int = DEFAULT_K, *, model: str = "rules") -> dict[str, Any]:
+def run_bench(
+    cases: Sequence[TrapCase], k: int = DEFAULT_K, *, model: str = "rules", driver: str = "person"
+) -> dict[str, Any]:
+    """Every case k times with one driver (`person` or `tick-all`)."""
     if model != "rules":
         raise BenchError(
             "--model product is reserved for the run with the real AI service; it is not built yet"
         )
-    results = [run_case(c, k) for c in cases]
+    if driver not in DRIVERS:
+        raise BenchError(f"no driver called {driver!r} (the drivers are {', '.join(DRIVERS)})")
+    results = [run_case(c, k, driver) for c in cases]
     by_category: dict[str, dict[str, int]] = {}
     for key in CATEGORIES:
         graded = [c for r in results for c in r["runs"][0]["checks"] if c["category"] == key]
         by_category[key] = {"graded": len(graded), "failed": sum(1 for c in graded if not c["passed"])}
+    shown = [r["shown_right"] for r in results if r["shown_right"] is not None]
+    guesses = sum(1 for r in results for c in r["runs"][0]["choices"] if c["why"].startswith("first offered"))
+    overrides = sum(1 for r in results for c in r["runs"][0]["choices"] if "over the product's" in c["why"])
+    stopped = [
+        r["id"] for r in results if any(c["did"] == "said yes to the stop" for c in r["runs"][0]["choices"])
+    ]
     return {
         "bench": "doctor_trap_bench",
-        "version": 0,
+        "version": 1,
         "model": model,
+        "driver": driver,
         "k": k,
         "cases": len(results),
         "passed": sum(1 for r in results if r["passed"]),
         "failed": sum(1 for r in results if not r["passed"]),
         "unstable": sum(1 for r in results if not r["stable"]),
         "untested": sum(1 for r in results if r["untested"]),
+        "shown_right": sum(1 for s in shown if s),
+        "shown_defined": len(shown),
+        "guessed_answers": guesses,
+        "key_over_recommendation": overrides,
+        "said_yes_to_a_stop": stopped,
         "by_category": by_category,
         "results": results,
     }
 
 
+def _compact(other: Mapping[str, Any]) -> dict[str, Any]:
+    """The part of another driver's run the report shows beside the main one."""
+    return {
+        "passed": other["passed"],
+        "failed": other["failed"],
+        "untested": other["untested"],
+        "unstable": other["unstable"],
+        "shown_right": other["shown_right"],
+        "by_category": other["by_category"],
+        "results": [
+            {
+                "id": r["id"],
+                "passed": r["passed"],
+                "untested": r["untested"],
+                "asked_only": r["asked_only"],
+                "failed_categories": r["failed_categories"],
+                "detail": next((c["detail"] for c in r["runs"][0]["checks"] if not c["passed"]), ""),
+            }
+            for r in other["results"]
+        ],
+    }
+
+
+def run_both(cases: Sequence[TrapCase], k: int = DEFAULT_K, *, model: str = "rules") -> dict[str, Any]:
+    """The person-like run (the report's main numbers) with the other two drivers beside it for comparison."""
+    report = run_bench(cases, k, model=model, driver="person")
+    report["tick_all"] = _compact(run_bench(cases, k, model=model, driver="tick-all"))
+    report["blocking_only"] = _compact(run_bench(cases, k, model=model, driver="blocking-only"))
+    return report
+
+
+def _mark(r: Mapping[str, Any]) -> str:
+    if not r["passed"]:
+        return "FAIL"
+    return "pass, untested" if r["untested"] else ("pass (asked only)" if r["asked_only"] else "pass")
+
+
+def _what_went_wrong(r: Mapping[str, Any]) -> str:
+    first = next((c for run in r["runs"] for c in run["checks"] if not c["passed"]), None)
+    error = next((run["error"] for run in r["runs"] if run["error"]), None)
+    why = "" if r["passed"] else (error or (first["detail"] if first else ""))
+    return "nothing was joined or stacked" if r["untested"] else why
+
+
 def render_markdown(report: Mapping[str, Any]) -> str:
+    tick: Mapping[str, Any] | None = report.get("tick_all")
+    lazy: Mapping[str, Any] | None = report.get("blocking_only")
+    driver = str(report.get("driver", "person"))
+    name = {"person": "person-like", "tick-all": "tick-all", "blocking-only": "blocking-only"}[driver]
+    ticks = {r["id"]: r for r in tick["results"]} if tick else {}
+    lazies = {r["id"]: r for r in lazy["results"]} if lazy else {}
+    total = report["cases"]
     lines = [
-        "# Data Doctor trap bench (v0)",
+        "# Data Doctor trap bench (v1)",
         "",
-        f"{report['cases']} planted traps, each run {report['k']} times with no AI (the rules path). "
+        f"{total} planted traps, each run {report['k']} times with no AI (the rules path). "
         "A trap passes only if every run passes every check. The result data is graded, never the Doctor's words.",
         "",
-        f"**Passed {report['passed']} of {report['cases']}; failed {report['failed']}; "
-        f"runs that disagreed with each other: {report['unstable']}.**",
+    ]
+    if tick and lazy:
+        lines += [
+            f"**Person-like (the number to track): passed {report['passed']} of {total}.**",
+            f"Tick-all (the old driver, flatters the product): passed {tick['passed']} of {total}. "
+            f"Person who skips the questions that do not block: passed {lazy['passed']} of {total}.",
+            "",
+        ]
+    else:
+        lines += [f"**Driver {name}: passed {report['passed']} of {total}; failed {report['failed']}.**", ""]
+    lines += [
+        "* **Person-like** acts like a careful person: it accepts what the product pre-ticks, leaves every "
+        "unticked suggestion unticked (unless the case's answer key says a person who knows their business would "
+        "tick it), answers every question that has a recommended option with that option, answers the questions "
+        "only the person can (which column is the outcome, consent direction, units, which statuses are real money, "
+        "household) from the case's answer key, says \"I don't know\" where the key says the person would not know, "
+        "and says yes to a safety stop only where the key says the loss is what the person meant.",
+        "* **Tick-all** (`--tick-all`) answers blocking questions only and ticks every pending suggestion, so a leak "
+        "column the product leaves unticked is dropped anyway. It is the old behaviour, kept for comparison.",
+        "* **Skips optional questions** is the person-like driver that leaves every question that does not block "
+        "unanswered (a person who clicks through). A trap that passes person-like but fails here only passes if the "
+        "person answers a question the product could have answered for them.",
         "",
+        f"Runs that disagreed with each other ({name}): {report['unstable']}. "
         f"{report['untested']} of the passes are untested: the case has several files but nothing was joined or "
-        "stacked, so its join traps were never sprung.",
+        "stacked, so its join traps were never sprung. "
+        f"{sum(1 for r in report['results'] if r['asked_only'])} pass (asked only): the right question was asked "
+        "but the data was not fixed (the check accepts either).",
         "",
+        f"**Asked the right question** ({name} run; the right question or flag was on the screen the person saw, "
+        f"ticked or not, whatever the data did): {report['shown_right']} of {report['shown_defined']} traps that "
+        "have one. A flag that changes nothing does not protect the data, so this is counted apart from the pass.",
+        "",
+    ]
+    if driver != "tick-all":
+        lines += [
+            f"Blocking questions with neither a recommended option nor an answer in the key, answered with the first "
+            f"option offered (a guess): {report['guessed_answers']}. Answers where the key overrode the "
+            f"product's recommended option: {report.get('key_over_recommendation', 0)}.",
+            "",
+            f"Traps where the person said yes to a safety stop because the key says the loss is what they meant "
+            f"({len(report.get('said_yes_to_a_stop', []))}): {', '.join(report.get('said_yes_to_a_stop', [])) or 'none'}. "
+            "Without that yes the visit cannot be approved, so these passes rest on the key's judgement.",
+            "",
+        ]
+    lines += [
         "Many traps fail today. That is expected: the bench measures, it does not have to pass.",
         "",
-        "## What was graded",
+        f"## What was graded ({name})",
         "",
         "| Check | Graded | Failed |",
         "|---|---|---|",
@@ -1029,16 +1317,85 @@ def render_markdown(report: Mapping[str, Any]) -> str:
     for key, label in CATEGORIES.items():
         row = report["by_category"][key]
         lines.append(f"| {label} | {row['graded']} | {row['failed']} |")
-    lines += ["", "## The traps", "", "| Trap | Scenario | Result | What went wrong |", "|---|---|---|---|"]
+    head = f"| Trap | Scenario | {name.capitalize()} |"
+    rule = "|---|---|---|"
+    if tick:
+        head += " Tick-all |"
+        rule += "---|"
+    if lazy:
+        head += " Skips optional questions |"
+        rule += "---|"
+    lines += [
+        "",
+        "## The traps",
+        "",
+        head + " Showed the right question | What went wrong |",
+        rule + "---|---|",
+    ]
     for r in report["results"]:
-        first = next((c for run in r["runs"] for c in run["checks"] if not c["passed"]), None)
-        error = next((run["error"] for run in r["runs"] if run["error"]), None)
-        why = "" if r["passed"] else (error or (first["detail"] if first else ""))
-        if r["untested"]:
-            why = "nothing was joined or stacked"
-        mark = "FAIL" if not r["passed"] else ("pass, untested" if r["untested"] else "pass")
-        lines.append(f"| {r['id']} | {r['scenario']} | {mark} | {why.replace('|', '/')[:160]} |")
-    lines += ["", "## Each trap", ""]
+        shown = {True: "yes", False: "no", None: "-"}[r["shown_right"]]
+        cells = f"| {r['id']} | {r['scenario']} | {_mark(r)} |"
+        for other in (ticks, lazies):
+            if other:
+                t = other.get(r["id"])
+                cells += f" {_mark(t) if t else '-'} |"
+        lines.append(f"{cells} {shown} | {_what_went_wrong(r).replace('|', '/')[:160]} |")
+    if tick:
+        flattered = [r["id"] for r in report["results"] if not r["passed"] and ticks[r["id"]]["passed"]]
+        lines += [
+            "",
+            f"Pass with tick-all, fail person-like ({len(flattered)}): {', '.join(flattered) or 'none'}.",
+        ]
+    if lazy:
+        needs = [r["id"] for r in report["results"] if r["passed"] and not lazies[r["id"]]["passed"]]
+        lines += [
+            "",
+            f"Pass person-like, fail when the person skips the optional questions ({len(needs)}): "
+            f"{', '.join(needs) or 'none'}. For these the recommended answer is what makes the data right, yet "
+            "the product leaves it unanswered: it should apply the recommendation as a pre-answered, changeable "
+            "choice (or make the question block).",
+        ]
+    failing = [r for r in report["results"] if not r["passed"] or (r["untested"] and r["if_fails"])]
+    if failing:
+        lines += [
+            "",
+            f"## Why each trap fails for the {name} driver",
+            "",
+            "For each failure: the failing check, what was left unticked on the plan or unanswered when the person "
+            "approved, and (written by hand in the case file) what the person would have to do and whether the "
+            "product should pre-tick it or ask a question.",
+            "",
+        ]
+        for r in failing:
+            run = r["runs"][0]
+            lines += [
+                f"### {r['id']} ({r['scenario']})" + ("" if not r["passed"] else " (passes, but untested)"),
+                "",
+            ]
+            for c in run["checks"]:
+                if not c["passed"]:
+                    lines.append(f"- Failed check: {c['label']}. {c['detail']}")
+            if run["error"]:
+                lines.append(f"- Stopped: {run['error']}")
+            routine = [
+                i for i in run["left_unticked"] if "values are different from each other" in i["title"]
+            ]
+            for item in run["left_unticked"]:
+                if item not in routine:
+                    lines.append(f"- Left unticked: [{item['kind']}] {item['title']}")
+            if routine:
+                lines.append(
+                    f"- Also {len(routine)} routine 'every value is different' flag(s) (information only)."
+                )
+            for q in run["left_open"]:
+                lines.append(
+                    f"- Left unanswered ({'blocking' if q['blocking'] else 'not blocking'}): {q['code']}"
+                )
+            lines.append(
+                f"- Why and what to do: {r['if_fails'] or '(no diagnosis written in the case file yet)'}"
+            )
+            lines.append("")
+    lines += ["", f"## Each trap ({name})", ""]
     for r in report["results"]:
         lines += [f"### {r['id']} ({r['scenario']}, {r['theme']})", "", r["description"], ""]
         lines += [f"Expected: {r['expected']}", ""]
@@ -1047,6 +1404,8 @@ def render_markdown(report: Mapping[str, Any]) -> str:
             lines.append(f"- {'pass' if c['passed'] else 'FAIL'}: {c['label']}. {c['detail']}")
         if run["error"]:
             lines.append(f"- Stopped: {run['error']}")
+        for choice in run["choices"]:
+            lines.append(f"- Person {choice['did']}: {choice['what']} ({choice['why']})")
         lines.append("")
     return "\n".join(lines) + "\n"
 
@@ -1068,15 +1427,36 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--model", choices=("rules", "product"), default="rules", help="product: reserved")
     parser.add_argument("--out", type=Path, default=DEFAULT_OUT, help="report path without extension")
     parser.add_argument("--list", action="store_true", help="list the cases and stop")
+    only = parser.add_mutually_exclusive_group()
+    only.add_argument(
+        "--tick-all",
+        action="store_true",
+        help="only the old driver: answer blocking questions, tick everything",
+    )
+    only.add_argument(
+        "--no-compare", action="store_true", help="only the person-like driver (skip the tick-all comparison)"
+    )
     args = parser.parse_args(argv)
     cases = load_cases(only=[c for c in args.cases.split(",") if c])
     if args.list:
         for c in cases:
             print(f"{c.case_id:34} {c.scenario:8} {c.description}")
         return 0
-    report = run_bench(cases, args.k, model=args.model)
-    md, js = write_report(report, args.out)
-    print(f"passed {report['passed']} of {report['cases']} (k={args.k}); report: {md} and {js}")
+    if args.tick_all:
+        report = run_bench(cases, args.k, model=args.model, driver="tick-all")
+    elif args.no_compare:
+        report = run_bench(cases, args.k, model=args.model)
+    else:
+        report = run_both(cases, args.k, model=args.model)
+    md, _js = write_report(report, args.out)
+    extra = (
+        f" (tick-all: {report['tick_all']['passed']}, skipping optional questions: {report['blocking_only']['passed']})"
+        if "tick_all" in report
+        else ""
+    )
+    print(
+        f"{report['driver']}: passed {report['passed']} of {report['cases']}{extra} (k={args.k}); report: {md}"
+    )
     return 0
 
 

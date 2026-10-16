@@ -14,7 +14,9 @@
   "sales_b"
  ],
  "key": "order_id",
- "answers": {},
+ "answers": {
+  "OUTCOME_COLUMN": "churn (sales_a"
+ },
  "rows_may_drop": [],
  "checks": [
   {
@@ -49,5 +51,8 @@
    "The second file looks like paise. Convert to rupees?"
   ],
   "file": "ideal.csv"
+ },
+ "person": {
+  "if_fails": "The person would have to tick the plan's suggestion \"Stack <file> and <file> into one table\". It is shown but not pre-ticked, so each file is used alone and the other one's customers are not counted. The product should PRE-TICK it, not ask: the files have the same columns, it has already measured the repeated rows, and the suggestion states the rows before and after; the approval still names it and one click unticks it. Until it is, the paise-against-rupees trap is never sprung (untested)."
  }
 }
