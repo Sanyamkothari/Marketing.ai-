@@ -263,7 +263,7 @@ def describe(participant: str, paths: SessionPaths, port: int, master: Mapping[s
         f"Server        {server_line(paths.store, port)}",
         "",
         "Before the participant arrives (USABILITY_TEST.md section 3.3): open the URL in a fresh browser profile, check",
-        "that the sidebar shows five places and that there is no 'Sample data' notice, fill in the answer key from this",
+        "that the sidebar shows four places (no bell) and that there is no 'Sample data' notice, fill in the answer key from this",
         "store's Reports page, empty the downloads folder and start the recorder.",
     ]
     if master.get("is_sample"):

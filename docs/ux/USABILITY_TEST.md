@@ -97,7 +97,7 @@ display at least 1440 pixels wide. Close the server when the session ends and st
 
 ### 3.3 Before every session (the facilitator, five minutes)
 
-- [ ] The left sidebar shows five places and the bell and Help at the top right. If the top bar shows Home, Connections,
+- [ ] The left sidebar shows four places (Overview, Campaigns, Data, Settings) and Help at the top right, with no bell. If the top bar shows Home, Connections,
       Results and Settings instead, the layout is `classic`: the setting was not picked up. Stop and fix it.
 - [ ] There is no "Sample data" notice in the top bar (if there is, demo mode is on: restart without `MARKETING_AI_DEMO_MODE`).
 - [ ] The answer key (section 7.3) is filled in from **this** store's campaigns, before the participant arrives.
@@ -133,7 +133,7 @@ Print one card per task. Read it aloud and leave it on the table. Do not add any
 > Tell me when you think you are finished.
 
 The cards avoid every menu name and every product word on purpose: "contact list", "goal", "Proof Pack", "comparison
-group" and the names of the five places must come from the screens, not from the facilitator.
+group" and the names of the four places must come from the screens, not from the facilitator.
 
 ### 5.1 What counts as finished
 

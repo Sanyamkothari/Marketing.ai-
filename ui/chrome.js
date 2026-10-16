@@ -42,7 +42,7 @@ import { technicalSwitchHtml } from "./technical.js";
 import { LOGO, MODULES_EVENT, esc, headerToolHtml } from "./dom.js";
 // <M174>
 // Plan M M174 (DEC-1604): with the deployment's `ui_layout` set to "campaigns" the bar is the new shell
-// (`shell.js`: the five-place sidebar, the bell, Help and the profile); in "classic" nothing below changes.
+// (`shell.js`: the four-place sidebar, Help and the profile); in "classic" nothing below changes.
 // Both files are leaves as far as this one is concerned: neither imports the router or this file. The lines
 // between the M174 marks are the whole of M174 in this file: the classic layout's check removes them to draw
 // the bar as it was before (tests/integration/test_shell_ui.py).

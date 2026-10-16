@@ -545,6 +545,8 @@ def task2(pristine_store: Path, workdir: Path, playwright_driver: Any) -> Iterat
             tile_title = page.locator("[data-value-amount]").get_attribute("title") or ""
             assert page.locator("nav.sh-side a[href='#/reports']").count() == 0, "Reports is out of the menu"
             reports.click(TASK2_REPORTS_CLICKS[0], "nav.sh-side a[href='#/settings']")
+            # Settings paints again when /healthz answers, which closes "More tools": open it after the version shows.
+            page.locator("[data-settings-about] .mono").wait_for(timeout=PAGE_TIMEOUT_MS)
             reports.click(TASK2_REPORTS_CLICKS[1], "[data-settings-advanced] summary")
             reports.click(TASK2_REPORTS_CLICKS[2], "[data-settings-advanced] a[href='#/reports']")
             page.locator("[data-reports-page]").wait_for(timeout=PAGE_TIMEOUT_MS)
