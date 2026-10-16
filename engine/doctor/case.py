@@ -81,7 +81,7 @@ from engine.agent.contracts import AgentConfidence, ProposalSource, ProposalStat
 from engine.config import ConfigError, StrictBase, load_engine_config
 from engine.contracts import Artefact
 from engine.doctor.visit_contracts import CaseVisit
-from engine.settings import settings
+from engine.settings import SettingsError, settings
 from engine.storage import LocalStorage, Storage, StorageError
 from engine.utils.logging import get_logger
 from engine.utils.time import utc_now
@@ -182,8 +182,11 @@ def data_doctor_unified(config_root: Path | None = None) -> bool:
     (make run / demo, docker compose) show it without a copy of the configuration.
     Read leniently: a configuration that does not name the switch, or cannot be read, is off.
     """
-    if settings().data_doctor_unified:
-        return True
+    try:
+        if settings().data_doctor_unified:
+            return True
+    except SettingsError:
+        pass  # the app checks its own settings at start; this switch alone never stops it
     try:
         defaults = load_engine_config(config_root).defaults
     except ConfigError:
