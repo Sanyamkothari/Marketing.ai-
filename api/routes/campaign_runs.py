@@ -46,12 +46,15 @@ from engine.campaign_run import (
     StepError,
     overrides_for,
 )
-from engine.config import PrimaryKey, RunMode, StrictBase, resolve_config
-from engine.contracts import ModelStatus
+from engine.config import PrimaryKey, ResolvedConfig, RunMode, StrictBase, resolve_config
+from engine.contracts import FeatureSchema, ModelStatus, ModelVersion
 from engine.decide.treat_list import TreatListError, ensure_treat_list
 from engine.doctor.case import CASE_ID_PATTERN, DEFAULT_CLIENT_ID, CaseError, CaseStore
 from engine.doctor.visit import is_approved
 from engine.measurement.cycle import MEASURE_NOT_OFFERED, CycleError, open_campaign
+from engine.model_approval import model_not_approved
+from engine.runs import RUN_CONFIG_FILENAME
+from engine.storage import Storage, StorageError, run_key
 from engine.utils.logging import get_logger, log_failure
 from engine.utils.time import utc_now
 
@@ -194,6 +197,40 @@ def _started(result: object) -> str:
     )
 
 
+def _missing_columns(storage: Storage, champion: ModelVersion, learned: ModelVersion) -> list[str]:
+    """The columns the champion needs that the file `learned` was trained on does not have (it cannot score it)."""
+    try:
+        needed = [
+            c.name for c in storage.read_model(champion.schema_key, FeatureSchema).columns if c.required
+        ]
+        offered = {c.name for c in storage.read_model(learned.schema_key, FeatureSchema).columns}
+    except Exception:  # an unreadable schema: keep the champion, as before
+        return []
+    return [name for name in needed if name not in offered]
+
+
+def _model_for_file(
+    storage: Storage, champion: ModelVersion, learned: ModelVersion, *, approval_required: bool
+) -> str:
+    """The model to score next month's file with: the champion, unless it cannot read the file.
+
+    The model just learned can then stand in only when it may be used with nobody choosing it: while approval is
+    required, a version no Approver has seen is not handed to the contact list (`engine.model_approval`).
+    """
+    missing = _missing_columns(storage, champion, learned)
+    if not missing:
+        return champion.model_id
+    if approval_required and model_not_approved(learned, unattended=True):
+        names = ", ".join(f"'{n}'" for n in missing[:5]) + (" and others" if len(missing) > 5 else "")
+        raise StepError(
+            "MODEL_NOT_APPROVED",
+            f"Last month's model needs {names}, which this file does not have. The model just learned can read "
+            "this file but has not been approved yet, so no contact list was made. An Approver can make it the "
+            "model in use on the Approvals page; then start this again.",
+        )
+    return learned.model_id  # a renamed or dropped column: only the new model can read this file
+
+
 def _actions(app: FastAPI) -> StepActions:
     request = app_request(app)
 
@@ -266,7 +303,23 @@ def _actions(app: FastAPI) -> StepActions:
         champion = registry.get_champion(
             trained.use_case_id
         )  # the new model was not better: use the current one
-        return champion.model_id if champion is not None else None
+        if champion is None:
+            return None
+        if trained.model_version_id is None:
+            return champion.model_id
+        try:
+            resolved = get_storage(request).read_model(
+                run_key(train_run_id, RUN_CONFIG_FILENAME), ResolvedConfig
+            )
+            approval_required = resolved.config.governance.approval_required
+        except StorageError:
+            approval_required = True  # fails closed
+        return _model_for_file(
+            get_storage(request),
+            champion,
+            registry.get(trained.model_version_id),
+            approval_required=approval_required,
+        )
 
     def build_list(score_run_id: str) -> None:
         try:

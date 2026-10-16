@@ -71,6 +71,9 @@ COMPARE_TOOL: Final[str] = "compare_with_memory"
 KEEP_PER_GOAL: Final[int] = 6
 SHARE_MOVE: Final[float] = 0.2
 """A category share that moves by more than this (20 points) is flagged."""
+NEW_VALUE_SHARE: Final[float] = 0.01
+"""A category not there last time is said when it is at least this share of the rows (a note; a flag from 5%)."""
+NEW_VALUE_FLAG: Final[float] = 0.05
 _MAX_CATEGORIES: Final[int] = 12
 _YES: Final[frozenset[str]] = frozenset({"1", "1.0", "true", "yes", "y", "t", "haan"})
 _NO: Final[frozenset[str]] = frozenset({"0", "0.0", "false", "no", "n", "f", "nahi"})
@@ -516,6 +519,29 @@ def _column_findings(now: Fingerprint, prev: Fingerprint) -> list[Finding]:
                     f"and is {say.pct(column.shares.get(value, 0.0))} now."
                 )
                 found.append(_mk("flag", "FACTS_CATEGORY_SHARE", f"share.{name}", text, say, name))
+                continue
+            fresh = sorted(
+                (
+                    (share, v)
+                    for v, share in column.shares.items()
+                    if v not in old.shares and share >= NEW_VALUE_SHARE
+                ),
+                reverse=True,
+            )
+            if (
+                len(old.shares) < old.distinct
+            ):  # last time's shares hold only the top values: a value may be old
+                fresh = []
+            if fresh:
+                say = _Say()
+                shown = ", ".join(f"“{say.text(v)}” ({say.pct(share)} of the rows)" for share, v in fresh[:3])
+                text = (
+                    f"‘{name}’ has {'a value' if len(fresh) == 1 else 'values'} not seen last time: {shown}"
+                    f"{' and others' if len(fresh) > 3 else ''}. Last month's model has not "
+                    f"seen {'it' if len(fresh) == 1 else 'them'}."
+                )
+                new_level: Level = "flag" if fresh[0][0] >= NEW_VALUE_FLAG else "note"
+                found.append(_mk(new_level, "FACTS_NEW_VALUE", f"new_value.{name}", text, say, name))
     if new:
         say = _Say()
         names = ", ".join(f"‘{c.name}’" for c in new[:5]) + (" and others" if len(new) > 5 else "")

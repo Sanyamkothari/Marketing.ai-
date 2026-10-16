@@ -243,3 +243,34 @@ def test_whole_number_ids_read_as_decimals_keep_their_length() -> None:
     frame = vs.customers(10).assign(customer_id=[12345678.0] * 9 + [None])
     print_ = _print(frame)
     assert print_.key_lengths == {"8": 1.0} and print_.key_pattern == "9{8}"
+
+
+def test_a_new_category_value_is_said_with_its_share_and_a_tiny_one_is_not() -> None:
+    frame = vs.customers(300).assign(plan=["gold"] * 100 + ["basic"] * 200)
+    last = _print(frame)
+    new_tier = frame.assign(plan=["gold"] * 100 + ["basic"] * 176 + ["enterprise"] * 24)
+    (found,) = [f for f in compare(_print(new_tier), last, ()) if f.code == "FACTS_NEW_VALUE"]
+    assert found.level == "flag" and "“enterprise” (8% of the rows)" in found.text and "‘plan’" in found.text
+    small = frame.assign(plan=["gold"] * 100 + ["basic"] * 196 + ["enterprise"] * 4)
+    (note,) = [f for f in compare(_print(small), last, ()) if f.code == "FACTS_NEW_VALUE"]
+    assert note.level == "note"
+    tiny = frame.assign(plan=["gold"] * 100 + ["basic"] * 199 + ["enterprise"] * 1)
+    assert not [f for f in compare(_print(tiny), last, ()) if f.code == "FACTS_NEW_VALUE"]
+    assert not [f for f in compare(_print(frame), last, ()) if f.code == "FACTS_NEW_VALUE"]
+
+
+def test_a_new_category_value_reaches_the_person_as_a_doubt_with_its_numbers(storage: LocalStorage) -> None:
+    frame = vs.customers(300).assign(plan=["gold"] * 100 + ["basic"] * 200)
+    FingerprintStore(storage).save("default", _print(frame))
+    found, _case = _detect(storage, frame.assign(plan=["gold"] * 100 + ["basic"] * 176 + ["enterprise"] * 24))
+    (doubt,) = [d for d in found.doubts if "enterprise" in d.because]
+    assert "‘plan’" in doubt.because and "8%" in doubt.because and not found.asks
+
+
+def test_a_value_that_only_entered_the_top_ten_of_a_wider_column_is_not_called_new() -> None:
+    # 11 categories: last time's shares keep only the 10 most common, so the rarest ("c10") is not in them
+    before = [f"c{i}" for i in range(10) for _ in range(28)] + ["c10"] * 20
+    after = [f"c{i}" for i in range(9) for _ in range(28)] + ["c9"] * 8 + ["c10"] * 40
+    last = _print(vs.customers(300).assign(plan=before))
+    now = _print(vs.customers(300).assign(plan=after))
+    assert not [f for f in compare(now, last, ()) if f.code == "FACTS_NEW_VALUE"]
