@@ -1189,11 +1189,6 @@ input[type="radio"] {
 .topbar.sh-on .sh-utils {
   gap: var(--s1);
 }
-.topbar.sh-on .sh-bell .count {
-  top: 2px;
-  right: 2px;
-  box-shadow: 0 0 0 2px var(--surface);
-}
 .sh-ico {
   width: 20px;
   height: 20px;
@@ -1297,7 +1292,7 @@ input[type="radio"] {
   font-weight: 500;
   color: var(--muted);
 }
-/* a phone or tablet: the bar is the name, Menu, the bell and Help; the sidebar is a drawer behind Menu */
+/* a phone or tablet: the bar is the name, Menu and Help; the sidebar is a drawer behind Menu */
 @media (max-width: 900px) {
   .topbar.sh-on .sh-row {
     padding: 0 var(--s3) 0 var(--s4);
@@ -1362,7 +1357,7 @@ input[type="radio"] {
     font-size: 14px;
     gap: var(--s2);
   }
-  /* the bell and Help stay 40 x 40 on a phone, where touch matters (visual_common section 7) */
+  /* Help stays 40 x 40 on a phone, where touch matters (visual_common section 7) */
   .topbar.sh-on .sh-menu-btn {
     padding: 0 10px;
   }

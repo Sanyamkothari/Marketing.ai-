@@ -127,3 +127,23 @@ test("with sign-in on, an Admin gets Users and Audit log, and a role that may no
   assert.equal(viewer.querySelector('a[href="#/settings/ai"]').textContent, "AI service");
   assert.equal(viewer.querySelector('a[href^="#/connections/ai/"]'), null, "no key form from Settings itself");
 });
+
+test("v1 (the campaigns layout): Settings shows AI service and Privacy, the rest is under More tools; classic is unchanged", () => {
+  const draw = (v1) => {
+    const holder = w.document.createElement("div");
+    holder.innerHTML = settingsHtml({ can: () => true, status: "off", version: null, v1 });
+    return holder;
+  };
+  const hrefs = (holder, sel) => [...holder.querySelectorAll(`${sel} a`)].map((a) => a.getAttribute("href"));
+  const v1 = draw(true);
+  assert.deepEqual(hrefs(v1, "[data-settings-main]"), ["#/settings/ai", "#/privacy/consent"]);
+  assert.equal(v1.querySelector("[data-settings-advanced] summary").textContent, "More tools");
+  const more = hrefs(v1, "[data-settings-advanced]");
+  for (const href of ["#/monitoring/schedules", "#/cost", "#/reports", "#/approvals", "#/doctor", "#/audit"]) {
+    assert.ok(more.includes(href), `${href} is listed under More tools`);
+  }
+  assert.ok(!more.includes("#/overview") && !more.includes("#/data"), "the sidebar's own places are not repeated");
+  const classic = draw(false);
+  assert.ok(hrefs(classic, "[data-settings-main]").includes("#/monitoring/schedules"));
+  assert.equal(classic.querySelector("[data-settings-advanced] summary").textContent, "Advanced tools");
+});

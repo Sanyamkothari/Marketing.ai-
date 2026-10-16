@@ -164,14 +164,14 @@ export const PAGES = [
     { id: `campaign-${name}-results`, hash: `#/campaigns/${id}/results`, expect: /Proven/, selector: "[data-results-measured]" },
     { id: `campaign-${name}-technical`, hash: `#/campaigns/${id}/technical`, expect: /Choose the best e-mail/, selector: "[data-technical-tab]" },
   ]),
-  // Plan M M174 (DEC-1604): the campaigns layout's shell - sidebar, bell, Help - around a page with an empty allow-list.
+  // Plan M M174 (DEC-1604): the campaigns layout's shell - sidebar, Help - around a page with an empty allow-list.
   // `after` puts the classic layout back, so every other page here is drawn as before.
   {
     id: "shell-campaigns",
     hash: `#/pilot/value/${SCORE_RISK}`,
     steps: [async () => (await import("../../../../../ui/layout.js")).setUiLayout("campaigns")],
     after: [async () => (await import("../../../../../ui/layout.js")).setUiLayout("classic")],
-    expect: /Overview[\s\S]*Campaigns[\s\S]*Data[\s\S]*Reports[\s\S]*Settings[\s\S]*Value of one extra customer/,
+    expect: /Overview[\s\S]*Campaigns[\s\S]*Data[\s\S]*Settings[\s\S]*Value of one extra customer/,
     selector: "#pb-bar nav.sh-side a[href='#/overview']",
   },
 ];

@@ -2,8 +2,9 @@
 
    `GET /auth/me` says `ui_layout: "campaigns"` (real answers, per role, from tests/integration/test_shell_ui.py);
    everything else is the recorded Hillstrom demo. What a person gets: a left sidebar with the five places of Plan M
-   §3 for every role, the route's place marked; top right the approvals bell (its count for an Approver only, from
-   the same source and role rule as the classic bar's badge), Help (?) and the profile; the wordmark and the logo;
+   §3 that the v1 flow needs (Overview, Campaigns, Data, Settings; Reports and the approvals bell are out of the menus,
+   their pages still work) for every role, the route's place marked; top right Help (?) and the profile; the wordmark
+   and the logo;
    below 900 px a Menu button that opens the sidebar. */
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -18,7 +19,7 @@ const layout = await import("../../../../../ui/layout.js");
 await until(() => $("#pb-bar .sh-side"), 5000, "the sidebar");
 await untilStable(state);
 
-const PLACES = ["Overview", "Campaigns", "Data", "Reports", "Settings"];
+const PLACES = ["Overview", "Campaigns", "Data", "Settings"];
 const places = () => $$("#pb-bar nav.sh-side[aria-label='Main'] a.sh-item").map((a) => a.textContent.trim());
 const marked = () => $$("#pb-bar .sh-side a[aria-current='page']").map((a) => a.textContent.trim());
 
@@ -43,18 +44,19 @@ test("GET /auth/me's ui_layout turns the shell on: the page says so, and the cla
   assert.equal($$("#pb-bar nav[aria-label='Main']").length, 1, "one main navigation");
 });
 
-test("the sidebar is the five places, in order, each a link to its page", () => {
+test("the sidebar is the four v1 places, in order, each a link to its page", () => {
   assert.deepEqual(places(), PLACES);
   assert.deepEqual(
     $$("#pb-bar .sh-side a.sh-item").map((a) => a.getAttribute("href")),
-    ["#/overview", "#/campaigns", "#/data", "#/reports", "#/settings"],
+    ["#/overview", "#/campaigns", "#/data", "#/settings"],
   );
+  assert.equal($('#pb-bar .sh-side a[href="#/reports"]'), null, "Reports is out of the menu");
   assert.ok($('#pb-bar a.wordmark[href="#/overview"]'), "the wordmark stays, and opens the Overview itself");
   assert.equal($("#pb-bar a.tb-logo").getAttribute("href"), "#/overview", "so does the logo (not '#/', which redirects)");
   assert.equal($("#pb-bar .tb-logo svg.logo").getAttribute("aria-label"), "Minfy", "the Minfy logo stays");
 });
 
-test("every role sees the same five places (sign-in on), and so does sign-in off", async () => {
+test("every role sees the same four places (sign-in on), and so does sign-in off", async () => {
   for (const name of ["me_viewer", "me_analyst", "me_approver", "me_admin", "me_off_campaigns"]) {
     await signInAs(name);
     assert.equal(session.sessionStatus(), name === "me_off_campaigns" ? "off" : "signed-in", name);
@@ -62,26 +64,17 @@ test("every role sees the same five places (sign-in on), and so does sign-in off
   }
 });
 
-test("the bell: an Approver sees how many models wait for them; a Viewer sees the bell with no count", async () => {
+test("no approvals bell for anyone: v1 approves inside the campaign, and Settings, More tools lists the page", async () => {
   const items = ["m1", "m2", "m3"].map((id) => ({ model_id: id, can_decide: true }));
-  await signInAs("me_approver", { items, separation_enforced: false });
-  await until(() => $("#pb-bar .sh-bell .count"), 3000, "the count on the bell");
-  const bell = $("#pb-bar a.sh-bell");
-  assert.equal(bell.getAttribute("href"), "#/approvals");
-  assert.equal(bell.querySelector(".count").textContent, "3");
-  assert.equal(bell.getAttribute("aria-label"), "Waiting for approval: 3");
-  // a model this person may not decide is not counted, as on the classic badge
-  await signInAs("me_admin", { items, separation_enforced: false });
-  await signInAs("me_approver", { items: [...items, { model_id: "m4", can_decide: false }], separation_enforced: false });
-  await until(() => ($("#pb-bar .sh-bell .count") || {}).textContent === "3", 3000, "three, not four");
-  await signInAs("me_viewer", { items, separation_enforced: false });
-  assert.ok($("#pb-bar a.sh-bell"), "the bell is there for everyone");
-  assert.equal($("#pb-bar a.sh-bell .count"), null, "a Viewer may not decide, so no count is read for them");
-  assert.equal($("#pb-bar a.sh-bell").getAttribute("aria-label"), "Waiting for approval");
+  for (const name of ["me_approver", "me_viewer"]) {
+    await signInAs(name, { items, separation_enforced: false });
+    assert.equal($("#pb-bar .sh-bell"), null, name);
+    assert.equal($('#pb-bar a[href="#/approvals"]'), null, name);
+  }
   await signInAs("me_off_campaigns");
 });
 
-test("the place marked follows the route; the approvals page marks the bell", async () => {
+test("the place marked follows the route; the pages out of the menu mark none", async () => {
   const cases = [
     ["#/settings", "Settings"],
     ["#/monitoring/alerts", "Settings"],
@@ -92,19 +85,19 @@ test("the place marked follows the route; the approvals page marks the bell", as
     ["#/connections/new/postgres", "Data"],
     ["#/uc/hillstrom-email", "Campaigns"],
     ["#/campaign/hillstrom-email/r_20261010_11100004", "Campaigns"],
-    ["#/pilot/proof/c_20261011_c9276210", "Reports"],
   ];
   for (const [hash, place] of cases) {
     await visit(state, hash);
     assert.equal(w.location.hash, hash, `${hash} is kept`);
     assert.deepEqual(marked(), [place], hash);
   }
-  await visit(state, "#/approvals");
-  assert.deepEqual(marked(), [], "no sidebar place for the approvals page");
-  assert.equal($("#pb-bar a.sh-bell").getAttribute("aria-current"), "page", "the bell is marked instead");
-  assert.ok($("#pb-bar a.sh-bell").classList.contains("on"));
+  // Reports and the approvals page still open by address (and from Settings, More tools); no place is marked
+  for (const hash of ["#/approvals", "#/reports", "#/pilot/proof/c_20261011_c9276210"]) {
+    await visit(state, hash);
+    assert.equal(w.location.hash, hash, `${hash} is kept`);
+    assert.deepEqual(marked(), [], hash);
+  }
   await visit(state, "#/settings");
-  assert.equal($("#pb-bar a.sh-bell").getAttribute("aria-current"), null);
 });
 
 test("a screen naming its classic place (setActiveNav) does not move the sidebar's mark", async () => {
@@ -115,7 +108,7 @@ test("a screen naming its classic place (setActiveNav) does not move the sidebar
   assert.deepEqual(marked(), ["Campaigns"]);
 });
 
-test("the keyboard path: wordmark, Menu, the five places, the bell, Help, the logo; nothing taken out of the tab order", async () => {
+test("the keyboard path: wordmark, Menu, the four places, Help, the logo; nothing taken out of the tab order", async () => {
   await visit(state, "#/settings");
   const focusable = $$("#pb-bar a[href], #pb-bar button").filter((el) => !el.closest("[hidden]"));
   const names = focusable.map(
@@ -125,7 +118,6 @@ test("the keyboard path: wordmark, Menu, the five places, the bell, Help, the lo
     "Marketing AI",
     "Menu",
     ...PLACES,
-    "Waiting for approval",
     "Help",
     "Minfy, home",
   ]);
@@ -134,9 +126,9 @@ test("the keyboard path: wordmark, Menu, the five places, the bell, Help, the lo
   assert.deepEqual(marked(), ["Settings"]);
   assert.match($("#sh-styles").textContent, /\.sh-item:focus-visible[^{]*\{outline:2px solid var\(--brand-blue\)/);
   // a place is a link: focus it and Enter follows it, as any link does
-  const reports = $('#pb-bar .sh-side a[href="#/reports"]');
-  reports.focus();
-  assert.equal(document.activeElement, reports);
+  const data = $('#pb-bar .sh-side a[href="#/data"]');
+  data.focus();
+  assert.equal(document.activeElement, data);
 });
 
 test("Help (?) opens the help entries as a menu, and Escape closes it and returns focus", async () => {
@@ -187,7 +179,7 @@ test("below 900 px the Menu button opens the sidebar; choosing a place or Escape
   assert.match(css, /@media \(max-width:900px\)\{[^@]*\.sh-menu-btn\{display:inline-flex\}[^@]*\.sh-side\{display:none\}[^@]*\.topbar\.open \.sh-side\{display:block/);
 });
 
-test("signed out: the wordmark, Sign in and the logo; no places, no bell, no Help", async () => {
+test("signed out: the wordmark, Sign in and the logo; no places, no Help", async () => {
   await signInAs("me_viewer");
   world.me = null;
   session.forgetSignIn();

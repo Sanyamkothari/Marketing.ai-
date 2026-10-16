@@ -5,8 +5,8 @@ screens' tests do) load the whole page as `ui/index.html` does, every module in 
 answers recorded from the validated Hillstrom demo (`tests/fixtures/ui_demo/api.json`, M170), with `GET /auth/me`
 answered by the bodies this module writes from the real app:
 
-* `shell.test.mjs` - the campaigns layout: five places for every role, the place marked by the route, the approvals
-  bell with its count for an Approver only, Help, the keyboard path through the bar, the folded sidebar (the Menu
+* `shell.test.mjs` - the campaigns layout: the four v1 places for every role (Reports and the approvals bell are out
+  of the menus), the place marked by the route, Help, the keyboard path through the bar, the folded sidebar (the Menu
   button below 900 px), signing out, and switching back to the classic bar;
 * `routes.test.mjs` - the redirect table (`ui/layout.js`): every route a module registers has a home, every old
   address goes where Plan M §3 says, redirects replace the history entry, never go to a page this build lacks, and

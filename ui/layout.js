@@ -1,8 +1,8 @@
 /* Which shell the UI draws, and where every old address lives in the new one (Plan M M174, DEC-1604).
 
    The deployment setting `ui_layout` (`MARKETING_AI_UI_LAYOUT`, engine/settings.py) is "classic" - today's
-   top bar, byte for byte - or "campaigns" - the five-place sidebar of Plan M §3 (Overview, Campaigns, Data,
-   Reports, Settings), the approvals bell, Help and the profile top right. The API hands it to the browser on
+   top bar, byte for byte - or "campaigns" - the sidebar of Plan M §3 (Overview, Campaigns, Data, Settings:
+   the v1 flow; Reports and the approvals bell are out of the menus but their pages work, v1 menus), Help and the profile top right. The API hands it to the browser on
    the call the UI already makes at start-up, `GET /auth/me` (field `ui_layout`), so this module listens to
    the production session and changes nothing until that answer says "campaigns". Before the answer, with
    sign-in refused, or against an API without the field, the layout is "classic".
@@ -29,17 +29,22 @@ export const DEFAULT_LAYOUT = "classic";
 /** Fired on window when the layout changes; `event.detail` is the new layout. */
 export const LAYOUT_EVENT = "marketing-ai:layout-changed";
 
-/** The five places of the sidebar, in order (Plan M §3). `href` is where each one opens. */
+/** Every place a route can belong to, in order (Plan M §3). `href` is where each one opens. A place with
+ * `menu: false` (Reports) is out of the sidebar - v1 menus show only the flow - but its pages work and are listed
+ * under Settings, More tools. */
 export const PLACES = Object.freeze([
   { id: "overview", label: "Overview", href: "#/overview" },
   { id: "campaigns", label: "Campaigns", href: "#/campaigns" },
   { id: "data", label: "Data", href: "#/data" },
-  { id: "reports", label: "Reports", href: "#/reports" },
+  { id: "reports", label: "Reports", href: "#/reports", menu: false },
   { id: "settings", label: "Settings", href: "#/settings" },
 ]);
 
-/** The bell's own "place": the approvals page belongs to no sidebar entry; the bell is marked instead. */
+/** The approvals page's "place": no sidebar entry and no bell (v1 approves inside the campaign); Settings, More tools lists it. */
 export const BELL = "approvals";
+
+/** The places the sidebar shows: all but those marked `menu: false`. */
+export const MENU_PLACES = Object.freeze(PLACES.filter((place) => place.menu !== false));
 
 /*
  * A row may say `notBy: "<module name>"`: a module of that name owning the target's first segment does not make
@@ -80,8 +85,8 @@ export const ROUTES = Object.freeze([
   { from: "pilot/*", to: null, home: "reports", why: "one report or Proof Pack keeps its address (a link in an e-mail)" },
   { from: "audit", to: "#/reports/check", home: "reports", why: "auditing a campaign is 'Check a past campaign'" },
   { from: "audit/*", to: null, home: "reports", why: "the audit form's own steps" },
-  // The bell
-  { from: "approvals/*", to: null, home: BELL, why: "opened from the bell" },
+  // Approvals (out of the menus; Settings, More tools lists it)
+  { from: "approvals/*", to: null, home: BELL, why: "opened from Settings, More tools, or a link" },
   // Settings, Advanced and Admin
   { from: "settings/*", to: null, home: "settings", why: "Settings itself" },
   { from: "cost/*", to: null, home: "settings", why: "Costs, under Settings" },
