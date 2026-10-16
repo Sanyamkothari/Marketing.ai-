@@ -41,6 +41,7 @@ from engine.doctor.combine_run import (
     guard_stack,
     plan_of,
     rules_digest,
+    shape_digest,
 )
 from engine.doctor.contracts import Diagnosis, FileStack
 from engine.doctor.protocol import Ask, AskOption
@@ -80,9 +81,32 @@ def combining_detector(*, clock: Callable[[], datetime] = utc_now) -> DetectorPo
         except (ValidationError, BuildDriveError, StackError) as exc:  # not a reason to stop the visit
             _LOG.info("doctor.combining_failed case=%s error=%s", case.case_id, type(exc).__name__)
             return Detected()
-        return Detected(asks=tuple(asks), items=tuple(items))
+        before = frozenset(case.visit.approved_before if case.visit else ())
+        return Detected(asks=tuple(asks), items=tuple(_same_as_last_month(i, before) for i in items))
 
     return detect
+
+
+def _same_as_last_month(item: CaseItem, before: frozenset[str]) -> CaseItem:
+    """A join of the same shape as one approved before (last month's, in a new case) that loses nobody and leaves out
+    no more than the protocol allows is ticked, so it is carried like any step. A changed join, or one that needs its
+    own yes, stays for the person."""
+    from engine.agent.contracts import ProposalState
+    from engine.doctor.carry import marks
+    from engine.doctor.protocol import approve_class_of
+
+    receipt = item.payload.get("receipt")
+    if (
+        item.kind == JOIN_KIND
+        and item.state is ProposalState.PENDING
+        and item.payload.get("needs_yes") is False
+        and isinstance(receipt, dict)
+        and receipt.get("keys_lost") == 0
+        and approve_class_of(item.kind, item.payload) is None
+        and marks(item)[0] in before
+    ):
+        return item.model_copy(update={"state": ProposalState.ACCEPTED})
+    return item
 
 
 def _propose(
@@ -223,6 +247,7 @@ def _join_item(
     payload: dict[str, JsonValue] = {
         "upload_ids": list(ids),
         "rules": rules_digest(plan),
+        "shape": shape_digest(plan, {u: f.frame for u, f in loaded.items()}),
         "customers": total,
         "customers_matched": matched,
         "log_rows": rows,

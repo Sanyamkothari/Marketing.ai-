@@ -1,0 +1,7 @@
+# Data Doctor, next month's file: how big a move since last time is a flag ("needs a look"); a smaller move is
+# only a note. Read by engine/doctor/fingerprint.py.
+#
+# outcome_rate_flag_ratio: the yes-rate went up or down by this factor or more (1.8 = about doubled or halved).
+# customers_flag_change: the number of customers moved by this share or more (0.2 = a fifth).
+outcome_rate_flag_ratio: 1.8
+customers_flag_change: 0.2
