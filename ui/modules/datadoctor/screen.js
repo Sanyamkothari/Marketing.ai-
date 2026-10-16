@@ -253,7 +253,7 @@ function continueHtml(entry) {
   const { state: s, host } = entry;
   const view = s.screen && s.screen.view;
   if (!view || !["ready", "ready_with_warnings"].includes(view.verdict.key) || !view.start) return "";
-  // Here the campaign starts (the wizard's own start, or the Data page's); else the goal's setup or the wizard goes on.
+  // Here the campaign starts (the wizard's Start, which also offers last month's model or learning again, or the Data page's); else the goal's setup or the wizard goes on.
   const starts =
     host.place !== "setup" && (host.approved ? true : view.start.target === "runs" && canAccess("POST", "/campaign-runs"));
   const label = starts ? "Start the campaign" : host.approved ? "Continue with this data" : "Continue to the campaign";

@@ -277,6 +277,7 @@ test("in the wizard, Approve does not start the list while a change is left out;
   await until(() => $("[data-dds-continue]"), 3000, "the case approved and ready");
   await settle(3);
   assert.deepEqual(started, [], "the run did not start on Approve");
+  assert.ok(!world.posted.some((p) => p.path === "/campaign-runs"), "Approve did not start the run");
   const button = $("[data-dds-continue]");
   assert.equal(button.textContent.trim(), "Start the campaign");
   assert.match($("[data-dds-continue-without]").textContent, /Continuing uses the data without the change left out above\./);
@@ -300,6 +301,7 @@ test("in the wizard, approving a plan that leaves nothing out still starts nothi
   await until(() => $("[data-dds-continue]"), 3000, "the case approved and ready");
   await settle(3);
   assert.deepEqual(started, [], "Approve did not start the run");
+  assert.ok(!world.posted.some((p) => p.path === "/campaign-runs"), "Approve did not post a run");
   assert.match($("[data-dds-start-sentence]").textContent, /^We will learn from .+ Balanced: about 15 minutes\./);
   assert.ok($("[data-dds-speed-open]"), "the Quick/Balanced choice sits behind Change");
   $("[data-dds-continue]").click();

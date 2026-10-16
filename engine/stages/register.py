@@ -333,7 +333,8 @@ def _champion_decision(
     """`(promote?, improvement %)` for `candidate`, decided on one frame's scores.
 
     Neither a metric mismatch nor a champion that could not be re-scored is an error here: both
-    mean "this comparison did not happen", which leaves the version a candidate.
+    mean "this comparison did not happen", which leaves the version a candidate (the caller makes it
+    pending approval instead when approval is required and the champion cannot read the frame's columns).
     """
     greater_is_better = config.catalog.metrics[candidate.metric].greater_is_better
     rescored = _rescored_champion(candidate, champion, champion_score)

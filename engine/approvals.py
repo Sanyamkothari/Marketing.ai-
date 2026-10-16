@@ -234,6 +234,12 @@ def separation_refusal(principal: Principal, trainer: str | None) -> str | None:
 # ---------------------------------------------------------------------------
 # The head-to-head
 # ---------------------------------------------------------------------------
+NOT_COMPARED_NOTE = (
+    "Not compared with the model in use: it cannot read this data (a column was renamed or removed), "
+    "so a person decides."
+)
+
+
 def head_to_head(storage: Storage, registry: ModelRegistry, version: ModelVersion) -> HeadToHead:
     """Both models' metrics on the challenger's test split, from what the train flow recorded."""
     measured = version.measured_against_champion_id
@@ -276,6 +282,8 @@ def head_to_head(storage: Storage, registry: ModelRegistry, version: ModelVersio
         notes.append(
             "There was no champion when this model was trained, so there is nothing to compare against."
         )
+    elif not champion_values and version.improvement_pct is None:
+        notes.append(NOT_COMPARED_NOTE)
     elif not champion_values:
         notes.append("The champion's re-score on this model's test split was not recorded for this run.")
     elif any(row.champion is None for row in rows):

@@ -192,9 +192,15 @@ function measuresTable(rows, firstModel) {
 function headToHead(h) {
   const firstModel = !h.measured_against_champion_id;
   const rows = h.rows_evaluated === null || h.rows_evaluated === undefined ? null : fmtInt(h.rows_evaluated);
+  const notCompared =
+    !firstModel &&
+    (h.improvement_pct === null || h.improvement_pct === undefined) &&
+    !(h.metrics || []).some((row) => row.champion !== null && row.champion !== undefined);
   const lead = firstModel
     ? "This is the first model for this goal: there is no model in use to compare it with."
-    : `Compared with the model in use on the same ${rows ? `${rows} customers` : "customers"}, which neither model saw while learning.${
+    : notCompared
+      ? "Not compared with the model in use: it cannot read this data (a column was renamed or removed), so a person decides."
+      : `Compared with the model in use on the same ${rows ? `${rows} customers` : "customers"}, which neither model saw while learning.${
         h.improvement_pct === null || h.improvement_pct === undefined
           ? ""
           : ` It is ${Number(h.improvement_pct).toFixed(1)}% better on the main measure.`
@@ -222,7 +228,7 @@ function headToHead(h) {
       ? `<details class="pb-measures"><summary>Show all measures (${hidden.length})</summary>${measuresTable(hidden, firstModel)}</details>`
       : ""
   }
-  ${h.note ? `<p class="pb-small" role="note">${esc(h.note)}</p>` : ""}`;
+  ${h.note && !notCompared ? `<p class="pb-small" role="note">${esc(h.note)}</p>` : ""}`;
 }
 
 // --- advisory checks (Plan J M96) -----------------------------------------------------------------

@@ -1261,10 +1261,31 @@ def test_a_champion_whose_schema_no_longer_fits_is_not_compared_against(
 ) -> None:
     stubs = StageStubs().install(monkeypatch)
     stubs.champion_scorer = FakeScorer(role="champion", missing_column="ad_ctr_90d")
-    make_champion(registry, stored_score=0.99)
+    champion = make_champion(registry, stored_score=0.99)
     record = run_flow(resolved, storage, registry)
-    assert registry.get(record.model_version_id or "").status is ModelStatus.CANDIDATE
+    stored = registry.get(record.model_version_id or "")
+    # approval is required: nobody compared them, so a person decides; the champion keeps the crown
+    assert stored.status is ModelStatus.PENDING_APPROVAL
+    assert stored.improvement_pct is None
+    assert stored.measured_against_champion_id == champion.model_id
+    assert registry.get_champion(USE_CASE).model_id == champion.model_id
+    assert record.beat_previous_champion is False
     assert stubs.scored == ["model", "baseline"]
+
+
+def test_a_champion_whose_schema_no_longer_fits_leaves_a_candidate_without_approval(
+    monkeypatch, resolved, storage, registry
+) -> None:
+    stubs = StageStubs().install(monkeypatch)
+    stubs.champion_scorer = FakeScorer(role="champion", missing_column="ad_ctr_90d")
+    champion = make_champion(registry, stored_score=0.99)
+    config = resolved.config.model_copy(
+        update={"governance": resolved.config.governance.model_copy(update={"approval_required": False})}
+    )
+    record = run_flow(resolved, storage, registry, config=config)
+    assert registry.get(record.model_version_id or "").status is ModelStatus.CANDIDATE
+    assert registry.get_champion(USE_CASE).model_id == champion.model_id
+    assert record.beat_previous_champion is False
 
 
 def test_a_champion_that_cannot_be_evaluated_is_not_compared_against(

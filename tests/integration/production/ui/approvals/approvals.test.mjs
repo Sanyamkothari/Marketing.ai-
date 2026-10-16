@@ -8,6 +8,17 @@ import { $, $$, fixture, until } from "../harness.mjs";
 import { installOps, ok, setField, submit } from "../ops/fake.mjs";
 
 let approved = false;
+let uncompared = false;
+// the same body as the Approver's, for a model that was never compared (the champion cannot read the file)
+const notCompared = () => {
+  const body = structuredClone(fixture("approvals_approver"));
+  const h2h = body.items[0].head_to_head;
+  h2h.improvement_pct = null;
+  h2h.stale = false;
+  h2h.note = "Not compared with the model in use: it cannot read this data (a column was renamed or removed), so a person decides.";
+  for (const row of h2h.metrics) row.champion = null;
+  return body;
+};
 const { w, calls } = installOps({
   tokens: { "tok-approver": fixture("me_approver"), "tok-trainer": fixture("me_trainer") },
   token: "tok-approver",
@@ -20,7 +31,9 @@ const { w, calls } = installOps({
         ok(
           r.auth === "Bearer tok-trainer"
             ? fixture("approvals_trainer")
-            : approved
+            : uncompared
+              ? notCompared()
+              : approved
               ? fixture("approvals_after")
               : fixture("approvals_approver"),
         ),
@@ -103,4 +116,18 @@ test("the trainer sees why they cannot decide, and has no button to press", asyn
   await until(() => $(`[data-blocked="${modelId}"]`), 3000, "the refusal in place of the buttons");
   assert.equal($(`[data-blocked="${modelId}"]`).textContent, blocked.blocked_reason);
   assert.equal($$(".pb-decide").length, 0, "no approve or reject form for the trainer");
+});
+
+test("a model never compared with the model in use does not say it was compared", async () => {
+  w.sessionStorage.setItem("marketing-ai.auth", JSON.stringify({ token: "tok-approver", expires_at: null }));
+  const session = await import("../../../../../ui/modules/production/session.js");
+  session._resetForTests();
+  uncompared = true;
+  w.location.hash = "#/";
+  await until(() => !$("[data-approval]"), 2000, "left the screen");
+  w.location.hash = "#/approvals";
+  await until(() => $(`[data-approval="${modelId}"]`), 3000, "the challenger");
+  const card = $(`[data-approval="${modelId}"]`).textContent;
+  assert.match(card, /Not compared with the model in use: it cannot read this data/);
+  assert.equal(/Compared with the model in use on the same/.test(card), false);
 });
