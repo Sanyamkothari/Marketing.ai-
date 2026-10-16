@@ -202,7 +202,9 @@ export function crumbs(items = []) {
  * (`#/` goes to Overview, `#/results` to Campaigns) are named as the sidebar names them. */
 const SIDEBAR_NAMES = { "#/": "Overview", "#/results": "Campaigns" };
 function placeNamed(item) {
-  const campaigns = typeof document !== "undefined" && document.documentElement.getAttribute("data-ui-layout") === "campaigns";
+  const campaigns = typeof document !== "undefined" &&
+    Boolean(document.documentElement) &&
+    document.documentElement.getAttribute("data-ui-layout") === "campaigns";
   return campaigns && SIDEBAR_NAMES[item.href] ? { ...item, label: SIDEBAR_NAMES[item.href] } : item;
 }
 
@@ -216,7 +218,7 @@ export function backLink(uc) {
  * one Home opens), for a caller that adds the rest. */
 export function journeyCrumb(uc) {
   const journey = journeyOf(uc);
-  return [HOME, sameAsHome(journey) ? null : journey].filter(Boolean).map(crumbLink).join(CRUMB_SEP);
+  return [HOME, sameAsHome(journey) ? null : journey].filter(Boolean).map(placeNamed).map(crumbLink).join(CRUMB_SEP);
 }
 
 /** The `{ href, label }` a "Back to ..." button on a use-case screen returns to. */
