@@ -91,26 +91,25 @@ def time_keys_detector(*, clock: Callable[[], datetime] = utc_now) -> DetectorPo
         room = max(0, MAX_QUESTIONS - len(stops))
         kept, spilled = [*stops, *others[:room]], others[room:]
         # One fact, one line: a finding a question covers (kept or held back) is not listed again, and nor is a
-        # sentence a file before it already carries (the combined table repeats what its files said).
-        rank = {loaded.upload_id: n for n, loaded in enumerate(files)}
-        said: dict[str, int] = {}
-        for item in case.items:
-            if item.kind == CHECK_KIND and item.upload_id in rank:
-                said[item.title] = min(rank[item.upload_id], said.get(item.title, len(rank)))
+        # sentence already on the page (the combined table repeats what its files said). An item this visit
+        # made before (same id) is only refreshed, never dropped.
+        on_page = {i.title for i in case.items if i.kind == CHECK_KIND}
+        had = {i.item_id for i in case.items}
         items: list[CaseItem] = []
         for upload_id, check in found:
             if _is_asked(check, upload_id, questions):
                 continue
             item = _check_item(upload_id, check, now)
-            if _repeats(said, item, rank):
+            if item.title in on_page and item.item_id not in had:
                 continue
             items.append(item)
-            said.setdefault(item.title, rank.get(upload_id or "", -1))
+            on_page.add(item.title)
         for ask in spilled:
             item = _ask_item(ask, now)
-            if not _repeats(said, item, rank):
-                items.append(item)
-                said.setdefault(item.title, rank.get(ask.upload_id or "", -1))
+            if item.title in on_page and item.item_id not in had:
+                continue
+            items.append(item)
+            on_page.add(item.title)
         return Detected(asks=tuple(kept), items=tuple(items), requests=tuple(requests))
 
     return detect
@@ -120,12 +119,6 @@ def _is_asked(check: Check, upload_id: str | None, asks: list[Ask]) -> bool:
     return any(
         ask.code == check.code and ask.column == check.column and ask.upload_id == upload_id for ask in asks
     )
-
-
-def _repeats(said: dict[str, int], item: CaseItem, rank: dict[str, int]) -> bool:
-    """Whether the same sentence is already on the page for an earlier file (or earlier in this run)."""
-    earlier = said.get(item.title)
-    return earlier is not None and earlier < rank.get(item.upload_id or "", -1)
 
 
 def _file(

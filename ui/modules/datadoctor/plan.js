@@ -219,11 +219,16 @@ export function alertOf(item, ledger) {
  */
 export function findingsOf(items, ledger, approveIds = new Set()) {
   const found = [];
-  // One fact, one line: a step the guards already wrote a sentence about is not counted again from its receipt.
-  const told = new Set();
+  // One fact, one line: a fact the guards already wrote a sentence about (by code) is not counted again from the
+  // step's receipt. A guard that says something else about the step does not hide the receipt's counts.
+  const told = new Map();
+  const toldBy = (id, ...codes) => codes.some((c) => told.get(id)?.has(c));
   for (const f of (ledger && ledger.findings) || []) {
     if (!f || !LEVELS.includes(f.level)) continue;
-    if (f.item_id && f.level !== "note") told.add(f.item_id);
+    if (f.item_id && f.level !== "note" && typeof f.code === "string") {
+      if (!told.has(f.item_id)) told.set(f.item_id, new Set());
+      told.get(f.item_id).add(f.code);
+    }
     add(found, {
       level: f.level,
       kind: f.kind || "guard",
@@ -248,11 +253,14 @@ export function findingsOf(items, ledger, approveIds = new Set()) {
     if (contact > 0) add(found, { level: "flag", kind: "contact_exclusion", count: contact, samples: rowsOf(p.contact_samples), itemId: id });
     const r = receiptOf(item, ledger);
     if (!r) continue;
-    if (!told.has(id) && r.duplicated > 0) add(found, { level: "flag", kind: "customers_duplicated", count: r.duplicated, itemId: id });
-    if (!told.has(id) && r.lost > 0) add(found, { level: "flag", kind: "customers_lost", count: r.lost, itemId: id });
+    const saidDup = toldBy(id, "JOIN_REPEATS_CUSTOMERS", "STEP_REPEATS_CUSTOMERS");
+    const saidLost = toldBy(id, "STEP_LOSES_CUSTOMERS");
+    if (!saidDup && r.duplicated > 0) add(found, { level: "flag", kind: "customers_duplicated", count: r.duplicated, itemId: id });
+    if (!saidLost && r.lost > 0) add(found, { level: "flag", kind: "customers_lost", count: r.lost, itemId: id });
     if (r.rowsIn > 0 && r.rowsOut === 0) {
+      if (toldBy(id, "STEP_ZERO_ROWS")) continue; // the guard's stop already says it (and stays a stop)
       add(found, { level: "stop", kind: "rows_left_out", count: r.rowsIn, of: r.rowsIn, itemId: id });
-    } else if (approveIds.has(id) && r.rowsIn > r.rowsOut && !told.has(id) && !(r.lost > 0 || r.duplicated > 0)) {
+    } else if (approveIds.has(id) && r.rowsIn > r.rowsOut && !saidDup && !saidLost && !(r.lost > 0 || r.duplicated > 0)) {
       // (customers lost or counted twice already say it; rows are the same fact, said less well)
       add(found, { level: "flag", kind: "rows_left_out", count: r.rowsIn - r.rowsOut, of: r.rowsIn, itemId: id });
     }
@@ -293,8 +301,10 @@ export function needsYes(item, approveIds, ledger) {
 export const isNote = (item) => item.kind === "data_check" && payloadOf(item).level === "note";
 
 /** The notes to read, each sentence once. */
-export const notesOf = (items) =>
-  items.filter((i, n) => isNote(i) && i.state !== "rejected" && items.findIndex((j) => isNote(j) && j.title === i.title) === n);
+export const notesOf = (items) => {
+  const live = items.filter((i) => isNote(i) && i.state !== "rejected");
+  return live.filter((i, n) => live.findIndex((j) => j.title === i.title) === n);
+};
 
 /**
  * The plan in sections. Each section: its items split into `open` (need a yes), `sure` (folded, still untickable) and

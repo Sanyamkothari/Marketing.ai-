@@ -647,3 +647,25 @@ def test_the_same_sentence_for_two_files_is_listed_once(tmp_path: Any) -> None:
     case = vs.open_case(LocalStorage(tmp_path), w)
     found = time_keys_detector()(case, tuple(w.files.values()), None)
     assert [i.payload["code"] for i in found.items].count("KEY_DIGITS_ROUNDED") == 1
+
+
+def test_a_sentence_a_source_file_already_carries_is_not_listed_again_for_another_upload(
+    tmp_path: Any,
+) -> None:
+    config = load_use_case(vs.GOAL_A)
+    frame = _messy_customers()
+    w = vs.World(
+        files={vs.FIRST: vs.loaded(vs.FIRST, "a.csv", frame, config)},
+        offers=(Offer(config=config, stage="Acquire"),),
+    )
+    case = vs.open_case(LocalStorage(tmp_path), w)
+    first = time_keys_detector()(case, tuple(w.files.values()), None)
+    sentence = next(i for i in first.items if i.payload["code"] == "KEY_DIGITS_ROUNDED")
+    other = vs.loaded(vs.SECOND, "combined.csv", frame, config)
+    case = case.model_copy(update={"items": (*case.items, sentence)})
+    again = time_keys_detector()(case, (other,), None)
+    assert "KEY_DIGITS_ROUNDED" not in [i.payload["code"] for i in again.items]
+    same = time_keys_detector()(case, tuple(w.files.values()), None)
+    assert "KEY_DIGITS_ROUNDED" in [
+        i.payload["code"] for i in same.items
+    ], "the same file's own item is refreshed"

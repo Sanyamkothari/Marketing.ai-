@@ -216,6 +216,7 @@ def ledger_view(check: PlanCheck | None, acknowledged: Sequence[Acknowledgement]
                 "text": f"{found.text} (confirmed by a person)" if ack else found.text,
                 "acknowledged": ack,
                 "item_id": found.item_id,
+                "code": found.code,
             }
         )
     worst: dict[str, str] = {}  # the worst level said about each step, for its receipt
