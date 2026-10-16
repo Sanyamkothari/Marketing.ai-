@@ -92,6 +92,7 @@ export function funnelOf(items, ledger) {
     rowsOut: ledger && finite(ledger.rows_out) ? ledger.rows_out : null,
     customersIn: ledger && finite(ledger.customers_in) ? ledger.customers_in : null,
     customersOut: ledger && finite(ledger.customers_out) ? ledger.customers_out : null,
+    sampledFrom: ledger && finite(ledger.sampled_from) ? ledger.sampled_from : null,
     rateIn: ledger && finite(ledger.positive_rate_in) ? ledger.positive_rate_in : null,
     rateOut: ledger && finite(ledger.positive_rate_out) ? ledger.positive_rate_out : null,
     losses: steps
@@ -123,6 +124,11 @@ export function funnelHtml(items, ledger, { level = 3 } = {}) {
           `${f.rateIn.toFixed(1)}% before, ${f.rateOut.toFixed(1)}% after`,
         )}</span></li>`
       : "";
+  // The counts are from the trial run on the first rows; say so, so 1,000 next to a 4,000-row file is not a puzzle.
+  const sample =
+    finite(f.sampledFrom) && finite(f.rowsIn) && f.sampledFrom > f.rowsIn
+      ? `<p class="dds-why" data-dds-sampled>Counted on a trial of the first ${esc(count(f.rowsIn))} of ${esc(count(f.sampledFrom))} rows. Approving prepares all of them.</p>`
+      : "";
   const losses = f.losses.length
     ? `<div class="dds-funnel-losses" data-dds-losses><span class="dds-label">Biggest losses:</span> ${f.losses
         .map(
@@ -138,7 +144,7 @@ export function funnelHtml(items, ledger, { level = 3 } = {}) {
     f.rowsIn,
     f.rowsOut,
     "rows",
-  )}${barRow("Customers", f.customersIn, f.customersOut, "customers")}${rate}</ul>${losses}</section>`;
+  )}${barRow("Customers", f.customersIn, f.customersOut, "customers")}${rate}</ul>${sample}${losses}</section>`;
 }
 
 // --- "3 things to check" ------------------------------------------------------------------------------------------

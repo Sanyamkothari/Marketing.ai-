@@ -28,6 +28,8 @@ services:
       MARKETING_AI_DATA_DIR: /var/lib/marketing-ai
       # The test installation shows the new look (the left-hand menu). The code default stays `classic`.
       MARKETING_AI_UI_LAYOUT: ${MARKETING_AI_UI_LAYOUT:-campaigns}
+      # ...and the one Data Doctor. The code default (configs/engine.yaml data_doctor.unified) stays false.
+      MARKETING_AI_DATA_DOCTOR_UNIFIED: ${MARKETING_AI_DATA_DOCTOR_UNIFIED:-true}
       # Left on sqlite by default so `docker compose up api` works on its own. Point it at the
       # database with `MARKETING_AI_METADATA_BACKEND=postgres` plus the URL below.
       MARKETING_AI_METADATA_BACKEND: ${MARKETING_AI_METADATA_BACKEND:-sqlite}

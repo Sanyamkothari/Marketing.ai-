@@ -628,3 +628,12 @@ def test_the_switch_reads_the_engine_defaults(config_root: Path, tmp_path: Path)
     document["defaults"]["data_doctor"] = {"unified": True}
     path.write_text(yaml.safe_dump(document), encoding="utf-8")
     assert data_doctor_unified(root) is True
+
+
+def test_the_switch_can_be_turned_on_by_the_environment(
+    config_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("MARKETING_AI_DATA_DOCTOR_UNIFIED", "true")
+    assert data_doctor_unified(config_root) is True
+    monkeypatch.setenv("MARKETING_AI_DATA_DOCTOR_UNIFIED", "false")
+    assert data_doctor_unified(config_root) is False

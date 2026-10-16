@@ -81,6 +81,7 @@ from engine.agent.contracts import AgentConfidence, ProposalSource, ProposalStat
 from engine.config import ConfigError, StrictBase, load_engine_config
 from engine.contracts import Artefact
 from engine.doctor.visit_contracts import CaseVisit
+from engine.settings import settings
 from engine.storage import LocalStorage, Storage, StorageError
 from engine.utils.logging import get_logger
 from engine.utils.time import utc_now
@@ -177,8 +178,12 @@ class CaseError(Exception):
 def data_doctor_unified(config_root: Path | None = None) -> bool:
     """Whether `data_doctor.unified` is on (`configs/engine.yaml` defaults; Plan O M230, default false).
 
+    `MARKETING_AI_DATA_DOCTOR_UNIFIED=true` turns it on too, which is how the test installation's entry points
+    (make run / demo, docker compose) show it without a copy of the configuration.
     Read leniently: a configuration that does not name the switch, or cannot be read, is off.
     """
+    if settings().data_doctor_unified:
+        return True
     try:
         defaults = load_engine_config(config_root).defaults
     except ConfigError:
@@ -515,6 +520,11 @@ class CaseReadinessRef(StrictBase):
         description="`ready`, `ready_with_warnings`, `needs_answers`, `needs_approval`, `not_ready`."
     )
     created_at: AwareDatetime = Field(description="When it was computed.")
+    plan_digest: str | None = Field(
+        default=None,
+        description="Digest of the accepted changes it was computed for; the screen trusts the verdict only while "
+        "the plan still has this digest.",
+    )
 
 
 class CaseCounters(StrictBase):

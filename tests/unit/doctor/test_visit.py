@@ -644,3 +644,22 @@ def test_converse_is_plan_gs_chat_turn_and_its_suggestions_land_pending(
     known = {e.evidence_id for e in case.evidence}
     assert set(item.evidence_ids) <= known, "the suggestion cites the case's own evidence, by content hash"
     assert case.state is VisitState.APPROVE
+
+
+def test_a_file_added_while_the_visit_waits_for_approval_is_read_before_anything_is_approved(
+    storage: LocalStorage, world: World
+) -> None:
+    """The Data Doctor page adds a file with `POST /cases/{id}/files` (the plain store) and then resumes the visit:
+    the plan the person approves must cover that file too, not rest on the first one."""
+    case = _generic(storage, world)
+    assert case.state is VisitState.APPROVE and case.visit is not None
+    assert case.visit.taken_in == (FIRST,)
+    added = CaseStore(storage, clock=world.clock).add_file(
+        CLIENT,
+        case.case_id,
+        expected_version=case.version,
+        actor=ANALYST,
+        file=vs.case_file(vs.SECOND, world),
+    )
+    resumed = visit.resume(CLIENT, added.case_id, _deps(storage, world), actor=ANALYST)
+    assert resumed.visit is not None and resumed.visit.taken_in == (FIRST, vs.SECOND)

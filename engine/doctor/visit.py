@@ -139,6 +139,7 @@ __all__ = [
     "Detected",
     "DetectorPort",
     "HandOffPort",
+    "PrepareError",
     "PrescribePort",
     "PreviewPort",
     "PreviewSummary",
@@ -972,7 +973,10 @@ def _treat(run: _Run, case: Case) -> _Step:
 
 
 def _ask(_run: _Run, case: Case) -> _Step | None:
-    """ASK: waits while a blocking question of the active section is open; then back to TREAT."""
+    """ASK: waits while a blocking question of the active section is open; then back to TREAT.
+    A file added while it waits goes to INTAKE first, as at APPROVE."""
+    if _pending_files(case):
+        return _Step(to=VisitState.INTAKE)
     if open_blocking(case):
         return None
     return _Step(to=VisitState.TREAT)
@@ -1055,9 +1059,12 @@ def _count_preview(case: Case, files: tuple[LoadedFile, ...]) -> PreviewSummary:
     )
 
 
-def _approve_wait(_run: _Run, _case: Case) -> None:
-    """APPROVE: waits for the person (:func:`approve`)."""
-    return
+def _approve_wait(_run: _Run, case: Case) -> _Step | None:
+    """APPROVE: waits for the person (:func:`approve`). A file added while it waits is read first: the plan the
+    person is shown must cover every file the case holds, so back to INTAKE (the same as FOLLOW_UP does)."""
+    if _pending_files(case):
+        return _Step(to=VisitState.INTAKE)
+    return None
 
 
 def _combine(run: _Run, case: Case) -> _Step | None:
@@ -1174,7 +1181,8 @@ def _verify(run: _Run, case: Case) -> _Step:
         result = port(case, brief, run.files(case))
     updates: dict[str, Any] = {}
     if result.ref is not None:
-        updates["readiness"] = (*(r for r in case.readiness if r.goal_id != result.ref.goal_id), result.ref)
+        ref = result.ref.model_copy(update={"plan_digest": prescription_digest(case, brief)})
+        updates["readiness"] = (*(r for r in case.readiness if r.goal_id != ref.goal_id), ref)
     ready = result.verdict in {"ready", "ready_with_warnings", "no_goal"}
     return _Step(
         to=VisitState.HAND_OFF if ready else VisitState.TREAT,
@@ -1649,8 +1657,21 @@ def _consent_rule(
 # ---------------------------------------------------------------------------
 # The default VERIFY: M234's readiness report on the file holding the outcome
 # ---------------------------------------------------------------------------
-def readiness_verify(storage: Storage, config_root: Path | None) -> VerifyPort:
-    """VERIFY with M234's `check_readiness` on the prepared copy of the file holding the goal's outcome."""
+class PrepareError(Exception):
+    """`readiness_verify`'s `prepare` cannot prepare the file under the approved changes; the message is the reason."""
+
+
+def readiness_verify(
+    storage: Storage,
+    config_root: Path | None,
+    prepare: Callable[[Any, str, Any, str], str] | None = None,
+) -> VerifyPort:
+    """VERIFY with M234's `check_readiness` on the prepared copy of the file holding the goal's outcome.
+
+    `prepare(config, upload_id, primary_key, target)` gives the id of the upload a run would read once the approved
+    changes are applied to `upload_id` (the same preparation `POST /runs` does), or raises :class:`PrepareError`.
+    Without it the stored file is checked as it is, so a file the approved changes make fine (haan/nahi read as
+    yes/no, money as text) would be called not ready for what the person has just fixed."""
 
     def verify(case: Case, brief: GoalBrief | None, files: tuple[LoadedFile, ...]) -> VerifyResult:
         from engine.config import RunMode, load_use_case
@@ -1671,6 +1692,11 @@ def readiness_verify(storage: Storage, config_root: Path | None) -> VerifyPort:
             diagnosed = next((f for f in case.files if f.upload_id == upload_id), None)
             key = diagnosed.key_columns[0] if diagnosed is not None and diagnosed.key_columns else None
         config = load_use_case(brief.goal_id, config_root)
+        if prepare is not None:
+            try:
+                upload_id = prepare(config, upload_id, key, column)
+            except PrepareError as exc:
+                return VerifyResult(verdict="not_ready", reason=f"Not ready: {exc}")
         inputs = inputs_for_upload(
             storage,
             upload_id,

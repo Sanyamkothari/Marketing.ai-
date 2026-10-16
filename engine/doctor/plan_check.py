@@ -164,7 +164,8 @@ def check_plan(
             totals["customers_out"] += ledger.end
             if rates == (None, None):
                 rates = (ledger.rate_start, ledger.rate_end)
-        sampled += loaded.file_rows or 0
+            # Only files counted in `rows_in` count here, so "the first N of M rows" compares like with like.
+            sampled += loaded.file_rows or len(loaded.frame)
     if not steps:
         return PlanCheck(digest=digest, findings=tuple(findings))
     view: dict[str, JsonValue] = {
@@ -174,7 +175,7 @@ def check_plan(
         "customers_out": totals["customers_out"] if counted else None,
         "positive_rate_in": rates[0],
         "positive_rate_out": rates[1],
-        "sampled_from": sampled or None,
+        "sampled_from": sampled if sampled > totals["rows_in"] else None,
         "steps": list(steps),
     }
     return PlanCheck(digest=digest, ledger=view, findings=tuple(findings))

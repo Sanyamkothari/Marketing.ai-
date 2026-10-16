@@ -456,7 +456,9 @@ def _current_readiness(storage: Storage, case: Case) -> tuple[str, DataReadiness
     ref = next((r for r in case.readiness if r.goal_id == goal.goal_id), None)
     if ref is None:
         return None
-    if case.prescriptions[-1].prescription_hash != prescription_digest(case, stored_brief(storage, case)):
+    now = prescription_digest(case, stored_brief(storage, case))
+    # The digest the verdict was computed for (a prescriber of its own writes another hash than the default digest).
+    if (ref.plan_digest or case.prescriptions[-1].prescription_hash) != now:
         return None  # something changed since it was approved: the verdict is the visit's again
     try:
         key = readiness_key(
