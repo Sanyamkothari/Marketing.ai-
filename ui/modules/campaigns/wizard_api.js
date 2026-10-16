@@ -112,7 +112,9 @@ export async function getModelStory(trainRunId) {
   if (!trainRunId) return null;
   const read = (name) => getArtefact(trainRunId, name).catch(() => null);
   const [lift, importance] = await Promise.all([read("decile_lift.json"), read("feature_importance.json")]);
-  return { lift, importance };
+  // A model of what contacting changes has no decile lift: its own evaluation says it (asked for only then).
+  const evaluation = lift ? null : await read("uplift_evaluation.json");
+  return { lift, importance, evaluation };
 }
 
 /** A scoring run's summary (`scoring_summary.json`): its priorities, counts and average likelihood. */

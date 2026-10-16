@@ -208,6 +208,30 @@ export const GOAL_NAMES = Object.freeze({
   "criteo-uplift": "Show ads where they change what people do",
 });
 
+/* What happens to a customer who "has the result" this goal looks for, as a phrase that follows "went on" or
+   "likely" ("went on to buy", "likely to leave"), by use-case id. Used by the results summary so it names the goal's
+   result in plain words. A goal not listed here gets OUTCOME_FALLBACK. */
+export const GOAL_OUTCOMES = Object.freeze({
+  "targeted-advertisement": "to buy",
+  "win-back-campaign": "to come back",
+  "retail-win-back": "to buy again",
+  "telco-churn": "to leave",
+  rca: "to leave",
+  "payment-propensity": "to pay late or not at all",
+  "hillstrom-email": "to buy",
+  "criteo-uplift": "to buy",
+  "card-default-propensity": "to miss a payment",
+  "first-purchase-propensity": "to buy for the first time",
+  "bank-term-deposit": "to take a term deposit",
+  "insurance-cross-sell": "to ask about the policy",
+});
+export const OUTCOME_FALLBACK = "to have the outcome this goal looks for";
+
+/** The goal's result in plain words (`GOAL_OUTCOMES`), else the generic phrase. */
+export function goalOutcome(id) {
+  return (id && GOAL_OUTCOMES[id]) || OUTCOME_FALLBACK;
+}
+
 /* A goal's short name, for a campaign's short name on lists ("Win back lapsed customers — Oct 2026", at most 40
    characters with the month). Only the goals whose display name is too long for that have one. */
 export const GOAL_SHORT_NAMES = Object.freeze({

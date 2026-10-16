@@ -102,7 +102,7 @@ test("how well it did on customers it had not seen: the Model page's sentence; a
   draw(review());
   assert.match(
     text($("[data-cw-sum-model]")),
-    /^On customers it had not seen while learning, the model put a customer who has the outcome above one who does not 78% of the time\. 50% would be no better than a coin toss; 100% would be perfect\.$/,
+    /^On customers it had not seen while learning, the model put a customer who went on to come back above one who did not, 78% of the time\. 50% would be no better than a coin toss; 100% would be perfect\.$/,
   );
   const other = SR.unseenSentence({ ...version, metric: "auuc", metric_label: "AUUC", test_score: 0.4123 });
   assert.match(other, /main measure was 0\.412\./);
@@ -215,7 +215,7 @@ test("how good the model is: one honest sentence a marketer understands, from th
   assert.equal(fold.open, false);
   assert.equal(text(fold.querySelector("summary")), "See more");
   assert.equal($$("[data-cw-sum-groups] tbody tr").length, 5);
-  assert.match(text(fold), /the model put a customer who has the outcome above one who does not 78% of the time/);
+  assert.match(text(fold), /the model put a customer who went on to come back above one who did not, 78% of the time/);
   // a ranking no better than average is never sold as a result
   const flat = { ...lift, bins: [{ rows: 60, actual_rate_pct: 12, lift: 1.02 }, ...lift.bins.slice(1)] };
   assert.match(SR.liftSentence(flat), /not clearly more likely than the average customer .* so do not rely on this list yet/);
@@ -265,4 +265,53 @@ test("the card answers in order: who to contact, why these customers, how good t
   assert.deepEqual(findNeverShown(text($("[data-cw-results]"))), {}, "plain words only");
   draw(review({ summary: { top, caseId: null } }));
   assert.equal($("[data-cw-sum-data]"), null, "no plan to point to when the file did not come through the Data Doctor");
+});
+
+test("the goal's result is named in plain words, with a safe generic fallback for a goal without one", () => {
+  assert.match(SR.liftSentence(lift, "telco-churn"), /5 times as likely as the average customer to leave \(58% against 12%/);
+  assert.match(SR.unseenSentence(version, "retail-win-back"), /a customer who went on to buy again above one who did not, 78% of the time/);
+  assert.match(SR.liftSentence(lift, "some-new-goal"), /as the average customer to have the outcome this goal looks for/);
+  draw(review({ summary: { top, caseId: "case_42", story: { lift, importance } } }));
+  assert.doesNotMatch(text($("[data-cw-sum-model]")), /the result you want/);
+  assert.match(text($("[data-cw-sum-groups] thead")), /Went on to come back/);
+});
+
+const evaluation = {
+  rows_evaluated: 4000,
+  treated_rows: 2000,
+  control_rows: 2000,
+  causal: true,
+  uplift_at: [
+    { fraction: 0.1, uplift: { value: 0.042, ci_low: 0.021, ci_high: 0.063 } },
+    { fraction: 0.2, uplift: { value: 0.03, ci_low: 0.01, ci_high: 0.05 } },
+  ],
+};
+
+test("an effect model gets one honest sentence: the gap between contacted and not contacted, measured on customers it had not seen", () => {
+  const sentence = SR.upliftSentence(evaluation, "targeted-advertisement");
+  assert.equal(
+    sentence,
+    "Among the 10% of customers the model puts first, those who were contacted went on to buy 4.2 percentage points more often than those who were not contacted (somewhere between 2.1 and 6.3 points). Measured on 4,000 customers the model had not seen while learning (2,000 were contacted and 2,000 were not contacted).",
+  );
+  assert.doesNotMatch(sentence, /extra sales|will bring/i, "no claim about this campaign's sales");
+  // contacting was not picked at random: the sentence says the gap may come from who was contacted
+  assert.match(SR.upliftSentence({ ...evaluation, causal: false }), /not picked for contact at random/);
+  // a gap that chance could give is never sold as an effect; a harmful one is said
+  const unclear = { ...evaluation, uplift_at: [{ fraction: 0.1, uplift: { value: 0.004, ci_low: -0.02, ci_high: 0.03 } }] };
+  assert.match(SR.upliftSentence(unclear), /not clear whether contacting them changes .* too small to tell apart from chance, so do not rely/);
+  const harm = { ...evaluation, uplift_at: [{ fraction: 0.1, uplift: { value: -0.03, ci_low: -0.05, ci_high: -0.01 } }] };
+  assert.match(SR.upliftSentence(harm), /less often .* may do harm/);
+  assert.match(SR.upliftSentence({ ...harm, causal: false }), /may do harm.*not picked for contact at random/);
+  // several offers: the numbers compare the first offer only, so the sentence names it
+  const offers = SR.upliftSentence({ ...evaluation, arms: [{ arm: "Mens E-Mail" }, { arm: "Womens E-Mail" }] });
+  assert.match(offers, /those sent the Mens E-Mail went on to have the outcome/);
+  assert.match(offers, /2,000 were sent the Mens E-Mail and 2,000 were not contacted/);
+  assert.equal(SR.upliftSentence({ ...evaluation, arms: [{}] }), null);
+  // no comparison group in the evaluation: nothing to say, so the page falls back
+  assert.equal(SR.upliftSentence({ ...evaluation, control_rows: 0 }), null);
+  assert.equal(SR.upliftSentence(null), null);
+  const uplifted = { ...campaign, use_case_id: "criteo-uplift" };
+  draw(review({ campaign: uplifted, summary: { top, caseId: "case_42", story: { lift: null, importance: null, evaluation } } }));
+  assert.match(text($("[data-cw-sum-model]")), /^Among the 10% of customers the model puts first, those who were contacted went on to buy 4\.2 percentage points more often/);
+  assert.match(text($("[data-cw-sum-unproven]")), /^Not yet proven:/);
 });

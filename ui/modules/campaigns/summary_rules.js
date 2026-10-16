@@ -4,6 +4,7 @@
 
 import { fmtNum, fmtPct } from "../../dom.js";
 import { count } from "../../format.js";
+import { goalOutcome } from "../../labels.js";
 
 const whole = (n) => Number.isInteger(n) && n >= 0;
 const people = (n) => `${count(n)} ${n === 1 ? "customer" : "customers"}`;
@@ -15,12 +16,12 @@ export const doctorHref = (caseId) => `#/data/check/case/${encodeURIComponent(ca
  * How well the model did on customers it had not seen while it learned, in one sentence, from the model's
  * registry record (`test_score` is measured on customers held out of learning). The ranking measure is said the
  * way the Model page says it; any other measure is given as a number without its (technical) name. `null` when the record is
- * missing, so the page can say that it could not be read.
+ * missing, so the page can say that it could not be read. `useCaseId` names the goal's result in words ("went on to buy").
  */
-export function unseenSentence(version) {
+export function unseenSentence(version, useCaseId = "") {
   if (!version || typeof version.test_score !== "number") return null;
   if (version.metric === "roc_auc") {
-    return `On customers it had not seen while learning, the model put a customer who has the outcome above one who does not ${fmtPct(
+    return `On customers it had not seen while learning, the model put a customer who went on ${goalOutcome(useCaseId)} above one who did not, ${fmtPct(
       version.test_score,
       0,
     )} of the time. 50% would be no better than a coin toss; 100% would be perfect.`;
@@ -59,8 +60,9 @@ export function columnWords(name) {
  * How much better than average the model's first customers did, in one sentence, from the training run's
  * `decile_lift.json` (customers it had not seen while learning, sorted best first in equal groups). `null` for any
  * answer that is not a ranking of a yes/no outcome with a base rate, so the page falls back to the model's own sentence.
+ * `useCaseId` names the goal's result in words ("likely to buy").
  */
-export function liftSentence(lift) {
+export function liftSentence(lift, useCaseId = "") {
   const bins = lift && lift.mode === "classification" && Array.isArray(lift.bins) ? lift.bins : [];
   const first = bins[0];
   const total = bins.reduce((sum, b) => sum + (whole(b && b.rows) ? b.rows : 0), 0);
@@ -71,10 +73,45 @@ export function liftSentence(lift) {
   const top = Math.max(1, Math.round((100 * first.rows) / total));
   const seen = `Measured on ${count(total)} customers the model had not seen while learning.`;
   if (first.lift < 1.2) {
-    return `The ${top}% of customers the model puts first are not clearly more likely than the average customer to have the outcome this goal looks for, so do not rely on this list yet. ${seen}`;
+    return `The ${top}% of customers the model puts first are not clearly more likely than the average customer ${goalOutcome(useCaseId)}, so do not rely on this list yet. ${seen}`;
   }
   const rates = `${fmtPct(first.actual_rate_pct / 100, 0)} against ${fmtPct(lift.base_rate_pct / 100, 0)} for an average customer`;
-  return `The ${top}% of customers the model puts first are ${fmtNum(first.lift, 1)} times as likely as the average customer to have the outcome this goal looks for (${rates}). ${seen}`;
+  return `The ${top}% of customers the model puts first are ${fmtNum(first.lift, 1)} times as likely as the average customer ${goalOutcome(useCaseId)} (${rates}). ${seen}`;
+}
+
+/**
+ * What contacting changed for the customers the model puts first, in one sentence, from the training run's
+ * `uplift_evaluation.json` (customers it had not seen while learning, some contacted and some not): the gap between
+ * the share of contacted and of not-contacted customers who went on to the result, with its range. Said as measured
+ * on that past data, never as extra sales this campaign will bring. `null` for any answer without that gap, so the
+ * page falls back to the model's own sentence.
+ */
+export function upliftSentence(evaluation, useCaseId = "") {
+  const ok = (n) => typeof n === "number" && Number.isFinite(n);
+  const steps = evaluation && Array.isArray(evaluation.uplift_at) ? evaluation.uplift_at.filter((u) => u && ok(u.fraction) && u.uplift && ok(u.uplift.value)) : [];
+  const first = steps.sort((a, b) => a.fraction - b.fraction)[0];
+  if (!first || !whole(evaluation.rows_evaluated) || !whole(evaluation.treated_rows) || !whole(evaluation.control_rows) || !evaluation.treated_rows || !evaluation.control_rows) {
+    return null;
+  }
+  const top = Math.max(1, Math.round(100 * first.fraction));
+  // several offers: the top-level numbers compare only the first offer with the not-contacted group, so say which
+  const offer = evaluation.arms && evaluation.arms.length ? evaluation.arms[0] && evaluation.arms[0].arm : "";
+  if (evaluation.arms && evaluation.arms.length && (typeof offer !== "string" || !offer)) return null;
+  const who = offer ? `those sent the ${offer}` : "those who were contacted";
+  const sent = offer ? `${count(evaluation.treated_rows)} were sent the ${offer}` : `${count(evaluation.treated_rows)} were contacted`;
+  const { value, ci_low: low, ci_high: high } = first.uplift;
+  const points = (n) => fmtNum(Math.abs(n) * 100, 1);
+  const out = goalOutcome(useCaseId);
+  const seen = `Measured on ${count(evaluation.rows_evaluated)} customers the model had not seen while learning (${sent} and ${count(evaluation.control_rows)} were not contacted).`;
+  const random = evaluation.causal === false ? " Customers were not picked for contact at random in this data, so part of the gap may come from who was contacted rather than from contacting them." : "";
+  const range = ok(low) && ok(high) ? ` (somewhere between ${points(low)} and ${points(high)} points)` : "";
+  if (ok(low) && low > 0) {
+    return `Among the ${top}% of customers the model puts first, ${who} went on ${out} ${points(value)} percentage points more often than those who were not contacted${range}. ${seen}${random}`;
+  }
+  if (ok(high) && high < 0) {
+    return `Among the ${top}% of customers the model puts first, ${who} went on ${out} ${points(value)} percentage points less often than those who were not contacted, so contacting them may do harm. ${seen}${random}`;
+  }
+  return `Among the ${top}% of customers the model puts first, it is not clear whether contacting them changes who goes on ${out}: the gap between ${who} and those not contacted is too small to tell apart from chance, so do not rely on this list yet. ${seen}${random}`;
 }
 
 /** The groups of `decile_lift.json` as table rows, best first: `{ group, customers, rate, times }`; empty when it is not one. */
