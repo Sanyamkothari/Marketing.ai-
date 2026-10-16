@@ -11,6 +11,7 @@ import {
   findingsOf,
   leadOf,
   maskCell,
+  notesOf,
   planOf,
   queueOf,
   readyToApprove,
@@ -166,3 +167,24 @@ if (!process.env.DDS_FIXTURES) {
 } else {
   await import("./plan_cases.mjs");
 }
+
+test("one fact, one line: a step the guards already wrote about is not counted again from its receipt", () => {
+  const items = [step("cut", "remove_rows")];
+  const ledger = {
+    steps: [{ item_id: "cut", rows_in: 1000, rows_out: 970, customers_in: 1000, customers_out: 970, customers_lost: 30 }],
+    findings: [{ level: "flag", kind: "guard", text: "Step 3 loses 30 of 1,000 customers", item_id: "cut" }],
+  };
+  const found = findingsOf(items, ledger, new Set(["cut"]));
+  assert.deepEqual(found.map((f) => f.kind), ["guard"], "not also '30 customers lost' and '30 rows left out'");
+  const bare = findingsOf(items, { steps: ledger.steps }, new Set(["cut"]));
+  assert.deepEqual(bare.map((f) => f.kind), ["customers_lost"], "without the guards' sentence, customers lost, not rows too");
+});
+
+test("a note is a line to read: it is no change, needs no yes and is shown once", () => {
+  const note = (id, title) => item(id, "data_check", { title, state: "pending", confidence: "check", payload: { level: "note", code: "KEY_REPORT" } });
+  const items = [note("n1", "'customer_id' is different on every row"), note("n2", "'customer_id' is different on every row"), note("n3", "other")];
+  assert.deepEqual(planOf(items, new Set(), null), [], "no section, no tick, no 'needs your yes'");
+  assert.deepEqual(notesOf(items).map((i) => i.item_id), ["n1", "n3"]);
+  const flag = item("f1", "data_check", { state: "pending", confidence: "check", payload: { level: "flag" } });
+  assert.equal(planOf([flag], new Set(), null)[0].pending.length, 1, "a flag still asks");
+});

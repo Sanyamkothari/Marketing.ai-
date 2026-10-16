@@ -90,17 +90,42 @@ def time_keys_detector(*, clock: Callable[[], datetime] = utc_now) -> DetectorPo
         others = [ask for ask in questions if not ask.blocking]
         room = max(0, MAX_QUESTIONS - len(stops))
         kept, spilled = [*stops, *others[:room]], others[room:]
-        items = [
-            _check_item(upload_id, check, now) for upload_id, check in found if not _is_asked(check, kept)
-        ]
-        items.extend(_ask_item(ask, now) for ask in spilled)
+        # One fact, one line: a finding a question covers (kept or held back) is not listed again, and nor is a
+        # sentence a file before it already carries (the combined table repeats what its files said).
+        rank = {loaded.upload_id: n for n, loaded in enumerate(files)}
+        said: dict[str, int] = {}
+        for item in case.items:
+            if item.kind == CHECK_KIND and item.upload_id in rank:
+                said[item.title] = min(rank[item.upload_id], said.get(item.title, len(rank)))
+        items: list[CaseItem] = []
+        for upload_id, check in found:
+            if _is_asked(check, upload_id, questions):
+                continue
+            item = _check_item(upload_id, check, now)
+            if _repeats(said, item, rank):
+                continue
+            items.append(item)
+            said.setdefault(item.title, rank.get(upload_id or "", -1))
+        for ask in spilled:
+            item = _ask_item(ask, now)
+            if not _repeats(said, item, rank):
+                items.append(item)
+                said.setdefault(item.title, rank.get(ask.upload_id or "", -1))
         return Detected(asks=tuple(kept), items=tuple(items), requests=tuple(requests))
 
     return detect
 
 
-def _is_asked(check: Check, asks: list[Ask]) -> bool:
-    return any(ask.code == check.code and ask.column == check.column for ask in asks)
+def _is_asked(check: Check, upload_id: str | None, asks: list[Ask]) -> bool:
+    return any(
+        ask.code == check.code and ask.column == check.column and ask.upload_id == upload_id for ask in asks
+    )
+
+
+def _repeats(said: dict[str, int], item: CaseItem, rank: dict[str, int]) -> bool:
+    """Whether the same sentence is already on the page for an earlier file (or earlier in this run)."""
+    earlier = said.get(item.title)
+    return earlier is not None and earlier < rank.get(item.upload_id or "", -1)
 
 
 def _file(
@@ -173,12 +198,13 @@ def _file(
         if dates is not None:
             yes = meaning[2] if meaning is not None else None
             tails = tail_checks(dates, yes, _days_covered(frame))
-            found.extend((upload_id, check) for check in tails)
             keep = min(
                 (c for c in tails if c.as_of is not None), key=lambda c: c.as_of or now.date(), default=None
             )
-            if keep is not None:
+            if keep is not None:  # the question says it all (its earliest date leaves out every later row)
                 asks.append((2, _tail_ask(keep, date_column, upload_id, rows)))
+            else:
+                found.extend((upload_id, check) for check in tails)
 
 
 # ---------------------------------------------------------------------------

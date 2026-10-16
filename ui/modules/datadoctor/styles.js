@@ -117,6 +117,7 @@ export const CSS = `
 .dds-who{display:flex;flex-direction:column;gap:var(--s2);margin-top:var(--s2);padding:var(--s3) var(--s4);border:1px dashed var(--brand-200);border-radius:var(--r)}
 .dds-who-message{width:100%;font-family:inherit;font-size:var(--fs-small);resize:vertical}
 .dds-parked .dds-item-sub{color:var(--warning)}
+.dds-note-list{list-style:disc;padding-left:var(--s5);display:grid;gap:var(--s2)}
 .dds-parked{display:flex;gap:var(--s3);align-items:center;justify-content:space-between;flex-wrap:wrap;min-height:48px;padding:var(--s2) 0}
 @media (max-width:700px){.dds-head{grid-template-columns:minmax(0,1fr)}.dds-events li{grid-template-columns:minmax(0,1fr)}.dds-standing,.dds-goal{align-items:flex-start}.dds-chat-form{flex-direction:column}}
 `;

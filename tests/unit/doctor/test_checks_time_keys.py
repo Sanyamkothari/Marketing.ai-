@@ -612,3 +612,38 @@ def test_every_stop_is_asked_whatever_the_question_budget(tmp_path: Any) -> None
     case = vs.open_case(LocalStorage(tmp_path), w)
     found = time_keys_detector()(case, tuple(w.files.values()), None)
     assert len(found.asks) == MAX_QUESTIONS + 2 and all(a.blocking for a in found.asks)
+
+
+def _dated(last_day: str) -> pd.DataFrame:
+    days = pd.date_range("2026-04-01", last_day, freq="D")
+    return pd.DataFrame(
+        {"customer_id": [f"C{n:05d}" for n in range(len(days))], "order_date": days.strftime("%Y-%m-%d")}
+    )
+
+
+def test_a_finding_the_question_covers_is_not_listed_again(tmp_path: Any) -> None:
+    config = load_use_case(vs.GOAL_A)
+    w = vs.World(
+        files={vs.FIRST: vs.loaded(vs.FIRST, "orders.csv", _dated("2026-07-08"), config)},
+        offers=(Offer(config=config, stage="Acquire"),),
+    )
+    case = vs.open_case(LocalStorage(tmp_path), w)
+    found = time_keys_detector()(case, tuple(w.files.values()), None)
+    assert "THIN_LAST_PERIOD" in {a.code for a in found.asks}
+    listed = {i.payload["code"] for i in found.items}
+    assert not listed & {"PARTIAL_LAST_MONTH", "THIN_TAIL", "IMMATURE_PERIOD"}
+
+
+def test_the_same_sentence_for_two_files_is_listed_once(tmp_path: Any) -> None:
+    config = load_use_case(vs.GOAL_A)
+    frame = _messy_customers()
+    w = vs.World(
+        files={
+            vs.FIRST: vs.loaded(vs.FIRST, "a.csv", frame, config),
+            vs.SECOND: vs.loaded(vs.SECOND, "b.csv", frame, config),
+        },
+        offers=(Offer(config=config, stage="Acquire"),),
+    )
+    case = vs.open_case(LocalStorage(tmp_path), w)
+    found = time_keys_detector()(case, tuple(w.files.values()), None)
+    assert [i.payload["code"] for i in found.items].count("KEY_DIGITS_ROUNDED") == 1
