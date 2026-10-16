@@ -30,6 +30,7 @@ Hiding a column is a recipe `drop_column` step, so scoring drops it the same way
 
 from __future__ import annotations
 
+import calendar
 import contextlib
 import hashlib
 import itertools
@@ -606,6 +607,28 @@ def _step(kind: RecipeStepKind, column: str, **params: Any) -> RecipeStep:
     return RecipeStep(order=1, kind=kind, column=column, params=params)
 
 
+_SLASH_DATE: Final[re.Pattern[str]] = re.compile(r"^(\d{1,2})[/.-](\d{1,2})[/.-](\d{4})$")
+
+
+def _both_ways(issue: Mapping[str, Any]) -> str:
+    """` For example '05/06/2026' is 5 June 2026 (day first) or 6 May 2026 (month first).` from the first example
+    written as numbers, else nothing."""
+    for value in issue.get("examples", []) or []:
+        match = _SLASH_DATE.match(str(value).strip())
+        if (
+            match
+            and match.group(1) != match.group(2)
+            and int(match.group(1)) <= 12
+            and int(match.group(2)) <= 12
+        ):
+            first, second, year = int(match.group(1)), int(match.group(2)), match.group(3)
+            return (
+                f" For example {quoted(str(value).strip())} is {first} {calendar.month_name[second]} {year} "
+                f"(day first) or {second} {calendar.month_name[first]} {year} (month first)."
+            )
+    return ""
+
+
 def _recipe_proposal(
     builder: _Builder,
     step: RecipeStep,
@@ -787,11 +810,13 @@ def _format_proposals(
     builder: _Builder, issues: ToolResult, protected: set[str], target: str | None = None
 ) -> None:
     limit = builder.ctx.config.agent.max_conversion_failure_pct
+    contact = builder.ctx.config.actions.suppression.recently_contacted_column
     for issue in _rows(issues, "issues"):
         column = str(issue["column"])
-        if column in protected:
-            continue
         kind = str(issue["kind"])
+        # The last-contact column is read as dates like any other: the recent-contact rule needs its order right.
+        if column in protected and not (kind == "mixed_dates" and column == contact):
+            continue
         evidence = issues.evidence_id
         if kind == PLACEHOLDER_KIND:
             _placeholder_proposal(builder, issues, issue, target)
@@ -865,8 +890,9 @@ def _format_proposals(
                 continue
             if dayfirst is None:
                 sample = _examples(issue)
+                both = _both_ways(issue)
                 builder.ask(
-                    f"In '{display_name(column)}' ({sample}), which comes first: the day or the month?",
+                    f"In '{display_name(column)}' ({sample}), which comes first: the day or the month?{both}",
                     [
                         QuestionOption(
                             option_id=order,
@@ -891,12 +917,14 @@ def _format_proposals(
                 )
                 continue
             order = "day first" if dayfirst else "month first"
+            unread = f", {failed} could not be read and stay empty" if failed else ""
             _recipe_proposal(
                 builder,
                 _step(RecipeStepKind.PARSE_DATE, column, dayfirst=bool(dayfirst)),
                 f"Read '{display_name(column)}' as dates, {order}",
-                f"The dates are written in more than one way ({_examples(issue)}); values such as a day above 12 "
-                f"show they are {order}.",
+                f"It is stored as text ({_examples(issue)}). Some dates have a "
+                f"{'first' if dayfirst else 'second'} part above 12, so they are written {order}: "
+                f"{int(issue['convertible'])} of {non_empty} values become dates{unread}.",
                 evidence,
                 AgentConfidence.SURE,
                 _cells(issue),

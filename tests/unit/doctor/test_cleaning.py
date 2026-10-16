@@ -3,6 +3,7 @@ column of rupees and dollars stops with a question instead of being merged."""
 
 from __future__ import annotations
 
+import tempfile
 from datetime import UTC, datetime
 
 import numpy as np
@@ -13,11 +14,13 @@ from engine.agent.advisor import Advice
 from engine.agent.contracts import ProposalState, RecipeStep, RecipeStepKind, SessionStatus, ToolResult
 from engine.config import load_use_case
 from engine.doctor import visit
-from engine.doctor.case import Case
+from engine.doctor.case import Case, CaseItem
 from engine.doctor.cleaning import _leak_items, _locale_flag, cleaning_detector
 from engine.doctor.diagnose import Offer
 from engine.doctor.indian_values import LocaleStepProposal
+from engine.doctor.locale import india_defaults
 from engine.doctor.prescription import prescription_from_case
+from engine.doctor.protocol import Ask
 from engine.storage import LocalStorage
 from tests.unit.doctor import visit_support as vs
 
@@ -137,3 +140,59 @@ def test_a_locale_finding_with_no_step_is_a_flag_naming_the_column() -> None:
     item = _locale_flag(found, "u1", NOW)
     assert item.payload["code"] == "LOCALE_UNREAD" and item.payload["level"] == "flag"
     assert item.payload["column"] == "consent" and "'consent' is left as it is" in item.title
+
+
+# ---------------------------------------------------------------------------
+# DD/MM dates in the last-contact column
+# ---------------------------------------------------------------------------
+def _contact_dates(days: list[int], *, settings: str | None = None) -> tuple[list[CaseItem], list[Ask]]:
+    """What the cleaning detector says about customers whose `last_contacted_at` is written `day/month/2026`."""
+    config = load_use_case(vs.GOAL_A)
+    frame = (
+        vs.customers(rows=len(days))
+        .drop(columns="account_no")
+        .assign(last_contacted_at=[f"{day:02d}/{1 + i % 12:02d}/2026" for i, day in enumerate(days)])
+    )
+    frame.loc[0, "last_contacted_at"] = "00/00/2026"
+    w = vs.World(
+        files={vs.FIRST: vs.loaded(vs.FIRST, "c.csv", frame, config)},
+        offers=(Offer(config=config, stage="Acquire"),),
+    )
+    storage = LocalStorage(tempfile.mkdtemp())
+    deps = vs.deps_for(storage, w, detectors=(cleaning_detector(w.offers),))
+    case = visit.resume(vs.CLIENT, vs.open_case(storage, w).case_id, deps, actor=vs.ANALYST)
+    if settings is not None:  # the client's confirmed day/month order
+        profile = india_defaults(vs.CLIENT).model_dump(mode="json")
+        profile["date_order"].update(value=settings, source="confirmed")
+        case = case.model_copy(update={"locale_profile": profile})
+    found = cleaning_detector(w.offers)(case, tuple(w.files.values()), None)
+    return (
+        [i for i in found.items if (i.payload.get("step") or {}).get("column") == "last_contacted_at"],  # type: ignore[attr-defined]
+        [a for a in found.asks if a.column == "last_contacted_at"],
+    )
+
+
+def test_a_last_contact_column_with_a_day_above_12_gets_a_day_first_date_fix_with_counts() -> None:
+    items, asks = _contact_dates([14, 3, 21, 5] * 50)
+    assert not asks
+    (item,) = items
+    step = RecipeStep.model_validate(item.payload["step"])
+    assert (step.kind, step.params["dayfirst"]) == (RecipeStepKind.PARSE_DATE, True)
+    assert item.state is ProposalState.ACCEPTED and "day first" in item.title
+    assert "199 of 200 values become dates, 1 could not be read" in step.reason
+
+
+def test_a_last_contact_column_that_could_be_either_order_asks_with_an_example_both_ways() -> None:
+    items, asks = _contact_dates([5, 3, 8, 11] * 50)
+    assert not items
+    (ask,) = asks
+    assert ask.code == "GUIDED_DATE_ORDER" and "day or the month" in ask.text
+    assert "(day first)" in ask.text and "(month first)" in ask.text
+
+
+def test_a_confirmed_day_order_answers_the_question_for_the_client() -> None:
+    items, asks = _contact_dates([5, 3, 8, 11] * 50, settings="day_first")
+    assert not asks
+    (item,) = items
+    assert RecipeStep.model_validate(item.payload["step"]).params["dayfirst"] is True
+    assert "as in your settings" in item.title

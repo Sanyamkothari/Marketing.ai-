@@ -134,6 +134,9 @@ def _clean(
         # The Indian checks' columns: the advisor's number or yes/no fix (or question) there is the same problem.
         taken = {found.column for found in indian}
         advice_items, advice_asks = _advised(loaded, config, root, key, outcome, never, now)
+        advice_items, advice_asks = _dates_by_settings(
+            case, advice_items, advice_asks, loaded.upload_id, never, now
+        )
         for item in advice_items:
             step = _step_of(item)
             if step is None or step.column in mixed:
@@ -143,6 +146,62 @@ def _clean(
             items.append(item)
         asks.extend(a for a in advice_asks if a.column not in mixed and a.column not in taken)
     return items, asks
+
+
+def _dates_by_settings(
+    case: Case,
+    items: list[CaseItem],
+    asks: list[Ask],
+    upload_id: str,
+    never: frozenset[RecipeStepKind],
+    now: datetime,
+) -> tuple[list[CaseItem], list[Ask]]:
+    """A day-or-month question the client already answered in their confirmed settings is not asked again: the fix
+    for that order is proposed instead. Without confirmed settings the question stays."""
+    from pydantic import ValidationError
+
+    from engine.doctor.locale import LocaleProfile, dayfirst_for
+
+    if case.locale_profile is None:
+        return items, asks
+    try:
+        dayfirst = dayfirst_for(LocaleProfile.model_validate(case.locale_profile), None)
+    except ValidationError:
+        return items, asks
+    if dayfirst is None:
+        return items, asks
+    kept: list[Ask] = []
+    for ask in asks:
+        step = _step_in_order(ask, dayfirst) if ask.code == "GUIDED_DATE_ORDER" else None
+        if step is None:
+            kept.append(ask)
+            continue
+        order = "day first" if dayfirst else "month first"
+        items.append(
+            _fix_item(
+                step,
+                title=f"Read '{step.column}' as dates, {order}, as in your settings.",
+                upload_id=upload_id,
+                sure=True,
+                never=never,
+                now=now,
+                counts={},
+            )
+        )
+    return items, kept
+
+
+def _step_in_order(ask: Ask, dayfirst: bool) -> RecipeStep | None:
+    for option in ask.options:
+        raw = option.effect.payload.get("step")
+        step = RecipeStep.model_validate(raw) if isinstance(raw, dict) else None
+        if (
+            step is not None
+            and step.kind is RecipeStepKind.PARSE_DATE
+            and step.params.get("dayfirst") is dayfirst
+        ):
+            return step
+    return None
 
 
 def _never_ticked(config: UseCaseConfig | None, root: Path | None) -> frozenset[RecipeStepKind]:
