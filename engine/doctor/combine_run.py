@@ -50,6 +50,7 @@ __all__ = [
     "guard_stack",
     "plan_of",
     "rules_digest",
+    "shape_digest",
     "upload_ids_of",
 ]
 
@@ -118,6 +119,21 @@ def rules_digest(plan: BuildPlan) -> str:
     """What the person approves in a join, apart from the counts: which files, which ID columns and ID rules."""
     parts = [
         [source.upload_ids, source.key_column, source.date_column, source.key_rule.params()]
+        for source in (plan.entity, *plan.events)
+    ]
+    return sha256_hex(canonical_bytes(parts))
+
+
+def shape_digest(plan: BuildPlan, frames: Mapping[str, pd.DataFrame]) -> str:
+    """The join without this month's uploads: the columns of each file, its ID and date columns and ID rules. The
+    same files next month give the same digest, so the same join can be recognised."""
+    parts = [
+        [
+            sorted(str(c) for c in frames[source.upload_ids[0]].columns),
+            source.key_column,
+            source.date_column,
+            source.key_rule.params(),
+        ]
         for source in (plan.entity, *plan.events)
     ]
     return sha256_hex(canonical_bytes(parts))

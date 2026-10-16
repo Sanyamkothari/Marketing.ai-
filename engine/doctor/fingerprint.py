@@ -30,9 +30,11 @@ import threading
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
+from pathlib import Path
 from typing import TYPE_CHECKING, Final, Literal
 
 import pandas as pd
+import yaml
 from pydantic import AwareDatetime, Field, JsonValue
 
 from engine.agent.contracts import ProposalState
@@ -75,6 +77,27 @@ NEW_VALUE_SHARE: Final[float] = 0.01
 """A category not there last time is said when it is at least this share of the rows (a note; a flag from 5%)."""
 NEW_VALUE_FLAG: Final[float] = 0.05
 _MAX_CATEGORIES: Final[int] = 12
+THRESHOLDS_PATH: Final[Path] = Path(__file__).resolve().parents[2] / "configs" / "doctor" / "fingerprint.yaml"
+
+
+class Thresholds(StrictBase):
+    """`configs/doctor/fingerprint.yaml`: how big a move since last time is a flag (a note below it)."""
+
+    outcome_rate_flag_ratio: float = Field(
+        default=1.8, gt=1.0, description="The rate doubled or halved, about."
+    )
+    customers_flag_change: float = Field(
+        default=0.2, gt=0.0, description="Customers up or down by this share."
+    )
+
+
+def load_thresholds(path: Path = THRESHOLDS_PATH) -> Thresholds:
+    return Thresholds.model_validate(
+        (yaml.safe_load(path.read_text(encoding="utf-8")) or {}) if path.exists() else {}
+    )
+
+
+THRESHOLDS: Final[Thresholds] = load_thresholds()
 _YES: Final[frozenset[str]] = frozenset({"1", "1.0", "true", "yes", "y", "t", "haan"})
 _NO: Final[frozenset[str]] = frozenset({"0", "0.0", "false", "no", "n", "f", "nahi"})
 _FAMILY: Final[dict[str, str]] = {
@@ -124,6 +147,11 @@ class Fingerprint(StrictBase):
     outcome_rate: float | None = None
     date_column: str | None = None
     date_last: str | None = Field(default=None, description="The newest date in the file (ISO).")
+    derived: bool = Field(
+        default=False,
+        description="A table the Doctor made (a join, a stack), not an upload as it came: it is compared "
+        "only with the same kind of table.",
+    )
     columns: tuple[ColumnPrint, ...] = ()
 
 
@@ -262,6 +290,7 @@ def fingerprint_file(
     brief: GoalBrief | None,
     at: datetime,
     actor: str = "",
+    derived: bool = False,
 ) -> Fingerprint:
     """The fingerprint of one file. Counts come from the whole-file profile; the rest from the rows loaded."""
     frame, profile = loaded.frame, loaded.profile
@@ -335,6 +364,7 @@ def fingerprint_file(
         outcome_rate=rate,
         date_column=date_column,
         date_last=date_last,
+        derived=derived,
         columns=tuple(columns),
     )
 
@@ -390,15 +420,17 @@ _CONSEQUENCE: Final[dict[str, tuple[str, str]]] = {
 }
 
 
-def _level(change: float, band: float, *, ratio: bool) -> Level | None:
-    """The level of a move: `change` is a relative change (a count) or a ratio >= 1 (a rate)."""
+def _level(change: float, band: float, *, ratio: bool, flag: float | None = None) -> Level | None:
+    """The level of a move: `change` is a relative change (a count) or a ratio >= 1 (a rate). `flag` moves the line
+    between a note and a flag (the stop line stays with `band`)."""
+    line = band if flag is None else flag
     if ratio:
         return (
             "stop"
             if change > band**2
-            else "flag" if change > band else "note" if change > band**0.75 else None
+            else "flag" if change > line else "note" if change > band**0.75 else None
         )
-    return "stop" if change > 2 * band else "flag" if change > band else "note" if change > band / 3 else None
+    return "stop" if change > 2 * band else "flag" if change > line else "note" if change > band / 3 else None
 
 
 def _worst(*levels: Level | None) -> Level | None:
@@ -429,7 +461,14 @@ def _count_finding(now: Fingerprint, prev: Fingerprint | None, fact: ClientFact 
             f"You told me {'about' if fact.approximate else 'exactly'} {say.count(int(ref))} customers."
         )
     if prev is not None and prev.customers:
-        levels.append(_level(abs(now.customers - prev.customers) / prev.customers, 0.3, ratio=False))
+        levels.append(
+            _level(
+                abs(now.customers - prev.customers) / prev.customers,
+                0.3,
+                ratio=False,
+                flag=THRESHOLDS.customers_flag_change,
+            )
+        )
         parts.append(f"Last time: {say.count(prev.customers)} customers.")
     level = _worst(*levels)
     if level is None:
@@ -457,7 +496,14 @@ def _rate_finding(now: Fingerprint, prev: Fingerprint | None, fact: ClientFact |
             f"You told me {name} is yes {'about' if fact.approximate else 'exactly'} {say.pct(float(fact.value))} of the time."
         )
     if prev is not None and prev.outcome_rate is not None:
-        levels.append(_level(_rate_ratio(now.outcome_rate, prev.outcome_rate), 2.0, ratio=True))
+        levels.append(
+            _level(
+                _rate_ratio(now.outcome_rate, prev.outcome_rate),
+                2.0,
+                ratio=True,
+                flag=THRESHOLDS.outcome_rate_flag_ratio,
+            )
+        )
         parts.append(f"Last time: {say.pct(prev.outcome_rate)} yes.")
     level = _worst(*levels)
     if level is None:
@@ -663,6 +709,9 @@ def _current(
         brief=brief,
         at=at,
         actor=actor,
+        derived=any(
+            f.upload_id == loaded.upload_id and f.original_upload_id and not f.sheet for f in case.files
+        ),
     )
 
 
@@ -694,8 +743,11 @@ def fingerprint_detector(storage: Storage, *, clock: Callable[[], datetime] = ut
         if prev is None and not facts:
             return Detected()
         now = _current(case, loaded, brief, clock())
-        if prev is not None and _is_sibling_print(prev, loaded, files):
-            prev = None  # last time's print was of another file of this visit (an orders log, beside this customer table)
+        if prev is not None and (prev.derived != now.derived or _is_sibling_print(prev, loaded, files)):
+            # last time's print was of another file of this visit (an orders log, beside this customer table), or
+            # of another kind of table (the joined table, against this month's raw customers file): the same kind
+            # is compared once the join is built
+            prev = None
         findings = compare(now, prev, facts)
         if not findings:
             return Detected()
@@ -725,7 +777,7 @@ def _report(findings: list[Finding], loaded: LoadedFile, goal: str | None, at: d
     asks: list[Ask] = []
     doubts: list[CaseDoubt] = []
     names = [loaded.upload_id]
-    for finding in findings:
+    for finding in _one_card_per_column(findings):
         if finding.level == "stop":
             asks.append(_stop_ask(finding, loaded, goal, evidence.evidence_id))
             continue
@@ -747,6 +799,30 @@ def _report(findings: list[Finding], loaded: LoadedFile, goal: str | None, at: d
             _LOG.warning("doctor.fingerprint_ungrounded code=%s error=%s", finding.code, exc.code)
             asks.append(_stop_ask(finding, loaded, goal, evidence.evidence_id))
     return Detected(asks=tuple(asks), doubts=tuple(doubts), evidence=(evidence,))
+
+
+def _one_card_per_column(findings: list[Finding]) -> list[Finding]:
+    """What is about the same column is said in one card, the facts listed (a stop stays its own question).
+    `findings` come worst first, so the card has the worst level and code."""
+    merged: list[Finding] = []
+    for finding in findings:
+        same = next(
+            (
+                m
+                for m in merged
+                if finding.column is not None
+                and m.column == finding.column
+                and finding.level != "stop"
+                and m.level != "stop"
+            ),
+            None,
+        )
+        if same is None:
+            merged.append(finding)
+            continue
+        same.text = f"{same.text} {finding.text}"
+        same.numbers = (*same.numbers, *finding.numbers)
+    return merged
 
 
 def _stop_ask(finding: Finding, loaded: LoadedFile, goal: str | None, evidence_id: str) -> Ask:

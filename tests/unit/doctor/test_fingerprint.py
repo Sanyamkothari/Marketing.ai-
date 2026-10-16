@@ -274,3 +274,36 @@ def test_a_value_that_only_entered_the_top_ten_of_a_wider_column_is_not_called_n
     last = _print(vs.customers(300).assign(plan=before))
     now = _print(vs.customers(300).assign(plan=after))
     assert not [f for f in compare(now, last, ()) if f.code == "FACTS_NEW_VALUE"]
+
+
+def test_a_doubled_or_halved_outcome_rate_and_a_fifth_more_customers_are_flags_not_notes() -> None:
+    last = _print(vs.customers(100)).model_copy(
+        update={"customers": 4_000, "outcome_rate": 0.116, "date_last": None}
+    )
+    big = compare(last.model_copy(update={"customers": 5_000, "outcome_rate": 0.233}), last, ())
+    assert {f.code: f.level for f in big} == {"FACTS_CUSTOMER_COUNT": "flag", "FACTS_OUTCOME_RATE": "flag"}
+    halved = compare(last.model_copy(update={"customers": 4_000, "outcome_rate": 0.06}), last, ())
+    assert [(f.code, f.level) for f in halved] == [("FACTS_OUTCOME_RATE", "flag")]
+    small = compare(last.model_copy(update={"customers": 4_500, "outcome_rate": 0.2}), last, ())
+    assert {f.code: f.level for f in small} == {"FACTS_CUSTOMER_COUNT": "note", "FACTS_OUTCOME_RATE": "note"}
+
+
+def test_what_is_about_the_same_column_is_one_card_with_the_facts_listed(storage: LocalStorage) -> None:
+    from engine.doctor.fingerprint import Finding, _one_card_per_column
+
+    def finding(level: str, code: str, text: str, column: str | None) -> Finding:
+        return Finding(level, code, code, text, "do", "if", column, (1,))  # type: ignore[arg-type]
+
+    found = [
+        finding("flag", "FACTS_OUTCOME_RATE", "Last time: 12% yes. Now: 23% yes.", "bought"),
+        finding("note", "FACTS_NEW_VALUE", "‘bought’ has a value not seen last time.", "bought"),
+        finding("flag", "FACTS_CUSTOMER_COUNT", "Now: 5,000 customers.", None),
+        finding("stop", "FACTS_COLUMN_MISSING", "No ‘bought’.", "bought"),
+    ]
+    merged = _one_card_per_column(found)
+    assert [(f.code, f.level) for f in merged] == [
+        ("FACTS_OUTCOME_RATE", "flag"),
+        ("FACTS_CUSTOMER_COUNT", "flag"),
+        ("FACTS_COLUMN_MISSING", "stop"),  # a stop stays its own question
+    ]
+    assert merged[0].text == "Last time: 12% yes. Now: 23% yes. ‘bought’ has a value not seen last time."

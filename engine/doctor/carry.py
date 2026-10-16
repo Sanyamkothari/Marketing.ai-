@@ -70,7 +70,11 @@ def marks(item: CaseItem) -> tuple[str, str]:
     what: Any = (
         [step.get("kind"), step.get("column"), step.get("new_column"), step.get("params")]
         if isinstance(step, dict)
-        else {k: v for k, v in item.payload.items() if k != "upload_id"}
+        else (
+            [item.payload["shape"]]  # a join is the same join next month whatever the counts and uploads
+            if "shape" in item.payload
+            else {k: v for k, v in item.payload.items() if k != "upload_id"}
+        )
     )
     return _mark(item.goal_id, item.kind, "step", what), _mark(
         item.goal_id, item.kind, "sentence", item.title
@@ -233,9 +237,15 @@ def last_month(
     prior, approval = best
     approved_before = (prior.visit or CaseVisit()).approved_before
     have = set().union(*wanted)
-    steps = [s for i in prior.items if isinstance(s := i.payload.get("step"), dict)]
+    # like with like: the files are raw now, so only the steps on last month's raw files say what is missing (a
+    # step on a column the approved join built is not asked of raw files; the joined table is still compared with
+    # last month's once it is built, because a carried approval keeps its source)
+    built = {f.upload_id for f in prior.files if f.original_upload_id and not f.sheet}
+    raw_now = not any(f.original_upload_id and not f.sheet for f in case.files)
+    asked = [i for i in prior.items if (i.upload_id in built) is not raw_now]
+    steps = [s for i in asked if isinstance(s := i.payload.get("step"), dict)]
     made = {s["new_column"] for s in steps if isinstance(s.get("new_column"), str)}
-    columns = {c for i in prior.items if i.state is ProposalState.ACCEPTED and (c := _step_column(i))}
+    columns = {c for i in asked if i.state is ProposalState.ACCEPTED and (c := _step_column(i))}
     declined = tuple(
         dict.fromkeys(
             marks(i)[0]
