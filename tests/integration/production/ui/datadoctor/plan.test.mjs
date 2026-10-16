@@ -5,6 +5,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   BLOCKING_AT_ONCE,
+  countsAsLoss,
   INTERRUPTION_BUDGET,
   SECTIONS,
   alertOf,
@@ -112,6 +113,21 @@ test("a stop that names no step holds the final yes; a check given to a section 
   const grown = [...items, step("b", "parse_number")];
   const later = planOf(grown, new Set(), null);
   assert.deepEqual(readyToApprove(later, checked, [], grown).unchecked.map((s) => s.id), ["fix"], "a new change asks for a new look");
+});
+
+test("a join that folds an orders log into one row per customer is not a loss; a change left unticked is told at the final yes", () => {
+  const join = item("join", "build_dataset", { confidence: "check", state: "pending" });
+  const note = item("note", "data_check", { confidence: "check", state: "pending" });
+  const items = [join, note, step("a", "parse_date", { confidence: "check", state: "accepted" })];
+  assert.equal(countsAsLoss(join), false, "6,029 order rows in, 4,000 customers out: no one is lost");
+  assert.equal(countsAsLoss(step("q", "sql_query")), true);
+  const plan = planOf(items, new Set(), null);
+  const checked = new Map(plan.map((s) => [s.id, signatureOf(s)]));
+  const gate = readyToApprove(plan, checked, [], items);
+  assert.equal(gate.ok, true, "the section check alone still lets the final yes through");
+  assert.deepEqual(gate.skipped.map((i) => i.item_id), ["join"], "but the unticked join is named: approving leaves it out");
+  const ticked = [item("join", "build_dataset", { confidence: "check", state: "accepted" })];
+  assert.deepEqual(readyToApprove(planOf(ticked, new Set(), null), new Map(), [], ticked).skipped, []);
 });
 
 test("at most five things interrupt: stops always, flags while the budget lasts, the rest are notes", () => {

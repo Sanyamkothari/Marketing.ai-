@@ -204,6 +204,23 @@ def test_next_months_file_is_compared_with_last_months_never_with_itself(storage
     assert both.evidence[0].input["upload_id"] == vs.SECOND
 
 
+def test_a_customer_table_is_not_compared_with_last_times_orders_log(storage: LocalStorage) -> None:
+    frame = vs.customers(300)
+    orders = pd.DataFrame(
+        {
+            "customer_id": frame["customer_id"].repeat(2).to_numpy(),
+            "order_id": [f"A-{n:06d}" for n in range(600)],
+            "order_date": ["2026-07-01"] * 600,
+            "order_value": [10] * 600,
+        }
+    )
+    FingerprintStore(storage).save(
+        "default", _print(orders, outcome=None)
+    )  # approved last time: the orders file
+    found, _case = _detect(storage, frame)
+    assert not found.asks and not found.doubts, "it shares only the ID column with that print"
+
+
 def test_whole_number_ids_read_as_decimals_keep_their_length() -> None:
     frame = vs.customers(10).assign(customer_id=[12345678.0] * 9 + [None])
     print_ = _print(frame)

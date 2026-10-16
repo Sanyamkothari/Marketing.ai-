@@ -625,6 +625,14 @@ def _current(
     )
 
 
+def _same_file_kind(now: Fingerprint, prev: Fingerprint) -> bool:
+    """Whether `prev` is a print of the same kind of file: half of the smaller file's columns are in both. A file
+    that only shares its ID column with it is another table of the same client, not last month's file changed.
+    """
+    a, b = {c.name for c in now.columns}, {c.name for c in prev.columns}
+    return 2 * len(a & b) >= min(len(a), len(b))
+
+
 def fingerprint_detector(storage: Storage, *, clock: Callable[[], datetime] = utc_now) -> DetectorPort:
     """Compare the case's main file with the client's facts and the last fingerprint of the same goal."""
 
@@ -641,6 +649,8 @@ def fingerprint_detector(storage: Storage, *, clock: Callable[[], datetime] = ut
         if prev is None and not facts:
             return Detected()
         now = _current(case, loaded, brief, clock())
+        if prev is not None and not _same_file_kind(now, prev):
+            prev = None  # last time's print was of another file (an orders log, beside this customer table)
         findings = compare(now, prev, facts)
         if not findings:
             return Detected()

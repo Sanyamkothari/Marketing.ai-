@@ -414,6 +414,8 @@ export function approveHtml(screen, { busy = false, level = 3, gate = null } = {
   // The section-by-section check (`plan.js` `readyToApprove`): one final yes, once each open section was looked at.
   const unchecked = gate ? gate.unchecked : [];
   const stops = gate ? gate.stops : [];
+  const skipped = gate && gate.skipped ? gate.skipped : [];
+  const names = namesOf(screen.case);
   const hold = [
     unchecked.length
       ? `Check each section above first: ${unchecked.map((s) => s.title).join(", ")}.`
@@ -423,7 +425,13 @@ export function approveHtml(screen, { busy = false, level = 3, gate = null } = {
   ].filter(Boolean);
   return `<section class="dds-approve card" data-dds-approve aria-labelledby="dds-approve-t"><h${level} id="dds-approve-t" class="dds-group-t">Approve the changes</h${level}><p class="dds-why">One final yes, after you have checked each section. You approve this sentence, word for word. Your files are not changed.</p><blockquote class="dds-sentence" id="dds-approve-sentence" data-dds-approve-sentence>${esc(
     view.approval_sentence,
-  )}</blockquote>${waiting ? `<p class="dds-why">${esc(`First give your own yes to ${plural(waiting, "change", "changes")} above.`)}</p>` : ""}${hold
+  )}</blockquote>${
+    skipped.length
+      ? `<p class="dds-why" data-dds-approve-skipped>${esc("Not ticked, so left out:")} ${skipped
+          .map((i) => userTextIn(String(i.title || i.kind).replace(/[.\s]+$/, ""), names))
+          .join("; ")}. ${esc("Tick it above to include it.")}</p>`
+      : ""
+  }${waiting ? `<p class="dds-why">${esc(`First give your own yes to ${plural(waiting, "change", "changes")} above.`)}</p>` : ""}${hold
     .map((h) => `<p class="dds-why" data-dds-approve-hold>${esc(h)}</p>`)
     .join("")}${leftOutHtml(screen, { where: "approve" })}${
     left ? `<p class="dds-why" data-dds-left-out-choice>${esc(`After you approve, you choose whether to continue without ${left === 1 ? "it" : "them"}.`)}</p>` : ""

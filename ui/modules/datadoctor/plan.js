@@ -301,6 +301,9 @@ export function needsYes(item, approveIds, ledger) {
   return level === "stop" || level === "flag";
 }
 
+/** A step that can lose customers. Building one row per customer from an orders log folds many rows into one: fewer rows, no one lost. */
+export const countsAsLoss = (item) => item.kind !== "build_dataset";
+
 /** The notes to read, each sentence once. */
 export const notesOf = (items) => {
   const live = items.filter((i) => isNote(i) && i.state !== "rejected");
@@ -334,11 +337,15 @@ export const isChecked = (sec, checked) => checked.get(sec.id) === signatureOf(s
  * Whether the final yes is ready: every section with something to look at has been checked as it is now, and no stop
  * is left. A stop holds when its step is still ticked, or when it names no step at all (a check on the whole plan).
  */
-export function readyToApprove(plan, checked, findings, items) {
+export function readyToApprove(plan, checked, findings, items, approveIds = new Set()) {
   const unchecked = plan.filter((s) => (s.pending.length || s.waiting.length) && !isChecked(s, checked));
   const open = new Set(items.filter((i) => i.state === "accepted").map((i) => i.item_id));
   const stops = findings.filter((f) => f.level === "stop" && (!f.items.length || f.items.some((id) => open.has(id))));
-  return { unchecked, stops, ok: !unchecked.length && !stops.length };
+  // Changes that ask for a tick and were never ticked: approving leaves them out, so the final yes says so.
+  const skipped = plan
+    .flatMap((s) => s.open)
+    .filter((i) => i.state === "pending" && i.kind !== "data_check" && !approveIds.has(i.item_id));
+  return { unchecked, stops, skipped, ok: !unchecked.length && !stops.length };
 }
 
 // --- the question queue -------------------------------------------------------------------------------------------

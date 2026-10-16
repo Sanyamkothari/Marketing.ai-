@@ -407,10 +407,11 @@ def open_campaign(
     holdout_scope, holdout_key, holdout_epoch = holdout_identity(run_holdout_spec(storage, record.run_id))
     uplift_run = "intended_treatment" in scores.columns
     start = treatment_start or finished_at
+    # The default name says no "sent": the list is a draft until it is downloaded.
     campaign = Campaign(
         campaign_id=new_campaign_id(now),
         kind=CampaignKind.SCORED,
-        name=name or f"{config.name}, sent {start.day} {start:%b %Y}",
+        name=name or f"{config.name}, {start.day} {start:%b %Y}",
         use_case_id=record.use_case_id,
         run_ids=(record.run_id,),
         primary_key=record.primary_key,
