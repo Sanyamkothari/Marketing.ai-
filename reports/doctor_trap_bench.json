@@ -242,7 +242,7 @@
         "failed_categories": [],
         "id": "v01_paise_vs_rupees",
         "passed": true,
-        "untested": false
+        "untested": true
       },
       {
         "asked_only": false,
@@ -287,7 +287,7 @@
     ],
     "shown_right": 15,
     "unstable": 0,
-    "untested": 4
+    "untested": 5
   },
   "by_category": {
     "asked": {
@@ -413,7 +413,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 120,
-          "seconds": 3.76,
+          "seconds": 3.43,
           "shown_right": true
         },
         {
@@ -487,7 +487,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 120,
-          "seconds": 1.19,
+          "seconds": 1.02,
           "shown_right": true
         }
       ],
@@ -568,7 +568,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 1.03,
+          "seconds": 0.96,
           "shown_right": null
         },
         {
@@ -631,7 +631,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 0.86,
+          "seconds": 0.99,
           "shown_right": null
         }
       ],
@@ -723,7 +723,7 @@
             "Q23_WHO_CAN_RESPOND"
           ],
           "rows": 72,
-          "seconds": 1.12,
+          "seconds": 1.13,
           "shown_right": true
         },
         {
@@ -797,7 +797,7 @@
             "Q23_WHO_CAN_RESPOND"
           ],
           "rows": 72,
-          "seconds": 1.0,
+          "seconds": 1.23,
           "shown_right": true
         }
       ],
@@ -894,7 +894,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 100,
-          "seconds": 1.19,
+          "seconds": 1.2,
           "shown_right": null
         },
         {
@@ -973,7 +973,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 100,
-          "seconds": 1.22,
+          "seconds": 1.42,
           "shown_right": null
         }
       ],
@@ -1059,7 +1059,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 60,
-          "seconds": 0.86,
+          "seconds": 0.92,
           "shown_right": null
         },
         {
@@ -1127,7 +1127,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 60,
-          "seconds": 1.16,
+          "seconds": 0.97,
           "shown_right": null
         }
       ],
@@ -1217,7 +1217,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 40,
-          "seconds": 0.52,
+          "seconds": 0.5,
           "shown_right": true
         },
         {
@@ -1289,7 +1289,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 40,
-          "seconds": 0.49,
+          "seconds": 0.46,
           "shown_right": true
         }
       ],
@@ -1369,7 +1369,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 60,
-          "seconds": 0.63,
+          "seconds": 0.74,
           "shown_right": true
         },
         {
@@ -1431,7 +1431,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 60,
-          "seconds": 0.89,
+          "seconds": 0.63,
           "shown_right": true
         }
       ],
@@ -1508,7 +1508,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 10,
-          "seconds": 0.49,
+          "seconds": 0.64,
           "shown_right": true
         },
         {
@@ -1567,7 +1567,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 10,
-          "seconds": 0.42,
+          "seconds": 0.53,
           "shown_right": true
         }
       ],
@@ -1672,7 +1672,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 150,
-          "seconds": 1.32,
+          "seconds": 1.96,
           "shown_right": null
         },
         {
@@ -1759,7 +1759,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 150,
-          "seconds": 1.47,
+          "seconds": 2.01,
           "shown_right": null
         }
       ],
@@ -1913,7 +1913,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 60,
-          "seconds": 0.91,
+          "seconds": 0.95,
           "shown_right": null
         }
       ],
@@ -1999,7 +1999,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 48,
-          "seconds": 0.97,
+          "seconds": 0.9,
           "shown_right": true
         },
         {
@@ -2067,7 +2067,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 48,
-          "seconds": 1.14,
+          "seconds": 0.99,
           "shown_right": true
         }
       ],
@@ -2165,7 +2165,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 30,
-          "seconds": 2.66,
+          "seconds": 2.85,
           "shown_right": true
         },
         {
@@ -2245,7 +2245,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 30,
-          "seconds": 2.84,
+          "seconds": 2.46,
           "shown_right": true
         }
       ],
@@ -2366,7 +2366,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 60,
-          "seconds": 1.51,
+          "seconds": 1.22,
           "shown_right": null
         },
         {
@@ -2469,7 +2469,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 60,
-          "seconds": 1.33,
+          "seconds": 1.53,
           "shown_right": null
         }
       ],
@@ -2593,7 +2593,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 50,
-          "seconds": 1.2,
+          "seconds": 1.39,
           "shown_right": null
         },
         {
@@ -2699,7 +2699,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 50,
-          "seconds": 1.1,
+          "seconds": 1.35,
           "shown_right": null
         }
       ],
@@ -2784,7 +2784,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 0.97,
+          "seconds": 1.16,
           "shown_right": null
         },
         {
@@ -2851,7 +2851,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 0.88,
+          "seconds": 0.87,
           "shown_right": null
         }
       ],
@@ -2937,7 +2937,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 0.8,
+          "seconds": 1.09,
           "shown_right": null
         },
         {
@@ -3005,7 +3005,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 1.03,
+          "seconds": 0.94,
           "shown_right": null
         }
       ],
@@ -3101,7 +3101,7 @@
             "Q23_WHO_CAN_RESPOND"
           ],
           "rows": 70,
-          "seconds": 1.04,
+          "seconds": 2.3,
           "shown_right": true
         },
         {
@@ -3179,7 +3179,7 @@
             "Q23_WHO_CAN_RESPOND"
           ],
           "rows": 70,
-          "seconds": 1.35,
+          "seconds": 2.77,
           "shown_right": true
         }
       ],
@@ -3254,7 +3254,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 120,
-          "seconds": 0.86,
+          "seconds": 0.75,
           "shown_right": true
         },
         {
@@ -3311,7 +3311,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 120,
-          "seconds": 1.02,
+          "seconds": 1.31,
           "shown_right": true
         }
       ],
@@ -3397,7 +3397,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 1.97,
+          "seconds": 1.19,
           "shown_right": true
         },
         {
@@ -3465,7 +3465,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 1.3,
+          "seconds": 1.07,
           "shown_right": true
         }
       ],
@@ -3551,7 +3551,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 1.15,
+          "seconds": 1.08,
           "shown_right": true
         },
         {
@@ -3619,7 +3619,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 0.88,
+          "seconds": 1.04,
           "shown_right": true
         }
       ],
@@ -3694,7 +3694,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 120,
-          "seconds": 0.84,
+          "seconds": 0.71,
           "shown_right": true
         },
         {
@@ -3751,7 +3751,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 120,
-          "seconds": 0.77,
+          "seconds": 0.83,
           "shown_right": true
         }
       ],
@@ -3847,7 +3847,7 @@
             "THIN_LAST_PERIOD"
           ],
           "rows": 180,
-          "seconds": 1.4,
+          "seconds": 2.88,
           "shown_right": true
         },
         {
@@ -3925,7 +3925,7 @@
             "THIN_LAST_PERIOD"
           ],
           "rows": 180,
-          "seconds": 1.38,
+          "seconds": 1.79,
           "shown_right": true
         }
       ],
@@ -4000,7 +4000,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 120,
-          "seconds": 0.74,
+          "seconds": 0.75,
           "shown_right": true
         },
         {
@@ -4057,7 +4057,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 120,
-          "seconds": 0.84,
+          "seconds": 0.77,
           "shown_right": true
         }
       ],
@@ -4148,7 +4148,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 90,
-          "seconds": 1.22,
+          "seconds": 1.03,
           "shown_right": true
         },
         {
@@ -4221,7 +4221,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 90,
-          "seconds": 0.98,
+          "seconds": 0.97,
           "shown_right": true
         }
       ],
@@ -4246,10 +4246,7 @@
           "accepted": [
             "\u201corder_id\u201d names each row of sales_a.csv.",
             "\u201corder_id\u201d names each row of sales_b.csv.",
-            "Stack sales_a.csv and sales_b.csv into one table: 80 rows in the files, no row is in two exports, 80 rows in the table.",
             "\u201cchurn\u201d is the outcome: The subscriber left within the month after the snapshot",
-            "Training: Balanced (about 2 min, recommended). Time for the search to finish on a file this size (from similar public datasets).",
-            "\u201corder_id\u201d names each row of sales_a stacked.csv.",
             "Training: Balanced (about 2 min, recommended). Time for the search to finish on a file this size (from similar public datasets)."
           ],
           "checks": [
@@ -4290,22 +4287,17 @@
               "did": "answered",
               "what": "TRAINING_BUDGET: Balanced (about 2 min, recommended)",
               "why": "recommended"
-            },
-            {
-              "did": "answered",
-              "what": "TRAINING_BUDGET: Balanced (about 2 min, recommended)",
-              "why": "recommended"
             }
           ],
-          "combined": true,
-          "digest": "972d39e4e259",
+          "combined": false,
+          "digest": "8e6d52b0b931",
           "error": null,
           "left_open": [],
           "left_unticked": [
             {
-              "column": "order_id",
-              "kind": "data_check",
-              "title": "'order_id': 100.0% of 40 values are different from each other; the most common appears 1 times."
+              "column": null,
+              "kind": "stack_files",
+              "title": "Stack sales_a.csv and sales_b.csv into one table: 80 rows in the files, no row is in two exports, 80 rows in the table."
             },
             {
               "column": "order_id",
@@ -4315,7 +4307,7 @@
             {
               "column": "order_id",
               "kind": "data_check",
-              "title": "'order_id': 100.0% of 80 values are different from each other; the most common appears 1 times."
+              "title": "'order_id': 100.0% of 40 values are different from each other; the most common appears 1 times."
             }
           ],
           "notes": [],
@@ -4323,21 +4315,17 @@
           "questions": [
             "Q06_UNIT_SCALE",
             "OUTCOME_COLUMN",
-            "TRAINING_BUDGET",
             "TRAINING_BUDGET"
           ],
-          "rows": 80,
-          "seconds": 1.6,
+          "rows": 40,
+          "seconds": 2.19,
           "shown_right": true
         },
         {
           "accepted": [
             "\u201corder_id\u201d names each row of sales_a.csv.",
             "\u201corder_id\u201d names each row of sales_b.csv.",
-            "Stack sales_a.csv and sales_b.csv into one table: 80 rows in the files, no row is in two exports, 80 rows in the table.",
             "\u201cchurn\u201d is the outcome: The subscriber left within the month after the snapshot",
-            "Training: Balanced (about 2 min, recommended). Time for the search to finish on a file this size (from similar public datasets).",
-            "\u201corder_id\u201d names each row of sales_a stacked.csv.",
             "Training: Balanced (about 2 min, recommended). Time for the search to finish on a file this size (from similar public datasets)."
           ],
           "checks": [
@@ -4378,22 +4366,17 @@
               "did": "answered",
               "what": "TRAINING_BUDGET: Balanced (about 2 min, recommended)",
               "why": "recommended"
-            },
-            {
-              "did": "answered",
-              "what": "TRAINING_BUDGET: Balanced (about 2 min, recommended)",
-              "why": "recommended"
             }
           ],
-          "combined": true,
-          "digest": "972d39e4e259",
+          "combined": false,
+          "digest": "8e6d52b0b931",
           "error": null,
           "left_open": [],
           "left_unticked": [
             {
-              "column": "order_id",
-              "kind": "data_check",
-              "title": "'order_id': 100.0% of 40 values are different from each other; the most common appears 1 times."
+              "column": null,
+              "kind": "stack_files",
+              "title": "Stack sales_a.csv and sales_b.csv into one table: 80 rows in the files, no row is in two exports, 80 rows in the table."
             },
             {
               "column": "order_id",
@@ -4403,7 +4386,7 @@
             {
               "column": "order_id",
               "kind": "data_check",
-              "title": "'order_id': 100.0% of 80 values are different from each other; the most common appears 1 times."
+              "title": "'order_id': 100.0% of 40 values are different from each other; the most common appears 1 times."
             }
           ],
           "notes": [],
@@ -4411,11 +4394,10 @@
           "questions": [
             "Q06_UNIT_SCALE",
             "OUTCOME_COLUMN",
-            "TRAINING_BUDGET",
             "TRAINING_BUDGET"
           ],
-          "rows": 80,
-          "seconds": 1.82,
+          "rows": 40,
+          "seconds": 1.57,
           "shown_right": true
         }
       ],
@@ -4424,7 +4406,7 @@
       "shown_right": true,
       "stable": true,
       "theme": "Money and units whose meaning is not in the cells",
-      "untested": false
+      "untested": true
     },
     {
       "asked_only": false,
@@ -4489,7 +4471,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 60,
-          "seconds": 0.65,
+          "seconds": 0.54,
           "shown_right": null
         },
         {
@@ -4545,7 +4527,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 60,
-          "seconds": 0.59,
+          "seconds": 0.65,
           "shown_right": null
         }
       ],
@@ -4619,7 +4601,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 0.92,
+          "seconds": 0.78,
           "shown_right": null
         },
         {
@@ -4675,7 +4657,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 0.81,
+          "seconds": 0.86,
           "shown_right": null
         }
       ],
@@ -4766,7 +4748,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 1.12,
+          "seconds": 1.08,
           "shown_right": true
         },
         {
@@ -4839,7 +4821,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 0.97,
+          "seconds": 1.16,
           "shown_right": true
         }
       ],
@@ -4926,7 +4908,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 90,
-          "seconds": 1.03,
+          "seconds": 1.23,
           "shown_right": null
         },
         {
@@ -4995,7 +4977,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 90,
-          "seconds": 0.9,
+          "seconds": 1.14,
           "shown_right": null
         }
       ],
@@ -5076,7 +5058,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 124,
-          "seconds": 1.84,
+          "seconds": 2.01,
           "shown_right": true
         },
         {
@@ -5139,7 +5121,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 124,
-          "seconds": 1.65,
+          "seconds": 2.17,
           "shown_right": true
         }
       ],
@@ -5448,6 +5430,6 @@
     "untested": 4
   },
   "unstable": 0,
-  "untested": 4,
+  "untested": 5,
   "version": 1
 }

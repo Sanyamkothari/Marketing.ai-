@@ -177,7 +177,8 @@ class FirstLook(StrictBase):
 def advised_leaks(advice: Advice, *, proven: bool = False) -> tuple[str, ...]:
     """Columns the advisor's run of the checks flagged as possibly holding the answer (any severity).
 
-    `proven=True` keeps only the error-severity finds: the column tells yes from no almost by itself.
+    `proven=True` keeps only the error-severity finds the person has not acknowledged: the column tells yes
+    from no almost by itself.
     """
     found: list[str] = []
     for result in advice.tool_results:
@@ -186,7 +187,7 @@ def advised_leaks(advice: Advice, *, proven: bool = False) -> tuple[str, ...]:
         checks: Any = result.result.get("checks")
         for check in checks if isinstance(checks, list) else []:
             if isinstance(check, dict) and check.get("code") == "LEAKAGE_SUSPECTED" and check.get("column"):
-                if proven and check.get("severity") != "error":
+                if proven and (check.get("severity") != "error" or check.get("acknowledged")):
                     continue
                 found.append(str(check["column"]))
     return tuple(dict.fromkeys(found))

@@ -9,7 +9,7 @@ Tick-all (the old driver, flatters the product): passed 30 of 30. Person who ski
 * **Tick-all** (`--tick-all`) answers blocking questions only and ticks every pending suggestion, so a leak column the product leaves unticked is dropped anyway. It is the old behaviour, kept for comparison.
 * **Skips optional questions** is the person-like driver that leaves every question that does not block unanswered (a person who clicks through). A trap that passes person-like but fails here only passes if the person answers a question the product could have answered for them.
 
-Runs that disagreed with each other (person-like): 0. 4 of the passes are untested: the case has several files but nothing was joined or stacked, so its join traps were never sprung. 2 pass (asked only): the right question was asked but the data was not fixed (the check accepts either).
+Runs that disagreed with each other (person-like): 0. 5 of the passes are untested: the case has several files but nothing was joined or stacked, so its join traps were never sprung. 2 pass (asked only): the right question was asked but the data was not fixed (the check accepts either).
 
 **Asked the right question** (person-like run; the right question or flag was on the screen the person saw, ticked or not, whatever the data did): 18 of 18 traps that have one. A flag that changes nothing does not protect the data, so this is counted apart from the pass.
 
@@ -60,7 +60,7 @@ Many traps fail today. That is expected: the bench measures, it does not have to
 | t07_immature_last_month | T07 | pass | pass (asked only) | FAIL | yes |  |
 | t13_outcome_from_column | T13 | pass | pass | pass | yes |  |
 | t15_partial_last_month | T15 | pass | pass (asked only) | pass (asked only) | yes |  |
-| v01_paise_vs_rupees | V01 | pass (asked only) | pass (asked only) | pass (asked only) | yes |  |
+| v01_paise_vs_rupees | V01 | pass, untested | pass (asked only) | pass, untested | yes | nothing was joined or stacked |
 | v03_refunds_negative | V03 | pass | pass | pass | - |  |
 | v04_blank_vs_zero | V04 | pass | pass | pass | - |  |
 | v06_test_accounts | V06 | pass | pass | pass | yes |  |
@@ -70,6 +70,17 @@ Many traps fail today. That is expected: the bench measures, it does not have to
 Pass with tick-all, fail person-like (0): none.
 
 Pass person-like, fail when the person skips the optional questions (3): c09_already_hold_product, s01_never_active, t07_immature_last_month. For these the recommended answer is what makes the data right, yet the product leaves it unanswered: it should apply the recommendation as a pre-answered, changeable choice (or make the question block).
+
+## Why each trap fails for the person-like driver
+
+For each failure: the failing check, what was left unticked on the plan or unanswered when the person approved, and (written by hand in the case file) what the person would have to do and whether the product should pre-tick it or ask a question.
+
+### v01_paise_vs_rupees (V01) (passes, but untested)
+
+- Left unticked: [stack_files] Stack sales_a.csv and sales_b.csv into one table: 80 rows in the files, no row is in two exports, 80 rows in the table.
+- Also 2 routine 'every value is different' flag(s) (information only).
+- Why and what to do: The person would have to tick the plan's suggestion "Stack <file> and <file> into one table". It is shown but not pre-ticked, so each file is used alone and the other one's customers are not counted. The product should PRE-TICK it, not ask: the files have the same columns, it has already measured the repeated rows, and the suggestion states the rows before and after; the approval still names it and one click unticks it. Until it is, the paise-against-rupees trap is never sprung (untested).
+
 
 ## Each trap (person-like)
 
@@ -384,7 +395,6 @@ Expected: The two files are stacked in one unit and the total is 198,508 rupees,
 - pass: amounts from both files add up in one unit (rupees). asked: Q06 UNIT SCALE What unit is amount in? Its values look like two units: they are about 73 t
 - Person answered: Q06_UNIT_SCALE: The files use different units: I will send them in one unit (recommended)
 - Person answered: OUTCOME_COLUMN: churn (sales_a.csv) (answer key)
-- Person answered: TRAINING_BUDGET: Balanced (about 2 min, recommended) (recommended)
 - Person answered: TRAINING_BUDGET: Balanced (about 2 min, recommended) (recommended)
 
 ### v03_refunds_negative (V03, Money and units whose meaning is not in the cells)

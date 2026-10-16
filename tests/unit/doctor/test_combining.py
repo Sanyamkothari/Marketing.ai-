@@ -5,6 +5,7 @@ log that barely meets the list is a question instead of a proposal."""
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -220,3 +221,37 @@ def test_stacked_exports_in_different_units_stop_with_a_blocking_question(tmp_pa
     assert ask.blocking and ask.column == "amount"
     assert "times larger in orders_feb.csv than in orders_jan.csv" in ask.text
     assert _one(case, "stack_files"), "the stack is still offered; the answer comes before the approval"
+    assert _one(case, "stack_files").state is ProposalState.PENDING, "different units: never pre-ticked"
+
+
+def test_files_with_the_same_columns_are_stacked_and_pre_ticked(tmp_path: Path) -> None:
+    files = {"up-jan": ("orders_jan.csv", _export(0, 200)), "up-feb": ("orders_feb.csv", _export(200, 400))}
+    item = _one(_Day(tmp_path, files).open(), "stack_files")
+    assert item.state is ProposalState.ACCEPTED
+    assert item.payload.get("needs_yes") is False
+
+
+def test_a_stack_the_guard_stops_on_or_cannot_check_is_not_pre_ticked(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from engine.doctor import combining
+    from engine.doctor.guards import Finding
+    from engine.doctor.stack_files import StackError
+
+    files = {"up-jan": ("orders_jan.csv", _export(0, 200)), "up-feb": ("orders_feb.csv", _export(200, 400))}
+    real = combining.guard_stack
+
+    def stops(*args: Any, **kwargs: Any) -> Any:
+        receipt, findings = real(*args, **kwargs)
+        return receipt, (*findings, Finding(level="stop", code="STEP_ZERO_ROWS", message="rows were lost"))
+
+    def cannot_run(*args: Any, **kwargs: Any) -> Any:
+        raise StackError("STACK_FAILED", "cannot be built")
+
+    monkeypatch.setattr(combining, "guard_stack", stops)
+    stopped = _one(_Day(tmp_path / "a", files).open(), "stack_files")
+    assert stopped.payload["needs_yes"] is True and stopped.state is ProposalState.PENDING
+
+    monkeypatch.setattr(combining, "guard_stack", cannot_run)
+    unchecked = _one(_Day(tmp_path / "b", files).open(), "stack_files")
+    assert "needs_yes" not in unchecked.payload and unchecked.state is ProposalState.PENDING

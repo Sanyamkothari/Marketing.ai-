@@ -210,6 +210,16 @@ def test_a_proven_leak_is_ticked_by_the_product_so_the_person_who_ticks_nothing_
         bench.run_bench([case], 1, driver="nobody")
 
 
+def test_a_trap_that_still_fails_for_a_driver_gets_a_failure_section_in_the_report() -> None:
+    """C09 still fails for the person who skips the optional questions: the report says which driver and why."""
+    case = next(c for c in CASES if c.case_id == "c09_already_hold_product")
+    lazy = bench.run_bench([case], 1, driver="blocking-only")
+    assert lazy["failed"] == 1 and lazy["passed"] == 0
+    text = bench.render_markdown(lazy)
+    assert "Why each trap fails for the blocking-only driver" in text
+    assert "Why and what to do:" in text
+
+
 def test_the_report_carries_both_numbers(tmp_path: Path) -> None:
     case = next(c for c in CASES if c.case_id == "s05_cancellation_reason")
     both = bench.run_both([case], 1)

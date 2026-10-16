@@ -140,6 +140,14 @@ def test_a_leak_the_check_proves_is_a_ticked_default_the_person_can_untick() -> 
     assert never.state is ProposalState.PENDING, "a kind the policy never ticks stays unticked"
 
 
+def test_a_proven_leak_the_person_already_kept_is_not_pre_ticked() -> None:
+    advice = _advice_with_leaks("refund_issued", severity="error")
+    check = advice.tool_results[0].result["checks"][0]  # type: ignore[index]
+    check["acknowledged"] = True  # type: ignore[index]
+    (item,) = _leak_items(advice, "u1", set(), frozenset(), NOW)
+    assert item.state is ProposalState.PENDING
+
+
 def test_an_id_named_or_skipped_leak_column_is_not_proposed_for_removal() -> None:
     advice = _advice_with_leaks("customer_id", "converted", "refund_issued")
     items = _leak_items(advice, "u1", {"converted"}, frozenset(), NOW)
