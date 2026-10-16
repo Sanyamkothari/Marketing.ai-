@@ -267,6 +267,20 @@ test("in the wizard, Approve does not start the list while a change is left out;
   assert.equal(started[0].speed, "balanced", "the training time the person left as it is reaches the start");
 });
 
+test("in the wizard, approving a plan that leaves nothing out still starts nothing: the one Start button does", async () => {
+  const started = [];
+  await show("approve", { host: { place: "wizard", goalId: GOAL, approved: (fill) => started.push(fill) } });
+  world.next.approval = "ready";
+  $("[data-dds-approve-button]").click();
+  await until(() => $("[data-dds-continue]"), 3000, "the case approved and ready");
+  await settle(3);
+  assert.deepEqual(started, [], "Approve did not start the run");
+  assert.match($("[data-dds-start-sentence]").textContent, /^We will learn from .+ Balanced: about 15 minutes\./);
+  assert.ok($("[data-dds-speed-open]"), "the Quick/Balanced choice sits behind Change");
+  $("[data-dds-continue]").click();
+  await until(() => started.length === 1, 3000, "the one Start");
+});
+
 test("Ready, with notes always shows a plain note", async () => {
   const s = await show("ready_with_warnings");
   assert.equal($("[data-dds-verdict]").dataset.ddsVerdict, "ready_with_warnings");
@@ -511,4 +525,23 @@ test("visible text: no word the glossary keeps from a marketer, in any shape", a
     const v = violations(visibleText(app));
     assert.ok(v.ok, describe(`data doctor ${at}`, v));
   }
+});
+
+test("the goals list shows why, customers and how many did it, best first, with the first one's button primary", () => {
+  const found = [
+    { use_case_id: "a_goal", name: "Second", status: "check", why: "b.csv has 10 customers.", customers: 10, yes_count: null, first_fix: "Answer 1 question." },
+    { use_case_id: "b_goal", name: "First", status: "ready", why: "a.csv has 4,000 customers; 276 of them are a yes in bought.", customers: 4000, yes_count: 276 },
+  ];
+  const html = view.goalsHtml({ case: { diagnosis: { use_cases: found } }, view: { mode: "generic" } });
+  const host = document.createElement("div");
+  host.innerHTML = html;
+  const rows = [...host.querySelectorAll("[data-dds-goal-row]")];
+  assert.deepEqual(rows.map((r) => r.dataset.ddsGoalRow), ["b_goal", "a_goal"], "the ready goal comes first");
+  assert.match(rows[0].textContent, /276 of them are a yes in bought/);
+  assert.match(rows[0].textContent, /4,000 customers, 276 already did it/);
+  assert.ok(rows[0].querySelector("[data-dds-goal-best]"));
+  assert.ok(rows[0].querySelector(".btn.primary[data-dds-goal]"), "the first goal's button goes on");
+  assert.ok(rows[1].querySelector(".btn.secondary[data-dds-goal]"));
+  assert.match(rows[1].querySelector("[data-dds-goal-fix]").textContent, /To do first: Answer 1 question\./);
+  assert.equal(rows[0].querySelector("[data-dds-goal-fix]"), null, "a ready goal has nothing to do first");
 });

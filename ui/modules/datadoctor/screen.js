@@ -486,13 +486,15 @@ async function approve(entry) {
   await act(entry, "approve", () => approveCase(theCase(entry), sentence), { announce: "Approved" });
   const screen = entry.state.screen;
   const view = screen && screen.view;
-  // One flow: approved and ready goes straight on, as Guided setup's Approve did - unless a change that needs its
-  // own yes is left out: then continuing without it is its own choice ("Continue with this data").
+  // Approving never starts a campaign run: that is the one "Start the campaign" button below the sentence, on the
+  // Data page and in the wizard alike. Only the goal's setup (which just fills its form, nothing runs) goes straight
+  // on, unless a change that needs its own yes is left out: then continuing without it is its own choice.
   if (
     view &&
     ["ready", "ready_with_warnings"].includes(view.verdict.key) &&
     view.start &&
     entry.host.approved &&
+    entry.host.place === "setup" &&
     !leftOutOf(screen).length
   ) {
     await proceed(entry);

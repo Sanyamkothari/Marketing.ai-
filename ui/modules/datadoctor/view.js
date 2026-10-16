@@ -450,11 +450,20 @@ export function goalsHtml(screen, { busy = false, level = 3 } = {}) {
   const rows = found
     .slice()
     .sort((a, b) => (order[a.status] ?? 9) - (order[b.status] ?? 9))
-    .map((u) => {
+    .map((u, index) => {
       const name = goalName(u.use_case_id, u.name);
-      return `<li class="dds-goal" data-dds-goal-row="${esc(u.use_case_id)}"><span class="dds-item-body"><span class="dds-item-t">${esc(name)}</span></span>${button({
+      // The server's own words: why, how many customers, how many already did it (a line is left out when not known).
+      const counts = [
+        Number.isFinite(u.customers) ? `${count(u.customers)} customers` : "",
+        Number.isFinite(u.yes_count) ? `${count(u.yes_count)} already did it` : "",
+      ].filter(Boolean);
+      const notes = [u.why ? esc(plain(u.why)) : "", counts.length ? esc(counts.join(", ")) : ""].filter(Boolean);
+      const fix = u.status !== "ready" && u.first_fix ? `<span class="dds-why" data-dds-goal-fix>To do first: ${esc(plain(u.first_fix))}</span>` : "";
+      return `<li class="dds-goal" data-dds-goal-row="${esc(u.use_case_id)}"><span class="dds-item-body"><span class="dds-item-t">${esc(name)}${
+        index === 0 ? ` <span class="chip neutral" data-dds-goal-best>Best fit</span>` : ""
+      }</span>${notes.map((n) => `<span class="dds-why" data-dds-goal-why>${n}</span>`).join("")}${fix}</span>${button({
         label: "Choose this goal",
-        kind: "secondary",
+        kind: index === 0 ? "primary" : "secondary",
         attrs: `data-dds-goal="${esc(u.use_case_id)}" aria-label="Choose the goal: ${esc(name)}"`,
         disabled: busy,
       })}</li>`;

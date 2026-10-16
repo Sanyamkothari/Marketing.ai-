@@ -411,10 +411,14 @@ function refreshHtml(model) {
   return { button: button({ label: "Refresh the list", kind: "secondary", size: "sm", attrs: "data-refresh-ask" }), panel: "" };
 }
 
+const isDraft = (model) => Boolean(model.status && model.status.key === "draft");
+
 function whatWasSent(model) {
   const { campaign, summary } = model;
   const rows = [];
-  rows.push(["Sent on", day(campaign.treatment_start)]);
+  // A Draft has not been sent: no "sent" date, only what is planned.
+  const draft = isDraft(model);
+  if (!draft) rows.push(["Sent on", day(campaign.treatment_start)]);
   const offers = Object.entries((summary && summary.offer_counts) || {});
   // Offer and channel names are the person's own (their configuration and data): marked as theirs (M172).
   for (const [offer, n] of offers) rows.push([`Offer: ${userText(offer)}`, customers(n), true]);
@@ -423,7 +427,7 @@ function whatWasSent(model) {
   if (summary && summary.treat_rows !== null && summary.treat_rows !== undefined) {
     rows.push([term("contactList"), customers(summary.treat_rows)]);
   }
-  return `<section class="card" data-what-was-sent><h3>What was sent</h3><dl class="cp-dl">${rows
+  return `<section class="card" data-what-was-sent><h3>${draft ? "What will be sent" : "What was sent"}</h3><dl class="cp-dl">${rows
     .map(([k, v, html]) => `<div class="cp-kv-row"><dt>${html ? k : esc(k)}</dt><dd class="num">${esc(v)}</dd></div>`)
     .join("")}</dl></section>`;
 }
@@ -714,7 +718,9 @@ export function campaignPageHtml(model) {
     ? `A campaign another tool sent on ${day(campaign.treatment_start)}, checked here.`
     : wholeProgramme(campaign)
       ? `Every customer contacted, against the customers never contacted, from ${day(campaign.treatment_start)}.`
-      : `${goal}: sent on ${day(campaign.treatment_start)} to ${customers(counts(campaign).intended_treated)}.`;
+      : isDraft(model)
+        ? `${goal}: not sent yet, planned for ${customers(counts(campaign).intended_treated)}.`
+        : `${goal}: sent on ${day(campaign.treatment_start)} to ${customers(counts(campaign).intended_treated)}.`;
   const sub =
     campaign.name && campaign.name !== name
       ? `<p class="cp-sub cp-long-name" data-long-name ${USER_TEXT_ATTRIBUTE} title="${esc(campaign.name)}">${esc(campaign.name)}</p>`

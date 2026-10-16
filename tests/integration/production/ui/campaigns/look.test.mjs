@@ -301,3 +301,11 @@ test("figureText writes each server figure in ui/format.js's one format", () => 
   assert.equal(views.figureText(fig(null, "Not measured", "text")), "Not measured");
   assert.equal(views.figureText(null), "—");
 });
+
+test("a Draft says it is not sent and shows no sent date", () => {
+  draw(views.campaignPageHtml(pageModel({ status: STATUS.draft })));
+  assert.equal($(".desc").textContent.includes("sent on"), false);
+  assert.match($(".desc").textContent, /not sent yet/);
+  assert.equal($("[data-what-was-sent] h3").textContent, "What will be sent");
+  assert.equal($$("[data-what-was-sent] dt").some((dt) => dt.textContent === "Sent on"), false);
+});

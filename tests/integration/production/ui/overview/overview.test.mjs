@@ -571,3 +571,17 @@ test("runs worth showing: old or already-sent ones and stopped ones that were st
     ["cr_new", "cr_restarted"],
   );
 });
+
+test("a finished campaign hides the 'new model is waiting' card of its goal; other cards stay", () => {
+  const cards = [
+    { code: "CHALLENGER_READY", kind: "challenger_ready", use_case_id: "win-back-campaign" },
+    { code: "CHALLENGER_READY", kind: "challenger_ready", use_case_id: "telco-churn" },
+    { code: "DRIFT_DRIFTED", kind: "drift", use_case_id: "win-back-campaign" },
+  ];
+  const ready = [campaignRun("cr_2", "done", { use_case_id: "win-back-campaign" })];
+  assert.deepEqual(
+    page.cardsToShow(cards, ready).map((c) => `${c.kind}:${c.use_case_id}`),
+    ["challenger_ready:telco-churn", "drift:win-back-campaign"],
+  );
+  assert.equal(page.cardsToShow(cards, [campaignRun("cr_1", "running")]).length, 3, "only a finished run hides it");
+});
