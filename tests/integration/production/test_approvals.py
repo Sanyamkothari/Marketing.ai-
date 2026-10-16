@@ -379,3 +379,14 @@ def test_with_sign_in_off_the_screen_says_separation_is_not_enforced(tmp_path: P
     assert body["separation_enforced"] is False
     (item,) = body["items"]
     assert item["can_decide"] is True
+
+
+def test_a_model_the_champion_could_not_be_compared_with_says_so(tmp_path: Path) -> None:
+    from engine.approvals import head_to_head
+
+    world = World(tmp_path)
+    write_run(world.storage, CHALLENGER_RUN, requested_by=None, champion=False)
+    uncompared = world.registry.get(CHALLENGER).model_copy(update={"improvement_pct": None})
+    h2h = head_to_head(world.storage, world.registry, uncompared)
+    assert h2h.note is not None
+    assert h2h.note.startswith("Not compared with the model in use: it cannot read this data")

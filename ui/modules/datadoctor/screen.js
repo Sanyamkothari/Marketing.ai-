@@ -237,8 +237,8 @@ function startSentence(entry) {
   const startId = s.screen.view.start.upload_id;
   const file = files.find((f) => f.upload_id === startId) || files[0];
   const rows = s.startInfo && s.startInfo.uploadId === startId ? s.startInfo.rows : null;
-  const choice = host.place === "data" ? modelChoice(s.offer, s.mode) : null;
-  const reuse = Boolean(host.modelVersionId) || Boolean(choice && choice.reuse); // nothing to learn, no time to choose
+  const choice = host.place !== "setup" ? modelChoice(s.offer, s.mode) : null; // the Data page and the wizard both offer it
+  const reuse = choice ? choice.reuse : host.place === "setup" && Boolean(host.modelVersionId); // reusing: no time to choose
   const change = reuse
     ? ""
     : ` ${button({ label: "Change", kind: "tertiary", size: "sm", attrs: `data-dds-speed-open aria-expanded="${s.speedOpen}"` })}`;
@@ -253,7 +253,7 @@ function continueHtml(entry) {
   const { state: s, host } = entry;
   const view = s.screen && s.screen.view;
   if (!view || !["ready", "ready_with_warnings"].includes(view.verdict.key) || !view.start) return "";
-  // Here the campaign starts (the wizard's own start, or the Data page's); else the goal's setup or the wizard goes on.
+  // Here the campaign starts (the wizard's Start, which also offers last month's model or learning again, or the Data page's); else the goal's setup or the wizard goes on.
   const starts =
     host.place !== "setup" && (host.approved ? true : view.start.target === "runs" && canAccess("POST", "/campaign-runs"));
   const label = starts ? "Start the campaign" : host.approved ? "Continue with this data" : "Continue to the campaign";
@@ -324,11 +324,11 @@ async function refresh(entry) {
   await readOffer(entry);
 }
 
-/** Next month: can last month's model score this file? Only on the Data page, only once the file is ready to start. */
+/** Next month: can last month's model score this file? Not in a goal's setup; only once the file is ready to start. */
 async function readOffer(entry) {
   const s = entry.state;
   const start = s.screen && s.screen.view && s.screen.view.start;
-  if (!start || entry.host.place !== "data" || !["ready", "ready_with_warnings"].includes(s.screen.view.verdict.key)) {
+  if (!start || entry.host.place === "setup" || !["ready", "ready_with_warnings"].includes(s.screen.view.verdict.key)) {
     s.offer = null;
     s.offerFor = null;
     return;
@@ -487,17 +487,19 @@ async function pickFromConnection(entry) {
 }
 
 /**
- * The hand-off. Wizard and goal setup get the prepared file and the chosen learning time from `host.approved` (the
- * wizard starts the campaign run, setup fills its form). On the Data page the campaign run starts from here, and the
- * person lands on its progress page: they can close the browser.
+ * The hand-off. Goal setup gets the prepared file and the chosen learning time from `host.approved` (it fills its
+ * form). On the Data page and in the wizard the campaign run starts from here, and the person lands on its progress
+ * page: they can close the browser.
  */
 async function proceed(entry) {
   const s = entry.state;
   const view = s.screen && s.screen.view;
   if (!view || !view.start) return;
   const start = view.start;
-  if (!entry.host.approved) {
-    if (start.target !== "runs" || !canAccess("POST", "/campaign-runs")) {
+  const runsHere = start.target === "runs" && canAccess("POST", "/campaign-runs");
+  // The wizard starts the run from here too: only this screen knows next month's choice (last month's model or learn again).
+  if (!entry.host.approved || (entry.host.place === "wizard" && runsHere)) {
+    if (!runsHere) {
       rememberCase(start.goal_id, s.caseId);
       window.location.hash = wizardHref(start.goal_id);
       return;

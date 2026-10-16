@@ -277,17 +277,20 @@ test("in the wizard, Approve does not start the list while a change is left out;
   await until(() => $("[data-dds-continue]"), 3000, "the case approved and ready");
   await settle(3);
   assert.deepEqual(started, [], "the run did not start on Approve");
+  assert.ok(!world.posted.some((p) => p.path === "/campaign-runs"), "Approve did not start the run");
   const button = $("[data-dds-continue]");
   assert.equal(button.textContent.trim(), "Start the campaign");
   assert.match($("[data-dds-continue-without]").textContent, /Continuing uses the data without the change left out above\./);
   const head = $('[data-dds-header] [data-dds-left-out="head"]');
   assert.ok(head && head.textContent.includes("says who agreed to be contacted"), "the verdict says what is left out");
   button.click();
-  await until(() => started.length === 1, 3000, "the list started by the person's own choice");
+  await until(() => world.posted.some((p) => p.path === "/campaign-runs"), 3000, "the list started by the person's own choice");
   const s = screen("ready");
-  assert.equal(started[0].target, s.view.start.outcome);
-  assert.equal(started[0].upload.upload_id, s.view.start.upload_id);
-  assert.equal(started[0].speed, "balanced", "the training time the person left as it is reaches the start");
+  const sent = world.posted.find((p) => p.path === "/campaign-runs").body; // the screen starts the run itself, in the wizard too
+  assert.equal(sent.target, s.view.start.outcome);
+  assert.equal(sent.upload_id, s.view.start.upload_id);
+  assert.equal(sent.speed, "balanced", "the training time the person left as it is reaches the start");
+  assert.deepEqual(started, []);
 });
 
 test("in the wizard, approving a plan that leaves nothing out still starts nothing: the one Start button does", async () => {
@@ -298,10 +301,11 @@ test("in the wizard, approving a plan that leaves nothing out still starts nothi
   await until(() => $("[data-dds-continue]"), 3000, "the case approved and ready");
   await settle(3);
   assert.deepEqual(started, [], "Approve did not start the run");
+  assert.ok(!world.posted.some((p) => p.path === "/campaign-runs"), "Approve did not post a run");
   assert.match($("[data-dds-start-sentence]").textContent, /^We will learn from .+ Balanced: about 15 minutes\./);
   assert.ok($("[data-dds-speed-open]"), "the Quick/Balanced choice sits behind Change");
   $("[data-dds-continue]").click();
-  await until(() => started.length === 1, 3000, "the one Start");
+  await until(() => world.posted.some((p) => p.path === "/campaign-runs"), 3000, "the one Start");
 });
 
 test("Ready, with notes always shows a plain note", async () => {
@@ -490,6 +494,20 @@ test("next month, choosing to learn again trains on the new data; a model that c
   assert.equal($('[data-dds-mode="reuse"]').disabled, true);
   assert.match($("[data-dds-reuse-off]").textContent, /needs 'ad_ctr_90d'/);
   assert.equal($('[data-dds-mode="learn"]').getAttribute("aria-pressed"), "true");
+});
+
+test("in the wizard too, next month's Start offers the choice and starts the run itself (a renamed column is not silently reused)", async () => {
+  const off = { ...OFFER, usable: true, suggest: "learn", hint: "Learning again fits better: some columns changed." };
+  let handedOver = 0;
+  const s = await show("ready", { offer: off, host: { place: "wizard", modelVersionId: "m_last", approved: () => handedOver++ } });
+  assert.equal($$("[data-dds-mode]").length, 2, "the wizard offers last month's model or learning again");
+  assert.equal($('[data-dds-mode="learn"]').getAttribute("aria-pressed"), "true", "the hint's suggestion, not a silent reuse");
+  assert.match($("[data-dds-start-sentence]").textContent, /^We will learn from /);
+  $("[data-dds-continue]").click();
+  await until(() => world.posted.some((p) => p.path === "/campaign-runs"), 3000, "the start");
+  const sent = world.posted.find((p) => p.path === "/campaign-runs").body;
+  assert.ok(sent.target === s.view.start.outcome && sent.speed === "balanced" && !("model_version_id" in sent));
+  assert.equal(handedOver, 0, "the wizard's own start (which always reused the model) is not used");
 });
 
 test("the first month has no offer: Start only learns", async () => {

@@ -389,6 +389,40 @@ def test_a_pending_version_cannot_be_approved_over_a_champion_it_never_met(
     assert champion.model_id == rival.model_id
 
 
+@pytest.mark.parametrize(
+    ("cannot_read_frame", "expected"),
+    [(True, ModelStatus.PENDING_APPROVAL), (False, ModelStatus.CANDIDATE)],
+    ids=["champion-cannot-read-the-new-columns", "predictor-missing"],
+)
+def test_a_champion_that_cannot_read_the_new_file_leaves_the_new_model_to_a_person(
+    tmp_path: Path, config_root: Path, cannot_read_frame: bool, expected: ModelStatus
+) -> None:
+    """Next month's file renamed a column: the old champion cannot score it, so there is nothing to compare.
+
+    With approval required the new model waits for a person (the one approval on the review page) instead of
+    staying a candidate nobody can approve; it is never the champion by itself.
+    """
+    approving = resolve(config_root, **{"governance.approval_required": False})
+    registry = LocalModelRegistry(tmp_path / "registry.db")
+    champion = register_version(
+        make_context(tmp_path, approving, registry=registry), make_best(test_score=0.80)
+    )
+    resolved = resolve(config_root, **{"governance.approval_required": True})
+    ctx = make_context(tmp_path, resolved, run_id="r_20260922_0000beef", registry=registry)
+    score = ChampionScore(
+        model_id=champion.model_id,
+        unavailable_reason="it cannot score this split",
+        cannot_read_frame=cannot_read_frame,
+    )
+    challenger = challenge(ctx, make_best(test_score=0.60, run_id=ctx.run_id), score)
+    assert challenger.status is expected
+    assert challenger.improvement_pct is None
+    assert challenger.promoted_at is None
+    assert registry.get_champion(USE_CASE) == champion  # the incumbent keeps the crown until a person decides
+    if expected is ModelStatus.PENDING_APPROVAL:
+        assert challenger.measured_against_champion_id == champion.model_id
+
+
 def test_a_champion_score_is_either_a_score_or_a_reason() -> None:
     with pytest.raises(ValueError, match="never both and never neither"):
         ChampionScore(model_id="m_1")

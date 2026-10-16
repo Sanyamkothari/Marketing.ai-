@@ -619,6 +619,7 @@ test("Review, a goal's first campaign: an Approver approves the new model, the p
   assert.equal(button.textContent, "Approve the new model and this plan, then download");
   assert.equal(button.getAttribute("data-cw-approve"), "model-and-plan");
   assert.match($("[data-cw-new-model]").textContent, /a new model that still needs an Approver's approval\. You have that role\./);
+  assert.doesNotMatch($("[data-cw-new-model]").textContent, /first campaign/, "next month's new model is not 'the first campaign'");
   assert.match($("[data-cw-approve-note]").textContent, /approves the new model, then fixes how this campaign will be judged, then downloads/);
   assert.equal($("[data-cw-approvals]").getAttribute("href"), "#/approvals", "the details stay one link away");
   assert.equal(primaries().length, 1);

@@ -1077,7 +1077,9 @@ class _TrainFlow:
             return _unavailable(champion, f"its saved model could not be loaded ({_reason(exc)})")
         usable, why = scorer.can_score(test)
         if not usable:
-            return _unavailable(champion, f"it cannot score this run's test split: {why}")
+            return _unavailable(
+                champion, f"it cannot score this run's test split: {why}", cannot_read_frame=True
+            )
         try:
             report, _, _, _ = evaluate.evaluate(
                 _as_scorer(scorer), test, ctx.config.evaluation, run_id=ctx.run_id
@@ -1157,10 +1159,12 @@ def _baseline_family(family: ModelFamily | None) -> ModelFamily:
     return ModelFamily.LOGISTIC_REGRESSION if family is None else family
 
 
-def _unavailable(champion: ModelVersion, reason: str) -> ChampionScore:
+def _unavailable(champion: ModelVersion, reason: str, *, cannot_read_frame: bool = False) -> ChampionScore:
     """A `ChampionScore` that carries why the incumbent could not be re-scored, logged at WARNING."""
     _LOGGER.warning("register: champion %s was not re-scored: %s", champion.model_id, reason)
-    return register.ChampionScore(model_id=champion.model_id, unavailable_reason=reason)
+    return register.ChampionScore(
+        model_id=champion.model_id, unavailable_reason=reason, cannot_read_frame=cannot_read_frame
+    )
 
 
 def _reason(exc: Exception) -> str:
