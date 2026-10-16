@@ -38,6 +38,9 @@ if TYPE_CHECKING:  # imported lazily below so the local path never loads a drive
 from engine.aws.metrics import MetricSink, metric_sink_for
 
 _LOCK: threading.Lock = threading.Lock()
+_REGISTRY_BUILD_LOCK: threading.Lock = threading.Lock()
+"""One registry is built at a time: on a fresh data directory the first page fires several requests at once, and two
+of them creating `model_version` together made one answer 500 ("table model_version already exists")."""
 
 
 def _state_path(request: Request, name: str) -> Path | None:
@@ -103,18 +106,22 @@ def get_registry(request: Request) -> ModelRegistry:
     cached: ModelRegistry | None = getattr(state, "registry", None)
     if cached is not None:
         return cached
-    data_dir = _state_path(request, "data_dir")
-    fresh: ModelRegistry = (
-        LocalModelRegistry(data_dir / REGISTRY_FILENAME)
-        if data_dir is not None
-        else build_registry(get_settings(request), get_storage(request))
-    )
-    with _LOCK:
-        existing: ModelRegistry | None = getattr(state, "registry", None)
-        if existing is None:
-            state.registry = fresh
-            return fresh
-    return existing
+    with _REGISTRY_BUILD_LOCK:
+        built: ModelRegistry | None = getattr(state, "registry", None)
+        if built is not None:
+            return built
+        data_dir = _state_path(request, "data_dir")
+        fresh: ModelRegistry = (
+            LocalModelRegistry(data_dir / REGISTRY_FILENAME)
+            if data_dir is not None
+            else build_registry(get_settings(request), get_storage(request))
+        )
+        with _LOCK:
+            existing: ModelRegistry | None = getattr(state, "registry", None)
+            if existing is None:
+                state.registry = fresh
+                return fresh
+        return existing
 
 
 def get_jobs(request: Request) -> JobRunner:

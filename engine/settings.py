@@ -222,6 +222,8 @@ ENV_VARS: Final[Mapping[str, str]] = {
     "brand_logo_url": f"{ENV_PREFIX}BRAND_LOGO_URL",
     "brand_logo_alt": f"{ENV_PREFIX}BRAND_LOGO_ALT",
     "brand_color": f"{ENV_PREFIX}BRAND_COLOR",
+    # --- v1 (the test installation). One more extension; nothing above changes meaning.
+    "data_doctor_unified": f"{ENV_PREFIX}DATA_DOCTOR_UNIFIED",
 }
 """Field name to environment variable. One mapping, so docs, tests and readers agree."""
 
@@ -497,6 +499,14 @@ class Settings(BaseModel):
     brand_color: str = Field(
         default=DEFAULT_BRAND_COLOR,
         description="The accent colour as #RRGGBB; refused when it fails WCAG AA contrast on the page.",
+    )
+
+    # --- v1 (the test installation shows the one Data Doctor) ---------------------------------------
+    # Added field only, defaulted off. True turns `data_doctor.unified` on whatever `configs/engine.yaml`
+    # says (the code default there stays false); false leaves the file's answer alone.
+    data_doctor_unified: bool = Field(
+        default=False,
+        description="True switches the one Data Doctor on (as `data_doctor.unified` in engine.yaml does).",
     )
 
     @field_validator("brand_name", "brand_logo_alt")

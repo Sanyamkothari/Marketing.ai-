@@ -358,6 +358,36 @@ def _review(
     )
 
 
+def _prepared_verify(storage: Storage, root: Path) -> Any:
+    """VERIFY on the file as a run would read it once the approved changes are applied: the readiness check must not
+    fail a file for what the person has just fixed (haan/nahi as consent, money as text)."""
+    from fastapi import HTTPException
+
+    from api.routes.run_prescriptions import prescribed_training
+    from api.routes.uploads import load_upload
+    from engine.agent.recipe import RecipeError
+
+    def prepare(config: Any, upload_id: str, primary_key: Any, target: str) -> str:
+        try:
+            made = prescribed_training(
+                storage,
+                config,
+                upload=load_upload(storage, upload_id),
+                dataset_id=None,
+                primary_key=primary_key,
+                target=target,
+            )
+        except HTTPException as exc:
+            detail: Any = exc.detail
+            said = detail.get("message") or detail.get("code") if isinstance(detail, dict) else detail
+            raise doctor_visit.PrepareError(str(said or "the approved changes cannot be applied.")) from exc
+        except RecipeError as exc:
+            raise doctor_visit.PrepareError(exc.message) from exc
+        return made.upload.upload_id if made is not None and made.upload is not None else upload_id
+
+    return doctor_visit.readiness_verify(storage, root, prepare)
+
+
 def _deps(storage: Storage, root: Path, request: Request, principal: Principal | None) -> VisitDeps:
     """Every visit route carries the CONVERSE port, connected only when a chat turn runs: a visit resumed in
     CONVERSE (the process died during the AI call) is answered by the AI service, not told there is none."""
@@ -385,6 +415,7 @@ def _deps(storage: Storage, root: Path, request: Request, principal: Principal |
         load_files=load_files,
         # Plan O M243 (DEC-1813): PRESCRIBE writes `prescriptions/<hash>.json` and binds the case's files to it.
         prescribe=CasePrescriber(storage, load_files=load_files, config_root=root),
+        verify=_prepared_verify(storage, root),
         # Several files: an approved join or stack is built from the whole files as a new upload of the case.
         combine=case_combiner(storage, root),
         offers=offers,

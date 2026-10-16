@@ -390,6 +390,10 @@ def unified_on(config: UseCaseConfig | None) -> bool:
     Read defensively: before M230's setting is merged a configuration has no `data_doctor` section, which reads
     as off. Callers look it up on this module at call time, so a test can switch it on.
     """
+    from engine.settings import settings
+
+    if settings().data_doctor_unified:  # MARKETING_AI_DATA_DOCTOR_UNIFIED: the test installation turns it on
+        return True
     section = getattr(config, "data_doctor", None)
     return bool(getattr(section, "unified", False))
 
