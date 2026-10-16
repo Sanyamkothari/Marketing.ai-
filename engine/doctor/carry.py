@@ -24,10 +24,10 @@ from typing import Any, Final
 
 from engine.agent.contracts import AgentConfidence, ProposalSource, ProposalState
 from engine.doctor.case import Case, CaseItem, CaseQuestion, payload_digest
-from engine.doctor.protocol import AGENT, DEFAULT_SETTINGS, approve_class_of
+from engine.doctor.protocol import AGENT, DEFAULT_SETTINGS, ProtocolSettings, approve_class_of
 from engine.doctor.visit_contracts import CaseVisit, PlanCheck
 
-__all__ = ["Carry", "approved_marks", "carries_on", "carry_of", "new_line"]
+__all__ = ["Carry", "approved_marks", "carries_on", "carry_of", "new_line", "plain_fix"]
 
 _ALSO: Final[dict[str, str]] = {
     "consent_column": "who agreed to be contacted",
@@ -138,6 +138,7 @@ def carry_of(
     check: PlanCheck | None,
     *,
     confirmed: Callable[[Case, CaseItem], bool],
+    settings: ProtocolSettings = DEFAULT_SETTINGS,
 ) -> Carry | None:
     """`items` (the active section) split by what was approved before in this round; None before any approval.
     `check` is the guards' count for the plan as it stands (None when not counted for it)."""
@@ -152,10 +153,14 @@ def carry_of(
     for item in items:
         if item.state is ProposalState.REJECTED:
             continue
-        needs_yes = approve_class_of(item.kind, item.payload, DEFAULT_SETTINGS) is not None and not confirmed(
+        needs_yes = approve_class_of(item.kind, item.payload, settings) is not None and not confirmed(
             case, item
         )
-        same = bool(before & set(marks(item)))
+        step_mark, sentence_mark = marks(item)
+        # a step is the same when it does the same (its sentence may be reworded); any other item by either mark
+        same = step_mark in before or (
+            not isinstance(item.payload.get("step"), dict) and sentence_mark in before
+        )
         shown = (item.state is ProposalState.ACCEPTED or item.kind == "data_check") and not item.parked_for
         if same and shown and not needs_yes and item.item_id not in flagged:
             approved.append(item)
@@ -170,7 +175,7 @@ def carry_of(
     return Carry(tuple(approved), tuple(gone), tuple(new))
 
 
-def _plain_fix(item: CaseItem) -> bool:
+def plain_fix(item: CaseItem, settings: ProtocolSettings = DEFAULT_SETTINGS) -> bool:
     """A sure fix of a value the rules found and ticked, that nobody touched and that needs no yes of its own."""
     return (
         item.kind == "recipe_step"
@@ -180,7 +185,7 @@ def _plain_fix(item: CaseItem) -> bool:
         and item.decided_by is None
         and item.standing_answer_id is None
         and not item.parked_for
-        and approve_class_of(item.kind, item.payload, DEFAULT_SETTINGS) is None
+        and approve_class_of(item.kind, item.payload, settings) is None
     )
 
 
@@ -191,11 +196,12 @@ def carries_on(
     check: PlanCheck | None,
     *,
     confirmed: Callable[[Case, CaseItem], bool],
+    settings: ProtocolSettings = DEFAULT_SETTINGS,
 ) -> Carry | None:
     """The carry when the visit may go on without asking again, else None: something was approved before in this
     round, everything new is a sure fix or a plain note, no stop or flag is raised, the person has not changed or
     unticked anything on this table, and the answers are the ones approved."""
-    carry = carry_of(case, items, check, confirmed=confirmed)
+    carry = carry_of(case, items, check, confirmed=confirmed, settings=settings)
     if carry is None or check is None:
         return None
     _ids, whole = alerted(check, items)
@@ -203,7 +209,7 @@ def carries_on(
         return None
     if _answers_mark(questions) not in set((case.visit or CaseVisit()).approved_before):
         return None
-    if not all(_plain_fix(i) or _is_note(i) for i in carry.new):
+    if not all(plain_fix(i, settings) or _is_note(i) for i in carry.new):
         return None
     files = {f.upload_id for f in case.files}
     touched = any(

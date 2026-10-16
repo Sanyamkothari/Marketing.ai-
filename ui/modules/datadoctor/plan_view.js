@@ -465,7 +465,7 @@ export function planModel(screen, ctx) {
     findings,
     unconfirmed,
     carried: carried
-      ? { line: carried.line || "", items: folded.filter((i, n) => folded.findIndex((j) => j.title === i.title) === n) }
+      ? { line: carried.line || "", items: folded }
       : null,
     gate: readyToApprove(plan, ctx.checked, findings, items),
   };

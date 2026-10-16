@@ -11,8 +11,8 @@ import pandas as pd
 
 from engine.agent.contracts import AgentConfidence, ProposalSource, ProposalState
 from engine.doctor import visit
-from engine.doctor.carry import carries_on
-from engine.doctor.case import Case, CaseStore, VisitState
+from engine.doctor.carry import carries_on, carry_of
+from engine.doctor.case import Case, CaseItem, CaseStore, VisitState
 from engine.doctor.screen import screen_view
 from engine.doctor.visit import active_section, confirmed
 from engine.doctor.visit_contracts import PlanCheck, PlanFinding
@@ -116,3 +116,78 @@ def test_a_stop_or_a_flag_or_a_change_a_person_made_is_never_carried_on(tmp_path
     )
     assert carries_on(case, (*items, consent), questions, check, confirmed=confirmed) is None
     assert CaseStore(day.storage).get(vs.CLIENT, case.case_id).state is VisitState.FOLLOW_UP
+
+
+def _fix(case: Case, items: tuple[CaseItem, ...], **update: object) -> CaseItem:
+    return items[0].model_copy(
+        update={
+            "item_id": "recipe_step.base.newone",
+            "upload_id": case.files[0].upload_id,
+            "kind": "recipe_step",
+            "title": "Turn 'spend' into numbers.",
+            "payload": {
+                "upload_id": case.files[0].upload_id,
+                "step": {"kind": "parse_number", "column": "spend"},
+            },
+            "payload_digest": "d" * 64,
+            "source": ProposalSource.RULES,
+            "confidence": AgentConfidence.SURE,
+            "state": ProposalState.ACCEPTED,
+            "decided_by": None,
+            "parked_for": None,
+            **update,
+        }
+    )
+
+
+def test_an_ai_item_a_changed_answer_or_a_changed_step_is_not_carried_on(tmp_path: Path) -> None:
+    day, case = _joined(tmp_path)
+    items, questions = active_section(case)
+    check = PlanCheck(digest="x")
+    ai = _fix(case, items, source=ProposalSource.AI)
+    assert carries_on(case, (*items, ai), questions, check, confirmed=confirmed) is None
+    assert carries_on(case, (*items, _fix(case, items)), questions, check, confirmed=confirmed) is not None
+
+    answered = vs.question(
+        visit.set_goal(
+            vs.CLIENT, case.case_id, vs.GOAL_A, day.deps, expected_version=case.version, actor=vs.ANALYST
+        ),
+        "OUTCOME_COLUMN",
+    )
+    changed = answered.model_copy(
+        update={"answer": "something else", "assumed": False, "standing_answer_id": None}
+    )
+    assert carries_on(case, items, (*questions, changed), check, confirmed=confirmed) is None
+
+    # the same sentence on a step that does something else is a new step, not the one approved
+    other = _fix(
+        case,
+        items,
+        payload={"upload_id": case.files[0].upload_id, "step": {"kind": "parse_number", "column": "age"}},
+    )
+    approved = case.visit.approved_before if case.visit is not None else ()
+    assert approved
+    carry = carry_of(case, (_fix(case, items), other), check, confirmed=confirmed)
+    assert carry is not None and other.item_id in {i.item_id for i in carry.new}
+
+
+def test_a_carried_approval_says_so_in_its_record_and_a_new_months_file_gets_a_whole_plan(
+    tmp_path: Path,
+) -> None:
+    day, case = _joined(tmp_path)
+    assert case.state is VisitState.FOLLOW_UP and case.visit is not None and case.visit.approved_before
+    carried = [
+        e
+        for e in CaseStore(day.storage).timeline(vs.CLIENT, case.case_id)
+        if e.kind.value == "approval" and e.details.get("carried")
+    ]
+    assert carried and carried[0].details.get("carried_from", "").startswith("approval.")
+
+    day.world.files["up-next"] = vs.loaded(
+        "up-next", "next.csv", _with_goal_columns(_customers()), day.config
+    )
+    case = visit.add_files(
+        vs.CLIENT, case.case_id, [vs.case_file("up-next", day.world)], day.deps,
+        expected_version=case.version, actor=vs.ANALYST,
+    )  # fmt: skip
+    assert case.visit is not None and case.visit.approved_before == ()

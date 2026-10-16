@@ -63,7 +63,7 @@ from pydantic import JsonValue
 from engine.agent.contracts import AgentConfidence, ProposalSource, ProposalState
 from engine.agent.tools import TOOLS, AgentToolError
 from engine.config import ConfigError
-from engine.doctor.carry import approved_marks, carries_on
+from engine.doctor.carry import approved_marks, carries_on, plain_fix
 from engine.doctor.case import (
     PARK_ROLES,
     Case,
@@ -527,6 +527,9 @@ class _Step:
     after: list[Callable[[Case], None]] = field(default_factory=list)
     """Plan O M246: side effects once the step is written (a standing answer's use or memory); each is
     idempotent, and none may fail the step."""
+    carried: bool = False
+    """An approval the visit made by itself (`engine.doctor.carry`): if its record cannot be made, the visit
+    waits for the person instead of failing whatever they just did."""
     within: Callable[[Case], dict[str, Any]] | None = None
     """Plan O M246: the step's record - Plan K's ledger entry of an approval, a standing answer's revocation - run
     inside the case's write, under its lock and after its version check, so it is made only for a write that
@@ -759,7 +762,13 @@ def _advance(run: _Run, case: Case) -> Case:
             return _stop(run, case, case.state, exc)
         if step is None:
             return case
-        case = _write(run, case, step)
+        try:
+            case = _write(run, case, step)
+        except CaseError:
+            if not step.carried:
+                raise
+            # the automatic approval could not be recorded (nothing was approved): the person's yes is asked
+            return run.store.get(case.client_id, case.case_id)
         _after(step, case)
     return case
 
@@ -799,9 +808,20 @@ def _intake(run: _Run, case: Case) -> _Step | None:
         )
         for upload_id in new
     ]
+    here = {f.upload_id for f in case.files}
+    made = {
+        f.upload_id
+        for f in case.files
+        if f.original_upload_id in visit.taken_in and f.original_upload_id not in here
+    }  # the table the approved join or stack made: its files gave way to it
+    fresh = any(upload_id not in made for upload_id in new)
     return _Step(
         to=VisitState.UNDERSTAND,
-        visit={"taken_in": tuple(dict.fromkeys((*visit.taken_in, *new)))},
+        visit={
+            "taken_in": tuple(dict.fromkeys((*visit.taken_in, *new))),
+            # a file the person never saw is another round: it gets a whole plan (engine.doctor.carry)
+            **({"approved_before": ()} if fresh and visit.approved_before else {}),
+        },
         events=events,
     )
 
@@ -1082,11 +1102,20 @@ def _approve_wait(run: _Run, case: Case) -> _Step | None:
         return None
     if visit.plan_check.digest != plan_digest(case.files, items):
         return None
-    carry = carries_on(case, items, questions, visit.plan_check, confirmed=confirmed)
+    settings = run.deps.protocol
+    if unconfirmed(case, settings):
+        return None
+    carry = carries_on(case, items, questions, visit.plan_check, confirmed=confirmed, settings=settings)
     if carry is None:
         return None
     try:
-        return _approval(run, case, actor=before[-1].approved_by, carried_new=len(carry.new))
+        return _approval(
+            run,
+            case,
+            actor=before[-1].approved_by,
+            carried_from=before[-1].approval_id,
+            carried_new=sum(1 for i in carry.new if plain_fix(i, settings)),
+        )
     except CaseError:
         return None  # a stop, a changed sentence: the person decides
 
@@ -2461,10 +2490,17 @@ CARRIED_ON: Final[str] = "Carried on from your earlier approval:"
 
 
 def _approval(
-    run: _Run, case: Case, *, actor: str, sentence: str | None = None, carried_new: int | None = None
+    run: _Run,
+    case: Case,
+    *,
+    actor: str,
+    sentence: str | None = None,
+    carried_from: str | None = None,
+    carried_new: int = 0,
 ) -> _Step:
     """The step that records an approval of the plan as it stands (:func:`approve`'s, and the carry-on's with
-    `carried_new`, the number of new sure fixes it carries, in the name of whoever approved before)."""
+    `carried_from`, the approval it goes on from, and `carried_new`, the number of new sure fixes it carries; it
+    is recorded in the name of whoever approved before, and says in its record that it was carried)."""
     from engine.doctor.patterns import record_approved
 
     deps = run.deps
@@ -2487,7 +2523,7 @@ def _approval(
             "APPROVAL_SENTENCE_CHANGED",
             f"What would be approved has changed since you read it. It now reads: “{shown}”",
         )
-    text = shown if carried_new is None else f"{CARRIED_ON} {shown}"
+    text = shown if carried_from is None else f"{CARRIED_ON} {shown}"
     goal = active_goal(case)
     accepted = [i for i in items if i.state is ProposalState.ACCEPTED]
     brief = stored_brief(run.deps.storage, case)
@@ -2502,6 +2538,7 @@ def _approval(
         prescription_hash=_record_hash(deps, case, brief),
         approval_id=approval_id,
         case_version=case.version,
+        carried_from=carried_from,
     )
     approval = CaseApproval(
         approval_id=approval_id,
@@ -2535,6 +2572,7 @@ def _approval(
             ),
         },
         within=_recorded(deps, DATA_PRESCRIPTION_APPROVED, actor, body, approval),
+        carried=carried_from is not None,
         events=[
             EventDraft(
                 kind=TimelineKind.APPROVAL,
@@ -2543,7 +2581,7 @@ def _approval(
                     "items": len(approval.item_ids),
                     "goal": goal.goal_id if goal is not None else None,
                     "receipt": "ledger" if deps.ledger is not None else "timeline",
-                    **({} if carried_new is None else {"carried": True, "new": carried_new}),
+                    **({} if carried_from is None else {"carried": True, "new": carried_new}),
                     **_timeline_body(body),
                 },
             )

@@ -1348,7 +1348,8 @@ ask for the outcome column this way when no file has it.
 
 Every decision carries the user id. `decision_body` is the record: `case_id`, `upload_id`, `payload_digest`,
 `prescription_hash`, `recipe_hash`, `status`, `decided_by`, `proposed_by` (comma-separated when several),
-`proposal_kind`, `approval_id`, `case_version` (and `identity_verified: false` with sign-in off) - ids and digests
+`proposal_kind`, `approval_id`, `case_version` (and `identity_verified: false` with sign-in off; `carried: true` and
+`carried_from`, the earlier approval, on an approval the visit carried on by itself) - ids and digests
 only. With `agentic.enabled` on, `VisitDeps.ledger` (`api.routes.case_visit.ledger_for`) appends it to Plan K's
 ledger **inside the case's write** (`_Step.within`: under the case lock, after the version check, before the
 commit), as `data.decision` (an item's own yes) or `data.prescription.approved` (the approval); both are in
