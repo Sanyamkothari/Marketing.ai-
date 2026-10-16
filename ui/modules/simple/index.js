@@ -68,7 +68,12 @@ async function renderResults(app, parts) {
 
 async function renderSettings(app, parts) {
   const paint = painter(app, parts);
-  const draw = (version) => settingsHtml({ can: canAccess, status: accessStatus(), version });
+  const draw = (version) => settingsHtml({
+      can: canAccess,
+      status: accessStatus(),
+      version,
+      v1: document.documentElement.dataset.uiLayout === "campaigns", // layout.js: set only in the campaigns layout
+    });
   paint(draw(null));
   document.title = "Settings · Marketing AI";
   // Drawn again once the version is in: by then a deep link's sign-in state has settled too.

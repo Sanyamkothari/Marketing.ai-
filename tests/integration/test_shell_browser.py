@@ -9,9 +9,9 @@ rather than an empty one; anything else goes to the real app.
 What is checked:
 
 * classic: today's top bar (Home, Connections, Results, Settings) and no sidebar;
-* campaigns at 1440 x 900: the five places in a left sidebar beside the page, the route's place marked, the bell
-  and Help top right; the keyboard path from the skip link through the wordmark, the five places, the bell and
-  Help, each with a visible focus ring;
+* campaigns at 1440 x 900: the four v1 places in a left sidebar beside the page, the route's place marked,
+  Help top right and no approvals bell; the keyboard path from the skip link through the wordmark, the four places
+  and Help, each with a visible focus ring;
 * campaigns at 390 px: the sidebar folded behind Menu, no horizontal scroll, Menu opens it, choosing a place
   navigates and folds it again;
 * no uncaught error on any of it.
@@ -45,7 +45,7 @@ sync_api = pytest.importorskip(
 REPO_ROOT: Final[Path] = Path(__file__).resolve().parents[2]
 RECORDED: Final[Path] = REPO_ROOT / "tests" / "fixtures" / "ui_demo" / "api.json"
 HOST: Final[str] = "127.0.0.1"
-PLACES: Final[list[str]] = ["Overview", "Campaigns", "Data", "Reports", "Settings"]
+PLACES: Final[list[str]] = ["Overview", "Campaigns", "Data", "Settings"]
 VALUE_PAGE: Final[str] = "#/pilot/value/r_20261010_11100004"
 
 
@@ -218,16 +218,16 @@ def test_campaigns_sidebar_and_keyboard_at_1440(browser: Any, campaigns_server: 
     assert box is not None and screen is not None
     assert box["x"] == 0 and box["width"] == 216
     assert screen["x"] >= box["width"], "the page is not under the sidebar"
-    assert page.locator("#pb-bar a.sh-bell").is_visible()
+    assert page.locator("#pb-bar a.sh-bell").count() == 0, "the approvals bell is out of the menus"
     assert page.locator("#pb-bar button[data-menu='sh-help']").is_visible()
     page.screenshot(path=str(shots / "campaigns_1440_settings.png"))
 
-    # The keyboard path: the skip link, then the wordmark, the five places, the bell and Help - each with a ring.
+    # The keyboard path: the skip link, then the wordmark, the four places and Help - each with a ring.
     page.evaluate("document.activeElement && document.activeElement.blur()")
     page.locator("a.skip").focus()
     path: list[str] = []
     rings: list[str] = []
-    for _ in range(8):
+    for _ in range(6):
         page.keyboard.press("Tab")
         path.append(
             page.evaluate(
@@ -235,19 +235,17 @@ def test_campaigns_sidebar_and_keyboard_at_1440(browser: Any, campaigns_server: 
             )
         )
         rings.append(page.evaluate("getComputedStyle(document.activeElement).outlineStyle"))
-    assert path == ["Marketing AI", *PLACES, "Waiting for approval", "Help"], path
+    assert path == ["Marketing AI", *PLACES, "Help"], path
     assert all(ring == "solid" for ring in rings), rings
     # Enter on a place follows it, and the new place is marked
     page.locator("#pb-bar .sh-side a[href='#/settings']").focus()
     page.keyboard.press("Shift+Tab")
-    assert page.evaluate("document.activeElement.textContent.trim()") == "Reports"
-    page.locator("#pb-bar a.sh-bell").focus()
-    page.keyboard.press("Enter")
-    page.wait_for_function("location.hash === '#/approvals'")
-    page.wait_for_selector("#pb-bar a.sh-bell[aria-current='page']")
+    assert page.evaluate("document.activeElement.textContent.trim()") == "Data"
     _open(page, campaigns_server, VALUE_PAGE)
     page.wait_for_selector("text=Value of one extra customer", state="attached")
-    assert side.locator("a[aria-current='page']").inner_text().strip() == "Reports"
+    assert (
+        side.locator("a[aria-current='page']").count() == 0
+    ), "a Reports page marks no place: Reports is out of the menu"
     page.screenshot(path=str(shots / "campaigns_1440_value.png"))
     page.locator("#pb-bar button[data-menu='sh-help']").click()
     assert page.locator("#sh-help").is_visible()
@@ -403,11 +401,9 @@ def test_the_look_on_a_phone(browser: Any, campaigns_server: str, shots: Path) -
     desc, action = _box(page, "#app .head .desc"), _box(page, "#app .head-actions .btn.primary")
     assert action["y"] >= desc["y"] + desc["height"], "the primary action sits below the text on a phone"
     assert action["x"] <= desc["x"] + 1, "and starts at the text's left edge"
-    assert page.locator(
-        "#pb-bar a.tb-logo"
-    ).is_hidden(), "the folded bar is the name, Menu, the bell and Help"
-    # the bell and Help stay 40 x 40 touch targets on a phone (visual_common section 7)
-    for target in ("#pb-bar a.sh-icon.sh-bell", "#pb-bar .sh-help > .sh-icon"):
+    assert page.locator("#pb-bar a.tb-logo").is_hidden(), "the folded bar is the name, Menu and Help"
+    # Help stays a 40 x 40 touch targets on a phone (visual_common section 7)
+    for target in ("#pb-bar .sh-help > .sh-icon",):
         box = _box(page, target)
         assert box["width"] >= 40 and box["height"] >= 40, f"{target} is {box['width']} x {box['height']}"
     page.locator("#pb-bar .sh-menu-btn").click()

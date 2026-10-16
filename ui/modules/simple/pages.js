@@ -339,11 +339,20 @@ const group = (title, entries, attrs = "") =>
 
 /**
  * The Settings page. `can(method, path)` says what this person may open; `status` is the sign-in
- * state ("off", "signed-in", ...); `version` the engine version, or null.
+ * state ("off", "signed-in", ...); `version` the engine version, or null. `v1` (the campaigns layout) keeps only what
+ * a marketer needs up top (AI service, Privacy); Schedules, Costs and the other tools fold into "More tools", which
+ * no longer repeats the sidebar's Overview and Data.
  */
-export function settingsHtml({ can = () => true, status = null, version = null } = {}) {
+export function settingsHtml({ can = () => true, status = null, version = null, v1 = false } = {}) {
   // Settings is a top-level place: no breadcrumb (visual direction 3).
   const head = pageHeader({ title: "Settings", subtitle: "Things you set up once. Your everyday work is in the main menu." });
+  const schedules = can("GET", "/schedules")
+    ? entry({ label: "Schedules", href: "#/monitoring/schedules", text: "Refresh contact lists every week or month without anyone starting them." })
+    : "";
+  // Plan M M173: `#/cost` had no way in. What runs have cost, and the rate rupee amounts are worked out with.
+  const costs = can("GET", "/cost/spend")
+    ? entry({ label: "Costs", href: "#/cost", text: "What building and refreshing contact lists has cost each month, and the exchange rate that rupee amounts use." })
+    : "";
   const main = [
     // Plan M M192 (DEC-1622): its own page, Settings › AI service, for anyone who may read the AI service; that page
     // says who may connect one. It used to open Connections, which the campaigns layout sends to the Data page.
@@ -358,13 +367,7 @@ export function settingsHtml({ can = () => true, status = null, version = null }
     can("GET", "/privacy/purposes")
       ? entry({ label: "Privacy", href: "#/privacy/consent", text: "Consent, requests to erase or see a person's data, and how long data is kept." })
       : "",
-    can("GET", "/schedules")
-      ? entry({ label: "Schedules", href: "#/monitoring/schedules", text: "Refresh contact lists every week or month without anyone starting them." })
-      : "",
-    // Plan M M173: `#/cost` had no way in. What runs have cost, and the rate rupee amounts are worked out with.
-    can("GET", "/cost/spend")
-      ? entry({ label: "Costs", href: "#/cost", text: "What building and refreshing contact lists has cost each month, and the exchange rate that rupee amounts use." })
-      : "",
+    ...(v1 ? [] : [schedules, costs]),
   ].filter(Boolean);
   // Admin only while sign-in is on: with it off there is one person, who needs no user list.
   const admin =
@@ -375,6 +378,7 @@ export function settingsHtml({ can = () => true, status = null, version = null }
         ].filter(Boolean)
       : [];
   const advanced = [
+    ...(v1 ? [schedules, costs] : []),
     entry({
       label: "Campaign effect workbench",
       href: "#/uplift",
@@ -414,10 +418,10 @@ export function settingsHtml({ can = () => true, status = null, version = null }
       : "",
     // Plan M M175 (DEC-1605) and M179 (DEC-1609): the Overview and the Data page are in the campaigns layout's sidebar
     // (M174); in the classic layout these are their ways in, as for Reports above.
-    can("GET", "/overview")
+    can("GET", "/overview") && !v1
       ? entry({ label: "Overview", href: "#/overview", text: "What needs your attention, the value proven to date and the campaigns under way, on one page." })
       : "",
-    can("GET", "/uploads")
+    can("GET", "/uploads") && !v1
       ? entry({ label: "Data", href: "#/data", text: "Where your customer data comes from: your files and saved connections, and a check of your data." })
       : "",
     can("GET", "/runs/{run_id}/outcomes")
@@ -437,7 +441,7 @@ export function settingsHtml({ can = () => true, status = null, version = null }
   return `<main class="screen sp st" data-module="simple">${head}<div class="sp-stack">
     ${group("Services and data", main, "data-settings-main")}
     ${group("Admin", admin, "data-settings-admin")}
-    <section class="card sp-group st-group st-quiet" data-settings-advanced><details class="adv"><summary>Advanced tools</summary><ul class="sp-list">${advanced.join(
+    <section class="card sp-group st-group st-quiet" data-settings-advanced><details class="adv"><summary>${v1 ? "More tools" : "Advanced tools"}</summary><ul class="sp-list">${advanced.join(
       "",
     )}</ul></details></section>
     ${viewHtml()}

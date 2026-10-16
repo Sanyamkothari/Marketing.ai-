@@ -25,7 +25,7 @@ in Chromium, against the real app in the `campaigns` layout on the validated Hil
 * **Task 2, "Show what last month's campaign earned".** From the Overview, the shortest real path to a measured
   campaign's earned value AND how sure the product is (the evidence label): Campaigns, the campaign, its Results tab,
   with the figures on screen the API's (`GET /pilot/proof/{id}`). Stage 0 of the v1 plan froze the Value Proof Packs
-  table, which used to be one click away under the sidebar's Reports: that click is still pinned, now as a check that
+  table, which used to be one click away under the sidebar's Reports (now out of the menu: Settings, More tools, Reports): the clicks are still pinned, now as a check that
   Reports lists no pack and links to none (the packs stay open by address and under Settings, Advanced). The Overview's own "Value proven to date" tile is the programme
   total, not one campaign's figure, so it is compared with `GET /overview` and is not counted as an answer to the task.
 
@@ -111,13 +111,18 @@ LATER_CAMPAIGN_CLICKS_PINNED: Final[int] = 4
 worded without the model."""
 LATER_LAST_BUTTON: Final[str] = "Approve and download"
 
-TASK2_REPORTS_CLICKS: Final[tuple[str, ...]] = ("sidebar: Reports",)
+# Reports is out of the v1 menu (the sidebar shows only the flow); its way in is Settings, More tools.
+TASK2_REPORTS_CLICKS: Final[tuple[str, ...]] = (
+    "sidebar: Settings",
+    "settings: More tools",
+    "more tools: Reports",
+)
 TASK2_CAMPAIGN_CLICKS: Final[tuple[str, ...]] = (
     "sidebar: Campaigns",
     "campaigns list: the campaign",
     "campaign page: Results tab",
 )
-TASK2_REPORTS_PINNED: Final[int] = 1
+TASK2_REPORTS_PINNED: Final[int] = 3
 TASK2_CAMPAIGN_PAGE_PINNED: Final[int] = 3
 
 PAGE_TIMEOUT_MS: Final[int] = 60_000
@@ -538,7 +543,10 @@ def task2(pristine_store: Path, workdir: Path, playwright_driver: Any) -> Iterat
             page.locator("[data-value]").wait_for(timeout=PAGE_TIMEOUT_MS)
             tile = page.locator("[data-value-amount]").inner_text()  # on screen with no click at all
             tile_title = page.locator("[data-value-amount]").get_attribute("title") or ""
-            reports.click(TASK2_REPORTS_CLICKS[0], "nav.sh-side a[href='#/reports']")
+            assert page.locator("nav.sh-side a[href='#/reports']").count() == 0, "Reports is out of the menu"
+            reports.click(TASK2_REPORTS_CLICKS[0], "nav.sh-side a[href='#/settings']")
+            reports.click(TASK2_REPORTS_CLICKS[1], "[data-settings-advanced] summary")
+            reports.click(TASK2_REPORTS_CLICKS[2], "[data-settings-advanced] a[href='#/reports']")
             page.locator("[data-reports-page]").wait_for(timeout=PAGE_TIMEOUT_MS)
             page.locator("[data-rp-check-form]").wait_for(timeout=PAGE_TIMEOUT_MS)
             tabs = page.locator("[data-reports-tab]").all_inner_texts()
@@ -588,7 +596,7 @@ def task2(pristine_store: Path, workdir: Path, playwright_driver: Any) -> Iterat
 
 
 def test_task_2_reports_no_longer_lists_the_value_proof_packs(task2: Task2) -> None:
-    """Frozen for v1 (plan stage 0): one click on Reports lands on Check a past campaign, with no Value Proof Pack
+    """Frozen for v1 (plan stage 0): Reports (Settings, More tools) lands on Check a past campaign, with no Value Proof Pack
     table, no link to a pack and no Value proof or Programme summary tab; the contradiction with the pilot value
     page ("The campaign worked" beside "Nothing is proven yet") cannot be reached by clicking."""
     walk = task2.reports_walk

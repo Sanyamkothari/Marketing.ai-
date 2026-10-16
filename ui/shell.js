@@ -1,22 +1,21 @@
 /* The new shell (Plan M §3, M174, DEC-1604): drawn by `chrome.js` in place of today's top bar when the
    deployment's `ui_layout` is "campaigns" (`ui/layout.js`). Today's bar is untouched in "classic".
 
-     [Marketing AI] [Menu]                                   [sample data] [bell 3] [?] [profile] [Minfy]
+     [Marketing AI] [Menu]                                          [sample data] [?] [profile] [Minfy]
      ┌──────────────┐
      │ Overview     │   (the page, in #app)
      │ Campaigns    │
      │ Data         │
-     │ Reports      │
      │ Settings     │
      └──────────────┘
 
-   - The left sidebar is the five places of `layout.js` PLACES, the same for every role (as Plan H's four
+   - The left sidebar is the v1 flow's places of `layout.js` MENU_PLACES (PLACES but those marked `menu: false`:
+     Reports is out of the menu, and so is the approvals bell - v1 approves inside the campaign; their pages work
+     and Settings, More tools lists them), the same for every role (as Plan H's four
      were): what a role may DO is still decided by each page and the API. The place marked is the route's
      `home` in layout.js's table, with `aria-current="page"`.
    - The wordmark and the Minfy logo open the Overview (`#/overview`), where "#/" would redirect.
-   - Top right: the sample-data chip (slot "demo"), the approvals bell (slot "badge:approvals" - the count
-     the classic bar puts on Results, read by `production/approvals.js` for an Approver only, the same role
-     rule), Help (?) (slot "help": the tour and "Send feedback", in the menu the bar's other menus use), and
+   - Top right: the sample-data chip (slot "demo"), Help (?) (slot "help": the tour and "Send feedback", in the menu the bar's other menus use), and
      the profile (slot "user"). The wordmark and the Minfy logo stay.
    - Below 900 px the sidebar folds behind a Menu button (the bar's own `data-tb-menu` toggle, so Escape and
      a route change close it as they close the classic panel).
@@ -30,7 +29,7 @@ import { LOGO, esc } from "./dom.js";
 // Plan M M182 (DEC-1612): the wordmark and the logo are the deployment's brand (`brand.js`); today's by default.
 import { brandLogoAlt, brandLogoHtml, brandNameHtml } from "./brand.js";
 // </M182>
-import { BELL, PLACES, homeFor } from "./layout.js";
+import { MENU_PLACES, PLACES, homeFor } from "./layout.js";
 
 export const SIDEBAR_ID = "sh-side";
 export const HELP_ID = "sh-help";
@@ -47,33 +46,17 @@ const ICONS = {
   settings: svg(
     '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>',
   ),
-  bell: svg('<path d="M6 8a6 6 0 1 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.9 1.9 0 0 0 3.4 0"/>'),
 };
 
-/** The count a badge slot holds ("" or "0" for none). */
-function countOf(raw) {
-  const count = String(raw || "").trim();
-  return count && count !== "0" ? count : "";
-}
-
-/** The sidebar: the five places, the route's own marked. */
+/** The sidebar: the v1 places (Overview, Campaigns, Data, Settings), the route's own marked. */
 export function sidebarHtml(here) {
-  const items = PLACES.map((place) => {
+  const items = MENU_PLACES.map((place) => {
     const on = place.id === here;
     return `<li><a class="sh-item${on ? " on" : ""}" href="${esc(place.href)}" data-place="${esc(place.id)}"${
       on ? ` aria-current="page"` : ""
     }>${ICONS[place.id] || ""}<span>${esc(place.label)}</span></a></li>`;
   }).join("");
   return `<nav class="sh-side" id="${SIDEBAR_ID}" aria-label="Main"><ul>${items}</ul></nav>`;
-}
-
-/** The approvals bell: always drawn for a signed-in person (anyone may look), the count only for an Approver. */
-export function bellHtml(rawCount, on) {
-  const count = countOf(rawCount);
-  const label = count ? `Waiting for approval: ${count}` : "Waiting for approval";
-  return `<a class="sh-icon sh-bell${on ? " on" : ""}" href="#/approvals" data-bell aria-label="${esc(label)}" title="Waiting for approval"${
-    on ? ` aria-current="page"` : ""
-  }>${ICONS.bell}${count ? `<span class="count" aria-hidden="true">${esc(count)}</span>` : ""}</a>`;
 }
 
 /** Help (?): the registered "help" entries in a menu, or nothing when no module registered any. */
@@ -104,7 +87,7 @@ export function shellBarHtml(ctx) {
   const menuBtn = `<button type="button" class="btn secondary sm sh-menu-btn" data-tb-menu aria-expanded="${Boolean(
     ctx.panel,
   )}" aria-controls="${SIDEBAR_ID}">Menu</button>`;
-  const utils = `${ctx.slot("demo")}${bellHtml(ctx.slot("badge:approvals"), here === BELL)}${helpHtml(
+  const utils = `${ctx.slot("demo")}${helpHtml(
     ctx.slot("help"),
     ctx.menu === HELP_ID,
   )}${user}`;
@@ -121,7 +104,6 @@ export const SHELL_CSS = `
 .sh-icon{position:relative;display:inline-grid;place-items:center;width:36px;height:36px;padding:0;border:0;border-radius:8px;background:none;color:var(--ink2);font:inherit;font-size:15px;font-weight:600;cursor:pointer}
 .sh-icon:hover,.sh-icon.on{background:var(--soft);color:var(--ink)}
 .sh-icon.on{box-shadow:inset 0 -2px 0 var(--brand-blue)}
-.sh-bell .count{position:absolute;top:-2px;right:-4px;min-width:18px;height:18px;padding:0 5px;font-size:11px}
 .sh-help{position:relative}
 .sh-help .menu-pop a:focus-visible,.sh-help .menu-pop button:focus-visible{outline:2px solid var(--brand-blue);outline-offset:-2px}
 .sh-menu-btn{display:none}
