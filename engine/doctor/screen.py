@@ -30,6 +30,7 @@ the sentences the rules wrote.
 
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Final, Literal
@@ -39,7 +40,7 @@ from pydantic import Field
 from engine.access.roles import Principal
 from engine.agent.contracts import ProposalState
 from engine.config import ConfigError, StrictBase
-from engine.doctor.case import Case, CaseStore, TimelineEvent
+from engine.doctor.case import Case, CaseError, CaseStore, TimelineEvent, TimelineKind
 from engine.doctor.plan_check import ledger_view, plan_digest
 from engine.doctor.protocol import (
     DEFAULT_SETTINGS,
@@ -486,6 +487,49 @@ def _reasons(report: DataReadinessReport, *, warnings: bool = False) -> tuple[st
     return tuple(out[:_REASONS])
 
 
+_PASSED: Final = frozenset({"ready", "ready_with_warnings", "no_goal"})
+
+
+def _last_readiness_failure(storage: Storage, case: Case) -> tuple[tuple[str, ...], str | None] | None:
+    """Why the last readiness check for the active goal did not pass, while the visit waits for approval again and no
+    approval has come since: the plan changed, so the check no longer counts for it, but the person must still be told
+    why. None when the last check passed, none ran, or an approval came after it. Plain reasons from the stored report
+    of that very check when there is one, else the sentence the visit wrote."""
+    goal = active_goal(case)
+    if goal is None:
+        return None
+    try:
+        events = [
+            e
+            for e in CaseStore(storage).timeline(case.client_id, case.case_id)
+            if e.kind is TimelineKind.READINESS and e.item_id == goal.goal_id
+        ]
+    except (CaseError, StorageError, ValueError):
+        return None
+    if not events or events[-1].details.get("verdict") in _PASSED:
+        return None
+    last = events[-1]
+    if any(a.approved_at >= last.at for a in case.approvals if not a.approve_class):
+        return None
+    from engine.doctor.readiness import readiness_key
+
+    ref = next((r for r in case.readiness if r.goal_id == goal.goal_id), None)
+    # Only the report this check made: an older check's report belongs to an older plan.
+    if ref is not None and ref.report_hash == last.details.get("report_hash"):
+        try:
+            key = readiness_key(
+                client_id=case.client_id, case_id=case.case_id, goal=ref.goal_id, report_hash=ref.report_hash
+            )
+            report = storage.read_model(key, DataReadinessReport)
+        except (StorageError, ValueError):
+            report = None
+        if report is not None and _reasons(report):
+            return _reasons(report), report.verdict_reason
+    said = str(last.details.get("reason") or "")
+    plain = re.sub(r"^(Not ready: )?([A-Z][A-Z0-9_]+: )?", "", said)
+    return ((plain,) if plain else ()), (said or None)
+
+
 def _verdict(storage: Storage, case: Case, approve_class: tuple[ScreenApproveClass, ...]) -> ScreenVerdict:
     visit = case.visit
     if not case.files or (visit is not None and visit.waiting_for == "files"):
@@ -541,6 +585,17 @@ def _verdict(storage: Storage, case: Case, approve_class: tuple[ScreenApproveCla
             )
     state = case.state.value
     if state == "approve":
+        failed = _last_readiness_failure(storage, case)
+        if failed is not None:
+            reasons, technical = failed
+            return ScreenVerdict(
+                key="not_ready",
+                title="Not ready yet",
+                next="The last check said the data is not ready for this goal. Here is what it found. "
+                "Fix it below, then approve again.",
+                reasons=reasons,
+                technical=technical,
+            )
         return ScreenVerdict(
             key="needs_approval",
             title="Ready for your approval",

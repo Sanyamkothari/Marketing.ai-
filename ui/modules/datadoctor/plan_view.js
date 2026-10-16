@@ -21,6 +21,7 @@ import {
   columnsOfRows,
   findingsOf,
   isChecked,
+  isNote,
   kindOf,
   leadOf,
   ledgerOf,
@@ -382,13 +383,21 @@ function parkedHtml(item, c, ctx) {
   })}</li>`;
 }
 
+/** The label of the folded part: sure fixes, and the notes (checks that change nothing) counted apart. */
+function foldedLabel(folded) {
+  const notes = folded.filter(isNote).length;
+  const fixes = folded.length - notes;
+  return [fixes ? plural(fixes, "sure fix", "sure fixes") : "", notes ? plural(notes, "note", "notes") : ""].filter(Boolean).join(", ");
+}
+
 function sectionHtml(sec, screen, ctx, level) {
   const { case: c, view } = screen;
   const entries = new Map((view.approve_class || []).map((a) => [a.item_id, a]));
   const approvals = sec.open.filter((i) => entries.has(i.item_id));
   const ticks = sec.open.filter((i) => !entries.has(i.item_id));
+  const changes = sec.items.filter((i) => !isNote(i)).length; // a note is not a change
   const lines = [
-    plural(sec.items.length, "change", "changes"),
+    changes ? plural(changes, "change", "changes") : "",
     sec.pending.length ? `${sec.pending.length} ${sec.pending.length === 1 ? "needs" : "need"} your yes` : "",
     sec.waiting.length ? `${sec.waiting.length} waiting for someone` : "",
   ].filter(Boolean);
@@ -413,7 +422,7 @@ function sectionHtml(sec, screen, ctx, level) {
   const waiting = sec.waiting.length ? `<ul class="dds-items" data-dds-waiting>${sec.waiting.map((i) => parkedHtml(i, c, ctx)).join("")}</ul>` : "";
   const sure = sec.sure.length
     ? `<details class="dds-sure" data-dds-sure="${sec.id}" data-dds-keep="sure-${sec.id}"><summary>${esc(
-        plural(sec.sure.length, "sure fix", "sure fixes"),
+        foldedLabel(sec.sure),
       )}</summary><ul class="dds-items">${sec.sure.map((i) => itemHtml(i, c, ctx, { open: false })).join("")}</ul></details>`
     : "";
   const needsCheck = sec.pending.length || sec.waiting.length;
