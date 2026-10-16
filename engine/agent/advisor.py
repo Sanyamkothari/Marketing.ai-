@@ -610,9 +610,10 @@ def _step(kind: RecipeStepKind, column: str, **params: Any) -> RecipeStep:
 _SLASH_DATE: Final[re.Pattern[str]] = re.compile(r"^(\d{1,2})[/.-](\d{1,2})[/.-](\d{4})$")
 
 
-def _both_ways(issue: Mapping[str, Any]) -> str:
-    """` For example '05/06/2026' is 5 June 2026 (day first) or 6 May 2026 (month first).` from the first example
-    written as numbers, else nothing."""
+def _both_ways(issue: Mapping[str, Any]) -> tuple[str, tuple[str, ...]]:
+    """` For example '05/06/2026' is '5 June 2026' (day first) or '6 May 2026' (month first).` from the first example
+    written as numbers, and the two readings (they are cells too: the gate masks them like the example), else nothing.
+    """
     for value in issue.get("examples", []) or []:
         match = _SLASH_DATE.match(str(value).strip())
         if (
@@ -622,11 +623,14 @@ def _both_ways(issue: Mapping[str, Any]) -> str:
             and 1 <= int(match.group(2)) <= 12
         ):
             first, second, year = int(match.group(1)), int(match.group(2)), match.group(3)
+            day_first = f"{first} {calendar.month_name[second]} {year}"
+            month_first = f"{second} {calendar.month_name[first]} {year}"
             return (
-                f" For example {quoted(str(value).strip())} is {first} {calendar.month_name[second]} {year} "
-                f"(day first) or {second} {calendar.month_name[first]} {year} (month first)."
+                f" For example {quoted(str(value).strip())} is {quoted(day_first)} (day first) "
+                f"or {quoted(month_first)} (month first).",
+                (day_first, month_first),
             )
-    return ""
+    return "", ()
 
 
 def _recipe_proposal(
@@ -890,7 +894,7 @@ def _format_proposals(
                 continue
             if dayfirst is None:
                 sample = _examples(issue)
-                both = _both_ways(issue)
+                both, readings = _both_ways(issue)
                 builder.ask(
                     f"In '{display_name(column)}' ({sample}), which comes first: the day or the month?{both}",
                     [
@@ -913,7 +917,7 @@ def _format_proposals(
                         )
                     ],
                     [evidence],
-                    examples=_cells(issue),
+                    examples=(*_cells(issue), *readings),
                 )
                 continue
             order = "day first" if dayfirst else "month first"

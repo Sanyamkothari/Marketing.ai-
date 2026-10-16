@@ -185,7 +185,10 @@ def test_a_few_tools_pass_pass_k_and_the_injection_canary() -> None:
 def test_every_registered_tool_passes_pass5_and_the_injection_canary() -> None:
     report = bench.run(parts=("tools",), k=5)
     built = [
-        t for t in report.tools if t.status.built and t.status.name not in ("propose_setting", "propose_step")
+        # the tools whose proposals come from the model are judged by the AI part (the recorded cassette), not here
+        t
+        for t in report.tools
+        if t.status.built and t.status.name not in ("propose_setting", "propose_step", "propose_sql_step")
     ]
     assert built and all(t.pass_k is not None for t in built)
     failed = {t.status.name: bench_kill(t) for t in built if bench_kill(t) != "keep"}

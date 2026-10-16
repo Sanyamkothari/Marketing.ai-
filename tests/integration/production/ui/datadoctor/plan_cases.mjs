@@ -209,8 +209,10 @@ test("a note (a check that changes nothing) is not counted as needing a yes", as
   });
   const sec = $('[data-dds-plan-section="fix"]');
   const shown = sec.querySelectorAll("[data-dds-item]").length;
-  assert.match(sec.querySelector("[data-dds-sec-line]").textContent, new RegExp(`${shown - 2} changes?\\. 1 needs your yes\\.`), "the two notes are not changes");
-  assert.equal(sec.querySelector("details[data-dds-sure] summary").textContent, "1 sure fix, 2 notes");
+  assert.match(sec.querySelector("[data-dds-sec-line]").textContent, new RegExp(`${shown} changes?\\. 1 needs your yes\\.`), "the two notes are not changes");
+  assert.equal(sec.querySelectorAll('[data-dds-item="n1"], [data-dds-item="n2"]').length, 0, "notes are lines, not items to tick");
+  assert.equal(sec.querySelector("details[data-dds-sure] summary").textContent, "1 sure fix");
+  assert.match($("[data-dds-notes]").textContent, /every value is different/, "the notes are read once, under Good to know");
 });
 
 test("Approve waits for each section with something to decide, then one final yes", async () => {
