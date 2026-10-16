@@ -91,6 +91,7 @@ test("a question that offers its own I don't know draws it once, as the last ans
   assert.ok(card.textContent.includes("Needed to go on"), "a blocking question says so");
   assert.equal($("[data-dds-verdict]").dataset.ddsVerdict, "needs_answers");
   assert.ok($("[data-dds-next]").textContent.includes("Answer 1 question below to go on."));
+  assert.equal($("[data-dds-todo]").textContent, "To do: answer 1 question, then Approve", "open questions are on the To do line");
 });
 
 test("a small choice decided for the person says what was assumed, and can be changed", async () => {
@@ -120,7 +121,7 @@ test("a change that needs its own yes: the exact sentence, why, who, and I agree
     assert.ok(card, entry.item_id);
     assert.equal(card.querySelector("[data-dds-sentence]").textContent, entry.sentence, "the sentence, word for word");
     assert.ok(card.textContent.includes(`Why: ${entry.why.charAt(0).toUpperCase()}${entry.why.slice(1)}.`), "why it needs its own yes");
-    const who = entry.role === "approver" ? "someone with the Approver role" : "someone with the Analyst role";
+    const who = entry.role === "approver" ? "an approver on your team" : "an analyst on your team";
     assert.ok(card.textContent.includes(who));
     assert.ok(card.textContent.includes("other than whoever suggested or answered it"), "separation of duties is said");
     assert.equal(card.querySelector("[data-dds-agree]").textContent.trim(), "I agree to this sentence");
@@ -221,9 +222,9 @@ test("someone the server would refuse is told whom to ask, with no I agree butto
     const ask = card.querySelector("[data-dds-ask-other]");
     assert.equal(ask.dataset.ddsAskOther, entry.cannot_agree);
     if (entry.cannot_agree === "role") {
-      assert.equal(ask.textContent.trim(), "Ask someone with the Approver role to agree to this.");
+      assert.equal(ask.textContent.trim(), "Ask an approver on your team to agree to this.");
     } else {
-      assert.equal(ask.textContent.trim(), "You suggested or answered this, so ask someone else with the Analyst role to agree to this.");
+      assert.equal(ask.textContent.trim(), "You suggested or answered this, so ask another analyst on your team to agree to this.");
     }
   }
   assert.deepEqual(new Set(s.view.approve_class.map((a) => a.cannot_agree)), new Set(["role", "separation"]));
@@ -432,6 +433,7 @@ test("not ready says so, and starts nothing", async () => {
   await show("not_ready");
   assert.equal($("[data-dds-verdict]").dataset.ddsVerdict, "not_ready");
   assert.ok(!$("[data-dds-continue]"));
+  assert.equal($("[data-dds-todo]"), null, "nothing to approve, so no To do line");
 });
 
 test("with no file yet: one sentence and Choose a file", async () => {

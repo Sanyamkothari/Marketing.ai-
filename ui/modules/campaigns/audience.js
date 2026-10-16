@@ -425,7 +425,9 @@ export function reasonTopic(reason) {
       html: `Their ${userText(column)} is ${userText(value)}`,
     };
   }
-  const general = text.replace(NUMBER, "…");
+  // A sentence "Visits 30d of 5 pushes the score up": only the customer's own value (after " of ") goes, not a number in the name.
+  const own = text.replace(/ of -?\d[\d,]*(?:\.\d+)?(?= )/, " of …");
+  const general = own !== text ? own : text.replace(NUMBER, "…");
   return { id: general, text: general, html: escapeHtml(general) };
 }
 

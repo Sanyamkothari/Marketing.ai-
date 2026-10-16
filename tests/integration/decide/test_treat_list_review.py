@@ -305,7 +305,7 @@ def test_reasons_are_read_from_the_config_root_given(tmp_path: Path) -> None:
     reasons = pd.concat([custom["reason_1"], custom["reason_2"], custom["reason_3"]])
     assert reasons.str.startswith("Away for ").any()
     assert not reasons.str.contains(
-        "Monthly spend of"
+        "Time as a customer of"
     ).any(), "the shipped file is not read when a root is given"
 
 

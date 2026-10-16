@@ -158,9 +158,9 @@ test("a step shows what our code counted: lost and counted-twice apart, totals, 
   const section = $('[data-dds-plan-section="combine"]');
   assert.ok(section, "a query step lands in Combine");
   const receipt = section.querySelector('[data-dds-step-receipt="sql.spend"]');
-  assert.match(receipt.textContent, /Counted by our code/);
+  assert.match(receipt.textContent, /We counted/);
   assert.match(receipt.querySelector("[data-dds-lost]").textContent, /Customers lost100/);
-  assert.match(receipt.querySelector("[data-dds-duplicated]").textContent, /Customers counted twice40/, "never netted off against each other");
+  assert.match(receipt.querySelector("[data-dds-duplicated]").textContent, /Customers that appear twice40/, "never netted off against each other");
   assert.match(receipt.querySelector("[data-dds-total]").textContent, /100500 before, 98200 after/);
   assert.match(receipt.textContent, /1,200 in, 1,100 out/);
   const [before, after] = receipt.querySelectorAll("[data-dds-sample]");
@@ -196,6 +196,32 @@ test("the plan: sections with one sentence and one count, only what needs a yes 
   const approve = $("[data-dds-approve-button]");
   assert.ok(approve.disabled);
   assert.match($("[data-dds-approve-hold]").textContent, /Check each section above first: Exclusions\./);
+});
+
+test("the top says what to do: sections to check, then Approve, from the counts the screen has", async () => {
+  await show("approve", {
+    patch: (s) => {
+      s.case.items.push(sqlItem());
+      return s;
+    },
+  });
+  assert.equal($("[data-dds-todo]").textContent, "To do: check 1 section, then Approve");
+  const box = $('input[data-dds-sec-ok="combine"]');
+  box.checked = true;
+  box.dispatchEvent(new window.Event("change", { bubbles: true }));
+  assert.equal($("[data-dds-todo]").textContent, "To do: Approve");
+});
+
+test("the To do line also counts changes still waiting for their own yes, and a stop replaces Approve", async () => {
+  const { todoHtml } = await import("../../../../../ui/modules/datadoctor/plan_view.js");
+  const text = (html) => html.replace(/<[^>]+>/g, "");
+  assert.equal(text(todoHtml("needs_approval", { unchecked: 0, unconfirmed: 1 })), "To do: agree to 1 change, then Approve");
+  assert.equal(
+    text(todoHtml("needs_approval", { asking: 2, unchecked: 1, unconfirmed: 2, stops: 1 })),
+    "To do: answer 2 questions, check 1 section, agree to 2 changes, then fix the step that stops the plan",
+  );
+  assert.equal(todoHtml("ready", { unchecked: 1 }), "");
+  assert.equal(todoHtml("not_ready", {}), "");
 });
 
 test("a note (a check that changes nothing) is not counted as needing a yes", async () => {

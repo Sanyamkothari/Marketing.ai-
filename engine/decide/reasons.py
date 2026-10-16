@@ -30,6 +30,7 @@ import pandas as pd
 import yaml
 from pydantic import BaseModel, Field, field_validator
 
+from engine.agent.untrusted import display_name
 from engine.config import config_root
 from engine.contracts import Reason
 from engine.utils.logging import get_logger
@@ -64,7 +65,7 @@ _SLOTS: Final[int] = 3
 
 _MISSING: Final[str] = "missing"
 """`engine.stages.explain.MISSING_VALUE`: what `Reason.value` holds for a value the row does not have.
-A phrase that prints the value would read "Monthly spend of missing", so such a reason keeps its text."""
+A phrase that prints the value would read "Monthly spend of missing", so such a reason says "is missing"."""
 
 
 class BusinessReasonDictionary(BaseModel):
@@ -107,15 +108,17 @@ class BusinessReasonDictionary(BaseModel):
         return by_direction.get(direction.lower())
 
     def render(self, feature: str, direction: str, value: str, text: str) -> str:
-        """The phrase with the row's `value`, or `text` when unmapped or the value is blank."""
-        template = self.phrase(feature, direction)
-        if template is None:
-            return text
-        if VALUE_PLACEHOLDER in template:
-            if not value.strip() or value.strip().lower() == _MISSING:
-                return text
-            return template.replace(VALUE_PLACEHOLDER, value)
-        return template
+        """One reason in plain words: its phrase, else a sentence from the column's name (never `text` raw)."""
+        one = pd.Series
+        return str(
+            _render_flat(
+                one([feature], dtype="object"),
+                one([direction], dtype="object"),
+                one([value], dtype="object"),
+                one([text], dtype="object"),
+                self,
+            )[0]
+        )
 
 
 def reasons_path(root: Path | None = None) -> Path:
@@ -190,7 +193,41 @@ def _render_flat(
     rendered = (
         rendered + pd.Series(np.where(needed, shown, ""), dtype="object") + pd.Series(tails, dtype="object")
     )
-    return np.where(usable, rendered.to_numpy(dtype=object), texts.to_numpy(dtype=object))
+    # A feature the dictionary does not cover reads as a plain sentence from its column's display name, not as
+    # the model's own "lifetime_spend ↑ (2136)".
+    names = np.array([_shown_name(str(n)) for n in feature_names], dtype=object)[feature_codes]
+    sentence, sayable = _plain_fallback(
+        names, np.asarray(direction_names, dtype=object)[direction_codes], shown, blank
+    )
+    plain = np.where(sayable, sentence, texts.to_numpy(dtype=object))
+    return np.where(usable, rendered.to_numpy(dtype=object), plain)
+
+
+def _shown_name(feature: str) -> str:
+    """A column as words: its display name, underscores as spaces, first letter capital."""
+    words = display_name(feature).replace("_", " ").strip()
+    return words[:1].upper() + words[1:]
+
+
+def _plain_fallback(
+    names: np.ndarray, directions: np.ndarray, shown: np.ndarray, blank: np.ndarray
+) -> tuple[np.ndarray, np.ndarray]:
+    """`Name of 12 pushes the score up` (`Region is North, which pushes ...` for a non-number) for a feature with no phrase."""
+    text = shown.astype(str)
+    is_number = pd.Series(text).str.match(r"^-?\d[\d.,]*$").to_numpy(dtype=bool)
+    # A number reads "Name of 12 pushes ..."; a category or yes/no reads "Name is North, which pushes ...".
+    of = np.where(blank, "", np.where(is_number, " of " + text, " is " + text + ", which"))
+    tail = np.select(
+        [directions == "up", directions == "down", directions == "none"],
+        [
+            " pushes the score up",
+            " pushes the score down",
+            " matters across customers, not measured for this customer",
+        ],
+        default="",
+    )
+    sentence = np.where(np.char.lower(text) == _MISSING, names + " is missing", names + of + tail)
+    return sentence.astype(object), tail != ""
 
 
 def map_reasons(

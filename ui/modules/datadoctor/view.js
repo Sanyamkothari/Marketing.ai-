@@ -78,7 +78,7 @@ export const EVENT_WORDS = Object.freeze({
   "approval.confirmed": "Sentence agreed to",
 });
 
-const ROLE_WORDS = Object.freeze({ analyst: "someone with the Analyst role", approver: "someone with the Approver role" });
+const ROLE_WORDS = Object.freeze({ analyst: "an analyst on your team", approver: "an approver on your team" });
 
 /** An id safe in an `id` attribute (and in `aria-describedby`'s list), from a question or item id. */
 const domId = (prefix, id) => `${prefix}-${String(id).replace(/[^A-Za-z0-9_-]/g, "_")}`;
@@ -304,7 +304,7 @@ export function approvalHtml(entry, item, c, { busy = false, read = false, extra
     // The server would refuse this reader: no button that can only fail, but who to ask.
     const ask =
       entry.cannot_agree === "separation"
-        ? `You suggested or answered this, so ask ${who.replace(/^someone/, "someone else")} to agree to this.`
+        ? `You suggested or answered this, so ask ${who.replace(/^an? /, "another ")} to agree to this.`
         : `Ask ${who} to agree to this.`;
     action = `<p class="dds-state" data-dds-ask-other="${esc(entry.cannot_agree || "role")}">${icon("info", { size: 14 })}<span>${esc(ask)}</span></p>`;
   } else {
@@ -318,10 +318,10 @@ export function approvalHtml(entry, item, c, { busy = false, read = false, extra
       disabled: busy || !read,
     })}</div>`;
   }
-  return `<article class="dds-card dds-approval" data-dds-approval="${esc(entry.item_id)}" data-dds-role="${esc(entry.role)}"><p class="dds-card-t has-icon">${icon("alert", { size: 16 })}<span>Needs its own yes</span></p><blockquote class="dds-sentence" id="${esc(sentenceId)}" data-dds-sentence>${userTextIn(
+  return `<article class="dds-card dds-approval" data-dds-approval="${esc(entry.item_id)}" data-dds-role="${esc(entry.role)}"><p class="dds-card-t has-icon">${icon("alert", { size: 16 })}<span>Needs your yes on its own</span></p><blockquote class="dds-sentence" id="${esc(sentenceId)}" data-dds-sentence>${userTextIn(
     entry.sentence,
     names,
-  )}</blockquote><p class="dds-why"><span class="dds-label">Why:</span> ${esc(entry.why.charAt(0).toUpperCase() + entry.why.slice(1))}.</p><p class="dds-why"><span class="dds-label">Who must agree:</span> ${esc(
+  )}</blockquote><p class="dds-why"><span class="dds-label">Why:</span> ${esc(entry.why.charAt(0).toUpperCase() + entry.why.slice(1))}.</p><p class="dds-why"><span class="dds-label">Needs a yes from</span> ${esc(
     whoText,
   )}.</p>${pending && !done ? `<p class="dds-why">Until someone agrees, this change is left out.</p>` : ""}${extra}${action}</article>`;
 }

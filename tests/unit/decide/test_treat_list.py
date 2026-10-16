@@ -129,7 +129,7 @@ def test_a_feature_that_pushed_the_score_down_gets_the_down_phrase_with_its_own_
     assert frame.loc[0, "reason_1"] != frame.loc[0, "reason_2"]
 
 
-def test_value_renders_the_rows_value_and_a_missing_value_keeps_todays_text() -> None:
+def test_value_renders_the_rows_value_and_a_missing_value_reads_as_missing() -> None:
     dictionary = BusinessReasonDictionary(
         features={
             "monthly_spend": {
@@ -147,15 +147,15 @@ def test_value_renders_the_rows_value_and_a_missing_value_keeps_todays_text() ->
         dictionary=dictionary,
     )
     assert mapped[0] == "Monthly spend of 5 raises the chance"
-    assert mapped[1] == texts[1], "'missing' is not a value to print"
-    assert mapped[2] == texts[2], "an empty value is not one either"
+    assert mapped[1] == "Monthly spend is missing", "'missing' is not a value to print"
+    assert mapped[2] == "Monthly spend pushes the score up", "an empty value is not one either"
     assert mapped[3] == "Spend lowers the chance", "a phrase with no {value} needs none"
     # A value that looks like a placeholder is data, printed as it is, never expanded again.
     odd = map_reasons(["monthly_spend"], ["up"], ["t"], values=["{value}"], dictionary=dictionary)
     assert odd[0] == "Monthly spend of {value} raises the chance"
 
 
-def test_reason_mapping_renders_phrase_for_mapped_and_keeps_original_for_unmapped() -> None:
+def test_reason_mapping_renders_phrase_for_mapped_and_plain_words_for_unmapped() -> None:
     dictionary = BusinessReasonDictionary(
         features={
             "monthly_spend": {
@@ -170,7 +170,7 @@ def test_reason_mapping_renders_phrase_for_mapped_and_keeps_original_for_unmappe
             _reason("monthly_spend", "50", Direction.DOWN, "monthly_spend was 50, pushing down"),
             _reason("complaints_30d", "2", Direction.UP, "complaints_30d was 2, pushing up"),
         ],
-        # Unmapped feature, and a mapped feature in a direction it has no phrase for: both keep today's text.
+        # Unmapped feature, and a mapped feature in a direction it has no phrase for: both read in plain words.
         [_reason("tenure_months", "12", Direction.DOWN, "tenure_months was 12")],
         [_reason("complaints_30d", "0", Direction.DOWN, "complaints_30d down (0)")],
         [],
@@ -181,8 +181,11 @@ def test_reason_mapping_renders_phrase_for_mapped_and_keeps_original_for_unmappe
     assert df_reasons.loc[0, "reason_1"] == "Spend of 50 lowers the chance"
     assert df_reasons.loc[0, "reason_2"] == "Complaints (2) raise the chance"
     assert df_reasons.loc[0, "reason_3"] is None
-    assert df_reasons.loc[1, "reason_1"] == "tenure_months was 12"
-    assert df_reasons.loc[2, "reason_1"] == "complaints_30d down (0)"
+    assert df_reasons.loc[1, "reason_1"] == "Tenure months of 12 pushes the score down"
+    assert df_reasons.loc[2, "reason_1"] == "Complaints 30d of 0 pushes the score down"
+    assert (
+        "_" not in df_reasons.loc[1, "reason_1"] and "↑" not in df_reasons.loc[1, "reason_1"]
+    ), "no raw column name"
     for slot in ("reason_1", "reason_2", "reason_3"):
         assert df_reasons.loc[3, slot] is None, "fewer reasons than slots leaves null, not an empty string"
     assert df_reasons.loc[1, "reason_2"] is None and df_reasons.loc[1, "reason_3"] is None
@@ -200,7 +203,7 @@ def test_the_arrow_reader_and_the_row_reader_agree_and_use_the_value() -> None:
     from_arrow = extract_and_map_reasons_from_parquet(_table(rows), dictionary=dictionary)
     pd.testing.assert_frame_equal(from_rows, from_arrow)
     assert from_arrow.loc[0, "reason_1"] == "Monthly spend of 1499 pushes the score down"
-    assert from_arrow.loc[3, "reason_1"] == "not_in_the_file ↑ (x)"
+    assert from_arrow.loc[3, "reason_1"] == "Not in the file is x, which pushes the score up"
 
     buffer = io.BytesIO()
     pq.write_table(_table(rows), buffer)  # type: ignore[no-untyped-call]

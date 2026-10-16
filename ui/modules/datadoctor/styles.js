@@ -24,6 +24,7 @@ export const CSS = `
 .dds-card-t.has-icon>span{flex:1;min-width:0}
 .dds-card-t>.ds-ico{margin-top:3px;flex:none}
 .dds-tag-row{margin:0}
+.dds-todo{margin:0;font-size:var(--fs-body);color:var(--ink)}
 .dds-why,.dds-state,.dds-doubt-part{margin:0;font-size:var(--fs-small);line-height:var(--lh-small);color:var(--ink2);overflow-wrap:anywhere}
 .dds-state{display:flex;gap:6px;align-items:flex-start}
 .dds-state>.ds-ico{margin-top:3px;flex:none}

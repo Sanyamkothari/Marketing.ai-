@@ -417,6 +417,11 @@ test("why these customers: the three most common strongest reasons, counted by w
         reasonTopic("Monthly spend of 1,200 pushes the score up").text,
         "Monthly spend of … pushes the score up",
     );
+    assert.equal(
+        reasonTopic("Visits 30d of 5 pushes the score up").text,
+        "Visits 30d of … pushes the score up",
+        "only the customer's own value goes, not a number in the column's name",
+    );
     assert.equal(reasonTopic(""), null);
     const rows = [
         "history ↑ (10)",
