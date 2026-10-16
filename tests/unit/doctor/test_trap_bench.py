@@ -198,28 +198,34 @@ def test_a_person_ticks_only_what_the_answer_key_names() -> None:
     assert not bench._ticks(dataclasses.replace(case, person={}), consent)
 
 
-def test_tick_all_flatters_a_leak_the_product_leaves_unticked_and_the_person_does_not() -> None:
-    """The old driver drops the leak column by ticking it; a person who ticks nothing keeps it (and the report says
-    so on both numbers)."""
+def test_a_proven_leak_is_ticked_by_the_product_so_the_person_who_ticks_nothing_loses_it() -> None:
+    """The leak check proves `cancellation_reason` tells yes from no: the plan pre-ticks its removal, so a person
+    who ticks nothing and the tick-all driver end with the same table."""
     case = next(c for c in CASES if c.case_id == "s05_cancellation_reason")
     person = bench.run_bench([case], 1)
     ticked = bench.run_bench([case], 1, driver="tick-all")
-    assert person["driver"] == "person" and person["failed"] == 1 and person["shown_right"] == 1
+    assert person["driver"] == "person" and person["passed"] == 1 and person["failed"] == 0
     assert ticked["driver"] == "tick-all" and ticked["passed"] == 1
-    assert person["results"][0][
-        "if_fails"
-    ], "a trap that fails for a careful person says what the product should do"
     with pytest.raises(bench.BenchError, match="no driver"):
         bench.run_bench([case], 1, driver="nobody")
+
+
+def test_a_trap_that_still_fails_for_a_driver_gets_a_failure_section_in_the_report() -> None:
+    """C09 still fails for the person who skips the optional questions: the report says which driver and why."""
+    case = next(c for c in CASES if c.case_id == "c09_already_hold_product")
+    lazy = bench.run_bench([case], 1, driver="blocking-only")
+    assert lazy["failed"] == 1 and lazy["passed"] == 0
+    text = bench.render_markdown(lazy)
+    assert "Why each trap fails for the blocking-only driver" in text
+    assert "Why and what to do:" in text
 
 
 def test_the_report_carries_both_numbers(tmp_path: Path) -> None:
     case = next(c for c in CASES if c.case_id == "s05_cancellation_reason")
     both = bench.run_both([case], 1)
     text = bench.write_report(both, tmp_path / "both")[0].read_text(encoding="utf-8")
-    assert "Person-like (the number to track): passed 0 of 1" in text
+    assert "Person-like (the number to track): passed 1 of 1" in text
     assert "Tick-all (the old driver, flatters the product): passed 1 of 1" in text
-    assert "Why each trap fails for the person-like driver" in text and "PRE-TICK" in text
     alone = bench.render_markdown(bench.run_bench([case], 1, driver="tick-all"))
     assert "Driver tick-all: passed 1 of 1" in alone and "Person-like (the number to track)" not in alone
 

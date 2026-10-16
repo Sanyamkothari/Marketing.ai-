@@ -283,7 +283,10 @@ def _advised(
 def _leak_items(
     advice: Advice, upload_id: str, skip: set[str | None], never: frozenset[RecipeStepKind], now: datetime
 ) -> list[CaseItem]:
-    """A column the advisor suspects holds the answer: a proposal to remove it. Never a sure fix: the person decides.
+    """A column the advisor suspects holds the answer: a proposal to remove it.
+
+    One the leak check proves (it tells yes from no almost by itself) is the recommended default, ticked and
+    stated in the plan; the person can untick it. One only suspected stays a check for the person to tick.
 
     An ID-named column (`customer_id` repeated over monthly rows) is not proposed: removing it loses who the row is
     about; the first look still lists it among the columns that may hold the answer.
@@ -291,6 +294,7 @@ def _leak_items(
     from engine.doctor.first_look import advised_leaks
     from engine.stages.ingest import is_key_like_name
 
+    proven = set(advised_leaks(advice, proven=True))
     return [
         _fix_item(
             RecipeStep(
@@ -301,7 +305,7 @@ def _leak_items(
             ),
             title=f"Remove '{column}': it looks like it gives away the outcome (it tells yes from no almost by itself).",
             upload_id=upload_id,
-            sure=False,
+            sure=column in proven,
             never=never,
             now=now,
             counts={},

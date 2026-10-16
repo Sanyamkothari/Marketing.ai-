@@ -368,16 +368,21 @@ def _stack(
     made = title_and_payload(proposal)
     if made is not None:
         title, payload = made
+        ask = _unit_ask(stack, loaded)
+        # Pre-ticked only when the guard ran and found no stop, and no unit question is open: a stack the guard
+        # stops on, cannot check, or whose files may use different units needs the person's own yes.
+        guarded = payload.get("needs_yes") is False and ask is None
         item = _item(
             STACK_KIND,
             payload,
             title=title,
             upload_id=stack.upload_ids[0],
-            confidence=AgentConfidence.CHECK,
+            confidence=AgentConfidence.SURE if guarded else AgentConfidence.CHECK,
             evidence=(),
             now=now,
+            ticked=guarded,
         )
-        return item, _unit_ask(stack, loaded)
+        return item, ask
     # Two exports give the same customer and day different values: one question, with each answer's item.
     assert proposal.question is not None
     options: list[AskOption] = []

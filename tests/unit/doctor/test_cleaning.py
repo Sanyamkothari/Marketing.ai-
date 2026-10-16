@@ -10,7 +10,14 @@ import pandas as pd
 from pydantic import JsonValue
 
 from engine.agent.advisor import Advice
-from engine.agent.contracts import ProposalState, RecipeStep, RecipeStepKind, SessionStatus, ToolResult
+from engine.agent.contracts import (
+    AgentConfidence,
+    ProposalState,
+    RecipeStep,
+    RecipeStepKind,
+    SessionStatus,
+    ToolResult,
+)
 from engine.config import load_use_case
 from engine.doctor import visit
 from engine.doctor.case import Case
@@ -93,8 +100,10 @@ def test_treat_proposes_the_fixes_with_counts_and_stops_on_two_currencies(tmp_pa
 NOW = datetime(2026, 10, 1, tzinfo=UTC)
 
 
-def _advice_with_leaks(*columns: str) -> Advice:
-    checks: list[JsonValue] = [{"code": "LEAKAGE_SUSPECTED", "column": c} for c in columns]
+def _advice_with_leaks(*columns: str, severity: str = "warning") -> Advice:
+    checks: list[JsonValue] = [
+        {"code": "LEAKAGE_SUSPECTED", "column": c, "severity": severity} for c in columns
+    ]
     result = ToolResult(evidence_id="e1", tool="check_data", result={"checks": checks}, created_at=NOW)
     return Advice(
         status=SessionStatus.READY,
@@ -109,11 +118,34 @@ def _advice_with_leaks(*columns: str) -> Advice:
     )
 
 
-def test_a_suspected_leak_column_becomes_an_unticked_drop_item() -> None:
+def test_a_leak_only_suspected_becomes_an_unticked_drop_item() -> None:
     (item,) = _leak_items(_advice_with_leaks("refund_issued"), "u1", set(), frozenset(), NOW)
     step = RecipeStep.model_validate(item.payload["step"])
     assert (step.kind, step.column) == (RecipeStepKind.DROP_COLUMN, "refund_issued")
     assert "Remove 'refund_issued'" in item.title and item.state is ProposalState.PENDING
+
+
+def test_a_leak_the_check_proves_is_a_ticked_default_the_person_can_untick() -> None:
+    (item,) = _leak_items(
+        _advice_with_leaks("refund_issued", severity="error"), "u1", set(), frozenset(), NOW
+    )
+    assert item.state is ProposalState.ACCEPTED and item.confidence is AgentConfidence.SURE
+    (never,) = _leak_items(
+        _advice_with_leaks("refund_issued", severity="error"),
+        "u1",
+        set(),
+        frozenset({RecipeStepKind.DROP_COLUMN}),
+        NOW,
+    )
+    assert never.state is ProposalState.PENDING, "a kind the policy never ticks stays unticked"
+
+
+def test_a_proven_leak_the_person_already_kept_is_not_pre_ticked() -> None:
+    advice = _advice_with_leaks("refund_issued", severity="error")
+    check = advice.tool_results[0].result["checks"][0]  # type: ignore[index]
+    check["acknowledged"] = True  # type: ignore[index]
+    (item,) = _leak_items(advice, "u1", set(), frozenset(), NOW)
+    assert item.state is ProposalState.PENDING
 
 
 def test_an_id_named_or_skipped_leak_column_is_not_proposed_for_removal() -> None:
