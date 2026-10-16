@@ -6,6 +6,15 @@
 schema_version: 1                       # int; bumped on any breaking change of this document's shape
 
 # ---------------------------------------------------------------------------
+# campaign_speeds: minutes of model search for the Quick / Balanced / Thorough choice on Start.
+# It replaces defaults.model_search.time_limit_minutes (and a use case's own) unless the run sets one.
+# ---------------------------------------------------------------------------
+campaign_speeds:
+  quick: 5
+  balanced: 15
+  thorough: 40
+
+# ---------------------------------------------------------------------------
 # catalog: engine-level constants. NOT merged into use cases, NOT overridable.
 # ---------------------------------------------------------------------------
 catalog:

@@ -13,7 +13,7 @@ from pathlib import Path
 import pandas as pd
 from fastapi import HTTPException
 
-from api.routes.uploads import finish_upload, load_upload
+from api.routes.uploads import existing_upload_with_bytes, finish_upload, load_upload
 from engine.agent.tools import AgentToolError
 from engine.config import load_use_case
 from engine.doctor.case import Case, CaseFile, CaseItem, case_dir
@@ -74,6 +74,17 @@ def case_combiner(storage: Storage, root: Path) -> CombinePort:
         )
         first = records[ids[0]]
         data = made.frame.to_csv(index=False).encode("utf-8")
+        same = existing_upload_with_bytes(storage, first.use_case_id, made.file_name, data)
+        if same is not None:  # approved again on the same data: the table already stored is the one
+            return CaseFile(
+                upload_id=same.upload_id,
+                file_name=same.file_name,
+                intake_key=same.intake_key,
+                fingerprint=same.fingerprint_hash,
+                original_upload_id=ids[0],
+                added_at=utc_now(),
+                added_by=actor,
+            )
         upload_id = new_upload_id()
         key = upload_key(upload_id, "source.csv")
         storage.write_bytes(key, data)

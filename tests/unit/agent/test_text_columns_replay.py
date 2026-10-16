@@ -141,3 +141,12 @@ def test_an_old_recipe_file_without_the_field_still_loads() -> None:
     document = recipe().model_dump(mode="json")
     del document["text_columns"]
     assert DataRecipe.model_validate(document).text_columns == ()
+
+
+def test_preparing_the_same_data_again_reuses_the_prepared_file(storage: LocalStorage) -> None:
+    source = upload(storage)
+    config = load_use_case(USE_CASE)
+    first = write_derived_upload(storage, config, source, recipe())
+    again = write_derived_upload(storage, config, source, recipe())
+    assert again.record.upload_id == first.record.upload_id
+    assert len([k for k in storage.list_keys("uploads/") if k.endswith("/upload.json")]) == 1

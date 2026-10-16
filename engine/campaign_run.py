@@ -25,11 +25,12 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
+from pathlib import Path
 from typing import Any, Final
 
 from pydantic import AwareDatetime, Field
 
-from engine.config import PrimaryKey
+from engine.config import PrimaryKey, load_engine_config
 from engine.contracts import Artefact, RunError, RunRecord, RunState, RunStatus
 from engine.jobs import JobRunner, ReconcilingJobRunner
 from engine.runs import cancel_run, fail_run
@@ -40,7 +41,6 @@ from engine.utils.time import utc_now
 _LOGGER = get_logger(__name__)
 
 __all__ = [
-    "SPEED_MINUTES",
     "CampaignRun",
     "CampaignRunRunner",
     "CampaignRunState",
@@ -49,6 +49,7 @@ __all__ = [
     "StepActions",
     "StepError",
     "overrides_for",
+    "speed_minutes",
 ]
 
 RECORD_FILENAME: Final[str] = "campaign_run.json"
@@ -79,9 +80,6 @@ class Speed(StrEnum):
     BALANCED = "balanced"
     THOROUGH = "thorough"
 
-
-SPEED_MINUTES: Final[dict[Speed, int]] = {Speed.QUICK: 5, Speed.BALANCED: 15, Speed.THOROUGH: 40}
-"""`model_search.time_limit_minutes` for each choice: the "about N minutes" the Doctor's time question offers."""
 
 STEPS: Final[tuple[tuple[str, str], ...]] = (
     ("train", "Learning from your customers"),
@@ -178,12 +176,17 @@ class StepActions:
     """Records the campaign once; None for a goal that has no campaign."""
 
 
-def overrides_for(overrides: dict[str, Any], speed: Speed) -> dict[str, Any]:
+def speed_minutes(speed: Speed, root: Path | None = None) -> int:
+    """`model_search.time_limit_minutes` for a choice: `campaign_speeds` in `configs/engine.yaml`."""
+    return load_engine_config(root).campaign_speeds[speed.value]
+
+
+def overrides_for(overrides: dict[str, Any], speed: Speed, root: Path | None = None) -> dict[str, Any]:
     """The training run's overrides: the person's own, plus the time of the chosen speed unless they set one."""
     own = "model_search.time_limit_minutes" in overrides or (
         isinstance(overrides.get("model_search"), dict) and "time_limit_minutes" in overrides["model_search"]
     )
-    return overrides if own else {**overrides, "model_search.time_limit_minutes": SPEED_MINUTES[speed]}
+    return overrides if own else {**overrides, "model_search.time_limit_minutes": speed_minutes(speed, root)}
 
 
 def new_campaign_run_id(now: datetime | None = None) -> str:

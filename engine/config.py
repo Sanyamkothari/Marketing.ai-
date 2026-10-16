@@ -20,6 +20,7 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    PositiveInt,
     PrivateAttr,
     RootModel,
     ValidationError,
@@ -1619,7 +1620,16 @@ class IndustryConfig(_Base):
 class EngineConfig(_Base):
     schema_version: Literal[1]
     catalog: Catalog
+    campaign_speeds: dict[str, PositiveInt]
+    """Minutes of model search for each speed a person can pick (`quick`, `balanced`, `thorough`)."""
     defaults: dict[str, Any]
+
+    @field_validator("campaign_speeds")
+    @classmethod
+    def _all_speeds(cls, value: dict[str, int]) -> dict[str, int]:
+        if set(value) != {"quick", "balanced", "thorough"}:
+            raise ValueError("must give minutes for quick, balanced and thorough")
+        return value
 
 
 # ---------------------------------------------------------------------------

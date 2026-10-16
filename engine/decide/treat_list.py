@@ -1974,6 +1974,9 @@ def _score_values(scores: pd.DataFrame, config: UseCaseConfig, is_uplift: bool) 
 def _best_first(frame: pd.DataFrame, key_cols: tuple[str, ...]) -> pd.DataFrame:
     """The list sorted best first: highest score on top, a customer with no score last, ties by customer id.
 
+    A customer left out by a contact rule (`suppression_reason` filled: opted out, no channel...) comes after
+    every contactable one, each group by score, so the top of the file is always who can be contacted.
+
     The id is compared as a number when every value of that key column is one, else as text, so a tie
     never depends on the order of the uploaded file. Ids the number cannot tell apart (`7` and `007`, or ids
     longer than a float holds exactly) then go by their text.
@@ -1987,6 +1990,8 @@ def _best_first(frame: pd.DataFrame, key_cols: tuple[str, ...]) -> pd.DataFrame:
             order.append(number.to_numpy(dtype=np.float64))
     score = frame[SCORE_COLUMN].to_numpy(dtype=np.float64)
     order.append(np.where(np.isnan(score), np.inf, -score))
+    if "suppression_reason" in frame.columns:
+        order.append(frame["suppression_reason"].notna().to_numpy(dtype=np.int8))
     return frame.iloc[np.lexsort(order)].reset_index(drop=True)
 
 

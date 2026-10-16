@@ -21,6 +21,7 @@ This module imports nothing from `api.routes.runs`, which imports it.
 
 from __future__ import annotations
 
+import io
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Final
@@ -30,6 +31,7 @@ from api.routes.uploads import (
     UPLOAD_FINGERPRINT_FILENAME,
     UPLOAD_PROFILE_FILENAME,
     UPLOAD_RECORD_FILENAME,
+    existing_upload_with_bytes,
     http_error,
     ingest_http,
     load_upload_profile,
@@ -236,6 +238,13 @@ def write_derived_rows(
     )
 
 
+def _same_steps(old: DataRecipe | None, new: DataRecipe | None) -> bool:
+    """Whether two recipes (each new approval writes a new id) prepare the same way."""
+    if old is None or new is None:
+        return old is new
+    return (old.recipe_hash, old.primary_key, old.target) == (new.recipe_hash, new.primary_key, new.target)
+
+
 def _store_derived(
     storage: Storage,
     config: UseCaseConfig,
@@ -247,20 +256,24 @@ def _store_derived(
     receipt: RecipeReceipt | None,
 ) -> tuple[UploadRecord, DatasetProfile]:
     source_key = upload_key(derived_id, source_filename("parquet"))
+    buffer = io.BytesIO()
     try:
-        with storage.open_write(source_key) as sink:
-            consistent_types(frame).to_parquet(sink, index=False)
+        consistent_types(frame).to_parquet(buffer, index=False)
     except (ValueError, TypeError) as exc:  # pyarrow's ArrowInvalid and ArrowTypeError among them
         # The error text quotes values from the file, so it is logged by type only, never shown.
         _LOGGER.warning(
             "recipe.derived_write_failed upload_id=%s error=%s", source.upload_id, type(exc).__name__
         )
-        if storage.exists(source_key):
-            storage.delete(source_key)
         raise RecipeError(
             "RECIPE_STEP_INVALID",
             "The prepared file could not be saved: a column holds values of more than one kind.",
         ) from exc
+    data = buffer.getvalue()
+    same = existing_upload_with_bytes(storage, source.use_case_id, f"{source.file_name} (prepared)", data)
+    if same is not None and _same_steps(load_recipe(storage, same.upload_id), recipe):
+        # Approved again on the same data: the prepared file already stored is the one.
+        return same, load_upload_profile(storage, same.upload_id)
+    storage.write_bytes(source_key, data)
     read = ingest.read_upload(storage, source_key, file_format="parquet", row_cap=profile_row_cap(config))
     profile = ingest.profile_dataset(
         read.frame,

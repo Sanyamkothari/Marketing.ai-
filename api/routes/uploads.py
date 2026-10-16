@@ -17,6 +17,7 @@ seam to stub, without any of them reaching into the route's own globals.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 from datetime import datetime
@@ -460,6 +461,31 @@ def load_upload_profile(storage: Storage, upload_id: str) -> DatasetProfile:
         return storage.read_model(upload_key(upload_id, UPLOAD_PROFILE_FILENAME), DatasetProfile)
     except StorageError as exc:
         raise upload_not_found(upload_id) from exc
+
+
+def existing_upload_with_bytes(
+    storage: Storage, use_case_id: str, file_name: str, data: bytes
+) -> UploadRecord | None:
+    """An upload already stored with this name and exactly these bytes, or None.
+
+    Approving the same data again makes the same prepared or combined file; it is reused, never saved twice.
+    """
+    wanted = hashlib.sha256(data).hexdigest()
+    for key in storage.list_keys("uploads/"):
+        if not key.endswith(f"/{UPLOAD_RECORD_FILENAME}"):
+            continue
+        try:
+            record = storage.read_model(key, UploadRecord)
+            if (
+                record.use_case_id == use_case_id
+                and record.file_name == file_name
+                and record.file_size_bytes == len(data)
+                and hashlib.sha256(storage.read_bytes(record.source_key)).hexdigest() == wanted
+            ):
+                return record
+        except (StorageError, ValueError):
+            continue
+    return None
 
 
 def delete_upload(storage: Storage, upload_id: str) -> None:
