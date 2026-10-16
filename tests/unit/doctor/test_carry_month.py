@@ -84,10 +84,8 @@ def test_the_same_kind_of_file_next_month_asks_nothing_and_says_whose_approval_i
 
     case = months.open(2)
     assert case.case_id != first.case_id and case.state is VisitState.FOLLOW_UP
-    assert case.visit is not None and case.visit.carry_source is not None
-    assert case.visit.carry_source.case_id == first.case_id
     (approval,) = case.approvals
-    assert approval.approved_by == vs.ANALYST and approval.text_shown.startswith("Carried on from")
+    assert approval.approved_by == vs.ANALYST and approval.text_shown.startswith("Carried on from last month")
     events = CaseStore(months.storage).timeline(vs.CLIENT, case.case_id)
     (carried,) = [e for e in events if e.kind.value == "approval"]
     assert carried.details["carried"] is True and carried.details["last_month"] is True
@@ -148,3 +146,22 @@ def test_another_kind_of_table_does_not_start_from_last_months_approval(tmp_path
     case = visit.resume(vs.CLIENT, case.case_id, months.deps, actor=vs.ANALYST)
     assert case.visit is not None and case.visit.carry_source is None and not case.visit.approved_before
     assert not case.approvals
+
+
+def test_last_months_doubts_stop_counting_once_this_months_person_has_approved(tmp_path: Path) -> None:
+    months = _Months(tmp_path)
+    months.month_one()
+    case = months.open(2, rename=True)
+    assert case.visit is not None and case.visit.carry_source is not None and case.doubts
+    items, questions = active_section(case)
+    check = PlanCheck(digest="x")
+    assert (
+        carries_on(case, items, questions, check, confirmed=confirmed) is None
+    )  # last month's source: asked
+
+    case = visit.approve(
+        vs.CLIENT, case.case_id, months.deps, expected_version=case.version, actor=vs.ANALYST
+    )
+    assert case.visit is not None and case.visit.carry_source is None  # this month's own approval stands now
+    items, questions = active_section(case)
+    assert carries_on(case, items, questions, check, confirmed=confirmed) is not None

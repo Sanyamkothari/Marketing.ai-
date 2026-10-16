@@ -2503,6 +2503,8 @@ def approve(
 
 CARRIED_ON: Final[str] = "Carried on from your earlier approval:"
 """What the sentence of an approval the visit carried on by itself starts with (`engine.doctor.carry`)."""
+CARRIED_ON_LAST_MONTH: Final[str] = "Carried on from last month's approval:"
+"""The same, when the approval is another case's (last month's)."""
 
 
 def _approval(
@@ -2539,7 +2541,8 @@ def _approval(
             "APPROVAL_SENTENCE_CHANGED",
             f"What would be approved has changed since you read it. It now reads: “{shown}”",
         )
-    text = shown if carried_from is None else f"{CARRIED_ON} {shown}"
+    lead = CARRIED_ON_LAST_MONTH if carried_from is not None and "@" in carried_from else CARRIED_ON
+    text = shown if carried_from is None else f"{lead} {shown}"
     goal = active_goal(case)
     accepted = [i for i in items if i.state is ProposalState.ACCEPTED]
     brief = stored_brief(run.deps.storage, case)
@@ -2586,6 +2589,7 @@ def _approval(
             "approved_before": tuple(
                 dict.fromkeys((*visit.approved_before, *approved_marks(items, questions)))
             ),
+            "carry_source": None,  # last month's approval only starts the case; this approval is its own now
         },
         within=_recorded(deps, DATA_PRESCRIPTION_APPROVED, actor, body, approval),
         carried=carried_from is not None,
