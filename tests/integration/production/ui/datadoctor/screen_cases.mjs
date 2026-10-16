@@ -84,8 +84,9 @@ test("a question that offers its own I don't know draws it once, as the last ans
   const s = await show("question");
   const q = s.case.questions.find((x) => x.code === "KEY_AMBIGUOUS");
   const card = $(`[data-dds-question="${q.question_id}"]`);
+  // a unique spend column no longer competes with the ID-named ones for "names each row" (visit._id_named)
   const labels = [...card.querySelectorAll("[data-dds-answer]")].map((b) => b.textContent.trim());
-  assert.deepEqual(labels, ["customer_id", "account_no", "monthly_spend", "I don't know"]);
+  assert.deepEqual(labels, ["customer_id", "account_no", "I don't know"]);
   assert.equal(card.querySelector("[data-dds-dont-know]").dataset.ddsAnswer, "none");
   assert.ok(card.textContent.includes("Needed to go on"), "a blocking question says so");
   assert.equal($("[data-dds-verdict]").dataset.ddsVerdict, "needs_answers");
