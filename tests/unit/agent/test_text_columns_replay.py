@@ -147,6 +147,27 @@ def test_preparing_the_same_data_again_reuses_the_prepared_file(storage: LocalSt
     source = upload(storage)
     config = load_use_case(USE_CASE)
     first = write_derived_upload(storage, config, source, recipe())
-    again = write_derived_upload(storage, config, source, recipe())
+    again = write_derived_upload(storage, config, source, recipe().model_copy(update={"recipe_id": "rc-2"}))
     assert again.record.upload_id == first.record.upload_id
-    assert len([k for k in storage.list_keys("uploads/") if k.endswith("/upload.json")]) == 1
+    assert again.recipe.recipe_id == "rc-1"  # the reused upload's own recipe, not the new one
+    assert again.receipt.derived_upload_id == first.record.upload_id
+    assert len(stored_uploads(storage)) == 1
+
+
+def test_a_different_recipe_or_mode_makes_a_new_prepared_file(storage: LocalStorage) -> None:
+    source = upload(storage)
+    config = load_use_case(USE_CASE)
+    first = write_derived_upload(storage, config, source, recipe())
+    other_levels = recipe().model_copy(update={"recipe_id": "rc-2", "max_failure_pct": 1.0})
+    assert (
+        write_derived_upload(storage, config, source, other_levels).record.upload_id != first.record.upload_id
+    )
+    as_train = source.model_copy(update={"mode": RunMode.TRAIN})
+    assert (
+        write_derived_upload(storage, config, as_train, recipe()).record.upload_id != first.record.upload_id
+    )
+    assert len(stored_uploads(storage)) == 3
+
+
+def stored_uploads(storage: LocalStorage) -> list[str]:
+    return [k for k in storage.list_keys("uploads/") if k.endswith("/upload.json")]

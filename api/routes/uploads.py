@@ -464,9 +464,9 @@ def load_upload_profile(storage: Storage, upload_id: str) -> DatasetProfile:
 
 
 def existing_upload_with_bytes(
-    storage: Storage, use_case_id: str, file_name: str, data: bytes
+    storage: Storage, use_case_id: str, mode: RunMode, file_name: str, data: bytes
 ) -> UploadRecord | None:
-    """An upload already stored with this name and exactly these bytes, or None.
+    """An upload already stored for this use case and mode with this name and exactly these bytes, or None.
 
     Approving the same data again makes the same prepared or combined file; it is reused, never saved twice.
     """
@@ -478,6 +478,7 @@ def existing_upload_with_bytes(
             record = storage.read_model(key, UploadRecord)
             if (
                 record.use_case_id == use_case_id
+                and record.mode is mode
                 and record.file_name == file_name
                 and record.file_size_bytes == len(data)
                 and hashlib.sha256(storage.read_bytes(record.source_key)).hexdigest() == wanted

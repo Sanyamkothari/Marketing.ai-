@@ -74,7 +74,7 @@ def case_combiner(storage: Storage, root: Path) -> CombinePort:
         )
         first = records[ids[0]]
         data = made.frame.to_csv(index=False).encode("utf-8")
-        same = existing_upload_with_bytes(storage, first.use_case_id, made.file_name, data)
+        same = existing_upload_with_bytes(storage, first.use_case_id, first.mode, made.file_name, data)
         if same is not None:  # approved again on the same data: the table already stored is the one
             return CaseFile(
                 upload_id=same.upload_id,

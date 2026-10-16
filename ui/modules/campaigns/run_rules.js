@@ -1,5 +1,5 @@
 // What a person chooses when they start a campaign, and how a campaign run is told back to them. Pure: no DOM,
-// no fetch. The minutes are the server's (`SPEED_MINUTES` in `engine/campaign_run.py`).
+// no fetch. The minutes below must match `campaign_speeds` in `configs/engine.yaml`, the server's.
 
 import { COST_NEEDS_CONFIRMATION } from "../../cost.js";
 import { esc, fmtInt } from "../../dom.js";

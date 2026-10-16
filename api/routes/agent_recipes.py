@@ -217,7 +217,11 @@ def write_derived_upload(
     record, profile = _store_derived(
         storage, config, source, rows, derived_id=derived_id, recipe=recipe, receipt=run.receipt
     )
-    return DerivedUpload(record=record, profile=profile, recipe=recipe, receipt=run.receipt)
+    receipt = run.receipt
+    if record.upload_id != derived_id:  # an upload stored earlier was reused: its own recipe and receipt
+        recipe = load_recipe(storage, record.upload_id) or recipe
+        receipt = load_receipt(storage, record.upload_id) or receipt
+    return DerivedUpload(record=record, profile=profile, recipe=recipe, receipt=receipt)
 
 
 def write_derived_rows(
@@ -236,13 +240,6 @@ def write_derived_rows(
     return _store_derived(
         storage, config, source, rows, derived_id=new_upload_id(), recipe=recipe, receipt=receipt
     )
-
-
-def _same_steps(old: DataRecipe | None, new: DataRecipe | None) -> bool:
-    """Whether two recipes (each new approval writes a new id) prepare the same way."""
-    if old is None or new is None:
-        return old is new
-    return (old.recipe_hash, old.primary_key, old.target) == (new.recipe_hash, new.primary_key, new.target)
 
 
 def _store_derived(
@@ -269,10 +266,14 @@ def _store_derived(
             "The prepared file could not be saved: a column holds values of more than one kind.",
         ) from exc
     data = buffer.getvalue()
-    same = existing_upload_with_bytes(storage, source.use_case_id, f"{source.file_name} (prepared)", data)
-    if same is not None and _same_steps(load_recipe(storage, same.upload_id), recipe):
-        # Approved again on the same data: the prepared file already stored is the one.
-        return same, load_upload_profile(storage, same.upload_id)
+    same = existing_upload_with_bytes(
+        storage, source.use_case_id, source.mode, f"{source.file_name} (prepared)", data
+    )
+    if same is not None:
+        old = load_recipe(storage, same.upload_id)
+        if old.prepares_like(recipe) if old is not None and recipe is not None else old is recipe:
+            # Approved again on the same data: the prepared file already stored is the one.
+            return same, load_upload_profile(storage, same.upload_id)
     storage.write_bytes(source_key, data)
     read = ingest.read_upload(storage, source_key, file_format="parquet", row_cap=profile_row_cap(config))
     profile = ingest.profile_dataset(
