@@ -1910,6 +1910,9 @@ def _review(run: _Run, case: Case, brief: GoalBrief | None, step: _Step) -> bool
     )
     step.model_calls += found.model_calls
     step.tokens += found.tokens
+    step.doubts.extend(found.doubts)  # grounded when the review made them (`express_doubt`)
+    for request in found.requests:
+        _add_request(step, request)
     _settle_asks(run, case, step, found.asks)
     if found.model_calls and found.summary:
         entry = CaseChatEntry(role="agent", text=found.summary, at=run.deps.clock(), sent=found.sent)
