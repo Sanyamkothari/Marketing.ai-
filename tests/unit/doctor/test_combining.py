@@ -112,27 +112,36 @@ class _Day:
         )
 
 
+def _tick_and_approve(day: _Day, case: Case, item: CaseItem) -> Case:
+    """A change that loses nobody is ticked like any other; it asks no yes of its own."""
+    case = visit.decide(
+        vs.CLIENT, case.case_id, item.item_id, True, day.deps, expected_version=case.version, actor=vs.ANALYST
+    )
+    return visit.approve(vs.CLIENT, case.case_id, day.deps, expected_version=case.version, actor=vs.ANALYST)
+
+
 def _one(case: Case, kind: str) -> CaseItem:
     (item,) = [i for i in case.items if i.kind == kind]
     return item
 
 
-def test_a_customer_list_and_its_orders_are_one_change_with_counts_that_needs_its_own_yes(
+def test_a_customer_list_and_its_orders_are_one_change_with_counts_that_loses_no_customer(
     tmp_path: Path,
 ) -> None:
     day = _Day(tmp_path, {"up-c": ("customers.csv", _customers()), "up-o": ("orders.csv", _orders())})
     case = day.open()
     item = _one(case, "build_dataset")
 
-    # One item, in plain words, with the counts; it is the person's to tick, and needs its own yes.
+    # One item, in plain words, with the counts; it is the person's to tick. Every customer stays, so no own yes.
     assert item.state is ProposalState.PENDING
-    assert "270 of 300 customers matched" in item.title
+    assert "30 customers have no orders; they stay, with 0 orders" in item.title
+    assert "of 300 customers matched" not in item.title
     assert "30 of 1,230 rows in orders.csv belong to someone who is not in customers.csv" in item.title
     assert "customers.csv keeps its own IDs" in item.title
-    assert approve_class_of(item.kind, item.payload) is not None
+    assert approve_class_of(item.kind, item.payload) is None
     assert (item.payload["customers"], item.payload["customers_matched"]) == (300, 270)
 
-    case = day.agree_and_approve(case, item)
+    case = _tick_and_approve(day, case, item)
 
     # The table that goes on is the new one: one row per customer, the list's own IDs, the orders counted per customer.
     (only,) = case.files

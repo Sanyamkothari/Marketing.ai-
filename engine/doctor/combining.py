@@ -6,8 +6,9 @@ One detector (`engine.doctor.visit.DetectorPort`) reads how the case's files fit
 * **A join** when a customer list and the logs about its customers (orders, bills, tickets) meet on a confident
   customer column: one `build_dataset` item, never ticked for the person, that combines them into one row per
   customer. It says in plain words how many customers were matched ("7,950 of 8,214 customers matched"), how many
-  log rows belong to nobody on the list, and how the IDs are made to meet (`C-00123` against `123`). It always
-  needs its own yes, because it replaces the files with one table.
+  log rows belong to nobody on the list, and how the IDs are made to meet (`C-00123` against `123`). A customer with
+  no log rows stays, with 0; when nobody is lost it asks no yes of its own, otherwise (or when it cannot be counted)
+  it needs one, because it replaces the files with one table.
 * **A stack** when files are the same report for different months: one `stack_files` item. A row two exports both
   hold is counted once, and the item says how many.
 * **A question, not a proposal**, when the customer column is not clear: a log whose customers barely meet the
@@ -23,6 +24,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import replace
 from datetime import datetime
+from pathlib import Path
 from typing import TYPE_CHECKING, Final
 
 from pydantic import JsonValue, ValidationError
@@ -108,6 +110,12 @@ def _propose(
 def _names(ids: tuple[str, ...], loaded: dict[str, LoadedFile]) -> str:
     names = [loaded[u].file_name or u for u in ids]
     return names[0] if len(names) == 1 else f"{', '.join(names[:-1])} and {names[-1]}"
+
+
+def _log_words(ids: tuple[str, ...], loaded: dict[str, LoadedFile]) -> tuple[str, str]:
+    """What the logs hold, in the person's words from their file names: ("orders or payments", "orders and payments")."""
+    words = list(dict.fromkeys(Path(loaded[u].file_name or u).stem.replace("_", " ") for u in ids))
+    return " or ".join(words), " and ".join(words)
 
 
 def _sampled(diagnosis: Diagnosis, loaded: dict[str, LoadedFile], ids: tuple[str, ...]) -> str:
@@ -219,10 +227,40 @@ def _join_item(
     ids = (entity.upload_ids[0], *log_ids)
     lists = _names(entity.upload_ids, loaded)
     logs_named = _names(log_ids, loaded)
-    title = (
-        f"Combine {lists} with {logs_named} into one table with one row per customer: "
-        f"{matched:,} of {total:,} customers matched."
-    )
+    payload: dict[str, JsonValue] = {
+        "upload_ids": list(ids),
+        "rules": rules_digest(plan),
+        "customers": total,
+        "customers_matched": matched,
+        "log_rows": rows,
+        "log_rows_left_out": left_out,
+    }
+    nobody_lost = False
+    try:  # what the combined table would look like, counted by code on the rows the visit read
+        table, vault = _one_row_per_customer(plan, files, new_salt())
+        receipt, findings = guard_join(plan, files, _real_keys(table, vault))
+        payload["receipt"] = receipt.model_dump(mode="json")
+        payload["findings"] = [f.model_dump(mode="json") for f in findings]
+        payload["needs_yes"] = any(f.level == "stop" for f in findings)
+        nobody_lost = receipt.keys_lost == 0 and not payload["needs_yes"]
+    except (
+        AgentToolError,
+        BuildDriveError,
+        WorkingKeyError,
+    ):  # no dates in the logs: no receipt, the join is still offered
+        pass
+    title = f"Combine {lists} with {logs_named} into one table with one row per customer:"
+    if nobody_lost:  # a join onto the customer list keeps every customer; one with no log rows stays with 0
+        kind = _log_words(log_ids, loaded)
+        title += (
+            f" {total - matched:,} customers have no {kind[0]}; they stay, with 0 {kind[1]}."
+            if total > matched
+            else f" all {total:,} customers have {kind[1]}."
+        )
+        # Every customer stays: this is no loss, so it needs no yes of its own (`protocol.approve_class_of`).
+        payload["rows_in"], payload["rows_out"] = total, total
+    else:
+        title += f" {matched:,} of {total:,} customers matched."
     if left_out:
         title += (
             f" {left_out:,} of {rows:,} rows in {logs_named} belong to someone who is not in {lists} "
@@ -239,27 +277,7 @@ def _join_item(
     if twice:
         title += f" {twice:,} rows that two exports both hold are counted once."
     title += _sampled(diagnosis, loaded, ids)
-    payload: dict[str, JsonValue] = {
-        "upload_ids": list(ids),
-        "rules": rules_digest(plan),
-        "customers": total,
-        "customers_matched": matched,
-        "log_rows": rows,
-        "log_rows_left_out": left_out,
-    }
-    try:  # what the combined table would look like, counted by code on the rows the visit read
-        table, vault = _one_row_per_customer(plan, files, new_salt())
-        receipt, findings = guard_join(plan, files, _real_keys(table, vault))
-        payload["receipt"] = receipt.model_dump(mode="json")
-        payload["findings"] = [f.model_dump(mode="json") for f in findings]
-        payload["needs_yes"] = any(f.level == "stop" for f in findings)
-    except (
-        AgentToolError,
-        BuildDriveError,
-        WorkingKeyError,
-    ):  # no dates in the logs: no receipt, the join is still offered
-        pass
-    # No `rows_in` / `rows_out`: a join always needs its own yes, however few rows it leaves out.
+    # No `rows_in` / `rows_out` unless nobody is lost: a join that cannot be counted needs its own yes.
     return _item(
         JOIN_KIND,
         payload,

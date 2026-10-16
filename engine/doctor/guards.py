@@ -27,6 +27,7 @@ frames and counts; it has no state a step can reach, and nothing in it is offere
 from __future__ import annotations
 
 import math
+import re
 from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Final, Literal
@@ -60,6 +61,7 @@ __all__ = [
     "frame_hash",
     "infer_key",
     "make_receipt",
+    "names_a_log_row",
     "plan_findings",
     "receipt_findings",
     "run_guarded",
@@ -245,6 +247,19 @@ def infer_key(before: pd.DataFrame, after: pd.DataFrame) -> str | None:
     return None
 
 
+_LOG_ROW_ID: Final[re.Pattern[str]] = re.compile(
+    r"^(order|tag|call|payment|pay|ticket|complaint|log|record|event|txn|transaction|invoice|bill|visit|session|"
+    r"click|message|msg|entry|snapshot|usage|claim)s?[_\s-]?(id|no|num|number|code|ref|key)$",
+    re.I,
+)
+
+
+def names_a_log_row(column: str | None) -> bool:
+    """Whether the ID column names a row of a log (`order_id`, `payment_id`), not a customer. The rows of such a
+    side table are not customers: rows it leaves out are said as rows of that file."""
+    return column is not None and _LOG_ROW_ID.search(column.strip()) is not None
+
+
 def _numeric(frame: pd.DataFrame, column: str) -> pd.Series[Any] | None:
     found = next((c for c in frame.columns if str(c) == column), None)
     if found is None:
@@ -314,16 +329,18 @@ def make_receipt(
     target: str | None = None,
     positive: object | None = None,
     stacking: bool = False,
+    infer: bool = True,
 ) -> Receipt:
     """The receipt for a step that read `inputs` (the first one is the base) and made `output`.
 
     When `stacking`, every input is part of the base (a stack puts the files under each other), and the totals
-    are of all inputs together.
+    are of all inputs together. With `infer` false and no `key`, customers are not counted at all (a log's own
+    row ID names a row of the log, not a customer).
     """
     frames = list(inputs.values())
     rows_in = {name: len(frame) for name, frame in inputs.items()}
     first = frames[0]
-    key = key or infer_key(first, output)
+    key = key or (infer_key(first, output) if infer else None)
     base_frames = frames if stacking else [next((f for f in frames if _has(f, key)), first)] if key else []
     receipt: dict[str, Any] = {
         "order": order,
@@ -390,8 +407,12 @@ def _pct(part: int, whole: int) -> str:
     return f"{part / whole * 100:.1f}%" if whole else "0%"
 
 
-def receipt_findings(receipt: Receipt, *, one_row_per_key: bool = True) -> list[Finding]:
-    """What the guards say about one step. `one_row_per_key` is false for a stack (a customer may repeat)."""
+def receipt_findings(
+    receipt: Receipt, *, one_row_per_key: bool = True, side_table: str | None = None
+) -> list[Finding]:
+    """What the guards say about one step. `one_row_per_key` is false for a stack (a customer may repeat).
+    `side_table` is the file's name when its rows are not customers (orders, payments): rows left out are
+    then said as rows of that file."""
     n = receipt.order
     found: list[Finding] = []
     first_rows = next(iter(receipt.rows_in.values()), 0)
@@ -417,7 +438,20 @@ def receipt_findings(receipt: Receipt, *, one_row_per_key: bool = True) -> list[
                 f"{', '.join(receipt.empty_columns[:5])}.",
             )
         )
-    if receipt.keys_in is None:
+    if side_table is not None:
+        left_out = max(0, first_rows - receipt.rows_out)
+        if left_out:
+            found.append(
+                Finding(
+                    level="flag",
+                    code="STEP_LEAVES_OUT_ROWS",
+                    order=n,
+                    count=left_out,
+                    message=f"Step {n} leaves out {left_out:,} of {first_rows:,} rows of {side_table} "
+                    f"({_pct(left_out, first_rows)}).",
+                )
+            )
+    elif receipt.keys_in is None:
         found.append(
             Finding(
                 level="flag",
@@ -427,7 +461,7 @@ def receipt_findings(receipt: Receipt, *, one_row_per_key: bool = True) -> list[
                 "counted. It needs a person's yes.",
             )
         )
-    else:
+    if receipt.keys_in is not None:
         found.extend(_key_findings(receipt, one_row_per_key=one_row_per_key))
     moved = [t for t in receipt.totals if not t.kept]
     if moved:
@@ -610,12 +644,14 @@ def _naming(orders: Sequence[int]) -> str:
     return ", ".join(f"step {o}" for o in orders)
 
 
-def plan_findings(ledger: Ledger | None) -> list[Finding]:
-    """The plan-level gate: over 5% lost, or the outcome rate moved over a point, needs a yes naming the steps."""
+def plan_findings(ledger: Ledger | None, *, side_table: bool = False) -> list[Finding]:
+    """The plan-level gate: over 5% lost, or the outcome rate moved over a point, needs a yes naming the steps.
+    The loss gate is about customers: a log's rows (`side_table`) are said per step, they do not stop the plan.
+    """
     if ledger is None:
         return []
     found: list[Finding] = []
-    if ledger.lost_pct > LOSS_STOP_PCT:
+    if ledger.lost_pct > LOSS_STOP_PCT and not side_table:
         by = ", ".join(f"{k}: {v:,}" for k, v in ledger.lost_by_outcome.items())
         found.append(
             Finding(
@@ -810,13 +846,18 @@ def run_guarded(
     expectations: Mapping[int, Expectations] | None = None,
     book: ExpectationBook | None = None,
     twice: bool = True,
+    source_name: str | None = None,
     **recipe_args: Any,
 ) -> GuardedRun:
     """`run_recipe`, with a receipt for every step, the plan's ledger and the findings; run twice by default.
 
+    A table whose `primary_key` names the rows of a log (:func:`names_a_log_row`: `order_id`, `payment_id`) is a
+    side table: its rows are counted as rows of `source_name`, never as customers.
+
     `expectations` (by step order) are locked in `book` before the plan runs. Raises what `run_recipe` raises.
     """
     book = book if book is not None else ExpectationBook()
+    side_table = (source_name or "this file") if names_a_log_row(primary_key) else None
     findings: list[Finding] = []
     for order, exp in (expectations or {}).items():
         findings.extend(book.declare(order, exp))
@@ -832,9 +873,10 @@ def run_guarded(
                     step.kind.value,
                     _inputs_of(step, before, tables),
                     after,
-                    key=primary_key,
+                    key=None if side_table else primary_key,
                     target=target,
                     positive=positive,
+                    infer=side_table is None,
                 )
             )
             hashes.append(frame_hash(after))
@@ -867,11 +909,11 @@ def run_guarded(
             )
     outcomes: list[ExpectationOutcome] = []
     for receipt in receipts:
-        findings.extend(receipt_findings(receipt, one_row_per_key=True))
+        findings.extend(receipt_findings(receipt, one_row_per_key=True, side_table=side_table))
         if receipt.order in (expectations or {}):
             outcome = book.check(receipt.order, receipt)
             outcomes.append(outcome)
             findings.extend(outcome.findings)
     ledger = build_ledger(receipts)
-    findings.extend(plan_findings(ledger))
+    findings.extend(plan_findings(ledger, side_table=side_table is not None))
     return GuardedRun(run, tuple(receipts), ledger, tuple(findings), tuple(outcomes))
