@@ -15,7 +15,7 @@ A sidebar on the left has five places. Below 900 pixels wide it folds behind a *
 | Place | What you do there |
 |---|---|
 | **Overview** | See what needs your attention, the value your campaigns have proven so far and your live campaigns. Start a campaign with **+ New campaign**. On your first visit a short **Getting started** list ticks itself off as you connect your data, start a campaign and add its results. |
-| **Campaigns** | See every campaign with its goal, status, how many customers it reached and its result. Open one to download its contact list or add its results. |
+| **Campaigns** | See every campaign with its goal, status, the size of its contact list and its result. Open one to download its contact list or add its results. |
 | **Data** | See where your customer data comes from, whether each source is ready to use, and when it last brought in data. **Check my data** looks at your files before you use them. |
 | **Reports** | Check a campaign another tool ran, and read your models' reports. |
 | **Settings** | Your team and roles, the AI service, privacy and consent, costs, and the tools you use less often. |

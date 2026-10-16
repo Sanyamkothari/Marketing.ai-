@@ -100,7 +100,7 @@ export function campaignPageHtml({
       names.long ? `<p class="desc dc-label">${userText(names.long)}</p>` : ""
     }<p class="desc">Sent on ${esc(fmtDate(campaign.treatment_start))}${listLink}. ${esc(
       fmtInt(counts.intended_treated || 0),
-    )} contacted and ${esc(fmtInt(counts.intended_holdout || 0))} held back are compared.</p>`,
+    )} eligible and ${esc(fmtInt(counts.intended_holdout || 0))} held back are compared.</p>`,
   );
   const plan = view.plan || (plans && plans.plan) || null;
   const card = planCardHtml({

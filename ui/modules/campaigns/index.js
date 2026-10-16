@@ -150,10 +150,12 @@ export function readyProofIds(summaries) {
 export async function loadListEntries() {
   const campaigns = ((await getCampaigns()) || {}).campaigns || [];
   const measured = campaigns.some((c) => c.status === "measured");
-  const [views, summaries, names] = await Promise.all([
+  const [views, summaries, names, lists] = await Promise.all([
     mapLimit(campaigns, 6, (c) => getCampaign(c.campaign_id).catch(() => null)),
     measured ? getProofs().catch(() => null) : null,
     apiGoalNames(campaigns),
+    // The contact list's own size for each campaign made here (asked once per run, never rejects).
+    mapLimit(campaigns, 6, (c) => (hasContactList(c) ? loadContactList(runIdOf(c)).then((a) => a.summary) : null)),
   ]);
   const ready = readyProofIds(summaries);
   const proofs = await mapLimit(campaigns, 6, (c) =>
@@ -165,6 +167,7 @@ export async function loadListEntries() {
       campaign,
       view,
       proof: proofs[i] || null,
+      summary: lists[i] || null,
       goal: goalName(campaign.use_case_id, names[campaign.use_case_id]),
       status: campaignStatus({ campaign, plan: view && view.plan, report: view && view.report }),
     };

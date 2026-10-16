@@ -2,7 +2,7 @@
 
    The builders' markup is parsed into a real document and read the way a browser and a screen reader read it:
    - the list: no breadcrumb (a top-level place), the status chip of components.js in each state's tone with its
-     icon hidden and its word read, the goal as a quiet tag, the contacted count in a number column, and the result as
+     icon hidden and its word read, the goal as a quiet tag, the size of its contact list in a number column, and the result as
      the net value with its likely range (a bar hidden from screen readers, the words beside it) once measured;
    - the campaign page: the name, the status chip and the view's ONE primary action in the header, underline tabs
      (role=tablist, aria-selected, the Technical tab marked for M180) over a tab panel named by its tab, the KPI row
@@ -148,7 +148,7 @@ const pageModel = (over = {}) => ({
 });
 
 test("the campaign page: the name, its status chip and the view's one primary action in the header, over underline tabs", () => {
-  draw(views.campaignPageHtml(pageModel()));
+  draw(views.campaignPageHtml(pageModel({ summary: null })));
   assert.equal($$("h1").length, 1);
   assert.equal($(".head .cp-title [data-status]").textContent, "Live");
   assert.equal($(".head .cp-title [data-status]").dataset.tone, "info");
@@ -311,4 +311,25 @@ test("a Draft says it is not sent and shows no sent date", () => {
   assert.match($("[data-tile-contacted]").textContent, /To contact/);
   assert.match($("[data-tile-contacted]").textContent, /planned for/);
   assert.doesNotMatch($("[data-tile-contacted]").textContent, /sent the campaign/);
+});
+
+test("contact count: the list and the page show the contact list's size; the eligible number is only in the comparison detail", () => {
+  // 900 eligible customers are not held back, but the list is only the best 403 of them.
+  draw(views.campaignsListHtml({ entries: [entry({ ...base, campaign_id: "c_1" }, STATUS.live, { summary: { treat_rows: 403, total_rows: 1000 } })] }));
+  assert.equal($("thead th:nth-child(4)").textContent, "Contact list");
+  assert.equal($("tbody td:nth-child(4)").textContent, "403");
+  // A list that cannot be read shows no number, never the eligible one.
+  draw(views.campaignsListHtml({ entries: [entry({ ...base, campaign_id: "c_2" }, STATUS.live)] }));
+  assert.equal($("tbody td:nth-child(4)").textContent, "—");
+  // A campaign another tool sent has no list of ours: its reported count stands.
+  draw(views.campaignsListHtml({ entries: [entry({ ...base, kind: "external", run_ids: [] }, STATUS.live)] }));
+  assert.equal($("tbody td:nth-child(4)").textContent, "900");
+  // The page: the tile is the list size; the comparison tile says "eligible".
+  draw(views.campaignPageHtml(pageModel({ summary: { treat_rows: 403, total_rows: 1000 } })));
+  assert.equal($("[data-tile-contacted] .stat-value").textContent, "403");
+  assert.match($("[data-tile-comparison] .stat-caption").textContent, /^900 eligible, 10% kept back for comparison\./);
+  assert.match($(".desc").textContent, /sent on .* to 403 customers\./);
+  // An unreadable list drops the "to N customers" clause instead of showing a dash.
+  draw(views.campaignPageHtml(pageModel({ summary: null })));
+  assert.doesNotMatch($(".desc").textContent, /—|to \d/);
 });
