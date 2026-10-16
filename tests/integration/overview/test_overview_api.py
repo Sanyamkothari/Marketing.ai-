@@ -244,3 +244,14 @@ def test_the_route_is_viewer_and_a_signed_out_caller_is_refused(tmp_path: Path) 
     seen = client.get("/overview", headers=bearer(app, viewer))
     assert seen.status_code == 200, seen.text
     assert seen.json()["checklist"] == {"connected": False, "campaign": False, "results": False}
+
+
+def test_a_campaign_with_no_name_is_not_called_sent_before_anything_went_out(
+    config_root: Path, tmp_path: Path
+) -> None:
+    storage = LocalStorage(tmp_path / "data")
+    propensity_run(storage, RUN_BANDED, rows=4_000)
+    with TestClient(create_app(config_root=config_root, data_dir=tmp_path / "data")) as client:
+        created = ok(client.post("/campaigns", json={"run_id": RUN_BANDED}), 201)
+    name = str(created["campaign"]["name"])
+    assert "sent" not in name, name
