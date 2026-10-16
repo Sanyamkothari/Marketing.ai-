@@ -205,6 +205,8 @@ jobs:
       # This is the step that catches a missing system library - libgomp1, say - before a deployment
       # does. Running the suite on the runner cannot catch it: the runner has a full distribution and
       # the image does not.
+      # The suite inside the image runs on every core (`-n auto`, set by the Makefile), like the main
+      # job's: serially it took ~52 minutes of this job's 60 (measured, run #363).
       - name: make image-test
         run: make image-test
 

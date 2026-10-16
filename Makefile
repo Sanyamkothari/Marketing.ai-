@@ -116,9 +116,12 @@ library-test: ## the public dataset library's tests: five small real trainings o
 image: ## build the api image (override PYTHON_BASE/RUNTIME_APT_PACKAGES for an unusual base)
 	docker build --target api --build-arg PYTHON_BASE=$(PYTHON_BASE) -t $(IMAGE):$(IMAGE_TAG) .
 
+# `-n auto` (pytest-xdist, one worker per core) as in CI's `make test` step: the suite is ~15,800 tests
+# and ran serially in ~52 minutes inside the image, which with the build left no room in the job's 60.
+IMAGE_TEST_ADDOPTS ?= -n auto
 image-test: ## build the test stage and run the fast suite INSIDE the image
 	docker build --target test --build-arg PYTHON_BASE=$(PYTHON_BASE) -t $(IMAGE):test .
-	docker run --rm $(IMAGE):test
+	docker run --rm -e PYTEST_ADDOPTS="$(IMAGE_TEST_ADDOPTS)" $(IMAGE):test
 
 image-size: ## print the image size and fail if it exceeds MAX_IMAGE_BYTES (default 4 GiB)
 	$(BIN)/python -m scripts.check_image_size --ref $(IMAGE):$(IMAGE_TAG)
