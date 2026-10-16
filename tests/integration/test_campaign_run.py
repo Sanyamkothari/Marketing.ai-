@@ -28,7 +28,7 @@ from engine.campaign_run import (
     speed_minutes,
 )
 from engine.config import DEFAULT_CONFIG_ROOT
-from engine.contracts import RunRecord, RunState, RunStatus
+from engine.contracts import FeatureSchema, RunRecord, RunState, RunStatus
 from engine.jobs import NullJobRunner
 from engine.storage import LocalStorage, run_key
 from tests.fixtures.make_data import CLEAN, GenerationSpec, generate
@@ -163,3 +163,118 @@ def test_the_minutes_of_each_speed_come_from_engine_yaml(tmp_path: Path) -> None
     assert speed_minutes(Speed.QUICK, tmp_path) == 2
     assert speed_minutes(Speed.QUICK) == 5
     assert overrides_for({}, Speed.QUICK, tmp_path) == {"model_search.time_limit_minutes": 2}
+
+
+@pytest.fixture(scope="module")
+def current_model(client: TestClient, finished: dict[str, Any]) -> str:
+    """Month one's list was approved: its model is the current one, the model next month can reuse."""
+    model_id = str(finished["record"]["model_version_id"])
+    approved = client.post(f"/models/{model_id}/approve", json={"approved_by": "an approver"})
+    assert approved.status_code == 200, approved.text
+    return model_id
+
+
+def _upload_train(client: TestClient, frame: Any, name: str) -> str:
+    uploaded = client.post(
+        "/uploads",
+        files={"file": (name, frame.to_csv(index=False, lineterminator="\n").encode(), "text/csv")},
+        data={"use_case": USE_CASE, "mode": "train"},
+    )
+    assert uploaded.status_code == 201, uploaded.text
+    return str(uploaded.json()["upload_id"])
+
+
+def test_next_month_the_current_model_scores_the_new_file_without_learning(
+    client: TestClient, current_model: str
+) -> None:
+    model_id = current_model
+    upload_id = _upload_train(
+        client, generate(GenerationSpec(USE_CASE, rows=1_500, variant=CLEAN, seed=20261016)), "month2.csv"
+    )
+    offer = client.get("/campaign-runs/model-offer", params={"use_case": USE_CASE, "upload_id": upload_id})
+    assert offer.status_code == 200, offer.text
+    assert offer.json()["model_version_id"] == model_id and offer.json()["usable"] is True
+    created = client.post(
+        "/campaign-runs",
+        json={
+            "use_case": USE_CASE,
+            "upload_id": upload_id,
+            "primary_key": "customerID",
+            "model_version_id": model_id,
+        },
+    )
+    assert created.status_code == 202, created.text
+    run_id = created.json()["record"]["campaign_run_id"]
+    deadline = time.monotonic() + TIMEOUT_S
+    while (view := client.get(f"/campaign-runs/{run_id}").json())["record"]["state"] == "running":
+        assert time.monotonic() < deadline, view
+        time.sleep(1)
+    record = view["record"]
+    assert record["state"] == "done", record["error"]
+    assert [s["state"] for s in record["steps"]] == ["skipped", "done", "done", "done"]
+    assert record["train_run_id"] is None and record["model_version_id"] == model_id
+    score = client.get(f"/runs/{record['score_run_id']}").json()["run"]
+    assert score["mode"] == "score" and score["model_version_id"] == model_id
+    assert (
+        score["upload_id"] != upload_id and record["campaign_id"]
+    )  # the same list and campaign as a normal run
+
+
+def test_a_new_file_the_current_model_cannot_read_disables_reuse_and_is_refused(
+    client: TestClient, data_dir: Path, current_model: str
+) -> None:
+    versions = client.get("/models", params={"use_case": USE_CASE}).json()["versions"]
+    version = next(v["version"] for v in versions if v["version"]["model_id"] == current_model)
+    needed = next(
+        c.name
+        for c in LocalStorage(data_dir).read_model(version["schema_key"], FeatureSchema).columns
+        if c.required
+    )
+    frame = generate(GenerationSpec(USE_CASE, rows=1_500, variant=CLEAN, seed=20261017)).drop(
+        columns=[needed]
+    )
+    upload_id = _upload_train(client, frame, "renamed.csv")
+    offer = client.get(
+        "/campaign-runs/model-offer", params={"use_case": USE_CASE, "upload_id": upload_id}
+    ).json()
+    assert offer["usable"] is False and f"'{needed}'" in offer["reason"]
+    refused = client.post(
+        "/campaign-runs",
+        json={
+            "use_case": USE_CASE,
+            "upload_id": upload_id,
+            "primary_key": "customerID",
+            "model_version_id": version["model_id"],
+        },
+    )
+    assert refused.status_code == 409 and refused.json()["detail"]["code"] == "MODEL_CANNOT_READ_FILE"
+
+
+def test_a_model_that_learned_another_outcome_than_this_months_is_not_reused(
+    client: TestClient, data_dir: Path, current_model: str
+) -> None:
+    learned = next(
+        v["version"]
+        for v in client.get("/models", params={"use_case": USE_CASE}).json()["versions"]
+        if v["version"]["model_id"] == current_model
+    )
+    target = LocalStorage(data_dir).read_model(learned["schema_key"], FeatureSchema).target
+    upload_id = _upload_train(
+        client, generate(GenerationSpec(USE_CASE, rows=1_500, variant=CLEAN, seed=20261018)), "month3.csv"
+    )
+    params = {"use_case": USE_CASE, "upload_id": upload_id}
+    same = client.get("/campaign-runs/model-offer", params={**params, "outcome": target}).json()
+    assert same["usable"] is True
+    other = client.get("/campaign-runs/model-offer", params={**params, "outcome": "churned_90d"}).json()
+    assert other["usable"] is False and "'churned_90d'" in other["reason"]
+    refused = client.post(
+        "/campaign-runs",
+        json={
+            "use_case": USE_CASE,
+            "upload_id": upload_id,
+            "primary_key": "customerID",
+            "target": "churned_90d",
+            "model_version_id": current_model,
+        },
+    )
+    assert refused.status_code == 409 and refused.json()["detail"]["code"] == "MODEL_OUTCOME_CHANGED"

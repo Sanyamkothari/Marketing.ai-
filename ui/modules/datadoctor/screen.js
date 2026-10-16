@@ -24,8 +24,8 @@ import { aiServiceStatus, AI_SERVICE_EVENT } from "../../availability.js";
 import { button, emptyState } from "../../components.js";
 import { canAccess } from "../router.js";
 import { createConnectionPicker } from "../connections/picker.js";
-import { postCampaignRun } from "../campaigns/wizard_api.js";
-import { DEFAULT_SPEED, SPEEDS, runHref, startSentenceHtml } from "../campaigns/run_rules.js";
+import { getModelOffer, postCampaignRun } from "../campaigns/wizard_api.js";
+import { DEFAULT_SPEED, SPEEDS, modelChoice, runHref, startSentenceHtml } from "../campaigns/run_rules.js";
 import { TABLE_FILE_TYPES } from "../intake/notes.js";
 import { injectAgentStyles } from "../agent/styles.js";
 import { plain } from "../agent/sent.js";
@@ -92,6 +92,9 @@ function fresh() {
     started: null, // the case whose hand-off was started from here
     speed: DEFAULT_SPEED, // how long the model may learn: quick | balanced | thorough
     speedOpen: false, // the three choices are shown ("Change")
+    offerFor: null, // which file and outcome `offer` was asked for
+    offer: null, // next month: the model that could be reused (`GET /campaign-runs/model-offer`), else null
+    mode: null, // "reuse" | "learn" as the person picked it on Start; null follows the hint
     startInfo: null, // { uploadId, rows } of the file the campaign starts from, for the sentence above Start
     changing: new Set(), // answered questions whose answers are shown again ("Change answer")
     read: new Set(), // changes needing their own yes whose "I have read this sentence" is ticked
@@ -208,6 +211,25 @@ function speedsHtml(entry) {
   return `<div class="dds-actions" role="group" aria-label="How long to learn" data-dds-speeds>${items}</div>`;
 }
 
+/** Next month: "Use last month's model" or "Learn again on the new data", the hint, and why reusing is off. */
+function modelChoiceHtml(choice) {
+  const pick = (mode, label, disabled) =>
+    button({
+      label,
+      kind: (choice.reuse ? "reuse" : "learn") === mode ? "primary" : "secondary",
+      size: "sm",
+      disabled,
+      attrs: `data-dds-mode="${mode}" aria-pressed="${(choice.reuse ? "reuse" : "learn") === mode}"`,
+    });
+  const why = choice.reason ? `<p class="dds-why" data-dds-reuse-off>${esc(choice.reason)}</p>` : "";
+  const hint = choice.hint ? `<p class="dds-why" data-dds-offer-hint>${esc(choice.hint)}</p>` : "";
+  return `<div class="dds-actions" role="group" aria-label="Which model to use" data-dds-modes>${pick(
+    "reuse",
+    "Use last month's model (fast)",
+    !choice.canReuse,
+  )}${pick("learn", "Learn again on the new data (slower)", false)}</div>${why}${hint}`;
+}
+
 /** The sentence above Start: what is learned from, how many customers, how long it takes, and "Change". */
 function startSentence(entry) {
   const { state: s, host } = entry;
@@ -215,12 +237,13 @@ function startSentence(entry) {
   const startId = s.screen.view.start.upload_id;
   const file = files.find((f) => f.upload_id === startId) || files[0];
   const rows = s.startInfo && s.startInfo.uploadId === startId ? s.startInfo.rows : null;
-  const reuse = Boolean(host.modelVersionId); // a goal that has a model uses it: nothing to learn, no time to choose
+  const choice = host.place === "data" ? modelChoice(s.offer, s.mode) : null;
+  const reuse = Boolean(host.modelVersionId) || Boolean(choice && choice.reuse); // nothing to learn, no time to choose
   const change = reuse
     ? ""
     : ` ${button({ label: "Change", kind: "tertiary", size: "sm", attrs: `data-dds-speed-open aria-expanded="${s.speedOpen}"` })}`;
   const sentence = startSentenceHtml({ table: file ? plain(file.file_name) : "", customers: rows, speed: s.speed, reuse });
-  return `<p class="dds-why" data-dds-start-sentence>${sentence}${change}</p>${
+  return `${choice ? modelChoiceHtml(choice) : ""}<p class="dds-why" data-dds-start-sentence>${sentence}${change}</p>${
     s.speedOpen && !reuse ? speedsHtml(entry) : ""
   }<p class="dds-why" data-dds-start-leave>You can close this page.</p>`;
 }
@@ -298,6 +321,27 @@ async function refresh(entry) {
   s.use = await getAiStatus(s.caseId).catch(() => null);
   if (s.ai === null) await readAi(entry); // not known yet: ask again (the answer is shared for a few seconds)
   await readStartInfo(entry);
+  await readOffer(entry);
+}
+
+/** Next month: can last month's model score this file? Only on the Data page, only once the file is ready to start. */
+async function readOffer(entry) {
+  const s = entry.state;
+  const start = s.screen && s.screen.view && s.screen.view.start;
+  if (!start || entry.host.place !== "data" || !["ready", "ready_with_warnings"].includes(s.screen.view.verdict.key)) {
+    s.offer = null;
+    s.offerFor = null;
+    return;
+  }
+  const asked = `${start.goal_id}|${start.upload_id}|${start.outcome}`; // asked again only when one of these changes
+  if (s.offerFor === asked) return;
+  s.offer = null;
+  s.offerFor = asked;
+  try {
+    s.offer = await getModelOffer(start.goal_id, start.upload_id, s.screen.case.client_id, start.outcome);
+  } catch {
+    s.offerFor = null; // no offer (the first month, or it cannot be asked): Start only learns; ask again next time
+  }
 }
 
 /** How many customers the file the campaign starts from holds, for the sentence above Start (no sentence without). */
@@ -493,12 +537,13 @@ async function startCampaignRun(entry, start) {
   s.error = null;
   draw(entry);
   try {
+    const choice = modelChoice(s.offer, s.mode);
     const created = await postCampaignRun({
       use_case: start.goal_id,
       upload_id: start.upload_id,
       primary_key: start.primary_key,
-      target: start.outcome,
-      speed: s.speed,
+      target: start.outcome, // also when reusing: the server checks the model learned this outcome
+      ...(choice && choice.reuse ? { model_version_id: choice.modelVersionId } : { speed: s.speed }),
       case_id: s.caseId,
     });
     s.started = s.caseId;
@@ -602,6 +647,9 @@ function bind(entry) {
     else if (target.hasAttribute("data-dds-continue")) proceed(entry);
     else if (d.ddsSpeed) {
       entry.state.speed = d.ddsSpeed;
+      draw(entry);
+    } else if (d.ddsMode) {
+      entry.state.mode = d.ddsMode;
       draw(entry);
     } else if (target.hasAttribute("data-dds-speed-open")) {
       entry.state.speedOpen = !entry.state.speedOpen;

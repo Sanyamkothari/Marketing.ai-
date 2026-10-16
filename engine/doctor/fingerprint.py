@@ -175,6 +175,15 @@ class FingerprintStore:
         mine = [p for p in self._read(client_id).prints if p.goal_id == goal_id and p.upload_id != besides]
         return mine[-1] if mine else None
 
+    def newest_two(
+        self, client_id: str, goal_id: str | None
+    ) -> tuple[Fingerprint | None, Fingerprint | None]:
+        """The newest fingerprint for this goal (this file, once approved) and the one before it (last time)."""
+        if re.fullmatch(CLIENT_ID_PATTERN, client_id) is None:
+            return None, None
+        mine = [p for p in self._read(client_id).prints if p.goal_id == goal_id]
+        return (mine[-1] if mine else None), (mine[-2] if len(mine) > 1 else None)
+
     def save(self, client_id: str, print_: Fingerprint) -> None:
         with _LOCK:
             document = self._read(client_id, strict=True)

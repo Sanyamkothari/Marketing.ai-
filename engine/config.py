@@ -1617,11 +1617,21 @@ class IndustryConfig(_Base):
         return tuple((stage, ref) for stage in self.stages for ref in stage.use_cases)
 
 
+class ModelReuseRules(_Base):
+    """When Start suggests learning again instead of using last month's model (`model_reuse` in `engine.yaml`)."""
+
+    max_age_days: PositiveInt = 45
+    """A model learnt longer ago than this is suggested to be learnt again."""
+    max_rate_ratio: float = Field(default=1.5, gt=1)
+    """The outcome rate may be this many times higher or lower than last time before learning again is suggested."""
+
+
 class EngineConfig(_Base):
     schema_version: Literal[1]
     catalog: Catalog
     campaign_speeds: dict[str, PositiveInt]
     """Minutes of model search for each speed a person can pick (`quick`, `balanced`, `thorough`)."""
+    model_reuse: ModelReuseRules = ModelReuseRules()
     defaults: dict[str, Any]
 
     @field_validator("campaign_speeds")

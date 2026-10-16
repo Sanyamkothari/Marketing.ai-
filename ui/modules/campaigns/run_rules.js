@@ -27,9 +27,26 @@ export const aboutMinutes = (speed) => `about ${speedOf(speed).minutes} minutes`
 export function startSentenceHtml({ table, customers = null, speed = DEFAULT_SPEED, reuse = false }) {
   const from = table ? userText(table) : "your data";
   const many = Number.isFinite(customers) ? `, ${esc(fmtInt(customers))} customers,` : "";
-  const verb = reuse ? "use your current model on" : "learn from";
+  const verb = reuse ? "use last month's model on" : "learn from";
   const time = reuse ? "This takes a few minutes." : `${esc(speedOf(speed).name)}: ${esc(aboutMinutes(speed))}.`;
   return `We will ${verb} ${from}${many} and build your contact list. ${time}`;
+}
+
+/**
+ * Next month's choice on Start, as plain words: `offer` is `GET /campaign-runs/model-offer`. Returns null the first
+ * month (only learning, nothing to choose); else the two options, which one is picked (the person's `chosen`, else
+ * the hint's suggestion; reusing only when it can) and the one-line hint.
+ */
+export function modelChoice(offer, chosen = null) {
+  if (!offer || !offer.model_version_id) return null;
+  const reuse = offer.usable && (chosen || offer.suggest) === "reuse";
+  return Object.freeze({
+    reuse,
+    modelVersionId: offer.model_version_id,
+    canReuse: Boolean(offer.usable),
+    reason: offer.usable ? "" : offer.reason || "",
+    hint: offer.hint || "",
+  });
 }
 
 /** Plain words for what each state of a campaign run is. */
