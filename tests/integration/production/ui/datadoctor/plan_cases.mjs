@@ -367,3 +367,24 @@ test("the new shapes pass the structural checks, have 40px targets and use no wo
   const found = check(app).violations;
   assert.deepEqual(found, [], JSON.stringify(found));
 });
+
+// --- one approval ----------------------------------------------------------------------------------------------------
+
+test("a plan that comes back after an approval says what is new, and folds what was approved under 'Already approved'", async () => {
+  let ids = [];
+  await show("approve", {
+    patch: (s) => {
+      ids = s.case.items.filter((i) => i.state === "accepted" && i.kind !== "data_check").map((i) => i.item_id);
+      s.view.carried = { approved: ids, gone: [], line: "We joined your files into one table; 1 new thing to check." };
+      return s;
+    },
+  });
+  assert.ok(ids.length > 0);
+  assert.equal($("[data-dds-new-line]").textContent.trim(), "We joined your files into one table; 1 new thing to check.");
+  const fold = $("[data-dds-approved]");
+  assert.match(fold.querySelector("summary").textContent, /^Already approved \(\d+\)$/);
+  for (const id of ids) assert.ok(!$(`[data-dds-plan-section] [data-dds-item="${id}"]`), "an approved item is not drawn in its section again");
+  assert.ok($$("[data-dds-approved] [data-dds-item]").length > 0, "they are still there, and can be unticked");
+  await show("approve");
+  assert.ok(!$("[data-dds-new-line]") && !$("[data-dds-approved]"), "before any approval nothing is folded");
+});

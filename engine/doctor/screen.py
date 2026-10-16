@@ -40,6 +40,7 @@ from pydantic import Field
 from engine.access.roles import Principal
 from engine.agent.contracts import ProposalState
 from engine.config import ConfigError, StrictBase
+from engine.doctor.carry import carry_of, new_line
 from engine.doctor.case import Case, CaseError, CaseStore, TimelineEvent, TimelineKind
 from engine.doctor.plan_check import ledger_view, plan_digest
 from engine.doctor.protocol import (
@@ -71,6 +72,7 @@ __all__ = [
     "CaseScreenView",
     "CaseSummary",
     "ScreenApproveClass",
+    "ScreenCarried",
     "ScreenRemembered",
     "ScreenStanding",
     "ScreenStart",
@@ -167,6 +169,21 @@ class ScreenStart(StrictBase):
     outcome: str
 
 
+class ScreenCarried(StrictBase):
+    """The plan after a first approval (`engine.doctor.carry`): what is the same as approved stays approved."""
+
+    approved: tuple[str, ...] = Field(
+        description="Items that are the same step or sentence as approved before, nothing flagged now: the screen "
+        'folds them under "Already approved".'
+    )
+    gone: tuple[str, ...] = Field(
+        default=(), description="Items of files that were made into another table: not shown again."
+    )
+    line: str | None = Field(
+        default=None, description="What is new and why, in one line; none when nothing is."
+    )
+
+
 class CaseScreenView(StrictBase):
     """Everything the screen needs beyond the case itself."""
 
@@ -187,6 +204,11 @@ class CaseScreenView(StrictBase):
         "rows and customers in and out, the outcome rate before and after, a receipt per step (`steps[].item_id`) "
         "and the findings (`level` stop, flag or note, each with its `key`). None until the plan is counted. The "
         "plan screen reads these names; a stop is lowered to a flag once a person said yes to it.",
+    )
+    carried: ScreenCarried | None = Field(
+        default=None,
+        description="Once a plan was approved and comes back (the files joined, the goal chosen): what is the "
+        "same stays approved and only what is new is open.",
     )
     start: ScreenStart | None = None
     missing_for: tuple[str, ...] = Field(
@@ -280,6 +302,7 @@ def screen_view(
         approval_sentence=sentence,
         approve_class=approve_class,
         ledger=_ledger(case),
+        carried=_carried(case),
         standing=_standing(storage, case),
         remembered=_remembered(storage, case),
         start=_start(case, visit.hand_off if visit is not None else None),
@@ -298,6 +321,26 @@ def _ledger(case: Case) -> dict[str, Any] | None:
     if visit.plan_check.digest != plan_digest(case.files, active_section(case)[0]):
         return None
     return ledger_view(visit.plan_check, visit.acknowledged)
+
+
+_AWAITING: Final = frozenset({"ask", "treat", "preview", "approve", "converse"})
+
+
+def _carried(case: Case) -> ScreenCarried | None:
+    """What of the plan was approved before in this round, while the plan waits to be approved again."""
+    if case.state.value not in _AWAITING:
+        return None
+    items, _ = active_section(case)
+    visit = case.visit
+    counted = visit.plan_check if visit is not None and _ledger(case) is not None else None
+    carry = carry_of(case, items, counted, confirmed=confirmed)
+    if carry is None:
+        return None
+    return ScreenCarried(
+        approved=tuple(i.item_id for i in carry.approved),
+        gone=tuple(i.item_id for i in carry.gone),
+        line=new_line(case, carry),
+    )
 
 
 def _approval_required(case: Case, config_root: Path | None) -> bool:

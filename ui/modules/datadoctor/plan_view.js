@@ -442,20 +442,31 @@ function sectionHtml(sec, screen, ctx, level) {
 /** Everything the plan view works out of one answer, so the screen draws it and the final yes reads the same numbers. */
 export function planModel(screen, ctx) {
   const { case: c, view } = screen;
-  const items = activeSection(c).items;
+  const all = activeSection(c).items;
+  // Once a plan was approved and comes back, what is the same stays approved (folded) and what belongs to a file that
+  // was made into another table is not drawn again: only what is new or changed is open.
+  const carried = view.carried || null;
+  const approvedIds = new Set(carried ? carried.approved : []);
+  const goneIds = new Set(carried ? carried.gone || [] : []);
+  const items = all.filter((i) => !goneIds.has(i.item_id));
+  const shown = items.filter((i) => !approvedIds.has(i.item_id));
   const ledger = ledgerOf(view);
   const approveIds = new Set((view.approve_class || []).map((a) => a.item_id));
   const confirmedIds = new Set((view.approve_class || []).filter((a) => a.confirmed).map((a) => a.item_id));
-  const plan = planOf(items, approveIds, ledger, confirmedIds);
+  const plan = planOf(shown, approveIds, ledger, confirmedIds);
   const findings = findingsOf(items, ledger, approveIds);
   const unconfirmed = (view.approve_class || []).filter((a) => !a.confirmed).length;
+  const folded = items.filter((i) => approvedIds.has(i.item_id) && !isNote(i));
   return {
     items,
-    notes: notesOf(items),
+    notes: notesOf(shown),
     ledger,
     plan,
     findings,
     unconfirmed,
+    carried: carried
+      ? { line: carried.line || "", items: folded.filter((i, n) => folded.findIndex((j) => j.title === i.title) === n) }
+      : null,
     gate: readyToApprove(plan, ctx.checked, findings, items),
   };
 }
@@ -468,11 +479,29 @@ function notesHtml(notes, c) {
     .join("")}</ul></section>`;
 }
 
+/** What is new since the first approval, and why, in one line (the server writes it; see `engine/doctor/carry.py`). */
+export function newLineHtml(model) {
+  const line = model.carried && model.carried.line;
+  return line ? `<section class="card dds-card" data-dds-new-line role="status"><p class="dds-item-t">${esc(line)}</p></section>` : "";
+}
+
+/** The same as what was approved before stays approved: folded, one line each sentence, still untickable. */
+function approvedHtml(screen, model, ctx) {
+  const items = model.carried ? model.carried.items : [];
+  if (!items.length) return "";
+  return `<details class="dds-sure dds-approved" data-dds-approved data-dds-keep="approved-before"><summary>${esc(
+    `Already approved (${count(items.length)})`,
+  )}</summary><p class="dds-why">These are the same as what you approved. Untick one to take it out.</p><ul class="dds-items">${items
+    .map((i) => itemHtml(i, screen.case, ctx, { open: false }))
+    .join("")}</ul></details>`;
+}
+
 export function planHtml(screen, model, ctx, { level = 3 } = {}) {
   const notes = notesHtml(model.notes, screen.case);
-  if (!model.plan.length) return notes;
   const full = { ...ctx, ledger: model.ledger };
+  const approved = approvedHtml(screen, model, full);
+  if (!model.plan.length && !approved) return notes;
   return `<section class="dds-plan" data-dds-plan aria-labelledby="dds-plan-t"><h${level} id="dds-plan-t" class="dds-section-t">The plan, section by section</h${level}><p class="dds-why">Only changes that need your yes are open. Sure fixes are folded away and can still be unticked. Check each section, then give one final yes.</p>${model.plan
     .map((s) => sectionHtml(s, screen, full, level + 1))
-    .join("")}</section>${notes}`;
+    .join("")}${approved}</section>${notes}`;
 }

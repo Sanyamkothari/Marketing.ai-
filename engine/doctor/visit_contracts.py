@@ -126,3 +126,10 @@ class CaseVisit(StrictBase):
     acknowledged: tuple[Acknowledgement, ...] = Field(
         default=(), description="Stops a person said yes to, for the plan in `plan_check` only."
     )
+    approved_before: tuple[str, ...] = Field(
+        default=(),
+        exclude_if=lambda value: not value,
+        description="What was approved in this round of the visit, as short digests of each step and each "
+        "sentence (`engine.doctor.carry`): a plan that comes back to approval folds what is the same. A new "
+        "month's file starts another round.",
+    )

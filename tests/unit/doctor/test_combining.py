@@ -16,7 +16,7 @@ from engine.agent.contracts import ProposalState
 from engine.config import load_use_case
 from engine.doctor import combining, visit
 from engine.doctor.build_driver import BuildDriveError
-from engine.doctor.case import Case, CaseFile, CaseItem, CaseStore, VisitState
+from engine.doctor.case import Case, CaseFile, CaseItem, CaseStore, TimelineKind, VisitState
 from engine.doctor.combine_run import combine_item, upload_ids_of
 from engine.doctor.combining import combining_detector
 from engine.doctor.contracts import Diagnosis
@@ -159,10 +159,16 @@ def test_a_customer_list_and_its_orders_are_one_change_with_counts_that_needs_it
     assert table["orders_90d"].iloc[CUSTOMERS - 1] == 0 and pd.isna(table["days_since_last_orders"].iloc[-1])
     assert case.visit is not None and case.visit.combined == (item.item_id,)
 
-    # The Doctor reads the new table from the start; approving it hands that table on.
-    assert case.state is VisitState.APPROVE
+    # The Doctor reads the new table from the start. Nothing on it is new to the person (one approval, not two), so
+    # the visit carries on by itself, says so on the timeline, and hands that table on.
     assert not [i for i in case.items if i.kind == "build_dataset" and i.item_id != item.item_id]
-    case = visit.approve(vs.CLIENT, case.case_id, day.deps, expected_version=case.version, actor=vs.ANALYST)
+    carried = [
+        e
+        for e in CaseStore(day.storage).timeline(vs.CLIENT, case.case_id)
+        if e.kind is TimelineKind.APPROVAL and e.details.get("carried")
+    ]
+    assert len(carried) == 1 and carried[0].details["new"] == 0
+    assert case.state is VisitState.FOLLOW_UP
     assert case.visit is not None and case.visit.hand_off is not None
     assert case.visit.hand_off.upload_ids == (only.upload_id,)
 

@@ -572,8 +572,13 @@ export function timelineHtml(screen, { level = 3 } = {}) {
         (e.kind === "approval" || e.kind === "approval.confirmed") && (d.approval_id || e.item_id)
           ? ` <span class="dds-receipt" data-dds-receipt>${esc(`Receipt ${d.approval_id || e.item_id}`)}</span>`
           : "";
+      // An approval the visit carried on by itself (the plan came back with nothing new that asks a person).
+      const carried = e.kind === "approval" && d.carried === true;
+      const said = carried
+        ? `Carried on by itself: ${d.new > 0 ? `${plural(d.new, "new sure fix", "new sure fixes")} of the kind you approved` : "nothing new to check"}`
+        : EVENT_WORDS[e.kind] + extra;
       return `<li data-dds-event="${esc(e.kind)}"><time datetime="${esc(e.at)}">${esc(fmtStamp(e.at))}</time><span>${esc(
-        EVENT_WORDS[e.kind] + extra,
+        said,
       )}${receipt}</span></li>`;
     })
     .join("");
