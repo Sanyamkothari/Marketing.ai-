@@ -452,18 +452,21 @@ export function goalsHtml(screen, { busy = false, level = 3 } = {}) {
     .sort((a, b) => (order[a.status] ?? 9) - (order[b.status] ?? 9))
     .map((u, index) => {
       const name = goalName(u.use_case_id, u.name);
-      // The server's own words: why, how many customers, how many already did it (a line is left out when not known).
+      // The server's own words: why, else how many customers and how many already did it (left out when not known).
       const counts = [
         Number.isFinite(u.customers) ? `${count(u.customers)} customers` : "",
         Number.isFinite(u.yes_count) ? `${count(u.yes_count)} already did it` : "",
       ].filter(Boolean);
-      const notes = [u.why ? esc(plain(u.why)) : "", counts.length ? esc(counts.join(", ")) : ""].filter(Boolean);
-      const fix = u.status !== "ready" && u.first_fix ? `<span class="dds-why" data-dds-goal-fix>To do first: ${esc(plain(u.first_fix))}</span>` : "";
+      // The server's why already carries the counts; the separate counts line is only for a goal with no why.
+      const notes = u.why ? [esc(plain(u.why))] : counts.length ? [esc(counts.join(", "))] : [];
+      // A goal to check is chosen first; its question is asked then, so only a goal with a real gap shows a first fix.
+      const best = index === 0 && ["ready", "check"].includes(u.status);
+      const fix = u.status !== "ready" && u.status !== "check" && u.first_fix ? `<span class="dds-why" data-dds-goal-fix>To do first: ${esc(plain(u.first_fix))}</span>` : "";
       return `<li class="dds-goal" data-dds-goal-row="${esc(u.use_case_id)}"><span class="dds-item-body"><span class="dds-item-t">${esc(name)}${
-        index === 0 ? ` <span class="chip neutral" data-dds-goal-best>Best fit</span>` : ""
+        best ? ` <span class="chip neutral" data-dds-goal-best>Best fit</span>` : ""
       }</span>${notes.map((n) => `<span class="dds-why" data-dds-goal-why>${n}</span>`).join("")}${fix}</span>${button({
         label: "Choose this goal",
-        kind: index === 0 ? "primary" : "secondary",
+        kind: best ? "primary" : "secondary",
         attrs: `data-dds-goal="${esc(u.use_case_id)}" aria-label="Choose the goal: ${esc(name)}"`,
         disabled: busy,
       })}</li>`;

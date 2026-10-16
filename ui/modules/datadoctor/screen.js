@@ -5,9 +5,9 @@
 //                          goal on the same case and continues in the "New campaign" wizard, where nothing answered
 //                          is asked again;
 //   the wizard's Customers the goal's case (the one just continued from the Data page, else the goal's newest) in
-//   step                   the card's two mount points `[data-cw-guided-main]` / `[data-cw-guided-aside]`; Approve,
-//                          once the data is ready, starts the list exactly as Guided setup's Approve did
-//                          (`host.approved(fill)`);
+//   step                   the card's two mount points `[data-cw-guided-main]` / `[data-cw-guided-aside]`; Approve
+//                          only approves: the run starts from "Start the campaign" under the sentence, as on the
+//                          Data page;
 //   a goal's setup         the Setup tab of `#/uc/<goal>`, in the same two places Guided setup mounts into.
 //
 // The wizard and a goal's setup reach it through Guided setup's own mount (`../agent/guided.js` `mountGuided` hands

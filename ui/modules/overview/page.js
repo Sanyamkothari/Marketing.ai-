@@ -151,7 +151,7 @@ function cardHtml(card, places) {
  * shown above as ready: "Review and download" there approves the model with the list, so the card would say it twice.
  */
 export function cardsToShow(cards, shownRuns = []) {
-  const ready = new Set(shownRuns.filter((v) => v.record.state === "done").map((v) => v.record.use_case_id));
+  const ready = new Set(shownRuns.filter((v) => v.record.state === "done" && v.record.train_run_id).map((v) => v.record.use_case_id));
   return (cards || []).filter((card) => !(card.kind === "challenger_ready" && ready.has(card.use_case_id)));
 }
 

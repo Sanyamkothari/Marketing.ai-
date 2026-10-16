@@ -444,7 +444,12 @@ function overviewHtml(model) {
   const tone = held ? "warning" : STAND_TONE[status.key] || "neutral";
   const refresh = refreshHtml(model);
   const tiles = [
-    statTile({ label: "Contacted", value: count(c.intended_treated), caption: "Customers sent the campaign.", attrs: "data-tile-contacted" }),
+    statTile({
+      label: isDraft(model) ? "To contact" : "Contacted",
+      value: count(c.intended_treated),
+      caption: isDraft(model) ? "Customers the campaign is planned for." : "Customers sent the campaign.",
+      attrs: "data-tile-contacted",
+    }),
     statTile({
       label: term("comparisonGroup"),
       value: count(c.intended_holdout),

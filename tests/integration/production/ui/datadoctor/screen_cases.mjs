@@ -527,21 +527,31 @@ test("visible text: no word the glossary keeps from a marketer, in any shape", a
   }
 });
 
-test("the goals list shows why, customers and how many did it, best first, with the first one's button primary", () => {
-  const found = [
-    { use_case_id: "a_goal", name: "Second", status: "check", why: "b.csv has 10 customers.", customers: 10, yes_count: null, first_fix: "Answer 1 question." },
+test("the goals list shows the why once, best first, with the first ready or check goal's button primary", () => {
+  const draw = (found) => {
+    const host = document.createElement("div");
+    host.innerHTML = view.goalsHtml({ case: { diagnosis: { use_cases: found } }, view: { mode: "generic" } });
+    return [...host.querySelectorAll("[data-dds-goal-row]")];
+  };
+  const rows = draw([
+    { use_case_id: "c_goal", name: "Third", status: "too_small", why: "c.csv has 5 customers.", customers: 5, yes_count: 0, first_fix: "Add more customers." },
+    { use_case_id: "a_goal", name: "Second", status: "check", why: "b.csv has 10 customers.", customers: 10, yes_count: null, first_fix: "Open Guided setup and answer 1 question." },
     { use_case_id: "b_goal", name: "First", status: "ready", why: "a.csv has 4,000 customers; 276 of them are a yes in bought.", customers: 4000, yes_count: 276 },
-  ];
-  const html = view.goalsHtml({ case: { diagnosis: { use_cases: found } }, view: { mode: "generic" } });
-  const host = document.createElement("div");
-  host.innerHTML = html;
-  const rows = [...host.querySelectorAll("[data-dds-goal-row]")];
-  assert.deepEqual(rows.map((r) => r.dataset.ddsGoalRow), ["b_goal", "a_goal"], "the ready goal comes first");
+  ]);
+  assert.deepEqual(rows.map((r) => r.dataset.ddsGoalRow), ["b_goal", "a_goal", "c_goal"], "the ready goal comes first");
   assert.match(rows[0].textContent, /276 of them are a yes in bought/);
-  assert.match(rows[0].textContent, /4,000 customers, 276 already did it/);
+  assert.doesNotMatch(rows[0].textContent, /already did it/, "the counts are not said twice");
   assert.ok(rows[0].querySelector("[data-dds-goal-best]"));
   assert.ok(rows[0].querySelector(".btn.primary[data-dds-goal]"), "the first goal's button goes on");
   assert.ok(rows[1].querySelector(".btn.secondary[data-dds-goal]"));
-  assert.match(rows[1].querySelector("[data-dds-goal-fix]").textContent, /To do first: Answer 1 question\./);
+  assert.equal(rows[1].querySelector("[data-dds-goal-fix]"), null, "a goal to check shows no 'Open Guided setup' step");
+  assert.match(rows[2].querySelector("[data-dds-goal-fix]").textContent, /To do first: Add more customers\./);
   assert.equal(rows[0].querySelector("[data-dds-goal-fix]"), null, "a ready goal has nothing to do first");
+  // No goal is ready or to check: nothing is called the best fit.
+  const none = draw([{ use_case_id: "x_goal", name: "X", status: "too_small", why: "x.csv has 5 customers.", customers: 5 }]);
+  assert.equal(none[0].querySelector("[data-dds-goal-best]"), null);
+  assert.ok(none[0].querySelector(".btn.secondary[data-dds-goal]"));
+  // With no why, the counts are said instead.
+  const bare = draw([{ use_case_id: "y_goal", name: "Y", status: "ready", customers: 4000, yes_count: 276 }]);
+  assert.match(bare[0].textContent, /4,000 customers, 276 already did it/);
 });

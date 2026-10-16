@@ -308,4 +308,7 @@ test("a Draft says it is not sent and shows no sent date", () => {
   assert.match($(".desc").textContent, /not sent yet/);
   assert.equal($("[data-what-was-sent] h3").textContent, "What will be sent");
   assert.equal($$("[data-what-was-sent] dt").some((dt) => dt.textContent === "Sent on"), false);
+  assert.match($("[data-tile-contacted]").textContent, /To contact/);
+  assert.match($("[data-tile-contacted]").textContent, /planned for/);
+  assert.doesNotMatch($("[data-tile-contacted]").textContent, /sent the campaign/);
 });

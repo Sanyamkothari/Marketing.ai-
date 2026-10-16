@@ -578,10 +578,12 @@ test("a finished campaign hides the 'new model is waiting' card of its goal; oth
     { code: "CHALLENGER_READY", kind: "challenger_ready", use_case_id: "telco-churn" },
     { code: "DRIFT_DRIFTED", kind: "drift", use_case_id: "win-back-campaign" },
   ];
-  const ready = [campaignRun("cr_2", "done", { use_case_id: "win-back-campaign" })];
+  const ready = [campaignRun("cr_2", "done", { use_case_id: "win-back-campaign", train_run_id: "tr_1" })];
   assert.deepEqual(
     page.cardsToShow(cards, ready).map((c) => `${c.kind}:${c.use_case_id}`),
     ["challenger_ready:telco-churn", "drift:win-back-campaign"],
   );
   assert.equal(page.cardsToShow(cards, [campaignRun("cr_1", "running")]).length, 3, "only a finished run hides it");
+  const reused = [campaignRun("cr_3", "done", { use_case_id: "win-back-campaign", train_run_id: null })];
+  assert.equal(page.cardsToShow(cards, reused).length, 3, "a finished run that learned no model keeps the waiting-model card");
 });
