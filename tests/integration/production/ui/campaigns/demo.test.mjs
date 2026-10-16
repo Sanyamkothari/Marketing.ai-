@@ -157,7 +157,7 @@ for (const [name, id] of [
         assert.equal(text("[data-tile-contacted] .stat-caption"), "Customers sent the campaign.");
         assert.equal(text("[data-tile-comparison] .stat-label"), "Comparison group");
         assert.equal(text("[data-tile-comparison] .stat-value"), "12,737");
-        assert.equal(text("[data-tile-comparison] .stat-caption"), "25,599 eligible, 50% kept back for comparison.");
+        assert.equal(text("[data-tile-comparison] .stat-caption"), "12,862 eligible, 50% kept back for comparison.");
         const net = proof(id)
             .sections.find((s) => s.key === "net_value")
             .lines.find((l) => NET_VALUE_LABEL.test(l.label));

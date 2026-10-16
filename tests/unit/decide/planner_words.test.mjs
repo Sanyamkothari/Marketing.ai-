@@ -62,3 +62,20 @@ test("an early look is labelled the same way on the campaign page", () => {
   const html = views.campaignPageHtml({ view, plans: null, can: () => false });
   assert.match(html, /data-early-look>Early look<\/span> Not a final result\./);
 });
+
+test("the campaign page says 'eligible' for the customers not held back, as the Campaigns page does", () => {
+  const view = {
+    campaign: {
+      campaign_id: "c1",
+      name: "Autumn",
+      status: "live",
+      treatment_start: "2026-10-01",
+      counts: { intended_treated: 2875, intended_holdout: 319 },
+    },
+    report: null,
+    verdict: null,
+    plan: null,
+  };
+  const html = views.campaignPageHtml({ view, plans: null, can: () => false });
+  assert.match(html, /2,875 eligible and 319 held back are compared\./);
+});

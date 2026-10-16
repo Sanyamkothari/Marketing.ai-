@@ -121,11 +121,11 @@ const contacted = (model) => listSize(model.campaign, model.summary);
 /** The comparison group's caption: the eligible customers and the share kept back, or the plain sentence. */
 function comparisonCaption(c) {
   const held = c.intended_holdout;
-  const eligible = Number(c.intended_treated) + Number(held);
-  if (!isValue(held) || !isValue(c.intended_treated) || !(eligible > 0)) {
+  const eligible = c.intended_treated; // the same number the measurement page calls "eligible"
+  if (!isValue(held) || !isValue(eligible) || !(Number(eligible) + Number(held) > 0)) {
     return "Customers held back, not contacted, to compare against.";
   }
-  return `${count(eligible)} eligible, ${percent(held / eligible, { places: 0 })} kept back for comparison.`;
+  return `${count(eligible)} eligible, ${percent(held / (Number(eligible) + Number(held)), { places: 0 })} kept back for comparison.`;
 }
 
 /**
@@ -745,13 +745,16 @@ const TAB_BODY = { overview: overviewHtml, audience: audienceHtml, results: resu
 export function campaignPageHtml(model) {
   const { campaign, goal, tab } = model;
   const name = shortName(campaign, goal);
+  // "to N customers" only when the list's size is known (an unreadable list gets no clause, not a dash).
+  const size = contacted(model);
+  const toList = isValue(size) ? (isDraft(model) ? `, planned for ${customers(size)}` : ` to ${customers(size)}`) : "";
   const sentence = runElsewhere(campaign)
     ? `A campaign another tool sent on ${day(campaign.treatment_start)}, checked here.`
     : wholeProgramme(campaign)
       ? `Every customer contacted, against the customers never contacted, from ${day(campaign.treatment_start)}.`
       : isDraft(model)
-        ? `${goal}: not sent yet, planned for ${customers(contacted(model))}.`
-        : `${goal}: sent on ${day(campaign.treatment_start)} to ${customers(contacted(model))}.`;
+        ? `${goal}: not sent yet${toList}.`
+        : `${goal}: sent on ${day(campaign.treatment_start)}${toList}.`;
   const sub =
     campaign.name && campaign.name !== name
       ? `<p class="cp-sub cp-long-name" data-long-name ${USER_TEXT_ATTRIBUTE} title="${esc(campaign.name)}">${esc(campaign.name)}</p>`

@@ -150,15 +150,13 @@ export function readyProofIds(summaries) {
 export async function loadListEntries() {
   const campaigns = ((await getCampaigns()) || {}).campaigns || [];
   const measured = campaigns.some((c) => c.status === "measured");
-  const [views, summaries, names] = await Promise.all([
+  const [views, summaries, names, lists] = await Promise.all([
     mapLimit(campaigns, 6, (c) => getCampaign(c.campaign_id).catch(() => null)),
     measured ? getProofs().catch(() => null) : null,
     apiGoalNames(campaigns),
+    // The contact list's own size for each campaign made here (asked once per run, never rejects).
+    mapLimit(campaigns, 6, (c) => (hasContactList(c) ? loadContactList(runIdOf(c)).then((a) => a.summary) : null)),
   ]);
-  // The contact list's own size for each campaign made here (its list counts, asked once per run, never rejects).
-  const lists = await mapLimit(campaigns, 6, (c) =>
-    c.kind === "scored" && (c.run_ids || [])[0] ? loadContactList(c.run_ids[0]).then((a) => a.summary) : null,
-  );
   const ready = readyProofIds(summaries);
   const proofs = await mapLimit(campaigns, 6, (c) =>
     c.status === "measured" && ready.has(c.campaign_id) ? getProof(c.campaign_id).catch(() => null) : null,
