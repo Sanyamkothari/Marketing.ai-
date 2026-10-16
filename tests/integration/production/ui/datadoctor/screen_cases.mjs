@@ -20,6 +20,7 @@ const app = $("#app");
 async function show(at, options = {}) {
   world = makeWorld({ at, ...options });
   if (options.cases) world.cases = options.cases;
+  if (options.offer) world.offer = options.offer;
   _resetDataDoctorForTests();
   forgetAiServiceStatus();
   await settle(2);
@@ -448,6 +449,52 @@ test("ready on the Data page: one sentence with the time, Change picks another, 
     speed: "thorough",
     case_id: CASE,
   });
+});
+
+const OFFER = { model_version_id: "m_last", usable: true, reason: null, suggest: "reuse", hint: "This data looks like last month's, so the model you have should still fit." };
+
+test("next month, Start offers last month's model or learning again, with the hint; reusing sends the model and no learning", async () => {
+  const s = await show("ready", { offer: OFFER });
+  assert.deepEqual(
+    $$("[data-dds-mode]").map((b) => b.textContent.trim()),
+    ["Use last month's model (fast)", "Learn again on the new data (slower)"],
+  );
+  assert.equal($('[data-dds-mode="reuse"]').getAttribute("aria-pressed"), "true", "the hint's suggestion is picked");
+  assert.match($("[data-dds-offer-hint]").textContent, /looks like last month's/);
+  assert.match($("[data-dds-start-sentence]").textContent, /^We will use last month's model on/);
+  assert.ok(!$("[data-dds-speed-open]"), "no learning time to choose when reusing");
+  $("[data-dds-continue]").click();
+  await until(() => world.posted.some((p) => p.path === "/campaign-runs"), 3000, "the start");
+  assert.deepEqual(world.posted.find((p) => p.path === "/campaign-runs").body, {
+    use_case: s.view.start.goal_id,
+    upload_id: s.view.start.upload_id,
+    primary_key: s.view.start.primary_key,
+    model_version_id: "m_last",
+    case_id: CASE,
+  });
+});
+
+test("next month, choosing to learn again trains on the new data; a model that cannot read the file cannot be picked", async () => {
+  await show("ready", { offer: OFFER });
+  $('[data-dds-mode="learn"]').click();
+  await settle(1);
+  assert.match($("[data-dds-start-sentence]").textContent, /^We will learn from /);
+  assert.ok($("[data-dds-speed-open]"));
+  $("[data-dds-continue]").click();
+  await until(() => world.posted.some((p) => p.path === "/campaign-runs"), 3000, "the start");
+  const sent = world.posted.find((p) => p.path === "/campaign-runs").body;
+  assert.ok(sent.target && sent.speed === "balanced" && !("model_version_id" in sent));
+  const off = { ...OFFER, usable: false, suggest: "learn", reason: "Last month's model needs 'ad_ctr_90d', which this file does not have.", hint: "Learn again on the new data." };
+  await show("ready", { offer: off });
+  assert.equal($('[data-dds-mode="reuse"]').disabled, true);
+  assert.match($("[data-dds-reuse-off]").textContent, /needs 'ad_ctr_90d'/);
+  assert.equal($('[data-dds-mode="learn"]').getAttribute("aria-pressed"), "true");
+});
+
+test("the first month has no offer: Start only learns", async () => {
+  await show("ready");
+  assert.ok(!$("[data-dds-modes]"));
+  assert.match($("[data-dds-start-sentence]").textContent, /^We will learn from /);
 });
 
 test("not ready says so, and starts nothing", async () => {

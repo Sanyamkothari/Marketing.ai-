@@ -31,7 +31,7 @@ from api.routes.campaigns import default_outcome_window, get_campaign_store
 from api.routes.doctor import clone_upload
 from api.routes.runs import _refuse_uplift_training, load_run, read_artefact, requested_by, start_run
 from api.routes.schedules import app_request
-from api.routes.uploads import http_error, load_upload, use_case_config
+from api.routes.uploads import http_error, load_upload, load_upload_profile, use_case_config
 from api.schemas import ErrorResponse, RunCreatedResponse, RunRequest
 from engine.access.roles import Role
 from engine.campaign_results import TopCustomer, top_customers
@@ -46,13 +46,16 @@ from engine.campaign_run import (
     StepError,
     overrides_for,
 )
-from engine.config import PrimaryKey, ResolvedConfig, RunMode, StrictBase, resolve_config
+from engine.config import PrimaryKey, ResolvedConfig, RunMode, StrictBase, load_engine_config, resolve_config
 from engine.contracts import FeatureSchema, ModelStatus, ModelVersion
 from engine.decide.treat_list import TreatListError, ensure_treat_list
 from engine.doctor.case import CASE_ID_PATTERN, DEFAULT_CLIENT_ID, CaseError, CaseStore
+from engine.doctor.fingerprint import FingerprintStore
 from engine.doctor.visit import is_approved
 from engine.measurement.cycle import MEASURE_NOT_OFFERED, CycleError, open_campaign
 from engine.model_approval import model_not_approved
+from engine.model_reuse import ModelOffer, missing_columns, model_offer
+from engine.registry import RegistryError
 from engine.runs import RUN_CONFIG_FILENAME
 from engine.storage import Storage, StorageError, run_key
 from engine.utils.logging import get_logger, log_failure
@@ -75,6 +78,11 @@ POLICIES: Final[dict[tuple[str, str], RoutePolicy]] = {
     ),
     ("GET", "/campaign-runs"): RoutePolicy(
         role=Role.VIEWER, action="campaign_runs.list", purpose="see campaign runs"
+    ),
+    ("GET", "/campaign-runs/model-offer"): RoutePolicy(
+        role=Role.ANALYST,
+        action="campaign_runs.model_offer",
+        purpose="see whether last month's model can be used on a prepared file",
     ),
     ("GET", "/campaign-runs/{campaign_run_id}"): RoutePolicy(
         role=Role.VIEWER,
@@ -409,6 +417,7 @@ def create_campaign_run(
         _refuse_uplift_training(RunMode.TRAIN, resolved)
     if body.upload_id is not None:
         load_upload(storage, body.upload_id)  # 404 before anything is recorded
+    _require_readable(request, storage, body)
     runner = get_runner(request.app)
     source = body.upload_id or body.dataset_id
     for active in runner.store.list(state=CampaignRunState.RUNNING):
@@ -437,6 +446,55 @@ def create_campaign_run(
     runner.ensure_running()
     response.headers["Location"] = f"/campaign-runs/{record.campaign_run_id}"
     return runner.view(started)
+
+
+@router.get(
+    "/campaign-runs/model-offer",
+    response_model=ModelOffer,
+    responses=_ERRORS,
+    summary="Next month's Start: can last month's model score this prepared file, and which fits better",
+)
+def read_model_offer(
+    request: Request,
+    storage: StorageDep,
+    root: ConfigRootDep,
+    use_case: str,
+    upload_id: str,
+    client_id: str | None = None,
+) -> ModelOffer:
+    """The first month there is no current model, so the offer holds none and Start only learns."""
+    use_case_config(use_case, root)
+    columns = [c.name for c in load_upload_profile(storage, upload_id).columns]
+    model = get_registry(request).get_champion(use_case)
+    newest, last = FingerprintStore(storage).newest_two(client_id or DEFAULT_CLIENT_ID, use_case)
+    return model_offer(
+        model,
+        None if model is None else missing_columns(storage, model, columns),
+        now=utc_now(),
+        current=newest,
+        last=last,
+        rules=load_engine_config(root).model_reuse,
+    )
+
+
+def _require_readable(request: Request, storage: StorageDep, body: CampaignRunRequest) -> None:
+    """A named model that cannot read the file is refused now, not after the run has been taken."""
+    if body.model_version_id is None or body.upload_id is None:
+        return
+    try:
+        version = get_registry(request).get(body.model_version_id)
+    except RegistryError:
+        return  # the run's own check names an unknown model
+    missing = missing_columns(
+        storage, version, [c.name for c in load_upload_profile(storage, body.upload_id).columns]
+    )
+    if missing:
+        names = ", ".join(f"'{n}'" for n in missing[:5])
+        raise http_error(
+            409,
+            "MODEL_CANNOT_READ_FILE",
+            f"The model needs {names}, which this file does not have. Learn again on the new data instead.",
+        )
 
 
 @router.get(

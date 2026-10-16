@@ -15,6 +15,15 @@ campaign_speeds:
   thorough: 40
 
 # ---------------------------------------------------------------------------
+# model_reuse: next month, Start offers "Use last month's model" or "Learn again on the new data".
+# The hint suggests learning again when the model is older than max_age_days, the outcome rate moved by more than
+# max_rate_ratio times, or the columns changed since the last approved file.
+# ---------------------------------------------------------------------------
+model_reuse:
+  max_age_days: 45
+  max_rate_ratio: 1.5
+
+# ---------------------------------------------------------------------------
 # catalog: engine-level constants. NOT merged into use cases, NOT overridable.
 # ---------------------------------------------------------------------------
 catalog:

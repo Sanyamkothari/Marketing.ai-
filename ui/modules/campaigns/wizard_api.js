@@ -66,6 +66,17 @@ const runsPath = (id) => `/campaign-runs/${encodeURIComponent(id)}`;
 /** Start a campaign on the server (`POST /campaign-runs`): learn, score, build the list. It goes on without the browser. */
 export const postCampaignRun = (payload) => request("/campaign-runs", post(payload));
 
+/**
+ * Next month's Start (`GET /campaign-runs/model-offer`): `{ model_version_id, usable, reason, suggest, hint }`.
+ * `model_version_id` is null the first month (only learning is offered); `usable` false says why in `reason`.
+ */
+export const getModelOffer = (useCase, uploadId, clientId = null) =>
+  request(
+    `/campaign-runs/model-offer?use_case=${encodeURIComponent(useCase)}&upload_id=${encodeURIComponent(uploadId)}${
+      clientId ? `&client_id=${encodeURIComponent(clientId)}` : ""
+    }`,
+  );
+
 /** Where one campaign run is (`GET /campaign-runs/{id}`): `{ record, pct, eta_seconds, summary }`. */
 export const getCampaignRun = (id) => request(runsPath(id));
 

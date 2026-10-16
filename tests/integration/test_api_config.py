@@ -490,6 +490,7 @@ def test_openapi_builds_and_documents_every_route(client: TestClient) -> None:
         "/campaigns/{campaign_id}",
         # v1: the Campaign Run - Start runs learn, score and list on the server
         "/campaign-runs",
+        "/campaign-runs/model-offer",
         "/campaign-runs/{campaign_run_id}",
         "/campaign-runs/{campaign_run_id}/cancel",
         "/campaign-runs/{campaign_run_id}/restart",

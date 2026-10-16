@@ -55,6 +55,9 @@ export function serverFor(world) {
     }
     if (method === "GET" && p === `/cases/${CASE}/screen`) return ok(world.patch ? world.patch(screen(world.at)) : screen(world.at));
     if (method === "GET" && /^\/uploads\/[^/]+\/profile$/.test(p)) return ok({ rows: 1200, row_count: 1200, columns: [] });
+    if (method === "GET" && p === "/campaign-runs/model-offer") {
+      return world.offer ? ok(world.offer) : { status: 404, body: { detail: { code: "NOT_FOUND", message: "No offer." } } };
+    }
     if (method === "POST" && p === "/campaign-runs") {
       world.posted.push({ path: p, body: request.body });
       return ok({ record: { campaign_run_id: "cr_dds", state: "running" }, pct: 0, eta_seconds: null, summary: "" }, 202);
