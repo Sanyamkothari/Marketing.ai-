@@ -164,6 +164,7 @@ def test_monthly_exports_that_repeat_rows_are_one_stack_that_counts_each_row_onc
     item = _one(case, "stack_files")
 
     assert not [i for i in case.items if i.kind == "build_dataset"], "no customer list: nothing to join"
+    assert item.state is ProposalState.ACCEPTED, "same columns: stacked is the recommended default"
     assert "50 rows that two exports both hold are counted once" in item.title
     assert (item.payload["rows_in"], item.payload["rows_out"]) == (400, 350)
     assert (

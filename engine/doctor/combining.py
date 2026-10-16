@@ -362,9 +362,12 @@ def _stack(
             payload,
             title=title,
             upload_id=stack.upload_ids[0],
-            confidence=AgentConfidence.CHECK,
+            # Files with the same columns are one table cut into pieces: stacked is the recommended default (one
+            # click unticks it). A stack the guard stops on (rows lost, conflicts) is left for the person to tick.
+            confidence=AgentConfidence.CHECK if payload.get("needs_yes") else AgentConfidence.SURE,
             evidence=(),
             now=now,
+            ticked=not payload.get("needs_yes"),
         )
         return item, _unit_ask(stack, loaded)
     # Two exports give the same customer and day different values: one question, with each answer's item.

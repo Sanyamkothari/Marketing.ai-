@@ -11,7 +11,7 @@
         "graded": 6
       },
       "double_counting": {
-        "failed": 1,
+        "failed": 0,
         "graded": 5
       },
       "join": {
@@ -19,7 +19,7 @@
         "graded": 4
       },
       "leak": {
-        "failed": 3,
+        "failed": 0,
         "graded": 3
       },
       "outcome_population": {
@@ -35,8 +35,8 @@
         "graded": 34
       }
     },
-    "failed": 7,
-    "passed": 23,
+    "failed": 3,
+    "passed": 27,
     "results": [
       {
         "asked_only": false,
@@ -106,12 +106,10 @@
       },
       {
         "asked_only": false,
-        "detail": "the result has 80 rows; the customers are 150",
-        "failed_categories": [
-          "double_counting"
-        ],
+        "detail": "",
+        "failed_categories": [],
         "id": "f21_overlapping_exports",
-        "passed": false,
+        "passed": true,
         "untested": false
       },
       {
@@ -182,12 +180,10 @@
       },
       {
         "asked_only": false,
-        "detail": "cancellation_reason still in the table the model would learn from / nothing like it was asked (it asked: TRAINING_BUDGET)",
-        "failed_categories": [
-          "leak"
-        ],
+        "detail": "",
+        "failed_categories": [],
         "id": "s05_cancellation_reason",
-        "passed": false,
+        "passed": true,
         "untested": false
       },
       {
@@ -208,12 +204,10 @@
       },
       {
         "asked_only": false,
-        "detail": "is_active still in the table the model would learn from / nothing like it was asked (it asked: TRAINING_BUDGET)",
-        "failed_categories": [
-          "leak"
-        ],
+        "detail": "",
+        "failed_categories": [],
         "id": "t06_status_exported_today",
-        "passed": false,
+        "passed": true,
         "untested": false
       },
       {
@@ -228,12 +222,10 @@
       },
       {
         "asked_only": false,
-        "detail": "account_status still in the table the model would learn from / nothing like it was asked (it asked: TRAINING_BUDGET)",
-        "failed_categories": [
-          "leak"
-        ],
+        "detail": "",
+        "failed_categories": [],
         "id": "t13_outcome_from_column",
-        "passed": false,
+        "passed": true,
         "untested": false
       },
       {
@@ -250,7 +242,7 @@
         "failed_categories": [],
         "id": "v01_paise_vs_rupees",
         "passed": true,
-        "untested": true
+        "untested": false
       },
       {
         "asked_only": false,
@@ -295,7 +287,7 @@
     ],
     "shown_right": 15,
     "unstable": 0,
-    "untested": 5
+    "untested": 4
   },
   "by_category": {
     "asked": {
@@ -307,7 +299,7 @@
       "graded": 6
     },
     "double_counting": {
-      "failed": 1,
+      "failed": 0,
       "graded": 5
     },
     "join": {
@@ -315,7 +307,7 @@
       "graded": 4
     },
     "leak": {
-      "failed": 3,
+      "failed": 0,
       "graded": 3
     },
     "outcome_population": {
@@ -333,12 +325,12 @@
   },
   "cases": 30,
   "driver": "person",
-  "failed": 4,
+  "failed": 0,
   "guessed_answers": 0,
   "k": 2,
   "key_over_recommendation": 0,
   "model": "rules",
-  "passed": 26,
+  "passed": 30,
   "results": [
     {
       "asked_only": false,
@@ -421,7 +413,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 120,
-          "seconds": 2.41,
+          "seconds": 3.76,
           "shown_right": true
         },
         {
@@ -495,7 +487,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 120,
-          "seconds": 0.76,
+          "seconds": 1.19,
           "shown_right": true
         }
       ],
@@ -576,7 +568,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 0.73,
+          "seconds": 1.03,
           "shown_right": null
         },
         {
@@ -639,7 +631,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 0.68,
+          "seconds": 0.86,
           "shown_right": null
         }
       ],
@@ -731,7 +723,7 @@
             "Q23_WHO_CAN_RESPOND"
           ],
           "rows": 72,
-          "seconds": 0.88,
+          "seconds": 1.12,
           "shown_right": true
         },
         {
@@ -805,7 +797,7 @@
             "Q23_WHO_CAN_RESPOND"
           ],
           "rows": 72,
-          "seconds": 0.83,
+          "seconds": 1.0,
           "shown_right": true
         }
       ],
@@ -902,7 +894,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 100,
-          "seconds": 1.23,
+          "seconds": 1.19,
           "shown_right": null
         },
         {
@@ -981,7 +973,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 100,
-          "seconds": 1.12,
+          "seconds": 1.22,
           "shown_right": null
         }
       ],
@@ -1067,7 +1059,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 60,
-          "seconds": 0.92,
+          "seconds": 0.86,
           "shown_right": null
         },
         {
@@ -1135,7 +1127,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 60,
-          "seconds": 0.89,
+          "seconds": 1.16,
           "shown_right": null
         }
       ],
@@ -1225,7 +1217,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 40,
-          "seconds": 0.43,
+          "seconds": 0.52,
           "shown_right": true
         },
         {
@@ -1297,7 +1289,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 40,
-          "seconds": 0.46,
+          "seconds": 0.49,
           "shown_right": true
         }
       ],
@@ -1377,7 +1369,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 60,
-          "seconds": 0.67,
+          "seconds": 0.63,
           "shown_right": true
         },
         {
@@ -1439,7 +1431,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 60,
-          "seconds": 0.56,
+          "seconds": 0.89,
           "shown_right": true
         }
       ],
@@ -1516,7 +1508,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 10,
-          "seconds": 0.37,
+          "seconds": 0.49,
           "shown_right": true
         },
         {
@@ -1575,7 +1567,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 10,
-          "seconds": 0.37,
+          "seconds": 0.42,
           "shown_right": true
         }
       ],
@@ -1590,18 +1582,19 @@
       "asked_only": false,
       "description": "The February export repeats the last 25 calls of January, so stacking the two files counts them twice.",
       "expected": "January and February are stacked into one table of 150 calls, each call once.",
-      "failed_categories": [
-        "double_counting"
-      ],
+      "failed_categories": [],
       "id": "f21_overlapping_exports",
       "if_fails": "The person would have to tick the plan's suggestion \"Stack <file> and <file> into one table\". It is shown but not pre-ticked, so each file is used alone and the other one's customers are not counted. The product should PRE-TICK it, not ask: the files have the same columns, it has already measured the repeated rows, and the suggestion states the rows before and after; the approval still names it and one click unticks it.",
       "k": 2,
-      "passed": false,
+      "passed": true,
       "runs": [
         {
           "accepted": [
             "\u201ccall_id\u201d names each row of calls_jan.csv.",
             "\u201ccall_id\u201d names each row of calls_feb.csv.",
+            "Stack calls_feb.csv and calls_jan.csv into one table: 175 rows in the files, 25 rows that two exports both hold are counted once, 150 rows in the table.",
+            "Training: Balanced (about 2 min, recommended). Time for the search to finish on a file this size (from similar public datasets).",
+            "\u201ccall_id\u201d names each row of calls_feb stacked.csv.",
             "Training: Balanced (about 2 min, recommended). Time for the search to finish on a file this size (from similar public datasets)."
           ],
           "checks": [
@@ -1622,9 +1615,9 @@
             {
               "asked_only": false,
               "category": "double_counting",
-              "detail": "the result has 80 rows; the customers are 150",
+              "detail": "150 rows, one per customer",
               "label": "150 calls once each after stacking the two exports",
-              "passed": false
+              "passed": true
             }
           ],
           "choices": [
@@ -1632,10 +1625,15 @@
               "did": "answered",
               "what": "TRAINING_BUDGET: Balanced (about 2 min, recommended)",
               "why": "recommended"
+            },
+            {
+              "did": "answered",
+              "what": "TRAINING_BUDGET: Balanced (about 2 min, recommended)",
+              "why": "recommended"
             }
           ],
-          "combined": false,
-          "digest": "11af7c960c22",
+          "combined": true,
+          "digest": "66def141c648",
           "error": null,
           "left_open": [
             {
@@ -1645,11 +1643,6 @@
             }
           ],
           "left_unticked": [
-            {
-              "column": null,
-              "kind": "stack_files",
-              "title": "Stack calls_feb.csv and calls_jan.csv into one table: 175 rows in the files, 25 rows that two exports both hold are counted once, 150 rows in the table."
-            },
             {
               "column": null,
               "kind": "data_check",
@@ -1664,22 +1657,31 @@
               "column": "call_id",
               "kind": "data_check",
               "title": "'call_id': 100.0% of 95 values are different from each other; the most common appears 1 times."
+            },
+            {
+              "column": "call_id",
+              "kind": "data_check",
+              "title": "'call_id': 100.0% of 150 values are different from each other; the most common appears 1 times."
             }
           ],
           "notes": [],
-          "passed": false,
+          "passed": true,
           "questions": [
             "DATA_REQUESTED",
+            "TRAINING_BUDGET",
             "TRAINING_BUDGET"
           ],
-          "rows": 80,
-          "seconds": 0.75,
+          "rows": 150,
+          "seconds": 1.32,
           "shown_right": null
         },
         {
           "accepted": [
             "\u201ccall_id\u201d names each row of calls_jan.csv.",
             "\u201ccall_id\u201d names each row of calls_feb.csv.",
+            "Stack calls_feb.csv and calls_jan.csv into one table: 175 rows in the files, 25 rows that two exports both hold are counted once, 150 rows in the table.",
+            "Training: Balanced (about 2 min, recommended). Time for the search to finish on a file this size (from similar public datasets).",
+            "\u201ccall_id\u201d names each row of calls_feb stacked.csv.",
             "Training: Balanced (about 2 min, recommended). Time for the search to finish on a file this size (from similar public datasets)."
           ],
           "checks": [
@@ -1700,9 +1702,9 @@
             {
               "asked_only": false,
               "category": "double_counting",
-              "detail": "the result has 80 rows; the customers are 150",
+              "detail": "150 rows, one per customer",
               "label": "150 calls once each after stacking the two exports",
-              "passed": false
+              "passed": true
             }
           ],
           "choices": [
@@ -1710,10 +1712,15 @@
               "did": "answered",
               "what": "TRAINING_BUDGET: Balanced (about 2 min, recommended)",
               "why": "recommended"
+            },
+            {
+              "did": "answered",
+              "what": "TRAINING_BUDGET: Balanced (about 2 min, recommended)",
+              "why": "recommended"
             }
           ],
-          "combined": false,
-          "digest": "11af7c960c22",
+          "combined": true,
+          "digest": "66def141c648",
           "error": null,
           "left_open": [
             {
@@ -1723,11 +1730,6 @@
             }
           ],
           "left_unticked": [
-            {
-              "column": null,
-              "kind": "stack_files",
-              "title": "Stack calls_feb.csv and calls_jan.csv into one table: 175 rows in the files, 25 rows that two exports both hold are counted once, 150 rows in the table."
-            },
             {
               "column": null,
               "kind": "data_check",
@@ -1742,20 +1744,26 @@
               "column": "call_id",
               "kind": "data_check",
               "title": "'call_id': 100.0% of 95 values are different from each other; the most common appears 1 times."
+            },
+            {
+              "column": "call_id",
+              "kind": "data_check",
+              "title": "'call_id': 100.0% of 150 values are different from each other; the most common appears 1 times."
             }
           ],
           "notes": [],
-          "passed": false,
+          "passed": true,
           "questions": [
             "DATA_REQUESTED",
+            "TRAINING_BUDGET",
             "TRAINING_BUDGET"
           ],
-          "rows": 80,
-          "seconds": 0.73,
+          "rows": 150,
+          "seconds": 1.47,
           "shown_right": null
         }
       ],
-      "runs_passed": 0,
+      "runs_passed": 2,
       "scenario": "F21",
       "shown_right": null,
       "stable": true,
@@ -1837,7 +1845,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 60,
-          "seconds": 0.81,
+          "seconds": 1.0,
           "shown_right": null
         },
         {
@@ -1905,7 +1913,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 60,
-          "seconds": 0.68,
+          "seconds": 0.91,
           "shown_right": null
         }
       ],
@@ -1991,7 +1999,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 48,
-          "seconds": 0.75,
+          "seconds": 0.97,
           "shown_right": true
         },
         {
@@ -2059,7 +2067,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 48,
-          "seconds": 0.68,
+          "seconds": 1.14,
           "shown_right": true
         }
       ],
@@ -2157,7 +2165,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 30,
-          "seconds": 2.21,
+          "seconds": 2.66,
           "shown_right": true
         },
         {
@@ -2237,7 +2245,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 30,
-          "seconds": 2.13,
+          "seconds": 2.84,
           "shown_right": true
         }
       ],
@@ -2358,7 +2366,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 60,
-          "seconds": 0.94,
+          "seconds": 1.51,
           "shown_right": null
         },
         {
@@ -2461,7 +2469,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 60,
-          "seconds": 1.14,
+          "seconds": 1.33,
           "shown_right": null
         }
       ],
@@ -2585,7 +2593,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 50,
-          "seconds": 1.01,
+          "seconds": 1.2,
           "shown_right": null
         },
         {
@@ -2691,7 +2699,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 50,
-          "seconds": 0.97,
+          "seconds": 1.1,
           "shown_right": null
         }
       ],
@@ -2776,7 +2784,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 0.66,
+          "seconds": 0.97,
           "shown_right": null
         },
         {
@@ -2843,7 +2851,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 0.82,
+          "seconds": 0.88,
           "shown_right": null
         }
       ],
@@ -2929,7 +2937,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 0.65,
+          "seconds": 0.8,
           "shown_right": null
         },
         {
@@ -2997,7 +3005,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 0.76,
+          "seconds": 1.03,
           "shown_right": null
         }
       ],
@@ -3093,7 +3101,7 @@
             "Q23_WHO_CAN_RESPOND"
           ],
           "rows": 70,
-          "seconds": 0.85,
+          "seconds": 1.04,
           "shown_right": true
         },
         {
@@ -3171,7 +3179,7 @@
             "Q23_WHO_CAN_RESPOND"
           ],
           "rows": 70,
-          "seconds": 0.85,
+          "seconds": 1.35,
           "shown_right": true
         }
       ],
@@ -3186,17 +3194,16 @@
       "asked_only": false,
       "description": "cancellation_reason is filled in only for customers who left, so 'is it filled in' gives the answer away.",
       "expected": "cancellation_reason is dropped from the features (or the Doctor asks), even though it is blank for most rows.",
-      "failed_categories": [
-        "leak"
-      ],
+      "failed_categories": [],
       "id": "s05_cancellation_reason",
       "if_fails": "The person would have to tick the plan's suggestion \"Remove '<column>': it looks like it gives away the outcome\". It is shown but not pre-ticked, and the column stays among the features, so the model learns from something known only after the outcome. The product should PRE-TICK it, not ask: the leakage check found it and the suggestion already explains it, the person's list and totals do not depend on a feature column, and the plan screen lists it, so the approval still names it and one click unticks it. A leak the person had to find and tick is the failure the owner described: an excellent test score, then a near-random live campaign.",
       "k": 2,
-      "passed": false,
+      "passed": true,
       "runs": [
         {
           "accepted": [
             "\u201ccustomer_id\u201d names each row of customers.csv.",
+            "Remove 'cancellation_reason': it looks like it gives away the outcome (it tells yes from no almost by itself).",
             "\u201cchurn\u201d in customers.csv is the outcome: The subscriber left within the month after the snapshot",
             "Training: Balanced (about 2 min, recommended). Time for the search to finish on a file this size (from similar public datasets)."
           ],
@@ -3218,9 +3225,9 @@
             {
               "asked_only": false,
               "category": "leak",
-              "detail": "cancellation_reason still in the table the model would learn from / nothing like it was asked (it asked: TRAINING_BUDGET)",
+              "detail": "the leak columns are out",
               "label": "cancellation_reason is out of the features",
-              "passed": false
+              "passed": true
             }
           ],
           "choices": [
@@ -3231,15 +3238,10 @@
             }
           ],
           "combined": false,
-          "digest": "4c1d9a5084ee",
+          "digest": "4fdc9f39bee8",
           "error": null,
           "left_open": [],
           "left_unticked": [
-            {
-              "column": null,
-              "kind": "recipe_step",
-              "title": "Remove 'cancellation_reason': it looks like it gives away the outcome (it tells yes from no almost by itself)."
-            },
             {
               "column": "customer_id",
               "kind": "data_check",
@@ -3247,17 +3249,18 @@
             }
           ],
           "notes": [],
-          "passed": false,
+          "passed": true,
           "questions": [
             "TRAINING_BUDGET"
           ],
           "rows": 120,
-          "seconds": 0.73,
+          "seconds": 0.86,
           "shown_right": true
         },
         {
           "accepted": [
             "\u201ccustomer_id\u201d names each row of customers.csv.",
+            "Remove 'cancellation_reason': it looks like it gives away the outcome (it tells yes from no almost by itself).",
             "\u201cchurn\u201d in customers.csv is the outcome: The subscriber left within the month after the snapshot",
             "Training: Balanced (about 2 min, recommended). Time for the search to finish on a file this size (from similar public datasets)."
           ],
@@ -3279,9 +3282,9 @@
             {
               "asked_only": false,
               "category": "leak",
-              "detail": "cancellation_reason still in the table the model would learn from / nothing like it was asked (it asked: TRAINING_BUDGET)",
+              "detail": "the leak columns are out",
               "label": "cancellation_reason is out of the features",
-              "passed": false
+              "passed": true
             }
           ],
           "choices": [
@@ -3292,15 +3295,10 @@
             }
           ],
           "combined": false,
-          "digest": "4c1d9a5084ee",
+          "digest": "4fdc9f39bee8",
           "error": null,
           "left_open": [],
           "left_unticked": [
-            {
-              "column": null,
-              "kind": "recipe_step",
-              "title": "Remove 'cancellation_reason': it looks like it gives away the outcome (it tells yes from no almost by itself)."
-            },
             {
               "column": "customer_id",
               "kind": "data_check",
@@ -3308,16 +3306,16 @@
             }
           ],
           "notes": [],
-          "passed": false,
+          "passed": true,
           "questions": [
             "TRAINING_BUDGET"
           ],
           "rows": 120,
-          "seconds": 0.57,
+          "seconds": 1.02,
           "shown_right": true
         }
       ],
-      "runs_passed": 0,
+      "runs_passed": 2,
       "scenario": "S05",
       "shown_right": true,
       "stable": true,
@@ -3399,7 +3397,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 0.78,
+          "seconds": 1.97,
           "shown_right": true
         },
         {
@@ -3467,7 +3465,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 0.78,
+          "seconds": 1.3,
           "shown_right": true
         }
       ],
@@ -3553,7 +3551,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 0.86,
+          "seconds": 1.15,
           "shown_right": true
         },
         {
@@ -3621,7 +3619,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 0.7,
+          "seconds": 0.88,
           "shown_right": true
         }
       ],
@@ -3636,17 +3634,16 @@
       "asked_only": false,
       "description": "The customer master was exported today, so is_active already says who left: it is 0 for every churner.",
       "expected": "is_active is not left among the columns the model learns from (it is known only after the outcome).",
-      "failed_categories": [
-        "leak"
-      ],
+      "failed_categories": [],
       "id": "t06_status_exported_today",
       "if_fails": "The person would have to tick the plan's suggestion \"Remove '<column>': it looks like it gives away the outcome\". It is shown but not pre-ticked, and the column stays among the features, so the model learns from something known only after the outcome. The product should PRE-TICK it, not ask: the leakage check found it and the suggestion already explains it, the person's list and totals do not depend on a feature column, and the plan screen lists it, so the approval still names it and one click unticks it. A leak the person had to find and tick is the failure the owner described: an excellent test score, then a near-random live campaign.",
       "k": 2,
-      "passed": false,
+      "passed": true,
       "runs": [
         {
           "accepted": [
             "\u201ccustomer_id\u201d names each row of customers.csv.",
+            "Remove 'is_active': it looks like it gives away the outcome (it tells yes from no almost by itself).",
             "\u201cchurn\u201d in customers.csv is the outcome: The subscriber left within the month after the snapshot",
             "Training: Balanced (about 2 min, recommended). Time for the search to finish on a file this size (from similar public datasets)."
           ],
@@ -3668,9 +3665,9 @@
             {
               "asked_only": false,
               "category": "leak",
-              "detail": "is_active still in the table the model would learn from / nothing like it was asked (it asked: TRAINING_BUDGET)",
+              "detail": "the leak columns are out",
               "label": "is_active (today's status) is out of the features",
-              "passed": false
+              "passed": true
             }
           ],
           "choices": [
@@ -3681,15 +3678,10 @@
             }
           ],
           "combined": false,
-          "digest": "f55b0cb8aeb2",
+          "digest": "10dbd81c1c0a",
           "error": null,
           "left_open": [],
           "left_unticked": [
-            {
-              "column": null,
-              "kind": "recipe_step",
-              "title": "Remove 'is_active': it looks like it gives away the outcome (it tells yes from no almost by itself)."
-            },
             {
               "column": "customer_id",
               "kind": "data_check",
@@ -3697,17 +3689,18 @@
             }
           ],
           "notes": [],
-          "passed": false,
+          "passed": true,
           "questions": [
             "TRAINING_BUDGET"
           ],
           "rows": 120,
-          "seconds": 0.48,
+          "seconds": 0.84,
           "shown_right": true
         },
         {
           "accepted": [
             "\u201ccustomer_id\u201d names each row of customers.csv.",
+            "Remove 'is_active': it looks like it gives away the outcome (it tells yes from no almost by itself).",
             "\u201cchurn\u201d in customers.csv is the outcome: The subscriber left within the month after the snapshot",
             "Training: Balanced (about 2 min, recommended). Time for the search to finish on a file this size (from similar public datasets)."
           ],
@@ -3729,9 +3722,9 @@
             {
               "asked_only": false,
               "category": "leak",
-              "detail": "is_active still in the table the model would learn from / nothing like it was asked (it asked: TRAINING_BUDGET)",
+              "detail": "the leak columns are out",
               "label": "is_active (today's status) is out of the features",
-              "passed": false
+              "passed": true
             }
           ],
           "choices": [
@@ -3742,15 +3735,10 @@
             }
           ],
           "combined": false,
-          "digest": "f55b0cb8aeb2",
+          "digest": "10dbd81c1c0a",
           "error": null,
           "left_open": [],
           "left_unticked": [
-            {
-              "column": null,
-              "kind": "recipe_step",
-              "title": "Remove 'is_active': it looks like it gives away the outcome (it tells yes from no almost by itself)."
-            },
             {
               "column": "customer_id",
               "kind": "data_check",
@@ -3758,16 +3746,16 @@
             }
           ],
           "notes": [],
-          "passed": false,
+          "passed": true,
           "questions": [
             "TRAINING_BUDGET"
           ],
           "rows": 120,
-          "seconds": 0.5,
+          "seconds": 0.77,
           "shown_right": true
         }
       ],
-      "runs_passed": 0,
+      "runs_passed": 2,
       "scenario": "T06",
       "shown_right": true,
       "stable": true,
@@ -3859,7 +3847,7 @@
             "THIN_LAST_PERIOD"
           ],
           "rows": 180,
-          "seconds": 1.2,
+          "seconds": 1.4,
           "shown_right": true
         },
         {
@@ -3937,7 +3925,7 @@
             "THIN_LAST_PERIOD"
           ],
           "rows": 180,
-          "seconds": 0.97,
+          "seconds": 1.38,
           "shown_right": true
         }
       ],
@@ -3952,17 +3940,16 @@
       "asked_only": false,
       "description": "The churn flag was built from account_status, which stays in the file as an ordinary column.",
       "expected": "account_status, the column the outcome came from, is dropped from the features.",
-      "failed_categories": [
-        "leak"
-      ],
+      "failed_categories": [],
       "id": "t13_outcome_from_column",
       "if_fails": "The person would have to tick the plan's suggestion \"Remove '<column>': it looks like it gives away the outcome\". It is shown but not pre-ticked, and the column stays among the features, so the model learns from something known only after the outcome. The product should PRE-TICK it, not ask: the leakage check found it and the suggestion already explains it, the person's list and totals do not depend on a feature column, and the plan screen lists it, so the approval still names it and one click unticks it. A leak the person had to find and tick is the failure the owner described: an excellent test score, then a near-random live campaign.",
       "k": 2,
-      "passed": false,
+      "passed": true,
       "runs": [
         {
           "accepted": [
             "\u201ccustomer_id\u201d names each row of customers.csv.",
+            "Remove 'account_status': it looks like it gives away the outcome (it tells yes from no almost by itself).",
             "\u201cchurn\u201d in customers.csv is the outcome: The subscriber left within the month after the snapshot",
             "Training: Balanced (about 2 min, recommended). Time for the search to finish on a file this size (from similar public datasets)."
           ],
@@ -3984,9 +3971,9 @@
             {
               "asked_only": false,
               "category": "leak",
-              "detail": "account_status still in the table the model would learn from / nothing like it was asked (it asked: TRAINING_BUDGET)",
+              "detail": "the leak columns are out",
               "label": "account_status (the outcome's source) is out of the features",
-              "passed": false
+              "passed": true
             }
           ],
           "choices": [
@@ -3997,15 +3984,10 @@
             }
           ],
           "combined": false,
-          "digest": "0a26078ceb0a",
+          "digest": "6735c6d22cc2",
           "error": null,
           "left_open": [],
           "left_unticked": [
-            {
-              "column": null,
-              "kind": "recipe_step",
-              "title": "Remove 'account_status': it looks like it gives away the outcome (it tells yes from no almost by itself)."
-            },
             {
               "column": "customer_id",
               "kind": "data_check",
@@ -4013,17 +3995,18 @@
             }
           ],
           "notes": [],
-          "passed": false,
+          "passed": true,
           "questions": [
             "TRAINING_BUDGET"
           ],
           "rows": 120,
-          "seconds": 0.52,
+          "seconds": 0.74,
           "shown_right": true
         },
         {
           "accepted": [
             "\u201ccustomer_id\u201d names each row of customers.csv.",
+            "Remove 'account_status': it looks like it gives away the outcome (it tells yes from no almost by itself).",
             "\u201cchurn\u201d in customers.csv is the outcome: The subscriber left within the month after the snapshot",
             "Training: Balanced (about 2 min, recommended). Time for the search to finish on a file this size (from similar public datasets)."
           ],
@@ -4045,9 +4028,9 @@
             {
               "asked_only": false,
               "category": "leak",
-              "detail": "account_status still in the table the model would learn from / nothing like it was asked (it asked: TRAINING_BUDGET)",
+              "detail": "the leak columns are out",
               "label": "account_status (the outcome's source) is out of the features",
-              "passed": false
+              "passed": true
             }
           ],
           "choices": [
@@ -4058,15 +4041,10 @@
             }
           ],
           "combined": false,
-          "digest": "0a26078ceb0a",
+          "digest": "6735c6d22cc2",
           "error": null,
           "left_open": [],
           "left_unticked": [
-            {
-              "column": null,
-              "kind": "recipe_step",
-              "title": "Remove 'account_status': it looks like it gives away the outcome (it tells yes from no almost by itself)."
-            },
             {
               "column": "customer_id",
               "kind": "data_check",
@@ -4074,16 +4052,16 @@
             }
           ],
           "notes": [],
-          "passed": false,
+          "passed": true,
           "questions": [
             "TRAINING_BUDGET"
           ],
           "rows": 120,
-          "seconds": 0.59,
+          "seconds": 0.84,
           "shown_right": true
         }
       ],
-      "runs_passed": 0,
+      "runs_passed": 2,
       "scenario": "T13",
       "shown_right": true,
       "stable": true,
@@ -4170,7 +4148,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 90,
-          "seconds": 0.97,
+          "seconds": 1.22,
           "shown_right": true
         },
         {
@@ -4243,7 +4221,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 90,
-          "seconds": 0.81,
+          "seconds": 0.98,
           "shown_right": true
         }
       ],
@@ -4268,7 +4246,10 @@
           "accepted": [
             "\u201corder_id\u201d names each row of sales_a.csv.",
             "\u201corder_id\u201d names each row of sales_b.csv.",
+            "Stack sales_a.csv and sales_b.csv into one table: 80 rows in the files, no row is in two exports, 80 rows in the table.",
             "\u201cchurn\u201d is the outcome: The subscriber left within the month after the snapshot",
+            "Training: Balanced (about 2 min, recommended). Time for the search to finish on a file this size (from similar public datasets).",
+            "\u201corder_id\u201d names each row of sales_a stacked.csv.",
             "Training: Balanced (about 2 min, recommended). Time for the search to finish on a file this size (from similar public datasets)."
           ],
           "checks": [
@@ -4309,19 +4290,19 @@
               "did": "answered",
               "what": "TRAINING_BUDGET: Balanced (about 2 min, recommended)",
               "why": "recommended"
+            },
+            {
+              "did": "answered",
+              "what": "TRAINING_BUDGET: Balanced (about 2 min, recommended)",
+              "why": "recommended"
             }
           ],
-          "combined": false,
-          "digest": "8e6d52b0b931",
+          "combined": true,
+          "digest": "972d39e4e259",
           "error": null,
           "left_open": [],
           "left_unticked": [
             {
-              "column": null,
-              "kind": "stack_files",
-              "title": "Stack sales_a.csv and sales_b.csv into one table: 80 rows in the files, no row is in two exports, 80 rows in the table."
-            },
-            {
               "column": "order_id",
               "kind": "data_check",
               "title": "'order_id': 100.0% of 40 values are different from each other; the most common appears 1 times."
@@ -4330,6 +4311,11 @@
               "column": "order_id",
               "kind": "data_check",
               "title": "'order_id': 100.0% of 40 values are different from each other; the most common appears 1 times."
+            },
+            {
+              "column": "order_id",
+              "kind": "data_check",
+              "title": "'order_id': 100.0% of 80 values are different from each other; the most common appears 1 times."
             }
           ],
           "notes": [],
@@ -4337,17 +4323,21 @@
           "questions": [
             "Q06_UNIT_SCALE",
             "OUTCOME_COLUMN",
+            "TRAINING_BUDGET",
             "TRAINING_BUDGET"
           ],
-          "rows": 40,
-          "seconds": 1.07,
+          "rows": 80,
+          "seconds": 1.6,
           "shown_right": true
         },
         {
           "accepted": [
             "\u201corder_id\u201d names each row of sales_a.csv.",
             "\u201corder_id\u201d names each row of sales_b.csv.",
+            "Stack sales_a.csv and sales_b.csv into one table: 80 rows in the files, no row is in two exports, 80 rows in the table.",
             "\u201cchurn\u201d is the outcome: The subscriber left within the month after the snapshot",
+            "Training: Balanced (about 2 min, recommended). Time for the search to finish on a file this size (from similar public datasets).",
+            "\u201corder_id\u201d names each row of sales_a stacked.csv.",
             "Training: Balanced (about 2 min, recommended). Time for the search to finish on a file this size (from similar public datasets)."
           ],
           "checks": [
@@ -4388,19 +4378,19 @@
               "did": "answered",
               "what": "TRAINING_BUDGET: Balanced (about 2 min, recommended)",
               "why": "recommended"
+            },
+            {
+              "did": "answered",
+              "what": "TRAINING_BUDGET: Balanced (about 2 min, recommended)",
+              "why": "recommended"
             }
           ],
-          "combined": false,
-          "digest": "8e6d52b0b931",
+          "combined": true,
+          "digest": "972d39e4e259",
           "error": null,
           "left_open": [],
           "left_unticked": [
             {
-              "column": null,
-              "kind": "stack_files",
-              "title": "Stack sales_a.csv and sales_b.csv into one table: 80 rows in the files, no row is in two exports, 80 rows in the table."
-            },
-            {
               "column": "order_id",
               "kind": "data_check",
               "title": "'order_id': 100.0% of 40 values are different from each other; the most common appears 1 times."
@@ -4409,6 +4399,11 @@
               "column": "order_id",
               "kind": "data_check",
               "title": "'order_id': 100.0% of 40 values are different from each other; the most common appears 1 times."
+            },
+            {
+              "column": "order_id",
+              "kind": "data_check",
+              "title": "'order_id': 100.0% of 80 values are different from each other; the most common appears 1 times."
             }
           ],
           "notes": [],
@@ -4416,10 +4411,11 @@
           "questions": [
             "Q06_UNIT_SCALE",
             "OUTCOME_COLUMN",
+            "TRAINING_BUDGET",
             "TRAINING_BUDGET"
           ],
-          "rows": 40,
-          "seconds": 1.2,
+          "rows": 80,
+          "seconds": 1.82,
           "shown_right": true
         }
       ],
@@ -4428,7 +4424,7 @@
       "shown_right": true,
       "stable": true,
       "theme": "Money and units whose meaning is not in the cells",
-      "untested": true
+      "untested": false
     },
     {
       "asked_only": false,
@@ -4493,7 +4489,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 60,
-          "seconds": 0.41,
+          "seconds": 0.65,
           "shown_right": null
         },
         {
@@ -4549,7 +4545,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 60,
-          "seconds": 0.41,
+          "seconds": 0.59,
           "shown_right": null
         }
       ],
@@ -4623,7 +4619,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 0.66,
+          "seconds": 0.92,
           "shown_right": null
         },
         {
@@ -4679,7 +4675,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 0.46,
+          "seconds": 0.81,
           "shown_right": null
         }
       ],
@@ -4770,7 +4766,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 0.69,
+          "seconds": 1.12,
           "shown_right": true
         },
         {
@@ -4843,7 +4839,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 80,
-          "seconds": 0.76,
+          "seconds": 0.97,
           "shown_right": true
         }
       ],
@@ -4930,7 +4926,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 90,
-          "seconds": 0.7,
+          "seconds": 1.03,
           "shown_right": null
         },
         {
@@ -4999,7 +4995,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 90,
-          "seconds": 0.67,
+          "seconds": 0.9,
           "shown_right": null
         }
       ],
@@ -5080,7 +5076,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 124,
-          "seconds": 1.56,
+          "seconds": 1.84,
           "shown_right": true
         },
         {
@@ -5143,7 +5139,7 @@
             "TRAINING_BUDGET"
           ],
           "rows": 124,
-          "seconds": 1.44,
+          "seconds": 1.65,
           "shown_right": true
         }
       ],
@@ -5452,6 +5448,6 @@
     "untested": 4
   },
   "unstable": 0,
-  "untested": 5,
+  "untested": 4,
   "version": 1
 }

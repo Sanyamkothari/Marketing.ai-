@@ -2,14 +2,14 @@
 
 30 planted traps, each run 2 times with no AI (the rules path). A trap passes only if every run passes every check. The result data is graded, never the Doctor's words.
 
-**Person-like (the number to track): passed 26 of 30.**
-Tick-all (the old driver, flatters the product): passed 30 of 30. Person who skips the questions that do not block: passed 23 of 30.
+**Person-like (the number to track): passed 30 of 30.**
+Tick-all (the old driver, flatters the product): passed 30 of 30. Person who skips the questions that do not block: passed 27 of 30.
 
 * **Person-like** acts like a careful person: it accepts what the product pre-ticks, leaves every unticked suggestion unticked (unless the case's answer key says a person who knows their business would tick it), answers every question that has a recommended option with that option, answers the questions only the person can (which column is the outcome, consent direction, units, which statuses are real money, household) from the case's answer key, says "I don't know" where the key says the person would not know, and says yes to a safety stop only where the key says the loss is what the person meant.
 * **Tick-all** (`--tick-all`) answers blocking questions only and ticks every pending suggestion, so a leak column the product leaves unticked is dropped anyway. It is the old behaviour, kept for comparison.
 * **Skips optional questions** is the person-like driver that leaves every question that does not block unanswered (a person who clicks through). A trap that passes person-like but fails here only passes if the person answers a question the product could have answered for them.
 
-Runs that disagreed with each other (person-like): 0. 5 of the passes are untested: the case has several files but nothing was joined or stacked, so its join traps were never sprung. 2 pass (asked only): the right question was asked but the data was not fixed (the check accepts either).
+Runs that disagreed with each other (person-like): 0. 4 of the passes are untested: the case has several files but nothing was joined or stacked, so its join traps were never sprung. 2 pass (asked only): the right question was asked but the data was not fixed (the check accepts either).
 
 **Asked the right question** (person-like run; the right question or flag was on the screen the person saw, ticked or not, whatever the data did): 18 of 18 traps that have one. A flag that changes nothing does not protect the data, so this is counted apart from the pass.
 
@@ -26,8 +26,8 @@ Many traps fail today. That is expected: the bench measures, it does not have to
 | No silent row loss | 30 | 0 |
 | No unapproved change | 34 | 0 |
 | Correct join (keys not merged, one row per customer) | 4 | 0 |
-| No double counting (totals) | 5 | 1 |
-| No leak column kept | 3 | 3 |
+| No double counting (totals) | 5 | 0 |
+| No leak column kept | 3 | 0 |
 | Outcome population correct | 4 | 0 |
 | Contact-list exclusions applied | 6 | 0 |
 | Asked the right question | 3 | 0 |
@@ -44,7 +44,7 @@ Many traps fail today. That is expected: the bench measures, it does not have to
 | f02_excel_e_plus | F02 | pass | pass | pass | yes |  |
 | f04_merged_cells_region | F04 | pass (asked only) | pass (asked only) | pass (asked only) | yes |  |
 | f05_pivot_summary | F05 | pass | pass | pass | yes |  |
-| f21_overlapping_exports | F21 | FAIL | pass | FAIL | - | the result has 80 rows; the customers are 150 |
+| f21_overlapping_exports | F21 | pass | pass | pass | - |  |
 | k13_household | K13 | pass | pass | pass | - |  |
 | k15_failed_payments | K15 | pass | pass (asked only) | pass (asked only) | yes |  |
 | k16_ticket_status_log | K16 | pass | pass (asked only) | pass (asked only) | yes |  |
@@ -53,64 +53,23 @@ Many traps fail today. That is expected: the bench measures, it does not have to
 | p7_minors | P7 | pass | pass | pass | - |  |
 | p8_deceased_fraud | P8 | pass | pass | pass | - |  |
 | s01_never_active | S01 | pass | pass (asked only) | FAIL | yes |  |
-| s05_cancellation_reason | S05 | FAIL | pass | FAIL | yes | cancellation_reason still in the table the model would learn from / nothing like it was asked (it asked: TRAINING_BUDGET) |
+| s05_cancellation_reason | S05 | pass | pass | pass | yes |  |
 | t01_mixed_date_order | T01 | pass | pass | pass | yes |  |
 | t03_placeholder_dates | T03 | pass | pass | pass (asked only) | yes |  |
-| t06_status_exported_today | T06 | FAIL | pass | FAIL | yes | is_active still in the table the model would learn from / nothing like it was asked (it asked: TRAINING_BUDGET) |
+| t06_status_exported_today | T06 | pass | pass | pass | yes |  |
 | t07_immature_last_month | T07 | pass | pass (asked only) | FAIL | yes |  |
-| t13_outcome_from_column | T13 | FAIL | pass | FAIL | yes | account_status still in the table the model would learn from / nothing like it was asked (it asked: TRAINING_BUDGET) |
+| t13_outcome_from_column | T13 | pass | pass | pass | yes |  |
 | t15_partial_last_month | T15 | pass | pass (asked only) | pass (asked only) | yes |  |
-| v01_paise_vs_rupees | V01 | pass, untested | pass (asked only) | pass, untested | yes | nothing was joined or stacked |
+| v01_paise_vs_rupees | V01 | pass (asked only) | pass (asked only) | pass (asked only) | yes |  |
 | v03_refunds_negative | V03 | pass | pass | pass | - |  |
 | v04_blank_vs_zero | V04 | pass | pass | pass | - |  |
 | v06_test_accounts | V06 | pass | pass | pass | yes |  |
 | v13_consent_spellings | V13 | pass | pass | pass | - |  |
 | v19_order_total_repeated | V19 | pass | pass (asked only) | pass (asked only) | yes |  |
 
-Pass with tick-all, fail person-like (4): f21_overlapping_exports, s05_cancellation_reason, t06_status_exported_today, t13_outcome_from_column.
+Pass with tick-all, fail person-like (0): none.
 
 Pass person-like, fail when the person skips the optional questions (3): c09_already_hold_product, s01_never_active, t07_immature_last_month. For these the recommended answer is what makes the data right, yet the product leaves it unanswered: it should apply the recommendation as a pre-answered, changeable choice (or make the question block).
-
-## Why each trap fails for the person-like driver
-
-For each failure: the failing check, what was left unticked on the plan or unanswered when the person approved, and (written by hand in the case file) what the person would have to do and whether the product should pre-tick it or ask a question.
-
-### f21_overlapping_exports (F21)
-
-- Failed check: 150 calls once each after stacking the two exports. the result has 80 rows; the customers are 150
-- Left unticked: [stack_files] Stack calls_feb.csv and calls_jan.csv into one table: 175 rows in the files, 25 rows that two exports both hold are counted once, 150 rows in the table.
-- Left unticked: [data_check] 25 rows appear in both calls_jan.csv and calls_feb.csv (31% of the smaller one): the two exports overlap, and anything added up across both would count them twice.
-- Also 2 routine 'every value is different' flag(s) (information only).
-- Left unanswered (not blocking): DATA_REQUESTED
-- Why and what to do: The person would have to tick the plan's suggestion "Stack <file> and <file> into one table". It is shown but not pre-ticked, so each file is used alone and the other one's customers are not counted. The product should PRE-TICK it, not ask: the files have the same columns, it has already measured the repeated rows, and the suggestion states the rows before and after; the approval still names it and one click unticks it.
-
-### s05_cancellation_reason (S05)
-
-- Failed check: cancellation_reason is out of the features. cancellation_reason still in the table the model would learn from / nothing like it was asked (it asked: TRAINING_BUDGET)
-- Left unticked: [recipe_step] Remove 'cancellation_reason': it looks like it gives away the outcome (it tells yes from no almost by itself).
-- Also 1 routine 'every value is different' flag(s) (information only).
-- Why and what to do: The person would have to tick the plan's suggestion "Remove '<column>': it looks like it gives away the outcome". It is shown but not pre-ticked, and the column stays among the features, so the model learns from something known only after the outcome. The product should PRE-TICK it, not ask: the leakage check found it and the suggestion already explains it, the person's list and totals do not depend on a feature column, and the plan screen lists it, so the approval still names it and one click unticks it. A leak the person had to find and tick is the failure the owner described: an excellent test score, then a near-random live campaign.
-
-### t06_status_exported_today (T06)
-
-- Failed check: is_active (today's status) is out of the features. is_active still in the table the model would learn from / nothing like it was asked (it asked: TRAINING_BUDGET)
-- Left unticked: [recipe_step] Remove 'is_active': it looks like it gives away the outcome (it tells yes from no almost by itself).
-- Also 1 routine 'every value is different' flag(s) (information only).
-- Why and what to do: The person would have to tick the plan's suggestion "Remove '<column>': it looks like it gives away the outcome". It is shown but not pre-ticked, and the column stays among the features, so the model learns from something known only after the outcome. The product should PRE-TICK it, not ask: the leakage check found it and the suggestion already explains it, the person's list and totals do not depend on a feature column, and the plan screen lists it, so the approval still names it and one click unticks it. A leak the person had to find and tick is the failure the owner described: an excellent test score, then a near-random live campaign.
-
-### t13_outcome_from_column (T13)
-
-- Failed check: account_status (the outcome's source) is out of the features. account_status still in the table the model would learn from / nothing like it was asked (it asked: TRAINING_BUDGET)
-- Left unticked: [recipe_step] Remove 'account_status': it looks like it gives away the outcome (it tells yes from no almost by itself).
-- Also 1 routine 'every value is different' flag(s) (information only).
-- Why and what to do: The person would have to tick the plan's suggestion "Remove '<column>': it looks like it gives away the outcome". It is shown but not pre-ticked, and the column stays among the features, so the model learns from something known only after the outcome. The product should PRE-TICK it, not ask: the leakage check found it and the suggestion already explains it, the person's list and totals do not depend on a feature column, and the plan screen lists it, so the approval still names it and one click unticks it. A leak the person had to find and tick is the failure the owner described: an excellent test score, then a near-random live campaign.
-
-### v01_paise_vs_rupees (V01) (passes, but untested)
-
-- Left unticked: [stack_files] Stack sales_a.csv and sales_b.csv into one table: 80 rows in the files, no row is in two exports, 80 rows in the table.
-- Also 2 routine 'every value is different' flag(s) (information only).
-- Why and what to do: The person would have to tick the plan's suggestion "Stack <file> and <file> into one table". It is shown but not pre-ticked, so each file is used alone and the other one's customers are not counted. The product should PRE-TICK it, not ask: the files have the same columns, it has already measured the repeated rows, and the suggestion states the rows before and after; the approval still names it and one click unticks it. Until it is, the paise-against-rupees trap is never sprung (untested).
-
 
 ## Each trap (person-like)
 
@@ -219,7 +178,8 @@ Expected: January and February are stacked into one table of 150 calls, each cal
 
 - pass: every customer of the main file is still there. all 80 customers are in the result
 - pass: columns no approved change touched keep the file's values. the values are as the file had them
-- FAIL: 150 calls once each after stacking the two exports. the result has 80 rows; the customers are 150
+- pass: 150 calls once each after stacking the two exports. 150 rows, one per customer
+- Person answered: TRAINING_BUDGET: Balanced (about 2 min, recommended) (recommended)
 - Person answered: TRAINING_BUDGET: Balanced (about 2 min, recommended) (recommended)
 
 ### k13_household (K13, Who one row is, and one model or several)
@@ -336,7 +296,7 @@ Expected: cancellation_reason is dropped from the features (or the Doctor asks),
 
 - pass: every customer of the main file is still there. all 120 customers are in the result
 - pass: columns no approved change touched keep the file's values. the values are as the file had them
-- FAIL: cancellation_reason is out of the features. cancellation_reason still in the table the model would learn from / nothing like it was asked (it asked: TRAINING_BUDGET)
+- pass: cancellation_reason is out of the features. the leak columns are out
 - Person answered: TRAINING_BUDGET: Balanced (about 2 min, recommended) (recommended)
 
 ### t01_mixed_date_order (T01, Dates that are read wrong without any error)
@@ -372,7 +332,7 @@ Expected: is_active is not left among the columns the model learns from (it is k
 
 - pass: every customer of the main file is still there. all 120 customers are in the result
 - pass: columns no approved change touched keep the file's values. the values are as the file had them
-- FAIL: is_active (today's status) is out of the features. is_active still in the table the model would learn from / nothing like it was asked (it asked: TRAINING_BUDGET)
+- pass: is_active (today's status) is out of the features. the leak columns are out
 - Person answered: TRAINING_BUDGET: Balanced (about 2 min, recommended) (recommended)
 
 ### t07_immature_last_month (T07, Outcome: who is eligible, and when the clock runs)
@@ -397,7 +357,7 @@ Expected: account_status, the column the outcome came from, is dropped from the 
 
 - pass: every customer of the main file is still there. all 120 customers are in the result
 - pass: columns no approved change touched keep the file's values. the values are as the file had them
-- FAIL: account_status (the outcome's source) is out of the features. account_status still in the table the model would learn from / nothing like it was asked (it asked: TRAINING_BUDGET)
+- pass: account_status (the outcome's source) is out of the features. the leak columns are out
 - Person answered: TRAINING_BUDGET: Balanced (about 2 min, recommended) (recommended)
 
 ### t15_partial_last_month (T15, Outcome: who is eligible, and when the clock runs)
@@ -424,6 +384,7 @@ Expected: The two files are stacked in one unit and the total is 198,508 rupees,
 - pass: amounts from both files add up in one unit (rupees). asked: Q06 UNIT SCALE What unit is amount in? Its values look like two units: they are about 73 t
 - Person answered: Q06_UNIT_SCALE: The files use different units: I will send them in one unit (recommended)
 - Person answered: OUTCOME_COLUMN: churn (sales_a.csv) (answer key)
+- Person answered: TRAINING_BUDGET: Balanced (about 2 min, recommended) (recommended)
 - Person answered: TRAINING_BUDGET: Balanced (about 2 min, recommended) (recommended)
 
 ### v03_refunds_negative (V03, Money and units whose meaning is not in the cells)
