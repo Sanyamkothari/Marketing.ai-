@@ -13,7 +13,8 @@ import pytest
 from engine.access.roles import Principal, Role
 from engine.agent.contracts import ProposalState
 from engine.config import load_use_case
-from engine.doctor import visit
+from engine.doctor import combining, visit
+from engine.doctor.build_driver import BuildDriveError
 from engine.doctor.case import Case, CaseFile, CaseItem, CaseStore, VisitState
 from engine.doctor.combine_run import combine_item, upload_ids_of
 from engine.doctor.combining import combining_detector
@@ -39,9 +40,9 @@ def _customers() -> pd.DataFrame:
     )
 
 
-def _orders() -> pd.DataFrame:
-    """The customers C-00001 to C-00270 order, written `1` to `270`; 30 orders are by people not on the list."""
-    who = [(n % 270) + 1 for n in range(1200)] + [CUSTOMERS + 1 + n % 10 for n in range(30)]
+def _orders(strangers: int = 30) -> pd.DataFrame:
+    """The customers C-00001 to C-00270 order, written `1` to `270`; `strangers` orders are by people not on the list."""
+    who = [(n % 270) + 1 for n in range(1200)] + [CUSTOMERS + 1 + n % 10 for n in range(strangers)]
     days = [(n * 7) % 250 for n in range(len(who))]
     return pd.DataFrame(
         {
@@ -112,6 +113,14 @@ class _Day:
         )
 
 
+def _tick_and_approve(day: _Day, case: Case, item: CaseItem) -> Case:
+    """A change that loses nobody is ticked like any other; it asks no yes of its own."""
+    case = visit.decide(
+        vs.CLIENT, case.case_id, item.item_id, True, day.deps, expected_version=case.version, actor=vs.ANALYST
+    )
+    return visit.approve(vs.CLIENT, case.case_id, day.deps, expected_version=case.version, actor=vs.ANALYST)
+
+
 def _one(case: Case, kind: str) -> CaseItem:
     (item,) = [i for i in case.items if i.kind == kind]
     return item
@@ -124,9 +133,11 @@ def test_a_customer_list_and_its_orders_are_one_change_with_counts_that_needs_it
     case = day.open()
     item = _one(case, "build_dataset")
 
-    # One item, in plain words, with the counts; it is the person's to tick, and needs its own yes.
+    # One item, in plain words, with the counts; no customer is lost, but 30 of 1,230 log rows (2.4%) are left out,
+    # more than the protocol's 2%: it needs its own yes.
     assert item.state is ProposalState.PENDING
-    assert "270 of 300 customers matched" in item.title
+    assert "30 customers have no rows in orders.csv; they stay, with 0." in item.title
+    assert "of 300 customers matched" not in item.title
     assert "30 of 1,230 rows in orders.csv belong to someone who is not in customers.csv" in item.title
     assert "customers.csv keeps its own IDs" in item.title
     assert approve_class_of(item.kind, item.payload) is not None
@@ -153,6 +164,53 @@ def test_a_customer_list_and_its_orders_are_one_change_with_counts_that_needs_it
     case = visit.approve(vs.CLIENT, case.case_id, day.deps, expected_version=case.version, actor=vs.ANALYST)
     assert case.visit is not None and case.visit.hand_off is not None
     assert case.visit.hand_off.upload_ids == (only.upload_id,)
+
+
+def test_a_join_that_loses_no_customer_and_few_log_rows_is_ticked_with_no_yes(tmp_path: Path) -> None:
+    day = _Day(
+        tmp_path, {"up-c": ("customers.csv", _customers()), "up-o": ("orders.csv", _orders(strangers=10))}
+    )
+    case = day.open()
+    item = _one(case, "build_dataset")
+
+    assert "30 customers have no rows in orders.csv; they stay, with 0." in item.title
+    assert (item.payload["rows_in"], item.payload["rows_out"]) == (1_210, 1_200)  # 0.8% of the log rows
+    assert approve_class_of(item.kind, item.payload) is None
+    case = _tick_and_approve(day, case, item)
+    assert case.visit is not None and case.visit.combined == (item.item_id,)
+
+
+def test_a_join_that_leaves_out_many_log_rows_still_needs_a_yes_even_when_no_customer_is_lost(
+    tmp_path: Path,
+) -> None:
+    # A wrong ID rule: most orders belong to nobody on the list. Every customer stays, but the orders are lost.
+    day = _Day(
+        tmp_path, {"up-c": ("customers.csv", _customers()), "up-o": ("orders.csv", _orders(strangers=200))}
+    )
+    item = _one(day.open(), "build_dataset")
+
+    assert "they stay, with 0." in item.title and "200 of 1,400 rows in orders.csv" in item.title
+    assert (item.payload["rows_in"], item.payload["rows_out"]) == (1_400, 1_200)
+    assert approve_class_of(item.kind, item.payload) is not None
+
+
+def test_a_join_that_cannot_be_counted_says_who_matched_and_needs_a_yes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def cannot(*_args: object, **_kwargs: object) -> object:
+        raise BuildDriveError("NO_DATES", "no dates")
+
+    monkeypatch.setattr(combining, "_one_row_per_customer", cannot)
+    day = _Day(
+        tmp_path, {"up-c": ("customers.csv", _customers()), "up-o": ("orders.csv", _orders(strangers=0))}
+    )
+    item = _one(
+        day.open(), "build_dataset"
+    )  # no receipt: the join is still offered, with the matched wording and a yes
+
+    assert "270 of 300 customers matched" in item.title and "they stay" not in item.title
+    assert "rows_in" not in item.payload
+    assert approve_class_of(item.kind, item.payload) is not None
 
 
 def test_monthly_exports_that_repeat_rows_are_one_stack_that_counts_each_row_once(tmp_path: Path) -> None:

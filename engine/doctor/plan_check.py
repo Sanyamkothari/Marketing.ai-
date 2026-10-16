@@ -23,7 +23,7 @@ from engine.agent.sql_step import SqlStepError
 from engine.agentic.canonical import canonical_bytes, sha256_hex
 from engine.doctor.case import CaseFile, CaseItem
 from engine.doctor.diagnose import LoadedFile
-from engine.doctor.guards import Finding, Receipt, run_guarded
+from engine.doctor.guards import Finding, Receipt, names_a_log_row, run_guarded
 from engine.doctor.prescription import slot_name
 from engine.doctor.visit_contracts import Acknowledgement, CaseVisit, PlanCheck, PlanFinding
 
@@ -114,6 +114,7 @@ def check_plan(
     findings: list[PlanFinding] = []
     totals = {"rows_in": 0, "rows_out": 0, "customers_in": 0, "customers_out": 0}
     counted = True
+    customer_tables = 0  # a log's rows (orders, payments) are never added to the customers
     rates: tuple[float | None, float | None] = (None, None)
     sampled = 0
     for loaded in files:
@@ -124,6 +125,7 @@ def check_plan(
         by_order = {step.order: item_id for step, item_id in mine}
         frame = consistent_types(loaded.frame.head(SAMPLE_ROWS))
         columns = {str(c) for c in frame.columns}
+        key = _column(items, "key", loaded.upload_id, columns)
         agent = AgentConfig()
         levels = tuple(agent.levels)
         if any(s.kind is RecipeStepKind.SQL_QUERY for s in ordered) and AgentLevel.RESHAPE not in levels:
@@ -132,10 +134,11 @@ def check_plan(
             guarded = run_guarded(
                 frame,
                 ordered,
-                primary_key=_column(items, "key", loaded.upload_id, columns),
+                primary_key=key,
                 target=_column(items, "outcome_column", loaded.upload_id, columns),
                 tables=tables,
                 upload_id=loaded.upload_id,
+                source_name=loaded.file_name or None,
                 levels=levels,
                 max_failure_pct=agent.max_conversion_failure_pct,
             )
@@ -159,15 +162,18 @@ def check_plan(
         if ledger is not None:
             totals["rows_in"] += next(iter(guarded.receipts[0].rows_in.values()), 0)
             totals["rows_out"] += guarded.receipts[-1].rows_out
-            counted = counted and ledger.unit == "customers"
-            totals["customers_in"] += ledger.start
-            totals["customers_out"] += ledger.end
+            if not names_a_log_row(key):
+                customer_tables += 1
+                counted = counted and ledger.unit == "customers"
+                totals["customers_in"] += ledger.start
+                totals["customers_out"] += ledger.end
             if rates == (None, None):
                 rates = (ledger.rate_start, ledger.rate_end)
             # Only files counted in `rows_in` count here, so "the first N of M rows" compares like with like.
             sampled += loaded.file_rows or len(loaded.frame)
     if not steps:
         return PlanCheck(digest=digest, findings=tuple(findings))
+    counted = counted and customer_tables > 0
     view: dict[str, JsonValue] = {
         "rows_in": totals["rows_in"],
         "rows_out": totals["rows_out"],

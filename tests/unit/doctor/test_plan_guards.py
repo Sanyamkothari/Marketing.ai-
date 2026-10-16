@@ -25,7 +25,9 @@ from engine.agent.dataset_recipe import run_saved_recipe
 from engine.agent.recipe import RecipeError
 from engine.config import load_use_case
 from engine.doctor import visit
-from engine.doctor.case import Case, CaseError, CaseItem, CaseStore, VisitState, payload_digest
+from engine.doctor.case import Case, CaseError, CaseFile, CaseItem, CaseStore, VisitState, payload_digest
+from engine.doctor.guards import names_a_log_row
+from engine.doctor.plan_check import check_plan
 from engine.doctor.protocol import item_sentence
 from engine.doctor.screen import build_screen
 from engine.doctor.visit import VisitDeps
@@ -294,3 +296,83 @@ def test_a_recipe_approved_without_the_guards_replays_as_it_was_approved() -> No
         _new_month(), _recipe(acknowledged=None), load_use_case(GOAL_A), upload_id="up-next"
     )
     assert 0 < len(run.frame) < 400
+
+
+def _key_item(upload_id: str, column: str) -> CaseItem:
+    payload: dict[str, JsonValue] = {"column": column}
+    return CaseItem(
+        item_id=f"key.{upload_id}",
+        kind="key",
+        title=f"{column} is the ID",
+        source=ProposalSource.PERSON,
+        confidence=AgentConfidence.CHECK,
+        state=ProposalState.ACCEPTED,
+        upload_id=upload_id,
+        payload=payload,
+        payload_digest=payload_digest(payload),
+        proposed_at=T0,
+    )
+
+
+def _remove_item(upload_id: str, column: str, value: int) -> CaseItem:
+    step = RecipeStep(
+        order=1,
+        kind=RecipeStepKind.REMOVE_ROWS,
+        column=column,
+        params={"operator": "equals", "values": [value]},
+    )
+    payload: dict[str, JsonValue] = {"upload_id": upload_id, "step": step.model_dump(mode="json")}
+    return CaseItem(
+        item_id=f"remove.{upload_id}",
+        kind="recipe_step",
+        title="Leave out the unfinished month.",
+        source=ProposalSource.PERSON,
+        confidence=AgentConfidence.CHECK,
+        state=ProposalState.ACCEPTED,
+        upload_id=upload_id,
+        payload=payload,
+        payload_digest=payload_digest(payload),
+        proposed_at=T0,
+    )
+
+
+def _checked(key: str, left_out_share: float) -> PlanCheck:
+    """customers.csv (400 customers) with orders.csv (1,000 orders, keyed `key`) minus a share of the orders."""
+    config = load_use_case(GOAL_A)
+    people = pd.DataFrame({"customer_id": range(400), "region": ["N"] * 400})
+    cut = int(1_000 * left_out_share)
+    orders = pd.DataFrame(
+        {
+            key: range(1_000),
+            "customer_id": [n % 400 for n in range(1_000)],
+            "month": [1] * cut + [0] * (1_000 - cut),
+        }
+    )
+    files = [
+        vs.loaded("up-c", "customers.csv", people, config),
+        vs.loaded("up-o", "orders.csv", orders, config),
+    ]
+    case_files = [
+        CaseFile(upload_id=f.upload_id, file_name=f.file_name, added_at=T0, added_by=ANALYST) for f in files
+    ]
+    items = [_key_item("up-c", "customer_id"), _key_item("up-o", key), _remove_item("up-o", "month", 1)]
+    return check_plan(files, case_files, items)
+
+
+def test_orders_left_out_are_said_as_rows_of_the_orders_file_never_as_customers() -> None:
+    check = _checked("order_id", 0.3)  # 30% of the orders: a customer stop if they were customers
+
+    assert [f for f in check.findings if f.level == "stop"] == []
+    said = " ".join(f.text for f in check.findings)
+    assert "300 of 1,000 rows of orders.csv" in said
+    assert (
+        check.ledger is not None and check.ledger["customers_in"] is None
+    )  # only the customer list counts customers
+
+
+def test_a_table_keyed_by_a_record_id_still_trips_the_customer_loss_stop() -> None:
+    # `record_id` is how a per-customer export names its rows (HubSpot "Record ID"): it is not a log of orders.
+    assert not names_a_log_row("record_id") and not names_a_log_row("Record ID")
+    check = _checked("record_id", 0.3)
+
+    assert [f.code for f in check.findings if f.level == "stop"] == ["PLAN_LOSES_TOO_MUCH"]

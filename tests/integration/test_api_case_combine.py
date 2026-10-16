@@ -58,14 +58,14 @@ def test_an_approved_join_becomes_the_cases_one_stored_table(client: TestClient,
     case: dict[str, Any] = client.post("/cases", json={"upload_ids": ids}).json()
     case = client.post(f"/cases/{case['case_id']}/visit", json={}).json()
     item = next(i for i in case["items"] if i["kind"] == "build_dataset")
-    assert "200 of 250 customers matched" in item["title"]
+    assert "50 customers have no rows in orders.csv; they stay, with 0." in item["title"]
 
-    yes = client.post(
-        f"/cases/{case['case_id']}/confirmations",
-        json={"version": case["version"], "item_id": item["item_id"], "sentence": item["title"]},
+    ticked = client.post(  # nobody is lost: ticked like any change, no yes of its own
+        f"/cases/{case['case_id']}/decisions",
+        json={"version": case["version"], "item_id": item["item_id"], "accept": True},
     )
-    assert yes.status_code == 200, yes.text
-    case = yes.json()
+    assert ticked.status_code == 200, ticked.text
+    case = ticked.json()
     approved = client.post(f"/cases/{case['case_id']}/approval", json={"version": case["version"]})
     assert approved.status_code == 200, approved.text
     case = approved.json()

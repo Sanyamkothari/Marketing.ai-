@@ -15,7 +15,7 @@ Runs that disagreed with each other (person-like): 0. 5 of the passes are untest
 
 Blocking questions with neither a recommended option nor an answer in the key, answered with the first option offered (a guess): 0. Answers where the key overrode the product's recommended option: 0.
 
-Traps where the person said yes to a safety stop because the key says the loss is what they meant (9): c09_already_hold_product, crit03_dup_and_drop, k15_failed_payments, k16_ticket_status_log, k1_merged_prefixes, k3_shared_phone, s01_never_active, t07_immature_last_month, t15_partial_last_month. Without that yes the visit cannot be approved, so these passes rest on the key's judgement.
+Traps where the person said yes to a safety stop because the key says the loss is what they meant (5): c09_already_hold_product, k16_ticket_status_log, s01_never_active, t07_immature_last_month, t15_partial_last_month. Without that yes the visit cannot be approved, so these passes rest on the key's judgement.
 
 Many traps fail today. That is expected: the bench measures, it does not have to pass.
 
@@ -164,7 +164,6 @@ Expected: Exactly the 100 customers, each once: neither the duplicates nor the d
 - pass: 100 customers once each (duplicates and drops are not netted). 100 rows, one per customer
 - Person answered: THIN_LAST_PERIOD: Leave them out (recommended)
 - Person answered: TRAINING_BUDGET: Balanced (about 2 min, recommended) (recommended)
-- Person said yes to the stop: PLAN_LOSES_TOO_MUCH: Together the steps lose 22 of 110 customers (20.0%), more than 5%. Most from step 1. (answer key)
 
 ### f01_leading_zeros (F01, False, merged or missed joins)
 
@@ -246,7 +245,6 @@ Expected: Only successful payments are counted (69,918), or the Doctor asks whic
 - pass: spend counts successful payments only. asked: Q22 REAL MONEY Which values of “status” in payments.csv are real money? 12 of 60 rows say 
 - Person answered: Q22_REAL_MONEY: Only the other rows are real money: leave out the “failed” rows (recommended)
 - Person answered: TRAINING_BUDGET: Balanced (about 2 min, recommended) (recommended)
-- Person said yes to the stop: PLAN_LOSES_TOO_MUCH: Together the steps lose 12 of 60 customers (20.0%), more than 5%. Most from step 1. By outcome, 0: 12. (answer key)
 
 ### k16_ticket_status_log (K16, Double counting and wrong grain)
 
@@ -274,7 +272,6 @@ Expected: 60 customers stay 60: a rule that strips the prefix must not merge C-1
 - pass: C-101 and S-101 each keep their own segment. the named customers have their own values
 - Person answered: THIN_LAST_PERIOD: Leave them out (recommended)
 - Person answered: TRAINING_BUDGET: Balanced (about 2 min, recommended) (recommended)
-- Person said yes to the stop: PLAN_LOSES_TOO_MUCH: Together the steps lose 29 of 60 customers (48.3%), more than 5%. Most from step 1. (answer key)
 
 ### k3_shared_phone (K3, False, merged or missed joins)
 
@@ -287,7 +284,6 @@ Expected: 50 customers stay 50 rows: calls must not be handed to every customer 
 - pass: 50 customers stay 50 rows when calls are keyed by a shared phone. 50 rows, one per customer
 - Person answered: THIN_LAST_PERIOD: Leave them out (recommended)
 - Person answered: TRAINING_BUDGET: Balanced (about 2 min, recommended) (recommended)
-- Person said yes to the stop: PLAN_LOSES_TOO_MUCH: Together the steps lose 19 of 50 customers (38.0%), more than 5%. Most from step 1. (answer key)
 
 ### p7_minors (P7, Consent, sensitive data and who may be contacted)
 

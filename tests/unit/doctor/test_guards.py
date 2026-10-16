@@ -212,6 +212,22 @@ def test_the_outcome_rate_moving_more_than_a_point_trips_the_gate_even_with_smal
     assert result.ledger.rate_move == pytest.approx(-3.75, abs=0.01)
 
 
+def test_the_rows_of_an_orders_log_are_never_counted_as_customers() -> None:
+    # 1,000 orders, 101 of them in the unfinished month: left out, said as rows of the file, not as customers.
+    frame = pd.DataFrame(
+        {"order_id": range(1_000), "month": [1] * 101 + [0] * 899, "y": [i % 2 for i in range(1_000)]}
+    )
+    step = RecipeStep(
+        order=1, kind=RecipeStepKind.REMOVE_ROWS, column="month", params={"operator": "equals", "values": [1]}
+    )
+    result = run_guarded(frame, [step], primary_key="order_id", target="y", source_name="orders.csv", **RUN)
+    assert codes(result, "stop") == []
+    said = " ".join(f.message for f in result.findings)
+    assert "101 of 1,000 rows of orders.csv" in said and "customers" not in said
+    assert guards.names_a_log_row("order_id") and guards.names_a_log_row("Payment ID")
+    assert not guards.names_a_log_row("customer_id") and not guards.names_a_log_row(None)
+
+
 def test_a_person_can_say_yes_to_a_stop_by_its_key() -> None:
     stop = Finding(level="stop", code="PLAN_LOSES_TOO_MUCH", count=1000, message="Lost 20%.")
     other = Finding(level="stop", code="PLAN_LOSES_TOO_MUCH", count=1001, message="Lost 20%.")
