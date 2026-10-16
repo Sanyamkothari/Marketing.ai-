@@ -11,6 +11,7 @@ import {
   findingsOf,
   leadOf,
   maskCell,
+  notesOf,
   planOf,
   queueOf,
   readyToApprove,
@@ -166,3 +167,41 @@ if (!process.env.DDS_FIXTURES) {
 } else {
   await import("./plan_cases.mjs");
 }
+
+test("one fact, one line: a step the guards already wrote about is not counted again from its receipt", () => {
+  const items = [step("cut", "remove_rows")];
+  const ledger = {
+    steps: [{ item_id: "cut", rows_in: 1000, rows_out: 970, customers_in: 1000, customers_out: 970, customers_lost: 30 }],
+    findings: [{ level: "flag", kind: "guard", code: "STEP_LOSES_CUSTOMERS", text: "Step 3 loses 30 of 1,000 customers", item_id: "cut" }],
+  };
+  const found = findingsOf(items, ledger, new Set(["cut"]));
+  assert.deepEqual(found.map((f) => f.kind), ["guard"], "not also '30 customers lost' and '30 rows left out'");
+  const bare = findingsOf(items, { steps: ledger.steps }, new Set(["cut"]));
+  assert.deepEqual(bare.map((f) => f.kind), ["customers_lost"], "without the guards' sentence, customers lost, not rows too");
+});
+
+test("a guard that says something else about a step does not hide the receipt's counts", () => {
+  const items = [step("cut", "remove_rows")];
+  const steps = [{ item_id: "cut", rows_in: 1000, rows_out: 970, customers_in: 1000, customers_out: 970, customers_lost: 30 }];
+  const other = { steps, findings: [{ level: "flag", kind: "guard", code: "EXPECTATION_CHANGED_AFTER_RUN", text: "changed after it ran", item_id: "cut" }] };
+  assert.deepEqual(findingsOf(items, other, new Set(["cut"])).map((f) => f.kind).sort(), ["customers_lost", "guard"]);
+  const zero = [{ item_id: "cut", rows_in: 1000, rows_out: 0, customers_in: 1000, customers_out: 0, customers_lost: 1000 }];
+  const said = { steps: zero, findings: [{ level: "stop", kind: "guard", code: "STEP_ZERO_ROWS", text: "Step 3 left no rows at all", item_id: "cut" }] };
+  assert.deepEqual(findingsOf(items, said, new Set()).map((f) => f.kind), ["guard", "customers_lost"], "no second 'rows left out' stop");
+  const unsaid = { steps: zero, findings: [] };
+  assert.ok(findingsOf(items, unsaid, new Set()).some((f) => f.kind === "rows_left_out" && f.level === "stop"), "without the guard, the stop stays");
+});
+
+test("a live note is shown even when an earlier copy of the same sentence was rejected", () => {
+  const note = (id, state) => item(id, "data_check", { title: "same", state, confidence: "check", payload: { level: "note" } });
+  assert.deepEqual(notesOf([note("a", "rejected"), note("b", "pending")]).map((i) => i.item_id), ["b"]);
+});
+
+test("a note is a line to read: it is no change, needs no yes and is shown once", () => {
+  const note = (id, title) => item(id, "data_check", { title, state: "pending", confidence: "check", payload: { level: "note", code: "KEY_REPORT" } });
+  const items = [note("n1", "'customer_id' is different on every row"), note("n2", "'customer_id' is different on every row"), note("n3", "other")];
+  assert.deepEqual(planOf(items, new Set(), null), [], "no section, no tick, no 'needs your yes'");
+  assert.deepEqual(notesOf(items).map((i) => i.item_id), ["n1", "n3"]);
+  const flag = item("f1", "data_check", { state: "pending", confidence: "check", payload: { level: "flag" } });
+  assert.equal(planOf([flag], new Set(), null)[0].pending.length, 1, "a flag still asks");
+});

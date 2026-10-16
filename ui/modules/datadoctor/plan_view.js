@@ -26,6 +26,7 @@ import {
   leadOf,
   ledgerOf,
   maskCell,
+  notesOf,
   planOf,
   queueOf,
   readyToApprove,
@@ -450,6 +451,7 @@ export function planModel(screen, ctx) {
   const unconfirmed = (view.approve_class || []).filter((a) => !a.confirmed).length;
   return {
     items,
+    notes: notesOf(items),
     ledger,
     plan,
     findings,
@@ -458,10 +460,19 @@ export function planModel(screen, ctx) {
   };
 }
 
+function notesHtml(notes, c) {
+  if (!notes.length) return "";
+  const names = namesOf(c);
+  return `<section class="dds-card dds-notes" data-dds-notes><p class="dds-label">Good to know</p><ul class="dds-note-list">${notes
+    .map((n) => `<li data-dds-note="${esc(n.item_id)}">${userTextIn(n.title || n.kind, names)}</li>`)
+    .join("")}</ul></section>`;
+}
+
 export function planHtml(screen, model, ctx, { level = 3 } = {}) {
-  if (!model.plan.length) return "";
+  const notes = notesHtml(model.notes, screen.case);
+  if (!model.plan.length) return notes;
   const full = { ...ctx, ledger: model.ledger };
   return `<section class="dds-plan" data-dds-plan aria-labelledby="dds-plan-t"><h${level} id="dds-plan-t" class="dds-section-t">The plan, section by section</h${level}><p class="dds-why">Only changes that need your yes are open. Sure fixes are folded away and can still be unticked. Check each section, then give one final yes.</p>${model.plan
     .map((s) => sectionHtml(s, screen, full, level + 1))
-    .join("")}</section>`;
+    .join("")}</section>${notes}`;
 }

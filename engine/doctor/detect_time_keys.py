@@ -90,17 +90,35 @@ def time_keys_detector(*, clock: Callable[[], datetime] = utc_now) -> DetectorPo
         others = [ask for ask in questions if not ask.blocking]
         room = max(0, MAX_QUESTIONS - len(stops))
         kept, spilled = [*stops, *others[:room]], others[room:]
-        items = [
-            _check_item(upload_id, check, now) for upload_id, check in found if not _is_asked(check, kept)
-        ]
-        items.extend(_ask_item(ask, now) for ask in spilled)
+        # One fact, one line: a finding a question covers (kept or held back) is not listed again, and nor is a
+        # sentence already on the page (the combined table repeats what its files said). An item this visit
+        # made before (same id) is only refreshed, never dropped.
+        on_page = {i.title for i in case.items if i.kind == CHECK_KIND}
+        had = {i.item_id for i in case.items}
+        items: list[CaseItem] = []
+        for upload_id, check in found:
+            if _is_asked(check, upload_id, questions):
+                continue
+            item = _check_item(upload_id, check, now)
+            if item.title in on_page and item.item_id not in had:
+                continue
+            items.append(item)
+            on_page.add(item.title)
+        for ask in spilled:
+            item = _ask_item(ask, now)
+            if item.title in on_page and item.item_id not in had:
+                continue
+            items.append(item)
+            on_page.add(item.title)
         return Detected(asks=tuple(kept), items=tuple(items), requests=tuple(requests))
 
     return detect
 
 
-def _is_asked(check: Check, asks: list[Ask]) -> bool:
-    return any(ask.code == check.code and ask.column == check.column for ask in asks)
+def _is_asked(check: Check, upload_id: str | None, asks: list[Ask]) -> bool:
+    return any(
+        ask.code == check.code and ask.column == check.column and ask.upload_id == upload_id for ask in asks
+    )
 
 
 def _file(
@@ -173,12 +191,13 @@ def _file(
         if dates is not None:
             yes = meaning[2] if meaning is not None else None
             tails = tail_checks(dates, yes, _days_covered(frame))
-            found.extend((upload_id, check) for check in tails)
             keep = min(
                 (c for c in tails if c.as_of is not None), key=lambda c: c.as_of or now.date(), default=None
             )
-            if keep is not None:
+            if keep is not None:  # the question says it all (its earliest date leaves out every later row)
                 asks.append((2, _tail_ask(keep, date_column, upload_id, rows)))
+            else:
+                found.extend((upload_id, check) for check in tails)
 
 
 # ---------------------------------------------------------------------------
