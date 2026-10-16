@@ -1371,9 +1371,15 @@ deterministic rules by a reviewed change. Nothing changes a rule by itself.
 ### 19.9 Limits
 
 - The four ASK tools of the catalogue (#70 `request_data`, #74 `ask_question`, #75 `express_doubt`, #76
-  `request_approval`) are these functions; they are not registered as model-callable tools yet (the egress canary
-  and the AI's wording of questions and doubts are M247/M248's).
+  `request_approval`) are these functions. The AI review (`engine/doctor/agent_review.py`) may return the actions
+  `ask_question`, `express_doubt` and `request_data`: a doubt is kept only with its three parts and every number in a
+  look it cites (else `AGENT_DOUBT_REFUSED`), a request needs a kind, what and why; at most 5 doubts and 3 requests
+  a review, all words through the guardrails. Neither changes data. They reach the plan screen as `case.doubts`
+  ("Not sure") and a `DATA_REQUESTED` / `DIFFERENT_FILE_REQUESTED` question.
 - A doubt is non-blocking; an APPROVE-class doubt travels with its item's sentence when the detector writes it there.
+  The AI may mark a doubt `meaning: true` (what a column means); it then also opens one blocking question
+  (`DOUBT_MEANING`, nothing recommended, no effect on data) that counts toward the review's 3 blocking questions, so
+  approval waits for the person's answer.
 - The plan's `AI_STEP_CHANGE_TOO_LARGE` is `AI_STEP_CHANGES_TOO_MANY`, the code M238 shipped (DEC-1808 (g)).
 - An approval whose ledger entry was written but whose case write then failed leaves that entry in the chain until
   the approval is retried (the retry reuses it); one never retried stays as a signed record of an approval the case

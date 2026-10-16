@@ -8,6 +8,9 @@ registry's look tools, and answers with one JSON action per call (the `data_doct
   and findings our code counted;
 * `ask_question` builds a catalogue question (`questions.build_ask`) and hands it to the protocol, which budgets
   it and adds "I don't know". Whether it blocks is the catalogue's decision, never the model's;
+* `express_doubt` is a grounded three-part doubt the person reads under "Not sure"; one about meaning also opens a
+  blocking question, so approval waits for the person; `request_data` asks the person for a missing file or column
+  (a non-blocking question). Neither changes any data;
 * `finish` ends the review with a short summary.
 
 Held in code, not in the prompt: the review does not run unless the client has allowed the AI and the case has
@@ -63,6 +66,7 @@ from engine.agent.loop import (
 from engine.agent.tools import AgentContext, AgentToolError
 from engine.agent.untrusted import for_prompt
 from engine.doctor.guards import ExpectationBook, Expectations, Finding
+from engine.doctor.protocol import DataRequest, ProtocolError, doubt_ask, express_doubt
 from engine.doctor.questions import QuestionError, build_ask, catalogue_lines
 from engine.doctor.registry import (
     DataToolContext,
@@ -83,7 +87,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from engine.doctor.ai_guard import AiGuard
-    from engine.doctor.case import Case, CaseItem
+    from engine.doctor.case import Case, CaseDoubt, CaseItem
     from engine.doctor.diagnose import LoadedFile
     from engine.doctor.goal_brief import GoalBrief
     from engine.doctor.protocol import Ask
@@ -98,6 +102,9 @@ MAX_BLOCKING: Final[int] = 3
 """The most blocking questions the AI may ask in one review; the next is dropped."""
 STRIKES: Final[int] = 2
 """Bad replies (malformed, unknown action, refused argument) before the review ends."""
+MAX_DOUBTS: Final[int] = 5
+MAX_REQUESTS: Final[int] = 3
+"""The most doubts and requests for more data the AI may add in one review; the next is refused."""
 SUMMARY_CHARS: Final[int] = 800
 SQL_ARGS: Final[frozenset[str]] = frozenset(
     {"sql", "output_name", "as_of", "as_of_rule", "as_of_column", "reads_future"}
@@ -139,6 +146,8 @@ class _Turn:
     """By output name: the latest try of each query."""
     closed: set[str] = field(default_factory=set)
     asks: list[Ask] = field(default_factory=list)
+    doubts: list[CaseDoubt] = field(default_factory=list)
+    requests: list[DataRequest] = field(default_factory=list)
     blocking: int = 0
     feedback: list[dict[str, Any]] = field(default_factory=list)
     sent: list[Any] = field(default_factory=list)
@@ -358,11 +367,17 @@ class _Review:
                 _LOG.warning("doctor review step failed: %s", type(exc).__name__)
                 break
         items, evidence = self._items()
+        questions = len(turn.asks) + len(turn.requests)
         return Detected(
             asks=tuple(turn.asks),
+            doubts=tuple(turn.doubts),
+            requests=tuple(turn.requests),
             items=tuple(items),
             evidence=tuple(evidence),
-            summary=summary or (_summary(len(items), len(turn.asks)) if items or turn.asks else ""),
+            summary=summary
+            or (
+                _summary(len(items), questions, len(turn.doubts)) if items or questions or turn.doubts else ""
+            ),
             sent=tuple(s.model_dump(mode="json") for s in turn.sent[:MAX_SENT_ITEMS]),
         )
 
@@ -376,6 +391,10 @@ class _Review:
             self._sql(args)
         elif name == "ask_question":
             self._ask(action, args)
+        elif name == "express_doubt":
+            self._doubt(action, args)
+        elif name == "request_data":
+            self._request(action, args)
         elif (tool := self.registry.find(name, self._context(0))) is not None and (
             tool.kind is DataToolKind.READ and tool.session_tool
         ):
@@ -531,6 +550,87 @@ class _Review:
         turn.asks.append(ask)
         turn.feedback.append({"asked": ask.code})
 
+    def _checked(self, texts: Sequence[str], target: str, index: int) -> list[str]:
+        """The model's own words for the person, each through the number and guardrail checks."""
+        for text in texts:
+            failure = self.checker.failure(text, target=target, max_chars=400) if text else None
+            if failure is not None:
+                raise AgentToolError(
+                    "AGENT_TEXT_REFUSED",
+                    f"The {target} failed a check ({failure}); use only numbers you looked up.",
+                )
+        return [self.gates[index].person_text(text) if text else "" for text in texts]
+
+    def _doubt(self, action: dict[str, Any], args: dict[str, Any]) -> None:
+        turn = self.turn
+        index = self._index(action, args)
+        ctx = self.ctxs[index]
+        args = dict(self.gates[index].unalias_args(args))
+        meaning = args.get("meaning") is True
+        if len(turn.doubts) >= MAX_DOUBTS or (meaning and turn.blocking >= MAX_BLOCKING):
+            raise AgentToolError(
+                "AGENT_DOUBT_LIMIT", "That is enough doubts for one review; this one is dropped."
+            )
+        parts = [str(args.get(key) or "").strip() for key in ("because", "would_do", "if_not")]
+        because, would_do, if_not = self._checked(parts, "doctor doubt", index)
+        evidence = args.get("evidence_ids")
+        known = {r.evidence_id: r for r in turn.looks}
+        cited = (
+            {evidence_id_of(known[e]): known[e].result for e in evidence if e in known}
+            if isinstance(evidence, list)
+            else {}
+        )
+        try:
+            doubt = express_doubt(
+                "AI_DOUBT",
+                because=because,
+                would_do=would_do,
+                if_not=if_not,
+                evidence=cited,
+                names=self.checker.names,
+                upload_id=ctx.upload_id,
+            )
+        except ProtocolError as exc:
+            raise AgentToolError("AGENT_DOUBT_REFUSED", exc.message) from exc
+        if doubt.doubt_id in {d.doubt_id for d in turn.doubts}:
+            return
+        turn.doubts.append(doubt)
+        if meaning:  # only a doubt about meaning stops approval; it never changes data
+            turn.blocking += 1
+            turn.asks.append(doubt_ask(doubt))
+        turn.feedback.append({"doubt": "noted"})
+
+    def _request(self, action: dict[str, Any], args: dict[str, Any]) -> None:
+        turn = self.turn
+        index = self._index(action, args)
+        args = dict(self.gates[index].unalias_args(args))
+        if len(turn.requests) >= MAX_REQUESTS:
+            raise AgentToolError(
+                "AGENT_REQUEST_LIMIT", "That is enough requests for one review; this is dropped."
+            )
+        kind = args.get("kind", "more_data")
+        columns = args.get("columns")
+        named = [str(c).strip() for c in columns[:8]] if isinstance(columns, list) else []
+        given = [str(args.get(k) or "").strip() for k in ("what", "why", "per", "ask_whom")]
+        if kind not in {"more_data", "different_file"} or not given[0] or not given[1]:
+            raise AgentToolError(
+                "AGENT_REQUEST_INVALID",
+                "A request needs `kind` (more_data or different_file), `what` is missing, and `why` it is needed.",
+            )
+        what, why, per, whom, *shape = self._checked([*given, *named], "doctor request", index)
+        turn.requests.append(
+            DataRequest(
+                kind=kind,
+                what=what,
+                why=why,
+                columns=tuple(shape),
+                per=per or "one row per customer",
+                ask_whom=whom or None,
+                upload_id=self.ctxs[index].upload_id,
+            )
+        )
+        turn.feedback.append({"requested": kind})
+
     def _finish(self, action: dict[str, Any]) -> str:
         text = str(action.get("text") or "").strip()
         if (
@@ -631,9 +731,10 @@ def _hashed(turn: _Turn, cited: Sequence[str]) -> list[str]:
     return [evidence_id_of(by_id[e]) for e in cited if e in by_id]
 
 
-def _summary(items: int, questions: int) -> str:
+def _summary(items: int, questions: int, doubts: int = 0) -> str:
     """The review in our own words, when the model's summary is missing or failed a check."""
+    unsure = f", and {doubts} thing{'s' if doubts != 1 else ''} it is not sure about" if doubts else ""
     return (
         f"I looked through your files with the AI: {items} suggested change{'s' if items != 1 else ''} "
-        f"and {questions} question{'s' if questions != 1 else ''}. Nothing is ticked; you decide."
+        f"and {questions} question{'s' if questions != 1 else ''}{unsure}. Nothing is ticked; you decide."
     )

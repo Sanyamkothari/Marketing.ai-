@@ -350,3 +350,104 @@ def test_no_consent_inside_the_visit_the_rules_go_on_alone(world: World, storage
     case = _answer_key(storage, world, _opened(storage, world, port), port)
     assert client.asked == 0 and case.state in (VisitState.APPROVE, VisitState.PREVIEW)
     assert not any(i.source is ProposalSource.AI for i in case.items)
+
+
+# -- doubts and requests for more data (the design §6.7, §6.8) ------------------------------------------------
+def _doubt(
+    *, meaning: bool = False, because: str = "the `age` column may be in months", **extra: Any
+) -> dict[str, Any]:
+    args = {
+        "because": because,
+        "would_do": "leave the column as written and flag it",
+        "if_not": "the ages would be read ten times too large",
+        "evidence_ids": ["r1"],
+        "meaning": meaning,
+    }
+    return {"action": "express_doubt", "file": "F1", "args": {**args, **extra}}
+
+
+def _request(**extra: Any) -> dict[str, Any]:
+    args = {
+        "kind": "more_data",
+        "what": "the date of each customer's last order",
+        "why": "Win back needs it.",
+        "columns": ["customer_id", "last_order_date"],
+        "ask_whom": "the billing team",
+    }
+    return {"action": "request_data", "file": "F1", "args": {**args, **extra}}
+
+
+_LOOK = {"action": "get_profile", "file": "F1", "args": {}}
+
+
+def test_a_doubt_is_kept_in_three_parts_and_does_not_block(world: World, storage: LocalStorage) -> None:
+    found, _ = _run(world, storage, Script([_LOOK, _doubt()]))
+    (doubt,) = found.doubts
+    assert doubt.because.startswith("the `age` column") and doubt.would_do and doubt.if_not
+    assert doubt.evidence_ids, "it rests on the look it cites"
+    assert found.asks == () and found.items == (), "a doubt alone asks nothing and changes nothing"
+
+
+def test_a_doubt_with_a_number_no_look_holds_is_refused(world: World, storage: LocalStorage) -> None:
+    bad = _doubt(because="the `age` column has 4,417 values in months")
+    found, _ = _run(world, storage, Script([_LOOK, bad]))
+    assert found.doubts == () and found.asks == ()
+
+
+def test_a_doubt_about_meaning_also_asks_and_blocks_but_changes_nothing(
+    world: World, storage: LocalStorage
+) -> None:
+    found, _ = _run(world, storage, Script([_LOOK, _doubt(meaning=True)]))
+    assert len(found.doubts) == 1
+    (ask,) = found.asks
+    assert ask.code == "DOUBT_MEANING" and ask.blocking and ask.meaning_bearing and ask.recommended is None
+    assert all(option.effect.kind is None for option in ask.options), "no answer changes any data"
+    assert found.items == ()
+
+
+def test_a_meaning_doubt_counts_against_the_blocking_limit(world: World, storage: LocalStorage) -> None:
+    script = [_LOOK, *(_doubt(meaning=True, because=f"column {n} may mean something else") for n in range(4))]
+    found, _ = _run(world, storage, Script(script))
+    assert len(found.asks) == MAX_BLOCKING == len(found.doubts)
+
+
+def test_a_request_for_more_data_names_what_the_file_and_whom(world: World, storage: LocalStorage) -> None:
+    found, _ = _run(world, storage, Script([_request()]))
+    (request,) = found.requests
+    assert request.kind == "more_data" and request.ask_whom == "the billing team"
+    assert request.columns == ("customer_id", "last_order_date") and request.per == "one row per customer"
+    assert found.items == () and found.asks == ()
+
+
+def test_a_request_without_a_reason_or_with_an_unknown_kind_is_refused(
+    world: World, storage: LocalStorage
+) -> None:
+    found, _ = _run(world, storage, Script([_request(why=""), _request(kind="delete_everything")]))
+    assert found.requests == ()
+
+
+def test_doubts_and_requests_reach_the_case_and_only_a_meaning_doubt_blocks(
+    world: World, storage: LocalStorage
+) -> None:
+    client = Script([_LOOK, _doubt(), _request(), {"action": "finish", "text": "Two things to read."}])
+    port = _review(_guard(client))
+    case = _answer_key(storage, world, _opened(storage, world, port), port)
+    assert [d.because.startswith("the `age`") for d in case.doubts] == [True]
+    (asked,) = [q for q in case.questions if q.code == "DATA_REQUESTED"]
+    assert not asked.blocking and asked.answer is None
+    assert not visit.open_blocking(case), "a doubt about anything else, and a request, do not stop approval"
+    assert not any(i.state is ProposalState.ACCEPTED and i.source is ProposalSource.AI for i in case.items)
+
+
+def test_a_meaning_doubt_stops_approval_until_the_person_answers(world: World, storage: LocalStorage) -> None:
+    client = Script([_LOOK, _doubt(meaning=True), {"action": "finish", "text": "One thing to check."}])
+    port = _review(_guard(client))
+    case = _answer_key(storage, world, _opened(storage, world, port), port)
+    (blocking,) = visit.open_blocking(case)
+    assert blocking.code == "DOUBT_MEANING" and blocking.recommended is None
+    assert case.state is VisitState.ASK
+    answered = visit.answer(
+        CLIENT, case.case_id, blocking.question_id, option(blocking, "Yes, that is right"), _deps(storage, world, port),
+        expected_version=case.version, actor=ANALYST,
+    )  # fmt: skip
+    assert not visit.open_blocking(answered) and answered.doubts == case.doubts

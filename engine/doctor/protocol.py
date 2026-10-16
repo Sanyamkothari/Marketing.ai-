@@ -73,6 +73,7 @@ __all__ = [
     "approve_class_of",
     "confirmation_refusal",
     "decision_body",
+    "doubt_ask",
     "express_doubt",
     "is_material",
     "item_kind",
@@ -536,6 +537,32 @@ def ungrounded_in(doubt: CaseDoubt, evidence: Mapping[str, Any], names: Iterable
         for part in (doubt.because, doubt.would_do, doubt.if_not)
         for token in ungrounded_numbers(part, grounded, named)
     ]
+
+
+def doubt_ask(doubt: CaseDoubt) -> Ask:
+    """A doubt about meaning also asks, so approval waits for the person (§6.7: a doubt blocks only then).
+
+    The answers change no data (they carry no effect): the person says whether the reading is right, and the
+    answer is recorded with who and when. Nothing is recommended and "I don't know" is added by :func:`settle`.
+    """
+    return Ask(
+        code="DOUBT_MEANING",
+        subject={"doubt": doubt.doubt_id},
+        text=(
+            f"Data Doctor is not sure: {doubt.because.rstrip('.')}. What it would do: "
+            f"{doubt.would_do.rstrip('.')}. If not: {doubt.if_not.rstrip('.')}. Is this right?"
+        ),
+        why="It is about what a column means, which only you can say.",
+        options=(
+            AskOption(label="Yes, that is right", effect=OptionEffect(option_id="right")),
+            AskOption(label="No, it is not right", effect=OptionEffect(option_id="wrong")),
+        ),
+        rows=0,
+        upload_id=doubt.upload_id,
+        blocking=True,
+        meaning_bearing=True,
+        evidence_ids=doubt.evidence_ids,
+    )
 
 
 @dataclass(frozen=True)
