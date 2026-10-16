@@ -2,7 +2,7 @@
    technical - the Data, Model and Output pages of a list (their links), the model reports, Setup's Advanced
    settings, and every technical section - for analysts who want them. It changes what a person SEES, never what
    they may DO: roles and the API still decide that, and a technical page still opens when its address is visited
-   (the CSS rule below that starts `html.hide-tech:has` shows the body of a technical tab opened by its address).
+   (with the switch off, a technical tab opened by its address says how to show it instead of drawing a blank page).
 
    What is technical is marked in the markup, the same marks the visible-text check reads (Plan M M170):
      - class "tech" (every "Technical details" section `dom.js` techDetails() draws, and older ones);
@@ -42,8 +42,7 @@ const TECH_SUMMARY = /^\s*technical details\s*$/i;
 export const CSS = `
 html.${HIDE_CLASS} .tech,html.${HIDE_CLASS} [data-technical],html.${HIDE_CLASS} details[data-technical-details]{display:none !important}
 html.${HIDE_CLASS} .flow>[data-technical]+.arrow{display:none !important}
-html.${HIDE_CLASS}:has([data-ds-tabs] [data-technical][aria-selected="true"]) [data-ds-tabs] [data-technical][aria-selected="true"]{display:inline-flex !important}
-html.${HIDE_CLASS}:has([data-ds-tabs] [data-technical][aria-selected="true"]) :is(section,details,div)[data-technical]:not([data-ds-tabs] *),html.${HIDE_CLASS}:has([data-ds-tabs] [data-technical][aria-selected="true"]) :is(section,details).tech:not([data-ds-tabs] *){display:block !important}
+html.${HIDE_CLASS}:has([data-ds-tabs] [data-technical][aria-selected="true"]) [data-ds-tabs]::after{content:"These are technical details. Turn on \\201CShow technical details\\201D in Settings to see them.";display:block;margin-top:16px;color:var(--muted,#555);font-size:14px}
 .tech-switch{display:flex;align-items:flex-start;gap:10px;cursor:pointer;font-size:14px;color:var(--ink)}
 .tech-switch input{margin:2px 0 0;width:16px;height:16px;flex:none;accent-color:var(--brand-blue)}
 .tech-switch .ts-text{display:flex;flex-direction:column;gap:2px}
