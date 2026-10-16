@@ -101,8 +101,12 @@ const CSS = `
 
 /* the Review page's plain summary, and the technical details folded under one button */
 .cw .cw-sum-lead{font-size:20px;line-height:28px;font-weight:600;color:var(--ink);margin:var(--s2, 8px) 0}
-.cw .cw-sum-h{margin-top:var(--s4, 16px)}
+.cw .cw-sum-h{margin-top:var(--s5, 24px);font-size:16px}
 .cw .cw-sum-scroll{overflow-x:auto}
+.cw .cw-sum-sub{font-weight:600;margin:var(--s3, 12px) 0 var(--s1, 4px)}
+.cw .cw-more{margin:var(--s2, 8px) 0}
+.cw .cw-more>summary{cursor:pointer;color:var(--brand-blue);font-weight:600;font-size:var(--fs-body, 14px)}
+.cw .cw-more-body{margin-top:var(--s2, 8px)}
 .cw .cw-techbox{margin-top:var(--s4, 16px)}
 .cw .cw-techbox>summary{list-style:none;cursor:pointer;display:inline-flex}
 .cw .cw-techbox>summary::-webkit-details-marker{display:none}

@@ -39,6 +39,7 @@ import {
   getMe,
   getModels,
   getPlanPreview,
+  getModelStory,
   getResultsSummary,
   getRun,
   getScoringSummary,
@@ -351,6 +352,7 @@ async function campaignStepScreen(token, route) {
     version,
     error: registry.error,
   };
+  const story = version && version.run_id ? await getModelStory(version.run_id) : null;
   const context = { campaign, detail, preview, model, runId };
   show(
     token,
@@ -367,7 +369,7 @@ async function campaignStepScreen(token, route) {
         resultsOn: resultsDate(campaign),
         canApprove: canAccess("POST", "/campaigns/{campaign_id}/plan"),
         model,
-        summary,
+        summary: { ...summary, story },
         busy: ui.review.busy,
         error: ui.review.error,
       }),

@@ -52,6 +52,16 @@ const world = {
   approveAnswer: null,
   runAnswer: null,
   list, // the list's summary (treat_list_summary.json); a case may answer another
+  lift: {
+    mode: "classification",
+    base_rate_pct: 12,
+    bins: [
+      { rows: 50, actual_rate_pct: 36, lift: 3 },
+      { rows: 50, actual_rate_pct: 18, lift: 1.5 },
+      { rows: 50, actual_rate_pct: 6, lift: 0.5 },
+    ],
+  },
+  importance: { items: [{ feature: "tenure_months", share_pct: 60 }, { feature: "monthly_spend", share_pct: 40 }] },
   preview, // the planner's preview; a case may answer another
   policy: null, // the list's policy_recommendation.json, when a case has one (else 404, as a non-uplift run)
   modelsAnswer: null, // an answer for GET /models other than `models` (a failure), when a case needs one
@@ -104,6 +114,9 @@ const server = (request) => {
     if (!kind) return world.runs[id] ? ok(world.runs[id]) : notFound;
     if (kind === "artefacts" && name === "scoring_summary.json") return ok(scoring);
     if (kind === "artefacts" && name === "treat_list_summary.json") return ok(world.list);
+    // The training run's own files the plain summary reads (the shape the engine writes): how its first customers did, what it relied on.
+    if (kind === "artefacts" && name === "decile_lift.json") return ok(world.lift);
+    if (kind === "artefacts" && name === "feature_importance.json") return ok(world.importance);
     if (kind === "uplift" && name === "policy_recommendation.json") return world.policy ? ok(world.policy) : notFound;
     // The served contact list, for the campaign's own page (its Audience tab reads it): two customers.
     if (kind === "treat_list.csv") return ok(`${world.runs[id].run.primary_key || "customer_id"},treat\n1,1\n2,1\n`);
