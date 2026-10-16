@@ -5,9 +5,9 @@
 //                          goal on the same case and continues in the "New campaign" wizard, where nothing answered
 //                          is asked again;
 //   the wizard's Customers the goal's case (the one just continued from the Data page, else the goal's newest) in
-//   step                   the card's two mount points `[data-cw-guided-main]` / `[data-cw-guided-aside]`; Approve,
-//                          once the data is ready, starts the list exactly as Guided setup's Approve did
-//                          (`host.approved(fill)`);
+//   step                   the card's two mount points `[data-cw-guided-main]` / `[data-cw-guided-aside]`; Approve
+//                          only approves: the run starts from "Start the campaign" under the sentence, as on the
+//                          Data page;
 //   a goal's setup         the Setup tab of `#/uc/<goal>`, in the same two places Guided setup mounts into.
 //
 // The wizard and a goal's setup reach it through Guided setup's own mount (`../agent/guided.js` `mountGuided` hands
@@ -486,13 +486,15 @@ async function approve(entry) {
   await act(entry, "approve", () => approveCase(theCase(entry), sentence), { announce: "Approved" });
   const screen = entry.state.screen;
   const view = screen && screen.view;
-  // One flow: approved and ready goes straight on, as Guided setup's Approve did - unless a change that needs its
-  // own yes is left out: then continuing without it is its own choice ("Continue with this data").
+  // Approving never starts a campaign run: that is the one "Start the campaign" button below the sentence, on the
+  // Data page and in the wizard alike. Only the goal's setup (which just fills its form, nothing runs) goes straight
+  // on, unless a change that needs its own yes is left out: then continuing without it is its own choice.
   if (
     view &&
     ["ready", "ready_with_warnings"].includes(view.verdict.key) &&
     view.start &&
     entry.host.approved &&
+    entry.host.place === "setup" &&
     !leftOutOf(screen).length
   ) {
     await proceed(entry);

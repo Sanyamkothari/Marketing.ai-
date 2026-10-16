@@ -44,7 +44,7 @@ export const CSS = `
 .dds-item-t{overflow-wrap:anywhere}
 .dds-item-sub{font-size:var(--fs-caption);line-height:var(--lh-caption);color:var(--muted)}
 .dds-standing,.dds-goal{display:flex;gap:var(--s3);align-items:center;justify-content:space-between;min-height:48px;padding:var(--s2) 0;flex-wrap:wrap}
-.dds-goal .dds-item-body{flex-direction:row;align-items:center;flex-wrap:wrap;gap:var(--s2)}
+.dds-goal .dds-item-body{flex-direction:column;align-items:flex-start;gap:var(--s1,4px);flex:1 1 16rem;min-width:0}
 .dds-standing .btn.sm,.dds-goal .btn{min-height:40px}
 .dds-remembered{display:flex;gap:var(--s3);align-items:center;justify-content:space-between;flex-wrap:wrap}
 .dds-remembered .btn.sm{min-height:40px}

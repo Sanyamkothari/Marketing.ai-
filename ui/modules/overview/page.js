@@ -146,8 +146,18 @@ function cardHtml(card, places) {
   });
 }
 
-function attentionHtml(overview, places) {
-  const cards = overview.cards || [];
+/**
+ * The cards to draw. "A new model is waiting for approval" is left out for a goal whose campaign just finished and is
+ * shown above as ready: "Review and download" there approves the model with the list, so the card would say it twice.
+ */
+export function cardsToShow(cards, shownRuns = []) {
+  const ready = new Set(shownRuns.filter((v) => v.record.state === "done" && v.record.train_run_id).map((v) => v.record.use_case_id));
+  return (cards || []).filter((card) => !(card.kind === "challenger_ready" && ready.has(card.use_case_id)));
+}
+
+function attentionHtml(overview, places, shownRuns = []) {
+  const all = overview.cards || [];
+  const cards = cardsToShow(all, shownRuns);
   let body;
   if (!overview.summary_checked) {
     body = `<p class="ov-note" data-unchecked>Some figures could not be checked against their records, so this list is not shown. Your campaigns below are unaffected.</p>`;
@@ -158,7 +168,7 @@ function attentionHtml(overview, places) {
       text: "When a campaign needs a decision, it appears here with the one thing to do.",
     });
   } else {
-    const more = Math.max(0, (overview.cards_total || cards.length) - cards.length);
+    const more = Math.max(0, (overview.cards_total || all.length) - all.length);
     body = `<div class="ov-cards" role="list">${cards.map((card) => cardHtml(card, places)).join("")}</div>${
       more
         ? `<p class="ov-more" data-more-cards>${esc(plural(more, "more item needs", "more items need"))} your attention. <a href="${esc(
@@ -382,7 +392,8 @@ export function overviewHtml({ overview = null, error = null, places = DEFAULT_P
   } else {
     // The checklist leads while it shows (a first visit's guide); attention, value and live keep the plan's order.
     const check = showChecklist(overview.checklist, checklistHidden) ? checklistHtml(overview, places) : "";
-    body = `${runsHtml(runsToShow(runs, overview))}<div class="ov-grid ovp-grid${check ? " has-check" : ""}">${check}${attentionHtml(overview, places)}${valueHtml(
+    const shownRuns = runsToShow(runs, overview);
+    body = `${runsHtml(shownRuns)}<div class="ov-grid ovp-grid${check ? " has-check" : ""}">${check}${attentionHtml(overview, places, shownRuns)}${valueHtml(
       overview,
       places,
     )}${liveHtml(overview, places)}</div>`;
