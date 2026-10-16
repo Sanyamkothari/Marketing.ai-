@@ -7,7 +7,7 @@
 
 import { button } from "../../components.js";
 import { esc } from "../../dom.js";
-import { term, userText } from "../../labels.js";
+import { goalOutcome, term, userText } from "../../labels.js";
 import {
   comparisonRows,
   contactSentence,
@@ -15,6 +15,7 @@ import {
   exclusionLines,
   liftRows,
   liftSentence,
+  upliftSentence,
   likelihoodText,
   notPickedRows,
   notProvenText,
@@ -91,12 +92,14 @@ function whyPart(story) {
 
 /** How good the model is: one honest sentence, what it does not prove, and the groups behind it one click away. */
 function qualityPart({ version, story, list, campaign, resultsOn }) {
-  const lift = liftSentence(story && story.lift);
-  const unseen = unseenSentence(version);
+  const goal = campaign && campaign.use_case_id;
+  const lift = liftSentence(story && story.lift, goal) || upliftSentence(story && story.evaluation, goal);
+  const unseen = unseenSentence(version, goal);
   const headline = lift || unseen;
   const rows = liftRows(story && story.lift);
+  const outcome = esc(goalOutcome(goal));
   const table = rows.length
-    ? `<p class="cw-p">Customers the model had not seen, sorted by how likely it thought they were, in equal groups:</p><div class="cw-sum-scroll"><table class="tbl cw-tbl" data-cw-sum-groups><thead><tr><th>Group</th><th class="num">Customers</th><th class="num">Had the result</th><th class="num">Compared with average</th></tr></thead><tbody>${rows
+    ? `<p class="cw-p">Customers the model had not seen, sorted by how likely it thought they were, in equal groups:</p><div class="cw-sum-scroll"><table class="tbl cw-tbl" data-cw-sum-groups><thead><tr><th>Group</th><th class="num">Customers</th><th class="num">Went on ${outcome}</th><th class="num">Compared with average</th></tr></thead><tbody>${rows
         .map((r) => `<tr><td>${esc(r.group)}</td><td class="num">${esc(r.customers)}</td><td class="num">${esc(r.rate)}</td><td class="num">${esc(r.times)}</td></tr>`)
         .join("")}</tbody></table></div>`
     : "";
