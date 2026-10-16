@@ -39,7 +39,10 @@ def test_a_technical_tab_opened_by_its_address_is_not_a_blank_page() -> None:
     """With "Show technical details" off, a technical tab opened by its address says how to show it; its technical
     words stay hidden (the visible-text check reads every page with the switch off)."""
     css = (UI / "technical.js").read_text(encoding="utf-8")
-    assert 'html.${HIDE_CLASS}:has([data-ds-tabs] [data-technical][aria-selected="true"]) [data-ds-tabs]::after' in css
+    assert (
+        'html.${HIDE_CLASS}:has([data-ds-tabs] [data-technical][aria-selected="true"]) [data-ds-tabs]::after'
+        in css
+    )
     assert "Turn on \\\\201CShow technical details\\\\201D in Settings" in css
 
 
