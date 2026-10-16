@@ -406,7 +406,7 @@ function decisionParts({ campaign, model, canApprove, busy }) {
   if (state === "pending" && (!model.canApprove || model.own)) {
     const who = model.own
       ? "You started this learning, so another person with the Approver role must approve the new model. They find it under Waiting for approval."
-      : "This is the first campaign for this goal, and the list was built with a new model that someone with the Approver role must approve first. They find it under Waiting for approval.";
+      : "The list was built with a new model that someone with the Approver role must approve first. They find it under Waiting for approval.";
     return {
       lead: problemBox(`${p(who)}${p("This page carries on once it is approved. Nothing is downloaded before then.")}`, 'data-cw-waiting="review"'),
       buttons: `${act({ label: "Open Waiting for approval", href: "#/approvals", attrs: "data-cw-approvals" })}${again}`,
@@ -418,7 +418,7 @@ function decisionParts({ campaign, model, canApprove, busy }) {
     return {
       lead: problemBox(
         p(
-          "This is the first campaign for this goal, so the list was built with what Marketing AI learned from your customers: a new model that still needs an Approver's approval. You have that role.",
+          "The list was built with what Marketing AI learned from your customers this time: a new model that still needs an Approver's approval. You have that role.",
         ),
         "data-cw-new-model",
         "info",

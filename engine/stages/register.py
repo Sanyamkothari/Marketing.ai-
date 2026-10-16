@@ -149,6 +149,8 @@ class ChampionScore:
     metric: Metric | None = None
     test_score: float | None = None
     unavailable_reason: str | None = None
+    # True when the champion's columns are not in this frame (a renamed or dropped column)
+    cannot_read_frame: bool = False
 
     def __post_init__(self) -> None:
         scored = self.test_score is not None and self.metric is not None
@@ -182,6 +184,9 @@ def build_model_version(
     The cases, in the order they are decided:
 
     - **no champion yet**: promote, nothing to re-score, `champion_score` is ignored;
+    - **a champion exists that cannot read this frame's columns, and approval is required**: the version is
+      `pending_approval` without a comparison (`improvement_pct` stays empty): the champion cannot score this
+      data at all, so waiting for a person is the only way on, and one person's approval is still needed;
     - **a champion exists and `champion_score` is None, names another model, or carries an
       `unavailable_reason`** (its predictor is gone, or it cannot score a frame built for a
       different feature schema): the comparison did not happen, so the version stays a `candidate`
@@ -255,6 +260,21 @@ def build_model_version(
     champion = ctx.registry.get_champion(config.id)
     promote, improvement_pct = _champion_decision(candidate, champion, champion_score, config)
     if not promote:
+        if (
+            config.governance.approval_required
+            and champion is not None
+            and champion_score is not None
+            and champion_score.cannot_read_frame
+            and champion_score.model_id == champion.model_id
+        ):
+            # The champion cannot even read this file, so no comparison can be made and it cannot score the new
+            # data. A person decides (Approvals, or the review page's one approval): never a model nobody looked at.
+            return candidate.model_copy(
+                update={
+                    "status": ModelStatus.PENDING_APPROVAL,
+                    "measured_against_champion_id": champion.model_id,
+                }
+            )
         return candidate
     if config.governance.approval_required:
         return candidate.model_copy(
