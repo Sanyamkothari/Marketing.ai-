@@ -57,7 +57,7 @@ const primaries = () => $$("#app .btn.primary");
 const view = (id) => recorded[`GET /campaigns/${id}`].body;
 const proof = (id) => recorded[`GET /pilot/proof/${id}?format=json`].body;
 
-test("the list: both campaigns, each with a short name, its goal, a status chip, how many were contacted and the result", async () => {
+test("the list: both campaigns, each with a short name, its goal, a status chip, the contact list size and the result", async () => {
     await visit("#/campaigns");
     assert.equal($$("#app h1").length, 1);
     assert.equal(text("#app h1"), "Campaigns");
@@ -157,7 +157,7 @@ for (const [name, id] of [
         assert.equal(text("[data-tile-contacted] .stat-caption"), "Customers sent the campaign.");
         assert.equal(text("[data-tile-comparison] .stat-label"), "Comparison group");
         assert.equal(text("[data-tile-comparison] .stat-value"), "12,737");
-        assert.equal(text("[data-tile-comparison] .stat-caption"), "Customers held back, not contacted, to compare against.");
+        assert.equal(text("[data-tile-comparison] .stat-caption"), "25,599 eligible, 50% kept back for comparison.");
         const net = proof(id)
             .sections.find((s) => s.key === "net_value")
             .lines.find((l) => NET_VALUE_LABEL.test(l.label));

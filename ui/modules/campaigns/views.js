@@ -103,14 +103,30 @@ function tagsHtml(campaign) {
 const counts = (campaign) => (campaign && campaign.counts) || {};
 
 /**
- * How many customers the campaign contacts: the contact list's own count when the list says it (the file a person
- * downloads and sends), else the campaign's planned count. The two differ for a list that picks only its best
- * customers, and the page must not give two numbers for one list.
+ * How many customers are on the campaign's contact list: the list's own count when it says it (the file a person
+ * downloads and sends). Never the eligible count (`counts.intended_treated`: everyone eligible except the
+ * comparison group), which is bigger for a list that picks only its best customers and is shown only as "eligible"
+ * in the measurement detail. A campaign made here whose list cannot be read has no number (null); a campaign sent
+ * by another tool or the whole programme has no list of ours, so its reported count stands.
  */
-const contacted = (model) => {
-  const n = model.summary && model.summary.treat_rows;
-  return Number.isInteger(n) && n >= 0 ? n : counts(model.campaign).intended_treated;
+export const listSize = (campaign, summary) => {
+  const n = summary && summary.treat_rows;
+  if (Number.isInteger(n) && n >= 0) return n;
+  if (campaign && campaign.kind === "scored" && (campaign.run_ids || []).length) return null;
+  return counts(campaign).intended_treated;
 };
+
+const contacted = (model) => listSize(model.campaign, model.summary);
+
+/** The comparison group's caption: the eligible customers and the share kept back, or the plain sentence. */
+function comparisonCaption(c) {
+  const held = c.intended_holdout;
+  const eligible = Number(c.intended_treated) + Number(held);
+  if (!isValue(held) || !isValue(c.intended_treated) || !(eligible > 0)) {
+    return "Customers held back, not contacted, to compare against.";
+  }
+  return `${count(eligible)} eligible, ${percent(held / eligible, { places: 0 })} kept back for comparison.`;
+}
 
 /**
  * The net value line's label, as `engine/pilot/proof.py` writes it: "Net value", or, for a Pack whose claim is
@@ -206,7 +222,7 @@ function listRow(entry) {
     `<div class="cp-cell">${link}${subtitle}</div>`,
     ours ? tagChip(goal, { attrs: `title="${esc(goal)}"` }) : `<span class="muted">${EM_DASH}</span>`,
     campaignChip(status),
-    esc(fmtInt(counts(campaign).intended_treated || 0)),
+    esc(count(listSize(campaign, entry.summary))),
     resultCell(entry),
   ];
 }
@@ -222,8 +238,8 @@ export function campaignsListHtml({ entries = [], error = null, canCreate = true
   const action = canCreate ? { label: "+ New campaign", href: "#/campaigns/new", attrs: "data-new-campaign" } : null;
   const capped = entries.length >= LIST_CAP;
   const lead = capped
-    ? `The newest ${fmtInt(LIST_CAP)} campaigns: where each stands, how many customers it reached and what it earned.`
-    : "Every campaign: where it stands, how many customers it reached and what it earned.";
+    ? `The newest ${fmtInt(LIST_CAP)} campaigns: where each stands, how many customers are on its contact list and what it earned.`
+    : "Every campaign: where it stands, how many customers are on its contact list and what it earned.";
   // A top-level place: no breadcrumb (visual_common §3).
   const head = pageHead(
     `<h1 class="h1">Campaigns</h1><p class="desc">${esc(lead)}</p>${entries.length ? headActions({ primary: action }) : ""}`,
@@ -242,7 +258,7 @@ export function campaignsListHtml({ entries = [], error = null, canCreate = true
       { label: "Campaign" },
       { label: "Goal" },
       { label: "Status" },
-      { label: "Contacted", num: true },
+      { label: "Contact list", num: true },
       { label: "Result" },
     ];
     const title = capped ? `The newest ${fmtInt(LIST_CAP)} campaigns` : "All campaigns";
@@ -463,7 +479,7 @@ function overviewHtml(model) {
     statTile({
       label: term("comparisonGroup"),
       value: count(c.intended_holdout),
-      caption: "Customers held back, not contacted, to compare against.",
+      caption: comparisonCaption(c),
       attrs: "data-tile-comparison",
     }),
     valueTile(model),
