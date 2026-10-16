@@ -355,8 +355,8 @@ async function uploadGoal(host) {
   throw new ApiError(0, "DOCTOR_NO_USE_CASES", "There is no goal to read the file for.", null);
 }
 
-/** Put a file the server now holds (uploaded, or imported from a connection) into the open case, or a new one. */
-async function bringIn(entry, name, getUpload) {
+/** Put the files the server now holds (uploaded, or imported from a connection) into the open case, or a new one. */
+async function bringIn(entry, name, getUploads) {
   const s = entry.state;
   const host = entry.host;
   s.uploadNote = `Reading ${name}…`;
@@ -364,14 +364,15 @@ async function bringIn(entry, name, getUpload) {
     entry,
     "upload",
     async () => {
-      const answer = await getUpload();
+      const ids = (await getUploads()).map((answer) => answer.upload_id);
       if (!s.caseId) {
-        const made = await createCase([answer.upload_id], name);
+        const made = await createCase(ids, name);
         s.caseId = made.case_id;
         let c = await resumeVisit(made.case_id);
         if (host.goalId) c = await chooseGoal(c, host.goalId);
       } else {
-        await addFile(theCase(entry), answer.upload_id);
+        let c = theCase(entry);
+        for (const id of ids) c = await addFile(c, id);
         await resumeVisit(s.caseId);
       }
     },
@@ -381,8 +382,17 @@ async function bringIn(entry, name, getUpload) {
   draw(entry);
 }
 
-const upload = (entry, file) =>
-  bringIn(entry, file.name, async () => postUpload(file, await uploadGoal(entry.host), entry.host.mode || "train"));
+/** One or several files from this computer, read together as one check. */
+function upload(entry, files) {
+  const list = [...files];
+  const name = list.length > 1 ? `${list[0].name} and ${list.length - 1} more` : list[0].name;
+  return bringIn(entry, name, async () => {
+    const goal = await uploadGoal(entry.host);
+    const read = [];
+    for (const file of list) read.push(await postUpload(file, goal, entry.host.mode || "train"));
+    return read;
+  });
+}
 
 /** "Pick from a connection": the picker's import answers what `POST /uploads` does, so it carries on as a file does. */
 async function pickFromConnection(entry) {
@@ -400,7 +410,7 @@ async function pickFromConnection(entry) {
       },
       onImported: (imported, label) => {
         s.picker = null;
-        bringIn(entry, label, async () => imported);
+        bringIn(entry, label, async () => [imported]);
       },
     });
   } catch (error) {
@@ -607,7 +617,7 @@ function bind(entry) {
       const agree = card && card.querySelector("[data-dds-agree]");
       if (agree) agree.disabled = Boolean(entry.state.busy) || !input.checked;
     } else if (input.type === "file" && input.files && input.files[0]) {
-      upload(entry, input.files[0]);
+      upload(entry, input.files);
     }
   });
   entry.aside.addEventListener("click", (event) => {
@@ -746,12 +756,17 @@ export function mountDataDoctor(slots, host) {
   const linked = Boolean(full.caseId) && full.caseId !== entry.state.caseId && full.caseId !== entry.linked;
   const reopen = !isNew && Boolean((wanted && wanted !== entry.state.caseId) || linked);
   entry.linked = full.caseId || null;
-  if (reopen) entry.state = { ...fresh(), ai: entry.state.ai };
+  // Files chosen on the Data page ("Connect your data") start a new check: no earlier case is opened first.
+  const handed = Boolean(full.files && full.files.length);
+  if (reopen || handed) entry.state = { ...fresh(), loading: !handed, ai: entry.state.ai };
   draw(entry);
   slots.main.replaceChildren(entry.main);
   if (slots.aside) slots.aside.replaceChildren(entry.aside);
   else entry.main.appendChild(entry.aside);
-  if (isNew || reopen) open(entry);
+  if (handed) {
+    readAi(entry).then(() => draw(entry), () => null);
+    upload(entry, full.files);
+  } else if (isNew || reopen) open(entry);
   if (full.pick) pickFromConnection(entry);
   return entry;
 }
