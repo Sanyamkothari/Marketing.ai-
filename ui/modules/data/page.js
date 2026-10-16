@@ -33,6 +33,7 @@ import { AI_SETTINGS_HREF, aiServiceStatus } from "../../availability.js";
 // in the tab (a component that draws no H1 of its own), and the header's link goes to the tab. Off: unchanged.
 import { dataDoctorOn, dataDoctorOnNow } from "../datadoctor/switch.js";
 import { mountDataDoctor } from "../datadoctor/screen.js";
+import { TABLE_FILE_TYPES } from "../intake/notes.js";
 
 export const DATA_HOME = "#/data";
 export const DOCTOR_HREF = "#/doctor";
@@ -60,6 +61,9 @@ const state = {
 };
 
 let view = { app: null, tab: "sources", hash: "", doctor: false };
+
+/** The files chosen on "Connect your data": kept while the page goes to the Data Doctor tab, which reads them. */
+let handedFiles = null;
 
 /** True while the person is still on the screen this page drew: an answer that arrives after they left must not paint over it. */
 const stillHere = () => window.location.hash === view.hash;
@@ -116,7 +120,9 @@ function fileOrigin(u) {
 /** The header: "+ Add a source" is the Sources tab's one primary action; the Check tab keeps its one action in its card. */
 function header(tab) {
   const subtitle = "Where your customer data comes from, and whether it is ready to use.";
-  if (tab !== "sources") return pageHeader({ title: "Data", subtitle });
+  // With the one Data Doctor on, the page's one action is "Connect your data" below; the other kinds of source are a
+  // quiet link there, so the header carries no second button.
+  if (tab !== "sources" || dataDoctorOnNow()) return pageHeader({ title: "Data", subtitle });
   return pageHeader({
     title: "Data",
     subtitle,
@@ -245,7 +251,7 @@ function chooserHtml() {
     .join("");
   // With the one Data Doctor on, a file or a pick from a connection is brought in on its tab; off, the old page.
   const doctor = dataDoctorOnNow();
-  const file = `<article class="dt-kind" data-dt-kind="file"><div class="dt-kind-h">${typeIcon("file")}<h3>A file from your computer</h3></div><p class="dt-note">CSV, Excel or Parquet. Data Doctor reads it first and says what it can be used for.</p><div class="btn-row">${button(
+  const file = doctor ? "" : `<article class="dt-kind" data-dt-kind="file"><div class="dt-kind-h">${typeIcon("file")}<h3>A file from your computer</h3></div><p class="dt-note">CSV, Excel or Parquet. Data Doctor reads it first and says what it can be used for.</p><div class="btn-row">${button(
     { label: "Choose a file", href: doctor ? `${DATA_HOME}/check` : DOCTOR_HREF, kind: "secondary", size: "sm", attrs: 'data-dt-new="file"' },
   )}</div></article>`;
   const pick =
@@ -254,7 +260,29 @@ function chooserHtml() {
           { label: "Pick from a connection", href: `${DATA_HOME}/check/pick`, kind: "secondary", size: "sm", attrs: 'data-dt-new="pick"' },
         )}</div></article>`
       : "";
-  return `<section class="dt-chooser" id="dt-chooser" aria-labelledby="dt-chooser-h"${state.chooserOpen ? "" : " hidden"}><h2 id="dt-chooser-h">Add a source</h2><p>Marketing AI only reads from a source. It never changes anything there.</p><div class="dt-kinds">${cards}${file}${pick}</div></section>`;
+  return `<section class="dt-chooser" id="dt-chooser" aria-labelledby="dt-chooser-h"${state.chooserOpen ? "" : " hidden"}><h2 id="dt-chooser-h">${doctor ? "Other sources" : "Add a source"}</h2><p>Marketing AI only reads from a source. It never changes anything there.</p><div class="dt-kinds">${cards}${file}${pick}</div></section>`;
+}
+
+/**
+ * With the one Data Doctor on: the page starts with one action. Files are chosen here (several at once) and go straight
+ * into the Data Doctor; the other kinds of source are a quiet link that opens the chooser below.
+ */
+function connectHtml() {
+  const other = state.kinds.some((k) => k.creatable) || state.connections.some((c) => c.available);
+  return `<section class="card dt-connect" data-dt-connect aria-labelledby="dt-connect-h"><h2 id="dt-connect-h">Connect your data</h2>
+    <p>Choose your customer files, CSV, Excel or Parquet, several at once if you have them. Data Doctor reads them, asks only what it cannot tell, and gets them ready. It never changes your files.</p>
+    <div class="btn-row"><label class="btn primary dt-files-label">${icon("upload")}<span>Connect your data</span><input type="file" class="sr" id="dt-files" multiple accept="${esc(
+      TABLE_FILE_TYPES,
+    )}" data-dt-files></label></div>${
+      other
+        ? `<p class="dt-other">${button({
+            label: "Use a database, cloud storage or a saved connection instead",
+            kind: "tertiary",
+            size: "sm",
+            attrs: `data-dt-open-chooser aria-controls="dt-chooser" aria-expanded="${state.chooserOpen}"`,
+          })}</p>`
+        : ""
+    }</section>`;
 }
 
 function sourcesHtml() {
@@ -285,14 +313,16 @@ function sourcesHtml() {
       : `<div class="card">${emptyState({
           icon: "data",
           title: "No data sources yet",
-          text: "Add a source or choose a file to get started.",
+          text: dataDoctorOnNow() ? "Connect your data above to get started." : "Add a source or choose a file to get started.",
           // The one way forward is the header's: this opens the same "Add a source" chooser (M188 review).
-          action: { label: "Add a source", kind: "secondary", attrs: 'data-dt-open-chooser aria-controls="dt-chooser"' },
+          action: dataDoctorOnNow()
+            ? null
+            : { label: "Add a source", kind: "secondary", attrs: 'data-dt-open-chooser aria-controls="dt-chooser"' },
         })}</div>`;
   const problem = state.uploadsError
     ? errorBox(state.uploadsError, { title: "The uploaded files could not be listed." })
     : "";
-  return `${aiStatusHtml()}${chooserHtml()}<section class="dt-sec" aria-labelledby="dt-sources-h"><h2 id="dt-sources-h">Your sources</h2><p>Saved connections and uploaded files, with their health and when they last brought in data.</p>${list}${problem}</section>
+  return `${aiStatusHtml()}${dataDoctorOnNow() ? connectHtml() : ""}${chooserHtml()}<section class="dt-sec" aria-labelledby="dt-sources-h"><h2 id="dt-sources-h">Your sources</h2><p>Saved connections and uploaded files, with their health and when they last brought in data.</p>${list}${problem}</section>
     <p class="dt-foot">Connect an AI service in <a href="${AI_SETTINGS_HREF}" data-dt-settings>Settings › AI service</a>.</p>`;
 }
 
@@ -335,8 +365,9 @@ function draw() {
   if (tab === "check" && view.doctor) {
     const main = app.querySelector("[data-dds-main]");
     const aside = app.querySelector("[data-dds-aside]");
-    if (main) mountDataDoctor({ main, aside }, { place: "data", pick: view.pick, caseId: view.caseId });
-    view.pick = false; // `#/data/check/pick` opens the picker once, not on every redraw
+    if (main) mountDataDoctor({ main, aside }, { place: "data", pick: view.pick, caseId: view.caseId, files: view.files });
+    view.pick = false;
+    view.files = null; // the files are read once, not on every redraw // `#/data/check/pick` opens the picker once, not on every redraw
   }
   revealSelectedTab(app);
   document.title = `${tab === "check" ? "Check my data" : "Data"} · Marketing AI`;
@@ -383,9 +414,17 @@ function bind(app) {
       state.chooserOpen = true;
       const chooser = app.querySelector("#dt-chooser");
       if (chooser) chooser.hidden = false;
-      if (add) add.setAttribute("aria-expanded", "true");
+      (add || opener).setAttribute("aria-expanded", "true");
       const first = chooser && chooser.querySelector("a, button");
       if (first) first.focus();
+    });
+  }
+  const files = app.querySelector("[data-dt-files]");
+  if (files) {
+    files.addEventListener("change", () => {
+      if (!files.files || !files.files.length) return;
+      handedFiles = [...files.files];
+      window.location.hash = `${DATA_HOME}/check`; // the Data Doctor tab reads them
     });
   }
   if (add) {
@@ -436,6 +475,8 @@ export async function renderData(app, parts) {
     const doctor = await dataDoctorOn();
     if (view.app !== app || view.tab !== tab) return;
     view.doctor = doctor;
+    view.files = doctor ? handedFiles : null;
+    handedFiles = null;
     draw();
     return;
   }

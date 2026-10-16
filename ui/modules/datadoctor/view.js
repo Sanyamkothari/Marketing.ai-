@@ -486,7 +486,7 @@ export function uploadHtml({ accept = "", busy = "", first = true, quiet = false
     : "Add a file with the data asked for. It joins this check, and nothing you answered is asked again.";
   return `<div class="dds-upload" data-dds-upload>${text ? `<p class="dds-why">${esc(text)}</p>` : ""}<label class="btn ${first ? "primary" : "secondary"} dds-file-label" for="dds-file">${icon(
     "upload",
-  )}<span>${esc(label)}</span></label><input type="file" id="dds-file" class="dds-file" accept="${esc(accept)}"${busy ? " disabled" : ""}>${
+  )}<span>${esc(label)}</span></label><input type="file" id="dds-file" class="dds-file" multiple accept="${esc(accept)}"${busy ? " disabled" : ""}>${
     pick && !busy
       ? ` ${button({ label: "Pick from a connection", kind: "secondary", attrs: "data-dds-pick-connection" })}`
       : ""

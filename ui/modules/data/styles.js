@@ -20,6 +20,12 @@ const CSS = `
 .dt .dt-more{margin-top:var(--s3);display:flex;flex-wrap:wrap;align-items:center;gap:var(--s3)}
 
 /* Add a source: one card, the kinds as quiet tiles inside it (no box in a box) */
+.dt .dt-connect{max-width:720px;margin:0 0 var(--s5);padding:var(--s5)}
+.dt .dt-connect h2{margin:0 0 var(--s1);font-size:var(--fs-section);line-height:var(--lh-section);font-weight:600;color:var(--ink)}
+.dt .dt-connect p{margin:0 0 var(--s4);font-size:var(--fs-body);line-height:var(--lh-body);color:var(--ink2)}
+.dt .dt-connect .dt-other{margin:var(--s3) 0 0;font-size:var(--fs-small)}
+.dt .dt-files-label{min-height:44px;cursor:pointer}
+.dt .dt-files-label:focus-within{outline:2px solid var(--brand-blue);outline-offset:2px}
 .dt .dt-chooser{margin:0 0 var(--s5);padding:20px;border:1px solid var(--line);border-radius:var(--r-lg);background:var(--surface)}
 .dt .dt-chooser[hidden]{display:none}
 .dt .dt-chooser h2{margin:0 0 var(--s1);font-size:var(--fs-section);line-height:var(--lh-section);font-weight:600;color:var(--ink)}
