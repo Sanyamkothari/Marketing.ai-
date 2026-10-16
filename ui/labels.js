@@ -219,6 +219,7 @@ export const GOAL_OUTCOMES = Object.freeze({
   rca: "to leave",
   "payment-propensity": "to pay late or not at all",
   "hillstrom-email": "to buy",
+  "criteo-uplift": "to buy",
   "card-default-propensity": "to miss a payment",
   "first-purchase-propensity": "to buy for the first time",
   "bank-term-deposit": "to take a term deposit",

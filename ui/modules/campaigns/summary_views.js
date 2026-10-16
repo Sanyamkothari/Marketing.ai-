@@ -123,7 +123,7 @@ function dataPart(caseId) {
 /**
  * The summary card, in the order a marketer asks: who to contact, why these customers, how good the model is, what was
  * done to the data. `list` is the contact list's summary, `version` the model's registry record (or null), `top` the
- * first customers (see `customersPart`), `story` the model's `{ lift, importance }` files (or null), `campaign` the
+ * first customers (see `customersPart`), `story` the model's `{ lift, importance, evaluation }` files (or null), `campaign` the
  * campaign record (its comparison group), `caseId` the Data Doctor case the file came from (or null), `resultsOn` the
  * day results can be added (or ""). A part whose figure is missing says so in words.
  */

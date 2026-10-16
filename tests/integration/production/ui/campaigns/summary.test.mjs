@@ -291,7 +291,7 @@ test("an effect model gets one honest sentence: the gap between contacted and no
   const sentence = SR.upliftSentence(evaluation, "targeted-advertisement");
   assert.equal(
     sentence,
-    "Among the 10% of customers the model puts first, those who were contacted went on to buy 4.2 percentage points more often than those who were not contacted (somewhere between 2.1 and 6.3 points). Measured on 4,000 customers the model had not seen while learning (2,000 were contacted and 2,000 were not).",
+    "Among the 10% of customers the model puts first, those who were contacted went on to buy 4.2 percentage points more often than those who were not contacted (somewhere between 2.1 and 6.3 points). Measured on 4,000 customers the model had not seen while learning (2,000 were contacted and 2,000 were not contacted).",
   );
   assert.doesNotMatch(sentence, /extra sales|will bring/i, "no claim about this campaign's sales");
   // contacting was not picked at random: the sentence says the gap may come from who was contacted
@@ -301,11 +301,17 @@ test("an effect model gets one honest sentence: the gap between contacted and no
   assert.match(SR.upliftSentence(unclear), /not clear whether contacting them changes .* too small to tell apart from chance, so do not rely/);
   const harm = { ...evaluation, uplift_at: [{ fraction: 0.1, uplift: { value: -0.03, ci_low: -0.05, ci_high: -0.01 } }] };
   assert.match(SR.upliftSentence(harm), /less often .* may do harm/);
+  assert.match(SR.upliftSentence({ ...harm, causal: false }), /may do harm.*not picked for contact at random/);
+  // several offers: the numbers compare the first offer only, so the sentence names it
+  const offers = SR.upliftSentence({ ...evaluation, arms: [{ arm: "Mens E-Mail" }, { arm: "Womens E-Mail" }] });
+  assert.match(offers, /those sent the Mens E-Mail went on to have the outcome/);
+  assert.match(offers, /2,000 were sent the Mens E-Mail and 2,000 were not contacted/);
+  assert.equal(SR.upliftSentence({ ...evaluation, arms: [{}] }), null);
   // no comparison group in the evaluation: nothing to say, so the page falls back
   assert.equal(SR.upliftSentence({ ...evaluation, control_rows: 0 }), null);
   assert.equal(SR.upliftSentence(null), null);
   const uplifted = { ...campaign, use_case_id: "criteo-uplift" };
   draw(review({ campaign: uplifted, summary: { top, caseId: "case_42", story: { lift: null, importance: null, evaluation } } }));
-  assert.match(text($("[data-cw-sum-model]")), /^Among the 10% of customers the model puts first, those who were contacted went on to have the outcome this goal looks for 4\.2 percentage points more often/);
+  assert.match(text($("[data-cw-sum-model]")), /^Among the 10% of customers the model puts first, those who were contacted went on to buy 4\.2 percentage points more often/);
   assert.match(text($("[data-cw-sum-unproven]")), /^Not yet proven:/);
 });

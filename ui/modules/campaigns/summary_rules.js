@@ -94,19 +94,24 @@ export function upliftSentence(evaluation, useCaseId = "") {
     return null;
   }
   const top = Math.max(1, Math.round(100 * first.fraction));
+  // several offers: the top-level numbers compare only the first offer with the not-contacted group, so say which
+  const offer = evaluation.arms && evaluation.arms.length ? evaluation.arms[0] && evaluation.arms[0].arm : "";
+  if (evaluation.arms && evaluation.arms.length && (typeof offer !== "string" || !offer)) return null;
+  const who = offer ? `those sent the ${offer}` : "those who were contacted";
+  const sent = offer ? `${count(evaluation.treated_rows)} were sent the ${offer}` : `${count(evaluation.treated_rows)} were contacted`;
   const { value, ci_low: low, ci_high: high } = first.uplift;
   const points = (n) => fmtNum(Math.abs(n) * 100, 1);
   const out = goalOutcome(useCaseId);
-  const seen = `Measured on ${count(evaluation.rows_evaluated)} customers the model had not seen while learning (${count(evaluation.treated_rows)} were contacted and ${count(evaluation.control_rows)} were not).`;
+  const seen = `Measured on ${count(evaluation.rows_evaluated)} customers the model had not seen while learning (${sent} and ${count(evaluation.control_rows)} were not contacted).`;
   const random = evaluation.causal === false ? " Customers were not picked for contact at random in this data, so part of the gap may come from who was contacted rather than from contacting them." : "";
   const range = ok(low) && ok(high) ? ` (somewhere between ${points(low)} and ${points(high)} points)` : "";
   if (ok(low) && low > 0) {
-    return `Among the ${top}% of customers the model puts first, those who were contacted went on ${out} ${points(value)} percentage points more often than those who were not contacted${range}. ${seen}${random}`;
+    return `Among the ${top}% of customers the model puts first, ${who} went on ${out} ${points(value)} percentage points more often than those who were not contacted${range}. ${seen}${random}`;
   }
   if (ok(high) && high < 0) {
-    return `Among the ${top}% of customers the model puts first, those who were contacted went on ${out} ${points(value)} percentage points less often than those who were not contacted, so contacting them may do harm. ${seen}`;
+    return `Among the ${top}% of customers the model puts first, ${who} went on ${out} ${points(value)} percentage points less often than those who were not contacted, so contacting them may do harm. ${seen}${random}`;
   }
-  return `Among the ${top}% of customers the model puts first, it is not clear whether contacting them changes who goes on ${out}: the gap between those contacted and those not contacted is too small to tell apart from chance, so do not rely on this list yet. ${seen}`;
+  return `Among the ${top}% of customers the model puts first, it is not clear whether contacting them changes who goes on ${out}: the gap between ${who} and those not contacted is too small to tell apart from chance, so do not rely on this list yet. ${seen}${random}`;
 }
 
 /** The groups of `decile_lift.json` as table rows, best first: `{ group, customers, rate, times }`; empty when it is not one. */
