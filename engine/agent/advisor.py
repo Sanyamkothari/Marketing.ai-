@@ -618,8 +618,8 @@ def _both_ways(issue: Mapping[str, Any]) -> str:
         if (
             match
             and match.group(1) != match.group(2)
-            and int(match.group(1)) <= 12
-            and int(match.group(2)) <= 12
+            and 1 <= int(match.group(1)) <= 12
+            and 1 <= int(match.group(2)) <= 12
         ):
             first, second, year = int(match.group(1)), int(match.group(2)), match.group(3)
             return (
@@ -917,7 +917,11 @@ def _format_proposals(
                 )
                 continue
             order = "day first" if dayfirst else "month first"
-            unread = f", {failed} could not be read and stay empty" if failed else ""
+            unread = (
+                f", {failed} could not be read and {'stays' if failed == 1 else 'stay'} empty"
+                if failed
+                else ""
+            )
             _recipe_proposal(
                 builder,
                 _step(RecipeStepKind.PARSE_DATE, column, dayfirst=bool(dayfirst)),
