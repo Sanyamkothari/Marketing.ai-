@@ -47,6 +47,7 @@ from engine.agent.contracts import ProposalState
 from engine.config import ConfigError, StrictBase
 from engine.doctor.carry import carry_of, new_line
 from engine.doctor.case import Case, CaseError, CaseStore, TimelineEvent, TimelineKind
+from engine.doctor.conversation import ConversationCard, build_conversation
 from engine.doctor.diagnose import LoadedFile
 from engine.doctor.plan_check import ledger_view, plan_digest
 from engine.doctor.preview import PreviewView, cached_preview, preview_rows
@@ -235,6 +236,12 @@ class CaseScreenView(StrictBase):
     missing_for: tuple[str, ...] = Field(
         default=(), description="Goals the files are missing something for (no goal chosen yet)."
     )
+    conversation: tuple[ConversationCard, ...] = Field(
+        default=(),
+        description="The case as one conversation, in reading order (`engine.doctor.conversation`): the first look, "
+        "each change with Undo, the questions as chips, doubts, requests, the goals (or whether the data fits the "
+        "goal chosen first), the chat, and the one ready card. The rules path and the AI path fill the same cards.",
+    )
 
 
 class CaseScreen(StrictBase):
@@ -304,10 +311,18 @@ def build_screen(
     visit's own loader) the view carries the data preview."""
     store = CaseStore(storage)
     case = store.get(client_id, case_id)
+    timeline = store.timeline(client_id, case_id)
     return CaseScreen(
         case=case,
-        timeline=store.timeline(client_id, case_id),
-        view=screen_view(storage, case, config_root=config_root, principal=principal, load_files=load_files),
+        timeline=timeline,
+        view=screen_view(
+            storage,
+            case,
+            config_root=config_root,
+            principal=principal,
+            load_files=load_files,
+            timeline=timeline,
+        ),
     )
 
 
@@ -318,8 +333,9 @@ def screen_view(
     config_root: Path | None,
     principal: Principal | None = None,
     load_files: Callable[[Case], Sequence[LoadedFile]] | None = None,
+    timeline: Sequence[TimelineEvent] = (),
 ) -> CaseScreenView:
-    """The view of one case (see the module docstring)."""
+    """The view of one case (see the module docstring); `timeline` orders the conversation's cards in time."""
     goal = active_goal(case)
     separate = _approval_required(case, config_root)
     approve_class = _approve_class(case, separate=separate, principal=principal)
@@ -330,7 +346,7 @@ def screen_view(
         else None
     )
     preview = _preview(case, load_files)
-    return CaseScreenView(
+    view = CaseScreenView(
         mode="goal" if goal is not None else "generic",
         goal_id=goal.goal_id if goal is not None else None,
         verdict=_verdict(storage, case, approve_class),
@@ -344,6 +360,15 @@ def screen_view(
         start=_start(case, visit.hand_off if visit is not None else None),
         missing_for=visit.missing_for if visit is not None and goal is None else (),
     )
+    conversation = build_conversation(
+        case,
+        view,
+        timeline,
+        goal_name=approval_goal_name(storage, case),
+        config_root=config_root,
+        principal=principal,
+    )
+    return view.model_copy(update={"conversation": conversation})
 
 
 # ---------------------------------------------------------------------------
