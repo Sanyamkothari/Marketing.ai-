@@ -237,8 +237,21 @@ function fileRow(u) {
   </li>`;
 }
 
-/** The uploads a Data Doctor check holds: they are listed under the check, not a second time as files. */
-const inChecks = () => new Set(state.checks.flatMap((c) => c.upload_ids || []));
+/** The uploads a Data Doctor check holds, and the prepared copies made from them: they are listed under the check,
+ *  not a second time as files. */
+const inChecks = () => {
+  const held = new Set(state.checks.flatMap((c) => c.upload_ids || []));
+  for (let grew = true; grew; ) {
+    grew = false;
+    for (const u of state.uploads) {
+      if (u.source_upload_id && held.has(u.source_upload_id) && !held.has(u.upload_id)) {
+        held.add(u.upload_id);
+        grew = true;
+      }
+    }
+  }
+  return held;
+};
 
 /** One row for a check: its files by name, and the way back into it. */
 function checkRow(c) {
