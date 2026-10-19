@@ -162,8 +162,7 @@ def preview_cell(value: Any) -> str:
     if isinstance(value, numbers.Integral):
         return str(int(value))
     if isinstance(value, np.datetime64):  # a datetime column's numpy scalar is not a number of nanoseconds
-        stamp = pd.Timestamp(value)
-        return "" if stamp is pd.NaT else preview_cell(stamp)
+        return "" if np.isnat(value) else preview_cell(pd.Timestamp(value))
     if isinstance(value, (int, float)) or hasattr(value, "dtype"):
         try:
             dtype = getattr(value, "dtype", None)
