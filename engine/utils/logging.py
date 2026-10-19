@@ -156,6 +156,26 @@ def configure_logging(level: str = "INFO", *, log_format: str = "text") -> None:
     _handler.setFormatter(formatter)
     install_context_filter(_handler)
     root.setLevel(level.upper())
+    _route_uvicorn_through_root()
+
+
+_UVICORN_LOGGERS: Final[tuple[str, ...]] = ("uvicorn", "uvicorn.error", "uvicorn.access")
+
+
+def _route_uvicorn_through_root() -> None:
+    """Take uvicorn's own handlers off its loggers so its records reach the redacting handler.
+
+    uvicorn gives `uvicorn.error` and `uvicorn.access` handlers of their own with a stock formatter
+    and sets `propagate` off, so "Exception in ASGI application" - a full traceback, message and
+    all, for any unhandled route error - never touched the root handler's `RedactingFormatter`
+    (security review 2, H-1). With no handler of their own and `propagate` on, those records are
+    written by the one handler this module owns. A process that never ran uvicorn has no such
+    handlers, so for a script this does nothing.
+    """
+    for name in _UVICORN_LOGGERS:
+        logger = logging.getLogger(name)
+        logger.handlers.clear()
+        logger.propagate = True
 
 
 def install_context_filter(handler: logging.Handler) -> ContextFilter:

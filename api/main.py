@@ -11,16 +11,19 @@ serves.
 
 from __future__ import annotations
 
+import logging
+import os
 from collections.abc import Callable
 from pathlib import Path
 from typing import Final
 
 from fastapi import APIRouter, FastAPI, Request
-from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.responses import Response
 
+from api.deps import get_settings
+from api.hardening import BodyLimitMiddleware, SecurityHeadersMiddleware, SettingsCORSMiddleware
 from api.routes import ALL_ROUTERS
 from api.schemas import ErrorBody, ErrorResponse, HealthResponse
 from engine import __version__
@@ -115,10 +118,10 @@ def create_app(
     import_lightgbm_before_torch()
     # Phase 1 never called this, so the API inherited whatever logging uvicorn had set up and the
     # `RedactingFormatter` guarantee - that no line the engine writes can carry an exception's
-    # message - applied only to processes that configured it themselves. It is called here so the
-    # guarantee holds for the API too, and so a deployment can ask for JSON without a code change.
-    if settings is not None:
-        configure_logging(settings.log_level, log_format=settings.log_format)
+    # message - applied only to processes that configured it themselves. It is called here, for every
+    # app including the deployed `api.main:app` (built with no settings), so the guarantee holds for
+    # the API too, and so a deployment can ask for JSON without a code change.
+    _configure_app_logging(settings)
     app = FastAPI(title="Marketing AI", version=__version__)
     app.state.config_root = config_root
     app.state.data_dir = data_dir
@@ -128,17 +131,19 @@ def create_app(
     app.state.jobs = None
     app.state.run_index = None
     app.state.metrics = None
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=list(settings.cors_origins) if settings is not None else ["*"],
-        allow_credentials=False,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
+    if settings is None:
+        # The settings (and with them the log level, format and uvicorn's handlers) are known only
+        # once the server has started: dress the logs again then.
+        app.router.on_startup.append(_reconfigure_logging_at_startup(app))
+    # Innermost first: the body limit, the configured CORS origins, then (the hooks below) access
+    # control and audit, then the security headers outermost so a refusal carries them too.
+    app.add_middleware(BodyLimitMiddleware)
+    app.add_middleware(SettingsCORSMiddleware)
     app.add_exception_handler(ConfigError, config_error_handler)
     app.add_exception_handler(SettingsError, settings_error_handler)
     for hook in PHASE_APP_HOOKS:
         hook(app)
+    app.add_middleware(SecurityHeadersMiddleware)
     for router in (*ALL_ROUTERS, *PHASE_ROUTERS):
         app.include_router(router)
     if UI_DIR.is_dir():
@@ -165,6 +170,34 @@ def create_app(
         return HealthResponse(status="ok", version=__version__)
 
     return app
+
+
+def _configure_app_logging(settings: Settings | None) -> None:
+    """Install the redacting formatter: from `settings` when given, else from the environment.
+
+    Reading two environment variables rather than loading `Settings` keeps importing `api.main` free
+    of I/O; `_reconfigure_logging_at_startup` corrects a level or format that came from elsewhere.
+    """
+    if settings is not None:
+        configure_logging(settings.log_level, log_format=settings.log_format)
+        return
+    level = os.environ.get(ENV_VARS["log_level"], "").strip().upper()
+    configure_logging(
+        level if level in logging.getLevelNamesMapping() else "INFO",
+        log_format=os.environ.get(ENV_VARS["log_format"], "text"),
+    )
+
+
+def _reconfigure_logging_at_startup(app: FastAPI) -> Callable[[], None]:
+    """A startup handler: dress the logs again from the loaded settings, after uvicorn set up its own."""
+
+    def run() -> None:
+        try:
+            _configure_app_logging(get_settings(Request({"type": "http", "app": app, "headers": []})))
+        except Exception:  # a settings problem is reported by the first request, not here
+            _configure_app_logging(None)
+
+    return run
 
 
 class _RevalidatedStaticFiles(StaticFiles):
