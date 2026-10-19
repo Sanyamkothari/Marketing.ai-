@@ -82,7 +82,7 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.exc import SQLAlchemyError
 from starlette.concurrency import run_in_threadpool
 
-from api.access import PrincipalDep, get_audit_log, platform_data_dir, set_audit_context
+from api.access import PrincipalDep, check_client_scope, get_audit_log, platform_data_dir, set_audit_context
 from api.access_policy import RoutePolicy, register
 from api.deps import ConfigRootDep, SettingsDep, StorageDep, get_settings
 from api.routes.clients import CLIENTS_DB_FILENAME, get_client_store
@@ -381,6 +381,7 @@ def _principal_id(raw: str) -> str:
 
 def _client_id(given: str | None, settings: Settings, *, required: bool) -> str | None:
     """The request's client id, else the deployment's; 422 when one is required and neither exists."""
+    check_client_scope(settings, given)  # a form field is not seen by the global client-scope dependency
     client = given or settings.client_id
     if client is None:
         if required:

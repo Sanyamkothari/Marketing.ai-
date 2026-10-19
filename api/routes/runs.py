@@ -191,6 +191,7 @@ from engine.stages.score import (
 )
 from engine.storage import Storage, StorageError, run_key, upload_key
 from engine.uplift.contracts import UPLIFT_ARTEFACTS
+from engine.utils.csv_safe import formula_safe_csv
 from engine.utils.logging import get_logger, log_failure
 
 router: APIRouter = APIRouter(tags=["runs"])
@@ -807,6 +808,8 @@ def read_artefact(run_id: str, name: str, storage: StorageDep, request: Request)
         payload = storage.read_bytes(run_key(run_id, name))
     except StorageError as exc:
         raise http_error(404, "ARTEFACT_NOT_FOUND", f"This run has not produced {name!r}.") from exc
+    if name.endswith(".csv"):  # a download, not the stored file: those are read back by the engine (M-3)
+        payload = formula_safe_csv(payload)
     return Response(content=payload, media_type=media_type_for(name))
 
 

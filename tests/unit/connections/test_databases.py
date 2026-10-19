@@ -10,6 +10,9 @@ is exercised in `test_postgres_live.py`.
 from __future__ import annotations
 
 import io
+import socket
+import threading
+import types
 from typing import Any
 
 import pandas as pd
@@ -257,3 +260,142 @@ def test_the_forms_ask_for_little_and_hide_the_rest() -> None:
         assert info.available
     redshift = {f.name: f for f in PostgresConnector(redshift=True).info().fields}
     assert redshift["port"].default == 5439 and redshift["sslmode"].default == "require"
+
+
+# --- a saved password is never handed to a server that asks for it in clear text (security review 2, H-2) ---
+def test_postgres_refuses_a_clear_text_password_request_unless_the_certificate_is_verified(
+    server: FakeServer, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    driver = driver_module("psycopg", server, "Error")
+    driver.pq = types.SimpleNamespace(version=lambda: 180000)  # type: ignore[attr-defined]
+    monkeypatch.setattr(postgres_module, "load_sdk", lambda _name: driver)
+    PostgresConnector().connect(PG, SECRET)
+    assert server.connects[-1]["require_auth"] == "!password"
+    PostgresConnector().connect({**PG, "sslmode": "require"}, SECRET)
+    assert server.connects[-1]["require_auth"] == "!password"
+    PostgresConnector().connect({**PG, "sslmode": "verify-full"}, SECRET)
+    assert "require_auth" not in server.connects[-1]
+    driver.pq = types.SimpleNamespace(version=lambda: 150000)  # type: ignore[attr-defined]  # libpq too old
+    with caplog.at_level("WARNING", logger=postgres_module.__name__):
+        PostgresConnector().connect(PG, SECRET)
+    assert "require_auth" not in server.connects[-1]
+    assert any("older than 16" in r.getMessage() for r in caplog.records)  # not skipped in silence
+
+
+def test_a_rogue_postgres_server_asking_for_the_password_in_clear_never_gets_it() -> None:
+    """The H-2 exploit end to end: a fake server on a real socket asks for AuthenticationCleartextPassword."""
+    psycopg = pytest.importorskip("psycopg")
+    if int(psycopg.pq.version()) < 160000:
+        pytest.skip("libpq older than 16 has no require_auth")
+    received: list[bytes] = []
+    stop = threading.Event()
+
+    def serve(listener: socket.socket) -> None:
+        while not stop.is_set():
+            try:
+                conn, _addr = listener.accept()
+            except OSError:
+                continue  # accept timed out: look at `stop` again
+            with conn:
+                conn.settimeout(3)
+                try:
+                    head = conn.recv(8)
+                    if head[4:8] == b"\x04\xd2\x16\x2f":  # SSLRequest: answer "no"
+                        conn.sendall(b"N")
+                        conn.recv(4096)
+                    else:
+                        conn.recv(4096)
+                    conn.sendall(b"R\x00\x00\x00\x08\x00\x00\x00\x03")  # AuthenticationCleartextPassword
+                    received.append(conn.recv(4096))
+                except OSError:
+                    pass
+
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(2)
+        listener.settimeout(0.5)
+        thread = threading.Thread(target=serve, args=(listener,), daemon=True)
+        thread.start()
+        try:
+            with pytest.raises(ConnectorError):
+                PostgresConnector().connect(
+                    {**PG, "host": "127.0.0.1", "port": listener.getsockname()[1]}, SECRET
+                )
+        finally:
+            stop.set()
+            thread.join(timeout=5)
+    assert b"s3cret-pw" not in b"".join(received)
+
+
+def test_mysql_refuses_the_sign_in_methods_that_send_the_password_in_clear(server: FakeServer) -> None:
+    pymysql = pytest.importorskip("pymysql")
+    MySqlConnector().connect(MY, SECRET)
+    plugins = server.connects[-1]["auth_plugin_map"]
+    assert set(plugins) == {
+        b"mysql_clear_password",
+        b"mysql_old_password",
+        b"dialog",
+        b"sha256_password",
+        b"caching_sha2_password",
+    }
+    for name in (b"mysql_clear_password", b"mysql_old_password", b"dialog", b"sha256_password"):
+        with pytest.raises(FakeError):
+            plugins[name](None)
+    real = mysql_module._refused_plugins(pymysql)
+    for name in (b"mysql_clear_password", b"dialog", b"sha256_password"):
+        with pytest.raises(pymysql.MySQLError):
+            real[name](None)
+    # over TLS (the certificate and host name are checked) the driver's own RSA and cleartext-in-TLS paths stand
+    MySqlConnector().connect({**MY, "ssl": True}, SECRET)
+    assert set(server.connects[-1]["auth_plugin_map"]) == {
+        b"mysql_clear_password",
+        b"mysql_old_password",
+        b"dialog",
+    }
+
+
+def test_mysql_without_tls_never_asks_the_server_for_a_key_to_encrypt_the_password_under() -> None:
+    """`caching_sha2_password` keeps its cached (fast) stage; the full stage's public-key request is refused."""
+    pymysql = pytest.importorskip("pymysql")
+    handler_class = mysql_module._refused_plugins(pymysql)[b"caching_sha2_password"]
+
+    class Packet:
+        def __init__(self, byte: int) -> None:
+            self._byte = byte
+
+        def is_auth_switch_request(self) -> bool:
+            return False
+
+        def is_extra_auth_data(self) -> bool:
+            return True
+
+        def advance(self, _n: int) -> None:
+            pass
+
+        def check_error(self) -> None:
+            pass
+
+        def read_uint8(self) -> int:
+            return self._byte
+
+    class Connection:
+        password = b"s3cret-pw"
+        _secure = False
+        server_public_key = None
+        salt = b"x" * 20
+
+        def __init__(self) -> None:
+            self.sent: list[bytes] = []
+
+        def write_packet(self, data: bytes) -> None:
+            self.sent.append(data)
+
+        def _read_packet(self) -> Any:
+            return Packet(3)
+
+    ok = Connection()  # fast stage: the server has the password cached
+    handler_class(ok).authenticate(Packet(3))
+    full = Connection()  # full stage without TLS: the driver would now ask for the RSA key
+    with pytest.raises(pymysql.MySQLError):
+        handler_class(full).authenticate(Packet(4))
+    assert full.sent == [] and b"s3cret-pw" not in b"".join(full.sent)

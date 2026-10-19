@@ -177,6 +177,14 @@ function listHtml() {
 
 // --- the form --------------------------------------------------------------------------------------
 
+// The settings that say where a saved secret is sent; the server drops the saved secrets when one changes
+// (`engine.connections.registry.ADDRESS_FIELDS`), so the form must not promise they are kept.
+const ADDRESS_FIELDS = ["host", "port", "database", "user", "endpoint_url", "account"];
+const norm = (value) => String(value ?? "").trim().toLowerCase();
+const addressMoved = (form) => ADDRESS_FIELDS.some((name) => norm(form.values[name]) !== norm(form.initial[name]));
+const KEPT_HINT = "Saved. Leave blank to keep it.";
+const MOVED_HINT = "The address changed, so type this again.";
+
 function freshForm(kind, connection) {
   const values = {};
   for (const field of kind.fields || []) {
@@ -189,6 +197,7 @@ function freshForm(kind, connection) {
     id: connection ? connection.connection_id : null,
     name: connection ? connection.name : kind.label,
     values,
+    initial: { ...values },
     saved: connection ? connection.secrets_saved || [] : [],
     readable: connection ? connection.secrets_readable !== false : true,
     report: connection ? connection.last_test : null,
@@ -210,7 +219,7 @@ function fieldHtml(field, form) {
   let control;
   if (field.secret) {
     const kept = form.saved.includes(field.name) && form.readable;
-    const placeholder = kept ? "Saved. Leave blank to keep it." : field.placeholder || "";
+    const placeholder = kept ? (addressMoved(form) ? MOVED_HINT : KEPT_HINT) : field.placeholder || "";
     control =
       field.type === "textarea"
         ? `<div class="control area"><textarea id="${id}" data-cn-secret="${esc(field.name)}" placeholder="${esc(
@@ -417,6 +426,11 @@ function bind(app) {
     form.querySelectorAll("[data-cn-field]").forEach((input) =>
       input.addEventListener("change", () => {
         state.form.values[input.dataset.cnField] = fieldValue(input);
+        // A saved secret does not follow a changed address: say so now, not after a refused save.
+        const hint = addressMoved(state.form) ? MOVED_HINT : KEPT_HINT;
+        form.querySelectorAll("[data-cn-secret]").forEach((secret) => {
+          if (secret.placeholder === KEPT_HINT || secret.placeholder === MOVED_HINT) secret.placeholder = hint;
+        });
       }),
     );
   }
