@@ -1,16 +1,38 @@
 // What a person chooses when they start a campaign, and how a campaign run is told back to them. Pure: no DOM,
-// no fetch. The minutes below must match `campaign_speeds` in `configs/engine.yaml`, the server's.
+// no fetch. The minutes are the server's (`campaign_speeds` in `configs/engine.yaml`, sent with the model offer);
+// 5, 15 and 40 stand until it has answered.
 
 import { COST_NEEDS_CONFIRMATION } from "../../cost.js";
 import { esc, fmtInt } from "../../dom.js";
 import { userText } from "../../labels.js";
 
+/** The minutes each speed falls back to when the server has not said (the same as `campaign_speeds` in configs/engine.yaml). */
+const FALLBACK_MINUTES = Object.freeze({ quick: 5, balanced: 15, thorough: 40 });
+const minutes = { ...FALLBACK_MINUTES };
+
+/**
+ * The server's minutes per speed (`speeds` in `GET /campaign-runs/model-offer`, from `campaign_speeds` in
+ * configs/engine.yaml). A speed the server did not give, or gave as anything but a positive number, keeps its fallback.
+ */
+export function applySpeedMinutes(speeds) {
+  for (const id of Object.keys(FALLBACK_MINUTES)) {
+    const n = speeds && typeof speeds === "object" ? speeds[id] : null;
+    minutes[id] = Number.isFinite(n) && n > 0 ? Math.round(n) : FALLBACK_MINUTES[id];
+  }
+}
+
+const makeSpeed = (id, name, recommended = false) =>
+  Object.freeze({
+    id,
+    name,
+    get minutes() {
+      return minutes[id];
+    },
+    ...(recommended ? { recommended: true } : {}),
+  });
+
 /** How long to learn: Quick, Balanced (recommended) or Thorough, each with the time it takes about. */
-export const SPEEDS = Object.freeze([
-  Object.freeze({ id: "quick", name: "Quick", minutes: 5 }),
-  Object.freeze({ id: "balanced", name: "Balanced", minutes: 15, recommended: true }),
-  Object.freeze({ id: "thorough", name: "Thorough", minutes: 40 }),
-]);
+export const SPEEDS = Object.freeze([makeSpeed("quick", "Quick"), makeSpeed("balanced", "Balanced", true), makeSpeed("thorough", "Thorough")]);
 
 export const DEFAULT_SPEED = "balanced";
 

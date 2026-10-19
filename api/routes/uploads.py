@@ -32,7 +32,7 @@ from api.access_policy import RoutePolicy, register
 from api.deps import ConfigRootDep, StorageDep
 from api.schemas import ErrorResponse, UploadRecord, UploadResponse
 from engine.access.roles import Role
-from engine.agent.contracts import DATA_RECIPE_FILENAME
+from engine.agent.contracts import DATA_RECIPE_FILENAME, RECIPE_RECEIPT_FILENAME
 from engine.config import (
     ConfigError,
     RunMode,
@@ -327,6 +327,8 @@ class UploadSummary(_Strict):
     created_at: datetime
     from_connection_id: str | None = None
     made_by: MadeBy = "file"
+    source_upload_id: str | None = None
+    """For a prepared copy (`made_by` "recipe"): the upload its recipe read, so the Data page can group the copy."""
 
 
 class UploadListResponse(_Strict):
@@ -362,6 +364,19 @@ def _made_by(storage: Storage, keys: frozenset[str], upload_id: str) -> tuple[Ma
     if upload_key(upload_id, DATA_RECIPE_FILENAME) in keys:
         return "recipe", None
     return "file", None
+
+
+def _source_of(storage: Storage, keys: frozenset[str], upload_id: str) -> str | None:
+    """The upload a prepared copy was made from, as its `recipe_receipt.json` records it, or None."""
+    key = upload_key(upload_id, RECIPE_RECEIPT_FILENAME)
+    if key not in keys:
+        return None
+    try:
+        document = json.loads(storage.read_bytes(key))
+    except (StorageError, ValueError):
+        return None
+    value = document.get("upload_id") if isinstance(document, dict) else None
+    return value if isinstance(value, str) and value != upload_id else None
 
 
 @router.get(
@@ -404,6 +419,7 @@ def list_uploads(
                 created_at=record.created_at,
                 from_connection_id=connection_id,
                 made_by=made_by,
+                source_upload_id=_source_of(storage, keys, record.upload_id) if made_by == "recipe" else None,
             )
         )
     return UploadListResponse(uploads=tuple(summaries), total=len(found))

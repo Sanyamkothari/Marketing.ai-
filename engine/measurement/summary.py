@@ -487,7 +487,7 @@ _WORDS: Final[dict[CardKind, _Words]] = {
         "The test may be too small for the effect you expect",
         "With the customers contacted and the customers kept back, an effect of the size you planned for would "
         "often be missed and read as no clear effect.",
-        "Keep back more customers, contact more of them, or plan for a larger effect before the campaign goes out.",
+        "Keep back more customers, contact more of them, or plan for a larger effect in the next campaign.",
     ),
     "contamination": _Words(
         "Customers kept back were contacted anyway",

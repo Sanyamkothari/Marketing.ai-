@@ -17,6 +17,7 @@ import {
 } from "../../api.js";
 import { getCampaign, getPlanPreview, getTreatListSummary, postPlan } from "../decide/api.js";
 import { getMe, postApprove } from "../production/api.js";
+import { applySpeedMinutes } from "./run_rules.js";
 
 export {
   getCampaign,
@@ -67,16 +68,20 @@ const runsPath = (id) => `/campaign-runs/${encodeURIComponent(id)}`;
 export const postCampaignRun = (payload) => request("/campaign-runs", post(payload));
 
 /**
- * Next month's Start (`GET /campaign-runs/model-offer`): `{ model_version_id, usable, reason, suggest, hint }`.
+ * Next month's Start (`GET /campaign-runs/model-offer`): `{ model_version_id, usable, reason, suggest, hint, speeds }`.
  * `model_version_id` is null the first month (only learning is offered); `usable` false says why in `reason`
  * (columns missing, or the model learned another outcome than `outcome`, the one approved this month).
  */
-export const getModelOffer = (useCase, uploadId, clientId = null, outcome = null) =>
-  request(
+export const getModelOffer = async (useCase, uploadId, clientId = null, outcome = null) => {
+  const offer = await request(
     `/campaign-runs/model-offer?use_case=${encodeURIComponent(useCase)}&upload_id=${encodeURIComponent(uploadId)}${
       clientId ? `&client_id=${encodeURIComponent(clientId)}` : ""
     }${outcome ? `&outcome=${encodeURIComponent(outcome)}` : ""}`,
   );
+  // The answer also carries the minutes of each speed (`speeds`): the Start panel shows the server's, not its own.
+  applySpeedMinutes(offer && offer.speeds);
+  return offer;
+};
 
 /** Where one campaign run is (`GET /campaign-runs/{id}`): `{ record, pct, eta_seconds, summary }`. */
 export const getCampaignRun = (id) => request(runsPath(id));

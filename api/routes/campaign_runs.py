@@ -473,15 +473,18 @@ def read_model_offer(
     newest, last = FingerprintStore(storage).newest_two(client_id or DEFAULT_CLIENT_ID, use_case)
     if newest is None or newest.upload_id != upload_id:  # this file was not fingerprinted: nothing to compare
         newest = last = None
-    return model_offer(
+    engine_config = load_engine_config(root)
+    offer = model_offer(
         model,
         None if model is None else missing_columns(storage, model, columns),
         now=utc_now(),
         current=newest,
         last=last,
-        rules=load_engine_config(root).model_reuse,
+        rules=engine_config.model_reuse,
         conflict=None if model is None else outcome_conflict(storage, model, outcome),
     )
+    # The minutes the Start panel shows for Quick / Balanced / Thorough are the server's own.
+    return offer.model_copy(update={"speeds": dict(engine_config.campaign_speeds)})
 
 
 def _require_readable(request: Request, storage: StorageDep, body: CampaignRunRequest) -> None:
