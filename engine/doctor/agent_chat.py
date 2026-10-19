@@ -33,6 +33,7 @@ from engine.agent.grounding import evidence_numbers, grounded_numbers
 from engine.agent.loop import MAX_MESSAGE_CHARS, MAX_REPLY_CHARS, UNAVAILABLE, _parse
 from engine.agent.tools import AgentContext, AgentToolError
 from engine.agent.untrusted import clean_text, for_prompt
+from engine.doctor.agent_apply import person_owns
 from engine.doctor.agent_review import STRIKES, _NoAnswerError, _Review
 from engine.doctor.protocol import DONT_KNOW, Ask, AskOption, question_id_of
 from engine.doctor.questions import catalogue_lines
@@ -72,6 +73,13 @@ MAX_QUICK: Final[int] = 2
 SHORT: Final[int] = 220
 QUICK_CODE: Final[str] = "CHAT_ASK"
 _DIGIT: Final = re.compile(r"\d")
+_MEANING_TOPICS: Final = re.compile(
+    r"(consent|opt[\W_]*(in|out)|opted|agree|contact|unsubscri|outcome|counts? as|a yes|a sale|purchas|bought"
+    r"|churn|convert|identif|customer[\W_]*id|\bids?\b|\bdates?\b|day first|month first)",
+    re.IGNORECASE,
+)
+"""What a quick question may not be about: who agreed to be contacted, the outcome, the ID, the date. Those are the
+catalogue's questions, which only the person answers."""
 OUT_OF_STEPS: Final[str] = (
     "That took more steps than I may take in one message. What I did so far is above; ask me to go on if you want more."
 )
@@ -108,6 +116,8 @@ class _Chosen:
     suggestion: tuple[str, str] | None = None
     used: list[str] = field(default_factory=list)
     reported: set[str] = field(default_factory=set)
+    applied: list[CaseItem] = field(default_factory=list)
+    """The changes this turn the visit will apply, so the next is judged with them in place."""
 
 
 class _Chat(_Review):
@@ -135,6 +145,16 @@ class _Chat(_Review):
         index = next((i for i, ctx in enumerate(self.ctxs) if ctx.upload_id == upload_id), 0)
         return self.gates[index]
 
+    def _text(self, upload_id: str | None, value: str) -> str:
+        """`value` for the prompt: through its file's gate, and for text about no one file (or the conversation)
+        through every file's gate, so a column name of any file the person typed or a title carried is aliased.
+        """
+        if upload_id is not None and any(ctx.upload_id == upload_id for ctx in self.ctxs):
+            return str(self._file_gate(upload_id).text(value))
+        for gate in self.gates[1:]:
+            value = gate.apply_aliases(value)
+        return str(self.gates[0].text(value))
+
     def _chat_state(self) -> dict[str, Any]:
         """The case as the model may read it: every change with its id, the questions with their answers."""
         from engine.doctor.visit import AGENT, active_section
@@ -143,7 +163,6 @@ class _Chat(_Review):
         plan: list[dict[str, Any]] = []
         for number, item in enumerate(items[-STATE_ITEMS:], start=1):
             self.handles[f"c{number}"] = item.item_id
-            gate = self._file_gate(item.upload_id)
             decided = (
                 "you" if item.decided_by == AGENT else ("the person" if item.decided_by is not None else None)
             )
@@ -156,7 +175,7 @@ class _Chat(_Review):
             plan.append(
                 {
                     "id": f"c{number}",
-                    "what": gate.text(clean_text(item.title, SHORT)),
+                    "what": self._text(item.upload_id, clean_text(item.title, SHORT)),
                     "made_by": {"rules": "the rules", "ai": "you", "person": "the person"}[item.source.value],
                     "state": shown,
                     **({"decided_by": decided} if decided else {}),
@@ -168,20 +187,21 @@ class _Chat(_Review):
             sorted(questions, key=lambda q: q.answer is not None)[:STATE_QUESTIONS], start=1
         ):
             self.handles[f"k{number}"] = q.question_id
-            gate = self._file_gate(q.upload_id)
-            options = [{"id": o.option_id, "label": gate.text(clean_text(o.label, SHORT))} for o in q.options]
+            options = [
+                {"id": o.option_id, "label": self._text(q.upload_id, clean_text(o.label, SHORT))}
+                for o in q.options
+            ]
             chosen = next((o["label"] for o in options if o["id"] == q.answer), None)
             asked.append(
                 {
                     "id": f"k{number}",
-                    "text": gate.text(clean_text(q.text, SHORT)),
+                    "text": self._text(q.upload_id, clean_text(q.text, SHORT)),
                     "options": options,
                     "answer": chosen,
                 }
             )
         doubts = [
-            self._file_gate(d.upload_id).text(clean_text(d.because, SHORT))
-            for d in self.case.doubts[-STATE_DOUBTS:]
+            self._text(d.upload_id, clean_text(d.because, SHORT)) for d in self.case.doubts[-STATE_DOUBTS:]
         ]
         return {"plan": plan, "questions": asked, "doubts": doubts}
 
@@ -234,11 +254,10 @@ class _Chat(_Review):
         earlier = self.case.chat[:-1][-HISTORY_TURNS:]
         if not earlier:
             return "(this is the first message)"
-        gate = self.gates[0]
         turns = [
             {
                 "who": "person" if entry.role == "user" else "you",
-                "text": gate.text(clean_text(entry.text, 800)),
+                "text": self._text(None, clean_text(entry.text, 800)),
             }
             for entry in earlier
         ]
@@ -249,7 +268,9 @@ class _Chat(_Review):
         from engine.agent.egress import MAX_SENT_ITEMS, STATE_TOOL, scrub, sent_item
 
         turn, strikes, reply, blocked = self.turn, 0, "", None
-        text = scrub(message[:MAX_MESSAGE_CHARS])
+        text = self._text(
+            None, scrub(message[:MAX_MESSAGE_CHARS])
+        )  # names of any file, as the state shows them
         self.checker.grounded = self.checker.grounded | grounded_numbers([text])
         prompt = load_prompt(CHAT_PROMPT, self.config_root)
         tools = self._tools()
@@ -355,29 +376,51 @@ class _Chat(_Review):
 
     def _report(self) -> None:
         """Tell the model, before it writes its reply, which of its new changes the visit will apply for the person
-        and which wait for their tick (and why): what it says it did is what happens (`agent_apply`)."""
-        from engine.doctor.agent_apply import agent_applies
+        and which wait for their tick (and why): what it says it did is what happens (`agent_apply`). Each change
+        is judged once, with the ones already applied in this turn in place."""
+        from engine.doctor.agent_apply import agent_applies, roles_of, twin_of
         from engine.doctor.visit import active_section
 
         items, _evidence = self._items()
-        known = {i.item_id for i in self.case.items}
-        fresh = [i for i in items if i.item_id not in known]
         gone = {*self.chosen.withdrawn, *self.chosen.replaces}
         plan = [
             i.model_copy(update={"state": ProposalState.REJECTED}) if i.item_id in gone else i
             for i in active_section(self.case)[0]
         ]
-        decided = agent_applies(self.files, self.case.files, plan, fresh, self.clock())
-        for item, waits in decided:
+        fresh: list[CaseItem] = []
+        for item in items:
             if item.item_id in self.chosen.reported:
                 continue
+            twin = twin_of(self.case.items, item)
+            if twin is None:
+                fresh.append(item)
+                continue
             self.chosen.reported.add(item.item_id)
-            gate = self._file_gate(item.upload_id)
-            said = {"change": gate.text(clean_text(item.title, 600))}
+            said = {"change": self._text(item.upload_id, clean_text(item.title, 600))}
+            if twin.state is ProposalState.REJECTED:
+                who = "the person took" if person_owns(self.case, twin) else "you took"
+                said["result"] = (
+                    f"That was left out earlier ({who} it back); it stays out unless the person ticks it."
+                )
+            else:
+                said["result"] = "That change is already in the case."
+            self.turn.feedback.append(said)
+        decided = agent_applies(
+            self.files,
+            self.case.files,
+            [*plan, *self.chosen.applied],
+            fresh,
+            self.clock(),
+            roles_of(self.case, self.config_root),
+        )
+        for item, waits in decided:
+            self.chosen.reported.add(item.item_id)
+            said = {"change": self._text(item.upload_id, clean_text(item.title, 600))}
             if waits is None:
+                self.chosen.applied.append(item)
                 said["result"] = "I will apply it for the person, who can undo it with one click."
             else:
-                why = gate.text(clean_text(waits, SHORT))
+                why = self._text(item.upload_id, clean_text(waits, SHORT))
                 self.checker.grounded = self.checker.grounded | grounded_numbers([why])
                 said["result"] = f"It waits for the person's tick, because {why}"
             self.turn.feedback.append(said)
@@ -385,17 +428,16 @@ class _Chat(_Review):
     def _own(self, handle: str) -> CaseItem:
         """One of the agent's own changes (by the handle the state gave it) that it may take back: waiting, or
         applied by the agent itself."""
-        from engine.doctor.visit import AGENT
-
         item_id = self.handles.get(handle)
         item = next((i for i in self.case.items if i.item_id == item_id), None)
         if item is None or item.source is not ProposalSource.AI:
             raise AgentToolError("AGENT_ITEM_UNKNOWN", "You have no change of your own with that id.")
         if item.state is ProposalState.REJECTED:
             raise AgentToolError("AGENT_ITEM_UNKNOWN", "That change is already left out.")
-        if item.state is ProposalState.ACCEPTED and item.decided_by != AGENT:
+        if person_owns(self.case, item):
             raise AgentToolError(
-                "AGENT_ITEM_PERSONS", "The person ticked that change themselves; only they can take it back."
+                "AGENT_ITEM_PERSONS",
+                "The person ticked that change or gave it their own yes; only they can take it back.",
             )
         return item
 
@@ -472,6 +514,12 @@ class _Chat(_Review):
         for part in (text, why, *options):
             if len(part) > SHORT:
                 raise AgentToolError("AGENT_QUESTION_INVALID", "Keep the question and its options short.")
+            if _MEANING_TOPICS.search(part):
+                raise AgentToolError(
+                    "AGENT_QUESTION_REFUSED",
+                    "A quick question is not about consent, the outcome, the ID or the date. "
+                    "Use the question list for those.",
+                )
             if _DIGIT.search(part):
                 raise AgentToolError(
                     "AGENT_QUESTION_REFUSED",

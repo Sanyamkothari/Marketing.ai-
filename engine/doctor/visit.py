@@ -66,7 +66,7 @@ from pydantic import JsonValue
 from engine.agent.contracts import AgentConfidence, ProposalSource, ProposalState
 from engine.agent.tools import AgentToolError
 from engine.config import ConfigError
-from engine.doctor.agent_apply import AGENT_APPLIED_STEPS, agent_applies
+from engine.doctor.agent_apply import AGENT_APPLIED_STEPS, agent_applies, person_owns, roles_of, twin_of
 from engine.doctor.carry import approved_marks, carries_on, last_month, plain_fix
 from engine.doctor.case import (
     PARK_ROLES,
@@ -1042,7 +1042,6 @@ def _converse(run: _Run, case: Case) -> _Step:
         cost_usd=result.cost_usd,
         tokens=result.tokens,
     )
-    known = {item.item_id: item for item in case.items}
     made = [
         item.model_copy(
             update={
@@ -1053,12 +1052,23 @@ def _converse(run: _Run, case: Case) -> _Step:
         )
         for item in result.items  # the AI never ticks: whatever a port returns lands pending, `check`
     ]
-    fresh = [item for item in made if item.item_id not in known]
-    back = _taken_back(case, result.withdrawn, {item.item_id for item in fresh})
+    # The same change in other words (the id hashes the model's wording) is the change already there: a person's
+    # "no" stands, and an applied one is not applied twice.
+    twins = {item.item_id: twin_of(case.items, item) for item in made}
+    fresh = [item for item in made if twins[item.item_id] is None]
+    kept_ids = {t.item_id for t in twins.values() if t is not None}
+    back = _taken_back(
+        case, [i for i in result.withdrawn if i not in kept_ids], {item.item_id for item in fresh}
+    )
     plan = [_decided_as(i, ProposalState.REJECTED, now) if i.item_id in back else i for i in case.items]
     active = [i for i in plan if _in_section(i.goal_id, case)]
     placed = (
-        [item for item, _waits in agent_applies(run.files(case), case.files, active, fresh, now)]
+        [
+            item
+            for item, _waits in agent_applies(
+                run.files(case), case.files, active, fresh, now, roles_of(case, run.deps.config_root)
+            )
+        ]
         if fresh
         else []
     )
@@ -1068,7 +1078,7 @@ def _converse(run: _Run, case: Case) -> _Step:
     step.events.extend(
         EventDraft(
             kind=TimelineKind.ITEM_DECIDED,
-            upload_id=known[item_id].upload_id,
+            upload_id=next((i.upload_id for i in case.items if i.item_id == item_id), None),
             item_id=item_id,
             details={"state": "rejected", "by": "agent", "withdrawn": True},
         )
@@ -1089,16 +1099,17 @@ def _converse(run: _Run, case: Case) -> _Step:
         _add_request(step, request)
     _settle_asks(run, case, step, result.asks, counted=False)
     text = result.reply
-    again = [
-        known[i.item_id]
-        for i in made
-        if i.item_id in known and known[i.item_id].state is ProposalState.REJECTED
-    ]
+    again = list(
+        {t.item_id: t for t in twins.values() if t is not None and t.state is ProposalState.REJECTED}.values()
+    )
     if again:  # an earlier "no" stands: the reply says so instead of claiming work that was not done
         text += (
             f" I did not put back “{again[0].title}”: it was left out earlier; tick it again if you want it."
         )
     left_out = {i.item_id for i in again}
+    suggestion = _suggested(case, step, result.suggestion)
+    if result.suggestion is not None and suggestion is None:  # its question was settled meanwhile: no button
+        text += " (The answer I pointed at is no longer open, so there is nothing to click for it.)"
     entry = CaseChatEntry(
         role="agent",
         text=text,
@@ -1107,12 +1118,12 @@ def _converse(run: _Run, case: Case) -> _Step:
         item_ids=tuple(
             dict.fromkeys(
                 [i.item_id for i in placed]
-                + [i.item_id for i in made if i.item_id in known and i.item_id not in left_out]
+                + [t.item_id for t in twins.values() if t is not None and t.item_id not in left_out]
             )
         ),
         withdrawn=tuple(back),
         tools=result.tools,
-        suggestion=_suggested(case, step, result.suggestion),
+        suggestion=suggestion,
     )
     step.updates["chat"] = (*case.chat, entry)
     step.events.append(
@@ -1138,7 +1149,8 @@ def _decided_as(item: CaseItem, state: ProposalState, now: datetime) -> CaseItem
 
 def _taken_back(case: Case, ids: Sequence[str], made: set[str]) -> list[str]:
     """The agent's own changes it may take back: waiting for the person, or applied by the agent itself. A change the
-    person ticked or unticked is theirs, and one made in this very turn is not an earlier one."""
+    person ticked, unticked or gave their own yes to is theirs, and one made in this very turn is not an earlier one.
+    """
     mine = {i.item_id: i for i in case.items}
     found: list[str] = []
     for item_id in dict.fromkeys(ids):
@@ -1147,6 +1159,7 @@ def _taken_back(case: Case, ids: Sequence[str], made: set[str]) -> list[str]:
             item is not None
             and item_id not in made
             and item.source is ProposalSource.AI
+            and not person_owns(case, item)
             and (
                 item.state is ProposalState.PENDING
                 or (item.state is ProposalState.ACCEPTED and item.decided_by == AGENT)
@@ -1472,8 +1485,10 @@ def _item(
     ticked: bool = False,
     source: ProposalSource = ProposalSource.RULES,
 ) -> CaseItem:
-    """A rules' proposal; its id is its content, so proposing it again finds it."""
-    item_id = f"{kind}.{goal_id or 'base'}.{_short(payload)}"
+    """A rules' proposal; its id is its content, so proposing it again finds it. What a trial on the first rows
+    counted (`tried`) is not part of what the change is: the rules' and the chat's version of one step are one.
+    """
+    item_id = f"{kind}.{goal_id or 'base'}.{_short({k: v for k, v in payload.items() if k != 'tried'})}"
     return CaseItem(
         item_id=item_id[:128],
         kind=kind,
@@ -2721,7 +2736,18 @@ def _proposers(case: Case, item: CaseItem) -> tuple[str, ...]:
     ticked or unticked it since (`decided_by`) took part too. Data Doctor (the rules, the AI) is no one."""
     found: list[str] = []
     origin = next((q for q in case.questions if item.item_id.startswith(f"{q.question_id}:")), None)
-    for who in (origin.answered_by if origin is not None else None, item.decided_by):
+    asked = next(  # a change the agent made in answer to a message was asked for by whoever wrote it
+        (
+            case.chat[n - 1].by
+            for n, entry in enumerate(case.chat)
+            if n
+            and entry.role == "agent"
+            and item.item_id in entry.item_ids
+            and case.chat[n - 1].role == "user"
+        ),
+        None,
+    )
+    for who in (origin.answered_by if origin is not None else None, asked, item.decided_by):
         if who is not None and who != AGENT and who not in found:
             found.append(who)
     return tuple(found)
@@ -2828,8 +2854,8 @@ def confirm(
         )
         ticked = (
             item
-            if item.state is ProposalState.ACCEPTED
-            else item.model_copy(
+            if item.state is ProposalState.ACCEPTED and item.decided_by != AGENT
+            else item.model_copy(  # a change the agent applied becomes the person's own with their yes
                 update={"state": ProposalState.ACCEPTED, "decided_by": principal.user_id, "decided_at": now}
             )
         )

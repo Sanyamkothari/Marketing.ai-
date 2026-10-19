@@ -128,7 +128,8 @@ def test_the_owners_conversation_suggests_an_answer_applies_a_filter_and_revises
     # (1) What counts as a sale is the person's: the agent asks it, suggests the answer, and records nothing.
     case = talk.say(SALE)
     sale = next(q for q in case.questions if q.code == "Q24_WHAT_COUNTS")
-    assert sale.answer is None and sale.blocking, "meaning: only the person's click answers it"
+    assert sale.answer is None and not sale.blocking, "meaning: only the person's click answers it"
+    assert "does not change what the model learns" in sale.why
     assert [o.label for o in sale.options][:2] == ["An order over 500 is a sale", "Any order is a sale"]
     suggestion = talk.reply.suggestion
     assert suggestion is not None
@@ -494,6 +495,179 @@ def test_a_doubt_about_meaning_and_a_request_for_data_reach_the_case(
 
 
 # ---------------------------------------------------------------------------
+# Review fixes: meaning columns, the person's own yes, an undo that sticks
+# ---------------------------------------------------------------------------
+def rename_step(column: str, new_column: str) -> object:
+    def step(seen: Seen) -> dict[str, object]:
+        return {
+            "action": "propose_step",
+            "file": "F1",
+            "args": {
+                "kind": "rename_column",
+                "column": column,
+                "new_column": new_column,
+                "params": {},
+                "reason": "A shorter name.",
+                "evidence_ids": [seen.last("evidence_id")],
+            },
+        }
+
+    return step
+
+
+def test_the_agent_never_renames_the_opt_in_column_even_before_a_goal_is_chosen(
+    storage: LocalStorage, world: World
+) -> None:
+    """Downstream, a missing opt-out column is only a warning: opted-out customers could reach the list."""
+    client = ChatScript(
+        {
+            "tidy": [
+                look("value_counts", "marketing_opt_in"),
+                rename_step("marketing_opt_in", "opted"),
+                reply("That one waits for you."),
+            ]
+        }
+    )
+    talk = Talk(storage, world, client)
+    (item,) = ai_items(talk.say("tidy the opt in column"))
+    assert item.state is ProposalState.PENDING and item.decided_by is None
+    assert "who may be contacted" in told(client)["result"]
+
+
+@pytest.mark.parametrize(("column", "new"), [("converted", "sold"), ("snapshot_date", "as_of")])
+def test_the_agent_never_changes_the_outcome_or_the_date_column_once_a_goal_is_chosen(
+    storage: LocalStorage, world: World, column: str, new: str
+) -> None:
+    client = ChatScript(
+        {
+            "tidy": [
+                look("value_counts", column),
+                rename_step(column, new),
+                reply("That one waits for you."),
+            ]
+        }
+    )
+    talk = Talk(storage, world, client)
+    talk.goal()
+    (item,) = ai_items(talk.say("tidy it"))
+    assert item.state is ProposalState.PENDING, column
+    assert "what the model learns" in told(client)["result"]
+
+
+def test_the_agent_cannot_take_back_a_change_the_person_gave_their_own_yes(
+    storage: LocalStorage, world: World
+) -> None:
+    from engine.doctor.protocol import item_sentence
+    from tests.unit.doctor.chat_support import ASHA
+
+    def withdraw_it(seen: Seen) -> dict[str, object]:
+        return {"action": "withdraw", "args": {"item_id": handle_of(seen, "starts with 999")}}
+
+    client = ChatScript(
+        {**SCRIPT, "take it back": [withdraw_it, reply("I could not take that back; it is yours.")]}
+    )
+    talk = Talk(storage, world, client)
+    (item,) = ai_items(talk.say(TEST_ACCOUNTS))
+    assert item.decided_by == AGENT
+    talk.case = visit.confirm(
+        vs.CLIENT, talk.case.case_id, item.item_id, talk.deps(), principal=ASHA,
+        sentence=item_sentence(item.title, item.payload), expected_version=talk.case.version,
+    )  # fmt: skip
+    (mine,) = ai_items(talk.case)
+    assert (
+        visit.confirmed(talk.case, mine) and mine.decided_by == ANALYST
+    ), "the yes makes the tick the person's"
+
+    case = talk.say("take it back")
+    assert ai_items(case)[0].state is ProposalState.ACCEPTED, "their yes stands"
+    assert talk.reply.withdrawn == ()
+    assert any(r.get("error") == "AGENT_ITEM_PERSONS" for r in client.seen[-1].results)
+
+
+def test_an_undo_sticks_when_the_agent_proposes_the_same_filter_in_other_words(
+    storage: LocalStorage, world: World
+) -> None:
+    client = ChatScript(
+        {
+            **SCRIPT,
+            "do it again": [
+                look("find_values", "customer_id", contains="999"),
+                lambda seen: {
+                    "action": "propose_step",
+                    "file": "F1",
+                    "args": {
+                        "kind": "remove_rows",
+                        "column": "customer_id",
+                        "params": {"operator": "starts_with", "values": ["999"]},
+                        "reason": "Test ids.",  # another reason: another id, the same change
+                        "evidence_ids": [seen.last("evidence_id")],
+                    },
+                },
+                reply("Done, the test accounts are out again."),
+            ],
+        }
+    )
+    talk = Talk(storage, world, client)
+    (applied,) = ai_items(talk.say(TEST_ACCOUNTS))
+    talk.decide(applied.item_id, False)  # Undo
+
+    case = talk.say("please do it again")
+    (only,) = ai_items(case)
+    assert only.state is ProposalState.REJECTED and only.decided_by == ANALYST, "no second, applied copy"
+    assert "left out earlier; tick it again if you want it" in talk.reply.text
+    assert talk.reply.item_ids == ()
+    assert "took" in told(client)["result"] and "back" in told(client)["result"], "the model is told too"
+
+
+def test_whoever_asked_for_a_change_in_the_chat_counts_as_its_proposer(
+    storage: LocalStorage, world: World
+) -> None:
+    """With separation of duties on, the person who typed "drop test accounts" cannot also give its own yes."""
+    talk = Talk(storage, world, ChatScript(SCRIPT))
+    (item,) = ai_items(talk.say(TEST_ACCOUNTS))
+    assert item.decided_by == AGENT
+    assert visit.item_proposers(talk.case, item) == (ANALYST,)
+
+
+def test_a_quick_question_is_not_about_consent_the_outcome_the_id_or_the_date(
+    storage: LocalStorage, world: World
+) -> None:
+    client = ChatScript(
+        {
+            "ask me": [
+                {
+                    "action": "ask",
+                    "args": {"text": "Did they agree to be contacted?", "options": ["Yes", "No"]},
+                },
+                {
+                    "action": "ask",
+                    "args": {"text": "Is the date day first?", "options": ["Day first", "Month first"]},
+                },
+                reply("I will use the question list for that."),
+            ]
+        }
+    )
+    talk = Talk(storage, world, client)
+    case = talk.say("ask me what you need")
+    assert not [q for q in case.questions if q.code == "CHAT_ASK"]
+    assert any(r.get("error") == "AGENT_QUESTION_REFUSED" for r in client.seen[-1].results)
+
+
+def test_a_suggestion_whose_question_was_settled_meanwhile_is_said_in_the_reply(
+    storage: LocalStorage, world: World
+) -> None:
+    from engine.doctor.visit import ConverseResult
+
+    talk = Talk(storage, world, None)
+    talk.converse = lambda _case, _message, _files: ConverseResult(
+        reply="Use this?", suggestion=("q.gone", "c0")
+    )
+    talk.say("anything")
+    assert talk.reply.suggestion is None
+    assert "no longer open" in talk.reply.text
+
+
+# ---------------------------------------------------------------------------
 # What the agent sees
 # ---------------------------------------------------------------------------
 def test_the_next_turn_reads_the_conversation_the_case_and_its_earlier_looks(
@@ -509,12 +683,12 @@ def test_the_next_turn_reads_the_conversation_the_case_and_its_earlier_looks(
                     "args": {
                         "kind": "remove_rows",
                         "column": "customer_id",
-                        "params": {"operator": "starts_with", "values": ["998"]},
+                        "params": {"operator": "starts_with", "values": ["99901"]},
                         "reason": "Your other test accounts.",
                         "evidence_ids": ["e1"],  # a look from an earlier turn
                     },
                 },
-                reply("I explained, and also left out ids starting 998."),
+                reply("I explained, and also left out ids starting 99901."),
             ],
         }
     )
@@ -529,8 +703,15 @@ def test_the_next_turn_reads_the_conversation_the_case_and_its_earlier_looks(
     assert seen.state["earlier_looks"] == [
         {"id": "e1", "tool": "find_values", "file": "F1", "column": "customer_id"}
     ]
-    # It cited an earlier look and the step was accepted for review: no AGENT_STEP_UNGROUNDED.
-    assert not any(r.get("error") == "AGENT_STEP_UNGROUNDED" for r in client.seen[-1].results)
+    # It cited only an earlier look (e1) and the change was made: grounded, applied, and the look is not stored twice.
+    assert not any(r.get("error") for r in client.seen[-1].results)
+    second = [
+        i for i in ai_items(talk.case) if i.title == "Leave out rows where 'customer_id' starts with 99901"
+    ]
+    assert len(second) == 1 and second[0].state is ProposalState.ACCEPTED and second[0].decided_by == AGENT
+    assert (
+        len(talk.case.evidence) == 5
+    ), "the reloaded look hashes back to its stored id; only the new step is added"
 
 
 def test_a_reply_with_a_number_nobody_looked_up_is_refused_and_the_next_one_is_used(
@@ -663,3 +844,22 @@ def visit_add(talk: Talk, upload_id: str, world: World) -> Case:
         expected_version=talk.case.version, actor=ANALYST,
     )  # fmt: skip
     return talk.case
+
+
+def test_the_conversation_is_masked_with_every_files_gate_not_only_the_first(storage: LocalStorage) -> None:
+    """A column name of the second file that the person typed (it is not a plain label) never reaches the model."""
+    world = vs.world()
+    odd = "ref#code!x"
+    frame = vs.customers(rows=300, seed=3)
+    frame[odd] = [f"r{i}" for i in range(len(frame))]
+    config = world.offers[0].config
+    world.files["up-odd"] = vs.loaded("up-odd", "odd.csv", frame, config)
+    client = ChatScript({"look": [look("describe_missing")], "again": [look("describe_missing")]})
+    talk = Talk(storage, world, client, files=(vs.FIRST, vs.SECOND), key=None)
+    visit_add(talk, "up-odd", world)
+    talk.say(f"look at {odd}")
+    talk.say("and again")
+    assert odd not in "\n".join(client.sent_text) and "4000123456" not in "\n".join(client.sent_text)
+    assert "column_" in json.dumps(
+        client.seen[-1].history
+    ), "the alias of the third file's column, not the name"

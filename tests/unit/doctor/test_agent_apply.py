@@ -7,7 +7,16 @@ from typing import Any
 import pytest
 
 from engine.agent.contracts import AgentConfidence, ProposalSource, ProposalState
-from engine.doctor.agent_apply import AGENT_APPLIED_STEPS, agent_applies, waits_because
+from engine.config import load_use_case
+from engine.doctor import agent_apply
+from engine.doctor.agent_apply import (
+    AGENT_APPLIED_STEPS,
+    Roles,
+    agent_applies,
+    meaning_key,
+    twin_of,
+    waits_because,
+)
 from engine.doctor.case import CaseItem
 from engine.doctor.protocol import AGENT
 from engine.doctor.visit import _item
@@ -157,3 +166,107 @@ def test_the_guard_run_decides_and_the_next_change_is_judged_with_the_first_in_p
         and b.decided_by is None
     )
     assert c_waits is None and c.state is ProposalState.ACCEPTED
+
+
+# ---------------------------------------------------------------------------
+# Columns that hold a meaning are the person's (review of v2a-engine-chat)
+# ---------------------------------------------------------------------------
+ROLES = Roles(
+    protected=frozenset({"marketing_opt_in", "converted", "snapshot_date"}), ids=frozenset({"customer_id"})
+)
+
+
+@pytest.mark.parametrize(
+    ("kind", "params"),
+    [
+        ("rename_column", {}),
+        ("split_column", {"separator": "-", "part": 0}),
+        ("parse_number", {}),
+        ("normalise_text", {"strip": True}),
+    ],
+)
+@pytest.mark.parametrize("column", ["marketing_opt_in", "converted", "snapshot_date"])
+def test_a_change_to_a_consent_outcome_or_date_column_waits_for_the_persons_tick(
+    kind: str, params: dict[str, Any], column: str
+) -> None:
+    why = waits_because(item(step(kind, column, **params)), ROLES)
+    assert why is not None and "who may be contacted or what the model learns" in why
+    assert (
+        waits_because(item(step(kind, "channel", **params)), ROLES) is None
+    ), "other columns are not held back"
+
+
+def test_a_column_renamed_to_a_protected_name_or_named_like_consent_waits_too() -> None:
+    to_protected = step("rename_column", "channel")
+    to_protected["step"]["new_column"] = "converted"
+    assert waits_because(item(to_protected), ROLES) is not None
+    # Without any goal or key decided, a name that reads as consent is still not the agent's to change.
+    for name in ("marketing_opt_in", "Opt Out", "unsubscribed", "sms_consent", "DND"):
+        assert waits_because(item(step("rename_column", name))) is not None, name
+
+
+def test_leaving_rows_out_by_the_id_is_the_one_step_on_the_id_the_agent_may_apply() -> None:
+    assert (
+        waits_because(item(step("remove_rows", "customer_id", operator="starts_with", values=["999"])), ROLES)
+        is None
+    )
+    assert waits_because(item(step("normalise_text", "customer_id", strip=True)), ROLES) is not None
+    assert (
+        waits_because(item(step("remove_rows", "converted", operator="equals", values=["0"])), ROLES)
+        is not None
+    )
+    assert (
+        waits_because(item(step("remove_rows", "marketing_opt_in", operator="equals", values=["0"])))
+        is not None
+    )
+
+
+def test_what_counts_as_the_same_change_ignores_the_models_wording_and_the_trial_counts() -> None:
+    plain = step("remove_rows", "customer_id", operator="starts_with", values=["999"])
+    worded = {**plain, "step": {**plain["step"], "reason": "Test ids.", "order": 3}}
+    first, again = item(plain), item({**worded, "tried": {"rows": 1000, "changed": 31, "failed": 0}})
+    assert meaning_key(first) == meaning_key(again)
+    assert twin_of([first], again) is first
+    other = item(step("remove_rows", "customer_id", operator="starts_with", values=["998"]))
+    assert twin_of([first], other) is None
+    # What a trial on the first rows counted is not part of what the change is: one step, one id.
+    assert first.item_id == item({**plain, "tried": {"rows": 1000, "changed": 31, "failed": 0}}).item_id
+
+
+def test_a_rule_that_hits_few_of_the_first_rows_but_many_of_the_file_waits() -> None:
+    """The guard run sees the first 1000 rows; the rule is also counted on the whole file."""
+    world = cs.orders_world()
+    files = tuple(world.files.values())
+    tail = item(step("remove_rows", "customer_id", operator="starts_with", values=["101"]))  # rows 1000-1199
+    ((_, why),) = agent_applies(files, [], [], [tail], vs.T0)
+    assert why is not None and "of the rows of the whole file, more than 5%" in why
+
+
+def test_a_date_rule_over_dates_whose_order_nobody_settled_waits() -> None:
+    frame = cs.orders_frame()
+    frame["order_date"] = ["03/04/2026", "05/06/2026", "01/02/2026"] * (len(frame) // 3)
+    config = load_use_case(vs.GOAL_A)
+    loaded = vs.loaded(FIRST, "orders.csv", frame, config)
+    before = item(step("remove_rows", "order_date", operator="before", values=["2026-01-01"]))
+    ((_, why),) = agent_applies((loaded,), [], [], [before], vs.T0)
+    assert why is not None and "day first or month first" in why
+
+
+def test_a_new_stop_on_another_step_holds_the_change_back(monkeypatch: pytest.MonkeyPatch) -> None:
+    from engine.doctor.visit_contracts import PlanCheck, PlanFinding
+
+    stop = PlanFinding(
+        key="k", level="stop", code="PLAN_STEP_CANNOT_RUN", text="Another step breaks.", item_id="x.1"
+    )
+    calls: list[int] = []
+
+    def fake(files: object, case_files: object, items: list[CaseItem]) -> PlanCheck:
+        calls.append(len(items))
+        return PlanCheck(digest="d", findings=(stop,) if len(items) > 1 else ())
+
+    monkeypatch.setattr(agent_apply, "check_plan", fake)
+    tidy = item(step("normalise_text", "channel", strip=True))
+    other = tidy.model_copy(update={"item_id": "x.1"})
+    world = cs.orders_world()
+    ((_, why),) = agent_applies(tuple(world.files.values()), [], [other], [tidy], vs.T0)
+    assert why == "Another step breaks."
