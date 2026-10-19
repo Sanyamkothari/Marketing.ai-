@@ -20,6 +20,7 @@ import { esc } from "../../dom.js";
 import { count } from "../../format.js";
 import { goalName, userText } from "../../labels.js";
 import { AI_NOT_CONNECTED_SENTENCE, AI_SETTINGS_HREF } from "../../availability.js";
+import { minutesText } from "../campaigns/run_rules.js";
 import { sentHtml, plain, TOOL_PHRASES } from "../agent/sent.js";
 import { samplesHtml } from "./plan_view.js";
 import { AI_CONSENT_BUTTON, AI_CONSENT_LINE, AI_SPENT_LINE, VERDICTS, namesOf, standingHtml, userTextIn } from "./view.js";
@@ -377,7 +378,7 @@ export function readyHtml(r, ctx) {
     ? `<div class="dds-actions" role="group" aria-label="How long to learn" data-dds-speeds>${r.speeds
         .map((sp) =>
           button({
-            label: `${sp.name}: about ${sp.minutes} minutes${sp.recommended ? " (recommended)" : ""}`,
+            label: `${sp.name}: about ${minutesText(sp.minutes)}${sp.recommended ? " (recommended)" : ""}`,
             kind: ctx.speed === sp.id ? "primary" : "secondary",
             size: "sm",
             attrs: `data-dds-speed="${esc(sp.id)}" aria-pressed="${ctx.speed === sp.id}"`,
@@ -391,7 +392,7 @@ export function readyHtml(r, ctx) {
   return indented(
     `<section class="ddc-ready" data-dds-ready="approve" aria-labelledby="ddc-ready-t"><h3 class="dds-group-t" id="ddc-ready-t">Ready to start</h3><blockquote class="dds-sentence" id="dds-approve-sentence" data-dds-approve-sentence>${esc(
       r.sentence,
-    )}</blockquote>${notesHtml}${stops}${yes}${hold}${speeds}${ctx.approveHtml || ""}<div data-dds-approve-note>${leavesOutHtml(r, ctx)}</div><div class="dds-actions">${button({
+    )}</blockquote>${notesHtml}${stops}${yes}${hold}${speeds}${ctx.approveHtml || ""}${ctx.alertHtml || ""}<div data-dds-approve-note>${leavesOutHtml(r, ctx)}</div><div class="dds-actions">${button({
       label,
       kind: "primary",
       attrs: `data-dds-approve-start aria-describedby="dds-approve-sentence"`,

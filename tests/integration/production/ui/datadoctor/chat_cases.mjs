@@ -422,6 +422,8 @@ test("a stop that appears after the own yeses ends the chain: nothing is approve
   $("[data-dds-approve-start]").click();
   await until(() => $("[data-dds-notice]"), 3000, "the notice");
   assert.match($("[data-dds-notice]").textContent, /A safety check changed/);
+  assert.ok($("[data-dds-ready] [data-dds-notice]"), "said in the approval card, next to the button, not at the top of a long page");
+  assert.equal($$("[data-dds-notice]").length, 1, "and said once");
   assert.deepEqual(order(), ["confirmations"], "no yes to a stop the person did not tick, and no approval");
   assert.ok($("[data-dds-stop-row]"), "the new stop is in the card to read");
 });
@@ -442,6 +444,7 @@ test("if agreeing changed the sentence, nothing is approved: the new sentence is
   $("[data-dds-approve-start]").click();
   await until(() => $("[data-dds-notice]"), 3000, "the notice");
   assert.match($("[data-dds-notice]").textContent, /Your yes is recorded\. What you approve has changed/);
+  assert.ok($("[data-dds-ready] [data-dds-notice]"), "said in the approval card, next to the button");
   assert.equal($("[data-dds-approve-sentence]").textContent, next);
   assert.deepEqual(order(), ["confirmations"], "no approval of a sentence the person did not read");
   world.next.approval = "ready";
@@ -503,7 +506,11 @@ test("in a goal's setup the one click approves and fills the form (nothing runs)
 
 test("phone width: the data panel is above the chat; every control is the theme's 40px button", async () => {
   assert.ok(CSS.includes("@media (max-width:900px){.ddc-layout{grid-template-columns:minmax(0,1fr)}.ddc-panel{order:-1;position:static;max-height:none;overflow:visible}}"));
-  assert.ok(CSS.includes("position:sticky;top:var(--s4);max-height:calc(100vh - 2*var(--s4));overflow:auto}"), "the panel scrolls inside itself, so its foot is reachable");
+  assert.ok(
+    CSS.includes("position:sticky;top:calc(var(--bar-h,56px) + var(--s4));max-height:calc(100vh - var(--bar-h,56px) - 2*var(--s4));overflow:auto}"),
+    "the panel sits below the top bar and scrolls inside itself, so its foot is reachable",
+  );
+  assert.ok(CSS.includes(".ddc-panel>*{flex:none}"), "a card of the panel is never squeezed (its last line clipped) by the others");
   assert.ok(CSS.includes(".ddc-form .btn{min-height:40px}") && CSS.includes(".ddc-prompts .btn{min-height:40px"));
   assert.ok(!/#[0-9a-fA-F]{3,6}\b/.test(CSS), "colours are the theme's tokens");
   await show("approve_class", { ai: connected() });
@@ -537,4 +544,23 @@ test("the checklist and the prompts are plain functions of the answer", () => {
   assert.equal(chat.promptsOf(s).length, 3);
   assert.equal(chat.cardOf(s, "ready").stage, "approve");
   assert.equal(chat.cardOf({ view: {} }, "ready"), null);
+});
+
+test("the learning times are the card's own, one minute is not 'minutes', and the sentence says what the buttons say", async () => {
+  const rules = await import("../../../../../ui/modules/campaigns/run_rules.js");
+  const patch = (a) => {
+    const ready = a.view.conversation.find((c) => c.type === "ready");
+    if (ready) ready.speeds = [{ id: "quick", name: "Quick", minutes: 1, recommended: false }, { id: "balanced", name: "Balanced", minutes: 7, recommended: true }, { id: "thorough", name: "Thorough", minutes: 20, recommended: false }];
+    return a;
+  };
+  try {
+    await show("approve_class", { patch });
+    assert.deepEqual(
+      $$("[data-dds-speeds] .btn").map((b) => b.textContent.trim()),
+      ["Quick: about 1 minute", "Balanced: about 7 minutes (recommended)", "Thorough: about 20 minutes"],
+    );
+    assert.match($("[data-dds-approve-start-sentence]").textContent, /Balanced: about 7 minutes\./, "not the screen's built-in 15");
+  } finally {
+    rules.applySpeedMinutes(null);
+  }
 });

@@ -38,8 +38,11 @@ export const DEFAULT_SPEED = "balanced";
 
 export const speedOf = (id) => SPEEDS.find((s) => s.id === id) || SPEEDS.find((s) => s.id === DEFAULT_SPEED);
 
+/** "1 minute", "15 minutes". */
+export const minutesText = (n) => `${n} ${n === 1 ? "minute" : "minutes"}`;
+
 /** "about 15 minutes". */
-export const aboutMinutes = (speed) => `about ${speedOf(speed).minutes} minutes`;
+export const aboutMinutes = (speed) => `about ${minutesText(speedOf(speed).minutes)}`;
 
 /**
  * The sentence above the Start button, as HTML: what we learn from, how many customers, and how long it takes.

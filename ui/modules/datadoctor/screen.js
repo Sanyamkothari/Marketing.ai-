@@ -29,7 +29,7 @@ import { button, emptyState } from "../../components.js";
 import { canAccess } from "../router.js";
 import { createConnectionPicker } from "../connections/picker.js";
 import { getModelOffer, postCampaignRun } from "../campaigns/wizard_api.js";
-import { DEFAULT_SPEED, SPEEDS, modelChoice, runHref, startSentenceHtml } from "../campaigns/run_rules.js";
+import { DEFAULT_SPEED, SPEEDS, applySpeedMinutes, minutesText, modelChoice, runHref, startSentenceHtml } from "../campaigns/run_rules.js";
 import { TABLE_FILE_TYPES } from "../intake/notes.js";
 import { injectAgentStyles } from "../agent/styles.js";
 import { plain } from "../agent/sent.js";
@@ -92,6 +92,7 @@ function fresh() {
     sent: new Map(), // files already uploaded for the next check ("name|size|date" -> the upload): a retry does not send them again
     error: null,
     notice: "",
+    alertAt: "top", // where the notice or error is drawn: the approval card for what the Approve click said, else the top
     draft: "",
     ai: null, // true | false | null (not known)
     use: null, // the Doctor's AI on this case: { consent, spent, ... } (`GET /cases/{id}/ai`), null while not known
@@ -216,7 +217,7 @@ function speedsHtml(entry) {
   const chosen = entry.state.speed;
   const items = SPEEDS.map((speed) =>
     button({
-      label: `${speed.name}: about ${speed.minutes} minutes${speed.recommended ? " (recommended)" : ""}`,
+      label: `${speed.name}: about ${minutesText(speed.minutes)}${speed.recommended ? " (recommended)" : ""}`,
       kind: chosen === speed.id ? "primary" : "secondary",
       size: "sm",
       attrs: `data-dds-speed="${speed.id}" aria-pressed="${chosen === speed.id}"`,
@@ -325,6 +326,12 @@ function chatMainHtml(entry) {
   const err = s.error ? errorBox(s.error) : "";
   const notice = s.notice ? `<p class="dds-why" role="status" data-dds-notice>${esc(s.notice)}</p>` : "";
   const ready = cardOf(screen, "ready");
+  // What the Approve click says (the sentence changed, a safety check changed, a refusal) is drawn in the approval card,
+  // next to the button the person just clicked; at the top of a long page it would be out of sight.
+  // The card's learning times are the server's; the sentence above Approve says the same ones (before a goal is chosen
+  // no offer has brought them in yet).
+  if (ready && (ready.speeds || []).length) applySpeedMinutes(Object.fromEntries(ready.speeds.map((sp) => [sp.id, sp.minutes])));
+  const alertInCard = s.alertAt === "card" && Boolean(ready && ready.stage === "approve");
   const parts = ready && ready.stage === "start" ? startParts(entry) : null;
   const starts = approveStarts(entry);
   const goalIds = screen.view.goal_id ? [screen.view.goal_id] : screen.view.missing_for || [];
@@ -337,6 +344,7 @@ function chatMainHtml(entry) {
     startHtml: parts ? `${parts.sentence}${parts.action}` : "",
     starts,
     approveHtml: ready && ready.stage === "approve" && starts ? approveSentence(entry) : "",
+    alertHtml: alertInCard ? `${notice}${err}` : "",
     openSent,
     kitHref: (ids) => dataRequestUrl((ids.length ? ids : goalIds).slice(0, 4)),
     composer: {
@@ -350,7 +358,7 @@ function chatMainHtml(entry) {
   });
   const intake = screen.case.read_only ? "" : intakeHtml(entry, { first: false });
   const panel = panelHtml(screen, { tab: s.tab, side: s.side, intake, busy: Boolean(s.busy) });
-  return `<div class="dds ddc" data-dds data-dds-chat-view data-dds-place="${esc(host.place)}" data-dds-case="${esc(screen.case.case_id)}">${headHtml(screen, { level })}${notice}${err}<div class="ddc-layout">${conversation}${panel}</div>${
+  return `<div class="dds ddc" data-dds data-dds-chat-view data-dds-place="${esc(host.place)}" data-dds-case="${esc(screen.case.case_id)}">${headHtml(screen, { level })}${alertInCard ? "" : `${notice}${err}`}<div class="ddc-layout">${conversation}${panel}</div>${
     host.place === "data" ? `<div class="dds-actions">${button({ label: "Start a new check", kind: "tertiary", attrs: "data-dds-new" })}</div>` : ""
   }</div>`;
 }
@@ -462,6 +470,7 @@ async function act(entry, busy, work, { announce = "" } = {}) {
   s.busy = busy;
   s.error = null;
   s.notice = "";
+  s.alertAt = busy === "approve" ? "card" : "top";
   draw(entry);
   try {
     await work();

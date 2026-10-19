@@ -133,7 +133,8 @@ export const CSS = `
 .ddc-head .dds-next,.ddc-head .dds-why{flex-basis:100%;margin:0}
 .ddc-layout{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,400px);gap:var(--s5);align-items:start}
 .ddc-conv{display:flex;flex-direction:column;gap:var(--s3);min-width:0}
-.ddc-panel{display:flex;flex-direction:column;gap:var(--s3);min-width:0;position:sticky;top:var(--s4);max-height:calc(100vh - 2*var(--s4));overflow:auto}
+.ddc-panel{display:flex;flex-direction:column;gap:var(--s3);min-width:0;position:sticky;top:calc(var(--bar-h,56px) + var(--s4));max-height:calc(100vh - var(--bar-h,56px) - 2*var(--s4));overflow:auto}
+.ddc-panel>*{flex:none}
 .ddc-box{padding:var(--s4);display:flex;flex-direction:column;gap:var(--s3);min-width:0}
 .ddc-box .dds-group-t{padding:0;border:0;background:none}
 .ddc .dds-opt{align-items:flex-start;max-width:min(100%,26rem)}
