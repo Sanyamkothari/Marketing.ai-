@@ -191,15 +191,17 @@ test("editing: the saved secret is not shown, a blank keeps it", async () => {
 });
 
 test("editing: a changed address says the saved secret must be typed again (security review 2, H-2)", async () => {
-  await show(`#/connections/${ids.s3}`);
-  const key = $('[data-cn-secret="secret_access_key"]');
-  const endpoint = $('[data-cn-field="endpoint_url"]');
-  const before = endpoint.value;
-  endpoint.value = "https://other-storage.example.com";
-  endpoint.dispatchEvent(new w.Event("change", { bubbles: true }));
+  // A database: its host is where the saved password goes (plain S3 has no address field to change).
+  await show(`#/connections/${ids.pg}`);
+  const key = $('[data-cn-secret="password"]');
+  const host = $('[data-cn-field="host"]');
+  assert.ok(key && host, "the Postgres form has a host and a saved password");
+  const before = host.value;
+  host.value = "attacker.example.com";
+  host.dispatchEvent(new w.Event("change", { bubbles: true }));
   assert.match(key.placeholder, /address changed/i);
-  endpoint.value = before;
-  endpoint.dispatchEvent(new w.Event("change", { bubbles: true }));
+  host.value = before;
+  host.dispatchEvent(new w.Event("change", { bubbles: true }));
   assert.equal(key.placeholder, "Saved. Leave blank to keep it.");
 });
 
