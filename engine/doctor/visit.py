@@ -36,8 +36,11 @@ Switching to another goal sets the first goal's section aside, it is not deleted
 again exactly as it was.
 
 **Rules first, and no AI needed.** Every state completes with no AI service connected. CONVERSE is Plan G's
-`chat_turn` (:func:`plan_g_converse`); without an AI service the person's message is kept and the reply says the
-chat needs one, and the visit goes back to TREAT. The AI only ever adds pending, unticked items.
+chat (`engine.doctor.agent_chat`): the AI review's loop with the conversation in front of it. Without an AI service
+the person's message is kept and the reply says the chat needs one, and the visit goes back to TREAT. The AI makes
+pending items; the ones whose guard run shows no stop and no flag, in the kinds listed in
+:data:`AGENT_APPLIED_STEPS`, are applied for the person (decided by the agent, one Undo each, on the timeline).
+Nothing about meaning is ever applied or answered by the AI: it may suggest an answer, and only a click records it.
 
 **What later milestones fill in.** PREVIEW, PRESCRIBE, VERIFY and HAND_OFF call ports (:class:`VisitDeps`). The
 defaults are the honest minimum today: PREVIEW counts what would change; PRESCRIBE hashes the approved items, the
@@ -61,8 +64,9 @@ from typing import TYPE_CHECKING, Any, Final, Literal, Protocol
 from pydantic import JsonValue
 
 from engine.agent.contracts import AgentConfidence, ProposalSource, ProposalState
-from engine.agent.tools import TOOLS, AgentToolError
+from engine.agent.tools import AgentToolError
 from engine.config import ConfigError
+from engine.doctor.agent_apply import AGENT_APPLIED_STEPS, agent_applies
 from engine.doctor.carry import approved_marks, carries_on, last_month, plain_fix
 from engine.doctor.case import (
     PARK_ROLES,
@@ -80,6 +84,7 @@ from engine.doctor.case import (
     CaseQuestion,
     CaseReadinessRef,
     CaseStore,
+    ChatSuggestion,
     EventDraft,
     TimelineKind,
     VisitState,
@@ -108,10 +113,8 @@ from engine.doctor.protocol import (
 )
 from engine.doctor.registry import (
     DataToolContext,
-    DataToolKind,
     DataToolRegistry,
     DataToolResult,
-    Exposure,
 )
 from engine.doctor.visit_contracts import (
     Acknowledgement,
@@ -126,13 +129,11 @@ from engine.utils.time import utc_now
 
 if TYPE_CHECKING:
     from engine.access.roles import Principal
-    from engine.agent.tools import AgentContext
-    from engine.doctor.ai_guard import AiGuard
     from engine.doctor.diagnose import LoadedFile, Offer
-    from engine.generative.guardrails import Guardrails
     from engine.storage import Storage
 
 __all__ = [
+    "AGENT_APPLIED_STEPS",
     "AI_NEEDED_REPLY",
     "VISIT_CODES",
     "CombinePort",
@@ -166,7 +167,6 @@ __all__ = [
     "lazy_converse",
     "mode_of",
     "open_blocking",
-    "plan_g_converse",
     "prescription_digest",
     "readiness_verify",
     "resume",
@@ -230,6 +230,15 @@ class ConverseResult:
     items: tuple[CaseItem, ...] = ()
     evidence: tuple[DataToolResult, ...] = ()
     sent: tuple[dict[str, JsonValue], ...] = ()
+    asks: tuple[Ask, ...] = ()
+    doubts: tuple[CaseDoubt, ...] = ()
+    requests: tuple[DataRequest, ...] = ()
+    withdrawn: tuple[str, ...] = ()
+    """Ids of the agent's own earlier changes it took back (waiting, or applied by the agent itself)."""
+    suggestion: tuple[str, str] | None = None
+    """`(question_id, option_id)`: the answer it suggests to an open question; never recorded by the AI."""
+    tools: tuple[str, ...] = ()
+    """What it did to answer, in order (the looks and the actions)."""
     model_calls: int = 0
     cost_usd: float = 0.0
     tokens: int = 0
@@ -1013,7 +1022,9 @@ def _ask(_run: _Run, case: Case) -> _Step | None:
 
 
 def _converse(run: _Run, case: Case) -> _Step:
-    """CONVERSE: Plan G's chat turn on the person's last message; proposals land pending. No AI: a fixed reply."""
+    """CONVERSE: the chat's turn on the person's last message. What the AI makes lands pending; the clean changes
+    are applied for the person to undo; its own earlier changes it took back are rejected. No AI: a fixed reply.
+    """
     message = case.chat[-1] if case.chat and case.chat[-1].role == "user" else None
     if message is None:
         return _Step(to=VisitState.TREAT)
@@ -1024,8 +1035,15 @@ def _converse(run: _Run, case: Case) -> _Step:
         if port is None
         else port(case, message.text, run.files(case))
     )
-    reply = CaseChatEntry(role="agent", text=result.reply, at=now, sent=result.sent)
-    items = [
+    step = _Step(
+        to=VisitState.TREAT,
+        evidence=list(result.evidence),
+        model_calls=result.model_calls,
+        cost_usd=result.cost_usd,
+        tokens=result.tokens,
+    )
+    known = {item.item_id: item for item in case.items}
+    made = [
         item.model_copy(
             update={
                 "source": ProposalSource.AI,
@@ -1035,21 +1053,123 @@ def _converse(run: _Run, case: Case) -> _Step:
         )
         for item in result.items  # the AI never ticks: whatever a port returns lands pending, `check`
     ]
-    return _Step(
-        to=VisitState.TREAT,
-        updates={"chat": (*case.chat, reply)},
-        items=items,
-        evidence=list(result.evidence),
-        events=[
-            EventDraft(
-                kind=TimelineKind.CHAT,
-                details={"role": "agent", "ai": result.ai, "proposals": len(items)},
-            )
-        ],
-        model_calls=result.model_calls,
-        cost_usd=result.cost_usd,
-        tokens=result.tokens,
+    fresh = [item for item in made if item.item_id not in known]
+    back = _taken_back(case, result.withdrawn, {item.item_id for item in fresh})
+    plan = [_decided_as(i, ProposalState.REJECTED, now) if i.item_id in back else i for i in case.items]
+    active = [i for i in plan if _in_section(i.goal_id, case)]
+    placed = (
+        [item for item, _waits in agent_applies(run.files(case), case.files, active, fresh, now)]
+        if fresh
+        else []
     )
+    step.items.extend(placed)
+    if back:  # `_write` adds new items itself; a change to an existing one is written whole
+        step.updates["items"] = [*plan, *placed]
+    step.events.extend(
+        EventDraft(
+            kind=TimelineKind.ITEM_DECIDED,
+            upload_id=known[item_id].upload_id,
+            item_id=item_id,
+            details={"state": "rejected", "by": "agent", "withdrawn": True},
+        )
+        for item_id in back
+    )
+    step.events.extend(
+        EventDraft(
+            kind=TimelineKind.ITEM_DECIDED,
+            upload_id=item.upload_id,
+            item_id=item.item_id,
+            details={"state": "accepted", "by": "agent"},
+        )
+        for item in placed
+        if item.state is ProposalState.ACCEPTED
+    )
+    step.doubts.extend(result.doubts)
+    for request in result.requests:
+        _add_request(step, request)
+    _settle_asks(run, case, step, result.asks, counted=False)
+    text = result.reply
+    again = [
+        known[i.item_id]
+        for i in made
+        if i.item_id in known and known[i.item_id].state is ProposalState.REJECTED
+    ]
+    if again:  # an earlier "no" stands: the reply says so instead of claiming work that was not done
+        text += (
+            f" I did not put back “{again[0].title}”: it was left out earlier; tick it again if you want it."
+        )
+    left_out = {i.item_id for i in again}
+    entry = CaseChatEntry(
+        role="agent",
+        text=text,
+        at=now,
+        sent=result.sent,
+        item_ids=tuple(
+            dict.fromkeys(
+                [i.item_id for i in placed]
+                + [i.item_id for i in made if i.item_id in known and i.item_id not in left_out]
+            )
+        ),
+        withdrawn=tuple(back),
+        tools=result.tools,
+        suggestion=_suggested(case, step, result.suggestion),
+    )
+    step.updates["chat"] = (*case.chat, entry)
+    step.events.append(
+        EventDraft(
+            kind=TimelineKind.CHAT,
+            details={
+                "role": "agent",
+                "ai": result.ai,
+                "proposals": len(fresh),
+                "applied": sum(1 for i in placed if i.state is ProposalState.ACCEPTED),
+                "withdrawn": len(back),
+            },
+        )
+    )
+    return step
+
+
+def _decided_as(item: CaseItem, state: ProposalState, now: datetime) -> CaseItem:
+    return item.model_copy(
+        update={"state": state, "decided_by": AGENT, "decided_at": now, "parked_for": None}
+    )
+
+
+def _taken_back(case: Case, ids: Sequence[str], made: set[str]) -> list[str]:
+    """The agent's own changes it may take back: waiting for the person, or applied by the agent itself. A change the
+    person ticked or unticked is theirs, and one made in this very turn is not an earlier one."""
+    mine = {i.item_id: i for i in case.items}
+    found: list[str] = []
+    for item_id in dict.fromkeys(ids):
+        item = mine.get(item_id)
+        if (
+            item is not None
+            and item_id not in made
+            and item.source is ProposalSource.AI
+            and (
+                item.state is ProposalState.PENDING
+                or (item.state is ProposalState.ACCEPTED and item.decided_by == AGENT)
+            )
+        ):
+            found.append(item_id)
+    return found
+
+
+def _suggested(case: Case, step: _Step, given: tuple[str, str] | None) -> ChatSuggestion | None:
+    """The answer the agent points at, if that question is open and the answer is a real one. The person's click
+    records it; nothing here does."""
+    if given is None:
+        return None
+    question_id, option_id = given
+    asked = [q for q, _effects in step.questions]
+    question = next((q for q in (*case.questions, *asked) if q.question_id == question_id), None)
+    if question is None or question.answer is not None:
+        return None
+    option = next((o for o in question.options if o.option_id == option_id), None)
+    if option is None or option.safe or option.label == DONT_KNOW:
+        return None
+    return ChatSuggestion(question_id=question_id, option_id=option_id, label=option.label)
 
 
 def _preview(run: _Run, case: Case) -> _Step:
@@ -1793,116 +1913,6 @@ def readiness_verify(
     return verify
 
 
-# ---------------------------------------------------------------------------
-# CONVERSE: Plan G's chat turn
-# ---------------------------------------------------------------------------
-def plan_g_converse(
-    context_for: Callable[[Case, tuple[LoadedFile, ...]], AgentContext],
-    *,
-    meter: Any,
-    guardrails: Guardrails,
-    principal: Principal | None = None,
-    config_root: Path | None = None,
-    guard: AiGuard | None = None,
-) -> ConversePort:
-    """CONVERSE as Plan G's `chat_turn` (the design §3.4): the same tools, egress gate, guardrails and budgets.
-
-    With a `guard` (which is then also the `meter`), the AI is asked only when the client has allowed it and the
-    case has spending left; otherwise the reply says so and the visit goes on with its rules.
-
-    `context_for` gives the file the chat is about (Plan G's chat reads one file). The turn runs on a session
-    opened for it, holding the case's chat so far; its pending proposals become the case's items (`ai`, `check`,
-    never ticked): a setting belongs to the active goal's section, a step to the base.
-    """
-
-    def converse(case: Case, message: str, files: tuple[LoadedFile, ...]) -> ConverseResult:
-        from engine.agent.contracts import ChatMessage, ChatRole
-        from engine.agent.loop import chat_turn
-        from engine.agent.session import start_session
-        from engine.doctor.ai_guard import AI_LIMIT_REPLY, AI_NO_CONSENT_REPLY, file_overviews
-        from engine.doctor.registry import evidence_id_of
-
-        if guard is not None:
-            allowed = guard.ask(case)
-            if allowed != "ok":
-                return ConverseResult(
-                    reply=AI_NO_CONSENT_REPLY if allowed == "no_consent" else AI_LIMIT_REPLY, ai=False
-                )
-        ctx = context_for(case, files)
-        # Every other file of the case is looked at too, each through its own egress gate.
-        others = file_overviews([context_for(case, (f,)) for f in files if f.upload_id != ctx.upload_id])
-        tokens_before = 0 if guard is None else guard.tokens_used()
-        calls_before = 0 if guard is None else guard.calls_used()
-        session = start_session(ctx, session_id=f"dd-{case.case_id}"[:64])
-        history = tuple(
-            ChatMessage(
-                role=ChatRole.USER if entry.role == "user" else ChatRole.AGENT,
-                text=entry.text,
-                created_at=entry.at,
-            )
-            for entry in case.chat[:-1]
-        )
-        session = session.model_copy(update={"transcript": history})
-        turn = chat_turn(
-            ctx,
-            session,
-            message,
-            meter=meter,
-            guardrails=guardrails,
-            config_root=config_root,
-            principal=principal,
-            case_files=others,
-        )
-        evidence = {result.evidence_id: result for result in turn.tool_results}
-        hashed = {key: evidence_id_of(result) for key, result in evidence.items()}
-        goal = active_goal(case)
-        now = ctx.clock()
-        items = tuple(
-            _item(
-                proposal.kind.value,
-                {
-                    "upload_id": ctx.upload_id,
-                    "path": proposal.path,
-                    "value": proposal.value,
-                    "step": None if proposal.step is None else proposal.step.model_dump(mode="json"),
-                    # Plan O M246 (DEC-1816): decision O10's warning, when the AI's step changes many values.
-                    **_warnings_of(proposal.evidence_ids, evidence),
-                },
-                title=proposal.title,
-                upload_id=ctx.upload_id,
-                confidence=AgentConfidence.CHECK,
-                evidence=tuple(hashed.get(e, e) for e in proposal.evidence_ids),
-                now=now,
-                goal_id=goal.goal_id if goal is not None and proposal.kind.value == "setting" else None,
-                source=ProposalSource.AI,
-            )
-            for proposal in turn.proposals
-        )
-        results = tuple(
-            DataToolResult(
-                evidence_id=hashed[result.evidence_id],
-                tool=result.tool,
-                kind=DataToolKind.READ if result.tool in TOOLS else DataToolKind.PROPOSE,
-                exposure=Exposure.SESSION_ONLY,
-                input={**result.args, "upload_id": ctx.upload_id},
-                output=dict(result.result),
-                computed_at=now,
-            )
-            for result in turn.tool_results
-        )
-        out_of_money = guard is not None and turn.blocked_by == "unavailable" and guard.spent()
-        return ConverseResult(
-            reply=AI_LIMIT_REPLY if out_of_money else turn.reply.text,
-            items=items,
-            evidence=results,
-            sent=tuple(item.model_dump(mode="json") for item in turn.reply.sent),
-            model_calls=turn.llm_calls if guard is None else guard.calls_used() - calls_before,
-            tokens=0 if guard is None else guard.tokens_used() - tokens_before,
-        )
-
-    return converse
-
-
 def _warnings_of(evidence_ids: Sequence[str], results: Mapping[str, Any]) -> dict[str, JsonValue]:
     """`{"warnings": [...]}` from the chat's own step result a proposal cites (M246), or nothing."""
     found: list[JsonValue] = []
@@ -1995,8 +2005,11 @@ def _review(run: _Run, case: Case, brief: GoalBrief | None, step: _Step) -> bool
     return found.model_calls > 0
 
 
-def _settle_asks(run: _Run, case: Case, step: _Step, asks: Sequence[Ask]) -> None:
-    """AUTO, a stated assumption or one question per ambiguity, within the file's question budget (§6.3)."""
+def _settle_asks(run: _Run, case: Case, step: _Step, asks: Sequence[Ask], *, counted: bool = True) -> None:
+    """AUTO, a stated assumption or one question per ambiguity, within the file's question budget (§6.3).
+
+    `counted` False: the questions are the person's own conversation (the chat's), which the budget does not cut
+    short; they still count towards the file's total."""
     now = run.deps.clock()
     settings = run.deps.protocol
     have = {q.question_id for q in case.questions} | {q.question_id for q, _e in step.questions}
@@ -2011,7 +2024,7 @@ def _settle_asks(run: _Run, case: Case, step: _Step, asks: Sequence[Ask]) -> Non
     for ask in asks:
         key = ask.upload_id or ""
         budget = question_budget(asked.get(key, 0) + ambiguities[key], settings)
-        settled = settle(ask, now=now, settings=settings, over_budget=asked.get(key, 0) >= budget)
+        settled = settle(ask, now=now, settings=settings, over_budget=counted and asked.get(key, 0) >= budget)
         if settled.question is not None:
             if settled.question.question_id in have:
                 continue  # asked once: never again, in any mode

@@ -93,6 +93,8 @@ VALUES: dict[str, object] = {
     "facts": '[{"ref": "f1", "type": "count", "about": "rows"}]',
     # The Data Doctor agent (data_doctor_agent)
     "questions": ["Q1 main customer ID (blocking): values choices, file"],
+    # The Data Doctor's chat (data_doctor_chat)
+    "conversation": '[{"who": "person", "text": "Drop the test accounts."}]',
 }
 """One plausible value per variable any shipped prompt declares, so the sweep can render them all."""
 

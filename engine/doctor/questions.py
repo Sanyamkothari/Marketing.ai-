@@ -84,6 +84,8 @@ class QuestionSpec:
     blocking: bool = False
     meaning_bearing: bool = False
     """About meaning: never answered by the rules, nothing recommended."""
+    chat_only: bool = False
+    """Asked only when the person says it in the chat (the review's prompt does not list it)."""
     roles: tuple[str, ...] = (CRM_ADMIN,)
     """Who would know, when the person does not."""
     safe_default: str = ""
@@ -499,10 +501,24 @@ CATALOGUE: Final[Mapping[str, QuestionSpec]] = {
             roles=(CAMPAIGN_MANAGER,),
             safe_default="keep them and show how many of them there are",
         ),
+        QuestionSpec(
+            qid="Q24",
+            code="Q24_WHAT_COUNTS",
+            topic="what counts as a yes",
+            text="What should count as a yes in {file}?",
+            why="The model learns from what you call a yes, and the file does not say it.",
+            options=(OptionSpec("{choice}", repeat=True),),
+            blocking=True,
+            meaning_bearing=True,
+            chat_only=True,
+            roles=(CAMPAIGN_MANAGER,),
+            safe_default="leave the outcome as the file has it",
+        ),
     )
 }
 """Q1 to Q20 of the scenario study, and Q21 to Q23 (what one row is, which statuses are real money, who can have the
-outcome) that its themes 3 and 5 need. "I don't know" is added to each at build time."""
+outcome) that its themes 3 and 5 need, and Q24 (what counts as a yes) that the chat asks when the person says it in
+their own words. "I don't know" is added to each at build time."""
 
 _FORMATTER: Final[string.Formatter] = string.Formatter()
 
@@ -743,10 +759,13 @@ def ready_message(
     )
 
 
-def catalogue_lines() -> tuple[str, ...]:
-    """One line per question for the agent's prompt: its id, topic, whether it blocks, and the values it needs."""
+def catalogue_lines(*, chat: bool = False) -> tuple[str, ...]:
+    """One line per question for the agent's prompt: its id, topic, whether it blocks, and the values it needs.
+    The chat's prompt (`chat`) also lists the questions only the chat asks."""
     lines = []
     for spec in CATALOGUE.values():
+        if spec.chat_only and not chat:
+            continue
         need = ", ".join(
             sorted(required_fields(spec) | ({"choices"} if any(o.repeat for o in spec.options) else set()))
         )

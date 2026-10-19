@@ -333,13 +333,20 @@ def _ai_parts(
 def _converse(
     storage: Storage, root: Path, request: Request, principal: Principal, offers: Sequence[Any]
 ) -> ConversePort | None:
-    """Plan G's chat turn when an AI service is connected; None (the chat says it needs one) otherwise."""
+    """The Doctor's chat when an AI service is connected; None (the chat says it needs one) otherwise."""
+    from engine.doctor.agent_chat import doctor_converse
+
     parts = _ai_parts(storage, root, request, offers)
     if parts is None:
         return None
     meter, guardrails, context_for = parts
-    return doctor_visit.plan_g_converse(
-        context_for, meter=meter, guardrails=guardrails, principal=principal, config_root=root, guard=meter
+    return doctor_converse(
+        context_for,
+        meter=meter,
+        guardrails=guardrails,
+        principal=principal,
+        config_root=root,
+        storage=storage,
     )
 
 
