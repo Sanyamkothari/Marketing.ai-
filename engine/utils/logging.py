@@ -176,6 +176,9 @@ def _route_uvicorn_through_root() -> None:
         logger = logging.getLogger(name)
         logger.handlers.clear()
         logger.propagate = True
+        # uvicorn's dictConfig puts INFO on these; a propagated record skips the root logger's own
+        # level, so leave them unset and let the root level (`MARKETING_AI_LOG_LEVEL`) decide.
+        logger.setLevel(logging.NOTSET)
 
 
 def install_context_filter(handler: logging.Handler) -> ContextFilter:

@@ -37,7 +37,8 @@ def clean_logging(monkeypatch: pytest.MonkeyPatch) -> Iterator[logging.Logger]:
     root = logging.getLogger()
     handlers, level = list(root.handlers), root.level
     saved = {
-        n: (list(logging.getLogger(n).handlers), logging.getLogger(n).propagate) for n in UVICORN_LOGGERS
+        n: (list(logging.getLogger(n).handlers), logging.getLogger(n).propagate, logging.getLogger(n).level)
+        for n in UVICORN_LOGGERS
     }
     monkeypatch.setattr(engine_logging, "_handler", None)
     root.handlers = []
@@ -46,9 +47,10 @@ def clean_logging(monkeypatch: pytest.MonkeyPatch) -> Iterator[logging.Logger]:
     finally:
         root.handlers = handlers
         root.setLevel(level)
-        for name, (hs, propagate) in saved.items():
+        for name, (hs, propagate, level_) in saved.items():
             logging.getLogger(name).handlers = hs
             logging.getLogger(name).propagate = propagate
+            logging.getLogger(name).setLevel(level_)
 
 
 # --- H-1 -----------------------------------------------------------------------------------------
@@ -105,6 +107,18 @@ def test_the_log_format_comes_from_the_environment_for_the_deployed_app(
     assert any(isinstance(h.formatter, RedactingJsonFormatter) for h in clean_logging.handlers)
 
 
+def test_the_log_level_from_the_environment_silences_uvicorns_access_lines(
+    clean_logging: logging.Logger, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    logging.config.dictConfig(uvicorn.config.LOGGING_CONFIG)  # puts INFO on uvicorn.access / .error
+    monkeypatch.setenv("MARKETING_AI_LOG_LEVEL", "WARNING")
+    create_app(data_dir=tmp_path)
+    for name in UVICORN_LOGGERS:
+        assert logging.getLogger(name).level == logging.NOTSET
+    assert not logging.getLogger("uvicorn.access").isEnabledFor(logging.INFO)
+    assert not logging.getLogger("uvicorn.error").isEnabledFor(logging.INFO)
+
+
 # --- M-1 -----------------------------------------------------------------------------------------
 def _preflight(client: TestClient, origin: str) -> Any:
     return client.options("/healthz", headers={"Origin": origin, "Access-Control-Request-Method": "GET"})
@@ -148,8 +162,10 @@ class _Driver:
         self.status = 0
         self.body = b""
 
-    def run(self, chunks: list[bytes], *, content_length: int | None) -> _Driver:
+    def run(self, chunks: list[bytes], *, content_length: int | None, chunked: bool = False) -> _Driver:
         headers = {k.lower(): v for k, v in self.headers.items()}
+        if chunked:
+            headers["transfer-encoding"] = "chunked"  # what h11 frames the body by, whatever else is sent
         if content_length is not None:
             headers["content-length"] = str(content_length)
         scope = {
@@ -187,6 +203,14 @@ class _Driver:
 
 
 MB = 1024 * 1024
+
+
+def _request_for(app: Any) -> Any:
+    from starlette.requests import Request
+
+    return Request({"type": "http", "app": app, "headers": [], "method": "GET", "path": "/"})
+
+
 JSON = {"content-type": "application/json"}
 MULTIPART = {"content-type": "multipart/form-data; boundary=xyz"}
 
@@ -246,6 +270,92 @@ def test_a_signed_in_two_megabyte_body_still_reaches_the_route(signed_in: tuple[
     driver = _Driver(app, "/runs", {**JSON, **auth}).run([body], content_length=len(body))
     assert driver.status not in {401, 413}
     assert driver.consumed == len(body)
+
+
+def test_a_small_content_length_does_not_excuse_a_chunked_body(
+    signed_in: tuple[Any, dict[str, str]],
+) -> None:
+    # Content-Length: 10 plus Transfer-Encoding: chunked: h11 frames by the chunks, so a 20 MB body
+    # arrives although the header promised ten bytes.
+    app, _ = signed_in
+    chunk = 256 * 1024
+    driver = _Driver(app, "/runs", JSON).run([b"x" * chunk] * 80, content_length=10, chunked=True)
+    assert driver.status == 401 and b"AUTH_REQUIRED" in driver.body
+    assert driver.consumed <= hardening.SMALL_BODY_BYTES + chunk
+
+
+def test_a_small_content_length_does_not_excuse_a_signed_in_chunked_body_either(
+    signed_in: tuple[Any, dict[str, str]],
+) -> None:
+    app, auth = signed_in
+    driver = _Driver(app, "/runs", {**JSON, **auth}).run([b"x" * MB] * 20, content_length=10, chunked=True)
+    assert driver.status == 413
+    assert driver.consumed <= hardening.MAX_JSON_BYTES + MB
+
+
+def test_a_lying_content_length_alone_cannot_smuggle_more_than_it_declared(
+    signed_in: tuple[Any, dict[str, str]],
+) -> None:
+    # Not a framing any server delivers, but the count is cheap and does not depend on the header.
+    app, _ = signed_in
+    driver = _Driver(app, "/runs", JSON).run([b"x" * MB] * 20, content_length=10)
+    assert driver.status == 401 and driver.consumed <= 2 * MB
+
+
+def test_the_multipart_ceiling_is_the_largest_configured_file_limit(
+    signed_in: tuple[Any, dict[str, str]],
+) -> None:
+    from api.deps import get_config_root
+    from engine.config import list_use_case_ids, load_use_case_document
+
+    app, auth = signed_in
+    root = get_config_root(_request_for(app))
+    largest_mb = max(
+        int(load_use_case_document(uc, root)["validation"]["max_file_size_mb"])
+        for uc in list_use_case_ids(root)
+    )
+    ceiling = largest_mb * MB + hardening.MULTIPART_OVERHEAD_BYTES
+    assert hardening._largest_file_limit_bytes(root) == ceiling
+    over = _Driver(app, "/uploads", {**MULTIPART, **auth}).run([], content_length=ceiling + 1)
+    assert over.status == 413 and over.consumed == 0
+    inside = _Driver(app, "/uploads", {**MULTIPART, **auth}).run([], content_length=100 * MB)
+    assert inside.status not in {401, 413}
+
+
+def test_a_signed_in_json_body_is_capped_far_below_a_file(signed_in: tuple[Any, dict[str, str]]) -> None:
+    app, auth = signed_in
+    assert hardening.MAX_JSON_BYTES <= 16 * MB
+    driver = _Driver(app, "/runs", {**JSON, **auth}).run([], content_length=hardening.MAX_JSON_BYTES + 1)
+    assert driver.status == 413 and driver.consumed == 0
+
+
+def test_a_refused_body_does_not_log_a_traceback_from_a_plain_route(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    from starlette.requests import Request
+    from starlette.responses import PlainTextResponse
+
+    async def probe(request: Request) -> PlainTextResponse:
+        return PlainTextResponse(str(len(await request.body())))  # raises ClientDisconnect once refused
+
+    app = local_app(tmp_path)
+    app.add_route("/probe", probe, methods=["POST"])
+    chunk = 256 * 1024
+    driver = _Driver(app, "/probe", JSON).run([b"x" * chunk] * 20, content_length=None)  # must not raise
+    assert driver.status == 401
+
+
+def test_an_error_from_the_app_before_any_refusal_still_propagates(tmp_path: Path) -> None:
+    from starlette.requests import Request
+    from starlette.responses import PlainTextResponse
+
+    async def boom(request: Request) -> PlainTextResponse:
+        raise RuntimeError("real bug")
+
+    app = local_app(tmp_path)
+    app.add_route("/boom", boom, methods=["POST"])
+    with pytest.raises(RuntimeError, match="real bug"):
+        _Driver(app, "/boom", JSON).run([b"{}"], content_length=2)
 
 
 def test_a_small_anonymous_body_is_unchanged(signed_in: tuple[Any, dict[str, str]]) -> None:

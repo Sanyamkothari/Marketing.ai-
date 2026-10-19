@@ -13,9 +13,12 @@ and Starlette spools a whole multipart file to disk before `create_upload` can a
 than `SMALL_BODY_BYTES` (a sign-in, any ordinary request) is passed through untouched. A larger one
 is passed only when its `Authorization` header authenticates, and then only up to
 `MAX_JSON_BYTES` (or `MAX_UPLOAD_BYTES` for `multipart/form-data`, where the route applies the use
-case's own, tighter limit). The check happens before the body is read when `Content-Length` is
-given, and while the body streams when it is not. A request that fails it is answered 401 or 413
-and its body is never handed to the app. `auth_mode=off` authenticates everyone, as it does for
+case's own, tighter limit; the multipart ceiling is the largest `max_file_size_mb` the configs
+allow). A declared `Content-Length` is used only for an early refusal, before a byte is read; the
+body is always counted as it streams, because a request carrying both `Content-Length` and
+`Transfer-Encoding: chunked` is framed by the chunks under uvicorn's h11 parser and the declared
+length means nothing. A request that fails the check is answered 401 or 413 and the rest of its
+body is never handed to the app. `auth_mode=off` authenticates everyone, as it does for
 the routes, except on `env=prod`, where the routes answer 503 and so does nothing here help a caller.
 
 **`SecurityHeadersMiddleware` (L-2).** `X-Content-Type-Options`, `Referrer-Policy`, `X-Frame-Options`
@@ -28,6 +31,7 @@ added on `env=prod` only.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any, Final
 
 from fastapi import Request
@@ -40,6 +44,7 @@ from engine.settings import Settings
 __all__ = [
     "MAX_JSON_BYTES",
     "MAX_UPLOAD_BYTES",
+    "MULTIPART_OVERHEAD_BYTES",
     "SMALL_BODY_BYTES",
     "BodyLimitMiddleware",
     "SecurityHeadersMiddleware",
@@ -49,11 +54,15 @@ __all__ = [
 SMALL_BODY_BYTES: Final[int] = 1024 * 1024
 """A body this small needs no sign-in to be read: it is cheap, and a sign-in body is one of them."""
 
-MAX_JSON_BYTES: Final[int] = 64 * 1024 * 1024
-"""The largest non-multipart body a signed-in caller may send."""
+MAX_JSON_BYTES: Final[int] = 8 * 1024 * 1024
+"""The largest non-multipart body a signed-in caller may send; no JSON route takes more than a
+configuration document, and files travel as multipart."""
 
-MAX_UPLOAD_BYTES: Final[int] = 4 * 1024 * 1024 * 1024
-"""The largest multipart body a signed-in caller may send; twice the 2 GB the engine config allows."""
+MULTIPART_OVERHEAD_BYTES: Final[int] = 1024 * 1024
+"""What a multipart body may add to the file it carries: boundaries, part headers, form fields."""
+
+MAX_UPLOAD_BYTES: Final[int] = 2048 * 1024 * 1024 + MULTIPART_OVERHEAD_BYTES
+"""The multipart ceiling when the configs cannot be read: the engine's own 2 GB file limit, plus overhead."""
 
 _BODY_METHODS: Final[frozenset[str]] = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 
@@ -120,6 +129,20 @@ def _refusal(status: int, code: str, message: str, *, challenge: bool = False) -
     )
 
 
+def _largest_file_limit_bytes(root: Path) -> int:
+    """The biggest `validation.max_file_size_mb` any use case (or the engine default) allows, in bytes."""
+    from engine.config import list_use_case_ids, load_use_case_document  # deferred: a good deal to import
+
+    limits = [
+        int(load_use_case_document(use_case_id, root).get("validation", {}).get("max_file_size_mb", 0))
+        for use_case_id in list_use_case_ids(root)
+    ]
+    largest = max(limits, default=0)
+    if largest < 1:
+        raise ValueError("no use case declares a file size limit")
+    return largest * 1024 * 1024 + MULTIPART_OVERHEAD_BYTES
+
+
 class BodyLimitMiddleware:
     """Refuse an oversized or unauthenticated large body before the app reads it (M-2)."""
 
@@ -127,28 +150,32 @@ class BodyLimitMiddleware:
         self.app = app
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        """Pass small bodies through; gate larger ones on sign-in and a size ceiling."""
+        """Count every body as it streams; refuse early when a trustworthy `Content-Length` allows."""
         if scope["type"] != "http" or str(scope["method"]).upper() not in _BODY_METHODS:
             await self.app(scope, receive, send)
             return
-        declared_text = _header(scope, b"content-length")
-        declared = int(declared_text) if declared_text and declared_text.isdigit() else None
-        if declared is not None and declared <= SMALL_BODY_BYTES:
-            await self.app(scope, receive, send)
-            return
         multipart = (_header(scope, b"content-type") or "").lower().startswith("multipart/")
-        ceiling = MAX_UPLOAD_BYTES if multipart else MAX_JSON_BYTES
-        if declared is not None:
+        # `Content-Length` frames the body only when `Transfer-Encoding` is absent: with both, h11
+        # reads the chunks and the declared size says nothing about what will arrive.
+        declared_text = _header(scope, b"content-length")
+        declared = (
+            int(declared_text)
+            if declared_text and declared_text.isdigit() and _header(scope, b"transfer-encoding") is None
+            else None
+        )
+        ceiling: int | None = None
+        signed_in: bool | None = None
+        if declared is not None and declared > SMALL_BODY_BYTES:
             # The size is known before a byte is read: decide now.
-            if not await self._signed_in(scope):
+            signed_in = await self._signed_in(scope)
+            if not signed_in:
                 await self._refuse(send, *self._unauthenticated())
                 return
+            ceiling = await self._ceiling(scope, multipart)
             if declared > ceiling:
                 await self._refuse(send, *self._too_large(ceiling))
                 return
-            await self.app(scope, receive, send)
-            return
-        await self._stream(scope, receive, send, ceiling)
+        await self._stream(scope, receive, send, multipart, signed_in, ceiling)
 
     @staticmethod
     def _unauthenticated() -> tuple[int, str, str, bool]:
@@ -168,6 +195,18 @@ class BodyLimitMiddleware:
         start, body = _refusal(status, code, message, challenge=challenge)
         await send(start)
         await send(body)
+
+    async def _ceiling(self, scope: Scope, multipart: bool) -> int:
+        """The most a signed-in caller may send: JSON is capped low, a file at the largest configured limit."""
+        if not multipart:
+            return MAX_JSON_BYTES
+        from api.deps import get_config_root  # deferred: api.deps imports a good deal
+
+        try:
+            root = get_config_root(Request(scope))
+            return await run_in_threadpool(_largest_file_limit_bytes, root)
+        except Exception:  # unreadable configs: the engine's own default limit
+            return MAX_UPLOAD_BYTES
 
     async def _signed_in(self, scope: Scope) -> bool:
         """Whether this request's `Authorization` header authenticates (or sign-in is off)."""
@@ -191,24 +230,39 @@ class BodyLimitMiddleware:
 
         return await run_in_threadpool(check)
 
-    async def _stream(self, scope: Scope, receive: Receive, send: Send, ceiling: int) -> None:
-        """No `Content-Length`: count the body as it arrives and refuse at the first limit it crosses."""
+    async def _stream(
+        self,
+        scope: Scope,
+        receive: Receive,
+        send: Send,
+        multipart: bool,
+        signed_in: bool | None,
+        ceiling: int | None,
+    ) -> None:
+        """Count the body as it arrives and refuse at the first limit it crosses.
+
+        `signed_in` and `ceiling` are already known when `Content-Length` was trusted and large;
+        otherwise they are worked out when the body first outgrows the small allowance.
+        """
         received = 0
-        decided: bool | None = None  # None until the small allowance is spent, then signed in or not
         answered = False
 
         async def guarded_receive() -> Message:
-            nonlocal received, decided, answered
+            nonlocal received, signed_in, ceiling, answered
             message = await receive()
             if message["type"] != "http.request" or answered:
                 return message
             received += len(message.get("body", b""))
-            if received > SMALL_BODY_BYTES and decided is None:
-                decided = await self._signed_in(scope)
-            if received > SMALL_BODY_BYTES and (decided is False or received > ceiling):
+            if received <= SMALL_BODY_BYTES:
+                return message
+            if signed_in is None:
+                signed_in = await self._signed_in(scope)
+            if signed_in and ceiling is None:
+                ceiling = await self._ceiling(scope, multipart)
+            if not signed_in or (ceiling is not None and received > ceiling):
                 answered = True
                 await self._refuse(
-                    send, *(self._unauthenticated() if decided is False else self._too_large(ceiling))
+                    send, *(self._too_large(ceiling or 0) if signed_in else self._unauthenticated())
                 )
                 return {"type": "http.disconnect"}
             return message
@@ -217,7 +271,13 @@ class BodyLimitMiddleware:
             if not answered:
                 await send(message)
 
-        await self.app(scope, guarded_receive, guarded_send)
+        try:
+            await self.app(scope, guarded_receive, guarded_send)
+        except Exception:
+            # The app was told the client went away (`ClientDisconnect` for a plain Starlette route)
+            # after the refusal was already sent: that is not an error worth a traceback in the log.
+            if not answered:
+                raise
 
 
 class SecurityHeadersMiddleware:
