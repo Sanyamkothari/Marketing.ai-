@@ -279,7 +279,13 @@ def check_recipe(
             unpivoted = True
             available = _check_unpivot(step, available, primary_key=primary_key, target=target)
             continue
-        if step.column in protected and step.kind is not RecipeStepKind.DERIVE:
+        if (
+            step.column in protected
+            and step.kind is not RecipeStepKind.DERIVE
+            # Leaving out the rows whose ID begins "999" (test accounts) changes no ID: only the outcome is
+            # never used to choose rows.
+            and not (step.kind is RecipeStepKind.REMOVE_ROWS and step.column == primary_key != target)
+        ):
             raise RecipeError(
                 "RECIPE_STEP_INVALID",
                 f"'{step.column}' is the ID or the outcome column, which the recipe never changes.",

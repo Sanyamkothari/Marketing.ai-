@@ -136,8 +136,11 @@ CHAT_STEP_KINDS: Final[frozenset[RecipeStepKind]] = frozenset(
         RecipeStepKind.DROP_COLUMN,
     }
 )
-"""What the chat may suggest. Combining rows and formulas stay the rules'; correcting a cell and leaving
-rows out stay the person's own (DEC-1520)."""
+"""What Guided setup's chat may suggest. Combining rows and formulas stay the rules'; correcting a cell and
+leaving rows out stay the person's own (DEC-1520)."""
+DOCTOR_STEP_KINDS: Final[frozenset[RecipeStepKind]] = CHAT_STEP_KINDS | {RecipeStepKind.REMOVE_ROWS}
+"""What the Data Doctor's chat may suggest: the same, and leaving out the rows a rule names ("drop the test
+accounts"). Leaving rows out is an APPROVE-class change, so the person's own yes at the approval stands."""
 STEP_SAMPLE_ROWS: Final[int] = 1_000
 """Rows a chat suggestion is tried on before it is shown, so its effect is measured, not claimed."""
 CHAT_STEP_TITLES: Final[dict[RecipeStepKind, str]] = {
@@ -154,6 +157,7 @@ CHAT_STEP_TITLES: Final[dict[RecipeStepKind, str]] = {
     RecipeStepKind.FILL_MISSING: "Fill the empty cells of '{c}'",
     RecipeStepKind.RENAME_COLUMN: "Rename '{c}'",
     RecipeStepKind.DROP_COLUMN: "Hide '{c}'",
+    RecipeStepKind.REMOVE_ROWS: "Leave out rows by '{c}'",
 }
 MAX_REPLY_CHARS: Final[int] = 800
 MAX_MESSAGE_CHARS: Final[int] = 1_000
@@ -873,6 +877,7 @@ def _propose_step(
     evidence_id: str,
     proposal_id: str,
     clock: Callable[[], datetime],
+    kinds: frozenset[RecipeStepKind] = CHAT_STEP_KINDS,
 ) -> tuple[ToolResult, Proposal]:
     """A chat suggestion of one data fix: allowed, grounded in a look at the column, checked and measured.
 
@@ -889,11 +894,11 @@ def _propose_step(
         kind = RecipeStepKind(str(args.get("kind", "")))
     except ValueError:
         kind = None
-    if kind is None or kind not in CHAT_STEP_KINDS:
+    if kind is None or kind not in kinds:
         raise AgentToolError(
             "AGENT_STEP_NOT_ALLOWED",
             f"{str(args.get('kind'))[:40]!r} is not a fix the chat may suggest. Allowed: "
-            + ", ".join(sorted(k.value for k in CHAT_STEP_KINDS)),
+            + ", ".join(sorted(k.value for k in kinds)),
         )
     # Plan O M233 (DEC-1803): behind `data_doctor.unified`, each check below is followed by the same rule of the
     # data policy (`configs/agentic/policy.yaml`, `data.recipe_step`), with the same code; None when it is off.
@@ -1033,7 +1038,11 @@ def _propose_step(
     proposal = Proposal(
         proposal_id=proposal_id,
         kind=ProposalKind.RECIPE_STEP,
-        title=CHAT_STEP_TITLES[kind].format(c=display_name(column)),
+        title=(
+            _rows_title(column, params)
+            if kind is RecipeStepKind.REMOVE_ROWS
+            else CHAT_STEP_TITLES[kind].format(c=display_name(column))
+        ),
         reason=(reason + measured)[: MAX_REASON_CHARS + len(measured)],
         step=step.model_copy(update={"reason": reason}),
         evidence_ids=(evidence_id, *(r.evidence_id for r in looks)),
@@ -1042,6 +1051,24 @@ def _propose_step(
         source=ProposalSource.AI,
     )
     return result, proposal
+
+
+_ROWS_RULES: Final[dict[str, str]] = {
+    "equals": "is {v}",
+    "in": "is one of {v}",
+    "starts_with": "starts with {v}",
+    "is_empty": "is empty",
+    "before": "is before {v}",
+    "after": "is after {v}",
+}
+
+
+def _rows_title(column: str, params: dict[str, Any]) -> str:
+    """ "Leave out rows where 'customer_id' starts with 999": the rule a `remove_rows` step names, in words."""
+    values = params.get("values")
+    shown = ", ".join(display_name(v) for v in values[:5]) if isinstance(values, list) else ""
+    rule = _ROWS_RULES.get(str(params.get("operator")), "matches a rule").format(v=shown)
+    return f"Leave out rows where '{display_name(column)}' {rule}"
 
 
 def _reply(
