@@ -67,6 +67,17 @@ def mysql_window(schema: str, table: str, column: str, start: date, end: date, l
     )
 
 
+def _refused_plugins(pymysql: Any) -> dict[bytes, Any]:
+    """Sign-in methods that hand the password over in the clear, or nearly: a server we have not verified
+    could ask for them (an "auth switch") and read the password. The driver would answer; we refuse."""
+
+    class _Refuse:
+        def __init__(self, _connection: Any) -> None:
+            raise pymysql.MySQLError(2059, "The server asked for the password in clear text.")
+
+    return {b"mysql_clear_password": _Refuse, b"mysql_old_password": _Refuse}
+
+
 class MySqlConnector(SqlConnector):
     kind = "mysql"
     label = "MySQL / MariaDB"
@@ -98,7 +109,7 @@ class MySqlConnector(SqlConnector):
                 "Ask whoever runs Marketing AI to install it: pip install pymysql.",
                 status=409,
             )
-        options: dict[str, Any] = {}
+        options: dict[str, Any] = {"auth_plugin_map": _refused_plugins(pymysql)}
         if bool_value(config, "ssl"):
             options["ssl"] = {"check_hostname": True}
         try:

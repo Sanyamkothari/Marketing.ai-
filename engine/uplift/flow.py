@@ -134,6 +134,7 @@ from engine.uplift.contracts import (
     Segment,
     UpliftModelCard,
 )
+from engine.utils.csv_safe import formula_safe_frame
 from engine.utils.ids import seed_from
 from engine.utils.logging import get_logger
 from engine.utils.text import humanise_count
@@ -2385,7 +2386,9 @@ def _write_scores(
         data, columns=list(scores_columns(primary_key, reason_names, ranked_by_value=ranked_by_value))
     )
     csv_key = run_key(run_id, export.SCORES_CSV)
-    storage.write_bytes(csv_key, table.to_csv(index=False, lineterminator="\n").encode("utf-8"))
+    storage.write_bytes(
+        csv_key, formula_safe_frame(table).to_csv(index=False, lineterminator="\n").encode("utf-8")
+    )
     parquet_key = run_key(run_id, export.SCORES_PARQUET)
     if arms:
         table = table.copy()

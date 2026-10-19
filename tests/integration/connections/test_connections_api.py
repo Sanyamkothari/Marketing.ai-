@@ -311,3 +311,62 @@ def test_a_changed_key_asks_for_the_password_again(
         )
         assert again.status_code == 200 and again.json()["secrets_readable"] is True
         assert second.post(f"/connections/{cid}/test").json()["report"]["ok"]
+
+
+# --- security review 2, H-2: a saved secret never follows a changed address ---------------------------
+def _postgres(client: TestClient) -> str:
+    response = client.post(
+        "/connections",
+        json={
+            "kind": "postgres",
+            "name": "Sales DB",
+            "config": {"host": "db.client.example", "database": "sales", "user": "reader"},
+            "secrets": {"password": "s3cret-pw"},
+        },
+    )
+    assert response.status_code == 201, response.text
+    return str(response.json()["connection_id"])
+
+
+@pytest.mark.parametrize(
+    "moved",
+    [
+        {"host": "attacker.example"},
+        {"port": 6543},
+        {"database": "other"},
+        {"user": "admin"},
+    ],
+)
+def test_repointing_a_database_connection_without_retyping_the_password_is_refused(
+    client: TestClient, moved: dict[str, Any]
+) -> None:
+    cid = _postgres(client)
+    config = {"host": "db.client.example", "database": "sales", "user": "reader", **moved}
+    # The exploit: new address, no secrets. It must not be accepted with the old password kept.
+    refused = client.put(f"/connections/{cid}", json={"config": config, "secrets": {}})
+    assert refused.status_code == 422, refused.text
+    assert refused.json()["detail"]["code"] == "CONNECTION_FIELD_REQUIRED"
+    assert client.get(f"/connections/{cid}").json()["config"]["host"] == "db.client.example"
+    # Retyping it is the supported way to repoint.
+    accepted = client.put(f"/connections/{cid}", json={"config": config, "secrets": {"password": "new-pw"}})
+    assert accepted.status_code == 200, accepted.text
+    assert accepted.json()["secrets_saved"] == ["password"]
+
+
+def test_repointing_drops_the_optional_secrets_too_and_a_same_address_edit_keeps_them(
+    client: TestClient,
+) -> None:
+    cid = _create(
+        client, kind="s3_compatible", config={"bucket": BUCKET, "endpoint_url": "https://s3.client.example"}
+    )["connection_id"]
+    same = client.put(
+        f"/connections/{cid}",
+        json={"name": "Renamed", "config": {"bucket": BUCKET, "endpoint_url": "https://s3.client.example"}},
+    )
+    assert same.status_code == 200 and same.json()["secrets_saved"] == ["access_key_id", "secret_access_key"]
+    moved = client.put(
+        f"/connections/{cid}",
+        json={"config": {"bucket": BUCKET, "endpoint_url": "https://attacker.example"}},
+    )
+    assert moved.status_code == 422, moved.text
+    assert client.get(f"/connections/{cid}").json()["secrets_saved"] == ["access_key_id", "secret_access_key"]

@@ -167,6 +167,16 @@ filter `RunRecord.client_id` was added for (Phase 2 plan section 6.5, change 4) 
 one. Without the parameter the answer is exactly what it was. `docs/API.md` is unchanged, because its
 endpoint table does not list query parameters. The test failed before the change and passes after it.
 
+**Closed for a one-client deployment (security review 2, H-3).** Outside `env=local`, a deployment with
+`Settings.client_id` set answers for that client only. `api.access.enforce_client_scope`, a second global
+dependency beside `enforce_access`, refuses (403 `CLIENT_NOT_ALLOWED`) any `client_id` that is neither the
+deployment's nor `default` (the Data Doctor's name for the deployment's own workspace), whether it is in the
+path, the query or a JSON body; the one consent form field is checked in `api.routes.privacy._client_id`.
+`GET /clients` lists only that client, `POST /clients` registers it once under `Settings.client_id` (a second is
+409), and `GET /campaign-runs` and a campaign run read by id show only runs of that client (or of none).
+This does not separate two clients that are already inside one deployment (items 1 and 2 of section 4
+stay open): it stops a second one being reached by name.
+
 **Requirements for code in flight.** These are not tests yet, because the code they apply to is
 still being written, or is owned by another workstream:
 

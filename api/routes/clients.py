@@ -29,8 +29,9 @@ from typing import Annotated, Final
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import Field
 
+from api.access import client_scope
 from api.access_policy import RoutePolicy, register
-from api.deps import ConfigRootDep
+from api.deps import ConfigRootDep, SettingsDep
 from api.routes.industries import default_first
 from api.routes.uploads import http_error, use_case_config
 from api.schemas import ErrorResponse
@@ -149,15 +150,36 @@ class StandardSchemaResponse(StrictBase):
     status_code=201,
     summary="Register a client whose data will be onboarded",
 )
-def create_client(body: ClientCreateRequest, store: ClientStoreDep) -> ClientCreateResponse:
-    """A new client folder: `engine.clients.LocalClientStore` mints the id, this just carries it back."""
+def create_client(
+    body: ClientCreateRequest, store: ClientStoreDep, current: SettingsDep
+) -> ClientCreateResponse:
+    """A new client folder: `engine.clients.LocalClientStore` mints the id, this just carries it back.
+
+    A deployment that serves one client (`client_scope`) registers that client once, under the
+    deployment's own id; a second one is refused (security review 2, H-3).
+    """
+    if client_scope(current) is not None:
+        assert current.client_id is not None
+        if store.list_clients():
+            raise http_error(
+                409,
+                "CLIENT_LIMIT",
+                "This deployment serves one client, and it already has one. Run another deployment for another client.",
+            )
+        return ClientCreateResponse(
+            client_id=store.ensure_client(current.client_id, body.name, body.industry).client_id
+        )
     record = store.create_client(body.name, body.industry, notes=body.notes)
     return ClientCreateResponse(client_id=record.client_id)
 
 
 @router.get("/clients", response_model=ClientListResponse, summary="Every client, newest first")
-def list_clients(store: ClientStoreDep) -> ClientListResponse:
-    return ClientListResponse(clients=store.list_clients())
+def list_clients(store: ClientStoreDep, current: SettingsDep) -> ClientListResponse:
+    allowed = client_scope(current)
+    clients = store.list_clients()
+    return ClientListResponse(
+        clients=clients if allowed is None else tuple(c for c in clients if c.client_id in allowed)
+    )
 
 
 @router.post(
@@ -166,7 +188,7 @@ def list_clients(store: ClientStoreDep) -> ClientListResponse:
     responses={409: {"model": ErrorResponse}},
     summary="The client every installation starts with, created the first time it is asked for",
 )
-def ensure_default_client(root: ConfigRootDep, store: ClientStoreDep) -> ClientRecord:
+def ensure_default_client(root: ConfigRootDep, store: ClientStoreDep, current: SettingsDep) -> ClientRecord:
     """`Demo`, under the fixed id `engine.clients.DEFAULT_CLIENT_ID` (Plan A M35).
 
     The header's client picker needs a client to stand on before anyone has created one, and the
@@ -185,6 +207,10 @@ def ensure_default_client(root: ConfigRootDep, store: ClientStoreDep) -> ClientR
             "This installation configures no industry, so there is nothing to onboard a client for. "
             "Add an industry file under configs/industries/ and reload.",
         )
+    if client_scope(current) is not None:
+        # A deployment that serves one client starts with that client, not with the demo's.
+        assert current.client_id is not None
+        return store.ensure_client(current.client_id, current.client_id, default_first(industries)[0])
     return store.ensure_client(DEFAULT_CLIENT_ID, DEFAULT_CLIENT_NAME, default_first(industries)[0])
 
 

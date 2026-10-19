@@ -64,6 +64,7 @@ audit trail lands in its `tmp_path`.
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import re
 import threading
@@ -95,6 +96,7 @@ from engine.audit.store import (
     record_event,
 )
 from engine.config import UseCaseConfig
+from engine.doctor.case import DEFAULT_CLIENT_ID as CASE_DEFAULT_CLIENT_ID
 from engine.platform_db import platform_engine
 from engine.settings import ENV_VARS, Settings
 from engine.utils.time import utc_now
@@ -106,9 +108,12 @@ __all__ = [
     "IdentityDep",
     "PrincipalDep",
     "UserStoreDep",
+    "check_client_scope",
     "client_address",
+    "client_scope",
     "current_principal",
     "enforce_access",
+    "enforce_client_scope",
     "get_audit_log",
     "get_identity",
     "get_login_throttle",
@@ -454,6 +459,60 @@ def enforce_access(request: Request) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Client scope (security review 2, H-3)
+# ---------------------------------------------------------------------------
+def client_scope(settings: Settings) -> frozenset[str] | None:
+    """The client ids this deployment answers for, or `None` when any is allowed.
+
+    A pilot or production deployment serves one client (`Settings.client_id`): users and models are
+    deployment-wide, so another client's id must not reach any route. A laptop (`env=local`), and a
+    deployment with no client id of its own, keep today's behaviour. `default` is the Data Doctor's name
+    for "this deployment's workspace" (what a case, a screen or a model offer carries when nobody names a
+    client), so it stays allowed.
+    """
+    if settings.env == "local" or not settings.client_id:
+        return None
+    return frozenset({settings.client_id, CASE_DEFAULT_CLIENT_ID})
+
+
+def check_client_scope(settings: Settings, client_id: object) -> None:
+    """403 `CLIENT_NOT_ALLOWED` when `client_id` names a client this deployment does not serve."""
+    allowed = client_scope(settings)
+    if allowed is None or client_id is None or client_id == "":
+        return
+    if not isinstance(client_id, str) or client_id not in allowed:
+        raise http_error(
+            403,
+            "CLIENT_NOT_ALLOWED",
+            "This deployment serves one client, and that is not it.",
+            path="client_id",
+        )
+
+
+async def enforce_client_scope(request: Request) -> None:
+    """The second global dependency: refuse any `client_id` (path, query or JSON body) but this deployment's.
+
+    It runs after `enforce_access`, so only a signed-in caller gets this far. A JSON body is read here
+    only to look at its top-level `client_id`; the body is cached on the request, so the route still sees it.
+    """
+    settings = get_settings(request)
+    if client_scope(settings) is None:
+        return
+    check_client_scope(settings, request.path_params.get("client_id"))
+    for value in request.query_params.getlist("client_id"):
+        check_client_scope(settings, value)
+    if request.method in MUTATING_METHODS and request.headers.get("content-type", "").lower().startswith(
+        "application/json"
+    ):
+        try:
+            body = json.loads(await request.body())
+        except ValueError:
+            return  # not JSON: the route answers its own 422
+        if isinstance(body, dict) and "client_id" in body:
+            check_client_scope(settings, body["client_id"])
+
+
+# ---------------------------------------------------------------------------
 # The audit middleware
 # ---------------------------------------------------------------------------
 def _outcome(status: int) -> str:
@@ -627,6 +686,7 @@ def _anonymous_allowed(scope: Scope) -> bool:
 def install_access(app: FastAPI) -> None:
     """`PHASE_APP_HOOKS` entry: the global dependency, the audit middleware, the off-warning."""
     app.router.dependencies.append(Depends(enforce_access))
+    app.router.dependencies.append(Depends(enforce_client_scope))
     app.add_middleware(AuditMiddleware)
     app.state.audit_write_failures = 0
     app.state.audit_events_dropped = 0

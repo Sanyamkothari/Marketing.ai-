@@ -85,6 +85,7 @@ from engine.stages.actions import (
     suppression_rules,
 )
 from engine.storage import run_key
+from engine.utils.csv_safe import formula_safe_frame
 from engine.utils.logging import get_logger, log_stage
 from engine.utils.text import humanise_count
 
@@ -144,7 +145,9 @@ def write_scores(
     table = _output_frame(frame, config, primary_key=primary_key, key_source=key_source)
 
     csv_key = run_key(run_id, SCORES_CSV)
-    storage.write_bytes(csv_key, table.to_csv(index=False, lineterminator="\n").encode("utf-8"))
+    storage.write_bytes(
+        csv_key, formula_safe_frame(table).to_csv(index=False, lineterminator="\n").encode("utf-8")
+    )
 
     buffer = io.BytesIO()
     table.to_parquet(buffer, engine="pyarrow", index=False)

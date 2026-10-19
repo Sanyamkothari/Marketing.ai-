@@ -13,7 +13,15 @@ from engine.connections.postgres import PostgresConnector
 from engine.connections.s3 import S3Connector
 from engine.connections.snowflake import SnowflakeConnector
 
-__all__ = ["AI_SERVICE", "CONNECTORS", "catalogue", "check_form", "connector"]
+__all__ = [
+    "ADDRESS_FIELDS",
+    "AI_SERVICE",
+    "CONNECTORS",
+    "catalogue",
+    "check_form",
+    "connector",
+    "moves_address",
+]
 
 CONNECTORS: Final[Mapping[str, Connector]] = {
     c.kind: c
@@ -43,6 +51,12 @@ AI_SERVICE: Final[KindInfo] = KindInfo(
     screen="#/connections/ai/product",
 )
 """The AI service's card. Its backend is `/ai-service` (two slots, DEC-1140); the page draws one card per slot."""
+
+ADDRESS_FIELDS: Final[frozenset[str]] = frozenset(
+    {"host", "port", "database", "user", "endpoint_url", "account"}
+)
+"""The settings that say where a saved secret is sent and who it signs in as. Changing one drops the saved
+secrets (they must be typed again), as an AI key never follows a changed address (`engine.ai_service.key_for`)."""
 
 MAX_TEXT: Final[int] = 1000
 MAX_SECRET: Final[int] = 20_000
@@ -115,6 +129,15 @@ def check_form(
         elif field.required and field.name not in kept_secrets:
             raise _missing(field)
     return clean, clean_secrets
+
+
+def moves_address(old: Mapping[str, Any], new: Mapping[str, Any]) -> bool:
+    """Whether `new` points the connection somewhere else than `old` (compared on `ADDRESS_FIELDS`)."""
+
+    def norm(config: Mapping[str, Any], name: str) -> str:
+        return str(config.get(name, "")).strip().lower()
+
+    return any(norm(old, name) != norm(new, name) for name in ADDRESS_FIELDS)
 
 
 def check_name(name: Any, info: KindInfo) -> str:

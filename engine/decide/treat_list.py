@@ -99,6 +99,7 @@ from engine.stages.actions import (
 from engine.stages.export import SCORES_CSV, SCORES_PARQUET
 from engine.storage import Storage, StorageError, run_key, upload_key
 from engine.uplift.actions import NET_VALUE_COLUMN, TREAT_ACTION
+from engine.utils.csv_safe import FORMULA_PREFIX_REGEX
 from engine.utils.logging import get_logger
 from engine.utils.time import utc_now
 
@@ -2044,6 +2045,12 @@ def _parquet_bytes(table: pa.Table) -> bytes:
 _NEEDS_QUOTES: Final[str] = '[",\r\n]'
 
 
+def _is_text(kind: pa.DataType) -> bool:
+    if pa.types.is_dictionary(kind):
+        kind = kind.value_type
+    return bool(pa.types.is_string(kind) or pa.types.is_large_string(kind))
+
+
 def _csv_text(column: pa.ChunkedArray) -> pa.Array:
     """One column as CSV text: flags `1` / `0`, numbers as Arrow prints them, null as empty, strings quoted
     only when they hold a comma, a quote or a line break."""
@@ -2053,6 +2060,10 @@ def _csv_text(column: pa.ChunkedArray) -> pa.Array:
     text = pc.fill_null(pc.cast(values, pa.large_string()), "")
     if pa.types.is_floating(values.type):
         return text
+    if _is_text(values.type):  # a spreadsheet would run a text cell that starts with = + - @ as a formula
+        marker = pa.scalar("'", pa.large_string())
+        marked = pc.binary_join_element_wise(marker, text, pa.scalar("", pa.large_string()))
+        text = pc.if_else(pc.match_substring_regex(text, FORMULA_PREFIX_REGEX), marked, text)
     quote = pa.scalar('"', pa.large_string())
     quoted = pc.binary_join_element_wise(
         quote, pc.replace_substring(text, '"', '""'), quote, pa.scalar("", pa.large_string())

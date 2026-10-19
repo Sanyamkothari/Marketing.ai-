@@ -130,6 +130,7 @@ from engine.stages.export import SCORES_CSV
 from engine.storage import Storage, run_key
 from engine.uplift.actions import INTENDED_TREATMENT_COLUMN, SEGMENT_COLUMN
 from engine.uplift.contracts import SEGMENT_ACTIONS, SEGMENT_LABELS, Segment
+from engine.utils.csv_safe import formula_safe_frame
 from engine.utils.logging import get_logger, log_stage
 from engine.utils.time import utc_now
 
@@ -932,7 +933,8 @@ def _write_messages_csv(storage: Storage, run_id: str, messages: Sequence[CopyMe
     rows = [message.model_dump(mode="json") for message in messages]
     frame = pd.DataFrame(rows, columns=columns)
     storage.write_text(
-        run_key(run_id, COPY_MESSAGES_FILENAME), frame.to_csv(index=False, lineterminator="\n")
+        run_key(run_id, COPY_MESSAGES_FILENAME),
+        formula_safe_frame(frame).to_csv(index=False, lineterminator="\n"),
     )
 
 
