@@ -115,6 +115,7 @@ __all__ = [
     "CaseReadinessRef",
     "CaseSource",
     "CaseStore",
+    "ChatSuggestion",
     "EventDraft",
     "StandingAnswerUse",
     "TimelineEvent",
@@ -488,6 +489,14 @@ class StandingAnswerUse(StrictBase):
     revoked_at: AwareDatetime | None = Field(default=None, description="When it was revoked, if it was.")
 
 
+class ChatSuggestion(StrictBase):
+    """The answer the agent suggests to an open question, from what the person typed. Only a click records it."""
+
+    question_id: str = Field(description="The open question it is about.")
+    option_id: str = Field(description="The answer it suggests (`CaseQuestion.options[].option_id`).")
+    label: str = Field(description="That answer's button text.")
+
+
 class CaseChatEntry(StrictBase):
     """One chat message, masked as it was stored, with what was sent to the AI service."""
 
@@ -497,6 +506,27 @@ class CaseChatEntry(StrictBase):
     by: str | None = Field(default=None, description="The user id, for a person's message.")
     sent: tuple[dict[str, JsonValue], ...] = Field(
         default=(), description="What the AI looked at (`docs/AGENTS.md` §7.7)."
+    )
+    item_ids: tuple[str, ...] = Field(
+        default=(),
+        exclude_if=lambda value: not value,
+        description="The changes this reply put in the plan (`CaseItem.item_id`): applied for the person to undo, "
+        "or waiting for their yes.",
+    )
+    withdrawn: tuple[str, ...] = Field(
+        default=(),
+        exclude_if=lambda value: not value,
+        description="The agent's own earlier changes it took back in this reply (now rejected, decided by the agent).",
+    )
+    tools: tuple[str, ...] = Field(
+        default=(),
+        exclude_if=lambda value: not value,
+        description="What the agent did to answer, in order: the looks it made and the actions it took.",
+    )
+    suggestion: ChatSuggestion | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+        description="An answer it suggests to an open question; the person's click answers it, nothing else does.",
     )
 
 

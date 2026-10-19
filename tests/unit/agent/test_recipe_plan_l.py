@@ -167,3 +167,39 @@ def test_a_correction_keyed_on_a_missing_column_is_refused() -> None:
             ]
         )
     assert caught.value.code == "RECIPE_COLUMN_MISSING"
+
+
+def test_leaving_rows_out_by_the_id_is_allowed_but_never_by_the_outcome() -> None:
+    """No ID value changes when the test accounts go; the outcome still never chooses which rows are kept."""
+
+    def check(column: str) -> None:
+        check_recipe(
+            [step(RecipeStepKind.REMOVE_ROWS, column, operator="starts_with", values=["9"])],
+            columns=list(frame().columns),
+            primary_key="customer_id",
+            target="converted",
+            levels=LEVELS,
+        )
+
+    check("customer_id")
+    with pytest.raises(RecipeError, match="ID or the outcome column"):
+        check("converted")
+    with pytest.raises(RecipeError, match="ID or the outcome column"):  # and no other step touches the ID
+        check_recipe(
+            [step(RecipeStepKind.NORMALISE_TEXT, "customer_id", strip=True)],
+            columns=list(frame().columns),
+            primary_key="customer_id",
+            target="converted",
+            levels=LEVELS,
+        )
+
+
+def test_starts_with_needs_a_value() -> None:
+    with pytest.raises(RecipeError, match="say which values"):
+        check_recipe(
+            [step(RecipeStepKind.REMOVE_ROWS, "city", operator="starts_with", values=[])],
+            columns=list(frame().columns),
+            primary_key="customer_id",
+            target="converted",
+            levels=LEVELS,
+        )

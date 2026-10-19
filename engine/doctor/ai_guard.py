@@ -123,6 +123,11 @@ class AiGuard(Meter):
         self._consented = consented
         self._on_case = (0, 0)
 
+    @property
+    def chat_steps(self) -> int:
+        """The most actions the chat takes to answer one message (`data_doctor.ai_limits.max_chat_steps`)."""
+        return self._limits.max_chat_steps
+
     def _own_tokens(self) -> int:
         return sum(t.input_tokens + t.output_tokens for t in self._by_model.values())
 

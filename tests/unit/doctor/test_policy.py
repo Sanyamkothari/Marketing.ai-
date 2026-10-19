@@ -18,7 +18,7 @@ from engine.agent.advisor import NEVER_TICKED_STEPS
 from engine.agent.config import AgentLevel
 from engine.agent.contracts import RecipeStepKind, StepReceipt
 from engine.agent.edits import PERSON_STEP_KINDS
-from engine.agent.loop import CHAT_STEP_KINDS, NEVER_SUGGESTED_BY_CHAT
+from engine.agent.loop import CHAT_STEP_KINDS, DOCTOR_STEP_KINDS, NEVER_SUGGESTED_BY_CHAT
 from engine.agent.recipe import EXCEL_SERIAL_PARAMS
 from engine.agent.recommend import NEVER_RECOMMENDED
 from engine.agentic.config import KNOWN_RULES, load_policy
@@ -219,7 +219,10 @@ def test_the_catalogues_unbuilt_propose_kinds_stay_refused_until_their_milestone
 def test_the_rule_sets_hold_the_rules_the_code_holds_today() -> None:
     """The hard-coded rules are read from the rule sets too; the code keeps its own as the second check."""
     policy = shipped()
-    assert set(policy.rule_sets["data.recipe_step"].step_kinds) == set(CHAT_STEP_KINDS)
+    # The Data Doctor's chat may also leave out the rows a rule names (a deliberate change: "drop the test accounts");
+    # Guided setup's chat does not, its own list (`CHAT_STEP_KINDS`) is checked first and still refuses it.
+    assert set(policy.rule_sets["data.recipe_step"].step_kinds) == set(DOCTOR_STEP_KINDS)
+    assert set(DOCTOR_STEP_KINDS) - set(CHAT_STEP_KINDS) == {RecipeStepKind.REMOVE_ROWS}
     assert set(policy.rule_sets["data.person_edit"].step_kinds) == set(PERSON_STEP_KINDS)
     assert set(policy.never_ticked_steps) == set(NEVER_TICKED_STEPS)
     assert (
@@ -234,7 +237,7 @@ def test_the_rule_sets_hold_the_rules_the_code_holds_today() -> None:
 # ---------------------------------------------------------------------------
 def test_the_chat_may_suggest_only_its_kinds() -> None:
     rules = rules_of("data.recipe_step")
-    for kind in (RecipeStepKind.CORRECT_CELLS, RecipeStepKind.REMOVE_ROWS, RecipeStepKind.COMBINE_ROWS):
+    for kind in (RecipeStepKind.CORRECT_CELLS, RecipeStepKind.COMBINE_ROWS):
         subject = ai_step("data.recipe_step", StepFacts(kind, PLAIN))
         assert "AGENT_STEP_NOT_ALLOWED" in codes(evaluate(subject, context())), kind
     person = DataProposal(
@@ -242,6 +245,20 @@ def test_the_chat_may_suggest_only_its_kinds() -> None:
     )
     assert codes(evaluate(person, context())) == {"AGENT_EDIT_NOT_ALLOWED"}
     assert allowed(evaluate(ai_step("data.recipe_step", step(RecipeStepKind.MAP_VALUES, rules)), context()))
+
+
+def test_leaving_rows_out_is_allowed_by_a_listed_rule_only() -> None:
+    """The Data Doctor's chat may leave rows out by `equals`, `in`, `starts_with`, `is_empty`, `before` or `after`;
+    any other parameter or operator is refused with the recipe's own code."""
+    rules = rules_of("data.recipe_step")
+    ok = step(RecipeStepKind.REMOVE_ROWS, rules, params={"operator": "starts_with", "values": ["999"]})
+    assert allowed(evaluate(ai_step("data.recipe_step", ok), context()))
+    for params in (
+        {"operator": "regex", "values": ["9.*"]},
+        {"operator": "equals", "values": ["x"], "column": "y"},
+    ):
+        bad = step(RecipeStepKind.REMOVE_ROWS, rules, params=params)
+        assert "RECIPE_STEP_INVALID" in codes(evaluate(ai_step("data.recipe_step", bad), context())), params
 
 
 def test_never_the_id_or_the_outcome() -> None:
@@ -257,6 +274,13 @@ def test_never_the_id_or_the_outcome() -> None:
         ),
     )
     assert codes(evaluate(derived, context())) == {"RECIPE_STEP_INVALID"}
+    # Leaving out the rows whose ID begins 999 changes no ID (a deliberate change, with the Doctor's chat): allowed on the
+    # ID, never on the outcome.
+    leaves = {"operator": "starts_with", "values": ["999"]}
+    by_id = step(RecipeStepKind.REMOVE_ROWS, rules, column=PK, params=leaves)
+    assert allowed(evaluate(ai_step("data.recipe_step", by_id), context()))
+    by_outcome_rows = step(RecipeStepKind.REMOVE_ROWS, rules, column=TARGET, params=leaves)
+    assert codes(evaluate(ai_step("data.recipe_step", by_outcome_rows), context())) == {"RECIPE_STEP_INVALID"}
     latest = rules_of("data.keep_latest_per_id")
     by_outcome = step(
         RecipeStepKind.KEEP_LATEST_PER_ID, latest, params={"time_column": TARGET, "ties": "refuse"}

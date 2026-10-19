@@ -157,6 +157,8 @@ class GenerativePurpose(StrEnum):
     DATA_EXPLAIN = "data_explain"
     # The Data Doctor agent: explores every table, plans typed steps and sandboxed queries, asks at most a few questions.
     DOCTOR_AGENT = "data_doctor_agent"
+    # The Data Doctor's chat: one friendly conversation that looks, changes the working copy, asks and replies.
+    DOCTOR_CHAT = "data_doctor_chat"
 
 
 class GuardrailOutcome(StrEnum):

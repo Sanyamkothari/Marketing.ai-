@@ -7,9 +7,11 @@ from pathlib import Path
 
 import pytest
 
+from engine.access.roles import Principal, Role
 from engine.agent.tools import AgentContext
 from engine.config import BudgetConfig, LlmConfig, RunMode, load_use_case
 from engine.doctor import visit
+from engine.doctor.agent_chat import doctor_converse
 from engine.doctor.ai_guard import (
     AI_LIMIT_REPLY,
     AI_NO_CONSENT_REPLY,
@@ -22,11 +24,13 @@ from engine.doctor.case import Case, CaseCounters
 from engine.doctor.config import AiLimitsConfig
 from engine.doctor.diagnose import LoadedFile
 from engine.storage import LocalStorage
-from tests.unit.agent.egress_canary import ToolingClient, guardrails
+from tests.fixtures.doctor_eval.chat_model import ChatScript
+from tests.unit.agent.egress_canary import guardrails
 from tests.unit.doctor import visit_support as vs
 from tests.unit.doctor.visit_support import ANALYST, CLIENT, GOAL_A, open_case
 
 EMAIL = "ravi.kumar@example.com"
+ASHA = Principal(user_id=ANALYST, username="asha", roles=frozenset({Role.ANALYST}), kind="user")
 
 
 @pytest.fixture
@@ -34,7 +38,7 @@ def storage(tmp_path: Path) -> LocalStorage:
     return LocalStorage(tmp_path / "data")
 
 
-def _guard(client: ToolingClient, *, calls: int = 60, tokens: int = 600_000, consent: bool = True) -> AiGuard:
+def _guard(client: ChatScript, *, calls: int = 60, tokens: int = 600_000, consent: bool = True) -> AiGuard:
     return AiGuard(
         client,
         job_id="test",
@@ -57,7 +61,7 @@ def _converse(guard: AiGuard) -> visit.ConversePort:
             frame=files[0].frame,
         )
 
-    return visit.plan_g_converse(context_for, meter=guard, guardrails=guardrails(), guard=guard)
+    return doctor_converse(context_for, meter=guard, guardrails=guardrails(), principal=ASHA)
 
 
 def _files() -> tuple[LoadedFile, ...]:
@@ -65,7 +69,7 @@ def _files() -> tuple[LoadedFile, ...]:
 
 
 def test_no_consent_means_no_call(storage: LocalStorage) -> None:
-    client = ToolingClient([])
+    client = ChatScript({})
     case = open_case(storage, vs.world())
     result = _converse(_guard(client, consent=False))(case, "Hello", _files())
     assert not client.calls, "the AI was not asked"
@@ -83,7 +87,7 @@ def test_consent_is_kept_once_with_who_and_when(storage: LocalStorage) -> None:
 
 @pytest.mark.parametrize("used", [{"model_calls": 3}, {"tokens": 1_000}])
 def test_a_spent_case_makes_no_further_call_and_says_so(storage: LocalStorage, used: dict[str, int]) -> None:
-    client = ToolingClient([])
+    client = ChatScript({})
     case = open_case(storage, vs.world()).model_copy(update={"counters": CaseCounters.model_validate(used)})
     result = _converse(_guard(client, calls=3, tokens=1_000))(case, "Hello", _files())
     assert not client.calls
@@ -91,7 +95,7 @@ def test_a_spent_case_makes_no_further_call_and_says_so(storage: LocalStorage, u
 
 
 def test_the_limit_stops_a_turn_between_calls_and_the_visit_goes_on(storage: LocalStorage) -> None:
-    client = ToolingClient([{"action": "describe_missing", "args": {}}])
+    client = ChatScript({"missing": [{"action": "describe_missing", "file": "F1", "args": {}}]})
     case = open_case(storage, vs.world())
     result = _converse(_guard(client, calls=1))(case, "What is missing?", _files())
     assert len([c for c in client.calls if c.kind == "complete"]) == 1, "the second call was refused"
@@ -105,11 +109,11 @@ def test_every_file_goes_through_its_own_gate(storage: LocalStorage) -> None:
     frame.insert(0, f"contact {EMAIL}", [f"c{i}@example.org" for i in range(len(frame))])
     first = vs.loaded("up-1", "customers.csv", vs.customers(rows=300, seed=4), config)
     second = vs.loaded("up-2", f"{EMAIL}.csv", frame, config)
-    client = ToolingClient([])
+    client = ChatScript({})
     case = open_case(storage, vs.world())
     result = _converse(_guard(client))(case, "What files do I have?", (first, second))
     sent = "\n".join(client.sent_text) + "\n".join(str(item) for item in result.sent)
-    assert "other_files" in sent, "the second file was shown to the AI"
+    assert '"file": 2' in sent, "the second file was shown to the AI"
     assert EMAIL not in sent and "example.org" not in sent, "...masked"
     assert any("get_profile" in str(item) for item in result.sent), "and the screen can say what was sent"
 
@@ -134,3 +138,14 @@ def test_many_wide_files_leave_room_for_the_chat() -> None:
     found = file_overviews(contexts)
     assert 0 < len(found) < 40, "files past the limit are left out"
     assert sum(len(json.dumps(overview)) for overview, _sent in found) <= MAX_OVERVIEW_CHARS + 40 * 20
+
+
+def test_a_case_may_spend_enough_for_a_conversation_and_a_message_takes_a_few_steps() -> None:
+    """The chat spends more than the one-shot review did: 2M tokens and 200 calls a case, 8 actions a message."""
+    limits = AiLimitsConfig()
+    assert (limits.max_tokens_per_case, limits.max_calls_per_case, limits.max_chat_steps) == (
+        2_000_000,
+        200,
+        8,
+    )
+    assert _guard(ChatScript({})).chat_steps == 8

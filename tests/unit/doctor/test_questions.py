@@ -50,10 +50,10 @@ def _ask(qid: str) -> Ask:
     return build_ask(qid, SAMPLE, rows=3000, choices=CHOICES, recommended_choice=1)
 
 
-def test_the_catalogue_holds_q1_to_q23() -> None:
-    assert list(CATALOGUE) == [f"Q{n}" for n in range(1, 24)]
+def test_the_catalogue_holds_q1_to_q24() -> None:
+    assert list(CATALOGUE) == [f"Q{n}" for n in range(1, 25)]
     codes = [spec.code for spec in CATALOGUE.values()]
-    assert len(set(codes)) == 23
+    assert len(set(codes)) == 24
 
 
 @pytest.mark.parametrize("qid", list(CATALOGUE))
@@ -108,12 +108,18 @@ def test_the_recommended_answers_are_the_ones_the_study_names() -> None:
 
 def test_meaning_bearing_questions_are_the_ones_about_meaning() -> None:
     meaning = {qid for qid, spec in CATALOGUE.items() if spec.meaning_bearing}
-    assert {"Q7", "Q8", "Q9", "Q11", "Q12", "Q14", "Q17", "Q20"} == meaning
+    assert {"Q7", "Q8", "Q9", "Q11", "Q12", "Q14", "Q17", "Q20", "Q24"} == meaning
     assert not any(spec.recommends for spec in CATALOGUE.values() if spec.meaning_bearing)
 
 
 def test_the_blocking_questions_are_few_and_decide_the_table_or_the_contact_list() -> None:
-    assert {qid for qid, spec in CATALOGUE.items() if spec.blocking} == {"Q1", "Q8", "Q10", "Q12", "Q14"}
+    assert {qid for qid, spec in CATALOGUE.items() if spec.blocking} == {
+        "Q1",
+        "Q8",
+        "Q10",
+        "Q12",
+        "Q14",
+    }, "Q24 is a note for the analyst until an outcome definition is built from it: it blocks nothing"
 
 
 def test_an_optional_answer_is_left_out_when_its_value_is_missing() -> None:
@@ -210,6 +216,21 @@ def test_the_agent_gets_one_line_per_question() -> None:
     lines = catalogue_lines()
     assert len(lines) == 23 and lines[0].startswith("Q1 ") and "(blocking)" in lines[0]
     assert "choices" in lines[0] and "file" in lines[0]
+
+
+def test_what_counts_as_a_yes_is_a_question_only_the_chat_asks_and_it_never_recommends() -> None:
+    """Q24: the person says in their own words what a sale is; the options are those words. Meaning: no
+    recommendation, the review's prompt does not list it, and it does not block (its answer builds no outcome
+    definition yet, so it must not hold the visit or promise that the rule is applied)."""
+    spec = question("Q24")
+    assert spec.chat_only and spec.meaning_bearing and not spec.blocking and not spec.recommends
+    assert "does not change what the model learns" in spec.why
+    assert len(catalogue_lines(chat=True)) == 24 and "Q24" not in "".join(catalogue_lines())
+    ask = build_ask(
+        "Q24", {"file": "orders.csv"}, rows=1200, choices=("An order over 500 is a sale", "Any order")
+    )
+    assert [o.label for o in ask.options] == ["An order over 500 is a sale", "Any order", DONT_KNOW]
+    assert ask.recommended is None and not ask.blocking and ask.meaning_bearing
 
 
 def test_a_recommended_choice_outside_the_choices_is_refused() -> None:

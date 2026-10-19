@@ -40,6 +40,7 @@ from engine.doctor.case import (
     CaseQuestion,
     CaseSource,
     CaseStore,
+    ChatSuggestion,
     StandingAnswerUse,
     TimelineEvent,
     TimelineKind,
@@ -637,3 +638,24 @@ def test_the_switch_can_be_turned_on_by_the_environment(
     assert data_doctor_unified(config_root) is True
     monkeypatch.setenv("MARKETING_AI_DATA_DOCTOR_UNIFIED", "false")
     assert data_doctor_unified(config_root) is False
+
+
+def test_a_chat_entry_written_before_the_agent_changed_the_plan_reads_and_dumps_as_it_did() -> None:
+    old = {"role": "agent", "text": "Hello.", "at": "2026-10-12T09:00:00Z", "by": None, "sent": []}
+    entry = CaseChatEntry.model_validate(old)
+    assert (entry.item_ids, entry.withdrawn, entry.tools, entry.suggestion) == ((), (), (), None)
+    assert json.loads(entry.model_dump_json()) == old, "the new fields are left out of a dump while unset"
+
+
+def test_a_chat_entry_carries_what_the_agent_did_in_its_reply() -> None:
+    entry = CaseChatEntry(
+        role="agent",
+        text="Done.",
+        at=T0,
+        item_ids=("recipe_step.base.aaa",),
+        withdrawn=("recipe_step.base.bbb",),
+        tools=("find_values", "propose_step"),
+        suggestion=ChatSuggestion(question_id="q.q24.base.x", option_id="c0", label="An order over 500"),
+    )
+    again = CaseChatEntry.model_validate_json(entry.model_dump_json())
+    assert again == entry and again.suggestion is not None and again.suggestion.option_id == "c0"
