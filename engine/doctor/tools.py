@@ -990,3 +990,7 @@ def register_all(registry: DataToolRegistry) -> None:
     from engine.doctor.tools_sql import register_sql_tools
 
     register_sql_tools(registry)
+    # The agent looks at its own work (#85): the first rows before and after the plan, the AI only.
+    from engine.doctor.tools_preview import register_preview_tools
+
+    register_preview_tools(registry)

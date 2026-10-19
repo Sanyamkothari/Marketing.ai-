@@ -248,6 +248,7 @@ def tool_world(root: Path, variant: Literal["plain", "planted", "control"] = "pl
         primary_key="customer_id",
         case_files=CaseFiles(store=store, client_id="default", case_id=case.case_id, actor=ANALYST.user_id),
         readiness=readiness,
+        case_items=(),  # the plan so far, for `preview_working_copy`: nothing ticked in the world
     )
 
 
@@ -324,6 +325,8 @@ CALLS: Final[dict[str, Calls | None]] = {
             "upload_ids": [EVENTS],
         }
     ),
+    # The agent's look at its own work: the first rows before and after the plan (nothing ticked here).
+    "preview_working_copy": _fixed({}, {"rows": 3}),
     "detect_locale": _fixed({}),
     "parse_indian_numbers": _fixed({}),
     "indian_booleans": _fixed({}),

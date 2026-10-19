@@ -24,13 +24,18 @@ the rules the visit and the protocol already use, never re-implemented in the br
 * **the hand-off** once the visit handed the data on: the file, its ID column and its outcome column, which is
   what `POST /runs` takes (the wizard and a goal's setup start the run with it, as Guided setup's Approve did).
 
-Nothing here writes. Nothing here holds a cell value: ids, column names the case already holds, counts, codes and
-the sentences the rules wrote.
+* **the data** (`preview`, `engine.doctor.preview`): the first rows of each file before and after the ticked steps,
+  which columns changed, personal columns withheld and every other cell masked; counted once per plan. Its rows
+  per step also fill `ledger.steps[].samples`.
+
+Nothing here writes. Nothing here holds a cell value but those masked preview rows: ids, column names the case
+already holds, counts, codes and the sentences the rules wrote.
 """
 
 from __future__ import annotations
 
 import re
+from collections.abc import Callable, Sequence
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Final, Literal
@@ -42,7 +47,9 @@ from engine.agent.contracts import ProposalState
 from engine.config import ConfigError, StrictBase
 from engine.doctor.carry import carry_of, new_line
 from engine.doctor.case import Case, CaseError, CaseStore, TimelineEvent, TimelineKind
+from engine.doctor.diagnose import LoadedFile
 from engine.doctor.plan_check import ledger_view, plan_digest
+from engine.doctor.preview import PreviewView, cached_preview, preview_rows
 from engine.doctor.protocol import (
     DEFAULT_SETTINGS,
     approve_class_of,
@@ -65,6 +72,7 @@ from engine.doctor.visit import (
 )
 from engine.doctor.visit_contracts import HandOffRecord
 from engine.storage import Storage, StorageError
+from engine.utils.logging import get_logger
 
 __all__ = [
     "CASES_LISTED",
@@ -82,6 +90,8 @@ __all__ = [
     "case_summaries",
     "screen_view",
 ]
+
+_LOG = get_logger(__name__)
 
 VerdictKey = Literal[
     "needs_files",
@@ -210,6 +220,12 @@ class CaseScreenView(StrictBase):
         "and the findings (`level` stop, flag or note, each with its `key`). None until the plan is counted. The "
         "plan screen reads these names; a stop is lowered to a flag once a person said yes to it.",
     )
+    preview: PreviewView | None = Field(
+        default=None,
+        description="The first rows of each file before and after the ticked steps (the person's and the agent's), "
+        "personal columns withheld and every other cell masked, with which columns changed "
+        "(`engine.doctor.preview`). None when the screen was not given the files to read.",
+    )
     carried: ScreenCarried | None = Field(
         default=None,
         description="Once a plan was approved and comes back (the files joined, the goal chosen): what is the "
@@ -281,20 +297,27 @@ def build_screen(
     *,
     config_root: Path | None,
     principal: Principal | None = None,
+    load_files: Callable[[Case], Sequence[LoadedFile]] | None = None,
 ) -> CaseScreen:
     """The case, its timeline and its view (`CASE_NOT_FOUND` / `CASE_UNREADABLE` as `CaseStore.get`), for
-    `principal` (who reads it; None: whether they may give a yes is not judged here)."""
+    `principal` (who reads it; None: whether they may give a yes is not judged here). With `load_files` (the
+    visit's own loader) the view carries the data preview."""
     store = CaseStore(storage)
     case = store.get(client_id, case_id)
     return CaseScreen(
         case=case,
         timeline=store.timeline(client_id, case_id),
-        view=screen_view(storage, case, config_root=config_root, principal=principal),
+        view=screen_view(storage, case, config_root=config_root, principal=principal, load_files=load_files),
     )
 
 
 def screen_view(
-    storage: Storage, case: Case, *, config_root: Path | None, principal: Principal | None = None
+    storage: Storage,
+    case: Case,
+    *,
+    config_root: Path | None,
+    principal: Principal | None = None,
+    load_files: Callable[[Case], Sequence[LoadedFile]] | None = None,
 ) -> CaseScreenView:
     """The view of one case (see the module docstring)."""
     goal = active_goal(case)
@@ -306,13 +329,15 @@ def screen_view(
         if case.state.value == "approve"
         else None
     )
+    preview = _preview(case, load_files)
     return CaseScreenView(
         mode="goal" if goal is not None else "generic",
         goal_id=goal.goal_id if goal is not None else None,
         verdict=_verdict(storage, case, approve_class),
         approval_sentence=sentence,
         approve_class=approve_class,
-        ledger=_ledger(case),
+        ledger=_with_samples(_ledger(case), preview),
+        preview=preview,
         carried=_carried(case),
         standing=_standing(storage, case),
         remembered=_remembered(storage, case),
@@ -332,6 +357,47 @@ def _ledger(case: Case) -> dict[str, Any] | None:
     if visit.plan_check.digest != plan_digest(case.files, active_section(case)[0]):
         return None
     return ledger_view(visit.plan_check, visit.acknowledged)
+
+
+def _preview(case: Case, load_files: Callable[[Case], Sequence[LoadedFile]] | None) -> PreviewView | None:
+    """The data before and after the plan as it stands (once per plan). A file that cannot be read is no preview,
+    never a screen that fails."""
+    if load_files is None or not case.files:
+        return None
+    items, _ = active_section(case)
+    try:
+        return cached_preview(
+            case.client_id,
+            case.case_id,
+            case.files,
+            items,
+            lambda: preview_rows(tuple(load_files(case)), items),
+        )
+    except Exception:
+        _LOG.warning("preview_unavailable", exc_info=True)
+        return None
+
+
+def _with_samples(ledger: dict[str, Any] | None, preview: PreviewView | None) -> dict[str, Any] | None:
+    """The ledger with each step's changed rows (`steps[].samples`, masked) where the preview has them."""
+    if ledger is None or preview is None or not preview.step_samples:
+        return ledger
+    steps = [
+        (
+            {**step, "samples": _samples_view(preview.step_samples[step["item_id"]])}
+            if step.get("item_id") in preview.step_samples
+            else step
+        )
+        for step in ledger.get("steps") or []
+    ]
+    return {**ledger, "steps": steps}
+
+
+def _samples_view(sample: Any) -> dict[str, Any]:
+    out: dict[str, Any] = {"before": list(sample.before), "after": list(sample.after)}
+    if sample.personal_columns:
+        out["personal_columns"] = list(sample.personal_columns)
+    return out
 
 
 _AWAITING: Final = frozenset({"ask", "treat", "preview", "approve", "converse"})

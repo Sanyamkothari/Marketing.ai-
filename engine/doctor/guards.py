@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import math
 import re
-from collections.abc import Collection, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Final, Literal
 
@@ -847,6 +847,7 @@ def run_guarded(
     book: ExpectationBook | None = None,
     twice: bool = True,
     source_name: str | None = None,
+    watch: Callable[[RecipeStep, pd.DataFrame, pd.DataFrame], None] | None = None,
     **recipe_args: Any,
 ) -> GuardedRun:
     """`run_recipe`, with a receipt for every step, the plan's ledger and the findings; run twice by default.
@@ -854,7 +855,9 @@ def run_guarded(
     A table whose `primary_key` names the rows of a log (:func:`names_a_log_row`: `order_id`, `payment_id`) is a
     side table: its rows are counted as rows of `source_name`, never as customers.
 
-    `expectations` (by step order) are locked in `book` before the plan runs. Raises what `run_recipe` raises.
+    `expectations` (by step order) are locked in `book` before the plan runs. `watch(step, before, after)` sees each
+    step's input and output once, on the first run (the preview takes its sample rows from it). Raises what
+    `run_recipe` raises.
     """
     book = book if book is not None else ExpectationBook()
     side_table = (source_name or "this file") if names_a_log_row(primary_key) else None
@@ -862,7 +865,7 @@ def run_guarded(
     for order, exp in (expectations or {}).items():
         findings.extend(book.declare(order, exp))
 
-    def once() -> tuple[RecipeRun, list[Receipt], list[str]]:
+    def once(watching: bool = False) -> tuple[RecipeRun, list[Receipt], list[str]]:
         receipts: list[Receipt] = []
         hashes: list[str] = []
 
@@ -880,6 +883,8 @@ def run_guarded(
                 )
             )
             hashes.append(frame_hash(after))
+            if watching and watch is not None:
+                watch(step, before, after)
 
         run = run_recipe(
             frame,
@@ -892,7 +897,7 @@ def run_guarded(
         )
         return run, receipts, hashes
 
-    run, receipts, hashes = once()
+    run, receipts, hashes = once(watching=True)
     if twice:
         _, _, again = once()
         if hashes != again:
