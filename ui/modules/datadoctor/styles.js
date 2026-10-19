@@ -133,7 +133,7 @@ export const CSS = `
 .ddc-head .dds-next,.ddc-head .dds-why{flex-basis:100%;margin:0}
 .ddc-layout{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,400px);gap:var(--s5);align-items:start}
 .ddc-conv{display:flex;flex-direction:column;gap:var(--s3);min-width:0}
-.ddc-panel{display:flex;flex-direction:column;gap:var(--s3);min-width:0;position:sticky;top:var(--s4)}
+.ddc-panel{display:flex;flex-direction:column;gap:var(--s3);min-width:0;position:sticky;top:var(--s4);max-height:calc(100vh - 2*var(--s4));overflow:auto}
 .ddc-box{padding:var(--s4);display:flex;flex-direction:column;gap:var(--s3);min-width:0}
 .ddc-box .dds-group-t{padding:0;border:0;background:none}
 .ddc .dds-opt{align-items:flex-start;max-width:min(100%,26rem)}
@@ -180,7 +180,7 @@ export const CSS = `
 .ddc-table th{background:var(--bg);font-weight:600}
 .ddc-table th.is-changed{background:var(--info-t)}
 .ddc-mark{font-weight:400;color:var(--brand-700)}
-@media (max-width:900px){.ddc-layout{grid-template-columns:minmax(0,1fr)}.ddc-panel{order:-1;position:static}}
+@media (max-width:900px){.ddc-layout{grid-template-columns:minmax(0,1fr)}.ddc-panel{order:-1;position:static;max-height:none;overflow:visible}}
 @media (max-width:600px){.ddc-indent{margin-left:0}.ddc-user .ddc-bubble{max-width:100%}.ddc-ready{padding:var(--s4)}.ddc-form{flex-direction:row}}
 `;
 

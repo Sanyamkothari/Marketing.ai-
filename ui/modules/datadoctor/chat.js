@@ -163,7 +163,7 @@ const DID = Object.freeze({
   preview_working_copy: "Looked at the result",
 });
 
-const WHO = Object.freeze({ rules: "Done by the rules", agent: "Done by Data Doctor", you: "Your choice" });
+const WHO = Object.freeze({ rules: "Done by the rules", agent: "Done by Data Doctor", you: "Your choice", someone: "Chosen by a teammate" });
 
 function changeHtml(card, names, busy) {
   const accepted = card.state === "accepted";
@@ -212,7 +212,9 @@ function questionHtml(q, names, { busy, remembered }) {
   const state = q.note
     ? `<p class="dds-state" data-dds-assumed>${icon("info", { size: 14 })}<span>${userTextIn(q.note, names)}</span></p>`
     : answered
-      ? `<p class="dds-state" data-dds-answered>${icon("check", { size: 14 })}<span>${esc(`Your answer: ${chose ? chose.label : q.answer}. Tap another answer to change it.`)}</span></p>`
+      ? `<p class="dds-state" data-dds-answered>${icon("check", { size: 14 })}<span>${esc(`Your answer: ${chose ? chose.label : q.answer}.`)}${
+          q.counts ? ` ${userTextIn(q.counts, names)}.` : ""
+        } ${esc("Tap another answer to change it.")}</span></p>`
       : "";
   const memory =
     remembered && answered && !remembered.revoked
@@ -329,7 +331,7 @@ function firstLookHtml(f, names) {
   return agentRow(`<div class="ddc-bubble" data-dds-first-look>${userTextIn(f.sentence, names)}</div>`);
 }
 
-/** The ready card in the stage it is in. `ctx`: the ticks (`stops`, `confirms` sets), `speed`, `busy`, and `startHtml` for the start stage. */
+/** The ready card in the stage it is in. `ctx`: the ticks (`stops`, `confirms` sets), `speed`, `busy`, `startHtml` for the start stage, and for the approve stage `starts` (false: approving does not start a run, the button says "continue") and `approveHtml` (what will happen after the click). */
 export function readyHtml(r, ctx) {
   const names = ctx.names || [];
   const notes = (r.notes || []).map((n) => `<li>${userTextIn(n, names)}</li>`).join("");
@@ -384,18 +386,33 @@ export function readyHtml(r, ctx) {
         .join("")}</div>`
     : "";
   const ok = approveAllowed(r, ctx);
+  const label = approveLabel(ctx);
   const hold = r.blocked ? `<p class="dds-why" data-dds-approve-hold>${esc("A change in the plan needs someone else's own yes first.")}</p>` : "";
   return indented(
     `<section class="ddc-ready" data-dds-ready="approve" aria-labelledby="ddc-ready-t"><h3 class="dds-group-t" id="ddc-ready-t">Ready to start</h3><blockquote class="dds-sentence" id="dds-approve-sentence" data-dds-approve-sentence>${esc(
       r.sentence,
-    )}</blockquote>${notesHtml}${stops}${yes}${hold}${speeds}<div class="dds-actions">${button({
-      label: "Approve and start",
+    )}</blockquote>${notesHtml}${stops}${yes}${hold}${speeds}${ctx.approveHtml || ""}<div data-dds-approve-note>${leavesOutHtml(r, ctx)}</div><div class="dds-actions">${button({
+      label,
       kind: "primary",
       attrs: `data-dds-approve-start aria-describedby="dds-approve-sentence"`,
       disabled: ctx.busy || !ok,
       busy: ctx.busy === "approve",
     })}<span class="dds-why">The only approval. Your files are not changed.</span></div></section>`,
   );
+}
+
+const approveLabel = (ctx) => (ctx.starts === false ? "Approve and continue" : "Approve and start");
+
+/**
+ * Next to the button: what the click leaves out (a change that needs its own yes and is not ticked, or cannot be agreed
+ * to by this reader). Redrawn in place when a box is ticked.
+ */
+export function leavesOutHtml(r, ctx) {
+  const names = ctx.names || [];
+  const out = (r.confirmations || []).filter((c) => !c.required && (!c.can_agree || !ctx.confirms.has(c.item_id)));
+  return out.length
+    ? `<p class="dds-why" data-dds-approve-leaves-out>${esc(`${approveLabel(ctx)} leaves out:`)} ${out.map((c) => userTextIn(c.sentence, names)).join("; ")}</p>`
+    : "";
 }
 
 /** Whether the one click may go: every stop and every needed own yes is ticked, and nobody else must agree first. */

@@ -35,6 +35,7 @@ from typing import TYPE_CHECKING, Annotated, Any, Final, Literal
 
 from pydantic import Field, JsonValue
 
+from engine.access.roles import Principal
 from engine.agent.contracts import ProposalState
 from engine.config import ConfigError, StrictBase, load_engine_config
 from engine.doctor.case import Case, CaseItem, CaseQuestion, TimelineEvent, TimelineKind
@@ -116,8 +117,9 @@ class ChangeCard(StrictBase):
     state: Literal["accepted", "pending", "rejected"] = Field(
         description="accepted: in the plan (Undo); pending: waiting for a yes (Use this); rejected: undone (Do it again)."
     )
-    by: Literal["rules", "agent", "you"] | None = Field(
-        default=None, description="Who put it in the plan, when it is in it."
+    by: Literal["rules", "agent", "you", "someone"] | None = Field(
+        default=None,
+        description="Who put it in the plan, when it is in it; `someone` is another person on the team.",
     )
     undo: bool = Field(description="True while it is in the plan, so Undo is offered.")
     parked_for: str | None = None
@@ -142,6 +144,10 @@ class QuestionCard(StrictBase):
         default=False, description="The rules decided it (too small to ask); the answer can change it."
     )
     note: str = Field(default="", description="An assumption or an earlier answer used, in a plain sentence.")
+    counts: str = Field(
+        default="",
+        description="What the answer changed, in a sentence our code measured (the fix an answer makes has no card of its own).",
+    )
 
 
 class DoubtCard(StrictBase):
@@ -178,7 +184,7 @@ class GoalChoice(StrictBase):
 class GoalsCard(StrictBase):
     type: Literal["goals"] = "goals"
     cards: tuple[GoalChoice, ...]
-    more_count: int = Field(default=0, description="Goals that fit less, not drawn.")
+    more_count: int = Field(default=0, description="Goals that fit (ready or to check) but are not drawn.")
 
 
 class FitCard(StrictBase):
@@ -313,13 +319,20 @@ def _is_check(item: CaseItem) -> bool:
     return item.kind == "data_check"
 
 
-def _change(item: CaseItem, steps: dict[str, dict[str, Any]]) -> ChangeCard | None:
+def _change(
+    item: CaseItem, steps: dict[str, dict[str, Any]], principal: Principal | None = None
+) -> ChangeCard | None:
     state = item.state.value
     if state == "rejected" and (item.decided_by is None or _is_agent(item.decided_by)):
         return None  # never in the plan, or taken back by the agent itself (its message says so)
-    by: Literal["rules", "agent", "you"] | None = None
+    by: Literal["rules", "agent", "you", "someone"] | None = None
     if item.state is ProposalState.ACCEPTED:
-        by = "agent" if _is_agent(item.decided_by) else "you" if item.decided_by else "rules"
+        if _is_agent(item.decided_by):
+            by = "agent"
+        elif not item.decided_by:
+            by = "rules"
+        else:  # a person: the reader, or (when we know who reads) a teammate
+            by = "you" if principal is None or item.decided_by == principal.user_id else "someone"
     return ChangeCard(
         item_id=item.item_id,
         title=item.title or item.kind,
@@ -356,7 +369,7 @@ def _option(option: Any, question: CaseQuestion, *, effect: str | None = None) -
     )
 
 
-def _question(question: CaseQuestion) -> QuestionCard:
+def _question(question: CaseQuestion, counts: str = "") -> QuestionCard:
     dont_know, own_id = _dont_know(question)
     options = tuple(_option(o, question) for o in question.options if o.option_id != own_id)
     note = ""
@@ -379,6 +392,7 @@ def _question(question: CaseQuestion) -> QuestionCard:
         answer=question.answer,
         assumed=question.assumed,
         note=note,
+        counts=counts,
     )
 
 
@@ -417,7 +431,7 @@ def _goals(case: Case) -> GoalsCard | None:
         )
         for index, u in enumerate(shown)
     )
-    return GoalsCard(cards=cards, more_count=len(found) - len(cards))
+    return GoalsCard(cards=cards, more_count=len(fitting) - len(cards))
 
 
 def _fit(case: Case, goal_id: str, goal_name: str | None, verdict_key: str, verdict_next: str) -> FitCard:
@@ -575,13 +589,15 @@ def build_conversation(
     *,
     goal_name: str | None = None,
     config_root: Path | None = None,
+    principal: Principal | None = None,
 ) -> tuple[ConversationCard, ...]:
     """The case as an ordered list of cards. `view` is the screen's view built without the conversation: its
     verdict, approve-class items, approval sentence, ledger and start say what the cards need."""
     if not case.files:
         return ()
     items, questions = active_section(case)
-    needs_own_yes = {a.item_id for a in view.approve_class}
+    # A change still waiting for its own yes is inside the ready card; once agreed it is a change like any other.
+    needs_own_yes = {a.item_id for a in view.approve_class if not a.confirmed}
     steps = {
         s["item_id"]: s
         for s in (view.ledger or {}).get("steps", [])
@@ -605,11 +621,33 @@ def build_conversation(
     def add(at: datetime, rank: int, card: Any) -> None:
         found.append((at, rank, len(found), card))
 
+    def in_reply(at: datetime) -> datetime:
+        """A question or doubt raised while the agent answered (after the person wrote, before the reply was stored)
+        is drawn with that reply, below its text."""
+        before = max((e.at for _, e in messages if e.at <= at), default=None)
+        if before is None or next(e for _, e in messages if e.at == before).role != "user":
+            return at
+        return min((e.at for _, e in messages if e.at > at and e.role == "agent"), default=at)
+
+    # An answer makes its fix itself (id `<question_id>:<option>`, ids cut at 128): that fix belongs to the question
+    # card, so the answer is told once and changed by tapping another chip, never twice.
+    made: dict[str, CaseItem] = {}
+    for q in questions:
+        prefix = f"{q.question_id}:"
+        for item in items:
+            if item.item_id.startswith(prefix):
+                made[item.item_id] = item
+
     changes: list[ChangeCard] = []
     for item in items:
-        if item.item_id in needs_own_yes or item.item_id in carried_gone or _is_check(item):
+        if (
+            item.item_id in made
+            or item.item_id in needs_own_yes
+            or item.item_id in carried_gone
+            or _is_check(item)
+        ):
             continue
-        card = _change(item, steps)
+        card = _change(item, steps, principal)
         if card is None:
             continue
         changes.append(card)
@@ -620,19 +658,28 @@ def build_conversation(
     for _, entry in messages:
         add(entry.at, 1, _message(case, entry))
 
+    def said(question: CaseQuestion) -> str:
+        prefix = f"{question.question_id}:"
+        for item in made.values():
+            if item.item_id.startswith(prefix) and item.state is ProposalState.ACCEPTED:
+                return _counts(item, steps.get(item.item_id))
+        return ""
+
     shown_questions = [q for q in questions if q.code not in _REQUEST_CODES]
     open_questions = [q for q in shown_questions if q.answer is None]
     for q in shown_questions:
-        add(asked_at.get(q.question_id, case.created_at), 3, _question(q))
+        add(in_reply(asked_at.get(q.question_id, case.created_at)), 3, _question(q, said(q)))
     goal_ids = (view.goal_id,) if view.goal_id else tuple(view.missing_for[:4])
     for q in questions:
         if q.code in _REQUEST_CODES:
-            add(asked_at.get(q.question_id, case.created_at), 5, _request(q, goal_ids))
+            add(in_reply(asked_at.get(q.question_id, case.created_at)), 5, _request(q, goal_ids))
     for doubt in case.doubts:
         add(
-            next(
-                (e.at for e in timeline if e.kind is TimelineKind.DOUBT and e.item_id == doubt.doubt_id),
-                case.created_at,
+            in_reply(
+                next(
+                    (e.at for e in timeline if e.kind is TimelineKind.DOUBT and e.item_id == doubt.doubt_id),
+                    case.created_at,
+                )
             ),
             4,
             DoubtCard(

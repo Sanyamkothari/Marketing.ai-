@@ -54,7 +54,7 @@ import {
 } from "./api.js";
 import { injectDataDoctorStyles } from "./styles.js";
 import { sectionOf } from "./plan.js";
-import { approveAllowed, cardOf, conversationHtml, headHtml, panelHtml } from "./chat.js";
+import { approveAllowed, cardOf, conversationHtml, headHtml, leavesOutHtml, panelHtml } from "./chat.js";
 import { checksHtml, funnelHtml, newLineHtml, planHtml, planModel, queueHtml, todoHtml } from "./plan_view.js";
 import {
   approveHtml,
@@ -64,6 +64,7 @@ import {
   headerHtml,
   leftOutOf,
   missingHtml,
+  namesOf,
   requestHtml,
   requestsOf,
   standingHtml,
@@ -280,6 +281,22 @@ function startParts(entry) {
   return { sentence: starts ? startSentence(entry) : "", action };
 }
 
+/** Whether "Approve" goes on to start a campaign here (the Data page, the wizard) or only fills the goal's setup / hands on to the wizard. */
+function approveStarts(entry) {
+  const { host } = entry;
+  return host.place !== "setup" && (host.approved ? true : canAccess("POST", "/campaign-runs"));
+}
+
+/** Above the approve button: what happens after the click (speed picked above; with last month's model on offer it is chosen after). */
+function approveSentence(entry) {
+  const { state: s } = entry;
+  if (modelChoice(s.offer, s.mode)) return "";
+  const files = s.screen.case.files || [];
+  const file = files[0];
+  const sentence = startSentenceHtml({ table: file ? plain(file.file_name) : "", speed: s.speed });
+  return `<p class="dds-why" data-dds-approve-start-sentence>${sentence}</p><p class="dds-why" data-dds-start-leave>You can close this page.</p>`;
+}
+
 /** Ready for the goal: one action on - start the campaign (Data page, wizard) or fill the goal's setup (setup). */
 function continueHtml(entry) {
   const parts = startParts(entry);
@@ -309,6 +326,7 @@ function chatMainHtml(entry) {
   const notice = s.notice ? `<p class="dds-why" role="status" data-dds-notice>${esc(s.notice)}</p>` : "";
   const ready = cardOf(screen, "ready");
   const parts = ready && ready.stage === "start" ? startParts(entry) : null;
+  const starts = approveStarts(entry);
   const goalIds = screen.view.goal_id ? [screen.view.goal_id] : screen.view.missing_for || [];
   const openSent = new Set([...entry.main.querySelectorAll("details[data-ag-sent][open]")].map((el) => el.getAttribute("data-ag-sent")));
   const conversation = conversationHtml(screen, {
@@ -317,6 +335,8 @@ function chatMainHtml(entry) {
     confirms: s.confirms,
     speed: s.speed,
     startHtml: parts ? `${parts.sentence}${parts.action}` : "",
+    starts,
+    approveHtml: ready && ready.stage === "approve" && starts ? approveSentence(entry) : "",
     openSent,
     kitHref: (ids) => dataRequestUrl((ids.length ? ids : goalIds).slice(0, 4)),
     composer: {
@@ -371,13 +391,19 @@ function draw(entry) {
   if (entry.state.picker) entry.state.picker.bind(entry.main);
 }
 
-/** A new card at the end of the conversation scrolls into view, as a chat does. */
+/**
+ * New cards in the conversation scroll into view, as a chat does. The approval card always stays last, so it is not
+ * counted: a reply that lands above it is what the person is taken to (the newest message, else the first new card).
+ */
 function followChat(entry) {
-  const cards = entry.main.querySelectorAll("[data-dds-conversation] > :not([data-dds-composer])");
+  const cards = [...entry.main.querySelectorAll("[data-dds-conversation] > :not([data-dds-composer])")].filter((el) => !el.querySelector("[data-dds-ready]"));
   const seen = entry.cardsSeen;
   entry.cardsSeen = cards.length;
-  const last = cards[cards.length - 1];
-  if (seen > 0 && cards.length > seen && last && typeof last.scrollIntoView === "function") last.scrollIntoView({ block: "nearest" });
+  if (!(seen > 0 && cards.length > seen)) return;
+  const fresh = cards.slice(seen);
+  const said = fresh.filter((el) => el.querySelector("[data-dds-msg]"));
+  const target = said.length ? said[said.length - 1] : fresh[0];
+  if (target && typeof target.scrollIntoView === "function") target.scrollIntoView({ block: "nearest" });
 }
 
 // --- behaviour -------------------------------------------------------------------------------------------------
@@ -836,7 +862,10 @@ function bind(entry) {
       if (input.checked) set.add(id);
       else set.delete(id);
       const go = root.querySelector("[data-dds-approve-start]");
-      if (go) go.disabled = Boolean(entry.state.busy) || !approveAllowed(cardOf(entry.state.screen, "ready"), entry.state);
+      const ready = cardOf(entry.state.screen, "ready");
+      if (go) go.disabled = Boolean(entry.state.busy) || !approveAllowed(ready, entry.state);
+      const note = root.querySelector("[data-dds-approve-note]");
+      if (note && ready) note.innerHTML = leavesOutHtml(ready, { names: namesOf(entry.state.screen.case), confirms: entry.state.confirms, starts: approveStarts(entry) });
     } else if (input.matches && input.matches("input[data-dds-read]")) {
       // "I have read this sentence": kept for the next drawing, and turns its "I agree" on or off in place, so
       // the focus stays on the box.

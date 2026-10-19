@@ -115,13 +115,16 @@ test("a fix is a one-line change card with its counts and Undo; undo posts the u
 test("a change waiting for a yes says so and can be used or skipped; an undone one can be done again", async () => {
   const s = await show("approve_class", {
     patch: (a) => {
+      const at = a.view.conversation.findIndex((c) => c.type === "change");
+      a.view.conversation.splice(at + 1, 0, { ...a.view.conversation[at], item_id: "ai.second_change", title: "Another change" }); // (the answers are on their questions, so one fix is all the fixture has)
       const [first, second] = a.view.conversation.filter((c) => c.type === "change");
       Object.assign(first, { state: "pending", undo: false, by: null, source: "ai" });
       Object.assign(second, { state: "rejected", undo: false, by: null });
       return a;
     },
   });
-  const [first, second] = s.view.conversation.filter((c) => c.type === "change");
+  const first = s.view.conversation.find((c) => c.type === "change");
+  const second = { item_id: "ai.second_change" }; // (added by the patch)
   const waiting = $(`[data-dds-change-card="${first.item_id}"]`);
   assert.match(waiting.textContent, /Suggested by the AI\. Waiting for your yes\./);
   assert.equal(waiting.querySelector("[data-dds-use]").textContent.trim(), "Use this");
@@ -325,6 +328,66 @@ test("Approve and start: the own yes, Approve with the sentence read, then the s
   assert.ok(!posts("confirmations").some((p) => p.body.item_id === consent.item_id), "what was not ticked is left out");
 });
 
+test("the approval card says what the click leaves out and what happens after it", async () => {
+  const s = await show("approve_class");
+  const ready = card(s, "ready");
+  const rows = ready.confirmations.find((c) => c.required);
+  const consent = ready.confirmations.find((c) => !c.required);
+  tick($(`input[data-dds-confirm="${rows.item_id}"]`));
+  assert.match($("[data-dds-approve-leaves-out]").textContent, /^Approve and start leaves out:/);
+  assert.ok($("[data-dds-approve-leaves-out]").textContent.includes(consent.sentence.slice(0, 20)), "the unticked change is named next to the button");
+  assert.match($("[data-dds-approve-start-sentence]").textContent, /build your contact list\. \w+: about \d+ minutes\./);
+  assert.match($("[data-dds-ready] [data-dds-start-leave]").textContent, /You can close this page/);
+  tick($(`input[data-dds-confirm="${consent.item_id}"]`));
+  assert.ok(!$("[data-dds-approve-leaves-out]"), "ticked: nothing is left out");
+});
+
+test("a change a teammate made is not called the reader's choice; an answer's counts are told on its question", async () => {
+  await show("approve_class", {
+    patch: (a) => {
+      const change = a.view.conversation.find((c) => c.type === "change");
+      change.by = "someone";
+      a.view.conversation.find((c) => c.type === "question" && c.answer).counts = "600 values changed";
+      return a;
+    },
+  });
+  assert.match($(".ddc-change").textContent, /Chosen by a teammate/);
+  assert.doesNotMatch($(".ddc-change").textContent, /Your choice/);
+  assert.match($("[data-dds-answered]").textContent, /Your answer: .*\. 600 values changed\. Tap another answer to change it\./);
+});
+
+test("after a reply the page follows the reply, not the approval card that always stays last", async () => {
+  const seen = [];
+  const original = window.Element.prototype.scrollIntoView;
+  window.Element.prototype.scrollIntoView = function () {
+    seen.push(this);
+  };
+  try {
+    await show("approve_class", {
+      ai: connected(),
+      patch: (a) => {
+        if (!posts("chat").length) return a;
+        const ready = a.view.conversation.findIndex((c) => c.type === "ready");
+        const m = { type: "message", item_ids: [], withdrawn: [], tools: [], suggestion: null, sent: [] };
+        a.view.conversation.splice(ready, 0, { ...m, role: "user", text: "why?" }, { ...m, role: "agent", text: "Because of the age column." });
+        return a;
+      },
+    });
+    const input = $("#dds-chat-input");
+    input.value = "why?";
+    input.dispatchEvent(new window.Event("input", { bubbles: true }));
+    $("#dds-chat-form").dispatchEvent(new window.Event("submit", { bubbles: true, cancelable: true }));
+    await until(() => $('[data-dds-msg="agent"]'), 3000, "the reply");
+    await settle(2);
+    assert.ok(seen.length >= 1);
+    const last = seen[seen.length - 1];
+    assert.ok(last.querySelector('[data-dds-msg="agent"]'), "the reply is what is scrolled to");
+    assert.ok(!last.querySelector("[data-dds-ready]"));
+  } finally {
+    window.Element.prototype.scrollIntoView = original;
+  }
+});
+
 test("a stop is a checkbox in the card: nothing goes on until it is ticked, then it is said yes to before Approve", async () => {
   const stop = { key: "k-stop", text: "One step leaves no customers.", item_id: null };
   const patch = (a) => {
@@ -426,6 +489,8 @@ test("next month the card still offers last month's model or learning again; App
 test("in a goal's setup the one click approves and fills the form (nothing runs)", async () => {
   const filled = [];
   const s = await show("approve_class", { host: { place: "setup", goalId: GOAL, approved: (fill) => filled.push(fill) } });
+  assert.equal($("[data-dds-approve-start]").textContent.trim(), "Approve and continue", "nothing starts here, so the button does not say it does");
+  assert.ok(!$("[data-dds-approve-start-sentence]"), "no start sentence where nothing starts");
   tick($(`input[data-dds-confirm="${card(s, "ready").confirmations.find((c) => c.required).item_id}"]`));
   world.next.approval = "ready";
   $("[data-dds-approve-start]").click();
@@ -437,7 +502,8 @@ test("in a goal's setup the one click approves and fills the form (nothing runs)
 // --- look, accessibility, words ---------------------------------------------------------------------------------
 
 test("phone width: the data panel is above the chat; every control is the theme's 40px button", async () => {
-  assert.ok(CSS.includes("@media (max-width:900px){.ddc-layout{grid-template-columns:minmax(0,1fr)}.ddc-panel{order:-1;position:static}}"));
+  assert.ok(CSS.includes("@media (max-width:900px){.ddc-layout{grid-template-columns:minmax(0,1fr)}.ddc-panel{order:-1;position:static;max-height:none;overflow:visible}}"));
+  assert.ok(CSS.includes("position:sticky;top:var(--s4);max-height:calc(100vh - 2*var(--s4));overflow:auto}"), "the panel scrolls inside itself, so its foot is reachable");
   assert.ok(CSS.includes(".ddc-form .btn{min-height:40px}") && CSS.includes(".ddc-prompts .btn{min-height:40px"));
   assert.ok(!/#[0-9a-fA-F]{3,6}\b/.test(CSS), "colours are the theme's tokens");
   await show("approve_class", { ai: connected() });

@@ -334,7 +334,12 @@ def screen_view(
         missing_for=visit.missing_for if visit is not None and goal is None else (),
     )
     conversation = build_conversation(
-        case, view, timeline, goal_name=approval_goal_name(storage, case), config_root=config_root
+        case,
+        view,
+        timeline,
+        goal_name=approval_goal_name(storage, case),
+        config_root=config_root,
+        principal=principal,
     )
     return view.model_copy(update={"conversation": conversation})
 

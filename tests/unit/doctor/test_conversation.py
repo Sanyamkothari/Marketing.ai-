@@ -17,8 +17,9 @@ from typing import Any
 
 import pytest
 
+from engine.access.roles import Principal, Role
 from engine.agent.contracts import AgentConfidence, ProposalSource, ProposalState
-from engine.doctor.case import Case, CaseChatEntry, CaseItem, payload_digest
+from engine.doctor.case import Case, CaseChatEntry, CaseItem, TimelineEvent, TimelineKind, payload_digest
 from engine.doctor.conversation import (
     ChangeCard,
     FirstLookCard,
@@ -122,12 +123,89 @@ def test_a_fix_is_a_change_card_with_undo_and_who_made_it(storage: LocalStorage,
     screen = scenario("approve_class", storage, world)
     changes = _of(screen, ChangeCard)
     assert changes and all(c.state == "accepted" and c.undo for c in changes)
-    by = {c.item_id: c.by for c in changes}
-    assert "you" in by.values() and "rules" in by.values(), "answered by the person, or ticked by the rules"
+    assert {c.by for c in changes} == {
+        "rules"
+    }, "the fixes the rules ticked; the person's answers are on their questions"
     shown = {c.item_id for c in changes}
     inside = {a.item_id for a in screen.view.approve_class}
     assert shown.isdisjoint(inside), "a change that needs its own yes is inside the ready card, not a card"
     assert not any(i.kind == "data_check" for i in screen.case.items if i.item_id in shown)
+
+
+def test_an_answer_is_told_once_on_its_question_and_is_not_a_fix(storage: LocalStorage, world: World) -> None:
+    screen = scenario("approve_class", storage, world)
+    answered = [q for q in screen.case.questions if q.answer is not None]
+    assert answered, "the fixture has answered questions"
+    made = {
+        i.item_id
+        for i in screen.case.items
+        if any(i.item_id.startswith(f"{q.question_id}:") for q in answered)
+    }
+    assert made, "each answer made an item"
+    assert made.isdisjoint(
+        {c.item_id for c in _of(screen, ChangeCard)}
+    ), "no second card repeating the answer"
+    first = screen.view.conversation[0]
+    assert isinstance(first, FirstLookCard)
+    assert first.fixes_count == len(_of(screen, ChangeCard)) == 1, "only fixes the rules made count"
+    assert "I made 1 fix on a copy" in first.sentence
+    # what an answer changed, measured by our code, is told on the question
+    q = next(q for q in answered if q.code == "KEY_AMBIGUOUS")
+    items = tuple(
+        (
+            i.model_copy(update={"payload": {**i.payload, "counts": "1,200 rows, none left out"}})
+            if i.item_id.startswith(f"{q.question_id}:")
+            else i
+        )
+        for i in screen.case.items
+    )
+    again = screen_view(storage, screen.case.model_copy(update={"items": items}), config_root=None)
+    card = next(
+        c for c in again.conversation if isinstance(c, QuestionCard) and c.question_id == q.question_id
+    )
+    assert card.answer == q.answer and card.counts == "1,200 rows, none left out"
+
+
+def test_a_change_someone_else_ticked_is_not_called_the_readers_choice(
+    storage: LocalStorage, world: World
+) -> None:
+    screen = scenario("approve_class", storage, world)
+    item = next(i for i in screen.case.items if i.item_id.startswith("as_of_column"))
+    mine = item.model_copy(update={"decided_by": "u-me"})
+    case = screen.case.model_copy(
+        update={"items": tuple(mine if i is item else i for i in screen.case.items)}
+    )
+    who = lambda p: next(  # noqa: E731
+        c.by
+        for c in screen_view(storage, case, config_root=None, principal=p).conversation
+        if isinstance(c, ChangeCard) and c.item_id == item.item_id
+    )
+    me = Principal(user_id="u-me", username="me", roles=frozenset({Role.ANALYST}))
+    other = Principal(user_id="u-other", username="other", roles=frozenset({Role.ANALYST}))
+    assert who(me) == "you" and who(other) == "someone" and who(None) == "you"
+
+
+def test_a_change_with_its_own_yes_is_a_change_once_agreed(storage: LocalStorage, world: World) -> None:
+    screen = scenario("approve_class", storage, world)
+    consent = next(a for a in screen.view.approve_class if a.item_id.startswith("consent_column"))
+    assert consent.item_id not in {
+        c.item_id for c in _of(screen, ChangeCard)
+    }, "waiting for its yes: in the ready card"
+    agreed = tuple(a.model_copy(update={"confirmed": a is consent}) for a in screen.view.approve_class)
+    view = screen.view.model_copy(update={"approve_class": agreed})
+    ticked = tuple(
+        (
+            i.model_copy(update={"state": ProposalState.ACCEPTED, "decided_by": "u-me"})
+            if i.item_id == consent.item_id
+            else i
+        )
+        for i in screen.case.items
+    )
+    cards = build_conversation(screen.case.model_copy(update={"items": ticked}), view, screen.timeline)
+    (card,) = [c for c in cards if isinstance(c, ChangeCard) and c.item_id == consent.item_id]
+    assert card.state == "accepted" and card.undo, "agreed: a change card with Undo, like any other"
+    ready = cards[-1]
+    assert isinstance(ready, ReadyCard) and consent.item_id not in {c.item_id for c in ready.confirmations}
 
 
 def test_the_ready_card_holds_the_exact_sentence_and_the_own_yes_changes(
@@ -279,6 +357,43 @@ def test_a_reply_brings_its_changes_after_it_and_a_suggestion_records_nothing(
     for entry in (gone, odd):
         shown = screen_view(storage, _chat(case, entry), config_root=None).conversation
         assert next(c for c in shown if isinstance(c, MessageCard)).suggestion is None
+
+
+def test_a_question_asked_during_a_reply_is_drawn_after_the_reply(
+    storage: LocalStorage, world: World
+) -> None:
+    screen = scenario("question", storage, world)
+    case = screen.case
+    q = next(q for q in case.questions if q.code == "UNKNOWN_BOOLEAN")
+    at = case.updated_at + timedelta(minutes=5)
+    base = {"by": None, "sent": (), "item_ids": (), "withdrawn": (), "tools": (), "suggestion": None}
+    user = SimpleNamespace(role="user", text="check the yes/no column", at=at, **base)
+    reply = SimpleNamespace(
+        role="agent", text="I have a question for you.", at=at + timedelta(seconds=3), **base
+    )
+    asked = TimelineEvent(
+        event_id="ev_" + "a" * 20,
+        case_id=case.case_id,
+        client_id=case.client_id,
+        version=case.version,
+        at=at + timedelta(seconds=1),
+        actor="agent:data-doctor",
+        kind=TimelineKind.QUESTION_ASKED,
+        item_id=q.question_id,
+    )
+    cards = screen_view(
+        storage,
+        _chat(case, user, reply),
+        config_root=None,
+        timeline=(*[e for e in screen.timeline if e.item_id != q.question_id], asked),
+    ).conversation
+    where = {
+        (c.role if isinstance(c, MessageCard) else getattr(c, "question_id", None)): i
+        for i, c in enumerate(cards)
+    }
+    assert (
+        where["user"] < where["agent"] < where[q.question_id]
+    ), "the reply first, then the question it raised"
 
 
 def test_the_ai_path_fills_the_same_cards(storage: LocalStorage, world: World) -> None:
