@@ -388,6 +388,24 @@ def _prepared_verify(storage: Storage, root: Path) -> Any:
     return doctor_visit.readiness_verify(storage, root, prepare)
 
 
+def case_file_loader(
+    storage: Storage, root: Path, offers: Sequence[Any] | None = None
+) -> Callable[[Case], tuple[LoadedFile, ...]]:
+    """The visit's loader of a case's files (rows capped as the Doctor reads them): the screen's data preview reads
+    the same rows the plan was counted on."""
+    from api.routes.doctor import offers as doctor_offers
+    from engine.stages.ingest import profile_row_cap
+
+    def load_files(case: Case) -> tuple[LoadedFile, ...]:
+        listed = (
+            offers if offers is not None else doctor_offers(root)
+        )  # read when a file is, not on every call
+        cap = min((profile_row_cap(o.config) for o in listed), default=DIAGNOSIS_ROWS)
+        return _load_files(storage, case.upload_ids(), cap)
+
+    return load_files
+
+
 def _deps(storage: Storage, root: Path, request: Request, principal: Principal | None) -> VisitDeps:
     """Every visit route carries the CONVERSE port, connected only when a chat turn runs: a visit resumed in
     CONVERSE (the process died during the AI call) is answered by the AI service, not told there is none."""
@@ -402,13 +420,9 @@ def _deps(storage: Storage, root: Path, request: Request, principal: Principal |
     from engine.doctor.prescription import CasePrescriber
     from engine.doctor.sensitive_ask import sensitive_detector
     from engine.doctor.time_settings import time_settings_detector
-    from engine.stages.ingest import profile_row_cap
 
     offers = doctor_offers(root)
-    cap = min((profile_row_cap(offer.config) for offer in offers), default=DIAGNOSIS_ROWS)
-
-    def load_files(case: Case) -> tuple[LoadedFile, ...]:
-        return _load_files(storage, case.upload_ids(), cap)
+    load_files = case_file_loader(storage, root, offers)
 
     return VisitDeps(
         storage=storage,

@@ -67,6 +67,11 @@ def test_the_screen_follows_a_visit_from_a_file_to_a_goal(client: TestClient) ->
     view = screen["view"]
     assert view["mode"] == "generic" and view["missing_for"] == case["visit"]["missing_for"]
     assert case["state"] == "approve" and view["verdict"]["key"] == "needs_approval"
+    shown = view["preview"]["files"][0]  # the data panel: the first rows before and after, masked
+    assert shown["file_name"] == "customers.csv" and shown["total_rows"] == 1_500
+    assert len(shown["before"]) == 10 == len(shown["after"]) and shown["note"] is None
+    assert set(shown["columns"][0]) == {"name", "changed", "personal"}
+    assert all(len(row) == len(shown["columns"]) for row in shown["before"] + shown["after"])
     approved = client.post(
         f"/cases/{case['case_id']}/approval",
         json={"version": case["version"], "sentence": view["approval_sentence"]},

@@ -142,6 +142,8 @@ CATALOGUE: Final[tuple[CatalogueRow, ...]] = (
     _R(83, "find_excel_serial_dates", "read", "rules", "new"),
     # N. The Data Doctor's own SQL step (sandboxed, read-only)
     _R(84, "propose_sql_step", "propose", "rules + ai", "new"),
+    # O. The agent looks at its own work: the first rows before and after the plan (masked)
+    _R(85, "preview_working_copy", "read", "ai", "new"),
 )
 """The design §5.5, row by row."""
 

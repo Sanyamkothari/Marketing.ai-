@@ -70,6 +70,7 @@ if TYPE_CHECKING:
     from engine.clients import ClientStore
     from engine.config import RoleCatalogue, UseCaseConfig
     from engine.connections.store import ConnectionStore
+    from engine.doctor.case import CaseItem
     from engine.doctor.diagnose import LoadedFile, Offer
     from engine.doctor.explain import Narrator
     from engine.doctor.locale import LocaleProfile
@@ -141,9 +142,9 @@ FORBIDDEN_PREFIXES: Final[tuple[str, ...]] = (
 Caller = Literal["rules", "ai", "person"]
 CALLERS: Final[frozenset[str]] = frozenset({"rules", "ai", "person"})
 _MIN_PROPOSE_ROLE: Final[frozenset[Role]] = frozenset({Role.ANALYST, Role.APPROVER, Role.ADMIN})
-_LAST_ROW: Final[int] = 84
+_LAST_ROW: Final[int] = 85
 """The catalogue's last row (`engine.doctor.catalogue`): #82 and #83 are M240's tools, given rows in M236;
-#84 is `propose_sql_step`."""
+#84 is `propose_sql_step`, #85 `preview_working_copy`."""
 _LETTERS: Final[dict[int, int]] = str.maketrans("0123456789abcdef", "abcdefghijklmnop")
 
 
@@ -257,6 +258,9 @@ class DataToolContext:
     cite them by evidence id; a model never supplies a result)."""
     narrator: Narrator | None = None
     """The AI service's writer of `explain`'s structured narrative; None means the rules' narrative."""
+    case_items: tuple[CaseItem, ...] | None = None
+    """The case's items as they stand (the section on screen): the plan `preview_working_copy` tries on the files.
+    None where the caller did not hand them over: the tool is then not available."""
 
     def require_agent(self) -> AgentContext:
         if self.agent is None:  # unreachable through the registry: `needs` makes the tool unavailable
@@ -283,6 +287,7 @@ Need = Literal[
     "client_store",
     "meter",
     "evidence",
+    "case_items",
 ]
 
 In = TypeVar("In", bound=BaseModel)
@@ -629,6 +634,8 @@ def _met(tool: DataTool[Any, Any], ctx: DataToolContext) -> bool:
         if need == "client_store" and ctx.client_store is None:
             return False
         if need == "meter" and ctx.meter is None:
+            return False
+        if need == "case_items" and ctx.case_items is None:
             return False
         if need == "evidence" and not ctx.evidence:
             return False

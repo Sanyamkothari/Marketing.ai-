@@ -177,6 +177,51 @@ def test_the_ai_proposes_a_join_and_it_is_a_pending_item_with_our_receipt(
     assert found.sent, "what was sent to the AI is recorded for the screen"
 
 
+def test_the_ai_can_look_at_its_working_copy_and_what_it_reads_has_no_personal_value(
+    world: World, storage: LocalStorage
+) -> None:
+    from engine.agent.contracts import DecidedBy, RecipeStep, RecipeStepKind
+    from engine.doctor.case import CaseItem, payload_digest
+
+    step = RecipeStep(
+        order=1,
+        kind=RecipeStepKind.REMOVE_ROWS,
+        column="marketing_opt_in",
+        params={"operator": "equals", "values": [0]},
+        reason="Leave out customers who did not opt in.",
+        decided_by=DecidedBy.USER,
+    )
+    payload: dict[str, Any] = {"upload_id": FIRST, "step": step.model_dump(mode="json")}
+    item = CaseItem(
+        item_id="i-optin",
+        kind="recipe_step",
+        title=step.reason,
+        source=ProposalSource.RULES,
+        confidence=AgentConfidence.SURE,
+        state=ProposalState.ACCEPTED,
+        upload_id=FIRST,
+        payload=payload,
+        payload_digest=payload_digest(payload),
+        proposed_at=vs.T0,
+    )
+    case = vs.open_case(storage, world)
+    case = case.model_copy(update={"items": (item,)})
+    client = Script(
+        [
+            {"action": "preview_working_copy", "file": "F1", "args": {"rows": 2}},
+            {"action": "finish", "text": "I looked at the working copy."},
+        ]
+    )
+    found = _review(_guard(client))(case, _files(world), None)
+    looked = [r for r in found.evidence if r.tool == "preview_working_copy"]
+    assert looked and looked[0].kind.value == "read", "the look is evidence like any other"
+    (shown,) = looked[0].output["files"]
+    opted = shown["after"]["columns"].index("marketing_opt_in")
+    assert {row[opted] for row in shown["after"]["rows"]} == {"1"}, "the rows left out are not in the copy"
+    second = [c for c in client.calls if c.kind == "complete"][1]
+    assert "changed_columns" in second.prompt, "the result was put in the next prompt, through the gate"
+
+
 def test_a_query_that_keeps_failing_its_own_checks_is_retried_twice_then_shown_with_a_stop(
     world: World, storage: LocalStorage
 ) -> None:
