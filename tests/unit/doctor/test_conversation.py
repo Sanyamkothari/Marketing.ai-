@@ -1,0 +1,341 @@
+"""The case as one conversation (`view.conversation`, `engine.doctor.conversation`).
+
+Through the real cases of `screen_support`: the cards the chat-first screen draws, in reading order, for the rules
+path (and, with the AI's items and chat entries put in by hand, the AI path - both leave their work in the same
+places, so the cards are the same). The checks: the first look says what was looked at; a fix is a change card with
+Undo; a question is chips with the safe "I don't know"; the goals (or the fit, with the goal chosen first); the one
+ready card holds the exact sentence with the stops and the own-yes changes inside it; a chat reply's changes follow
+the reply; a suggestion is offered only for an open question and records nothing.
+"""
+
+from __future__ import annotations
+
+from datetime import timedelta
+from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
+
+import pytest
+
+from engine.agent.contracts import AgentConfidence, ProposalSource, ProposalState
+from engine.doctor.case import Case, CaseChatEntry, CaseItem, payload_digest
+from engine.doctor.conversation import (
+    ChangeCard,
+    FirstLookCard,
+    FitCard,
+    GoalsCard,
+    MessageCard,
+    QuestionCard,
+    ReadyCard,
+    RequestCard,
+    build_conversation,
+)
+from engine.doctor.plan_check import plan_digest
+from engine.doctor.screen import CaseScreen, screen_view
+from engine.doctor.visit import active_section
+from engine.doctor.visit_contracts import Acknowledgement, PlanCheck, PlanFinding
+from engine.storage import LocalStorage
+from tests.unit.doctor import visit_support as vs
+from tests.unit.doctor.screen_support import scenario
+from tests.unit.doctor.visit_support import World
+
+
+@pytest.fixture
+def world() -> World:
+    return vs.world()
+
+
+@pytest.fixture
+def storage(tmp_path: Path) -> LocalStorage:
+    return LocalStorage(tmp_path / "data")
+
+
+def _types(screen: CaseScreen) -> list[str]:
+    return [card.type for card in screen.view.conversation]
+
+
+def _of(screen: CaseScreen, kind: type) -> list[Any]:
+    return [card for card in screen.view.conversation if isinstance(card, kind)]
+
+
+def test_a_case_with_no_file_has_no_conversation_yet(storage: LocalStorage, world: World) -> None:
+    assert scenario("empty", storage, world).view.conversation == ()
+
+
+def test_the_first_look_comes_first_and_says_what_was_looked_at(storage: LocalStorage, world: World) -> None:
+    screen = scenario("question", storage, world)
+    first = screen.view.conversation[0]
+    assert isinstance(first, FirstLookCard)
+    assert first.rows == 1200 and [f.name for f in first.files] == ["customers_oct.csv"]
+    assert first.fixes_count == 0 and first.questions_count == 2
+    assert "I looked at 1 file: customers_oct.csv (1,200 rows)." in first.sentence
+    assert "2 questions are only yours to answer." in first.sentence
+    assert _types(screen).count("first_look") == 1
+
+
+def test_questions_are_chips_and_i_dont_know_is_the_safe_choice(storage: LocalStorage, world: World) -> None:
+    screen = scenario("question", storage, world)
+    by_code = {q.code: q for q in screen.case.questions}
+    cards = {c.question_id: c for c in _of(screen, QuestionCard)}
+    key = cards[by_code["KEY_AMBIGUOUS"].question_id]
+    assert key.blocking and key.answer is None
+    assert [o.label for o in key.options] == [
+        "customer_id",
+        "account_no",
+    ], "the question's own I don't know is apart"
+    assert key.dont_know is not None and key.dont_know.id == "none" and key.dont_know.label == "I don't know"
+    boolean = cards[by_code["UNKNOWN_BOOLEAN"].question_id]
+    assert boolean.options[0].label == "Yes: haa is yes, nahi is no"
+    assert boolean.options[0].rows_changed == 600 and boolean.options[0].effect
+    assert boolean.why == "600 of 1,200 values are written that way."
+    safe = boolean.dont_know
+    assert safe is not None and safe.id == "c1" and safe.label == "I don't know"
+    assert (
+        "safe choice: Leave them as written" in safe.effect
+    ), "I don't know takes the safe choice, never a guess"
+
+
+def test_doubts_and_requests_are_cards_of_their_own(storage: LocalStorage, world: World) -> None:
+    screen = scenario("question", storage, world)
+    (doubt,) = [c for c in screen.view.conversation if c.type == "doubt"]
+    assert doubt.because.startswith("“monthly_spend” is near 2,000")
+    (request,) = _of(screen, RequestCard)
+    assert [o.id for o in request.options] == ["will_add", "cannot"]
+    assert "Win back needs it" in request.text
+
+
+def test_with_no_goal_the_goals_are_cards_and_a_goal_chosen_first_is_a_fit(
+    storage: LocalStorage, world: World, tmp_path: Path
+) -> None:
+    generic = scenario("question", storage, world)
+    (goals,) = _of(generic, GoalsCard)
+    assert goals.cards and goals.cards[0].best and goals.cards[0].goal_id
+    assert goals.cards[0].customers == 1200 and goals.more_count == 0
+    assert not _of(generic, FitCard)
+    chosen = scenario("approve_class", LocalStorage(tmp_path / "goal"), vs.world())
+    (fit,) = _of(chosen, FitCard)
+    assert fit.goal_id == "targeted-advertisement" and fit.ok and fit.name == "Find customers likely to buy"
+    assert not _of(chosen, GoalsCard), "a goal chosen first is not asked for again"
+
+
+def test_a_fix_is_a_change_card_with_undo_and_who_made_it(storage: LocalStorage, world: World) -> None:
+    screen = scenario("approve_class", storage, world)
+    changes = _of(screen, ChangeCard)
+    assert changes and all(c.state == "accepted" and c.undo for c in changes)
+    by = {c.item_id: c.by for c in changes}
+    assert "you" in by.values() and "rules" in by.values(), "answered by the person, or ticked by the rules"
+    shown = {c.item_id for c in changes}
+    inside = {a.item_id for a in screen.view.approve_class}
+    assert shown.isdisjoint(inside), "a change that needs its own yes is inside the ready card, not a card"
+    assert not any(i.kind == "data_check" for i in screen.case.items if i.item_id in shown)
+
+
+def test_the_ready_card_holds_the_exact_sentence_and_the_own_yes_changes(
+    storage: LocalStorage, world: World
+) -> None:
+    screen = scenario("approve_class", storage, world)
+    ready = screen.view.conversation[-1]
+    assert isinstance(ready, ReadyCard) and ready.stage == "approve"
+    assert ready.sentence == screen.view.approval_sentence, "the sentence the server checks, word for word"
+    assert {c.item_id for c in ready.confirmations} == {a.item_id for a in screen.view.approve_class}
+    consent = next(c for c in ready.confirmations if c.role == "approver")
+    assert consent.sentence == next(
+        a.sentence for a in screen.view.approve_class if a.item_id == consent.item_id
+    )
+    assert not consent.required, "not ticked: left out unless agreed"
+    assert [s.id for s in ready.speeds] == ["quick", "balanced", "thorough"]
+    assert [s.id for s in ready.speeds if s.recommended] == ["balanced"]
+    assert not ready.blocked and ready.stops == ()
+    assert _types(screen).index("ready") == len(_types(screen)) - 1, "the ready card is last"
+
+
+def test_a_ticked_change_this_reader_cannot_agree_to_blocks_the_approval_and_says_why(
+    storage: LocalStorage, world: World
+) -> None:
+    screen = scenario("approve_class_own", storage, world)
+    ready = screen.view.conversation[-1]
+    assert isinstance(ready, ReadyCard)
+    assert {c.cannot_agree for c in ready.confirmations} == {"role", "separation"}
+    assert all(not c.can_agree for c in ready.confirmations)
+    required = [c for c in ready.confirmations if c.required]
+    assert [c.cannot_agree for c in required] == [
+        "separation"
+    ], "the ticked rows change needs someone else's yes"
+    assert ready.blocked, "so this reader cannot approve; the unticked consent change is only left out"
+
+
+def test_an_open_stop_is_a_checkbox_inside_the_ready_card(storage: LocalStorage, world: World) -> None:
+    screen = scenario("approve", storage, world)
+    case = screen.case
+    items, _ = active_section(case)
+    assert case.visit is not None
+    stop = PlanFinding(key="k-stop", level="stop", code="STEP_LOSES_CUSTOMERS", text="Two thirds are lost.")
+    check = PlanCheck(digest=plan_digest(case.files, items), findings=(stop,))
+    counted = case.model_copy(update={"visit": case.visit.model_copy(update={"plan_check": check})})
+    ready = screen_view(storage, counted, config_root=None).conversation[-1]
+    assert isinstance(ready, ReadyCard)
+    assert [(s.key, s.text) for s in ready.stops] == [("k-stop", "Two thirds are lost.")]
+    said = case.visit.model_copy(update={"plan_check": check})
+    ack = Acknowledgement(key="k-stop", by="u", at=case.updated_at)
+    after = case.model_copy(update={"visit": said.model_copy(update={"acknowledged": (ack,)})})
+    again = screen_view(storage, after, config_root=None).conversation[-1]
+    assert (
+        isinstance(again, ReadyCard) and again.stops == ()
+    ), "a stop that was said yes to is not asked again"
+    stale = counted.model_copy(update={"visit": counted.visit.model_copy(update={"plan_check": check.model_copy(update={"digest": "old"})})})  # type: ignore[union-attr]
+    old = screen_view(storage, stale, config_root=None).conversation[-1]
+    assert isinstance(old, ReadyCard) and old.stops == (), "the stops of another plan are never shown"
+
+
+def test_once_approved_the_card_is_the_start_and_names_what_was_left_out(
+    storage: LocalStorage, world: World
+) -> None:
+    screen = scenario("ready", storage, world)
+    ready = screen.view.conversation[-1]
+    assert isinstance(ready, ReadyCard) and ready.stage == "start"
+    assert ready.sentence.startswith("Prepare 1 file with 4 changes")
+    assert ready.left_out == ("“marketing_opt_in” says who agreed to be contacted.",)
+    assert screen.view.start is not None
+
+
+def test_not_ready_is_a_card_with_the_checks_own_reasons(storage: LocalStorage, world: World) -> None:
+    screen = scenario("not_ready", storage, world)
+    ready = screen.view.conversation[-1]
+    assert isinstance(ready, ReadyCard) and ready.stage in {"blocked", "approve"}
+    assert ready.notes == tuple(screen.view.verdict.reasons)
+
+
+def _chat(case: Case, *entries: Any) -> Case:
+    return case.model_copy(update={"chat": tuple(entries)})
+
+
+def test_a_reply_brings_its_changes_after_it_and_a_suggestion_records_nothing(
+    storage: LocalStorage, world: World
+) -> None:
+    screen = scenario("question", storage, world)
+    case = screen.case
+    q = next(q for q in case.questions if q.code == "UNKNOWN_BOOLEAN")
+    at = case.updated_at + timedelta(minutes=5)
+    item = CaseItem(
+        item_id="ai.yes_no",
+        kind="recipe_step",
+        title="Read “haa” and “nahi” as yes and no",
+        source=ProposalSource.AI,
+        confidence=AgentConfidence.CHECK,
+        payload={},
+        payload_digest=payload_digest({}),
+        proposed_at=at,
+    )
+    items = (*case.items, item)
+    user = SimpleNamespace(
+        role="user",
+        text="haa means yes",
+        at=at,
+        by="u",
+        sent=(),
+        item_ids=(),
+        withdrawn=(),
+        tools=(),
+        suggestion=None,
+    )
+    suggestion = SimpleNamespace(
+        question_id=q.question_id, option_id="c0", label="Yes: haa is yes, nahi is no"
+    )
+    reply = SimpleNamespace(
+        role="agent",
+        text="I understood: haa is yes. Use this?",
+        at=at + timedelta(seconds=2),
+        by=None,
+        sent=(),
+        item_ids=(item.item_id,),
+        withdrawn=(),
+        tools=("get_profile", "propose_step"),
+        suggestion=suggestion,
+    )
+    asked = _chat(case.model_copy(update={"items": items}), user, reply)
+    view = screen_view(storage, asked, config_root=None, timeline=screen.timeline)
+    cards = view.conversation
+    messages = [c for c in cards if isinstance(c, MessageCard)]
+    assert [m.role for m in messages] == ["user", "agent"]
+    agent = messages[1]
+    assert agent.tools == ("get_profile", "propose_step")
+    assert agent.suggestion is not None and agent.suggestion.option_id == "c0" and not agent.suggestion.used
+    assert agent.suggestion.question.startswith("In “marketing_opt_in”")
+    assert (
+        next(x for x in asked.questions if x.question_id == q.question_id).answer is None
+    ), "nothing recorded"
+    after = cards[cards.index(agent) + 1]
+    assert isinstance(after, ChangeCard) and after.item_id == item.item_id and after.source == "ai"
+    # a suggestion for a question that is not there, or an answer it does not offer, is dropped
+    gone = SimpleNamespace(
+        **{**reply.__dict__, "suggestion": SimpleNamespace(question_id="nope", option_id="c0", label="x")}
+    )
+    odd = SimpleNamespace(
+        **{
+            **reply.__dict__,
+            "suggestion": SimpleNamespace(question_id=q.question_id, option_id="zz", label="x"),
+        }
+    )
+    for entry in (gone, odd):
+        shown = screen_view(storage, _chat(case, entry), config_root=None).conversation
+        assert next(c for c in shown if isinstance(c, MessageCard)).suggestion is None
+
+
+def test_the_ai_path_fills_the_same_cards(storage: LocalStorage, world: World) -> None:
+    """An AI step the agent applied (decided by the agent), one waiting for a yes, one the person undid and one the
+    agent took back: the cards say who made each and what can be done; a take-back is not a card."""
+    screen = scenario("approve", storage, world)
+    case = screen.case
+    base = next(i for i in case.items if i.kind not in {"data_check"})
+    now = case.updated_at
+
+    def ai(item_id: str, state: ProposalState, by: str | None, title: str) -> Any:
+        return base.model_copy(
+            update={
+                "item_id": item_id,
+                "title": title,
+                "source": ProposalSource.AI,
+                "state": state,
+                "decided_by": by,
+                "decided_at": now if by else None,
+                "payload": {"counts": "312 values → 1,200 · none unreadable"},
+            }
+        )
+
+    items = (
+        ai("ai.applied", ProposalState.ACCEPTED, "agent:data-doctor", "Read the dates day first"),
+        ai("ai.waiting", ProposalState.PENDING, None, "Use only this year's orders"),
+        ai("ai.undone", ProposalState.REJECTED, "u-asha", "Drop the test customers"),
+        ai("ai.taken_back", ProposalState.REJECTED, "agent:data-doctor", "A step the agent withdrew"),
+    )
+    view = screen_view(storage, case.model_copy(update={"items": (*case.items, *items)}), config_root=None)
+    cards = {c.item_id: c for c in view.conversation if isinstance(c, ChangeCard)}
+    assert (
+        cards["ai.applied"].by == "agent" and cards["ai.applied"].undo and cards["ai.applied"].source == "ai"
+    )
+    assert cards["ai.applied"].counts == "312 values → 1,200 · none unreadable"
+    assert (
+        cards["ai.waiting"].state == "pending"
+        and not cards["ai.waiting"].undo
+        and cards["ai.waiting"].by is None
+    )
+    assert cards["ai.undone"].state == "rejected", "undone by the person: shown, so it can be done again"
+    assert "ai.taken_back" not in cards, "taken back by the agent: its message says so, it is not a card"
+    first = view.conversation[0]
+    assert isinstance(first, FirstLookCard) and first.fixes_count == sum(
+        1 for c in cards.values() if c.state == "accepted"
+    )
+
+
+def test_the_conversation_is_built_from_the_case_alone(storage: LocalStorage, world: World) -> None:
+    screen = scenario("approve_class", storage, world)
+    again = build_conversation(
+        screen.case, screen.view.model_copy(update={"conversation": ()}), screen.timeline
+    )
+    assert [c.model_dump() for c in again] == [c.model_dump() for c in screen.view.conversation]
+    # a chat entry as the case stores it today (no item_ids / suggestion fields needed) is a plain message
+    plain = _chat(screen.case, CaseChatEntry(role="user", text="why?", at=screen.case.updated_at))
+    (message,) = [
+        c for c in build_conversation(plain, screen.view, screen.timeline) if isinstance(c, MessageCard)
+    ]
+    assert message.item_ids == () and message.suggestion is None and message.text == "why?"
