@@ -51,7 +51,8 @@ if (!process.env.DDS_FIXTURES) {
     await until(() => $('[data-cw-customers] [data-cw-guided-main] [data-dds-place="wizard"]'), 5000, "the screen in the wizard");
     const here = $('[data-dds-place="wizard"]');
     assert.equal(here.dataset.ddsCase, CASE, "the same case");
-    assert.ok($('[data-cw-customers] [data-cw-guided-aside] [data-dds-chat]'), "the chat in the card's side");
+    assert.ok($('[data-cw-customers] [data-cw-guided-main] [data-dds-composer]'), "the chat's box, in the card");
+    assert.ok($('[data-cw-customers] [data-cw-guided-main] [data-dds-fit]'), "the goal was chosen first: whether the data fits it");
   });
 
   test("nothing is asked twice: the Data page's answer stands in the wizard", async () => {
@@ -60,7 +61,8 @@ if (!process.env.DDS_FIXTURES) {
     const blocking = $$('[data-dds-place="wizard"] .dds-q.is-open').filter((q) => q.textContent.includes("Needed to go on"));
     assert.deepEqual(blocking, [], "no question waits again");
     assert.equal(answersTo(keyQuestion.question_id).length, 1, "answered once, in one place");
-    assert.ok($('[data-dds-place="wizard"] [data-dds-approval]'), "the goal's own approvals follow");
+    assert.ok($('[data-dds-place="wizard"] [data-dds-confirm-row]'), "the goal's own yeses are in the one approval card");
+    assert.equal($$('[data-dds-place="wizard"] [data-dds-approve-start]').length, 1, "and there is one approval");
   });
 
   test("a goal's setup opens the same case where Guided setup mounts", async () => {

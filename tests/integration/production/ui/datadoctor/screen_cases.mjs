@@ -25,7 +25,7 @@ async function show(at, options = {}) {
   forgetAiServiceStatus();
   await settle(2);
   app.innerHTML = `<main><h1>Data</h1><div class="dds-layout"><div id="m"></div><aside id="a"></aside></div></main>`;
-  mountDataDoctor({ main: $("#m"), aside: $("#a") }, { place: "data", ...(options.host || {}) });
+  mountDataDoctor({ main: $("#m"), aside: $("#a") }, { place: "data", detail: true, ...(options.host || {}) });
   await until(() => $("[data-dds-verdict]") || $("[data-dds-start]"), 3000, `the ${at} screen`);
   await settle(3);
   return screen(at);

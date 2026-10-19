@@ -126,6 +126,7 @@ class ChangeCard(StrictBase):
 class QuestionCard(StrictBase):
     type: Literal["question"] = "question"
     question_id: str
+    code: str = Field(default="", description="The rule that asked it; technical, never drawn as text.")
     text: str
     why: str = ""
     blocking: bool = False
@@ -369,6 +370,7 @@ def _question(question: CaseQuestion) -> QuestionCard:
         )
     return QuestionCard(
         question_id=question.question_id,
+        code=question.code,
         text=question.text,
         why=question.why,
         blocking=question.blocking,
