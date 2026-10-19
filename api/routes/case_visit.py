@@ -388,20 +388,36 @@ def _prepared_verify(storage: Storage, root: Path) -> Any:
     return doctor_visit.readiness_verify(storage, root, prepare)
 
 
-def case_file_loader(
-    storage: Storage, root: Path, offers: Sequence[Any] | None = None
-) -> Callable[[Case], tuple[LoadedFile, ...]]:
-    """The visit's loader of a case's files (rows capped as the Doctor reads them): the screen's data preview reads
-    the same rows the plan was counted on."""
-    from api.routes.doctor import offers as doctor_offers
-    from engine.stages.ingest import profile_row_cap
+def first_rows_loader(storage: Storage) -> Callable[[Case], tuple[LoadedFile, ...]]:
+    """The screen's loader of a case's files: only each file's FIRST `SAMPLE_ROWS` rows (the rows the plan is tried
+    on and the preview shows), never the Doctor's whole-file read or random sample. An O(1,000) read per file.
+    """
+    from engine.doctor.plan_check import SAMPLE_ROWS
+    from engine.stages import ingest
 
     def load_files(case: Case) -> tuple[LoadedFile, ...]:
-        listed = (
-            offers if offers is not None else doctor_offers(root)
-        )  # read when a file is, not on every call
-        cap = min((profile_row_cap(o.config) for o in listed), default=DIAGNOSIS_ROWS)
-        return _load_files(storage, case.upload_ids(), cap)
+        loaded: list[LoadedFile] = []
+        for upload_id in case.upload_ids():
+            record = load_upload(storage, upload_id)
+            profile = load_upload_profile(storage, upload_id)
+            frame = ingest.read_upload(
+                storage,
+                record.source_key,
+                file_format=record.file_format,
+                max_rows=SAMPLE_ROWS,
+                row_cap=SAMPLE_ROWS,
+                keep_leading_zeros=True,
+            ).frame
+            loaded.append(
+                LoadedFile(
+                    upload_id=upload_id,
+                    file_name=record.file_name,
+                    frame=frame,
+                    profile=profile,
+                    file_rows=profile.row_count if profile.row_count > len(frame) else None,
+                )
+            )
+        return tuple(loaded)
 
     return load_files
 
@@ -420,9 +436,13 @@ def _deps(storage: Storage, root: Path, request: Request, principal: Principal |
     from engine.doctor.prescription import CasePrescriber
     from engine.doctor.sensitive_ask import sensitive_detector
     from engine.doctor.time_settings import time_settings_detector
+    from engine.stages.ingest import profile_row_cap
 
     offers = doctor_offers(root)
-    load_files = case_file_loader(storage, root, offers)
+    cap = min((profile_row_cap(offer.config) for offer in offers), default=DIAGNOSIS_ROWS)
+
+    def load_files(case: Case) -> tuple[LoadedFile, ...]:
+        return _load_files(storage, case.upload_ids(), cap)
 
     return VisitDeps(
         storage=storage,

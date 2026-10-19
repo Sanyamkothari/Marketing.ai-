@@ -23,7 +23,7 @@ from engine.agent.contracts import (
 from engine.config import load_use_case
 from engine.doctor.case import CaseItem, CaseStore, payload_digest
 from engine.doctor.diagnose import LoadedFile
-from engine.doctor.preview import PERSONAL_CELL, PREVIEW_ROWS, cached_preview, preview_rows
+from engine.doctor.preview import MAX_COLUMNS, PERSONAL_CELL, PREVIEW_ROWS, cached_preview, preview_rows
 from engine.doctor.registry import DataToolContext, DataToolError, data_registry
 from engine.doctor.screen import build_screen
 from engine.storage import LocalStorage
@@ -195,10 +195,148 @@ def test_the_preview_is_counted_once_per_plan() -> None:
         calls.append(1)
         return preview_rows([_file(_frame())], items)
 
-    first = cached_preview("case-cache", case_files, items, build)
-    again = cached_preview("case-cache", case_files, items, build)
-    other = cached_preview("case-cache", case_files, [*items, _item(DROP, "i-drop")], build)
+    first = cached_preview("c1", "case-cache", case_files, items, build)
+    again = cached_preview("c1", "case-cache", case_files, items, build)
+    other = cached_preview("c1", "case-cache", case_files, [*items, _item(DROP, "i-drop")], build)
     assert first is again and len(calls) == 2 and other is not first
+    cached_preview("c2", "case-cache", case_files, items, build)
+    assert len(calls) == 3, "another client's case is never served this client's rows"
+
+
+def _sql(text: str, order: int = 1, inputs: tuple[str, ...] = ("this", "people")) -> RecipeStep:
+    return _step(
+        RecipeStepKind.SQL_QUERY,
+        "out",
+        order,
+        sql=text,
+        inputs=list(inputs),
+        output_name="out",
+        description="Test query.",
+    )
+
+
+def _people_case() -> tuple[LoadedFile, LoadedFile]:
+    """customers.csv holds no personal column; people.csv (a second file of the case) holds names and numbers."""
+    customers = pd.DataFrame(
+        {"customer_id": [f"C{i}" for i in range(30)], "city": ["Pune", "Delhi"] * 15, "amount": range(30)}
+    )
+    people = pd.DataFrame(
+        {
+            "customer_id": [f"C{i}" for i in range(30)],
+            "full_name": [f"Asha Rao {chr(65 + i % 26)}" for i in range(30)],
+            "mobile": [f"98765{i:05d}" for i in range(30)],
+        }
+    )
+    return _file(customers), _file(people, "up-people", "people.csv")
+
+
+def _clear_cells(file: Any) -> str:
+    return " ".join(cell for row in file.before + file.after for cell in row)
+
+
+def test_a_join_that_brings_names_in_from_another_file_shows_none_of_them() -> None:
+    first, second = _people_case()
+    join = "SELECT c.*, p.full_name AS who, p.mobile AS m FROM t_this c JOIN t_people p USING (customer_id)"
+    view = preview_rows([first, second], [_item(_sql(join), "i-join")], only=FIRST)
+    (shown,) = view.files
+    assert shown.note is None
+    flags = {c.name: c.personal for c in shown.columns}
+    assert flags["who"] and flags["m"] and not flags["city"]
+    assert "Asha" not in _clear_cells(shown) and "98765" not in _clear_cells(shown)
+    assert PERSONAL_CELL in _clear_cells(shown)
+
+
+def test_a_query_that_puts_names_under_another_columns_name_shows_none_of_them() -> None:
+    first, second = _people_case()
+    replace = (
+        "SELECT * REPLACE (p.full_name AS customer_id) FROM t_this c JOIN t_people p USING (customer_id)"
+    )
+    view = preview_rows([first, second], [_item(_sql(replace), "i-replace")], only=FIRST)
+    (shown,) = view.files
+    assert (
+        "Asha" not in _clear_cells(shown)
+        and next(c for c in shown.columns if c.name == "customer_id").personal
+    )
+    own = "SELECT * REPLACE (full_name AS customer_id) FROM t_this"
+    alone = preview_rows(
+        [second], [_item(_sql(own, inputs=("this",)), "i-own", upload_id="up-people")]
+    ).files[0]
+    assert alone.note is None and "Asha" not in _clear_cells(alone)
+    assert next(c for c in alone.columns if c.name == "customer_id").personal
+
+
+def test_personal_values_found_in_a_column_by_value_alone_are_withheld() -> None:
+    first, second = _people_case()
+    copy = _step(RecipeStepKind.SPLIT_COLUMN, "city", new_column="town", separator="~", part=0)
+    # a column whose values are another file's personal values, whatever put them there, is personal
+    first = LoadedFile(**{**first.__dict__, "frame": first.frame.assign(city=second.frame["full_name"])})
+    view = preview_rows([first, second], [_item(copy, "i-copy")], only=FIRST)
+    town = next(c for c in view.files[0].columns if c.name == "town")
+    index = [c.name for c in view.files[0].columns].index("town")
+    assert town.personal and {row[index] for row in view.files[0].after} == {PERSONAL_CELL}
+
+
+def test_the_tool_does_not_hand_the_ai_names_a_query_joined_in() -> None:
+    first, second = _people_case()
+    join = "SELECT c.*, p.full_name AS who, p.mobile AS m FROM t_this c JOIN t_people p USING (customer_id)"
+    ctx = _ctx([first, second], [_item(_sql(join), "i-join")])
+    out = data_registry().call("preview_working_copy", {"rows": 5}, ctx).output
+    text = str(out)
+    assert "Asha" not in text and "98765" not in text and PERSONAL_CELL in text
+
+
+def test_a_plain_row_filter_after_a_query_marks_no_column_changed() -> None:
+    first, _ = _people_case()
+    keep = "SELECT * FROM t_this WHERE amount > 5"
+    shown = preview_rows([first], [_item(_sql(keep, inputs=("this",)), "i-keep")]).files[0]
+    assert shown.note is None and len(shown.after) == PREVIEW_ROWS
+    assert not any(c.changed for c in shown.columns)
+    assert all(int(row[2]) > 5 for row in shown.after)
+
+
+def test_a_query_that_rewrites_a_cell_marks_that_column_changed_by_the_id_column() -> None:
+    first, _ = _people_case()
+    rewrite = "SELECT customer_id, city, amount * 2 AS amount FROM t_this WHERE amount > 5"
+    shown = preview_rows([first], [_item(_sql(rewrite, inputs=("this",)), "i-rw")]).files[0]
+    assert shown.note is None and {c.name for c in shown.columns if c.changed} == {"amount"}
+
+
+def test_a_wide_file_serves_the_changed_columns_first_and_says_how_many_it_left_out() -> None:
+    wide = pd.DataFrame({f"c{i:03d}": [f"v{i}"] * 12 for i in range(300)})
+    wide["c299"] = ["  x "] * 12
+    strip = _step(RecipeStepKind.NORMALISE_TEXT, "c299", strip=True)
+    shown = preview_rows([_file(wide)], [_item(strip, "i-strip")]).files[0]
+    names = [c.name for c in shown.columns]
+    assert len(names) == MAX_COLUMNS == 60 and shown.left_out_columns == 240
+    assert "c299" in names and next(c for c in shown.columns if c.name == "c299").changed
+    assert all(len(row) == 60 for row in shown.before + shown.after)
+
+
+def test_a_step_that_breaks_in_an_unexpected_way_is_a_note_not_an_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import engine.doctor.preview as preview
+
+    def boom(*_: Any, **__: Any) -> Any:
+        raise RuntimeError("unexpected")
+
+    monkeypatch.setattr(preview, "run_guarded", boom)
+    shown = preview_rows([_file(_frame())], [_item(STRIP, "i-strip")]).files[0]
+    assert shown.note and shown.before == shown.after
+
+
+def test_the_tool_refuses_instead_of_ending_the_review_when_the_preview_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import engine.doctor.tools_preview as tool
+
+    def boom(*_: Any, **__: Any) -> Any:
+        raise RuntimeError("unexpected")
+
+    monkeypatch.setattr(tool, "preview_rows", boom)
+    with pytest.raises(DataToolError) as refused:
+        data_registry().call("preview_working_copy", {}, _ctx([_file(_frame())], []))
+    assert refused.value.code == "PREVIEW_UNAVAILABLE"
 
 
 # ---------------------------------------------------------------------------
@@ -348,7 +486,7 @@ def test_the_screen_serves_the_preview_and_fills_the_steps_samples(tmp_path: Pat
     assert all(row[opted] == "1" for row in shown.after)
     served = view.model_dump(mode="json")
     assert set(served["preview"]["files"][0]) == {
-        "upload_id", "file_name", "total_rows", "columns", "before", "after", "note"
+        "upload_id", "file_name", "total_rows", "columns", "before", "after", "left_out_columns", "note"
     }  # fmt: skip
     assert set(served["preview"]["files"][0]["columns"][0]) == {"name", "changed", "personal"}
 

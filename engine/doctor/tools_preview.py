@@ -33,6 +33,7 @@ from engine.doctor.registry import (
     Exposure,
     output_size,
 )
+from engine.utils.logging import get_logger
 
 __all__ = [
     "M_PREVIEW_TOOLS",
@@ -42,6 +43,8 @@ __all__ = [
     "WorkingCopyTable",
     "register_preview_tools",
 ]
+
+_LOG = get_logger(__name__)
 
 M_PREVIEW_TOOLS: Final[tuple[str, ...]] = ("preview_working_copy",)
 DEFAULT_ROWS: Final[int] = 5
@@ -118,7 +121,7 @@ def _shaped(file: PreviewFile, label: str, picked: list[int], rows: int, values:
         changed_columns=tuple(display_name(c.name) for c in file.columns if c.changed)[:40],
         before=table(file.before),
         after=table(file.after),
-        left_out_columns=len(file.columns) - len(picked),
+        left_out_columns=file.left_out_columns + len(file.columns) - len(picked),
         note=file.note,
     )
 
@@ -135,7 +138,13 @@ def _preview(given: PreviewWorkingCopyArgs, ctx: DataToolContext) -> WorkingCopy
         if only is None or loaded.upload_id == only:
             hidden |= {found.column for found in find_long_text(loaded.frame.head(1_000))}
     values = agent is None or agent.config.agent.ai_data_access is not DataAccess.SUMMARIES_ONLY
-    view = preview_rows(files, items, hide=hidden, rows=given.rows, only=only)
+    try:
+        view = preview_rows(files, items, hide=hidden, rows=given.rows, only=only)
+    except Exception as exc:  # a refusal the AI can recover from, never the end of its whole review
+        _LOG.warning("preview_working_copy_failed", exc_info=True)
+        raise DataToolError(
+            "PREVIEW_UNAVAILABLE", "The working copy could not be tried on a sample just now.", status=409
+        ) from exc
     labels = {f.upload_id: f"F{n}" for n, f in enumerate(files, start=1)}
     shaped = [
         _shaped(file, labels[file.upload_id], _pick(file, given.columns), given.rows, values)
@@ -202,6 +211,8 @@ def register_preview_tools(registry: DataToolRegistry) -> tuple[str, ...]:
             ),
             exposure=Exposure.SESSION_ONLY,
             run=_preview,
+            # The catalogue lists the AI (#85, mode "ai"); "person" stays so the eval world and the canary, which call
+            # every tool as a person, can run it. No HTTP route dispatches it, and `case_items` is the plan only.
             callers=frozenset({"ai", "person"}),  # never the rules: they have no use for it
             needs=("files", "case_items"),
             wraps="engine/doctor/preview.py preview_rows (the plan_check trial run on 1,000 rows)",

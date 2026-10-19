@@ -367,7 +367,11 @@ def _preview(case: Case, load_files: Callable[[Case], Sequence[LoadedFile]] | No
     items, _ = active_section(case)
     try:
         return cached_preview(
-            case.case_id, case.files, items, lambda: preview_rows(tuple(load_files(case)), items)
+            case.client_id,
+            case.case_id,
+            case.files,
+            items,
+            lambda: preview_rows(tuple(load_files(case)), items),
         )
     except Exception:
         _LOG.warning("preview_unavailable", exc_info=True)

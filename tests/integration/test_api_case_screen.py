@@ -177,3 +177,9 @@ def test_the_screen_names_the_goal_and_says_who_may_agree(unified: None, tmp_pat
         assert screen["case"]["state"] == "approve", screen["case"]["state"]
         sentence = screen["view"]["approval_sentence"]
         assert "“Find customers likely to buy”" in sentence and GOAL not in sentence
+
+        # Cell values (masked) are an Analyst's, as on `agent-session/preview` and `/rows`: a Viewer's screen holds none.
+        assert screen["view"]["preview"]["files"][0]["before"]
+        seen = client.get(f"/cases/{case['case_id']}/screen", headers=bearer(app, viewer)).json()
+        assert seen["view"]["preview"] is None
+        assert all("samples" not in step for step in (seen["view"]["ledger"] or {}).get("steps", []))
