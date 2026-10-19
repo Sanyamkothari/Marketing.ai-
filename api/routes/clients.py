@@ -155,20 +155,15 @@ def create_client(
 ) -> ClientCreateResponse:
     """A new client folder: `engine.clients.LocalClientStore` mints the id, this just carries it back.
 
-    A deployment that serves one client (`client_scope`) registers that client once, under the
-    deployment's own id; a second one is refused (security review 2, H-3).
+    A deployment that serves one client (`client_scope`) has exactly one, under the deployment's own id
+    (security review 2, H-3): this registers it, or, when the page already created it under its id (the
+    silent `POST /clients/default`), sets its real name and industry. It never mints a second.
     """
     if client_scope(current) is not None:
         assert current.client_id is not None
-        if store.list_clients():
-            raise http_error(
-                409,
-                "CLIENT_LIMIT",
-                "This deployment serves one client, and it already has one. Run another deployment for another client.",
-            )
-        return ClientCreateResponse(
-            client_id=store.ensure_client(current.client_id, body.name, body.industry).client_id
-        )
+        store.ensure_client(current.client_id, body.name, body.industry)
+        record = store.update_client(current.client_id, body.name, body.industry, body.notes)
+        return ClientCreateResponse(client_id=record.client_id)
     record = store.create_client(body.name, body.industry, notes=body.notes)
     return ClientCreateResponse(client_id=record.client_id)
 

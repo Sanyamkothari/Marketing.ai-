@@ -264,7 +264,7 @@ def test_the_forms_ask_for_little_and_hide_the_rest() -> None:
 
 # --- a saved password is never handed to a server that asks for it in clear text (security review 2, H-2) ---
 def test_postgres_refuses_a_clear_text_password_request_unless_the_certificate_is_verified(
-    server: FakeServer, monkeypatch: pytest.MonkeyPatch
+    server: FakeServer, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     driver = driver_module("psycopg", server, "Error")
     driver.pq = types.SimpleNamespace(version=lambda: 180000)  # type: ignore[attr-defined]
@@ -276,8 +276,10 @@ def test_postgres_refuses_a_clear_text_password_request_unless_the_certificate_i
     PostgresConnector().connect({**PG, "sslmode": "verify-full"}, SECRET)
     assert "require_auth" not in server.connects[-1]
     driver.pq = types.SimpleNamespace(version=lambda: 150000)  # type: ignore[attr-defined]  # libpq too old
-    PostgresConnector().connect(PG, SECRET)
+    with caplog.at_level("WARNING", logger=postgres_module.__name__):
+        PostgresConnector().connect(PG, SECRET)
     assert "require_auth" not in server.connects[-1]
+    assert any("older than 16" in r.getMessage() for r in caplog.records)  # not skipped in silence
 
 
 def test_a_rogue_postgres_server_asking_for_the_password_in_clear_never_gets_it() -> None:
@@ -329,10 +331,71 @@ def test_mysql_refuses_the_sign_in_methods_that_send_the_password_in_clear(serve
     pymysql = pytest.importorskip("pymysql")
     MySqlConnector().connect(MY, SECRET)
     plugins = server.connects[-1]["auth_plugin_map"]
-    assert set(plugins) == {b"mysql_clear_password", b"mysql_old_password"}
-    for name in (b"mysql_clear_password", b"mysql_old_password"):
+    assert set(plugins) == {
+        b"mysql_clear_password",
+        b"mysql_old_password",
+        b"dialog",
+        b"sha256_password",
+        b"caching_sha2_password",
+    }
+    for name in (b"mysql_clear_password", b"mysql_old_password", b"dialog", b"sha256_password"):
         with pytest.raises(FakeError):
             plugins[name](None)
     real = mysql_module._refused_plugins(pymysql)
+    for name in (b"mysql_clear_password", b"dialog", b"sha256_password"):
+        with pytest.raises(pymysql.MySQLError):
+            real[name](None)
+    # over TLS (the certificate and host name are checked) the driver's own RSA and cleartext-in-TLS paths stand
+    MySqlConnector().connect({**MY, "ssl": True}, SECRET)
+    assert set(server.connects[-1]["auth_plugin_map"]) == {
+        b"mysql_clear_password",
+        b"mysql_old_password",
+        b"dialog",
+    }
+
+
+def test_mysql_without_tls_never_asks_the_server_for_a_key_to_encrypt_the_password_under() -> None:
+    """`caching_sha2_password` keeps its cached (fast) stage; the full stage's public-key request is refused."""
+    pymysql = pytest.importorskip("pymysql")
+    handler_class = mysql_module._refused_plugins(pymysql)[b"caching_sha2_password"]
+
+    class Packet:
+        def __init__(self, byte: int) -> None:
+            self._byte = byte
+
+        def is_auth_switch_request(self) -> bool:
+            return False
+
+        def is_extra_auth_data(self) -> bool:
+            return True
+
+        def advance(self, _n: int) -> None:
+            pass
+
+        def check_error(self) -> None:
+            pass
+
+        def read_uint8(self) -> int:
+            return self._byte
+
+    class Connection:
+        password = b"s3cret-pw"
+        _secure = False
+        server_public_key = None
+        salt = b"x" * 20
+
+        def __init__(self) -> None:
+            self.sent: list[bytes] = []
+
+        def write_packet(self, data: bytes) -> None:
+            self.sent.append(data)
+
+        def _read_packet(self) -> Any:
+            return Packet(3)
+
+    ok = Connection()  # fast stage: the server has the password cached
+    handler_class(ok).authenticate(Packet(3))
+    full = Connection()  # full stage without TLS: the driver would now ask for the RSA key
     with pytest.raises(pymysql.MySQLError):
-        real[b"mysql_clear_password"](None)
+        handler_class(full).authenticate(Packet(4))
+    assert full.sent == [] and b"s3cret-pw" not in b"".join(full.sent)

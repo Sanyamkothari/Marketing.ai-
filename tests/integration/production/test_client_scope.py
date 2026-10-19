@@ -8,6 +8,7 @@ The exploit these tests replay: an Analyst of client A, on a deployment that als
 
 from __future__ import annotations
 
+import json
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -17,6 +18,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from api.routes.campaign_runs import get_runner
+from api.routes.clients import get_client_store
 from engine.access.roles import Role
 from engine.campaign_run import CampaignRunStore
 from tests.integration.production.access_support import bearer, local_app, make_user
@@ -44,6 +46,12 @@ def pilot(tmp_path: Path) -> Iterator[tuple[TestClient, dict[str, str], FastAPI]
     )
     with TestClient(app) as client:
         yield client, headers, app
+
+
+def _request(app: FastAPI) -> Any:
+    from starlette.requests import Request
+
+    return Request({"type": "http", "app": app, "headers": [], "method": "GET"})
 
 
 def _code(response: Any) -> str | None:
@@ -89,6 +97,42 @@ def test_a_foreign_client_in_a_json_body_is_refused_before_the_route_runs(
     assert _code(none) != "CLIENT_NOT_ALLOWED"
 
 
+JSON_SPELLINGS = (
+    "application/json",
+    "application/json; charset=utf-8",
+    " application/json",
+    "application/vnd.api+json",
+    "application/merge-patch+json",
+    "APPLICATION/JSON",
+)
+
+
+@pytest.mark.parametrize("content_type", JSON_SPELLINGS)
+def test_a_foreign_client_in_a_body_is_refused_whatever_json_type_the_caller_claims(
+    pilot: tuple[TestClient, dict[str, str], FastAPI], content_type: str
+) -> None:
+    """FastAPI parses `application/*+json` and a padded ` application/json` too; the check must not be keyed on the header."""
+    client, headers, _ = pilot
+    headers = {**headers, "Content-Type": content_type}
+    for path, body in (
+        ("/datasets", {"client_id": OTHER, "spec_id": "s_x"}),
+        ("/campaign-runs", {"use_case": "targeted-advertisement", "client_id": OTHER}),
+    ):
+        refused = client.post(path, content=json.dumps(body), headers=headers)
+        assert refused.status_code == 403 and _code(refused) == "CLIENT_NOT_ALLOWED", (path, content_type)
+    own = client.post("/datasets", content=json.dumps({"client_id": MINE, "spec_id": "s_x"}), headers=headers)
+    assert _code(own) != "CLIENT_NOT_ALLOWED", content_type
+
+
+def test_a_foreign_client_in_a_body_with_no_content_type_is_refused(
+    pilot: tuple[TestClient, dict[str, str], FastAPI],
+) -> None:
+    client, headers, _ = pilot
+    body = json.dumps({"client_id": OTHER, "spec_id": "s_x"})
+    response = client.post("/datasets", content=body, headers={**headers, "Content-Type": ""})
+    assert response.status_code == 403 and _code(response) == "CLIENT_NOT_ALLOWED"
+
+
 def test_a_foreign_client_in_a_form_field_is_refused(
     pilot: tuple[TestClient, dict[str, str], FastAPI],
 ) -> None:
@@ -129,8 +173,30 @@ def test_the_deployment_registers_its_one_client_under_its_own_id(
     created = client.post("/clients", json={"name": "Acme Telecom", "industry": "telecom"}, headers=headers)
     assert created.status_code == 201, created.text
     assert created.json()["client_id"] == MINE  # not c_acme_telecom_1: it must equal Settings.client_id
-    second = client.post("/clients", json={"name": "Other Co", "industry": "telecom"}, headers=headers)
-    assert second.status_code == 409 and _code(second) == "CLIENT_LIMIT"
+    again = client.post("/clients", json={"name": "Other Co", "industry": "telecom"}, headers=headers)
+    assert again.status_code == 201 and again.json()["client_id"] == MINE  # never a second client
+    assert [c["client_id"] for c in client.get("/clients", headers=headers).json()["clients"]] == [MINE]
+
+
+def test_the_runbook_step_names_the_client_the_page_already_created_silently(
+    pilot: tuple[TestClient, dict[str, str], FastAPI],
+) -> None:
+    """The UI calls `POST /clients/default` on load (named after the id); `POST /clients` must then set the real name,
+    and a store that holds some other client must not make the deployment's own impossible to create."""
+    client, headers, app = pilot
+    assert client.post("/clients/default", headers=headers).json()["name"] == MINE
+    created = client.post("/clients", json={"name": "Acme Telecom", "industry": "telecom"}, headers=headers)
+    assert created.status_code == 201 and created.json()["client_id"] == MINE
+    (record,) = client.get("/clients", headers=headers).json()["clients"]
+    assert record["name"] == "Acme Telecom" and record["industry"] == "telecom"
+    store = get_client_store(_request(app))
+    store.create_client("Demo", "telecom")  # another client left in the store (for example c_demo)
+    assert (
+        client.post(
+            "/clients", json={"name": "Acme Telecom", "industry": "telecom"}, headers=headers
+        ).status_code
+        == 201
+    )
     assert [c["client_id"] for c in client.get("/clients", headers=headers).json()["clients"]] == [MINE]
 
 
@@ -161,3 +227,45 @@ def test_the_campaign_run_list_and_reads_hold_only_this_clients_runs(
         response = client.get(f"/campaign-runs/{foreign.campaign_run_id}{path}", headers=headers)
         assert response.status_code == 404 and _code(response) == "CAMPAIGN_RUN_NOT_FOUND", path
     assert client.get(f"/campaign-runs/{kept['mine'].campaign_run_id}", headers=headers).status_code == 200
+
+
+def test_cancel_and_restart_of_a_foreign_campaign_run_are_not_found_and_change_nothing(
+    pilot: tuple[TestClient, dict[str, str], FastAPI],
+) -> None:
+    client, headers, app = pilot
+    runner = get_runner(app)
+    foreign = runner.store.create(
+        use_case_id="targeted-advertisement", client_id=OTHER, state="stopped", error=None
+    )
+    running = runner.store.create(use_case_id="targeted-advertisement", client_id=OTHER, state="running")
+    cancelled = client.post(f"/campaign-runs/{running.campaign_run_id}/cancel", headers=headers)
+    assert cancelled.status_code == 404 and _code(cancelled) == "CAMPAIGN_RUN_NOT_FOUND"
+    assert runner.store.get(running.campaign_run_id).state == "running"  # type: ignore[union-attr]
+    before = len(runner.store.list(limit=200))
+    restarted = client.post(f"/campaign-runs/{foreign.campaign_run_id}/restart", headers=headers)
+    assert restarted.status_code == 404 and _code(restarted) == "CAMPAIGN_RUN_NOT_FOUND"
+    assert len(runner.store.list(limit=200)) == before  # no run was started for the other client
+
+
+def test_the_campaign_run_list_keeps_this_clients_runs_behind_many_foreign_ones(
+    pilot: tuple[TestClient, dict[str, str], FastAPI],
+) -> None:
+    client, headers, app = pilot
+    store: CampaignRunStore = get_runner(app).store
+    mine = store.create(use_case_id="targeted-advertisement", client_id=MINE, state="done")
+    for _ in range(205):
+        store.create(use_case_id="targeted-advertisement", client_id=OTHER, state="done")
+    listed = client.get("/campaign-runs?limit=3", headers=headers)
+    ids = [r["record"]["campaign_run_id"] for r in listed.json()["campaign_runs"]]
+    assert ids == [mine.campaign_run_id]
+
+
+def test_a_non_local_deployment_without_a_client_id_says_so_at_startup(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    app, _ = _signed_in(
+        tmp_path, env="prod", privacy_salt="x" * 32, cors_origins=("https://pilot.example.com",)
+    )
+    with caplog.at_level("WARNING", logger="api.access"), TestClient(app):
+        pass
+    assert any("CLIENT_ID" in r.getMessage() and "any client id" in r.getMessage() for r in caplog.records)

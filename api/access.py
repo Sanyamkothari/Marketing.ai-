@@ -76,6 +76,7 @@ from typing import Annotated, Any, Final
 
 import anyio
 from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi.params import Form as FormParam
 from fastapi.routing import APIRoute
 from sqlalchemy.engine import Engine
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
@@ -423,6 +424,22 @@ def _warn_if_open(app: Any, settings: Settings) -> None:
         )
 
 
+def _warn_if_unscoped(app: Any, settings: Settings) -> None:
+    """Log once per app that nothing limits the client ids a non-local deployment answers for."""
+    if (
+        client_scope(settings) is not None
+        or settings.env == "local"
+        or getattr(app.state, "unscoped_warned", False)
+    ):
+        return
+    app.state.unscoped_warned = True
+    logger.warning(
+        "env=%s and %s is not set: any client id is accepted on every route; set it to this deployment's client",
+        settings.env,
+        ENV_VARS["client_id"],
+    )
+
+
 def enforce_access(request: Request) -> None:
     """The global dependency: find the route's policy and check the principal against it (DEC-717)."""
     path = route_path(request.scope)
@@ -501,15 +518,29 @@ async def enforce_client_scope(request: Request) -> None:
     check_client_scope(settings, request.path_params.get("client_id"))
     for value in request.query_params.getlist("client_id"):
         check_client_scope(settings, value)
-    if request.method in MUTATING_METHODS and request.headers.get("content-type", "").lower().startswith(
-        "application/json"
-    ):
+    if request.method in MUTATING_METHODS and _takes_json_body(request):
         try:
             body = json.loads(await request.body())
         except ValueError:
             return  # not JSON: the route answers its own 422
-        if isinstance(body, dict) and "client_id" in body:
-            check_client_scope(settings, body["client_id"])
+        for item in body if isinstance(body, list) else [body]:
+            if isinstance(item, dict) and "client_id" in item:
+                check_client_scope(settings, item["client_id"])
+
+
+def _takes_json_body(request: Request) -> bool:
+    """True when the matched route declares a (non-form) body, whatever content type the caller claims.
+
+    FastAPI decides to parse a body as JSON from the content type (`application/json`, any
+    `application/*+json`, with or without padding, or none at all), and a route with a body field gets
+    whatever parses. Deciding by the header here would leave every spelling this check does not know
+    as a way round it, so the decision is the route's: a route with a body model is read and tried as
+    JSON. A route that streams its own upload (no body field) is never buffered here.
+    """
+    route = request.scope.get("route")
+    if not isinstance(route, APIRoute) or route.body_field is None:
+        return False
+    return not isinstance(route.body_field.field_info, FormParam)
 
 
 # ---------------------------------------------------------------------------
@@ -694,6 +725,7 @@ def install_access(app: FastAPI) -> None:
     settings = getattr(app.state, "settings", None)
     if isinstance(settings, Settings):
         _warn_if_open(app, settings)
+        _warn_if_unscoped(app, settings)
     else:
         # The deployed `api.main:app` is built with no settings; resolve them at startup so an open
         # prod deployment says so at once, not at its first non-public request (DEC-725).
@@ -708,3 +740,4 @@ def _warn_at_startup(app: FastAPI) -> None:
         logger.error("access control could not read the settings at startup error=%s", type(exc).__name__)
         return
     _warn_if_open(app, settings)
+    _warn_if_unscoped(app, settings)

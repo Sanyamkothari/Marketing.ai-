@@ -10,6 +10,7 @@ refuse a write even from a transaction someone forgot to mark. The only query bu
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Mapping
 from datetime import date
 from typing import Any, Final
@@ -28,6 +29,8 @@ from engine.connections.base import (
 from engine.connections.sql import SqlConnector, database_fields, date_literal
 
 __all__ = ["PostgresConnector", "postgres_select", "postgres_window"]
+
+logger = logging.getLogger(__name__)
 
 _SYSTEM_SCHEMAS: Final[frozenset[str]] = frozenset({"information_schema", "pg_catalog", "pg_toast"})
 _SSL_MODES: Final[tuple[str, ...]] = ("prefer", "require", "verify-full", "disable")
@@ -128,6 +131,10 @@ class PostgresConnector(SqlConnector):
             # A server we did not verify may ask for the password in clear text; refuse that method
             # (SCRAM, MD5 and a server that asks for nothing still work).
             extra["require_auth"] = "!password"
+        elif sslmode != "verify-full":
+            logger.warning(
+                "libpq is older than 16, so a server that is not verified can still ask for the password in clear text"
+            )
         try:
             connection = psycopg.connect(
                 host=text_value(config, "host"),

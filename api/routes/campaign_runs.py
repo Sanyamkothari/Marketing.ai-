@@ -522,10 +522,10 @@ def list_campaign_runs(
 ) -> CampaignRunListResponse:
     runner = get_runner(request.app)
     allowed = client_scope(get_settings(request))
-    runs = runner.store.list(state=state, limit=limit if allowed is None else 200, score_run_id=score_run_id)
-    return CampaignRunListResponse(
-        campaign_runs=tuple(runner.view(run) for run in [r for r in runs if _in_scope(r, allowed)][:limit])
+    runs = runner.store.list(
+        state=state, limit=limit, score_run_id=score_run_id, accept=lambda run: _in_scope(run, allowed)
     )
+    return CampaignRunListResponse(campaign_runs=tuple(runner.view(run) for run in runs))
 
 
 def _in_scope(run: CampaignRun, allowed: frozenset[str] | None) -> bool:
@@ -616,7 +616,7 @@ def restart_campaign_run(
     body: RestartRequest | None = None,
 ) -> CampaignRunView:
     """A run the server restarted under, or one that needs a cost confirmed, goes on from the start."""
-    old = get_runner(request.app).store.get(campaign_run_id)
+    old = _visible(request, get_runner(request.app).store.get(campaign_run_id))
     if old is None:
         raise http_error(404, "CAMPAIGN_RUN_NOT_FOUND", f"No campaign run with id {campaign_run_id!r}.")
     if old.state in (CampaignRunState.RUNNING, CampaignRunState.DONE):
@@ -652,7 +652,7 @@ def restart_campaign_run(
 )
 def cancel_campaign_run(campaign_run_id: str, request: Request) -> CampaignRunView:
     runner = get_runner(request.app)
-    if runner.cancel(campaign_run_id) is None:
+    if _visible(request, runner.store.get(campaign_run_id)) is None or runner.cancel(campaign_run_id) is None:
         raise http_error(404, "CAMPAIGN_RUN_NOT_FOUND", f"No campaign run with id {campaign_run_id!r}.")
     return _read(request, campaign_run_id, advance=False)
 
