@@ -203,3 +203,12 @@ def test_the_card_codes_are_defined_once_and_three_reuse_a_code_the_catalogue_ha
     }
     assert {"PLAN_UNDERPOWERED", "UPLIFT_NOT_BETTER_THAN_RISK"} <= PLAN_J_CODES
     assert not SUMMARY_CODES & {"PLAN_UNDERPOWERED", "UPLIFT_NOT_BETTER_THAN_RISK", "DRIFT_DRIFTED"}
+
+
+def test_the_too_small_test_card_does_not_say_the_list_has_not_gone_out() -> None:
+    """A card read from a registered test plan is about a list that is already made and downloaded."""
+    from engine.measurement import summary
+
+    words = summary._WORDS["underpowered"]
+    assert "before the campaign goes out" not in words.next_step
+    assert "next campaign" in words.next_step

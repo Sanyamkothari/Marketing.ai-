@@ -205,6 +205,37 @@ test("files that belong to a Data Doctor check are listed once, under the check,
   await session.loadMe();
 });
 
+test("older Data Doctor checks are folded: the newest 3 show, the rest open on one button", async () => {
+  const [a] = world.uploads;
+  world.doctor = true;
+  await session.loadMe();
+  world.cases = Array.from({ length: 5 }, (_, i) => ({
+    case_id: `case_${i}`,
+    title: `check ${i}`,
+    goal_id: null,
+    state: "open",
+    files: [`f${i}.csv`],
+    upload_ids: i === 0 ? [a.upload_id] : [],
+    updated_at: a.created_at,
+  }));
+  await show("#/data");
+  assert.equal($$("[data-dt-source='check']").length, 3, "the newest three checks");
+  assert.deepEqual(
+    $$("[data-dt-source='check']").map((el) => el.dataset.dtId),
+    ["case_0", "case_1", "case_2"],
+    "newest first, as the server sent them",
+  );
+  assert.equal(row(a.upload_id), null, "an upload stays under its check, not a row of its own");
+  assert.equal(text($("[data-dt-show-older]")), "Show 2 older checks");
+  $("[data-dt-show-older]").click();
+  await settle();
+  assert.equal($$("[data-dt-source='check']").length, 5);
+  assert.equal($("[data-dt-show-older]"), null);
+  world.cases = [];
+  world.doctor = false;
+  await session.loadMe();
+});
+
 test("a connection keeps Test, Edit and Delete; a file has no action of its own", async () => {
   await show("#/data");
   const ok = row(ids.s3);
