@@ -3,15 +3,23 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pandas as pd
 
-from api.routes.agent import _cell, _rows
+from api.routes.agent import PREVIEW_ROWS
 from engine.agent.config import AgentLevel
 from engine.agent.contracts import DataRecipe, RecipeStep, RecipeStepKind, recipe_hash
 from engine.agent.formats import masked_cut
+from engine.doctor.preview import masked_rows
+from engine.doctor.preview import preview_cell as _cell
 from engine.utils.time import utc_now
+
+
+def _rows(frame: Any, columns: tuple[str, ...], personal: set[str]) -> tuple[tuple[str, ...], ...]:
+    """The Plan G preview's rows, now written by the engine's helper (moved from the route)."""
+    return tuple(tuple(row) for row in masked_rows(frame, columns, personal, PREVIEW_ROWS))
 
 
 def test_the_preview_shows_every_digit_of_a_number() -> None:
