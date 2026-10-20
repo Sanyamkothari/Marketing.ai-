@@ -24,13 +24,24 @@ How each metric is measured:
 
 Rates are measured over two windows, the last batch (a day by default) and the last seven days,
 and a rule trips if either crosses its threshold. The short window reacts fast to a bad batch; the
-long one catches a slow trickle. Small samples cannot trip a breaker: a rate needs a minimum number
-of deliveries (or sends) and at least `min_count` bad events, and spend pace needs a minimum
-planned spend. A false pause is cheap (a person resumes it); a missed one is not, so the guards are
+long one catches a slow trickle. Complaints are also measured over the last hour (`fast_window`):
+a burst of complaints from one bad send should stop the next send, not wait for the day's tally.
+In that hour only complaints about messages that went out in the same hour count (matched by
+decision id): complaints lag their message by hours, so late complaints about yesterday's big send,
+divided by the few messages of the last hour, would trip on nothing new. Small samples cannot trip
+a breaker: a rate needs a minimum number of deliveries (or sends) and at least `min_count` bad
+events, and spend pace needs a minimum planned spend. A false pause is cheap (a person resumes it); a missed one is not, so the guards are
 kept modest.
 
 When a rule says `pause_goal` but no goal is given, the offending channel is paused instead: a
 tripped breaker always stops something it can name.
+
+**Negative lift** (`negative_lift`) is a separate check, not a `StopMetric`: it reads the proof
+(`autonomy.proof`), not the last week of events. Nightly, over a goal's closed outcome windows, it
+compares the agent group with the no-contact holdout in money. When the whole 95% interval of
+incremental profit sits below zero (with enough customers in both groups), the goal is losing money
+against doing nothing and is paused, with alert code `proof.negative_lift`. The check is one-sided:
+it only ever stops a goal, it never declares a win, and a goal whose interval still spans zero runs on.
 """
 
 from __future__ import annotations
@@ -39,9 +50,24 @@ from collections import defaultdict
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import NamedTuple
+from typing import Literal, NamedTuple
 
-from autonomy.contracts import Alert, Brief, Channel, Event, EventType, StopMetric, StopRule, stable_id
+from autonomy.contracts import (
+    Alert,
+    Brief,
+    Channel,
+    Decision,
+    Event,
+    EventType,
+    StopMetric,
+    StopRule,
+    stable_id,
+)
+from autonomy.proof.estimate import MIN_GROUP, proof_summary
+from autonomy.proof.rewards import Costs, proof_rewards
+
+NEGATIVE_LIFT_CODE = "proof.negative_lift"
+"""The alert code of the negative-lift breaker (it is not a `StopMetric`: contracts stay as they are)."""
 
 COMPLAINT_TYPES: frozenset[EventType] = frozenset({EventType.COMPLAINT, EventType.BLOCK})
 QUALITY_ATTR_KEYS: tuple[str, ...] = ("quality_rating", "quality")
@@ -64,6 +90,8 @@ class Guards:
     """Planned spend to date, in the goal's currency, before spend pace counts."""
     batch_window: timedelta = timedelta(days=1)
     long_window: timedelta = timedelta(days=7)
+    fast_window: timedelta | None = timedelta(hours=1)
+    """The extra, short window complaint rates are also judged over; None turns it off."""
     delivery_grace: timedelta = timedelta(hours=1)
 
 
@@ -164,14 +192,39 @@ def _windows(guards: Guards) -> tuple[tuple[str, timedelta], ...]:
     return (("the last batch", guards.batch_window), ("the last 7 days", guards.long_window))
 
 
+def _complaint_windows(guards: Guards) -> tuple[tuple[str, timedelta, bool], ...]:
+    """(label, span, same-window messages only): the batch and 7-day windows, then the last hour.
+
+    The hour comes last so a harm the longer windows already report keeps their wording; it only
+    adds trips they would miss. It counts only complaints about messages sent in that hour (see
+    `_same_window_complaints`)."""
+    out = tuple((label, span, False) for label, span in _windows(guards))
+    if guards.fast_window is None:
+        return out
+    return (*out, ("the last hour", guards.fast_window, True))
+
+
+def _same_window_complaints(events: Sequence[Event], since: datetime, now: datetime) -> list[Event]:
+    """The events, less complaints whose message did not go out (SEND or DELIVER) in (since, now].
+
+    A complaint with no decision id cannot be matched, so it is left to the longer windows."""
+    messages = {
+        e.decision_id
+        for e in events
+        if e.decision_id is not None and e.type in (EventType.SEND, EventType.DELIVER) and since < e.ts <= now
+    }
+    return [e for e in events if e.type not in COMPLAINT_TYPES or e.decision_id in messages]
+
+
 def _pct(x: float) -> str:
     return f"{x * 100:.2f}%"
 
 
 def _complaint_rate(rule: StopRule, events: Sequence[Event], now: datetime, guards: Guards) -> list[_Trip]:
     trips: dict[Channel, _Trip] = {}
-    for label, span in _windows(guards):
-        counts = _counts(events, now - span, now)
+    for label, span, same_window in _complaint_windows(guards):
+        since = now - span
+        counts = _counts(_same_window_complaints(events, since, now) if same_window else events, since, now)
         for ch in sorted(counts):
             c = counts[ch]
             if ch in trips or c.deliveries < guards.min_deliveries or c.complaints < guards.min_count:
@@ -409,3 +462,85 @@ def evaluate_goals(
         merged.paused_goals.update(result.paused_goals)
         merged.paused_channels.update(result.paused_channels)
     return merged
+
+
+# --- negative lift: the proof says the goal loses money -------------------------------------------
+
+
+@dataclass(frozen=True)
+class LiftGuards:
+    """When the negative-lift breaker may judge a goal, and which bound it reads.
+
+    `min_group` measured customers in both the agent group and the holdout (the proof's own floor),
+    and at least `min_closed` closed outcome windows in all, before anything is judged.
+
+    `bound` is the end of the 95% interval of incremental profit that must be below zero to trip:
+    "high" (the default) trips only when the whole interval is below zero, i.e. we are confident the
+    goal earns less than leaving its customers alone. "low" trips as soon as the interval reaches
+    below zero, which pauses every goal that has not yet proved a profit; it is there for a business
+    that wants proof before spend, and is not the default.
+    """
+
+    min_group: int = MIN_GROUP
+    min_closed: int = 100
+    bound: Literal["high", "low"] = "high"
+
+
+DEFAULT_LIFT_GUARDS = LiftGuards()
+
+
+def negative_lift(
+    brief: Brief,
+    decisions: Sequence[Decision],
+    events_by_customer: Mapping[str, Sequence[Event]],
+    now: datetime,
+    *,
+    costs: Costs | None = None,
+    guards: LiftGuards = DEFAULT_LIFT_GUARDS,
+) -> BreakerResult:
+    """Pause the brief's goal when its proof shows it losing money against the holdout.
+
+    `decisions` are the goal's own decisions (holdout "do nothing" ones included) and
+    `events_by_customer` those customers' events; rewards are built with last-touch attribution
+    (`proof_rewards`) as of `now`, so only closed outcome windows count. `costs` prices messages and
+    offers (default: offer costs from the brief, no channel cost, unknown margin counted as revenue,
+    which flatters the goal: a harm detector should not trip on our own guesses).
+
+    One-sided: the result pauses a goal or does nothing; it never reports a win. Below the guards'
+    minimum sample, or when the proof refuses to put a number on the goal, nothing is judged.
+    """
+    rewards = proof_rewards(
+        decisions,
+        events_by_customer,
+        brief.horizon_days,
+        brief.objective,
+        costs or Costs.from_brief(brief),
+        now=now,
+    )
+    empty = BreakerResult(alerts=[], paused_goals=set(), paused_channels=set())
+    if len(rewards) < guards.min_closed:
+        return empty
+    summary = proof_summary(rewards, decisions, now, brief.goal_id, min_group=guards.min_group)
+    profit = summary.incremental_profit
+    if profit is None:
+        return empty
+    bound = profit.high if guards.bound == "high" else profit.low
+    if bound >= 0:
+        return empty
+    which = "upper" if guards.bound == "high" else "lower"
+    message = (
+        f"Against the no-contact holdout, this goal's incremental profit is {profit.point:,.2f} "
+        f"(95% interval {profit.low:,.2f} to {profit.high:,.2f}; {summary.agent_n:,} agent and "
+        f"{summary.holdout_n:,} holdout customers over closed outcome windows). Its {which} bound is "
+        "below zero, so it is losing money compared with doing nothing. Paused the goal."
+    )
+    alert = Alert(
+        alert_id=stable_id("alert", "breaker", NEGATIVE_LIFT_CODE, brief.goal_id, now.isoformat()),
+        at=now,
+        goal_id=brief.goal_id,
+        severity="critical",
+        code=NEGATIVE_LIFT_CODE,
+        message=message,
+        auto_paused=True,
+    )
+    return BreakerResult(alerts=[alert], paused_goals={brief.goal_id}, paused_channels=set())
