@@ -35,6 +35,17 @@ so "do nothing" moves ahead of all of them alike. With pruning on, a customer wh
 credibly lower their buying gets no bids at all (`leave_alone`), except in about one week a year
 (`LEAVE_ALONE_RETRY`), so a wrong verdict can be undone.
 
+**Purchases weigh in on a gain read from clicks.** A put-off customer still clicks, so a response
+model whose uplift is implied by clicks (`uplift_from_clicks`, the agent's) credits them with a
+message's full gain. For such a model (`purchase_weighted`) the bidder weighs the click gain of the
+customer's best plain option against their own purchases inside and outside message weeks
+(`ContactHarm.purchase_shift`): Bayes on the ratio grid, with the click reading as the prior and
+the record as the likelihood, so the record counts by how well it is measured. How far records
+stray from click readings, beyond their noise, is learned from the customers themselves
+(`ClickGap`, empirical Bayes), and so is the gap common to everyone, which is not charged to
+anyone. Purchases only take off, never add. The purchase drop is taken off once: the larger of
+that shift and the credible dent, never both (docs/v2/CLICK_HARM.md).
+
 **Products.** An action can be about one product (`Action.item_id`):
 
 * A *refill* goal (`GoalKind.REPEAT_PURCHASE`, or a brief whose audience reads `scores.refill_*`)
@@ -343,6 +354,10 @@ HARM_CREDIBLE = 0.9
 """A band is charged only the dent its purchases make credible: 1 minus the upper 90% bound of its
 ratio. A band whose buying merely might fall after a message is charged nothing. The same level
 decides when a person is left alone (`LEAVE_ALONE_CREDIBLE`)."""
+LEAVE_ALONE_CREDIBLE = HARM_CREDIBLE
+"""A person is left alone when it is this credible, on their own posterior, that messages lower
+their buying: a lower-confidence-bound rule, like the restraint rule, but on the harm. Below it the
+harm is only charged (`ContactHarm.dent`)."""
 HARM_ROUNDS = 25
 EVIDENCE_HALF_LIFE_DAYS = 90.0
 """Recency weighting of the evidence the learner keeps (`ContactEvidence`): a record a quarter old
@@ -371,9 +386,87 @@ _CLICK_PSEUDO_SENDS = 5.0
 """A customer's click rate is shrunk towards the business's by this many messages."""
 _VISIT_PSEUDO_DAYS = 30.0
 """A customer's direct-visit rate is shrunk towards the business's by this many days."""
+HARM_BLOCK = 2048
+"""Customers per block when the refit reads the customers x ratio-grid likelihood: a block's rows are
+2048 x 241 floats (4 MB), and no pass holds more than a few blocks at once."""
 _RATIO_GRID = np.exp(np.linspace(math.log(0.05), math.log(5.0), 241))
 _LOG_GRID = np.log(_RATIO_GRID)
 _TINY = 1e-12
+CLICK_GAP_SPREADS: tuple[float, ...] = (0.0, *HARM_TAUS)
+"""Candidate spreads (log scale) of how far one person's ratio, as their purchases read it, strays
+from what their clicks predict: the one the records make most likely is used (`ClickGap`). 0 means
+the records differ from the click readings by noise alone, and then no record moves a gain."""
+CLICK_GAP_MIN = HARM_MIN_CUSTOMERS
+"""Customers with both a record and a click reading needed before the gap is read at all."""
+CLICK_GAP_ROUNDS = 8
+"""Newton steps for the shared gap at each candidate spread (warm-started from the last fit)."""
+CLICK_GAP_SAMPLE = 5000
+"""The most customers the gap is read from: two numbers need no more, and it keeps the nightly cost
+flat however large the business."""
+_MIN_PRIOR_SD = 0.02
+"""The narrowest a click reading's prior is drawn on the ratio grid (about one grid step)."""
+_CLICK_SD_CAP = 3.0
+"""The most a click reading's own spread (log scale) is taken to be: wider is as good as none."""
+
+
+@dataclass(frozen=True)
+class ClickGap:
+    """How the customers' purchase records relate to what the click model predicts for them.
+
+    For each customer with both, u = log(ratio their record reads) - log(ratio their click gain
+    implies). Across customers u is taken as Normal(`offset`, `spread`^2 + the click reading's own
+    variance), both chosen by the marginal likelihood of the records (empirical Bayes, as for
+    `HarmFit.tau`).
+
+    * `offset` is the gap everyone shares. The click model's scale is set against the holdout
+      (extra purchases per click), so a shared gap is the record's own bias: messages go out when
+      people are likelier to buy anyway (a refill is due, they just visited), which flatters the
+      ratio a purchase record reads for everyone alike. It is taken off before a record is read
+      against a click reading, so no one's gain moves for it.
+    * `spread` is how far people really differ from their click reading beyond that. In a shop
+      where clicks tell the whole story it is 0 and no record moves a gain; where some customers
+      click but buy less after messages it is wide, and a clear record counts."""
+
+    offset: float = 0.0
+    spread: float = 0.0
+    customers: int = 0
+    """Customers it was read from (0: not read yet, and then it moves nothing)."""
+
+
+def _click_reading(organic: float, gain: float, gain_sd: float) -> tuple[float, float]:
+    """(log ratio, its spread) that a click model's gain implies: with `organic` the chance of a
+    purchase in the window without a message (> 0), a message's week buys 1 + gain / organic times as
+    much. The spread is the gain's sd carried to the log scale (delta method)."""
+    r = min(max(1.0 + gain / organic, float(_RATIO_GRID[0])), float(_RATIO_GRID[-1]))
+    return math.log(r), min(max(gain_sd, 0.0) / (organic * r), _CLICK_SD_CAP)
+
+
+@dataclass(frozen=True)
+class _OwnRecords:
+    """Per customer, what their own record says about their ratio: of `trials` purchases, `hits`
+    were made in the week after a message, where a message's weeks are `share` of their (weighted)
+    time; `ok` marks customers with a usable record."""
+
+    hits: npt.NDArray[np.float64]
+    trials: npt.NDArray[np.float64]
+    share: npt.NDArray[np.float64]
+    ok: npt.NDArray[np.bool_]
+
+
+def _own_loglik(
+    hits: npt.NDArray[np.float64],
+    trials: npt.NDArray[np.float64],
+    share: npt.NDArray[np.float64],
+    ok: npt.NDArray[np.bool_],
+) -> npt.NDArray[np.float64]:
+    """Binomial log-likelihood (up to a constant) of each record on the ratio grid, one row each: with
+    ratio r, a purchase falls in a message's week with chance r x share / (r x share + 1 - share).
+    Rows without a usable record are 0 (flat)."""
+    x = np.where(ok, share, 0.5)
+    ll = hits[:, None] * _LOG_GRID[None, :] - trials[:, None] * np.log(
+        _RATIO_GRID[None, :] * x[:, None] + (1.0 - x[:, None])
+    )
+    return np.where(ok[:, None], ll, 0.0)
 
 
 @dataclass(frozen=True)
@@ -471,9 +564,17 @@ class ContactHarm:
     upper `HARM_CREDIBLE` bound of their ratio (or their neighbours', if larger), 0 if that bound is
     above 1. A shop where messages harm no one has no band credibly below 1 and is charged nothing.
     `expected_loss(customer, organic)` = dent x their organic chance of buying in the window: what
-    bidders take off every option's uplift. `p_below(customer, ratio)` is the chance their own ratio
-    is below `ratio`; `p_harm` is `p_below(customer, 1)`, which the bidders use to leave someone
-    alone when it is credible that messages lower their buying (`leave_alone`).
+    bidders take off every option's uplift (a purchase-weighted bidder takes the larger of it and
+    `purchase_shift`, never both). `p_below(customer, ratio)` is the chance their own ratio
+    is below `ratio` (a Normal summary); `p_harm` is the exact grid chance that it is below 1, which
+    the bidders use to leave someone alone when it is credible that messages lower their buying
+    (`leave_alone`) and which `likely` and `describe` count, so the two never disagree.
+    `purchase_shift(customer, organic, gain, gain_sd)` weighs a click model's gain against their own
+    record (see `GoalBidder`'s purchase weighting); `note_click` hands it the click readings the
+    bidders made, from which each refit reads `click_gap`.
+
+    **Memory.** `refit` reads the customers x 241 grid `block` customers at a time, so its peak
+    memory does not grow with the number of customers beyond a few per-customer vectors.
     """
 
     def __init__(
@@ -487,9 +588,12 @@ class ContactHarm:
         rounds: int = HARM_ROUNDS,
         taus: Sequence[float] = HARM_TAUS,
         min_holdout: int = HARM_MIN_HOLDOUT,
+        block: int = HARM_BLOCK,
     ) -> None:
         if ridge <= 0 or bands < 1 or ratio_sd <= 0 or not 0.5 <= credible < 1 or rounds < 1:
             raise ValueError("ridge, bands, ratio_sd and rounds must be positive; credible in [0.5, 1)")
+        if block < 1:
+            raise ValueError("block must be at least 1")
         if not taus or min(taus) <= 0:
             raise ValueError("taus must be positive")
         self.min_customers = min_customers
@@ -500,6 +604,7 @@ class ContactHarm:
         self.rounds = rounds
         self.taus = tuple(float(t) for t in taus)
         self.min_holdout = min_holdout
+        self.block = block
         self.evidence: dict[str, HarmEvidence] = {}
         self.data_start: datetime | None = None
         """Where the business's records begin (set by the learner): evidence is counted from there."""
@@ -513,6 +618,14 @@ class ContactHarm:
         self._dent: dict[str, float] = {}
         self._p: dict[str, float] = {}
         self._post: dict[str, tuple[float, float]] = {}
+        self._near_dent: dict[str, float] = {}
+        self._own: dict[str, tuple[float, float, float]] = {}
+        """Customer -> (purchases in a message's week, purchases, that week's share of their time):
+        their own record, which `purchase_shift` weighs against the click model's gain."""
+        self._click: dict[str, tuple[float, float]] = {}
+        """Customer -> the latest click reading a bidder made for them (`note_click`)."""
+        self.click_gap = ClickGap()
+        """How purchase records relate to click readings, read at each refit (`ClickGap`)."""
         self._last_holdout: tuple[int, float] = (0, 1.0)
         self._dirty = False
 
@@ -546,6 +659,9 @@ class ContactHarm:
         self._p.pop(customer_id, None)
         self._dent.pop(customer_id, None)
         self._post.pop(customer_id, None)
+        self._near_dent.pop(customer_id, None)
+        self._own.pop(customer_id, None)
+        self._click.pop(customer_id, None)
 
     # -- reading --
 
@@ -562,8 +678,14 @@ class ContactHarm:
         return self.fit.effect if self.fit is not None else 0.0
 
     def p_harm(self, customer_id: str) -> float:
-        """Chance that a message lowers this customer's buying (0 without a record)."""
-        return self._p.get(customer_id, 0.0)
+        """Chance that a message lowers this customer's buying (0 without a record).
+
+        Read on the exact grid posterior the refit keeps. `leave_alone`, `likely` and `describe` all
+        read this one number, so the count of customers who "look clearly put off" is the count of
+        customers left alone. A posterior set without its grid (a hand-made model) falls back to the
+        Normal reading of `p_below`."""
+        found = self._p.get(customer_id)
+        return found if found is not None else self.p_below(customer_id, 1.0)
 
     def p_below(self, customer_id: str, ratio: float) -> float:
         """Chance this customer's own ratio is below `ratio` (0 without a record: a stranger is the
@@ -589,15 +711,76 @@ class ContactHarm:
         return self.dent(customer_id) * min(max(organic, 0.0), 1.0)
 
     def likely(self, threshold: float = 0.5) -> int:
-        """Customers whose chance of being harmed is above `threshold`."""
-        return sum(1 for p in self._p.values() if p > threshold)
+        """Customers whose chance of being harmed (`p_harm`) is at least `threshold`: at
+        `LEAVE_ALONE_CREDIBLE`, exactly the customers `leave_alone` holds back."""
+        known = set(self._p) | set(self._post)
+        return sum(1 for cid in known if self.p_harm(cid) >= threshold)
+
+    def near_dent(self, customer_id: str) -> float:
+        """The dent the customer's neighbours along the clue index make credible, without their own
+        record (0 when none is credible, or without a record)."""
+        return self._near_dent.get(customer_id, 0.0)
+
+    def note_click(self, customer_id: str, organic: float, gain: float, gain_sd: float) -> None:
+        """Remember what a click model credits a message with for this customer (`gain` +-
+        `gain_sd` on a chance `organic` of buying without one). The next refit reads the gap between
+        these readings and the customers' records (`click_gap`); a later reading replaces an
+        earlier one."""
+        o = min(max(organic, 0.0), 1.0)
+        if o > 0.0 and math.isfinite(gain) and math.isfinite(gain_sd):
+            self._click[customer_id] = _click_reading(o, gain, gain_sd)
+
+    def purchase_shift(self, customer_id: str, organic: float, gain: float, gain_sd: float) -> float:
+        """How much the customer's own purchases take off the click model's gain (negative: add).
+
+        The click model credits a message with `gain` (+- `gain_sd`): extra chance of a purchase in
+        its week. With `organic` their chance without one, that is a ratio r_c = 1 + gain / organic
+        of buying in a message's week to buying without. Their own record reads the same ratio from
+        purchases: of their N purchases, how many fell in a message's week (`_own`, against the
+        holdout's organic level since the start, as for the harm posterior). The two are combined by
+        Bayes on the ratio grid. The click reading is the prior: a log-Normal centred on r_c (moved
+        by the gap every record shares, `click_gap.offset`) whose spread is the click model's own
+        (`gain_sd` on the log scale) together with how far people's records really stray from their
+        click readings (`click_gap.spread`). The record is the likelihood. So the record's weight
+        grows with how well it pins the ratio down against how sure the click reading is (an
+        inverse-variance blend, done exactly on the grid): a customer with no record keeps the click
+        gain (shift 0); one with a long record of buying less after messages ends with a gain near
+        or below zero; one who buys more reads a larger ratio (a negative shift, which the bidder
+        does not add: `GoalBidder._purchase_weighted_loss`). Before the gap is read
+        (`click_gap.customers` 0) or where it is nil, only the click model's own spread lets the
+        record in.
+
+        The shift is organic x (prior mean of r - posterior mean of r), carried back to the click
+        model's scale (times e^-offset), so it is exactly 0 without a record, whatever the grid's
+        edges do to either mean. 0 when nothing is fitted."""
+        own = self._own.get(customer_id)
+        o = min(max(organic, 0.0), 1.0)
+        if (
+            own is None
+            or self.fit is None
+            or o <= 0.0
+            or not (math.isfinite(gain) and math.isfinite(gain_sd))
+        ):
+            return 0.0
+        centre, s_click = _click_reading(o, gain, gain_sd)
+        gap = self.click_gap
+        spread = max(math.sqrt(s_click * s_click + gap.spread * gap.spread), _MIN_PRIOR_SD)
+        mid = min(max(centre + gap.offset, float(_LOG_GRID[0])), float(_LOG_GRID[-1]))
+        prior = _normal_on_grid(np.array([mid]), np.array([spread]))[0]
+        hits, trials, share = own
+        ll = _own_loglik(
+            np.array([hits]), np.array([trials]), np.array([share]), np.array([True], dtype=np.bool_)
+        )[0]
+        post = prior * np.exp(ll - ll.max())
+        post /= post.sum()
+        return o * math.exp(-gap.offset) * float(((prior - post) * _RATIO_GRID).sum())
 
     def describe(self) -> str:
         """One plain sentence for logs and the decision view."""
         fit = self.fit
         if fit is None:
             return "Not enough history yet to tell who is put off by messages."
-        clearly = self.likely(self.credible)
+        clearly = self.likely(LEAVE_ALONE_CREDIBLE)
         who = f"; {clearly} look clearly put off on their own record" if clearly else ""
         if fit.share <= 0:
             return (
@@ -613,7 +796,14 @@ class ContactHarm:
     # -- fitting --
 
     def refit(self) -> None:
-        """Fit the model to every record (a no-op when nothing changed since the last fit)."""
+        """Fit the model to every record (a no-op when nothing changed since the last fit).
+
+        Every step that reads the customers x ratio-grid likelihood goes through it `block`
+        customers at a time (`_rows` recomputes a block's rows from the per-customer counts), so
+        peak memory stays at a few blocks of the grid whatever the number of customers: the whole
+        grid is about 190 MB at 100,000 customers. Sums over customers (bands, segments, the
+        business) are added up block by block; the neighbours' sliding sums use running totals kept
+        at every block boundary (`_cum_rows`)."""
         if not self._dirty and self.fit is not None:
             return
         self._dirty = False
@@ -621,6 +811,8 @@ class ContactHarm:
         if len(ids) < self.min_customers:
             self.fit = None
             self._p, self._dent, self._post = {}, {}, {}
+            self._own, self._near_dent = {}, {}
+            self.click_gap = ClickGap()
             return
         rows = [self.evidence[c] for c in ids]
         n = len(ids)
@@ -686,28 +878,46 @@ class ContactHarm:
 
         grid, log_grid = _RATIO_GRID, _LOG_GRID
         x = np.where(own_ok, exp_w / np.maximum(exp_w + open_w, _TINY), 0.5)
-        ll_grid = np.where(
-            own_ok[:, None],
-            exposed_p[:, None] * log_grid[None, :]
-            - n_buys[:, None] * np.log(grid[None, :] * x[:, None] + (1.0 - x[:, None])),
-            0.0,
-        )
+        lik_in = _OwnRecords(hits=exposed_p, trials=n_buys, share=x, ok=own_ok)
         in_holdout = np.array([c in self.holdout for c in ids], dtype=np.bool_)
         post_ok = own_ok & (post_xd > 0) & ~in_holdout
-        business = log_grid[int(np.argmax(ll_grid.sum(axis=0)))]
         order = np.argsort(index, kind="stable")
-        groups = np.array_split(order, self.bands)
+        sizes = [len(g) for g in np.array_split(order, self.bands)]
+        block = self.block
+
+        # Pass 1, along the index: the sums every group needs, and running totals at each block
+        # boundary for the neighbours' sliding sums.
+        seg_names = sorted({s for s in seg_of if s is not None})
+        seg_code = np.array([seg_names.index(s) if s is not None else -1 for s in seg_of], dtype=np.int64)[
+            order
+        ]
+        bounds = np.concatenate([[0], np.cumsum(sizes)]).astype(np.int64)
+        total = np.zeros(len(grid))
+        band_sums = np.zeros((self.bands, len(grid)))
+        seg_sums = np.zeros((len(seg_names), len(grid)))
+        checkpoints = np.zeros(((n + block - 1) // block + 1, len(grid)))
+        for i, a in enumerate(range(0, n, block)):
+            b = min(a + block, n)
+            ll = self._rows(lik_in, order[a:b])
+            total += ll.sum(axis=0)
+            for j in range(self.bands):
+                lo, hi = max(int(bounds[j]), a), min(int(bounds[j + 1]), b)
+                if lo < hi:
+                    band_sums[j] += ll[lo - a : hi - a].sum(axis=0)
+            codes = seg_code[a:b]
+            for k in np.unique(codes[codes >= 0]).tolist():
+                seg_sums[k] += ll[codes == k].sum(axis=0)
+            checkpoints[i + 1] = np.cumsum(np.vstack([checkpoints[i], ll]), axis=0)[-1]
+
+        business = log_grid[int(np.argmax(total))]
         # How far a band's ratio is let stray from the business's: as far as the bands really differ
         # beyond their own noise (empirical Bayes), at most `ratio_sd`. Many bands and windows are
         # read every night; in a shop where they differ by noise alone, this keeps one of them from
         # reading as credibly harmed by chance.
-        band_spread = _spread_between([ll_grid[m].sum(axis=0) for m in groups], self.ratio_sd)
+        band_spread = _spread_between(list(band_sums), self.ratio_sd)
         prior = -0.5 * ((log_grid - business) / band_spread) ** 2
 
-        seg_scores = {
-            seg: ll_grid[np.array([s == seg for s in seg_of], dtype=np.bool_)].sum(axis=0)
-            for seg in sorted({s for s in seg_of if s is not None})
-        }
+        seg_scores = {seg: seg_sums[k] for k, seg in enumerate(seg_names)}
         seg_prior = (
             -0.5 * ((log_grid - business) / _spread_between(list(seg_scores.values()), self.ratio_sd)) ** 2
         )
@@ -716,38 +926,58 @@ class ContactHarm:
         }
         band_ratios: list[float] = []
         band_dents: list[float] = []
-        for members in groups:
-            score = ll_grid[members].sum(axis=0) + prior
+        for j in range(self.bands):
+            score = band_sums[j] + prior
             post = np.exp(score - score.max())
             post /= post.sum()
             upper = float(grid[min(int(np.searchsorted(np.cumsum(post), self.credible)), len(grid) - 1)])
             band_dents.append(max(0.0, 1.0 - upper))
             band_ratios.append(float((post * grid).sum()))
 
-        # Each person: their neighbours along the index (a band's worth of the customers nearest
-        # them, themselves left out, shrunk to the business) as the prior, spread by tau, times
-        # their own record. tau is the spread the records make most likely.
-        near_mean, near_sd, near_upper = _neighbours(
-            ll_grid, order, max(n // (2 * self.bands), 1), prior, self.credible
+        # Pass 2, along the index: each person's neighbours (a band's worth of the customers nearest
+        # them, themselves left out, shrunk to the business) as the prior.
+        near_mean, near_sd, near_upper = self._neighbours(
+            lik_in, order, max(n // (2 * self.bands), 1), prior, checkpoints
         )
-        lik = np.exp(ll_grid - ll_grid.max(axis=1, keepdims=True))
+
+        # Pass 3: tau, the person-to-person spread the records make most likely.
+        marginal = np.zeros(len(self.taus))
+        for a in range(0, n, block):
+            idx = np.arange(a, min(a + block, n))
+            ll = self._rows(lik_in, idx)
+            lik = np.exp(ll - ll.max(axis=1, keepdims=True))
+            mine = own_ok[idx]
+            for t, tau in enumerate(self.taus):
+                pri = _normal_on_grid(near_mean[idx], np.sqrt(near_sd[idx] ** 2 + tau * tau))
+                marginal[t] += float(np.log(np.maximum((pri * lik)[mine].sum(axis=1), _TINY)).sum())
         best_tau, best_ll = self.taus[0], -math.inf
-        for tau in self.taus:
-            pri = _normal_on_grid(near_mean, np.sqrt(near_sd**2 + tau * tau))
-            marginal = float(np.log(np.maximum((pri * lik)[own_ok].sum(axis=1), _TINY)).sum())
-            if marginal > best_ll + 1e-9:
-                best_tau, best_ll = tau, marginal
-        own_post = _normal_on_grid(near_mean, np.sqrt(near_sd**2 + best_tau * best_tau)) * lik
-        own_post /= np.maximum(own_post.sum(axis=1, keepdims=True), _TINY)
-        mean = (own_post * log_grid[None, :]).sum(axis=1)
-        sd = np.sqrt(np.maximum((own_post * (log_grid[None, :] - mean[:, None]) ** 2).sum(axis=1), 0.0))
-        cut = np.minimum((np.cumsum(own_post, axis=1) < self.credible).sum(axis=1), len(grid) - 1)
-        own_dent = np.maximum(1.0 - grid[cut], 0.0)
+        for tau, value in zip(self.taus, marginal.tolist(), strict=True):
+            if value > best_ll + 1e-9:
+                best_tau, best_ll = tau, value
+
+        # Pass 4: each person's posterior, their neighbours spread by tau times their own record.
+        mean = np.empty(n)
+        sd = np.empty(n)
+        own_dent = np.empty(n)
+        p_harm = np.empty(n)
+        below = grid < 1.0
+        for a in range(0, n, block):
+            idx = np.arange(a, min(a + block, n))
+            ll = self._rows(lik_in, idx)
+            lik = np.exp(ll - ll.max(axis=1, keepdims=True))
+            own_post = _normal_on_grid(near_mean[idx], np.sqrt(near_sd[idx] ** 2 + best_tau * best_tau)) * lik
+            own_post /= np.maximum(own_post.sum(axis=1, keepdims=True), _TINY)
+            m = (own_post * log_grid[None, :]).sum(axis=1)
+            mean[idx] = m
+            sd[idx] = np.sqrt(np.maximum((own_post * (log_grid[None, :] - m[:, None]) ** 2).sum(axis=1), 0.0))
+            cut = np.minimum((np.cumsum(own_post, axis=1) < self.credible).sum(axis=1), len(grid) - 1)
+            own_dent[idx] = np.maximum(1.0 - grid[cut], 0.0)
+            p_harm[idx] = own_post[:, below].sum(axis=1)
         # Their charge is the larger of the two credible dents: their own, and their neighbours'
         # (someone who looks like the put-off but has bought too little to show it is charged what
         # the people most like them make credible).
-        dent = np.maximum(own_dent, np.maximum(1.0 - near_upper, 0.0))
-        p_harm = own_post[:, grid < 1.0].sum(axis=1)
+        near_dent = np.maximum(1.0 - near_upper, 0.0)
+        dent = np.maximum(own_dent, near_dent)
 
         self.fit = HarmFit(
             coefficients=tuple(float(b) for b in everyone[1:]),
@@ -764,10 +994,144 @@ class ContactHarm:
             post_rows=int(post_ok.sum()),
         )
         self._dent = {cid: float(d) for cid, d in zip(ids, dent.tolist(), strict=True) if d > 0}
+        self._near_dent = {cid: float(d) for cid, d in zip(ids, near_dent.tolist(), strict=True) if d > 0}
         self._p = {cid: float(p) for cid, p in zip(ids, p_harm.tolist(), strict=True)}
         self._post = {
             cid: (float(m), float(s)) for cid, m, s in zip(ids, mean.tolist(), sd.tolist(), strict=True)
         }
+        self._own = {
+            cid: (float(k), float(t), float(s))
+            for cid, k, t, s, good in zip(
+                ids, exposed_p.tolist(), n_buys.tolist(), x.tolist(), own_ok.tolist(), strict=True
+            )
+            if good
+        }
+        self.click_gap = self._fit_click_gap(lik_in, ids)
+
+    def _fit_click_gap(self, records: _OwnRecords, ids: Sequence[str]) -> ClickGap:
+        """Read `ClickGap` from the customers with a usable record and a click reading.
+
+        For each candidate spread (`CLICK_GAP_SPREADS`) the shared offset that makes the records
+        most likely is found by safeguarded Newton steps (warm-started from the last fit), and the
+        spread whose marginal likelihood is highest is kept. At most `CLICK_GAP_SAMPLE` customers
+        are read, picked by a fixed hash of their id (two numbers need no more), a block at a time
+        like the refit. Fewer than `CLICK_GAP_MIN`: nothing is read, and no record moves a gain
+        beyond what the click model's own spread lets in."""
+        pick = [i for i, cid in enumerate(ids) if records.ok[i] and cid in self._click]
+        if len(pick) > CLICK_GAP_SAMPLE:
+            pick = sorted(sorted(pick, key=lambda i: _stable_key(ids[i]))[:CLICK_GAP_SAMPLE])
+        if len(pick) < CLICK_GAP_MIN:
+            return ClickGap(customers=len(pick))
+        idx_all = np.array(pick, dtype=np.int64)
+        centre_all = np.array([self._click[ids[i]][0] for i in pick], dtype=np.float64)
+        sd_all = np.array([self._click[ids[i]][1] for i in pick], dtype=np.float64)
+        k = len(pick)
+
+        def sweep(offset: float, spread: float) -> tuple[float, float, float]:
+            """(marginal log-likelihood, its slope in the offset, the curvature's estimate)."""
+            marginal, score, info = 0.0, 0.0, 0.0
+            for a in range(0, k, self.block):
+                b = min(a + self.block, k)
+                ll = self._rows(records, idx_all[a:b])
+                top = ll.max(axis=1, keepdims=True)
+                centre = np.clip(centre_all[a:b] + offset, _LOG_GRID[0], _LOG_GRID[-1])
+                var = np.maximum(sd_all[a:b] ** 2 + spread * spread, _MIN_PRIOR_SD**2)
+                pri = _normal_on_grid(centre, np.sqrt(var))
+                joint = pri * np.exp(ll - top)
+                mass = np.maximum(joint.sum(axis=1), _TINY)
+                marginal += float((np.log(mass) + top[:, 0]).sum())
+                post = joint / mass[:, None]
+                mean = (post * _LOG_GRID[None, :]).sum(axis=1)
+                post_var = (post * (_LOG_GRID[None, :] - mean[:, None]) ** 2).sum(axis=1)
+                # d/d offset of log m_i = (posterior mean - prior mean) / prior var; its expected
+                # curvature is (1 - posterior var / prior var) / prior var.
+                score += float(((mean - centre) / var).sum())
+                info += float((np.maximum(1.0 - post_var / var, 0.0) / var).sum())
+            return marginal, score, info
+
+        best = ClickGap(customers=k)
+        best_ll = -math.inf
+        for spread in CLICK_GAP_SPREADS:
+            offset = self.click_gap.offset
+            value, score, info = sweep(offset, spread)
+            for _ in range(CLICK_GAP_ROUNDS):
+                if info <= _TINY or abs(score) < 1e-6:
+                    break
+                step = min(max(score / info, -0.5), 0.5)
+                while abs(step) > 1e-4:
+                    trial = sweep(offset + step, spread)
+                    if trial[0] >= value:
+                        offset += step
+                        value, score, info = trial
+                        break
+                    step /= 2.0
+                else:
+                    break
+            if value > best_ll + 1e-9:
+                best, best_ll = ClickGap(offset=offset, spread=spread, customers=k), value
+        return best
+
+    def _rows(self, records: _OwnRecords, idx: npt.NDArray[np.int64]) -> npt.NDArray[np.float64]:
+        """The log-likelihood of these customers' own records on the ratio grid, one row each (0 for
+        a customer with no usable record). Every pass of `refit` reads the grid through here, a
+        block at a time."""
+        return _own_loglik(records.hits[idx], records.trials[idx], records.share[idx], records.ok[idx])
+
+    def _cum_rows(
+        self,
+        records: _OwnRecords,
+        order: npt.NDArray[np.int64],
+        checkpoints: npt.NDArray[np.float64],
+        start: int,
+        stop: int,
+    ) -> npt.NDArray[np.float64]:
+        """Running totals of the rows along `order`, at positions `start..stop` inclusive (position p
+        holds the sum of the first p rows). Rebuilt from the nearest block boundary at or before
+        `start`, so at most two blocks of rows are read."""
+        base = (start // self.block) * self.block
+        ll = self._rows(records, order[base:stop])
+        cum = np.cumsum(np.vstack([checkpoints[base // self.block], ll]), axis=0)
+        return cum[start - base : stop - base + 1]
+
+    def _neighbours(
+        self,
+        records: _OwnRecords,
+        order: npt.NDArray[np.int64],
+        half_width: int,
+        prior: npt.NDArray[np.float64],
+        checkpoints: npt.NDArray[np.float64],
+    ) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.float64], npt.NDArray[np.float64]]:
+        """Per customer, the mean and sd of the log ratio read from the `half_width` customers on each
+        side of them along the index (themselves left out), with `prior` (a log-density on the grid),
+        and the upper `credible` bound of that ratio.
+
+        A sliding band: everyone is read against the people most like them, so someone at the edge of a
+        band is not moved by which side of an arbitrary cut they fall, and the reading changes smoothly
+        as their clues do. Worked a block of positions at a time: the window sum of position p is the
+        running total at p + half_width + 1 minus the one at p - half_width (`_cum_rows`)."""
+        n = len(order)
+        mean = np.empty(n)
+        sd = np.empty(n)
+        upper = np.empty(n)
+        for a in range(0, n, self.block):
+            b = min(a + self.block, n)
+            pos = np.arange(a, b)
+            lo = np.clip(pos - half_width, 0, n)
+            hi = np.clip(pos + half_width + 1, 0, n)
+            cum_lo = self._cum_rows(records, order, checkpoints, int(lo[0]), int(lo[-1]))
+            cum_hi = self._cum_rows(records, order, checkpoints, int(hi[0]), int(hi[-1]))
+            own = self._rows(records, order[a:b])
+            score = cum_hi[hi - hi[0]] - cum_lo[lo - lo[0]] - own + prior[None, :]
+            post = np.exp(score - score.max(axis=1, keepdims=True))
+            post /= post.sum(axis=1, keepdims=True)
+            m = (post * _LOG_GRID[None, :]).sum(axis=1)
+            s = np.sqrt(np.maximum((post * (_LOG_GRID[None, :] - m[:, None]) ** 2).sum(axis=1), 0.0))
+            cut = np.minimum((np.cumsum(post, axis=1) < self.credible).sum(axis=1), len(_RATIO_GRID) - 1)
+            where = order[a:b]
+            mean[where] = m
+            sd[where] = s
+            upper[where] = _RATIO_GRID[cut]
+        return mean, sd, upper
 
     def _holdout_trend(
         self,
@@ -832,43 +1196,6 @@ def _pseudo_days(n: npt.NDArray[np.float64], d: npt.NDArray[np.float64]) -> floa
 _NO_SPREAD_DAYS = 1e6
 
 
-def _neighbours(
-    ll_grid: npt.NDArray[np.float64],
-    order: npt.NDArray[np.int64],
-    half_width: int,
-    prior: npt.NDArray[np.float64],
-    credible: float,
-) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.float64], npt.NDArray[np.float64]]:
-    """Per customer, the mean and sd of the log ratio read from the `half_width` customers on each
-    side of them along the index (themselves left out), with `prior` (a log-density on the grid),
-    and the upper `credible` bound of that ratio.
-
-    A sliding band: everyone is read against the people most like them, so someone at the edge of a
-    band is not moved by which side of an arbitrary cut they fall, and the reading changes smoothly
-    as their clues do."""
-    n = len(order)
-    sorted_ll = ll_grid[order]
-    cum = np.vstack([np.zeros((1, ll_grid.shape[1])), np.cumsum(sorted_ll, axis=0)])
-    pos = np.arange(n)
-    lo = np.clip(pos - half_width, 0, n)
-    hi = np.clip(pos + half_width + 1, 0, n)
-    score = cum[hi] - cum[lo] - sorted_ll + prior[None, :]
-    post = np.exp(score - score.max(axis=1, keepdims=True))
-    post /= post.sum(axis=1, keepdims=True)
-    mean_sorted = (post * _LOG_GRID[None, :]).sum(axis=1)
-    sd_sorted = np.sqrt(
-        np.maximum((post * (_LOG_GRID[None, :] - mean_sorted[:, None]) ** 2).sum(axis=1), 0.0)
-    )
-    cut = np.minimum((np.cumsum(post, axis=1) < credible).sum(axis=1), len(_RATIO_GRID) - 1)
-    mean = np.empty(n)
-    sd = np.empty(n)
-    upper = np.empty(n)
-    mean[order] = mean_sorted
-    sd[order] = sd_sorted
-    upper[order] = _RATIO_GRID[cut]
-    return mean, sd, upper
-
-
 HARM_SPREAD_FLOOR = 0.05
 """The least a band's (or segment's) ratio may stray from the business's, on the log scale."""
 
@@ -907,6 +1234,11 @@ def _normal_on_grid(
     return out / np.maximum(out.sum(axis=1, keepdims=True), _TINY)
 
 
+def _stable_key(customer_id: str) -> int:
+    """A fixed number per customer (not Python's salted hash), for picking a sample."""
+    return int.from_bytes(hashlib.blake2b(customer_id.encode(), digest_size=8).digest(), "big")
+
+
 def _stable_half(customer_id: str) -> bool:
     """A fixed coin flip per customer (not Python's salted hash), for cross-fitting."""
     return int.from_bytes(hashlib.blake2b(customer_id.encode(), digest_size=2).digest(), "big") % 2 == 1
@@ -940,10 +1272,6 @@ def _logit_fit(
     return beta
 
 
-LEAVE_ALONE_CREDIBLE = HARM_CREDIBLE
-"""A person is left alone when it is this credible, on their own posterior, that messages lower
-their buying: a lower-confidence-bound rule, like the restraint rule, but on the harm. Below it the
-harm is only charged (`ContactHarm.dent`)."""
 LEAVE_ALONE_RETRY = 0.02
 """The exploration floor of leaving alone: the chance, per customer and calendar week, that someone
 left alone is bid for as usual that week, so a wrongly flagged customer can come back (a click or a
@@ -956,14 +1284,16 @@ def leave_alone(harm: ContactHarm, customer_id: str, at_stake: float) -> bool:
 
     Their ratio is read on all of their buying in the week after a message, so it already nets off
     whatever messages like those add: a ratio below 1 is a message whose harm is larger than its
-    gain. They are left alone when their own posterior puts at least `LEAVE_ALONE_CREDIBLE` below 1.
-    The click model's gain for the best option is not added on top: it predicts the same lift from
+    gain. They are left alone when their own posterior puts at least `LEAVE_ALONE_CREDIBLE` below 1,
+    read on the exact grid (`ContactHarm.p_harm`, the number `likely` and `describe` count). The
+    click model's gain for the best option is not added on top: it predicts the same lift from
     clicks, and counting it twice would never leave anyone alone (measured: on day 0 it credits the
     put-off customers of `sleeping_dogs_15` with the same gain, about 65% of their buying in the
-    window, as everyone else). `at_stake` is what their buying in a message's window is worth
-    (urgency x organic chance x value): nobody is left alone with nothing at stake, or without a
-    record."""
-    return at_stake > 0 and harm.p_below(customer_id, 1.0) >= LEAVE_ALONE_CREDIBLE
+    window, as everyone else). Below the bar the bidder weighs that gain against the same record
+    instead (`ContactHarm.purchase_shift`). `at_stake` is what their buying in a message's window
+    is worth (urgency x organic chance x value): nobody is left alone with nothing at stake, or
+    without a record."""
+    return at_stake > 0 and harm.p_harm(customer_id) >= LEAVE_ALONE_CREDIBLE
 
 
 def leave_alone_retry(customer_id: str, now: datetime, rate: float = LEAVE_ALONE_RETRY) -> bool:
@@ -1144,6 +1474,12 @@ class GoalBidder:
     but the exploration floor picks uniformly among whatever is offered, so without pruning it keeps
     handing a discount to someone who plainly buys at full price.
 
+    `purchase_weighted` (None: on when the response model says `uplift_from_clicks`, as the agent's
+    click model does) weighs the click gain against each customer's own purchases and takes the
+    purchase drop off once, never adding to the gain (`_purchase_weighted_loss`; see the module
+    docstring). Off, every option pays the credible dent only, as for a model whose uplift is read
+    from purchases.
+
     `bids()` remembers each customer's segment and each content item's labels for `learn()`;
     `quote()` prices the same options and remembers nothing (for explaining a decision).
     """
@@ -1170,16 +1506,22 @@ class GoalBidder:
         carousel_template: bool = False,
         format_costs: Mapping[Format, float] | None = None,
         harm: ContactHarm | None = None,
+        purchase_weighted: bool | None = None,
     ) -> None:
         if prune_z is not None and prune_z < 0:
             raise ValueError("prune_z must be >= 0")
         self.harm = harm
+        self.response_model: ResponseModel = response_model or BetaResponseModel()
+        self.purchase_weighted = (
+            purchase_weighted
+            if purchase_weighted is not None
+            else bool(getattr(self.response_model, "uplift_from_clicks", False))
+        )
         self.goal_id = brief.goal_id
         self.kind = kind
         self.own_spread = own_spread
         self.prune_z = prune_z
         self.brief = brief
-        self.response_model: ResponseModel = response_model or BetaResponseModel()
         self.value_model = value_model or ValueModel()
         # A partial override keeps the defaults for the channels it does not name, so a channel is
         # never priced as free just because the business only told us about email.
@@ -1233,7 +1575,7 @@ class GoalBidder:
 
     def bids(self, state: CustomerState, ctx: DecisionContext) -> list[Bid]:
         """Every allowed option for this customer, best expected net first; [] if not in the audience."""
-        out = self.quote(state, ctx)
+        out = self._quote(state, ctx, prune=True, remember=True)
         if out:
             library = self._usable(self._content if self._content is not None else ctx.content)
             self._segments[state.customer_id] = state.segment
@@ -1245,6 +1587,11 @@ class GoalBidder:
 
         `prune=False` skips every `prune_z` step (the offer gate, the harm hold and the spread floor),
         so an explanation can list what pruning left out and say so."""
+        return self._quote(state, ctx, prune=prune, remember=False)
+
+    def _quote(self, state: CustomerState, ctx: DecisionContext, *, prune: bool, remember: bool) -> list[Bid]:
+        """`quote`; with `remember`, the click reading of a purchase-weighted bid is handed to the
+        harm model (`ContactHarm.note_click`) for its next refit."""
         prune_z = self.prune_z if prune else None
         if not matches(state, self.brief.audience, ctx.now):
             return []
@@ -1269,6 +1616,8 @@ class GoalBidder:
         # option pays it, so it moves "do nothing" ahead of all of them alike.
         loss = harm.expected_loss(state.customer_id, organic) if harm is not None else 0.0
         references = _no_offer_references(raw)
+        if harm is not None and self.purchase_weighted:
+            loss = self._purchase_weighted_loss(state, harm, raw, references, organic, loss, remember)
         sensitivity = offer_sensitivity_factor(state)
 
         out: list[Bid] = []
@@ -1386,6 +1735,43 @@ class GoalBidder:
             )
         )
         return out
+
+    def _purchase_weighted_loss(
+        self,
+        state: CustomerState,
+        harm: ContactHarm,
+        raw: Sequence[_Raw],
+        references: Mapping[tuple[Channel, Format], _Raw],
+        organic: float,
+        dent_loss: float,
+        remember: bool = False,
+    ) -> float:
+        """What comes off every option's uplift when the gain is read from clicks: the purchase drop
+        counted once.
+
+        The click model's gain for the message they would get (their best plain option) is weighed
+        against their own purchases (`ContactHarm.purchase_shift`). The credible dent
+        (`dent_loss`, from the same record and their neighbours') is a second reading of the same
+        drop, so the larger of the two is taken, never their sum.
+
+        Purchases only ever take off: a record that reads more buying than the clicks predict leaves
+        the click gain as it is. The click model's scale is set against the holdout, while a record's
+        ratio is flattered by when messages go out (when a refill is due, after a visit), so a high
+        record is as likely that timing as a keener customer; a low one survives the flattery. And
+        a mean-zero spread of small raises and cuts is not neutral: it lifts the customers just
+        below the attention price over it (measured: `whatsapp_fatigue` sent 1.11 messages a week
+        instead of 1.03 and lost $546 on average; docs/v2/CLICK_HARM.md). Every option moves by the
+        same amount, so their order (the customer's taste, from clicks) is kept and only the level
+        changes. With `remember` the click reading is noted for the harm
+        model's next refit, which reads from all of them how records and click readings relate
+        (`ContactHarm.click_gap`)."""
+        plain = list(references.values()) or list(raw)
+        best = max(plain, key=lambda o: (o.plain, o.item.content_id))
+        gain_sd = self.response_model.predict(state, best.key)[1]
+        if remember:
+            harm.note_click(state.customer_id, organic, best.plain, gain_sd)
+        shift = harm.purchase_shift(state.customer_id, organic, best.plain, gain_sd)
+        return max(shift, dent_loss, 0.0)
 
     def _raw_options(
         self,
