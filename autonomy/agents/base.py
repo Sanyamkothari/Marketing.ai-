@@ -13,6 +13,8 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Callable, Sequence
+from functools import cache
+from pathlib import Path
 from typing import TypeVar
 
 from pydantic import BaseModel, ValidationError
@@ -23,9 +25,18 @@ M = TypeVar("M", bound=BaseModel)
 
 _FENCE = re.compile(r"```(?:json)?\s*(.*?)```", re.DOTALL)
 
+PROMPTS_DIR = Path(__file__).parent / "prompts"
+"""Where every agent prompt lives, one markdown file per prompt."""
+
 
 class AgentOutputError(RuntimeError):
     """The model did not produce valid output after a repair attempt."""
+
+
+@cache
+def load_prompt(name: str) -> str:
+    """A prompt from `autonomy/agents/prompts/<name>.md`. Prompts are files so they can be reviewed."""
+    return (PROMPTS_DIR / f"{name}.md").read_text(encoding="utf-8")
 
 
 def extract_json(text: str) -> str:
@@ -98,8 +109,8 @@ class ScriptedLLM:
         )
 
     def embed(
-        self, texts: Sequence[str], *, model_id: str | None = None
-    ) -> tuple[tuple[float, ...], ...]:  # noqa: ARG002
+        self, texts: Sequence[str], *, model_id: str | None = None  # noqa: ARG002
+    ) -> tuple[tuple[float, ...], ...]:
         """Bag-of-letters vectors: crude, deterministic, and enough for nearest-centroid tests."""
         out = []
         for t in texts:
