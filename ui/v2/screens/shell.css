@@ -277,15 +277,8 @@
   color: var(--accent-ink);
 }
 
-.pause-scope {
-  margin: 0 4px 0 8px;
-  color: var(--faint);
-  font-size: var(--fs-small);
-  line-height: var(--lh-small);
-  white-space: nowrap;
-}
-
-/* The one big Pause: solid near-black with a pause glyph. While paused it says Resume, in the negative colour,
+/* The one big Pause: solid near-black with a pause glyph. What it stops ("Stops all sending, for every goal") is its
+   description (#pause-scope), shown on hover and keyboard focus, so the bar carries no helper text. While paused it says Resume, in the negative colour,
    so the stopped state is plain at a glance. */
 .topbar-actions .pause-big {
   min-width: 92px;
@@ -562,10 +555,6 @@
     padding: 0 6px;
   }
 
-  .pause-scope {
-    display: none;
-  }
-
   .topbar-actions .pause-big {
     min-width: 0;
     min-height: 36px;
@@ -606,4 +595,18 @@
   .goal-note .goal-note-trial {
     display: none;
   }
+}
+
+/* An (i) on the bar's tinted notes takes the note's own ink. */
+.goal-note .info-dot,
+.mode-banner .info-dot {
+  margin-left: 6px;
+  border-color: currentColor;
+  color: inherit;
+  opacity: 0.75;
+}
+
+.goal-note .info-dot:hover,
+.mode-banner .info-dot:hover {
+  opacity: 1;
 }

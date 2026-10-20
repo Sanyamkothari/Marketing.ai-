@@ -106,9 +106,11 @@
   max-width: 80ch;
 }
 
-.gl-safe strong {
-  color: var(--text);
-  font-weight: 500;
+/* A field label with its (i) on the same line. */
+.gl-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .gl-skel-box {
@@ -146,17 +148,6 @@
   margin-top: 6px;
 }
 
-.gl-autonomy {
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
-}
-
-.gl-autonomy-words {
-  color: var(--faint);
-  font-size: var(--fs-small);
-}
-
 .gl-goal-meta {
   margin: 4px 0 0;
 }
@@ -177,7 +168,7 @@
   font-variant-numeric: tabular-nums;
 }
 
-.gl-next-list strong {
+.gl-next-list .has-info {
   color: var(--text);
   font-weight: 500;
 }
@@ -200,12 +191,6 @@
 
 .gl-opps-head .card-title {
   margin: 0;
-}
-
-.gl-sub {
-  margin: 4px 0 0;
-  color: var(--muted);
-  max-width: 72ch;
 }
 
 .gl-pad {
@@ -272,11 +257,6 @@
 .gl-opp-why {
   margin: 4px 0 0;
   color: var(--muted);
-}
-
-.gl-opp-why strong {
-  color: var(--text);
-  font-weight: 500;
 }
 
 .gl-opp-meta {

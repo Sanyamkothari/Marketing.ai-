@@ -12,7 +12,7 @@ redemption (free shipping $4, 10% off $6). They were taken on 20 Oct 2026 in hea
 
 Desktop is a 1440×900 viewport and phone is 390×844 (with mobile emulation). Each shot covers at most
 the first two viewport heights (1440×1800 or 390×1688), so long screens such as Live and Operator stop
-part-way down. The PNGs are reduced to a 256-colour palette to keep the folder small (about 1.9 MB).
+part-way down. The PNGs are reduced to a 256-colour palette to keep the folder small (about 1.3 MB).
 
 | Screen | Desktop, light | Phone, light | Desktop, dark | Phone, dark |
 | --- | --- | --- | --- | --- |
@@ -138,3 +138,26 @@ Changed since the round before, and visible in these shots:
 - **Operator**: the raw JSON wraps inside its grey well, so nothing scrolls sideways any more.
 - **Message pictures** in the demo point at `assets.demo.invalid`, a name that can never load: Plan says the
   picture could not be loaded here, and Live leaves the thumbnail out, without asking the network for them.
+
+## Retaken for the declutter pass (20 Oct 2026)
+
+All 22 shots were retaken after the founder's "there is too much text on each page". Every screen now shows numbers
+first, each card its title, its numbers and at most one short sentence, and every explanation moved into a
+description that opens on hover, keyboard focus or tap (the dotted underlines and the (i) glyphs in these shots;
+see section 6 of [DESIGN.md](../DESIGN.md)). Visible words fell by 41% to 74% per screen. None of the 22 shots, and
+none of the same routes in mock mode (`?mock=1`), raised a console error or stuck out past the right edge at 390px.
+A shot cannot show a description open: they are closed until someone hovers, focuses or taps.
+
+Changed since the round before, and visible in these shots:
+
+- **Every screen** uses the same page head (title, status pill, one grey line); the (i) after any title sits 8px
+  after its words, and on a phone it wraps with the title's last word.
+- **Plan**: the limits strip says the audience, budget, weekly limit and quiet hours once; the rules are names in
+  two columns, the stop rules short rows; four ready messages before "Show all".
+- **Live**: Yesterday is the pitch's sentence plus three figures; the feed is one line a decision; the Briefing is
+  one row per section.
+- **Proof**: the verdict, then one sentence with the money and its range; the share text is folded.
+- **Connect, Goal, Getting started**: one line per card, the file and step details in descriptions.
+
+Still visible: Operator lists all 200 decisions (the shots stop after two viewport heights), the demo has no
+product names, and its pictures point at a host that never resolves.

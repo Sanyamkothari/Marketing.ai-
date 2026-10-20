@@ -448,3 +448,63 @@ def test_simulated_demo_falls_back_to_the_fake_world(monkeypatch: pytest.MonkeyP
     services = build_demo_services(NOW, n_customers=30, days=2, simulation=True)
     assert services.runtime is None and services.batch_store is None
     assert [g.status for g in services.list_goals()] == [GoalStatus.ACTIVE]
+    # Without the demo layer there are no names to show, and none is made up.
+    assert all(r.display_name is None for r in services.activity(limit=50))
+
+
+# --- what people read: first names and product names ------------------------------------------------
+
+
+def test_demo_first_names_are_stable_first_names_only() -> None:
+    from autonomy.runtime.demo import DEMO_FIRST_NAMES, demo_first_name, with_first_names
+
+    assert len(DEMO_FIRST_NAMES) >= 150 and len(set(DEMO_FIRST_NAMES)) == len(DEMO_FIRST_NAMES)
+    assert all(n.strip() == n and " " not in n and "@" not in n for n in DEMO_FIRST_NAMES)
+    ids = [f"gym_{i:06d}" for i in range(400)]
+    assert [demo_first_name(c) for c in ids] == [demo_first_name(c) for c in ids]  # seeded by the id
+    assert len({demo_first_name(c) for c in ids}) > 100  # spread over the list, not a handful
+
+    def signup(cid: str, **attrs: Any) -> Event:
+        return Event(
+            event_id=f"s_{cid}", customer_id=cid, type=EventType.SIGNUP, ts=NOW, source="gym", attrs=attrs
+        )
+
+    visit = Event(event_id="v1", customer_id="gym_000001", type=EventType.VISIT, ts=NOW, source="gym")
+    named = with_first_names([signup("gym_000001", timezone="UTC"), signup("c2", first_name="Priya"), visit])
+    assert named[0].attrs == {"timezone": "UTC", "first_name": demo_first_name("gym_000001")}
+    assert named[1].attrs == {"first_name": "Priya"}  # a name the data already has is kept
+    assert named[2] == visit  # only signups carry a name
+
+
+def test_demo_product_names_never_leave_a_bare_id() -> None:
+    from autonomy.runtime.demo import HERO_PRODUCTS, demo_catalogue, product_name
+
+    assert product_name("tee_organic") == "Organic cotton tee"
+    assert product_name("mug_ceramic") == "Mug ceramic"  # not in the shop: the id in words
+    seen = Event(
+        event_id="p1", customer_id="c1", type=EventType.VISIT, ts=NOW, source="csv", item_id="gift_card"
+    )
+    names = demo_catalogue([seen])
+    assert names["gift_card"] == "Gift card"
+    assert all(names[p.item_id] == p.name for p in HERO_PRODUCTS)
+
+
+def test_simulated_demo_shows_first_names_and_product_names() -> None:
+    from autonomy.runtime.demo import demo_first_name
+
+    services = build_demo_services(NOW, n_customers=60, days=3, simulation=True)
+    rows = services.activity(limit=500)
+    assert rows and all(r.display_name == demo_first_name(r.decision.customer_id) for r in rows)
+    assert all(r.item.name for r in rows if r.item is not None)
+    cid = next(r.decision.customer_id for r in rows if r.decision.action is not None)
+    insight = services.customer_insight(cid)
+    assert insight.customer_id == cid and insight.display_name == demo_first_name(cid)
+    assert all(insight.items.values()) and all(n.name for n in insight.next_items)
+    assert insight.refill is None or insight.refill.item_name
+
+    with _client(services) as c:
+        row = c.get("/v2/activity", params={"limit": 5}).json()[0]
+        assert row["display_name"] == demo_first_name(row["decision"]["customer_id"])
+        body = c.get(f"/v2/customers/{cid}/insight").json()
+        assert body["customer_id"] == cid and body["display_name"] == demo_first_name(cid)
+        assert all(body["items"].values())

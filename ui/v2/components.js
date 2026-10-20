@@ -4,7 +4,9 @@
 //
 // They draw the design system in styles.css (docs/v2/DESIGN.md; "How to use the system" at its end lists the
 // classes): cards, the divided KPI strip, tables that fold to two-line rows on a phone, pills, notices, the
-// segmented control, skeleton blocks, empty and error states, the freshness stamp, toasts and dialogs.
+// segmented control, skeleton blocks, empty and error states, the freshness stamp, toasts and dialogs, the one page
+// head, and descriptions: the explanations that show only on hover, focus or tap (withInfo, info, describe), so a
+// card shows its title, its numbers and at most one sentence (DESIGN.md section 6, "Words").
 
 export const EM_DASH = "—";
 
@@ -282,12 +284,225 @@ export function slotted(text) {
 
 // ---- the design system's newer pieces (DESIGN.md, "How to use the system") ---------------------------------------
 
+// ---- descriptions: the explanation that shows only on hover, focus or tap ------------------------------------------
+//
+// Every "how is this measured", what a number means, a threshold or a method note lives in a description, not on the
+// page. A description is a short floating box (the only floating thing besides menus, toasts and dialogs) that opens
+// on hover after 150 ms, on keyboard focus, and on tap on a touch screen (tap again, tap outside or Esc closes it).
+// Its text is always in the DOM (role="tooltip", linked with aria-describedby), so screen readers and tests find it;
+// it is `hidden` while closed, so it adds no visible words, and it is position: fixed, so nothing shifts when it opens.
+
+const HOVER_DELAY = 150;
+let infoSeq = 0;
+/** The one description open right now: {target, tip, close}. */
+let openInfo = null;
+let infoGlobalsReady = false;
+
+const classesOf = (node) => String(node.getAttribute("class") || "").split(/\s+/).filter(Boolean);
+const hasClass = (node, c) => classesOf(node).includes(c);
+function addClass(node, c) {
+  if (!hasClass(node, c)) node.setAttribute("class", [...classesOf(node), c].join(" "));
+}
+function removeClass(node, c) {
+  if (hasClass(node, c)) node.setAttribute("class", classesOf(node).filter((x) => x !== c).join(" "));
+}
+const isActionable = (node) => /^(A|BUTTON|INPUT|SELECT|TEXTAREA|SUMMARY|LABEL)$/.test(String(node.tagName || "").toUpperCase());
+
+/** Esc closes, a tap or click outside closes, and scrolling or resizing moves the open one with its target. */
+function infoGlobals() {
+  if (infoGlobalsReady || typeof document === "undefined" || typeof document.addEventListener !== "function") return;
+  infoGlobalsReady = true;
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && openInfo) openInfo.close(true);
+  });
+  document.addEventListener(
+    "pointerdown",
+    (e) => {
+      if (!openInfo) return;
+      const inside = (n) => n && typeof n.contains === "function" && n.contains(e.target);
+      if (!inside(openInfo.target) && !inside(openInfo.tip)) openInfo.close(true);
+    },
+    true,
+  );
+  const follow = () => openInfo && placeInfo(openInfo.target, openInfo.tip);
+  if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
+    window.addEventListener("scroll", follow, { capture: true, passive: true });
+    window.addEventListener("resize", follow, { passive: true });
+  }
+}
+
+/** Put the box under its target (above when there is no room below), inside the window with an 8px margin. */
+function placeInfo(target, tip) {
+  if (typeof target.getBoundingClientRect !== "function" || typeof window === "undefined" || !tip.style) return;
+  const r = target.getBoundingClientRect();
+  const vw = (document.documentElement && document.documentElement.clientWidth) || window.innerWidth;
+  const vh = window.innerHeight;
+  tip.style.left = "0px";
+  tip.style.top = "0px";
+  tip.style.maxWidth = `${Math.min(280, vw - 16)}px`;
+  const w = tip.offsetWidth || 0;
+  const h = tip.offsetHeight || 0;
+  const left = Math.max(8, Math.min(r.left + r.width / 2 - w / 2, vw - w - 8));
+  const below = r.bottom + 6;
+  const top = below + h + 8 > vh && r.top - 6 - h >= 8 ? r.top - 6 - h : below;
+  tip.style.left = `${Math.round(left)}px`;
+  tip.style.top = `${Math.round(top)}px`;
+}
+
 /**
- * The title row: an h1 (a noun: "Live", "Proof"), an optional grey line about the data, and on the right the
- * real actions and/or a freshness stamp. Returns a `.page-head` block.
+ * Wire an existing description box (`tip`, any element holding the words) to its `target`. The building block of
+ * `withInfo` and `info`; the shell uses it for the boxes written in index.html. Returns the target.
+ *
+ * On a label, a number or a pill: hover (150 ms), keyboard focus (it becomes tabbable) and tap all open it. On a
+ * button or a link the action wins on click and tap: its description shows on hover and focus, so its aria-label
+ * should carry the same words for touch screens.
  */
-export function pageHead({ title, sub, actions = [], stamp = null, level = 1 } = {}) {
-  const left = el("div", {}, el(`h${level}`, { class: "page-title" }, title), present(sub) ? el("p", { class: "page-sub" }, sub) : null);
+export function describe(target, tip) {
+  if (!target || !tip) return target;
+  if (!tip.getAttribute("id")) tip.setAttribute("id", `info-${(infoSeq += 1)}`);
+  const tipId = tip.getAttribute("id");
+  tip.setAttribute("role", "tooltip");
+  addClass(tip, "info-tip");
+  tip.hidden = true;
+  const ids = String(target.getAttribute("aria-describedby") || "").split(/\s+/).filter(Boolean);
+  if (!ids.includes(tipId)) target.setAttribute("aria-describedby", [...ids, tipId].join(" "));
+  addClass(target, "has-info");
+  const glyph = hasClass(target, "info-dot");
+  const actionable = isActionable(target) && !glyph;
+  if (!isActionable(target) && target.getAttribute("tabindex") === null) target.setAttribute("tabindex", "0");
+
+  const state = { hover: false, focus: false, pinned: false };
+  let timer = null;
+  let lastPointer = "mouse";
+  function close(all = false) {
+    clearTimeout(timer);
+    if (all) Object.assign(state, { hover: false, focus: false, pinned: false });
+    tip.hidden = true;
+    removeClass(tip, "is-open");
+    if (openInfo && openInfo.tip === tip) openInfo = null;
+  }
+  function show() {
+    if (openInfo && openInfo.tip !== tip) openInfo.close(true);
+    infoGlobals();
+    tip.hidden = false;
+    addClass(tip, "is-open");
+    placeInfo(target, tip);
+    openInfo = { target, tip, close };
+  }
+  const sync = () => (state.hover || state.focus || state.pinned ? show() : close());
+
+  target.addEventListener("pointerenter", (e) => {
+    if (e && e.pointerType && e.pointerType !== "mouse") return;
+    clearTimeout(timer);
+    timer = setTimeout(() => {
+      state.hover = true;
+      sync();
+    }, HOVER_DELAY);
+  });
+  target.addEventListener("pointerleave", (e) => {
+    if (e && e.pointerType && e.pointerType !== "mouse") return;
+    clearTimeout(timer);
+    state.hover = false;
+    sync();
+  });
+  target.addEventListener("pointerdown", (e) => {
+    lastPointer = (e && e.pointerType) || "mouse";
+  });
+  target.addEventListener("focus", () => {
+    // Keyboard focus only: a click or a tap also focuses, and hover or the tap handle those.
+    let keyboard = true;
+    try {
+      if (typeof target.matches === "function") keyboard = target.matches(":focus-visible");
+    } catch {
+      keyboard = true;
+    }
+    if (!keyboard) return;
+    state.focus = true;
+    sync();
+  });
+  target.addEventListener("blur", () => {
+    state.focus = false;
+    state.pinned = false;
+    sync();
+  });
+  if (!actionable) {
+    target.addEventListener("click", (e) => {
+      const type = (e && e.pointerType) || lastPointer;
+      if (type === "mouse" && !glyph) return; // the mouse already sees it on hover
+      // A tap toggles it; a click on the (i) keeps it open (or closes it if it was pinned already).
+      state.pinned = !state.pinned;
+      if (!state.pinned) state.hover = false;
+      sync();
+    });
+  }
+  target.addEventListener("keydown", (e) => {
+    if (e && e.key === "Escape") close(true);
+  });
+  return target;
+}
+
+/** The description box: a `span.info-tip` holding `text` (a string or inline nodes; no links, it cannot be clicked). */
+const infoTip = (text, id) => el("span", { class: "info-tip", role: "tooltip", id: id || null, hidden: true }, text);
+
+/**
+ * Give `target` (a label, a number, a pill, a button) a description that shows only on hover, focus or tap. The
+ * target gets a dotted underline (`.has-info`). Returns a wrapper to put where the target goes (`.info-host`,
+ * `display: contents`, so it takes no room and does not change the layout); if the target is already in the page,
+ * the box goes right after it and the target itself is returned. An empty `text` adds nothing.
+ *
+ *     el("p", { class: "kpi-label" }, withInfo(el("span", {}, "Extra profit"), "Orders from people we contact, …"))
+ */
+export function withInfo(target, text, { id } = {}) {
+  if (!target || !present(text)) return target;
+  const tip = infoTip(text, id);
+  if (target.parentNode && typeof target.after === "function") {
+    target.after(tip);
+    describe(target, tip);
+    return target;
+  }
+  describe(target, tip);
+  return el("span", { class: "info-host" }, target, tip);
+}
+
+/**
+ * A quiet (i) glyph that holds a description, for when there is no word or number to underline (after a card title
+ * or a figure). `label` is what a screen reader says for the glyph. Returns null for an empty `text`.
+ */
+export function info(text, { label = "What this means", id } = {}) {
+  if (!present(text)) return null;
+  const dot = el("button", { type: "button", class: "info-dot", "aria-label": label }, el("span", { "aria-hidden": "true" }, "i"));
+  const tip = infoTip(text, id);
+  describe(dot, tip);
+  return el("span", { class: "info-host" }, dot, tip);
+}
+
+/**
+ * A title's words followed by its (i), with the last word and the glyph kept together, so a title that wraps on a
+ * phone never leaves the (i) alone on a line. Returns the children to put in the heading.
+ */
+export function titleInfo(text, about, { label } = {}) {
+  const dot = info(about, { label: label || `About ${text}` });
+  if (!dot) return [text];
+  const cut = String(text).lastIndexOf(" ");
+  return [cut > 0 ? text.slice(0, cut + 1) : "", el("span", { class: "no-wrap" }, cut > 0 ? text.slice(cut + 1) : text, dot)];
+}
+
+/**
+ * The one page head every screen uses: on the left the title (a noun: "Live", "Proof") with its status pills on the
+ * same row and one short grey line under it; on the right the primary action and/or a freshness stamp. `status` is a
+ * pill or a list of pills (`pill()`), `info` a description behind an (i) after the title, `sub` one short line (put
+ * anything longer into `info`). Returns a `.page-head` block.
+ */
+export function pageHead({ title, sub, status = [], actions = [], stamp = null, info: about, level = 1 } = {}) {
+  const pills = [status].flat().filter(Boolean);
+  const titleRow = el(
+    "div",
+    { class: "page-title-row" },
+    el(`h${level}`, { class: "page-title" }, title),
+    present(about) ? info(about, { label: `About ${typeof title === "string" ? title : "this page"}` }) : null,
+    pills.length ? el("div", { class: "page-status" }, pills) : null,
+  );
+  const left = el("div", { class: "page-head-main" }, titleRow, present(sub) ? el("p", { class: "page-sub" }, sub) : null);
   const right = [stamp, ...[actions].flat()].filter(Boolean);
   return el("div", { class: "page-head" }, left, right.length ? el("div", { class: "page-actions" }, right) : null);
 }
@@ -368,33 +583,52 @@ let segmentedSeq = 0;
 
 /**
  * A segmented control (the autonomy dial: Shadow | Approve | Autopilot): radios in one rounded track, so arrow keys
- * move the choice. `options` is `[{value, label, disabled?}]`; `onChange(value)` runs on a choice; `note` is the
- * one sentence under it that explains the choice (pass a node to update it yourself).
+ * move the choice. `options` is `[{value, label, text?, hint?, disabled?}]`; `onChange(value)` runs on a choice.
+ *
+ * Words: when the options carry a `text` (one sentence each), ONE sentence shows under the track, the selected
+ * option's, and it follows the choice. Every segment also keeps its own sentence (with its `hint` first) in a
+ * description that opens on hover, so the other levels are one hover away and all three sentences stay in the
+ * DOM (screen readers hear each one with its radio). `note` overrides the sentence under the track (a string, or a
+ * node you update yourself).
  */
-export function segmented({ name, legend, options = [], value, onChange, note, disabled = false } = {}) {
+export function segmented({ name, legend, options = [], value, onChange, note, disabled = false, className = "" } = {}) {
   const group = name || `seg-${(segmentedSeq += 1)}`;
+  const described = options.some((o) => present(o.text));
+  const sentence = (v) => {
+    const o = options.find((x) => x.value === v);
+    return o && present(o.text) ? o.text : "";
+  };
+  const noteNode = present(note) ? el("p", { class: "segmented-note" }, note) : described ? el("p", { class: "segmented-note", "aria-live": "polite" }, sentence(value)) : null;
   const track = el(
     "fieldset",
-    { class: "segmented", disabled },
+    { class: ["segmented", className], disabled },
     present(legend) ? el("legend", {}, legend) : null,
     options.map((o, i) => {
       const id = `${group}-${i}`;
-      return [
-        el("input", {
-          type: "radio",
-          id,
-          name: group,
-          value: String(o.value),
-          checked: o.value === value,
-          disabled: Boolean(o.disabled),
-          onchange: (e) => e.target.checked && typeof onChange === "function" && onChange(o.value),
-        }),
-        el("label", { for: id }, o.label),
-      ];
+      const input = el("input", {
+        type: "radio",
+        id,
+        name: group,
+        value: String(o.value),
+        checked: o.value === value,
+        disabled: Boolean(o.disabled),
+        onchange: (e) => {
+          if (!e.target.checked) return;
+          if (described && !present(note) && noteNode) noteNode.textContent = sentence(o.value);
+          if (typeof onChange === "function") onChange(o.value);
+        },
+      });
+      const label = el("label", { for: id }, o.label);
+      const words = [o.hint, o.text].filter(present);
+      if (!words.length) return [input, label];
+      const tip = el("span", { class: "info-tip", id: `${id}-info` }, words.map((w, j) => (j === 0 && words.length > 1 ? el("strong", {}, `${w}. `) : w)));
+      describe(label, tip);
+      input.setAttribute("aria-describedby", `${id}-info`);
+      return [input, label, tip];
     }),
   );
-  if (!present(note)) return track;
-  return el("div", { class: "segmented-field" }, track, el("p", { class: "segmented-note" }, note));
+  if (!noteNode) return track;
+  return el("div", { class: "segmented-field" }, track, noteNode);
 }
 
 /**

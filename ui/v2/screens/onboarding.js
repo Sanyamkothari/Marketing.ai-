@@ -11,8 +11,12 @@
 // With no goal yet it shows only the ask: your customer data and one goal. The product facts on this page
 // ("not yet run with a real business", "3-10% is typical") are labelled as facts about Autonomy or as general
 // guidance, never as numbers about this business. Every number about the business comes from the API.
+//
+// Words (DESIGN.md section 6): each step is its title, its state and at most one short sentence of what the data
+// says. What a step means (the teaching) is the title's description, and the detail behind a number (who it left
+// alone and why, what a forecast covers, what a budget change needs) is that number's description.
 
-import { button, card, clear, el, errorBox, int, money, notice, pageHead, present, range, skeleton, when } from "../components.js";
+import { button, clear, describe, el, errorBox, info, int, money, pageHead, present, range, skeleton, when, withInfo } from "../components.js";
 
 /** The Shadow trial the pitch asks for: two weeks. */
 export const TRIAL_DAYS = 14;
@@ -48,6 +52,13 @@ const plural = (n, one, many) => `${int(n)} ${Number(n) === 1 ? one : many}`;
 const valueOf = (r) => (r && r.status === "fulfilled" ? r.value : null);
 const errorOf = (r) => (r && r.status === "rejected" ? r.reason : null);
 
+/** A description box for `target` that sits where the caller puts it (at the end of a sentence, so the words read on). */
+function tipFor(target, text) {
+  const tip = el("span", {}, text);
+  describe(target, tip);
+  return tip;
+}
+
 const STATE_WORDS = {
   done: "Done",
   now: "Doing now",
@@ -60,12 +71,28 @@ const STATE_WORDS = {
 /** The pill tone for each state: green only for done, the accent only for the step being done now. */
 const STATE_TONE = { done: "positive", now: "accent", next: "neutral", later: "neutral", past: "neutral", unknown: "warning" };
 
-function stateTag(state) {
-  return el("span", { class: ["pill", `pill-${STATE_TONE[state] || "neutral"}`, "ob-state", `ob-state-${state}`] }, STATE_WORDS[state] || state);
+/** The state pill; `about` (what that state means here) is its description. */
+function stateTag(state, about) {
+  const tag = el("span", { class: ["pill", `pill-${STATE_TONE[state] || "neutral"}`, "ob-state", `ob-state-${state}`] }, STATE_WORDS[state] || state);
+  return present(about) ? withInfo(tag, about) : tag;
 }
 
-/** One step of the path: number, title, state (in words, not only colour), what the data says, and actions. */
-function step(n, title, state, body, actions = []) {
+/** The five steps: the title, and what the step means (the teaching), which is the title's description. */
+const STEPS = {
+  1: ["Connect your customer and order data", "Upload your files or connect your database. The Data Doctor cleans up messy data and asks you before it changes anything."],
+  2: ["Set one goal, in plain words", "Type what you want, for example “Win back customers who stopped buying, $5,000 this month.” Or pick one of the opportunities it found in your data."],
+  3: ["Run in Shadow mode for two weeks", "It decides every day what it would do for each customer, and why, but sends nothing. You see what it expects to earn before a single message goes out."],
+  4: ["Turn on Approve mode, with a small budget", "Then it sends, but only the batches you approve with one click on the Live page. Start with a small budget."],
+  5: ["Switch to Autopilot when Proof shows real extra profit", "Proof compares the customers it looks after with a small random group of people we never contact. Autopilot only makes sense once that difference is clearly above zero."],
+};
+
+/**
+ * One step of the path: number, title (its meaning on hover), state (in words, not only colour), at most one short
+ * sentence of what the data says, and actions. `about` is the state pill's description.
+ */
+function step(n, state, body, actions = [], about = null) {
+  const [title, teach] = STEPS[n];
+  const text = [body].flat().filter(Boolean);
   return el(
     "li",
     { class: ["ob-step", `ob-step-${state}`] },
@@ -73,8 +100,13 @@ function step(n, title, state, body, actions = []) {
     el(
       "div",
       { class: "ob-step-body" },
-      el("div", { class: "ob-step-head" }, el("h3", { class: "ob-step-title" }, el("span", { class: "visually-hidden" }, `Step ${n}: `), title), stateTag(state)),
-      el("div", { class: "ob-step-text" }, body),
+      el(
+        "div",
+        { class: "ob-step-head" },
+        el("h3", { class: "ob-step-title" }, el("span", { class: "visually-hidden" }, `Step ${n}: `), withInfo(el("span", {}, title), teach)),
+        stateTag(state, about),
+      ),
+      text.length ? el("div", { class: "ob-step-text" }, text) : null,
       actions.length ? el("div", { class: "ob-actions" }, actions) : null,
     ),
   );
@@ -86,40 +118,32 @@ const link = (text, href) => el("a", { class: "ob-link", href }, text);
 function dataStep(report, err) {
   const go = link("Go to Connect", "#/connect");
   if (err || !report) {
-    return step(
-      1,
-      "Connect your customer and order data",
-      "unknown",
-      el("p", {}, err ? `We couldn't check your data from here. ${err.message || ""}`.trim() : "This server can't report on your data yet, so we can't tell whether it's connected."),
-      [go],
-    );
+    const words = err ? "We couldn't check your data from here." : "This server can't report on your data yet.";
+    return step(1, "unknown", el("p", {}, err && present(err.message) ? withInfo(el("span", {}, words), err.message) : words), [go]);
   }
   const sources = Array.isArray(report.sources) ? report.sources : [];
   const customers = Number(report.customers) || 0;
   if (!customers && !sources.length) {
-    return step(
-      1,
-      "Connect your customer and order data",
-      "now",
-      el("p", {}, "Upload your customer and order files, or connect your database. The Data Doctor cleans up messy data and asks you before it changes anything."),
-      [go],
-    );
+    return step(1, "now", el("p", {}, "Upload your customer and order files, or connect your database."), [go]);
   }
   const questions = Array.isArray(report.questions) ? report.questions : [];
   return step(
     1,
-    "Connect your customer and order data",
     "done",
     [
       el(
         "p",
         {},
-        `Autonomy has ${plural(customers, "customer", "customers")}`,
+        `${plural(customers, "customer", "customers")}`,
         present(report.orders) ? ` and ${plural(report.orders, "order", "orders")}` : "",
         sources.length ? `, from ${plural(sources.length, "source", "sources")}.` : ".",
       ),
       questions.length
-        ? el("p", { class: "notice ob-attention" }, `The Data Doctor has ${plural(questions.length, "question", "questions")} for you. It won't change anything until you answer.`)
+        ? el(
+            "p",
+            { class: "notice ob-attention" },
+            withInfo(el("span", {}, `The Data Doctor has ${plural(questions.length, "question", "questions")} for you.`), "It won't change anything until you answer."),
+          )
         : null,
     ],
     [link(questions.length ? "Answer on Connect" : "See your data", "#/connect")],
@@ -129,22 +153,18 @@ function dataStep(report, err) {
 // ---- step 2: one goal ------------------------------------------------------------------------------------------
 function goalStep(goals, goal, dataMissing) {
   if (!goals.length) {
-    return step(
-      2,
-      "Set one goal, in plain words",
-      dataMissing ? "next" : "now",
-      el("p", {}, "Type what you want, for example: ", el("q", {}, "Win back customers who stopped buying, $5,000 this month."), " Or pick one of the opportunities it found in your data."),
-      [link("Set a goal", "#/goal")],
-    );
+    return step(2, dataMissing ? "next" : "now", el("p", {}, "Type what you want, or pick an opportunity it found."), [link("Set a goal", "#/goal")]);
   }
+  const name = el("strong", {}, goal.text || goal.goal_id);
   return step(
     2,
-    "Set one goal, in plain words",
     "done",
-    [
-      el("p", {}, "Following: ", el("strong", {}, goal.text || goal.goal_id)),
-      goals.length > 1 ? el("p", { class: "ob-muted" }, `You have ${plural(goals.length, "goal", "goals")}. Switch between them at the top; we suggest starting with one.`) : null,
-    ],
+    el(
+      "p",
+      {},
+      "Following: ",
+      goals.length > 1 ? withInfo(name, `You have ${plural(goals.length, "goal", "goals")}. Switch between them at the top; we suggest starting with one.`) : name,
+    ),
     [link("See your goals", "#/goal")],
   );
 }
@@ -155,38 +175,37 @@ function shadowFacts(goal, today, expected) {
   if (today && Number(today.customers_considered) === 0 && goal.status === "paused") {
     out.push(el("p", {}, "It made no decisions before it was paused."));
   } else if (today && Number(today.customers_considered) === 0) {
-    out.push(el("p", {}, `It hasn't made its first decisions yet${present(today.next_run_at) ? `; the next daily run is ${when(today.next_run_at)}` : ""}. Come back after it runs to see what it would do.`));
+    const next = present(today.next_run_at) ? `; the next daily run is ${when(today.next_run_at)}` : "";
+    out.push(el("p", {}, withInfo(el("span", {}, `No decisions yet${next}.`), "Come back after it runs to see what it would do, and why.")));
   } else if (today && present(today.contacted)) {
+    // Who it left alone, and why: the reasons are the description of that number, read after the sentence.
+    const alone = el("span", {}, `left ${int(today.left_alone)} alone`);
+    const reasons = Array.isArray(today.reasons) ? today.reasons.filter((r) => r && present(r.n)).slice(0, 3) : [];
+    const why = reasons.length ? `Why it left people alone: ${reasons.map((r) => `${r.words || r.code}: ${int(r.n)}`).join("; ")}.` : null;
     out.push(
       el(
         "p",
         {},
-        `On ${when(today.date, { time: false })} it would have contacted ${plural(today.contacted, "customer", "customers")} and left ${int(today.left_alone)} alone. Nothing was sent.`,
+        `On ${when(today.date, { time: false })} it would have contacted ${plural(today.contacted, "customer", "customers")} and `,
+        alone,
+        ". Nothing was sent.",
+        why ? tipFor(alone, why) : null,
       ),
     );
-    const reasons = Array.isArray(today.reasons) ? today.reasons.filter((r) => r && present(r.n)).slice(0, 3) : [];
-    if (reasons.length) {
-      out.push(
-        el("p", { class: "ob-sub" }, "Why it left people alone:"),
-        el(
-          "ul",
-          { class: "ob-reasons" },
-          reasons.map((r) => el("li", {}, el("span", {}, r.words || r.code), el("span", { class: "visually-hidden" }, ": "), el("span", { class: "num" }, int(r.n)))),
-        ),
-      );
-    }
   }
   if (expected && expected.expected_net) {
     const verdict = rangeVerdict(expected.expected_net);
+    const figure = el("strong", {}, range(expected.expected_net, expected.currency || goal.currency));
+    const covers = `Its own forecast for the ${plural(expected.with_forecast, "contact", "contacts")} it would have made.`;
     out.push(
       el(
         "p",
         {},
-        `Its own forecast for the ${plural(expected.with_forecast, "contact", "contacts")} it would have made: `,
-        el("strong", {}, range(expected.expected_net, expected.currency || goal.currency)),
-        " extra profit",
-        verdict === "unsure" ? ", so it's not sure yet: that range includes zero." : ".",
-        " This is a forecast, not proof.",
+        "Its forecast, not proof: ",
+        figure,
+        " extra profit.",
+        verdict === "unsure" ? " Not sure yet." : "",
+        tipFor(figure, verdict === "unsure" ? `${covers} That range includes zero, so it's not sure yet.` : covers),
       ),
     );
   } else if (expected && expected.words && !(today && Number(today.customers_considered) === 0)) {
@@ -196,53 +215,37 @@ function shadowFacts(goal, today, expected) {
 }
 
 function shadowStep(goal, day, today, expected) {
-  if (!goal) {
-    return step(3, "Run in Shadow mode for two weeks", "later", el("p", {}, "It decides every day what it would do for each customer, and why, but sends nothing."));
-  }
+  if (!goal) return step(3, "later", el("p", {}, "It decides every day, but sends nothing."));
   const plan = link("Open the plan", `#/plan/${encodeURIComponent(goal.goal_id)}`);
   if (goal.status === "draft") {
-    return step(
-      3,
-      "Run in Shadow mode for two weeks",
-      "next",
-      el("p", {}, "Check its plan and the messages it wrote, then approve it in Shadow mode, the recommended start. It decides every day but sends nothing."),
-      [plan],
-    );
+    return step(3, "next", el("p", {}, "Check its plan, then approve it in Shadow mode, the recommended start."), [plan]);
   }
+  const words = trialWords(day);
   if (goal.autonomy === "shadow" && goal.status === "paused") {
     // Only running goals are run: a paused one neither decides nor sends, so the trial waits.
-    const words = trialWords(day);
     return step(
       3,
-      "Run in Shadow mode for two weeks",
       "now",
       [
-        el("p", {}, el("strong", {}, words ? `Shadow trial: ${words}, paused.` : "Shadow trial paused."), " While it is paused it neither decides nor sends. Resume it on the Live page to carry on."),
+        el("p", {}, withInfo(el("strong", {}, words ? `Shadow trial: ${words}, paused.` : "Shadow trial paused."), "While it is paused it neither decides nor sends. Resume it on the Live page to carry on.")),
         shadowFacts(goal, today, expected),
       ],
       [link("Resume it, or see what it decided so far", `#/live/${encodeURIComponent(goal.goal_id)}`)],
     );
   }
   if (goal.autonomy === "shadow") {
-    const words = trialWords(day);
     return step(
       3,
-      "Run in Shadow mode for two weeks",
       day && day > TRIAL_DAYS ? "done" : "now",
       [
-        el("p", {}, el("strong", {}, words ? `Shadow trial: ${words}.` : "Shadow trial running."), " Autonomy is deciding, but nothing is being sent."),
+        el("p", {}, withInfo(el("strong", {}, words ? `Shadow trial: ${words}.` : "Shadow trial running."), "Autonomy is deciding, but nothing is being sent.")),
         shadowFacts(goal, today, expected),
       ],
       [link("See what it would do, and why", `#/live/${encodeURIComponent(goal.goal_id)}`)],
     );
   }
-  return step(
-    3,
-    "Run in Shadow mode for two weeks",
-    // "Past", not "Done": the level today says nothing about whether a Shadow trial ever ran.
-    "past",
-    el("p", {}, `This goal is past Shadow: it is at ${goal.autonomy === "approve" ? "Approve each batch" : "Autopilot"}.`),
-  );
+  // "Past", not "Done": the level today says nothing about whether a Shadow trial ever ran.
+  return step(3, "past", null, [], `This goal is past Shadow: it is at ${goal.autonomy === "approve" ? "Approve each batch" : "Autopilot"}.`);
 }
 
 // ---- step 4: Approve with a small budget -----------------------------------------------------------------------------
@@ -278,17 +281,18 @@ function budgetForm(ctx, goal, rerender) {
     },
     el("label", { for: id }, `Budget for this goal (${goal.currency || "USD"})`),
     el("div", { class: "ob-budget-row" }, input, save),
-    el("p", { id: `${id}-help`, class: "field-hint" }, `Now ${money(goal.budget, goal.currency)}. Lowering it is always allowed. Raising it above an approved plan needs a new plan.`),
+    el(
+      "p",
+      { id: `${id}-help`, class: "field-hint" },
+      withInfo(el("span", {}, "You can always lower it."), `Now ${money(goal.budget, goal.currency)}. Lowering it is always allowed; raising it above an approved plan needs a new plan.`),
+    ),
     msg,
   );
   return form;
 }
 
 function approveStep(ctx, goal, day, rerender) {
-  const title = "Turn on Approve mode, with a small budget";
-  if (!goal || goal.status === "draft") {
-    return step(4, title, "later", el("p", {}, "After the trial it sends, but only the batches you approve with one click. Start with a small budget."));
-  }
+  if (!goal || goal.status === "draft") return step(4, "later", el("p", {}, "Then it sends only the batches you approve."));
   if (goal.autonomy === "shadow") {
     const early = !day || day <= TRIAL_DAYS;
     const turnOn = button(early ? "Turn on Approve mode now" : "Turn on Approve mode", async () => {
@@ -303,125 +307,117 @@ function approveStep(ctx, goal, day, rerender) {
         turnOn.disabled = false;
       }
     }, { kind: early ? "secondary" : "primary" });
+    const left = day ? (day >= TRIAL_DAYS ? " (today is its last day)" : ` (${TRIAL_DAYS - day} more ${TRIAL_DAYS - day === 1 ? "day" : "days"})`) : "";
     return step(
       4,
-      title,
       early ? "later" : "next",
       [
-        el(
-          "p",
-          {},
-          early
-            ? `We suggest finishing the two-week trial first${day ? (day >= TRIAL_DAYS ? " (today is its last day)" : ` (${TRIAL_DAYS - day} more ${TRIAL_DAYS - day === 1 ? "day" : "days"})`) : ""}. Then it sends, but only the batches you approve. You can lower the budget now.`
-            : "The two weeks are up. Next: let it send, but only the batches you approve with one click, inside a small budget you choose.",
-        ),
+        el("p", {}, early ? `We suggest finishing the two-week trial first${left}.` : "The two weeks are up: next, let it send the batches you approve."),
         budgetForm(ctx, goal, rerender),
       ],
       [turnOn],
     );
   }
   if (goal.autonomy === "approve") {
-    return step(
-      4,
-      title,
-      "now",
-      [el("p", {}, "It sends only the batches you approve, with one click on the Live page."), budgetForm(ctx, goal, rerender)],
-      [link("Batches waiting for you", `#/live/${encodeURIComponent(goal.goal_id)}`)],
-    );
+    return step(4, "now", budgetForm(ctx, goal, rerender), [link("Batches waiting for you", `#/live/${encodeURIComponent(goal.goal_id)}`)]);
   }
-  return step(4, title, "past", el("p", {}, "This goal is past Approve mode: it is on Autopilot."), []);
+  return step(4, "past", null, [], "This goal is past Approve mode: it is on Autopilot.");
 }
 
 // ---- step 5: Autopilot when Proof shows real extra profit -------------------------------------------------------------
-function proofStep(goal, proof, proofErr) {
-  const title = "Switch to Autopilot when Proof shows real extra profit";
-  const guidance = el(
+/** General guidance about the field, labelled as such: the 3-10% is never a number about this shop. */
+function guidance() {
+  return el(
     "p",
     { class: "notice notice-neutral ob-guidance" },
-    el("strong", {}, "What to expect, in general: "),
-    "well-run AI marketing typically adds 3–10% in real, measured extra profit. That is general guidance about the field, not a number about your shop; the Proof page shows your real number, with its range.",
+    el("strong", {}, "In general: "),
+    "well-run AI marketing typically adds ",
+    withInfo(el("span", {}, "3–10%"), "That is general guidance about the field, not a number about your shop. Your Proof page shows your real number, with its range."),
+    " in real, measured extra profit.",
   );
-  if (!goal || goal.status === "draft") {
-    return step(5, title, "later", [el("p", {}, "Proof compares the customers it looks after with a small random group it never contacts. Autopilot only makes sense once that difference is clearly above zero."), guidance]);
-  }
+}
+
+function proofStep(goal, proof, proofErr) {
+  if (!goal || goal.status === "draft") return step(5, "later", guidance());
   const proofLink = link("See the proof", `#/proof/${encodeURIComponent(goal.goal_id)}`);
-  const planLink = link("Change the level on the Plan page", `#/plan/${encodeURIComponent(goal.goal_id)}`);
   if (goal.autonomy === "autopilot") {
-    return step(5, title, "done", [el("p", {}, "This goal is on Autopilot: it acts on its own inside the limits you set. The big Pause button at the top stops it at once."), guidance], [proofLink]);
+    return step(5, "done", [el("p", {}, "It acts on its own inside the limits you set."), guidance()], [proofLink]);
   }
   const est = proof && proof.incremental_profit;
   const verdict = rangeVerdict(est);
+  const figure = () => el("strong", {}, range(est, goal.currency));
   let body;
   let state = "later";
-  if (proofErr) body = el("p", {}, `We couldn't load the proof. ${proofErr.message || ""}`.trim());
-  else if (!verdict) body = el("p", {}, "No proof yet. It needs time: it compares the customers it looked after with people we never contact.");
-  else if (verdict === "sure") {
+  if (proofErr) {
+    const words = el("span", {}, "We couldn't load the proof.");
+    body = el("p", {}, present(proofErr.message) ? withInfo(words, proofErr.message) : words);
+  } else if (!verdict && goal.autonomy === "shadow") {
+    body = el("p", {}, "Nothing to prove yet: in Shadow mode nothing is sent.");
+  } else if (!verdict) {
+    body = el("p", {}, withInfo(el("span", {}, "No proof yet."), "It needs time: it compares the customers it looked after with people we never contact."));
+  } else if (verdict === "sure") {
     state = goal.autonomy === "approve" ? "next" : "later";
-    body = el("p", {}, "Proof shows real extra profit compared with people we never contact: ", el("strong", {}, range(est, goal.currency)), ". If you're happy with how it works, you can switch to Autopilot.");
+    body = el("p", {}, "Proof shows real extra profit compared with people we never contact: ", figure(), ".");
   } else if (verdict === "unsure") {
-    body = el("p", {}, "Not sure yet. Extra profit so far is somewhere between ", el("strong", {}, range(est, goal.currency)), ", and that range includes zero. Stay where you are for now.");
+    body = el("p", {}, withInfo(el("span", {}, "Not sure yet."), "That range includes zero. Stay where you are for now."), " Extra profit so far: ", figure(), ".");
   } else {
-    body = el("p", {}, "So far it has made less than doing nothing: ", el("strong", {}, range(est, goal.currency)), ". Stay in Approve mode, or pause it.");
+    body = el("p", {}, withInfo(el("span", {}, "So far it has made less than doing nothing:"), "Stay in Approve mode, or pause it."), " ", figure(), ".");
   }
   const actions = [proofLink];
-  if (verdict === "sure" && goal.autonomy === "approve") actions.push(planLink);
-  return step(5, title, state, [body, goal.autonomy === "shadow" ? el("p", { class: "ob-muted" }, "In Shadow mode nothing is sent, so there is nothing to prove yet.") : null, guidance], actions);
+  if (verdict === "sure" && goal.autonomy === "approve") actions.push(link("Switch to Autopilot on the Plan page", `#/plan/${encodeURIComponent(goal.goal_id)}`));
+  return step(5, state, [body, guidance()], actions);
 }
 
 // ---- the page --------------------------------------------------------------------------------------------------------
 // One question: where am I on the safe path, and what is next? The path is the biggest block (8 of 12 columns); the
-// ask, the honest status and the control promise sit in the rail beside it (under it on a phone).
+// ask (first run only), the honest status and the control promise sit in the rail beside it (under it on a phone).
 
 const TITLE = "Getting started";
-const SUB = "Getting started is safe. Autonomy starts by watching, not sending. You let it do more one step at a time, and only when the numbers say so.";
+const SUB = "Getting started is safe. It starts by watching, not sending.";
+const SUB_MORE = "You let it do more one step at a time, and only when the numbers say so.";
 
 function honestNote() {
   return el(
     "section",
     { class: "card ob-honest", "aria-labelledby": "ob-honest-title" },
-    el("h2", { id: "ob-honest-title", class: "card-title" }, "Honest status"),
     el(
-      "p",
-      { class: "notice ob-honest-notice" },
-      "Autonomy has been tested on simulated shops and on past shop data. It has not yet run with a real business, so it is not proven on yours. That is why it starts in Shadow mode, where it decides but sends nothing: risk-free.",
-    ),
-    el(
-      "details",
-      { class: "ob-details" },
-      el("summary", {}, "How we tested it"),
-      el(
-        "p",
-        {},
-        "We run it in the Autonomy Gym, a simulated shop with customers who buy, ignore messages and unsubscribe, and we replay it on historical orders from real shops. Those results describe the product in general. They say nothing yet about your customers; your own Proof page will.",
+      "div",
+      { class: "ob-card-title" },
+      el("h2", { id: "ob-honest-title", class: "card-title" }, "Honest status"),
+      info(
+        "We test it in the Autonomy Gym, a simulated shop with customers who buy, ignore messages and unsubscribe, and replay it on past orders from real shops. Those results describe the product, not your customers; your own Proof page will.",
+        { label: "How we tested it" },
       ),
     ),
+    el("p", { class: "notice ob-honest-notice" }, "It has not yet run with a real business, so it starts in Shadow mode, risk-free."),
   );
 }
 
-function theAsk(hasGoals) {
+function theAsk() {
   return el(
     "section",
     { class: "card ob-ask", "aria-labelledby": "ob-ask-title" },
     el("h2", { id: "ob-ask-title", class: "card-title" }, "What we ask: your customer data and one goal"),
-    el(
-      "p",
-      {},
-      "In two weeks of Shadow mode you'll see what it would do, why, and what it expects to earn, before a single message goes out.",
-    ),
-    hasGoals ? null : el("p", { class: "ob-muted" }, "That's all for today. The next steps appear here once your goal is set."),
+    el("p", {}, "In two weeks of Shadow mode you'll see what it would do, why, and what it expects to earn, before a single message goes out."),
   );
 }
 
 function controlNote() {
-  return card({
-    title: "You stay in control at every step",
-    level: 2,
-    className: "ob-control",
-    body: [el("p", { class: "ob-footnote" }, "The big Pause button at the top stops all sending at once, and Autonomy also pauses itself if complaints or unsubscribes spike.")],
-  });
+  return el(
+    "section",
+    { class: "card ob-control", "aria-labelledby": "ob-control-title" },
+    el(
+      "div",
+      { class: "ob-card-title" },
+      el("h2", { id: "ob-control-title", class: "card-title" }, "You stay in control at every step"),
+      info("Autonomy also pauses itself if complaints or unsubscribes spike.", { label: "When it pauses itself" }),
+    ),
+    el("p", { class: "ob-footnote" }, "Pause, at the top, stops all sending at once."),
+  );
 }
 
-const rail = (hasGoals) => el("div", { class: "span-4 stack ob-rail" }, theAsk(hasGoals), honestNote(), controlNote());
+// The ask is the first run's whole message; once a goal is set it has been answered, so the rail drops it.
+const rail = (hasGoals) => el("div", { class: "span-4 stack ob-rail" }, hasGoals ? null : theAsk(), honestNote(), controlNote());
 
 /** The path's frame: the card with its title, "Step n of 5" on the right when one step is current, and its rows. */
 function pathCard(title, meta, children) {
@@ -445,7 +441,7 @@ function pathSkeleton() {
       "li",
       { class: "ob-step ob-step-later" },
       el("span", { class: "ob-num", "aria-hidden": "true" }, String(n)),
-      el("div", { class: "ob-step-body" }, skeleton({ width: "55%", height: "20px" }), skeleton({ width: "85%", height: "16px", className: "ob-skel-line" })),
+      el("div", { class: "ob-step-body" }, skeleton({ width: "55%", height: "20px" }), skeleton({ width: "70%", height: "16px", className: "ob-skel-line" })),
     );
   return el("ol", { class: "ob-steps", "aria-busy": "true" }, [1, 2, 3, 4, 5].map(row), el("li", { class: "visually-hidden", role: "status" }, "Loading your path…"));
 }
@@ -456,7 +452,7 @@ function focusGoal(goals, ctx) {
   return (ctx.goalId && byId(ctx.goalId)) || goals.find((g) => g.status === "active") || goals[0] || null;
 }
 
-const frame = (path, hasGoals) => [pageHead({ title: TITLE, sub: SUB }), el("div", { class: "grid ob-grid" }, path, rail(hasGoals))];
+const frame = (path, hasGoals) => [pageHead({ title: TITLE, sub: SUB, info: SUB_MORE }), el("div", { class: "grid ob-grid" }, path, rail(hasGoals))];
 
 export async function render(root, ctx) {
   clear(root, ...frame(pathCard("Your path", null, pathSkeleton()), true));
@@ -515,7 +511,10 @@ export async function render(root, ctx) {
         : el(
             "p",
             { class: "ob-muted ob-then" },
-            "Then: two weeks in Shadow mode, where it decides but sends nothing; then Approve mode for one goal, with a small budget; then Autopilot, only when the Proof page shows real extra profit.",
+            withInfo(
+              el("span", {}, "Then: Shadow for two weeks, Approve with a small budget, Autopilot when proven."),
+              "Two weeks in Shadow mode, where it decides but sends nothing; then Approve mode for one goal, with a small budget; then Autopilot, only when the Proof page shows real extra profit.",
+            ),
           ),
     ],
   );

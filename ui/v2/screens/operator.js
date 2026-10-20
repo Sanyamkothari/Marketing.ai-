@@ -1,15 +1,20 @@
 /* Operator mode: power tools for us, acting as the growth engineer for an early client
    (plan-v2.md section 9).
 
-   Three tools on one page:
+   Three tools on one page, in this order:
      - the raw JSON of the goal, its brief, its content library, its proof and its approval batches,
        exactly as the API sent them;
+     - a customer lookup by id: state, decisions and events, as a table and as raw JSON. It sits above the
+       long decisions list, so a phone reaches it without scrolling past 200 rows;
      - a decisions table with filters (customer, kind, group, channel, words in the reason) and the
-       raw JSON of any row;
-     - a customer lookup by id: state, decisions and events, as a table and as raw JSON.
+       raw JSON of any row. Each row shows the start of the reason (the part after "what it did", which the
+       Action column already says); the whole reason is that cell's description (hover, focus or tap).
 
    It shows the API's own values (ids, probabilities, expected net, policy version) with no
-   rounding into new numbers, because this is where we check what the agent really did. */
+   rounding into new numbers, because this is where we check what the agent really did. Explanations are
+   descriptions (DESIGN.md section 6), so the page is its titles, its forms and its data. */
+
+import { info, pageHead, withInfo } from "../components.js";
 
 import {
   DASH,
@@ -34,6 +39,23 @@ import {
 } from "./live.js";
 
 const LIMITS = [50, 200, 500];
+const PREVIEW_WORDS = 6;
+
+/**
+ * The start of a decision's reason for its table row. The API writes "what it did: why" ("Sent a quality
+ * message by email with no discount: the top option's estimate is uncertain, …"); the Action column already
+ * says what it did, so the row shows the first words of the why. The whole reason stays the cell's description.
+ */
+export function reasonPreview(reason, words = PREVIEW_WORDS) {
+  const text = String(reason || "").trim();
+  if (!text) return DASH;
+  const cut = text.indexOf(": ");
+  const why = cut > 0 && cut < text.length - 2 ? text.slice(cut + 2) : text;
+  const parts = why.split(/\s+/);
+  const head = parts.slice(0, words).join(" ").replace(/[,;:.]$/, "");
+  const shown = head.charAt(0).toUpperCase() + head.slice(1);
+  return parts.length > words ? `${shown}…` : shown;
+}
 
 /**
  * The client-side filters of the decisions table. `customer_id` and `limit` are sent to the API;
@@ -137,11 +159,13 @@ function goalFacts(goal) {
   );
 }
 
-function card(title, meta, ...kids) {
+/** A card: its title (with an (i) holding what the card is, when `about` is given), an optional meta, its body. */
+function card(title, about, meta, ...kids) {
   return h(
     "section",
     { class: "card span-12" },
-    h("div", { class: "card-head" }, h("h2", { class: "card-title" }, title), meta),
+    h("div", { class: "card-head" },
+      h("h2", { class: "card-title op-title" }, title, about ? info(about, { label: `About ${title}` }) : null), meta),
     ...kids,
   );
 }
@@ -153,13 +177,11 @@ export async function render(root, ctx) {
   const page = h("div", { class: "ap-page ap-operator" });
   root.replaceChildren(page);
   page.append(
-    h(
-      "div",
-      { class: "page-head" },
-      h("div", null,
-        h("h1", { class: "page-title" }, "Operator"),
-        h("p", { class: "page-sub" }, "Raw data and power tools for the people running the agent. Everything here is exactly what the API returned.")),
-    ),
+    pageHead({
+      title: "Operator",
+      sub: "Raw data and power tools for the team running the agent.",
+      info: "Everything here is exactly what the API returned: ids, probabilities, expected net and policy versions, with no rounding into new numbers.",
+    }),
   );
   const grid = h("div", { class: "grid op-grid" });
   page.append(grid);
@@ -168,13 +190,20 @@ export async function render(root, ctx) {
   const goalInput = h("input", { class: "mono", id: "ap-op-goal", autocomplete: "off", spellcheck: "false" });
   const goalForm = h("form", { class: "op-filters" }, field("Goal id", goalInput, "op-field-wide"), h("button", { type: "submit", class: "btn btn-secondary" }, "Load"));
   const goalOut = h("div", { class: "op-out" }, loadingBlock(3));
-  grid.append(card("Goal, brief and content", h("span", { class: "card-meta" }, "Raw JSON, as the API sent it"), goalForm, goalOut));
+  grid.append(card("Goal, brief and content", "Raw JSON, as the API sent it.", null, goalForm, goalOut));
+
+  // ---- customer lookup (above the long decisions list)
+  const lookupInput = h("input", { class: "mono", autocomplete: "off", spellcheck: "false", required: true, placeholder: "cust_…" });
+  const lookupForm = h("form", { class: "op-filters" }, field("Customer id", lookupInput, "op-field-wide"), h("button", { type: "submit", class: "btn btn-secondary" }, "Look up"));
+  const lookupOut = h("div", { class: "op-out" });
+  const lookupCard = card("Customer lookup", "State, decisions and events for one customer. A customer id in the decisions list below opens it here.", null, lookupForm, lookupOut);
+  grid.append(lookupCard);
 
   // ---- decisions
   const custFilter = h("input", { class: "mono", autocomplete: "off", spellcheck: "false", placeholder: "any" });
   const limitSel = select(LIMITS.map((n) => [String(n), String(n)]), "200");
   const kindSel = select([["", "Any"], ["act", "Act"], ["nothing", "Left alone"]]);
-  const groupSel = select([["", "Any"], ["agent", "Agent"], ["baseline", "Simple rule"], ["holdout", "Holdout"]]);
+  const groupSel = select([["", "Any"], ["agent", "Agent"], ["baseline", "Simple rule"], ["holdout", "People we never contact"]]);
   const channelSel = select([["", "Any"], ...["email", "whatsapp", "sms", "push", "web", "webhook"].map((c) => [c, channelLabel(c)])]);
   const textFilter = h("input", { type: "search", autocomplete: "off", placeholder: "words in the reason, or an id" });
   const decForm = h(
@@ -191,13 +220,7 @@ export async function render(root, ctx) {
   const decCount = h("span", { class: "card-meta tabular", "aria-live": "polite" });
   const decTable = h("div", { class: "op-out" });
   const decDetail = h("div", { class: "op-detail" });
-  grid.append(card("Decisions", decCount, decForm, decTable, decDetail));
-
-  // ---- customer lookup
-  const lookupInput = h("input", { class: "mono", autocomplete: "off", spellcheck: "false", required: true, placeholder: "cust_…" });
-  const lookupForm = h("form", { class: "op-filters" }, field("Customer id", lookupInput, "op-field-wide"), h("button", { type: "submit", class: "btn btn-secondary" }, "Look up"));
-  const lookupOut = h("div", { class: "op-out" });
-  grid.append(card("Customer lookup", h("span", { class: "card-meta" }, "State, decisions and events for one customer"), lookupForm, lookupOut));
+  grid.append(card("Decisions", "Customer id and How many are sent to the API; the other filters narrow what came back. Hover or tap a reason to read all of it.", decCount, decForm, decTable, decDetail));
   page.append(announcer);
 
   let bundle = null;
@@ -258,7 +281,7 @@ export async function render(root, ctx) {
       decTable.replaceChildren(emptyBox("No decisions match."));
       return;
     }
-    const cols = [["Made"], ["Customer"], ["Kind"], ["Group"], ["Action"], ["Prob.", true], ["Exp. net", true], ["Attention price", true], ["Policy"], ["Reason"], [h("span", { class: "visually-hidden" }, "Raw")]];
+    const cols = [["Made"], ["Customer"], ["Group"], ["Action"], ["Prob.", true], ["Exp. net", true], ["Attention price", true], ["Policy"], ["Reason"], [h("span", { class: "visually-hidden" }, "Raw")]];
     const table = h(
       "table",
       { class: "table-stack op-table" },
@@ -268,6 +291,7 @@ export async function render(root, ctx) {
         who.addEventListener("click", () => {
           lookupInput.value = d.customer_id;
           lookup(d.customer_id);
+          if (typeof lookupCard.scrollIntoView === "function") lookupCard.scrollIntoView({ block: "start", behavior: "smooth" });
         });
         const view = h("button", { type: "button", class: "btn btn-ghost btn-sm", "aria-label": `Show JSON of ${d.decision_id}` }, "JSON");
         view.addEventListener("click", () => {
@@ -278,14 +302,15 @@ export async function render(root, ctx) {
           null,
           td(null, "op-nowrap", when(d.made_at)),
           td("Customer", "op-nowrap", who),
-          td("Kind", "op-nowrap", d.kind === "act" ? "Act" : "Left alone"),
           td("Group", "op-nowrap", groupLabel(d.group)),
-          td("Action", "op-nowrap", describeAction(d, brief())),
+          td("Action", "op-nowrap", d.kind === "act" ? describeAction(d, brief()) : "Left alone"),
           td("Prob.", "num", num(d.probability, 3)),
           td("Exp. net", "num is-key", money(d.expected_net, currency())),
           td("Attention price", "num", money(d.attention_price, currency())),
           td("Policy", "mono op-nowrap", d.policy_version ?? DASH),
-          td("Reason", "op-reason", d.reason || DASH, (d.blocked_by || []).length > 0 && h("span", { class: "meta" }, ` [ruled out: ${d.blocked_by.join(", ")}]`)),
+          td("Reason", "op-reason",
+            present(d.reason) ? withInfo(h("span", { class: "op-reason-text" }, reasonPreview(d.reason)), String(d.reason)) : DASH,
+            (d.blocked_by || []).length > 0 && h("span", { class: "meta" }, ` [ruled out: ${d.blocked_by.join(", ")}]`)),
           td(null, "op-raw", view),
         );
       })),

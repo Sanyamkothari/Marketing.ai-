@@ -1,18 +1,12 @@
-/* Plan screen (screens/plan.js): "what will it do, within what limits?". The plan in plain words is the biggest
-   block; the limits sit in one divided strip above it; the one decision (You approve once) rides in a sticky
-   column on the right on wide screens, and comes last, after the messages, on narrow ones. Only the tokens of
-   styles.css are used, so light and dark mode follow them. Status is never colour alone: every mark comes with
-   its word (visible, or for screen readers). Hairlines, no resting shadows, no tinted boxes for decoration. */
+/* Plan screen (screens/plan.js): "what will it do, within what limits?". Numbers first: the limits sit in one
+   divided strip at the top and are said only there; the plan in plain words is the biggest block; the rules and
+   the automatic pauses sit side by side by name; the one decision (You approve once) rides in a sticky column on
+   the right on wide screens, and comes last, after the messages, on narrow ones. Every explanation is a
+   description (dotted underline or (i), styles.css), so a card is its title, its numbers and one short line.
+   Only the tokens of styles.css are used, so light and dark mode follow them. Status is never colour alone: every
+   mark comes with its word (visible, in a description, or for screen readers). Hairlines, no resting shadows. */
 
-/* ---- the title row and the three steps --------------------------------------------------------------------- */
-.plan-head-tags {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-  margin: 4px 0 0;
-}
-
+/* ---- the three steps -------------------------------------------------------------------------------------- */
 /* The three things to do here, in order. No numbers: the top bar's steps already carry 1-5. */
 .plan-steps {
   display: flex;
@@ -73,8 +67,13 @@
     display: none;
   }
 
+  .plan-steps {
+    gap: 0 8px;
+  }
+
   .plan-steps li {
     flex: none;
+    gap: 8px;
   }
 
   .plan-step {
@@ -225,14 +224,6 @@
   margin-top: 4px;
 }
 
-.plan-audience {
-  margin: 8px 0 0;
-}
-
-.plan-audience strong {
-  font-weight: 600;
-}
-
 @media (max-width: 719px) {
   .plan-facts dt {
     padding-bottom: 2px;
@@ -244,28 +235,25 @@
   }
 }
 
-.brief .rationale {
-  margin: 4px 0 0;
-  padding: 16px 0 0;
-  border-top: 1px solid var(--rule);
-  border-radius: 0;
-  background: none;
-}
-
-.brief .rationale p {
-  margin: 0;
-}
-
-.brief .rationale p + p {
-  margin-top: 4px;
-}
-
-/* The grey sentence under a card title. */
-.card-lede {
-  margin: -4px 0 12px;
-}
-
 /* ---- rules it can never break, when it pauses itself ------------------------------------------------------- */
+/* Side by side where there is room: both are short lists now (the rules by name, their words in descriptions). */
+.plan-pair {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--gap);
+  align-items: start;
+}
+
+.plan-pair > .card {
+  margin-bottom: 0;
+}
+
+@media (min-width: 1180px) {
+  .plan-pair {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+}
+
 .rule-list {
   list-style: none;
   padding: 0;
@@ -276,13 +264,13 @@
   display: flex;
   gap: 10px;
   align-items: baseline;
-  padding: 10px 0;
+  padding: 8px 0;
   border-top: 1px solid var(--rule);
 }
 
 .rule:first-child {
   border-top: 0;
-  padding-top: 4px;
+  padding-top: 0;
 }
 
 .rule:last-child {
@@ -298,36 +286,42 @@
   font-weight: 600;
 }
 
-.rule-name {
-  font-weight: 600;
+/* The rules by name: two columns of short rows. */
+.plan-rules .rule-list {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  column-gap: var(--pad);
 }
 
-/* Two columns of rules where there is room. */
-@media (min-width: 1180px) {
-  .plan-rules .rule-list {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    column-gap: var(--pad);
-  }
-
-  .plan-rules .rule:nth-child(2) {
-    border-top: 0;
-    padding-top: 4px;
-  }
-
-  .plan-rules .rule:nth-last-child(2):nth-child(odd) {
-    padding-bottom: 0;
-  }
+.plan-rules .rule:nth-child(2) {
+  border-top: 0;
+  padding-top: 0;
 }
 
-.plan-stops-foot {
-  margin: 12px 0 0;
-  padding-top: 12px;
-  border-top: 1px solid var(--rule);
+.plan-rules .rule:nth-last-child(2):nth-child(odd) {
+  padding-bottom: 0;
+}
+
+/* The automatic pauses: what is watched, with its line, on the left; what happens, in grey, on the right. */
+.stop {
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.stop-then {
+  flex: none;
+  color: var(--muted);
+  font-size: var(--fs-small);
+  line-height: var(--lh-small);
+  white-space: nowrap;
 }
 
 /* ---- products it may suggest, and the labelled product fact ------------------------------------------------ */
 /* A quiet grey aside: it is a fact about Autonomy, not about this shop, so it must not look like a result. */
+.plan-products p {
+  margin: 0;
+}
+
 .product-fact {
   margin-top: 12px;
   padding: 12px 16px;
@@ -337,7 +331,7 @@
 }
 
 .product-fact p {
-  margin: 0 0 8px;
+  margin: 0 0 4px;
 }
 
 .product-fact p:last-child {
@@ -359,8 +353,8 @@
   font-weight: 400;
 }
 
-.product-fact code {
-  overflow-wrap: anywhere;
+.product-fact a {
+  margin-left: 4px;
 }
 
 /* ---- the messages ------------------------------------------------------------------------------------------ */
@@ -370,21 +364,14 @@
   margin: 0 0 4px;
 }
 
-.plan-library-lede {
-  max-width: 80ch;
-  margin: 0 0 12px;
-}
-
-.plan-tally {
+.plan-library .section-title {
   display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 2px 16px;
-  margin: 0 0 4px;
+  align-items: center;
 }
 
-.plan-tally p {
-  margin: 0;
+/* One line under the title: the promise, then the counts in grey. */
+.plan-tally {
+  margin: 0 0 12px;
 }
 
 .plan-editor-summary {
@@ -392,13 +379,7 @@
 }
 
 .plan-counts {
-  font-size: var(--fs-body);
   color: var(--muted);
-}
-
-.plan-library-note {
-  max-width: 80ch;
-  margin: 0 0 var(--gap);
 }
 
 .message-list {
@@ -425,7 +406,7 @@
 }
 
 /* From 760px the choice (Approve / Reject) sits on the message's top line, right-aligned, so the message keeps
-   the full width of the list; the failed message's sentence stays under the editor's verdict. */
+   the full width of the list. A message the editor failed has no buttons (its pill's description says why). */
 @media (min-width: 760px) {
   .message {
     grid-template-columns: minmax(0, 1fr) auto;
@@ -453,17 +434,6 @@
     margin-top: -3px;
   }
 
-  .message-side-end {
-    grid-column: 1 / -1;
-    grid-row: auto;
-    margin-top: 0;
-    order: 1;
-  }
-
-  .message-main > .editor-notes {
-    order: 2;
-  }
-
   .message-side .message-actions {
     margin-top: 0;
     justify-content: flex-end;
@@ -472,15 +442,16 @@
   .message-side .message-actions .btn-ghost:first-child {
     margin-left: 0;
   }
-
-  .message-side-end .message-never {
-    margin-top: 6px;
-  }
 }
 
 .message-main,
 .message-side {
   min-width: 0;
+}
+
+/* A message with no choice to make (the editor failed it) keeps no empty row under it. */
+.message-side:empty {
+  display: none;
 }
 
 .message-main > :last-child {
@@ -528,10 +499,17 @@
   font-weight: 500;
 }
 
+/* Theme · tone · offer · picture on one grey line (their names are for screen readers). */
 .message .labels {
-  margin-top: 8px;
-  gap: 4px 16px;
-  color: var(--text);
+  margin-top: 6px;
+  gap: 2px 0;
+  color: var(--muted);
+}
+
+.message .labels li + li::before {
+  content: "\00b7";
+  padding: 0 8px;
+  color: var(--faint);
 }
 
 .message .labels li,
@@ -572,27 +550,30 @@
   max-width: 100%;
 }
 
-/* The strict editor's checklist on each message: one wrapped line of words with a plain mark, no box. */
-.editor {
+/* The strict editor's verdict on each message: one short line under a hairline, its checklist in the description;
+   a check that did not pass shows on its own line with the editor's reason. The notes fold sits on the same line. */
+.message-foot {
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
   gap: 4px 16px;
-  margin-top: 12px;
-  padding-top: 12px;
+  margin-top: 10px;
+  padding-top: 10px;
   border-top: 1px solid var(--rule);
 }
 
-.editor > .editor-title {
-  flex-basis: 100%;
+.message-foot:empty {
+  display: none;
+}
+
+.editor {
+  min-width: 0;
+  margin: 0;
+  color: var(--muted);
 }
 
 .editor p {
   margin: 0;
-}
-
-.editor-title {
-  color: var(--muted);
 }
 
 .editor-result {
@@ -604,33 +585,18 @@
   color: var(--negative);
 }
 
-/* Not checked yet: the same hairline-topped line as the checklist, no box. */
-.editor-none {
-  display: block;
-}
-
 .check-list {
   list-style: none;
   padding: 0;
-  margin: 0;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px 16px;
-  font-size: var(--fs-small);
-  line-height: var(--lh-small);
+  margin: 4px 0 0;
 }
 
+/* The mark, the check's name, and the editor's reason on the line under the name (never a dangling dash). */
 .check {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: 12px minmax(0, 1fr);
   align-items: baseline;
   gap: 2px 4px;
-}
-
-/* A failed check takes its own line after the ones that passed, with the editor's reason under it. */
-.check-fail {
-  flex-basis: 100%;
-  order: 1;
 }
 
 .check-mark {
@@ -639,8 +605,15 @@
   font-weight: 600;
 }
 
-.check-pass .check-mark {
+.check-pass-mark {
+  display: inline-block;
+  margin-right: 4px;
   color: var(--positive);
+}
+
+/* A verdict with a check that did not pass takes the whole line; the notes fold goes under it. */
+.editor-with-checks {
+  flex-basis: 100%;
 }
 
 .check-fail .check-mark,
@@ -654,27 +627,19 @@
   color: var(--muted);
 }
 
+/* The editor's reason, under the failed check's name. */
 .check-note {
-  flex-basis: 100%;
-  padding-left: 16px;
+  grid-column: 2;
   color: var(--text);
 }
 
-.editor .editor-verdict {
-  flex-basis: 100%;
-}
-
-.editor-failed .editor-verdict strong {
-  color: var(--negative);
-}
-
+/* The fold opens under the verdict, full width. */
 .editor-notes {
-  margin-top: 8px;
+  min-width: 0;
 }
 
-.editor-none + .editor-notes,
-.editor + .editor-notes {
-  margin-top: 6px;
+.editor-notes[open] {
+  flex-basis: 100%;
 }
 
 .editor-notes summary {
@@ -708,10 +673,6 @@
 
 .message-actions .btn-ghost:first-child {
   margin-left: -8px;
-}
-
-.message-never {
-  margin: 0;
 }
 
 /* Under 760px the choice comes last in the message; the grid gap above it is the space. */
@@ -749,39 +710,6 @@
   margin-bottom: 8px;
 }
 
-/* In the side column the three levels stack: each one a row with its radio, its hint and its sentence. */
-.plan-aside .dial-options {
-  grid-template-columns: 1fr;
-}
-
-.dial-card .dial-option label {
-  gap: 2px;
-  padding: 12px;
-}
-
-.dial-card .dial-option input:checked + label {
-  box-shadow: none;
-  border-color: var(--primary);
-}
-
-.dial-hint,
-.dial-text {
-  padding-left: 22px;
-}
-
-.dial-hint {
-  font-size: var(--fs-small);
-  line-height: var(--lh-small);
-  font-weight: 500;
-  color: var(--text);
-}
-
-.dial-card .dial-text {
-  margin-top: 2px;
-  font-size: var(--fs-small);
-  line-height: var(--lh-small);
-}
-
 .dial-card .notice {
   margin: 12px 0 0;
 }
@@ -798,11 +726,4 @@
   margin: 0;
   padding: 0 4px;
   font-size: var(--fs-body);
-}
-
-/* Narrow: the decision comes after the messages, full width, its three levels side by side when they fit. */
-@media (min-width: 720px) and (max-width: 1023px) {
-  .plan-aside .dial-options {
-    grid-template-columns: repeat(3, 1fr);
-  }
 }

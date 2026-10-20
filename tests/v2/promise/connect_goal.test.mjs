@@ -207,12 +207,24 @@ test("Connect (sample data): says where and what to upload, and shows what is co
   await connect.render(root, ctx);
   const text = root.textContent;
   const data = await sample("data_status.json");
-  for (const s of ["Upload your files", "CSV, Excel", "Customers: ", "Orders: ", "Or connect your database", "Read-only access", "Where: "]) assert.ok(text.includes(s), s);
+  for (const s of ["Upload your files", "CSV, Excel", "Or connect your database", "Read-only access", "Where: "]) assert.ok(text.includes(s), s);
+  // What to bring sits in the descriptions of "customers" and "orders" (hover, focus or tap), still in the page.
+  const tipOf = (word) => {
+    const target = root.querySelectorAll("span").find((n) => n.classes().includes("has-info") && n.textContent === word);
+    assert.ok(target, `"${word}" has a description`);
+    return root.querySelectorAll("span").find((n) => n.id === target.getAttribute("aria-describedby")).textContent;
+  };
+  assert.match(tipOf("customers"), /^One row per customer, with their id, email or phone number, and whether they agreed to hear from you\.$/);
+  assert.match(tipOf("orders"), /^One row per order, with the order id, the customer id, the date, the amount and what they bought\.$/);
+  assert.match(tipOf("Read-only access"), /never writes to your database/);
   const hrefs = root.querySelectorAll("a").map((a) => a.getAttribute("href"));
   assert.ok(hrefs.includes("/") && hrefs.includes("/#/connections"), "links to the Data Doctor and to database connections");
   const totals = byClass(root, "cn-total").map((n) => n.textContent);
   assert.deepEqual(totals, [`Customers${C.int(data.customers)}`, `Orders${C.int(data.orders)}`, `Products in those orders${C.int(data.products)}`]);
   assert.ok(text.includes("Uploaded file (csv)"));
+  // One source: its counts are the totals above, so it is one line, not a table repeating them.
+  assert.equal(root.querySelectorAll("table").length, 0);
+  assert.match(byClass(root, "cn-from")[0].textContent, /^From Uploaded file \(csv\) · latest data /);
 });
 
 test("Connect (sample data): what the Data Doctor fixed, and what it is waiting for you to answer", async () => {
@@ -226,9 +238,13 @@ test("Connect (sample data): what the Data Doctor fixed, and what it is waiting 
   for (const p of data.problems) assert.ok(text.includes(p), p);
   assert.ok(text.includes(`Waiting for your answer (${data.questions.length})`));
   assert.ok(text.includes("It asks before changing anything."));
+  // How it asks is the promise's description; each question says how many rows it would change.
+  const promise = byClass(root, "cn-promise")[0];
+  assert.match(promise.querySelector("strong").getAttribute("aria-describedby") || "", /\S/);
+  assert.match(promise.textContent, /shows you the change and how many rows it touches, then waits for your yes\./);
   for (const q of data.questions) {
     assert.ok(text.includes(q.text), q.text);
-    assert.ok(text.includes(`Would change ${C.int(q.rows_affected)} rows. Nothing changes until you answer.`));
+    assert.ok(text.includes(`Would change ${C.int(q.rows_affected)} rows.`));
   }
   assert.equal(byText(root, "a", "Answer in the Data Doctor").length, 1);
 });

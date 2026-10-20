@@ -67,6 +67,15 @@ class FakeElement extends FakeNode {
     this.hidden = false;
     this.disabled = false;
     this.value = "";
+    this.style = { setProperty(k, v) { this[k] = v; } };
+    this.dataset = {};
+  }
+  // components.js (the page head and the descriptions) sets classes through className.
+  get className() {
+    return this.attributes.class || "";
+  }
+  set className(v) {
+    this.attributes.class = String(v);
   }
   setAttribute(k, v) {
     this.attributes[k] = String(v);
@@ -112,6 +121,7 @@ const fakeDocument = {
   },
 };
 globalThis.document = fakeDocument;
+globalThis.Node = FakeNode;
 
 function all(node) {
   const out = [];
@@ -212,9 +222,19 @@ test("Live leads with yesterday: contacted, left alone and why, from GET /v2/tod
   assert.ok(text.includes("Made a decision for each of 2,100 customers yesterday"), "always-on: how many it looked at");
   assert.ok(text.includes("Next check: 21 Oct"), "when it checks next");
   assert.ok(text.includes("371 chosen by Autonomy, 41 by the simple rule"));
-  assert.ok(text.includes("$4,300 (range $900 to $7,700)"), "extra profit with its range, from /proof");
+  // Extra profit is set large with its range on the line right under it, in the same cell (never a bare point).
+  const profit = byClass(root, "lv-profit")[0];
+  assert.ok(profit, "the extra profit figure");
+  assert.ok(byClass(profit, "kpi-value")[0].textContent === "$4,300", "extra profit, from /proof");
+  assert.ok(byClass(profit, "kpi-range")[0].textContent === "Range $900 to $7,700", "with its range");
   assert.ok(text.includes("$1,840 of $5,000") && text.includes("$3,160 left"), "spend against the budget");
-  assert.ok(text.includes("$2,960 in sales, from every purchase by these customers, not only extra ones"));
+  assert.ok(text.includes("$2,960 in sales"));
+  // How it is measured is a description on the label, opened by hover, focus or tap (DESIGN.md section 6).
+  const tipFor = (node) => all(root).find((n) => n.getAttribute("role") === "tooltip" && (node.getAttribute("aria-describedby") || "").split(" ").includes(n.id));
+  const purchases = all(root).find((n) => n.textContent === "Purchases" && n.getAttribute("aria-describedby"));
+  assert.ok(tipFor(purchases).textContent.includes("Every purchase by these customers, not only extra ones"));
+  const profitLabel = all(profit).find((n) => n.textContent === "Extra profit so far" && n.getAttribute("aria-describedby"));
+  assert.match(tipFor(profitLabel).textContent, /small random group of customers it never contacts/);
   assert.ok(text.includes(today.learned[0]), "what it learned");
   assert.ok(noJunk(text), "no stray false/null/undefined text");
 });

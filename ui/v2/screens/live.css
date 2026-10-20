@@ -8,46 +8,34 @@
    a word. Sizes are 24 (title), 28 (KPI), 16 (card titles, the sentence), 14 (body) and 12 (labels). */
 
 /* ---- header ---------------------------------------------------------------------------------------- */
+/* The one page head (components.js pageHead): "Live", the status pill(s) on the title row, the goal's words under
+   it, and the goal's own Pause on the right. What the status and Pause mean are their descriptions. */
 
 .lv-head {
   align-items: flex-start;
 }
-.lv-head-text {
-  min-width: 0;
-  flex: 1 1 420px;
-}
-.lv-goal {
-  color: var(--muted);
-}
-.lv-status {
-  display: flex;
-  flex-wrap: wrap;
+
+/* Words (DESIGN.md section 6): a card title can carry a quiet (i); a description can hold several lines. */
+.lv-title-row {
+  display: inline-flex;
   align-items: center;
-  gap: 6px;
-  margin-top: 12px;
+  gap: 0;
+  min-width: 0;
 }
-.lv-autonomy-line {
-  margin: 8px 0 0;
-  max-width: 96ch;
+.lv-tip-line {
+  display: block;
+}
+.lv-tip-line + .lv-tip-line {
+  margin-top: 4px;
+}
+.info-tip .lv-combo {
+  margin: 0;
   color: var(--muted);
   font-size: var(--fs-small);
   line-height: var(--lh-small);
 }
-.lv-pause {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 6px;
-  flex: 0 1 300px;
-  min-width: 0;
-}
-.lv-pause-hint {
+.info-tip .lv-alone-why {
   margin: 0;
-  max-width: 300px;
-  text-align: right;
-  color: var(--faint);
-  font-size: var(--fs-small);
-  line-height: var(--lh-small);
 }
 
 /* ---- "it paused itself" --------------------------------------------------------------------------- */
@@ -113,20 +101,51 @@
 .lv-selfpause-scope {
   opacity: 0.85;
 }
-.lv-selfpause-foot {
-  margin: 6px 0 0 18px;
-  font-size: var(--fs-small);
-  line-height: var(--lh-small);
-  opacity: 0.9;
+/* The (i) on the banner takes the banner's own ink. */
+.lv-selfpause .info-dot {
+  color: inherit;
+  border-color: currentColor;
+  opacity: 0.8;
 }
 
-/* ---- the frame: 8 + 4 columns, cards keep their own height --------------------------------------- */
+/* ---- the frame: two stacks of 8 + 4 columns, cards keep their own height ----------------------------- */
 
 .lv-grid {
   margin-bottom: 0;
 }
-.lv-grid-top {
-  margin-bottom: var(--gap);
+/* A phone: one column in the order of the questions (live.js builds the two stacks; here they dissolve). */
+@media (max-width: 719px) {
+  .lv-grid {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: var(--gap);
+  }
+  .lv-grid > .lv-main,
+  .lv-grid > .lv-side {
+    display: contents;
+  }
+  .lv-grid .lv-batch-slot {
+    order: 1;
+  }
+  .lv-grid .lv-today {
+    order: 2;
+  }
+  .lv-grid .lv-inbox-card {
+    order: 3;
+  }
+  .lv-grid .lv-health-card {
+    order: 4;
+  }
+  .lv-grid .lv-feed-card {
+    order: 5;
+  }
+  .lv-grid .lv-learned-card {
+    order: 6;
+  }
+  .lv-grid .lv-briefing {
+    order: 7;
+  }
 }
 /* Sentences break evenly instead of leaving one word on the last line. */
 .lv-page p,
@@ -179,13 +198,6 @@
   color: var(--muted);
   overflow-wrap: anywhere;
 }
-.lv-intro {
-  margin: 0;
-  max-width: 64ch;
-  color: var(--muted);
-  font-size: var(--fs-small);
-  line-height: var(--lh-small);
-}
 .lv-foot {
   margin: 12px 0 0;
   max-width: 80ch;
@@ -222,21 +234,24 @@
   color: var(--text);
   overflow-wrap: anywhere;
 }
+.lv-today .lv-say {
+  margin-bottom: 16px;
+}
+/* The two counts in the sentence are its figures: set heavier, with tabular digits. */
+.lv-say-n {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+/* Only an overdue check is a line on the card (the usual times are the meta's description). */
 .lv-checked {
-  margin: 4px 0 20px;
+  margin: -8px 0 16px;
   max-width: 80ch;
-  color: var(--muted);
+  color: var(--warning);
   font-size: var(--fs-small);
   line-height: var(--lh-small);
 }
 .lv-today .kpis {
   margin: 0;
-}
-.lv-big .kpi-value {
-  font-variant-numeric: tabular-nums;
-}
-.lv-big-quiet .kpi-value {
-  color: var(--text);
 }
 .lv-block {
   margin-top: var(--pad);
@@ -251,25 +266,15 @@
 }
 .lv-reason {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(80px, 180px) 72px;
+  grid-template-columns: minmax(0, 220px) minmax(80px, 1fr) 72px;
   column-gap: 16px;
   align-items: baseline;
-  padding: 10px 0;
+  padding: 8px 0;
   border-bottom: 1px solid var(--rule);
 }
 .lv-reason-words {
   min-width: 0;
   overflow-wrap: anywhere;
-}
-.lv-reason-cap {
-  color: var(--muted);
-}
-.lv-reason-hint {
-  display: block;
-  margin-top: 2px;
-  color: var(--faint);
-  font-size: var(--fs-small);
-  line-height: var(--lh-small);
 }
 .lv-reason-bar {
   align-self: center;
@@ -294,15 +299,6 @@
 /* What came of it: one strip of four. A money figure keeps its range right under it. */
 .lv-stats .kpi-value {
   font-variant-numeric: tabular-nums;
-}
-.lv-kpi-range {
-  display: block;
-  margin-top: 2px;
-  color: var(--faint);
-  font-size: var(--fs-small);
-  line-height: var(--lh-small);
-  font-weight: 400;
-  letter-spacing: 0;
 }
 .lv-kpi-of {
   display: block;
@@ -341,9 +337,6 @@
 
 /* ---- batches waiting for approval ------------------------------------------------------------------------- */
 
-.lv-batches .lv-intro {
-  margin-bottom: 8px;
-}
 .lv-batch {
   display: flex;
   align-items: center;
@@ -378,28 +371,18 @@
 .lv-feed-tools {
   display: flex;
   flex-wrap: wrap;
-  align-items: flex-end;
+  align-items: center;
   justify-content: space-between;
-  gap: 12px var(--pad);
-  padding-bottom: var(--gap);
-  margin-bottom: var(--gap);
-  border-bottom: 1px solid var(--rule);
+  gap: 8px var(--pad);
+  margin-bottom: 4px;
 }
-.lv-feed-tools .lv-intro {
-  flex: 1 1 280px;
-}
-.lv-find {
-  flex: 0 1 320px;
-  min-width: 0;
+.lv-feed-tools .lv-subhead {
   margin: 0;
 }
-.lv-find-label {
-  display: block;
-  margin-bottom: 4px;
-  color: var(--muted);
-  font-size: var(--fs-small);
-  line-height: var(--lh-small);
-  font-weight: 500;
+.lv-find {
+  flex: 0 1 280px;
+  min-width: 0;
+  margin: 0;
 }
 .lv-find-row {
   display: flex;
@@ -410,33 +393,58 @@
   min-width: 0;
 }
 
+/* One line per decision: the person | the action and the short reason | what happened. */
 .lv-feed > .lv-row {
-  padding: 14px 0;
-  border-top: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 160px) minmax(0, 1fr) max-content;
+  column-gap: 16px;
+  align-items: baseline;
+  padding: 10px 0;
+  border-top: 1px solid var(--rule);
 }
 .lv-feed > .lv-row:first-child {
-  padding-top: 8px;
+  border-top: 0;
 }
-.lv-row::after {
-  content: "";
-  display: block;
-  clear: both;
-}
-.lv-row-top {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 4px 12px;
+.lv-row-who {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 .lv-row-what {
   display: flex;
-  flex-wrap: wrap;
   align-items: baseline;
-  gap: 2px 10px;
+  gap: 10px;
   min-width: 0;
+  white-space: nowrap;
+}
+.lv-row-act {
+  display: inline-flex;
+  flex: none;
+  align-items: baseline;
+  gap: 10px;
+}
+.lv-row-what .lv-action {
+  min-width: 128px;
+}
+.lv-row-what .lv-why {
+  flex: 0 1 auto;
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* Twenty dotted lines would be noise: the reason's underline shows when its row is hovered or it has focus. */
+.lv-row .lv-why.has-info:not(.btn):not(.info-dot):not(.pill):not(a):not(label) {
+  text-decoration-color: transparent;
+}
+.lv-row:hover .lv-why.has-info:not(.btn):not(.info-dot):not(.pill):not(a):not(label),
+.lv-row .lv-why.has-info:not(.btn):not(.info-dot):not(.pill):not(a):not(label):focus-visible {
+  text-decoration-color: var(--control);
 }
 .lv-row-status {
   flex: none;
+  justify-self: end;
 }
 /* The status in a long list: a 6px dot in the tone's colour, the word in grey, no fill. */
 .lv-mark {
@@ -457,6 +465,9 @@
   border-radius: 50%;
   background: var(--control);
 }
+.lv-mark-short {
+  display: none;
+}
 .lv-mark-good::before {
   background: var(--positive);
 }
@@ -471,6 +482,7 @@
 }
 .lv-who {
   display: inline-flex;
+  max-width: 100%;
   align-items: baseline;
   gap: 6px;
   padding: 0;
@@ -501,7 +513,7 @@
   font-weight: 400;
   color: var(--muted);
 }
-.lv-why {
+.lv-panel .lv-why {
   margin: 4px 0 0;
   max-width: 80ch;
   overflow-wrap: anywhere;
@@ -518,10 +530,10 @@
   font-weight: 500;
 }
 .lv-thumb {
-  float: right;
-  width: 56px;
-  height: 56px;
-  margin: 6px 0 0 var(--gap);
+  flex: none;
+  align-self: center;
+  width: 24px;
+  height: 24px;
   object-fit: cover;
   border-radius: var(--radius-control);
   border: 1px solid var(--border);
@@ -539,9 +551,7 @@
   padding-top: 4px;
   border-top: 1px solid var(--rule);
 }
-.lv-fold > .lv-intro {
-  margin: 0 0 4px;
-}
+
 
 /* ---- the side column: inbox, health, learned -------------------------------------------------------------- */
 
@@ -575,11 +585,17 @@
   overflow-wrap: anywhere;
 }
 
+/* A self-pause the banner above already names: one quiet line, its words in the description. */
+.lv-alert-msg.lv-alert-named {
+  color: var(--muted);
+}
+
 /* Health: a figure list against the plan's limits, label left and value right, the limit underneath. */
 .lv-metrics {
   margin: 0;
 }
-.lv-metric.ap-tile {
+.lv-metric.ap-tile,
+.lv-metric.lv-metric-stop {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   column-gap: 12px;
@@ -588,20 +604,31 @@
   background: none;
   border-bottom: 1px solid var(--rule);
 }
-.lv-metric.ap-tile:first-child {
+.lv-metric:first-child {
   padding-top: 0;
 }
-.lv-metric.ap-tile:last-child {
+.lv-metric:last-child {
   border-bottom: 0;
 }
-.lv-metric.ap-tile dt {
+.lv-metrics .lv-metric dt {
   font-size: var(--fs-body);
   line-height: var(--lh-body);
   font-weight: 400;
   color: var(--text);
 }
-.lv-metric.ap-tile dd {
+.lv-metrics .lv-metric dd {
   margin: 0;
+}
+.lv-metric.ap-tile {
+  padding: 8px 0;
+}
+.lv-metric.lv-metric-stop {
+  padding: 8px 0;
+}
+/* A stop's state is a word ("On", "Not running yet"), set quieter than a figure. */
+.lv-metric .lv-metric-value.lv-metric-word {
+  color: var(--muted);
+  font-weight: 400;
 }
 .lv-metric .lv-metric-value {
   font-size: var(--fs-body);
@@ -618,30 +645,9 @@
 .lv-metric-bad .lv-metric-value {
   color: var(--negative);
 }
-.lv-metric-flag,
-.lv-metric-note {
-  grid-column: 1 / -1;
-}
 .lv-metric-flag {
+  grid-column: 1 / -1;
   margin-top: 4px !important;
-}
-.lv-metric-note {
-  margin-top: 2px !important;
-  color: var(--faint);
-  font-size: var(--fs-small);
-  line-height: var(--lh-small);
-}
-.lv-health-card .lv-subhead {
-  margin-top: var(--pad);
-}
-.lv-stops > li {
-  padding: 8px 0;
-}
-.lv-stops > li:first-child {
-  padding-top: 0;
-}
-.lv-stop-now {
-  color: var(--muted);
 }
 .lv-learned > li {
   padding: 10px 0;
@@ -652,36 +658,33 @@
 
 /* ---- the full briefing ---------------------------------------------------------------------------------- */
 
-/* It sits in the side column beside the feed: the headline, then one section under another. */
+/* It sits in the side column: one row per section, like the health list above it (each section's words are the
+   row's description). The headline shows only when there is no Yesterday card (live.js). */
 .lv-headline {
-  margin: 0 0 12px;
+  margin: 0 0 4px;
   max-width: 72ch;
   font-weight: 500;
 }
+.lv-headline-range {
+  margin: 0 0 12px;
+}
 .lv-brief-secs {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  border-top: 1px solid var(--rule);
+  list-style: none;
+  margin: 0;
+  padding: 0;
 }
 .lv-brief-secs > .lv-brief-sec,
 .lv-brief-secs > .lv-brief-sec + .lv-brief-sec {
-  padding: 12px 0;
-  border-top: 0;
-  border-bottom: 1px solid var(--rule);
+  padding: 8px 0;
+  border: 0;
+  border-top: 1px solid var(--rule);
 }
-.lv-brief-secs > .lv-brief-sec:last-child {
-  border-bottom: 0;
-  padding-bottom: 0;
+.lv-brief-secs > .lv-brief-sec:first-child {
+  padding-top: 0;
+  border-top: 0;
 }
 .lv-brief-title {
-  margin: 0 0 2px;
-  color: var(--muted);
-  font-size: var(--fs-small);
-  line-height: var(--lh-small);
-  font-weight: 500;
-}
-.lv-brief-sec p {
-  margin: 0;
+  color: var(--text);
 }
 
 /* ---- the customer panel ------------------------------------------------------------------------------ */
@@ -736,10 +739,6 @@
 .lv-know-text {
   display: block;
   overflow-wrap: anywhere;
-}
-.lv-basis {
-  color: var(--faint);
-  font-size: var(--fs-small);
 }
 /* Label left, value right: a little under half for the label, so "Messages (last 7 / 30 days)" keeps one line. */
 .lv-panel .lv-facts > div {
@@ -806,26 +805,10 @@
 
 /* ---- narrow screens --------------------------------------------------------------------------------------- */
 
-@media (max-width: 899px) {
-  .lv-brief-secs {
-    grid-template-columns: minmax(0, 1fr);
-  }
-}
-
 @media (max-width: 719px) {
-  .lv-pause {
-    flex: 1 1 100%;
-    align-items: stretch;
-  }
-  .lv-pause-btn {
+  .lv-head .page-actions,
+  .lv-head .page-actions .lv-pause-btn {
     width: 100%;
-  }
-  .lv-pause-hint {
-    max-width: none;
-    text-align: left;
-  }
-  .lv-checked {
-    margin-bottom: var(--gap);
   }
   /* Words and count on one line, the bar under them. */
   .lv-reason {
@@ -844,13 +827,65 @@
     grid-column: 1 / -1;
     grid-row: 2;
   }
-  .lv-feed-tools {
-    flex-direction: column;
-    align-items: stretch;
-  }
-  .lv-feed-tools .lv-intro,
   .lv-find {
-    flex: none;
+    flex: 1 1 100%;
+  }
+  /* A row on a phone: the person, the action and what happened on line 1; the short reason has line 2 to itself,
+     so it reads whole instead of ending in an ellipsis. The id stays in the name's label and the side panel. */
+  .lv-feed > .lv-row {
+    grid-template-columns: auto minmax(0, 1fr) max-content;
+    column-gap: 10px;
+    row-gap: 2px;
+  }
+  .lv-row-who {
+    grid-column: 1;
+    grid-row: 1;
+    max-width: 40vw;
+  }
+  .lv-row-who .lv-id,
+  .lv-row-what .lv-thumb {
+    display: none;
+  }
+  .lv-row-what {
+    display: contents;
+  }
+  .lv-row-act {
+    display: block;
+    grid-column: 2;
+    grid-row: 1;
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+  .lv-row-act > .pill {
+    margin-left: 8px;
+  }
+  .lv-row-what .lv-action {
+    min-width: 0;
+  }
+  .lv-row .lv-why {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .lv-row-status {
+    grid-column: 3;
+    grid-row: 1;
+  }
+  .lv-mark-has-short .lv-mark-short {
+    display: inline;
+  }
+  .lv-mark-has-short .lv-mark-long {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    clip-path: inset(50%);
+    white-space: nowrap;
   }
   .lv-batch {
     flex-direction: column;
@@ -859,16 +894,12 @@
   .lv-batch-actions .btn {
     flex: 1 1 0;
   }
-  .lv-row-top {
-    flex-wrap: wrap;
-  }
   .lv-selfpause-list li {
     flex-direction: column;
     gap: 0;
   }
   .lv-selfpause-why,
-  .lv-selfpause-list,
-  .lv-selfpause-foot {
+  .lv-selfpause-list {
     margin-left: 0;
   }
   .ap-panel-body {
@@ -878,10 +909,5 @@
   .lv-panel .lv-facts > div {
     grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
     gap: 12px;
-  }
-  .lv-thumb {
-    width: 40px;
-    height: 40px;
-    margin-left: 12px;
   }
 }

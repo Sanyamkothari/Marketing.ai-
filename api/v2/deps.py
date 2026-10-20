@@ -80,7 +80,15 @@ from autonomy.fakes import (
     SimpleStateFolder,
 )
 from autonomy.fakes.samples import sample_brief, sample_content, sample_goal
-from autonomy.interfaces import ChannelAdapter, DecisionLog, EventStore, StateFolder, StateStore, Workspace
+from autonomy.interfaces import (
+    ChannelAdapter,
+    DecisionLog,
+    Environment,
+    EventStore,
+    StateFolder,
+    StateStore,
+    Workspace,
+)
 from autonomy.loop import run_days
 
 if TYPE_CHECKING:  # imported lazily below, so `import api.v2.deps` stays light
@@ -693,6 +701,31 @@ def _demo_group(customer_id: str) -> Group:
     return Group.AGENT
 
 
+class _NamedEnvironment:
+    """The fake world with a first name on each signup (`autonomy.runtime.demo.with_first_names`), so
+    the demo's people read as people. The API only ever shows a name the data has."""
+
+    def __init__(self, inner: Environment) -> None:
+        self.inner = inner
+
+    def reset(self, seed: int) -> Sequence[Event]:
+        history = self.inner.reset(seed)
+        try:
+            from autonomy.runtime.demo import with_first_names
+        except ImportError:  # the runtime's demo layer is not installed: ids only, as before
+            return history
+        return with_first_names(history)
+
+    def now(self) -> datetime:
+        return self.inner.now()
+
+    def act(self, decisions: Sequence[Decision]) -> None:
+        self.inner.act(decisions)
+
+    def advance(self, until: datetime) -> Sequence[Event]:
+        return self.inner.advance(until)
+
+
 class _DemoPolicy:
     """ContactEveryonePolicy, held to the weekly cap, never touching the holdout.
 
@@ -1008,7 +1041,7 @@ def build_demo_services(
     workspace.put_content(content)
 
     run_days(
-        env=FakeEnvironment(n_customers=n_customers, start=start),
+        env=_NamedEnvironment(FakeEnvironment(n_customers=n_customers, start=start)),
         policy=_DemoPolicy(),
         events=events,
         states=states,
@@ -1256,6 +1289,7 @@ def build_services_from_runtime(
     seed: int = 0,
     alert_store: Any = None,
     briefing_store: Any = None,
+    catalogue: Mapping[str, str] | None = None,
 ) -> Services:
     """Services over a running `AutonomyRuntime` and its stores (SQL in production).
 
@@ -1266,6 +1300,7 @@ def build_services_from_runtime(
 
     `alert_store` and `briefing_store` default to the runtime's own (`runtime.alert_store` and
     `runtime.briefing_store`, when it has them); `alerts` and `briefings` are served alongside.
+    `catalogue` (item_id -> product name) is what product ids are shown as; none: names come from events.
     """
     if alert_store is None:
         alert_store = _runtime_store(runtime, ("alert_store", "alerts_store"), "list")
@@ -1313,6 +1348,7 @@ def build_services_from_runtime(
         batch_store=runtime.batches,
         runtime=_RecordingRuntime(runtime, reads),
         allow_tick=allow_tick,
+        catalogue=dict(catalogue or {}),
     )
 
 
@@ -1357,8 +1393,10 @@ def simulated_demo_services(
             DECIDE_HOUR,
             EnrichingStateStore,
             SpendTrackingEventStore,
+            demo_catalogue,
             goal_pacing,
             policy_factory,
+            product_name,
             run_demo,
         )
         from autonomy.runtime.service import AutonomyRuntime, RuntimeConfig, standard_breakers
@@ -1388,10 +1426,16 @@ def simulated_demo_services(
     # SENDs appended through it), so ticks after the simulation see what is left, and keep the
     # circuit breakers (spend pace included) the simulation ran with.
     events = SpendTrackingEventStore(st.events, costs.channel)
+    item_ids: set[str] = set()
     for e in st.events.scan():
         goal_of = e.attrs.get("goal_id")
         if e.type is EventType.SEND and e.channel is not None and isinstance(goal_of, str):
             events.spend[goal_of] += float(costs.channel.get(e.channel, 0.0))
+        if e.item_id:
+            item_ids.add(e.item_id)
+    # What product ids are shown as: the demo shop's names, else the id in words (never a bare id).
+    catalogue = demo_catalogue()
+    catalogue.update({i: product_name(i) for i in item_ids if i not in catalogue})
     # Paced from each goal's own start, as in the simulation: the APPROVE goal may have started late.
     planned = goal_pacing(result.goals, result.start)
 
@@ -1433,4 +1477,5 @@ def simulated_demo_services(
         notes=(SIMULATION_NOTE,),
         allow_tick=True,
         seed=seed,
+        catalogue=catalogue,
     )

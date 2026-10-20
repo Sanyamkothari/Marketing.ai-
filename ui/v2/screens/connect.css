@@ -23,17 +23,17 @@
     display: contents;
   }
 
+  /* Every card spans the column, however short its words (the grid itself aligns its items to the start). */
+  .cn-col > .card {
+    align-self: stretch;
+  }
+
   .cn-o1 { order: 1; }
   .cn-o2 { order: 2; }
   .cn-o3 { order: 3; }
   .cn-o4 { order: 4; }
   .cn-o5 { order: 5; }
   .cn-o6 { order: 6; }
-}
-
-.cn-lead {
-  margin: 0 0 12px;
-  max-width: 68ch;
 }
 
 .cn-sub {
@@ -58,6 +58,20 @@
 
 .cn-source-kind {
   font-weight: 500;
+}
+
+/* One source: a single line under the totals (the table is for several). */
+.cn-from {
+  margin: 0;
+  color: var(--muted);
+}
+
+.cn-from .cn-source-kind {
+  color: var(--text);
+}
+
+.cn-from-when {
+  color: var(--muted);
 }
 
 .cn-source-name {
@@ -95,31 +109,6 @@
 
 .cn-ways > li > :last-child {
   margin-bottom: 0;
-}
-
-.cn-files {
-  margin: 0 0 8px;
-  padding-left: 18px;
-  color: var(--muted);
-}
-
-.cn-files li {
-  margin: 4px 0;
-}
-
-.cn-files li::marker {
-  color: var(--faint);
-}
-
-.cn-files strong {
-  color: var(--text);
-  font-weight: 500;
-}
-
-.cn-ways .cn-hint {
-  color: var(--faint);
-  font-size: var(--fs-small);
-  line-height: var(--lh-small);
 }
 
 .cn-where {
@@ -181,10 +170,6 @@
   font-weight: 600;
 }
 
-.cn-after {
-  margin: 0;
-}
-
 .cn-questions {
   list-style: none;
   margin: 0;
@@ -219,14 +204,7 @@
 }
 
 .cn-channel-group .cn-sub {
-  margin: 0;
-}
-
-.cn-group-words {
-  margin: 2px 0 4px;
-  color: var(--faint);
-  font-size: var(--fs-small);
-  line-height: var(--lh-small);
+  margin: 0 0 2px;
 }
 
 .cn-channel-list {
@@ -256,13 +234,6 @@
   font-weight: 500;
 }
 
-.cn-channel-why {
-  margin: 4px 0 0;
-  color: var(--muted);
-  font-size: var(--fs-small);
-  line-height: var(--lh-small);
-}
-
 /* ---- sending health -------------------------------------------------------------------------------------- */
 .cn-health-lines {
   list-style: none;
@@ -276,9 +247,10 @@
   border-bottom: 1px solid var(--rule);
 }
 
-.cn-health-line p {
-  margin: 2px 0 0;
-  max-width: 60ch;
+/* The last line ends the card: no rule under it (the card's own edge is the rule). */
+.cn-health-line:last-child {
+  border-bottom: 0;
+  padding-bottom: 0;
 }
 
 .cn-health-head {
@@ -297,23 +269,6 @@
   font-size: var(--fs-section);
   line-height: 24px;
   font-weight: 600;
-}
-
-.cn-health-words {
-  color: var(--muted);
-  font-size: var(--fs-small);
-  line-height: var(--lh-small);
-}
-
-.cn-health-limit {
-  color: var(--faint);
-  font-size: var(--fs-small);
-  line-height: var(--lh-small);
-}
-
-.cn-health-limit strong {
-  color: var(--text);
-  font-weight: 500;
 }
 
 /* It paused itself: a hairline box with one small red mark on its title, not a red fill. */
@@ -356,18 +311,10 @@
   font-size: var(--fs-small);
 }
 
-.cn-foot {
-  margin: 12px 0 0;
-  color: var(--faint);
-  font-size: var(--fs-small);
-  line-height: var(--lh-small);
-}
-
 .cn-next {
   margin: var(--pad) 0 0;
   font-weight: 500;
 }
-
 
 @media (max-width: 719px) {
   .cn-channel {

@@ -35,6 +35,7 @@ from autonomy.contracts import (
     Group,
     Theme,
 )
+from autonomy.runtime.demo import demo_first_name
 
 NOW = datetime(2026, 10, 20, 12, 0, tzinfo=UTC)
 MOCK = Path(__file__).resolve().parents[3] / "ui" / "v2" / "mock"
@@ -175,7 +176,8 @@ def test_activity_rows_wrap_the_decision_with_what_happened(services: Services) 
     assert any(r.content is not None for r in acts)
     # Bid-less "nothing" decisions (the holdout) are kept by the goal filter, unlike /v2/decisions.
     assert any(r.decision.group is Group.HOLDOUT for r in rows)
-    assert all(r.display_name is None for r in rows)  # the demo has no names, and none is made up
+    # The demo's sign-up data carries first names (the demo layer's), and the rows show the data's own.
+    assert all(r.display_name == demo_first_name(r.decision.customer_id) for r in rows)
     assert len(services.activity(limit=3)) == 3
     with pytest.raises(NotFoundError):
         services.activity(goal_id="goal_missing")
