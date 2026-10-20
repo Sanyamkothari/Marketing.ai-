@@ -34,9 +34,9 @@ from engine.agent.loop import MAX_MESSAGE_CHARS, MAX_REPLY_CHARS, UNAVAILABLE, _
 from engine.agent.tools import AgentContext, AgentToolError
 from engine.agent.untrusted import clean_text, for_prompt
 from engine.doctor.agent_apply import person_owns
-from engine.doctor.agent_review import STRIKES, _NoAnswerError, _Review
+from engine.doctor.agent_review import MAX_BLOCKING, STRIKES, _NoAnswerError, _Review
 from engine.doctor.protocol import DONT_KNOW, Ask, AskOption, question_id_of
-from engine.doctor.questions import catalogue_lines
+from engine.doctor.questions import QuestionError, build_ask, catalogue_lines
 from engine.doctor.visit_contracts import OptionEffect
 from engine.generative.contracts import GenerativePurpose
 from engine.generative.prompts import load_prompt
@@ -72,6 +72,9 @@ MAX_QUICK: Final[int] = 2
 """The most quick questions (with the model's own options) one message may raise."""
 SHORT: Final[int] = 220
 QUICK_CODE: Final[str] = "CHAT_ASK"
+OUTCOME_QUESTIONS: Final[frozenset[str]] = frozenset({"Q24", "Q24_WHAT_COUNTS"})
+MAX_OUTCOMES: Final[int] = 3
+"""The most answers (rules the person might mean) one "what counts as a yes" question offers."""
 _DIGIT: Final = re.compile(r"\d")
 _MEANING_TOPICS: Final = re.compile(
     r"(consent|opt[\W_]*(in|out)|opted|agree|contact|unsubscri|outcome|counts? as|a yes|a sale|purchas|bought"
@@ -476,7 +479,9 @@ class _Chat(_Review):
     def _ask(self, action: dict[str, Any], args: dict[str, Any]) -> None:
         """A catalogue question, or a quick one (`text` and `options`); its id and answers go back to the model
         so it can suggest one."""
-        if "question" in args:
+        if str(args.get("question", "")) in OUTCOME_QUESTIONS:
+            self._outcome_ask(action, args)
+        elif "question" in args:
             super()._ask(action, args)
             self.turn.feedback.pop()  # the review's one-word note; the chat's carries the ids
         else:
@@ -496,6 +501,120 @@ class _Chat(_Review):
                 "options": [{"id": o.effect.option_id, "label": gate.text(o.label)} for o in ask.options],
             }
         )
+
+    def _outcome_ask(self, action: dict[str, Any], args: dict[str, Any]) -> None:
+        """ "What counts as a yes": each answer is built by our code (`engine.doctor.outcome_answer`), with the counts
+        it measured, from what the model names: a column of the file and its yes values (`outcomes[i]` =
+        `{"column", "yes": [...]}`), or the column ONE query it proposed (`propose_sql`) builds on the customer table
+        (`{"column", "sql": "<output_name>"}`). The person's click records the outcome; the query step waits for it.
+        """
+        from engine.doctor.agent_review import _decided
+        from engine.doctor.outcome_answer import column_offer, query_item, sql_offer
+        from engine.doctor.outcome_definition import OutcomeError
+        from engine.doctor.tools_sql import SqlStepProposal
+        from engine.doctor.visit import active_goal
+
+        goal = active_goal(self.case)
+        if goal is None:
+            raise AgentToolError(
+                "AGENT_QUESTION_REFUSED",
+                "The outcome belongs to the goal: ask it after the person has chosen what the campaign is for.",
+            )
+        index = self._index(action, args)
+        ctx, file, gate = self.ctxs[index], self.files[index], self.gates[index]
+        args = dict(gate.unalias_args(args))
+        rules, specs = args.get("choices"), args.get("outcomes")
+        if (
+            not isinstance(rules, list)
+            or not isinstance(specs, list)
+            or not 1 <= len(rules) == len(specs) <= MAX_OUTCOMES
+            or not all(isinstance(r, str) and r.strip() for r in rules)
+            or not all(isinstance(spec, dict) for spec in specs)
+        ):
+            raise AgentToolError(
+                "AGENT_QUESTION_INVALID",
+                f"Q24 needs 1 to {MAX_OUTCOMES} `choices` (the rule in the person's words) and one `outcomes` entry "
+                'for each: {"column": "...", "yes": ["..."]} for a column of the file, or {"column": "...", '
+                '"sql": "<output_name of your propose_sql>"} for a column your one query builds.',
+            )
+        key = _decided(self.case, "key", ctx.upload_id) or next(
+            (c.key_columns[0] for c in self.case.files if c.upload_id == ctx.upload_id and c.key_columns),
+            None,
+        )
+        marked = {c.name for c in ctx.profile.columns if c.pii_kinds} | set(
+            ctx.config.agent.always_hide_columns
+        )
+        offers = []
+        for rule, spec in zip(rules, specs, strict=True):
+            failure = self.checker.failure(rule, target="doctor question", max_chars=400)
+            if failure is not None:
+                raise AgentToolError(
+                    "AGENT_QUESTION_REFUSED",
+                    f"The rule failed a check ({failure}); use the person's own numbers.",
+                )
+            words = gate.person_text(rule)
+            try:
+                if "sql" in spec:
+                    if key is None:
+                        raise AgentToolError("AGENT_QUESTION_INVALID", "Settle which column is the ID first.")
+                    name = str(spec["sql"])
+                    made = self.turn.queries.get(name)
+                    step: Any = None
+                    if made is not None:
+                        step = SqlStepProposal.model_validate(made.result.output).step
+                    elif (earlier := query_item(self.case.items, name)) is not None:
+                        step = earlier.payload.get("step")
+                    if not isinstance(step, dict):
+                        raise AgentToolError(
+                            "AGENT_QUESTION_INVALID", f"Propose the query '{name[:40]}' first (propose_sql)."
+                        )
+                    offers.append(
+                        sql_offer(
+                            step,
+                            str(spec.get("column", "")),
+                            self.files,
+                            file,
+                            key,
+                            rule=words,
+                            items=self.case.items,
+                        )
+                    )
+                else:
+                    column = ctx.resolve(str(spec.get("column", "")))
+                    if column == key or column in marked:
+                        raise AgentToolError(
+                            "AGENT_QUESTION_REFUSED",
+                            "The ID or a column of personal data is never the outcome.",
+                        )
+                    yes = spec.get("yes")
+                    offers.append(
+                        column_offer(
+                            ctx.frame,
+                            column,
+                            yes if isinstance(yes, list) else [],
+                            upload_id=ctx.upload_id,
+                            rule=words,
+                        )
+                    )
+            except OutcomeError as exc:
+                raise AgentToolError("AGENT_OUTCOME_REFUSED", f"{exc.code}: {exc.message}"[:400]) from exc
+        if self.turn.blocking >= MAX_BLOCKING:
+            raise AgentToolError("AGENT_BLOCKING_LIMIT", "That is enough blocking questions for one message.")
+        self.turn.blocking += 1
+        try:
+            ask = build_ask(
+                "Q24",
+                {"file": file.file_name or "this file", "value": "|".join(o.says for o in offers)},
+                rows=len(ctx.frame),
+                choices=[o.label for o in offers],
+                effects=[o.effect for o in offers],
+                choice_says=[o.effect_text for o in offers],
+                upload_id=ctx.upload_id,
+                goal_id=goal.goal_id,
+            )
+        except QuestionError as exc:
+            raise AgentToolError("AGENT_QUESTION_INVALID", str(exc)[:300]) from exc
+        self.turn.asks.append(ask)
 
     def _quick(self, action: dict[str, Any], args: dict[str, Any]) -> None:
         index = self._index(action, args)

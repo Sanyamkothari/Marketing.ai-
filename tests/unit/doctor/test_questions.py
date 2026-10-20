@@ -119,7 +119,8 @@ def test_the_blocking_questions_are_few_and_decide_the_table_or_the_contact_list
         "Q10",
         "Q12",
         "Q14",
-    }, "Q24 is a note for the analyst until an outcome definition is built from it: it blocks nothing"
+        "Q24",
+    }, "Q24 decides the outcome the model learns from, so it blocks Approve"
 
 
 def test_an_optional_answer_is_left_out_when_its_value_is_missing() -> None:
@@ -220,17 +221,17 @@ def test_the_agent_gets_one_line_per_question() -> None:
 
 def test_what_counts_as_a_yes_is_a_question_only_the_chat_asks_and_it_never_recommends() -> None:
     """Q24: the person says in their own words what a sale is; the options are those words. Meaning: no
-    recommendation, the review's prompt does not list it, and it does not block (its answer builds no outcome
-    definition yet, so it must not hold the visit or promise that the rule is applied)."""
+    recommendation, the review's prompt does not list it, and it blocks: its answer decides the outcome the model
+    learns from (`engine.doctor.outcome_answer`)."""
     spec = question("Q24")
-    assert spec.chat_only and spec.meaning_bearing and not spec.blocking and not spec.recommends
-    assert "does not change what the model learns" in spec.why
+    assert spec.chat_only and spec.meaning_bearing and spec.blocking and not spec.recommends
+    assert "decides what the model learns" in spec.why
     assert len(catalogue_lines(chat=True)) == 24 and "Q24" not in "".join(catalogue_lines())
     ask = build_ask(
         "Q24", {"file": "orders.csv"}, rows=1200, choices=("An order over 500 is a sale", "Any order")
     )
     assert [o.label for o in ask.options] == ["An order over 500 is a sale", "Any order", DONT_KNOW]
-    assert ask.recommended is None and not ask.blocking and ask.meaning_bearing
+    assert ask.recommended is None and ask.blocking and ask.meaning_bearing
 
 
 def test_a_recommended_choice_outside_the_choices_is_refused() -> None:

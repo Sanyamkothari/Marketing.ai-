@@ -506,10 +506,9 @@ CATALOGUE: Final[Mapping[str, QuestionSpec]] = {
             code="Q24_WHAT_COUNTS",
             topic="what counts as a yes",
             text="What should count as a yes in {file}?",
-            why="I note it for your analyst. It does not change what the model learns yet: that still comes from "
-            "the outcome the file has.",
+            why="It decides what the model learns: the model is trained to find the customers you call a yes.",
             options=(OptionSpec("{choice}", repeat=True),),
-            blocking=False,
+            blocking=True,
             meaning_bearing=True,
             chat_only=True,
             roles=(CAMPAIGN_MANAGER,),
@@ -519,9 +518,8 @@ CATALOGUE: Final[Mapping[str, QuestionSpec]] = {
 }
 """Q1 to Q20 of the scenario study, and Q21 to Q23 (what one row is, which statuses are real money, who can have the
 outcome) that its themes 3 and 5 need, and Q24 (what counts as a yes) that the chat asks when the person says it in
-their own words. Q24 is a note for the analyst, not blocking: no outcome definition is built from it yet (the
-outcome-definition items of `engine.doctor.outcome_definition` are not part of the visit), so it must not hold the
-visit or say the rule is applied. "I don't know" is added to each at build time."""
+their own words. Q24 decides the outcome the model learns from (`engine.doctor.outcome_answer`): it is meaning, so
+it is blocking and only the person's click answers it. "I don't know" is added to each at build time."""
 
 _FORMATTER: Final[string.Formatter] = string.Formatter()
 

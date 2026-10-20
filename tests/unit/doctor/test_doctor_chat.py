@@ -28,7 +28,7 @@ from tests.unit.doctor import visit_support as vs
 from tests.unit.doctor.chat_support import Talk, ai_items
 from tests.unit.doctor.visit_support import ANALYST, World
 
-SALE = "a sale only counts if the order was over 500"
+SALE = "a yes is a customer who converted, the converted column is 1"
 TEST_ACCOUNTS = "drop test accounts, ids start with 999"
 THIS_YEAR = "actually only this year's orders"
 
@@ -88,18 +88,19 @@ def asked_sale(seen: Seen) -> dict[str, object]:
 
 SCRIPT: dict[str, list[object]] = {
     SALE: [
-        look("describe_numbers", "order_amount"),
+        look("describe_numbers", "visits_90d"),
         {
             "action": "ask",
             "file": "F1",
             "args": {
                 "question": "Q24",
                 "values": {"file": "orders.csv"},
-                "choices": ["An order over 500 is a sale", "Any order is a sale"],
+                "choices": ["a yes = a customer who converted"],
+                "outcomes": [{"column": "converted", "yes": ["1"]}],
             },
         },
         asked_sale,
-        reply("I understood: a sale is an order over 500. Use this?"),
+        reply("I understood: a yes is a customer who converted. Use this?"),
     ],
     TEST_ACCOUNTS: [
         look("find_values", "customer_id", contains="999"),
@@ -125,16 +126,19 @@ def test_the_owners_conversation_suggests_an_answer_applies_a_filter_and_revises
     client = ChatScript(SCRIPT)
     talk = Talk(storage, world, client)
 
-    # (1) What counts as a sale is the person's: the agent asks it, suggests the answer, and records nothing.
+    # (1) What counts as a yes is the person's: the agent asks it, suggests the answer, and records nothing. It is
+    # blocking (it decides what the model learns) and our code counted the yes rate on the label.
+    talk.goal()
     case = talk.say(SALE)
     sale = next(q for q in case.questions if q.code == "Q24_WHAT_COUNTS")
-    assert sale.answer is None and not sale.blocking, "meaning: only the person's click answers it"
-    assert "does not change what the model learns" in sale.why
-    assert [o.label for o in sale.options][:2] == ["An order over 500 is a sale", "Any order is a sale"]
+    assert sale.answer is None and sale.blocking, "meaning: only the person's click answers it; Approve waits"
+    assert "decides what the model learns" in sale.why
+    assert sale.options[0].label.startswith("a yes = a customer who converted: ")
+    assert " of 1,200 customers" in sale.options[0].label
     suggestion = talk.reply.suggestion
     assert suggestion is not None
     assert (suggestion.question_id, suggestion.option_id) == (sale.question_id, "c0")
-    assert suggestion.label == "An order over 500 is a sale"
+    assert suggestion.label == sale.options[0].label
     assert talk.reply.tools == ("describe_numbers", "ask", "suggest_answer")
     assert not ai_items(case), "nothing was changed in the plan for a question of meaning"
     sent = {item["tool"] for item in talk.reply.sent}
@@ -425,13 +429,23 @@ def test_a_quick_question_may_be_the_first_thing_the_agent_does(storage: LocalSt
 
 def test_the_answer_is_recorded_only_by_the_persons_click(storage: LocalStorage, world: World) -> None:
     talk = Talk(storage, world, ChatScript(SCRIPT))
+    talk.goal()
     case = talk.say(SALE)
     suggestion = talk.reply.suggestion
     assert suggestion is not None
     assert next(q for q in case.questions if q.question_id == suggestion.question_id).answer is None
+    assert not [
+        i for i in case.items if i.kind == "outcome_column" and "yes" in i.title
+    ], "not before the click"
     case = talk.answer(suggestion.question_id, suggestion.option_id)
     answered = next(q for q in case.questions if q.question_id == suggestion.question_id)
     assert answered.answer == "c0" and answered.answered_by == ANALYST, "the person's click"
+    (outcome,) = [i for i in case.items if i.kind == "outcome_column" and i.state is ProposalState.ACCEPTED]
+    assert outcome.decided_by == ANALYST and outcome.payload["column"] == "converted"
+    assert outcome.payload["definition"]["map"] == [
+        {"value": "0", "meaning": "no"},
+        {"value": "1", "meaning": "yes"},
+    ]
 
 
 @pytest.mark.parametrize("handle", ["k99", "k1"])

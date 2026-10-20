@@ -632,6 +632,15 @@ def _outcome(case: Case, items: Sequence[CaseItem]) -> OutcomePart | None:
                     approved_by=recorded.approved_by,
                     approved_at=recorded.approved_at,
                 )
+        says = item.payload.get("says")
+        if approval is None and isinstance(says, str) and item.decided_by and item.decided_at is not None:
+            # The person's click on the question "what counts as a yes" (Q24): they read this sentence and chose it.
+            approval = OutcomeApproval(
+                definition_hash=definition.definition_hash,
+                sentence=says,
+                approved_by=item.decided_by,
+                approved_at=item.decided_at,
+            )
         return OutcomePart(definition=definition, approval=approval)
     return None
 
@@ -900,12 +909,22 @@ def prescription_from_case(
                 contract=contract,
             )
         )
+    # An outcome a query step builds (Q24: "a sale is an order over 500 within 30 days") is the post-build recipe's
+    # target: the leak rule of the query lets that column alone read the rows after the as-of date.
+    built_outcome = next(
+        (
+            column
+            for item in approved
+            if item.kind == "outcome_column" and item.payload.get("outcome_sql") and (column := _column(item))
+        ),
+        None,
+    )
     post_build = _recipe(
         steps_by_upload.get(None, []),
         use_case_id=use_case_id,
         fingerprint=f"case:{case.case_id}:post_build",
         primary_key=None,
-        target=None,
+        target=built_outcome,
         snapshot_column=None,
         config=config,
         approved_by=approver,

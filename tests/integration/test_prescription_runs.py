@@ -899,3 +899,104 @@ def test_a_guided_run_with_a_conversion_keeps_its_money_basis_with_the_switch_on
     assert (money.column, money.written_in, money.reported_in) == ("amount", ("USD",), "INR")
     (rate,) = money.rates
     assert (rate.rate, rate.source, str(rate.rate_date)) == (83.1, "RBI reference rate", "2026-10-10")
+
+
+# ---------------------------------------------------------------------------
+# What counts as a yes (Q24): the outcome a query step builds from another file
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize("capped", [False, True])
+def test_an_upload_trains_on_the_outcome_column_a_query_builds_from_the_orders_file(
+    api: tuple[TestClient, Path], unified: None, monkeypatch: pytest.MonkeyPatch, capped: bool
+) -> None:
+    from tests.unit.doctor import visit_support as vs
+
+    client, data_dir = api
+    storage = LocalStorage(data_dir)
+    rng = np.random.default_rng(24)
+    customers = vs.customers(rows=1_500, seed=5).drop(columns=["converted", "churned", "snapshot_date"])
+    ids = rng.integers(0, 1_500, 4_000)
+    orders = pd.DataFrame(
+        {
+            "customer_id": [f"C{100000 + i}" for i in ids],
+            "order_amount": np.round(rng.gamma(2.0, 260.0, 4_000), 2),
+            "order_date": (
+                pd.Timestamp("2026-07-01") + pd.to_timedelta(rng.integers(0, 125, 4_000), unit="D")
+            )
+            .strftime("%Y-%m-%d")
+            .to_numpy(),
+        }
+    )
+
+    def upload(frame: pd.DataFrame, name: str) -> str:
+        sent = client.post(
+            "/uploads",
+            files={"file": (name, frame.to_csv(index=False).encode(), "text/csv")},
+            data={"use_case": "targeted-advertisement", "mode": "train"},
+        )
+        assert sent.status_code == 201, sent.text
+        return str(sent.json()["upload_id"])
+
+    customers_id, orders_id = upload(customers, "customers.csv"), upload(orders, "orders.csv")
+    sql = (
+        "SELECT c.*, COALESCE(w.is_sale, 0) AS is_sale FROM t_customers c LEFT JOIN ("
+        "SELECT customer_id, 1 AS is_sale FROM t_orders WHERE order_amount > 500 "
+        "AND CAST(order_date AS DATE) > $as_of GROUP BY customer_id) w ON c.customer_id = w.customer_id"
+    )
+    steps = (
+        RecipeStep(
+            order=1,
+            kind=RecipeStepKind.SQL_QUERY,
+            column="customer_sales",
+            params={
+                "sql": sql,
+                "inputs": ["customers", "orders"],
+                "output_name": "customer_sales",
+                "description": "Mark each customer who ordered over 500 after the as-of date",
+                "as_of": "2026-09-30",
+                "reads_future": True,
+            },
+        ),
+    )
+    post_build = DataRecipe(
+        recipe_id="rc-sales",
+        use_case_id="targeted-advertisement",
+        source_fingerprint="case:sales",
+        steps=steps,
+        recipe_hash=recipe_hash(steps),
+        primary_key=None,
+        target="is_sale",
+        levels=(AgentLevel.RESHAPE,),
+        max_failure_pct=5.0,
+        created_at=utc_now(),
+    )
+    ref, _ = _prescribe(
+        storage,
+        files=(
+            FilePart(slot="customers", upload_ids=(customers_id,)),
+            FilePart(slot="orders", upload_ids=(orders_id,)),
+        ),
+        post_build=post_build,
+        basis=None,
+    )
+    bind_upload(storage, customers_id, ref)
+    if capped:
+        monkeypatch.setattr("api.routes.run_prescriptions.profile_row_cap", lambda _config: 2_000)
+    response = client.post(
+        "/runs",
+        json={
+            "use_case": "targeted-advertisement",
+            "mode": "train",
+            "upload_id": customers_id,
+            "primary_key": "customer_id",
+            "target": "is_sale",
+        },
+    )
+    if capped:  # the orders file has more rows than are read: the newest rows, the outcome, may be cut
+        assert response.status_code == 409 and response.json()["detail"]["code"] == "QUERY_INPUT_TOO_LARGE"
+        return
+    assert response.status_code == 202, response.text
+    run_id = response.json()["run_id"]
+    prepared = _frame(storage, read_job_spec(storage, job_spec_key(run_id)).upload_key)
+    day = pd.to_datetime(orders["order_date"])
+    expected = orders[(orders["order_amount"] > 500) & (day > "2026-09-30")]["customer_id"].nunique()
+    assert len(prepared) == len(customers) and int(prepared["is_sale"].sum()) == expected > 0
