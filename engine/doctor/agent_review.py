@@ -520,6 +520,14 @@ class _Review:
                 "AGENT_RETRIES_USED",
                 f"'{name[:60]}' has failed its own checks too often; it is left for the person.",
             )
+        if any(
+            o.effect.payload.get("outcome_sql") == name for ask in turn.asks for o in ask.options
+        ):  # the person is shown the counts of this query: it is not changed under them
+            raise AgentToolError(
+                "AGENT_QUERY_ASKED",
+                f"'{name[:60]}' is the outcome the person was just asked about; propose a query with another "
+                "output_name and ask again.",
+            )
         first = next(i for i, ctx in enumerate(self.ctxs) if ctx.upload_id == given["upload_ids"][0])
         key = _decided(self.case, "key", given["upload_ids"][0])
         result = self.registry.call("propose_sql_step", given, self._context(first, primary_key=key))

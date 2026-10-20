@@ -716,9 +716,15 @@ replies in plain words. Its instructions are one short prompt, `configs/prompts/
   customers." The query must state its as-of date; the orders after it are the outcome window, so only the outcome
   column may read them (`reads_future`) and every other column must be what was known by that date
   (`FUTURE_EVENTS_LEAKED`), and a column that alone tells every yes from every no is refused
-  (`OUTCOME_FROM_A_FEATURE`). Without an AI the question about the outcome offers the columns the goal detects as
-  chips, with the same counts and sentence. **Left:** if you later untick the query, the outcome column goes with it; the
-  readiness check then says the column is missing.
+  (`OUTCOME_FROM_A_FEATURE`, read on the rows the column has values for). The click ticks exactly the query you were
+  shown (its digest covers the SQL, inputs, as-of date and `reads_future`); a query the agent changes afterwards is not
+  ticked. Taking the answer back (answering again, or unticking the outcome or the query) unticks both. The outcome
+  query makes the table the model learns from, so it is refused while a join, stack or another query is ticked
+  (`OUTCOME_QUERY_ALONE`). Training reads the other files up to the row cap; past it the run stops
+  (`QUERY_INPUT_TOO_LARGE`) rather than label from a cut file. Without an AI the question about the outcome offers the
+  columns the goal detects as chips, with the same counts and sentence; a chip's outcome stays the column (no value
+  map). **Left:** a leaky column that is a snapshot of the customer file taken after the outcome window is not found
+  by the check; use an `as_of_rule` so the date moves each month.
 - **Changing your mind.** "Actually only this year's orders" makes the agent take back its own earlier change
   (rejected, decided by the agent, shown in the reply) and apply the new one. It cannot take back what you ticked or
   gave your own yes to, and your Undo sticks: the same change proposed again in other words is not put back.

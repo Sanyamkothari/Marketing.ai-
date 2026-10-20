@@ -277,10 +277,20 @@ def _query_tables(
     for other in prescription.files:
         if other.slot == slot:
             continue
-        read = [
-            ingest.read_upload(storage, record.source_key, file_format=record.file_format, row_cap=cap).frame
+        results = [
+            ingest.read_upload(storage, record.source_key, file_format=record.file_format, row_cap=cap)
             for record in (load_upload(storage, upload_id) for upload_id in other.upload_ids)
         ]
+        if any(
+            r.truncated for r in results
+        ):  # the rows past the cap are often the newest: the labels would be wrong
+            raise http_error(
+                409,
+                "QUERY_INPUT_TOO_LARGE",
+                f"The file '{other.slot}' has more than {cap:,} rows, and the query that builds the outcome reads "
+                "it. Use a smaller file (for example the last months) so every row is read.",
+            )
+        read = [r.frame for r in results]
         frame = read[0] if len(read) == 1 else pd.concat(read, ignore_index=True)
         if other.recipe is not None:
             frame = run_part_recipe(

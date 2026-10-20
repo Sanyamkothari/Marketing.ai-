@@ -405,4 +405,146 @@ def test_without_an_ai_the_rules_offer_the_detected_outcome_columns_as_chips_wit
                         expected_version=case.version, actor=ANALYST)  # fmt: skip
     (outcome,) = accepted_outcomes(case)
     assert outcome.payload["column"] == "converted" and outcome.payload["counts"]["yes"] == yes
+    assert (
+        "definition" not in outcome.payload
+    ), "a chip's outcome is the column, as it always was: no value map"
     assert f"{yes:,} of {len(frame):,} customers" in visit.approval_sentence(case)
+
+
+# ---------------------------------------------------------------------------
+# The click ticks exactly the step the person saw, and taking the answer back takes the query with it
+# ---------------------------------------------------------------------------
+LATER = "2026-08-15"
+
+
+def step_of(case: Case, **where: Any) -> Any:
+    found = [
+        i
+        for i in case.items
+        if i.payload.get("step", {}).get("kind") == "sql_query"
+        and all(i.payload["step"]["params"].get(k) == v for k, v in where.items())
+    ]
+    assert len(found) == 1, found
+    return found[0]
+
+
+def test_the_agent_cannot_propose_the_asked_query_again_in_the_same_turn(storage: LocalStorage) -> None:
+    again = propose()
+    again["args"] = {**again["args"], "as_of": LATER}
+    talk = talk_with(storage, {TYPED: [propose(), ask_sale(), again, suggest, reply("Use this?")]})
+    case = talk.say(TYPED)
+    assert any(r.get("error") == "AGENT_QUERY_ASKED" for r in talk.client.seen[-1].results)
+    case = talk.answer(next(q for q in case.questions if q.code == "Q24_WHAT_COUNTS").question_id, "c0")
+    assert step_of(case, as_of=AS_OF).state is ProposalState.ACCEPTED
+
+
+def test_a_click_ticks_only_the_step_with_the_digest_the_person_was_shown(storage: LocalStorage) -> None:
+    again = propose()
+    again["args"] = {**again["args"], "as_of": LATER}
+    talk = talk_with(storage, {TYPED: sale_script()[TYPED], "again": [again, reply("Another date.")]})
+    case = talk.say(TYPED)
+    q = next(q for q in case.questions if q.code == "Q24_WHAT_COUNTS")
+    case = talk.say("again")  # a later message: the same name, another as-of date
+    other = step_of(case, as_of=LATER)
+    case = talk.answer(q.question_id, "c0")
+    assert step_of(case, as_of=AS_OF).state is ProposalState.ACCEPTED
+    assert step_of(case, as_of=LATER).item_id == other.item_id
+    assert step_of(case, as_of=LATER).state is ProposalState.PENDING
+
+    # A step that is no longer there as it was shown is refused, nothing is ticked.
+    items = [i.model_copy(update={"state": ProposalState.PENDING}) for i in case.items]
+    (outcome,) = accepted_outcomes(case)
+    gone = [i for i in items if i.payload.get("step", {}).get("params", {}).get("as_of") != AS_OF]
+    with pytest.raises(visit.CaseError):
+        visit._the_outcome(gone, GOAL_A, outcome.payload, ANALYST, case.updated_at)
+
+
+def test_taking_the_answer_back_unticks_the_query_and_the_run_does_not_need_it(storage: LocalStorage) -> None:
+    talk = talk_with(storage, sale_script())
+    case = talk.say(TYPED)
+    q = next(q for q in case.questions if q.code == "Q24_WHAT_COUNTS")
+    case = talk.answer(q.question_id, "c0")
+    assert step_of(case, as_of=AS_OF).state is ProposalState.ACCEPTED
+    dont_know = next(o.option_id for o in q.options if o.label == "I don't know")
+    case = talk.answer(q.question_id, dont_know)
+    assert not accepted_outcomes(case)
+    waiting = step_of(case, as_of=AS_OF)
+    assert waiting.state is ProposalState.PENDING and waiting.decided_by is None
+    w = talk.world
+    prescription = prescription_from_case(case, storage=storage, files=tuple(w.load(case)))
+    assert prescription.post_build is None or prescription.post_build.target is None
+    assert not (prescription.post_build.steps if prescription.post_build else ())
+
+
+def test_unticking_the_outcome_or_its_query_unticks_both_and_another_query_cannot_join_them(
+    storage: LocalStorage,
+) -> None:
+    talk = talk_with(storage, sale_script())
+    case = talk.say(TYPED)
+    case = talk.answer(next(q for q in case.questions if q.code == "Q24_WHAT_COUNTS").question_id, "c0")
+    query, (outcome,) = step_of(case, as_of=AS_OF), accepted_outcomes(case)
+
+    with pytest.raises(visit.CaseError):  # the outcome is chosen by answering, not by a tick
+        talk.decide(outcome.item_id, True)
+    case = talk.decide(outcome.item_id, False)
+    assert not accepted_outcomes(case) and step_of(case, as_of=AS_OF).state is ProposalState.PENDING
+
+    case = talk.answer(next(q for q in case.questions if q.code == "Q24_WHAT_COUNTS").question_id, "c0")
+    case = talk.decide(query.item_id, False)  # the query goes: the outcome that needs it goes too
+    assert not accepted_outcomes(case)
+
+
+def test_an_outcome_query_does_not_sit_beside_another_ticked_query(storage: LocalStorage) -> None:
+    feature = propose(
+        "SELECT customer_id, SUM(order_amount) AS spend_before FROM t_orders "
+        "WHERE CAST(order_date AS DATE) <= $as_of GROUP BY customer_id",
+        "customer_spend",
+    )
+    feature["args"] = {
+        **feature["args"],
+        "files": ["F2"],
+        "reads_future": False,
+        "expect": {"keys_unique": True},
+    }
+    script = {"feature": [feature, reply("A spend column.")], **sale_script()}
+    talk = talk_with(storage, script)
+    case = talk.say("feature")
+    spend = step_of(case, output_name="customer_spend")
+    case = talk.decide(spend.item_id, True)
+    case = talk.say(TYPED)
+    assert not [q for q in case.questions if q.code == "Q24_WHAT_COUNTS"]
+    assert any("OUTCOME_QUERY_ALONE" in str(r.get("message")) for r in talk.client.seen[-1].results)
+
+
+def test_a_column_with_gaps_that_alone_decides_the_outcome_is_still_found() -> None:
+    from engine.doctor.outcome_answer import _alone_decides
+
+    n = 100
+    outcome = pd.Series([1] * 40 + [0] * 60)
+    table = pd.DataFrame(
+        {"customer_id": range(n), "is_sale": outcome, "leak": np.where(outcome == 1, 5.0, 1.0)}
+    )
+    table.loc[[3, 70], "leak"] = np.nan
+    assert _alone_decides(table, "is_sale", "customer_id", outcome) == "leak"
+    table["leak"] = np.random.default_rng(1).random(n)
+    assert _alone_decides(table, "is_sale", "customer_id", outcome) is None
+
+
+def test_while_the_outcome_is_a_query_no_other_query_can_be_ticked(storage: LocalStorage) -> None:
+    feature = propose(
+        "SELECT customer_id, SUM(order_amount) AS spend_before FROM t_orders "
+        "WHERE CAST(order_date AS DATE) <= $as_of GROUP BY customer_id",
+        "customer_spend",
+    )
+    feature["args"] = {
+        **feature["args"],
+        "files": ["F2"],
+        "reads_future": False,
+        "expect": {"keys_unique": True},
+    }
+    talk = talk_with(storage, {**sale_script(), "feature": [feature, reply("A spend column.")]})
+    case = talk.say(TYPED)
+    case = talk.answer(next(q for q in case.questions if q.code == "Q24_WHAT_COUNTS").question_id, "c0")
+    case = talk.say("feature")
+    with pytest.raises(visit.CaseError):
+        talk.decide(step_of(case, output_name="customer_spend").item_id, True)

@@ -569,7 +569,15 @@ class _Chat(_Review):
                             "AGENT_QUESTION_INVALID", f"Propose the query '{name[:40]}' first (propose_sql)."
                         )
                     offers.append(
-                        sql_offer(step, str(spec.get("column", "")), self.files, file, key, rule=words)
+                        sql_offer(
+                            step,
+                            str(spec.get("column", "")),
+                            self.files,
+                            file,
+                            key,
+                            rule=words,
+                            items=self.case.items,
+                        )
                     )
                 else:
                     column = ctx.resolve(str(spec.get("column", "")))

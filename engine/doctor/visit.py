@@ -96,11 +96,11 @@ from engine.doctor.goal_brief import GOAL_BRIEF_TOOL, GoalBrief, load_goal_brief
 from engine.doctor.outcome_answer import (
     OUTCOME_ASK_CODE,
     OUTCOME_KIND,
+    other_changes,
+    outcome_query,
     outcome_says,
     query_item,
     rules_payload,
-    sql_hash,
-    step_sql,
 )
 from engine.doctor.plan_check import check_plan, open_stops, plan_digest
 from engine.doctor.protocol import (
@@ -1771,9 +1771,7 @@ def _goal_rules(run: _Run, case: Case, brief: GoalBrief, step: _Step) -> None:
                             payload={
                                 "upload_id": loaded.upload_id,
                                 "column": column,
-                                **rules_payload(
-                                    loaded.frame, column, loaded.upload_id, brief.outcome.positive_label
-                                ),
+                                **rules_payload(loaded.frame, column, brief.outcome.positive_label),
                             },
                         ),
                     )
@@ -2420,6 +2418,8 @@ def answer(
         effect = effects.get(option_id)
         replaced = f"{question_id}:{question.answer}" if question.answer is not None else None
         items = [item for item in case.items if item.item_id != replaced]
+        for old in (i for i in case.items if i.item_id == replaced):
+            items = _untick_outcome_query(items, old)  # the answer taken back takes its query with it
         payload: dict[str, Any] = {} if effect is None else dict(effect.payload)
         if effect is not None and effect.kind == OUTCOME_KIND:
             # The outcome is what the model learns: this click records it (the prescription reads the click as the
@@ -2489,24 +2489,47 @@ def answer(
     return _person_step(run, client_id, case_id, expected_version, op_id, build)
 
 
+def _untick_outcome_query(items: list[CaseItem], outcome: CaseItem) -> list[CaseItem]:
+    """`items` with the query step an outcome (Q24's rule over orders) ticked waiting again: an outcome that is set
+    aside must not leave the query that builds it from future orders in the plan."""
+    step = outcome_query(items, outcome)
+    if step is None or step.state is not ProposalState.ACCEPTED:
+        return items
+    waiting = step.model_copy(update={"state": ProposalState.PENDING, "decided_by": None, "decided_at": None})
+    return [waiting if i.item_id == step.item_id else i for i in items]
+
+
 def _the_outcome(
     items: list[CaseItem], goal_id: str | None, payload: Mapping[str, Any], actor: str, now: datetime
 ) -> list[CaseItem]:
-    """`items` with the goal's other outcomes set aside, and the query step that builds the new outcome's column
-    ticked by `actor`. `CaseError` when that step is gone or is not the one the person was shown."""
+    """`items` with the goal's other outcomes set aside (and the queries they ticked untick), and the query step
+    that builds the new outcome's column ticked by `actor`. `CaseError` when that step is gone or is not exactly
+    the one the person was shown (its digest covers the query, inputs, as-of date and `reads_future`)."""
     built = payload.get("outcome_sql")
-    out: list[CaseItem] = []
+    out = list(items)
     for item in items:
         if item.kind == OUTCOME_KIND and item.goal_id == goal_id and item.state is ProposalState.ACCEPTED:
-            item = item.model_copy(
-                update={"state": ProposalState.REJECTED, "decided_by": actor, "decided_at": now}
-            )
-        out.append(item)
+            out = _untick_outcome_query(out, item)
+            out = [
+                (
+                    i.model_copy(
+                        update={"state": ProposalState.REJECTED, "decided_by": actor, "decided_at": now}
+                    )
+                    if i.item_id == item.item_id
+                    else i
+                )
+                for i in out
+            ]
     if isinstance(built, str):
-        step = query_item(out, built)
-        if step is None or sql_hash(step_sql(step)) != payload.get("sql_hash"):
+        digest = payload.get("step_digest")
+        step = query_item(out, built, digest if isinstance(digest, str) else "")
+        if step is None:
             raise _unknown(
                 "The query that builds this outcome is not in the plan as you were shown it; ask for it again."
+            )
+        if other_changes(out, built):
+            raise _unknown(
+                "Untick the other join, stack or query first: the outcome query cannot sit beside them."
             )
         ticked = step.model_copy(
             update={"state": ProposalState.ACCEPTED, "decided_by": actor, "decided_at": now}
@@ -2580,9 +2603,11 @@ def decide(
         decided = item.model_copy(
             update={"state": state, "decided_by": actor, "decided_at": now, "parked_for": park_for}
         )
+        items = [decided if i.item_id == item_id else i for i in case.items]
+        items = _outcome_pair(item, accept, items, actor, now)
         return _Step(
             to=VisitState.TREAT if case.state in _AFTER_RECALL else case.state,
-            updates={"items": [decided if i.item_id == item_id else i for i in case.items]},
+            updates={"items": items},
             events=[
                 EventDraft(
                     kind=TimelineKind.ITEM_DECIDED,
@@ -2594,6 +2619,43 @@ def decide(
         )
 
     return _person_step(run, client_id, case_id, expected_version, op_id, build)
+
+
+def _outcome_pair(
+    item: CaseItem, accept: bool, items: list[CaseItem], actor: str, now: datetime
+) -> list[CaseItem]:
+    """An outcome Q24 recorded from a query and the query that builds it stand or fall together: unticking either
+    unticks both; the outcome is ticked again only by answering the question; and while it stands no other query is
+    ticked (the outcome query makes the table the model learns from)."""
+    if item.kind == OUTCOME_KIND and item.payload.get("outcome_sql"):
+        if accept:
+            raise _unknown("Answer the question about what counts as a yes again to choose this outcome.")
+        return _untick_outcome_query(items, item)
+    step = item.payload.get("step")
+    if not (isinstance(step, dict) and step.get("kind") == "sql_query"):
+        return items
+    standing = [
+        (outcome, outcome_query(items, outcome))
+        for outcome in items
+        if outcome.kind == OUTCOME_KIND
+        and outcome.state is ProposalState.ACCEPTED
+        and outcome.payload.get("outcome_sql")
+    ]
+    if accept:
+        if any(own is not None and own.item_id != item.item_id for _, own in standing):
+            raise _unknown(
+                "The outcome is built by a query: untick that outcome first to tick another query."
+            )
+        return items
+    aside = {o.item_id for o, own in standing if own is not None and own.item_id == item.item_id}
+    return [
+        (
+            i.model_copy(update={"state": ProposalState.REJECTED, "decided_by": actor, "decided_at": now})
+            if i.item_id in aside
+            else i
+        )
+        for i in items
+    ]
 
 
 def approve(

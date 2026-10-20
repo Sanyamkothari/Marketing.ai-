@@ -904,8 +904,9 @@ def test_a_guided_run_with_a_conversion_keeps_its_money_basis_with_the_switch_on
 # ---------------------------------------------------------------------------
 # What counts as a yes (Q24): the outcome a query step builds from another file
 # ---------------------------------------------------------------------------
+@pytest.mark.parametrize("capped", [False, True])
 def test_an_upload_trains_on_the_outcome_column_a_query_builds_from_the_orders_file(
-    api: tuple[TestClient, Path], unified: None
+    api: tuple[TestClient, Path], unified: None, monkeypatch: pytest.MonkeyPatch, capped: bool
 ) -> None:
     from tests.unit.doctor import visit_support as vs
 
@@ -978,6 +979,8 @@ def test_an_upload_trains_on_the_outcome_column_a_query_builds_from_the_orders_f
         basis=None,
     )
     bind_upload(storage, customers_id, ref)
+    if capped:
+        monkeypatch.setattr("api.routes.run_prescriptions.profile_row_cap", lambda _config: 2_000)
     response = client.post(
         "/runs",
         json={
@@ -988,6 +991,9 @@ def test_an_upload_trains_on_the_outcome_column_a_query_builds_from_the_orders_f
             "target": "is_sale",
         },
     )
+    if capped:  # the orders file has more rows than are read: the newest rows, the outcome, may be cut
+        assert response.status_code == 409 and response.json()["detail"]["code"] == "QUERY_INPUT_TOO_LARGE"
+        return
     assert response.status_code == 202, response.text
     run_id = response.json()["run_id"]
     prepared = _frame(storage, read_job_spec(storage, job_spec_key(run_id)).upload_key)

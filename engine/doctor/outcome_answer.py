@@ -28,6 +28,7 @@ from typing import TYPE_CHECKING, Any, Final
 
 import pandas as pd
 
+from engine.agent.contracts import ProposalState
 from engine.agent.sql_step import (
     THIS_TABLE,
     SqlStepError,
@@ -36,6 +37,7 @@ from engine.agent.sql_step import (
     run_sql,
     sql_params,
 )
+from engine.doctor.case import payload_digest
 from engine.doctor.outcome_definition import (
     OutcomeError,
     propose_value_map,
@@ -53,13 +55,14 @@ __all__ = [
     "OUTCOME_KIND",
     "OutcomeOffer",
     "column_offer",
+    "other_changes",
+    "outcome_query",
     "outcome_says",
     "query_item",
     "rule_tables",
     "rules_payload",
-    "sql_hash",
     "sql_offer",
-    "step_sql",
+    "step_digest",
 ]
 
 OUTCOME_ASK_CODE: Final[str] = "Q24_WHAT_COUNTS"
@@ -159,12 +162,10 @@ def column_offer(
     )
 
 
-def rules_payload(
-    frame: pd.DataFrame, column: str, upload_id: str, positive_label: Any = None
-) -> dict[str, Any]:
-    """What a chip of the rules' own outcome question records beyond the column: the value map the rules can place
-    (a value spelled like yes or no; nothing is guessed), its counts and its sentence. Nothing extra when a value
-    cannot be placed or the column is not a yes/no: the column alone is the outcome, as before."""
+def rules_payload(frame: pd.DataFrame, column: str, positive_label: Any = None) -> dict[str, Any]:
+    """What a chip of the rules' own outcome question records beyond the column: the counts and the sentence the
+    Ready card shows. Never a value map: the chip's outcome is the column, as it always was, so training does not
+    start to drop rows or stop on a new value. Nothing extra when the values cannot be read as yes and no."""
     try:
         found = propose_value_map(frame, column, positive_label=positive_label)
     except OutcomeError:
@@ -174,13 +175,7 @@ def rules_payload(
     counts = found.counts
     yes = [m.value for m in found.definition.map if m.meaning == "yes"]
     says = _says(f"“{column}” = {' or '.join(yes)} is a yes", counts.yes + counts.no, counts.yes)
-    return {
-        "definition": found.definition.model_dump(mode="json"),
-        "says": says,
-        "counts": _counts(counts.yes + counts.no, counts.yes, counts.no),
-        "upload_id": upload_id,
-        "column": column,
-    }
+    return {"says": says, "counts": _counts(counts.yes + counts.no, counts.yes, counts.no)}
 
 
 # ---------------------------------------------------------------------------
@@ -206,15 +201,24 @@ def sql_offer(
     key: str,
     *,
     rule: str,
+    items: Sequence[CaseItem] = (),
 ) -> OutcomeOffer:
     """The offer of a query step (its recipe-step dump) whose table has the 0/1 `column` on `customers`.
 
     Run again here on the whole files the case holds. Refused (`OutcomeError`) unless: the query states an as-of
     date; its table has one row per customer, the ID and the column; the column is only 0 and 1 with both present;
-    and the rows dated after the as-of date change nothing but that column.
+    the rows dated after the as-of date change nothing but that column; and the case has no other ticked build or
+    query (this query reads the files by name and its table is the one the model learns from).
     """
     if step.get("kind") != "sql_query":
         raise OutcomeError("OUTCOME_CANNOT_MEASURE", "The outcome of a rule is built by one query step.")
+    name = (step.get("params") or {}).get("output_name")
+    if other_changes(items, str(name)):
+        raise OutcomeError(
+            "OUTCOME_QUERY_ALONE",
+            "This case already has a ticked join, stack or query. The outcome query makes the table the model "
+            "learns from, so it cannot sit beside them: untick them first, or use a column the file has.",
+        )
     try:
         params = sql_params(step.get("params") or {})
         tables = rule_tables(files)
@@ -294,7 +298,7 @@ def sql_offer(
         "says": says,
         "counts": _counts(len(table), yes, no),
         "outcome_sql": params.output_name,
-        "sql_hash": sql_hash(params.sql),
+        "step_digest": step_digest(step),
     }
     return OutcomeOffer(
         label=_label(says, yes, len(table)),
@@ -309,45 +313,76 @@ def sql_offer(
 
 def _alone_decides(table: pd.DataFrame, column: str, key: str, outcome: pd.Series[Any]) -> str | None:
     """A number column that separates every yes from every no by itself (a rank AUC of 1 either way): the rule
-    was written on it, and leaving it in the table lets the model read the answer off it."""
-    yes = outcome == 1
-    n1, n0 = int(yes.sum()), int((~yes).sum())
+    was written on it, and leaving it in the table lets the model read the answer off it. Read on the rows the
+    column has a value for (when it has gaps, only with 20 rows or more and both a yes and a no among them).
+    """
     for name in table.columns:
         if name in (key, column):
             continue
         numbers = pd.to_numeric(table[name], errors="coerce")
-        if numbers.isna().any() or numbers.nunique() < 2:
+        known = numbers.notna()
+        if numbers[known].nunique() < 2 or (not known.all() and int(known.sum()) < 20):
             continue
-        ranks = numbers.rank()
+        yes = (outcome == 1)[known]
+        n1, n0 = int(yes.sum()), int((~yes).sum())
+        if not n1 or not n0:
+            continue
+        ranks = numbers[known].rank()
         auc = (float(ranks[yes].sum()) - n1 * (n1 + 1) / 2) / (n1 * n0)
         if auc >= 0.999 or auc <= 0.001:
             return str(name)
     return None
 
 
-def sql_hash(sql: str) -> str:
-    import hashlib
+def step_digest(step: Mapping[str, Any]) -> str:
+    """A digest of the whole step (the query, its inputs, name, as-of date and rule, `reads_future`, description):
+    what the person is shown is this exact step, and the click ticks only a step with this digest."""
+    import json
 
-    return hashlib.sha256(" ".join(sql.split()).encode()).hexdigest()[:16]
+    return payload_digest(json.loads(json.dumps(step, default=str)))
 
 
-def step_sql(item: CaseItem) -> str:
-    """The query text of a query-step item ("" when it is not one)."""
+def _step_of(item: CaseItem) -> dict[str, Any] | None:
     step = item.payload.get("step")
-    params = step.get("params") if isinstance(step, dict) else None
-    return str(params.get("sql", "")) if isinstance(params, dict) else ""
+    return step if isinstance(step, dict) and step.get("kind") == "sql_query" else None
 
 
-def query_item(items: Sequence[CaseItem], output_name: str) -> CaseItem | None:
-    """The newest query-step item of the case that makes the table `output_name`."""
+def _output_name(step: Mapping[str, Any]) -> object:
+    params = step.get("params")
+    return params.get("output_name") if isinstance(params, dict) else None
+
+
+def query_item(items: Sequence[CaseItem], output_name: str, digest: str | None = None) -> CaseItem | None:
+    """The newest query-step item of the case that makes the table `output_name` (and, with `digest`, is exactly
+    the step with that digest)."""
     found: CaseItem | None = None
     for item in items:
-        step = item.payload.get("step")
+        step = _step_of(item)
         if (
-            isinstance(step, dict)
-            and step.get("kind") == "sql_query"
-            and isinstance(params := step.get("params"), dict)
-            and params.get("output_name") == output_name
+            step is not None
+            and _output_name(step) == output_name
+            and (digest is None or step_digest(step) == digest)
         ):
             found = item
     return found
+
+
+def outcome_query(items: Sequence[CaseItem], outcome: CaseItem) -> CaseItem | None:
+    """The query-step item an outcome item (Q24's rule over orders) ticked, or None when it is a column's outcome."""
+    name, digest = outcome.payload.get("outcome_sql"), outcome.payload.get("step_digest")
+    if not isinstance(name, str) or not isinstance(digest, str):
+        return None
+    return query_item(items, name, digest)
+
+
+def other_changes(items: Sequence[CaseItem], output_name: str) -> bool:
+    """Whether a ticked join, stack or query other than the query `output_name` is in `items`."""
+    for item in items:
+        if item.state is not ProposalState.ACCEPTED:
+            continue
+        step = _step_of(item)
+        if step is not None and _output_name(step) != output_name:
+            return True
+        if isinstance(item.payload.get("build_record"), dict):
+            return True
+    return False
