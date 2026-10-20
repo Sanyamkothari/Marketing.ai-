@@ -5,7 +5,11 @@ marketer app (ui/v2) served at `/v2/app` when that folder exists. Wave 2 mounts 
 in `api/main.py` instead (with `attach_services`), so nothing here is needed in production.
 
     python -m api.v2.app                    # the demo API on http://127.0.0.1:8010
+    python -m api.v2.app --fake             # the same on the small fake-world demo (starts faster)
     python -m api.v2.app --openapi          # rewrite docs/v2/openapi.json and exit
+
+The demo is a Gym shop run by the whole system (`autonomy.runtime.demo.run_demo`) for `--days`
+simulated days, ending at today's 09:00 UTC sweep; `POST /v2/runtime/tick` keeps it running.
 """
 
 from __future__ import annotations
@@ -33,6 +37,12 @@ OPENAPI_PATH = REPO_ROOT / "docs" / "v2" / "openapi.json"
 LOCAL_ORIGINS = r"https?://(localhost|127\.0\.0\.1)(:\d+)?"
 """Pages served from this machine on any port; the UI's own dev server is one of them."""
 DEFAULT_PORT = 8010
+FAKE_CUSTOMERS = 200
+FAKE_DAYS = 7
+DEMO_CUSTOMERS = 1000
+DEMO_DAYS = 30
+"""Enough customers and days for outcome windows to close and every proof group to pass its minimum
+size, so the proof page shows numbers. Simulating it takes about half a minute."""
 SCHEMA_NOW = datetime(2026, 1, 1, tzinfo=UTC)
 """The demo's "now" when it is built only to print the schema (the schema does not depend on it)."""
 
@@ -43,7 +53,10 @@ def create_app(
     app = FastAPI(
         title="Autonomy API",
         version="2.0.0",
-        description="The v2 marketer app's API: goals, plans, approvals, decisions, proof and webhooks.",
+        description=(
+            "The v2 marketer app's API: goals, plans, approvals, batches, decisions, proof, webhooks "
+            "and the operator's runtime tick."
+        ),
     )
     attach_services(app, services)
     app.add_exception_handler(RequestValidationError, _validation_error)
@@ -97,6 +110,9 @@ def main(argv: Sequence[str] | None = None) -> None:
     parser.add_argument(
         "--openapi", nargs="?", const=str(OPENAPI_PATH), help="write the OpenAPI schema here and exit"
     )
+    parser.add_argument("--fake", action="store_true", help="serve the small fake-world demo instead")
+    parser.add_argument("--customers", type=int, help=f"simulated customers (default {DEMO_CUSTOMERS})")
+    parser.add_argument("--days", type=int, help=f"simulated days of history (default {DEMO_DAYS})")
     args = parser.parse_args(argv)
     if args.openapi:
         export_openapi(Path(args.openapi))
@@ -107,7 +123,14 @@ def main(argv: Sequence[str] | None = None) -> None:
 
     # The edge of the system: the one place the demo reads the clock.
     now = datetime.now(UTC)
-    services = build_demo_services(now, clock=lambda: datetime.now(UTC))
+    # The fake-world demo keeps its own small defaults unless sizes are given.
+    customers: int = args.customers or (FAKE_CUSTOMERS if args.fake else DEMO_CUSTOMERS)
+    days: int = args.days or (FAKE_DAYS if args.fake else DEMO_DAYS)
+    if not args.fake:
+        print(f"simulating {customers:,} customers over {days} days; this takes a little while ...")
+    services = build_demo_services(
+        now, n_customers=customers, days=days, clock=lambda: datetime.now(UTC), simulation=not args.fake
+    )
     uvicorn.run(create_app(services), host=args.host, port=args.port)
 
 

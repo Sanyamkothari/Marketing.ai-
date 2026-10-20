@@ -7,7 +7,13 @@ HTTP server and Wave 2 can swap the in-memory stores for Postgres without touchi
 
 `build_demo_services(now)` wires the fakes from `autonomy.fakes` (stores, a sample goal, an
 approved brief, a content library) and runs a week of a simulated shop through the reference loop,
-so every endpoint returns real-looking data with no external services.
+so every endpoint returns real-looking data with no external services. With `simulation=True` it
+instead seeds from `autonomy.runtime.demo.run_demo` (a Gym shop run by the whole system, with
+agents, batches and briefings) and keeps a runtime attached, so `POST /v2/runtime/tick` works.
+
+`build_services_from_runtime(runtime, clock=...)` is the production wiring: the routes read the
+runtime's SQL stores, batches are the runtime's `BatchStore`, and proof, health and opportunities
+are computed from the stores on request (`StoreReadModels`).
 
 Time is passed in: `Services.clock` is the only place "now" comes from, and the demo fixes it.
 """
@@ -16,11 +22,12 @@ from __future__ import annotations
 
 import math
 import statistics
+import threading
 from collections import Counter, defaultdict
-from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
-from datetime import datetime, timedelta
-from typing import TypeAlias
+from collections.abc import Callable, Iterable, Mapping, Sequence
+from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING, Any, Protocol, TypeAlias
 
 from starlette.applications import Starlette
 from starlette.requests import Request
@@ -31,6 +38,8 @@ from autonomy.contracts import (
     Audience,
     AudienceFilter,
     AutonomyLevel,
+    Batch,
+    BatchStatus,
     Brief,
     Briefing,
     BriefingSection,
@@ -71,6 +80,11 @@ from autonomy.fakes.samples import sample_brief, sample_content, sample_goal
 from autonomy.interfaces import ChannelAdapter, DecisionLog, EventStore, StateFolder, StateStore, Workspace
 from autonomy.loop import run_days
 
+if TYPE_CHECKING:  # imported lazily below, so `import api.v2.deps` stays light
+    from autonomy.proof import Costs
+    from autonomy.runtime.batches import BatchStore
+    from autonomy.runtime.service import AutonomyRuntime
+
 ProofProvider: TypeAlias = Callable[[str | None], ProofSummary | None]
 """goal_id (None: the whole programme) -> the proof so far, or None when there is none yet."""
 BriefingProvider: TypeAlias = Callable[[str | None], Briefing | None]
@@ -82,6 +96,27 @@ Strategist: TypeAlias = Callable[[Goal], Brief]
 Ingest: TypeAlias = Callable[[Sequence[Event]], int]
 """Store events (and fold them into state); return how many were new."""
 Clock: TypeAlias = Callable[[], datetime]
+
+
+class TickOutcome(Protocol):
+    """What one runtime tick reports. `autonomy.runtime.service.TickReport` is one."""
+
+    @property
+    def alerts(self) -> Sequence[Alert]: ...
+
+    @property
+    def briefings(self) -> Sequence[Briefing]: ...
+
+    def summary(self) -> dict[str, Any]:
+        """Counts plus the new batches and alerts in full, JSON-ready (see `TickResult` in routes)."""
+        ...
+
+
+class Runtime(Protocol):
+    """The part of `AutonomyRuntime` the API drives: one tick at a given time."""
+
+    def tick(self, now: datetime) -> TickOutcome: ...
+
 
 SERVICES_STATE_KEY = "v2_services"
 """Where `attach_services()` puts the container on `app.state`, and `get_services()` finds it."""
@@ -114,6 +149,10 @@ class NotFoundError(ServiceError):
     status_code = 404
 
 
+class ForbiddenError(ServiceError):
+    status_code = 403
+
+
 class ConflictError(ServiceError):
     status_code = 409
 
@@ -139,6 +178,14 @@ class Services:
     ingest: Ingest
     clock: Clock
     business_id: str = "demo"
+    batch_store: BatchStore | None = None
+    """Decisions held for a person (goals at APPROVE). None: there are no batches to show."""
+    runtime: Runtime | None = None
+    """The runtime `POST /v2/runtime/tick` drives. None: the endpoint answers 404."""
+    allow_tick: bool = False
+    """Whether the operator tick endpoint may run. Only the demo and operator setups turn it on;
+    in production the worker ticks on its own schedule."""
+    _tick_lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False, compare=False)
 
     # goals and briefs ---------------------------------------------------------------------------
 
@@ -283,6 +330,59 @@ class Services:
         )
         events = sorted(self.events.for_customer(customer_id), key=lambda e: (e.ts, e.event_id), reverse=True)
         return state, decisions[:TIMELINE_LIMIT], events[:TIMELINE_LIMIT]
+
+    # batches ------------------------------------------------------------------------------------
+
+    def list_batches(self, goal_id: str | None = None, status: BatchStatus | None = None) -> list[Batch]:
+        """Newest first, like every other list here. An unknown goal is a 404, not an empty list."""
+        if goal_id is not None:
+            self.get_goal(goal_id)
+        if self.batch_store is None:
+            return []
+        statuses = (status,) if status is not None else None
+        rows = self.batch_store.list_batches(goal_id=goal_id, statuses=statuses)
+        return sorted(rows, key=lambda b: (b.created_at, b.batch_id), reverse=True)
+
+    def approve_batch(self, batch_id: str) -> Batch:
+        """A person signs off a pending batch; the runtime sends it on its next tick."""
+        from autonomy.runtime.batches import approve
+
+        return self._move_batch(batch_id, approve)
+
+    def reject_batch(self, batch_id: str) -> Batch:
+        """A person turns a pending batch down; nothing in it is ever sent."""
+        from autonomy.runtime.batches import reject
+
+        return self._move_batch(batch_id, reject)
+
+    def _move_batch(self, batch_id: str, move: Callable[..., Batch]) -> Batch:
+        from autonomy.runtime.batches import BatchTransitionError, UnknownBatchError
+
+        if self.batch_store is None:
+            raise NotFoundError(f"no batch {batch_id!r}")
+        try:
+            return move(self.batch_store, batch_id, by=APPROVER, now=self.clock())
+        except UnknownBatchError as exc:
+            raise NotFoundError(f"no batch {batch_id!r}") from exc
+        except BatchTransitionError as exc:  # already decided, sent or expired
+            raise ConflictError(str(exc)) from exc
+
+    # the operator tick --------------------------------------------------------------------------
+
+    def tick(self, now: datetime | None = None) -> dict[str, Any]:
+        """Run one runtime tick at `now` (default: the clock) and return its summary.
+
+        Ticks are serialised: the runtime keeps a cursor, and two ticks at once would race on it.
+        """
+        if self.runtime is None:
+            raise NotFoundError("this API has no runtime to tick")
+        if not self.allow_tick:
+            raise ForbiddenError("ticking by hand is turned off here; the worker ticks on its schedule")
+        at = self.clock() if now is None else now
+        if at.tzinfo is None or at.utcoffset() is None:
+            raise BadRequestError("now must include a time zone")
+        with self._tick_lock:
+            return self.runtime.tick(at).summary()
 
     # webhooks -----------------------------------------------------------------------------------
 
@@ -637,34 +737,45 @@ class _DemoReadModels:
 
     def opportunities(self) -> list[Goal]:
         """Goals the agent would suggest, sized from customer state. Drafts: nothing runs until approved."""
-        states = list(self.states.scan())
-        ideas = [
-            (
-                "opp_repeat_purchase",
-                GoalKind.REPEAT_PURCHASE,
-                sum(1 for s in states if s.purchases == 1),
-                "Turn {n} one-time buyers into repeat customers",
-            ),
-            (
-                "opp_onboarding",
-                GoalKind.ONBOARDING,
-                sum(1 for s in states if s.purchases == 0),
-                "Get {n} customers who signed up but never bought to a first purchase",
-            ),
-        ]
-        return [
-            Goal(
-                goal_id=goal_id,
-                business_id=self.business_id,
-                text=text.format(n=n),
-                kind=kind,
-                budget=1000,
-                starts_at=self.now,
-                created_at=self.now,
-            )
-            for goal_id, kind, n, text in ideas
-            if n > 0
-        ]
+        return suggest_opportunities(self.states.scan(), self.business_id, self.now)
+
+
+def suggest_opportunities(
+    states: Iterable[CustomerState],
+    business_id: str,
+    now: datetime,
+    *,
+    taken: frozenset[GoalKind] = frozenset(),
+) -> list[Goal]:
+    """Draft goals sized from customer state; kinds in `taken` (already being worked on) are left out."""
+    rows = list(states)
+    ideas = [
+        (
+            "opp_repeat_purchase",
+            GoalKind.REPEAT_PURCHASE,
+            sum(1 for s in rows if s.purchases == 1),
+            "Turn {n} one-time buyers into repeat customers",
+        ),
+        (
+            "opp_onboarding",
+            GoalKind.ONBOARDING,
+            sum(1 for s in rows if s.purchases == 0),
+            "Get {n} customers who signed up but never bought to a first purchase",
+        ),
+    ]
+    return [
+        Goal(
+            goal_id=goal_id,
+            business_id=business_id,
+            text=text.format(n=n),
+            kind=kind,
+            budget=1000,
+            starts_at=now,
+            created_at=now,
+        )
+        for goal_id, kind, n, text in ideas
+        if n > 0 and kind not in taken
+    ]
 
 
 def _rate(numerator: int, denominator: int) -> float | None:
@@ -706,14 +817,26 @@ def build_demo_services(
     days: int = 7,
     seed: int = 7,
     clock: Clock | None = None,
+    simulation: bool = False,
+    scenario: str = "baseline_shop",
 ) -> Services:
     """In-memory services with a goal, an approved brief, content and `days` of simulated history.
 
     The simulated week ends at `now`. `clock` is what new goals and approvals are stamped with;
     it defaults to `now`, so the demo is the same on every run.
+
+    `simulation=True` seeds from the whole system instead (`simulated_demo_services`): a Gym shop
+    with two goals, agents, batches and briefings, and a runtime the tick endpoint drives. When
+    that is not installed, it falls back to the simple fake-world demo below.
     """
     if now.tzinfo is None:
         raise ValueError("pass a timezone-aware now")
+    if simulation:
+        simulated = simulated_demo_services(
+            now, n_customers=n_customers, days=days, seed=seed, clock=clock, scenario=scenario
+        )
+        if simulated is not None:
+            return simulated
     start = now - timedelta(days=days)
     workspace = InMemoryWorkspace()
     events = InMemoryEventStore()
@@ -771,4 +894,295 @@ def build_demo_services(
         ingest=make_ingest(events, states, folder),
         clock=clock if clock is not None else (lambda: now),
         business_id=goal.business_id,
+    )
+
+
+# --- services over a real runtime ---------------------------------------------------------------------
+
+DEFAULT_HORIZON_DAYS = 14
+"""The outcome window the proof uses when no brief says otherwise."""
+HEALTH_WINDOW = timedelta(days=7)
+ALERTS_LIMIT = 200
+"""The most alerts `/v2/alerts` returns (newest first)."""
+_TICK = timedelta(microseconds=1)
+"""Store scans exclude `until`; adding this makes them include it."""
+
+
+@dataclass
+class StoreReadModels:
+    """Proof, briefing, health, alerts and opportunities read from the stores on each request.
+
+    Proof is computed the way the Gym and the demo compute it (`autonomy.proof`): decisions whose
+    outcome window has closed by now, last-touch rewards, agent vs holdout and vs baseline. Alerts
+    and briefings are not in any store yet, so they are kept here: seeded by the caller, and
+    appended to by every tick the API runs (`record`).
+    """
+
+    workspace: Workspace
+    events: EventStore
+    states: StateStore
+    decisions: DecisionLog
+    clock: Clock
+    business_id: str
+    costs: Costs | None = None
+    """Channel and offer costs for the proof; by default `SEND_COST` and the briefs' offer costs."""
+    alerts_log: list[Alert] = field(default_factory=list)
+    briefings_log: list[Briefing] = field(default_factory=list)
+    notes: tuple[str, ...] = ()
+    """Added to every proof summary, e.g. that the data is simulated."""
+    seed: int = 0
+
+    def record(self, report: TickOutcome) -> None:
+        self.alerts_log.extend(report.alerts)
+        self.briefings_log.extend(report.briefings)
+
+    def proof(self, goal_id: str | None) -> ProofSummary | None:
+        from autonomy.proof import Costs, proof_rewards, proof_summary
+
+        now = self.clock()
+        briefs = self.workspace.briefs()
+        objective = Objective.GROSS_PROFIT
+        if goal_id is not None:
+            goal = next((g for g in self.workspace.goals() if g.goal_id == goal_id), None)
+            if goal is None:
+                return None
+            objective = goal.objective
+            briefs = [b for b in briefs if b.goal_id == goal_id]
+        if next(self.decisions.scan(until=now + _TICK), None) is None:
+            return None
+        horizon = max((b.horizon_days for b in briefs), default=DEFAULT_HORIZON_DAYS)
+        cutoff = now - timedelta(days=horizon)
+        closed = [d for d in self.decisions.scan(until=cutoff + _TICK) if d.made_at <= cutoff]
+        by_customer = {
+            c: self.events.for_customer(c, until=now) for c in sorted({d.customer_id for d in closed})
+        }
+        costs = self.costs or Costs(
+            channel=SEND_COST,
+            offer={o.offer_id: o.cost_per_redemption for b in briefs for o in b.envelope.offers},
+        )
+        rewards = proof_rewards(closed, by_customer, horizon, objective, costs, now=now)
+        summary = proof_summary(rewards, closed, now, goal_id, seed=self.seed)
+        if not closed:
+            wait = f"Outcomes count once a decision's {horizon}-day window has closed; none has yet."
+            summary = summary.model_copy(update={"notes": (*summary.notes, wait)})
+        if self.notes:
+            summary = summary.model_copy(update={"notes": (*summary.notes, *self.notes)})
+        return summary
+
+    def briefing(self, goal_id: str | None) -> Briefing | None:
+        """The newest briefing for exactly this goal (None: the programme-wide one)."""
+        mine = [b for b in self.briefings_log if b.goal_id == goal_id]
+        return max(mine, key=lambda b: (b.as_of, b.briefing_id)) if mine else None
+
+    def alerts(self) -> list[Alert]:
+        """Newest first, each alert once (a tick repeated at the same time raises the same ids)."""
+        unique = {a.alert_id: a for a in self.alerts_log}
+        return sorted(unique.values(), key=lambda a: (a.at, a.alert_id), reverse=True)[:ALERTS_LIMIT]
+
+    def health(self) -> HealthStatus:
+        now = self.clock()
+        # `until` is exclusive; what happened at this very instant (a tick's sends) counts.
+        counts = Counter(e.type for e in self.events.scan(since=now - HEALTH_WINDOW, until=now + _TICK))
+        sends, delivers = counts[EventType.SEND], counts[EventType.DELIVER]
+        return HealthStatus(
+            as_of=now,
+            delivery_rate=_rate(delivers, sends),
+            complaint_rate=_rate(counts[EventType.COMPLAINT], delivers),
+            unsubscribe_rate=_rate(counts[EventType.UNSUBSCRIBE], delivers),
+            block_rate=_rate(counts[EventType.BLOCK], delivers),
+            contacts_per_customer_week=_rate(sends, self.states.count()),
+            alerts=tuple(self.alerts()),
+        )
+
+    def opportunities(self) -> list[Goal]:
+        """Suggestions for kinds of goal nobody is working on yet."""
+        taken = frozenset(g.kind for g in self.workspace.goals() if g.status is not GoalStatus.DONE)
+        return suggest_opportunities(self.states.scan(), self.business_id, self.clock(), taken=taken)
+
+
+@dataclass
+class _RecordingRuntime:
+    """Ticks the runtime and keeps what each tick said (alerts, briefings) for the read endpoints."""
+
+    inner: Runtime
+    reads: StoreReadModels
+
+    def tick(self, now: datetime) -> TickOutcome:
+        report = self.inner.tick(now)
+        self.reads.record(report)
+        return report
+
+
+def build_services_from_runtime(
+    runtime: AutonomyRuntime,
+    *,
+    clock: Clock,
+    business_id: str = "default",
+    strategist: Strategist = template_strategist,
+    costs: Costs | None = None,
+    adapters: Mapping[Channel, ChannelAdapter] | None = None,
+    alerts: Sequence[Alert] = (),
+    briefings: Sequence[Briefing] = (),
+    notes: Sequence[str] = (),
+    allow_tick: bool = False,
+    seed: int = 0,
+) -> Services:
+    """Services over a running `AutonomyRuntime` and its stores (SQL in production).
+
+    The API and the runtime share every store, so a goal approved here is what the next tick
+    reads, and a batch approved here is what it sends. Webhooks only append their events: the
+    runtime folds them into state on its next tick, as the worker's webhook handler does, so a
+    callback is never folded twice. `adapters` defaults to the dispatcher's.
+    """
+    reads = StoreReadModels(
+        workspace=runtime.workspace,
+        events=runtime.events,
+        states=runtime.states,
+        decisions=runtime.decisions,
+        clock=clock,
+        business_id=business_id,
+        costs=costs,
+        alerts_log=list(alerts),
+        briefings_log=list(briefings),
+        notes=tuple(notes),
+        seed=seed,
+    )
+    if adapters is None:
+        adapters = dict(runtime.dispatcher.adapters) if runtime.dispatcher is not None else {}
+    events = runtime.events
+
+    def ingest(batch: Sequence[Event]) -> int:
+        return events.append(batch)
+
+    return Services(
+        workspace=runtime.workspace,
+        events=runtime.events,
+        states=runtime.states,
+        decisions=runtime.decisions,
+        proof=reads.proof,
+        briefing=reads.briefing,
+        health=reads.health,
+        alerts=reads.alerts,
+        opportunities=reads.opportunities,
+        strategist=strategist,
+        adapters=adapters,
+        ingest=ingest,
+        clock=clock,
+        business_id=business_id,
+        batch_store=runtime.batches,
+        runtime=_RecordingRuntime(runtime, reads),
+        allow_tick=allow_tick,
+    )
+
+
+# --- the simulation-backed demo -----------------------------------------------------------------------
+
+SIMULATION_NOTE = "Demo data from a simulated shop, not your customers."
+
+
+def _demo_address(customer_id: str, channel: Channel) -> str:
+    return f"{customer_id}.{channel.value}@customers.demo.invalid"
+
+
+def simulated_demo_services(
+    now: datetime,
+    *,
+    n_customers: int = 200,
+    days: int = 7,
+    seed: int = 7,
+    clock: Clock | None = None,
+    scenario: str = "baseline_shop",
+) -> Services | None:
+    """A Gym shop run by the whole system for `days` days (`autonomy.runtime.demo.run_demo`), served.
+
+    The simulation ends at the last daily sweep (09:00 UTC) at or before `now`. The API then keeps
+    a runtime over the same stores, with the tick endpoint turned on: each tick decides, holds the
+    APPROVE goal's contacts in a pending batch for the marketer, and sends the rest through fake
+    channels. The Gym world itself is not kept, so messages sent after the simulation get no
+    replies or purchases. Returns None when the runtime or the Gym is not installed.
+    """
+    try:
+        from autonomy.channels.dispatcher import Dispatcher
+        from autonomy.data import StateFolder as ProductionFolder
+        from autonomy.gym import GYM_OFFERS, get_scenario
+        from autonomy.proof import Costs, group_assigner
+        from autonomy.runtime.demo import (
+            BUSINESS_ID,
+            DECIDE_HOUR,
+            PLAN_DAYS,
+            SpendTrackingEventStore,
+            policy_factory,
+            run_demo,
+        )
+        from autonomy.runtime.service import AutonomyRuntime, RuntimeConfig, standard_breakers
+    except ImportError:
+        return None
+    if days < 1:
+        raise ValueError("days must be at least 1")
+    utc_now = now.astimezone(UTC)
+    end = utc_now.replace(hour=DECIDE_HOUR, minute=0, second=0, microsecond=0)
+    if end > utc_now:
+        end -= timedelta(days=1)
+    result = run_demo(scenario, days=days, customers=n_customers, seed=seed, start=end - timedelta(days=days))
+    st = result.stores
+    spec = get_scenario(scenario, n_customers=n_customers, days=days, seed=seed)
+    costs = Costs(
+        channel=dict(spec.channel_cost),
+        offer={o.offer_id: o.cost_per_redemption for o in GYM_OFFERS},
+        margin_rate=spec.margin_rate,
+    )
+    adapters: dict[Channel, ChannelAdapter] = {
+        ch: FakeChannelAdapter(ch, secret=DEMO_SECRET) for ch in (Channel.EMAIL, Channel.WHATSAPP)
+    }
+    # A goal's budget is a hard limit: carry the simulation's spend over (the tracker only counts
+    # SENDs appended through it), so ticks after the simulation see what is left, and keep the
+    # circuit breakers (spend pace included) the simulation ran with.
+    events = SpendTrackingEventStore(st.events, costs.channel)
+    for e in st.events.scan():
+        goal_of = e.attrs.get("goal_id")
+        if e.type is EventType.SEND and e.channel is not None and isinstance(goal_of, str):
+            events.spend[goal_of] += float(costs.channel.get(e.channel, 0.0))
+    budgets = {g.goal_id: g.budget for g in result.goals}
+    sim_start = result.start
+
+    def spend(goal_id: str, now: datetime) -> float:  # noqa: ARG001
+        return events.spend.get(goal_id, 0.0)
+
+    def planned(goal_id: str, now: datetime) -> float:
+        elapsed = max(0.0, (now - sim_start) / timedelta(days=1))
+        return budgets.get(goal_id, 0.0) * min(1.0, elapsed / PLAN_DAYS)
+
+    runtime = AutonomyRuntime(
+        events=events,
+        states=st.states,
+        decisions=st.decisions,
+        workspace=st.workspace,
+        folder=ProductionFolder(),
+        policy_factory=policy_factory({g.goal_id: g.kind for g in result.goals}, costs),
+        queue=st.queue,
+        dispatcher=Dispatcher(adapters, _demo_address, st.workspace, events, st.queue),
+        batches=st.batches,
+        breakers_fn=standard_breakers(spend_fn=spend, planned_fn=planned),
+        spend_fn=spend,
+        assign_group=group_assigner(BUSINESS_ID, envelope=result.briefs[0].envelope),
+        config=RuntimeConfig(sweep_hour=DECIDE_HOUR, seed=seed, worker="demo-api", nightly_rebuild=False),
+    )
+    demo_alert = Alert(
+        alert_id=stable_id("alert", "demo_data", result.end.isoformat()),
+        at=result.end,
+        severity="info",
+        code="demo_data",
+        message="You are looking at demo data from a shop simulated by the Autonomy Gym.",
+    )
+    return build_services_from_runtime(
+        runtime,
+        clock=clock if clock is not None else (lambda: now),
+        business_id=BUSINESS_ID,
+        costs=costs,
+        adapters=adapters,
+        alerts=[demo_alert, *result.alerts],
+        briefings=result.briefings,
+        notes=(SIMULATION_NOTE,),
+        allow_tick=True,
+        seed=seed,
     )

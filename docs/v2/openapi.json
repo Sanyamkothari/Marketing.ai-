@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Autonomy API",
-    "description": "The v2 marketer app's API: goals, plans, approvals, decisions, proof and webhooks.",
+    "description": "The v2 marketer app's API: goals, plans, approvals, batches, decisions, proof, webhooks and the operator's runtime tick.",
     "version": "2.0.0"
   },
   "paths": {
@@ -668,6 +668,211 @@
         }
       }
     },
+    "/v2/batches": {
+      "get": {
+        "tags": [
+          "v2"
+        ],
+        "summary": "List Batches",
+        "description": "Contacts held for a person to sign off, newest first; filter by goal and status.",
+        "operationId": "list_batches_v2_batches_get",
+        "parameters": [
+          {
+            "name": "goal_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Goal Id"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/BatchStatus"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Batch"
+                  },
+                  "title": "Response List Batches V2 Batches Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/batches/{batch_id}/approve": {
+      "post": {
+        "tags": [
+          "v2"
+        ],
+        "summary": "Approve Batch",
+        "description": "Approve a pending batch; the runtime sends it on its next tick. 409 if it is no longer pending.",
+        "operationId": "approve_batch_v2_batches__batch_id__approve_post",
+        "parameters": [
+          {
+            "name": "batch_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Batch Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Batch"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/batches/{batch_id}/reject": {
+      "post": {
+        "tags": [
+          "v2"
+        ],
+        "summary": "Reject Batch",
+        "description": "Reject a pending batch; nothing in it is sent. 409 if it is no longer pending.",
+        "operationId": "reject_batch_v2_batches__batch_id__reject_post",
+        "parameters": [
+          {
+            "name": "batch_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Batch Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Batch"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/runtime/tick": {
+      "post": {
+        "tags": [
+          "v2"
+        ],
+        "summary": "Run Tick",
+        "description": "Run one tick of the runtime now (or at `now`). 404 without a runtime, 403 where it is turned off.",
+        "operationId": "run_tick_v2_runtime_tick_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/TickRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TickResult"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v2/webhooks/{channel}": {
       "post": {
         "tags": [
@@ -923,6 +1128,101 @@
           "autopilot"
         ],
         "title": "AutonomyLevel"
+      },
+      "Batch": {
+        "properties": {
+          "batch_id": {
+            "type": "string",
+            "title": "Batch Id"
+          },
+          "goal_id": {
+            "type": "string",
+            "title": "Goal Id"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "decision_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Decision Ids"
+          },
+          "n_contacts": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "N Contacts"
+          },
+          "expected_net": {
+            "type": "number",
+            "title": "Expected Net",
+            "description": "Sum of the decisions' expected_net",
+            "default": 0.0
+          },
+          "expected_spend": {
+            "type": "number",
+            "minimum": 0.0,
+            "title": "Expected Spend",
+            "default": 0.0
+          },
+          "summary": {
+            "type": "string",
+            "title": "Summary",
+            "description": "One plain sentence: who, which channels, which offers",
+            "default": ""
+          },
+          "status": {
+            "$ref": "#/components/schemas/BatchStatus",
+            "default": "pending"
+          },
+          "decided_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decided By"
+          },
+          "decided_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decided At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "batch_id",
+          "goal_id",
+          "created_at",
+          "decision_ids",
+          "n_contacts"
+        ],
+        "title": "Batch",
+        "description": "One goal's ACT decisions from one sweep, held for a person when the goal is at APPROVE level."
+      },
+      "BatchStatus": {
+        "type": "string",
+        "enum": [
+          "pending",
+          "approved",
+          "rejected",
+          "sent"
+        ],
+        "title": "BatchStatus"
       },
       "Bid": {
         "properties": {
@@ -2632,6 +2932,142 @@
           "personal"
         ],
         "title": "Theme"
+      },
+      "TickRequest": {
+        "properties": {
+          "now": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Now",
+            "description": "When the tick runs; the API's clock if absent"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "TickRequest"
+      },
+      "TickResult": {
+        "properties": {
+          "now": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Now"
+          },
+          "decisions": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Decisions",
+            "description": "Decisions made (contact or leave alone)"
+          },
+          "acts": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Acts",
+            "description": "Of those, decisions to contact someone",
+            "default": 0
+          },
+          "sent": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Sent",
+            "description": "Messages handed to a channel"
+          },
+          "queued": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Queued",
+            "description": "Messages queued for a later send time",
+            "default": 0
+          },
+          "failed": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Failed",
+            "default": 0
+          },
+          "events_folded": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Events Folded",
+            "default": 0
+          },
+          "batches": {
+            "items": {
+              "$ref": "#/components/schemas/Batch"
+            },
+            "type": "array",
+            "title": "Batches",
+            "description": "Batches created by this tick, waiting for a person"
+          },
+          "batches_sent": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Batches Sent",
+            "description": "Ids of approved batches sent"
+          },
+          "batches_expired": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Batches Expired"
+          },
+          "alerts": {
+            "items": {
+              "$ref": "#/components/schemas/Alert"
+            },
+            "type": "array",
+            "title": "Alerts"
+          },
+          "paused_goals": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Paused Goals",
+            "description": "Goals a circuit breaker paused"
+          },
+          "paused_channels": {
+            "items": {
+              "$ref": "#/components/schemas/Channel"
+            },
+            "type": "array",
+            "title": "Paused Channels"
+          },
+          "swept_goals": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Swept Goals",
+            "description": "Goals whose daily sweep ran"
+          },
+          "nightly_ran": {
+            "type": "boolean",
+            "title": "Nightly Ran",
+            "default": false
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "now",
+          "decisions",
+          "sent",
+          "batches",
+          "alerts"
+        ],
+        "title": "TickResult",
+        "description": "What one runtime tick did: counts, plus the batches it created and the alerts it raised in full."
       },
       "Tone": {
         "type": "string",
