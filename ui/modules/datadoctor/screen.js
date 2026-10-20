@@ -331,7 +331,7 @@ function chatMainHtml(entry) {
   // The card's learning times are the server's; the sentence above Approve says the same ones (before a goal is chosen
   // no offer has brought them in yet).
   if (ready && (ready.speeds || []).length) applySpeedMinutes(Object.fromEntries(ready.speeds.map((sp) => [sp.id, sp.minutes])));
-  const alertInCard = s.alertAt === "card" && Boolean(ready && ready.stage === "approve");
+  const alertInCard = s.alertAt === "card" && Boolean(ready && ["approve", "start"].includes(ready.stage));
   const parts = ready && ready.stage === "start" ? startParts(entry) : null;
   const starts = approveStarts(entry);
   const goalIds = screen.view.goal_id ? [screen.view.goal_id] : screen.view.missing_for || [];
@@ -585,6 +585,7 @@ async function pickFromConnection(entry) {
     });
   } catch (error) {
     s.error = error;
+    s.alertAt = "top";
     draw(entry);
     return;
   }
@@ -620,6 +621,7 @@ async function proceed(entry) {
     profile = await getProfile(start.upload_id);
   } catch (error) {
     s.error = error;
+    s.alertAt = "card";
     s.busy = "";
     draw(entry);
     return;
@@ -643,6 +645,7 @@ async function startCampaignRun(entry, start) {
   const s = entry.state;
   s.busy = "continue";
   s.error = null;
+  s.alertAt = "card"; // a refused start is told in the card with the Start button, not at the top of a long page
   draw(entry);
   try {
     const choice = modelChoice(s.offer, s.mode);
@@ -996,6 +999,7 @@ async function open(entry) {
     }
   } catch (error) {
     s.error = error;
+    s.alertAt = "top";
   }
   s.loading = false;
   draw(entry);

@@ -60,6 +60,7 @@ export function serverFor(world) {
     }
     if (method === "POST" && p === "/campaign-runs") {
       world.posted.push({ path: p, body: request.body });
+      if (world.refuseRun) return world.refuseRun;
       return ok({ record: { campaign_run_id: "cr_dds", state: "running" }, pct: 0, eta_seconds: null, summary: "" }, 202);
     }
     if (method === "POST" && p === "/uploads") {

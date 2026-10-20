@@ -16,6 +16,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from pydantic import JsonValue
 
 from engine.access.roles import Principal, Role
 from engine.agent.contracts import AgentConfidence, ProposalSource, ProposalState
@@ -454,3 +455,157 @@ def test_the_conversation_is_built_from_the_case_alone(storage: LocalStorage, wo
         c for c in build_conversation(plain, screen.view, screen.timeline) if isinstance(c, MessageCard)
     ]
     assert message.item_ids == () and message.suggestion is None and message.text == "why?"
+
+
+def _applied_removal(case: Case, state: ProposalState = ProposalState.ACCEPTED) -> CaseItem:
+    """What the AI's 'drop the test accounts' makes: a step that leaves rows out, so it needs the person's own yes
+    at the approval, applied for them (decided by the agent) with one Undo."""
+    step: dict[str, JsonValue] = {
+        "kind": "remove_rows",
+        "column": "customer_id",
+        "operator": "starts_with",
+        "values": ["999"],
+    }
+    return CaseItem(
+        item_id="ai.test_accounts",
+        kind="recipe_step",
+        title="Leave out the test accounts",
+        source=ProposalSource.AI,
+        confidence=AgentConfidence.CHECK,
+        state=state,
+        upload_id=case.files[0].upload_id,
+        payload={"step": step, "counts": "1,200 rows in, 1,180 out"},
+        payload_digest=payload_digest({"step": step}),
+        proposed_at=case.updated_at,
+        decided_by="agent:data-doctor",
+        decided_at=case.updated_at,
+    )
+
+
+def test_a_change_the_ai_applied_that_needs_its_own_yes_is_a_card_with_undo_while_a_question_is_open(
+    storage: LocalStorage, world: World
+) -> None:
+    screen = scenario("question", storage, world)
+    assert any(q.blocking and q.answer is None for q in screen.case.questions)
+    case = screen.case.model_copy(update={"items": (*screen.case.items, _applied_removal(screen.case))})
+    view = screen_view(storage, case, config_root=None)
+    assert any(a.item_id == "ai.test_accounts" and not a.confirmed for a in view.approve_class)
+    (card,) = [c for c in view.conversation if isinstance(c, ChangeCard) and c.item_id == "ai.test_accounts"]
+    assert card.undo and card.by == "agent" and card.counts == "1,200 rows in, 1,180 out"
+    first = view.conversation[0]
+    assert isinstance(first, FirstLookCard) and first.fixes_count == 1, "counted in the checklist"
+    assert not _of(view_screen(view), ReadyCard), "no approval card while a question is open"
+
+
+def view_screen(view: Any) -> Any:
+    return SimpleNamespace(view=view)
+
+
+def test_the_ready_card_repeats_an_applied_change_as_its_checkbox_marked_shown(
+    storage: LocalStorage, world: World
+) -> None:
+    screen = scenario("approve_class", storage, world)
+    case = screen.case.model_copy(update={"items": (*screen.case.items, _applied_removal(screen.case))})
+    view = screen_view(storage, case, config_root=None)
+    ready = view.conversation[-1]
+    assert isinstance(ready, ReadyCard)
+    by_id = {c.item_id: c for c in ready.confirmations}
+    assert by_id["ai.test_accounts"].shown and by_id["ai.test_accounts"].required
+    consent = next(c for i, c in by_id.items() if i.startswith("consent_column"))
+    assert not consent.shown, "waiting for its yes: only the ready card has it"
+    assert "ai.test_accounts" in {c.item_id for c in view.conversation if isinstance(c, ChangeCard)}
+
+
+def test_a_pending_change_that_needs_its_own_yes_is_still_only_in_the_ready_card(
+    storage: LocalStorage, world: World
+) -> None:
+    screen = scenario("approve_class", storage, world)
+    pending = _applied_removal(screen.case, ProposalState.PENDING).model_copy(
+        update={"decided_by": None, "decided_at": None}
+    )
+    case = screen.case.model_copy(update={"items": (*screen.case.items, pending)})
+    view = screen_view(storage, case, config_root=None)
+    assert "ai.test_accounts" not in {c.item_id for c in view.conversation if isinstance(c, ChangeCard)}
+    ready = view.conversation[-1]
+    assert (
+        isinstance(ready, ReadyCard)
+        and not next(c for c in ready.confirmations if c.item_id == "ai.test_accounts").shown
+    )
+
+
+def test_approve_is_held_until_a_goal_is_chosen_and_while_the_last_check_found_something(
+    storage: LocalStorage, world: World, tmp_path: Path
+) -> None:
+    no_goal = scenario("approve", storage, world)
+    ready = no_goal.view.conversation[-1]
+    assert isinstance(ready, ReadyCard) and ready.stage == "approve"
+    assert ready.hold == "Choose what the campaign is for first."
+    goal = scenario("approve_class", LocalStorage(tmp_path / "goal"), vs.world())
+    ok = goal.view.conversation[-1]
+    assert isinstance(ok, ReadyCard) and ok.stage == "approve" and ok.hold == ""
+    failed = scenario("not_ready", LocalStorage(tmp_path / "nr"), vs.world())
+    blocked = failed.view.conversation[-1]
+    assert isinstance(blocked, ReadyCard) and blocked.stage == "approve"
+    assert blocked.hold == "Fix what the last check found first."
+
+
+def test_what_was_said_before_a_join_is_not_drawn_beside_the_table_it_made(
+    storage: LocalStorage, world: World
+) -> None:
+    screen = scenario("approve_class", storage, world)
+    case = screen.case
+    (only,) = case.files
+    gone = "up-before-join"
+    old_step = next(i for i in case.items if i.kind == "recipe_step")
+    old = old_step.model_copy(
+        update={"item_id": "recipe_step.base.old", "upload_id": gone, "title": "Old fix"}
+    )
+    join = old_step.model_copy(
+        update={
+            "item_id": "build_dataset.base.j",
+            "kind": "build_dataset",
+            "upload_id": gone,
+            "title": "Combine the files",
+            "payload": {"upload_ids": [gone, "up-orders"]},
+        }
+    )
+    outcome = next(i for i in case.items if i.kind == "outcome_column").model_copy(
+        update={"item_id": "outcome_column.carried", "upload_id": gone}
+    )
+    carried = case.model_copy(update={"items": (*case.items, old, join, outcome)})
+    cards = {
+        c.item_id: c
+        for c in screen_view(storage, carried, config_root=None).conversation
+        if isinstance(c, ChangeCard)
+    }
+    assert "recipe_step.base.old" not in cards, "an earlier fix on a file the join gave way to"
+    assert "build_dataset.base.j" in cards, "the join itself stays"
+    assert "outcome_column.carried" in cards, "the person's decision on what the data means goes on the table"
+    assert only.upload_id not in {gone}
+
+
+def test_approving_with_no_goal_chosen_starts_nothing_and_goes_back_to_asking_for_a_goal(
+    storage: LocalStorage, world: World
+) -> None:
+    """Approve is held in the screen until a goal is chosen; if the call is made anyway (an older screen), the data
+    is approved for later, no campaign can start (there is no goal) and the goal cards are offered again."""
+    from engine.doctor import visit
+    from engine.doctor.screen import build_screen
+    from tests.unit.doctor.test_protocol_visit import _deps, _found
+
+    screen = scenario("approve", storage, world)
+    case = screen.case
+    assert case.state.value == "approve" and screen.view.goal_id is None
+    after = visit.approve(
+        vs.CLIENT,
+        case.case_id,
+        _deps(storage, world, _found()),
+        expected_version=case.version,
+        actor=vs.ANALYST,
+        sentence=screen.view.approval_sentence,
+    )
+    assert after.visit is not None and after.visit.hand_off is not None
+    assert after.visit.hand_off.target == "choose_goal" and after.visit.hand_off.run_id is None
+    again = build_screen(storage, vs.CLIENT, after.case_id, config_root=None)
+    assert again.view.start is None, "nothing to start"
+    assert _of(again, GoalsCard) and not _of(again, ReadyCard), "the goals are offered again"

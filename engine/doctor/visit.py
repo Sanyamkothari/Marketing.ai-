@@ -1751,8 +1751,12 @@ def _goal_rules(run: _Run, case: Case, brief: GoalBrief, step: _Step) -> None:
                     ),
                 )
     if outcome is not None:
-        _time_rule(run, case, brief, outcome[0], step, now)
-        _consent_rule(case, brief, outcome[0], step, files, now)
+        from engine.doctor.combine_run import current_upload
+
+        # The table an approved join made from the outcome's file is where the date and consent are looked for now.
+        table = current_upload(case, outcome[0])
+        _time_rule(run, case, brief, table, step, now)
+        _consent_rule(case, brief, table, step, files, now)
 
 
 def _decided(case: Case, kind: str, goal_id: str) -> tuple[str, str] | None:
@@ -1884,6 +1888,7 @@ def readiness_verify(
 
     def verify(case: Case, brief: GoalBrief | None, files: tuple[LoadedFile, ...]) -> VerifyResult:
         from engine.config import RunMode, load_use_case
+        from engine.doctor.combine_run import current_upload
         from engine.doctor.readiness import check_readiness, inputs_for_upload, store_readiness
 
         del files  # the stored upload is read the way POST /runs reads it
@@ -1895,7 +1900,8 @@ def readiness_verify(
             return VerifyResult(
                 verdict="not_ready", reason="VISIT_NO_OUTCOME: no file has the goal's outcome yet."
             )
-        upload_id, column = outcome
+        # An approved join or stack gave its files' place to the table it made: that table is what a run reads.
+        upload_id, column = current_upload(case, outcome[0]), outcome[1]
         key = _key_of(case, upload_id)
         if key is None:
             diagnosed = next((f for f in case.files if f.upload_id == upload_id), None)

@@ -564,3 +564,50 @@ test("the learning times are the card's own, one minute is not 'minutes', and th
     rules.applySpeedMinutes(null);
   }
 });
+
+test("Approve waits until a goal is chosen: the card says so and the button is off", async () => {
+  const s = await show("approve");
+  assert.equal(card(s, "ready").hold, "Choose what the campaign is for first.");
+  const go = $("[data-dds-approve-start]");
+  assert.equal(go.disabled, true);
+  assert.match($("[data-dds-approve-hold]").textContent, /Choose what the campaign is for first\./);
+  go.click();
+  await settle(2);
+  assert.deepEqual(order(), [], "nothing is approved before there is a goal");
+});
+
+test("while the last check found something to fix, Approve is off and the card says to fix it first", async () => {
+  const patch = (a) => {
+    const ready = a.view.conversation.find((c) => c.type === "ready");
+    ready.hold = "Fix what the last check found first.";
+    ready.notes = ["Say which values of 'marketing_opt_in' mean yes."];
+    return a;
+  };
+  await show("approve_class", { patch });
+  assert.equal($("[data-dds-approve-start]").disabled, true);
+  assert.match($("[data-dds-approve-hold]").textContent, /Fix what the last check found first\./);
+  assert.match($("[data-dds-ready-notes]").textContent, /Say which values/, "the reasons stay in the card");
+});
+
+test("a change the card repeats as a checkbox says it was shown above, with Undo", async () => {
+  const patch = (a) => {
+    const ready = a.view.conversation.find((c) => c.type === "ready");
+    ready.confirmations.find((c) => c.required).shown = true;
+    return a;
+  };
+  const s = await show("approve_class", { patch });
+  const ready = card(s, "ready");
+  const rows = ready.confirmations.find((c) => c.required);
+  const consent = ready.confirmations.find((c) => !c.required);
+  assert.match($(`[data-dds-confirm-row="${rows.item_id}"]`).textContent, /Shown above, with Undo\. Needed to go on/);
+  assert.doesNotMatch($(`[data-dds-confirm-row="${consent.item_id}"]`).textContent, /Shown above/);
+});
+
+test("a refused start is told in the card with the Start button, not at the top of the page", async () => {
+  await show("ready");
+  world.refuseRun = { status: 409, body: { detail: { code: "RUN_REFUSED", message: "A campaign is running already." } } };
+  $("[data-dds-continue]").click();
+  await until(() => $("[data-dds-ready] [role=alert]"), 3000, "the refusal in the card");
+  assert.equal($$("[role=alert]").length, 1, "and said once");
+  assert.ok($("[data-dds-ready] [data-dds-continue]"), "next to the button that can try again");
+});

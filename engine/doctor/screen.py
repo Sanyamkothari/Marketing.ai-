@@ -47,6 +47,7 @@ from engine.agent.contracts import ProposalState
 from engine.config import ConfigError, StrictBase
 from engine.doctor.carry import carry_of, new_line
 from engine.doctor.case import Case, CaseError, CaseStore, TimelineEvent, TimelineKind
+from engine.doctor.combine_run import current_upload
 from engine.doctor.conversation import ConversationCard, build_conversation
 from engine.doctor.diagnose import LoadedFile
 from engine.doctor.plan_check import ledger_view, plan_digest
@@ -571,6 +572,8 @@ def _start(case: Case, hand_off: HandOffRecord | None) -> ScreenStart | None:
     upload_id, column = outcome.payload.get("upload_id"), outcome.payload.get("column")
     if not isinstance(upload_id, str) or not isinstance(column, str):
         return None
+    # An approved join or stack made its files into one table: the run reads that table, with the outcome on it.
+    upload_id = current_upload(case, upload_id)
     key = next(
         (
             item.payload.get("column")
