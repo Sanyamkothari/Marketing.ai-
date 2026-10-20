@@ -1,0 +1,12 @@
+{
+  "error": {
+    "message": "(#132001) Template name does not exist in the translation",
+    "type": "OAuthException",
+    "code": 132001,
+    "error_data": {
+      "messaging_product": "whatsapp",
+      "details": "template name (winback_offer) does not exist in en"
+    },
+    "fbtrace_id": "AbCdEfGhIjKlMnOpQrStUv"
+  }
+}

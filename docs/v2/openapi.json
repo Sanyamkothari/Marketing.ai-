@@ -1,0 +1,2715 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Autonomy API",
+    "description": "The v2 marketer app's API: goals, plans, approvals, decisions, proof and webhooks.",
+    "version": "2.0.0"
+  },
+  "paths": {
+    "/v2/goals": {
+      "get": {
+        "tags": [
+          "v2"
+        ],
+        "summary": "List Goals",
+        "description": "Every goal, newest first.",
+        "operationId": "list_goals_v2_goals_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Goal"
+                  },
+                  "title": "Response List Goals V2 Goals Get"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "v2"
+        ],
+        "summary": "Create Goal",
+        "description": "Store a new goal (a draft) with the Strategist's plan for it, waiting for approval.",
+        "operationId": "create_goal_v2_goals_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GoalCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoalWithBrief"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/goals/{goal_id}": {
+      "get": {
+        "tags": [
+          "v2"
+        ],
+        "summary": "Get Goal",
+        "description": "The goal, its latest plan, its content (drafts included) and the proof so far.",
+        "operationId": "get_goal_v2_goals__goal_id__get",
+        "parameters": [
+          {
+            "name": "goal_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Goal Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoalDetail"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/goals/{goal_id}/approve": {
+      "post": {
+        "tags": [
+          "v2"
+        ],
+        "summary": "Approve Goal",
+        "description": "Approve the plan and set the autonomy level; the goal becomes active.",
+        "operationId": "approve_goal_v2_goals__goal_id__approve_post",
+        "parameters": [
+          {
+            "name": "goal_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Goal Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApproveRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoalWithBrief"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/goals/{goal_id}/pause": {
+      "post": {
+        "tags": [
+          "v2"
+        ],
+        "summary": "Pause Goal",
+        "description": "Stop the agent acting for this goal.",
+        "operationId": "pause_goal_v2_goals__goal_id__pause_post",
+        "parameters": [
+          {
+            "name": "goal_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Goal Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Goal"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/goals/{goal_id}/resume": {
+      "post": {
+        "tags": [
+          "v2"
+        ],
+        "summary": "Resume Goal",
+        "description": "Let the agent act again (the plan must be approved).",
+        "operationId": "resume_goal_v2_goals__goal_id__resume_post",
+        "parameters": [
+          {
+            "name": "goal_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Goal Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Goal"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/goals/{goal_id}/content": {
+      "get": {
+        "tags": [
+          "v2"
+        ],
+        "summary": "Goal Content",
+        "description": "The goal's content library, drafts included.",
+        "operationId": "goal_content_v2_goals__goal_id__content_get",
+        "parameters": [
+          {
+            "name": "goal_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Goal Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ContentItem"
+                  },
+                  "title": "Response Goal Content V2 Goals  Goal Id  Content Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/content/{content_id}/status": {
+      "post": {
+        "tags": [
+          "v2"
+        ],
+        "summary": "Set Content Status",
+        "description": "Approve, reject or retire one content item.",
+        "operationId": "set_content_status_v2_content__content_id__status_post",
+        "parameters": [
+          {
+            "name": "content_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Content Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ContentStatusRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContentItem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/decisions": {
+      "get": {
+        "tags": [
+          "v2"
+        ],
+        "summary": "List Decisions",
+        "description": "The latest decisions, newest first, each with its plain-English reason.",
+        "operationId": "list_decisions_v2_decisions_get",
+        "parameters": [
+          {
+            "name": "goal_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Goal Id"
+            }
+          },
+          {
+            "name": "customer_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Customer Id"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 1000,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Decision"
+                  },
+                  "title": "Response List Decisions V2 Decisions Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/customers/{customer_id}": {
+      "get": {
+        "tags": [
+          "v2"
+        ],
+        "summary": "Get Customer",
+        "description": "One customer: their state, and their latest decisions and events.",
+        "operationId": "get_customer_v2_customers__customer_id__get",
+        "parameters": [
+          {
+            "name": "customer_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Customer Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerDetail"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/briefing": {
+      "get": {
+        "tags": [
+          "v2"
+        ],
+        "summary": "Get Briefing",
+        "description": "The latest briefing for a goal (or the whole programme); null when there is none yet.",
+        "operationId": "get_briefing_v2_briefing_get",
+        "parameters": [
+          {
+            "name": "goal_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Goal Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Briefing"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "title": "Response Get Briefing V2 Briefing Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/proof": {
+      "get": {
+        "tags": [
+          "v2"
+        ],
+        "summary": "Get Proof",
+        "description": "Agent vs holdout and vs baseline; null when there is nothing to show yet.",
+        "operationId": "get_proof_v2_proof_get",
+        "parameters": [
+          {
+            "name": "goal_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Goal Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ProofSummary"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "title": "Response Get Proof V2 Proof Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/health": {
+      "get": {
+        "tags": [
+          "v2"
+        ],
+        "summary": "Get Health",
+        "description": "Delivery, complaint and unsubscribe rates over the last week, with open alerts.",
+        "operationId": "get_health_v2_health_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthStatus"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/alerts": {
+      "get": {
+        "tags": [
+          "v2"
+        ],
+        "summary": "List Alerts",
+        "operationId": "list_alerts_v2_alerts_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Alert"
+                  },
+                  "title": "Response List Alerts V2 Alerts Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/opportunities": {
+      "get": {
+        "tags": [
+          "v2"
+        ],
+        "summary": "List Opportunities",
+        "description": "Goals the agent suggests (drafts); POST one's text to /v2/goals to take it up.",
+        "operationId": "list_opportunities_v2_opportunities_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Goal"
+                  },
+                  "title": "Response List Opportunities V2 Opportunities Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/webhooks/{channel}": {
+      "post": {
+        "tags": [
+          "v2"
+        ],
+        "summary": "Receive Webhook",
+        "description": "A provider callback (delivery, click, reply, ...): 401 on a bad signature, 404 on an unknown channel.\n\nThe raw body is passed through untouched, because signatures are computed over the exact bytes.",
+        "operationId": "receive_webhook_v2_webhooks__channel__post",
+        "parameters": [
+          {
+            "name": "channel",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Channel"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookResult"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Action": {
+        "additionalProperties": false,
+        "properties": {
+          "goal_id": {
+            "title": "Goal Id",
+            "type": "string"
+          },
+          "channel": {
+            "$ref": "#/components/schemas/Channel"
+          },
+          "offer_id": {
+            "default": "none",
+            "title": "Offer Id",
+            "type": "string"
+          },
+          "content_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Content Id"
+          },
+          "format": {
+            "$ref": "#/components/schemas/Format",
+            "default": "text"
+          },
+          "send_at": {
+            "format": "date-time",
+            "title": "Send At",
+            "type": "string"
+          },
+          "follow_up_step": {
+            "default": 0,
+            "description": "0 = first contact, 1 = first follow-up, ...",
+            "title": "Follow Up Step",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "goal_id",
+          "channel",
+          "send_at"
+        ],
+        "title": "Action",
+        "type": "object"
+      },
+      "Alert": {
+        "additionalProperties": false,
+        "properties": {
+          "alert_id": {
+            "title": "Alert Id",
+            "type": "string"
+          },
+          "at": {
+            "format": "date-time",
+            "title": "At",
+            "type": "string"
+          },
+          "goal_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Goal Id"
+          },
+          "severity": {
+            "enum": [
+              "info",
+              "warning",
+              "critical"
+            ],
+            "title": "Severity",
+            "type": "string"
+          },
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "auto_paused": {
+            "default": false,
+            "title": "Auto Paused",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "alert_id",
+          "at",
+          "severity",
+          "code",
+          "message"
+        ],
+        "title": "Alert",
+        "type": "object"
+      },
+      "ApproveRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "autonomy": {
+            "$ref": "#/components/schemas/AutonomyLevel"
+          }
+        },
+        "required": [
+          "autonomy"
+        ],
+        "title": "ApproveRequest",
+        "type": "object"
+      },
+      "Audience": {
+        "additionalProperties": false,
+        "properties": {
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "filters": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/AudienceFilter"
+            },
+            "title": "Filters",
+            "type": "array"
+          }
+        },
+        "required": [
+          "description"
+        ],
+        "title": "Audience",
+        "type": "object"
+      },
+      "AudienceFilter": {
+        "additionalProperties": false,
+        "description": "A test on one `CustomerState` field. `days_since_*` compare a datetime field with now.",
+        "properties": {
+          "field": {
+            "title": "Field",
+            "type": "string"
+          },
+          "op": {
+            "enum": [
+              "eq",
+              "ne",
+              "gt",
+              "gte",
+              "lt",
+              "lte",
+              "in",
+              "not_in",
+              "is_null",
+              "not_null",
+              "days_since_gt",
+              "days_since_lt"
+            ],
+            "title": "Op",
+            "type": "string"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "boolean"
+              },
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Value"
+          }
+        },
+        "required": [
+          "field",
+          "op"
+        ],
+        "title": "AudienceFilter",
+        "type": "object"
+      },
+      "AutonomyLevel": {
+        "enum": [
+          "shadow",
+          "approve",
+          "autopilot"
+        ],
+        "title": "AutonomyLevel",
+        "type": "string"
+      },
+      "Bid": {
+        "additionalProperties": false,
+        "description": "One goal's offer for this customer's attention. Money is in the goal's currency.",
+        "properties": {
+          "goal_id": {
+            "title": "Goal Id",
+            "type": "string"
+          },
+          "action": {
+            "$ref": "#/components/schemas/Action"
+          },
+          "uplift": {
+            "description": "Change in the chance of the outcome caused by acting, -1..1",
+            "title": "Uplift",
+            "type": "number"
+          },
+          "value_if_converted": {
+            "description": "Expected margin (or revenue) if the outcome happens",
+            "title": "Value If Converted",
+            "type": "number"
+          },
+          "offer_cost": {
+            "default": 0.0,
+            "title": "Offer Cost",
+            "type": "number"
+          },
+          "channel_cost": {
+            "default": 0.0,
+            "title": "Channel Cost",
+            "type": "number"
+          },
+          "urgency": {
+            "default": 1.0,
+            "description": "Multiplier; decays as the moment passes",
+            "minimum": 0,
+            "title": "Urgency",
+            "type": "number"
+          },
+          "expected_net": {
+            "description": "uplift x value - offer cost - channel cost, times urgency",
+            "title": "Expected Net",
+            "type": "number"
+          },
+          "uncertainty": {
+            "default": 0.0,
+            "description": "Std. dev. of expected_net, for sampling",
+            "minimum": 0,
+            "title": "Uncertainty",
+            "type": "number"
+          }
+        },
+        "required": [
+          "goal_id",
+          "action",
+          "uplift",
+          "value_if_converted",
+          "expected_net"
+        ],
+        "title": "Bid",
+        "type": "object"
+      },
+      "Brief": {
+        "additionalProperties": false,
+        "properties": {
+          "brief_id": {
+            "title": "Brief Id",
+            "type": "string"
+          },
+          "goal_id": {
+            "title": "Goal Id",
+            "type": "string"
+          },
+          "version": {
+            "default": 1,
+            "title": "Version",
+            "type": "integer"
+          },
+          "objective": {
+            "$ref": "#/components/schemas/Objective"
+          },
+          "audience": {
+            "$ref": "#/components/schemas/Audience"
+          },
+          "horizon_days": {
+            "default": 14,
+            "description": "Outcome window after a contact",
+            "maximum": 180,
+            "minimum": 1,
+            "title": "Horizon Days",
+            "type": "integer"
+          },
+          "envelope": {
+            "$ref": "#/components/schemas/Envelope"
+          },
+          "follow_ups": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/FollowUpStep"
+            },
+            "title": "Follow Ups",
+            "type": "array"
+          },
+          "rationale": {
+            "default": "",
+            "description": "The Strategist's plain-English reasoning",
+            "title": "Rationale",
+            "type": "string"
+          },
+          "created_by": {
+            "default": "strategist",
+            "title": "Created By",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "approved_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Approved By"
+          },
+          "approved_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Approved At"
+          }
+        },
+        "required": [
+          "brief_id",
+          "goal_id",
+          "objective",
+          "audience",
+          "envelope",
+          "created_at"
+        ],
+        "title": "Brief",
+        "type": "object"
+      },
+      "Briefing": {
+        "additionalProperties": false,
+        "properties": {
+          "briefing_id": {
+            "title": "Briefing Id",
+            "type": "string"
+          },
+          "goal_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Goal Id"
+          },
+          "as_of": {
+            "format": "date-time",
+            "title": "As Of",
+            "type": "string"
+          },
+          "period": {
+            "enum": [
+              "daily",
+              "weekly"
+            ],
+            "title": "Period",
+            "type": "string"
+          },
+          "headline": {
+            "title": "Headline",
+            "type": "string"
+          },
+          "sections": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/BriefingSection"
+            },
+            "title": "Sections",
+            "type": "array"
+          }
+        },
+        "required": [
+          "briefing_id",
+          "as_of",
+          "period",
+          "headline"
+        ],
+        "title": "Briefing",
+        "type": "object"
+      },
+      "BriefingSection": {
+        "additionalProperties": false,
+        "properties": {
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "body": {
+            "description": "Plain English; every number in it appears in `numbers`",
+            "title": "Body",
+            "type": "string"
+          },
+          "numbers": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "description": "Computed by code, never by an LLM",
+            "title": "Numbers",
+            "type": "object"
+          }
+        },
+        "required": [
+          "title",
+          "body"
+        ],
+        "title": "BriefingSection",
+        "type": "object"
+      },
+      "Channel": {
+        "description": "Where a message can go. `WEBHOOK` means \"hand the decision to the client's own tool\".",
+        "enum": [
+          "email",
+          "whatsapp",
+          "sms",
+          "push",
+          "web",
+          "webhook"
+        ],
+        "title": "Channel",
+        "type": "string"
+      },
+      "ChannelStats": {
+        "additionalProperties": false,
+        "properties": {
+          "address_known": {
+            "default": false,
+            "title": "Address Known",
+            "type": "boolean"
+          },
+          "consent": {
+            "default": false,
+            "title": "Consent",
+            "type": "boolean"
+          },
+          "unsubscribed": {
+            "default": false,
+            "title": "Unsubscribed",
+            "type": "boolean"
+          },
+          "sends": {
+            "default": 0,
+            "title": "Sends",
+            "type": "integer"
+          },
+          "delivers": {
+            "default": 0,
+            "title": "Delivers",
+            "type": "integer"
+          },
+          "clicks": {
+            "default": 0,
+            "title": "Clicks",
+            "type": "integer"
+          },
+          "replies": {
+            "default": 0,
+            "title": "Replies",
+            "type": "integer"
+          },
+          "bounces": {
+            "default": 0,
+            "title": "Bounces",
+            "type": "integer"
+          },
+          "complaints": {
+            "default": 0,
+            "title": "Complaints",
+            "type": "integer"
+          },
+          "last_send_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Last Send At"
+          },
+          "last_engaged_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Last Engaged At"
+          }
+        },
+        "title": "ChannelStats",
+        "type": "object"
+      },
+      "ContentItem": {
+        "additionalProperties": false,
+        "properties": {
+          "content_id": {
+            "title": "Content Id",
+            "type": "string"
+          },
+          "goal_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Goal Id"
+          },
+          "channel": {
+            "$ref": "#/components/schemas/Channel"
+          },
+          "format": {
+            "$ref": "#/components/schemas/Format",
+            "default": "text"
+          },
+          "theme": {
+            "$ref": "#/components/schemas/Theme"
+          },
+          "tone": {
+            "$ref": "#/components/schemas/Tone",
+            "default": "friendly"
+          },
+          "offer_id": {
+            "default": "none",
+            "title": "Offer Id",
+            "type": "string"
+          },
+          "subject": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Email only",
+            "title": "Subject"
+          },
+          "body": {
+            "description": "Text with {{slot}} placeholders, e.g. {{first_name}}, {{top_category}}",
+            "title": "Body",
+            "type": "string"
+          },
+          "slots": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Slots",
+            "type": "array"
+          },
+          "asset_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Asset Url"
+          },
+          "template_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "WhatsApp: the pre-approved template",
+            "title": "Template Name"
+          },
+          "language": {
+            "default": "en",
+            "title": "Language",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ContentStatus",
+            "default": "draft"
+          },
+          "critic_notes": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Critic Notes",
+            "type": "array"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "content_id",
+          "channel",
+          "theme",
+          "body",
+          "created_at"
+        ],
+        "title": "ContentItem",
+        "type": "object"
+      },
+      "ContentStatus": {
+        "enum": [
+          "draft",
+          "approved",
+          "rejected",
+          "retired"
+        ],
+        "title": "ContentStatus",
+        "type": "string"
+      },
+      "ContentStatusRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "status": {
+            "$ref": "#/components/schemas/ContentStatus"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "ContentStatusRequest",
+        "type": "object"
+      },
+      "CustomerDetail": {
+        "additionalProperties": false,
+        "properties": {
+          "state": {
+            "$ref": "#/components/schemas/CustomerState"
+          },
+          "decisions": {
+            "description": "Newest first, at most 200",
+            "items": {
+              "$ref": "#/components/schemas/Decision"
+            },
+            "title": "Decisions",
+            "type": "array"
+          },
+          "events": {
+            "description": "Newest first, at most 200",
+            "items": {
+              "$ref": "#/components/schemas/Event"
+            },
+            "title": "Events",
+            "type": "array"
+          }
+        },
+        "required": [
+          "state",
+          "decisions",
+          "events"
+        ],
+        "title": "CustomerDetail",
+        "type": "object"
+      },
+      "CustomerState": {
+        "additionalProperties": false,
+        "properties": {
+          "customer_id": {
+            "title": "Customer Id",
+            "type": "string"
+          },
+          "as_of": {
+            "format": "date-time",
+            "title": "As Of",
+            "type": "string"
+          },
+          "version": {
+            "default": 0,
+            "description": "How many events have been folded in",
+            "title": "Version",
+            "type": "integer"
+          },
+          "group": {
+            "$ref": "#/components/schemas/Group",
+            "default": "agent"
+          },
+          "timezone": {
+            "default": "UTC",
+            "title": "Timezone",
+            "type": "string"
+          },
+          "country": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Country"
+          },
+          "first_seen_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "First Seen At"
+          },
+          "last_seen_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Last Seen At"
+          },
+          "last_purchase_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Last Purchase At"
+          },
+          "purchases": {
+            "default": 0,
+            "title": "Purchases",
+            "type": "integer"
+          },
+          "revenue": {
+            "default": 0.0,
+            "title": "Revenue",
+            "type": "number"
+          },
+          "margin": {
+            "default": 0.0,
+            "title": "Margin",
+            "type": "number"
+          },
+          "top_categories": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Top Categories",
+            "type": "array"
+          },
+          "category_counts": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "description": "Purchases per category",
+            "title": "Category Counts",
+            "type": "object"
+          },
+          "channels": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/ChannelStats"
+            },
+            "propertyNames": {
+              "$ref": "#/components/schemas/Channel"
+            },
+            "title": "Channels",
+            "type": "object"
+          },
+          "contacts_7d": {
+            "default": 0,
+            "title": "Contacts 7D",
+            "type": "integer"
+          },
+          "contacts_30d": {
+            "default": 0,
+            "title": "Contacts 30D",
+            "type": "integer"
+          },
+          "last_contact_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Last Contact At"
+          },
+          "recent_contacts": {
+            "default": [],
+            "description": "Send times in the last 30 days, oldest first; feeds contacts_7d/30d",
+            "items": {
+              "format": "date-time",
+              "type": "string"
+            },
+            "title": "Recent Contacts",
+            "type": "array"
+          },
+          "active_hours": {
+            "default": [],
+            "description": "24 shares of engagement by local hour, summing to 1; empty if unknown",
+            "items": {
+              "type": "number"
+            },
+            "title": "Active Hours",
+            "type": "array"
+          },
+          "hour_counts": {
+            "default": [],
+            "description": "24 counts of engagement by local hour",
+            "items": {
+              "type": "integer"
+            },
+            "title": "Hour Counts",
+            "type": "array"
+          },
+          "offer_sensitivity": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "0 = buys at full price, 1 = needs an offer",
+            "title": "Offer Sensitivity"
+          },
+          "preferences": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Stated or learned, e.g. no_discounts=true",
+            "title": "Preferences",
+            "type": "object"
+          },
+          "open_complaint": {
+            "default": false,
+            "title": "Open Complaint",
+            "type": "boolean"
+          },
+          "scores": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "description": "Model outputs, e.g. churn_risk, clv_90d",
+            "title": "Scores",
+            "type": "object"
+          },
+          "segment": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Segment"
+          }
+        },
+        "required": [
+          "customer_id",
+          "as_of"
+        ],
+        "title": "CustomerState",
+        "type": "object"
+      },
+      "Decision": {
+        "additionalProperties": false,
+        "properties": {
+          "decision_id": {
+            "title": "Decision Id",
+            "type": "string"
+          },
+          "customer_id": {
+            "title": "Customer Id",
+            "type": "string"
+          },
+          "made_at": {
+            "format": "date-time",
+            "title": "Made At",
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/DecisionKind"
+          },
+          "action": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Action"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "group": {
+            "$ref": "#/components/schemas/Group",
+            "default": "agent"
+          },
+          "probability": {
+            "description": "Chance the policy had of choosing exactly this",
+            "exclusiveMinimum": 0,
+            "maximum": 1,
+            "title": "Probability",
+            "type": "number"
+          },
+          "expected_net": {
+            "default": 0.0,
+            "title": "Expected Net",
+            "type": "number"
+          },
+          "attention_price": {
+            "default": 0.0,
+            "description": "What a bid had to beat",
+            "minimum": 0,
+            "title": "Attention Price",
+            "type": "number"
+          },
+          "reason": {
+            "description": "One plain sentence a marketer understands",
+            "title": "Reason",
+            "type": "string"
+          },
+          "bids": {
+            "default": [],
+            "description": "The top bids considered, best first",
+            "items": {
+              "$ref": "#/components/schemas/Bid"
+            },
+            "title": "Bids",
+            "type": "array"
+          },
+          "blocked_by": {
+            "default": [],
+            "description": "Hard rules that removed options",
+            "items": {
+              "type": "string"
+            },
+            "title": "Blocked By",
+            "type": "array"
+          },
+          "policy_version": {
+            "title": "Policy Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "decision_id",
+          "customer_id",
+          "made_at",
+          "kind",
+          "probability",
+          "reason",
+          "policy_version"
+        ],
+        "title": "Decision",
+        "type": "object"
+      },
+      "DecisionKind": {
+        "enum": [
+          "act",
+          "nothing"
+        ],
+        "title": "DecisionKind",
+        "type": "string"
+      },
+      "Envelope": {
+        "additionalProperties": false,
+        "properties": {
+          "channels": {
+            "items": {
+              "$ref": "#/components/schemas/Channel"
+            },
+            "title": "Channels",
+            "type": "array"
+          },
+          "offers": {
+            "default": [
+              {
+                "offer_id": "none",
+                "label": "No offer",
+                "kind": "none",
+                "amount": 0.0,
+                "cost_per_redemption": 0.0,
+                "needs_approval": false
+              }
+            ],
+            "items": {
+              "$ref": "#/components/schemas/OfferOption"
+            },
+            "title": "Offers",
+            "type": "array"
+          },
+          "budget": {
+            "minimum": 0,
+            "title": "Budget",
+            "type": "number"
+          },
+          "max_daily_spend": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Max Daily Spend"
+          },
+          "max_contacts_per_week": {
+            "default": 2,
+            "description": "Hard cap per customer across all goals",
+            "minimum": 0,
+            "title": "Max Contacts Per Week",
+            "type": "integer"
+          },
+          "quiet_start_hour": {
+            "default": 21,
+            "description": "Local time; no sends from here...",
+            "maximum": 23,
+            "minimum": 0,
+            "title": "Quiet Start Hour",
+            "type": "integer"
+          },
+          "quiet_end_hour": {
+            "default": 9,
+            "description": "...until here",
+            "maximum": 23,
+            "minimum": 0,
+            "title": "Quiet End Hour",
+            "type": "integer"
+          },
+          "exploration_floor": {
+            "default": 0.05,
+            "maximum": 0.5,
+            "minimum": 0,
+            "title": "Exploration Floor",
+            "type": "number"
+          },
+          "holdout_share": {
+            "default": 0.1,
+            "maximum": 0.5,
+            "minimum": 0,
+            "title": "Holdout Share",
+            "type": "number"
+          },
+          "baseline_share": {
+            "default": 0.1,
+            "maximum": 0.5,
+            "minimum": 0,
+            "title": "Baseline Share",
+            "type": "number"
+          },
+          "stop_rules": {
+            "default": [
+              {
+                "metric": "complaint_rate",
+                "threshold": 0.0008,
+                "action": "pause_goal"
+              },
+              {
+                "metric": "unsubscribe_multiple",
+                "threshold": 3.0,
+                "action": "pause_goal"
+              },
+              {
+                "metric": "delivery_rate_below",
+                "threshold": 0.95,
+                "action": "pause_channel"
+              },
+              {
+                "metric": "spend_pace",
+                "threshold": 1.2,
+                "action": "pause_goal"
+              },
+              {
+                "metric": "whatsapp_quality",
+                "threshold": 1.0,
+                "action": "pause_channel"
+              }
+            ],
+            "items": {
+              "$ref": "#/components/schemas/StopRule"
+            },
+            "title": "Stop Rules",
+            "type": "array"
+          }
+        },
+        "required": [
+          "channels",
+          "budget"
+        ],
+        "title": "Envelope",
+        "type": "object"
+      },
+      "Estimate": {
+        "additionalProperties": false,
+        "description": "A number with its 95% interval. Every money figure shown to a person is one of these.",
+        "properties": {
+          "point": {
+            "title": "Point",
+            "type": "number"
+          },
+          "low": {
+            "title": "Low",
+            "type": "number"
+          },
+          "high": {
+            "title": "High",
+            "type": "number"
+          }
+        },
+        "required": [
+          "point",
+          "low",
+          "high"
+        ],
+        "title": "Estimate",
+        "type": "object"
+      },
+      "Event": {
+        "additionalProperties": false,
+        "properties": {
+          "event_id": {
+            "description": "Unique; the store drops a second event with the same id",
+            "title": "Event Id",
+            "type": "string"
+          },
+          "customer_id": {
+            "title": "Customer Id",
+            "type": "string"
+          },
+          "type": {
+            "$ref": "#/components/schemas/EventType"
+          },
+          "ts": {
+            "format": "date-time",
+            "title": "Ts",
+            "type": "string"
+          },
+          "source": {
+            "description": "Where it came from: 'gym', 'ses', 'whatsapp', 'csv', 'shopify', ...",
+            "title": "Source",
+            "type": "string"
+          },
+          "channel": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Channel"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "decision_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The decision that caused it, if any",
+            "title": "Decision Id"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Purchase or refund amount, gross, in the business currency",
+            "title": "Value"
+          },
+          "margin": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Gross margin of a purchase, if known",
+            "title": "Margin"
+          },
+          "category": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Category"
+          },
+          "item_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Item Id"
+          },
+          "text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Reply text; never logged",
+            "title": "Text"
+          },
+          "attrs": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ]
+            },
+            "title": "Attrs",
+            "type": "object"
+          }
+        },
+        "required": [
+          "event_id",
+          "customer_id",
+          "type",
+          "ts",
+          "source"
+        ],
+        "title": "Event",
+        "type": "object"
+      },
+      "EventType": {
+        "enum": [
+          "signup",
+          "visit",
+          "view",
+          "cart",
+          "purchase",
+          "refund",
+          "send",
+          "deliver",
+          "open",
+          "click",
+          "reply",
+          "bounce",
+          "unsubscribe",
+          "complaint",
+          "block",
+          "fail",
+          "consent_granted",
+          "consent_revoked",
+          "preference"
+        ],
+        "title": "EventType",
+        "type": "string"
+      },
+      "FollowUpStep": {
+        "additionalProperties": false,
+        "properties": {
+          "after_days": {
+            "minimum": 1,
+            "title": "After Days",
+            "type": "integer"
+          },
+          "when": {
+            "default": "no_purchase",
+            "enum": [
+              "no_response",
+              "no_purchase",
+              "always"
+            ],
+            "title": "When",
+            "type": "string"
+          },
+          "channel": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Channel"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "None: let decide() pick"
+          }
+        },
+        "required": [
+          "after_days"
+        ],
+        "title": "FollowUpStep",
+        "type": "object"
+      },
+      "Format": {
+        "enum": [
+          "text",
+          "text_image",
+          "carousel",
+          "video"
+        ],
+        "title": "Format",
+        "type": "string"
+      },
+      "Goal": {
+        "additionalProperties": false,
+        "properties": {
+          "goal_id": {
+            "title": "Goal Id",
+            "type": "string"
+          },
+          "business_id": {
+            "title": "Business Id",
+            "type": "string"
+          },
+          "text": {
+            "description": "The marketer's words, e.g. 'win back lapsed customers, $5k this month'",
+            "title": "Text",
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/GoalKind",
+            "default": "custom"
+          },
+          "objective": {
+            "$ref": "#/components/schemas/Objective",
+            "default": "gross_profit"
+          },
+          "budget": {
+            "description": "Total spend allowed on offers and messages, in `currency`",
+            "minimum": 0,
+            "title": "Budget",
+            "type": "number"
+          },
+          "currency": {
+            "default": "USD",
+            "title": "Currency",
+            "type": "string"
+          },
+          "starts_at": {
+            "format": "date-time",
+            "title": "Starts At",
+            "type": "string"
+          },
+          "ends_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Ends At"
+          },
+          "autonomy": {
+            "$ref": "#/components/schemas/AutonomyLevel",
+            "default": "shadow"
+          },
+          "status": {
+            "$ref": "#/components/schemas/GoalStatus",
+            "default": "draft"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "goal_id",
+          "business_id",
+          "text",
+          "budget",
+          "starts_at",
+          "created_at"
+        ],
+        "title": "Goal",
+        "type": "object"
+      },
+      "GoalCreate": {
+        "additionalProperties": false,
+        "description": "The marketer's goal in their own words, and what they will spend on it.",
+        "properties": {
+          "text": {
+            "description": "e.g. 'win back lapsed customers'",
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Text",
+            "type": "string"
+          },
+          "budget": {
+            "minimum": 0,
+            "title": "Budget",
+            "type": "number"
+          },
+          "currency": {
+            "default": "USD",
+            "maxLength": 3,
+            "minLength": 3,
+            "title": "Currency",
+            "type": "string"
+          }
+        },
+        "required": [
+          "text",
+          "budget"
+        ],
+        "title": "GoalCreate",
+        "type": "object"
+      },
+      "GoalDetail": {
+        "additionalProperties": false,
+        "properties": {
+          "goal": {
+            "$ref": "#/components/schemas/Goal"
+          },
+          "brief": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Brief"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "content": {
+            "items": {
+              "$ref": "#/components/schemas/ContentItem"
+            },
+            "title": "Content",
+            "type": "array"
+          },
+          "proof": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ProofSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "goal",
+          "brief",
+          "content",
+          "proof"
+        ],
+        "title": "GoalDetail",
+        "type": "object"
+      },
+      "GoalKind": {
+        "enum": [
+          "win_back",
+          "repeat_purchase",
+          "cart_recovery",
+          "cross_sell",
+          "onboarding",
+          "retention",
+          "custom"
+        ],
+        "title": "GoalKind",
+        "type": "string"
+      },
+      "GoalStatus": {
+        "enum": [
+          "draft",
+          "active",
+          "paused",
+          "done"
+        ],
+        "title": "GoalStatus",
+        "type": "string"
+      },
+      "GoalWithBrief": {
+        "additionalProperties": false,
+        "properties": {
+          "goal": {
+            "$ref": "#/components/schemas/Goal"
+          },
+          "brief": {
+            "$ref": "#/components/schemas/Brief"
+          }
+        },
+        "required": [
+          "goal",
+          "brief"
+        ],
+        "title": "GoalWithBrief",
+        "type": "object"
+      },
+      "Group": {
+        "description": "The three-way split every customer belongs to, for proof (plan-v2 section 8).",
+        "enum": [
+          "agent",
+          "baseline",
+          "holdout"
+        ],
+        "title": "Group",
+        "type": "string"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "HealthStatus": {
+        "additionalProperties": false,
+        "properties": {
+          "as_of": {
+            "format": "date-time",
+            "title": "As Of",
+            "type": "string"
+          },
+          "delivery_rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Delivery Rate"
+          },
+          "complaint_rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Complaint Rate"
+          },
+          "unsubscribe_rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Unsubscribe Rate"
+          },
+          "block_rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Block Rate"
+          },
+          "contacts_per_customer_week": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Contacts Per Customer Week"
+          },
+          "alerts": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/Alert"
+            },
+            "title": "Alerts",
+            "type": "array"
+          }
+        },
+        "required": [
+          "as_of"
+        ],
+        "title": "HealthStatus",
+        "type": "object"
+      },
+      "Objective": {
+        "enum": [
+          "conversion",
+          "revenue",
+          "gross_profit",
+          "retention",
+          "lead",
+          "activation"
+        ],
+        "title": "Objective",
+        "type": "string"
+      },
+      "OfferKind": {
+        "enum": [
+          "none",
+          "percent_off",
+          "amount_off",
+          "free_shipping",
+          "gift",
+          "loyalty",
+          "content"
+        ],
+        "title": "OfferKind",
+        "type": "string"
+      },
+      "OfferOption": {
+        "additionalProperties": false,
+        "properties": {
+          "offer_id": {
+            "title": "Offer Id",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/OfferKind"
+          },
+          "amount": {
+            "default": 0.0,
+            "description": "Percent for percent_off, money for amount_off",
+            "minimum": 0,
+            "title": "Amount",
+            "type": "number"
+          },
+          "cost_per_redemption": {
+            "default": 0.0,
+            "description": "Expected cost to the business if used",
+            "minimum": 0,
+            "title": "Cost Per Redemption",
+            "type": "number"
+          },
+          "needs_approval": {
+            "default": false,
+            "title": "Needs Approval",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "offer_id",
+          "label",
+          "kind"
+        ],
+        "title": "OfferOption",
+        "type": "object"
+      },
+      "ProofSummary": {
+        "additionalProperties": false,
+        "properties": {
+          "goal_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "None: the whole programme",
+            "title": "Goal Id"
+          },
+          "as_of": {
+            "format": "date-time",
+            "title": "As Of",
+            "type": "string"
+          },
+          "agent_n": {
+            "title": "Agent N",
+            "type": "integer"
+          },
+          "baseline_n": {
+            "title": "Baseline N",
+            "type": "integer"
+          },
+          "holdout_n": {
+            "title": "Holdout N",
+            "type": "integer"
+          },
+          "incremental_revenue": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Estimate"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Agent vs holdout, per the agent group"
+          },
+          "incremental_profit": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Estimate"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "lift_vs_baseline": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Estimate"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Agent vs simple baseline, profit per customer"
+          },
+          "spend": {
+            "default": 0.0,
+            "title": "Spend",
+            "type": "number"
+          },
+          "roi": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Estimate"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "notes": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Notes",
+            "type": "array"
+          }
+        },
+        "required": [
+          "goal_id",
+          "as_of",
+          "agent_n",
+          "baseline_n",
+          "holdout_n",
+          "incremental_revenue",
+          "incremental_profit",
+          "lift_vs_baseline"
+        ],
+        "title": "ProofSummary",
+        "type": "object"
+      },
+      "StopMetric": {
+        "enum": [
+          "complaint_rate",
+          "unsubscribe_multiple",
+          "delivery_rate_below",
+          "spend_pace",
+          "whatsapp_quality"
+        ],
+        "title": "StopMetric",
+        "type": "string"
+      },
+      "StopRule": {
+        "additionalProperties": false,
+        "properties": {
+          "metric": {
+            "$ref": "#/components/schemas/StopMetric"
+          },
+          "threshold": {
+            "title": "Threshold",
+            "type": "number"
+          },
+          "action": {
+            "default": "pause_goal",
+            "enum": [
+              "pause_goal",
+              "pause_channel"
+            ],
+            "title": "Action",
+            "type": "string"
+          }
+        },
+        "required": [
+          "metric",
+          "threshold"
+        ],
+        "title": "StopRule",
+        "type": "object"
+      },
+      "Theme": {
+        "enum": [
+          "savings",
+          "quality",
+          "urgency",
+          "social_proof",
+          "education",
+          "convenience",
+          "novelty",
+          "loyalty",
+          "reminder",
+          "personal"
+        ],
+        "title": "Theme",
+        "type": "string"
+      },
+      "Tone": {
+        "enum": [
+          "friendly",
+          "professional",
+          "playful",
+          "urgent",
+          "calm"
+        ],
+        "title": "Tone",
+        "type": "string"
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
+      },
+      "WebhookResult": {
+        "additionalProperties": false,
+        "properties": {
+          "accepted": {
+            "description": "How many of the callback's events were new",
+            "title": "Accepted",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "accepted"
+        ],
+        "title": "WebhookResult",
+        "type": "object"
+      }
+    }
+  }
+}
