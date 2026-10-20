@@ -27,7 +27,8 @@ makes sense *at the moment of sending*, for every channel and every country:
   exponential backoff (deterministic jitter from the key, so runs repeat), up to `max_rounds`.
 - **One telemetry stream.** Every step emits a `TelemetryEvent` (received, refused, queued,
   attempt, sent, failed, replayed, webhook), and sends and final failures are written to the event
-  store as SEND / FAIL events like the dispatcher's own.
+  store as SEND / FAIL events like the dispatcher's own. A telemetry sink that raises is logged and
+  counted (`telemetry_errors`); it never stops or changes a send.
 
 Country rules come as `SendRules`, looked up per (recipient country, channel) by a `RulesFor`
 callable. `default_rules` is a small built-in set (India in depth, the US and the EU/UK basic);
@@ -40,6 +41,7 @@ Time is passed in everywhere. Nothing here reads the clock; the API layer does t
 from __future__ import annotations
 
 import hashlib
+import logging
 import threading
 from collections import deque
 from collections.abc import Callable, Iterator, Mapping, Sequence
@@ -124,6 +126,8 @@ GATEWAY_DECISION_JOB = "gateway_send_decision"
 """Queue job kind for a decision the gateway deferred or will retry."""
 SOURCE = "gateway"
 MAX_ERROR_LEN = 500
+
+_log = logging.getLogger(__name__)
 
 AMBIGUOUS_ERRORS: tuple[str, ...] = (
     "ReadTimeout",
@@ -671,6 +675,8 @@ class DispatchGateway:
         self.retry = retry or RetryPolicy()
         self._sink = telemetry
         self.telemetry_log: deque[TelemetryEvent] = deque(maxlen=10_000)
+        self.telemetry_errors = 0
+        """How many times the telemetry sink raised. Those events are still in `telemetry_log`."""
         self.default_country = default_country
         self.decision_purpose = decision_purpose
         self.suppressed: set[tuple[Channel, str]] = set()
@@ -689,9 +695,17 @@ class DispatchGateway:
     # --- telemetry ---------------------------------------------------------------------------------
 
     def _emit(self, event: TelemetryEvent) -> None:
+        """Record a telemetry event and hand it to the sink. A failing sink never touches the send.
+
+        `_emit` runs in the middle of a send (after the carrier accepted, before the SEND event is
+        stored), so a sink error that escaped would turn a delivered message into a FAIL and a retry."""
         self.telemetry_log.append(event)
         if self._sink is not None:
-            self._sink(event)
+            try:
+                self._sink(event)
+            except Exception:  # P6 telemetry: a raising sink is logged and counted, never propagated
+                self.telemetry_errors += 1
+                _log.warning("telemetry sink failed for %s (%s)", event.name, event.key, exc_info=True)
 
     def _emit_record(self, name: str, record: MessageRecord, at: datetime, **attrs: AttrValue) -> None:
         self._emit(

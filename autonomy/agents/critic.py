@@ -18,6 +18,11 @@ Two stages, cheapest and surest first:
    with the rubric in a different order each time. The item is rejected if either run scores any
    criterion below the threshold.
 
+When the judge cannot be reached (the provider is down, or the call raises), copy that passed the
+rules is neither approved nor rejected: it is left DRAFT with a note starting `judge unavailable`,
+so a later review can approve it once the judge is back. Nothing is approved without the judge
+unless the brand's rules say `judge_optional`. Rule failures still reject, with no model call.
+
 The judge never sees numbers it could change and never decides per customer; it only says yes or
 no to a template, with reasons a person can read.
 
@@ -60,7 +65,7 @@ from autonomy.contracts import (
     OfferKind,
     OfferOption,
 )
-from engine.llm import LLMClient
+from engine.llm import LLMClient, LLMError
 
 DEFAULT_BANNED_PHRASES: tuple[str, ...] = (
     "guaranteed",
@@ -172,6 +177,13 @@ class BrandRules(Contract):
     pack_settings: PackSettings = Field(
         default_factory=PackSettings,
         description="What the packs need from the brand: registered DLT templates, a postal address",
+    )
+    judge_optional: bool = Field(
+        default=False,
+        description=(
+            "True lets copy that passes every rule be approved when the judge cannot be reached. "
+            "False (the default) holds it as a draft until the judge is back."
+        ),
     )
 
     @classmethod
@@ -392,8 +404,16 @@ class Critic:
         self._seed = seed
 
     def review(self, items: Sequence[ContentItem], brand_rules: BrandRules) -> list[ContentItem]:
-        """The same items, in order, each APPROVED or REJECTED with `critic_notes` saying why."""
-        return [self._review_one(item, brand_rules) for item in items]
+        """The same items, in order, each APPROVED or REJECTED with `critic_notes` saying why.
+
+        While the judge is unreachable, an item that passes the rules stays DRAFT (or is APPROVED,
+        if `brand_rules.judge_optional`), with a `judge unavailable` note. One item's outage never
+        takes the rest of the review with it. Once the judge has failed in a review, the remaining
+        items are held without asking it again: retrying a provider that is down, item after item,
+        only makes the review slow.
+        """
+        down: list[str] = []  # the judge's failure, once it has failed in this review
+        return [self._review_one(item, brand_rules, down) for item in items]
 
     def rubric_orders(self, item: ContentItem) -> tuple[tuple[str, ...], tuple[str, ...]]:
         """The criterion order for each of the two runs: a seeded shuffle, then its reverse.
@@ -405,10 +425,12 @@ class Critic:
         random.Random(f"{self._seed}|{item.content_id}").shuffle(order)
         return tuple(order), tuple(reversed(order))
 
-    def _review_one(self, item: ContentItem, rules: BrandRules) -> ContentItem:
+    def _review_one(self, item: ContentItem, rules: BrandRules, down: list[str]) -> ContentItem:
         problems = check_rules(item, rules)
         if problems:
             return _verdict(item, ContentStatus.REJECTED, [f"rule: {p}" for p in problems])
+        if down:
+            return _judge_unavailable(item, rules, [], [], f"judge unavailable (not asked: {down[0]})")
 
         notes: list[str] = []
         failed: list[str] = []
@@ -426,6 +448,10 @@ class Critic:
                 notes.append(f"judge run {run}: no valid verdict ({exc})")
                 failed.append(f"run {run} gave no valid verdict")
                 continue
+            except Exception as exc:  # P4 LLM unavailable: hold the item, never crash the review
+                why = exc.code if isinstance(exc, LLMError) else type(exc).__name__
+                down.append(f"it failed earlier in this review with {why}")
+                return _judge_unavailable(item, rules, notes, failed, f"judge unavailable (run {run}: {why})")
             by_name: dict[str, CriterionScore] = {s.criterion: s for s in verdict.scores}
             notes.append(
                 f"judge run {run} [{', '.join(order)}]: "
@@ -439,6 +465,25 @@ class Critic:
         if failed:
             return _verdict(item, ContentStatus.REJECTED, [*notes, f"rejected: {'; '.join(failed)}"])
         return _verdict(item, ContentStatus.APPROVED, [*notes, "approved"])
+
+
+def _judge_unavailable(
+    item: ContentItem, rules: BrandRules, notes: list[str], failed: list[str], note: str
+) -> ContentItem:
+    """The verdict for an item that passed the rules but whose judge could not be reached.
+
+    `note` (starting `judge unavailable`) says why. A run that already scored it below the
+    threshold still rejects it: that is a sure no. Otherwise it stays DRAFT, so it is never sent,
+    unless the brand chose `judge_optional`.
+    """
+    notes = [*notes, note]
+    if failed:
+        return _verdict(item, ContentStatus.REJECTED, [*notes, f"rejected: {'; '.join(failed)}"])
+    if rules.judge_optional:
+        return _verdict(
+            item, ContentStatus.APPROVED, [*notes, "approved on the rules alone (judge optional)"]
+        )
+    return _verdict(item, ContentStatus.DRAFT, [*notes, "held as a draft until the judge is back"])
 
 
 def _verdict(item: ContentItem, status: ContentStatus, notes: list[str]) -> ContentItem:

@@ -4,9 +4,9 @@ Each row of the founder's failure-isolation table (docs/v2/FAILURE_ISOLATION.md)
 here, named `test_p<engine>_...`. Each one makes that engine fail with fakes (a store that raises,
 an LLM that is down, a carrier that answers 503) and checks the fallback the table promises.
 
-Where today's code does not degrade the way the table says, the test is still written, against
-the promised behaviour, and marked xfail with the gap and where to fix it. Nothing here is made to
-pass by weakening it. A few tests use optional runtime hooks wired in this round (`gateway=`,
+Every row now passes. A row whose code falls short is written against the promised behaviour
+and marked xfail with the gap and where to fix it; nothing here is made to pass by weakening it.
+A few tests use optional runtime hooks wired in this round (`gateway=`,
 `mandates=`, `state_enricher=` on `AutonomyRuntime`); `_require_hook` xfails them at once if the
 hook is missing, so a branch without the wiring reports the gap instead of a TypeError.
 
@@ -358,14 +358,6 @@ def test_p1_ingest_stalled_runtime_keeps_deciding_on_cached_states() -> None:
     assert len(report.sent) == len(CUSTOMERS)
 
 
-@pytest.mark.xfail(
-    strict=False,
-    reason=(
-        "The runtime never notices that the event feed has gone quiet: no tick raises an alert when "
-        "nothing has been appended for a long time. Fix in autonomy/runtime/service.py (_fold: track "
-        "the newest event's arrival and alert 'ingest.stale' past a configurable age). " + GAP
-    ),
-)
 def test_p1_ingest_stalled_raises_a_staleness_alert() -> None:
     w = build(seed_events=history(seen_at=T0 - timedelta(hours=1)))
     w.runtime.tick(T0)
@@ -373,16 +365,6 @@ def test_p1_ingest_stalled_raises_a_staleness_alert() -> None:
     assert any(a.code.startswith("ingest.") and a.severity != "info" for a in report.alerts)
 
 
-@pytest.mark.xfail(
-    strict=False,
-    raises=ConnectionError,
-    reason=(
-        "An unreachable event feed crashes the whole tick: AutonomyRuntime._fold calls "
-        "events.scan() with no guard, so nothing is decided, not even on cached states, and no alert "
-        "is stored. Fix in autonomy/runtime/service.py (tick/_fold: catch, keep the watermark, alert "
-        "'ingest.unavailable', go on to decide). " + GAP
-    ),
-)
 def test_p1_event_feed_unreachable_keeps_deciding_on_cached_states_and_alerts() -> None:
     feed: dict[str, FlakyFeed] = {}
 
@@ -534,16 +516,6 @@ def test_p2_the_runtime_mandate_refuses_a_budget_expansion() -> None:
     assert first.mandate_blocked and any(a.code == "mandate.violation" for a in first.alerts)
 
 
-@pytest.mark.xfail(
-    strict=False,
-    reason=(
-        "The runtime's mandate wiring fails closed on a store outage: AutonomyRuntime._mandate_for "
-        "catches the error and halts the goal ('mandate.error'), instead of keeping the last "
-        "unexpired mandate it read and refusing only what that mandate refuses. Fix in "
-        "autonomy/runtime/service.py (_mandate_for/_mandate_state: cache the last good mandate per "
-        "goal and use it, with a warning, while it is unexpired). " + GAP
-    ),
-)
 def test_p2_mandate_store_down_keeps_the_last_unexpired_mandate_and_refuses_budget_expansion() -> None:
     _require_hook("mandates", MANDATE_HOOK)
     store = FlakyMandates(_mandate(3.0, until=SWEEP + 5 * DAY))
@@ -590,15 +562,6 @@ def test_p3_policy_raising_for_one_customer_spares_the_rest() -> None:
     assert any(a.code == "decide.error" for a in report.alerts)
 
 
-@pytest.mark.xfail(
-    strict=False,
-    reason=(
-        "A customer whose decision raised is skipped with no decision logged, so the proof and the "
-        "off-policy log lose that moment, and a static-rule ranking is never tried. Expected: a "
-        "DO_NOTHING decision (probability 1, reason naming the failure) per affected customer. Fix "
-        "in autonomy/runtime/service.py (_decide_goal's except branch). " + GAP
-    ),
-)
 def test_p3_policy_raising_logs_do_nothing_for_that_tick() -> None:
     w = build(policy=RaisingPolicy())
     report = w.runtime.tick(SWEEP)
@@ -609,16 +572,6 @@ def test_p3_policy_raising_logs_do_nothing_for_that_tick() -> None:
     assert w.adapter.sent == []
 
 
-@pytest.mark.xfail(
-    strict=False,
-    raises=RuntimeError,
-    reason=(
-        "A policy that cannot be built crashes the whole tick: AutonomyRuntime._running calls "
-        "policy_factory() with no guard, so every other goal stops too. Expected: that goal is "
-        "skipped for the tick with a 'decide.error' alert. Fix in autonomy/runtime/service.py "
-        "(_running). " + GAP
-    ),
-)
 def test_p3_policy_that_cannot_be_built_is_isolated_to_its_goal() -> None:
     def factory(briefs: Sequence[Brief], content: Sequence[ContentItem]) -> Policy:
         if briefs[0].goal_id == BROKEN:
@@ -673,15 +626,6 @@ def test_p4_strategist_falls_back_to_the_template_brief_and_keeps_the_plan() -> 
     assert "No change this week" in adjusted.rationale
 
 
-@pytest.mark.xfail(
-    strict=False,
-    raises=LLMError,
-    reason=(
-        "Analyst.write_briefing falls back to its code-written template only for unreadable answers "
-        "(AgentOutputError); an unreachable model (LLMError) propagates. Fix in "
-        "autonomy/agents/analyst.py (catch LLMError beside AgentOutputError). " + GAP
-    ),
-)
 def test_p4_analyst_falls_back_to_the_template_briefing() -> None:
     result = Analyst(DownLLM()).write_briefing(
         sample_goal(T0, GOAL), _proof(), HealthStatus(as_of=SWEEP), {}, "weekly", SWEEP
@@ -690,15 +634,6 @@ def test_p4_analyst_falls_back_to_the_template_briefing() -> None:
     assert result.briefing.sections  # every number still comes from code
 
 
-@pytest.mark.xfail(
-    strict=False,
-    reason=(
-        "Creative.build_library has no template copy: an unreachable model (LLMError) propagates, "
-        "and an unreadable answer leaves its cell empty. Expected: fixed, pre-approved template copy "
-        "per (channel, offer, theme) cell, still DRAFT so the Critic gates it. Fix in "
-        "autonomy/agents/creative.py (_cell). " + GAP
-    ),
-)
 def test_p4_creative_falls_back_to_template_copy() -> None:
     creative = Creative(DownLLM())
     items = creative.build_library(sample_brief(T0, GOAL), brand_voice="warm and plain", now=T0)
@@ -721,16 +656,6 @@ def test_p4_critic_rules_still_gate_while_its_judge_is_down() -> None:
     assert llm.calls == 0
 
 
-@pytest.mark.xfail(
-    strict=False,
-    raises=LLMError,
-    reason=(
-        "Critic.review catches only AgentOutputError from its judge; an unreachable judge "
-        "(LLMError) propagates out of review(), which fails closed but takes the whole review with "
-        "it. Expected: the item is held (REJECTED, or left DRAFT) with a note, never APPROVED. Fix "
-        "in autonomy/agents/critic.py (_review_one). " + GAP
-    ),
-)
 def test_p4_critic_holds_rule_passing_copy_while_its_judge_is_down() -> None:
     item = _draft(
         sample_content(T0, GOAL)[0], f"New in {{{{top_category}}}} since your visit.\n\n{EMAIL_FOOTER}"
@@ -743,9 +668,9 @@ def test_p4_critic_holds_rule_passing_copy_while_its_judge_is_down() -> None:
 def test_p4_runtime_weekly_review_survives_an_llm_outage_and_keeps_sending() -> None:
     """Analyst and Strategist both on a dead model: the plan stays, a person is told, sends go on.
 
-    Today the Analyst raises, so the review is refused (`weekly.refused`). Once it falls back to
-    its template briefing (see the Analyst xfail), the review completes and the Strategist's
-    fallback stores an unchanged next version. Both keep the approved plan, so both pass here."""
+    The Analyst writes its template briefing, so the review completes and the Strategist's
+    fallback stores an unchanged next version. The `weekly.refused` branch is kept for a branch
+    without the Analyst fallback: both keep the approved plan, so both pass here."""
     llm = DownLLM()
 
     def analyst(goal: Goal, brief: Brief, now: datetime) -> Briefing:
@@ -1018,15 +943,6 @@ def test_p6_a_lagging_proof_report_does_not_stop_dispatch() -> None:
     assert len(report.sent) == len(CUSTOMERS)
 
 
-@pytest.mark.xfail(
-    strict=False,
-    reason=(
-        "A telemetry sink that raises breaks sending: DispatchGateway._emit calls the sink with no "
-        "guard inside the FailoverAdapter, so a message the carrier accepted is logged as a FAIL "
-        "(and retried), and gateway.dispatch() then raises. Telemetry must never stop or distort a "
-        "send. Fix in autonomy/channels/gateway.py (_emit: catch and count sink errors). " + GAP
-    ),
-)
 def test_p6_a_failing_telemetry_sink_does_not_stop_or_distort_a_send() -> None:
     def sink(event: TelemetryEvent) -> None:
         raise ConnectionError("the telemetry collector is unreachable")
@@ -1041,16 +957,6 @@ def test_p6_a_failing_telemetry_sink_does_not_stop_or_distort_a_send() -> None:
     assert not any(e.type is EventType.FAIL for e in g.events.scan())
 
 
-@pytest.mark.xfail(
-    strict=False,
-    raises=ConnectionError,
-    reason=(
-        "A spend source that raises crashes the tick: AutonomyRuntime._budget_left calls spend_fn "
-        "with no guard. Expected: the goal keeps deciding with the last budget it knew (never more), "
-        "and a 'spend.unavailable' alert is raised. Fix in autonomy/runtime/service.py "
-        "(_budget_left). " + GAP
-    ),
-)
 def test_p6_spend_source_down_keeps_the_last_known_budget() -> None:
     feed = {"down": False}
 

@@ -14,6 +14,11 @@ words exactly, so a later comparison between formats measures the format and not
 costs no extra LLM call. Assets are chosen by code from the approved set, never generated, and an
 asset without alt text is never used. The text variants are always kept.
 
+When the model cannot be reached (`LLMError`, or any other exception from the provider), each cell
+gets fixed template copy instead (`TEMPLATE_COPY`): plain sentences per theme, the offer only as
+`{{offer_label}}`, only allowed slots, and the same footer and length checks as model copy. A
+library always comes out, and the cells that used templates are listed in `templated`.
+
 Items come out as DRAFT. Nothing reaches a customer until the Critic approves it.
 """
 
@@ -47,7 +52,7 @@ from autonomy.contracts import (
     Tone,
     stable_id,
 )
-from engine.llm import LLMClient
+from engine.llm import LLMClient, LLMError
 
 ALLOWED_SLOTS: tuple[str, ...] = (
     "first_name",
@@ -119,6 +124,128 @@ THEME_GUIDANCE: dict[Theme, str] = {
 }
 """Extra direction for themes that are easy to get dishonest. Comparison has no theme of its own:
 it is an angle on quality (or savings, when there is an offer) and the labels stay the Theme enum."""
+
+TEMPLATE_COPY: dict[Theme, tuple[tuple[str, str], ...]] = {
+    Theme.SAVINGS: (
+        (
+            "A little something for you, {{first_name}}",
+            "Hi {{first_name}}, a good moment to stock up on {{top_category}}.",
+        ),
+        (
+            "Ready when you are, {{first_name}}",
+            "Hi {{first_name}}, your next order from {{store_name}} is ready when you are.",
+        ),
+    ),
+    Theme.QUALITY: (
+        (
+            "Made to last, {{first_name}}",
+            "Hi {{first_name}}, everything in {{top_category}} at {{store_name}} is chosen with care.",
+        ),
+        (
+            "A closer look at {{top_category}}",
+            "Hi {{first_name}}, take a closer look at {{top_category}} at {{store_name}}.",
+        ),
+    ),
+    Theme.URGENCY: (
+        (
+            "Worth a look soon, {{first_name}}",
+            "Hi {{first_name}}, if you have been eyeing {{top_category}}, now is a good moment.",
+        ),
+        (
+            "Why wait, {{first_name}}?",
+            "Hi {{first_name}}, {{top_category}} at {{store_name}} is ready for you today.",
+        ),
+    ),
+    Theme.SOCIAL_PROOF: (
+        (
+            "A favourite with shoppers like you",
+            "Hi {{first_name}}, {{top_category}} is a favourite with shoppers like you.",
+        ),
+        (
+            "Loved by people like you",
+            "Hi {{first_name}}, people who shop like you keep coming back to {{top_category}}.",
+        ),
+    ),
+    Theme.EDUCATION: (
+        (
+            "A few ideas for {{top_category}}",
+            "Hi {{first_name}}, a few simple ideas to get more from {{top_category}}.",
+        ),
+        (
+            "Getting the most from {{top_category}}",
+            "Hi {{first_name}}, a little care keeps what you buy in {{top_category}} at its best for longer.",
+        ),
+    ),
+    Theme.CONVENIENCE: (
+        (
+            "Easy does it, {{first_name}}",
+            "Hi {{first_name}}, your favourites in {{top_category}} are a few taps away.",
+        ),
+        (
+            "Your next order, made simple",
+            "Hi {{first_name}}, picking up where you left off in {{top_category}} takes a minute.",
+        ),
+    ),
+    Theme.NOVELTY: (
+        (
+            "Something new in {{top_category}}",
+            "Hi {{first_name}}, there is something new in {{top_category}} we think you will like.",
+        ),
+        (
+            "The latest at {{store_name}}",
+            "Hi {{first_name}}, take a look at the latest in {{top_category}} at {{store_name}}.",
+        ),
+    ),
+    Theme.LOYALTY: (
+        (
+            "Thank you, {{first_name}}",
+            "Hi {{first_name}}, thank you for shopping with {{store_name}}. We are glad you are here.",
+        ),
+        (
+            "A thank-you from {{store_name}}",
+            "Hi {{first_name}}, a thank-you from {{store_name}} for coming back to us.",
+        ),
+    ),
+    Theme.REMINDER: (
+        (
+            "Still thinking about {{top_category}}?",
+            "Hi {{first_name}}, your favourites in {{top_category}} are still here when you are ready.",
+        ),
+        (
+            "We kept your place, {{first_name}}",
+            "Hi {{first_name}}, it has been a while. {{top_category}} at {{store_name}} is ready when you are.",
+        ),
+    ),
+    Theme.PERSONAL: (
+        (
+            "Picked for you, {{first_name}}",
+            "Hi {{first_name}}, we picked {{recommended_product}} with you in mind.",
+        ),
+        (
+            "Something you might like",
+            "Hi {{first_name}}, based on what you like, you might enjoy {{recommended_product}}.",
+        ),
+    ),
+}
+"""Fixed copy per theme as (email subject, body), used when the model cannot be reached. Written to
+pass the Critic's rules on every channel: allowed slots only, no figures, no deadlines or scarcity,
+no capitals, and short enough for one SMS with the offer line added. Each line also reads well when
+a slot falls back to its neutral phrase (`top_category` becomes 'our latest picks'), so no
+'your {{top_category}}' or '{{top_category}} order'. The offer is never described here:
+`TEMPLATE_OFFER_LINE` names it through `{{offer_label}}` when the cell has one."""
+
+TEMPLATE_OFFER_LINE = " Your offer: {{offer_label}}."
+"""Appended to template copy for a cell with an offer, so the approved offer's label is the only claim."""
+
+
+def template_variants(channel: Channel, offer: OfferOption, theme: Theme, n: int) -> list[Variant]:
+    """Up to `n` fixed variants for one cell, the same every time (P4 LLM unavailable)."""
+    out: list[Variant] = []
+    for subject, body in TEMPLATE_COPY[theme][:n]:
+        text = body if offer.kind is OfferKind.NONE else body + TEMPLATE_OFFER_LINE
+        out.append(Variant(subject=subject if channel is Channel.EMAIL else None, body=text))
+    return out
+
 
 CAROUSEL_CARDS = 5
 """How many cards the Creative puts in a carousel it assembles itself. Stacked in an email, more than
@@ -280,6 +407,11 @@ class VariantSet(BaseModel):
     variants: list[Variant] = Field(min_length=1)
 
 
+def _why(exc: Exception) -> str:
+    """A short reason for a failed model call: the `LLMError` code, or the exception's type."""
+    return exc.code if isinstance(exc, LLMError) else type(exc).__name__
+
+
 class Creative:
     """Builds a DRAFT content library for a brief. One LLM call per (channel, offer, theme) cell."""
 
@@ -290,6 +422,9 @@ class Creative:
         """Why variants from the last build were left out (too long, missing subject, duplicate)."""
         self.failures: list[str] = []
         """Cells from the last build whose LLM answer never parsed."""
+        self.templated: list[str] = []
+        """Cells from the last build written from `TEMPLATE_COPY` because the model could not be reached."""
+        self._down: str | None = None
 
     def build_library(
         self,
@@ -306,7 +441,9 @@ class Creative:
 
         `themes`, if given, is used for every offer; otherwise each offer gets the themes that fit
         its kind (`OFFER_THEMES`). A cell whose answer never parses is skipped and noted in
-        `failures`, so one bad answer does not cost the whole library.
+        `failures`, so one bad answer does not cost the whole library. A cell whose model call
+        raises (the provider is down) gets template copy instead and is noted in `templated`; once
+        the model has failed in a build, the remaining cells use templates without asking again.
 
         `assets` are the brand's approved images and videos. With none, the library is text only,
         as before. `formats` overrides which formats each channel may use (default
@@ -317,6 +454,8 @@ class Creative:
             raise ValueError("n_per_cell must be at least 1")
         self.dropped = []
         self.failures = []
+        self.templated = []
+        self._down = None
         pool = list(assets)
         support = formats if formats is not None else FORMAT_SUPPORT
         items: list[ContentItem] = []
@@ -398,21 +537,45 @@ class Creative:
     ) -> list[ContentItem]:
         tone = THEME_TONE[theme]
         cell = f"{channel.value}/{offer.offer_id}/{theme.value}"
-        try:
-            answer = ask_json(
-                self._llm,
-                VariantSet,
-                system=self._system(),
-                prompt=self._cell_prompt(brief, channel, offer, theme, tone, brand_voice, n),
-                model_id=self._model_id,
-            )
-        except AgentOutputError as exc:
-            self.failures.append(f"{cell}: {exc}")
-            return []
+        variants: Sequence[Variant]
+        if self._down is not None:
+            variants = template_variants(channel, offer, theme, n)
+            self.templated.append(f"{cell}: {self._down}")
+        else:
+            try:
+                variants = ask_json(
+                    self._llm,
+                    VariantSet,
+                    system=self._system(),
+                    prompt=self._cell_prompt(brief, channel, offer, theme, tone, brand_voice, n),
+                    model_id=self._model_id,
+                ).variants
+            except AgentOutputError as exc:
+                self.failures.append(f"{cell}: {exc}")
+                return []
+            except Exception as exc:  # P4 LLM unavailable: fixed template copy, still DRAFT for the Critic
+                self._down = f"the model could not be reached ({_why(exc)})"
+                variants = template_variants(channel, offer, theme, n)
+                self.templated.append(f"{cell}: {self._down}")
+        return self._items(brief, channel, offer, theme, variants, n=n, now=now)
 
+    def _items(
+        self,
+        brief: Brief,
+        channel: Channel,
+        offer: OfferOption,
+        theme: Theme,
+        variants: Sequence[Variant],
+        *,
+        n: int,
+        now: datetime,
+    ) -> list[ContentItem]:
+        """DRAFT items for one cell's variants, with code-assigned labels; misfits go to `dropped`."""
+        tone = THEME_TONE[theme]
+        cell = f"{channel.value}/{offer.offer_id}/{theme.value}"
         out: list[ContentItem] = []
         seen_bodies: set[str] = set()
-        for variant in answer.variants[:n]:
+        for variant in variants[:n]:
             body = variant.body.strip()
             subject = ((variant.subject or "").strip() or None) if channel is Channel.EMAIL else None
             if channel is Channel.EMAIL:

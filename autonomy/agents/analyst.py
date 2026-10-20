@@ -11,6 +11,10 @@ bodies around those numbers. `claims.check_numbers` reads every number back out 
 3. still wrong (or the model's output does not parse): use the template briefing, written entirely
    by code from the same numbers. A briefing always arrives, and it never carries an invented number.
 
+If the model cannot be reached at all (`LLMError`, or any other exception from the provider), the
+template briefing is used at once, without a second ask: retrying a provider that is down only
+delays the report.
+
 **Opportunities** (`opportunities()`) are rule-based scouting over a summary of segments, with no LLM
 at all: for example many lapsing customers with real past spend become a DRAFT win-back goal with
 a budget computed from their value. The goal's text is the one-line reason. A person approves it,
@@ -45,7 +49,7 @@ from autonomy.contracts import (
     StopMetric,
     stable_id,
 )
-from engine.llm import LLMClient
+from engine.llm import LLMClient, LLMError
 
 Period = Literal["daily", "weekly"]
 BriefingSource = Literal["llm", "llm_retry", "template"]
@@ -500,7 +504,7 @@ class Analyst:
         period: Period,
         now: datetime,
     ) -> Briefing:
-        """The briefing a marketer reads. Never raises for bad model output: it falls back to code."""
+        """The briefing a marketer reads. Never raises for bad or missing model output; code fills in."""
         return self.write_briefing(goal, proof, health, facts, period, now).briefing
 
     def write_briefing(
@@ -532,6 +536,10 @@ class Analyst:
             except AgentOutputError as err:
                 seen.append(f"unreadable answer: {err}")
                 continue
+            except Exception as err:  # P4 LLM unavailable: the template briefing, every number from code
+                why = err.code if isinstance(err, LLMError) else type(err).__name__
+                seen.append(f"the model could not be reached ({why})")
+                break
             problems = find_problems(text, drafts)
             if not problems:
                 bodies = {s.key: s.body.strip() for s in text.sections}

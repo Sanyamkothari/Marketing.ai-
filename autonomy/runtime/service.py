@@ -50,6 +50,15 @@ and the operator endpoint call it by hand. Each tick does, in order:
   country quiet hours, rate limits and carrier failover. A refusal is a skipped send and an
   alert; held decisions come back as `gateway_send_decision` jobs.
 
+**When an engine fails**, the tick goes on with what is still safe (the founder's table,
+`docs/v2/FAILURE_ISOLATION.md`). An unreadable event feed folds nothing, keeps the watermark and
+decides on the states held (`ingest.unavailable`); a feed with no new customer event for
+`ingest_stale_after` raises `ingest.stale`. A mandate store that cannot be read leaves the goal under
+the last active, certified mandate it read, until that one expires (`mandate.store_unavailable`). A
+policy that raises logs a DO_NOTHING decision for that customer (`LEFT_ALONE`); one that cannot be
+built skips only its goal (`decide.error`). A spend source that raises leaves the last budget known,
+less the goal's own sends since, and never more (`spend.unavailable`).
+
 Every alert and briefing a tick produces is written to the runtime's `AlertStore` and
 `BriefingStore` (`autonomy.runtime.stores`), so a worker's ticks reach the API. Spend per goal
 (budget left and the spend-pace breaker) comes from a `SpendLedger` over the event log: channel
@@ -167,6 +176,8 @@ if TYPE_CHECKING:
     from autonomy.channels.gateway import DispatchGateway
 
 __all__ = [
+    "INGEST_TYPES",
+    "LEFT_ALONE",
     "MANDATE_PACED",
     "MATERIAL_BRIEF_FIELDS",
     "TRIGGER_TYPES",
@@ -226,6 +237,23 @@ ENRICH_PER_CUSTOMER_MAX = 200
 
 _DISPATCHER_SKIPS: frozenset[str] = frozenset(r.value for r in SkipReason)
 """The dispatcher's own skip codes. Any other skip reason on the gateway path is the gateway's refusal."""
+
+INGEST_TYPES: frozenset[EventType] = frozenset(
+    {
+        EventType.SIGNUP,
+        EventType.VISIT,
+        EventType.VIEW,
+        EventType.CART,
+        EventType.PURCHASE,
+        EventType.REFUND,
+    }
+)
+"""What customers do on their own, which only the shop's event feed brings in. The staleness check
+(`RuntimeConfig.ingest_stale_after`) watches these, so the runtime's own sends never make a dead
+feed look alive."""
+
+LEFT_ALONE = "Left alone: the decision engine is unavailable"
+"""The reason on the DO_NOTHING decision logged for a customer whose policy call raised."""
 
 TRIGGER_TYPES: frozenset[EventType] = frozenset({EventType.REPLY, EventType.CART})
 """Events that get a customer a decision within one tick, not at the next daily sweep."""
@@ -293,6 +321,10 @@ class RuntimeConfig:
     """How much of a goal's decision log the nightly negative-lift check reads (from its start at most)."""
     mandate_burst_share: float = 0.25
     """The share of a mandate's daily cap its spend pacer lets go at once (see `TokenBucket`)."""
+    ingest_stale_after: timedelta | None = timedelta(days=2)
+    """Raise an `ingest.stale` alert when the newest customer event (`INGEST_TYPES`) is older than
+    this, counted from the process's first fold at most: the feed has probably gone quiet. The
+    runtime keeps deciding on the states it holds. None turns the check off."""
 
     def __post_init__(self) -> None:
         for name in ("sweep_hour", "nightly_hour", "weekly_hour"):
@@ -320,6 +352,8 @@ class RuntimeConfig:
             raise ValueError("enrich_lookback and proof_lookback cannot be negative")
         if not 0 < self.mandate_burst_share < 1:
             raise ValueError("mandate_burst_share is between 0 and 1, exclusive")
+        if self.ingest_stale_after is not None and self.ingest_stale_after <= timedelta(0):
+            raise ValueError("ingest_stale_after must be positive, or None")
 
 
 class RuntimeCursor(BaseModel):
@@ -580,6 +614,18 @@ class SpendLedger:
     def refresh(self) -> None:
         """Read the briefs again (outcome windows and offer prices) the next time they are needed."""
         self._briefs = None
+
+    def adopt(self, other: SpendLedger) -> None:
+        """Take over what `other` (a ledger just rebuilt from the log) knows, keeping this object.
+
+        The runtime rebuilds into a fresh ledger and adopts it only once the scan has finished, so a
+        feed that fails half way leaves the spend it knew in place, never an empty ledger."""
+        self._seen = other._seen
+        self._charges = other._charges
+        self._offer_sends = other._offer_sends
+        self._unmatched = other._unmatched
+        self._paid = other._paid
+        self._briefs = other._briefs
 
     def observe(self, events: Iterable[Event]) -> None:
         for e in events:
@@ -917,6 +963,16 @@ class AutonomyRuntime:
         self._paused_channels: set[Channel] = set()
         self._buckets: dict[tuple[str, int], TokenBucket] = {}
         """The spend pacer per mandate version. Rebuilt after a restart from the last day's spend."""
+        self._newest_ingest: datetime | None = None
+        """The time of the newest customer event (`INGEST_TYPES`) folded, for the staleness alert."""
+        self._watching_since: datetime | None = None
+        """The first successful fold in this process: the staleness clock never starts earlier."""
+        self._last_mandate: dict[str, tuple[Mandate, datetime]] = {}
+        """goal_id -> the last active, certified mandate the store gave, and when it was read."""
+        self._spend_known: dict[str, tuple[float, float, datetime]] = {}
+        """goal_id -> (spend, budget left, when) at the last good read of the spend source."""
+        self._ledger_read_at: datetime | None = None
+        """When a process that has not ticked last read the log into its spend ledger (`send_gate`)."""
 
     # --- the API's helpers ---------------------------------------------------------------------
 
@@ -997,7 +1053,13 @@ class AutonomyRuntime:
             # rebuilds once; folding an event twice would count a purchase twice.
             return self._full_rebuild(now, report)
         since = self.cursor.watermark - self.config.late_window
-        new = [e for e in self.events.scan(since=since) if e.ts <= now and e.event_id not in self._seen]
+        try:
+            new = [e for e in self.events.scan(since=since) if e.ts <= now and e.event_id not in self._seen]
+        except Exception as err:  # P1 ingest: an unreachable feed folds nothing; deciding goes on
+            self._feed_down(report, err)
+            return []  # the watermark stays, so these events are folded once the feed is back
+        self._note_ingest(new, now)
+        self._check_stale(now, report)
         if new:
             apply_events(new, self.states, self.folder, now=now)
             self._mark_seen(new)
@@ -1017,10 +1079,26 @@ class AutonomyRuntime:
         """
         floor = now - max(self.config.late_window, self.config.trigger_window)
         ledger = self.spend_ledger
-        if ledger is not None:
-            ledger.reset()  # rebuilt from the same scan of the log as state
-        recording = _RecordingEvents(self.events, floor, ledger.observe_one if ledger is not None else None)
-        rebuild_states(recording, self.states, self.folder, now)
+        # Rebuilt from the same scan of the log as state, into a fresh ledger adopted only once the
+        # scan has finished (P1 ingest: a failed rebuild keeps the spend already known).
+        rebuilt = (
+            SpendLedger(ledger.decisions, ledger.workspace, channel_costs=ledger.channel_costs)
+            if ledger is not None
+            else None
+        )
+        recording = _RecordingEvents(
+            self.events, floor, rebuilt.observe_one if rebuilt is not None else None, until=now
+        )
+        try:
+            rebuild_states(recording, self.states, self.folder, now)
+        except Exception as err:  # P1 ingest: decide on the states already stored; retry next tick
+            self._feed_down(report, err)
+            return []
+        if ledger is not None and rebuilt is not None:
+            ledger.adopt(rebuilt)
+        if recording.newest_ingest is not None:
+            self._newest_ingest = recording.newest_ingest
+        self._check_stale(now, report)
         # Everything folded, future-dated events included, is marked so it is never folded again.
         fresh = [
             e for e in recording.recent if e.ts <= now and (not self._warm or e.event_id not in self._seen)
@@ -1032,6 +1110,59 @@ class AutonomyRuntime:
         report.rebuilt = True
         report.events_folded += len(fresh)
         return fresh
+
+    def _feed_down(self, report: TickReport, err: Exception) -> None:
+        """P1 ingest: the feed could not be read. Alert (once a day); the tick decides on cached states."""
+        day = self._today()
+        if ("ingest.unavailable", None) in day.alerted:
+            return
+        day.alerted.add(("ingest.unavailable", None))
+        self._alert(
+            report,
+            code="ingest.unavailable",
+            key=day.day.isoformat(),
+            severity="warning",
+            message=(
+                f"New events could not be folded ({type(err).__name__}: {err}). The runtime keeps "
+                "deciding on the customer states it holds and folds the missed events once the feed "
+                "is back; check the event feed."
+            )[:1000],
+        )
+
+    def _note_ingest(self, events: Iterable[Event], now: datetime) -> None:
+        """Remember the newest customer event folded (for the P1 staleness alert)."""
+        for e in events:
+            fresh = self._newest_ingest is None or e.ts > self._newest_ingest
+            if e.type in INGEST_TYPES and e.ts <= now and fresh:
+                self._newest_ingest = e.ts
+
+    def _check_stale(self, now: datetime, report: TickReport) -> None:
+        """P1 ingest: alert (once a day) when no new customer event has come for `ingest_stale_after`.
+
+        The quiet is counted from the newest customer event, but never from before this process's
+        first fold: a log whose history is old is not a dead feed until the runtime has watched it
+        stay quiet for the whole window. A log with no customer events at all is a setup problem,
+        not a stale feed, so it raises nothing here."""
+        if self._watching_since is None:
+            self._watching_since = now
+        limit, newest = self.config.ingest_stale_after, self._newest_ingest
+        if limit is None or newest is None or now - max(newest, self._watching_since) <= limit:
+            return
+        day = self._today()
+        if ("ingest.stale", None) in day.alerted:
+            return
+        day.alerted.add(("ingest.stale", None))
+        self._alert(
+            report,
+            code="ingest.stale",
+            key=day.day.isoformat(),
+            severity="warning",
+            message=(
+                f"No new customer events (visits, carts, purchases) for {_age(now - newest)}: the "
+                f"newest is from {newest.isoformat()}. The feed may have gone quiet; the runtime keeps "
+                "deciding on the states it holds."
+            ),
+        )
 
     def _mark_seen(self, events: Iterable[Event]) -> None:
         for e in events:
@@ -1116,8 +1247,21 @@ class AutonomyRuntime:
         running = [(g, b) for g, b in self._goals_with_briefs() if g.status is GoalStatus.ACTIVE]
         if not running:
             return
-        recent = [e for e in self.events.scan(since=now - self.config.breaker_window) if e.ts <= now]
-        result = self.breakers_fn([b for _, b in running], recent, now)
+        try:
+            recent = [e for e in self.events.scan(since=now - self.config.breaker_window) if e.ts <= now]
+            result = self.breakers_fn([b for _, b in running], recent, now)
+        except Exception as err:  # P1 ingest / P6 spend: breakers that cannot read are an alert, not a stop
+            self._alert(
+                report,
+                code="breakers.error",
+                key=now.isoformat(),
+                severity="warning",
+                message=(
+                    f"The circuit breakers could not run ({type(err).__name__}); nothing was paused by "
+                    "them this tick."
+                ),
+            )
+            return
         self._apply_breakers(result, {g.goal_id: g for g, _ in running}, report)
 
     def _apply_breakers(self, result: BreakerResult, goals: Mapping[str, Goal], report: TickReport) -> None:
@@ -1323,7 +1467,7 @@ class AutonomyRuntime:
             now=now,
             briefs=(run.brief,),
             content=tuple(run.content),
-            budget_left={gid: self._budget_left(run, now)},
+            budget_left={gid: self._budget_left(run, now, report)},
             seed=_seed(self.config.seed, gid, now),
             policy_version=run.policy.version,
         )
@@ -1360,8 +1504,9 @@ class AutonomyRuntime:
         for cand, state in picked:
             try:
                 decision = run.policy.decide(state, ctx)
-            except Exception:  # a policy bug for one customer must not stop everyone else's
+            except Exception:  # P3 Decision Hub: log DO_NOTHING for this customer; the rest still decide
                 failures += 1
+                made.append(_left_alone(cand.decision_id, state, now, run.policy.version))
                 continue
             made.append(decision.model_copy(update={"decision_id": cand.decision_id}))
         if failures:
@@ -1371,7 +1516,10 @@ class AutonomyRuntime:
                 key=f"{gid}:{now.isoformat()}",
                 severity="warning",
                 goal_id=gid,
-                message=f"The policy failed for {failures} customers of this goal; they were skipped.",
+                message=(
+                    f"The policy failed for {failures} customers of this goal; each was left alone this "
+                    "tick (a do-nothing decision is logged) and nothing was sent to them."
+                ),
             )
         if made:
             self.decisions.record(made)
@@ -1592,17 +1740,22 @@ class AutonomyRuntime:
         if self.mandates is None or goal.autonomy is AutonomyLevel.SHADOW:
             return True, None
         gid = goal.goal_id
+        day = self._today()
         try:
-            mandate, problem, why = self._mandate_state(gid, now)
+            mandate, problem, why = self._read_mandate(gid, now)
         except Exception as err:  # a mandate store outage stops this goal, never the tick
+            held = self._held_mandate(gid, now)
+            if held is not None:  # P2 mandate store down: run under the last good, unexpired mandate
+                self._store_down_alert(gid, held, err, report)
+                return True, held
             mandate, problem, why = (
                 None,
                 MANDATE_ERROR,
-                f"its mandate could not be read ({type(err).__name__})",
+                f"its mandate could not be read ({type(err).__name__}) and no unexpired mandate read "
+                "earlier stands in",
             )
         if problem is None:
             return True, mandate
-        day = self._today()
         key = (f"mandate.{problem}", gid)
         if key not in day.alerted:
             day.alerted.add(key)
@@ -1616,6 +1769,50 @@ class AutonomyRuntime:
             )
         return False, None
 
+    def _read_mandate(self, goal_id: str, now: datetime) -> tuple[Mandate | None, str | None, str]:
+        """`_mandate_state`, remembering an active, certified mandate as the goal's last good one.
+
+        Any other answer from the store (no mandate, revoked, unsigned, not governed) clears it: only
+        a store that cannot answer at all lets the last good mandate stand in (P2)."""
+        mandate, problem, why = self._mandate_state(goal_id, now)
+        if problem is None and mandate is not None:
+            self._last_mandate[goal_id] = (mandate, now)
+        else:
+            self._last_mandate.pop(goal_id, None)
+        return mandate, problem, why
+
+    def _held_mandate(self, goal_id: str, now: datetime) -> Mandate | None:
+        """P2 mandate store down: the last good mandate read for the goal, if it is still unexpired."""
+        held = self._last_mandate.get(goal_id)
+        if held is None:
+            return None
+        mandate = held[0]
+        if mandate.effective_status(now) is not MandateStatus.ACTIVE or not mandate.is_valid_at(now):
+            return None  # expired while the store was down: the goal halts (fail safe)
+        return mandate
+
+    def _store_down_alert(self, goal_id: str, mandate: Mandate, err: Exception, report: TickReport) -> None:
+        """Say (once a day per goal) that the goal runs under a mandate held from an earlier read."""
+        day = self._today()
+        key = ("mandate.store_unavailable", goal_id)
+        if key in day.alerted:
+            return
+        day.alerted.add(key)
+        read_at = self._last_mandate[goal_id][1]
+        self._alert(
+            report,
+            code="mandate.store_unavailable",
+            key=f"{goal_id}:{day.day.isoformat()}",
+            severity="warning",
+            goal_id=goal_id,
+            message=(
+                f"The mandate store could not be read ({type(err).__name__}). This goal keeps running "
+                f"under mandate {mandate.mandate_id} (v{mandate.version}) as read at "
+                f"{read_at.isoformat()}: nothing beyond it is spent, and the goal stops at "
+                f"{mandate.valid_until.isoformat()} unless the store is back."
+            ),
+        )
+
     def send_gate(self, decision: Decision, now: datetime) -> str | None:
         """The mandate check for a queued send coming due (a worker's `SendGate`): a reason, or None.
 
@@ -1624,7 +1821,13 @@ class AutonomyRuntime:
         action = decision.action
         if self.mandates is None or action is None:
             return None
-        mandate, problem, _ = self._mandate_state(action.goal_id, now)
+        try:
+            mandate, problem, _ = self._read_mandate(action.goal_id, now)
+        except Exception:
+            held = self._held_mandate(action.goal_id, now)
+            if held is None:
+                raise  # nothing stands in: the job fails and is retried, nothing is sent
+            mandate, problem = held, None  # P2 mandate store down: the last good mandate still gates
         if problem is not None:
             return problem
         if mandate is None:
@@ -1634,8 +1837,28 @@ class AutonomyRuntime:
             return None  # the dispatcher reports the missing state itself
         state = self.folder.refresh(state, now)
         brief = self._latest_brief(action.goal_id)
+        self._catch_up_ledger(now)
         codes, _ = self._check_one(mandate, brief, decision, state, now, self._mandate_spend(mandate, now))
         return codes[0] if codes else None
+
+    def _catch_up_ledger(self, now: datetime) -> None:
+        """Bring the spend ledger up from the log in a process that has not ticked (a worker's gate).
+
+        A tick keeps the ledger current through its fold. A worker that claims a queued send before
+        any tick ran would otherwise gate it on a ledger never built, which reads as unknown spend
+        and refuses the send for good. If the log cannot be read this raises: the job fails and is
+        retried, and nothing is sent."""
+        ledger = self.spend_ledger
+        if ledger is None or self._warm:
+            return
+        if self._ledger_read_at is None:
+            fresh = SpendLedger(ledger.decisions, ledger.workspace, channel_costs=ledger.channel_costs)
+            fresh.observe(self.events.scan())
+            ledger.adopt(fresh)
+        else:
+            ledger.refresh()
+            ledger.observe(self.events.scan(since=self._ledger_read_at - self.config.late_window))
+        self._ledger_read_at = now if self._ledger_read_at is None else max(self._ledger_read_at, now)
 
     def _check_one(
         self,
@@ -1682,7 +1905,9 @@ class AutonomyRuntime:
         (`mandate_paced`) and the customer is decided again on another day."""
         spend = self._mandate_spend(mandate, now)
         extra = 0.0
-        bucket = self._bucket(mandate, now) if pace else None
+        # P6 spend: with spend unknown nothing passes the ceiling, and a pacer built now (from a
+        # ledger a cold start never filled) would be kept with a whole fresh burst in it.
+        bucket = self._bucket(mandate, now) if pace and not math.isinf(spend.today) else None
         allowed: list[Decision] = []
         blocked: list[tuple[Decision, list[str]]] = []
         for d in acts:
@@ -1760,10 +1985,15 @@ class AutonomyRuntime:
         at = now.astimezone(UTC)
         midnight = datetime.combine(at.date(), time(0), tzinfo=UTC)
         total = today = 0.0
-        for gid in mandate.goal_ids:
-            spent = self.spend_fn(gid, now)
-            total += max(0.0, spent - self.spend_fn(gid, mandate.valid_from))
-            today += max(0.0, spent - self.spend_fn(gid, midnight))
+        if self._spend_unknown():
+            return SpendToDate(total=math.inf, today=math.inf)  # P6 spend: unknown spend sends nothing
+        try:
+            for gid in mandate.goal_ids:
+                spent = self.spend_fn(gid, now)
+                total += max(0.0, spent - self.spend_fn(gid, mandate.valid_from))
+                today += max(0.0, spent - self.spend_fn(gid, midnight))
+        except Exception:  # P6 spend: unknown spend counts as the whole ceiling, so nothing goes
+            return SpendToDate(total=math.inf, today=math.inf)
         return SpendToDate(total=total, today=today)
 
     def _bucket(self, mandate: Mandate, now: datetime) -> TokenBucket | None:
@@ -1778,10 +2008,14 @@ class AutonomyRuntime:
         fresh = TokenBucket.for_mandate(mandate, now, burst_share=self.config.mandate_burst_share)
         if fresh is None:
             return None
-        recent = sum(
-            max(0.0, self.spend_fn(gid, now) - self.spend_fn(gid, now - timedelta(days=1)))
-            for gid in mandate.goal_ids
-        )
+        recent: float
+        try:
+            recent = sum(
+                max(0.0, self.spend_fn(gid, now) - self.spend_fn(gid, now - timedelta(days=1)))
+                for gid in mandate.goal_ids
+            )
+        except Exception:  # P6 spend: a pacer built while spend is unknown starts empty and refills
+            recent = math.inf
         fresh = fresh.model_copy(update={"tokens": max(0.0, fresh.tokens - recent)})
         self._buckets[key] = fresh
         return fresh
@@ -1796,9 +2030,62 @@ class AutonomyRuntime:
         last = self.cursor.lapse_checked_at
         return last is None or now - last >= self.config.lapse_check_every
 
-    def _budget_left(self, run: _Running, now: datetime) -> float:
-        spent = self.spend_fn(run.goal.goal_id, now) if self.spend_fn is not None else 0.0
-        return max(0.0, min(run.brief.envelope.budget, run.goal.budget) - spent)
+    def _budget_left(self, run: _Running, now: datetime, report: TickReport) -> float:
+        """The goal's budget less its spend. With the spend unknown, the last budget known, never more."""
+        gid = run.goal.goal_id
+        cap = min(run.brief.envelope.budget, run.goal.budget)
+        try:
+            if self._spend_unknown():
+                raise RuntimeError("the spend ledger has not been built from the event log yet")
+            spent = self.spend_fn(gid, now)
+        except Exception as err:  # P6 spend telemetry: keep the last known budget less our own sends
+            return self._budget_unknown(gid, cap, now, err, report)
+        left = max(0.0, cap - spent)
+        self._spend_known[gid] = (spent, left, now)
+        return left
+
+    def _spend_unknown(self) -> bool:
+        """True while the runtime's own spend ledger has never been built from the log (a cold start
+        whose feed is down)."""
+        return self.spend_ledger is not None and not self._warm and self._ledger_read_at is None
+
+    def _budget_unknown(
+        self, goal_id: str, cap: float, now: datetime, err: Exception, report: TickReport
+    ) -> float:
+        """P6 spend: the budget left when the spend source cannot be read; alert once a day.
+
+        It is the budget left at the last good read (or the cap less that read's spend, if the cap
+        was cut since), less what this goal's own SENDs since then cost. A raised budget is never
+        honoured, and with no good read, or no way to count the sends since, nothing is spent."""
+        day = self._today()
+        key = ("spend.unavailable", goal_id)
+        if key not in day.alerted:
+            day.alerted.add(key)
+            self._alert(
+                report,
+                code="spend.unavailable",
+                key=f"{goal_id}:{day.day.isoformat()}",
+                severity="warning",
+                goal_id=goal_id,
+                message=(
+                    f"This goal's spend could not be read ({type(err).__name__}). It keeps deciding "
+                    "with the last budget it knew, less its own sends since, and never more."
+                ),
+            )
+        known = self._spend_known.get(goal_id)
+        if known is None:
+            return 0.0
+        spent, left, at = known
+        try:
+            # Priced as the ledger prices them, which also finds the goal of a gateway SEND (it
+            # carries only the decision id). `scan`'s `until` is exclusive and this tick's queued
+            # sends land at `now`, so the window is filtered by hand, inclusive at both ends.
+            ours = SpendLedger(self.decisions, self.workspace, channel_costs=self.channel_costs)
+            ours.observe(e for e in self.events.scan(since=at) if at <= e.ts <= now)
+            since = ours.spent(goal_id, now)
+        except Exception:  # the sends since the last read cannot be counted either: spend nothing
+            return 0.0
+        return max(0.0, min(left, cap - spent) - since)
 
     # --- 6. nightly ------------------------------------------------------------------------------
 
@@ -2055,7 +2342,12 @@ class AutonomyRuntime:
             cached = self._policies.get(goal.goal_id)
             fresh = cached is None or cached[0] != key
             if fresh:
-                cached = (key, self.policy_factory([brief], content))
+                try:
+                    built_policy = self.policy_factory([brief], content)
+                except Exception as err:  # P3: a policy that cannot be built skips only its goal
+                    self._unbuildable(goal, report, err)
+                    continue  # tried again next tick; the other goals run
+                cached = (key, built_policy)
                 self._policies[goal.goal_id] = cached
             assert cached is not None
             run = _Running(goal=goal, brief=brief, content=content, policy=cached[1])
@@ -2065,6 +2357,25 @@ class AutonomyRuntime:
         if built:
             self._replay(built, now, report)
         return out
+
+    def _unbuildable(self, goal: Goal, report: TickReport, err: Exception) -> None:
+        """Alert (once a day per goal) that a goal's policy could not be built, so it did not run."""
+        day = self._today()
+        key = ("decide.unbuildable", goal.goal_id)
+        if key in day.alerted:
+            return
+        day.alerted.add(key)
+        self._alert(
+            report,
+            code="decide.error",
+            key=f"{goal.goal_id}:build:{day.day.isoformat()}",
+            severity="critical",
+            goal_id=goal.goal_id,
+            message=(
+                f"This goal's decision policy could not be built ({type(err).__name__}: {err}), so it "
+                "is not deciding or sending; it is tried again every tick. Other goals are not affected."
+            )[:1000],
+        )
 
     def _refuse(self, goal: Goal, report: TickReport, why: str) -> None:
         """Alert (once a day per goal) that a goal's brief was refused, so a person fixes it."""
@@ -2121,6 +2432,22 @@ def _sendable(goal: Goal, now: datetime, *, require_level: bool = True) -> bool:
     return not (require_level and goal.autonomy is AutonomyLevel.SHADOW)
 
 
+def _left_alone(decision_id: str, state: CustomerState, now: datetime, version: str) -> Decision:
+    """P3 Decision Hub: the DO_NOTHING decision logged when the policy raised for this customer.
+
+    Probability 1 (nothing else was possible), so proof and the off-policy log keep the moment."""
+    return Decision(
+        decision_id=decision_id,
+        customer_id=state.customer_id,
+        made_at=now,
+        kind=DecisionKind.NOTHING,
+        group=state.group,
+        probability=1.0,
+        reason=LEFT_ALONE,
+        policy_version=version,
+    )
+
+
 def _seed(seed: int, goal_id: str, now: datetime) -> int:
     """A sampling seed fixed by (seed, goal, moment), so a repeated run samples the same way."""
     return int(stable_id("seed", seed, goal_id, now.isoformat())[5:13], 16)
@@ -2134,13 +2461,20 @@ class _RecordingEvents:
     """
 
     def __init__(
-        self, inner: EventStore, floor: datetime, observe: Callable[[Event], None] | None = None
+        self,
+        inner: EventStore,
+        floor: datetime,
+        observe: Callable[[Event], None] | None = None,
+        until: datetime | None = None,
     ) -> None:
         self.inner = inner
         self.floor = floor
         self.observe = observe
         """Also sees every event scanned (the spend ledger rebuilds from the same pass)."""
         self.recent: list[Event] = []
+        self.until = until
+        self.newest_ingest: datetime | None = None
+        """The newest customer event (`INGEST_TYPES`) scanned, at or before `until`."""
 
     def append(self, events: Iterable[Event]) -> int:
         return self.inner.append(events)
@@ -2156,6 +2490,9 @@ class _RecordingEvents:
                 self.recent.append(e)
             if self.observe is not None:
                 self.observe(e)
+            due = self.until is None or e.ts <= self.until
+            if e.type in INGEST_TYPES and due and (self.newest_ingest is None or e.ts > self.newest_ingest):
+                self.newest_ingest = e.ts
             yield e
 
     def for_decision(self, decision_id: str) -> list[Event]:
@@ -2207,6 +2544,14 @@ def _goal_of(
     if decision.bids:
         return decision.bids[0].goal_id
     return _derived_goal(decision, goal_ids, tz, trigger_event_ids)
+
+
+def _age(span: timedelta) -> str:
+    """A rough age in words: whole days from a day up, else whole hours."""
+    if span >= timedelta(days=1):
+        return "1 day" if span.days == 1 else f"{span.days} days"
+    hours = int(span.total_seconds() // 3600)
+    return "1 hour" if hours == 1 else f"{hours} hours"
 
 
 def _days(span: timedelta) -> str:
