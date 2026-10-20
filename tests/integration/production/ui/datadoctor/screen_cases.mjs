@@ -202,7 +202,10 @@ test("the sentence approved names the goal as the screens do, never its id", asy
   const s = await show("approve_class");
   const shown = $("[data-dds-approve-sentence]").textContent;
   assert.equal(shown, s.view.approval_sentence);
-  assert.equal(shown, "Prepare 1 file with 4 changes for the goal “Find customers likely to buy”. Nothing else changes.");
+  assert.equal(
+    shown,
+    "Prepare 1 file with 4 changes for the goal “Find customers likely to buy”. The model learns from this: “converted” = 1 is a yes: 602 of 1,200 customers. Nothing else changes.",
+  );
   assert.ok(!shown.includes(GOAL), "not the goal's id");
   assert.ok(visibleText(app).includes("Find customers likely to buy"), "it is visible text, checked by the glossary below");
   assert.equal($("[data-dds-approve-button]").getAttribute("aria-describedby"), "dds-approve-sentence");
