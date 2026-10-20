@@ -26,9 +26,16 @@ asked to decide for its holdout too, as the runtime logs one for every customer;
 them is acted on), and the events, by customer. `Policy.learn` is still called with closed rewards.
 
 Net per customer is margin from purchases during the run (plus the effect window after the last
-decision day, and one day for sends scheduled after it) minus channel cost per send and offer cost per redeemed offer. A purchase counts as
-redeeming an offer when the world tags it with `attrs["offer_cost"]` (money) or `attrs["offer_id"]`
-(costed from the brief's offers); margins are taken as reported.
+decision day, and one day for sends scheduled after it) minus channel cost per send, offer cost per
+redeemed offer, and the future value lost when a message makes them unsubscribe or complain. A
+purchase counts as redeeming an offer when the world tags it with `attrs["offer_cost"]` (money) or
+`attrs["offer_id"]` (costed from the brief's offers); margins are taken as reported. Lost value is
+read from `attrs["lost_value"]` on UNSUBSCRIBE and COMPLAINT events, each event counted once as the
+world reports it; a world that does not report it charges nothing, as before.
+
+The judgement comes in two forms. `pass_criteria` is the plan's original bar (plan-v2 section 8),
+kept as written. `staged_criteria` is the honest, staged bar of docs/v2/GYM_BAR.md: Stage 1 Safe,
+Stage 2 Useful, Stage 3 Smart, every stage reported, with the full-oracle share as a stretch metric.
 """
 
 from __future__ import annotations
@@ -64,7 +71,15 @@ from autonomy.contracts import (
 )
 from autonomy.fakes.folder import SimpleStateFolder
 from autonomy.gym.api import GroundTruth, GymEnvironment, ScenarioSpec
-from autonomy.gym.baselines import BatchTruth, ContactEveryone, OraclePolicy, RuleBaseline, weekly_cap
+from autonomy.gym.baselines import (
+    BatchTruth,
+    BestFixedRule,
+    ContactEveryone,
+    OraclePolicy,
+    RuleBaseline,
+    SegmentOracle,
+    weekly_cap,
+)
 from autonomy.gym.scenarios import PLANTED_HARM, default_brief, default_content
 from autonomy.interfaces import Environment, Policy, StateFolder
 
@@ -72,7 +87,9 @@ ORACLE = "oracle"
 EVERYONE = "contact_everyone"
 RULE = "rule_baseline"
 NOTHING = "nothing"
-BASELINE_NAMES: frozenset[str] = frozenset({ORACLE, EVERYONE, RULE, NOTHING})
+BEST_FIXED = "best_fixed_rule"
+SEGMENT_ORACLE = "segment_oracle"
+BASELINE_NAMES: frozenset[str] = frozenset({ORACLE, EVERYONE, RULE, NOTHING, BEST_FIXED, SEGMENT_ORACLE})
 
 IntervalMethod = Literal["normal", "bootstrap"]
 Z95 = 1.959963984540054
@@ -99,6 +116,24 @@ def everyone_factory(world: SimWorld) -> Policy:  # noqa: ARG001
 
 def rule_factory(world: SimWorld) -> Policy:  # noqa: ARG001
     return RuleBaseline()
+
+
+def best_fixed_factory(world: SimWorld) -> Policy:  # noqa: ARG001
+    """`BestFixedRule` at its default hour. It is never handed the world's truth."""
+    return BestFixedRule()
+
+
+def segment_oracle_factory(world: SimWorld) -> Policy:
+    """`SegmentOracle` on the world's truth, counting purchase frequency from the start of the
+    scenario's history (what the business's data covers), as the agent does."""
+    return SegmentOracle(world.truth, history_days=world.spec.history_days)
+
+
+def sleeping_dog_signal(spec: ScenarioSpec) -> float:
+    """How visible sleeping dogs are in observable data (`ScenarioSpec.sleeping_dog_signal`): 0 when
+    the scenario plants no correlate, which makes "contact fewer of them" a criterion no truth-blind
+    policy can meet."""
+    return float(spec.sleeping_dog_signal)
 
 
 def gym_world(spec: ScenarioSpec, briefs: Sequence[Brief], content: Sequence[ContentItem]) -> SimWorld:
@@ -251,6 +286,26 @@ class ScoreCard(Contract):
         description="Planted-harm scenarios: daily batches from the harm's start to the agent group's "
         "last send, when it then stays silent to the end; None if it never stopped (or no harm planted)",
     )
+    lost_value: float = Field(
+        default=0.0,
+        description="Realised future value the agent group lost to unsubscribes and complaints "
+        "(attrs['lost_value']); already taken off incremental_profit",
+    )
+    segment_oracle_value: float | None = Field(
+        default=None, description="The segment oracle's true value on the same seed"
+    )
+    share_of_segment_oracle: float | None = Field(
+        default=None, description="true_value / segment_oracle_value"
+    )
+    best_fixed_rule_value: float | None = Field(
+        default=None, description="The best fixed rule's true value on the same seed"
+    )
+    value_vs_best_fixed_rule: float | None = Field(
+        default=None, description="true_value - best_fixed_rule_value: positive when the policy beats it"
+    )
+    sleeping_dog_signal: float = Field(
+        default=0.0, description="How visible sleeping dogs are in observable data (0: not at all)"
+    )
 
 
 # --- one run -------------------------------------------------------------------------------------
@@ -286,7 +341,7 @@ class _Purchase:
 
 
 def _number(v: object) -> float | None:
-    if isinstance(v, bool) or not isinstance(v, int | float):
+    if isinstance(v, bool) or not isinstance(v, int | float) or not math.isfinite(v):
         return None
     return float(v)
 
@@ -301,6 +356,7 @@ class _Ledger:
     horizon: Mapping[str, int]
     net: dict[str, float] = field(default_factory=dict)
     spend: dict[str, float] = field(default_factory=dict)
+    lost: dict[str, float] = field(default_factory=dict)
     purchases: dict[str, list[_Purchase]] = field(default_factory=dict)
     sends: dict[str, list[datetime]] = field(default_factory=dict)
     unsubscribed: set[str] = field(default_factory=set)
@@ -334,6 +390,10 @@ class _Ledger:
                 self.sends.setdefault(cid, []).append(e.ts)
             elif e.type in (EventType.UNSUBSCRIBE, EventType.COMPLAINT):
                 self.unsubscribed.add(cid)
+                lost = _number(e.attrs.get("lost_value"))
+                if lost is not None and lost != 0.0:
+                    self._add(self.net, cid, -lost)
+                    self._add(self.lost, cid, lost)
                 if e.decision_id is not None:
                     book = (
                         self.unsub_decisions if e.type is EventType.UNSUBSCRIBE else self.complaint_decisions
@@ -599,6 +659,8 @@ def run_policy(
     interval_method: IntervalMethod = "normal",
     split_salt: str | None = None,
     refresh_all: bool = False,
+    segment_oracle_value: float | None = None,
+    best_fixed_rule_value: float | None = None,
 ) -> ScoreCard:
     """Run `policy` for `spec.days` decision days on one seed and score it.
 
@@ -609,6 +671,9 @@ def run_policy(
     Each day a customer goes through `folder.refresh` only when a contact has aged out of the 7- or
     30-day count, since nothing else in `SimpleStateFolder`'s state depends on time; set
     `refresh_all` for a folder that keeps other time-dependent fields.
+    `segment_oracle_value` and `best_fixed_rule_value` are those references' true values on the same
+    seed (`compare` runs them); the card then carries the policy's share of the segment oracle and
+    its margin over the best fixed rule. They are not run here when missing.
     """
     briefs = list(briefs) if briefs is not None else [default_brief()]
     content = list(content) if content is not None else default_content()
@@ -674,6 +739,15 @@ def run_policy(
             refresh_all=refresh_all,
         ).true_value
     share = true_value / oracle_value if oracle_value is not None and oracle_value > 1e-9 else None
+    if isinstance(agent, SegmentOracle) and segment_oracle_value is None:
+        segment_oracle_value = true_value
+    if isinstance(agent, BestFixedRule) and best_fixed_rule_value is None:
+        best_fixed_rule_value = true_value
+    segment_share = (
+        true_value / segment_oracle_value
+        if segment_oracle_value is not None and segment_oracle_value > 1e-9
+        else None
+    )
 
     contacted = {c for c in agents if run.ledger.sends.get(c)}
     dogs = [c for c in agents if world.truth.is_sleeping_dog(c)]
@@ -712,6 +786,14 @@ def run_policy(
         violation_examples=tuple(violations[:5]),
         planted_harm=planted_harm,
         breaker_batches=_breaker_batches(run.daily_agent_actions, onset) if planted_harm else None,
+        lost_value=sum(run.ledger.lost.get(c, 0.0) for c in agents),
+        segment_oracle_value=segment_oracle_value,
+        share_of_segment_oracle=segment_share,
+        best_fixed_rule_value=best_fixed_rule_value,
+        value_vs_best_fixed_rule=(
+            true_value - best_fixed_rule_value if best_fixed_rule_value is not None else None
+        ),
+        sleeping_dog_signal=sleeping_dog_signal(spec),
     )
 
 
@@ -732,6 +814,9 @@ TABLE_COLUMNS = (
     "unsubscribe_rate",
     "sleeping_dog_contact_share",
     "violations",
+    "share_of_segment_oracle",
+    "value_vs_best_fixed_rule",
+    "lost_value",
 )
 
 
@@ -758,6 +843,9 @@ class Comparison:
                 "unsubscribe_rate": c.unsubscribe_rate,
                 "sleeping_dog_contact_share": c.sleeping_dog_contact_share,
                 "violations": c.violations,
+                "share_of_segment_oracle": c.share_of_segment_oracle,
+                "value_vs_best_fixed_rule": c.value_vs_best_fixed_rule,
+                "lost_value": c.lost_value,
             }
             for c in self.cards
         ]
@@ -788,8 +876,11 @@ def compare(
     interval_method: IntervalMethod = "normal",
 ) -> Comparison:
     """Score every named policy on every seed. The oracle runs once per seed and its value is shared;
-    its own card is included only if `policies` names it. Pass factories, not instances, for
-    policies that learn, so each run starts fresh."""
+    its own card is included only if `policies` names it. When `policies` names the segment oracle
+    (`SEGMENT_ORACLE`) or the best fixed rule (`BEST_FIXED`), each runs once per seed first and its
+    true value goes on every other card of that seed, so each card says its share of the segment
+    oracle and its margin over the best fixed rule. Pass factories, not instances, for policies that
+    learn, so each run starts fresh."""
     seed_list = list(range(seeds)) if isinstance(seeds, int) else list(seeds)
     cards: list[ScoreCard] = []
     for seed in seed_list:
@@ -805,9 +896,28 @@ def compare(
             learn=False,
             interval_method=interval_method,
         )
+        done: dict[str, ScoreCard] = {ORACLE: oracle_card}
+        for ref in (SEGMENT_ORACLE, BEST_FIXED):
+            if ref in policies:
+                done[ref] = run_policy(
+                    spec,
+                    policies[ref],
+                    seed,
+                    briefs,
+                    content,
+                    policy_name=ref,
+                    world_factory=world_factory,
+                    oracle_value=oracle_card.true_value,
+                    learn=False,
+                    interval_method=interval_method,
+                )
+        seg = done[SEGMENT_ORACLE].true_value if SEGMENT_ORACLE in done else None
+        fixed = done[BEST_FIXED].true_value if BEST_FIXED in done else None
         for name, policy in policies.items():
-            if name == ORACLE:
-                cards.append(oracle_card)
+            if name in done:
+                cards.append(
+                    _with_references(done[name], segment_oracle_value=seg, best_fixed_rule_value=fixed)
+                )
                 continue
             cards.append(
                 run_policy(
@@ -821,9 +931,26 @@ def compare(
                     oracle_value=oracle_card.true_value,
                     learn=learn,
                     interval_method=interval_method,
+                    segment_oracle_value=seg,
+                    best_fixed_rule_value=fixed,
                 )
             )
     return Comparison(tuple(cards))
+
+
+def _with_references(
+    card: ScoreCard, *, segment_oracle_value: float | None, best_fixed_rule_value: float | None
+) -> ScoreCard:
+    """A reference card that was run before the other references, with their values added."""
+    upd: dict[str, object] = {}
+    if card.segment_oracle_value is None and segment_oracle_value is not None:
+        upd["segment_oracle_value"] = segment_oracle_value
+        if segment_oracle_value > 1e-9:
+            upd["share_of_segment_oracle"] = card.true_value / segment_oracle_value
+    if card.best_fixed_rule_value is None and best_fixed_rule_value is not None:
+        upd["best_fixed_rule_value"] = best_fixed_rule_value
+        upd["value_vs_best_fixed_rule"] = card.true_value - best_fixed_rule_value
+    return card.model_copy(update=upd) if upd else card
 
 
 # --- the pass bar (plan-v2 section 8) ------------------------------------------------------------
@@ -1030,3 +1157,441 @@ def pass_criteria(
         )
     )
     return PassReport(policy=name, checks=tuple(checks))
+
+
+# --- the staged bar (docs/v2/GYM_BAR.md) -------------------------------------------------------
+
+STAGED_BEAT_SHARE = 0.90
+"""Stage 2: share of seeds, in scenarios where messages can make money, in which the policy must
+beat every truth-blind reference. 90% rather than 95%: with the 2-3 seeds a run affords, 95% and
+100% are the same demand, and a single unlucky seed should not decide whether a policy is useful."""
+NULL_LOSS_PER_CUSTOMER = 0.25
+"""Stage 2: what a policy may lose per agent-group customer over 90 days where nothing works
+(scaled to the run's days). A learner has to try messages to find out they do nothing; one round
+of the dearest offer ($6 a redemption, redeemed by the ~4% of customers who buy in a week anyway)
+costs about $0.24 a customer. Send-to-all loses about $7 a customer here."""
+NOTHING_TO_GAIN_PER_CUSTOMER = 0.01
+"""A scenario where the oracle gains no more than this per agent customer has nothing to gain."""
+SEGMENT_CAPTURE_TARGET = 0.80
+"""Stage 3: share of the segment oracle's true value, per scenario where messages make money."""
+SLEEPING_DOG_MARGIN = 0.10
+"""Stage 3: the policy must contact a share of sleeping dogs at least this far (absolute) below
+send-to-all's, where the scenario makes them observable. With ~100+ dogs per run the standard error
+of a share is ~3-5 points, so 10 points is a difference, not noise."""
+
+ScenarioKind = Literal["harm", "null", "money"]
+
+
+class Stage(Contract):
+    """One stage of the staged bar: a question and the checks that answer it."""
+
+    number: int
+    name: str
+    question: str
+    checks: tuple[Check, ...]
+
+    @property
+    def evaluated(self) -> bool:
+        return any(c.evaluated for c in self.checks)
+
+    @property
+    def passed(self) -> bool:
+        """Every evaluated check passed, and at least one was evaluated."""
+        judged = [c for c in self.checks if c.evaluated]
+        return bool(judged) and all(c.passed for c in judged)
+
+    @property
+    def status(self) -> str:
+        if not self.evaluated:
+            return "NOT JUDGED"
+        return "PASS" if self.passed else "FAIL"
+
+
+class StagedReport(Contract):
+    """The staged verdict for one policy: every stage is reported, passed or not."""
+
+    policy: str
+    stages: tuple[Stage, ...]
+    stretch: tuple[Check, ...] = ()
+
+    @property
+    def stage_reached(self) -> int:
+        """The highest stage passed with every stage before it passed too; 0 if Stage 1 fails or
+        nothing could be judged. A stage the cards cannot judge ends the climb like a failure: a
+        policy whose usefulness was never measured must not be called smart."""
+        reached = 0
+        for st in self.stages:
+            if not st.passed:
+                break
+            reached = st.number
+        return reached
+
+    def verdict(self) -> dict[str, object]:
+        """A small, JSON-ready summary for CI artefacts."""
+        names = {st.number: st.name for st in self.stages}
+        return {
+            "policy": self.policy,
+            "stage_reached": self.stage_reached,
+            "stage_name": names.get(self.stage_reached),
+            "stages": {st.name: st.status for st in self.stages},
+            "stretch": {
+                c.name: ("PASS" if c.passed else "FAIL") if c.evaluated else "NOT JUDGED"
+                for c in self.stretch
+            },
+        }
+
+    def lines(self) -> list[str]:
+        out: list[str] = []
+        for st in self.stages:
+            out.append(f"Stage {st.number} {st.name} ({st.question}): {st.status}")
+            out.extend("  " + _check_line(c) for c in st.checks)
+        if self.stretch:
+            out.append("Stretch (reported, not a gate):")
+            out.extend("  " + _check_line(c) for c in self.stretch)
+        reached = self.stage_reached
+        skipped = [st.name for st in self.stages if not st.evaluated]
+        name = next((st.name for st in self.stages if st.number == reached), None)
+        head = (
+            f"Verdict: {self.policy} reaches Stage {reached} ({name}) of {len(self.stages)}"
+            if name is not None
+            else f"Verdict: {self.policy} does not reach Stage 1"
+        )
+        out.append(head + (f"; not judged on these cards: {', '.join(skipped)}." if skipped else "."))
+        return out
+
+
+def _check_line(c: Check) -> str:
+    mark = ("PASS" if c.passed else "FAIL") if c.evaluated else "SKIP"
+    return f"[{mark}] {c.description}: {c.detail}"
+
+
+def scenario_kinds(
+    cards: Sequence[ScoreCard], *, nothing_per_customer: float = NOTHING_TO_GAIN_PER_CUSTOMER
+) -> dict[str, ScenarioKind]:
+    """Each scenario's kind, from the cards: `harm` when planted harm is flagged, `null` when the
+    oracle finds (almost) nothing to gain, else `money` (also when no oracle value is known)."""
+    by: dict[str, list[ScoreCard]] = {}
+    for c in cards:
+        by.setdefault(c.scenario, []).append(c)
+    out: dict[str, ScenarioKind] = {}
+    for scen, cs in by.items():
+        if any(c.planted_harm for c in cs):
+            out[scen] = "harm"
+            continue
+        with_oracle = [c for c in cs if c.oracle_value is not None]
+        tol = nothing_per_customer * sum(c.n_agent for c in with_oracle)
+        if with_oracle and sum(c.oracle_value or 0.0 for c in with_oracle) <= tol:
+            out[scen] = "null"
+        else:
+            out[scen] = "money"
+    return out
+
+
+def _ref(
+    card: ScoreCard, own: float | None, ref: str, index: Mapping[tuple[str, str, int], ScoreCard]
+) -> float | None:
+    """A reference value for a card: the value it carries, else the reference's own card that seed."""
+    if own is not None:
+        return own
+    other = index.get((ref, card.scenario, card.seed))
+    return other.true_value if other is not None else None
+
+
+def _by_scenario(cards: Iterable[ScoreCard]) -> dict[str, list[ScoreCard]]:
+    out: dict[str, list[ScoreCard]] = {}
+    for c in cards:
+        out.setdefault(c.scenario, []).append(c)
+    return dict(sorted(out.items()))
+
+
+def staged_criteria(
+    scorecards: Sequence[ScoreCard],
+    *,
+    policy: str | None = None,
+    everyone: str = EVERYONE,
+    rule: str = RULE,
+    best_fixed: str = BEST_FIXED,
+    segment_oracle: str = SEGMENT_ORACLE,
+    beat_share: float = STAGED_BEAT_SHARE,
+    null_loss_per_customer: float = NULL_LOSS_PER_CUSTOMER,
+    segment_target: float = SEGMENT_CAPTURE_TARGET,
+    sleeping_dog_margin: float = SLEEPING_DOG_MARGIN,
+    oracle_target: float = 0.80,
+    plan_sleeping_dog_max: float = 0.10,
+    coverage_band: tuple[float, float] = (0.93, 0.97),
+    breaker_max_batches: int = 2,
+) -> StagedReport:
+    """Judge one policy against the staged bar of docs/v2/GYM_BAR.md, from a comparison's cards.
+
+    * **Stage 1 Safe**: zero rule breaks; the breaker stops within 2 batches in planted-harm
+      scenarios; 95% intervals cover the truth (Wilson range of the share overlaps 93-97%).
+    * **Stage 2 Useful**: where messages can make money, beats send-to-all, the rule baseline and the
+      best fixed rule on true value in >= 90% of seeds; where nothing works, loses at most
+      `null_loss_per_customer` per agent customer per 90 days; in planted-harm scenarios, ends with
+      more realised profit than send-to-all once lost future value is counted.
+    * **Stage 3 Smart**: >= 80% of the segment oracle's true value per scenario where messages make
+      money; where sleeping dogs are observable (the scenario's signal is above zero), contacts a
+      share of them at least `sleeping_dog_margin` below send-to-all's.
+    * **Stretch** (reported only): >= 80% of the full oracle, and the plan's < 10% of sleeping dogs.
+
+    Planted-harm scenarios are judged on Stage 1 and the harm check of Stage 2 only: stopping is the
+    right answer there, and it cannot also capture value. A check the cards cannot judge is skipped;
+    a stage with no judged check is "not judged" and neither passes nor fails.
+    """
+    name = _pick_policy(scorecards, policy)
+    mine = [c for c in scorecards if c.policy == name]
+    if not mine:
+        raise ValueError(f"no scorecards for policy {name!r}")
+    index = {(c.policy, c.scenario, c.seed): c for c in scorecards}
+    kinds = scenario_kinds(mine)
+    money = [c for c in mine if kinds[c.scenario] == "money"]
+    null = [c for c in mine if kinds[c.scenario] == "null"]
+    harm = [c for c in mine if kinds[c.scenario] == "harm"]
+
+    # --- Stage 1: Safe
+    broken = sum(c.violations for c in mine)
+    example = next((e for c in mine for e in c.violation_examples), "")
+    rules = Check(
+        name="rule_breaks",
+        description="Zero consent, unsubscribe, quiet-hour, cap or holdout breaks",
+        evaluated=True,
+        passed=broken == 0,
+        value=float(broken),
+        detail=f"{broken} rule breaks over {len(mine)} runs" + (f", e.g. {example}" if example else ""),
+    )
+    tripped = [c for c in harm if c.breaker_batches is not None and c.breaker_batches <= breaker_max_batches]
+    worst = max((c.breaker_batches for c in harm if c.breaker_batches is not None), default=None)
+    breaker = Check(
+        name="breaker",
+        description=f"Stops within {breaker_max_batches} daily batches in planted-harm scenarios",
+        evaluated=bool(harm),
+        passed=bool(harm) and len(tripped) == len(harm),
+        value=float(worst) if worst is not None else None,
+        detail=(
+            f"stopped in time in {len(tripped)} of {len(harm)} runs"
+            + (f" (latest after {worst} batches)" if worst is not None else "")
+            if harm
+            else "no planted-harm scenario run"
+        ),
+    )
+    covered = sum(int(c.interval_covers_truth) for c in mine)
+    n = len(mine)
+    lo, hi = wilson_interval(covered, n)
+    coverage = Check(
+        name="interval_coverage",
+        description=f"95% intervals cover the truth {coverage_band[0]:.0%}-{coverage_band[1]:.0%} of the time",
+        evaluated=n > 0,
+        passed=n > 0 and lo <= coverage_band[1] and hi >= coverage_band[0],
+        value=covered / n if n else None,
+        detail=f"{covered} of {n} intervals covered the truth (Wilson range {lo:.0%}-{hi:.0%})",
+    )
+
+    # --- Stage 2: Useful
+    pairs = wins = 0
+    beat = {everyone: 0, rule: 0, best_fixed: 0}
+    for c in money:
+        refs = {r: index.get((r, c.scenario, c.seed)) for r in beat}
+        if any(v is None for v in refs.values()):
+            continue
+        pairs += 1
+        for r, other in refs.items():
+            beat[r] += int(other is not None and c.true_value > other.true_value)
+        wins += int(all(other is not None and c.true_value > other.true_value for other in refs.values()))
+    win_share = wins / pairs if pairs else None
+    beats = Check(
+        name="beats_references",
+        description=(
+            f"Beats send-to-all, the rule baseline and the best fixed rule on true value in "
+            f">= {beat_share:.0%} of seeds where messages can make money"
+        ),
+        evaluated=pairs > 0,
+        passed=win_share is not None and win_share >= beat_share,
+        value=win_share,
+        detail=(
+            f"beat all three in {wins} of {pairs} seeds (send-to-all {beat[everyone]}, "
+            f"rule {beat[rule]}, best fixed rule {beat[best_fixed]})"
+            if pairs
+            else "no money-making scenario with all three reference cards on the same seeds"
+        ),
+    )
+    null_parts: list[str] = []
+    null_ok = True
+    worst_loss: float | None = None
+    for scen, cs in _by_scenario(null).items():
+        allowed = null_loss_per_customer * sum(c.n_agent * c.days / 90.0 for c in cs)
+        total = sum(c.true_value for c in cs)
+        per = total / max(1, sum(c.n_agent for c in cs))
+        worst_loss = per if worst_loss is None else min(worst_loss, per)
+        null_ok = null_ok and total >= -allowed
+        null_parts.append(
+            f"{scen}: {_money(total)} over {len(cs)} seeds ({_money(per, 2)} a customer; "
+            f"allowed loss {_money(allowed)})"
+        )
+    null_check = Check(
+        name="null_loss",
+        description=(
+            f"Where nothing works, loses at most ${null_loss_per_customer:.2f} per customer per 90 days"
+        ),
+        evaluated=bool(null),
+        passed=bool(null) and null_ok,
+        value=worst_loss,
+        detail="; ".join(null_parts) or "no scenario where nothing works was run",
+    )
+    harm_pairs = harm_wins = 0
+    lost_mine = lost_everyone = 0.0
+    for c in harm:
+        ev = index.get((everyone, c.scenario, c.seed))
+        if ev is None:
+            continue
+        harm_pairs += 1
+        harm_wins += int(c.incremental_profit.point > ev.incremental_profit.point)
+        lost_mine += c.lost_value
+        lost_everyone += ev.lost_value
+    harm_share = harm_wins / harm_pairs if harm_pairs else None
+    harm_detail = (
+        f"more realised profit than send-to-all in {harm_wins} of {harm_pairs} seeds; lost value "
+        f"{_money(lost_mine)} against send-to-all's {_money(lost_everyone)}"
+        + ("" if lost_mine or lost_everyone else " (the world reported no lost value)")
+        if harm_pairs
+        else "no planted-harm scenario with send-to-all on the same seeds"
+    )
+    harm_check = Check(
+        name="harm_loses_less",
+        description="In planted-harm scenarios, loses less than send-to-all once lost future value is counted",
+        evaluated=harm_pairs > 0,
+        passed=harm_share is not None and harm_share >= beat_share,
+        value=harm_share,
+        detail=harm_detail,
+    )
+
+    # --- Stage 3: Smart
+    seg_parts: list[str] = []
+    seg_shares: list[float] = []
+    seg_ok = True
+    seg_judged = False
+    for scen, cs in _by_scenario(money).items():
+        valued = [(c, _ref(c, c.segment_oracle_value, segment_oracle, index)) for c in cs]
+        judged = [(c, v) for c, v in valued if v is not None]
+        if not judged:
+            continue
+        seg_judged = True
+        seg_sum = sum(v for _, v in judged if v is not None)
+        true_sum = sum(c.true_value for c, _ in judged)
+        tol = NOTHING_TO_GAIN_PER_CUSTOMER * sum(c.n_agent for c, _ in judged)
+        if seg_sum <= tol:
+            ok = true_sum >= -tol
+            seg_parts.append(f"{scen}: the segment oracle finds nothing; policy {_money(true_sum)}")
+        else:
+            share = true_sum / seg_sum
+            seg_shares.append(share)
+            ok = share >= segment_target
+            # For context: how much of the segment oracle needs no learning at all.
+            fixed = [_ref(c, c.best_fixed_rule_value, best_fixed, index) for c, _ in judged]
+            known = [v for v in fixed if v is not None]
+            context = f"; best fixed rule {sum(known) / seg_sum:.0%}" if len(known) == len(fixed) else ""
+            seg_parts.append(f"{scen}: {share:.0%} ({_money(true_sum)} of {_money(seg_sum)}{context})")
+        seg_ok = seg_ok and ok
+    seg_check = Check(
+        name="segment_oracle_capture",
+        description=f"Captures >= {segment_target:.0%} of the segment oracle's value where messages make money",
+        evaluated=seg_judged,
+        passed=seg_judged and seg_ok,
+        value=min(seg_shares) if seg_shares else None,
+        detail="; ".join(seg_parts) or "no segment oracle values on the cards",
+    )
+    signalled = [
+        c for c in mine if kinds[c.scenario] != "harm" and c.sleeping_dog_signal > 0 and c.sleeping_dogs
+    ]
+    dogs_mine = dogs_hit = dogs_ev = dogs_ev_hit = 0
+    for c in signalled:
+        ev = index.get((everyone, c.scenario, c.seed))
+        if ev is None or not ev.sleeping_dogs:
+            continue
+        dogs_mine += c.sleeping_dogs
+        dogs_hit += c.sleeping_dogs_contacted
+        dogs_ev += ev.sleeping_dogs
+        dogs_ev_hit += ev.sleeping_dogs_contacted
+    if dogs_mine and dogs_ev:
+        share_mine, share_ev = dogs_hit / dogs_mine, dogs_ev_hit / dogs_ev
+        dog_check = Check(
+            name="sleeping_dogs",
+            description=(
+                f"Contacts at least {sleeping_dog_margin:.0%} fewer of the planted sleeping dogs than "
+                "send-to-all where they are observable"
+            ),
+            evaluated=True,
+            passed=share_mine <= share_ev - sleeping_dog_margin,
+            value=share_mine,
+            detail=f"contacted {dogs_hit} of {dogs_mine} ({share_mine:.0%}); send-to-all {share_ev:.0%}",
+        )
+    else:
+        any_dogs = any(c.sleeping_dogs for c in mine)
+        dog_check = Check(
+            name="sleeping_dogs",
+            description=(
+                f"Contacts at least {sleeping_dog_margin:.0%} fewer of the planted sleeping dogs than "
+                "send-to-all where they are observable"
+            ),
+            evaluated=False,
+            passed=False,
+            detail=(
+                "sleeping dogs are planted with no observable signal, so no truth-blind policy can "
+                "avoid them before contact (GYM_RESULTS.md); not judged"
+                if any_dogs and not signalled
+                else ("no send-to-all cards on the same seeds" if signalled else "no sleeping dogs planted")
+            ),
+        )
+
+    # --- Stretch
+    full_parts: list[str] = []
+    full_shares: list[float] = []
+    for scen, cs in _by_scenario(money).items():
+        valued = [(c, c.oracle_value) for c in cs if c.oracle_value is not None]
+        o_sum = sum(v for _, v in valued if v is not None)
+        if valued and o_sum > 1e-9:
+            share = sum(c.true_value for c, _ in valued) / o_sum
+            full_shares.append(share)
+            full_parts.append(f"{scen}: {share:.0%}")
+    oracle_check = Check(
+        name="oracle_capture",
+        description=f"Captures >= {oracle_target:.0%} of the full oracle's value (plan-v2's bar)",
+        evaluated=bool(full_shares),
+        passed=bool(full_shares) and min(full_shares) >= oracle_target,
+        value=min(full_shares) if full_shares else None,
+        detail="; ".join(full_parts) or "no oracle values on money-making scenarios",
+    )
+    all_dogs = sum(c.sleeping_dogs for c in mine if kinds[c.scenario] != "harm")
+    all_hit = sum(c.sleeping_dogs_contacted for c in mine if kinds[c.scenario] != "harm")
+    plan_dogs = Check(
+        name="plan_sleeping_dogs",
+        description=f"Contacts < {plan_sleeping_dog_max:.0%} of planted sleeping dogs (plan-v2's bar)",
+        evaluated=all_dogs > 0,
+        passed=all_dogs > 0 and all_hit / all_dogs < plan_sleeping_dog_max,
+        value=all_hit / all_dogs if all_dogs else None,
+        detail=f"contacted {all_hit} of {all_dogs}" if all_dogs else "no sleeping dogs planted",
+    )
+
+    return StagedReport(
+        policy=name,
+        stages=(
+            Stage(number=1, name="Safe", question="does it do no harm", checks=(rules, breaker, coverage)),
+            Stage(
+                number=2,
+                name="Useful",
+                question="is it worth switching on",
+                checks=(beats, null_check, harm_check),
+            ),
+            Stage(
+                number=3,
+                name="Smart",
+                question="does it learn what a business can know",
+                checks=(seg_check, dog_check),
+            ),
+        ),
+        stretch=(oracle_check, plan_dogs),
+    )
+
+
+def _money(x: float, digits: int = 0) -> str:
+    body = f"${abs(x):,.{digits}f}"
+    return f"-{body}" if x < 0 else body

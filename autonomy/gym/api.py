@@ -3,6 +3,25 @@
 Both halves of the Gym code against this file: the world (which plants the truth and simulates
 customers) and the scoreboard (which runs policies and scores them against the truth). Change it by
 addition only.
+
+Realism knobs added in wave 3a, each with the real-world behaviour it stands for (the mechanics are in
+`autonomy.gym.truth` and `autonomy.gym.world`):
+
+* `lost_contact_value`, `lost_contact_horizon_days`, `lost_contact_sends_per_week`, `complaint_cost`:
+  an unsubscribe is not free. A shop that loses someone's email address loses the margin its future
+  messages to them would have made, and every spam complaint hurts inbox placement for the whole list.
+  The truth charges both in `expected_net` and the world puts the realised amount on UNSUBSCRIBE and
+  COMPLAINT events (`attrs["lost_value"]`). The lost contact value is on by default; the complaint
+  cost is 0 on a bare spec and $5 in every library scenario.
+* `sleeping_dog_signal`, `sleeping_dog_unsubscribe_multiplier`: people annoyed by marketing do not
+  look like everyone else for ever. Their annoyance shows in what a CRM already holds: they ignore
+  messages, come in through direct visits, and now and then unsubscribe from a channel. The signal
+  sets how long before day 0 the annoyance began, so how much of the history shows it (0 = none: the
+  old coin flip, invisible before the first contact).
+* `history_sends_per_week`: a real client hands over months of past campaigns with their clicks and
+  purchases, so an agent can learn before day 1. The past campaigns follow a documented, randomised
+  logging policy and every past send carries `attrs["logged_probability"]`. The bare spec keeps the
+  old history (0: no past marketing); every library scenario turns it on.
 """
 
 from __future__ import annotations
@@ -95,6 +114,50 @@ class ScenarioSpec(Contract):
     timezones: dict[str, float] = Field(default_factory=lambda: {"UTC": 1.0})
     drift_day: int | None = Field(default=None, description="Decision day on which the world changes, if any")
     drift_purchase_multiplier: float = 1.0
+    lost_contact_value: float | None = Field(
+        default=None,
+        ge=0,
+        description=(
+            "Margin lost when a customer unsubscribes from a channel. None: each customer's own value, "
+            "the margin `lost_contact_sends_per_week` plain messages a week on that channel would make "
+            "over `lost_contact_horizon_days` at their planted uplift (0 for sleeping dogs)"
+        ),
+    )
+    lost_contact_horizon_days: int = Field(
+        default=180, ge=0, description="How far ahead the lost value of an unsubscribe looks"
+    )
+    lost_contact_sends_per_week: float = Field(
+        default=1.0, ge=0, description="The message rhythm the lost value assumes (a weekly newsletter)"
+    )
+    complaint_cost: float = Field(
+        default=0.0,
+        ge=0,
+        description=(
+            "Deliverability cost of one spam complaint, on top of the lost contact value (the library "
+            "uses $5; 0 here keeps a bare spec's sleeping dogs costing only their dent)"
+        ),
+    )
+    sleeping_dog_signal: float = Field(
+        default=0.5,
+        ge=0,
+        le=1,
+        description=(
+            "How visible sleeping dogs are in the history: 0 = not at all (a coin flip), 1 = annoyed "
+            "for the whole history (ignore messages, more direct visits, more past unsubscribes)"
+        ),
+    )
+    sleeping_dog_unsubscribe_multiplier: float = Field(
+        default=3.0, ge=0, description="Sleeping dogs unsubscribe this many times as often once annoyed"
+    )
+    history_sends_per_week: float = Field(
+        default=0.0,
+        ge=0,
+        le=1,
+        description=(
+            "Past marketing in the history: the weekly campaign's base inclusion probability for a "
+            "consented customer (0 = no past campaigns; the library uses 0.4)"
+        ),
+    )
 
 
 @runtime_checkable
@@ -107,7 +170,8 @@ class GroundTruth(Protocol):
 
     def expected_net(self, customer_id: str, action: Action, now: datetime) -> float:
         """True expected incremental margin minus offer and channel cost, vs doing nothing, given the
-        customer's current fatigue. Negative for sleeping dogs and for wasted discounts."""
+        customer's current fatigue, minus the expected cost of the unsubscribes and complaints the
+        contact causes. Negative for sleeping dogs and for wasted discounts."""
         ...
 
     def best_action(self, customer_id: str, candidates: Sequence[Action], now: datetime) -> Action | None:

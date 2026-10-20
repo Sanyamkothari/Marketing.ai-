@@ -18,13 +18,41 @@ The model, per customer and per hour (the world simulates hour by hour):
 * While a discount is active, a buyer redeems it. With `discount_redeemed_by_sure_things` every buyer
   does (the cost of cannibalisation); otherwise only the buyers the contact created do.
 
-`expected_net` is incremental margin minus expected offer cost minus channel cost, versus not sending
-this action. A dog already dented by an earlier contact only loses the hours the new contact adds to
-the dent. It ignores two second-order effects on purpose: the overlap with an offer already active
-from an earlier contact, and the future value lost when the contact causes an unsubscribe.
+* A delivered contact causes an unsubscribe from its channel with probability
+  `(unsubscribe_base + unsubscribe_per_weekly_contact x contacts in the last 7 days)`, times
+  `sleeping_dog_unsubscribe_multiplier` for an annoyed sleeping dog; `complaint_share_of_unsubscribes`
+  of those unsubscribes also complain.
+
+`expected_net` is incremental margin minus expected offer cost minus channel cost, minus the expected
+cost of what the contact breaks: unsubscribe probability x the customer's lost contact value on that
+channel, plus complaint probability x `complaint_cost`. A dog already dented by an earlier contact only
+loses the hours the new contact adds to the dent. It still ignores one second-order effect on purpose:
+the overlap with an offer already active from an earlier contact.
+
+Realism, and why (wave 3a):
+
+* **Lost contact value.** Losing a customer's consent on a channel loses the margin every later
+  message on it would have made; a business feels that, so the truth charges it. By default each
+  customer's own value is the margin of `lost_contact_sends_per_week` plain messages a week (no offer,
+  best hour, no fatigue) on that channel over `lost_contact_horizon_days` (180) days at their planted
+  uplift, net of channel cost and never below zero; for a sleeping dog it is zero, because messaging
+  them never made money. `lost_contact_value` replaces it with one documented figure for everyone.
+  A complaint adds `complaint_cost` on top (0 on a bare spec, $5 in the library): mailbox providers
+  route a sender's mail to spam once complaints pass about 0.1-0.3% of sends, which costs every later
+  message some reach. The scoreboard sees the same money realised, on UNSUBSCRIBE and COMPLAINT
+  events (`lost_value`).
+* **Sleeping dogs leave clues.** Annoyance with marketing has a start. Each sleeping dog's started at
+  `dog_onset_s`, on average `sleeping_dog_signal` x the history length before day 0 (spread 0.5x to
+  1.5x, capped at the start of the history). From then on they are a dog in every respect: no lift,
+  a dented own rate, almost no clicks and more unsubscribes. Before it they behave like their persona,
+  so with signal 0 the history cannot tell a dog from anyone else, as before. By day 0 every dog is
+  annoyed. The flag and the onset are never emitted; only the behaviour is.
+* **Unsubscribe risk of annoyed people.** People who resent messages unsubscribe and complain more
+  when messaged; `sleeping_dog_unsubscribe_multiplier` (3) is that, in the history and after day 0.
 
 Fatigue, dents and consent change as the world runs, so the world reports contacts (`note_contacts`),
-dents (`note_dent`) and unsubscribes (`note_unsubscribe`) here; everything else is fixed by `plant`.
+dents (`note_dent`) and unsubscribes (`note_unsubscribe`) here, including the past campaigns of the
+history; everything else is fixed by `plant`.
 """
 
 from __future__ import annotations
@@ -56,6 +84,12 @@ CATEGORIES: tuple[str, ...] = ("apparel", "home", "beauty", "outdoor", "electron
 _CH = {c: i for i, c in enumerate(CHANNELS)}
 _KIND = {k: i for i, k in enumerate(OFFER_KINDS)}
 _THEME = {t: i for i, t in enumerate(THEMES)}
+CHANNEL_INDEX: dict[Channel, int] = _CH
+"""Column of each channel in the per-channel arrays (`consent`, `uplift`, `lost_value`, ...)."""
+KIND_INDEX: dict[OfferKind, int] = _KIND
+"""Column of each offer kind in `offer_mult`."""
+THEME_INDEX: dict[Theme, int] = _THEME
+"""Column of each theme in `theme_mult`."""
 
 DEFAULT_OFFERS: tuple[OfferOption, ...] = GYM_OFFERS
 """The scenario library's offers (the same as `autonomy.fakes.samples`), so the sample brief runs in
@@ -241,11 +275,30 @@ class PlantedTruth:
         self.signup_s: FloatArray = -np.where(is_new, new_days, old_days) * 86_400.0
         self.favourite: IntArray = rng.integers(0, len(CATEGORIES), n).astype(np.int64)
 
+        # Realism draws come from their own stream, so every array above is the same as before they
+        # existed and old seeds plant the same customers.
+        extra = np.random.default_rng([seed, 5])
+        spread = extra.uniform(0.5, 1.5, n)
+        onset_days = np.minimum(spec.sleeping_dog_signal * spread, 1.0) * hist
+        self.dog_onset_s: FloatArray = np.where(self.sleeping_dog, -onset_days * 86_400.0, np.inf)
+        self.lost_value: FloatArray = self._lost_contact_values()
+
         # Contact memory for fatigue: a small ring of send times per customer.
         self._contact_s: FloatArray = np.full((n, _CONTACT_SLOTS), -np.inf)
         self._contact_ptr: IntArray = np.zeros(n, dtype=np.int64)
         # The hour (from start) until which a sleeping dog's own rate is already dented.
         self._dent_until_h: FloatArray = np.full(n, -np.inf)
+
+    def _lost_contact_values(self) -> FloatArray:
+        """Margin lost per customer and channel when they unsubscribe from it (see the module notes)."""
+        spec = self.spec
+        if spec.lost_contact_value is not None:
+            return np.full((self.n, len(CHANNELS)), float(spec.lost_contact_value), dtype=np.float64)
+        sends = spec.lost_contact_sends_per_week * spec.lost_contact_horizon_days / 7.0
+        cost = np.array([spec.channel_cost.get(c, 0.0) for c in CHANNELS], dtype=np.float64)
+        per_send = self.uplift * spec.effect_days * self.margin_per_purchase - cost[None, :]
+        value = np.maximum(per_send, 0.0) * sends
+        return np.asarray(np.where(self.sleeping_dog[:, None], 0.0, value), dtype=np.float64)
 
     def _multipliers(
         self, rng: np.random.Generator, table: Mapping[str, Mapping[str, float]], keys: Sequence[str]
@@ -333,6 +386,21 @@ class PlantedTruth:
         """What a contact does to a sleeping dog's own rate while its effect lasts."""
         return max(0.0, 1.0 + self.spec.sleeping_dog_effect)
 
+    def annoyed(self, idx: IntArray, times_s: FloatArray) -> BoolArray:
+        """Sleeping dogs whose annoyance had begun by each time (all of them from day 0 on)."""
+        return np.asarray(self.sleeping_dog[idx] & (self.dog_onset_s[idx] <= times_s), dtype=np.bool_)
+
+    def unsubscribe_prob(self, prior_7d: IntArray, annoyed: BoolArray) -> FloatArray:
+        """Chance a delivered contact causes an unsubscribe, given contacts already sent this week."""
+        spec = self.spec
+        p = spec.unsubscribe_base + spec.unsubscribe_per_weekly_contact * prior_7d
+        p = p * np.where(annoyed, spec.sleeping_dog_unsubscribe_multiplier, 1.0)
+        return np.asarray(np.clip(p, 0.0, 1.0), dtype=np.float64)
+
+    def lost_contact_value(self, customer_id: str, channel: Channel) -> float:
+        """Margin lost if this customer unsubscribes from `channel` (truth only; for scoring)."""
+        return float(self.lost_value[self.index(customer_id), _CH[channel]])
+
     # --- dynamic state the world reports -------------------------------------------------------
 
     def note_contacts(self, idx: IntArray, times_s: FloatArray) -> None:
@@ -411,7 +479,7 @@ class PlantedTruth:
         prior = self.contacts_7d(idx, t_s)
         fatigue = np.maximum(0.0, 1.0 - spec.fatigue_per_weekly_contact * prior)
         theme_mult = np.where(theme >= 0, self.theme_mult[idx, np.maximum(theme, 0)], 1.0)
-        dog = self.sleeping_dog[idx]
+        dog = self.annoyed(idx, t_s)
         lift = self.uplift[idx, ch] * self.offer_mult[idx, kind] * theme_mult * hour_factor * fatigue
         lift = np.where(dog, 0.0, lift)
 
@@ -428,7 +496,12 @@ class PlantedTruth:
             redemptions = np.where(dog, dog_mult * organic, organic + extra)
         else:
             redemptions = np.where(dog, 0.0, extra)
-        value = incremental * self.margin_per_purchase - redemptions * offer_cost - channel_cost
+        # What the contact breaks: the channel (lost contact value) and, for complainers, deliverability.
+        p_unsub = self.unsubscribe_prob(prior, dog)
+        p_complaint = p_unsub * min(max(spec.complaint_share_of_unsubscribes, 0.0), 1.0)
+        lost = self.lost_value[idx, ch]
+        harm = p_unsub * lost + p_complaint * spec.complaint_cost
+        value = incremental * self.margin_per_purchase - redemptions * offer_cost - channel_cost - harm
 
         consent = self.consent[idx, ch]
         unsubscribed = self.unsub_at[idx, ch] <= t_s
@@ -442,7 +515,25 @@ class PlantedTruth:
             local_hour=local_hour,
             hour_factor=np.asarray(hour_factor, dtype=np.float64),
             offer_cost=offer_cost,
+            p_unsubscribe=np.asarray(p_unsub, dtype=np.float64),
+            lost_value=np.asarray(lost, dtype=np.float64),
+            annoyed=np.asarray(dog, dtype=np.bool_),
         )
+
+    def evaluate_rows(
+        self,
+        idx: IntArray,
+        ch: IntArray,
+        kind: IntArray,
+        theme: IntArray,
+        offer_cost: FloatArray,
+        channel_cost: FloatArray,
+        t_s: FloatArray,
+        local_hour: FloatArray,
+    ) -> Evaluation:
+        """`evaluate` for rows already coded as arrays (channel, offer kind and theme positions, -1 for
+        no theme): what the world's history uses to value thousands of past sends at once."""
+        return self._evaluate(idx, ch, kind, theme, offer_cost, channel_cost, t_s, local_hour)
 
     def _organic(self, idx: IntArray, from_h: FloatArray, to_h: FloatArray) -> FloatArray:
         """Expected own purchases between two hours (from start), with the drift where it applies."""
@@ -510,3 +601,9 @@ class Evaluation:
     hour_factor: FloatArray
     offer_cost: FloatArray
     """Cost per redemption of the row's offer."""
+    p_unsubscribe: FloatArray
+    """Chance the contact, if delivered, causes an unsubscribe from its channel."""
+    lost_value: FloatArray
+    """Margin lost if it does (the customer's lost contact value on that channel)."""
+    annoyed: BoolArray
+    """A sleeping dog whose annoyance had begun by the send time: no lift, a dent, rare clicks."""
