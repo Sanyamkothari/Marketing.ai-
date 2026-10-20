@@ -89,3 +89,156 @@ runs. Nine scenarios reach their highest stage; only `sleeping_dogs_15` is held 
 * **One interval missed.** In `whatsapp_fatigue` seed 0 the 95% range ($15.8k-$37.2k) missed the
   true value ($39.7k). Coverage still passes (2 of 3, Wilson range 21%-94%), but it is worth
   watching. The full oracle is still out of reach: 55-75%.
+
+## After per-person harm and the click model (runs 39481636725 and 39507038294)
+
+- **Runs:** GitHub Actions `gym` run 39481636725 (commit `cf4d3492`) and run 39507038294 (commit
+  `72b5fc31`). Same setup as above: 10 scenarios × 3 seeds × 3,000 customers × 90 days. All 20 jobs
+  finished; none crashed.
+- **Per-person harm** (run 39481636725): contact harm worked out for each customer, plus the new
+  decision reasons (merge of `v2/dogs-storm`, plus a Python 3.11 fix).
+- **Click model** (run 39507038294): adds the purchase-weighted click blend from `v2/click-harm`
+  (`ClickResponseModel.uplift_from_clicks = True` in `autonomy/runtime/agent.py`).
+- Each cell reads contact-less -> per-person harm -> click model. "Unsubscribed" has the BFR's rate
+  in brackets. "Beats the BFR" gives the seeds won and the mean true value above the BFR. The
+  reference policies (send-to-all, marketer rule, BFR, segment oracle) are the same in both runs,
+  because they share seeds and do not use the agent's code.
+
+**baseline_shop**
+
+| | contact-less | per-person harm | click model |
+|---|---|---|---|
+| Stage | 3 | 3 | 3 |
+| Share of the segment oracle (BFR 80%) | 91% | 91% | 92% |
+| Contacts a customer a week | 1.61 | 1.61 | 1.61 |
+| Unsubscribed (BFR 7.8%) | 8.1% | 8.1% | 8.0% |
+| Sleeping dogs contacted | - | - | - |
+| Beats the BFR | 3/3, by $4.4k | 3/3, by $4.4k | 3/3, by $4.7k |
+
+**small_business**
+
+| | contact-less | per-person harm | click model |
+|---|---|---|---|
+| Stage | 3 | 3 | 3 |
+| Share of the segment oracle (BFR 80%) | 92% | 92% | 92% |
+| Contacts a customer a week | 1.62 | 1.62 | 1.62 |
+| Unsubscribed (BFR 7.8%) | 8.0% | 8.0% | 7.8% |
+| Sleeping dogs contacted | - | - | - |
+| Beats the BFR | 3/3, by $4.7k | 3/3, by $4.7k | 3/3, by $4.7k |
+
+**send_time_matters**
+
+| | contact-less | per-person harm | click model |
+|---|---|---|---|
+| Stage | 3 | 3 | 3 |
+| Share of the segment oracle (BFR 72%) | 106% | 106% | 105% |
+| Contacts a customer a week | 1.56 | 1.56 | 1.56 |
+| Unsubscribed (BFR 9.2%) | 7.7% | 7.7% | 7.6% |
+| Sleeping dogs contacted | - | - | - |
+| Beats the BFR | 3/3, by $9.7k | 3/3, by $9.6k | 3/3, by $9.5k |
+
+**drift_midway**
+
+| | contact-less | per-person harm | click model |
+|---|---|---|---|
+| Stage | 3 | 3 | 3 |
+| Share of the segment oracle (BFR 76%) | 89% | 89% | 89% |
+| Contacts a customer a week | 1.62 | 1.62 | 1.62 |
+| Unsubscribed (BFR 8.2%) | 7.9% | 7.9% | 7.9% |
+| Sleeping dogs contacted | - | - | - |
+| Beats the BFR | 3/3, by $4.8k | 3/3, by $4.8k | 3/3, by $4.8k |
+
+**sleeping_dogs_15**
+
+| | contact-less | per-person harm | click model |
+|---|---|---|---|
+| Stage | 2 | 2 | 2 |
+| Share of the segment oracle (BFR 80%) | 93% | 93% | 93% |
+| Contacts a customer a week | 1.59 | 1.59 | 1.59 |
+| Unsubscribed (BFR 10.3%) | 10.0% | 10.0% | 10.0% |
+| Sleeping dogs contacted (send-to-all 93%) | 93% ❌ | 93% ❌ (1,036 of 1,113) | 93% ❌ (1,036 of 1,113) |
+| Beats the BFR | 3/3, by $3.9k | 3/3, by $3.7k | 3/3, by $3.9k |
+
+**null_effect**
+
+| | contact-less | per-person harm | click model |
+|---|---|---|---|
+| Stage | 2 | 2 | 2 |
+| Share of the segment oracle | not judged | not judged | not judged |
+| Loss a customer (allowed $0.25) | $0.10 | **$0.00** | $0.00 |
+| Contacts a customer a week | 1.29 | **0.02** | 0.02 |
+| Unsubscribed (BFR 7.8%) | 6.6% | **0.1%** | 0.1% |
+| Sleeping dogs contacted | - | - | - |
+| Beats the BFR | 3/3, by $0.7k | 3/3, by $0.9k | 3/3, by $0.9k |
+
+**complaint_storm**
+
+| | contact-less | per-person harm | click model |
+|---|---|---|---|
+| Stage | 2 | 2 | 2 |
+| Share of the segment oracle | not judged (0%) | not judged (0%) | not judged (0%) |
+| Contacts a customer a week | 0.00 (paused before day 0) | 0.00 | 0.00 |
+| Unsubscribed (BFR 44%) | 0% | 0% | 0% |
+| Sleeping dogs contacted | - | - | - |
+| Beats the BFR | 3/3, by $1.9k | 3/3, by $1.9k | 3/3, by $1.9k |
+
+**sleeping_dogs_hidden**
+
+| | contact-less | per-person harm | click model |
+|---|---|---|---|
+| Stage | 3 | 3 | 3 |
+| Share of the segment oracle (BFR 80%) | 92% | 92% | 92% |
+| Contacts a customer a week | 1.61 | 1.61 | 1.60 |
+| Unsubscribed (BFR 10.2%) | 10.3% | 10.3% | 10.2% |
+| Sleeping dogs contacted (not judged: no signal) | 94% | 94% (1,040 of 1,109) | 94% (1,040 of 1,109) |
+| Beats the BFR | 3/3, by $3.6k | 3/3, by $3.6k | 3/3, by $3.5k |
+
+**discount_cannibalisation**
+
+| | contact-less | per-person harm | click model |
+|---|---|---|---|
+| Stage | 3 | 3 | 3 |
+| Share of the segment oracle (BFR 92%) | 98% | 98% | 98% |
+| Contacts a customer a week | 1.59 | 1.59 | 1.59 |
+| Unsubscribed (BFR 8.1%) | 7.5% | 7.6% | 7.5% |
+| Sleeping dogs contacted | - | - | - |
+| Beats the BFR | 3/3, by $1.8k | 3/3, by $1.7k | 3/3, by $1.7k |
+
+**whatsapp_fatigue**
+
+| | contact-less | per-person harm | click model |
+|---|---|---|---|
+| Stage | 3 | 3 | 3 |
+| Share of the segment oracle (BFR 71%) | 101% | 101% | 100% |
+| Contacts a customer a week | 1.01 | 1.01 | 1.01 |
+| Unsubscribed (BFR 15.5%) | 3.9% | 3.9% | 4.1% |
+| Sleeping dogs contacted | - | - | - |
+| Beats the BFR | 3/3, by $12.2k | 3/3, by $12.2k | 3/3, by $11.7k |
+
+Still zero rule breaks in all 60 runs. The stages are the same as after contact-less: nine
+scenarios at their highest stage, `sleeping_dogs_15` held at Stage 2.
+
+**What this says:**
+
+* **Per-person harm fixed one thing: `null_effect`.** Where messages do nothing, the agent now
+  almost stops: 0.02 contacts a week instead of 1.29, 0.1% unsubscribed instead of 6.6%, and a loss
+  of about $0.00 a customer instead of $0.10. Every other scenario is unchanged to within a few
+  hundred dollars.
+* **Sleeping dogs are still not found.** Both runs contact exactly the same 1,036 of 1,113
+  sleeping dogs in `sleeping_dogs_15` (93%, the same as send-to-all). Neither per-person harm nor
+  the click model moved a single one, so Stage 3 still fails there.
+* **The click model changed nothing beyond seed noise.** Against per-person harm, its edge over the
+  BFR moved by +$210 (baseline_shop), +$115 (sleeping_dogs_15), +$11, -$17, -$92, -$114, -$148 and
+  -$587 (whatsapp_fatigue). Summed over the eight money-making scenarios that is about -$600. The
+  seeds alone spread the edge by about $800 in the plain shops and about $6.7k in
+  `whatsapp_fatigue`. No stage was lost, but none was gained either, and no sleeping dog was spared.
+* **Recommendation: switch the purchase-weighted click blend off** (`uplift_from_clicks = False`).
+  It was meant to help with sleeping dogs. It did not, and it did not add profit beyond noise. It
+  only adds complexity. Keep the code behind the flag in case a later per-person signal gives it
+  something to work with.
+* **One interval still misses.** `whatsapp_fatigue` seed 0 misses in both runs, as before (95% range
+  $15.8k-$37.2k against a true $39.6k-$39.7k). Coverage still passes at 2 of 3. The full oracle is
+  still out of reach: 55-75%.
+* **These are simulator results only.** `REAL_DATA_RESULTS.md` shows that on real randomised data
+  (Hillstrom, X5) the agent does not yet beat simple policies, so these Gym gains have not been shown
+  outside the simulator.
