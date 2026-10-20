@@ -29,6 +29,17 @@ so `contacts_7d` alone would let a second and third send through. The policy rem
 decision's `send_at` until the customer's state shows a contact at or after it (the SEND was
 folded) or until it is a week old, and adds those pending sends to `contacts_7d` before the rules and
 the attention price see the state.
+
+Two optional parts make the policy smarter per person and per channel (both off by default, so the
+agent factory decides when to switch them on):
+
+* `reading_hours` (a `timing.ReadingHourModel`): each decision takes one Thompson draw of the
+  customer's reading hours and times every bid at the best allowed hour of that draw. The draw uses
+  its own seeded generator, so it never changes the auction's draws.
+* `pacer` (a `pacing.Pacer`): before the breaker would trip a stop rule, a channel's bids pay a
+  surcharge that rises with its pressure, and at full pressure the channel is held (`pacing` in
+  `blocked_by`). The surcharge is charged like the attention price, and a sent decision logs the
+  price plus its surcharge as `attention_price`, which is what that bid had to beat.
 """
 
 from __future__ import annotations
@@ -44,6 +55,7 @@ import numpy as np
 
 from autonomy.contracts import (
     Bid,
+    Channel,
     CustomerState,
     Decision,
     DecisionContext,
@@ -53,7 +65,8 @@ from autonomy.contracts import (
     stable_id,
 )
 from autonomy.decide import explain, rules
-from autonomy.decide.timing import DEFAULT_HOUR, choose_send_time
+from autonomy.decide.pacing import Pacer
+from autonomy.decide.timing import DEFAULT_HOUR, ReadingHourModel, choose_send_time
 from autonomy.interfaces import Bidder, Policy
 
 DEFAULT_EXPLORATION_FLOOR = 0.05
@@ -146,7 +159,9 @@ class AutonomousPolicy:
     hours are unknown. `plausible_z` (None: off) keeps only options whose net could beat doing
     nothing within that many standard deviations; the rest are logged as considered but neither
     sampled nor explored. `min_gap` (None: off) holds a new message while another is scheduled or
-    within that long of the last one (`rules.too_soon`).
+    within that long of the last one (`rules.too_soon`). `reading_hours` (None: off) times each
+    send by a Thompson draw of the customer's reading hours. `pacer` (None: off) slows a channel
+    down, then holds it, as the goal nears a stop rule (see the module docstring).
 
     `decide(state, ctx, trigger=None)`: `trigger` names what prompted the decision when it is not the
     daily sweep (a cart, a reply). The decision id is fixed by (customer, `ctx.now`, trigger), so
@@ -169,6 +184,8 @@ class AutonomousPolicy:
         version: str = "autonomy-v1",
         plausible_z: float | None = None,
         min_gap: timedelta | None = None,
+        reading_hours: ReadingHourModel | None = None,
+        pacer: Pacer | None = None,
     ) -> None:
         if exploration_floor is not None and not 0 <= exploration_floor <= 1:
             raise ValueError("exploration_floor is a probability")
@@ -186,6 +203,8 @@ class AutonomousPolicy:
         self.version = version
         self.plausible_z = plausible_z
         self.min_gap = min_gap
+        self.reading_hours = reading_hours
+        self.pacer = pacer
         # customer -> {decision_id: send_at} for ACT decisions whose SEND is not in the state yet
         self._scheduled: dict[str, dict[str, datetime]] = {}
 
@@ -218,11 +237,18 @@ class AutonomousPolicy:
             )
             gap = rules.too_soon(state, ctx.now, self.min_gap, upcoming)
         state = self.with_pending(state, ctx.now, ignore=decision_id)
+        rng_key = state.customer_id if trigger in (None, SWEEP) else f"{state.customer_id}\x1f{trigger}"
+        hour_scores: tuple[float, ...] | None = None
+        if self.reading_hours is not None:
+            # One draw per decision, shared by every bid, from its own generator.
+            hour_scores = self.reading_hours.sample_profile(
+                state.customer_id, state.segment, seeded_rng(ctx.seed, f"{rng_key}\x1freading")
+            )
         # A bid whose value or uncertainty is NaN or infinite is a bidder bug, not an opportunity:
         # numpy's argmax treats NaN as the largest value, so one such bid would always be sent.
         times: dict[tuple[str, datetime], datetime | None] = {}
         offered = [
-            self._timed(b, state, ctx, times)
+            self._timed(b, state, ctx, times, hour_scores)
             for bidder in self.bidders
             for b in bidder.bids(state, ctx)
             if math.isfinite(b.expected_net) and math.isfinite(b.uncertainty)
@@ -237,19 +263,26 @@ class AutonomousPolicy:
                 survivors.append(bid)
             else:
                 blocked.append(check.code)
-        # Keep the near-best options only: exploring a long tail of poor bids wastes the floor.
-        survivors = sorted(survivors, key=lambda b: b.expected_net, reverse=True)[: self.max_options]
-
         price = self._price(state)
+        extra: dict[tuple[str, Channel], float] = {}
+        if self.pacer is not None:
+            survivors = self._paced(survivors, ctx, price, extra, blocked)
+
+        def cost(b: Bid) -> float:
+            return price + extra.get((b.goal_id, b.action.channel), 0.0)
+
+        # Keep the near-best options only: exploring a long tail of poor bids wastes the floor.
+        survivors = sorted(survivors, key=lambda b: b.expected_net - cost(b), reverse=True)[
+            : self.max_options
+        ]
         options = survivors
         if self.plausible_z is not None:
             # Near-best only: an option whose net is below "do nothing" even at the optimistic end
             # of its spread is not explored either, so the floor is not spent on known losers.
             z = self.plausible_z
-            options = [b for b in survivors if b.expected_net - price + z * b.uncertainty > 0]
-        means = [0.0] + [b.expected_net - price for b in options]  # option 0 is "do nothing"
+            options = [b for b in survivors if b.expected_net - cost(b) + z * b.uncertainty > 0]
+        means = [0.0] + [b.expected_net - cost(b) for b in options]  # option 0 is "do nothing"
         sds = [0.0] + [b.uncertainty for b in options]
-        rng_key = state.customer_id if trigger in (None, SWEEP) else f"{state.customer_id}\x1f{trigger}"
         pick = thompson_with_floor(means, sds, self._floor(ctx), seeded_rng(ctx.seed, rng_key), self.mc_draws)
 
         chosen = options[pick.index - 1] if pick.index > 0 else None
@@ -262,7 +295,7 @@ class AutonomousPolicy:
             group=state.group,
             probability=pick.probability,
             expected_net=chosen.expected_net if chosen is not None else 0.0,
-            attention_price=price,
+            attention_price=cost(chosen) if chosen is not None else price,
             reason="-",
             bids=tuple(survivors[:LOGGED_BIDS]),
             blocked_by=_unique(blocked),
@@ -276,6 +309,8 @@ class AutonomousPolicy:
             contacts_7d=state.contacts_7d,
             explored=pick.explored,
             currency=self.currency,
+            surcharges=extra,
+            base_price=price,
         )
         self._remember(draft)
         return draft.model_copy(update={"reason": sentence})
@@ -345,12 +380,15 @@ class AutonomousPolicy:
         state: CustomerState,
         ctx: DecisionContext,
         cache: dict[tuple[str, datetime], datetime | None] | None = None,
+        hour_scores: Sequence[float] | None = None,
     ) -> Bid:
         """The bid with its send time set: the customer's best allowed hour, never before now.
 
         A bidder may ask for a later start (a follow-up due in two days); the hour is then chosen in
         the 24 hours after that. A bid for a goal with no brief keeps its time; the rules block it.
         Bids of one goal with the same start share one send time, so it is worked out once.
+        `hour_scores` (one draw of the customer's reading hours) take precedence over their
+        `active_hours` and the segment's profile.
         """
         earliest: datetime = max(ctx.now, bid.action.send_at)
         key = (bid.goal_id, earliest)
@@ -367,6 +405,7 @@ class AutonomousPolicy:
                     earliest,
                     fallback_hours=self.segment_hours.get(state.segment) if state.segment else None,
                     default_hour=self.default_hour,
+                    hour_scores=hour_scores,
                 )
             )
             if cache is not None:
@@ -374,6 +413,38 @@ class AutonomousPolicy:
         if send_at is None or send_at == bid.action.send_at:
             return bid
         return bid.model_copy(update={"action": bid.action.model_copy(update={"send_at": send_at})})
+
+    def _paced(
+        self,
+        bids: Sequence[Bid],
+        ctx: DecisionContext,
+        price: float,
+        extra: dict[tuple[str, Channel], float],
+        blocked: list[str],
+    ) -> list[Bid]:
+        """Bids that pacing lets through; fills `extra` with each (goal, channel)'s surcharge and
+        adds `pacing` to `blocked` for each bid on a held channel."""
+        pacer = self.pacer
+        if pacer is None:
+            return list(bids)
+        kept: list[Bid] = []
+        for bid in bids:
+            channel = bid.action.channel
+            pacer.observe_bid(channel, bid.expected_net, ctx.now)
+            key = (bid.goal_id, channel)
+            if key not in extra:
+                brief = rules.brief_for(bid.goal_id, ctx.briefs)
+                pressure = (
+                    0.0 if brief is None else pacer.pressure(bid.goal_id, channel, brief.envelope, ctx.now)
+                )
+                extra[key] = pacer.surcharge(channel, pressure, price, ctx.now)
+            if math.isinf(extra[key]):
+                blocked.append(rules.PACING)
+            else:
+                kept.append(bid)
+        for key in [k for k, v in extra.items() if math.isinf(v) or v <= 0]:
+            del extra[key]
+        return kept
 
     def _price(self, state: CustomerState) -> float:
         if self.attention_price_fn is None:

@@ -28,6 +28,13 @@ Three kinds of observation, one per model in `autonomy.decide.models`:
   or one without an id before the next send and inside the window).
 * `ValueObservation`: every PURCHASE event up to `now`, with its value and margin.
 
+**Logged history.** A client hands over months of past campaigns before day 1. `logged_sends` reads
+them back as `LoggedSend`s (channel, offer, theme, whether delivered and clicked, and the
+`logged_probability` a randomised campaign recorded for each send), and `ipw_weights` /
+`weighted_rate` turn them into rates that undo the campaigns' targeting: a send that had a 10%
+chance of going out stands for ten customers like it. The agent warm-starts its click model from
+them (`autonomy.runtime.agent.AgentPolicy`).
+
 **Overlapping control windows.** Daily do-nothing decisions with a 14-day horizon put one purchase
 in up to 14 control observations. That does not bias the rate, but it would make the control
 posterior about 14 times too sure of itself. With `overlap_weighting=True` (the default) a control
@@ -45,7 +52,7 @@ from collections.abc import Callable, Container, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
-from autonomy.contracts import ContentItem, Decision, DecisionKind, Event, EventType, Group
+from autonomy.contracts import Channel, ContentItem, Decision, DecisionKind, Event, EventType, Group
 from autonomy.decide.models import FatigueObservation, ResponseObservation, action_key
 from autonomy.learning.bundle import ValueObservation
 
@@ -411,3 +418,147 @@ def value_observations(
             out.value.append(ValueObservation(value=e.value, margin=e.margin))
             out.count("value")
     return out
+
+
+# --- logged history: past campaigns handed over with the client's data ---------------------------
+
+LOGGED_PROBABILITY = "logged_probability"
+"""The attr a logged send carries when the campaign that sent it was randomised: the chance it had of
+going to this customer. It is what makes the history usable for learning without its targeting bias."""
+LOGGED_CLICK_WINDOW = timedelta(days=3)
+"""A click without a decision id is credited to the last send on its channel at most this long before."""
+DEFAULT_LOGGED_IPW_CLIP = 20.0
+"""Largest inverse-propensity weight for a logged send, so one send with a tiny propensity cannot
+carry a whole action's estimate."""
+
+
+@dataclass(frozen=True)
+class LoggedSend:
+    """One message from the client's past campaigns, as the history shows it."""
+
+    customer_id: str
+    sent_at: datetime
+    channel: Channel
+    offer_id: str
+    theme: str | None
+    """From the content library when the content id is known, else the send's `theme` attr."""
+    propensity: float | None
+    """`attrs["logged_probability"]` when the campaign logged it (a number in (0, 1]), else None."""
+    delivered: bool
+    clicked: bool
+    click_at: datetime | None
+    decision_id: str | None
+
+    def action_key(self) -> str:
+        return action_key(self.channel, self.offer_id, self.theme or "*")
+
+
+def _probability(value: object) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return None
+    p = float(value)
+    return p if 0 < p <= 1 else None
+
+
+def logged_sends(
+    events_by_customer: Mapping[str, Sequence[Event]],
+    content_by_id: Mapping[str, ContentItem],
+    *,
+    exclude: Container[str] = frozenset(),
+) -> list[LoggedSend]:
+    """Every past send in the history, with whether it was delivered and clicked.
+
+    A SEND event is one message (its `decision_id`, when there is one, ties it to its DELIVER, FAIL
+    and CLICK events). Without a decision id, a FAIL or BOUNCE on the same channel within five minutes
+    marks it undelivered and the first CLICK on the same channel within `LOGGED_CLICK_WINDOW`, before
+    the next send on that channel, is its click. Sends whose decision id is in `exclude` (the agent's
+    own) are left out. Sorted by customer, then send time, so callers repeat exactly.
+    """
+    out: list[LoggedSend] = []
+    for cid in sorted(events_by_customer):
+        ordered = sorted(events_by_customer[cid], key=lambda e: (e.ts, e.event_id))
+        sends = [e for e in ordered if e.type is EventType.SEND and e.channel is not None]
+        if not sends:
+            continue
+        failed: set[str] = set()
+        delivered_ids: set[str] = set()
+        clicks: dict[str, datetime] = {}
+        loose_fail: list[Event] = []
+        loose_clicks: list[Event] = []
+        for e in ordered:
+            if e.type is EventType.DELIVER and e.decision_id is not None:
+                delivered_ids.add(e.decision_id)
+            elif e.type in _UNDELIVERED_TYPES:
+                if e.decision_id is not None:
+                    failed.add(e.decision_id)
+                else:
+                    loose_fail.append(e)
+            elif e.type is EventType.CLICK:
+                if e.decision_id is not None:
+                    clicks.setdefault(e.decision_id, e.ts)
+                else:
+                    loose_clicks.append(e)
+        used: set[str] = set()
+        for k, s in enumerate(sends):
+            if s.decision_id is not None and s.decision_id in exclude:
+                continue
+            channel = s.channel
+            assert channel is not None  # filtered above
+            offer = s.attrs.get("offer_id")
+            content = s.attrs.get("content_id")
+            theme = theme_of(content if isinstance(content, str) else None, content_by_id)
+            if theme is None:
+                raw = s.attrs.get("theme")
+                theme = raw if isinstance(raw, str) else None
+            did = s.decision_id
+            if did is not None:
+                delivered = did in delivered_ids or did not in failed
+                click_at = clicks.get(did)
+            else:
+                delivered = not any(
+                    f.channel is channel and timedelta(0) <= f.ts - s.ts <= timedelta(minutes=5)
+                    for f in loose_fail
+                )
+                nxt = next((t.ts for t in sends[k + 1 :] if t.channel is channel), None)
+                until = s.ts + LOGGED_CLICK_WINDOW if nxt is None else min(nxt, s.ts + LOGGED_CLICK_WINDOW)
+                click_at = None
+                for c in loose_clicks:
+                    if c.event_id not in used and c.channel in (channel, None) and s.ts <= c.ts < until:
+                        used.add(c.event_id)
+                        click_at = c.ts
+                        break
+            out.append(
+                LoggedSend(
+                    customer_id=cid,
+                    sent_at=s.ts,
+                    channel=channel,
+                    offer_id=offer if isinstance(offer, str) else "none",
+                    theme=theme,
+                    propensity=_probability(s.attrs.get(LOGGED_PROBABILITY)),
+                    delivered=delivered,
+                    clicked=delivered and click_at is not None,
+                    click_at=click_at if delivered else None,
+                    decision_id=did,
+                )
+            )
+    return out
+
+
+def ipw_weights(
+    propensities: Sequence[float | None], *, clip: float = DEFAULT_LOGGED_IPW_CLIP
+) -> list[float]:
+    """Inverse-propensity weights 1 / p, clipped at `clip`. A send without a logged propensity gets
+    weight 1: we cannot correct its targeting, so it counts as if it had been sent to everyone."""
+    return [1.0 if p is None else min(1.0 / p, clip) for p in propensities]
+
+
+def weighted_rate(outcomes: Sequence[bool], weights: Sequence[float]) -> tuple[float, float]:
+    """(self-normalised weighted rate, effective sample size) of yes/no outcomes.
+
+    The rate is the Hajek estimator sum(w y) / sum(w); the effective size (sum w)^2 / sum(w^2) is how
+    many unweighted observations it is worth, so a prior built from it is not overconfident."""
+    sw = sum(weights)
+    if sw <= 0:
+        return 0.0, 0.0
+    rate = sum(w for y, w in zip(outcomes, weights, strict=True) if y) / sw
+    return rate, sw * sw / sum(w * w for w in weights)

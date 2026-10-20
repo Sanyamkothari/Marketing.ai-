@@ -3,8 +3,10 @@
 Goal bidders price each allowed action (`bidders`), using small learnable models of response,
 value and fatigue (`models`) and the brief's audience (`audience`). `AutonomousPolicy` (`policy`)
 turns the bids into one `Decision`: the hard rules (`rules`) remove what may not go out, the send
-time is chosen (`timing`), the attention price is charged, Thompson sampling with an exploration
-floor picks, and `explain` writes the one-sentence reason.
+time is chosen (`timing`, optionally from a learned `ReadingHourModel`), the attention price and
+any pacing surcharge (`pacing`) are charged, Thompson sampling with an exploration floor picks, and
+`explain` writes the one-sentence reason. `models.PersonalEffects` is the per-person click model the
+agent (`autonomy.runtime.agent`) builds on.
 """
 
 from autonomy.decide import rules
@@ -17,14 +19,19 @@ from autonomy.decide.models import (
     BetaResponseModel,
     FatigueModel,
     FatigueObservation,
+    PersonalEffects,
     ResponseModel,
     ResponseObservation,
     ValueModel,
     action_key,
+    cuped_adjust,
+    cuped_theta,
+    shrink_to_pool,
 )
+from autonomy.decide.pacing import Pacer
 from autonomy.decide.policy import AutonomousPolicy, Pick, seeded_rng, thompson_with_floor
 from autonomy.decide.rules import RuleResult, check_bid
-from autonomy.decide.timing import candidate_times, choose_send_time
+from autonomy.decide.timing import ReadingHourModel, candidate_times, choose_send_time
 
 __all__ = [
     "ANY",
@@ -35,7 +42,10 @@ __all__ = [
     "FatigueModel",
     "FatigueObservation",
     "GoalBidder",
+    "Pacer",
+    "PersonalEffects",
     "Pick",
+    "ReadingHourModel",
     "ResponseModel",
     "ResponseObservation",
     "RuleResult",
@@ -45,11 +55,14 @@ __all__ = [
     "candidate_times",
     "check_bid",
     "choose_send_time",
+    "cuped_adjust",
+    "cuped_theta",
     "days_since_cart",
     "matches",
     "reason",
     "rules",
     "seeded_rng",
+    "shrink_to_pool",
     "thompson_with_floor",
     "urgency_for",
 ]
