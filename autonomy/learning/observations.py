@@ -125,6 +125,17 @@ def theme_of(content_id: str | None, content_by_id: Mapping[str, ContentItem]) -
     return None if item is None else item.theme.value
 
 
+def format_of(content_id: str | None, content_by_id: Mapping[str, ContentItem]) -> str | None:
+    """The format of a content item (`text`, `text_image`, ...), or None when the item is unknown.
+
+    It goes into the action key beside the theme, so an image send is learned as its own option
+    (see `autonomy.decide.models.action_key`); plain text keeps the three-part key."""
+    if content_id is None:
+        return None
+    item = content_by_id.get(content_id)
+    return None if item is None else item.format.value
+
+
 class Timeline:
     """One customer's events, sorted, with the lookups learning needs."""
 
@@ -292,7 +303,9 @@ def decision_observations(
             out.response.append(
                 ResponseObservation(
                     segment=segment(d.customer_id),
-                    action_key=action_key(action.channel, action.offer_id, theme),
+                    action_key=action_key(
+                        action.channel, action.offer_id, theme, format_of(action.content_id, content_by_id)
+                    ),
                     converted=tl.bought(start, end),
                 )
             )
@@ -448,9 +461,12 @@ class LoggedSend:
     clicked: bool
     click_at: datetime | None
     decision_id: str | None
+    format: str | None = None
+    """From the content library when the content id is known, else the send's `format` attr; None
+    (plain text) for campaigns that never recorded one."""
 
     def action_key(self) -> str:
-        return action_key(self.channel, self.offer_id, self.theme or "*")
+        return action_key(self.channel, self.offer_id, self.theme or "*", self.format)
 
 
 def _probability(value: object) -> float | None:
@@ -510,6 +526,10 @@ def logged_sends(
             if theme is None:
                 raw = s.attrs.get("theme")
                 theme = raw if isinstance(raw, str) else None
+            fmt = format_of(content if isinstance(content, str) else None, content_by_id)
+            if fmt is None:
+                raw_fmt = s.attrs.get("format")
+                fmt = raw_fmt if isinstance(raw_fmt, str) else None
             did = s.decision_id
             if did is not None:
                 delivered = did in delivered_ids or did not in failed
@@ -539,6 +559,7 @@ def logged_sends(
                     clicked=delivered and click_at is not None,
                     click_at=click_at if delivered else None,
                     decision_id=did,
+                    format=fmt,
                 )
             )
     return out

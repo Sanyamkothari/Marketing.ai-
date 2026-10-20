@@ -28,6 +28,7 @@ from autonomy.learning.observations import (
     ObservationSet,
     SegmentOf,
     decision_observations,
+    format_of,
     holdout_observations,
     overlap_weight,
     segment_lookup,
@@ -240,7 +241,7 @@ def learn_from_rewards(
         if theme is None:
             obs.count("unknown_content")
         else:
-            key = action_key(a.channel, a.offer_id, theme)
+            key = action_key(a.channel, a.offer_id, theme, format_of(a.content_id, content_by_id))
             obs.response.append(ResponseObservation(segment(d.customer_id), key, r.converted))
             obs.count("treated")
         contacts = (contacts_7d_at or {}).get(d.decision_id)
