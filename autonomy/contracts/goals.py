@@ -1,0 +1,184 @@
+"""Goals, briefs and envelopes: what the marketer wants and the limits the agent works within.
+
+A `Goal` is the marketer's request in plain words. The Strategist answers with a `Brief`, which
+holds an `Envelope`: the box the agent may act in without asking (channels, offers, caps, budget,
+quiet hours, stop rules). The marketer approves the brief once, then chooses the autonomy level.
+"""
+
+from __future__ import annotations
+
+from enum import StrEnum
+from typing import Literal
+
+from pydantic import AwareDatetime, Field, model_validator
+
+from autonomy.contracts.base import Channel, Contract
+
+
+class Objective(StrEnum):
+    CONVERSION = "conversion"  # did they buy at all
+    REVENUE = "revenue"
+    GROSS_PROFIT = "gross_profit"  # the default
+    RETENTION = "retention"
+    LEAD = "lead"
+    ACTIVATION = "activation"
+
+
+class GoalKind(StrEnum):
+    WIN_BACK = "win_back"
+    REPEAT_PURCHASE = "repeat_purchase"
+    CART_RECOVERY = "cart_recovery"
+    CROSS_SELL = "cross_sell"
+    ONBOARDING = "onboarding"
+    RETENTION = "retention"
+    CUSTOM = "custom"
+
+
+class AutonomyLevel(StrEnum):
+    SHADOW = "shadow"  # decide and log only, send nothing
+    APPROVE = "approve"  # a person approves each batch
+    AUTOPILOT = "autopilot"  # act inside the envelope; a person can pause any time
+
+
+class GoalStatus(StrEnum):
+    DRAFT = "draft"
+    ACTIVE = "active"
+    PAUSED = "paused"
+    DONE = "done"
+
+
+class Goal(Contract):
+    goal_id: str
+    business_id: str
+    text: str = Field(description="The marketer's words, e.g. 'win back lapsed customers, $5k this month'")
+    kind: GoalKind = GoalKind.CUSTOM
+    objective: Objective = Objective.GROSS_PROFIT
+    budget: float = Field(ge=0, description="Total spend allowed on offers and messages, in `currency`")
+    currency: str = "USD"
+    starts_at: AwareDatetime
+    ends_at: AwareDatetime | None = None
+    autonomy: AutonomyLevel = AutonomyLevel.SHADOW
+    status: GoalStatus = GoalStatus.DRAFT
+    created_at: AwareDatetime
+
+
+class OfferKind(StrEnum):
+    NONE = "none"
+    PERCENT_OFF = "percent_off"
+    AMOUNT_OFF = "amount_off"
+    FREE_SHIPPING = "free_shipping"
+    GIFT = "gift"
+    LOYALTY = "loyalty"
+    CONTENT = "content"  # useful information, no incentive
+
+
+class OfferOption(Contract):
+    offer_id: str
+    label: str
+    kind: OfferKind
+    amount: float = Field(default=0.0, ge=0, description="Percent for percent_off, money for amount_off")
+    cost_per_redemption: float = Field(default=0.0, ge=0, description="Expected cost to the business if used")
+    needs_approval: bool = False
+
+
+NO_OFFER = OfferOption(offer_id="none", label="No offer", kind=OfferKind.NONE)
+
+
+class StopMetric(StrEnum):
+    COMPLAINT_RATE = "complaint_rate"  # share of deliveries, e.g. 0.0008
+    UNSUBSCRIBE_MULTIPLE = "unsubscribe_multiple"  # vs the account's own baseline, e.g. 3.0
+    DELIVERY_RATE_BELOW = "delivery_rate_below"  # e.g. 0.95
+    SPEND_PACE = "spend_pace"  # spend / planned spend to date, e.g. 1.2
+    WHATSAPP_QUALITY = "whatsapp_quality"  # 1 = yellow, 2 = red
+
+
+class StopRule(Contract):
+    metric: StopMetric
+    threshold: float
+    action: Literal["pause_goal", "pause_channel"] = "pause_goal"
+
+
+DEFAULT_STOP_RULES: tuple[StopRule, ...] = (
+    StopRule(metric=StopMetric.COMPLAINT_RATE, threshold=0.0008),
+    StopRule(metric=StopMetric.UNSUBSCRIBE_MULTIPLE, threshold=3.0),
+    StopRule(metric=StopMetric.DELIVERY_RATE_BELOW, threshold=0.95, action="pause_channel"),
+    StopRule(metric=StopMetric.SPEND_PACE, threshold=1.2),
+    StopRule(metric=StopMetric.WHATSAPP_QUALITY, threshold=1, action="pause_channel"),
+)
+
+
+class Envelope(Contract):
+    channels: tuple[Channel, ...]
+    offers: tuple[OfferOption, ...] = (NO_OFFER,)
+    budget: float = Field(ge=0)
+    max_daily_spend: float | None = None
+    max_contacts_per_week: int = Field(default=2, ge=0, description="Hard cap per customer across all goals")
+    quiet_start_hour: int = Field(default=21, ge=0, le=23, description="Local time; no sends from here...")
+    quiet_end_hour: int = Field(default=9, ge=0, le=23, description="...until here")
+    exploration_floor: float = Field(default=0.05, ge=0, le=0.5)
+    holdout_share: float = Field(default=0.10, ge=0, le=0.5)
+    baseline_share: float = Field(default=0.10, ge=0, le=0.5)
+    stop_rules: tuple[StopRule, ...] = DEFAULT_STOP_RULES
+
+    @model_validator(mode="after")
+    def _sane(self) -> Envelope:
+        if not self.channels:
+            raise ValueError("an envelope needs at least one channel")
+        if self.holdout_share + self.baseline_share >= 1:
+            raise ValueError("holdout + baseline must leave room for the agent")
+        return self
+
+
+FilterOp = Literal[
+    "eq",
+    "ne",
+    "gt",
+    "gte",
+    "lt",
+    "lte",
+    "in",
+    "not_in",
+    "is_null",
+    "not_null",
+    "days_since_gt",
+    "days_since_lt",
+]
+
+
+class AudienceFilter(Contract):
+    """A test on one `CustomerState` field. `days_since_*` compare a datetime field with now."""
+
+    field: str
+    op: FilterOp
+    value: str | float | int | bool | tuple[str, ...] | None = None
+
+
+class Audience(Contract):
+    description: str
+    filters: tuple[AudienceFilter, ...] = ()
+
+
+class FollowUpStep(Contract):
+    after_days: int = Field(ge=1)
+    when: Literal["no_response", "no_purchase", "always"] = "no_purchase"
+    channel: Channel | None = Field(default=None, description="None: let decide() pick")
+
+
+class Brief(Contract):
+    brief_id: str
+    goal_id: str
+    version: int = 1
+    objective: Objective
+    audience: Audience
+    horizon_days: int = Field(default=14, ge=1, le=180, description="Outcome window after a contact")
+    envelope: Envelope
+    follow_ups: tuple[FollowUpStep, ...] = ()
+    rationale: str = Field(default="", description="The Strategist's plain-English reasoning")
+    created_by: str = "strategist"
+    created_at: AwareDatetime
+    approved_by: str | None = None
+    approved_at: AwareDatetime | None = None
+
+    @property
+    def approved(self) -> bool:
+        return self.approved_at is not None

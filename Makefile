@@ -56,13 +56,13 @@ test-all: ## every test that costs nothing, @frozen included; `pytest -m bedrock
 	$(BIN)/python -m pytest -m "$(PAID_MARKERS)"
 
 lint: check-generated ## ruff + black --check + mypy --strict + generated-file drift check
-	$(BIN)/ruff check engine api scripts tests
-	$(BIN)/black --check engine api scripts tests
+	$(BIN)/ruff check engine api scripts autonomy tests
+	$(BIN)/black --check engine api scripts autonomy tests
 	$(BIN)/mypy
 
 format: ## apply ruff --fix and black
-	$(BIN)/ruff check --fix engine api scripts tests
-	$(BIN)/black engine api scripts tests
+	$(BIN)/ruff check --fix engine api scripts autonomy tests
+	$(BIN)/black engine api scripts autonomy tests
 
 generate: ## regenerate templates/, docs/API.md and infra/observability/ from configs and contracts
 	$(BIN)/python -m scripts.gen_templates
@@ -281,3 +281,13 @@ DOCTOR_AI_K ?= 5
 doctor-ai-gate: ## Stage 4 release gate: the Data Doctor's seven safety checks on the live Product AI, each case DOCTOR_AI_K (5) times; exit 2 when no Product AI is connected
 	$(BIN)/python -m scripts.plan_o_benchmark --model product --k $(DOCTOR_AI_K) --parts tools,ai,multi,extended --out reports/doctor_ai_gate $(ARGS)
 # ---- END PLAN-O ----
+
+# ---- v2 (plan-v2.md) — the light loop for the autonomy package ----
+.PHONY: v2-check v2-test
+v2-check: ## v2 only, light: ruff + black --check on autonomy/ and tests/v2/, then its fast tests
+	ruff check autonomy tests/v2
+	black --check autonomy tests/v2
+	python -m pytest tests/v2 -q -m "not v1bridge and not slow"
+
+v2-test: ## v2's fast tests only (no AutoGluon, no v1 bridges)
+	python -m pytest tests/v2 -q -m "not v1bridge and not slow"

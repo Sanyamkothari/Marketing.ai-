@@ -54,8 +54,8 @@ Claude builds this directly, before any workflow starts. It's what makes paralle
 | `autonomy/contracts/` | Pydantic models: `Event`, `EventType`, `CustomerState`, `Goal`, `Brief`, `Envelope`, `ContentItem` (with labels: theme, tone, offer, format, channel), `Action`, `Decision` (with `probability`, `reason`, `decision_id`), `Bid`, `Outcome`, `Prior`, `Briefing`, `HealthStatus` |
 | `autonomy/interfaces.py` | Protocols: `EventStore`, `StateStore`, `JobQueue`, `Bidder`, `Policy` (`decide()`), `Environment` (the Gym and the real world look the same to `decide()`), `Dispatcher`, `ChannelAdapter`, `TextSignals`, `PriorStore`, `AgentRole` |
 | `autonomy/fakes/` | In-memory versions of every interface, so each stream can run on its own |
-| DB schema | Tables: `event`, `customer_state`, `decision`, `goal`, `brief`, `content_item`, `prior`, `job`, plus a migration |
-| Test harness | `tests/v2/` layout, fixtures, `make v2-test` (fast, under 2 minutes) |
+| `autonomy/loop.py` | The reference loop (`run_days`) showing how the pieces meet |
+| Test harness + CI | `tests/v2/`, `make v2-check`, and a light CI job (`.github/workflows/v2.yml`) that answers in minutes. **CI does the heavy testing; locally we run only seconds-long checks.** (The SQL schema belongs to WF1, since only WF1 touches the database.) |
 | `docs/v2/CONTRACTS.md` | One page that each stream reads first |
 
 **Contract change rule:** a stream that needs a new field **adds** it (never renames or removes), notes it in its merge summary, and the integrator applies it to `version-2` first.

@@ -149,12 +149,12 @@ marketing-ai-templates = "scripts.gen_templates:main"
 marketing-ai-apidocs   = "scripts.gen_api_docs:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["engine", "api", "scripts"]
+packages = ["engine", "api", "scripts", "autonomy"]
 
 [tool.ruff]
 line-length = 110
 target-version = "py311"
-src = ["engine", "api", "scripts", "tests"]
+src = ["engine", "api", "scripts", "autonomy", "tests"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "N", "UP", "B", "A", "C4", "SIM", "PTH", "RET", "ARG", "ANN", "TID", "RUF"]
@@ -171,7 +171,7 @@ ignore = [
 "tests/*" = ["ANN", "ARG"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["engine", "api", "scripts"]
+known-first-party = ["engine", "api", "scripts", "autonomy"]
 
 [tool.black]
 line-length = 110
@@ -184,6 +184,7 @@ files = [
   "engine",
   "api",
   "scripts",
+  "autonomy",                           # v2 (plan-v2.md): held to the same strict bar
   "alembic",                            # the migrations own the Postgres schema, so they are held to the same bar
   "tests/fixtures/make_data.py",
   "tests/fixtures/make_docs.py",
@@ -212,5 +213,6 @@ markers = [
   "docker: needs a working Docker daemon and a pullable base image; skips with a reason when there is none",
   "aws: talks to a real AWS account; never selected by default, run by hand against a dev account",
   "frozen: tests of features the v1 plan froze (decision 5); excluded from `make test`, run by `make test-all` (nightly)",
+  "v1bridge: v2 code that imports heavy v1 modules (AutoGluon, LightGBM, DuckDB); left out of the light v2 CI job",
   "statistical: Monte Carlo validity tests (Plan J); collected only with MARKETING_AI_STATISTICAL=1, run nightly by `make test-statistical` (DEC-1300)",
 ]
