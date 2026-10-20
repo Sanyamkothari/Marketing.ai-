@@ -72,6 +72,7 @@ class PlanFinding(StrictBase):
     code: str
     text: str = Field(description="Plain words with counts; never a cell value.")
     item_id: str | None = Field(default=None, description="The step it is about; none for the whole plan.")
+    detail: str | None = Field(default=None, description="The expert's side of `text`, shown behind a click.")
 
 
 class PlanCheck(StrictBase):

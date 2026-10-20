@@ -190,6 +190,21 @@ test("editing: the saved secret is not shown, a blank keeps it", async () => {
   assert.deepEqual(sent.updates[0].body.secrets, { access_key_id: "", secret_access_key: "" });
 });
 
+test("editing: a changed address says the saved secret must be typed again (security review 2, H-2)", async () => {
+  // A database: its host is where the saved password goes (plain S3 has no address field to change).
+  await show(`#/connections/${ids.pg}`);
+  const key = $('[data-cn-secret="password"]');
+  const host = $('[data-cn-field="host"]');
+  assert.ok(key && host, "the Postgres form has a host and a saved password");
+  const before = host.value;
+  host.value = "attacker.example.com";
+  host.dispatchEvent(new w.Event("change", { bubbles: true }));
+  assert.match(key.placeholder, /address changed/i);
+  host.value = before;
+  host.dispatchEvent(new w.Event("change", { bubbles: true }));
+  assert.equal(key.placeholder, "Saved. Leave blank to keep it.");
+});
+
 test("Delete asks first, then removes the card", async () => {
   await show("#/connections");
   card(ids.s3).querySelector("[data-cn-delete]").click();

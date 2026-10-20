@@ -67,6 +67,63 @@ def mysql_window(schema: str, table: str, column: str, start: date, end: date, l
     )
 
 
+def _refused_plugins(pymysql: Any, *, tls: bool = False) -> dict[bytes, Any]:
+    """Sign-in methods that hand the password over in the clear, or nearly: a server we have not verified
+    could ask for them (an "auth switch") and read the password. The driver would answer; we refuse.
+
+    `dialog` (MariaDB PAM) types the password at a prompt. Without TLS, `sha256_password` and the full
+    stage of `caching_sha2_password` encrypt the password with whatever public key the server sends, so
+    a server in the middle recovers it: the first is refused, the second is allowed its cached (fast)
+    stage only. With TLS (the certificate and host name are checked) those two are the driver's own."""
+
+    class _Refuse:
+        def __init__(self, _connection: Any) -> None:
+            raise pymysql.MySQLError(2059, "The server asked for the password in a form we do not send.")
+
+    plugins: dict[bytes, Any] = {
+        b"mysql_clear_password": _Refuse,
+        b"mysql_old_password": _Refuse,
+        b"dialog": _Refuse,
+    }
+    if not tls:
+        plugins[b"sha256_password"] = _Refuse
+        plugins[b"caching_sha2_password"] = _cached_sha2_only(pymysql)
+    return plugins
+
+
+def _cached_sha2_only(pymysql: Any) -> Any:
+    """`caching_sha2_password` as the driver does it, except that asking the server for its RSA key fails."""
+    import importlib
+
+    _auth = importlib.import_module(
+        "pymysql._auth"
+    )  # the driver's own exchange; only the key request is ours to refuse
+
+    class _Guard:
+        def __init__(self, connection: Any) -> None:
+            object.__setattr__(self, "_connection", connection)
+
+        def __getattr__(self, name: str) -> Any:
+            return getattr(self._connection, name)
+
+        def __setattr__(self, name: str, value: Any) -> None:
+            setattr(self._connection, name, value)
+
+        def write_packet(self, data: bytes) -> None:
+            if data == b"\x02":  # "send me your public key": the password would go out under it
+                raise pymysql.MySQLError(2059, "The server needs the password sent without TLS.")
+            self._connection.write_packet(data)
+
+    class _Handler:
+        def __init__(self, connection: Any) -> None:
+            self._connection = connection
+
+        def authenticate(self, packet: Any) -> Any:
+            return _auth.caching_sha2_password_auth(_Guard(self._connection), packet)
+
+    return _Handler
+
+
 class MySqlConnector(SqlConnector):
     kind = "mysql"
     label = "MySQL / MariaDB"
@@ -98,8 +155,9 @@ class MySqlConnector(SqlConnector):
                 "Ask whoever runs Marketing AI to install it: pip install pymysql.",
                 status=409,
             )
-        options: dict[str, Any] = {}
-        if bool_value(config, "ssl"):
+        tls = bool_value(config, "ssl")
+        options: dict[str, Any] = {"auth_plugin_map": _refused_plugins(pymysql, tls=tls)}
+        if tls:
             options["ssl"] = {"check_hostname": True}
         try:
             connection = pymysql.connect(

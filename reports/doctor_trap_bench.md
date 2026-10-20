@@ -120,8 +120,8 @@ Expected: Existing holders are not counted in the outcome; the true response rat
 - pass: customers who already hold the product are not in the outcome. asked: Q23 WHO CAN RESPOND 48 customers in policyholders.csv already hold the product. 0 of them 
 - Person answered: TRAINING_BUDGET: Balanced (about 2 min, recommended) (recommended)
 - Person answered: Q23_WHO_CAN_RESPOND: Yes, leave them out of the outcome (recommended)
-- Person said yes to the stop: PLAN_LOSES_TOO_MUCH: Together the steps lose 48 of 120 customers (40.0%), more than 5%. Most from step 2. By outcome, 0: 48. (answer key)
-- Person said yes to the stop: PLAN_MOVES_OUTCOME_RATE: The outcome rate moves from 14.2% to 23.6% (+9.4 points), more than 1. Biggest moves: step 2. (answer key)
+- Person said yes to the stop: PLAN_LOSES_TOO_MUCH: This step leaves out 48 of 120 customers (40.0%), more than the 5% we allow without asking. Most of them were not a yes. (answer key)
+- Person said yes to the stop: PLAN_MOVES_OUTCOME_RATE: These steps change the share of customers who are a yes from 14.2% to 23.6% (+9.4 points), more than the 1 point we allow without asking. (answer key)
 
 ### crit03_dup_and_drop (crit-03, SQL steps slip past the safety limits)
 
@@ -229,7 +229,7 @@ Expected: 30 tickets, each once with its latest status, or the Doctor asks how t
 - Person answered: THIN_LAST_PERIOD: Leave them out (recommended)
 - Person answered: Q21_ONE_ROW: Keep the latest status per ticket id (recommended)
 - Person answered: TRAINING_BUDGET: Balanced (about 2 min, recommended) (recommended)
-- Person said yes to the stop: PLAN_LOSES_TOO_MUCH: Together the steps lose 65 of 95 customers (68.4%), more than 5%. Most from step 2, step 1. By outcome, 0: 65. (answer key)
+- Person said yes to the stop: PLAN_LOSES_TOO_MUCH: Together these steps leave out 65 of 95 customers (68.4%), more than the 5% we allow without asking. Most of them were not a yes. (answer key)
 
 ### k1_merged_prefixes (K1, False, merged or missed joins)
 
@@ -292,8 +292,8 @@ Expected: The 30 never-active customers are not counted in the outcome; the true
 - pass: never-active customers are not in the outcome population. asked: Q23 WHO CAN RESPOND 30 customers in customers.csv were never active. 30 of them are marked
 - Person answered: TRAINING_BUDGET: Balanced (about 2 min, recommended) (recommended)
 - Person answered: Q23_WHO_CAN_RESPOND: Yes, leave them out of the outcome (recommended)
-- Person said yes to the stop: PLAN_LOSES_TOO_MUCH: Together the steps lose 30 of 100 customers (30.0%), more than 5%. Most from step 1. By outcome, 1: 30. (answer key)
-- Person said yes to the stop: PLAN_MOVES_OUTCOME_RATE: The outcome rate moves from 48.0% to 25.7% (-22.3 points), more than 1. Biggest moves: step 1. (answer key)
+- Person said yes to the stop: PLAN_LOSES_TOO_MUCH: This step leaves out 30 of 100 customers (30.0%), more than the 5% we allow without asking. Most of them were a yes. (answer key)
+- Person said yes to the stop: PLAN_MOVES_OUTCOME_RATE: These steps change the share of customers who are a yes from 48.0% to 25.7% (-22.3 points), more than the 1 point we allow without asking. (answer key)
 
 ### s05_cancellation_reason (S05, Time travel and leaks the checks miss)
 
@@ -353,8 +353,8 @@ Expected: The unfinished month (2026-09) is left out of the outcome, or the Doct
 - pass: the unfinished last month is not counted as 'did not leave'. asked: THIN LAST PERIOD The newest rows of 'snapshot_month' look unfinished. The newest month is 
 - Person answered: TRAINING_BUDGET: Balanced (about 3 min, recommended) (recommended)
 - Person answered: THIN_LAST_PERIOD: Leave them out (recommended)
-- Person said yes to the stop: PLAN_LOSES_TOO_MUCH: Together the steps lose 30 of 210 customers (14.3%), more than 5%. Most from step 1. By outcome, 0: 29, 1: 1. (answer key)
-- Person said yes to the stop: PLAN_MOVES_OUTCOME_RATE: The outcome rate moves from 20.0% to 22.8% (+2.8 points), more than 1. Biggest moves: step 1. (answer key)
+- Person said yes to the stop: PLAN_LOSES_TOO_MUCH: This step leaves out 30 of 210 customers (14.3%), more than the 5% we allow without asking. Most of them were not a yes. (answer key)
+- Person said yes to the stop: PLAN_MOVES_OUTCOME_RATE: These steps change the share of customers who are a yes from 20.0% to 22.8% (+2.8 points), more than the 1 point we allow without asking. (answer key)
 
 ### t13_outcome_from_column (T13, Time travel and leaks the checks miss)
 
@@ -378,7 +378,7 @@ Expected: The partial month is left out, or the Doctor asks; it is never treated
 - pass: the 12-day month is not used as a full month. asked: THIN LAST PERIOD The newest rows of 'month' look unfinished. The newest month is only part
 - Person answered: THIN_LAST_PERIOD: Leave them out (recommended)
 - Person answered: TRAINING_BUDGET: Balanced (about 2 min, recommended) (recommended)
-- Person said yes to the stop: PLAN_LOSES_TOO_MUCH: Together the steps lose 30 of 120 customers (25.0%), more than 5%. Most from step 1. By outcome, 0: 24, 1: 6. (answer key)
+- Person said yes to the stop: PLAN_LOSES_TOO_MUCH: This step leaves out 30 of 120 customers (25.0%), more than the 5% we allow without asking. Most of them were not a yes. (answer key)
 
 ### v01_paise_vs_rupees (V01, Money and units whose meaning is not in the cells)
 

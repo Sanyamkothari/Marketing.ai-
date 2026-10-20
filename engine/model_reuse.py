@@ -13,6 +13,8 @@ from collections.abc import Collection
 from datetime import datetime
 from typing import Literal
 
+from pydantic import Field
+
 from engine.config import ModelReuseRules, StrictBase
 from engine.contracts import FeatureSchema, ModelVersion
 from engine.doctor.fingerprint import Fingerprint
@@ -31,6 +33,10 @@ class ModelOffer(StrictBase):
     suggest: Literal["reuse", "learn"] = "learn"
     hint: str = ""
     age_days: int | None = None
+    speeds: dict[str, int] = Field(
+        default_factory=dict,
+        description="Minutes of model search per speed (`campaign_speeds` in engine.yaml).",
+    )
 
 
 def missing_columns(storage: Storage, model: ModelVersion, offered: Collection[str]) -> list[str] | None:

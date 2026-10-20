@@ -85,6 +85,7 @@ def test_every_upload_is_listed_newest_first_with_what_the_data_page_shows(clien
         "created_at",
         "from_connection_id",
         "made_by",
+        "source_upload_id",
     }
     assert newest["made_by"] == "file"
     assert body["total"] == 2
@@ -172,6 +173,11 @@ def test_a_dataset_built_by_guided_setup_says_it_was_built(client: TestClient) -
     listed = {u["upload_id"]: u["made_by"] for u in client.get("/uploads").json()["uploads"]}
     assert listed[applied.json()["upload_id"]] == "recipe"
     assert listed[upload_id] == "file"
+    sources = {u["upload_id"]: u["source_upload_id"] for u in client.get("/uploads").json()["uploads"]}
+    assert (
+        sources[applied.json()["upload_id"]] == upload_id
+    ), "a prepared copy names the upload it was made from"
+    assert sources[upload_id] is None
 
 
 def test_reading_the_list_needs_only_the_viewer_role() -> None:

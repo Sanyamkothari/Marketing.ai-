@@ -27,7 +27,18 @@ from engine.doctor.guards import Finding, Receipt, names_a_log_row, run_guarded
 from engine.doctor.prescription import slot_name
 from engine.doctor.visit_contracts import Acknowledgement, CaseVisit, PlanCheck, PlanFinding
 
-__all__ = ["acknowledged_codes", "check_plan", "ledger_view", "open_stops", "plan_digest", "recipe_steps_of"]
+__all__ = [
+    "SAMPLE_ROWS",
+    "accepted_column",
+    "acknowledged_codes",
+    "case_tables",
+    "check_plan",
+    "guard_levels",
+    "ledger_view",
+    "open_stops",
+    "plan_digest",
+    "recipe_steps_of",
+]
 
 SAMPLE_ROWS: Final[int] = 1_000
 """Rows of each file the plan is tried on."""
@@ -61,7 +72,10 @@ def recipe_steps_of(
     ]
 
 
-def _column(items: Sequence[CaseItem], kind: str, upload_id: str, columns: Collection[str]) -> str | None:
+def accepted_column(
+    items: Sequence[CaseItem], kind: str, upload_id: str, columns: Collection[str]
+) -> str | None:
+    """The column an accepted item of `kind` names for this file (its ID, its outcome), if the file has it."""
     for item in items:
         column = item.payload.get("column")
         if (
@@ -75,6 +89,19 @@ def _column(items: Sequence[CaseItem], kind: str, upload_id: str, columns: Colle
     return None
 
 
+def guard_levels(steps: Sequence[RecipeStep]) -> tuple[AgentLevel, ...]:
+    """The levels a plan's steps may run at: the default ones, and reshaping when a step is a query."""
+    levels = tuple(AgentConfig().levels)
+    if any(s.kind is RecipeStepKind.SQL_QUERY for s in steps) and AgentLevel.RESHAPE not in levels:
+        levels = (*levels, AgentLevel.RESHAPE)
+    return levels
+
+
+def case_tables(files: Sequence[LoadedFile]) -> dict[str, Any]:
+    """Each file's first `SAMPLE_ROWS` rows by table name: what a query step may read besides its own table."""
+    return {slot_name(Path(f.file_name).stem): f.frame.head(SAMPLE_ROWS) for f in files}
+
+
 def _finding(found: Finding, item_id: str | None) -> PlanFinding:
     return PlanFinding(
         key=sha256_hex(canonical_bytes([found.key, item_id]))[:16],
@@ -82,6 +109,7 @@ def _finding(found: Finding, item_id: str | None) -> PlanFinding:
         code=found.code,
         text=found.message,
         item_id=item_id,
+        detail=found.detail,
     )
 
 
@@ -109,7 +137,7 @@ def check_plan(
     A plan with no steps has an empty ledger. A step that cannot run on the sample is a stop, not a silence.
     """
     digest = plan_digest(case_files, items)
-    tables = {slot_name(Path(f.file_name).stem): f.frame.head(SAMPLE_ROWS) for f in files}
+    tables = case_tables(files)
     steps: list[dict[str, JsonValue]] = []
     findings: list[PlanFinding] = []
     totals = {"rows_in": 0, "rows_out": 0, "customers_in": 0, "customers_out": 0}
@@ -125,17 +153,15 @@ def check_plan(
         by_order = {step.order: item_id for step, item_id in mine}
         frame = consistent_types(loaded.frame.head(SAMPLE_ROWS))
         columns = {str(c) for c in frame.columns}
-        key = _column(items, "key", loaded.upload_id, columns)
+        key = accepted_column(items, "key", loaded.upload_id, columns)
         agent = AgentConfig()
-        levels = tuple(agent.levels)
-        if any(s.kind is RecipeStepKind.SQL_QUERY for s in ordered) and AgentLevel.RESHAPE not in levels:
-            levels = (*levels, AgentLevel.RESHAPE)
+        levels = guard_levels(ordered)
         try:
             guarded = run_guarded(
                 frame,
                 ordered,
                 primary_key=key,
-                target=_column(items, "outcome_column", loaded.upload_id, columns),
+                target=accepted_column(items, "outcome_column", loaded.upload_id, columns),
                 tables=tables,
                 upload_id=loaded.upload_id,
                 source_name=loaded.file_name or None,
@@ -219,7 +245,9 @@ def ledger_view(check: PlanCheck | None, acknowledged: Sequence[Acknowledgement]
                 "level": "flag" if ack else found.level,
                 "kind": "guard",
                 "key": found.key,
-                "text": f"{found.text} (confirmed by a person)" if ack else found.text,
+                "text": " ".join(
+                    filter(None, [found.text, found.detail, "(confirmed by a person)" if ack else ""])
+                ),
                 "acknowledged": ack,
                 "item_id": found.item_id,
                 "code": found.code,

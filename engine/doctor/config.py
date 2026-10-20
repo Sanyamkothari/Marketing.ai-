@@ -74,10 +74,16 @@ class AiLimitsConfig(BaseModel):
     model_config = _SETTINGS
 
     max_tokens_per_case: int = Field(
-        default=600_000, ge=1, description="Tokens (read plus written) the AI may use on one case."
+        default=2_000_000, ge=1, description="Tokens (read plus written) the AI may use on one case."
     )
     max_calls_per_case: int = Field(
-        default=60, ge=1, description="Calls to the AI service the Doctor may make on one case."
+        default=200, ge=1, description="Calls to the AI service the Doctor may make on one case."
+    )
+    max_chat_steps: int = Field(
+        default=8,
+        ge=1,
+        le=30,
+        description="Actions (looks, changes, questions) the Doctor's chat may take to answer one message.",
     )
 
 

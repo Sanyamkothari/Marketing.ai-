@@ -824,6 +824,7 @@ def prescription_from_case(
     its recipe, so a model trained on it carries one recipe and scores exactly as a Guided-setup model does.
     """
     from engine import __version__
+    from engine.doctor.combine_run import current_upload
     from engine.doctor.plan_check import acknowledged_codes
     from engine.doctor.visit import active_section
 
@@ -835,18 +836,19 @@ def prescription_from_case(
     approver = case.approvals[-1].approved_by if case.approvals else None
     build = _build(approved)
     acked = acknowledged_codes(case.visit)
+    # A decision made on a file goes on the table an approved join or stack made from it (the outcome, the date).
     keys = {
-        item.upload_id: column
+        current_upload(case, item.upload_id): column
         for item in approved
         if item.kind == "key" and item.upload_id and (column := _column(item))
     }
     targets = {
-        item.upload_id: column
+        current_upload(case, item.upload_id): column
         for item in approved
         if item.kind == "outcome_column" and item.upload_id and (column := _column(item))
     }
     as_of = {
-        item.upload_id: column
+        current_upload(case, item.upload_id): column
         for item in approved
         if item.kind == "as_of_column" and item.upload_id and (column := _column(item))
     }

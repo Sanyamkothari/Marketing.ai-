@@ -279,6 +279,13 @@ def test_hindi_and_hinglish_yes_no_map_when_both_sides_are_seen(
     assert mapped.failed == 0
 
 
+def test_the_reason_counts_spellings_in_plain_grammar() -> None:
+    (one,) = propose_indian_booleans(_flags(["haan", "nahi", "haan"]), primary_key="customer_id")
+    (more,) = propose_indian_booleans(_flags(["haan", "Haan", "nahi", "NAHI"]), primary_key="customer_id")
+    assert "1 spelling of yes and 1 of no" in one.reason and "spellings" not in one.reason
+    assert "2 spellings of yes and 2 of no" in more.reason
+
+
 @pytest.mark.parametrize("values", [["haan", "haan", None], ["nahi", "nahin"], ["हाँ", "हाँ"], ["नहीं"]])
 def test_one_side_only_is_never_mapped(values: list[str | None]) -> None:
     (finding,) = propose_indian_booleans(_flags(values))

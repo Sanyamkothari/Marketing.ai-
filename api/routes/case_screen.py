@@ -5,7 +5,7 @@ M246's): with it off - the default - neither path exists and docs/API.md is unch
 
 | Method and path | Role | Does |
 |---|---|---|
-| `GET /cases/{case_id}/screen` | Viewer | The case, its timeline and what the screen shows beside it: the verdict with the next action, the sentence Approve records, the changes that need their own yes (and whether the reader may give it), the remembered answers with their dates, and what the hand-off starts (`engine.doctor.screen`). |
+| `GET /cases/{case_id}/screen` | Viewer | The case, its timeline and what the screen shows beside it: the verdict with the next action, the sentence Approve records, the changes that need their own yes (and whether the reader may give it), the remembered answers with their dates, for an Analyst, the first rows of each file before and after the plan (`view.preview`, personal columns withheld, every other cell masked; a Viewer gets `null`) and what the hand-off starts (`engine.doctor.screen`). |
 | `GET /data-doctor/cases` | Viewer | The client's cases, newest change first (at most 20); `goal_id` keeps those whose goal it is. The Data page opens the newest; the wizard and a goal's setup open their goal's. |
 
 Refusals: `404 CASE_NOT_FOUND` (also another client's case), `409 CASE_UNREADABLE`.
@@ -20,6 +20,7 @@ from fastapi import APIRouter, Query, Request
 from api.access import PrincipalDep, set_audit_context
 from api.access_policy import RoutePolicy, register
 from api.deps import ConfigRootDep, StorageDep
+from api.routes.case_visit import first_rows_loader
 from api.routes.uploads import http_error
 from api.schemas import ErrorResponse
 from engine.access.roles import Role
@@ -76,7 +77,16 @@ def case_screen(
 ) -> CaseScreen:
     try:
         # Who reads it: whether they may give a change's own yes is said before they click (`can_agree`).
-        screen = build_screen(storage, client_id, case_id, config_root=root, principal=principal)
+        # The data panel shows cell values (masked), which only an Analyst sees, as `agent-session/preview` and
+        # `/rows` do: a Viewer's screen has `view.preview: null` and no step samples.
+        screen = build_screen(
+            storage,
+            client_id,
+            case_id,
+            config_root=root,
+            principal=principal,
+            load_files=first_rows_loader(storage) if principal.has(Role.ANALYST) else None,
+        )
     except CaseError as exc:
         raise http_error(404 if exc.code == "CASE_NOT_FOUND" else 409, exc.code, exc.message) from exc
     set_audit_context(request, object_id=case_id, object_type="case")

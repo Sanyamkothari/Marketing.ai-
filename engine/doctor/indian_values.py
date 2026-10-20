@@ -405,8 +405,8 @@ def propose_indian_booleans(
             step = None
         else:
             reason = (
-                f"{len(true_values)} spellings of yes and {len(false_values)} of no, in Hindi or Hinglish; "
-                f"all {len(cells)} values read"
+                f"{_spellings(len(true_values))} of yes and {len(false_values)} of no, in Hindi or Hinglish; "
+                f"all {len(cells):,} values read"
             )
             step = RecipeStep(
                 order=1,
@@ -430,3 +430,7 @@ def propose_indian_booleans(
             )
         )
     return tuple(found)
+
+
+def _spellings(count: int) -> str:
+    return f"{count} spelling" if count == 1 else f"{count} spellings"

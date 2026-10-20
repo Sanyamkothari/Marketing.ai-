@@ -82,8 +82,10 @@ data:
     data.setting:
       proposes: setting
       rules: [data.setting]
-    # The chat's data fix (M232 `propose_step`; loop._propose_step): the chat's kinds (loop.CHAT_STEP_KINDS),
-    # grounded in a look, tried on 1,000 rows, never ticked; Excel day numbers stay the rules' fix (M240).
+    # The chat's data fix (M232 `propose_step`; loop._propose_step): the chat's kinds (loop.CHAT_STEP_KINDS; the
+    # Data Doctor's chat adds `remove_rows`, loop.DOCTOR_STEP_KINDS, whose own yes the approval still collects),
+    # grounded in a look, tried on 1,000 rows, never ticked here (the visit may apply a clean one for the person
+    # to undo); Excel day numbers stay the rules' fix (M240).
     data.recipe_step:
       proposes: steps
       rules:
@@ -111,11 +113,15 @@ data:
         - fill_missing
         - rename_column
         - drop_column
+        - remove_rows
       params:
         parse_date: {allowed: [dayfirst]}
         parse_number:
           allowed: [decimal, percent_to_fraction, indian_scale_words]
           one_of: {decimal: [".", ","]}
+        remove_rows:
+          allowed: [operator, values]
+          one_of: {operator: [equals, in, starts_with, is_empty, before, after]}
       levels: [clean, derive]
       change_share: true
     # The person's own edit (M232 `edit_by_hand`; edits.add_edit): their kinds (edits.PERSON_STEP_KINDS).

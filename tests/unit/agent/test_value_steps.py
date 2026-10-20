@@ -88,11 +88,23 @@ def test_correct_cells_applies_only_where_the_old_value_is_still_there() -> None
         ("equals", ["TEST"], [False, True, True, True]),
         ("in", ["TEST", "demo"], [False, False, True, True]),
         ("is_empty", [], [True, True, True, False]),
+        ("starts_with", ["de", "TE"], [False, False, True, True]),
     ],
 )
 def test_remove_rows_by_a_rule(operator: str, values: list[str], kept: list[bool]) -> None:
     series = pd.Series(["TEST", "demo", "live", None])
     assert remove_rows(series, operator=operator, values=values).tolist() == kept
+
+
+def test_remove_rows_that_start_with_a_prefix_reads_numbers_as_text() -> None:
+    """Test accounts: every ID that begins 999, whether the file read the column as text or as numbers."""
+    series = pd.Series([9990012, "9990013", 1999, "C9991", None, 999.0])
+    assert remove_rows(series, operator="starts_with", values=["999"]).tolist() == [
+        False, False, True, True, True, False,
+    ]  # fmt: skip
+    assert (
+        remove_rows(series, operator="starts_with", values=[]).tolist() == [True] * 6
+    ), "no prefix removes nothing"
 
 
 def test_remove_rows_before_a_date_keeps_what_is_not_a_date() -> None:

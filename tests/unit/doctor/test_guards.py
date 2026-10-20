@@ -197,7 +197,40 @@ def test_25_small_drops_add_up_and_trip_the_plan_gate_naming_the_steps() -> None
     assert ledger.steps[-1].rows_after == 3_750 and ledger.lost_by_outcome == {"0": 625, "1": 625}
     assert codes(result, "stop") == ["PLAN_LOSES_TOO_MUCH"]  # the outcome rate stays at 50%
     gate = next(f for f in result.findings if f.code == "PLAN_LOSES_TOO_MUCH")
-    assert "step 1" in gate.message and "1,250" in gate.message
+    assert gate.detail is not None and "step 1" in gate.detail and "1,250" in gate.message
+    assert (
+        gate.message.startswith("Together these steps leave out 1,250 of 5,000 customers (25.0%)")
+        and "Most of them" not in gate.message
+    )
+
+
+def test_the_plan_stop_is_one_plain_sentence_with_the_expert_detail_kept_apart() -> None:
+    # 1,000 customers, one step drops 87 of them: 76 who did not say yes and 11 who did
+    gone = [1] * 87 + [0] * 913
+    frame = pd.DataFrame({"id": range(1_000), "gone": gone, "y": [0] * 76 + [1] * 11 + [1] * 100 + [0] * 813})
+    step = RecipeStep(
+        order=1, kind=RecipeStepKind.REMOVE_ROWS, column="gone", params={"operator": "equals", "values": [1]}
+    )
+    result = run_guarded(frame, [step], primary_key="id", target="y", **RUN)
+    gate = next(f for f in result.findings if f.code == "PLAN_LOSES_TOO_MUCH")
+    assert gate.message == (
+        "This step leaves out 87 of 1,000 customers (8.7%), more than the 5% we allow without asking. "
+        "Most of them were not a yes."
+    )
+    assert gate.detail == "Most from step 1. By outcome, 0: 76, 1: 11."
+    assert "step" not in gate.message.replace("This step", "") and "outcome" not in gate.message
+
+
+def test_the_plan_stop_does_not_say_who_was_a_yes_when_the_outcome_is_not_a_yes_or_no() -> None:
+    # an amount outcome: most lost rows hold 0, but 0 is not a "no" here, so the stop does not claim it
+    gone = [1] * 87 + [0] * 913
+    frame = pd.DataFrame({"id": range(1_000), "gone": gone, "spend": [0] * 80 + [37] * 7 + [12] * 913})
+    step = RecipeStep(
+        order=1, kind=RecipeStepKind.REMOVE_ROWS, column="gone", params={"operator": "equals", "values": [1]}
+    )
+    result = run_guarded(frame, [step], primary_key="id", target="spend", **RUN)
+    gate = next(f for f in result.findings if f.code == "PLAN_LOSES_TOO_MUCH")
+    assert "a yes" not in gate.message
 
 
 def test_the_outcome_rate_moving_more_than_a_point_trips_the_gate_even_with_small_loss() -> None:

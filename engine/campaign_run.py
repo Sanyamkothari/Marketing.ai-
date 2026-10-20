@@ -214,9 +214,16 @@ class CampaignRunStore:
             return None
 
     def list(
-        self, *, state: CampaignRunState | None = None, limit: int = 50, score_run_id: str | None = None
+        self,
+        *,
+        state: CampaignRunState | None = None,
+        limit: int = 50,
+        score_run_id: str | None = None,
+        accept: Callable[[CampaignRun], bool] | None = None,
     ) -> list[CampaignRun]:
-        """Newest first (ids sort by date); `score_run_id` keeps only the run that made that contact list."""
+        """Newest first (ids sort by date); `score_run_id` keeps only the run that made that contact list.
+
+        `accept` filters while scanning, so `limit` counts the runs kept, not the runs looked at."""
         kept: list[CampaignRun] = []
         for key in sorted(self._storage.list_keys(PREFIX), reverse=True):
             if not key.endswith(f"/{RECORD_FILENAME}"):
@@ -225,6 +232,8 @@ class CampaignRunStore:
             if run is None or (state is not None and run.state is not state):
                 continue
             if score_run_id is not None and run.score_run_id != score_run_id:
+                continue
+            if accept is not None and not accept(run):
                 continue
             kept.append(run)
             if len(kept) == limit:

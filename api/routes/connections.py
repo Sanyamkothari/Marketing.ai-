@@ -53,7 +53,7 @@ from engine.connections import (
     limits,
 )
 from engine.connections.base import BrowseResult, ConfigValue, Connector, FetchResult, KindInfo, Preview
-from engine.connections.registry import check_name
+from engine.connections.registry import check_name, moves_address
 from engine.intake.config import load_intake_config
 from engine.storage import upload_key
 from engine.utils.ids import new_upload_id
@@ -337,10 +337,14 @@ async def update_connection(
             else frozenset()
         )
         config, secrets = _catch(lambda: check_form(info, body.config, body.secrets, kept_secrets=kept))
+        dropped = frozenset(body.clear_secrets)
+        if moves_address(record.config, config):
+            # A saved secret never follows a changed address: whoever repoints the connection types the
+            # secrets again, so repointing it at a server they control cannot reveal the saved ones.
+            dropped = frozenset(record.secret_names)
+            config, secrets = _catch(lambda: check_form(info, body.config, body.secrets))
         updated = _catch(
-            lambda: store.update(
-                record, name=name, config=config, secrets=secrets, drop_secrets=frozenset(body.clear_secrets)
-            )
+            lambda: store.update(record, name=name, config=config, secrets=secrets, drop_secrets=dropped)
         )
         return _view(store, updated)
 

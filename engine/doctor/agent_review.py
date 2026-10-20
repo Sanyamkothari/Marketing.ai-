@@ -76,11 +76,12 @@ from engine.doctor.registry import (
     Exposure,
     evidence_id_of,
 )
+from engine.doctor.tools_preview import M_PREVIEW_TOOLS
 from engine.doctor.tools_sql import SqlStepProposal
 from engine.generative.contracts import GenerativePurpose
 from engine.generative.errors import GenerativeError
 from engine.generative.guardrails import Guardrails
-from engine.generative.prompts import load_prompt, render
+from engine.generative.prompts import Prompt, load_prompt, render
 from engine.llm import LLMError
 from engine.utils.logging import get_logger
 
@@ -127,6 +128,14 @@ def lazy_review(build: Callable[[], DetectorPort | None]) -> DetectorPort:
         return Detected() if port is None else port(case, files, brief)
 
     return review
+
+
+class _NoAnswerError(Exception):
+    """The model cannot be asked now: `reason` is `prompt_too_large` or `unavailable` (no service, or no money)."""
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
 
 
 @dataclass
@@ -301,12 +310,15 @@ class _Review:
         return int(text[1:]) - 1
 
     def _context(self, index: int, **extra: Any) -> DataToolContext:
+        from engine.doctor.visit import active_section
+
         return DataToolContext(
             agent=self.ctxs[index],
             principal=self.principal,
             caller="ai",
             egress=self.gates[index],
             files=self.files,
+            case_items=active_section(self.case)[0],  # the plan so far, for `preview_working_copy`
             config_root=self.config_root,
             clock=self.clock,
             actor="agent:data-doctor",
@@ -314,12 +326,11 @@ class _Review:
         )
 
     # -- the loop --------------------------------------------------------------------------------------
-    def run(self) -> Detected:
-        from engine.doctor.visit import Detected
+    purpose: GenerativePurpose = GenerativePurpose.DOCTOR_AGENT
 
-        turn, strikes, summary = self.turn, 0, ""
-        prompt = load_prompt(PROMPT, self.config_root)
-        tools = [
+    def _tools(self) -> list[dict[str, str]]:
+        """Each look tool with its arguments, for the prompt; a tool is read on a file named `F1` .. `Fn`."""
+        return [
             {
                 "name": t.name,
                 "description": t.description,
@@ -332,6 +343,30 @@ class _Review:
             }
             for t in self.registry.listed_for(self._context(0), DataToolKind.READ)
         ]
+
+    def _complete(self, prompt: Prompt, variables: dict[str, Any]) -> str:
+        """One call to the model on `prompt` rendered with `variables`, after the last egress check. Raises
+        `_NoAnswerError` when the prompt is too long for one call or the AI service cannot answer (unavailable, or out
+        of money): what was made so far stands and the rules go on."""
+        rendered = render(prompt, variables)
+        system, masked_system = assert_clean(rendered.system)
+        user, masked_user = assert_clean(rendered.user)
+        if masked_system or masked_user:
+            _LOG.warning("%s: a review prompt was masked late", EGRESS_LATE_MASK)
+            rendered = dataclasses.replace(rendered, system=system, user=user)
+        if len(rendered.system) + len(rendered.user) > MAX_PROMPT_CHARS:
+            raise _NoAnswerError("prompt_too_large")
+        try:
+            return self.meter.complete(rendered, self.purpose).text
+        except (LLMError, GenerativeError) as exc:
+            raise _NoAnswerError("unavailable") from exc
+
+    def run(self) -> Detected:
+        from engine.doctor.visit import Detected
+
+        turn, strikes, summary = self.turn, 0, ""
+        prompt = load_prompt(PROMPT, self.config_root)
+        tools = self._tools()
         goal = self.brief.goal_name if self.brief is not None else "see what these tables can be used for"
         for _ in range(self.max_steps + 1):
             variables = {
@@ -343,20 +378,12 @@ class _Review:
                     json.dumps(for_prompt(turn.feedback, {}), ensure_ascii=False) if turn.feedback else "none"
                 ),
             }
-            rendered = render(prompt, variables)
-            system, masked_system = assert_clean(rendered.system)
-            user, masked_user = assert_clean(rendered.user)
-            if masked_system or masked_user:
-                _LOG.warning("%s: a review prompt was masked late", EGRESS_LATE_MASK)
-                rendered = dataclasses.replace(rendered, system=system, user=user)
-            if len(rendered.system) + len(rendered.user) > MAX_PROMPT_CHARS:
-                break
             try:
-                completion = self.meter.complete(rendered, GenerativePurpose.DOCTOR_AGENT)
-            except (LLMError, GenerativeError):
+                text = self._complete(prompt, variables)
+            except _NoAnswerError:
                 break  # unavailable or out of money: what was made so far stands, the rules go on
             try:
-                action = _parse(completion.text)
+                action = _parse(text)
                 if str(action["action"]) == "finish":
                     summary = self._finish(action)
                     break
@@ -399,7 +426,7 @@ class _Review:
         elif name == "request_data":
             self._request(action, args)
         elif (tool := self.registry.find(name, self._context(0))) is not None and (
-            tool.kind is DataToolKind.READ and tool.session_tool
+            tool.kind is DataToolKind.READ and (tool.session_tool or name in M_PREVIEW_TOOLS)
         ):
             self._look(name, action, args)
         else:
@@ -418,9 +445,19 @@ class _Review:
                 args,
             )
         evidence_id = f"r{len(turn.looks) + 1}"
-        result: ToolResult = self.registry.session_call(
-            name, args, self._context(index), evidence_id=evidence_id
-        )
+        result: ToolResult
+        if name in M_PREVIEW_TOOLS:  # a registry READ tool of its own (not one of Plan G's look tools)
+            made = self.registry.call(name, args, self._context(index))
+            result = ToolResult(
+                evidence_id=evidence_id,
+                tool=name,
+                args=made.input,
+                supplied=args,
+                result=made.output,
+                created_at=made.computed_at,
+            )
+        else:
+            result = self.registry.session_call(name, args, self._context(index), evidence_id=evidence_id)
         turn.looks.append(result)
         turn.files_of[evidence_id] = index
         self.checker.grounded = self.checker.grounded | evidence_numbers(result.result, result.typed_args)
@@ -660,6 +697,11 @@ class _Review:
         return self.gates[0].person_text(text)
 
     # -- what the review made --------------------------------------------------------------------------
+    def _payload_extra(self, result: ToolResult) -> dict[str, Any]:
+        """More for a typed change's payload (the chat adds what its trial counted); nothing for the review."""
+        del result
+        return {}
+
     def _items(self) -> tuple[list[CaseItem], list[DataToolResult]]:
         """Pending, never-ticked items and the results they rest on (content-hash ids)."""
         from engine.doctor.visit import _item, _warnings_of
@@ -681,6 +723,7 @@ class _Review:
                         "value": None,
                         "step": proposal.step.model_dump(mode="json") if proposal.step is not None else None,
                         **_warnings_of(proposal.evidence_ids, {result.evidence_id: result}),
+                        **self._payload_extra(result),
                     },
                     title=proposal.title,
                     upload_id=ctx.upload_id,
@@ -737,7 +780,11 @@ def _data_result(result: ToolResult, ctx: AgentContext, now: Any) -> DataToolRes
     return DataToolResult(
         evidence_id=evidence_id_of(result),
         tool=result.tool,
-        kind=DataToolKind.READ if result.tool in TOOLS else DataToolKind.PROPOSE,
+        kind=(
+            DataToolKind.READ
+            if result.tool in TOOLS or result.tool in M_PREVIEW_TOOLS
+            else DataToolKind.PROPOSE
+        ),
         exposure=Exposure.SESSION_ONLY,
         input={**result.args, "upload_id": ctx.upload_id},
         output=dict(result.result),

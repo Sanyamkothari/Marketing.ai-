@@ -333,13 +333,20 @@ def _ai_parts(
 def _converse(
     storage: Storage, root: Path, request: Request, principal: Principal, offers: Sequence[Any]
 ) -> ConversePort | None:
-    """Plan G's chat turn when an AI service is connected; None (the chat says it needs one) otherwise."""
+    """The Doctor's chat when an AI service is connected; None (the chat says it needs one) otherwise."""
+    from engine.doctor.agent_chat import doctor_converse
+
     parts = _ai_parts(storage, root, request, offers)
     if parts is None:
         return None
     meter, guardrails, context_for = parts
-    return doctor_visit.plan_g_converse(
-        context_for, meter=meter, guardrails=guardrails, principal=principal, config_root=root, guard=meter
+    return doctor_converse(
+        context_for,
+        meter=meter,
+        guardrails=guardrails,
+        principal=principal,
+        config_root=root,
+        storage=storage,
     )
 
 
@@ -386,6 +393,40 @@ def _prepared_verify(storage: Storage, root: Path) -> Any:
         return made.upload.upload_id if made is not None and made.upload is not None else upload_id
 
     return doctor_visit.readiness_verify(storage, root, prepare)
+
+
+def first_rows_loader(storage: Storage) -> Callable[[Case], tuple[LoadedFile, ...]]:
+    """The screen's loader of a case's files: only each file's FIRST `SAMPLE_ROWS` rows (the rows the plan is tried
+    on and the preview shows), never the Doctor's whole-file read or random sample. An O(1,000) read per file.
+    """
+    from engine.doctor.plan_check import SAMPLE_ROWS
+    from engine.stages import ingest
+
+    def load_files(case: Case) -> tuple[LoadedFile, ...]:
+        loaded: list[LoadedFile] = []
+        for upload_id in case.upload_ids():
+            record = load_upload(storage, upload_id)
+            profile = load_upload_profile(storage, upload_id)
+            frame = ingest.read_upload(
+                storage,
+                record.source_key,
+                file_format=record.file_format,
+                max_rows=SAMPLE_ROWS,
+                row_cap=SAMPLE_ROWS,
+                keep_leading_zeros=True,
+            ).frame
+            loaded.append(
+                LoadedFile(
+                    upload_id=upload_id,
+                    file_name=record.file_name,
+                    frame=frame,
+                    profile=profile,
+                    file_rows=profile.row_count if profile.row_count > len(frame) else None,
+                )
+            )
+        return tuple(loaded)
+
+    return load_files
 
 
 def _deps(storage: Storage, root: Path, request: Request, principal: Principal | None) -> VisitDeps:

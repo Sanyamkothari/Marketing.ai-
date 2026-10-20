@@ -194,6 +194,20 @@ def test_the_plan_the_wizard_registers_is_the_planner_s_and_is_frozen(fixtures: 
     assert _read(fixtures, "campaign_draft")["plan"] is None
 
 
+def test_the_speed_minutes_are_the_servers_with_5_15_40_as_the_fallback() -> None:
+    node = skip_without_jsdom(NODE_DIR)
+    result = subprocess.run(
+        [node, "--test", str(TESTS_DIR / "run_rules_speeds.test.mjs")],
+        cwd=NODE_DIR,
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout[-8000:] + result.stderr[-3000:]
+    assert "# fail 0" in result.stdout
+
+
 def test_the_fixtures_are_the_world_the_wizard_is_tested_in(fixtures: Path) -> None:
     assert _read(fixtures, "use_case")["config"]["actions"]["contacts_customers"] is True
     assert _read(fixtures, "use_case_ops")["config"]["actions"]["contacts_customers"] is False
