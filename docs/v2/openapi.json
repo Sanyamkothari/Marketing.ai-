@@ -20,10 +20,10 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "array",
                   "items": {
                     "$ref": "#/components/schemas/Goal"
                   },
+                  "type": "array",
                   "title": "Response List Goals V2 Goals Get"
                 }
               }
@@ -135,14 +135,14 @@
           }
         ],
         "requestBody": {
+          "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/ApproveRequest"
               }
             }
-          },
-          "required": true
+          }
         },
         "responses": {
           "200": {
@@ -321,14 +321,14 @@
           }
         ],
         "requestBody": {
+          "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/ContentStatusRequest"
               }
             }
-          },
-          "required": true
+          }
         },
         "responses": {
           "200": {
@@ -376,7 +376,6 @@
                   "type": "null"
                 }
               ],
-              "default": null,
               "title": "Goal Id"
             }
           },
@@ -393,7 +392,6 @@
                   "type": "null"
                 }
               ],
-              "default": null,
               "title": "Customer Id"
             }
           },
@@ -503,7 +501,6 @@
                   "type": "null"
                 }
               ],
-              "default": null,
               "title": "Goal Id"
             }
           }
@@ -562,7 +559,6 @@
                   "type": "null"
                 }
               ],
-              "default": null,
               "title": "Goal Id"
             }
           }
@@ -634,10 +630,10 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "array",
                   "items": {
                     "$ref": "#/components/schemas/Alert"
                   },
+                  "type": "array",
                   "title": "Response List Alerts V2 Alerts Get"
                 }
               }
@@ -660,10 +656,10 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "array",
                   "items": {
                     "$ref": "#/components/schemas/Goal"
                   },
+                  "type": "array",
                   "title": "Response List Opportunities V2 Opportunities Get"
                 }
               }
@@ -719,19 +715,18 @@
   "components": {
     "schemas": {
       "Action": {
-        "additionalProperties": false,
         "properties": {
           "goal_id": {
-            "title": "Goal Id",
-            "type": "string"
+            "type": "string",
+            "title": "Goal Id"
           },
           "channel": {
             "$ref": "#/components/schemas/Channel"
           },
           "offer_id": {
-            "default": "none",
+            "type": "string",
             "title": "Offer Id",
-            "type": "string"
+            "default": "none"
           },
           "content_id": {
             "anyOf": [
@@ -742,7 +737,6 @@
                 "type": "null"
               }
             ],
-            "default": null,
             "title": "Content Id"
           },
           "format": {
@@ -750,36 +744,36 @@
             "default": "text"
           },
           "send_at": {
+            "type": "string",
             "format": "date-time",
-            "title": "Send At",
-            "type": "string"
+            "title": "Send At"
           },
           "follow_up_step": {
-            "default": 0,
-            "description": "0 = first contact, 1 = first follow-up, ...",
+            "type": "integer",
             "title": "Follow Up Step",
-            "type": "integer"
+            "description": "0 = first contact, 1 = first follow-up, ...",
+            "default": 0
           }
         },
+        "additionalProperties": false,
+        "type": "object",
         "required": [
           "goal_id",
           "channel",
           "send_at"
         ],
-        "title": "Action",
-        "type": "object"
+        "title": "Action"
       },
       "Alert": {
-        "additionalProperties": false,
         "properties": {
           "alert_id": {
-            "title": "Alert Id",
-            "type": "string"
+            "type": "string",
+            "title": "Alert Id"
           },
           "at": {
+            "type": "string",
             "format": "date-time",
-            "title": "At",
-            "type": "string"
+            "title": "At"
           },
           "goal_id": {
             "anyOf": [
@@ -790,32 +784,33 @@
                 "type": "null"
               }
             ],
-            "default": null,
             "title": "Goal Id"
           },
           "severity": {
+            "type": "string",
             "enum": [
               "info",
               "warning",
               "critical"
             ],
-            "title": "Severity",
-            "type": "string"
+            "title": "Severity"
           },
           "code": {
-            "title": "Code",
-            "type": "string"
+            "type": "string",
+            "title": "Code"
           },
           "message": {
-            "title": "Message",
-            "type": "string"
+            "type": "string",
+            "title": "Message"
           },
           "auto_paused": {
-            "default": false,
+            "type": "boolean",
             "title": "Auto Paused",
-            "type": "boolean"
+            "default": false
           }
         },
+        "additionalProperties": false,
+        "type": "object",
         "required": [
           "alert_id",
           "at",
@@ -823,53 +818,51 @@
           "code",
           "message"
         ],
-        "title": "Alert",
-        "type": "object"
+        "title": "Alert"
       },
       "ApproveRequest": {
-        "additionalProperties": false,
         "properties": {
           "autonomy": {
             "$ref": "#/components/schemas/AutonomyLevel"
           }
         },
+        "additionalProperties": false,
+        "type": "object",
         "required": [
           "autonomy"
         ],
-        "title": "ApproveRequest",
-        "type": "object"
+        "title": "ApproveRequest"
       },
       "Audience": {
-        "additionalProperties": false,
         "properties": {
           "description": {
-            "title": "Description",
-            "type": "string"
+            "type": "string",
+            "title": "Description"
           },
           "filters": {
-            "default": [],
             "items": {
               "$ref": "#/components/schemas/AudienceFilter"
             },
+            "type": "array",
             "title": "Filters",
-            "type": "array"
+            "default": []
           }
         },
+        "additionalProperties": false,
+        "type": "object",
         "required": [
           "description"
         ],
-        "title": "Audience",
-        "type": "object"
+        "title": "Audience"
       },
       "AudienceFilter": {
-        "additionalProperties": false,
-        "description": "A test on one `CustomerState` field. `days_since_*` compare a datetime field with now.",
         "properties": {
           "field": {
-            "title": "Field",
-            "type": "string"
+            "type": "string",
+            "title": "Field"
           },
           "op": {
+            "type": "string",
             "enum": [
               "eq",
               "ne",
@@ -884,8 +877,7 @@
               "days_since_gt",
               "days_since_lt"
             ],
-            "title": "Op",
-            "type": "string"
+            "title": "Op"
           },
           "value": {
             "anyOf": [
@@ -911,77 +903,78 @@
                 "type": "null"
               }
             ],
-            "default": null,
             "title": "Value"
           }
         },
+        "additionalProperties": false,
+        "type": "object",
         "required": [
           "field",
           "op"
         ],
         "title": "AudienceFilter",
-        "type": "object"
+        "description": "A test on one `CustomerState` field. `days_since_*` compare a datetime field with now."
       },
       "AutonomyLevel": {
+        "type": "string",
         "enum": [
           "shadow",
           "approve",
           "autopilot"
         ],
-        "title": "AutonomyLevel",
-        "type": "string"
+        "title": "AutonomyLevel"
       },
       "Bid": {
-        "additionalProperties": false,
-        "description": "One goal's offer for this customer's attention. Money is in the goal's currency.",
         "properties": {
           "goal_id": {
-            "title": "Goal Id",
-            "type": "string"
+            "type": "string",
+            "title": "Goal Id"
           },
           "action": {
             "$ref": "#/components/schemas/Action"
           },
           "uplift": {
-            "description": "Change in the chance of the outcome caused by acting, -1..1",
+            "type": "number",
             "title": "Uplift",
-            "type": "number"
+            "description": "Change in the chance of the outcome caused by acting, -1..1"
           },
           "value_if_converted": {
-            "description": "Expected margin (or revenue) if the outcome happens",
+            "type": "number",
             "title": "Value If Converted",
-            "type": "number"
+            "description": "Expected margin (or revenue) if the outcome happens"
           },
           "offer_cost": {
-            "default": 0.0,
+            "type": "number",
             "title": "Offer Cost",
-            "type": "number"
+            "default": 0.0
           },
           "channel_cost": {
-            "default": 0.0,
+            "type": "number",
             "title": "Channel Cost",
-            "type": "number"
+            "default": 0.0
           },
           "urgency": {
-            "default": 1.0,
-            "description": "Multiplier; decays as the moment passes",
-            "minimum": 0,
+            "type": "number",
+            "minimum": 0.0,
             "title": "Urgency",
-            "type": "number"
+            "description": "Multiplier; decays as the moment passes",
+            "default": 1.0
           },
           "expected_net": {
-            "description": "uplift x value - offer cost - channel cost, times urgency",
+            "type": "number",
             "title": "Expected Net",
-            "type": "number"
+            "description": "uplift x value - offer cost - channel cost, times urgency"
           },
           "uncertainty": {
-            "default": 0.0,
-            "description": "Std. dev. of expected_net, for sampling",
-            "minimum": 0,
+            "type": "number",
+            "minimum": 0.0,
             "title": "Uncertainty",
-            "type": "number"
+            "description": "Std. dev. of expected_net, for sampling",
+            "default": 0.0
           }
         },
+        "additionalProperties": false,
+        "type": "object",
         "required": [
           "goal_id",
           "action",
@@ -990,23 +983,22 @@
           "expected_net"
         ],
         "title": "Bid",
-        "type": "object"
+        "description": "One goal's offer for this customer's attention. Money is in the goal's currency."
       },
       "Brief": {
-        "additionalProperties": false,
         "properties": {
           "brief_id": {
-            "title": "Brief Id",
-            "type": "string"
+            "type": "string",
+            "title": "Brief Id"
           },
           "goal_id": {
-            "title": "Goal Id",
-            "type": "string"
+            "type": "string",
+            "title": "Goal Id"
           },
           "version": {
-            "default": 1,
+            "type": "integer",
             "title": "Version",
-            "type": "integer"
+            "default": 1
           },
           "objective": {
             "$ref": "#/components/schemas/Objective"
@@ -1015,39 +1007,39 @@
             "$ref": "#/components/schemas/Audience"
           },
           "horizon_days": {
-            "default": 14,
-            "description": "Outcome window after a contact",
-            "maximum": 180,
-            "minimum": 1,
+            "type": "integer",
+            "maximum": 180.0,
+            "minimum": 1.0,
             "title": "Horizon Days",
-            "type": "integer"
+            "description": "Outcome window after a contact",
+            "default": 14
           },
           "envelope": {
             "$ref": "#/components/schemas/Envelope"
           },
           "follow_ups": {
-            "default": [],
             "items": {
               "$ref": "#/components/schemas/FollowUpStep"
             },
+            "type": "array",
             "title": "Follow Ups",
-            "type": "array"
+            "default": []
           },
           "rationale": {
-            "default": "",
-            "description": "The Strategist's plain-English reasoning",
+            "type": "string",
             "title": "Rationale",
-            "type": "string"
+            "description": "The Strategist's plain-English reasoning",
+            "default": ""
           },
           "created_by": {
-            "default": "strategist",
+            "type": "string",
             "title": "Created By",
-            "type": "string"
+            "default": "strategist"
           },
           "created_at": {
+            "type": "string",
             "format": "date-time",
-            "title": "Created At",
-            "type": "string"
+            "title": "Created At"
           },
           "approved_by": {
             "anyOf": [
@@ -1058,23 +1050,23 @@
                 "type": "null"
               }
             ],
-            "default": null,
             "title": "Approved By"
           },
           "approved_at": {
             "anyOf": [
               {
-                "format": "date-time",
-                "type": "string"
+                "type": "string",
+                "format": "date-time"
               },
               {
                 "type": "null"
               }
             ],
-            "default": null,
             "title": "Approved At"
           }
         },
+        "additionalProperties": false,
+        "type": "object",
         "required": [
           "brief_id",
           "goal_id",
@@ -1083,15 +1075,13 @@
           "envelope",
           "created_at"
         ],
-        "title": "Brief",
-        "type": "object"
+        "title": "Brief"
       },
       "Briefing": {
-        "additionalProperties": false,
         "properties": {
           "briefing_id": {
-            "title": "Briefing Id",
-            "type": "string"
+            "type": "string",
+            "title": "Briefing Id"
           },
           "goal_id": {
             "anyOf": [
@@ -1102,74 +1092,74 @@
                 "type": "null"
               }
             ],
-            "default": null,
             "title": "Goal Id"
           },
           "as_of": {
+            "type": "string",
             "format": "date-time",
-            "title": "As Of",
-            "type": "string"
+            "title": "As Of"
           },
           "period": {
+            "type": "string",
             "enum": [
               "daily",
               "weekly"
             ],
-            "title": "Period",
-            "type": "string"
+            "title": "Period"
           },
           "headline": {
-            "title": "Headline",
-            "type": "string"
+            "type": "string",
+            "title": "Headline"
           },
           "sections": {
-            "default": [],
             "items": {
               "$ref": "#/components/schemas/BriefingSection"
             },
+            "type": "array",
             "title": "Sections",
-            "type": "array"
+            "default": []
           }
         },
+        "additionalProperties": false,
+        "type": "object",
         "required": [
           "briefing_id",
           "as_of",
           "period",
           "headline"
         ],
-        "title": "Briefing",
-        "type": "object"
+        "title": "Briefing"
       },
       "BriefingSection": {
-        "additionalProperties": false,
         "properties": {
           "title": {
-            "title": "Title",
-            "type": "string"
+            "type": "string",
+            "title": "Title"
           },
           "body": {
-            "description": "Plain English; every number in it appears in `numbers`",
+            "type": "string",
             "title": "Body",
-            "type": "string"
+            "description": "Plain English; every number in it appears in `numbers`"
           },
           "numbers": {
             "additionalProperties": {
               "type": "number"
             },
-            "description": "Computed by code, never by an LLM",
+            "type": "object",
             "title": "Numbers",
-            "type": "object"
+            "description": "Computed by code, never by an LLM"
           }
         },
+        "additionalProperties": false,
+        "type": "object",
         "required": [
           "title",
           "body"
         ],
-        "title": "BriefingSection",
-        "type": "object"
+        "title": "BriefingSection"
       },
       "Channel": {
-        "description": "Where a message can go. `WEBHOOK` means \"hand the decision to the client's own tool\".",
+        "type": "string",
         "enum": [
           "email",
           "whatsapp",
@@ -1179,92 +1169,89 @@
           "webhook"
         ],
         "title": "Channel",
-        "type": "string"
+        "description": "Where a message can go. `WEBHOOK` means \"hand the decision to the client's own tool\"."
       },
       "ChannelStats": {
-        "additionalProperties": false,
         "properties": {
           "address_known": {
-            "default": false,
+            "type": "boolean",
             "title": "Address Known",
-            "type": "boolean"
+            "default": false
           },
           "consent": {
-            "default": false,
+            "type": "boolean",
             "title": "Consent",
-            "type": "boolean"
+            "default": false
           },
           "unsubscribed": {
-            "default": false,
+            "type": "boolean",
             "title": "Unsubscribed",
-            "type": "boolean"
+            "default": false
           },
           "sends": {
-            "default": 0,
+            "type": "integer",
             "title": "Sends",
-            "type": "integer"
+            "default": 0
           },
           "delivers": {
-            "default": 0,
+            "type": "integer",
             "title": "Delivers",
-            "type": "integer"
+            "default": 0
           },
           "clicks": {
-            "default": 0,
+            "type": "integer",
             "title": "Clicks",
-            "type": "integer"
+            "default": 0
           },
           "replies": {
-            "default": 0,
+            "type": "integer",
             "title": "Replies",
-            "type": "integer"
+            "default": 0
           },
           "bounces": {
-            "default": 0,
+            "type": "integer",
             "title": "Bounces",
-            "type": "integer"
+            "default": 0
           },
           "complaints": {
-            "default": 0,
+            "type": "integer",
             "title": "Complaints",
-            "type": "integer"
+            "default": 0
           },
           "last_send_at": {
             "anyOf": [
               {
-                "format": "date-time",
-                "type": "string"
+                "type": "string",
+                "format": "date-time"
               },
               {
                 "type": "null"
               }
             ],
-            "default": null,
             "title": "Last Send At"
           },
           "last_engaged_at": {
             "anyOf": [
               {
-                "format": "date-time",
-                "type": "string"
+                "type": "string",
+                "format": "date-time"
               },
               {
                 "type": "null"
               }
             ],
-            "default": null,
             "title": "Last Engaged At"
           }
         },
-        "title": "ChannelStats",
-        "type": "object"
+        "additionalProperties": false,
+        "type": "object",
+        "title": "ChannelStats"
       },
       "ContentItem": {
-        "additionalProperties": false,
         "properties": {
           "content_id": {
-            "title": "Content Id",
-            "type": "string"
+            "type": "string",
+            "title": "Content Id"
           },
           "goal_id": {
             "anyOf": [
@@ -1275,7 +1262,6 @@
                 "type": "null"
               }
             ],
-            "default": null,
             "title": "Goal Id"
           },
           "channel": {
@@ -1293,9 +1279,9 @@
             "default": "friendly"
           },
           "offer_id": {
-            "default": "none",
+            "type": "string",
             "title": "Offer Id",
-            "type": "string"
+            "default": "none"
           },
           "subject": {
             "anyOf": [
@@ -1306,22 +1292,21 @@
                 "type": "null"
               }
             ],
-            "default": null,
-            "description": "Email only",
-            "title": "Subject"
+            "title": "Subject",
+            "description": "Email only"
           },
           "body": {
-            "description": "Text with {{slot}} placeholders, e.g. {{first_name}}, {{top_category}}",
+            "type": "string",
             "title": "Body",
-            "type": "string"
+            "description": "Text with {{slot}} placeholders, e.g. {{first_name}}, {{top_category}}"
           },
           "slots": {
-            "default": [],
             "items": {
               "type": "string"
             },
+            "type": "array",
             "title": "Slots",
-            "type": "array"
+            "default": []
           },
           "asset_url": {
             "anyOf": [
@@ -1332,7 +1317,6 @@
                 "type": "null"
               }
             ],
-            "default": null,
             "title": "Asset Url"
           },
           "template_name": {
@@ -1344,33 +1328,34 @@
                 "type": "null"
               }
             ],
-            "default": null,
-            "description": "WhatsApp: the pre-approved template",
-            "title": "Template Name"
+            "title": "Template Name",
+            "description": "WhatsApp: the pre-approved template"
           },
           "language": {
-            "default": "en",
+            "type": "string",
             "title": "Language",
-            "type": "string"
+            "default": "en"
           },
           "status": {
             "$ref": "#/components/schemas/ContentStatus",
             "default": "draft"
           },
           "critic_notes": {
-            "default": [],
             "items": {
               "type": "string"
             },
+            "type": "array",
             "title": "Critic Notes",
-            "type": "array"
+            "default": []
           },
           "created_at": {
+            "type": "string",
             "format": "date-time",
-            "title": "Created At",
-            "type": "string"
+            "title": "Created At"
           }
         },
+        "additionalProperties": false,
+        "type": "object",
         "required": [
           "content_id",
           "channel",
@@ -1378,89 +1363,87 @@
           "body",
           "created_at"
         ],
-        "title": "ContentItem",
-        "type": "object"
+        "title": "ContentItem"
       },
       "ContentStatus": {
+        "type": "string",
         "enum": [
           "draft",
           "approved",
           "rejected",
           "retired"
         ],
-        "title": "ContentStatus",
-        "type": "string"
+        "title": "ContentStatus"
       },
       "ContentStatusRequest": {
-        "additionalProperties": false,
         "properties": {
           "status": {
             "$ref": "#/components/schemas/ContentStatus"
           }
         },
+        "additionalProperties": false,
+        "type": "object",
         "required": [
           "status"
         ],
-        "title": "ContentStatusRequest",
-        "type": "object"
+        "title": "ContentStatusRequest"
       },
       "CustomerDetail": {
-        "additionalProperties": false,
         "properties": {
           "state": {
             "$ref": "#/components/schemas/CustomerState"
           },
           "decisions": {
-            "description": "Newest first, at most 200",
             "items": {
               "$ref": "#/components/schemas/Decision"
             },
+            "type": "array",
             "title": "Decisions",
-            "type": "array"
+            "description": "Newest first, at most 200"
           },
           "events": {
-            "description": "Newest first, at most 200",
             "items": {
               "$ref": "#/components/schemas/Event"
             },
+            "type": "array",
             "title": "Events",
-            "type": "array"
+            "description": "Newest first, at most 200"
           }
         },
+        "additionalProperties": false,
+        "type": "object",
         "required": [
           "state",
           "decisions",
           "events"
         ],
-        "title": "CustomerDetail",
-        "type": "object"
+        "title": "CustomerDetail"
       },
       "CustomerState": {
-        "additionalProperties": false,
         "properties": {
           "customer_id": {
-            "title": "Customer Id",
-            "type": "string"
+            "type": "string",
+            "title": "Customer Id"
           },
           "as_of": {
+            "type": "string",
             "format": "date-time",
-            "title": "As Of",
-            "type": "string"
+            "title": "As Of"
           },
           "version": {
-            "default": 0,
-            "description": "How many events have been folded in",
+            "type": "integer",
             "title": "Version",
-            "type": "integer"
+            "description": "How many events have been folded in",
+            "default": 0
           },
           "group": {
             "$ref": "#/components/schemas/Group",
             "default": "agent"
           },
           "timezone": {
-            "default": "UTC",
+            "type": "string",
             "title": "Timezone",
-            "type": "string"
+            "default": "UTC"
           },
           "country": {
             "anyOf": [
@@ -1471,78 +1454,74 @@
                 "type": "null"
               }
             ],
-            "default": null,
             "title": "Country"
           },
           "first_seen_at": {
             "anyOf": [
               {
-                "format": "date-time",
-                "type": "string"
+                "type": "string",
+                "format": "date-time"
               },
               {
                 "type": "null"
               }
             ],
-            "default": null,
             "title": "First Seen At"
           },
           "last_seen_at": {
             "anyOf": [
               {
-                "format": "date-time",
-                "type": "string"
+                "type": "string",
+                "format": "date-time"
               },
               {
                 "type": "null"
               }
             ],
-            "default": null,
             "title": "Last Seen At"
           },
           "last_purchase_at": {
             "anyOf": [
               {
-                "format": "date-time",
-                "type": "string"
+                "type": "string",
+                "format": "date-time"
               },
               {
                 "type": "null"
               }
             ],
-            "default": null,
             "title": "Last Purchase At"
           },
           "purchases": {
-            "default": 0,
+            "type": "integer",
             "title": "Purchases",
-            "type": "integer"
+            "default": 0
           },
           "revenue": {
-            "default": 0.0,
+            "type": "number",
             "title": "Revenue",
-            "type": "number"
+            "default": 0.0
           },
           "margin": {
-            "default": 0.0,
+            "type": "number",
             "title": "Margin",
-            "type": "number"
+            "default": 0.0
           },
           "top_categories": {
-            "default": [],
             "items": {
               "type": "string"
             },
+            "type": "array",
             "title": "Top Categories",
-            "type": "array"
+            "default": []
           },
           "category_counts": {
             "additionalProperties": {
               "type": "integer"
             },
-            "description": "Purchases per category",
+            "type": "object",
             "title": "Category Counts",
-            "type": "object"
+            "description": "Purchases per category"
           },
           "channels": {
             "additionalProperties": {
@@ -1551,59 +1530,58 @@
             "propertyNames": {
               "$ref": "#/components/schemas/Channel"
             },
-            "title": "Channels",
-            "type": "object"
+            "type": "object",
+            "title": "Channels"
           },
           "contacts_7d": {
-            "default": 0,
+            "type": "integer",
             "title": "Contacts 7D",
-            "type": "integer"
+            "default": 0
           },
           "contacts_30d": {
-            "default": 0,
+            "type": "integer",
             "title": "Contacts 30D",
-            "type": "integer"
+            "default": 0
           },
           "last_contact_at": {
             "anyOf": [
               {
-                "format": "date-time",
-                "type": "string"
+                "type": "string",
+                "format": "date-time"
               },
               {
                 "type": "null"
               }
             ],
-            "default": null,
             "title": "Last Contact At"
           },
           "recent_contacts": {
-            "default": [],
-            "description": "Send times in the last 30 days, oldest first; feeds contacts_7d/30d",
             "items": {
-              "format": "date-time",
-              "type": "string"
+              "type": "string",
+              "format": "date-time"
             },
+            "type": "array",
             "title": "Recent Contacts",
-            "type": "array"
+            "description": "Send times in the last 30 days, oldest first; feeds contacts_7d/30d",
+            "default": []
           },
           "active_hours": {
-            "default": [],
-            "description": "24 shares of engagement by local hour, summing to 1; empty if unknown",
             "items": {
               "type": "number"
             },
+            "type": "array",
             "title": "Active Hours",
-            "type": "array"
+            "description": "24 shares of engagement by local hour, summing to 1; empty if unknown",
+            "default": []
           },
           "hour_counts": {
-            "default": [],
-            "description": "24 counts of engagement by local hour",
             "items": {
               "type": "integer"
             },
+            "type": "array",
             "title": "Hour Counts",
-            "type": "array"
+            "description": "24 counts of engagement by local hour",
+            "default": []
           },
           "offer_sensitivity": {
             "anyOf": [
@@ -1614,30 +1592,29 @@
                 "type": "null"
               }
             ],
-            "default": null,
-            "description": "0 = buys at full price, 1 = needs an offer",
-            "title": "Offer Sensitivity"
+            "title": "Offer Sensitivity",
+            "description": "0 = buys at full price, 1 = needs an offer"
           },
           "preferences": {
             "additionalProperties": {
               "type": "string"
             },
-            "description": "Stated or learned, e.g. no_discounts=true",
+            "type": "object",
             "title": "Preferences",
-            "type": "object"
+            "description": "Stated or learned, e.g. no_discounts=true"
           },
           "open_complaint": {
-            "default": false,
+            "type": "boolean",
             "title": "Open Complaint",
-            "type": "boolean"
+            "default": false
           },
           "scores": {
             "additionalProperties": {
               "type": "number"
             },
-            "description": "Model outputs, e.g. churn_risk, clv_90d",
+            "type": "object",
             "title": "Scores",
-            "type": "object"
+            "description": "Model outputs, e.g. churn_risk, clv_90d"
           },
           "segment": {
             "anyOf": [
@@ -1648,32 +1625,31 @@
                 "type": "null"
               }
             ],
-            "default": null,
             "title": "Segment"
           }
         },
+        "additionalProperties": false,
+        "type": "object",
         "required": [
           "customer_id",
           "as_of"
         ],
-        "title": "CustomerState",
-        "type": "object"
+        "title": "CustomerState"
       },
       "Decision": {
-        "additionalProperties": false,
         "properties": {
           "decision_id": {
-            "title": "Decision Id",
-            "type": "string"
+            "type": "string",
+            "title": "Decision Id"
           },
           "customer_id": {
-            "title": "Customer Id",
-            "type": "string"
+            "type": "string",
+            "title": "Customer Id"
           },
           "made_at": {
+            "type": "string",
             "format": "date-time",
-            "title": "Made At",
-            "type": "string"
+            "title": "Made At"
           },
           "kind": {
             "$ref": "#/components/schemas/DecisionKind"
@@ -1686,60 +1662,61 @@
               {
                 "type": "null"
               }
-            ],
-            "default": null
+            ]
           },
           "group": {
             "$ref": "#/components/schemas/Group",
             "default": "agent"
           },
           "probability": {
-            "description": "Chance the policy had of choosing exactly this",
-            "exclusiveMinimum": 0,
-            "maximum": 1,
+            "type": "number",
+            "maximum": 1.0,
+            "exclusiveMinimum": 0.0,
             "title": "Probability",
-            "type": "number"
+            "description": "Chance the policy had of choosing exactly this"
           },
           "expected_net": {
-            "default": 0.0,
+            "type": "number",
             "title": "Expected Net",
-            "type": "number"
+            "default": 0.0
           },
           "attention_price": {
-            "default": 0.0,
-            "description": "What a bid had to beat",
-            "minimum": 0,
+            "type": "number",
+            "minimum": 0.0,
             "title": "Attention Price",
-            "type": "number"
+            "description": "What a bid had to beat",
+            "default": 0.0
           },
           "reason": {
-            "description": "One plain sentence a marketer understands",
+            "type": "string",
             "title": "Reason",
-            "type": "string"
+            "description": "One plain sentence a marketer understands"
           },
           "bids": {
-            "default": [],
-            "description": "The top bids considered, best first",
             "items": {
               "$ref": "#/components/schemas/Bid"
             },
+            "type": "array",
             "title": "Bids",
-            "type": "array"
+            "description": "The top bids considered, best first",
+            "default": []
           },
           "blocked_by": {
-            "default": [],
-            "description": "Hard rules that removed options",
             "items": {
               "type": "string"
             },
+            "type": "array",
             "title": "Blocked By",
-            "type": "array"
+            "description": "Hard rules that removed options",
+            "default": []
           },
           "policy_version": {
-            "title": "Policy Version",
-            "type": "string"
+            "type": "string",
+            "title": "Policy Version"
           }
         },
+        "additionalProperties": false,
+        "type": "object",
         "required": [
           "decision_id",
           "customer_id",
@@ -1749,28 +1726,31 @@
           "reason",
           "policy_version"
         ],
-        "title": "Decision",
-        "type": "object"
+        "title": "Decision"
       },
       "DecisionKind": {
+        "type": "string",
         "enum": [
           "act",
           "nothing"
         ],
-        "title": "DecisionKind",
-        "type": "string"
+        "title": "DecisionKind"
       },
       "Envelope": {
-        "additionalProperties": false,
         "properties": {
           "channels": {
             "items": {
               "$ref": "#/components/schemas/Channel"
             },
-            "title": "Channels",
-            "type": "array"
+            "type": "array",
+            "title": "Channels"
           },
           "offers": {
+            "items": {
+              "$ref": "#/components/schemas/OfferOption"
+            },
+            "type": "array",
+            "title": "Offers",
             "default": [
               {
                 "offer_id": "none",
@@ -1780,17 +1760,12 @@
                 "cost_per_redemption": 0.0,
                 "needs_approval": false
               }
-            ],
-            "items": {
-              "$ref": "#/components/schemas/OfferOption"
-            },
-            "title": "Offers",
-            "type": "array"
+            ]
           },
           "budget": {
-            "minimum": 0,
-            "title": "Budget",
-            "type": "number"
+            "type": "number",
+            "minimum": 0.0,
+            "title": "Budget"
           },
           "max_daily_spend": {
             "anyOf": [
@@ -1801,54 +1776,58 @@
                 "type": "null"
               }
             ],
-            "default": null,
             "title": "Max Daily Spend"
           },
           "max_contacts_per_week": {
-            "default": 2,
-            "description": "Hard cap per customer across all goals",
-            "minimum": 0,
+            "type": "integer",
+            "minimum": 0.0,
             "title": "Max Contacts Per Week",
-            "type": "integer"
+            "description": "Hard cap per customer across all goals",
+            "default": 2
           },
           "quiet_start_hour": {
-            "default": 21,
-            "description": "Local time; no sends from here...",
-            "maximum": 23,
-            "minimum": 0,
+            "type": "integer",
+            "maximum": 23.0,
+            "minimum": 0.0,
             "title": "Quiet Start Hour",
-            "type": "integer"
+            "description": "Local time; no sends from here...",
+            "default": 21
           },
           "quiet_end_hour": {
-            "default": 9,
-            "description": "...until here",
-            "maximum": 23,
-            "minimum": 0,
+            "type": "integer",
+            "maximum": 23.0,
+            "minimum": 0.0,
             "title": "Quiet End Hour",
-            "type": "integer"
+            "description": "...until here",
+            "default": 9
           },
           "exploration_floor": {
-            "default": 0.05,
+            "type": "number",
             "maximum": 0.5,
-            "minimum": 0,
+            "minimum": 0.0,
             "title": "Exploration Floor",
-            "type": "number"
+            "default": 0.05
           },
           "holdout_share": {
-            "default": 0.1,
+            "type": "number",
             "maximum": 0.5,
-            "minimum": 0,
+            "minimum": 0.0,
             "title": "Holdout Share",
-            "type": "number"
+            "default": 0.1
           },
           "baseline_share": {
-            "default": 0.1,
+            "type": "number",
             "maximum": 0.5,
-            "minimum": 0,
+            "minimum": 0.0,
             "title": "Baseline Share",
-            "type": "number"
+            "default": 0.1
           },
           "stop_rules": {
+            "items": {
+              "$ref": "#/components/schemas/StopRule"
+            },
+            "type": "array",
+            "title": "Stop Rules",
             "default": [
               {
                 "metric": "complaint_rate",
@@ -1875,70 +1854,65 @@
                 "threshold": 1.0,
                 "action": "pause_channel"
               }
-            ],
-            "items": {
-              "$ref": "#/components/schemas/StopRule"
-            },
-            "title": "Stop Rules",
-            "type": "array"
+            ]
           }
         },
+        "additionalProperties": false,
+        "type": "object",
         "required": [
           "channels",
           "budget"
         ],
-        "title": "Envelope",
-        "type": "object"
+        "title": "Envelope"
       },
       "Estimate": {
-        "additionalProperties": false,
-        "description": "A number with its 95% interval. Every money figure shown to a person is one of these.",
         "properties": {
           "point": {
-            "title": "Point",
-            "type": "number"
+            "type": "number",
+            "title": "Point"
           },
           "low": {
-            "title": "Low",
-            "type": "number"
+            "type": "number",
+            "title": "Low"
           },
           "high": {
-            "title": "High",
-            "type": "number"
+            "type": "number",
+            "title": "High"
           }
         },
+        "additionalProperties": false,
+        "type": "object",
         "required": [
           "point",
           "low",
           "high"
         ],
         "title": "Estimate",
-        "type": "object"
+        "description": "A number with its 95% interval. Every money figure shown to a person is one of these."
       },
       "Event": {
-        "additionalProperties": false,
         "properties": {
           "event_id": {
-            "description": "Unique; the store drops a second event with the same id",
+            "type": "string",
             "title": "Event Id",
-            "type": "string"
+            "description": "Unique; the store drops a second event with the same id"
           },
           "customer_id": {
-            "title": "Customer Id",
-            "type": "string"
+            "type": "string",
+            "title": "Customer Id"
           },
           "type": {
             "$ref": "#/components/schemas/EventType"
           },
           "ts": {
+            "type": "string",
             "format": "date-time",
-            "title": "Ts",
-            "type": "string"
+            "title": "Ts"
           },
           "source": {
-            "description": "Where it came from: 'gym', 'ses', 'whatsapp', 'csv', 'shopify', ...",
+            "type": "string",
             "title": "Source",
-            "type": "string"
+            "description": "Where it came from: 'gym', 'ses', 'whatsapp', 'csv', 'shopify', ..."
           },
           "channel": {
             "anyOf": [
@@ -1948,8 +1922,7 @@
               {
                 "type": "null"
               }
-            ],
-            "default": null
+            ]
           },
           "decision_id": {
             "anyOf": [
@@ -1960,9 +1933,8 @@
                 "type": "null"
               }
             ],
-            "default": null,
-            "description": "The decision that caused it, if any",
-            "title": "Decision Id"
+            "title": "Decision Id",
+            "description": "The decision that caused it, if any"
           },
           "value": {
             "anyOf": [
@@ -1973,9 +1945,8 @@
                 "type": "null"
               }
             ],
-            "default": null,
-            "description": "Purchase or refund amount, gross, in the business currency",
-            "title": "Value"
+            "title": "Value",
+            "description": "Purchase or refund amount, gross, in the business currency"
           },
           "margin": {
             "anyOf": [
@@ -1986,9 +1957,8 @@
                 "type": "null"
               }
             ],
-            "default": null,
-            "description": "Gross margin of a purchase, if known",
-            "title": "Margin"
+            "title": "Margin",
+            "description": "Gross margin of a purchase, if known"
           },
           "category": {
             "anyOf": [
@@ -1999,7 +1969,6 @@
                 "type": "null"
               }
             ],
-            "default": null,
             "title": "Category"
           },
           "item_id": {
@@ -2011,7 +1980,6 @@
                 "type": "null"
               }
             ],
-            "default": null,
             "title": "Item Id"
           },
           "text": {
@@ -2023,9 +1991,8 @@
                 "type": "null"
               }
             ],
-            "default": null,
-            "description": "Reply text; never logged",
-            "title": "Text"
+            "title": "Text",
+            "description": "Reply text; never logged"
           },
           "attrs": {
             "additionalProperties": {
@@ -2044,10 +2011,12 @@
                 }
               ]
             },
-            "title": "Attrs",
-            "type": "object"
+            "type": "object",
+            "title": "Attrs"
           }
         },
+        "additionalProperties": false,
+        "type": "object",
         "required": [
           "event_id",
           "customer_id",
@@ -2055,10 +2024,10 @@
           "ts",
           "source"
         ],
-        "title": "Event",
-        "type": "object"
+        "title": "Event"
       },
       "EventType": {
+        "type": "string",
         "enum": [
           "signup",
           "visit",
@@ -2080,26 +2049,24 @@
           "consent_revoked",
           "preference"
         ],
-        "title": "EventType",
-        "type": "string"
+        "title": "EventType"
       },
       "FollowUpStep": {
-        "additionalProperties": false,
         "properties": {
           "after_days": {
-            "minimum": 1,
-            "title": "After Days",
-            "type": "integer"
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "After Days"
           },
           "when": {
-            "default": "no_purchase",
+            "type": "string",
             "enum": [
               "no_response",
               "no_purchase",
               "always"
             ],
             "title": "When",
-            "type": "string"
+            "default": "no_purchase"
           },
           "channel": {
             "anyOf": [
@@ -2110,41 +2077,40 @@
                 "type": "null"
               }
             ],
-            "default": null,
             "description": "None: let decide() pick"
           }
         },
+        "additionalProperties": false,
+        "type": "object",
         "required": [
           "after_days"
         ],
-        "title": "FollowUpStep",
-        "type": "object"
+        "title": "FollowUpStep"
       },
       "Format": {
+        "type": "string",
         "enum": [
           "text",
           "text_image",
           "carousel",
           "video"
         ],
-        "title": "Format",
-        "type": "string"
+        "title": "Format"
       },
       "Goal": {
-        "additionalProperties": false,
         "properties": {
           "goal_id": {
-            "title": "Goal Id",
-            "type": "string"
+            "type": "string",
+            "title": "Goal Id"
           },
           "business_id": {
-            "title": "Business Id",
-            "type": "string"
+            "type": "string",
+            "title": "Business Id"
           },
           "text": {
-            "description": "The marketer's words, e.g. 'win back lapsed customers, $5k this month'",
+            "type": "string",
             "title": "Text",
-            "type": "string"
+            "description": "The marketer's words, e.g. 'win back lapsed customers, $5k this month'"
           },
           "kind": {
             "$ref": "#/components/schemas/GoalKind",
@@ -2155,32 +2121,31 @@
             "default": "gross_profit"
           },
           "budget": {
-            "description": "Total spend allowed on offers and messages, in `currency`",
-            "minimum": 0,
+            "type": "number",
+            "minimum": 0.0,
             "title": "Budget",
-            "type": "number"
+            "description": "Total spend allowed on offers and messages, in `currency`"
           },
           "currency": {
-            "default": "USD",
+            "type": "string",
             "title": "Currency",
-            "type": "string"
+            "default": "USD"
           },
           "starts_at": {
+            "type": "string",
             "format": "date-time",
-            "title": "Starts At",
-            "type": "string"
+            "title": "Starts At"
           },
           "ends_at": {
             "anyOf": [
               {
-                "format": "date-time",
-                "type": "string"
+                "type": "string",
+                "format": "date-time"
               },
               {
                 "type": "null"
               }
             ],
-            "default": null,
             "title": "Ends At"
           },
           "autonomy": {
@@ -2192,11 +2157,13 @@
             "default": "draft"
           },
           "created_at": {
+            "type": "string",
             "format": "date-time",
-            "title": "Created At",
-            "type": "string"
+            "title": "Created At"
           }
         },
+        "additionalProperties": false,
+        "type": "object",
         "required": [
           "goal_id",
           "business_id",
@@ -2205,42 +2172,62 @@
           "starts_at",
           "created_at"
         ],
-        "title": "Goal",
-        "type": "object"
+        "title": "Goal"
       },
       "GoalCreate": {
-        "additionalProperties": false,
-        "description": "The marketer's goal in their own words, and what they will spend on it.",
         "properties": {
           "text": {
-            "description": "e.g. 'win back lapsed customers'",
+            "type": "string",
             "maxLength": 2000,
             "minLength": 1,
             "title": "Text",
-            "type": "string"
+            "description": "e.g. 'win back lapsed customers'"
           },
           "budget": {
-            "minimum": 0,
-            "title": "Budget",
-            "type": "number"
+            "type": "number",
+            "minimum": 0.0,
+            "title": "Budget"
           },
           "currency": {
-            "default": "USD",
+            "type": "string",
             "maxLength": 3,
             "minLength": 3,
             "title": "Currency",
-            "type": "string"
+            "default": "USD"
+          },
+          "kind": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GoalKind"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional; inferred from the text when absent"
+          },
+          "objective": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Objective"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional; the Strategist proposes one when absent"
           }
         },
+        "additionalProperties": false,
+        "type": "object",
         "required": [
           "text",
           "budget"
         ],
         "title": "GoalCreate",
-        "type": "object"
+        "description": "The marketer's goal in their own words, and what they will spend on it."
       },
       "GoalDetail": {
-        "additionalProperties": false,
         "properties": {
           "goal": {
             "$ref": "#/components/schemas/Goal"
@@ -2259,8 +2246,8 @@
             "items": {
               "$ref": "#/components/schemas/ContentItem"
             },
-            "title": "Content",
-            "type": "array"
+            "type": "array",
+            "title": "Content"
           },
           "proof": {
             "anyOf": [
@@ -2273,16 +2260,18 @@
             ]
           }
         },
+        "additionalProperties": false,
+        "type": "object",
         "required": [
           "goal",
           "brief",
           "content",
           "proof"
         ],
-        "title": "GoalDetail",
-        "type": "object"
+        "title": "GoalDetail"
       },
       "GoalKind": {
+        "type": "string",
         "enum": [
           "win_back",
           "repeat_purchase",
@@ -2292,21 +2281,19 @@
           "retention",
           "custom"
         ],
-        "title": "GoalKind",
-        "type": "string"
+        "title": "GoalKind"
       },
       "GoalStatus": {
+        "type": "string",
         "enum": [
           "draft",
           "active",
           "paused",
           "done"
         ],
-        "title": "GoalStatus",
-        "type": "string"
+        "title": "GoalStatus"
       },
       "GoalWithBrief": {
-        "additionalProperties": false,
         "properties": {
           "goal": {
             "$ref": "#/components/schemas/Goal"
@@ -2315,22 +2302,23 @@
             "$ref": "#/components/schemas/Brief"
           }
         },
+        "additionalProperties": false,
+        "type": "object",
         "required": [
           "goal",
           "brief"
         ],
-        "title": "GoalWithBrief",
-        "type": "object"
+        "title": "GoalWithBrief"
       },
       "Group": {
-        "description": "The three-way split every customer belongs to, for proof (plan-v2 section 8).",
+        "type": "string",
         "enum": [
           "agent",
           "baseline",
           "holdout"
         ],
         "title": "Group",
-        "type": "string"
+        "description": "The three-way split every customer belongs to, for proof (plan-v2 section 8)."
       },
       "HTTPValidationError": {
         "properties": {
@@ -2346,12 +2334,11 @@
         "title": "HTTPValidationError"
       },
       "HealthStatus": {
-        "additionalProperties": false,
         "properties": {
           "as_of": {
+            "type": "string",
             "format": "date-time",
-            "title": "As Of",
-            "type": "string"
+            "title": "As Of"
           },
           "delivery_rate": {
             "anyOf": [
@@ -2362,7 +2349,6 @@
                 "type": "null"
               }
             ],
-            "default": null,
             "title": "Delivery Rate"
           },
           "complaint_rate": {
@@ -2374,7 +2360,6 @@
                 "type": "null"
               }
             ],
-            "default": null,
             "title": "Complaint Rate"
           },
           "unsubscribe_rate": {
@@ -2386,7 +2371,6 @@
                 "type": "null"
               }
             ],
-            "default": null,
             "title": "Unsubscribe Rate"
           },
           "block_rate": {
@@ -2398,7 +2382,6 @@
                 "type": "null"
               }
             ],
-            "default": null,
             "title": "Block Rate"
           },
           "contacts_per_customer_week": {
@@ -2410,25 +2393,26 @@
                 "type": "null"
               }
             ],
-            "default": null,
             "title": "Contacts Per Customer Week"
           },
           "alerts": {
-            "default": [],
             "items": {
               "$ref": "#/components/schemas/Alert"
             },
+            "type": "array",
             "title": "Alerts",
-            "type": "array"
+            "default": []
           }
         },
+        "additionalProperties": false,
+        "type": "object",
         "required": [
           "as_of"
         ],
-        "title": "HealthStatus",
-        "type": "object"
+        "title": "HealthStatus"
       },
       "Objective": {
+        "type": "string",
         "enum": [
           "conversion",
           "revenue",
@@ -2437,10 +2421,10 @@
           "lead",
           "activation"
         ],
-        "title": "Objective",
-        "type": "string"
+        "title": "Objective"
       },
       "OfferKind": {
+        "type": "string",
         "enum": [
           "none",
           "percent_off",
@@ -2450,53 +2434,51 @@
           "loyalty",
           "content"
         ],
-        "title": "OfferKind",
-        "type": "string"
+        "title": "OfferKind"
       },
       "OfferOption": {
-        "additionalProperties": false,
         "properties": {
           "offer_id": {
-            "title": "Offer Id",
-            "type": "string"
+            "type": "string",
+            "title": "Offer Id"
           },
           "label": {
-            "title": "Label",
-            "type": "string"
+            "type": "string",
+            "title": "Label"
           },
           "kind": {
             "$ref": "#/components/schemas/OfferKind"
           },
           "amount": {
-            "default": 0.0,
-            "description": "Percent for percent_off, money for amount_off",
-            "minimum": 0,
+            "type": "number",
+            "minimum": 0.0,
             "title": "Amount",
-            "type": "number"
+            "description": "Percent for percent_off, money for amount_off",
+            "default": 0.0
           },
           "cost_per_redemption": {
-            "default": 0.0,
-            "description": "Expected cost to the business if used",
-            "minimum": 0,
+            "type": "number",
+            "minimum": 0.0,
             "title": "Cost Per Redemption",
-            "type": "number"
+            "description": "Expected cost to the business if used",
+            "default": 0.0
           },
           "needs_approval": {
-            "default": false,
+            "type": "boolean",
             "title": "Needs Approval",
-            "type": "boolean"
+            "default": false
           }
         },
+        "additionalProperties": false,
+        "type": "object",
         "required": [
           "offer_id",
           "label",
           "kind"
         ],
-        "title": "OfferOption",
-        "type": "object"
+        "title": "OfferOption"
       },
       "ProofSummary": {
-        "additionalProperties": false,
         "properties": {
           "goal_id": {
             "anyOf": [
@@ -2507,25 +2489,25 @@
                 "type": "null"
               }
             ],
-            "description": "None: the whole programme",
-            "title": "Goal Id"
+            "title": "Goal Id",
+            "description": "None: the whole programme"
           },
           "as_of": {
+            "type": "string",
             "format": "date-time",
-            "title": "As Of",
-            "type": "string"
+            "title": "As Of"
           },
           "agent_n": {
-            "title": "Agent N",
-            "type": "integer"
+            "type": "integer",
+            "title": "Agent N"
           },
           "baseline_n": {
-            "title": "Baseline N",
-            "type": "integer"
+            "type": "integer",
+            "title": "Baseline N"
           },
           "holdout_n": {
-            "title": "Holdout N",
-            "type": "integer"
+            "type": "integer",
+            "title": "Holdout N"
           },
           "incremental_revenue": {
             "anyOf": [
@@ -2560,9 +2542,9 @@
             "description": "Agent vs simple baseline, profit per customer"
           },
           "spend": {
-            "default": 0.0,
+            "type": "number",
             "title": "Spend",
-            "type": "number"
+            "default": 0.0
           },
           "roi": {
             "anyOf": [
@@ -2572,18 +2554,19 @@
               {
                 "type": "null"
               }
-            ],
-            "default": null
+            ]
           },
           "notes": {
-            "default": [],
             "items": {
               "type": "string"
             },
+            "type": "array",
             "title": "Notes",
-            "type": "array"
+            "default": []
           }
         },
+        "additionalProperties": false,
+        "type": "object",
         "required": [
           "goal_id",
           "as_of",
@@ -2594,10 +2577,10 @@
           "incremental_profit",
           "lift_vs_baseline"
         ],
-        "title": "ProofSummary",
-        "type": "object"
+        "title": "ProofSummary"
       },
       "StopMetric": {
+        "type": "string",
         "enum": [
           "complaint_rate",
           "unsubscribe_multiple",
@@ -2605,37 +2588,37 @@
           "spend_pace",
           "whatsapp_quality"
         ],
-        "title": "StopMetric",
-        "type": "string"
+        "title": "StopMetric"
       },
       "StopRule": {
-        "additionalProperties": false,
         "properties": {
           "metric": {
             "$ref": "#/components/schemas/StopMetric"
           },
           "threshold": {
-            "title": "Threshold",
-            "type": "number"
+            "type": "number",
+            "title": "Threshold"
           },
           "action": {
-            "default": "pause_goal",
+            "type": "string",
             "enum": [
               "pause_goal",
               "pause_channel"
             ],
             "title": "Action",
-            "type": "string"
+            "default": "pause_goal"
           }
         },
+        "additionalProperties": false,
+        "type": "object",
         "required": [
           "metric",
           "threshold"
         ],
-        "title": "StopRule",
-        "type": "object"
+        "title": "StopRule"
       },
       "Theme": {
+        "type": "string",
         "enum": [
           "savings",
           "quality",
@@ -2648,10 +2631,10 @@
           "reminder",
           "personal"
         ],
-        "title": "Theme",
-        "type": "string"
+        "title": "Theme"
       },
       "Tone": {
+        "type": "string",
         "enum": [
           "friendly",
           "professional",
@@ -2659,8 +2642,7 @@
           "urgent",
           "calm"
         ],
-        "title": "Tone",
-        "type": "string"
+        "title": "Tone"
       },
       "ValidationError": {
         "properties": {
@@ -2685,6 +2667,13 @@
           "type": {
             "type": "string",
             "title": "Error Type"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "ctx": {
+            "type": "object",
+            "title": "Context"
           }
         },
         "type": "object",
@@ -2696,19 +2685,19 @@
         "title": "ValidationError"
       },
       "WebhookResult": {
-        "additionalProperties": false,
         "properties": {
           "accepted": {
-            "description": "How many of the callback's events were new",
+            "type": "integer",
             "title": "Accepted",
-            "type": "integer"
+            "description": "How many of the callback's events were new"
           }
         },
+        "additionalProperties": false,
+        "type": "object",
         "required": [
           "accepted"
         ],
-        "title": "WebhookResult",
-        "type": "object"
+        "title": "WebhookResult"
       }
     }
   }

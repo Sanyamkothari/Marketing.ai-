@@ -12,13 +12,16 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from api.v2.deps import Services, attach_services, build_demo_services
@@ -43,6 +46,7 @@ def create_app(
         description="The v2 marketer app's API: goals, plans, approvals, decisions, proof and webhooks.",
     )
     attach_services(app, services)
+    app.add_exception_handler(RequestValidationError, _validation_error)
     app.add_middleware(
         CORSMiddleware,
         allow_origin_regex=cors_origin_regex,
@@ -56,6 +60,24 @@ def create_app(
         app.mount("/v2/app", StaticFiles(directory=folder, html=True), name="v2-app")
     app.include_router(router)
     return app
+
+
+def _json_safe(value: Any) -> Any:
+    """Inputs echoed back in a 422 may hold infinity (JSON's 1e999), which JSON cannot carry."""
+    if isinstance(value, float) and not math.isfinite(value):
+        return str(value)
+    if isinstance(value, dict):
+        return {k: _json_safe(v) for k, v in value.items()}
+    if isinstance(value, list | tuple):
+        return [_json_safe(v) for v in value]
+    return value
+
+
+async def _validation_error(request: Request, exc: Exception) -> JSONResponse:  # noqa: ARG001
+    """FastAPI's own 422, made safe for inputs JSON cannot encode (otherwise it raises a 500)."""
+    errors = exc.errors() if isinstance(exc, RequestValidationError) else []
+    detail = [{k: _json_safe(v) for k, v in e.items() if k != "ctx"} for e in errors]
+    return JSONResponse(status_code=422, content={"detail": detail})
 
 
 def export_openapi(path: Path = OPENAPI_PATH, app: FastAPI | None = None) -> dict[str, Any]:

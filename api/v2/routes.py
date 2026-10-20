@@ -27,7 +27,9 @@ from autonomy.contracts import (
     Decision,
     Event,
     Goal,
+    GoalKind,
     HealthStatus,
+    Objective,
     ProofSummary,
 )
 
@@ -61,6 +63,10 @@ class GoalCreate(Contract):
     text: str = Field(min_length=1, max_length=2000, description="e.g. 'win back lapsed customers'")
     budget: float = Field(ge=0, allow_inf_nan=False)
     currency: str = Field(default="USD", min_length=3, max_length=3)
+    kind: GoalKind | None = Field(default=None, description="Optional; inferred from the text when absent")
+    objective: Objective | None = Field(
+        default=None, description="Optional; the Strategist proposes one when absent"
+    )
 
 
 class ApproveRequest(Contract):
@@ -105,7 +111,7 @@ def list_goals(services: ServicesDep) -> list[Goal]:
 @router.post("/goals")
 def create_goal(body: GoalCreate, services: ServicesDep) -> GoalWithBrief:
     """Store a new goal (a draft) with the Strategist's plan for it, waiting for approval."""
-    goal, brief = _run(services.create_goal, body.text, body.budget, body.currency)
+    goal, brief = _run(services.create_goal, body.text, body.budget, body.currency, body.kind, body.objective)
     return GoalWithBrief(goal=goal, brief=brief)
 
 

@@ -50,6 +50,7 @@ from autonomy.contracts import (
     GoalStatus,
     Group,
     HealthStatus,
+    Objective,
     ProofSummary,
     Reward,
     Theme,
@@ -161,7 +162,14 @@ class Services:
         content = self.workspace.content(goal_id=goal_id, approved_only=False)
         return goal, self.latest_brief(goal_id), content, self.proof(goal_id)
 
-    def create_goal(self, text: str, budget: float, currency: str = "USD") -> tuple[Goal, Brief]:
+    def create_goal(
+        self,
+        text: str,
+        budget: float,
+        currency: str = "USD",
+        kind: GoalKind | None = None,
+        objective: Objective | None = None,
+    ) -> tuple[Goal, Brief]:
         """Store the marketer's goal as a draft and the Strategist's (unapproved) brief for it."""
         text = text.strip()
         if not text:
@@ -181,7 +189,8 @@ class Services:
             goal_id=goal_id,
             business_id=self.business_id,
             text=text,
-            kind=infer_goal_kind(text),
+            kind=kind or infer_goal_kind(text),
+            objective=objective or Objective.GROSS_PROFIT,
             budget=budget,
             currency=currency.upper(),
             starts_at=now,
