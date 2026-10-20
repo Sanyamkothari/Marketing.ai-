@@ -6,19 +6,35 @@ Everything else is code: ids, labels (theme, tone, offer, channel, format), the 
 WhatsApp template name, the email footer, and the length limits. The LLM writes words, never
 labels or numbers, so the bandits downstream can trust the labels they learn over.
 
+Formats (decision 5, done the safe way first). Given the brand's approved assets, every text
+variant is also offered as a `text_image`, `carousel` or `video` item wherever the channel can carry
+that format (`FORMAT_SUPPORT` in `autonomy.channels.render`: SMS is text only, WhatsApp has no
+carousel, an email carousel is stacked images). The format variant reuses the text variant's
+words exactly, so a later comparison between formats measures the format and not the copy, and it
+costs no extra LLM call. Assets are chosen by code from the approved set, never generated, and an
+asset without alt text is never used. The text variants are always kept.
+
 Items come out as DRAFT. Nothing reaches a customer until the Critic approves it.
 """
 
 from __future__ import annotations
 
 import re
-from collections.abc import Sequence
+from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from datetime import datetime
 from string import Template
+from typing import Protocol
 
 from pydantic import BaseModel, Field
 
 from autonomy.agents.base import AgentOutputError, ask_json, load_prompt
+from autonomy.channels.render import (
+    CAROUSEL_MAX,
+    CAROUSEL_MIN,
+    FORMAT_MEDIA,
+    FORMAT_SUPPORT,
+    join_asset_urls,
+)
 from autonomy.contracts import (
     Brief,
     Channel,
@@ -33,8 +49,15 @@ from autonomy.contracts import (
 )
 from engine.llm import LLMClient
 
-ALLOWED_SLOTS: tuple[str, ...] = ("first_name", "top_category", "offer_label", "store_name")
-"""The only per-customer details the dispatcher knows how to fill at send time."""
+ALLOWED_SLOTS: tuple[str, ...] = (
+    "first_name",
+    "top_category",
+    "offer_label",
+    "store_name",
+    "recommended_product",
+)
+"""The only per-customer details the dispatcher knows how to fill at send time. `recommended_product`
+is optional: the renderer fills it from the profile, or with a neutral phrase when there is none."""
 
 SLOT_PATTERN = re.compile(r"\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}")
 """A `{{slot}}` placeholder. Spaces inside the braces are tolerated, as most template engines do."""
@@ -81,6 +104,143 @@ OFFER_THEMES: dict[OfferKind, tuple[Theme, ...]] = {
     OfferKind.LOYALTY: (Theme.LOYALTY, Theme.PERSONAL),
 }
 """Default themes per offer kind. A savings message with no offer would be a false promise."""
+
+THEME_GUIDANCE: dict[Theme, str] = {
+    Theme.SOCIAL_PROOF: (
+        "Social proof: say in general words that people like the reader enjoy this. Quote no "
+        "ratings, review counts, customer numbers or testimonials: none were given, so any would "
+        "be invented."
+    ),
+    Theme.QUALITY: (
+        "A comparison angle is welcome: compare with the reader's past choice or between the "
+        "brand's own products. Never name or run down a competitor, and claim no 'best' or "
+        "'cheapest' that is not given here."
+    ),
+}
+"""Extra direction for themes that are easy to get dishonest. Comparison has no theme of its own:
+it is an angle on quality (or savings, when there is an offer) and the labels stay the Theme enum."""
+
+CAROUSEL_CARDS = 5
+"""How many cards the Creative puts in a carousel it assembles itself. Stacked in an email, more than
+a handful of images is a long scroll most readers never finish. A card set the brand built is used
+whole (up to the channel limit)."""
+
+
+class ApprovedAsset(Protocol):
+    """An approved image or video from the brand's asset library, as far as the Creative needs it.
+
+    Structural, so `autonomy.assets.library.Asset` fits without this module importing it. `kind` is
+    "image", "video" or "carousel_card". `themes` are the themes the asset suits; an asset with none
+    suits any theme. `item_id` and `category` say what product it shows, if any. Optional extras
+    read when present: `status` (only "approved" is used), and `group_id` / `position` for a
+    carousel card set the brand built.
+    """
+
+    @property
+    def asset_id(self) -> str: ...
+
+    @property
+    def kind(self) -> str: ...
+
+    @property
+    def url(self) -> str: ...
+
+    @property
+    def alt_text(self) -> str | None: ...
+
+    @property
+    def item_id(self) -> str | None: ...
+
+    @property
+    def category(self) -> str | None: ...
+
+    @property
+    def themes(self) -> Collection[str]: ...
+
+
+def media_kind(asset: ApprovedAsset) -> str:
+    """The asset's kind as a lowercase word, whether the library stores a string or a string enum."""
+    return str(getattr(asset.kind, "value", asset.kind)).strip().lower()
+
+
+def is_approved(asset: ApprovedAsset) -> bool:
+    """False only when the asset says it is not approved (a library that hands over drafts by mistake)."""
+    status = getattr(asset, "status", "approved")
+    return str(getattr(status, "value", status)).strip().lower() == "approved"
+
+
+def usable_asset(asset: ApprovedAsset) -> bool:
+    """Approved, with a URL a message can carry and alt text to describe it."""
+    if not is_approved(asset):
+        return False
+    url = asset.url.strip()
+    return bool(url) and not any(ch.isspace() for ch in url) and bool((asset.alt_text or "").strip())
+
+
+def _fits(asset: ApprovedAsset, fmt: Format, theme: Theme) -> bool:
+    themes = {str(t) for t in asset.themes}
+    return (
+        usable_asset(asset)
+        and media_kind(asset) in FORMAT_MEDIA.get(fmt, frozenset())
+        and (not themes or theme.value in themes)
+    )
+
+
+def _rank(theme: Theme) -> Callable[[ApprovedAsset], tuple[bool, str]]:
+    # Assets made for the theme first, then the ones that suit any theme; ties by id, so it repeats.
+    return lambda a: (theme.value not in {str(t) for t in a.themes}, a.asset_id)
+
+
+def assets_for(assets: Iterable[ApprovedAsset], fmt: Format, theme: Theme) -> list[ApprovedAsset]:
+    """The usable assets that fit a format and theme, best first, in a fixed order.
+
+    An asset tagged for other themes only is left out: a celebratory picture under an education
+    message says something the words do not. Two records with the same URL count once, so a
+    carousel never shows one picture twice (the Critic rejects that).
+    """
+    ranked = sorted((a for a in assets if _fits(a, fmt, theme)), key=_rank(theme))
+    by_url: dict[str, ApprovedAsset] = {}
+    for asset in ranked:
+        by_url.setdefault(asset.url.strip(), asset)
+    return list(by_url.values())
+
+
+def carousel_sets(assets: Sequence[ApprovedAsset], theme: Theme) -> list[list[ApprovedAsset]]:
+    """The brand's own card sets (same `group_id`) that can be used whole for this theme, by group.
+
+    A set with any card unusable or off-theme, or with two cards of the same URL, is skipped rather
+    than shown with a gap or a repeat.
+    """
+    groups: dict[str, list[ApprovedAsset]] = {}
+    for asset in assets:
+        group = getattr(asset, "group_id", None)
+        if group and media_kind(asset) in FORMAT_MEDIA[Format.CAROUSEL]:
+            groups.setdefault(str(group), []).append(asset)
+    out: list[list[ApprovedAsset]] = []
+    for group in sorted(groups):
+        cards = sorted(groups[group], key=lambda a: (int(getattr(a, "position", 0) or 0), a.asset_id))
+        kept = cards[:CAROUSEL_MAX]
+        distinct = len({c.url.strip() for c in kept}) == len(kept)
+        if len(cards) >= CAROUSEL_MIN and distinct and all(_fits(c, Format.CAROUSEL, theme) for c in cards):
+            out.append(kept)
+    return out
+
+
+def _media_choices(
+    pool: Sequence[ApprovedAsset], fmt: Format, theme: Theme, n: int
+) -> list[list[ApprovedAsset]]:
+    """The assets for each of `n` variants of one format, or an empty list when there are too few."""
+    if fmt is Format.CAROUSEL:
+        sets = carousel_sets(pool, theme)
+        if sets:
+            return [sets[k % len(sets)] for k in range(n)]
+        loose = [a for a in assets_for(pool, fmt, theme) if not getattr(a, "group_id", None)]
+        if len(loose) < CAROUSEL_MIN:
+            return []
+        size = min(CAROUSEL_CARDS, len(loose))
+        return [[loose[(k + j) % len(loose)] for j in range(size)] for k in range(n)]
+    fitting = assets_for(pool, fmt, theme)
+    return [[fitting[k % len(fitting)]] for k in range(n)] if fitting else []
 
 
 def slots_in(*texts: str | None) -> tuple[str, ...]:
@@ -139,27 +299,91 @@ class Creative:
         n_per_cell: int = 2,
         now: datetime,
         themes: Sequence[Theme] | None = None,
+        assets: Iterable[ApprovedAsset] = (),
+        formats: Mapping[Channel, Sequence[Format]] | None = None,
     ) -> list[ContentItem]:
         """Write `n_per_cell` variants for every channel x offer x theme cell of the brief's envelope.
 
         `themes`, if given, is used for every offer; otherwise each offer gets the themes that fit
         its kind (`OFFER_THEMES`). A cell whose answer never parses is skipped and noted in
         `failures`, so one bad answer does not cost the whole library.
+
+        `assets` are the brand's approved images and videos. With none, the library is text only,
+        as before. `formats` overrides which formats each channel may use (default
+        `FORMAT_SUPPORT`); it can narrow the defaults, and anything the renderer cannot carry is
+        still refused at send time.
         """
         if n_per_cell < 1:
             raise ValueError("n_per_cell must be at least 1")
         self.dropped = []
         self.failures = []
+        pool = list(assets)
+        support = formats if formats is not None else FORMAT_SUPPORT
         items: list[ContentItem] = []
         for channel in brief.envelope.channels:
             for offer in brief.envelope.offers:
                 for theme in tuple(themes) if themes else OFFER_THEMES[offer.kind]:
-                    items.extend(
-                        self._cell(
-                            brief, channel, offer, theme, brand_voice=brand_voice, n=n_per_cell, now=now
-                        )
+                    texts = self._cell(
+                        brief, channel, offer, theme, brand_voice=brand_voice, n=n_per_cell, now=now
                     )
+                    items.extend(texts)
+                    if pool:
+                        items.extend(
+                            self._format_variants(
+                                brief, texts, pool, tuple(support.get(channel, (Format.TEXT,)))
+                            )
+                        )
         return items
+
+    def _format_variants(
+        self,
+        brief: Brief,
+        texts: Sequence[ContentItem],
+        pool: Sequence[ApprovedAsset],
+        formats: Sequence[Format],
+    ) -> list[ContentItem]:
+        """The text variants of one cell again, each with approved media, per supported format.
+
+        Variant k takes the k-th fitting asset (wrapping round), so a cell's image variants do not
+        all show the same picture. A carousel uses one of the brand's own card sets when one fits
+        the theme, and otherwise `CAROUSEL_CARDS` loose images starting at the k-th.
+        """
+        if not texts:
+            return []
+        first = texts[0]
+        cell = f"{first.channel.value}/{first.offer_id}/{first.theme.value}"
+        out: list[ContentItem] = []
+        for fmt in dict.fromkeys(formats):
+            if fmt is Format.TEXT or fmt not in FORMAT_SUPPORT.get(first.channel, ()):
+                continue
+            choices = _media_choices(pool, fmt, first.theme, len(texts))
+            if not choices:
+                self.dropped.append(f"{cell}: no {fmt.value} variant, too few approved assets with alt text")
+                continue
+            for index, (text, chosen) in enumerate(zip(texts, choices, strict=True)):
+                out.append(
+                    text.model_copy(
+                        update={
+                            "content_id": stable_id(
+                                "ci",
+                                brief.brief_id,
+                                brief.version,
+                                text.channel.value,
+                                text.offer_id,
+                                text.theme.value,
+                                index,
+                                fmt.value,
+                                *(a.asset_id for a in chosen),
+                            ),
+                            "format": fmt,
+                            "asset_url": join_asset_urls(a.url for a in chosen),
+                            "template_name": (
+                                f"{text.template_name}_{fmt.value}"[:512] if text.template_name else None
+                            ),
+                        }
+                    )
+                )
+        return out
 
     def _cell(
         self,
@@ -241,6 +465,7 @@ class Creative:
             allowed_slots=", ".join(f"{{{{{s}}}}}" for s in ALLOWED_SLOTS),
             email_subject_max=EMAIL_SUBJECT_MAX,
             whatsapp_body_max=CHANNEL_BODY_MAX[Channel.WHATSAPP],
+            carousel_max=CAROUSEL_MAX,
         )
 
     @staticmethod
@@ -271,6 +496,7 @@ class Creative:
                 f"Channel: {channel.value}. Body at most {CHANNEL_BODY_MAX[channel]} characters.",
                 subject_line,
                 f"Theme: {theme.value}. Tone: {tone.value}.",
+                *([f"Angle: {THEME_GUIDANCE[theme]}"] if theme in THEME_GUIDANCE else []),
                 offer_line,
                 f"Audience: {brief.audience.description}",
                 f"Objective: {brief.objective.value}",
