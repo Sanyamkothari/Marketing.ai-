@@ -14,6 +14,9 @@ Contacting less: `models.HazardModel` learns P(unsubscribe or complaint | channe
 week), which the agent turns into a per-channel attention price. `bidders` prices offers against
 the plain message (`shrink_offer_extra`, `offer_sensitivity_factor`, `organic_chance`) and charges
 the dent contact makes in some customers' own buying (`ContactHarm`, found by `contact_harm_of`).
+`ContactHarm` is a per-person posterior read against the holdout's organic trend (at least
+`HARM_MIN_HOLDOUT` people); `leave_alone` says when messages credibly lower someone's buying, and
+`leave_alone_retry` lets them back in now and then so a wrong verdict can be undone.
 `policy.Market` is one customer's priced options before the draw.
 """
 
@@ -22,6 +25,9 @@ from autonomy.decide.audience import matches
 from autonomy.decide.bidders import (
     DEFAULT_CHANNEL_COSTS,
     EVIDENCE_HALF_LIFE_DAYS,
+    HARM_MIN_HOLDOUT,
+    LEAVE_ALONE_CREDIBLE,
+    LEAVE_ALONE_RETRY,
     AssetOf,
     ContactHarm,
     GoalBidder,
@@ -33,6 +39,8 @@ from autonomy.decide.bidders import (
     asset_lookup,
     contact_harm_of,
     days_since_cart,
+    leave_alone,
+    leave_alone_retry,
     needs_item,
     offer_sensitivity_factor,
     organic_chance,
@@ -70,6 +78,9 @@ __all__ = [
     "ANY",
     "DEFAULT_CHANNEL_COSTS",
     "EVIDENCE_HALF_LIFE_DAYS",
+    "HARM_MIN_HOLDOUT",
+    "LEAVE_ALONE_CREDIBLE",
+    "LEAVE_ALONE_RETRY",
     "AssetOf",
     "AutonomousPolicy",
     "Beta",
@@ -104,6 +115,8 @@ __all__ = [
     "cuped_theta",
     "days_since_cart",
     "key_format",
+    "leave_alone",
+    "leave_alone_retry",
     "matches",
     "needs_item",
     "offer_sensitivity_factor",

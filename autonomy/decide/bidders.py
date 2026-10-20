@@ -27,10 +27,13 @@ runs), an offer whose expected net, on that evidence, is below its plain version
 all: the default is no offer, and an offer is tried only once the evidence says it pays.
 
 **Sleeping dogs.** Some customers buy *less* after a message. `ContactHarm` (fitted nightly by
-`autonomy.learning.update`, found with `contact_harm_of(response_model)`) gives each customer the
-share of their own buying a message credibly costs them; `dent x organic chance` comes off every
-option's uplift, so "do nothing" moves ahead of all of them alike, and with pruning on a customer
-whose expected harm is larger than every option's gain gets no bids.
+`autonomy.learning.update`, found with `contact_harm_of(response_model)`) keeps a posterior per
+customer of how their buying moves after a message, from their own record, their neighbours along
+a clue index and the business, read against the holdout once the agent runs. The share of their
+own buying a message credibly costs them (`dent x organic chance`) comes off every option's uplift,
+so "do nothing" moves ahead of all of them alike. With pruning on, a customer whose messages
+credibly lower their buying gets no bids at all (`leave_alone`), except in about one week a year
+(`LEAVE_ALONE_RETRY`), so a wrong verdict can be undone.
 
 **Products.** An action can be about one product (`Action.item_id`):
 
@@ -303,7 +306,9 @@ class HarmEvidence(Protocol):
     """One customer's record around messages, as `ContactHarm` reads it.
 
     `autonomy.learning.observations.ContactEvidence` is the one the learner builds from events; the
-    protocol keeps the inner loop free of the learning package."""
+    protocol keeps the inner loop free of the learning package. A record may also carry
+    `message_purchases`, `sends_since_click` and the `post_*` counts of `ContactEvidence` (the time
+    since the agent started); one without them is read as having none."""
 
     @property
     def exposed_days(self) -> float: ...
@@ -332,22 +337,42 @@ HARM_BANDS = 10
 """Customers are cut into this many equal bands along the clue index; each band's buying after a
 message is read on its own."""
 HARM_RATIO_SD = 0.5
-"""Prior spread (log scale) of a band's ratio around the business's: before its purchases say
-otherwise, a band buys after a message like everyone else."""
+"""Prior spread (log scale) of a band's or a segment's ratio around the business's: before its
+purchases say otherwise, a band buys after a message like everyone else."""
 HARM_CREDIBLE = 0.9
 """A band is charged only the dent its purchases make credible: 1 minus the upper 90% bound of its
-ratio. A band whose buying merely might fall after a message is charged nothing."""
+ratio. A band whose buying merely might fall after a message is charged nothing. The same level
+decides when a person is left alone (`LEAVE_ALONE_CREDIBLE`)."""
 HARM_ROUNDS = 25
 EVIDENCE_HALF_LIFE_DAYS = 90.0
 """Recency weighting of the evidence the learner keeps (`ContactEvidence`): a record a quarter old
 counts half. Annoyance begins at some point; the recent stretch says more about who someone is now."""
 HARM_CLUES: tuple[str, ...] = ("clicks", "direct_visits", "stopped")
-"""The clues, in the order of `HarmFit.coefficients`."""
+"""The clues, in the order of `HarmFit.coefficients`: click rate, direct-visit rate, ever
+unsubscribed or complained. Three more were tried and left out (docs/v2/DOGS_STORM.md):
+
+* message-attributed purchases: each is itself a purchase in the week after a message, so "never
+  bought through a message" puts everyone who has not bought after one at the harmed end by
+  construction;
+* the run of messages since the last click (`ContactEvidence.sends_since_click`): it is the click
+  rate again, and it ranked the put-off worse;
+* the segment: it sorts heavy buyers, whom messages move least, in with the put-off."""
+HARM_TAUS: tuple[float, ...] = (0.05, 0.1, 0.15, 0.2, 0.3, 0.4, 0.5, 0.7, 1.0)
+"""Candidate spreads (log scale) of one person's ratio around their band's: the one the records
+make most likely is used (empirical Bayes). Narrow when people in a band behave alike, so a thin
+record is mostly its band; wide when they differ, so a person's own record counts."""
+TREND_PSEUDO_PURCHASES = 5.0
+"""The holdout's buying since the start, against what its history predicted, is shrunk per segment
+towards the whole holdout's (and that towards no change) by this many expected purchases."""
+HARM_MIN_HOLDOUT = 20
+"""Fewer holdout customers than this with time since the start give no honest baseline: the organic
+level since the start is then taken as unchanged."""
 _CLICK_PSEUDO_SENDS = 5.0
 """A customer's click rate is shrunk towards the business's by this many messages."""
 _VISIT_PSEUDO_DAYS = 30.0
 """A customer's direct-visit rate is shrunk towards the business's by this many days."""
 _RATIO_GRID = np.exp(np.linspace(math.log(0.05), math.log(5.0), 241))
+_LOG_GRID = np.log(_RATIO_GRID)
 _TINY = 1e-12
 
 
@@ -355,13 +380,13 @@ _TINY = 1e-12
 class HarmFit:
     """What `ContactHarm` fitted.
 
-    The ratio is buying in the week after a message as a multiple of the customer's own buying on open
-    days: above 1 a message adds to what they buy, below 1 it takes away."""
+    The ratio is buying in the week after a message as a multiple of the customer's own buying
+    without one: above 1 a message adds to what they buy, below 1 it takes away."""
 
     coefficients: tuple[float, ...]
     """Per standardised clue (`HARM_CLUES`): its weight in the index (positive: more of it, more
     buying after a message), fitted on all customers; the index each customer gets comes from the
-    other half of the customers (cross-fitting)."""
+    other half of the customers (cross-fitting). The segment is not a clue (see `HARM_CLUES`)."""
     ratio: float
     """The business's ratio."""
     band_ratios: tuple[float, ...]
@@ -370,7 +395,20 @@ class HarmFit:
     """The credible dent charged per band (`HARM_CREDIBLE`)."""
     customers: int
     rows: int
-    """Customers whose purchases could be read (some buying, some exposed and some open days)."""
+    """Customers whose history could be read (some buying, some exposed and some open days)."""
+    tau: float = 0.0
+    """The spread of one person's (log) ratio around their neighbours', chosen by the records."""
+    spread: float = HARM_RATIO_SD
+    """How far a band's (log) ratio was let stray from the business's: as far as the bands really
+    differ beyond their own noise."""
+    segment_ratios: Mapping[str, float] = MappingProxyType({})
+    """Posterior mean ratio per segment, shrunk towards the business's."""
+    holdout: int = 0
+    """Holdout customers whose buying since the start set the organic baseline (0: not read)."""
+    trend: float = 1.0
+    """The holdout's buying since the start as a multiple of what its own history predicted."""
+    post_rows: int = 0
+    """Contacted customers whose record since the start was read (at the holdout's level)."""
 
     @property
     def share(self) -> float:
@@ -391,34 +429,51 @@ class ContactHarm:
     (sleeping dogs). No single clue gives them away, but the clues a CRM holds tilt the odds: many
     messages and few clicks, coming in by direct visits rather than links, an unsubscribe or a
     complaint on any channel. Which clues matter, and whether people who show them really buy less,
-    is learned from purchases:
+    is learned from purchases. The result is a posterior per person, shrunk to the people most like
+    them and those to the business.
 
-    * **The outcome** is each customer's buying around messages (`HarmEvidence`): given N purchases,
-      the share made in the week after a message is binomial, with odds = ratio x exposed / open
-      days. How much someone buys in general cancels out, so heavy buyers do not look responsive.
-    * **The clues** are each customer's own, shrunk towards the business's: click rate (by
-      `_CLICK_PSEUDO_SENDS` messages), direct-visit rate (by `_VISIT_PSEUDO_DAYS` days), and whether
-      they ever unsubscribed or complained. Two messages and no click is mostly the average customer;
-      twenty and no click is mostly themselves.
+    **The outcome** is each customer's own buying around messages. Given their N purchases, the
+    share made in the week after a message is binomial, with odds = ratio x exposed / open days, so
+    how much someone buys in general cancels out. The ratio is read on all of their buying, so it
+    nets off whatever messages add: below 1, a message costs them more than it brings.
+
+    **The holdout sets the organic level since the start.** Once the agent runs, most of its
+    customers' exposed days fall after its start and most of their open days before it, so a season
+    that lowers everyone's buying would read as harm. People we never contact show how buying moved
+    on its own: the holdout's purchases since the start, against what each holdout customer's own
+    earlier rate predicted (shrunk to their segment's by as much as people really differ), give the
+    organic trend per segment, shrunk to the whole holdout's and that to no change. Each day since
+    the start then counts at that level. Segments are the ones customers started in: today's segment
+    depends on what they bought since, which is the outcome. Without a holdout (fewer than
+    `min_holdout` customers with time since the start) the level is taken as unchanged.
+
+    **Who is put off**, in layers:
+
     * **An index** orders customers from least to most likely to buy after a message: a logistic
-      regression of that outcome on the clues (with the offset, a ridge prior on each clue). It is
-      cross-fitted: each customer's index comes from the coefficients fitted on the *other* half of
-      the customers, so no one is placed low because they happened to buy less.
-    * **Bands** (`HARM_BANDS` equal slices of the index) each get their own ratio from their
-      members' purchases, shrunk towards the business's (`HARM_RATIO_SD`). The index's shape is not
-      trusted: in a shop where keen clickers buy more after messages, a straight line would call
-      the quiet loyal buyers harmed; the bands read what the quiet buyers actually do.
-    * **The charge** is the dent each band's purchases make credible: 1 minus the upper
-      `HARM_CREDIBLE` bound of its ratio, 0 if that bound is above 1. A shop where messages harm no
-      one has no band credibly below 1 and is charged nothing.
+      regression of that outcome on the clues (each the customer's own, shrunk towards the
+      business's), with a ridge prior on each. It is cross-fitted: each customer's index comes from
+      the coefficients fitted on the *other* half of the customers, so no one is placed low because
+      they happened to buy less.
+    * **Bands** (`HARM_BANDS` equal slices of the index) each read their own ratio from their
+      members' purchases, shrunk towards the business's by as much as the bands really differ beyond
+      their own noise (`spread`, at most `HARM_RATIO_SD`). The index's shape is not trusted: in a
+      shop where keen clickers buy more after messages, a straight line would call the quiet loyal
+      buyers harmed; the bands read what the quiet buyers actually do. And many groups are read
+      every night: where they differ by noise alone, the shrinkage keeps one from looking harmed by
+      chance.
+    * **Each person** gets a posterior over their own ratio: their neighbours' (the band's worth of
+      customers nearest them on the index, themselves left out, shrunk the same way) as the prior,
+      spread by `tau` (the person-to-person spread the records make most likely, from `HARM_TAUS`),
+      times the likelihood of their own purchases. A thin record stays near its neighbours; a long
+      one is mostly the person.
 
-    * **Each customer's own record** then updates their band's ratio (as the prior, spread
-      `HARM_RATIO_SD`): someone who keeps buying on open days and not after messages is charged the
-      dent their own purchases make credible, if it is larger than their band's.
-
-    `dent(customer)` is that charge, `p_harm(customer)` the chance their own ratio is below 1, and
+    **What it charges.** `dent(customer)` is the dent their purchases make credible: 1 minus the
+    upper `HARM_CREDIBLE` bound of their ratio (or their neighbours', if larger), 0 if that bound is
+    above 1. A shop where messages harm no one has no band credibly below 1 and is charged nothing.
     `expected_loss(customer, organic)` = dent x their organic chance of buying in the window: what
-    bidders take off every option's uplift.
+    bidders take off every option's uplift. `p_below(customer, ratio)` is the chance their own ratio
+    is below `ratio`; `p_harm` is `p_below(customer, 1)`, which the bidders use to leave someone
+    alone when it is credible that messages lower their buying (`leave_alone`).
     """
 
     def __init__(
@@ -430,21 +485,35 @@ class ContactHarm:
         ratio_sd: float = HARM_RATIO_SD,
         credible: float = HARM_CREDIBLE,
         rounds: int = HARM_ROUNDS,
+        taus: Sequence[float] = HARM_TAUS,
+        min_holdout: int = HARM_MIN_HOLDOUT,
     ) -> None:
         if ridge <= 0 or bands < 1 or ratio_sd <= 0 or not 0.5 <= credible < 1 or rounds < 1:
             raise ValueError("ridge, bands, ratio_sd and rounds must be positive; credible in [0.5, 1)")
+        if not taus or min(taus) <= 0:
+            raise ValueError("taus must be positive")
         self.min_customers = min_customers
         self.ridge = ridge
         self.bands = bands
         self.ratio_sd = ratio_sd
         self.credible = credible
         self.rounds = rounds
+        self.taus = tuple(float(t) for t in taus)
+        self.min_holdout = min_holdout
         self.evidence: dict[str, HarmEvidence] = {}
         self.data_start: datetime | None = None
         """Where the business's records begin (set by the learner): evidence is counted from there."""
+        self.split_at: datetime | None = None
+        """Where the agent started (set by the learner): the records split into history and since."""
+        self.holdout: set[str] = set()
+        """Customers we never contact (set by the learner): the honest organic baseline."""
+        self.segments: dict[str, str] = {}
+        """Customer -> segment (set by the learner); a customer without one is pooled."""
         self.fit: HarmFit | None = None
         self._dent: dict[str, float] = {}
         self._p: dict[str, float] = {}
+        self._post: dict[str, tuple[float, float]] = {}
+        self._last_holdout: tuple[int, float] = (0, 1.0)
         self._dirty = False
 
     # -- evidence --
@@ -455,10 +524,28 @@ class ContactHarm:
             self.evidence.update(updates)
             self._dirty = True
 
+    def set_groups(
+        self, *, holdout: Iterable[str] = (), segments: Mapping[str, str | None] | None = None
+    ) -> None:
+        """Add holdout customers and each customer's segment (the learner's view).
+
+        A customer keeps the first segment they are given: today's segment depends on what they
+        bought since the start (a lapsed customer who buys is lapsed no more), and that buying is
+        the outcome being read, so a later segment would sort people by their own result."""
+        new = set(holdout) - self.holdout
+        if new:
+            self.holdout |= new
+            self._dirty = True
+        for cid, seg in (segments or {}).items():
+            if seg is not None and cid not in self.segments:
+                self.segments[cid] = seg
+                self._dirty = True
+
     def forget(self, customer_id: str) -> None:
         self.evidence.pop(customer_id, None)
         self._p.pop(customer_id, None)
         self._dent.pop(customer_id, None)
+        self._post.pop(customer_id, None)
 
     # -- reading --
 
@@ -475,8 +562,23 @@ class ContactHarm:
         return self.fit.effect if self.fit is not None else 0.0
 
     def p_harm(self, customer_id: str) -> float:
-        """Chance that a message lowers the buying of customers like this one (0 without a record)."""
+        """Chance that a message lowers this customer's buying (0 without a record)."""
         return self._p.get(customer_id, 0.0)
+
+    def p_below(self, customer_id: str, ratio: float) -> float:
+        """Chance this customer's own ratio is below `ratio` (0 without a record: a stranger is the
+        average customer, and nobody is left alone for being unknown)."""
+        found = self._post.get(customer_id)
+        if found is None or ratio <= 0:
+            return 0.0
+        mean, sd = found
+        if sd <= 0:
+            return 1.0 if mean < math.log(ratio) else 0.0
+        return 0.5 * math.erfc(-(math.log(ratio) - mean) / (sd * math.sqrt(2.0)))
+
+    def posterior(self, customer_id: str) -> tuple[float, float] | None:
+        """(mean, sd) of the log of this customer's ratio, None without a record."""
+        return self._post.get(customer_id)
 
     def dent(self, customer_id: str) -> float:
         """Share of their own buying one message credibly costs this customer (0 without a record)."""
@@ -495,15 +597,17 @@ class ContactHarm:
         fit = self.fit
         if fit is None:
             return "Not enough history yet to tell who is put off by messages."
+        clearly = self.likely(self.credible)
+        who = f"; {clearly} look clearly put off on their own record" if clearly else ""
         if fit.share <= 0:
             return (
-                f"No sign that messages put anyone off: across {fit.customers} customers, buying "
-                f"after a message runs at {fit.ratio:.2f} times their own."
+                f"No sign that messages put anyone off as a group: across {fit.customers} customers, "
+                f"buying after a message runs at {fit.ratio:.2f} times their own{who}."
             )
         return (
             f"About {fit.share:.0%} of customers look put off by messages (few clicks, direct "
             f"visits, past unsubscribes): they buy at least {fit.effect:.0%} less of their own in "
-            f"the week after one."
+            f"the week after one{who}."
         )
 
     # -- fitting --
@@ -516,21 +620,50 @@ class ContactHarm:
         ids = sorted(self.evidence)
         if len(ids) < self.min_customers:
             self.fit = None
-            self._p, self._dent = {}, {}
+            self._p, self._dent, self._post = {}, {}, {}
             return
         rows = [self.evidence[c] for c in ids]
+        n = len(ids)
 
         def col(name: str) -> npt.NDArray[np.float64]:
-            return np.array([max(float(getattr(r, name)), 0.0) for r in rows], dtype=np.float64)
+            return np.array([max(float(getattr(r, name, 0.0) or 0.0), 0.0) for r in rows], dtype=np.float64)
 
         exposed_p, open_p = col("exposed_purchases"), col("open_purchases")
         exposed_d, open_d = col("exposed_days"), col("open_days")
+        post_d, post_xd = col("post_days"), col("post_exposed_days")
+        post_p, post_xp = col("post_purchases"), col("post_exposed_purchases")
         sends = col("sends")
         clicks = np.minimum(col("clicks"), sends)
         visits = col("direct_visits")
         stopped = np.minimum(col("stops"), 1.0)
         days = exposed_d + open_d
 
+        # The history, the record before the agent started: each customer's earlier buying rate,
+        # which the holdout's trend is measured against.
+        hist_xp = np.maximum(exposed_p - post_xp, 0.0)
+        hist_xd = np.maximum(exposed_d - post_xd, 0.0)
+        hist_op = np.maximum(open_p - (post_p - post_xp), 0.0)
+        hist_od = np.maximum(open_d - (post_d - post_xd), 0.0)
+        hist_n = hist_xp + hist_op
+        hist_days = hist_xd + hist_od
+        ok = (hist_xd > 0) & (hist_od > 0) & (hist_n > 0)
+
+        # Since the start, the holdout's organic level (1 without a holdout).
+        seg_of = [self.segments.get(c) for c in ids]
+        trend_i = self._holdout_trend(ids, seg_of, hist_n, hist_days, post_d, post_p)
+        holdout_n, trend = self._last_holdout
+
+        # Each person's own record, history and since the start together: given their N purchases,
+        # the share made in the week after a message is binomial with odds = ratio x exposed / open
+        # days, each day since the start counted at the holdout's organic level then, so a season
+        # everyone shares is not read as harm.
+        post_od = np.maximum(post_d - post_xd, 0.0)
+        exp_w = hist_xd + trend_i * post_xd
+        open_w = hist_od + trend_i * post_od
+        n_buys = exposed_p + open_p
+        own_ok = (exp_w > 0) & (open_w > 0) & (n_buys > 0)
+
+        # The clues, each shrunk towards the business's.
         c_pool = max(float(clicks.sum()), 0.5) / max(float(sends.sum()), 1.0)
         v_pool = max(float(visits.sum()), 0.5) / max(float(days.sum()), 1.0)
         click_rate = (clicks + c_pool * _CLICK_PSEUDO_SENDS) / (sends + _CLICK_PSEUDO_SENDS)
@@ -539,63 +672,239 @@ class ContactHarm:
         scale = raw.std(axis=0)
         feats = (raw - raw.mean(axis=0)) / np.where(scale > 1e-9, scale, 1.0)
 
-        n_buys = exposed_p + open_p
-        ok = (exposed_d > 0) & (open_d > 0) & (n_buys > 0)
-        offset = np.log(np.maximum(exposed_d, _TINY) / np.maximum(open_d, _TINY))
-        design = np.column_stack([np.ones(len(ids)), feats])
+        offset = np.log(np.maximum(exp_w, _TINY) / np.maximum(open_w, _TINY))
+        design = np.column_stack([np.ones(n), feats])
 
         def fit_on(mask: npt.NDArray[np.bool_]) -> npt.NDArray[np.float64]:
-            m = mask & ok
+            m = mask & own_ok
             return _logit_fit(design[m], exposed_p[m], n_buys[m], offset[m], self.ridge, self.rounds)
 
         # cross-fitting: each half's index comes from the other half's coefficients
         half = np.array([_stable_half(c) for c in ids], dtype=np.bool_)
         index = np.where(half, feats @ fit_on(~half)[1:], feats @ fit_on(half)[1:])
-        everyone = fit_on(np.ones(len(ids), dtype=np.bool_))
+        everyone = fit_on(np.ones(n, dtype=np.bool_))
 
-        grid, log_grid = _RATIO_GRID, np.log(_RATIO_GRID)
-        x = np.where(ok, exposed_d / np.maximum(days, _TINY), 0.5)
+        grid, log_grid = _RATIO_GRID, _LOG_GRID
+        x = np.where(own_ok, exp_w / np.maximum(exp_w + open_w, _TINY), 0.5)
         ll_grid = np.where(
-            ok[:, None],
+            own_ok[:, None],
             exposed_p[:, None] * log_grid[None, :]
             - n_buys[:, None] * np.log(grid[None, :] * x[:, None] + (1.0 - x[:, None])),
             0.0,
         )
+        in_holdout = np.array([c in self.holdout for c in ids], dtype=np.bool_)
+        post_ok = own_ok & (post_xd > 0) & ~in_holdout
         business = log_grid[int(np.argmax(ll_grid.sum(axis=0)))]
-        prior = -0.5 * ((log_grid - business) / self.ratio_sd) ** 2
         order = np.argsort(index, kind="stable")
-        dent = np.zeros(len(ids))
-        p_harm = np.zeros(len(ids))
+        groups = np.array_split(order, self.bands)
+        # How far a band's ratio is let stray from the business's: as far as the bands really differ
+        # beyond their own noise (empirical Bayes), at most `ratio_sd`. Many bands and windows are
+        # read every night; in a shop where they differ by noise alone, this keeps one of them from
+        # reading as credibly harmed by chance.
+        band_spread = _spread_between([ll_grid[m].sum(axis=0) for m in groups], self.ratio_sd)
+        prior = -0.5 * ((log_grid - business) / band_spread) ** 2
+
+        seg_scores = {
+            seg: ll_grid[np.array([s == seg for s in seg_of], dtype=np.bool_)].sum(axis=0)
+            for seg in sorted({s for s in seg_of if s is not None})
+        }
+        seg_prior = (
+            -0.5 * ((log_grid - business) / _spread_between(list(seg_scores.values()), self.ratio_sd)) ** 2
+        )
+        seg_ratios = {
+            seg: float(math.exp(_grid_moments(sc + seg_prior)[0])) for seg, sc in seg_scores.items()
+        }
         band_ratios: list[float] = []
         band_dents: list[float] = []
-        for members in np.array_split(order, self.bands):
+        for members in groups:
             score = ll_grid[members].sum(axis=0) + prior
             post = np.exp(score - score.max())
             post /= post.sum()
             upper = float(grid[min(int(np.searchsorted(np.cumsum(post), self.credible)), len(grid) - 1)])
-            band_dent = max(0.0, 1.0 - upper)
-            band_ratio = float((post * grid).sum())
-            band_ratios.append(band_ratio)
-            band_dents.append(band_dent)
-            # Each member's own record, with their band as the prior: someone who keeps buying on
-            # open days and not after messages is charged what their own purchases make credible.
-            own = ll_grid[members] - 0.5 * ((log_grid - math.log(band_ratio)) / self.ratio_sd) ** 2
-            own_post = np.exp(own - own.max(axis=1, keepdims=True))
-            own_post /= own_post.sum(axis=1, keepdims=True)
-            cut = np.minimum((np.cumsum(own_post, axis=1) < self.credible).sum(axis=1), len(grid) - 1)
-            own_dent = np.maximum(1.0 - grid[cut], 0.0)
-            dent[members] = np.maximum(own_dent, band_dent)
-            p_harm[members] = own_post[:, grid < 1.0].sum(axis=1)
+            band_dents.append(max(0.0, 1.0 - upper))
+            band_ratios.append(float((post * grid).sum()))
+
+        # Each person: their neighbours along the index (a band's worth of the customers nearest
+        # them, themselves left out, shrunk to the business) as the prior, spread by tau, times
+        # their own record. tau is the spread the records make most likely.
+        near_mean, near_sd, near_upper = _neighbours(
+            ll_grid, order, max(n // (2 * self.bands), 1), prior, self.credible
+        )
+        lik = np.exp(ll_grid - ll_grid.max(axis=1, keepdims=True))
+        best_tau, best_ll = self.taus[0], -math.inf
+        for tau in self.taus:
+            pri = _normal_on_grid(near_mean, np.sqrt(near_sd**2 + tau * tau))
+            marginal = float(np.log(np.maximum((pri * lik)[own_ok].sum(axis=1), _TINY)).sum())
+            if marginal > best_ll + 1e-9:
+                best_tau, best_ll = tau, marginal
+        own_post = _normal_on_grid(near_mean, np.sqrt(near_sd**2 + best_tau * best_tau)) * lik
+        own_post /= np.maximum(own_post.sum(axis=1, keepdims=True), _TINY)
+        mean = (own_post * log_grid[None, :]).sum(axis=1)
+        sd = np.sqrt(np.maximum((own_post * (log_grid[None, :] - mean[:, None]) ** 2).sum(axis=1), 0.0))
+        cut = np.minimum((np.cumsum(own_post, axis=1) < self.credible).sum(axis=1), len(grid) - 1)
+        own_dent = np.maximum(1.0 - grid[cut], 0.0)
+        # Their charge is the larger of the two credible dents: their own, and their neighbours'
+        # (someone who looks like the put-off but has bought too little to show it is charged what
+        # the people most like them make credible).
+        dent = np.maximum(own_dent, np.maximum(1.0 - near_upper, 0.0))
+        p_harm = own_post[:, grid < 1.0].sum(axis=1)
+
         self.fit = HarmFit(
             coefficients=tuple(float(b) for b in everyone[1:]),
             ratio=float(math.exp(business)),
             band_ratios=tuple(band_ratios),
             band_dents=tuple(band_dents),
-            customers=len(ids),
+            customers=n,
             rows=int(ok.sum()),
+            tau=best_tau,
+            spread=band_spread,
+            segment_ratios=MappingProxyType(seg_ratios),
+            holdout=holdout_n,
+            trend=trend,
+            post_rows=int(post_ok.sum()),
         )
         self._dent = {cid: float(d) for cid, d in zip(ids, dent.tolist(), strict=True) if d > 0}
         self._p = {cid: float(p) for cid, p in zip(ids, p_harm.tolist(), strict=True)}
+        self._post = {
+            cid: (float(m), float(s)) for cid, m, s in zip(ids, mean.tolist(), sd.tolist(), strict=True)
+        }
+
+    def _holdout_trend(
+        self,
+        ids: Sequence[str],
+        seg_of: Sequence[str | None],
+        hist_n: npt.NDArray[np.float64],
+        hist_days: npt.NDArray[np.float64],
+        post_d: npt.NDArray[np.float64],
+        post_p: npt.NDArray[np.float64],
+    ) -> npt.NDArray[np.float64]:
+        """Per customer, the organic level of buying since the start as a multiple of before it: the
+        holdout's purchases since the start against what each holdout customer's own earlier rate
+        predicted, in the customer's segment, shrunk towards the whole holdout's (and that towards
+        no change). 1 where there is no honest baseline. Also sets `_last_holdout` (holdout customers
+        read, the overall trend)."""
+        n = len(ids)
+        ones = np.ones(n)
+        self._last_holdout = (0, 1.0)
+        if not (post_d > 0).any():
+            return ones
+        # their own rate before the start, shrunk towards their segment's (pooled without one) by as
+        # much as people really differ: a light buyer's lucky month is mostly luck
+        keys = [s if s is not None else "" for s in seg_of]
+        k_days = _pseudo_days(hist_n, hist_days)
+        pooled = float(hist_n.sum()) / max(float(hist_days.sum()), _TINY)
+        seg_rate: dict[str, float] = {}
+        for k in sorted(set(keys)):
+            m = np.array([x == k for x in keys], dtype=np.bool_)
+            d = float(hist_days[m].sum())
+            seg_rate[k] = (float(hist_n[m].sum()) + pooled * k_days) / (d + k_days)
+        prior_rate = np.array([seg_rate[k] for k in keys])
+        own_rate = (hist_n + prior_rate * k_days) / (hist_days + k_days)
+        predicted = own_rate * post_d
+        held = np.array([c in self.holdout for c in ids], dtype=np.bool_) & (post_d > 0)
+        if int(held.sum()) < self.min_holdout:
+            return ones
+        k0 = TREND_PSEUDO_PURCHASES
+        overall = (float(post_p[held].sum()) + k0) / (float(predicted[held].sum()) + k0)
+        trend_of: dict[str, float] = {}
+        for k in sorted(set(keys)):
+            m = held & np.array([x == k for x in keys], dtype=np.bool_)
+            trend_of[k] = (float(post_p[m].sum()) + overall * k0) / (float(predicted[m].sum()) + k0)
+        self._last_holdout = (int(held.sum()), overall)
+        return np.array([trend_of[k] for k in keys])
+
+
+def _pseudo_days(n: npt.NDArray[np.float64], d: npt.NDArray[np.float64]) -> float:
+    """How many days of the average customer's buying one person's own record is shrunk by
+    (empirical Bayes for Poisson buying with Gamma-distributed rates): the mean rate over the
+    spread of true rates, read from how much more people's counts vary than chance alone makes
+    them. With no spread beyond chance everyone is the average (a very large number)."""
+    total = float(d.sum())
+    if total <= 0:
+        return _NO_SPREAD_DAYS
+    m = float(n.sum()) / total
+    spread = (float(((n - m * d) ** 2).sum()) - m * total) / max(float((d * d).sum()), _TINY)
+    if spread <= 0 or m <= 0:
+        return _NO_SPREAD_DAYS
+    return float(min(max(m / spread, 1.0), _NO_SPREAD_DAYS))
+
+
+_NO_SPREAD_DAYS = 1e6
+
+
+def _neighbours(
+    ll_grid: npt.NDArray[np.float64],
+    order: npt.NDArray[np.int64],
+    half_width: int,
+    prior: npt.NDArray[np.float64],
+    credible: float,
+) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.float64], npt.NDArray[np.float64]]:
+    """Per customer, the mean and sd of the log ratio read from the `half_width` customers on each
+    side of them along the index (themselves left out), with `prior` (a log-density on the grid),
+    and the upper `credible` bound of that ratio.
+
+    A sliding band: everyone is read against the people most like them, so someone at the edge of a
+    band is not moved by which side of an arbitrary cut they fall, and the reading changes smoothly
+    as their clues do."""
+    n = len(order)
+    sorted_ll = ll_grid[order]
+    cum = np.vstack([np.zeros((1, ll_grid.shape[1])), np.cumsum(sorted_ll, axis=0)])
+    pos = np.arange(n)
+    lo = np.clip(pos - half_width, 0, n)
+    hi = np.clip(pos + half_width + 1, 0, n)
+    score = cum[hi] - cum[lo] - sorted_ll + prior[None, :]
+    post = np.exp(score - score.max(axis=1, keepdims=True))
+    post /= post.sum(axis=1, keepdims=True)
+    mean_sorted = (post * _LOG_GRID[None, :]).sum(axis=1)
+    sd_sorted = np.sqrt(
+        np.maximum((post * (_LOG_GRID[None, :] - mean_sorted[:, None]) ** 2).sum(axis=1), 0.0)
+    )
+    cut = np.minimum((np.cumsum(post, axis=1) < credible).sum(axis=1), len(_RATIO_GRID) - 1)
+    mean = np.empty(n)
+    sd = np.empty(n)
+    upper = np.empty(n)
+    mean[order] = mean_sorted
+    sd[order] = sd_sorted
+    upper[order] = _RATIO_GRID[cut]
+    return mean, sd, upper
+
+
+HARM_SPREAD_FLOOR = 0.05
+"""The least a band's (or segment's) ratio may stray from the business's, on the log scale."""
+
+
+def _spread_between(scores: Sequence[npt.NDArray[np.float64]], ceiling: float) -> float:
+    """How much groups' log ratios really differ: the DerSimonian-Laird moment estimate from each
+    group's own reading (its log-likelihood on the grid, read with a flat prior), between
+    `HARM_SPREAD_FLOOR` and `ceiling`. As `autonomy.decide.models.shrink_to_pool` does for lift."""
+    read = [_grid_moments(sc) for sc in scores if np.ptp(sc) > 1e-9]
+    usable = [(m, sd) for m, sd in read if sd > 1e-6]
+    if len(usable) < 2:
+        return HARM_SPREAD_FLOOR
+    w = np.array([1.0 / (sd * sd) for _, sd in usable])
+    m = np.array([mean for mean, _ in usable])
+    centre = float((w * m).sum() / w.sum())
+    q = float((w * (m - centre) ** 2).sum())
+    denom = float(w.sum() - (w * w).sum() / w.sum())
+    tau2 = max(0.0, (q - (len(usable) - 1)) / denom) if denom > 0 else 0.0
+    return float(min(max(math.sqrt(tau2), HARM_SPREAD_FLOOR), ceiling))
+
+
+def _grid_moments(score: npt.NDArray[np.float64]) -> tuple[float, float]:
+    """Mean and sd of the log ratio under a log-posterior `score` on the ratio grid."""
+    post = np.exp(score - score.max())
+    post /= post.sum()
+    mean = float((post * _LOG_GRID).sum())
+    return mean, math.sqrt(max(float((post * (_LOG_GRID - mean) ** 2).sum()), 0.0))
+
+
+def _normal_on_grid(
+    centre: npt.NDArray[np.float64], spread: npt.NDArray[np.float64]
+) -> npt.NDArray[np.float64]:
+    """Per row, a Normal(centre, spread) on the log-ratio grid, normalised to sum to 1."""
+    z = (_LOG_GRID[None, :] - centre[:, None]) / np.maximum(spread[:, None], 1e-6)
+    out = np.exp(-0.5 * z * z)
+    return out / np.maximum(out.sum(axis=1, keepdims=True), _TINY)
 
 
 def _stable_half(customer_id: str) -> bool:
@@ -629,6 +938,40 @@ def _logit_fit(
         if float(np.abs(step).max()) < 1e-8:
             break
     return beta
+
+
+LEAVE_ALONE_CREDIBLE = HARM_CREDIBLE
+"""A person is left alone when it is this credible, on their own posterior, that messages lower
+their buying: a lower-confidence-bound rule, like the restraint rule, but on the harm. Below it the
+harm is only charged (`ContactHarm.dent`)."""
+LEAVE_ALONE_RETRY = 0.02
+"""The exploration floor of leaving alone: the chance, per customer and calendar week, that someone
+left alone is bid for as usual that week, so a wrongly flagged customer can come back (a click or a
+purchase after the message moves their posterior). About one week a year."""
+_WEEK_SECONDS = 7 * 86_400
+
+
+def leave_alone(harm: ContactHarm, customer_id: str, at_stake: float) -> bool:
+    """Whether a message clearly harms this customer more than it could gain.
+
+    Their ratio is read on all of their buying in the week after a message, so it already nets off
+    whatever messages like those add: a ratio below 1 is a message whose harm is larger than its
+    gain. They are left alone when their own posterior puts at least `LEAVE_ALONE_CREDIBLE` below 1.
+    The click model's gain for the best option is not added on top: it predicts the same lift from
+    clicks, and counting it twice would never leave anyone alone (measured: on day 0 it credits the
+    put-off customers of `sleeping_dogs_15` with the same gain, about 65% of their buying in the
+    window, as everyone else). `at_stake` is what their buying in a message's window is worth
+    (urgency x organic chance x value): nobody is left alone with nothing at stake, or without a
+    record."""
+    return at_stake > 0 and harm.p_below(customer_id, 1.0) >= LEAVE_ALONE_CREDIBLE
+
+
+def leave_alone_retry(customer_id: str, now: datetime, rate: float = LEAVE_ALONE_RETRY) -> bool:
+    """A fixed coin per customer and calendar week (time is passed in): True in about `rate` of
+    weeks, when someone left alone is bid for as usual."""
+    week = int(now.timestamp() // _WEEK_SECONDS)
+    digest = hashlib.blake2b(f"{customer_id}|{week}".encode(), digest_size=8).digest()
+    return int.from_bytes(digest, "big") / 2.0**64 < rate
 
 
 _HARM_MODELS: weakref.WeakKeyDictionary[object, ContactHarm] = weakref.WeakKeyDictionary()
@@ -1013,12 +1356,17 @@ class GoalBidder:
                 and _offer_allowed(bid, state, envelope, ctx)
             }
             out = [b for b in out if id(b) not in dropped]
-        if prune_z is not None and loss > 0 and out:
-            # Nor can any option be worth sending to someone whose expected harm is larger than every
-            # option's gain even prune_z standard deviations up: leave them alone.
+        if prune_z is not None and harm is not None and out:
+            # Leave alone someone a message clearly harms: their credible harm is larger than every
+            # option's gain even prune_z standard deviations up, or their own posterior makes it
+            # credible that messages lower their buying (`leave_alone`). A week or so a year they are
+            # let back in (`LEAVE_ALONE_RETRY`), so a wrong verdict can be undone.
             harm_cost = urgency * loss * value
             z = prune_z
-            if harm_cost > max(b.expected_net + harm_cost + z * b.uncertainty for b in out):
+            clear = loss > 0 and harm_cost > max(b.expected_net + harm_cost + z * b.uncertainty for b in out)
+            if (clear or leave_alone(harm, state.customer_id, urgency * organic * value)) and not (
+                leave_alone_retry(state.customer_id, ctx.now)
+            ):
                 return []
         if prune_z is not None and len(out) > 1:
             # The floor is set by options the offer rules let through for this customer: a discount

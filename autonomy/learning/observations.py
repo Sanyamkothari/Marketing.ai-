@@ -618,6 +618,14 @@ class ContactEvidence:
     It is an accumulator: `contact_evidence` adds the events in `[until, now)` and returns a new one,
     so a nightly caller that keeps only recent events still counts each moment once. Events that
     arrive with a timestamp before `until` are not counted.
+
+    **Before and after the agent started** (`split_at`). Once the agent runs, its customers are
+    messaged most weeks, so most of their exposed days fall after the start and most of their open
+    days before it. A season that lowers everyone's buying since the start would then read as
+    messages costing them buying. The holdout (people we never contact) shows how buying moved on
+    its own; the `post_*` counts, the part of the record from `split_at` on, let the harm model
+    count those days at that level. The exposed, open and total counts above still cover the whole
+    record.
     """
 
     since: datetime | None = None
@@ -643,6 +651,17 @@ class ContactEvidence:
     visits: float = 0.0
     direct_visits: float = 0.0
     message_purchases: float = 0.0
+    """Purchases within `LOGGED_CLICK_WINDOW` of a click: buying a message can be credited with."""
+    sends_since_click: int = 0
+    """Messages delivered since the customer's last click (all of them if they never clicked), not
+    weighted by recency: a long run of messages with no answer, whether they never engaged or have
+    stopped engaging since they were contacted more."""
+    split_at: datetime | None = None
+    """Where the `post_*` counts begin (the agent's first decision); None: nothing split off yet."""
+    post_days: float = 0.0
+    post_exposed_days: float = 0.0
+    post_purchases: float = 0.0
+    post_exposed_purchases: float = 0.0
 
     @property
     def days(self) -> float:
@@ -673,6 +692,7 @@ def contact_evidence(
     no_offer: str = "none",
     data_start: datetime | None = None,
     half_life_days: float | None = None,
+    split_at: datetime | None = None,
 ) -> ContactEvidence:
     """`previous` plus the events in `[previous.until, now)` (all events before `now` the first time).
 
@@ -692,6 +712,10 @@ def contact_evidence(
     every event since `previous.until`. A send's window is `horizon_days` long, as in learning. A
     SEND whose decision is reported FAIL, BOUNCE or BLOCK (and never DELIVER) did not reach the
     customer and exposes nothing. Pure: `previous` is not changed.
+
+    `split_at` (the agent's first decision) starts the `post_*` counts. It is kept on the record the
+    first time it is given, and only moments from then on, not yet counted, are split off: a record
+    counted before the agent started keeps its history as history.
     """
     if horizon_days < 1:
         raise ValueError("horizon_days must be at least 1")
@@ -700,6 +724,9 @@ def contact_evidence(
     horizon = timedelta(days=horizon_days)
     library = content_by_id or {}
     acc = ContactEvidence() if previous is None else replace(previous)
+    if acc.split_at is None and split_at is not None:
+        acc.split_at = split_at
+    split = acc.split_at
     start = acc.until
     batch = sorted(
         (e for e in events if e.ts < now and (start is None or e.ts >= start)),
@@ -761,6 +788,12 @@ def contact_evidence(
         acc.exposed_days += exposed
         acc.open_days += max(total - exposed, 0.0)
         acc.offer_days += min(offer, exposed)
+        if split is not None and to > split:
+            # the part of [t, to) from the agent's start on
+            a = max(t, split)
+            acc.post_days += days(a, to)
+            if acc.exposed_until is not None and acc.exposed_until > a:
+                acc.post_exposed_days += days(a, min(to, acc.exposed_until))
 
     for e in batch:
         advance(e.ts)
@@ -770,18 +803,24 @@ def contact_evidence(
             if e.decision_id is not None and e.decision_id in failed:
                 continue
             acc.sends += w
+            acc.sends_since_click += 1
             end = e.ts + horizon
             acc.exposed_until = end if acc.exposed_until is None else max(acc.exposed_until, end)
             if _offer_of(e, library) != no_offer:
                 acc.offer_sends += w
                 acc.offer_until = end if acc.offer_until is None else max(acc.offer_until, end)
         elif e.type is EventType.PURCHASE:
-            if acc.exposed_until is not None and e.ts < acc.exposed_until:
+            exposed_now = acc.exposed_until is not None and e.ts < acc.exposed_until
+            if exposed_now:
                 acc.exposed_purchases += w
                 if acc.offer_until is not None and e.ts < acc.offer_until:
                     acc.offer_purchases += w
             else:
                 acc.open_purchases += w
+            if split is not None and e.ts >= split:
+                acc.post_purchases += w
+                if exposed_now:
+                    acc.post_exposed_purchases += w
             if acc.last_click_at is not None and e.ts - acc.last_click_at <= LOGGED_CLICK_WINDOW:
                 acc.message_purchases += w
         elif e.type is EventType.CLICK:
@@ -791,6 +830,7 @@ def contact_evidence(
                 clicked.add(e.decision_id)
             acc.clicks += w
             acc.last_click_at = e.ts
+            acc.sends_since_click = 0
         elif e.type in _STOP_TYPES:
             acc.stops += w
         elif e.type is EventType.VISIT:
@@ -811,11 +851,13 @@ def contact_evidence_all(
     content_by_id: Mapping[str, ContentItem] | None = None,
     data_start: datetime | None = None,
     half_life_days: float | None = None,
+    split_at: datetime | None = None,
 ) -> dict[str, ContactEvidence]:
     """`contact_evidence` for every customer in `events_by_customer` (sorted, so runs repeat).
 
     Only the customers given are returned; the caller merges them into what it keeps. `data_start`
-    is where the business's records begin (see `contact_evidence`)."""
+    is where the business's records begin and `split_at` where the agent started (see
+    `contact_evidence`)."""
     known = previous or {}
     out: dict[str, ContactEvidence] = {}
     for cid in sorted(events_by_customer):
@@ -827,6 +869,7 @@ def contact_evidence_all(
             content_by_id=content_by_id,
             data_start=data_start,
             half_life_days=half_life_days,
+            split_at=split_at,
         )
         if found.until is not None:
             out[cid] = found

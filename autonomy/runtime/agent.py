@@ -62,7 +62,9 @@ What it does around the auction:
   docs/v2/CONTACT_LESS.md.
 * **Briefs move.** A newer brief version rebuilds that goal's bidder (the models are shared).
 * **Nightly.** `nightly(decisions, events_by_customer, now)` feeds the clicks and purchases above,
-  then hands the log to `autonomy.learning.update_models` (window conversions, fatigue, value).
+  then hands the log to `autonomy.learning.update_models` (window conversions, fatigue, value), with
+  the holdout and the agent's start for the contact-harm model: people we never contact are the
+  organic baseline it reads each customer's buying against (`autonomy.decide.bidders.ContactHarm`).
   Decisions do not carry the customer's segment, so the agent remembers the segment each decision
   was made in: labelling an old window with today's segment would leak its outcome.
 * **The breaker.** The brief's stop rules, judged nightly on the agent's own sends of the last week
@@ -2014,6 +2016,10 @@ class AgentPolicy:
                 now,
                 self.learn_horizon_days,
                 segment_of=self._segment_at(log, now),
+                # Who contact puts off is read against the people we never contact: the holdout
+                # since the agent's first decision is the honest organic baseline.
+                harm_holdout=sorted(c for c, g in self.lift.group.items() if g is Group.HOLDOUT),
+                harm_split_at=self.lift.start,
             )
         model = self.bundle.response
         if isinstance(model, ClickResponseModel):
