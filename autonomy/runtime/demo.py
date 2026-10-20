@@ -15,7 +15,7 @@
   buyers into repeat buyers" runs at APPROVE, so its ACT decisions are held in a pending `Batch`.
   The demo plays the marketer and approves each batch, and the runtime sends it. For the API's
   demo, `approve_goal_days` starts the APPROVE goal late (a second goal the marketer added recently)
-  and `hold_last_batches` leaves the last day's batches pending, so the app has batches to show.
+  and `hold_last_batches` leaves the last two days' batches pending, so the app has batches to show.
 - **Costs are close to real ones** (`DEMO_CHANNEL_COST`): a tenth of a cent per email, four cents
   per WhatsApp marketing message, and the offers' own cost per redemption, so spend and return on
   spend are numbers a marketer would believe.
@@ -360,9 +360,11 @@ class SpendTrackingEventStore:
             if not self.inner.append([e]):
                 continue
             new += 1
-            self.sends += 1
             goal = e.attrs.get("goal_id")
-            if isinstance(goal, str) and e.channel is not None:
+            if not isinstance(goal, str):
+                continue  # a past campaign from the shop's own history: not ours, not our spend
+            self.sends += 1
+            if e.channel is not None:
                 self.spend[goal] += float(self.channel_costs.get(e.channel, 0.0))
         return new
 
@@ -418,7 +420,9 @@ class GymBridge:
     def advance(self, until: datetime) -> list[Event]:
         """Flush, move the world to `until`, and return its events without its own SEND copies."""
         self.flush()
-        return [e for e in self.world.advance(until) if e.type is not EventType.SEND]
+        from autonomy.gym.score import policy_view
+
+        return policy_view([e for e in self.world.advance(until) if e.type is not EventType.SEND])
 
 
 class GymChannelAdapter:
@@ -750,7 +754,9 @@ def build_system(
         margin_rate=spec.margin_rate,
     )
     events = SpendTrackingEventStore(stores.events, costs.channel)
-    events.append(world.reset(seed))
+    from autonomy.gym.score import policy_view
+
+    events.append(policy_view(world.reset(seed)))  # the Gym's truth bookkeeping never reaches the agent
     bridge = GymBridge(world, stores.decisions, immediate=live)
     adapters = bridge.adapters()
     dispatcher = Dispatcher(adapters, _address, stores.workspace, events, stores.queue)
@@ -921,7 +927,9 @@ def run_demo(
         goal_starts=goal_starts,
     )
     for day in range(days):
-        system.cycle.auto_approve = not (hold_last_batches and day == days - 1)
+        # Hold the last two days: on a small shop the agent may rightly contact nobody new on the very
+        # last day (weekly caps), and the app still needs a batch waiting for a person.
+        system.cycle.auto_approve = not (hold_last_batches and day >= days - 2)
         system.day(first + timedelta(days=day))
     end = first + timedelta(days=days)
     system.step_to(end)

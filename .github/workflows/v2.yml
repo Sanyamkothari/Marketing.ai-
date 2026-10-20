@@ -79,7 +79,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        scenario: [baseline_shop, sleeping_dogs_15, discount_cannibalisation, whatsapp_fatigue, send_time_matters, drift_midway, small_business, null_effect, complaint_storm]
+        scenario: [baseline_shop, sleeping_dogs_15, sleeping_dogs_hidden, discount_cannibalisation, whatsapp_fatigue, send_time_matters, drift_midway, small_business, null_effect, complaint_storm]
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
@@ -92,7 +92,7 @@ jobs:
       - name: Gym scoreboard
         run: |
           mkdir -p gym-report
-          python -m autonomy.gym.run --scenario ${{ matrix.scenario }} --policy agent --seeds 3 --customers 3000 | tee gym-report/${{ matrix.scenario }}.txt
+          python -m autonomy.gym.run --scenario ${{ matrix.scenario }} --policy agent --seeds 3 --customers 3000 --report-json gym-report/${{ matrix.scenario }}.json | tee gym-report/${{ matrix.scenario }}.txt
       - uses: actions/upload-artifact@v4
         with:
           name: gym-${{ matrix.scenario }}

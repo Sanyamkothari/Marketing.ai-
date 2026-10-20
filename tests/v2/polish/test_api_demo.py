@@ -275,7 +275,7 @@ def test_the_demo_starts_the_approve_goal_late_and_leaves_a_batch_pending(story:
     assert story.list_goals()[0] == approve  # the newer goal is listed first
 
     pending = story.list_batches(approve.goal_id, BatchStatus.PENDING)
-    assert len(pending) == 1 and pending[0].created_at <= NOW
+    assert pending and all(b.created_at <= NOW for b in pending)
     assert all(b.created_at >= approve.starts_at for b in story.list_batches(approve.goal_id))
     # Earlier batches were approved and sent; nothing from the pending one was sent.
     sent = {
@@ -283,7 +283,7 @@ def test_the_demo_starts_the_approve_goal_late_and_leaves_a_batch_pending(story:
         for e in story.events.scan()
         if e.type is EventType.SEND and e.attrs.get("goal_id") == approve.goal_id
     }
-    assert not sent & set(pending[0].decision_ids)
+    assert not sent & {i for b in pending for i in b.decision_ids}
 
     with _client(story) as c:
         r = c.post(f"/v2/batches/{pending[0].batch_id}/approve", json={})

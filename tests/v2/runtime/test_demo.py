@@ -85,14 +85,15 @@ def test_agents_built_an_approved_library_and_two_active_goals(demo: DemoResult)
 
 def test_every_send_traces_to_one_act_decision_and_lands_in_the_gym(demo: DemoResult) -> None:
     by_id = {d.decision_id: d for d in demo.decisions}
-    sends = [e for e in demo.events if e.type is EventType.SEND]
+    # The Gym's history holds the shop's own past campaigns (no goal_id); only our sends are checked.
+    sends = [e for e in demo.events if e.type is EventType.SEND and e.attrs.get("goal_id")]
     assert sends and len(sends) == demo.sent == demo.contacts
     per_decision = Counter(e.decision_id for e in sends)
     assert max(per_decision.values()) == 1
     for e in sends:
         decision = by_id[str(e.decision_id)]
         assert decision.kind is DecisionKind.ACT and decision.group is not Group.HOLDOUT
-    delivered = {e.decision_id for e in demo.events if e.type is EventType.DELIVER}
+    delivered = {e.decision_id for e in demo.events if e.type is EventType.DELIVER and e.decision_id in by_id}
     assert delivered == set(per_decision)
 
 

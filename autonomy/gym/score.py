@@ -485,6 +485,27 @@ def _by_customer(events: Iterable[Event]) -> dict[str, list[Event]]:
     return out
 
 
+_TRUTH_ATTRS = frozenset({"lost_value"})
+
+
+def policy_view(events: Sequence[Event]) -> list[Event]:
+    """Events as a policy may see them: without the Gym's bookkeeping of planted truth.
+
+    `lost_value` on an UNSUBSCRIBE or COMPLAINT is the scoreboard's charge for the contact the
+    business lost, derived from the customer's planted uplift (zero for a sleeping dog). Only the
+    ledger may read it; a policy that saw it would be reading the truth.
+    """
+    out: list[Event] = []
+    for e in events:
+        if _TRUTH_ATTRS.isdisjoint(e.attrs):
+            out.append(e)
+        else:
+            out.append(
+                e.model_copy(update={"attrs": {k: v for k, v in e.attrs.items() if k not in _TRUTH_ATTRS}})
+            )
+    return out
+
+
 def _fold(events: Iterable[Event], states: dict[str, CustomerState], folder: StateFolder) -> None:
     for e in events:
         states[e.customer_id] = folder.fold(states.get(e.customer_id), e)
@@ -505,7 +526,8 @@ def _simulate(
     learn: bool,
     refresh_all: bool,
 ) -> _Run:
-    history = world.reset(seed)
+    raw_history = world.reset(seed)
+    history = policy_view(raw_history)
     start = world.now()
     holdout_share, baseline_share = split_shares(briefs)
     ledger = _Ledger(
@@ -516,7 +538,7 @@ def _simulate(
     )
     states: dict[str, CustomerState] = {}
     _fold(history, states, folder)
-    ledger.observe(history)
+    ledger.observe(raw_history)
     nightly = getattr(agent, "nightly", None) if learn else None
     if not callable(nightly):
         nightly = None
@@ -532,9 +554,10 @@ def _simulate(
     for day in range(spec.days):
         now = (start + timedelta(days=day)).replace(hour=decide_hour, minute=0, second=0, microsecond=0)
         now = max(now, world.now())
-        new = world.advance(now)
+        raw_new = world.advance(now)
+        new = policy_view(raw_new)
         _fold(new, states, folder)
-        ledger.observe(new)
+        ledger.observe(raw_new)
         if nightly is not None:
             nightly(logged, _by_customer(new), now)
             logged = []
