@@ -148,7 +148,7 @@ export const CSS = `
 .ddc-change{display:flex;gap:var(--s3);align-items:flex-start;padding:var(--s3) var(--s4);background:var(--surface);border:1px solid var(--line);border-radius:var(--r-lg);flex-wrap:wrap}
 .ddc-change>.ds-ico{margin-top:2px;flex:none;color:var(--good)}
 .ddc-change.is-pending{border-color:var(--brand-200);background:var(--brand-50)}
-.ddc-change.is-pending>.ds-ico,.ddc-change.is-rejected>.ds-ico{color:var(--muted)}
+.ddc-change.is-pending>.ds-ico,.ddc-change.is-rejected>.ds-ico{color:var(--ink2)}
 .ddc-change-body{display:flex;flex-direction:column;gap:2px;flex:1 1 14rem;min-width:0}
 .ddc-change .dds-actions{flex:none}
 .ddc-goals{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:var(--s3)}
