@@ -19,11 +19,12 @@ cross-client prior store) and the client's own data overrides them as it accumul
 from __future__ import annotations
 
 import math
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Protocol, runtime_checkable
 
-from autonomy.contracts import Channel, CustomerState, Objective
+from autonomy.contracts import NO_OFFER, Channel, CustomerState, Objective
 
 ANY = "*"
 """Wildcard for a segment or one part of an action key in prior keys, and the pooled segment."""
@@ -330,3 +331,423 @@ class FatigueModel:
             n = min(max(obs.contacts_7d, 0), self._max)
             hit, miss = (obs.weight, 0.0) if obs.unsubscribed else (0.0, obs.weight)
             self._beliefs[n] = self._beliefs[n].plus(hit, miss)
+
+
+# --- per-person response: empirical Bayes ------------------------------------------------------
+#
+# People in one segment want different things: one clicks on everything, one only on money off, one
+# never. A model per (segment, action) gets the average right and every individual wrong. The pieces
+# below learn each customer's own deviation from their segment, shrunk towards it by exactly as much
+# as the business's data says people really differ (empirical Bayes), so a customer with two messages
+# behind them is still mostly their segment and one with thirty is mostly themselves.
+
+GAMMA_STRENGTH_GRID: tuple[float, ...] = (
+    0.5,
+    1.0,
+    1.5,
+    2.0,
+    3.0,
+    4.0,
+    6.0,
+    8.0,
+    12.0,
+    16.0,
+    24.0,
+    32.0,
+    64.0,
+)
+"""Candidate prior strengths (1 / variance of the multiplier) tried when fitting one from data."""
+
+
+def gamma_poisson_loglik(clicks: float, expected: float, strength: float) -> float:
+    """Log marginal likelihood of `clicks` when the rate is `expected` x a Gamma(k, k) multiplier.
+
+    This is the negative binomial with mean `expected` and shape `strength`; the term that does not
+    depend on the strength (log clicks!) is left out. Non-integer (weighted) clicks are fine.
+    """
+    k = strength
+    m = max(expected, 1e-12)
+    return (
+        math.lgamma(k + clicks) - math.lgamma(k) + k * math.log(k / (k + m)) + clicks * math.log(m / (k + m))
+    )
+
+
+def fit_gamma_strength(
+    pairs: Iterable[tuple[float, float]],
+    *,
+    grid: Iterable[float] = GAMMA_STRENGTH_GRID,
+    default: float,
+    min_units: int = 30,
+) -> float:
+    """The prior strength under which the observed (clicks, expected clicks) pairs are most likely.
+
+    Each pair is one unit (a customer, or a customer x offer): its clicks, and the clicks its segment
+    would predict. If units really differ, their click counts are more spread out than Poisson noise
+    alone allows and the fitted strength is low (trust each unit's own record sooner); if they do
+    not, it is high (keep everyone at their segment). Type-II maximum likelihood over `grid`. With
+    fewer than `min_units` units that carry any expectation the data cannot say, so `default`.
+    """
+    data = [(c, e) for c, e in pairs if e > 0 and math.isfinite(e) and math.isfinite(c) and c >= 0]
+    if len(data) < min_units:
+        return default
+    best, best_ll = default, -math.inf
+    for k in grid:
+        ll = sum(gamma_poisson_loglik(c, e, k) for c, e in data)
+        if ll > best_ll + 1e-9:
+            best, best_ll = k, ll
+    return best
+
+
+def moment_strength(
+    units: Iterable[tuple[float, ...]],
+    *,
+    default: float,
+    min_units: int = 30,
+    floor: float = GAMMA_STRENGTH_GRID[0],
+    ceiling: float = GAMMA_STRENGTH_GRID[-1],
+) -> float:
+    """The prior strength (1 / variance of the multiplier) from the spread of yes/no click records.
+
+    Each unit is (clicks, expected clicks, sum of squared per-message click chances[, extra]). A
+    unit's clicks vary by the messages' own yes/no noise (expected - squares: at most one click per
+    message, so less than Poisson), by `extra` (the variance the expectation itself carries, when it
+    rests on an estimate), plus the multiplier's variance times expected squared. The method-of-moments
+    estimate of that variance pools every unit (weighted by expected squared, so a unit with more
+    messages counts for more). This, not a Poisson likelihood, is what one click per message needs:
+    the yes/no noise is smaller than Poisson noise, and a Poisson model would read the difference as
+    "people do not differ". Clipped to [floor, ceiling]; `default` with fewer than `min_units` units.
+    """
+    data = [u for u in units if len(u) >= 3 and u[1] > 0 and all(math.isfinite(v) for v in u)]
+    if len(data) < min_units:
+        return default
+    num = sum((u[0] - u[1]) ** 2 - max(u[1] - u[2], 0.0) - (u[3] if len(u) > 3 else 0.0) for u in data)
+    den = sum(u[1] * u[1] for u in data)
+    if den <= 0:
+        return default
+    var = num / den
+    if var <= 1.0 / ceiling:
+        return ceiling
+    return min(max(1.0 / var, floor), ceiling)
+
+
+def product_moments(factors: Iterable[tuple[float, float]]) -> tuple[float, float]:
+    """(mean, variance) of a product of independent factors, each given as (mean, variance)."""
+    m, second = 1.0, 1.0
+    for fm, fv in factors:
+        m *= fm
+        second *= fm * fm + fv
+    return m, max(second - m * m, 0.0)
+
+
+PERSON_FEATURES: tuple[str, ...] = ("channel", "offer", "theme")
+"""The parts of an action a person's own taste is learned for. Learning on one discount informs the
+next discount on any channel; a liking for WhatsApp informs every WhatsApp message."""
+DEFAULT_OVERALL_STRENGTH = 3.0
+"""Before the data can say: a customer's overall responsiveness varies by about +-60% around their
+segment's (variance 1/3)."""
+DEFAULT_FEATURE_STRENGTH = 8.0
+"""Before the data can say: a customer's taste for one channel, offer or theme varies by about
++-35% around what their overall level predicts (variance 1/8)."""
+REFERENCE_LEVELS: Mapping[str, str] = MappingProxyType({"offer": NO_OFFER.offer_id})
+"""Feature levels whose factor is fixed at 1. With "no offer" as the reference, a customer's overall
+level is how they answer a plain message and their offer factor is how much more (or less) an offer
+moves them than that: the taste that differs most between people, measured against a clean baseline."""
+_BACKFIT_ROUNDS = 2
+
+_Fit = tuple[tuple[float, float], dict[tuple[int, str], tuple[float, float]]]
+
+
+def action_features(action_key: str) -> tuple[str, str, str]:
+    """(channel, offer, theme) of a `channel|offer|theme` key; parts missing from a shorter key are ANY."""
+    parts = action_key.split("|")
+    while len(parts) < 3:
+        parts.append(ANY)
+    return parts[0], parts[1], parts[2]
+
+
+@dataclass
+class _Person:
+    """One customer's evidence and its fitted factors (recomputed only when the evidence changes)."""
+
+    cells: dict[tuple[str, str, str], list[float]]
+    """(channel, offer, theme) -> [clicks, expected clicks from their segment, sum of each message's
+    expected clicks squared (for the yes/no noise in `refit`)]."""
+    fit: _Fit | None = None
+    """((overall shape, rate), {(feature index, level): (shape, rate)}), or None when stale."""
+
+
+class PersonalEffects:
+    """Each customer's own click response, relative to their segment, per action feature.
+
+    For customer c and an action with features (channel, offer, theme):
+
+        clicks ~ Poisson(segment rate(action) x rho_c x psi_c[channel] x psi_c[offer] x psi_c[theme])
+
+    Every factor has a Gamma(k, k) prior centred on 1, so a customer with no record is exactly their
+    segment. Each delivered message adds its segment-predicted clicks to the customer's evidence and
+    each first click adds one click. Posteriors come from two rounds of backfitting (each factor's
+    Gamma posterior given the others' means): exact for the overall factor, close for the rest at
+    the few dozen messages a customer gets.
+
+    The prior strengths are not guesses: `refit()` estimates them by the method of moments from the
+    spread of every customer's clicks beyond their yes/no noise (`moment_strength`), so they say how
+    much this business's customers really differ. A shop of near-identical customers keeps everyone at their segment; one with
+    sleeping dogs and bargain hunters lets each person's record speak after a few messages.
+
+    Observations can be weighted (an inverse-propensity weight for logged history sends, say).
+    """
+
+    def __init__(
+        self,
+        *,
+        overall_strength: float = DEFAULT_OVERALL_STRENGTH,
+        feature_strength: float = DEFAULT_FEATURE_STRENGTH,
+        reference: Mapping[str, str] = REFERENCE_LEVELS,
+    ) -> None:
+        if overall_strength <= 0 or feature_strength <= 0:
+            raise ValueError("prior strengths must be positive")
+        unknown = set(reference) - set(PERSON_FEATURES)
+        if unknown:
+            raise ValueError(f"unknown features in reference: {sorted(unknown)}")
+        self._reference: dict[int, str] = {PERSON_FEATURES.index(f): level for f, level in reference.items()}
+        self.overall_strength = overall_strength
+        self.feature_strengths: list[float] = [feature_strength] * len(PERSON_FEATURES)
+        self._default_overall = overall_strength
+        self._default_feature = feature_strength
+        self._people: dict[str, _Person] = {}
+
+    # -- evidence --
+
+    def observe(
+        self,
+        customer_id: str,
+        action_key: str,
+        *,
+        expected: float = 0.0,
+        clicks: float = 0.0,
+        weight: float = 1.0,
+    ) -> None:
+        """Add a message's segment-predicted clicks (`expected`) and/or its clicks to the evidence."""
+        if weight <= 0 or (expected <= 0 and clicks <= 0):
+            return
+        person = self._people.get(customer_id)
+        if person is None:
+            person = self._people[customer_id] = _Person(cells={})
+        cell = person.cells.setdefault(action_features(action_key), [0.0, 0.0, 0.0])
+        e = min(max(expected, 0.0), 1.0)
+        cell[0] += max(clicks, 0.0) * weight
+        cell[1] += e * weight
+        cell[2] += e * e * weight
+        person.fit = None
+
+    def forget(self, customer_id: str) -> None:
+        self._people.pop(customer_id, None)
+
+    def evidence(self, customer_id: str) -> tuple[float, float]:
+        """(clicks, expected clicks) over all of a customer's messages."""
+        person = self._people.get(customer_id)
+        if person is None:
+            return 0.0, 0.0
+        return sum(v[0] for v in person.cells.values()), sum(v[1] for v in person.cells.values())
+
+    def __len__(self) -> int:
+        return len(self._people)
+
+    # -- fitting --
+
+    def _fit(self, person: _Person) -> _Fit:
+        if person.fit is not None:
+            return person.fit
+        k0 = self.overall_strength
+        ks = self.feature_strengths
+        cells = [(key, (v[0], v[1])) for key, v in person.cells.items()]
+        means: dict[tuple[int, str], float] = {}
+        overall = (k0, k0)
+        params: dict[tuple[int, str], tuple[float, float]] = {}
+        for _ in range(_BACKFIT_ROUNDS):
+            rho_shape = k0 + sum(c for _key, (c, _e) in cells)
+            rho_rate = k0 + sum(e * _others(means, key, -1) for key, (_c, e) in cells)
+            overall = (rho_shape, rho_rate)
+            rho = rho_shape / rho_rate
+            for f in range(len(PERSON_FEATURES)):
+                sums: dict[str, list[float]] = {}
+                for key, (c, e) in cells:
+                    acc = sums.setdefault(key[f], [0.0, 0.0])
+                    acc[0] += c
+                    acc[1] += e * rho * _others(means, key, f)
+                for level, (c, e) in sums.items():
+                    if self._reference.get(f) == level:
+                        continue  # fixed at 1
+                    shape, rate = ks[f] + c, ks[f] + e
+                    params[(f, level)] = (shape, rate)
+                    means[(f, level)] = shape / rate
+        person.fit = (overall, params)
+        return person.fit
+
+    def factor(self, customer_id: str, action_key: str) -> tuple[float, float]:
+        """(mean, variance) of how this customer's click rate for this action compares with their
+        segment's: 1 and the prior variance for someone we know nothing about."""
+        overall, taste = self.parts(customer_id, action_key)
+        return product_moments((overall, taste))
+
+    def parts(self, customer_id: str, action_key: str) -> tuple[tuple[float, float], tuple[float, float]]:
+        """The factor split in two, each as (mean, variance): the customer's overall responsiveness,
+        which every one of their options shares, and their taste for this action's channel, offer and
+        theme, which tells their options apart."""
+        person = self._people.get(customer_id)
+        fit = self._fit(person) if person is not None else None
+        taste: list[tuple[float, float]] = []
+        for f, level in enumerate(action_features(action_key)):
+            found = fit[1].get((f, level)) if fit is not None else None
+            if self._reference.get(f) == level:
+                taste.append((1.0, 0.0))
+            elif found is None:
+                taste.append((1.0, 1.0 / self.feature_strengths[f]))
+            else:
+                taste.append((found[0] / found[1], found[0] / found[1] ** 2))
+        if fit is None:
+            return (1.0, 1.0 / self.overall_strength), product_moments(taste)
+        shape, rate = fit[0]
+        return (shape / rate, shape / rate**2), product_moments(taste)
+
+    def overall(self, customer_id: str) -> tuple[float, float]:
+        """(mean, variance) of the customer's overall responsiveness alone."""
+        person = self._people.get(customer_id)
+        if person is None:
+            return 1.0, 1.0 / self.overall_strength
+        (shape, rate), _ = self._fit(person)
+        return shape / rate, shape / rate**2
+
+    def refit(self, *, min_units: int = 30) -> None:
+        """Choose the prior strengths that make the business's click records most likely.
+
+        The overall strength is fitted on each customer's total clicks against their segment's
+        prediction (`moment_strength`). A feature's strength is fitted on (customer, level) records
+        against what the segment predicts times the customer's own level on their *other* messages
+        (on their no-offer messages, for the offer, which has "no offer" as its reference), for
+        customers with more than one level of the feature. Measuring their level on the same
+        messages would let it soak up the very taste being measured (someone who clicks on every
+        discount looks generally keen, and their discount clicks then look ordinary); the
+        leave-one-level-out level is noisier instead, and that noise is subtracted.
+        """
+        totals = [
+            (
+                sum(v[0] for v in p.cells.values()),
+                sum(v[1] for v in p.cells.values()),
+                sum(v[2] for v in p.cells.values()),
+            )
+            for p in self._people.values()
+        ]
+        self.overall_strength = moment_strength(totals, default=self._default_overall, min_units=min_units)
+        self._stale()
+        k0 = self.overall_strength
+        for f in range(len(PERSON_FEATURES)):
+            units: list[tuple[float, ...]] = []
+            ref = self._reference.get(f)
+            for person in self._people.values():
+                sums: dict[str, list[float]] = {}
+                for key, (c, e, sq) in person.cells.items():
+                    acc = sums.setdefault(key[f], [0.0, 0.0, 0.0])
+                    acc[0] += c
+                    acc[1] += e
+                    acc[2] += sq
+                if len(sums) < 2 or (ref is not None and ref not in sums):
+                    continue
+                total_c = sum(v[0] for v in sums.values())
+                total_e = sum(v[1] for v in sums.values())
+                for level, (c, e, sq) in sums.items():
+                    if level == ref:
+                        continue
+                    # their level on the reference messages if there is a reference, else on the rest
+                    base_c, base_e = (
+                        (sums[ref][0], sums[ref][1]) if ref is not None else (total_c - c, total_e - e)
+                    )
+                    shape, rate = k0 + base_c, k0 + base_e
+                    rho, rho_var = shape / rate, shape / rate**2
+                    units.append((c, e * rho, sq * rho * rho, e * e * rho_var))
+            self.feature_strengths[f] = moment_strength(
+                units, default=self._default_feature, min_units=min_units
+            )
+        self._stale()
+
+    def _stale(self) -> None:
+        for person in self._people.values():
+            person.fit = None
+
+
+def _others(means: Mapping[tuple[int, str], float], key: tuple[str, str, str], skip: int) -> float:
+    """Product of the current feature means for this cell, leaving out feature `skip`."""
+    out = 1.0
+    for f, level in enumerate(key):
+        if f != skip:
+            out *= means.get((f, level), 1.0)
+    return out
+
+
+# --- calibration helpers -------------------------------------------------------------------------
+
+
+def cuped_theta(x: Sequence[float], y: Sequence[float]) -> float:
+    """The CUPED coefficient cov(x, y) / var(x): how much of y the pre-period covariate x predicts.
+
+    Computed on everyone in the comparison (treated and control together), so it is the same for
+    both groups and the adjusted difference stays unbiased under random assignment. 0 when x does not
+    vary.
+    """
+    n = len(x)
+    if n != len(y):
+        raise ValueError("x and y must have the same length")
+    if n < 2:
+        return 0.0
+    mx = sum(x) / n
+    my = sum(y) / n
+    sxx = sum((a - mx) ** 2 for a in x)
+    if sxx <= 0:
+        return 0.0
+    return sum((a - mx) * (b - my) for a, b in zip(x, y, strict=True)) / sxx
+
+
+def cuped_adjust(x: Sequence[float], y: Sequence[float], theta: float | None = None) -> list[float]:
+    """y - theta (x - mean x): the same mean as y, and less variance when x predicts y.
+
+    Controlled-experiment Using Pre-Experiment Data (Deng et al., 2013). A customer's purchases before
+    the agent started say a lot about their purchases since; taking that predictable part out leaves
+    the part a message can change, so the agent-versus-holdout difference needs far fewer customers
+    for the same precision.
+    """
+    if len(x) != len(y):
+        raise ValueError("x and y must have the same length")
+    t = cuped_theta(x, y) if theta is None else theta
+    mx = sum(x) / len(x) if x else 0.0
+    return [b - t * (a - mx) for a, b in zip(x, y, strict=True)]
+
+
+def shrink_to_pool(
+    estimates: Mapping[str, tuple[float, float]], pooled: float
+) -> dict[str, tuple[float, float]]:
+    """Empirical-Bayes shrinkage of per-group estimates towards a pooled value.
+
+    `estimates` maps a group to (estimate, standard error). How far the groups spread beyond their
+    standard errors (tau^2, the DerSimonian-Laird moment estimate) sets how hard each is pulled to
+    `pooled`: a group measured loosely ends near the pool, one measured precisely keeps its own value.
+    Returns (shrunk estimate, its standard error) per group. Groups without a usable standard error,
+    and every group when the spread is no more than noise, come back at the pool.
+    """
+    usable = {g: (m, s) for g, (m, s) in estimates.items() if s > 0 and math.isfinite(m) and math.isfinite(s)}
+    tau2 = 0.0
+    if len(usable) >= 2:
+        w = {g: 1.0 / (s * s) for g, (_m, s) in usable.items()}
+        sw = sum(w.values())
+        mean = sum(w[g] * m for g, (m, _s) in usable.items()) / sw
+        q = sum(w[g] * (m - mean) ** 2 for g, (m, _s) in usable.items())
+        denom = sw - sum(v * v for v in w.values()) / sw
+        tau2 = max(0.0, (q - (len(usable) - 1)) / denom) if denom > 0 else 0.0
+    out: dict[str, tuple[float, float]] = {}
+    for g in estimates:
+        if g not in usable or tau2 <= 0:
+            out[g] = (pooled, math.sqrt(tau2))
+            continue
+        m, s = usable[g]
+        b = s * s / (s * s + tau2)
+        out[g] = (b * pooled + (1 - b) * m, math.sqrt((1 - b) * s * s))
+    return out

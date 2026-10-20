@@ -38,10 +38,12 @@ from autonomy.contracts import (
     Decision,
     DecisionContext,
     DecisionKind,
+    Envelope,
     GoalKind,
     Group,
     Reward,
 )
+from autonomy.decide import rules
 from autonomy.decide.audience import matches
 from autonomy.decide.models import (
     ANY,
@@ -162,6 +164,12 @@ class GoalBidder:
     `own_spread=True` sets each bid's `uncertainty` from the option's own (treated) spread only, not
     the control rate's spread that all of a customer's options share (see `_option_std`); the default
     uses the full spread of the uplift.
+
+    `prune_z` (None: off) drops options that cannot plausibly be this customer's best: those whose
+    optimistic value (`expected_net + prune_z x uncertainty`) is below the pessimistic value of the
+    best option (`expected_net - prune_z x uncertainty`). Thompson sampling would rarely pick them,
+    but the exploration floor picks uniformly among whatever is offered, so without pruning it keeps
+    handing a discount to someone who plainly buys at full price.
     """
 
     def __init__(
@@ -178,9 +186,13 @@ class GoalBidder:
         segment_of: Callable[[str], str | None] | None = None,
         control_groups: frozenset[Group] = frozenset({Group.HOLDOUT}),
         own_spread: bool = False,
+        prune_z: float | None = None,
     ) -> None:
+        if prune_z is not None and prune_z < 0:
+            raise ValueError("prune_z must be >= 0")
         self.goal_id = brief.goal_id
         self.own_spread = own_spread
+        self.prune_z = prune_z
         self.brief = brief
         self.response_model: ResponseModel = response_model or BetaResponseModel()
         self.value_model = value_model or ValueModel()
@@ -255,6 +267,15 @@ class GoalBidder:
                     # theme that lifts more can still lose money when the offer costs more than the sale.
                     group = [max(group, key=_rank)]
                 out.extend(group)
+        if self.prune_z is not None and len(out) > 1:
+            # The floor is set by options the offer rules let through for this customer: a discount
+            # they asked not to get, one waiting for approval or one the budget cannot pay must not
+            # crowd out the plain message the policy could still send.
+            z = self.prune_z
+            sendable = [b for b in out if _offer_allowed(b, state, envelope, ctx)]
+            if sendable:
+                floor = max(b.expected_net - z * b.uncertainty for b in sendable)
+                out = [b for b in out if b.expected_net + z * b.uncertainty >= floor]
         out.sort(
             key=lambda b: (
                 -b.expected_net,
@@ -321,3 +342,17 @@ class GoalBidder:
             if item.channel == channel and item.offer_id == offer_id:
                 chosen.setdefault(item.theme.value, item)
         return [chosen[t] for t in sorted(chosen)]
+
+
+def _offer_allowed(bid: Bid, state: CustomerState, envelope: Envelope, ctx: DecisionContext) -> bool:
+    """Whether the hard rules that depend on the offer (not on the customer's week or the hour)
+    would let this bid through: the ones that can block a pruned option's winner alone."""
+    return all(
+        r.allowed
+        for r in (
+            rules.offer_in_envelope(bid, envelope),
+            rules.offer_approved(bid, envelope),
+            rules.no_discounts(bid, state, envelope),
+            rules.budget_left(bid, ctx.budget_left),
+        )
+    )

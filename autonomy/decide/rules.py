@@ -44,6 +44,10 @@ TOO_SOON = "too_soon"
 WEEKLY_CAP = "weekly_cap"
 NO_BUDGET = "no_budget"
 QUIET_HOURS = "quiet_hours"
+PACING = "pacing"
+"""Not a hard rule but the policy's own brake: the channel is held because one more complaint or
+unsubscribe could trip the brief's stop rules (`autonomy.decide.pacing`). It is checked after the
+rules above, by the policy, and only when pacing is switched on."""
 
 ALL_CODES: tuple[str, ...] = (
     HOLDOUT,
@@ -61,6 +65,7 @@ ALL_CODES: tuple[str, ...] = (
     WEEKLY_CAP,
     NO_BUDGET,
     QUIET_HOURS,
+    PACING,
 )
 
 # Codes that mean "this channel cannot reach this person", as opposed to "not now".
